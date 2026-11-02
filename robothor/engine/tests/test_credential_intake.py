@@ -6,22 +6,18 @@ owner who pasted an API key into chat was told to edit a manifest or to "ask
 the operator's own agent" — while talking to it. The human's role was never
 consulted.
 
-``ROBOTHOR_CREDENTIAL_INTAKE`` adds one more way through the gate, and only
-one: an owner or admin, typing to the default chat agent in a top-level human
-chat run. Everything else stays refused, and the refusal names the gate that
-held so the agent can tell the person what would open it.
-
-* ``off`` (the default) — today's behaviour, to the byte.
-* ``observe`` — still refused; a log line records that enforce would allow.
-* ``enforce`` — allowed.
+Credential intake is one more way through the gate, and only one: an owner or
+admin, typing to the default chat agent in a top-level human chat run.
+Everything else stays refused, and the refusal names the gate that held so the
+agent can tell the person what would open it. There is no switch: every test
+here runs with no intake variable in the environment and with a stale one left
+at ``off`` or ``observe``, and the behaviour is the same.
 
 No assertion in this file prints a credential: every leak check computes a
 bool first, so a failure reports ``assert not True`` and never the value.
 """
 
 from __future__ import annotations
-
-import logging
 
 import pytest
 
@@ -35,9 +31,16 @@ from robothor.engine.tools.handlers.vault import HANDLERS
 SHAPELESS_KEY = "c0ffee42" * 4
 KEY = "providers/openweather/api_key"
 
+#: What the person typed this turn: the hand-over itself.
+HANDOVER = f"here is my openweather key {SHAPELESS_KEY} please store it"
 
-@pytest.fixture
-def intake(monkeypatch):
+
+#: A retired switch left in an environment must change nothing.
+STALE_SWITCH = "ROBOTHOR_CREDENTIAL_INTAKE"
+
+
+@pytest.fixture(params=[None, "off", "observe"], ids=["unset", "stale-off", "stale-observe"])
+def intake(monkeypatch, request):
     """No manifest tier, a vault double, and a live-session registry cleanup."""
     from robothor import secrets as secrets_module
     from robothor import vault
@@ -46,7 +49,10 @@ def intake(monkeypatch):
     from robothor.secrets import redaction
 
     monkeypatch.setattr(vault_tools, "credential_tier", lambda agent_id: "")
-    monkeypatch.delenv("ROBOTHOR_CREDENTIAL_INTAKE", raising=False)
+    if request.param is None:
+        monkeypatch.delenv(STALE_SWITCH, raising=False)
+    else:
+        monkeypatch.setenv(STALE_SWITCH, request.param)
     monkeypatch.delenv("ROBOTHOR_DEFAULT_CHAT_AGENT", raising=False)
 
     rows: dict[str, str] = {}
@@ -59,6 +65,7 @@ def intake(monkeypatch):
     monkeypatch.setattr(vault, "get", lambda key, **kw: rows.get(key))
     monkeypatch.setattr(vault, "set", fake_set)
     monkeypatch.setattr(vault, "list", lambda **kw: sorted(rows))
+    monkeypatch.setattr(vault, "delete", lambda key, **kw: rows.pop(key, None) is not None)
 
     async def _no_reload() -> None:
         return None
@@ -80,7 +87,7 @@ def intake(monkeypatch):
         trigger: TriggerType = TriggerType.WEBCHAT,
         agent_id: str = "main",
         parent_run_id: str | None = None,
-        task_text: str | None = None,
+        task_text: str | None = HANDOVER,
     ):
         from robothor.engine.session import AgentSession
 
@@ -102,13 +109,40 @@ def intake(monkeypatch):
     secrets_module.reset_vault_availability()
 
 
-def _ctx(session=None, *, role: str = "owner", agent_id: str = "main") -> ToolContext:
+_VERIFIED = object()
+
+
+def _identity(role: str = "owner", *, channel: str = "webchat", verified: bool = True, **kw):
+    """A channel-resolved identity; by default a signed-in, registered person."""
+    from robothor.identity import IdentityContext
+
+    if verified and not kw:
+        kw = (
+            {"user_account_id": "acct-alice"}
+            if channel == "webchat"
+            else {"tenant_user_id": "tu-alice"}
+        )
+    return IdentityContext(
+        tenant_id="default",
+        channel=channel,
+        identifier="user-alice",
+        verified=verified,
+        display_name="Alice",
+        role=role,
+        **kw,
+    )
+
+
+def _ctx(
+    session=None, *, role: str = "owner", agent_id: str = "main", identity=_VERIFIED
+) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
         run_id=session.run.id if session is not None else "",
         tenant_id="default",
         user_id="user-alice",
         user_role=role,
+        identity=_identity(role) if identity is _VERIFIED else identity,
     )
 
 
@@ -116,36 +150,40 @@ def _store_args() -> dict:
     return {"key": KEY, "value": SHAPELESS_KEY}
 
 
-# ── off: today's behaviour ───────────────────────────────────────────────────
+# ── there is no switch ───────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_off_refuses_an_owner_in_chat_and_writes_nothing(intake):
-    session = intake["live"]()
-    result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
-    assert result["denied_by"] == "credential_tier"
-    assert intake["writes"] == []
+def test_there_is_no_intake_mode_reader():
+    import inspect
+
+    from robothor.engine import feature_flags
+
+    assert not hasattr(feature_flags, "credential_intake_mode")
+    assert STALE_SWITCH not in inspect.getsource(feature_flags)
 
 
-@pytest.mark.asyncio
-async def test_off_is_the_default(intake, monkeypatch):
-    from robothor.engine.feature_flags import credential_intake_mode
+def test_the_retired_switch_is_not_a_declared_setting():
+    from robothor.settings.registry import field_index
 
-    assert credential_intake_mode() == "off"
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "sure, why not")
-    assert credential_intake_mode() == "off", "an unknown value must not grant anything"
+    declared = {record["env"] for record in field_index().values()}
+    assert STALE_SWITCH not in declared
 
 
-# ── enforce: the owner's hand-over works ─────────────────────────────────────
+def test_the_handler_says_it_takes_a_credential_in_chat():
+    """Capability copy reads a public marker, and the gate it names stays put."""
+    from robothor.engine.tools.handlers import vault as vault_tools
+
+    assert vault_tools.CREDENTIAL_INTAKE is True
+    assert callable(vault_tools._intake_gate)
+
+
+# ── the owner's hand-over works ──────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["owner", "admin"])
 @pytest.mark.parametrize("trigger", [TriggerType.WEBCHAT, TriggerType.TELEGRAM])
-async def test_enforce_lets_an_owner_or_admin_store_a_credential_in_chat(
-    intake, monkeypatch, role, trigger
-):
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+async def test_an_owner_or_admin_can_store_a_credential_in_chat(intake, role, trigger):
     session = intake["live"](trigger=trigger)
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session, role=role))
     assert result.get("success") is True, result.get("error")
@@ -157,8 +195,7 @@ async def test_enforce_lets_an_owner_or_admin_store_a_credential_in_chat(
 
 
 @pytest.mark.asyncio
-async def test_enforce_opens_the_other_vault_tools_too(intake, monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+async def test_intake_opens_the_other_vault_tools_too(intake):
     session = intake["live"]()
     intake["rows"][KEY] = SHAPELESS_KEY
     got = await HANDLERS["vault_get"]({"key": KEY}, _ctx(session))
@@ -167,8 +204,7 @@ async def test_enforce_opens_the_other_vault_tools_too(intake, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_the_stored_row_records_who_stored_it_and_how(intake, monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+async def test_the_stored_row_records_who_stored_it_and_how(intake):
     session = intake["live"](trigger=TriggerType.TELEGRAM)
     await HANDLERS["vault_set"](_store_args(), _ctx(session))
     (write,) = intake["writes"]
@@ -183,20 +219,18 @@ async def test_the_stored_row_records_who_stored_it_and_how(intake, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_the_default_chat_agent_is_read_from_the_setting(intake, monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
     monkeypatch.setenv("ROBOTHOR_DEFAULT_CHAT_AGENT", "concierge")
     session = intake["live"](agent_id="concierge")
     allowed = await HANDLERS["vault_set"](_store_args(), _ctx(session, agent_id="concierge"))
     assert allowed.get("success") is True, allowed.get("error")
 
 
-# ── enforce: everybody else stays refused, and is told why ───────────────────
+# ── everybody else stays refused, and is told why ────────────────────────────
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["member", "viewer", "user", "service", ""])
-async def test_enforce_refuses_a_caller_who_is_not_an_owner_or_admin(intake, monkeypatch, role):
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+async def test_intake_refuses_a_caller_who_is_not_an_owner_or_admin(intake, role):
     session = intake["live"]()
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session, role=role))
     assert result["denied_by"] == "credential_tier"
@@ -206,8 +240,7 @@ async def test_enforce_refuses_a_caller_who_is_not_an_owner_or_admin(intake, mon
 
 
 @pytest.mark.asyncio
-async def test_enforce_refuses_an_agent_that_is_not_the_default_chat_agent(intake, monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+async def test_intake_refuses_an_agent_that_is_not_the_default_chat_agent(intake):
     session = intake["live"](agent_id="researcher")
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session, agent_id="researcher"))
     assert result["denied_by"] == "credential_tier"
@@ -216,10 +249,9 @@ async def test_enforce_refuses_an_agent_that_is_not_the_default_chat_agent(intak
 
 
 @pytest.mark.asyncio
-async def test_enforce_refuses_a_sub_agent_of_the_chat_agent(intake, monkeypatch):
+async def test_intake_refuses_a_sub_agent_of_the_chat_agent(intake):
     """A child of main runs as main's id only if someone spawns main itself;
     either way a run with a parent is not the owner typing."""
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
     session = intake["live"](trigger=TriggerType.SUB_AGENT, parent_run_id="parent-run")
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
     assert result["denied_by"] == "credential_tier"
@@ -228,8 +260,7 @@ async def test_enforce_refuses_a_sub_agent_of_the_chat_agent(intake, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_enforce_refuses_a_parented_run_even_on_a_chat_trigger(intake, monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+async def test_intake_refuses_a_parented_run_even_on_a_chat_trigger(intake):
     session = intake["live"](trigger=TriggerType.WEBCHAT, parent_run_id="parent-run")
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
     assert result["gate"] == "human_chat"
@@ -241,8 +272,7 @@ async def test_enforce_refuses_a_parented_run_even_on_a_chat_trigger(intake, mon
     "trigger",
     [TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW, TriggerType.CHANNEL_EVENT],
 )
-async def test_enforce_refuses_an_unattended_run_of_the_chat_agent(intake, monkeypatch, trigger):
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+async def test_intake_refuses_an_unattended_run_of_the_chat_agent(intake, trigger):
     session = intake["live"](trigger=trigger)
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
     assert result["gate"] == "human_chat"
@@ -250,11 +280,10 @@ async def test_enforce_refuses_an_unattended_run_of_the_chat_agent(intake, monke
 
 
 @pytest.mark.asyncio
-async def test_enforce_refuses_a_manual_trigger(intake, monkeypatch):
+async def test_intake_refuses_a_manual_trigger(intake):
     """``MANUAL`` is the CLI, but also the API trigger and resume endpoints and
     the unattended repair-resume of the chat agent, which runs as ``owner``.
     None of those is a person handing over a credential in chat."""
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
     session = intake["live"](trigger=TriggerType.MANUAL)
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
     assert result.get("gate") == "human_chat"
@@ -262,55 +291,165 @@ async def test_enforce_refuses_a_manual_trigger(intake, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_enforce_refuses_a_call_with_no_live_run(intake, monkeypatch):
+async def test_intake_refuses_a_call_with_no_live_run(intake):
     """No session to read the trigger from is not evidence of a person."""
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
     result = await HANDLERS["vault_set"](_store_args(), _ctx(None))
     assert result["gate"] == "human_chat"
     assert intake["writes"] == []
 
 
 @pytest.mark.asyncio
-async def test_the_refusal_names_the_unlock(intake, monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
+async def test_the_refusal_names_the_unlock(intake):
     session = intake["live"]()
     result = await HANDLERS["vault_set"](_store_args(), _ctx(session, role="member"))
     assert result["unlock"], "a gated refusal must say what would open it"
 
 
-# ── observe: refused, and the would-allow is on record ───────────────────────
+# ── only a person the channel verified, and registered, can hand one over ────
+
+ALL_VAULT_TOOLS = ["vault_get", "vault_set", "vault_test", "vault_list", "vault_delete"]
+
+
+def _telegram_fabricated_owner():
+    """What ``TelegramBot._build_identity`` makes of an UNREGISTERED sender in
+    the operator's default chat under the shipped defaults: role ``owner``,
+    ``verified=False``, no tenant user behind it."""
+    return _identity("owner", channel="telegram", verified=False)
 
 
 @pytest.mark.asyncio
-async def test_observe_refuses_but_logs_that_enforce_would_allow(intake, monkeypatch, caplog):
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "observe")
-    session = intake["live"]()
-    with caplog.at_level(logging.INFO, logger="robothor.engine.tools.handlers.vault"):
-        result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
-    assert result["denied_by"] == "credential_tier"
+@pytest.mark.parametrize("tool", ALL_VAULT_TOOLS)
+async def test_a_fabricated_telegram_owner_is_refused_every_vault_tool(intake, tool):
+    session = intake["live"](trigger=TriggerType.TELEGRAM, task_text=HANDOVER + " list delete")
+    intake["rows"][KEY] = "previously-stored-value"
+    result = await HANDLERS[tool](
+        _store_args(), _ctx(session, identity=_telegram_fabricated_owner())
+    )
+    assert result.get("gate") == "unverified_sender", result
+    assert "genus user add" in result["unlock"]
     assert intake["writes"] == []
-    lines = [
-        r.getMessage() for r in caplog.records if "credential intake would allow" in r.getMessage()
-    ]
-    assert len(lines) == 1
-    leaked = any(SHAPELESS_KEY in r.getMessage() for r in caplog.records)
-    assert not leaked, "a log line carried the credential"
+    assert intake["rows"][KEY] == "previously-stored-value"
 
 
 @pytest.mark.asyncio
-async def test_observe_does_not_log_a_would_allow_for_a_member(intake, monkeypatch, caplog):
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "observe")
+async def test_a_run_with_no_resolved_identity_is_refused(intake):
     session = intake["live"]()
-    with caplog.at_level(logging.INFO, logger="robothor.engine.tools.handlers.vault"):
-        await HANDLERS["vault_set"](_store_args(), _ctx(session, role="member"))
-    assert not [r for r in caplog.records if "would allow" in r.getMessage()]
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session, identity=None))
+    assert result.get("gate") == "unverified_sender"
+    assert intake["writes"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_verified_flag_with_no_registered_person_is_refused(intake):
+    """The legacy sender parse marks an identity verified from an id and a
+    role alone; with no tenant user or account behind it, it is not one."""
+    session = intake["live"](trigger=TriggerType.TELEGRAM)
+    unregistered = _identity("owner", channel="telegram", verified=True, person_id=None)
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session, identity=unregistered))
+    assert result.get("gate") == "unverified_sender"
+    assert intake["writes"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_identity_role_must_be_owner_or_admin_too(intake):
+    session = intake["live"]()
+    result = await HANDLERS["vault_set"](
+        _store_args(), _ctx(session, role="owner", identity=_identity("member"))
+    )
+    assert result.get("gate") in {"role", "unverified_sender"}
+    assert intake["writes"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_registered_verified_telegram_owner_still_hands_one_over(intake):
+    session = intake["live"](trigger=TriggerType.TELEGRAM)
+    registered = _identity("owner", channel="telegram")
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session, identity=registered))
+    assert result.get("success") is True, result.get("error")
+
+
+# ── intake means the person handed it over, this turn ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_value_the_person_did_not_type_is_refused(intake):
+    """After ``main`` reads an email or a page, an injected instruction can ask
+    for a ``vault_set``. The value then came from tool output, not from the
+    person, and their own message this turn does not carry it."""
+    session = intake["live"](task_text="summarise my inbox please")
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    assert result.get("gate") == "not_handed_over", result
+    assert intake["writes"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_value_in_the_persons_message_is_stored(intake):
+    session = intake["live"](task_text=f"store this: {SHAPELESS_KEY}")
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    assert result.get("success") is True, result.get("error")
+
+
+@pytest.mark.asyncio
+async def test_two_keys_in_one_message_are_both_stored(intake):
+    other = "ghp_FAKE0000_second_key_in_the_message_0000"
+    session = intake["live"](task_text=f"weather {SHAPELESS_KEY} and github {other}")
+    first = await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    second = await HANDLERS["vault_set"](
+        {"key": "providers/github/api_key", "value": other}, _ctx(session)
+    )
+    assert first.get("success") is True, first.get("error")
+    assert second.get("success") is True, second.get("error")
+
+
+@pytest.mark.asyncio
+async def test_a_delete_the_person_did_not_ask_for_is_refused(intake):
+    session = intake["live"](task_text="summarise my inbox please")
+    intake["rows"][KEY] = SHAPELESS_KEY
+    result = await HANDLERS["vault_delete"]({"key": KEY}, _ctx(session))
+    assert result.get("gate") == "not_requested", result
+    assert intake["rows"][KEY] == SHAPELESS_KEY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "please remove the openweather key",
+        f"delete {KEY}",
+        "drop OPENWEATHER_API_KEY from the vault",
+    ],
+)
+async def test_a_delete_the_person_named_goes_through(intake, message):
+    session = intake["live"](task_text=message)
+    intake["rows"][KEY] = SHAPELESS_KEY
+    result = await HANDLERS["vault_delete"]({"key": KEY}, _ctx(session))
+    assert result.get("success") is True, result.get("error")
+
+
+@pytest.mark.asyncio
+async def test_a_list_the_person_did_not_ask_for_is_refused(intake):
+    session = intake["live"](task_text="summarise my inbox please")
+    result = await HANDLERS["vault_list"]({}, _ctx(session))
+    assert result.get("gate") == "not_requested", result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    ["which keys are stored?", "list my credentials", "show me the secrets in the vault"],
+)
+async def test_a_list_the_person_asked_for_goes_through(intake, message):
+    session = intake["live"](task_text=message)
+    intake["rows"][KEY] = SHAPELESS_KEY
+    result = await HANDLERS["vault_list"]({}, _ctx(session))
+    assert "error" not in result, result
 
 
 # ── the manifest tier still works on its own ─────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_the_operator_tier_needs_no_intake_flag(intake, monkeypatch):
+async def test_the_operator_tier_needs_no_human_in_the_loop(intake, monkeypatch):
     from robothor.engine.tools.handlers import vault as vault_tools
 
     monkeypatch.setattr(vault_tools, "credential_tier", lambda agent_id: "operator")
@@ -322,11 +461,10 @@ async def test_the_operator_tier_needs_no_intake_flag(intake, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_the_live_runs_task_text_loses_the_value(intake, monkeypatch):
+async def test_the_live_runs_task_text_loses_the_value(intake):
     """``agent_runs.task_text`` is written at run START, before the agent has
     stored anything, so a shapeless key in the owner's message is already in
     the row by the time ``vault_set`` runs. The handler takes it back out."""
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
     message = f"here is my weather key {SHAPELESS_KEY} please store it"
     session = intake["live"](task_text=message)
     await HANDLERS["vault_set"](_store_args(), _ctx(session))
@@ -343,14 +481,13 @@ async def test_the_live_runs_task_text_loses_the_value(intake, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_after_a_store_every_later_redaction_takes_the_value(intake, monkeypatch):
+async def test_after_a_store_every_later_redaction_takes_the_value(intake):
     """ChatHistory, ``chat_messages`` and the logs all go through ``redact``;
     the owner's turn is appended to them AFTER the run, when the value is
     known."""
     from robothor.engine.chat_history import ChatHistory
     from robothor.secrets.redaction import redact
 
-    monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
     session = intake["live"]()
     stored = await HANDLERS["vault_set"](_store_args(), _ctx(session))
 
@@ -374,12 +511,10 @@ async def test_after_a_store_every_later_redaction_takes_the_value(intake, monke
     "tool", ["vault_get", "vault_set", "vault_test", "vault_list", "vault_delete"]
 )
 async def test_the_gate_runs_off_the_event_loop(intake, monkeypatch, tool):
-    """The gate reads the agent's manifest from disk and the governed flag from
-    the database (``robothor.flags.store``). Both are blocking I/O; on the loop
-    thread they stall every other run for as long as the read takes."""
+    """The gate reads the agent's manifest from disk: blocking I/O that, on the
+    loop thread, stalls every other run for as long as the read takes."""
     import threading
 
-    from robothor.engine import feature_flags
     from robothor.engine.tools.handlers import vault as vault_tools
 
     seen: list[bool] = []
@@ -388,13 +523,34 @@ async def test_the_gate_runs_off_the_event_loop(intake, monkeypatch, tool):
         seen.append(threading.current_thread() is threading.main_thread())
         return ""
 
-    def mode():
-        seen.append(threading.current_thread() is threading.main_thread())
-        return "off"
-
     monkeypatch.setattr(vault_tools, "credential_tier", tier)
-    monkeypatch.setattr(feature_flags, "credential_intake_mode", mode)
     session = intake["live"]()
     await HANDLERS[tool](_store_args(), _ctx(session))
     assert seen, "the gate never ran"
     assert not any(seen), "the gate ran on the event-loop thread"
+
+
+# ── a deferred run reaches the gate with the same identity ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_tool_call_hands_the_inner_call_the_runs_identity(monkeypatch):
+    """On a deferred run ``vault_set`` is reached through ``tool_call``. The
+    gate reads the identity, so a wrapper that drops it refuses every
+    hand-over, and one that forged it would open the vault."""
+    from robothor.engine.tools import registry as registry_module
+    from robothor.engine.tools.handlers import toolsearch
+
+    seen: dict = {}
+
+    class _Registry:
+        async def execute(self, name, args, **kwargs):
+            seen.update(kwargs, name=name)
+            return {"success": True}
+
+    monkeypatch.setattr(registry_module, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(toolsearch, "get_deferred_allowed", lambda: frozenset({"vault_set"}))
+    ctx = _ctx()
+    await toolsearch._tool_call({"name": "vault_set", "arguments": _store_args()}, ctx)
+    assert seen.get("name") == "vault_set"
+    assert seen.get("identity") is ctx.identity

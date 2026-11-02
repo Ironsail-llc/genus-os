@@ -1837,16 +1837,6 @@ class FlagSettings(SettingsGroup):
         "needs the meetings.space.settings OAuth scope, and a failure is a "
         "note on the booking, never a failed booking.",
     )
-    credential_intake: str = declare(
-        "off",
-        "ROBOTHOR_CREDENTIAL_INTAKE",
-        "Let the default chat agent use the vault tools when an owner or admin "
-        "hands it a credential in a top-level human chat run. off keeps the "
-        "manifest-tier rule only, observe logs what enforce would allow, "
-        "enforce allows it. Unknown values read as off.",
-        governed=True,
-        since="unreleased",
-    )
     curator_apply: bool = declare(
         False,
         "ROBOTHOR_CURATOR_APPLY",

@@ -28,6 +28,18 @@ import pytest
 FAKE_TOKEN = "ghp_FAKE0000_must_not_reach_a_stored_row_0000"
 
 
+@pytest.fixture(
+    autouse=True, params=[None, "off", "observe"], ids=["unset", "stale-off", "stale-observe"]
+)
+def _no_switch(request, monkeypatch):
+    """Redaction has no switch. A retired intake variable left in the
+    environment, at any value it once took, must not turn any of it off."""
+    if request.param is None:
+        monkeypatch.delenv("ROBOTHOR_CREDENTIAL_INTAKE", raising=False)
+    else:
+        monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", request.param)
+
+
 def _session():
     from robothor.engine.session import AgentSession
 

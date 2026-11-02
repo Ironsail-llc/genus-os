@@ -231,8 +231,8 @@ def environment_credential_names() -> set[str]:
 
     declared = declared_secret_names()
     # A name the settings model declares and does NOT mark secret is a setting,
-    # whatever it is called: ``ROBOTHOR_CREDENTIAL_INTAKE`` is a feature flag,
-    # and the shape match alone listed it as a credential.
+    # whatever it is called: ``ROBOTHOR_MAIN_SESSION_KEY`` is a session name,
+    # and the shape match alone lists it as a credential.
     settings_only = non_secret_env_names()
     return {
         name
