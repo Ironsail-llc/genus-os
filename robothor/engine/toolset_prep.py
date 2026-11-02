@@ -40,8 +40,8 @@ class PreparedToolset:
     #: prompt paragraph and the browser schema wording turn on together — they
     #: describe one feature, and both used to ship to everyone.
     autonomy_active: bool = False
-    #: Opt-in tools the run's capability tier added (enforce) or would have
-    #: added (observe). Empty when no widening tier was resolved.
+    #: Opt-in tools the run's capability tier added. Empty when no widening
+    #: tier was resolved.
     tier_unlocked: tuple[str, ...] = ()
 
 
@@ -193,13 +193,13 @@ def publish_toolset(
       ``tool_search`` can answer a non-deferred run with the agent's own tools
       instead of "only available on deferred runs", which it returned 18 times
       in one week to an agent that went on calling it;
-    * the run's EFFECTIVE capability tier (``capability``, the run's
-      ``TierDecision`` or None), which dispatch copies onto ``ToolContext``.
+    * the run's capability tier (``capability``, the run's ``TierDecision``,
+      None outside a run), which dispatch copies onto ``ToolContext``.
     """
     from robothor.engine.capability_tier import set_effective_tier
     from robothor.engine.tools.dispatch import set_agent_toolset, set_deferred_allowed
 
-    tier = capability.effective if capability is not None else ""
+    tier = capability.tier if capability is not None else ""
     tier_kw = {"tier": tier} if tier else {}
     defer_token = (
         set_deferred_allowed(registry.deferred_whitelist(agent_config, **tier_kw))
@@ -240,25 +240,24 @@ async def prepare_toolset(
     of the two places that spend tokens on the answer. Both used to spend them
     unconditionally, on every instance, enrolled or not.
 
-    ``capability`` is the run's ``TierDecision`` (or None with the flag off).
-    Its effective tier picks the toolset; a widening tier also reports which
-    opt-in tools it added, or under observe would have added.
+    ``capability`` is the run's ``TierDecision`` (None outside a run). Its
+    tier picks the toolset; a widening tier also reports which opt-in tools
+    it added.
     """
     await _load_adapters(registry, agent_config, agent_id)
 
     if not readonly_mode:
         autonomy = await _autonomy_active(tenant_id, actor_id, agent_id)
-        # Passed only when there is one, so a run with the flag off makes the
+        # Passed only when there is one, so a caller with no run makes the
         # same registry calls it always made (any registry, not just ours).
-        tier = capability.effective if capability is not None else ""
+        tier = capability.tier if capability is not None else ""
         tier_kw = {"tier": tier} if tier else {}
         schemas = registry.build_for_agent(agent_config, autonomy=autonomy, **tier_kw)
         names = registry.get_tool_names(agent_config, **tier_kw)
         unlocked: tuple[str, ...] = ()
         if capability is not None and capability.widens:
             baseline = set(registry.get_tool_names(agent_config))
-            widened = registry.get_tool_names(agent_config, tier=capability.tier)
-            unlocked = tuple(n for n in widened if n not in baseline)
+            unlocked = tuple(n for n in names if n not in baseline)
         advertised = {str(schema.get("function", {}).get("name", "")) for schema in schemas}
         reachable = tuple(n for n in names if n not in advertised)
         return PreparedToolset(

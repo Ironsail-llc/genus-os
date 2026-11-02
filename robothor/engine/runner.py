@@ -676,7 +676,7 @@ class AgentRunner(
             if effective_identity is None and spawn_context.identity:
                 effective_identity = spawn_context.identity
 
-        # Capability tier from the final (post-spawn) user_role; None while off.
+        # Capability tier from the final (post-spawn) user_role.
         _tier = stamp_capability_tier(session.run, trigger_type, effective_identity)
 
         # Contact 360 linkage (robothor/engine/run_person_link.py).
@@ -1074,7 +1074,7 @@ class AgentRunner(
                 except Exception as e:
                     logger.warning("Failed to record run start: %s", _sanitize(e))
 
-                if _tier and _tier.widens:  # role_capability evidence; needs the run row
+                if _tier.widens:  # role_capability evidence; needs the run row
                     await asyncio.to_thread(
                         record_tier_event, session.run.id, _tier, _prepared.tier_unlocked
                     )

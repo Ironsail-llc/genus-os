@@ -17,8 +17,8 @@ The tier is that value. Rules:
   ``service_role``; a fabricated identity (an unregistered Telegram sender in
   the operator's chat is handed role ``owner`` with ``verified=False``) proves
   nothing about who is typing.
-* ``ROBOTHOR_ROLE_CAPABILITIES_MODE``: ``observe`` stamps the tier on the run
-  and records what it would unlock; only ``enforce`` makes it effective.
+* Every run is stamped with its tier, and a widened run writes one
+  ``role_capability`` guardrail row naming the opt-in tools it unlocked.
 """
 
 from __future__ import annotations
@@ -56,56 +56,41 @@ class TierDecision:
     tier: Tier
     role: str
     reason: str
-    mode: str
-
-    @property
-    def effective(self) -> str:
-        """The tier gates may act on: the tier under enforce, else ``""``."""
-        return self.tier if self.mode == "enforce" else ""
 
     @property
     def widens(self) -> bool:
         return self.tier in WIDENING_TIERS
 
 
-def resolve_tier(
-    role: str, *, interactive: bool, identity_verified: bool, mode: str
-) -> TierDecision:
+def resolve_tier(role: str, *, interactive: bool, identity_verified: bool) -> TierDecision:
     """Map a human's role to a tier, refusing to widen without proof of who it is."""
     tier: Tier = ROLE_TIERS.get(role, "standard")
     if tier in WIDENING_TIERS and not interactive:
-        return TierDecision("standard", role, "not an interactive run", mode)
+        return TierDecision("standard", role, "not an interactive run")
     if tier in WIDENING_TIERS and not identity_verified:
-        return TierDecision("standard", role, "identity not verified", mode)
-    return TierDecision(tier, role, f"role {role or 'unknown'}", mode)
+        return TierDecision("standard", role, "identity not verified")
+    return TierDecision(tier, role, f"role {role or 'unknown'}")
 
 
-def stamp_capability_tier(run: Any, trigger_type: Any, identity: Any) -> TierDecision | None:
-    """Resolve this run's tier and record it on the run. None when the flag is off.
+def stamp_capability_tier(run: Any, trigger_type: Any, identity: Any) -> TierDecision:
+    """Resolve this run's tier and record it on the run.
 
     Called once per run, after the human's role and identity are resolved. A
     trigger in the runner's ``_SYSTEM_TRIGGER_TYPES`` has no interactive human.
     """
-    from robothor.engine.feature_flags import role_capabilities_mode
-
-    mode = role_capabilities_mode()
-    if mode == "off":
-        return None
     from robothor.engine.runner import _SYSTEM_TRIGGER_TYPES
 
     decision = resolve_tier(
         run.user_role,
         interactive=trigger_type not in _SYSTEM_TRIGGER_TYPES,
         identity_verified=bool(identity is not None and getattr(identity, "verified", False)),
-        mode=mode,
     )
     run.capability_tier = decision.tier
-    run.capability_tier_mode = decision.mode
     run.capability_tier_reason = decision.reason
     return decision
 
 
-#: The effective tier of the run whose tools are executing. Installed and
+#: The tier of the run whose tools are executing. Installed and
 #: withdrawn with the run's toolset (toolset_prep.publish_toolset), so a
 #: sub-agent run inline in its parent's task restores the parent's on exit.
 _effective_tier_var: ContextVar[str] = ContextVar("capability_tier", default="")
@@ -120,24 +105,22 @@ def clear_effective_tier(token: Token[str]) -> None:
 
 
 def current_effective_tier() -> str:
-    """What ``ToolContext.capability_tier`` carries: the tier under enforce, else ``""``."""
+    """What ``ToolContext.capability_tier`` carries; ``""`` outside a run."""
     return _effective_tier_var.get()
 
 
 def record_tier_event(run_id: str, decision: TierDecision, unlocked: tuple[str, ...]) -> None:
     """One ``agent_guardrail_events`` row for a widened run. Blocking: call off the loop."""
     tools = ", ".join(unlocked) if unlocked else "none"
-    verb = "unlocked" if decision.mode == "enforce" else "would unlock"
-    reason = f"role {decision.role} -> tier {decision.tier}; {verb} opt-in tools: {tools}"
+    reason = f"role {decision.role} -> tier {decision.tier}; unlocked opt-in tools: {tools}"
     try:
         from robothor.engine.tracking import log_guardrail_event
 
         log_guardrail_event(
             run_id=run_id,
             guardrail_name=GUARDRAIL_NAME,
-            action="allowed" if decision.mode == "enforce" else "observed",
+            action="allowed",
             reason=reason,
-            mode=decision.mode,
             step_number=0,
         )
     except Exception as exc:  # noqa: BLE001 - losing the audit row is logged, never fatal

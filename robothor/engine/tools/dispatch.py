@@ -155,9 +155,9 @@ class ToolContext:
     # to compute the "own data + shared" DataScope for a call; None is the
     # unaffected, pre-Task-5 default every existing caller gets.
     identity: IdentityContext | None = None
-    # The run's EFFECTIVE capability tier (robothor/engine/capability_tier.py):
-    # "unrestricted" / "elevated" / "standard" / "restricted" under
-    # ROBOTHOR_ROLE_CAPABILITIES_MODE=enforce, "" otherwise. A gate that widens
+    # The run's capability tier (robothor/engine/capability_tier.py):
+    # "unrestricted" / "elevated" / "standard" / "restricted", "" for a call
+    # made outside a run. A gate that widens
     # for the owner reads this one field instead of re-deriving it from
     # user_role, trigger and identity. Read from the run's published toolset
     # (capability_tier.current_effective_tier) when the call is dispatched.

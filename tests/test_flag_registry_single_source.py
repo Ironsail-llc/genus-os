@@ -79,11 +79,6 @@ HISTORICAL_GOVERNED_FLAGS: frozenset[str] = frozenset(
         "ROBOTHOR_TRUNCATION_LEDGER_MODE",
         "ROBOTHOR_ACT_OBSERVE_MODE",
         "ROBOTHOR_VERDICT_COMMITMENT_MODE",
-        # Added 2026-10-31 with the role capability tier. Governed from the
-        # start: the rung decides whether an owner's chat run is offered the
-        # opt-in tool families, and an operator watching the observe rows must
-        # be able to move it from Controls rather than from /etc plus a restart.
-        "ROBOTHOR_ROLE_CAPABILITIES_MODE",
     }
 )
 
