@@ -450,3 +450,25 @@ class TestTheTriggerLogIsNotForgeable:
 
         assert caplog.records, "the schema refusal was not logged"
         assert all("\n" not in record.getMessage() for record in caplog.records)
+
+
+def test_retire_on_a_read_only_volume_without_retired_yet_is_a_422(client, seeded, monkeypatch):
+    """``retired/`` is created on first use, and that mkdir is a write too."""
+    from pathlib import Path
+
+    real_mkdir = Path.mkdir
+
+    def _read_only(self, *args, **kwargs):
+        if self.name == "retired":
+            raise OSError(30, "Read-only file system")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", _read_only)
+
+    response = client.request(
+        "DELETE", "/api/admin/agent-manifests/demo-agent", json={"confirm": "demo-agent"}
+    )
+
+    assert response.status_code == 422, response.text
+    assert "not writable" in response.json()["detail"]
+    assert seeded.is_file()

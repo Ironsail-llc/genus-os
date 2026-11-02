@@ -1991,3 +1991,23 @@ class TestAWriteWhoseAnswerWasLostIsStillAudited:
             client.patch("/api/agent-manifests/demo-agent", json={"name": "X"})
 
         assert seen["PATCH"] > seen["GET"]
+
+
+@pytest.mark.parametrize("hostile", ["../x", "a" * 4096, "x\ny"])
+def test_a_lost_create_never_audits_an_unvalidated_id(client, workspace, hostile):
+    """On the 502 path the bridge audits the id the engine WOULD have used —
+    and an id the engine would refuse is not a slug, so it must not become the
+    audit event's ``action``."""
+
+    async def _lost(method, path, *, json=None, timeout=30):
+        return 502, {"error": "engine unavailable"}
+
+    with (
+        patch("routers.agent_manifests.engine_request", new=_lost),
+        patch("routers.agent_manifests.audited") as audit,
+    ):
+        response = client.post("/api/agent-manifests", json=_create_body(id=hostile))
+
+    assert response.status_code == 502, response.text
+    assert audit.call_args.kwargs["action"] == "(invalid id)"
+    assert hostile not in json.dumps(audit.call_args.kwargs)
