@@ -165,6 +165,7 @@ async def _handle_chat_send(
     from robothor.engine.models import TriggerType
 
     async def _run() -> None:
+        identity = await _signed_in_identity(session.auth)
         last_len = 0
 
         async def on_content(cumulative: str) -> None:
@@ -189,6 +190,7 @@ async def _handle_chat_send(
                 tenant_id=session.auth.tenant_id,
                 user_id=session.auth.user_id,
                 user_role=session.auth.role,
+                identity=identity,
             )
 
             # Update history
@@ -211,6 +213,25 @@ async def _handle_chat_send(
             await session.send_notification("chat/error", {"error": str(e)})
 
     session.active_task = asyncio.create_task(_run())
+
+
+async def _signed_in_identity(auth: AuthContext) -> Any:
+    """The person behind a user token, resolved as webchat resolves one.
+
+    The IDE authenticates with the same ``user_accounts`` token as webchat, so
+    the same resolver applies. A service token is no person: None.
+    """
+    if auth.is_service:
+        return None
+    from robothor import identity as identity_module
+
+    try:
+        return await asyncio.to_thread(
+            identity_module.resolve_identity, "webchat", auth.user_id, auth.tenant_id
+        )
+    except Exception as exc:  # noqa: BLE001 - no identity is the safe answer
+        logger.warning("IDE: could not resolve the signed-in identity (%s)", type(exc).__name__)
+        return None
 
 
 async def _handle_chat_abort(session: IdeSession, request_id: str | int | None) -> None:
