@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from robothor.engine.pool import FleetPool, Priority, get_fleet_pool, init_fleet_pool
 
 
@@ -40,21 +42,20 @@ class TestFleetPool:
         pool.complete_run("run-1", cost_usd=0.60)
         pool.register_run("run-2", "agent-b")
         pool.complete_run("run-2", cost_usd=0.50)
-        # Total $1.10 > $1.00 cap
+        # Total $1.10 > $1.00 cap: reported, never refused
         allowed, reason = pool.can_start("agent-c")
-        assert allowed is False
-        assert "cost cap" in reason.lower()
+        assert allowed is True, reason
+        assert pool.cost_cap_crossed() == (pytest.approx(1.10), 1.0)
 
     def test_hourly_cost_includes_active_runs(self):
         pool = FleetPool(max_concurrent=100, hourly_cost_cap_usd=1.0)
         pool.register_run("run-1", "agent-a")
         pool.update_cost("run-1", 0.90)
         # Active run costs count toward cap
-        allowed, reason = pool.can_start("agent-b")
-        assert allowed is True  # 0.90 < 1.0
+        assert pool.cost_cap_crossed() is None  # 0.90 < 1.0
         pool.update_cost("run-1", 1.10)
-        allowed, reason = pool.can_start("agent-b")
-        assert allowed is False  # 1.10 > 1.0
+        assert pool.cost_cap_crossed() == (pytest.approx(1.10), 1.0)
+        assert pool.can_start("agent-b")[0] is True
 
     def test_cost_cap_zero_means_unlimited(self):
         pool = FleetPool(max_concurrent=100, hourly_cost_cap_usd=0)
@@ -63,6 +64,7 @@ class TestFleetPool:
             pool.complete_run(f"run-{i}", cost_usd=100.0)
         allowed, _ = pool.can_start("agent-a")
         assert allowed is True  # No cost cap
+        assert pool.cost_cap_crossed() is None
 
     def test_active_count(self):
         pool = FleetPool(max_concurrent=10)
@@ -96,9 +98,8 @@ class TestFleetPool:
         pool.complete_run("old", cost_usd=999.0)
         # Manually age the record
         pool._cost_history[0].completed_at = time.monotonic() - 3700  # >1h ago
-        # Should be pruned; new run allowed
-        allowed, _ = pool.can_start("agent-b")
-        assert allowed is True
+        # Should be pruned; the cap is no longer crossed
+        assert pool.cost_cap_crossed() is None
 
     def test_hourly_cost_property(self):
         pool = FleetPool(max_concurrent=100, hourly_cost_cap_usd=10.0)

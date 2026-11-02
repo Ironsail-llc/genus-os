@@ -182,24 +182,37 @@ def test_a_flagged_watchdog_stops_the_run():
 # ── Runaway tokens ───────────────────────────────────────────────────
 
 
-def test_the_hard_cap_stops_the_run_and_marks_the_budget_exhausted(monkeypatch):
-    """When the operator sets the cap. Unset, it observes (test_budget_stops.py)."""
+def test_the_hard_cap_records_and_does_not_stop_the_run(monkeypatch):
+    """Set explicitly or not, the cap is a threshold for the report."""
+    from robothor.engine import loop_guards
     from robothor.engine.runner import RUNAWAY_TOKEN_HARD_CAP
 
     monkeypatch.setenv("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", str(RUNAWAY_TOKEN_HARD_CAP))
+    hits: list[int] = []
+    monkeypatch.setattr(
+        loop_guards.budget_stops, "runaway_cap_hit", lambda _s, _cap, used, _r: hits.append(used)
+    )
+    monkeypatch.setattr(loop_guards, "_spawn_hard_cap_alert", lambda *a: None)
     session = _session(input_tokens=RUNAWAY_TOKEN_HARD_CAP, output_tokens=0)
 
-    assert _call(session) is True
-    assert session.run.budget_exhausted is True
-    assert session.errors and "runaway_token_cap_hit" in session.errors[0]
+    assert _call(session) is False
+    assert session.run.budget_exhausted is False
+    assert session.errors == []
+    assert hits == [RUNAWAY_TOKEN_HARD_CAP]
 
 
 def test_the_cap_counts_input_and_output_together(monkeypatch):
+    from robothor.engine import loop_guards
     from robothor.engine.runner import RUNAWAY_TOKEN_HARD_CAP
 
-    monkeypatch.setenv("ROBOTHOR_RUNAWAY_HARD_CAP_MODE", "enforce")
+    hits: list[int] = []
+    monkeypatch.setattr(
+        loop_guards.budget_stops, "runaway_cap_hit", lambda _s, _cap, used, _r: hits.append(used)
+    )
+    monkeypatch.setattr(loop_guards, "_spawn_hard_cap_alert", lambda *a: None)
     half = RUNAWAY_TOKEN_HARD_CAP // 2 + 1
-    assert _call(_session(input_tokens=half, output_tokens=half)) is True
+    assert _call(_session(input_tokens=half, output_tokens=half)) is False
+    assert hits == [2 * half]
 
 
 def test_the_soft_alert_fires_once_and_does_not_stop_the_run():

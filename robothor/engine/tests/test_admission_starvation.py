@@ -68,16 +68,16 @@ class TestCriticalIsNotStarvedAtOneSlot:
 
         assert pool.can_start("main", Priority.CRITICAL)[0] is False
 
-    def test_the_cost_cap_still_binds_the_overflow(self) -> None:
-        """Overflow buys a slot, never a budget."""
+    def test_the_cost_cap_never_refuses_the_overflow(self) -> None:
+        """Spend past the cap is reported, never a reason to refuse a slot."""
         pool = FleetPool(max_concurrent=1, hourly_cost_cap_usd=1.0)
         pool.register_run("bg-1", "crm-sweep")
         pool.update_cost("bg-1", 2.0)
 
         allowed, reason = pool.can_start("main", Priority.CRITICAL)
 
-        assert allowed is False
-        assert "cost cap" in reason.lower()
+        assert allowed is True, reason
+        assert pool.cost_cap_crossed() == (2.0, 1.0)
 
 
 class TestSpawnFanOutIsSizedFromTheModePolicy:
