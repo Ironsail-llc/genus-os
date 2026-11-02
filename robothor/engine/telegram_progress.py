@@ -29,11 +29,11 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from robothor.engine.telegram_format import SentMessages, needs_rich_message, telegram_chunks
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["TelegramProgress"]
+__all__ = ["TelegramProgress", "deliver_reply"]
 
 #: Telegram's message length limit, and the room left for the tool line.
 _MESSAGE_LIMIT = 4096
@@ -220,3 +220,35 @@ class TelegramProgress:
                 return SimpleNamespace(message_id=self.message_id)
             return result
         return None
+
+
+async def deliver_reply(
+    progress: TelegramProgress | None,
+    run: Any,
+    chat_id: str,
+    send: Callable[[str, str], Awaitable[list[Any]]],
+) -> list[Any]:
+    """Deliver a finished run's answer; the one place a Telegram turn's reply goes out.
+
+    The progress message is finalised in place when the answer fits one edit.
+    Otherwise it is deleted and the answer (or the error, or "no output") goes
+    out through ``send(chat_id, text)`` as new messages. ``progress`` is
+    ``None`` only when Telegram refused the "Thinking..." message. Returns the
+    delivered Message objects, so the caller can record delivery and map
+    platform message ids.
+    """
+    if progress is not None:
+        if run.output_text:
+            finalised = await progress.finalise(run.output_text)
+            if finalised is not None:
+                return finalised
+        await progress.aclose()
+        with contextlib.suppress(Exception):
+            await progress.bot.delete_message(
+                chat_id=int(progress.chat_id), message_id=progress.message_id
+            )
+    if run.output_text:
+        return await send(chat_id, run.output_text)
+    if run.error_message:
+        return await send(chat_id, f"Error: {run.error_message}")
+    return await send(chat_id, "Done. No output produced.")

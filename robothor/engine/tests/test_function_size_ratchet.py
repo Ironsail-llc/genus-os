@@ -105,7 +105,9 @@ KNOWN_LARGE: dict[str, int] = {
     # is what paid for owning SIGTERM in here (the handler install and the
     # stop-signal task) rather than raising this number for it.
     "daemon.py::main": 354,
-    "telegram.py::_run_interactive": 384,
+    # 384 -> 363: the ten-second tool-status edits went with the only
+    # streaming path; the reply's delivery is telegram_progress.deliver_reply.
+    "telegram.py::_run_interactive": 363,
     # 343 -> 325: the benchmark break-out moved to _benchmark_spend, which is
     # what paid for un-scoping it from the production tenant (the graded
     # children now run as benchmark-sandbox) rather than raising this number.
@@ -150,6 +152,8 @@ KNOWN_LARGE: dict[str, int] = {
     # 247 -> 245: its own per-call timeout selection now shares
     # _per_call_timeout with _call_llm, which more than paid for the same
     # workflow-deadline clamp landing on this chain walk too.
+    # 230 -> 229: the in-place stream retry's announce, watchdog touch and
+    # pause are one helper, _before_stream_retry.
     # 236 -> 230: the credential rotation and the auth-failure verdict are now
     # the same two helpers _call_llm uses, which is what paid for the streaming
     # emptiness guard (one provider call, one row).
@@ -157,8 +161,9 @@ KNOWN_LARGE: dict[str, int] = {
     # retired pool) moved to _streaming_skip_reason, which is what paid for it
     # recording its attempts — so `duration_ms` means the provider attempt on
     # BOTH paths instead of one thing streamed and another not (review I5).
-    "llm_client.py::_call_llm_streaming": 230,
-    "telegram.py::run_agent": 257,
+    "llm_client.py::_call_llm_streaming": 229,
+    # 257 -> 239: delivery moved to telegram_progress.deliver_reply.
+    "telegram.py::run_agent": 239,
     "tools/handlers/experiment.py::_experiment_commit": 256,
     "telegram.py::_handle_goal_command": 242,
     "managed_agents/runner.py::run_on_managed_agents": 241,

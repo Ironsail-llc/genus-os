@@ -85,7 +85,9 @@ CAPS = {
     # instead of a parser. It came back to the cap when the private-input cut
     # was added to it, and trimming that explanation to fit is the trade this
     # file has refused before.
-    "robothor/engine/telegram.py": 1980,
+    # 1980 -> 1967: streaming is the only reply path; the old status edits
+    # went, and delivering the reply moved to telegram_progress.deliver_reply.
+    "robothor/engine/telegram.py": 1967,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new

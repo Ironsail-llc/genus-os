@@ -56,7 +56,7 @@ from robothor.engine.telegram_format import (
     rich_payload,
     telegram_chunks,
 )
-from robothor.engine.telegram_progress import TelegramProgress
+from robothor.engine.telegram_progress import TelegramProgress, deliver_reply
 from robothor.sanitize import sanitize_preview
 
 if TYPE_CHECKING:
@@ -569,25 +569,22 @@ class TelegramBot(
                 # _chat_user_info entry, or no from_user on the message).
                 _identity = self._build_identity(_user, chat_id, _tenant)
 
-                execute_kwargs: dict[str, Any] = {
-                    "agent_id": self.config.default_chat_agent,
-                    "message": user_text,
-                    "trigger_type": TriggerType.TELEGRAM,
-                    "trigger_detail": _detail,
-                    "on_tool": on_tool,
-                    "on_status": on_tool,
-                    "model_override": model,
-                    "conversation_history": history or None,
-                    "tenant_id": _tenant,
-                    "user_id": str((_user or {}).get("user_id") or f"telegram:{chat_id}"),
-                    "user_role": str((_user or {}).get("role") or "user"),
-                    "identity": _identity,
-                    "live_inbox": inbox,
-                }
                 with channel_stream_scope():
                     run = await self.runner.execute(
-                        **execute_kwargs,
+                        agent_id=self.config.default_chat_agent,
+                        message=user_text,
+                        trigger_type=TriggerType.TELEGRAM,
+                        trigger_detail=_detail,
+                        on_tool=on_tool,
+                        on_status=on_tool,
                         on_content=progress.on_content if progress is not None else None,
+                        model_override=model,
+                        conversation_history=history or None,
+                        tenant_id=_tenant,
+                        user_id=str((_user or {}).get("user_id") or f"telegram:{chat_id}"),
+                        user_role=str((_user or {}).get("role") or "user"),
+                        identity=_identity,
+                        live_inbox=inbox,
                     )
                 run_for_delivery = run
                 self._seal_live_inbox(chat_id, inbox)  # later messages are a new turn
@@ -619,9 +616,7 @@ class TelegramBot(
                 # Capture the Telegram Message objects the reply went out as,
                 # so the channel bus can map platform_message_ids to the
                 # assistant chat_message row we'll persist below.
-                sent_messages = await self._finalise_progress_and_send(
-                    chat_id, stream_msg_id, progress, run
-                )
+                sent_messages = await deliver_reply(progress, run, chat_id, self.send_message)
 
                 await self._record_interactive_delivery(run, sent_messages)
 
@@ -771,36 +766,6 @@ class TelegramBot(
 
         task = asyncio.create_task(run_agent())
         self._active_tasks[chat_id] = task
-
-    async def _finalise_progress_and_send(
-        self,
-        chat_id: str,
-        stream_msg_id: int | None,
-        progress: TelegramProgress | None,
-        run: Any,
-    ) -> list[Any]:
-        """Deliver a finished run's answer; the one place a turn's reply goes out.
-
-        The progress message is finalised in place when the answer fits one
-        edit. Otherwise the status message is
-        deleted and the answer (or the error, or "no output") is sent as new
-        messages. Returns the delivered Message objects, so the caller can
-        record delivery and map platform message ids.
-        """
-        if progress is not None and run.output_text:
-            finalised = await progress.finalise(run.output_text)
-            if finalised is not None:
-                return finalised
-        if progress is not None:
-            await progress.aclose()
-        if stream_msg_id is not None:
-            with contextlib.suppress(Exception):
-                await self.bot.delete_message(chat_id=int(chat_id), message_id=stream_msg_id)
-        if run.output_text:
-            return await self.send_message(chat_id, run.output_text)
-        if run.error_message:
-            return await self.send_message(chat_id, f"Error: {run.error_message}")
-        return await self.send_message(chat_id, "Done. No output produced.")
 
     def _build_background_config(self) -> Any:
         """Build agent config with continuous-mode overrides for background plan execution."""
