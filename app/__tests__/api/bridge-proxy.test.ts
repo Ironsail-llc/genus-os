@@ -295,3 +295,48 @@ describe("Bridge Proxy vault denylist", () => {
     );
   });
 });
+
+/**
+ * Retiring an agent is a DELETE that carries `{confirm: <id>}`: the bridge
+ * refuses a retire whose body does not name the agent being retired. The proxy
+ * forwarded a body only for POST, PUT and PATCH, so the confirmation never left
+ * the dashboard and every retire came back 422 "Field required".
+ */
+describe("Bridge Proxy request bodies", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: () => Promise.resolve({ id: "example-agent", retired: true }),
+    });
+  });
+
+  it("forwards a DELETE's JSON body to the bridge", async () => {
+    const body = JSON.stringify({ confirm: "example-agent" });
+    const req = makeRequest("DELETE", "api/agent-manifests/example-agent", body);
+    const res = await DELETE(req, makeContext(["api", "agent-manifests", "example-agent"]));
+
+    expect(res.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:9100/api/agent-manifests/example-agent",
+      expect.objectContaining({ method: "DELETE", body })
+    );
+    expect(mockFetch.mock.calls[0][1].headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("sends no body for a DELETE that has none", async () => {
+    const req = makeRequest("DELETE", "api/notes/7");
+    await DELETE(req, makeContext(["api", "notes", "7"]));
+
+    expect(mockFetch.mock.calls[0][1].body).toBeUndefined();
+  });
+
+  it("keeps a GET bodiless", async () => {
+    const req = makeRequest("GET", "api/notes");
+    await GET(req, makeContext(["api", "notes"]));
+
+    expect(mockFetch.mock.calls[0][1].body).toBeUndefined();
+  });
+});
