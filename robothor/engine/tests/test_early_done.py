@@ -428,14 +428,20 @@ async def _telegram_turn(bot, runner: _ContractRunner, timeline: _Timeline) -> l
         sent.append(text)
         return [MagicMock(message_id=777)]
 
+    async def deliver(progress: Any, run: Any, chat_id: str, send: Any) -> list[Any]:
+        # With streaming the only path, the answer usually finalises the
+        # progress message in place; either way it leaves through here.
+        return await send_message(chat_id, run.output_text)
+
     bot.runner = runner
     bot.send_message = send_message
     session_key = bot._session_key("12345")
     session = get_shared_session(session_key)
-    await bot._run_interactive("12345", session_key, session, "hello")
-    task = bot._active_tasks.get("12345")
-    if task:
-        await task
+    with patch("robothor.engine.telegram.deliver_reply", deliver):
+        await bot._run_interactive("12345", session_key, session, "hello")
+        task = bot._active_tasks.get("12345")
+        if task:
+            await task
     return sent
 
 
@@ -638,15 +644,19 @@ class TestReviewFollowUps:
             open_at_send.append(runner.kwargs["live_inbox"].is_open)
             return [MagicMock(message_id=777)]
 
+        async def deliver(progress: Any, run: Any, chat_id: str, send: Any) -> list[Any]:
+            return await send_message(chat_id, run.output_text)  # the reply's one way out
+
         telegram_bot.runner = runner
         telegram_bot.send_message = send_message
         session_key = telegram_bot._session_key("12345")
-        await telegram_bot._run_interactive(
-            "12345", session_key, get_shared_session(session_key), "hello"
-        )
-        task = telegram_bot._active_tasks.get("12345")
-        if task:
-            await task
+        with patch("robothor.engine.telegram.deliver_reply", deliver):
+            await telegram_bot._run_interactive(
+                "12345", session_key, get_shared_session(session_key), "hello"
+            )
+            task = telegram_bot._active_tasks.get("12345")
+            if task:
+                await task
         await get_task_registry().drain(timeout=5.0)
 
         assert open_at_send == [False]
