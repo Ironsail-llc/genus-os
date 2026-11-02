@@ -65,16 +65,30 @@ def test_a_failure_never_breaks_the_checkout():
     dbc._apply_ann_scan_mode(_Boom())  # must not raise
 
 
-def test_it_is_applied_from_get_connection():
+def test_it_is_applied_from_get_connection(monkeypatch):
     """Wired, not merely defined -- the defect class this fixes is unwired guards.
 
-    Reads the file rather than using ``inspect``: ``get_connection`` is
-    wrapped by ``@contextmanager``, and linecache can serve stale source
-    inside a test session, which would make this assertion lie in both
-    directions.
+    Drives ``get_connection`` against a fake pool and reads what reached the
+    connection, rather than grepping the source for a call.
     """
-    import pathlib
+    sink: list[str] = []
 
-    src = (pathlib.Path(dbc.__file__)).read_text()
-    body = src[src.index("def get_connection(") :]
-    assert "_apply_ann_scan_mode(conn)" in body
+    class _Pool:
+        def __init__(self):
+            self.conn = _Conn(sink)
+            self.conn.autocommit = False
+            self.conn.closed = 0
+            self.conn.commit = lambda: None
+            self.conn.rollback = lambda: None
+
+        def getconn(self):
+            return self.conn
+
+        def putconn(self, conn):
+            pass
+
+    monkeypatch.setattr(dbc, "get_pool", lambda: _Pool())
+    monkeypatch.setattr(dbc, "_warned_superuser", True)
+    with dbc.get_connection(read_only=True):
+        pass
+    assert any("hnsw.iterative_scan" in sql.lower() for sql in sink), sink

@@ -1,15 +1,16 @@
 """A database checkout that costs one round trip, not four or five.
 
-Today every ``get_connection()`` starts an OS thread just to call
-``pool.getconn()``, then runs ``set_config('app.tenant_id', ...)`` (when RLS
+It used to be that every ``get_connection()`` started an OS thread just to call
+``pool.getconn()``, then ran ``set_config('app.tenant_id', ...)`` (when RLS
 is on) and ``SET hnsw.iterative_scan`` on a connection that very often already
-carries both, and finally commits. A single-statement read therefore pays
+carried both, and finally committed. A single-statement read paid
 BEGIN + set_config + SET + the query + COMMIT.
 
-Under ``ROBOTHOR_DB_FAST_CHECKOUT`` the session settings are remembered per
-connection and re-applied only when they change, a ``read_only`` checkout runs
-without a transaction, and no thread is started. RLS must not regress: a
-connection reused for a different tenant re-runs ``set_config``.
+The session settings are remembered per connection and re-applied only when
+they change, a ``read_only`` checkout runs without a transaction, and no thread
+is started. That is the only checkout there is: no setting turns it off. RLS
+must not regress: a connection reused for a different tenant re-runs
+``set_config``.
 
 The fake connection below models what psycopg2 sends to the server: an
 implicit BEGIN before the first statement of a transaction, COMMIT/ROLLBACK
@@ -145,12 +146,6 @@ def pool(monkeypatch: pytest.MonkeyPatch) -> _Pool:
     return fake
 
 
-@pytest.fixture
-def fast(monkeypatch: pytest.MonkeyPatch, pool: _Pool) -> _Pool:
-    monkeypatch.setenv("ROBOTHOR_DB_FAST_CHECKOUT", "true")
-    return pool
-
-
 def _select(conn: _Conn, sql: str = "SELECT 1") -> None:
     with conn.cursor() as cur:
         cur.execute(sql)
@@ -169,78 +164,58 @@ def _set_configs(log: list[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Baseline: the flag off keeps today's trace exactly.
+# The one checkout path.
 # ---------------------------------------------------------------------------
 
 
-def test_flag_off_a_repeat_read_still_costs_five_round_trips(pool: _Pool) -> None:
-    for _ in range(2):
-        pool.log.clear()
-        with connection.get_connection() as conn:
-            _select(conn)
-    assert len(pool.created) == 1, "the fake pool must hand back the same connection"
-    assert pool.log == [
-        "BEGIN",
-        "SELECT set_config('app.tenant_id', %s, false)",
-        f"SET hnsw.iterative_scan = {connection.ANN_ITERATIVE_SCAN_MODE}",
-        "SELECT 1",
-        "COMMIT",
-    ]
-
-
-# ---------------------------------------------------------------------------
-# Flag on.
-# ---------------------------------------------------------------------------
-
-
-def test_a_second_read_only_checkout_with_the_same_tenant_is_one_statement(fast: _Pool) -> None:
+def test_a_second_read_only_checkout_with_the_same_tenant_is_one_statement(pool: _Pool) -> None:
     with connection.get_connection(read_only=True) as conn:
         _select(conn)
-    fast.log.clear()
+    pool.log.clear()
 
     with connection.get_connection(read_only=True) as conn:
         _select(conn)
 
-    assert len(fast.created) == 1
-    assert fast.log == ["SELECT 1"], (
+    assert len(pool.created) == 1
+    assert pool.log == ["SELECT 1"], (
         "a repeat read on a connection already bound to this tenant must send "
-        f"only the caller's own statement, got {fast.log}"
+        f"only the caller's own statement, got {pool.log}"
     )
 
 
-def test_a_second_write_checkout_with_the_same_tenant_skips_the_setup(fast: _Pool) -> None:
+def test_a_second_write_checkout_with_the_same_tenant_skips_the_setup(pool: _Pool) -> None:
     with connection.get_connection() as conn:
         _select(conn, "INSERT INTO t VALUES (1)")
-    fast.log.clear()
+    pool.log.clear()
 
     with connection.get_connection() as conn:
         _select(conn, "INSERT INTO t VALUES (2)")
 
-    assert fast.log == ["BEGIN", "INSERT INTO t VALUES (2)", "COMMIT"]
+    assert pool.log == ["BEGIN", "INSERT INTO t VALUES (2)", "COMMIT"]
 
 
-def test_the_first_checkout_still_applies_both_settings(fast: _Pool) -> None:
+def test_the_first_checkout_still_applies_both_settings(pool: _Pool) -> None:
     with connection.get_connection(read_only=True) as conn:
         assert _bound_tenant(conn) == "tenant-a"
-    conn_obj = fast.created[0]
+    conn_obj = pool.created[0]
     assert conn_obj.session["hnsw.iterative_scan"] == connection.ANN_ITERATIVE_SCAN_MODE
-    assert _set_configs(fast.log), "the first checkout must bind the tenant"
+    assert _set_configs(pool.log), "the first checkout must bind the tenant"
 
 
-def test_a_tenant_change_reapplies_set_config_every_time(fast: _Pool) -> None:
+def test_a_tenant_change_reapplies_set_config_every_time(pool: _Pool) -> None:
     seen: list[str] = []
     for tenant in ("tenant-a", "tenant-b", "tenant-a", "tenant-b"):
-        fast.log.clear()
+        pool.log.clear()
         with connection.tenant_scope(tenant), connection.get_connection(read_only=True) as conn:
             seen.append(_bound_tenant(conn))
-        assert len(_set_configs(fast.log)) == 1, (
-            f"switching the pooled connection to {tenant} must re-run set_config, got {fast.log}"
+        assert len(_set_configs(pool.log)) == 1, (
+            f"switching the pooled connection to {tenant} must re-run set_config, got {pool.log}"
         )
-    assert len(fast.created) == 1
+    assert len(pool.created) == 1
     assert seen == ["tenant-a", "tenant-b", "tenant-a", "tenant-b"]
 
 
-def test_a_rollback_does_not_leave_the_connection_on_a_stale_tenant(fast: _Pool) -> None:
+def test_a_rollback_does_not_leave_the_connection_on_a_stale_tenant(pool: _Pool) -> None:
     """Settings a rolled-back transaction carried must not be trusted afterwards."""
     with pytest.raises(RuntimeError, match="boom"):
         with connection.tenant_scope("tenant-b"), connection.get_connection() as conn:
@@ -253,21 +228,21 @@ def test_a_rollback_does_not_leave_the_connection_on_a_stale_tenant(fast: _Pool)
         assert _bound_tenant(conn) == "tenant-a"
 
 
-def test_a_discarded_connection_is_not_remembered(fast: _Pool) -> None:
+def test_a_discarded_connection_is_not_remembered(pool: _Pool) -> None:
     with connection.get_connection(read_only=True) as conn:
         _select(conn)
         conn.close()  # the server went away; the pool will discard it
-    fast.log.clear()
+    pool.log.clear()
 
     with connection.get_connection(read_only=True) as conn:
         _select(conn)
 
-    assert len(fast.created) == 2
-    assert _set_configs(fast.log), "a fresh connection must be bound to the tenant"
-    assert any(s.startswith("SET hnsw.iterative_scan") for s in fast.log)
+    assert len(pool.created) == 2
+    assert _set_configs(pool.log), "a fresh connection must be bound to the tenant"
+    assert any(s.startswith("SET hnsw.iterative_scan") for s in pool.log)
 
 
-def test_no_thread_is_started_per_checkout(fast: _Pool, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_thread_is_started_per_checkout(pool: _Pool, monkeypatch: pytest.MonkeyPatch) -> None:
     started: list[object] = []
 
     class _NoThread(threading.Thread):
@@ -282,13 +257,13 @@ def test_no_thread_is_started_per_checkout(fast: _Pool, monkeypatch: pytest.Monk
     assert started == [], f"{len(started)} threads started for 50 checkouts"
 
 
-def test_an_acquisition_error_keeps_its_cause(fast: _Pool, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_acquisition_error_keeps_its_cause(pool: _Pool, monkeypatch: pytest.MonkeyPatch) -> None:
     cause = RuntimeError("connection pool exhausted")
 
     def _boom() -> _Conn:
         raise cause
 
-    monkeypatch.setattr(fast, "getconn", _boom)
+    monkeypatch.setattr(pool, "getconn", _boom)
     with pytest.raises(ConnectionError, match="Failed to acquire") as raised:
         with connection.get_connection():
             pytest.fail("failed acquisition must not yield")
@@ -296,12 +271,58 @@ def test_an_acquisition_error_keeps_its_cause(fast: _Pool, monkeypatch: pytest.M
 
 
 def test_a_read_only_checkout_leaves_the_connection_transactional_for_the_next(
-    fast: _Pool,
+    pool: _Pool,
 ) -> None:
     with connection.get_connection(read_only=True) as conn:
         _select(conn)
     with connection.get_connection() as conn:
         assert conn.autocommit is False
+
+
+#: Spelled in two halves so this file is not itself a mention.
+_RETIRED_SWITCH = "ROBOTHOR_DB_" + "FAST_CHECKOUT"
+
+
+def test_the_old_switch_changes_nothing(pool: _Pool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting the retired switch to off still gets the one checkout path."""
+    monkeypatch.setenv(_RETIRED_SWITCH, "0")
+    started: list[object] = []
+
+    class _CountingThread(threading.Thread):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            started.append(kwargs.get("target"))
+            super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(threading, "Thread", _CountingThread)
+    for _ in range(3):
+        with connection.get_connection(read_only=True) as conn:
+            _select(conn)
+
+    assert started == [], f"{len(started)} threads started for 3 checkouts"
+    assert len(pool.created) == 1
+    assert len(_set_configs(pool.log)) == 1, f"the tenant was bound more than once: {pool.log}"
+    scans = [s for s in pool.log if s.startswith("SET hnsw.iterative_scan")]
+    assert len(scans) == 1, f"the scan mode was set more than once: {pool.log}"
+
+
+def test_nothing_mentions_the_retired_switch() -> None:
+    """A shipped behaviour is the only code path; nothing reads, declares or documents a switch."""
+    repo = pathlib.Path(connection.__file__).resolve().parents[2]
+    here = pathlib.Path(__file__).resolve()
+    roots = ["robothor", "tests", "docs", "changelog.d", "infra", "scripts", "crm"]
+    suffixes = {".py", ".md", ".yaml", ".yml", ".toml", ".json", ".txt", ".sh", ".env"}
+    offenders = [
+        str(path.relative_to(repo))
+        for root in roots
+        if repo.joinpath(root).is_dir()
+        for path in repo.joinpath(root).rglob("*")
+        if path.is_file()
+        and path.suffix in suffixes
+        and path.resolve() != here
+        and "node_modules" not in path.parts
+        and _RETIRED_SWITCH in path.read_text(encoding="utf-8", errors="ignore")
+    ]
+    assert offenders == [], f"files still mention {_RETIRED_SWITCH}: {offenders}"
 
 
 # ---------------------------------------------------------------------------

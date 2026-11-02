@@ -380,3 +380,62 @@ def test_the_rls_fix_executes_migration_120s_own_sql(monkeypatch) -> None:
 def test_the_backstop_migration_ships_with_this_install() -> None:
     sql = db_checks._migration_sql(db_checks.RLS_BACKSTOP_MIGRATION)
     assert "tenant_isolation" in sql
+
+
+# ── db.session_settings ──────────────────────────────────────────────────────
+#
+# The connection factory sets the tenant binding and the vector-scan mode once
+# per pooled connection and trusts the session to keep them. A transaction-mode
+# pooler hands each transaction to whichever server connection is free, so
+# that trust is misplaced there; this check is how an operator finds out.
+
+
+def _session_ctx(monkeypatch, rows):
+    monkeypatch.setattr(db_checks, "_session_probe_token", lambda: "probe-token")
+    factory = fake_db(rows)
+    return make_ctx(db_factory=factory), factory
+
+
+def test_session_settings_pass_when_they_survive_every_transaction(monkeypatch) -> None:
+    rows = [(41, "probe-token")] + [(41, "probe-token")] * db_checks.SESSION_PROBE_ROUNDS
+    ctx, factory = _session_ctx(monkeypatch, rows)
+    result = _run("db.session_settings", ctx)
+    assert result.status == "pass", result.detail
+    # Each read must sit in its own transaction, or the probe proves nothing.
+    assert factory.connection.commits >= db_checks.SESSION_PROBE_ROUNDS
+
+
+def test_a_setting_lost_between_transactions_fails_and_names_the_pooler(monkeypatch) -> None:
+    rows = [(41, "probe-token"), (41, "probe-token"), (41, "")] + [
+        (41, "probe-token")
+    ] * db_checks.SESSION_PROBE_ROUNDS
+    ctx, _ = _session_ctx(monkeypatch, rows)
+    result = _run("db.session_settings", ctx)
+    assert result.status == "fail"
+    assert "transaction-mode pooler" in result.detail
+    assert "docs/deployment.md" in result.detail
+
+
+def test_a_different_server_process_fails_even_when_the_value_matches(monkeypatch) -> None:
+    rows = [(41, "probe-token"), (42, "probe-token")] + [
+        (41, "probe-token")
+    ] * db_checks.SESSION_PROBE_ROUNDS
+    ctx, _ = _session_ctx(monkeypatch, rows)
+    result = _run("db.session_settings", ctx)
+    assert result.status == "fail"
+    assert "transaction-mode pooler" in result.detail
+
+
+def test_session_settings_skip_when_the_database_is_unreachable(monkeypatch) -> None:
+    monkeypatch.setattr(db_checks, "_session_probe_token", lambda: "probe-token")
+    ctx = make_ctx(db_factory=fake_db(error=RuntimeError("password=hunter2")))
+    result = _run("db.session_settings", ctx)
+    assert result.status == "skip"
+    assert "hunter2" not in result.detail
+
+
+def test_session_settings_is_a_required_database_check() -> None:
+    """A tenant binding that can belong to another tenant is a data boundary."""
+    check = _check("db.session_settings")
+    assert check.category == "database"
+    assert check.severity == "required"
