@@ -825,6 +825,32 @@ class EngineSettings(SettingsGroup):
         "ROBOTHOR_ENGINE_URL",
         "Base URL the dashboard's server-side client and the bridge call the engine on.",
     )
+    webhooks_config: str = declare(
+        "",
+        "ROBOTHOR_WEBHOOKS_CONFIG",
+        "Where the webhook ingress reads its channels: a YAML file (its sibling "
+        "<stem>.d/ drop-ins are merged after it), or a directory holding "
+        "webhooks.yaml and webhooks.d/. Read by the engine and by the standalone "
+        "receiver (python -m robothor.engine.hooks_server). Empty means "
+        "<workspace>/docs/webhooks.yaml.",
+        since="unreleased",
+    )
+    hooks_host: str = declare(
+        "0.0.0.0",  # noqa: S104 -- the receiver exists to take external deliveries
+        "ROBOTHOR_HOOKS_HOST",
+        "Address the standalone webhook receiver binds to. All interfaces by "
+        "default: it serves only the signed webhook POST and two probes, and "
+        "exists to be reached from outside.",
+        restart_units=(),
+        since="unreleased",
+    )
+    hooks_port: int = declare(
+        18801,
+        "ROBOTHOR_HOOKS_PORT",
+        "Port the standalone webhook receiver (python -m robothor.engine.hooks_server) listens on.",
+        restart_units=(),
+        since="unreleased",
+    )
     max_concurrent_agents: int = declare(
         3,
         "ROBOTHOR_MAX_CONCURRENT_AGENTS",

@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -109,7 +109,7 @@ jobs:
   changelog-fragment:
     name: Release-note fragment
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -130,7 +130,7 @@ jobs:
           --pr "$PR_NUMBER" --title "$PR_TITLE" --labels "$PR_LABELS"
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -167,7 +167,7 @@ jobs:
       - run: shellcheck --severity=warning scripts/*.sh
 
   typecheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -183,7 +183,7 @@ jobs:
       - run: mypy bench/wildclaw --ignore-missing-imports --exclude 'tests/'
 
   validate-agents:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -193,7 +193,7 @@ jobs:
       - run: python scripts/validate_agents.py --ci
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -248,7 +248,7 @@ jobs:
           -v
 
   test-autonomy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       postgres:
@@ -288,7 +288,7 @@ jobs:
       - run: pytest robothor/autonomy/tests/ robothor/engine/tests/test_browser_resources.py -q
 
   test-bridge:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -302,7 +302,7 @@ jobs:
   test-integration:
     # Real-PostgreSQL integration lane. Kept out of the default unit matrix,
     # but every integration contract is release-blocking here.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         # pgvector image (Postgres 16 + the `vector` extension): infra/001_init.sql
@@ -374,7 +374,7 @@ jobs:
     # the way an end user (or a later distribution PR) actually would. This
     # is the first place in CI anything builds a wheel at all — later
     # distribution-train PRs extend this job rather than re-deriving it.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -479,7 +479,7 @@ jobs:
           path: dist/
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: app
