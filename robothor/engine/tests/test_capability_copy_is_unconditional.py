@@ -65,7 +65,7 @@ def test_a_refusal_carries_its_gate_and_unlock(both_zero) -> None:
 def test_the_rules_tell_the_model_to_relay_a_refusal(both_zero) -> None:
     from robothor.engine.prompts import behavioral_rules
 
-    assert "\n22. " in behavioral_rules()
+    assert "\n21. " in behavioral_rules()
 
 
 def test_the_prompt_carries_the_capability_block(both_zero, tmp_path) -> None:

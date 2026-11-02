@@ -1379,8 +1379,7 @@ listed in `agent_capabilities.json`.
 ### When a tool is refused
 
 A refusal is a control declining the call, not the tool failing. Every refusal
-keeps its `error` text. With `ROBOTHOR_REFUSAL_PAYLOAD_V2` on, the engine's
-refusals (plan mode, `tools_allowed`, the wrap-up window, a pre-tool-use hook,
+keeps its `error` text. The engine's refusals (plan mode, `tools_allowed`, the wrap-up window, a pre-tool-use hook,
 a guardrail, RBAC for a chat or a scheduled run, a forked task's whitelist,
 `config_get`/`config_set` for a non-owner, `config_set apply=true` without host
 exec, `send_file` to another chat, and every GitHub tool without
@@ -1393,7 +1392,7 @@ exec, `send_file` to another chat, and every GitHub tool without
 | `gate_name` | the control: `plan_mode`, `tools_allowed`, `rbac`, `owner_role`, `GITHUB_TOKEN`, a guardrail's name |
 | `unlock` | what a person changes for the same call to succeed |
 
-Behavioural rule 22 ships with them: **A refusal names its gate; relay it,
+Behavioural rule 21 ships with them: **A refusal names its gate; relay it,
 never claim an inability** — when a tool result has `refused: true` and a
 `gate`, tell the person which gate refused it (`gate`, `gate_name`) and what
 unlocks it (`unlock`), then offer the next step you can take now; do not look
@@ -1409,27 +1408,26 @@ to call it through `tool_call`; only a tool outside the grant gets the
 The repeat guard's `refused: true` (an identical call run too many times) has
 no `gate` on purpose: it asks for a different call, not a person.
 
-With the setting off, every payload is exactly what it was. A handler that
-refuses builds its payload with `robothor.engine.refusal.refusal()`.
+A handler that refuses builds its payload with
+`robothor.engine.refusal.refusal()`.
 
 ### What an agent is told it can do
 
-With `ROBOTHOR_CAPABILITY_BLOCK_ENABLED` on, every agent's system prompt carries
+Every agent's system prompt carries
 a "What you can do here" block after its instruction and bootstrap files: the
 capabilities its granted tools give it (`exec`, `write_files`, `git_pr`,
 `coding_jobs`, `browser`, `spawn`, `vault_set`, `send_mail`, and `host_exec` for
 `main`), and for each one it lacks, the gate and the unlock (a manifest key, or
-a setting such as `ROBOTHOR_CODING_REPO_ROOTS` or `ROBOTHOR_HOST_EXEC_SOCKET`). `vault_set` is listed as available only when the
-manifest declares `credentials: operator` under `v2:`, or, for the default chat
-agent, when credential intake is enforced (then in an owner's or admin's own
-chat); coding jobs are available when `ROBOTHOR_CODING_REPO_ROOTS` is set, or a
-coding workspace is. Credential intake (`ROBOTHOR_CREDENTIAL_INTAKE`) and the
-coding workspace (`ROBOTHOR_CODING_WORKSPACE`) are counted, and offered as
-unlocks, only in a build that has them: the block asks the vault handler's
-feature flags and the coding settings, not the environment, so a variable this
-build does not read is never offered as a fix. It
-tells the agent to relay a refusal's gate and unlock only when
-`ROBOTHOR_REFUSAL_PAYLOAD_V2` is also on, since only then do refusals carry them.
+a setting such as `ROBOTHOR_CODING_REPO_ROOTS` or `ROBOTHOR_HOST_EXEC_SOCKET`).
+`vault_set` is listed as available when the manifest declares
+`credentials: operator` under `v2:`, or, for the default chat agent, in an
+owner's or admin's own chat where the build has credential intake. Coding jobs
+are available when `ROBOTHOR_CODING_REPO_ROOTS` is set, or a coding workspace
+is. Credential intake and the coding workspace (`ROBOTHOR_CODING_WORKSPACE`)
+count only in a build that has them: the block asks the vault handler and the
+coding settings, not the environment, so a variable this build does not read is
+never offered as a fix. The block tells the agent to relay a refusal's gate and
+unlock, since every refusal carries them.
 It reads only the manifest and the engine's settings, so it is the same on every
 turn of a conversation and the prompt prefix stays cacheable; a settings change
 that alters it rebuilds the prompt. `genus doctor --category capabilities

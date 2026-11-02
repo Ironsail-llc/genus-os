@@ -1505,8 +1505,7 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
         # What this agent can do here, and what gates the rest. After the
         # instructions so it reads as this instance's facts about them; outside
         # the bootstrap limit because it is the platform's text, not the agent's.
-        if capabilities:
-            parts.append(capabilities)
+        parts.append(capabilities)
 
         # Skill catalog (if skills exist)
         try:
@@ -1542,9 +1541,7 @@ def _snapshot_prompt_body(config: AgentConfig) -> str:
         raise ValueError("Fleet snapshot system prompt exceeds the bootstrap character limit")
     from robothor.engine.capabilities import capability_block
 
-    capabilities = capability_block(config)
-    if capabilities:
-        parts.append(capabilities)
+    parts.append(capability_block(config))
     try:
         catalog = build_skill_catalog()
         if catalog:

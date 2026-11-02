@@ -2,8 +2,8 @@
 
 Without it the model learns its abilities only from tool schemas, and an agent
 that has `exec`, `write_file` and the git tools still tells the person "I can't
-edit code". ``ROBOTHOR_CAPABILITY_BLOCK_ENABLED`` adds one block, built from the
-agent's granted tools and the engine's settings, after the bootstrap files.
+edit code". Every system prompt carries one block, built from the agent's
+granted tools and the engine's settings, after the bootstrap files.
 
 The block must be SESSION-STABLE: it reads no clock, no vault and no per-turn
 state, so the static body stays byte-identical from one turn to the next (the
@@ -25,7 +25,6 @@ from robothor.engine.models import AgentConfig
 if TYPE_CHECKING:
     from pathlib import Path
 
-FLAG = "ROBOTHOR_CAPABILITY_BLOCK_ENABLED"
 HEADER = "## What you can do here"
 
 
@@ -33,7 +32,6 @@ HEADER = "## What you can do here"
 def _clean(monkeypatch):
     from robothor.settings import reset_settings
 
-    monkeypatch.delenv(FLAG, raising=False)
     monkeypatch.delenv("ROBOTHOR_CODING_REPO_ROOTS", raising=False)
     monkeypatch.delenv("ROBOTHOR_HOST_EXEC_SOCKET", raising=False)
     engine_config_module._prompt_cache.clear()
@@ -67,23 +65,7 @@ def _static(config: AgentConfig, workspace: Path, minute: int = 41) -> str:
         return engine_config_module.build_system_prompt(config, workspace).static_body
 
 
-class TestFlagOff:
-    def test_the_static_body_is_unchanged(self, tmp_path) -> None:
-        config = _agent(tmp_path)
-        body = _static(config, tmp_path)
-        assert HEADER not in body
-        # Byte-identical to the body built without the capability module at all.
-        from robothor.engine.prompts import behavioral_rules
-
-        assert body.startswith(engine_config_module.SECURITY_PREAMBLE)
-        assert behavioral_rules() in body
-
-
-class TestFlagOn:
-    @pytest.fixture(autouse=True)
-    def _on(self, monkeypatch):
-        monkeypatch.setenv(FLAG, "1")
-
+class TestTheBlock:
     def test_the_block_lists_what_the_agent_was_granted(self, tmp_path) -> None:
         body = _static(_agent(tmp_path), tmp_path)
         assert HEADER in body
@@ -178,66 +160,39 @@ class TestSharedAssessment:
         assert "vault_set" in git.unlock
 
 
-class TestTheBlockMatchesThePayload:
-    """The block may say a refusal names its gate and unlock only when the
-    refusal payload actually carries them."""
-
-    RELAY = "names the gate and the unlock"
-
-    @pytest.fixture(autouse=True)
-    def _on(self, monkeypatch):
-        monkeypatch.setenv(FLAG, "1")
-
-    def test_payload_off_the_block_does_not_promise_a_gate(self, tmp_path, monkeypatch) -> None:
-        monkeypatch.delenv("ROBOTHOR_REFUSAL_PAYLOAD_V2", raising=False)
-        block = _static(_agent(tmp_path), tmp_path)
-        block = block[block.index(HEADER) :]
-        assert self.RELAY not in block
-        assert "Never say you cannot" in block
-
-    def test_payload_on_the_block_says_to_relay_it(self, tmp_path, monkeypatch) -> None:
-        monkeypatch.setenv("ROBOTHOR_REFUSAL_PAYLOAD_V2", "1")
-        block = _static(_agent(tmp_path), tmp_path)
-        assert self.RELAY in block[block.index(HEADER) :]
-
-
-def test_flag_off_the_body_equals_one_built_without_the_block(tmp_path, monkeypatch) -> None:
-    """Equality, not containment: with the flag off nothing is appended."""
-    import robothor.engine.capabilities as capabilities
-
-    config = _agent(tmp_path)
-    body = _static(config, tmp_path)
-    engine_config_module._prompt_cache.clear()
-    monkeypatch.setattr(capabilities, "capability_block", lambda config: "")
-    assert _static(config, tmp_path) == body
+def test_the_block_says_to_relay_a_refusal(tmp_path) -> None:
+    """Every gated refusal names its gate and unlock, so the block says so."""
+    block = _static(_agent(tmp_path), tmp_path)
+    block = block[block.index(HEADER) :]
+    assert "names the gate and the unlock" in block
+    assert "Never say you cannot" in block
 
 
 # ── QA round: vault_set and coding jobs follow what actually admits them ──
 #
 # Credential intake and the coding workspace are separate features. The report
-# names them, and counts them as admitting anything, only when the running tree
-# has them: the vault handler's intake mode (``feature_flags.credential_intake_mode``)
-# and the coding settings' ``workspace`` field. An environment variable by
-# itself is not a gate.
+# counts them as admitting anything only when the running tree has them: the
+# vault handler's intake gate and the coding settings' ``workspace`` field. An
+# environment variable by itself is not a gate.
 
 
 def _without_intake(monkeypatch) -> None:
     """This build has no credential intake, whichever tree the test runs on."""
-    from robothor.engine import feature_flags
+    from robothor.engine.tools.handlers import vault
 
-    monkeypatch.delattr(feature_flags, "credential_intake_mode", raising=False)
+    monkeypatch.delattr(vault, "_intake_gate", raising=False)
 
 
-def _with_intake(monkeypatch, mode: str) -> None:
-    from robothor.engine import feature_flags
+def _with_intake(monkeypatch) -> None:
+    from robothor.engine.tools.handlers import vault
 
-    monkeypatch.setattr(feature_flags, "credential_intake_mode", lambda: mode, raising=False)
+    monkeypatch.setattr(vault, "_intake_gate", lambda ctx: None, raising=False)
 
 
 class TestVaultSetFollowsTheCredentialGate:
     """``vault_set`` is refused unless the manifest declares the operator
-    credential tier, or credential intake (where this build has it) is enforced
-    for an owner's or admin's chat with the default chat agent. Granting the
+    credential tier, or credential intake (where this build has it) serves an
+    owner's or admin's chat with the default chat agent. Granting the
     tool is not enough."""
 
     def _vault(self, **facts):
@@ -245,16 +200,6 @@ class TestVaultSetFollowsTheCredentialGate:
 
         rows = assess({"vault_set", "git_commit"}, Facts(**facts))
         return {c.key: c for c in rows}
-
-    def test_no_tier_and_intake_off_is_gated_naming_both_unlocks(self) -> None:
-        rows = self._vault(agent_id="main", credential_intake="off")
-        vault = rows["vault_set"]
-        assert vault.available is False
-        assert vault.gate == "flag"
-        assert vault.gate_name == "ROBOTHOR_CREDENTIAL_INTAKE"
-        assert "ROBOTHOR_CREDENTIAL_INTAKE=enforce" in vault.unlock
-        assert "credentials: operator" in vault.unlock
-        assert "vault_set" not in rows["git_pr"].note
 
     def test_without_intake_in_this_build_main_is_gated_on_the_tier_only(self) -> None:
         rows = self._vault(agent_id="main")
@@ -265,14 +210,8 @@ class TestVaultSetFollowsTheCredentialGate:
         assert "credentials: operator" in vault.unlock
         assert "CREDENTIAL_INTAKE" not in vault.unlock
 
-    def test_observe_is_still_gated(self) -> None:
-        assert (
-            self._vault(agent_id="main", credential_intake="observe")["vault_set"].available
-            is False
-        )
-
     def test_another_agent_without_a_tier_is_gated_on_the_tier(self) -> None:
-        vault = self._vault(agent_id="example-agent", credential_intake="enforce")["vault_set"]
+        vault = self._vault(agent_id="example-agent", credential_intake=True)["vault_set"]
         assert vault.available is False
         assert vault.gate_name == "credential_tier"
         assert "credentials: operator" in vault.unlock
@@ -282,29 +221,27 @@ class TestVaultSetFollowsTheCredentialGate:
         assert rows["vault_set"].available is True
         assert "vault_set" in rows["git_pr"].note
 
-    def test_intake_enforced_makes_it_available_in_an_owner_or_admin_chat(self) -> None:
-        vault = self._vault(agent_id="main", credential_intake="enforce")["vault_set"]
+    def test_intake_makes_it_available_in_an_owner_or_admin_chat(self) -> None:
+        vault = self._vault(agent_id="main", credential_intake=True)["vault_set"]
         assert vault.available is True
         assert "owner or admin" in vault.note
 
     def test_intake_follows_the_default_chat_agent_not_the_name_main(self) -> None:
-        moved = {"default_chat_agent": "example-agent", "credential_intake": "enforce"}
+        moved = {"default_chat_agent": "example-agent", "credential_intake": True}
         assert self._vault(agent_id="example-agent", **moved)["vault_set"].available is True
         assert self._vault(agent_id="main", **moved)["vault_set"].available is False
 
-    def test_the_probe_reads_the_mode_the_vault_handler_reads(self, monkeypatch) -> None:
+    def test_the_probe_reads_the_vault_handler(self, monkeypatch) -> None:
         from robothor.engine import capabilities
 
-        monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
         _without_intake(monkeypatch)
-        assert capabilities.credential_intake_mode() is None
-        _with_intake(monkeypatch, "observe")
-        assert capabilities.credential_intake_mode() == "observe"
+        assert capabilities.credential_intake() is False
+        _with_intake(monkeypatch)
+        assert capabilities.credential_intake() is True
 
     def test_the_intake_env_alone_admits_nothing_without_intake_in_the_build(
         self, tmp_path, monkeypatch
     ) -> None:
-        monkeypatch.setenv(FLAG, "1")
         monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
         _without_intake(monkeypatch)
         config = _agent(tmp_path, id="main", tools_allowed=["vault_set", "read_file"])
@@ -313,14 +250,13 @@ class TestVaultSetFollowsTheCredentialGate:
         assert "- vault_set:" in block[block.index("Gated") :]
         assert "ROBOTHOR_CREDENTIAL_INTAKE" not in block
 
-    def test_the_prompt_reads_the_tier_and_the_intake_mode(self, tmp_path, monkeypatch) -> None:
-        monkeypatch.setenv(FLAG, "1")
-        _with_intake(monkeypatch, "off")
+    def test_the_prompt_reads_the_intake_probe(self, tmp_path, monkeypatch) -> None:
+        _without_intake(monkeypatch)
         config = _agent(tmp_path, id="main", tools_allowed=["vault_set", "read_file"])
         body = _static(config, tmp_path)
         assert "- vault_set:" in body[body.index("Gated") :]
         engine_config_module._prompt_cache.clear()
-        _with_intake(monkeypatch, "enforce")
+        _with_intake(monkeypatch)
         body = _static(config, tmp_path)
         assert "- vault_set:" in body[body.index(HEADER) : body.index("Gated")]
 
@@ -388,7 +324,6 @@ class TestCodingJobsAcceptTheCodingWorkspace:
     def test_the_prompt_reads_the_probed_workspace(self, tmp_path, monkeypatch) -> None:
         from robothor.engine import capabilities
 
-        monkeypatch.setenv(FLAG, "1")
         config = _agent(tmp_path, tools_allowed=["claude_code_start", "read_file"])
         monkeypatch.setattr(capabilities, "coding_workspace", lambda settings: None)
         body = _static(config, tmp_path)

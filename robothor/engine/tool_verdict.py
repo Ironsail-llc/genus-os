@@ -46,8 +46,7 @@ class ToolVerdict:
     #: Possibly rewritten by a MODIFY hook; the caller uses this, not its own.
     tool_args: dict[str, Any] = field(default_factory=dict)
     #: Which kind of control refused (``robothor.engine.refusal.GATES``) and what
-    #: a person changes for the call to succeed. Filled by :func:`with_gate`; they
-    #: reach the model's tool result only with ``ROBOTHOR_REFUSAL_PAYLOAD_V2``.
+    #: a person changes for the call to succeed. Filled by :func:`with_gate`.
     gate: str = ""
     unlock: str = ""
 
@@ -134,7 +133,7 @@ def _gate_for(verdict: ToolVerdict, tool: str, config: AgentConfig | None) -> tu
 
 
 def with_gate(verdict: ToolVerdict, tool: str, config: AgentConfig | None) -> ToolVerdict:
-    """``verdict`` with its gate and unlock filled, and the v2 keys in ``output``."""
+    """``verdict`` with its gate and unlock filled, and the refusal keys in ``output``."""
     if verdict.allowed:
         return verdict
     gate, name, unlock = _gate_for(verdict, tool, config)

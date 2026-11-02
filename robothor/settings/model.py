@@ -2066,24 +2066,6 @@ class FlagSettings(SettingsGroup):
         "write the agent_reviews rows the achievement score is built on.",
         governed=True,
     )
-    capability_block: bool = declare(
-        False,
-        "ROBOTHOR_CAPABILITY_BLOCK_ENABLED",
-        "Add a 'What you can do here' block to every agent's system prompt: the "
-        "capabilities its granted tools and this instance's settings give it, and "
-        "for each one it lacks, the gate and what unlocks it. Session-stable, so "
-        "the prompt prefix stays cacheable.",
-        since="unreleased",
-    )
-    refusal_payload_v2: bool = declare(
-        False,
-        "ROBOTHOR_REFUSAL_PAYLOAD_V2",
-        "A refused tool call tells the model which gate refused it (role, flag, "
-        "allowlist, runtime or policy) and what unlocks it, alongside the unchanged "
-        "error text, and the behavioural rules tell it to relay both to the person "
-        "rather than say it cannot.",
-        since="unreleased",
-    )
     disable_all_rips: bool = declare(
         False,
         "ROBOTHOR_DISABLE_ALL_RIPS",
