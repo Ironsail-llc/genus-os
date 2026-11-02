@@ -410,6 +410,19 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
                 raise ValueError(f"duplicate step id {sid!r} in workflow {data.get('id')!r}")
             seen_ids.add(sid)
 
+    # An agent step serialises on the agent's own lock and is skipped, not
+    # failed, when that lock is held: two overlapping runs would drop one
+    # event's agent step while its run reads completed.
+    if any(t.concurrent for t in triggers):
+        for step in steps:
+            for candidate in (step, *step.parallel_steps):
+                if candidate.type == WorkflowStepType.AGENT:
+                    raise ValueError(
+                        f"workflow {data.get('id')!r}: a concurrent workflow cannot have "
+                        f"agent steps (step {candidate.id!r}); overlapping runs would skip it "
+                        "while the agent is busy"
+                    )
+
     rate_limit = data.get("rate_limit_per_minute", 0)
     if "rate_limit_per_minute" in data and (
         not isinstance(rate_limit, int) or isinstance(rate_limit, bool) or rate_limit < 1
