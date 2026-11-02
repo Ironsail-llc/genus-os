@@ -4,6 +4,8 @@
  */
 import type { ChatMessage } from "./types";
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
+import type { AttachmentPayload } from "@/lib/chat/attachments";
+import { EngineRefusal, REFUSAL_STATUSES } from "./engine-refusal";
 
 const ENGINE_URL = process.env.ROBOTHOR_ENGINE_URL || "http://127.0.0.1:18800";
 
@@ -105,7 +107,13 @@ class EngineClient {
    * Send a chat message. Returns the raw Response with SSE body.
    * Caller is responsible for reading the SSE stream.
    */
-  async chatSend(message: string, sessionKey = "", requestId?: string, joinRunning = false): Promise<Response> {
+  async chatSend(
+    message: string,
+    sessionKey = "",
+    requestId?: string,
+    joinRunning = false,
+    attachments?: AttachmentPayload[],
+  ): Promise<Response> {
     // `join_running`: sent while this session's turn works, so offer it to that
     // turn instead of starting another (robothor/engine/chat_live.py).
     const res = await fetchStream(`${ENGINE_URL}/chat/send`, {
@@ -116,8 +124,22 @@ class EngineClient {
         ...keyed(sessionKey),
         ...(requestId ? { request_id: requestId } : {}),
         ...(joinRunning ? { join_running: true } : {}),
+        // Files attached to the turn ({name, mime, size, data}), checked by the
+        // route and again by the engine (robothor/engine/chat_attachments.py).
+        ...(attachments?.length ? { attachments } : {}),
       }),
     });
+    // The engine checked the request and said no (an attachment the route let
+    // through, say), or failed before it admitted a turn and said so
+    // (`request_admitted: false`, e.g. a file it could not keep): its words,
+    // not "Engine error", and never a turn to recover.
+    // The body is read only on failure, where nothing else will read it.
+    const payload = res.ok ? {} : await Promise.resolve().then(() => res.json()).catch(() => ({}));
+    if (REFUSAL_STATUSES.has(res.status) || (!res.ok && payload?.request_admitted === false)) {
+      const error = typeof payload?.error === "string" ? payload.error
+        : typeof payload?.detail === "string" ? payload.detail : `Engine refused the request (${res.status})`;
+      throw new EngineRefusal(res.status, error);
+    }
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
     }
