@@ -342,3 +342,23 @@ def test_forty_message_history_shares_at_least_ninety_percent_with_flag_on(flag_
 def test_forty_message_history_shares_only_the_tools_with_flag_off(flag_off, model):
     shared, total = shared_prefix_tokens(model)
     assert shared / total < 0.1
+
+
+# ─── One layout, no switch ────────────────────────────────────────────────
+
+
+def test_feature_flags_has_no_cache_layout_reader():
+    import inspect
+
+    from robothor.engine import feature_flags
+
+    assert not [name for name in dir(feature_flags) if "cache_layout" in name]
+    assert "ROBOTHOR_CACHE_LAYOUT" not in inspect.getsource(feature_flags)
+
+
+def test_old_switch_in_the_env_does_not_bring_the_clock_back(monkeypatch):
+    monkeypatch.setenv("ROBOTHOR_CACHE_LAYOUT_V2", "0")
+    kwargs = _build(ANTHROPIC_DIRECT, _messages(_system_at(9, 41), _history(40), "next?"))
+    assert "Current time:" not in _dump(kwargs["messages"][0])
+    assert kwargs["tools"][-1].get("cache_control") == {"type": "ephemeral"}
+    assert any("cache_control" in _dump(m) for m in kwargs["messages"][1:-2])
