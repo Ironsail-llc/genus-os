@@ -102,7 +102,9 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: right for the merged tree, so the number here is the MEASURED count from
 #: `scripts/list_env_reads.py --count-sites` after the rebase; both histories
 #: are kept because both sets of removals are real.
-ENV_READ_SITE_BASELINE = 472
+#: 472 -> 471 with the catch-up fold: its features ship without switches, so
+#: their environment reads went with them.
+ENV_READ_SITE_BASELINE = 471
 
 
 def _discovery():
