@@ -147,18 +147,15 @@ def list_installed_agents() -> dict[str, object]:
 
 
 def _invalidate_agent_caches() -> None:
-    """Forget the bridge's cached view of the fleet after an install, update
-    or remove: the manifest listing and the known-agent set RBAC checks.
+    """Forget the bridge's cached known-agent set after an install, update or
+    remove, so RBAC checks see the fleet as it now is.
 
     Called whether or not the act succeeded -- a half-finished install can
-    still have written a manifest -- and before the reconcile, so the next
-    listing the dashboard asks for already sees the result.
+    still have written a manifest. The fleet LISTING is the engine's, and its
+    cache is dropped by the reconcile this is followed by.
     """
     import middleware
 
-    from routers import agent_manifests
-
-    agent_manifests.invalidate_manifest_listing()
     middleware.invalidate_known_agents()
 
 

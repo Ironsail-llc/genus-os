@@ -1,3 +1,22 @@
+## [1.125.1](https://github.com/Ironsail-llc/genus-os/compare/v1.125.0...v1.125.1) (2026-11-02)
+
+### Bug Fixes
+
+* **bridge:** serve agent manifests from the engine's workspace (GEN-333) ([#851](https://github.com/Ironsail-llc/genus-os/issues/851)) ([13bad31](https://github.com/Ironsail-llc/genus-os/commit/13bad310ca0defa130dee986e444769ce330bbdb))
+
+## [1.125.0](https://github.com/Ironsail-llc/genus-os/compare/v1.124.0...v1.125.0) (2026-11-02)
+
+### Features
+
+* **engine:** concurrent hook workflows (GEN-331) ([2dbc376](https://github.com/Ironsail-llc/genus-os/commit/2dbc37668f962b4834e2da0eb1c3572bca0444d5))
+
+## [1.124.0](https://github.com/Ironsail-llc/genus-os/compare/v1.123.0...v1.124.0) (2026-11-01)
+
+### Features
+
+* **cli:** scaffold writes programmatic.json and a release workflow (GEN-296) ([#847](https://github.com/Ironsail-llc/genus-os/issues/847)) ([8ba2ab3](https://github.com/Ironsail-llc/genus-os/commit/8ba2ab32cde9512b6f6cea2967b3a4ce97a5be75))
+* **engine:** webhook receiver as its own process and chart component (GEN-276) ([#845](https://github.com/Ironsail-llc/genus-os/issues/845)) ([ca99c96](https://github.com/Ironsail-llc/genus-os/commit/ca99c96799a07fd687a466212ef2b55907f508d4)), closes [#846](https://github.com/Ironsail-llc/genus-os/issues/846)
+
 ## [1.123.0](https://github.com/Ironsail-llc/genus-os/compare/v1.122.0...v1.123.0) (2026-10-31)
 
 ### Features

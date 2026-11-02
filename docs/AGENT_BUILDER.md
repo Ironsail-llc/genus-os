@@ -168,8 +168,8 @@ sender gave none) and `event.payload`, parsed when it is JSON. Steps template
 it like any other context value; a field the event lacks, such as
 `{{ event.payload.data.message.id }}` when there is no `message`, renders
 empty. The event is stored with the run, as the rest of its context is, for as
-long as workflow runs are kept. Only one run of a workflow is in flight at a time; by default
-an event that arrives while it is running is dropped. `requeue_if_busy: true`
+long as workflow runs are kept. Only one run of a workflow is in flight at a time (unless
+its trigger sets `concurrent`, below); by default an event that arrives while it is running is dropped. `requeue_if_busy: true`
 re-adds it for this workflow after a pause that starts at 5 seconds and backs
 off to a minute, for up to about 50 minutes, before parking it in
 `<stream>:dlq`.
@@ -191,6 +191,41 @@ steps:
       delivery_id: "{{ event.delivery_id }}"
     retry_count: 1
 ```
+
+A trigger may instead set `concurrent: true` (default `false`): runs of the
+workflow then overlap, each event starting its own run straight away, and no
+event is ever skipped or requeued as busy. Use it for a workflow that only
+hands each event on to something that serialises its own work, such as a
+channel pipeline with its own per-conversation lock; without it, an event that
+lands a moment after another waits at least 5 seconds. Every step must be safe
+to run twice at once, since two events can be in the same step together. A
+concurrent workflow has no `agent` steps, only tool steps and the steps that
+route between them (condition, transform, parallel): an agent step runs one at
+a time per agent and is skipped while that agent is busy, so an overlapping run
+would drop it and still be recorded as completed.
+The setting covers every run of the workflow, whichever trigger starts it, and
+the tool-call rate limit (below) still defers a run as usual. A concurrent
+workflow with an `agent` step (at the top level or inside `parallel`), or with
+`requeue_if_busy` on any trigger, is an error: the workflow does not load.
+
+```yaml
+id: example-dispatch
+triggers:
+  - type: hook
+    stream: platform
+    event_type: platform.message.created
+    concurrent: true
+
+steps:
+  - id: dispatch
+    type: tool
+    tool_name: message_dispatch
+    tool_args:
+      message_id: "{{ event.payload.data.message.id }}"
+```
+
+An engine older than this setting ignores it and runs the workflow one run at
+a time, as before.
 
 The payload comes from outside: a tool that receives it validates what it
 is given.
@@ -630,22 +665,35 @@ required — it is just the impatient version of waiting.
 
 `/api/agent-manifests` is the same flow from the browser, with no ssh session
 and no restart. It renders the same templates, runs the same validation, writes
-the same two files, and calls the engine reconcile itself.
+the same two files, and reconciles the scheduler itself.
+
+The bridge serves these routes to the dashboard, but the work happens in the
+**engine**, the process that mounts the workspace: the bridge checks the
+operator's session, validates the agent id, records the audit event and
+forwards each call to the engine's `/api/admin/agent-manifests` routes
+(`robothor/engine/admin_manifests.py`, which require the `engine:control`
+scope). The bridge never reads or writes the instance's `docs/agents/` or `brain/`
+itself, so it needs no workspace volume, and a deployment that runs several bridge
+replicas against one engine sees one fleet. If the engine cannot be reached, or
+refuses the bridge's credential, every route answers `502` with a `detail`
+sentence; a refusal the engine decided (`404`, `409`, `422`) comes back
+unchanged, the validator's codes included.
 
 | Route | What it does |
 |-------|--------------|
 | `GET /api/agent-manifests` | The fleet, plus a `broken` list naming any manifest that will not load and its error type. One unreadable file lands in `broken`, never in a 500 — a fleet of twenty with one bad manifest lists nineteen |
 | `GET /api/agent-manifests/{id}` | The parsed document, its raw YAML, its instruction file, and its verdict. A broken manifest answers 200 with the verdict, not 404 — "absent" and "unreadable" have different fixes |
-| `POST /api/agent-manifests/validate` | Always 200; the verdict is the payload (`{ok, errors, warnings}`). Send `{manifest}` or `{yaml}` |
+| `POST /api/agent-manifests/validate` | Always 200 when the engine answers; the verdict is the payload (`{ok, errors, warnings}`). Send `{manifest}` or `{yaml}`. Tool names are checked against the engine's own registry; if the registry cannot be built, a `tools_unverified` warning replaces the check rather than blocking the save |
 | `POST /api/agent-manifests` | Scaffold + validate + write + reconcile. `409` on a colliding id, `422` carrying the validator's own codes on refusal |
 | `PATCH /api/agent-manifests/{id}` | Edits only the form-owned paths, bumps `version`, appends a changelog entry, snapshots the previous document, reconciles. Refused only on errors **this edit introduced** — see below |
 | `POST /api/agent-manifests/{id}/enable` \| `/disable` | Sets `schedule.enabled`. Disabling drops the cron, heartbeat and worker jobs on the next reconcile without retiring the agent |
 | `DELETE /api/agent-manifests/{id}` | Body `{"confirm": "<id>"}`. Moves the manifest to the instance's own `docs/agents/retired/` — nothing is unlinked, and the instruction file stays |
-| `POST /api/agent-manifests/{id}/run` | Fires one run now, via the engine's trigger route |
+| `POST /api/agent-manifests/{id}/run` | Fires one run now, through the same in-engine function as `POST /api/agents/{id}/trigger` (`robothor/engine/manual_trigger.py`) |
 
-Every write answers with a `reconcile` block. `applied: false` means the file is
-on disk and the engine has not picked it up yet — the watchdog will, within five
-minutes.
+Every write answers with a `reconcile` block, from a reconcile the engine runs
+in-process right after the write. `applied: false` (with an `error`, such as
+`scheduler not running`) means the file is on disk and the job set has not
+picked it up yet — the watchdog will, within five minutes.
 
 **What an edit is refused for.** Only the errors it INTRODUCED. Every edit is
 validated twice — the document as it was, and as the edit leaves it — and the
@@ -679,7 +727,7 @@ landed and the schedule is unchanged", not "the manifest is now clean". Read
 `pre_existing` before telling an operator their agent is fixed.
 
 **What a PATCH may change.** An edit sets only the paths the form owns
-(`routers/agent_manifests.FORM_OWNED_PATHS`: name, description, department,
+(`FORM_OWNED_PATHS` in `robothor/engine/manifest_store.py`: name, description, department,
 `model.primary`/`fallbacks`, the `schedule` and `delivery` blocks,
 `tools_allowed`/`tools_denied`, `instruction_file`, `version`, `changelog`).
 Everything else in the document survives untouched, including keys the platform

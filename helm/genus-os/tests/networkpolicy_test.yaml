@@ -411,3 +411,37 @@ tests:
                 app.kubernetes.io/instance: gos
                 app.kubernetes.io/component: bridge
 
+
+  - it: hooks reaches the HTTPS egress destination so google_oidc channels can fetch signing certs
+    set:
+      hooks.enabled: true
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.https.cidrs: [10.42.64.0/28]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-https-egress
+    asserts:
+      - contains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: hooks
+      - notContains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: dashboard
+
+  - it: hooks reaches an external cache so it can publish to the event stream
+    set:
+      hooks.enabled: true
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.redis.cidrs: [10.42.70.5/32]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-redis-egress
+    asserts:
+      - contains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: hooks
+      - equal:
+          path: spec.egress[0].ports[0].port
+          value: 6379
