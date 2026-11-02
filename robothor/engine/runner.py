@@ -805,8 +805,7 @@ class AgentRunner(
                 _sender = self.config.operator_name
 
             def _build_interactive_warmup() -> tuple[str, dict[str, float]]:
-                # Filled per section only with ROBOTHOR_WARMUP_PARALLEL on;
-                # empty otherwise, which is what was always recorded here.
+                # Filled per section with its elapsed seconds.
                 _timings: dict[str, float] = {}
                 with set_warmup_kind("interactive"):
                     text = build_interactive_preamble(
@@ -871,8 +870,8 @@ class AgentRunner(
 
                 # Enrichment does blocking DB work on a cache miss — offload to
                 # the executor so it never blocks the event loop, mirroring the
-                # first-turn warmup path just above. With
-                # ROBOTHOR_WARMUP_PARALLEL on it is held for the chat session.
+                # first-turn warmup path just above. It is held for the chat
+                # session.
                 _enrich_fn, _enrich_args = enrichment_call_for_turn(agent_id, effective_identity)
                 _enriched = await loop.run_in_executor(None, _enrich_fn, *_enrich_args)
             except Exception as e:

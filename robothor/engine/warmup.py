@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.identity import enrich_identity
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -342,34 +341,26 @@ def _build_history_section(agent_id: str) -> str:
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
-def _build_memory_blocks_section(
-    block_names: list[str], tenant_id: str = DEFAULT_TENANT, *, batched: bool = False
-) -> str:
+def _build_memory_blocks_section(block_names: list[str], tenant_id: str = DEFAULT_TENANT) -> str:
     """Read memory blocks and format them, flagging stale ones.
 
-    ``batched`` reads every block in one SELECT (``read_blocks``) and defers
-    the read accounting to one batched write (``touch_blocks``), instead of one
-    ``UPDATE ... RETURNING`` per block. The text is the same either way.
+    Every block is read in one SELECT (``read_blocks``) and the read
+    accounting is deferred to one batched write (``touch_blocks``), instead of
+    one ``UPDATE ... RETURNING`` per block.
     """
     if not block_names:
         return ""
 
-    from robothor.memory.blocks import read_block, read_blocks, touch_blocks
+    from robothor.memory.blocks import read_blocks, touch_blocks
 
-    fetched: dict[str, dict[str, Any]] | None = None
-    if batched:
-        fetched = read_blocks(block_names, tenant_id=tenant_id)
-        if fetched:
-            _defer_write(touch_blocks, list(fetched), tenant_id)
+    fetched = read_blocks(block_names, tenant_id=tenant_id)
+    if fetched:
+        _defer_write(touch_blocks, list(fetched), tenant_id)
 
     lines = ["--- MEMORY BLOCKS ---"]
     for name in block_names:
         try:
-            result = (
-                fetched.get(name, {})
-                if fetched is not None
-                else read_block(name, tenant_id=tenant_id)
-            )
+            result = fetched.get(name, {})
             content = (
                 result.get("content", "")
                 if isinstance(result, dict)
@@ -791,9 +782,9 @@ def _interactive_supervisor_sections(
     corrects nothing.
 
     Returns the sections as named builders, in order, so the caller can run
-    them one after another or concurrently (``ROBOTHOR_WARMUP_PARALLEL``) and
-    join them in this order either way. Each builder is independently guarded —
-    one failing must not cost the other two, nor the preamble.
+    them one after another or concurrently and join them in this order either
+    way. Each builder is independently guarded — one failing must not cost the
+    other two, nor the preamble.
     """
 
     def _host_state() -> list[str]:
@@ -839,22 +830,22 @@ def _interactive_supervisor_sections(
 
 
 # ── Running the interactive sections ──────────────────────────────
-# Sequentially, the first interactive turn waits for the sum of its sections.
-# With ROBOTHOR_WARMUP_PARALLEL on they run on this pool and are joined in
-# their original order, so the text is identical and the wait is the slowest
-# section. Shared by every concurrent warmup in the process and bounded; a
-# section never submits to it, so it cannot deadlock on itself.
+# In place, the first interactive turn waits for the sum of its sections.
+# Fanned out they run on this pool and are joined in their original order, so
+# the text is identical and the wait is the slowest section. Shared by every
+# concurrent warmup in the process and bounded; a section never submits to it,
+# so it cannot deadlock on itself.
 _SECTION_WORKERS = 8
 _section_pool: ThreadPoolExecutor | None = None
 # Writes the read path does not wait for (memory-block read accounting).
 _deferred_pool: ThreadPoolExecutor | None = None
 _deferred_pending: set[Future[Any]] = set()
 _pool_lock = threading.Lock()
-#: A section slower than this in an agent's previous flagged warmup makes the
+#: A section slower than this in an agent's previous warmup makes the
 #: next one fan out. Below it, the queries are fast enough that a thread
 #: hand-off per section costs more than overlapping them saves.
 FAN_OUT_MIN_SECTION_SECONDS = 0.03
-#: Each agent's slowest section in its previous flagged warmup, in seconds.
+#: Each agent's slowest section in its previous warmup, in seconds.
 _slowest_section_by_agent: dict[str, float] = {}
 
 
@@ -906,26 +897,18 @@ def _timed(fn: Callable[[], list[str]]) -> tuple[list[str], float]:
 def _run_interactive_sections(
     builders: list[tuple[str, Callable[[], list[str]]]],
     *,
-    parallel: bool,
     section_timings: dict[str, float] | None,
     fan_out_key: str = "",
 ) -> list[str]:
-    """Run the builders and join their sections in builder order.
+    """Run the builders, timing each, and join their sections in builder order.
 
-    ``parallel`` is the flag. Off, the builders run in place and nothing is
-    timed, as always. On, they are timed, and they fan out to the section pool
-    only when ``fan_out_key``'s previous warmup had a section slower than
-    ``FAN_OUT_MIN_SECTION_SECONDS``: on a fast database a thread hand-off costs
-    more than the queries it overlaps (QA measured the fanned-out preamble at
-    roughly twice the sequential one), so a fast instance stays in place and
-    keeps only the statement savings.
+    They fan out to the section pool only when ``fan_out_key``'s previous
+    warmup had a section slower than ``FAN_OUT_MIN_SECTION_SECONDS``: on a fast
+    database a thread hand-off costs more than the queries it overlaps (QA
+    measured the fanned-out preamble at roughly twice the in-place one), so a
+    fast instance stays in place and keeps only the statement savings.
     """
     sections: list[str] = []
-    if not parallel:
-        for _name, fn in builders:
-            sections.extend(fn())
-        return sections
-
     timings: dict[str, float] = {}
     with _pool_lock:
         previous_slowest = _slowest_section_by_agent.get(fan_out_key, 0.0)
@@ -973,19 +956,11 @@ def enrichment_call_for_turn(
     """The enrichment function and arguments for one interactive turn.
 
     Returned rather than called so the runner can hand both to
-    ``run_in_executor``. With ``ROBOTHOR_WARMUP_PARALLEL`` on it is the
-    session-held cache (``enrich_identity_for_session``); off, the 60-second
-    ``enrich_identity`` every turn has always used.
+    ``run_in_executor``: the session-held cache (``enrich_identity_for_session``).
     """
-    from robothor.engine.feature_flags import warmup_parallel_enabled
+    from robothor.identity import enrichment
 
-    if warmup_parallel_enabled():
-        from robothor.identity import enrichment
-
-        return enrichment.enrich_identity_for_session, (agent_id, identity)
-    import robothor.identity as _identity
-
-    return _identity.enrich_identity, (identity,)
+    return enrichment.enrich_identity_for_session, (agent_id, identity)
 
 
 def enrich_identity_for_turn(agent_id: str, identity: IdentityContext) -> EnrichedIdentity | None:
@@ -1004,7 +979,6 @@ def _interactive_section_builders(
     sender_name: str,
     identity: IdentityContext | None,
     agent_config: AgentConfig | None,
-    parallel: bool,
     enforce_scope: DataScope | None,
     observe_scope_obj: DataScope | None,
     scope_user_id: str | None,
@@ -1027,11 +1001,7 @@ def _interactive_section_builders(
 
         def _identity_section() -> list[str]:
             try:
-                enriched = (
-                    enrich_identity_for_turn(agent_id, identity)
-                    if parallel
-                    else enrich_identity(identity)
-                )
+                enriched = enrich_identity_for_turn(agent_id, identity)
             except Exception as e:
                 logger.debug("Interactive warmup identity enrichment failed: %s", e)
                 enriched = None
@@ -1068,9 +1038,7 @@ def _interactive_section_builders(
         def _memory_blocks() -> list[str]:
             out: list[str] = []
             try:
-                blocks_section = _build_memory_blocks_section(
-                    core_blocks, tenant_id=tenant_id, batched=parallel
-                )
+                blocks_section = _build_memory_blocks_section(core_blocks, tenant_id=tenant_id)
                 if blocks_section:
                     out.append(blocks_section)
             except Exception as e:
@@ -1109,7 +1077,6 @@ def _interactive_section_builders(
                     scope=enforce_scope,
                     observe_scope_obj=observe_scope_obj,
                     user_id=scope_user_id,
-                    batched=parallel,
                 )
             except Exception as e:
                 # WARNING, not DEBUG: a failure here empties entity recall
@@ -1192,18 +1159,12 @@ def build_interactive_preamble(
             primary model — but omitting it is not neutral there: without a
             config that section cannot tell "no primary is set" from "nobody
             told me", and it used to assert the former.
-        section_timings: When given and ``ROBOTHOR_WARMUP_PARALLEL`` is on,
-            filled with ``{section name: elapsed seconds}`` for each section
-            that ran, for ``record_warmup_steps``. Left empty when the flag is
-            off, which is what the sequential path has always recorded.
+        section_timings: When given, filled with ``{section name: elapsed
+            seconds}`` for each section that ran, for ``record_warmup_steps``.
 
     Returns:
         Warmup preamble string, or empty string if nothing to inject.
     """
-    from robothor.engine.feature_flags import warmup_parallel_enabled
-
-    parallel = warmup_parallel_enabled()
-
     # No alert digest here, deliberately. An interactive turn is a human
     # talking; the heartbeat (``build_warmth_preamble``) is the alert reader.
     # When this preamble carried the digest, a one-word greeting turned into a
@@ -1240,7 +1201,6 @@ def build_interactive_preamble(
         sender_name=sender_name,
         identity=identity,
         agent_config=agent_config,
-        parallel=parallel,
         enforce_scope=_enforce_scope,
         observe_scope_obj=_observe_scope,
         scope_user_id=_scope_user_id,
@@ -1248,7 +1208,6 @@ def build_interactive_preamble(
 
     sections = _run_interactive_sections(
         builders,
-        parallel=parallel,
         section_timings=section_timings,
         fan_out_key=f"{tenant_id}:{agent_id}",
     )
@@ -1324,7 +1283,6 @@ def _build_entity_context(
     scope: DataScope | None = None,
     observe_scope_obj: DataScope | None = None,
     user_id: str | None = None,
-    batched: bool = False,
 ) -> str:
     """Extract entities from the user message and pull relevant facts.
 
@@ -1343,9 +1301,9 @@ def _build_entity_context(
             scope and a would-drop count is logged — never used to alter
             the returned text.
         user_id: Identity's stable id, for the observe-mode log line only.
-        batched: Fetch every candidate's facts in one statement (a LATERAL
-            join over the candidate list, same per-candidate filter, order and
-            limit) instead of one query per candidate. Same text.
+
+    Every candidate's facts come from one statement
+    (``_fetch_entity_facts_batched``).
 
     Budget: max 1000 chars. Stays synchronous (no async search_facts) so it can
     run inside the sync warmup path; recency awareness is done in SQL.
@@ -1381,59 +1339,8 @@ def _build_entity_context(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        def _per_candidate() -> Iterator[list[dict[str, Any]]]:
-            # One query per candidate, in candidate order.
-            for entity_name in candidates[:max_candidates]:
-                if v2:
-                    cur.execute(
-                        f"""
-                        SELECT fact_text, category, importance_score, person_id
-                        FROM memory_facts
-                        WHERE is_active = TRUE AND tenant_id = %s
-                          -- Indexed by idx_facts_entities_lower (migration 109).
-                          -- The previous EXISTS(unnest(...)) form was unindexable
-                          -- and scanned the tenant's whole active set, five times
-                          -- per warmup: 13,155 buffers (105 MB) a call against a
-                          -- 128 MB shared_buffers, ~262 ms versus 2.7 ms for every
-                          -- other warmup section. lower() cannot simply be dropped
-                          -- to reuse the raw-array GIN — 646 of 14,714 entity names
-                          -- on this instance collapse under it, and that rewrite
-                          -- was measured losing 37 percent of matched rows.
-                          -- (No bare percent sign in this SQL, comments
-                          -- included: psycopg2 reads it as a parameter.)
-                          AND lower_entities(entities) && ARRAY[lower(%s)]
-                          {scope_clause}
-                        ORDER BY
-                          0.55 * COALESCE(importance_score, 0.5)
-                          + 0.45 * POWER(
-                              0.5,
-                              EXTRACT(EPOCH FROM (now() - created_at)) / 3600.0 / 168.0
-                            ) DESC
-                        LIMIT 3
-                        """,
-                        (tenant_id, entity_name, *scope_params),
-                    )
-                else:
-                    cur.execute(
-                        f"""
-                        SELECT fact_text, category, importance_score, person_id
-                        FROM memory_facts
-                        WHERE is_active = TRUE AND %s = ANY(entities)
-                          AND tenant_id = %s
-                          {scope_clause}
-                        ORDER BY importance_score DESC, created_at DESC
-                        LIMIT 3
-                        """,
-                        (entity_name, tenant_id, *scope_params),
-                    )
-                yield cur.fetchall()
-
-        fetched = (
-            _fetch_entity_facts_batched(
-                cur, candidates[:max_candidates], tenant_id, v2, scope_clause, scope_params
-            )
-            if batched
-            else _per_candidate()
+        fetched = _fetch_entity_facts_batched(
+            cur, candidates[:max_candidates], tenant_id, v2, scope_clause, scope_params
         )
         for rows in fetched:
             if observe_scope_obj is not None:
@@ -1467,9 +1374,17 @@ def _fetch_entity_facts_batched(
 ) -> list[list[dict[str, Any]]]:
     """Every candidate's top facts in one statement, grouped per candidate in order.
 
-    The per-candidate filter, ordering and ``LIMIT 3`` are the ones
-    ``_build_entity_context`` runs once per candidate; ``WITH ORDINALITY``
-    keeps the candidates in their extraction order.
+    A LATERAL join over the candidate list applies the per-candidate filter,
+    ordering and ``LIMIT 3``; ``WITH ORDINALITY`` keeps the candidates in their
+    extraction order. ``scope_clause`` adds ``AND (person_id = %s OR person_id
+    IS NULL)`` for a restricted scope.
+
+    The v2 match is indexed by idx_facts_entities_lower (migration 109). The
+    earlier ``EXISTS(unnest(...))`` form was unindexable and scanned the
+    tenant's whole active set per candidate. ``lower()`` cannot simply be
+    dropped to reuse the raw-array GIN: entity names that collapse under it
+    were measured losing over a third of matched rows. No bare percent sign
+    may appear in the SQL itself: psycopg2 reads it as a parameter.
     """
     if v2:
         match = "tenant_id = %s AND lower_entities(entities) && ARRAY[lower(c.name)]"
