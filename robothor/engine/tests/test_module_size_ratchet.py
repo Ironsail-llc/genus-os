@@ -164,7 +164,8 @@ CAPS = {
     # 368 -> 369: the observation notes are appended as their own messages
     # rather than folded into the pacing note (measured 2026-09-17: folded, the
     # act->observe sentence was read as part of "decide NOW what to deliver").
-    "robothor/engine/loop_guards.py": 369,
+    # 369 -> 365: the runaway hard cap records and never stops, so its stop branch went.
+    "robothor/engine/loop_guards.py": 365,
     # The three modules the budget work landed in, bounded from the day they
     # land — the rule this file states for anything that would otherwise
     # absorb the next concern one branch at a time. `_run_loop` paid for the
@@ -774,7 +775,7 @@ CAPS = {
     # Fleet admission (2026-08-27): extracted from the scheduler rather than
     # growing it past its cap — the pool it drives had no production caller for
     # its whole existence, and the wiring is a cohesive unit of its own.
-    "robothor/engine/admission.py": 108,  # +23: observe/enforce ladder; the evidence writer was extracted to admission_evidence.py. +3: the two budget_stop call sites; the record itself lives in budget_stops.py
+    "robothor/engine/admission.py": 107,  # +23: observe/enforce ladder; the evidence writer was extracted to admission_evidence.py. +3: the two budget_stop call sites; the record itself lives in budget_stops.py. -1: the hourly cap never refuses, so the refusal record went
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,

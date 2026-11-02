@@ -6,8 +6,8 @@ a cap or a stop, with the setting, its default, and what you see.
 
 **Budget** means a limit on spend: dollars, tokens or calls. **Control** means
 something else: a stop you issued, a timeout, a safety valve. The platform's
-direction is that budgets report and controls act. A spend budget whose limit
-you never set observes and alerts. It does not stop the run.
+direction is that budgets report and controls act. A spend budget that is
+reached records a step and alerts. It does not stop the run.
 
 ## How a stop is recorded
 
@@ -21,7 +21,7 @@ run step of type `budget_stop`:
 | `setting` | The environment variable or manifest field that controls it |
 | `limit` | The limit in force |
 | `observed` | The value that crossed it |
-| `mode` | `observe`: recorded, and the run went on. `enforce`: the run was stopped or refused. |
+| `mode` | `observe`: a spend budget was reached, and the run went on. `enforce`: a control stopped the run. |
 
 The same fields, plus `run_id`, `agent_id` and `tenant_id`, are published as an
 `agent.budget_stop` event on the `robothor:events:telemetry` Redis stream. The
@@ -41,29 +41,25 @@ as its category, `budget_stops`, which is also its module name
 budget_stops` selects it too. It is an `info` check: it reports a count and is
 never a verdict on the instance.
 
-An observed hourly cap crossing also raises a `warning` alert through the
-existing alert path, which writes a digest row rather than paging. The
-runaway-token cap keeps its `critical` alert in both modes.
+An hourly cap crossing also raises a `warning` alert through the existing
+alert path, which writes a digest row rather than paging. The runaway-token cap
+raises a `critical` alert.
 
-## Spend budgets that observe unless you set them
+## Spend budgets that report
 
-| Budget | Setting (default) | Unset (default) | Set explicitly, or `*_MODE=enforce` |
-|---|---|---|---|
-| Fleet hourly cost cap (`hourly_cost_cap`) | `ROBOTHOR_HOURLY_COST_CAP_USD` (5.0); `ROBOTHOR_HOURLY_COST_CAP_MODE` (empty) | Scheduled runs are admitted past the cap. The run carries a `budget_stop` step with mode `observe`, and a warning alert is raised. | Scheduled runs are deferred (a SKIPPED run row) once the rolling hour reaches the cap. The SKIPPED row carries the step with mode `enforce`. |
-| Runaway-token hard cap (`runaway_token_cap`) | `ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS` (5,000,000); `ROBOTHOR_RUNAWAY_HARD_CAP_MODE` (empty) | The step (mode `observe`) and the critical alert are recorded once. The run continues. | The run ends with `budget_exhausted`, and the step has mode `enforce`. |
+| Budget | Setting (default) | When it is reached |
+|---|---|---|
+| Fleet hourly cost cap (`hourly_cost_cap`) | `ROBOTHOR_HOURLY_COST_CAP_USD` (5.0; 0 turns the report off) | Scheduled runs are still admitted. The run carries a `budget_stop` step with mode `observe`, and a warning alert is raised (at most once an hour). |
+| Runaway-token hard cap (`runaway_token_cap`) | `ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS` (5,000,000) | The step (mode `observe`) and the critical alert are recorded once per run. The run continues. |
 
-Both modes and the hourly cap are ordinary settings: set them in the
-environment, in config.yaml, or with `genus config set`, and the engine reads
-them at start. The runaway cap's token count comes from the environment
-variable only; setting it in config.yaml alone switches the guard to enforce at
-the default. When the runaway cap observes, its pages say the run was **not**
-contained.
+The numbers are thresholds for the report. Setting them, in the environment,
+in config.yaml or with `genus config set`, moves the threshold; no setting turns
+either cap into a stop. The runaway cap's token count comes from the
+environment variable only. Its pages say the run was **not** contained.
 
 The hourly cap is only consulted when fleet admission is on
 (`ROBOTHOR_ADMISSION_ENABLED` with `ROBOTHOR_ADMISSION_MODE`). It never applies
-to interactive runs. `ROBOTHOR_HOURLY_COST_CAP_MODE=observe` wins over an
-explicit cap, for a deployment that sets the cap and wants it to report only.
-Concurrency admission, meaning the slot cap and the reservation for
+to interactive runs. Concurrency admission, meaning the slot cap and the reservation for
 interactive work, is capacity rather than spend, and is unchanged. See
 [Configuration](reference/configuration.md) for every setting.
 
@@ -76,7 +72,7 @@ or workflow run partway through.
 
 | Stop | Where | Setting (default) | Mid-run? | What you see | Kind | `budget_stop` |
 |---|---|---|---|---|---|---|
-| Fleet hourly cost cap | `pool.py` `FleetPool.can_start`, `admission.py` `admit` | See above | No (observes by default) | Observe: the step on the run. Enforce: a SKIPPED run "Deferred by admission control: Hourly cost cap reached", plus a guardrail event. | Budget | yes |
+| Fleet hourly cost cap | `pool.py` `FleetPool.cost_cap_crossed`, `admission.py` `admit` | See above | No; never refuses | The step on the run and a warning alert | Budget (report) | yes, observe |
 | Fleet concurrency and interactive reservation | `pool.py` `can_start` | `ROBOTHOR_MAX_CONCURRENT_AGENTS` (3), `ROBOTHOR_RESERVED_INTERACTIVE_SLOTS` (1), admission flags (off) | Refuses scheduled fires only | SKIPPED deferral row and a guardrail event | Control (capacity) | no |
 | Capacity governor | `capacity_governor.py` | Mode policy and thermal readings | No; lowers the pool's slot count | Log "Capacity: mode=..." | Control | no |
 | Cron dedup, circuit breaker, safety timeout | `scheduler.py` `_run_scheduled` | 5 consecutive errors (constant); timeout + 120 s | Refuses scheduled fires | Log "Cron skipped"; the breaker opens a CRM task "paused" | Control | no |
@@ -86,7 +82,7 @@ or workflow run partway through.
 
 | Stop | Where | Setting (default) | Mid-run? | What you see | Kind | `budget_stop` |
 |---|---|---|---|---|---|---|
-| Runaway-token hard cap | `loop_guards.py` `_runaway` | See above | No (observes by default) | Observe: the step and a critical alert. Enforce: `runaway_token_cap_hit`, `budget_exhausted`. | Budget | yes |
+| Runaway-token hard cap | `loop_guards.py` `_runaway` | See above | No; never stops | The step and a critical alert | Budget (report) | yes, observe |
 | Runaway-token soft alert | `loop_guards.py` `_runaway` | `ROBOTHOR_RUNAWAY_ALERT_TOKENS` (500,000) | No; alert only | Alert "Runaway-token alert" | Budget (alert) | no |
 | Per-agent cost cap | `runner.py` `_run_loop` hard-budget check | `v2.hard_budget` (false) and `v2.max_cost_usd` (0) | No; off unless the manifest sets both | A forced final summary, "Hard budget limit reached (explicit cost cap).", `budget_exhausted` | Budget (explicit) | yes, `hard_budget`, enforce |
 | Per-agent cost pre-flight | `runner.py` `_run_loop` | Same as the per-agent cost cap | No; off by default | Tools removed for the next call | Budget (explicit) | no |
@@ -121,10 +117,9 @@ or workflow run partway through.
 
 ## Open questions for the operator
 
-- **No default spend stop.** With neither cap set, no spend budget stops any
-  run by default. A runaway interactive run is bounded only by its timeout
-  (86,400 s on Telegram). This is the intended change and needs your explicit
-  sign-off. To restore the old protection, set `ROBOTHOR_RUNAWAY_HARD_CAP_MODE=enforce`.
+- **No spend stop.** Neither cap stops a run. A runaway interactive run is
+  bounded only by its timeout (86,400 s on Telegram); the runaway cap pages
+  critical when it is reached. Rolling this back is a revert.
 
 - **Iteration safety cap.** `safety_cap` defaults to 200 and stops a run
   partway. It is recorded as a `budget_stop` step and still enforces. It is

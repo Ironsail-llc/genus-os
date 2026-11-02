@@ -1032,14 +1032,12 @@ explicit `provider="browser"` still runs.
 
 ## Budgets and stops
 
-Spend budgets report rather than stop unless you set them. The fleet hourly
-cost cap (`ROBOTHOR_HOURLY_COST_CAP_USD`, 5.0) and the per-run runaway-token
-hard cap (`ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS`, 5,000,000) observe by default. A
-run that crosses one carries a `budget_stop` step with mode `observe`, the
-existing alert is raised, and the run continues. Set the limit explicitly (in
-the environment or config.yaml), or set `ROBOTHOR_HOURLY_COST_CAP_MODE` or
-`ROBOTHOR_RUNAWAY_HARD_CAP_MODE` to `enforce`, and they stop runs as before.
-`observe` wins over an explicit limit. `genus doctor --only budget_stops.recent`
+Spend budgets report; they never stop a run. When a run reaches the fleet
+hourly cost cap (`ROBOTHOR_HOURLY_COST_CAP_USD`, 5.0) or the per-run
+runaway-token hard cap (`ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS`, 5,000,000), it
+carries a `budget_stop` step with mode `observe`, the existing alert is raised,
+and the run continues. The numbers are thresholds for that report, and no
+setting turns either into a stop. `genus doctor --only budget_stops.recent`
 counts the last day's stops. The full inventory of budgets, caps and stops is
 in `docs/BUDGETS_AND_STOPS.md` (repository only).
 

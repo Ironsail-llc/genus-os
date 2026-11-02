@@ -251,9 +251,10 @@ read-only. It has four parts:
   its output, which the engine caps at 4,000 characters when it records it — the
   drawer says so when an output was cut. Warm-up steps are grouped under
   **Warm-up**, and guardrail events are listed with their reason.
-  A budget, cap or stop that refused, ended or (in observe mode) would have
-  ended the run is a `budget_stop` step, whose tool is the stop's name and whose
-  input carries the reason, setting, limit, observed value and mode. The same
+  A spend budget the run reached (mode `observe`: the run continued), or a
+  control that refused or ended it (mode `enforce`), is a `budget_stop` step,
+  whose tool is the stop's name and whose input carries the reason, setting,
+  limit, observed value and mode. The same
   record is published as `agent.budget_stop` on `robothor:events:telemetry`
   ([Budgets and Stops](BUDGETS_AND_STOPS.md)).
 

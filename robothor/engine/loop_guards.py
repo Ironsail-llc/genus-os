@@ -45,7 +45,7 @@ class GuardState:
     """One-shot notices retained across iterations; checks continue after notice."""
 
     runaway_alerted: bool = False
-    runaway_cap_observed: bool = False  # an observing hard cap records once
+    runaway_cap_observed: bool = False  # the hard cap records once
     #: Whether the agent has already been told a credential was found. The
     #: REDACTION that accompanies it is not latched — only the notice is.
     secret_notified: bool = False
@@ -130,7 +130,7 @@ def _watchdog_aborted(session: Any, watchdog: Any) -> bool:
 
 
 def _runaway(session: Any, agent_config: Any, state: GuardState) -> bool:
-    """Fleet-wide token guard: alert at 500K, 5M records (and stops when set)."""
+    """Fleet-wide token guard: alert at 500K; 5M records and pages. Neither stops."""
     from robothor.engine.runner import (
         RUNAWAY_TOKEN_ALERT,
         RUNAWAY_TOKEN_HARD_CAP,
@@ -148,13 +148,9 @@ def _runaway(session: Any, agent_config: Any, state: GuardState) -> bool:
             used,
         )
         _spawn_hard_cap_alert(session, agent_config, used)
-        mode = budget_stops.runaway_cap_hit(session, RUNAWAY_TOKEN_HARD_CAP, used, reason)
-        if mode == "observe":  # an unset cap records once and the run goes on
-            state.runaway_cap_observed = True
-            return False
-        session.run.budget_exhausted = True
-        session.record_error(reason)
-        return True
+        budget_stops.runaway_cap_hit(session, RUNAWAY_TOKEN_HARD_CAP, used, reason)
+        state.runaway_cap_observed = True
+        return False
 
     if not state.runaway_alerted and used >= RUNAWAY_TOKEN_ALERT:
         state.runaway_alerted = True

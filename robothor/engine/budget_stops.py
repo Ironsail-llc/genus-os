@@ -9,14 +9,14 @@ This module is that record. :func:`record` appends one ``budget_stop`` step to
 the run (``tool_name`` is the stop, ``tool_input`` carries ``reason``,
 ``setting``, ``limit``, ``observed`` and ``mode``) and publishes the same fields
 as ``agent.budget_stop`` on the telemetry stream, so the Runs view and the
-metrics pipeline see the same thing. ``mode`` is ``observe`` when the budget
-recorded what it WOULD have done and let the run continue, ``enforce`` when it
-acted.
+metrics pipeline see the same thing. ``mode`` is ``observe`` when a spend
+budget's limit was reached and the run continued, ``enforce`` when a control
+(the operator's stop, the iteration safety valve, an explicit per-agent cost
+cap) acted.
 
-It also owns the rule for spend budgets whose limit the operator never set:
-they observe. Setting the limit explicitly in the environment, or setting the
-budget's ``*_MODE`` variable to ``enforce``, keeps the old behaviour. See
-``docs/BUDGETS_AND_STOPS.md``.
+Spend budgets always observe. The fleet hourly cost cap and the runaway-token
+hard cap are thresholds for this record and its alert, never a reason to refuse
+or end a run. See ``docs/BUDGETS_AND_STOPS.md``.
 
 Everything here is best-effort and never raises: a record that crashes the run
 it describes is worse than no record.
@@ -29,13 +29,11 @@ import contextvars
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 
 from robothor.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
-
-Mode = Literal["observe", "enforce"]
 
 TELEMETRY_STREAM = "telemetry"
 EVENT_TYPE = "agent.budget_stop"
@@ -51,50 +49,9 @@ _pending: contextvars.ContextVar[tuple[dict[str, Any], ...]] = contextvars.Conte
 )
 
 
-def _providers() -> Any:
-    from robothor.settings import get_settings
-
-    return get_settings().providers
-
-
-def spend_cap_mode(mode: Any, limit_explicit: bool) -> Mode:
-    """``enforce`` only when the operator asked for it.
-
-    The mode setting wins when it says ``observe`` or ``enforce``. Without it,
-    a limit the operator set explicitly enforces, and a limit that is only the
-    built-in default observes.
-    """
-    raw = str(mode or "").strip().lower()
-    if raw in ("observe", "enforce"):
-        return raw  # type: ignore[return-value]
-    return "enforce" if limit_explicit else "observe"
-
-
-def hourly_cost_cap_mode() -> Mode:
-    """Read through the settings, so ``genus config set`` and config.yaml work
-    exactly like the environment, for the mode and for the cap itself."""
-    providers = _providers()
-    return spend_cap_mode(
-        providers.hourly_cost_cap_mode, "hourly_cost_cap_usd" in providers.model_fields_set
-    )
-
-
-def runaway_hard_cap_mode() -> Mode:
-    """Read through the settings, like :func:`hourly_cost_cap_mode`."""
-    providers = _providers()
-    return spend_cap_mode(
-        providers.runaway_hard_cap_mode, "runaway_hard_cap_tokens" in providers.model_fields_set
-    )
-
-
 def runaway_cap_note() -> str:
     """What the runaway pages may honestly say about containment."""
-    if runaway_hard_cap_mode() == "enforce":
-        return "Contained by the budget guard"
-    return (
-        "NOT contained: the hard cap observes and the run continues "
-        "(set ROBOTHOR_RUNAWAY_HARD_CAP_MODE=enforce to stop such runs)"
-    )
+    return "Not contained: the hard cap is recorded and the run continues"
 
 
 def _detail(
@@ -173,8 +130,7 @@ def _alert(detail: dict[str, Any], agent_id: str) -> None:
                 "warning",
                 f"Budget observed, run continued: {detail['stop']} ({agent_id})",
                 f"{detail['reason']} -- setting {detail['setting']}, limit {detail['limit']}, "
-                f"observed {detail['observed']}. Set the limit explicitly or its mode to "
-                "enforce to stop runs instead.",
+                f"observed {detail['observed']}.",
             ),
             name=f"budget-observed-alert:{detail['stop']}:{agent_id}",
         )
@@ -210,19 +166,6 @@ def record(
     )
     publish(session.run_id, session.run.agent_id, session.run.tenant_id or "", detail)
     return step
-
-
-def record_for_run(run_id: str, agent_id: str, **fields: Any) -> None:
-    """Write a ``budget_stop`` step straight to a run row that is not live
-    (the SKIPPED row an enforcing admission writes). Never raises."""
-    detail = _detail(**fields)
-    try:
-        from robothor.engine.tracking import create_step
-
-        create_step(_step(run_id, 1, detail))
-    except Exception:  # noqa: BLE001
-        logger.debug("budget_stop step could not be written", exc_info=True)
-    publish(run_id, agent_id, "", detail)
 
 
 def note_pending(agent_id: str, **fields: Any) -> None:
@@ -278,14 +221,8 @@ def record_durable_stop(session: Any, reason: str) -> Any:
     )
 
 
-def runaway_cap_hit(session: Any, cap: int, used: int, reason: str) -> Mode:
-    """Record the runaway-token hard cap and say whether it stops the run.
-
-    A cap the operator never set observes: the step (and the caller's critical
-    alert) once, and the run goes on. ``ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS`` set
-    explicitly, or ``ROBOTHOR_RUNAWAY_HARD_CAP_MODE=enforce``, stops it.
-    """
-    mode = runaway_hard_cap_mode()
+def runaway_cap_hit(session: Any, cap: int, used: int, reason: str) -> None:
+    """Record the runaway-token hard cap. The caller pages; the run goes on."""
     record(
         session,
         stop=RUNAWAY_TOKEN_CAP,
@@ -293,9 +230,8 @@ def runaway_cap_hit(session: Any, cap: int, used: int, reason: str) -> Mode:
         setting="ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS",
         limit=cap,
         observed=used,
-        mode=mode,
+        mode="observe",
     )
-    return mode
 
 
 def safety_cap(cap: int, iteration: int) -> dict[str, Any]:
@@ -322,7 +258,7 @@ def cost_cap(limit: float, run: Any) -> dict[str, Any]:
     )
 
 
-def _hourly_detail(pool: Any, verb: str, mode: str) -> dict[str, Any] | None:
+def _hourly_detail(pool: Any) -> dict[str, Any] | None:
     """The hourly cap's record, or None when the pool has not reached it."""
     over = _crossed(pool)
     if over is None:
@@ -330,11 +266,11 @@ def _hourly_detail(pool: Any, verb: str, mode: str) -> dict[str, Any] | None:
     observed, cap = over
     return _detail(
         HOURLY_COST_CAP,
-        f"Hourly cost cap {verb}: ${observed:.2f}/${cap:.2f}",
+        f"Hourly cost cap crossed: ${observed:.2f}/${cap:.2f}",
         "ROBOTHOR_HOURLY_COST_CAP_USD",
         cap,
         round(observed, 4),
-        mode,
+        "observe",
     )
 
 
@@ -347,27 +283,11 @@ def _crossed(pool: Any) -> tuple[float, float] | None:
 
 
 def observe_hourly_cap(pool: Any, agent_id: str) -> bool:
-    """Note an observing pool's cap crossing for the run about to start.
+    """Note the pool's cap crossing for the run about to start.
 
     Returns True: the run was admitted, and this only adds the record.
     """
-    detail = _hourly_detail(pool, "crossed", "observe")
+    detail = _hourly_detail(pool)
     if detail is not None:
         note_pending(agent_id, **detail)
     return True
-
-
-def record_hourly_cap_refusal(
-    pool: Any, run_id: str | None, agent_id: str, reason: str, admission_mode: str
-) -> None:
-    """The SKIPPED row an enforcing cap left behind carries the step.
-
-    ``admission_mode`` decides the step's mode: at admission ``observe`` the
-    refusal was only recorded and the run went ahead.
-    """
-    if not run_id or not reason.startswith("Hourly cost cap"):
-        return
-    mode = "enforce" if admission_mode == "enforce" else "observe"
-    detail = _hourly_detail(pool, "reached", mode)
-    if detail is not None:
-        record_for_run(run_id, agent_id, **detail)
