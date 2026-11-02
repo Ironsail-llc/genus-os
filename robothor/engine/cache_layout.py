@@ -1,7 +1,6 @@
-"""Prompt-cache layout v2: keep the request prefix byte-stable between runs.
+"""Prompt-cache layout: keep the request prefix byte-stable between runs.
 
-Gated by ``ROBOTHOR_CACHE_LAYOUT_V2`` (``feature_flags.cache_layout_v2_enabled``)
-and applied by ``LLMClient._build_llm_kwargs``.
+Applied by ``LLMClient._build_llm_kwargs`` on every model call.
 
 Every provider that caches prompts caches a prefix. The engine's system prompt
 ends with a ``Current time:`` line at minute precision, so with it in place the
@@ -38,15 +37,12 @@ _TIME_MARKER = f"{_SEPARATOR}Current time:"
 _EPHEMERAL = {"type": "ephemeral"}
 
 
-def prepare(model: str, messages: list[dict[str, Any]]) -> tuple[bool, list[dict[str, Any]], bool]:
-    """(layout v2 on, messages to send, whether the system message gets a breakpoint)."""
-    from robothor.engine.feature_flags import cache_layout_v2_enabled
+def prepare(model: str, messages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """(messages to send, whether the system message gets a breakpoint)."""
     from robothor.engine.model_registry import supports_cache_control
 
-    cache_system = supports_cache_control(model)
-    if not cache_layout_v2_enabled():
-        return False, messages, cache_system
-    return True, move_time_to_engine_turn(messages), sends_cache_markers(model, cache_system)
+    cache_system = sends_cache_markers(model, supports_cache_control(model))
+    return move_time_to_engine_turn(messages), cache_system
 
 
 def _take_time_line(content: str) -> tuple[str, str]:
@@ -121,12 +117,16 @@ def is_openai_family(model: str) -> bool:
 
 
 def sends_cache_markers(model: str, supports_cache_control: bool) -> bool:
-    """Whether the system-message breakpoint is sent under the v2 layout."""
+    """Whether the system-message breakpoint is sent."""
     return supports_cache_control and not is_openai_family(model)
 
 
 def has_explicit_breakpoints(model: str) -> bool:
-    """Anthropic direct: tool and conversation breakpoints, not only the system one."""
+    """Anthropic direct: tool and conversation breakpoints, not only the system one.
+
+    Only a route that already gets the system breakpoint (the catalog's
+    ``supports_cache_control``) gets these; the caller checks both.
+    """
     return model.startswith("anthropic/")
 
 

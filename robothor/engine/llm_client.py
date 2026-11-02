@@ -2160,43 +2160,25 @@ class LLMClient:
 
         # Which routes get a system-prompt cache_control breakpoint is the
         # catalog-driven model_registry.supports_cache_control (its docstring
-        # says why OpenRouter and Gemini get none); cache layout v2 also keeps
-        # the system prompt a byte-stable prefix (see cache_layout).
+        # says why OpenRouter and Gemini get none); cache_layout keeps the
+        # system prompt a byte-stable prefix and drops OpenAI-family markers.
         from robothor.engine import cache_layout
 
-        layout_v2, messages, cache_system = cache_layout.prepare(model, messages)
+        messages, cache_system = cache_layout.prepare(model, messages)
         if cache_system and messages and messages[0].get("role") == "system":
             messages = list(messages)  # shallow copy to avoid mutating original
             sys_content = messages[0].get("content")
             if isinstance(sys_content, str):
                 sys_msg = dict(messages[0])
-                # Split into static (cacheable) + dynamic (time context) blocks.
-                # The dynamic tail starts at the last "---" separator before "Current time:".
-                split_marker = "\n\n---\n\nCurrent time:"
-                split_idx = sys_content.rfind(split_marker)
-                if split_idx > 0:
-                    static_part = sys_content[:split_idx]
-                    dynamic_part = sys_content[split_idx + len("\n\n---\n\n") :]
-                    sys_msg["content"] = [
-                        {
-                            "type": "text",
-                            "text": static_part,
-                            "cache_control": {"type": "ephemeral"},
-                        },
-                        {
-                            "type": "text",
-                            "text": dynamic_part,
-                        },
-                    ]
-                else:
-                    # Fallback: cache the whole thing (no time context found)
-                    sys_msg["content"] = [
-                        {
-                            "type": "text",
-                            "text": sys_content,
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ]
+                # cache_layout already moved the per-run time line out, so the
+                # whole system prompt is the stable, cacheable prefix.
+                sys_msg["content"] = [
+                    {
+                        "type": "text",
+                        "text": sys_content,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
                 messages[0] = sys_msg
 
         # Defense in depth: drop orphaned tool_result messages that would
@@ -2218,7 +2200,7 @@ class LLMClient:
             # the list or stripped as engine context.
             messages = [*messages, {"role": "user", "content": nudge}]
 
-        if layout_v2 and cache_layout.has_explicit_breakpoints(model):
+        if cache_system and cache_layout.has_explicit_breakpoints(model):
             messages, tools = cache_layout.add_anthropic_breakpoints(messages, tools)
 
         kwargs: dict[str, Any] = {

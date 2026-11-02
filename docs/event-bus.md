@@ -207,7 +207,8 @@ with the other hook fields in `docs/agents/schema.yaml`.
 A workflow with a `hook` trigger gets the event as its run's `event` context
 (`type`, `stream`, `delivery_id`, the parsed `payload`, and `id` for webhook
 events), so its steps
-can template it, and its trigger takes the same `requeue_if_busy` option. See
+can template it, and its trigger takes the same `requeue_if_busy` option, or
+`concurrent: true` to let its runs overlap. See
 [Agent Builder](AGENT_BUILDER.md#triggered-by-an-event).
 
 ### Running the webhook receiver separately

@@ -267,12 +267,16 @@ class TestAgentRunnerExecute:
         assert messages[1]["content"] == "First message"
         assert messages[2]["role"] == "assistant"
         assert messages[2]["content"] == "First reply"
-        # The engine's own context turn sits between the history and the user's
-        # words — never inside them (#547). It carries who the two principals
-        # are, and on a deferred run how to reach the rest of the toolset.
+        # The engine's own context turns sit between the history and the user's
+        # words — never inside them (#547). The first carries who the two
+        # principals are, and on a deferred run how to reach the rest of the
+        # toolset; the second is the per-run time and task record the prompt-cache
+        # layout moves out of the system prompt (see cache_layout).
         assert messages[3]["role"] == ENGINE_CONTEXT_ROLE
-        assert messages[4]["role"] == "user"
-        assert messages[4]["content"] == "Follow-up"
+        assert messages[4]["role"] == ENGINE_CONTEXT_ROLE
+        assert "Current time:" in messages[4]["content"]
+        assert messages[5]["role"] == "user"
+        assert messages[5]["content"] == "Follow-up"
 
     @pytest.mark.asyncio
     async def test_an_unconfigured_instance_still_gets_the_context_turn(
@@ -326,6 +330,7 @@ class TestAgentRunnerExecute:
             "user",
             "assistant",
             ENGINE_CONTEXT_ROLE,
+            ENGINE_CONTEXT_ROLE,
             "user",
         ]
         context = messages[3]["content"]
@@ -333,7 +338,7 @@ class TestAgentRunnerExecute:
         assert "landed in their account" in context
         # And it invents nothing about principals nobody configured.
         assert "@" not in context
-        assert messages[4]["content"] == "Follow-up"
+        assert messages[5]["content"] == "Follow-up"
 
     @pytest.mark.asyncio
     async def test_all_models_fail(self, runner, sample_agent_config):
@@ -752,7 +757,9 @@ class TestIdentityThreading:
         # --- CURRENT USER --- header" in every reply, 2026-09-14).
         from robothor.engine.session import ENGINE_CONTEXT_ROLE
 
-        engine_turn = captured["messages"][-2]
+        # [-2] is the per-run time and task turn the prompt-cache layout adds.
+        assert captured["messages"][-2]["role"] == ENGINE_CONTEXT_ROLE
+        engine_turn = captured["messages"][-3]
         assert engine_turn["role"] == ENGINE_CONTEXT_ROLE
         assert "--- CURRENT USER ---" in engine_turn["content"]
         assert "Bob" in engine_turn["content"]

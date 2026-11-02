@@ -2297,15 +2297,6 @@ class FlagSettings(SettingsGroup):
         "would cost more than they save). The text is the same.",
         since="unreleased",
     )
-    cache_layout_v2: bool = declare(
-        False,
-        "ROBOTHOR_CACHE_LAYOUT_V2",
-        "Prompt-cache layout v2: move the per-run time line out of the system "
-        "prompt into an engine turn before the latest user message, so the "
-        "system prompt, tools and earlier conversation stay a byte-stable "
-        "prefix that providers cache; adds tool and conversation breakpoints "
-        "on Anthropic direct and sends no cache markers to OpenAI or Gemini.",
-    )
     execution_lanes: bool = declare(
         False,
         "ROBOTHOR_EXECUTION_LANES",
