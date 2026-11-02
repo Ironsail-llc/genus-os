@@ -216,7 +216,11 @@ async def create_manifest(body: CreateRequest, request: Request) -> dict[str, An
     """Scaffold an agent, validate it, write it, and make it fire — in the engine."""
     require_operator(request)
     # The id the engine will derive, for an audit event whose answer is lost.
-    intended = body.id if body.id is not None else kebab(body.name)
+    # An id the engine would refuse is not a slug, so it is not the action.
+    try:
+        intended = safe_id(body.id if body.id is not None else kebab(body.name))
+    except ManifestError:
+        intended = "(invalid id)"
     event = "helm.agent_manifest.create"
     result = await _forward_write(request, event, intended, "POST", _ENGINE, body.model_dump())
     agent_id = str(result.get("id") or "")

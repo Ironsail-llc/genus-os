@@ -338,13 +338,12 @@ def snapshot(agent_id: str) -> None:
 def retire(agent_id: str, path: Path) -> None:
     """Move the manifest to ``retired/``. Nothing is unlinked."""
     root = manifest_root()
-    (root / RETIRED_DIR).mkdir(parents=True, exist_ok=True)
     try:
+        (root / RETIRED_DIR).mkdir(parents=True, exist_ok=True)
         target = contained_path(root, f"{RETIRED_DIR}/{agent_id}.yaml", label="retired manifest")
+        path.replace(target)
     except TemplateSecurityError as error:
         raise _refused(error) from error
-    try:
-        path.replace(target)
     except OSError as error:
         raise _unwritable(error) from error
 
