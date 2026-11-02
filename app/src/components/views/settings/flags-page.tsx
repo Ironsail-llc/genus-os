@@ -52,6 +52,31 @@ import {
 
 const BRIDGE = "/api/bridge";
 
+/**
+ * A read that answered 401, then answered 401 again.
+ *
+ * The BFF refreshes an expiring session on the way through a request, so the
+ * first 401 is often the one request that lost a refresh race (two dashboard
+ * replicas rotating one session at once). One retry carries the rotated
+ * cookie. A second 401 means the session really is gone, and the honest
+ * screen is "sign in again" — not a red banner beside guardrail controls
+ * whose Apply would be refused the same way.
+ */
+const SIGNED_OUT = "signed-out";
+
+/** `fetch`, and once more if the answer was 401. */
+async function fetchRetryingUnauthorized(url: string): Promise<Response> {
+  const first = await fetch(url);
+  if (first.status !== 401) return first;
+  return fetch(url);
+}
+
+function signInHref(): string {
+  if (typeof window === "undefined") return "/signin";
+  const back = `${window.location.pathname}${window.location.search}`;
+  return `/signin?callbackUrl=${encodeURIComponent(back)}`;
+}
+
 /** Verdict statuses that may render affirmatively. Exactly one. */
 const AFFIRMATIVE = new Set(["ENFORCING"]);
 /** Zero evidence, no evidence table, or no verdict at all. */
@@ -146,6 +171,11 @@ export function FlagsPage({ visible = true, role }: FlagsPageProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [verdictError, setVerdictError] = useState<string | null>(null);
+  // One per loader: the two run concurrently, and one succeeding must not
+  // clear the other's verdict that the session is gone.
+  const [valuesSignedOut, setValuesSignedOut] = useState(false);
+  const [controlsSignedOut, setControlsSignedOut] = useState(false);
+  const signedOut = valuesSignedOut || controlsSignedOut;
 
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [reasons, setReasons] = useState<Record<string, string>>({});
@@ -164,7 +194,14 @@ export function FlagsPage({ visible = true, role }: FlagsPageProps) {
    */
   const loadControls = useCallback(async () => {
     try {
-      const res = await fetch(`${BRIDGE}/api/controls`);
+      const res = await fetchRetryingUnauthorized(`${BRIDGE}/api/controls`);
+      if (res.status === 401) {
+        setControls({});
+        setVerdictError(null);
+        setControlsSignedOut(true);
+        return;
+      }
+      setControlsSignedOut(false);
       if (!res.ok) {
         const refusal = await readBridgeReply(res);
         // Dropped, not kept. A banner reading "no flag below can be shown as
@@ -192,25 +229,50 @@ export function FlagsPage({ visible = true, role }: FlagsPageProps) {
    * restart — is not worth re-fetching to learn that.
    */
   const loadValues = useCallback(async (): Promise<string | null> => {
-    const res = await fetch(`${BRIDGE}/api/settings`);
+    const res = await fetchRetryingUnauthorized(`${BRIDGE}/api/settings`);
+    if (res.status === 401) {
+      setValuesSignedOut(true);
+      return SIGNED_OUT;
+    }
+    setValuesSignedOut(false);
     if (!res.ok) return readBridgeReply(res);
     setValues(normalizeValues(await res.json()).values);
     return null;
   }, []);
 
+  /**
+   * Schema, then values. A failure CLEARS what an earlier load put on screen:
+   * a red banner above a full set of controls from the last good read is two
+   * claims at once, and the controls are the one people act on.
+   */
   const load = useCallback(async () => {
     setLoading(true);
+    const fail = (message: string | null) => {
+      setFields(null);
+      setValues({});
+      setError(message);
+    };
     try {
-      const schemaRes = await fetch(`${BRIDGE}/api/settings/schema`);
+      const schemaRes = await fetchRetryingUnauthorized(`${BRIDGE}/api/settings/schema`);
+      if (schemaRes.status === 401) {
+        setValuesSignedOut(true);
+        fail(null);
+        return;
+      }
       if (!schemaRes.ok) {
-        setError(await readBridgeReply(schemaRes));
+        fail(await readBridgeReply(schemaRes));
         return;
       }
       const groups = normalizeSchema(await schemaRes.json());
+      const failure = await loadValues();
+      if (failure) {
+        fail(failure === SIGNED_OUT ? null : failure);
+        return;
+      }
       setFields(groups.flatMap((group) => group.fields).filter((field) => field.governed));
-      setError(await loadValues());
+      setError(null);
     } catch {
-      setError(BRIDGE_UNREACHABLE);
+      fail(BRIDGE_UNREACHABLE);
     } finally {
       setLoading(false);
     }
@@ -320,191 +382,211 @@ export function FlagsPage({ visible = true, role }: FlagsPageProps) {
         as one.
       </p>
 
-      {error ? (
-        <p
-          data-testid="flags-error"
-          className="max-w-3xl rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
-        >
-          {error}
-        </p>
-      ) : null}
-
-      {verdictError ? (
-        <p
-          data-testid="flags-verdict-error"
-          className="max-w-3xl rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
-        >
-          The verdicts could not be read ({verdictError}), so no flag below can be shown as doing
-          anything. The values are still current, and a change still applies.
-        </p>
-      ) : null}
-
-      {loading && fields === null ? (
+      {signedOut ? (
         <div
-          className="flex items-center gap-2 p-6 text-xs text-muted-foreground"
-          data-testid="flags-loading"
+          data-testid="flags-signin"
+          className="flex max-w-3xl flex-col gap-2 rounded-lg border border-border bg-card p-3 text-xs text-foreground"
         >
-          <Loader2 aria-hidden className="size-4 animate-spin" />
-          Reading the governed flags…
+          <p>
+            Your session has ended, so the flags cannot be read or changed from here. Sign in again
+            to see what each guardrail is doing.
+          </p>
+          <a
+            href={signInHref()}
+            className="self-start rounded-md border border-border px-2 py-1 font-medium hover:bg-accent/60"
+          >
+            Sign in
+          </a>
         </div>
-      ) : null}
+      ) : (
+        <>
+          {error ? (
+            <p
+              data-testid="flags-error"
+              className="max-w-3xl rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+            >
+              {error}
+            </p>
+          ) : null}
 
-      {fields !== null && sections.length === 0 && !error ? (
-        <p data-testid="flags-empty" className="max-w-3xl text-xs text-muted-foreground">
-          This instance declares no governed flags. Every guardrail it runs is then fixed at build
-          time, which is not how the platform ships — check that the bridge and the engine are the
-          same version.
-        </p>
-      ) : null}
+          {verdictError ? (
+            <p
+              data-testid="flags-verdict-error"
+              className="max-w-3xl rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
+            >
+              The verdicts could not be read ({verdictError}), so no flag below can be shown as doing
+              anything. The values are still current, and a change still applies.
+            </p>
+          ) : null}
 
-      {sections.map((section) => (
-        <section
-          key={section.id}
-          data-testid={`flags-section-${section.id}`}
-          className="flex min-w-0 flex-col gap-2"
-        >
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <h3 className="text-sm font-medium text-foreground">{section.label}</h3>
-            <p className="max-w-3xl text-[11px] text-muted-foreground">{section.blurb}</p>
-          </div>
+          {loading && fields === null ? (
+            <div
+              className="flex items-center gap-2 p-6 text-xs text-muted-foreground"
+              data-testid="flags-loading"
+            >
+              <Loader2 aria-hidden className="size-4 animate-spin" />
+              Reading the governed flags…
+            </div>
+          ) : null}
 
-          {section.fields.map((field) => {
-            const control = controls[field.name];
-            const verdict = control?.verdict ?? NO_VERDICT;
-            const current = currentOf(field);
-            const rungs = rungsOf(field);
-            const chosen = picked[field.name] ?? current;
-            const reason = reasons[field.name] ?? "";
-            const source = values[field.name]?.source ?? "unknown";
-            const canApply = Boolean(reason.trim()) && chosen !== current;
+          {fields !== null && sections.length === 0 && !error ? (
+            <p data-testid="flags-empty" className="max-w-3xl text-xs text-muted-foreground">
+              This instance declares no governed flags. Every guardrail it runs is then fixed at build
+              time, which is not how the platform ships — check that the bridge and the engine are the
+              same version.
+            </p>
+          ) : null}
 
-            return (
-              <div
-                key={field.name}
-                data-testid={`flag-${field.name}`}
-                className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-border bg-card p-3"
-              >
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="min-w-0 break-all font-mono text-[12px] text-foreground">
-                    {field.env}
-                  </span>
-                  <span className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-                    now: {current || "unset"}
-                  </span>
-                  <span
-                    data-testid={`flag-source-${field.name}`}
-                    className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
-                  >
-                    {SOURCE_LABEL[source]}
-                  </span>
-                  <span
-                    data-testid={`flag-verdict-${field.name}`}
-                    data-status={verdict.status}
-                    className={`ml-auto shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${badgeClass(
-                      verdict.status
-                    )}`}
-                  >
-                    {verdict.status}
-                  </span>
-                </div>
-
-                {field.description ? (
-                  <p className="text-[11px] text-muted-foreground">{field.description}</p>
-                ) : null}
-
-                <p className="text-[11px] text-muted-foreground">{verdict.message}</p>
-                <p className="text-[10px] text-muted-foreground/80">
-                  Last fired {when(verdict.lastFired)} · {verdict.count7d} events / 7d
-                </p>
-
-                {source === "env" ? (
-                  <p
-                    data-testid={`flag-env-note-${field.name}`}
-                    className="text-[11px] text-muted-foreground"
-                  >
-                    An environment variable on the box currently supplies this. A change saved here
-                    writes an operator row, which outranks the variable — so it applies, and it
-                    keeps applying until somebody removes the row on the box.
-                  </p>
-                ) : null}
-
-                {canWrite ? (
-                  <div className="flex min-w-0 flex-wrap items-center gap-2 pt-0.5">
-                    <div
-                      role="group"
-                      aria-label={`${field.env} value`}
-                      className="flex min-w-0 flex-wrap items-center gap-1 rounded-md border border-border p-0.5"
-                    >
-                      {rungs.map((rung) => {
-                        const active = rung === chosen;
-                        return (
-                          <button
-                            key={rung}
-                            type="button"
-                            aria-pressed={active}
-                            data-testid={`flag-value-${field.name}-${rung}`}
-                            onClick={() =>
-                              setPicked((prev) => ({ ...prev, [field.name]: rung }))
-                            }
-                            className={`rounded px-2 py-1 text-xs transition-colors ${
-                              active
-                                ? "bg-primary/15 text-foreground"
-                                : "text-muted-foreground hover:bg-accent/60"
-                            }`}
-                          >
-                            {rung}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <Input
-                      data-testid={`flag-reason-${field.name}`}
-                      placeholder="Reason (recorded in the audit log)"
-                      value={reason}
-                      onChange={(event) =>
-                        setReasons((prev) => ({ ...prev, [field.name]: event.target.value }))
-                      }
-                      className="h-8 min-w-[160px] flex-1 text-sm sm:max-w-sm"
-                    />
-                    <Button
-                      size="sm"
-                      data-testid={`flag-apply-${field.name}`}
-                      disabled={!canApply || applying === field.name}
-                      onClick={() => void apply(field)}
-                    >
-                      {applying === field.name ? "Applying…" : "Apply"}
-                    </Button>
-                  </div>
-                ) : (
-                  <p
-                    data-testid={`flag-readonly-${field.name}`}
-                    className="text-[11px] italic text-muted-foreground"
-                  >
-                    Operator only — ask an owner or admin of this instance to change this flag.
-                  </p>
-                )}
-
-                {rowErrors[field.name] ? (
-                  <p
-                    data-testid={`flag-error-${field.name}`}
-                    className="text-[11px] text-destructive"
-                  >
-                    {rowErrors[field.name]}
-                  </p>
-                ) : null}
+          {sections.map((section) => (
+            <section
+              key={section.id}
+              data-testid={`flags-section-${section.id}`}
+              className="flex min-w-0 flex-col gap-2"
+            >
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <h3 className="text-sm font-medium text-foreground">{section.label}</h3>
+                <p className="max-w-3xl text-[11px] text-muted-foreground">{section.blurb}</p>
               </div>
-            );
-          })}
-        </section>
-      ))}
 
-      {sections.length > 0 ? (
-        <p className="flex max-w-3xl items-center gap-1.5 text-[11px] text-muted-foreground">
-          <FlagIcon aria-hidden className="size-3" />
-          Every change is recorded with its reason. The inventory behind these flags — owner,
-          production mode, promotion date — lives in <span className="font-mono">infra/flags.yaml</span>.
-        </p>
-      ) : null}
+              {section.fields.map((field) => {
+                const control = controls[field.name];
+                const verdict = control?.verdict ?? NO_VERDICT;
+                const current = currentOf(field);
+                const rungs = rungsOf(field);
+                const chosen = picked[field.name] ?? current;
+                const reason = reasons[field.name] ?? "";
+                const source = values[field.name]?.source ?? "unknown";
+                const canApply = Boolean(reason.trim()) && chosen !== current;
+
+                return (
+                  <div
+                    key={field.name}
+                    data-testid={`flag-${field.name}`}
+                    className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-border bg-card p-3"
+                  >
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="min-w-0 break-all font-mono text-[12px] text-foreground">
+                        {field.env}
+                      </span>
+                      <span className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                        now: {current || "unset"}
+                      </span>
+                      <span
+                        data-testid={`flag-source-${field.name}`}
+                        className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
+                      >
+                        {SOURCE_LABEL[source]}
+                      </span>
+                      <span
+                        data-testid={`flag-verdict-${field.name}`}
+                        data-status={verdict.status}
+                        className={`ml-auto shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${badgeClass(
+                          verdict.status
+                        )}`}
+                      >
+                        {verdict.status}
+                      </span>
+                    </div>
+
+                    {field.description ? (
+                      <p className="text-[11px] text-muted-foreground">{field.description}</p>
+                    ) : null}
+
+                    <p className="text-[11px] text-muted-foreground">{verdict.message}</p>
+                    <p className="text-[10px] text-muted-foreground/80">
+                      Last fired {when(verdict.lastFired)} · {verdict.count7d} events / 7d
+                    </p>
+
+                    {source === "env" ? (
+                      <p
+                        data-testid={`flag-env-note-${field.name}`}
+                        className="text-[11px] text-muted-foreground"
+                      >
+                        An environment variable on the box currently supplies this. A change saved here
+                        writes an operator row, which outranks the variable — so it applies, and it
+                        keeps applying until somebody removes the row on the box.
+                      </p>
+                    ) : null}
+
+                    {canWrite ? (
+                      <div className="flex min-w-0 flex-wrap items-center gap-2 pt-0.5">
+                        <div
+                          role="group"
+                          aria-label={`${field.env} value`}
+                          className="flex min-w-0 flex-wrap items-center gap-1 rounded-md border border-border p-0.5"
+                        >
+                          {rungs.map((rung) => {
+                            const active = rung === chosen;
+                            return (
+                              <button
+                                key={rung}
+                                type="button"
+                                aria-pressed={active}
+                                data-testid={`flag-value-${field.name}-${rung}`}
+                                onClick={() =>
+                                  setPicked((prev) => ({ ...prev, [field.name]: rung }))
+                                }
+                                className={`rounded px-2 py-1 text-xs transition-colors ${
+                                  active
+                                    ? "bg-primary/15 text-foreground"
+                                    : "text-muted-foreground hover:bg-accent/60"
+                                }`}
+                              >
+                                {rung}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <Input
+                          data-testid={`flag-reason-${field.name}`}
+                          placeholder="Reason (recorded in the audit log)"
+                          value={reason}
+                          onChange={(event) =>
+                            setReasons((prev) => ({ ...prev, [field.name]: event.target.value }))
+                          }
+                          className="h-8 min-w-[160px] flex-1 text-sm sm:max-w-sm"
+                        />
+                        <Button
+                          size="sm"
+                          data-testid={`flag-apply-${field.name}`}
+                          disabled={!canApply || applying === field.name}
+                          onClick={() => void apply(field)}
+                        >
+                          {applying === field.name ? "Applying…" : "Apply"}
+                        </Button>
+                      </div>
+                    ) : (
+                      <p
+                        data-testid={`flag-readonly-${field.name}`}
+                        className="text-[11px] italic text-muted-foreground"
+                      >
+                        Operator only — ask an owner or admin of this instance to change this flag.
+                      </p>
+                    )}
+
+                    {rowErrors[field.name] ? (
+                      <p
+                        data-testid={`flag-error-${field.name}`}
+                        className="text-[11px] text-destructive"
+                      >
+                        {rowErrors[field.name]}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </section>
+          ))}
+
+          {sections.length > 0 ? (
+            <p className="flex max-w-3xl items-center gap-1.5 text-[11px] text-muted-foreground">
+              <FlagIcon aria-hidden className="size-3" />
+              Every change is recorded with its reason. The inventory behind these flags — owner,
+              production mode, promotion date — lives in <span className="font-mono">infra/flags.yaml</span>.
+            </p>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }

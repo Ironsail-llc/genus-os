@@ -254,8 +254,12 @@ def _journalctl_path() -> tuple[str | None, str | None]:
     return path, None
 
 
-def _journalctl() -> tuple[str | None, str | None]:
-    """``(path, None)`` when journald is usable here, else ``(None, reason)``.
+def _journalctl() -> tuple[str | None, str | None, bool]:
+    """``(path, None, False)`` when journald is usable, else ``(None, reason, missing)``.
+
+    ``missing`` is True only when there is no ``journalctl`` binary at all (a
+    container), as opposed to one that is installed and failed (a systemd host
+    with a broken or unreadable journal).
 
     This one DOES probe, because ``/api/logs/units`` has nothing else to go on:
     its whole answer is "can this box serve logs at all", and a ``journalctl``
@@ -264,7 +268,7 @@ def _journalctl() -> tuple[str | None, str | None]:
     """
     path, reason = _journalctl_path()
     if path is None:
-        return None, reason
+        return None, reason, True
     try:
         probe = _run(
             [path, "--version"],
@@ -275,13 +279,21 @@ def _journalctl() -> tuple[str | None, str | None]:
             shell=False,
         )
     except subprocess.TimeoutExpired:
-        return None, "journalctl timed out"
+        return None, "journalctl timed out", False
     except OSError as exc:
         logger.warning("journalctl probe failed: %s", sanitize_log(exc))
-        return None, "journald is not available on this deployment (journalctl could not be run)"
+        return (
+            None,
+            "journald is not available on this deployment (journalctl could not be run)",
+            False,
+        )
     if probe.returncode != 0:
-        return None, "journald is not available on this deployment (journalctl exited non-zero)"
-    return path, None
+        return (
+            None,
+            "journald is not available on this deployment (journalctl exited non-zero)",
+            False,
+        )
+    return path, None, False
 
 
 def _timestamp(record: dict[str, Any]) -> str | None:
@@ -331,14 +343,59 @@ def _unavailable(unit: str | None, reason: str) -> dict[str, Any]:
     return payload
 
 
+#: What an operator on a container deployment does instead. Generic on purpose:
+#: the bridge does not know which cluster, or which log tool, it is running under.
+CONTAINER_HINT = (
+    "this deployment writes its logs to standard output; read them with your cluster's log tool"
+)
+
+
+def _logs_url() -> str | None:
+    """The configured ``GENUS_LOGS_URL``, or ``None`` when it is not set.
+
+    Credential-free is enforced here: every operator is shown this link, so a
+    URL carrying a username or password is treated as unset. The warning names
+    the setting and never the value.
+    """
+    from urllib.parse import urlsplit
+
+    from robothor.settings import get_settings
+
+    value = get_settings().services.logs_url.strip()
+    if not value:
+        return None
+    try:
+        parts = urlsplit(value)
+        has_credentials = bool(parts.username or parts.password)
+    except ValueError:
+        has_credentials = False
+    if has_credentials:
+        logger.warning("GENUS_LOGS_URL carries credentials; ignoring it")
+        return None
+    return value
+
+
 @router.get("/units")
 def list_units(request: Request) -> dict[str, Any]:
-    """Which units the operator may follow, and whether journald is here."""
+    """Which units the operator may follow, and whether journald is here.
+
+    When it is not, the answer also carries the deployment's own ``logs_url``
+    (``null`` when unset), so the page can link out instead of showing a dead
+    end, and, when there is no ``journalctl`` binary at all (a container), a
+    ``hint`` saying where the logs are.
+    """
     require_operator(request)
     catalog = unit_catalog()
-    _, reason = _journalctl()
+    _, reason, missing = _journalctl()
     if reason is not None:
-        return _unavailable(None, reason)
+        payload = _unavailable(None, reason)
+        payload["logs_url"] = _logs_url()
+        # The container hint only where there is no journalctl at all. One
+        # that is installed but failed is a systemd host, and a cluster's log
+        # tool is the wrong place to send its operator.
+        if missing:
+            payload["hint"] = CONTAINER_HINT
+        return payload
     return {
         "units": [{"name": name, "description": catalog[name]} for name in sorted(catalog)],
         "available": True,

@@ -193,9 +193,11 @@ async def test_refresh_consumes_token_before_rejecting_disabled_account(test_cli
         "status": "disabled",
     }
     with (
-        patch("routers.auth.accounts.consume_active_session", return_value=session) as consume,
+        # The route rotates through ``rotate_session`` (the grace-window
+        # store); the token is still spent before the account is checked.
+        patch("routers.auth.accounts.rotate_session", return_value=session) as consume,
         patch("routers.auth.accounts.get_account_by_id", return_value=account),
-        patch("routers.auth.accounts.create_session") as create_session,
+        patch("routers.auth.accounts.token_pair") as token_pair,
     ):
         r = await test_client.post(
             "/api/auth/refresh",
@@ -204,7 +206,9 @@ async def test_refresh_consumes_token_before_rejecting_disabled_account(test_cli
     assert r.status_code == 401
     assert r.json() == {"error": "account inactive"}
     consume.assert_called_once()
-    create_session.assert_not_called()
+    # No pair is built for a disabled account, and none leaves in the body.
+    token_pair.assert_not_called()
+    assert "refresh_token" not in r.json() and "access_token" not in r.json()
 
 
 @pytest.mark.asyncio

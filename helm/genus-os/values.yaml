@@ -283,7 +283,8 @@ valkey:
 
   # OFF by default, deliberately. The exporter sidecar listens on 9121, but
   # `networkPolicy.enabled: true` renders default-deny ingress and the only rule
-  # for these pods admits the cache port from the Python services — nothing
+  # for these pods admits the cache port from the Python services and the
+  # dashboard — nothing
   # admits 9121. Enabled without a matching rule it costs a container and
   # delivers no metrics.
   #
@@ -529,6 +530,91 @@ bridge:
     enabled: true
     minAvailable: 1
 
+# ─── Hooks (standalone webhook receiver) ─────────────────────────────────────
+# Opt-in. Serves POST /api/webhooks/{channel} from its own pods, so webhook
+# ingress keeps answering while the engine restarts (the engine is a single
+# Recreate replica). It verifies each delivery and publishes it to the event
+# stream; the engine consumes it from there. No workspace volume and no
+# migrations wait: it touches neither.
+hooks:
+  enabled: false
+  replicaCount: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  image:
+    repository: python
+  command: ["python", "-m", "robothor.engine.hooks_server"]
+  # The port the server listens on and the `<release>-hooks` Service exposes.
+  port: 18801
+  # cache for the event stream; engine-providers for the channels' signing
+  # secrets (each channel's secret_env). engine-providers is broader than this
+  # component needs; a webhook-only secret class is a planned follow-up.
+  secretRefs: [cache, engine-providers]
+  # Channel definitions, rendered verbatim as `channels:` in webhooks.yaml in
+  # the `<release>-hooks-webhooks` ConfigMap, mounted at
+  # /etc/robothor/webhooks and named by ROBOTHOR_WEBHOOKS_CONFIG. The keys are
+  # the router's ("Webhook ingress" in docs/event-bus.md). Name each signing
+  # secret by `secret_env`; never inline it. Example:
+  #   channels:
+  #     example:
+  #       stream: example
+  #       secret_env: EXAMPLE_WEBHOOK_SECRET
+  #       signature_scheme: hmac_hex
+  channels: {}
+  ingress:
+    enabled: false
+    className: traefik-private
+    host: ""
+    tls: []
+    annotations: {}
+  env: {}
+  # Additional volumes and mounts; see engine.extraVolumes. `webhooks` is
+  # taken by the channels ConfigMap.
+  extraVolumes: []
+  extraVolumeMounts: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  probes:
+    liveness:
+      enabled: true
+      path: /live
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      enabled: true
+      path: /ready
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+# Pods write their logs to standard output; there is no journald in a
+# container, so the dashboard's Logs page cannot read them. Set url to where
+# this deployment's logs are viewed (your cluster's log tool) and the page
+# links to it. Rendered into the bridge as GENUS_LOGS_URL only when set.
+# Credential-free: every operator sees this link, so never put a token in it.
+logs:
+  url: ""
+
 # ─── Orchestrator (RAG/semantic-search HTTP API) ─────────────────────────────
 orchestrator:
   enabled: true
@@ -577,7 +663,10 @@ dashboard:
   image:
     repository: app
   # The dashboard/BFF receives only Auth.js/OIDC and the Bridge exchange
-  # secret. Provider, payment, JWT-signing, DB, and cache paths are forbidden.
+  # secret. Provider, payment, JWT-signing, and DB paths are forbidden, and so
+  # is the cache class as a whole: the dashboard reads the cache password key
+  # only, for the event-bus stream reads, as one secretKeyRef the chart wires
+  # itself (genus-os.dashboardCacheEnv), never through secretRefs.
   secretRefs: [dashboard-auth, bridge-sso]
   service:
     port: 3000
@@ -820,12 +909,18 @@ networkPolicy:
         components: [engine, bridge, orchestrator, migrations]
         cidrs: []
         ports: [{protocol: TCP, port: 5432}]
+      # Hooks publishes every accepted delivery to the event stream, so an
+      # external cache must admit it too (the in-chart cache already does).
       redis:
-        components: [engine, bridge, orchestrator]
+        components: [engine, bridge, orchestrator, hooks]
         cidrs: []
         ports: [{protocol: TCP, port: 6379}]
+      # The bridge embeds a memory fact an operator edits. The chart only
+      # permits the traffic; the deployment gives the bridge
+      # ROBOTHOR_OLLAMA_URL and ROBOTHOR_EMBEDDING_MODEL (without them it
+      # falls back to 127.0.0.1:11434 and flags edited facts embedding_stale).
       ollama:
-        components: [engine, orchestrator]
+        components: [engine, bridge, orchestrator]
         cidrs: []
         ports: [{protocol: TCP, port: 11434}]
       # Hosted client-tokenization/provider APIs (Bridge) and organization
@@ -845,7 +940,11 @@ networkPolicy:
       # configure HTTP(S)_PROXY in only the backend component env blocks that
       # need it. Direct API CIDRs may also be listed, but unrestricted ranges
       # are rejected.
+      # Hooks is listed because a google_oidc channel verifies each push by
+      # fetching Google's signing certificates over HTTPS; without this route
+      # every such delivery is refused with 401. A proxy set in engine.env must
+      # be repeated in hooks.env.
       https:
-        components: [engine, bridge, orchestrator]
+        components: [engine, bridge, orchestrator, hooks]
         cidrs: []
         ports: [{protocol: TCP, port: 443}]

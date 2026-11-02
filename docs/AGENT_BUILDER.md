@@ -168,8 +168,8 @@ sender gave none) and `event.payload`, parsed when it is JSON. Steps template
 it like any other context value; a field the event lacks, such as
 `{{ event.payload.data.message.id }}` when there is no `message`, renders
 empty. The event is stored with the run, as the rest of its context is, for as
-long as workflow runs are kept. Only one run of a workflow is in flight at a time; by default
-an event that arrives while it is running is dropped. `requeue_if_busy: true`
+long as workflow runs are kept. Only one run of a workflow is in flight at a time (unless
+its trigger sets `concurrent`, below); by default an event that arrives while it is running is dropped. `requeue_if_busy: true`
 re-adds it for this workflow after a pause that starts at 5 seconds and backs
 off to a minute, for up to about 50 minutes, before parking it in
 `<stream>:dlq`.
@@ -191,6 +191,41 @@ steps:
       delivery_id: "{{ event.delivery_id }}"
     retry_count: 1
 ```
+
+A trigger may instead set `concurrent: true` (default `false`): runs of the
+workflow then overlap, each event starting its own run straight away, and no
+event is ever skipped or requeued as busy. Use it for a workflow that only
+hands each event on to something that serialises its own work, such as a
+channel pipeline with its own per-conversation lock; without it, an event that
+lands a moment after another waits at least 5 seconds. Every step must be safe
+to run twice at once, since two events can be in the same step together. A
+concurrent workflow has no `agent` steps, only tool steps and the steps that
+route between them (condition, transform, parallel): an agent step runs one at
+a time per agent and is skipped while that agent is busy, so an overlapping run
+would drop it and still be recorded as completed.
+The setting covers every run of the workflow, whichever trigger starts it, and
+the tool-call rate limit (below) still defers a run as usual. A concurrent
+workflow with an `agent` step (at the top level or inside `parallel`), or with
+`requeue_if_busy` on any trigger, is an error: the workflow does not load.
+
+```yaml
+id: example-dispatch
+triggers:
+  - type: hook
+    stream: platform
+    event_type: platform.message.created
+    concurrent: true
+
+steps:
+  - id: dispatch
+    type: tool
+    tool_name: message_dispatch
+    tool_args:
+      message_id: "{{ event.payload.data.message.id }}"
+```
+
+An engine older than this setting ignores it and runs the workflow one run at
+a time, as before.
 
 The payload comes from outside: a tool that receives it validates what it
 is given.
@@ -272,9 +307,13 @@ Or in chat: a delivery agent with the `list_pending_approvals` /
 answer, and the engine picks it up on the next watchdog tick (≤1 min).
 
 Or from the Helm: `GET /api/approvals` lists everything waiting on a person —
-workflow steps and `ask_user` questions in one list — and
-`POST /api/approvals/{kind}/{id}` answers one. Both are operator-scoped and
-audited.
+workflow steps, `ask_user` questions and proposed actions (`operation_actions`
+in review, `kind: "action"`) in one list — and
+`POST /api/approvals/{kind}/{id}` answers one. Both are scoped to the tenant
+the session acts in: an owner or admin of that tenant sees and decides only
+its rows, an id from another tenant is a 404, and members and viewers get a
+403. Each decision records `operator:<user>` on the row and in the audit log
+with the tenant.
 
 A **tool-permission escalation** is the third kind and is deliberately not in
 that list: it lives in the engine's memory with a coroutine blocked on it, so a

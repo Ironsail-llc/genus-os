@@ -205,6 +205,18 @@ describe("MetricGrid", () => {
     const cards = screen.getAllByTestId("metric-card");
     expect(cards).toHaveLength(2);
   });
+
+  it("fits its columns to its own width, not viewport breakpoints", () => {
+    render(<MetricGrid metrics={[{ title: "A", value: 1 }]} />);
+    const grid = screen.getByTestId("metric-grid");
+    // Two columns, or four when its container is at least 41rem: never 3 + 1.
+    expect(grid.parentElement?.className).toContain("@container");
+    const classes = grid.className.split(/\s+/);
+    expect(classes).toContain("grid-cols-2");
+    expect(classes).toContain("@[41rem]:grid-cols-4");
+    expect(grid.className).not.toMatch(/grid-cols-3|auto-fit/);
+    expect(grid.className).not.toMatch(/(md|lg):grid-cols-/);
+  });
 });
 
 describe("BarChart", () => {

@@ -27,6 +27,19 @@ const APPROVAL = {
   created_at: "2026-06-15T11:45:00Z",
 };
 
+const PROPOSAL = {
+  kind: "action",
+  id: "44444444-4444-4444-8444-444444444444",
+  run_id: "",
+  agent_id: "",
+  action_kind: "sales.email",
+  question: "sales.email: Intro to Acme",
+  detail: "{}",
+  options: [],
+  expires_at: "2026-06-16T11:00:00Z",
+  created_at: "2026-06-15T11:00:00Z",
+};
+
 function jsonResponse(body: unknown, status = 200) {
   return {
     ok: status >= 200 && status < 300,
@@ -68,6 +81,33 @@ describe("useInbox", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/bridge/api/approvals");
     expect(result.current.items.map((i) => i.id)).toEqual([QUESTION.id, APPROVAL.id]);
     expect(result.current.isLoading).toBe(false);
+  });
+
+  it("lists proposed actions in review alongside approvals and questions", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ count: 3, pending: [QUESTION, APPROVAL, PROPOSAL] }));
+    const { result } = renderHook(() => useInbox({ active: true }));
+
+    await waitFor(() => expect(result.current.count).toBe(3));
+    expect(result.current.items.map((i) => i.kind)).toEqual(["question", "workflow", "action"]);
+    expect(result.current.unrenderable).toBe(0);
+  });
+
+  it("posts a proposal verdict to the action route and drops the settled card", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ count: 1, pending: [PROPOSAL] }));
+    const { result } = renderHook(() => useInbox({ active: true }));
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ settled: true, kind: "action" }));
+    await act(async () => {
+      const outcome = await result.current.answer(PROPOSAL.id, "action", { approved: true });
+      expect(outcome.settled).toBe(true);
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/bridge/api/approvals/action/${PROPOSAL.id}`,
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ approved: true }) })
+    );
+    expect(result.current.items).toHaveLength(0);
   });
 
   it("polls every 30 seconds while the view is on screen", async () => {

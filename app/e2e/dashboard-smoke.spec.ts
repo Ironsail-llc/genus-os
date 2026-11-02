@@ -149,6 +149,32 @@ test.describe("Dashboard Layout", () => {
   });
 });
 
+test.describe("Chat dock", () => {
+  test("collapses from its header, stays collapsed on reload, reopens from the edge", async ({ page }) => {
+    await setupMocks(page);
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
+
+    const chatContainer = page.locator('[data-testid="chat-container"]');
+    const toggle = page.locator('[data-testid="chat-panel-toggle"]');
+    await expect(page.locator('[data-testid="chat-panel"]')).toBeVisible({ timeout: 10000 });
+
+    // The rail keeps its 1px left border when collapsed, so read the width it was given.
+    await page.locator('[data-testid="chat-dock-close"]').click();
+    await expect(chatContainer).toHaveAttribute("style", /width:\s*0px/);
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    // The choice survives a reload, server render and hydration included.
+    await page.reload({ waitUntil: "networkidle" });
+    await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
+    await expect(chatContainer).toHaveAttribute("style", /width:\s*0px/);
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    await page.locator('[data-testid="chat-dock-open"]').click();
+    await expect(chatContainer).toHaveAttribute("style", /width:\s*400px/);
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
 test.describe("Generated canvas (iframe sizing)", () => {
   test("generated dashboard renders and iframe is not cut off", async ({ page }) => {
     await setupMocks(page);
@@ -236,6 +262,17 @@ test.describe("Navigation", () => {
     await expect(page.locator('[data-testid="nav-chat"]')).toHaveAttribute("aria-current", "page");
     await expect(page.locator('[data-testid="chat-panel"]')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('[data-testid="default-dashboard"]')).not.toBeVisible();
+
+    // Before the first message the chat home is a landing: a greeting, the
+    // dashboard's figures and its quick actions, with the composer below.
+    await expect(page.locator('[data-testid="chat-landing-greeting"]')).toHaveText(
+      /^Good (morning|afternoon|evening)/,
+    );
+    await expect(page.locator('[data-testid="chat-landing-metrics"]')).toContainText("2/2");
+    await expect(
+      page.locator('[data-testid="chat-landing"] [data-testid="quick-action"]'),
+    ).toHaveCount(4);
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible();
 
     // The dashboard is reachable by URL...
     await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });

@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/business/page-header";
 import { EmptyState } from "@/components/business/empty-state";
 import { Button } from "@/components/ui/button";
 import { PluginInstallCard } from "@/components/views/settings/plugins-install";
-import { readBridgeReply } from "@/lib/bridge/read-reply";
+import { refusalSentence, unreachableSentence } from "@/lib/bridge/hop-sentence";
 import { useRowActions } from "@/lib/bridge/row-actions";
 import { BRIDGE_UNREACHABLE, useBridgePoll } from "@/lib/bridge/use-bridge-poll";
 
@@ -64,10 +64,6 @@ import { BRIDGE_UNREACHABLE, useBridgePoll } from "@/lib/bridge/use-bridge-poll"
 
 const BRIDGE = "/api/bridge";
 const LISTING_URL = `${BRIDGE}/api/plugins`;
-
-/** The engine answered nothing at all. A bridge that cannot reach it says 502. */
-const ENGINE_UNREACHABLE =
-  "The engine is unreachable from the bridge, so the plugin set could not be read. Nothing has been changed.";
 
 /** The reason string the engine writes for a plugin its operator turned off. */
 const BY_OPERATOR = "disabled by operator";
@@ -435,8 +431,18 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
   const poll = useBridgePoll({ visible, url: LISTING_URL, onData, paused: true });
 
   const data = listing ?? EMPTY_LISTING;
-  const engineDown = poll.status === 502;
-  const listError = poll.forbidden ? null : engineDown ? ENGINE_UNREACHABLE : poll.error;
+  const listError = poll.forbidden
+    ? null
+    : poll.status === 502 && poll.error !== null
+      ? unreachableSentence(poll.error)
+      : poll.error;
+  /*
+    A refresh failed after a read that worked. The rows stay — the last answer
+    is more use than a blank page — but they are not the live state, so they
+    say so and the switches are locked: a toggle drawn from a stale row is a
+    write against a set nobody has confirmed.
+  */
+  const stale = listing !== null && listError !== null;
 
   /**
    * One act on screen at a time.
@@ -470,7 +476,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
         headers: { "Content-Type": "application/json" },
       });
       if (!res.ok) {
-        const message = res.status === 502 ? ENGINE_UNREACHABLE : await readBridgeReply(res);
+        const message = await refusalSentence(res);
         setSyncError(message);
         /*
           A 409 is not one refusal.
@@ -505,7 +511,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
         headers: { "Content-Type": "application/json" },
       });
       if (!res.ok) {
-        setReloadError(res.status === 502 ? ENGINE_UNREACHABLE : await readBridgeReply(res));
+        setReloadError(await refusalSentence(res));
         return;
       }
       setReloadReport(normalizeReload(await res.json()));
@@ -558,8 +564,8 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
           setPending(true);
           poll.reload();
         },
-        (res) => {
-          if (res.status === 502) setRowError(plugin.name, ENGINE_UNREACHABLE);
+        (res, message) => {
+          if (res.status === 502) setRowError(plugin.name, unreachableSentence(message));
         }
       );
     },
@@ -613,14 +619,14 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
           );
           setPending(true);
         },
-        (res) => {
+        (res, message) => {
           /*
             `row-actions` prints the bridge's own words, which for a 502 are the
             app proxy's "Bridge service unavailable" or a bare status line. The
-            page has one sentence for "the engine did not answer" and the row is
-            not the place to start using a second.
+            page names which hop failed, and the row says it the way the
+            listing does.
           */
-          if (res.status === 502) setRowError(plugin.name, ENGINE_UNREACHABLE);
+          if (res.status === 502) setRowError(plugin.name, unreachableSentence(message));
         }
       );
     },
@@ -714,6 +720,13 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
           className="max-w-3xl break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
         >
           {listError}
+        </p>
+      ) : null}
+
+      {stale ? (
+        <p data-testid="plugins-stale" className="max-w-3xl text-xs text-muted-foreground">
+          This is the plugin set the bridge last answered with; the live state could not be
+          confirmed.
         </p>
       ) : null}
 
@@ -1137,7 +1150,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                     aria-checked={plugin.enabled}
                     aria-label={`${plugin.name} enabled`}
                     data-testid={`plugin-switch-${plugin.name}`}
-                    disabled={!plugin.recorded || busy}
+                    disabled={!plugin.recorded || busy || stale}
                     onClick={() => toggle(plugin)}
                     className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                       plugin.enabled ? "border-primary/40 bg-primary/70" : "border-border bg-muted"

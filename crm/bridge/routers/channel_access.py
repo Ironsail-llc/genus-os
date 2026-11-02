@@ -265,6 +265,33 @@ def _local_channel_state(names: list[str]) -> dict[str, dict[str, Any]]:
     return state
 
 
+def _listing_failure(status: int, body: Any) -> str:
+    """Why the engine's channel listing could not be read, as the operator's fix.
+
+    Still a 502 to the browser whatever the cause (the page reads any 502 as a
+    listing failure), but one sentence for every cause hid the thing to act on:
+    a closed network path, a refused key and a version skew are three different
+    fixes. Never echoes the engine's body: a refusal is where a credential has
+    historically come back.
+    """
+    if isinstance(body, dict) and body.get("error") == "engine unavailable":
+        return (
+            "the bridge could not reach the engine at its configured URL (ROBOTHOR_ENGINE_URL); "
+            "check that the engine is running and that the network path from the bridge to the "
+            "engine is allowed"
+        )
+    if status in (401, 403):
+        return (
+            f"the engine refused the bridge's request (HTTP {status}); check the shared signing key"
+        )
+    if status == 404:
+        return (
+            "the engine does not serve the channel listing (HTTP 404); the bridge and the engine "
+            "may be different versions"
+        )
+    return f"the engine answered HTTP {status} to the channel listing"
+
+
 @router.get("")
 async def list_channels(request: Request) -> dict[str, Any]:
     """What can deliver, whether it is configured, and who is waiting on it.
@@ -281,7 +308,7 @@ async def list_channels(request: Request) -> dict[str, Any]:
     require_operator(request)
     status, body = await engine_request("GET", "/api/admin/channels")
     if status >= 400 or not isinstance(body, dict):
-        raise HTTPException(status_code=502, detail="could not read the channel state")
+        raise HTTPException(status_code=502, detail=_listing_failure(status, body))
 
     entries = [entry for entry in (body.get("channels") or []) if isinstance(entry, dict)]
     local = await asyncio.to_thread(

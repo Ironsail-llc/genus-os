@@ -82,7 +82,81 @@ tests:
       dashboard.secretRefs: [dashboard-auth, bridge-sso, engine-providers]
     asserts:
       - failedTemplate:
-          errorMessage: 'dashboard.secretRefs forbids privileged secret class "engine-providers"; only dashboard-auth and bridge-sso are allowed'
+          errorMessage: 'dashboard.secretRefs forbids privileged secret class "engine-providers"; only dashboard-auth and bridge-sso are allowed (the chart wires the one cache password key itself)'
+
+  - it: dashboard still cannot take the whole cache secret class
+    template: dashboard/deployment.yaml
+    set:
+      dashboard.secretRefs: [dashboard-auth, bridge-sso, cache]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'dashboard.secretRefs forbids privileged secret class "cache"; only dashboard-auth and bridge-sso are allowed (the chart wires the one cache password key itself)'
+
+  - it: dashboard reaches the in-chart cache with host, port and only the password key
+    template: dashboard/deployment.yaml
+    set:
+      redis.port: 6380
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_HOST
+            value: gos-valkey
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_PORT
+            value: "6380"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: gos-genus-os-cache
+                key: ROBOTHOR_REDIS_PASSWORD
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: gos-genus-os-cache
+
+  - it: dashboard sends no password when the cache runs without auth
+    template: dashboard/deployment.yaml
+    set:
+      valkey.auth.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_HOST
+            value: gos-valkey
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_PASSWORD
+          any: true
+
+  - it: dashboard gets no cache wiring when the in-chart cache is disabled
+    template: dashboard/deployment.yaml
+    set:
+      valkey.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_HOST
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_PORT
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ROBOTHOR_REDIS_PASSWORD
+          any: true
 
   - it: dashboard never mounts a Kubernetes API token
     template: dashboard/deployment.yaml

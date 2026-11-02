@@ -1142,3 +1142,176 @@ def test_no_reason_sentence_ever_carries_a_secret_value(
     )
     leaked = sorted(name for name, value in planted.items() if value in reasons)
     assert not leaked, leaked
+
+
+# ── one read of config.yaml per request ──────────────────────────────────────
+#
+# The values route asks "is this field in the file?" once per declared field,
+# and the pending-restart walk asks it again for every restart-required one.
+# Each question used to open and parse the file afresh -- hundreds of YAML
+# parses per page load, against a file that may sit on a network volume.
+
+
+def _counting_reads(monkeypatch, path):
+    """Every ``read_text`` of ``path``, counted at the opener."""
+    from pathlib import Path
+
+    reads: list[object] = []
+    real = Path.read_text
+
+    def _counting(self, *args, **kwargs):
+        if self == path:
+            reads.append(self)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _counting)
+    return reads
+
+
+def test_the_values_route_reads_config_yaml_once_per_request(
+    controls_client_as_operator, clean_env, env_workspace, monkeypatch
+):
+    path = _write_config(
+        env_workspace,
+        "settings:\n  engine:\n    max_concurrent_agents: 5\n  paths:\n    log_dir: /var/log/one\n",
+    )
+    reads = _counting_reads(monkeypatch, path)
+
+    r = controls_client_as_operator.get(SETTINGS)
+    assert r.status_code == 200, r.text
+    assert len(reads) == 1, f"one read of config.yaml per request, not {len(reads)}"
+
+    controls_client_as_operator.get(SETTINGS)
+    assert len(reads) == 2, "each request reads the file afresh: the snapshot is per request"
+
+
+def test_a_write_is_seen_by_the_next_read(controls_client_as_operator, clean_env, env_workspace):
+    """Reading once per request must not become reading once per process."""
+    _write_config(env_workspace, "settings:\n")
+    before = controls_client_as_operator.get(SETTINGS).json()["values"][HOT_INT]
+    assert before["source"] == "default"
+
+    r = controls_client_as_operator.patch(SETTINGS, json={"changes": {HOT_INT: 7}})
+    assert r.status_code == 200, r.text
+    after = controls_client_as_operator.get(SETTINGS).json()["values"][HOT_INT]
+    assert after["value"] == 7
+    assert after["source"] == "config"
+
+    # And a write by something other than this API (an editor on the box,
+    # `genus config set`) is seen too: provenance is read from the file.
+    _write_config(env_workspace, "settings:\n")
+    again = controls_client_as_operator.get(SETTINGS).json()["values"][HOT_INT]
+    assert again["source"] == "default"
+
+
+def test_one_read_per_request_answers_exactly_what_a_read_per_field_did(
+    controls_client_as_operator, clean_env, env_workspace, monkeypatch
+):
+    """Fewer reads, same answers: every value and source the route serves is
+    the one ``operator.resolve`` gives for the field on its own, and the
+    pending-restart list still names a file value the environment overrides."""
+    from robothor.settings import operator
+    from robothor.settings.registry import field_index
+
+    _write_config(
+        env_workspace,
+        "settings:\n  engine:\n    max_concurrent_agents: 5\n  paths:\n    log_dir: /var/log/file\n",
+    )
+    monkeypatch.setenv(RESTART_STR, "/var/log/env")
+    from robothor.settings import reset_settings
+
+    reset_settings()
+
+    body = controls_client_as_operator.get(SETTINGS).json()
+    seen = set()
+    for record in field_index().values():
+        if record["env"] in seen or record["secret"]:
+            continue
+        seen.add(record["env"])
+        value, source, _detail = operator.resolve(record)
+        entry = body["values"][record["env"]]
+        assert entry["value"] == value, record["env"]
+        assert (
+            entry["source"]
+            == {
+                "default": "default",
+                "config.yaml": "config",
+                "env": "env",
+                "runtime": "db",
+            }[source]
+        ), record["env"]
+    assert body["values"][HOT_INT]["source"] == "config"
+    assert body["values"][RESTART_STR]["source"] == "env"
+    assert body["pending_restart"] == sorted(operator.units_for(operator.record(RESTART_STR)))
+
+
+def test_a_malformed_file_raises_a_fresh_error_on_every_read_in_the_scope(clean_env, env_workspace):
+    """The scope's one read may be a ValueError. Re-raising that one object on
+    every read grows its traceback by a frame chain per read -- hundreds per
+    request -- so each read raises an equal error of its own."""
+    from robothor.settings import sources
+
+    _write_config(env_workspace, "settings: [unclosed\n")
+    raised: list[ValueError] = []
+    with sources.read_settings_once():
+        for _ in range(3):
+            try:
+                sources._read_settings_block()
+            except ValueError as exc:
+                raised.append(exc)
+    assert len(raised) == 3
+    assert len({id(exc) for exc in raised}) == 3, "one error object re-raised"
+    assert len({str(exc) for exc in raised}) == 1, "the same message every time"
+
+    def depth(exc):
+        n, tb = 0, exc.__traceback__
+        while tb is not None:
+            n, tb = n + 1, tb.tb_next
+        return n
+
+    assert depth(raised[0]) == depth(raised[-1])
+
+
+# ── the schema changes only on restart, so the browser may keep it ───────────
+
+
+def test_the_schema_carries_a_weak_etag_and_is_always_revalidated(controls_client_as_operator):
+    first = controls_client_as_operator.get(SCHEMA)
+    second = controls_client_as_operator.get(SCHEMA)
+    assert first.status_code == 200
+    etag = first.headers.get("etag")
+    # Weak: the dashboard proxy re-serialises the JSON, so the bytes the browser
+    # holds are equivalent to the bridge's, not identical.
+    assert etag and etag.startswith('W/"') and etag.endswith('"'), etag
+    assert second.headers.get("etag") == etag, "the same schema must carry the same tag"
+    # Revalidated on every load: no window in which an upgrade's new fields, or
+    # a signed-out session's copy, is served without asking.
+    assert first.headers.get("cache-control") == "private, no-cache"
+
+
+def test_a_matching_if_none_match_is_answered_304_without_the_body(
+    controls_client_as_operator,
+):
+    etag = controls_client_as_operator.get(SCHEMA).headers["etag"]
+    strong = etag.removeprefix("W/")
+    for header in (etag, strong, f'"something-else", {etag}', "*"):
+        r = controls_client_as_operator.get(SCHEMA, headers={"If-None-Match": header})
+        assert r.status_code == 304, header
+        assert r.content == b"", header
+        assert r.headers.get("etag") == etag, header
+        assert r.headers.get("cache-control") == "private, no-cache", header
+
+
+def test_a_stale_if_none_match_gets_the_whole_schema(controls_client_as_operator):
+    r = controls_client_as_operator.get(SCHEMA, headers={"If-None-Match": '"stale"'})
+    assert r.status_code == 200
+    assert r.json()["groups"]
+
+
+def test_a_service_token_cannot_revalidate_the_schema(
+    controls_client_as_operator, controls_client_as_service
+):
+    """The gate runs before the tag is compared: a 304 is an answer too."""
+    etag = controls_client_as_operator.get(SCHEMA).headers["etag"]
+    r = controls_client_as_service.get(SCHEMA, headers={"If-None-Match": etag})
+    assert r.status_code == 403

@@ -100,6 +100,16 @@ jobs:
             --values helm/genus-os/values.yaml \
             --values helm/genus-os/values-local.yaml \
             > _rendered/local.yaml
+          # The opt-in hooks component renders nothing by default, so validate
+          # it explicitly on top of the production policy.
+          helm template gos helm/genus-os \
+            --namespace genus \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-production.yaml \
+            --set dashboard.ingress.host=genus-os.example.invalid \
+            --set hooks.enabled=true \
+            --set hooks.channels.example.secret_env=EXAMPLE_WEBHOOK_SECRET \
+            > _rendered/production-hooks.yaml
 
       - name: Install kubeconform
         run: |
@@ -158,6 +168,15 @@ jobs:
               | python3 scripts/strip_subchart_test_hooks.py valkey \
               > "_lintable/$env.yaml"
           done
+          helm template gos helm/genus-os \
+            --namespace genus \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-production.yaml \
+            --set dashboard.ingress.host=genus-os.example.invalid \
+            --set hooks.enabled=true \
+            --set hooks.channels.example.secret_env=EXAMPLE_WEBHOOK_SECRET \
+            | python3 scripts/strip_subchart_test_hooks.py valkey \
+            > _lintable/production-hooks.yaml
 
       - name: kube-linter (best practices)
         run: |

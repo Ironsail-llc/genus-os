@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import yaml
 from fastapi import APIRouter
 from starlette.testclient import TestClient
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 from robothor.auth import tokens
+from robothor.engine import config as defaults_config
+from robothor.engine.dashboards import completions
 from robothor.engine.dashboards.completions import (
     DEFAULT_DASHBOARD_MODEL,
     MAX_SYSTEM_PROMPT_CHARS,
@@ -21,6 +28,12 @@ from robothor.engine.dashboards.completions import (
 def completion_client(monkeypatch, engine_config):
     monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
     monkeypatch.delenv("DASHBOARD_MODEL", raising=False)
+    monkeypatch.delenv("ROBOTHOR_LAST_RESORT_MODEL", raising=False)
+    # The model chain reads the fleet defaults from the engine's manifest dir;
+    # point it at this test's empty one, never at a real instance.
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(engine_config.workspace))
+    monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(engine_config.manifest_dir))
+    defaults_config.reset_defaults_cache()
     monkeypatch.setenv("ROBOTHOR_ENGINE_HOST", "0.0.0.0")
     monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "dashboard-test-key-that-is-at-least-32-bytes")
     tokens.reset_signing_key_cache()
@@ -87,7 +100,7 @@ def test_member_chat_scope_can_complete_with_fixed_render_settings(completion_cl
         {"role": "user", "content": "Show current service health."},
     ]
     assert call.await_args.kwargs == {
-        "model": DEFAULT_DASHBOARD_MODEL,
+        "model": [DEFAULT_DASHBOARD_MODEL],
         "temperature": 0.3,
         "json_mode": False,
         "timeout": 120,
@@ -127,7 +140,7 @@ def test_triage_settings_and_operator_model_are_server_controlled(
 
     assert response.status_code == 200
     assert call.await_args.kwargs == {
-        "model": "openrouter/google/operator-selected-model",
+        "model": ["google/operator-selected-model"],
         "temperature": 0.1,
         "json_mode": True,
         "timeout": 15,
@@ -181,3 +194,246 @@ def test_provider_failure_response_is_generic(completion_client) -> None:
     assert response.status_code == 503
     assert response.json() == {"detail": "dashboard completion unavailable"}
     assert provider_detail not in response.text
+
+
+# ── The canvas model chain ────────────────────────────────────────────────
+#
+# The canvas used to dial one hard-wired OpenRouter model, and forced an
+# ``openrouter/`` prefix onto any id it was given: an instance with keys for a
+# different provider could never generate a view. The chain is now the
+# operator's choice first, then whatever the fleet itself runs on.
+
+
+@pytest.fixture
+def fleet(tmp_path, monkeypatch) -> Path:
+    """An empty manifest dir, with nothing configured anywhere else."""
+    directory = tmp_path / "agents"
+    directory.mkdir()
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(directory))
+    monkeypatch.delenv("DASHBOARD_MODEL", raising=False)
+    monkeypatch.delenv("ROBOTHOR_LAST_RESORT_MODEL", raising=False)
+    defaults_config.reset_defaults_cache()
+    yield directory
+    defaults_config.reset_defaults_cache()
+
+
+def _defaults(directory: Path, model_block: dict) -> None:
+    (directory / "_defaults.yaml").write_text(yaml.safe_dump({"model": model_block}))
+    defaults_config.reset_defaults_cache()
+
+
+class TestDashboardModelChain:
+    def test_with_nothing_configured_it_keeps_the_old_default(self, fleet) -> None:
+        assert completions.dashboard_model_chain() == [DEFAULT_DASHBOARD_MODEL]
+
+    def test_with_no_canvas_model_it_uses_the_fleet_primary(self, fleet) -> None:
+        _defaults(fleet, {"primary": "vertex_ai/gemini-fast", "fallbacks": ["x/y"]})
+        assert completions.dashboard_model_chain() == ["vertex_ai/gemini-fast"]
+
+    def test_a_configured_canvas_model_is_tried_first_then_the_fleet_primary(self, fleet) -> None:
+        _defaults(fleet, {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"})
+        assert completions.dashboard_model_chain() == [
+            "vertex_ai/gemini-fast",
+            "anthropic/claude-big",
+        ]
+
+    def test_the_last_resort_model_ends_the_chain(self, fleet, monkeypatch) -> None:
+        _defaults(fleet, {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"})
+        monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/local")
+        assert completions.dashboard_model_chain() == [
+            "vertex_ai/gemini-fast",
+            "anthropic/claude-big",
+            "ollama_chat/local",
+        ]
+
+    def test_the_last_resort_model_alone_is_a_chain(self, fleet, monkeypatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/local")
+        assert completions.dashboard_model_chain() == ["ollama_chat/local"]
+
+    def test_the_env_override_wins(self, fleet, monkeypatch) -> None:
+        _defaults(fleet, {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"})
+        monkeypatch.setenv("DASHBOARD_MODEL", "gemini/override")
+        monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/local")
+        assert completions.dashboard_model_chain() == [
+            "gemini/override",
+            "vertex_ai/gemini-fast",
+            "anthropic/claude-big",
+            "ollama_chat/local",
+        ]
+
+    def test_no_provider_prefix_is_forced(self, fleet, monkeypatch) -> None:
+        monkeypatch.setenv("DASHBOARD_MODEL", "vertex_ai/x")
+        assert completions.dashboard_model_chain() == ["vertex_ai/x"]
+
+    def test_a_model_named_twice_is_tried_once(self, fleet, monkeypatch) -> None:
+        _defaults(fleet, {"primary": "vertex_ai/gemini-fast", "canvas": "vertex_ai/gemini-fast"})
+        monkeypatch.setenv("DASHBOARD_MODEL", "vertex_ai/gemini-fast")
+        monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "vertex_ai/gemini-fast")
+        assert completions.dashboard_model_chain() == ["vertex_ai/gemini-fast"]
+
+    def test_a_null_canvas_model_means_the_fleet_default(self, fleet) -> None:
+        _defaults(fleet, {"primary": "vertex_ai/gemini-fast", "canvas": None})
+        assert completions.dashboard_model_chain() == ["vertex_ai/gemini-fast"]
+
+    def test_a_rewritten_defaults_file_is_seen_after_a_reload(self, fleet) -> None:
+        _defaults(fleet, {"primary": "anthropic/claude-big"})
+        assert completions.dashboard_model_chain() == ["anthropic/claude-big"]
+        _defaults(fleet, {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"})
+        assert completions.dashboard_model_chain() == [
+            "vertex_ai/gemini-fast",
+            "anthropic/claude-big",
+        ]
+
+    def test_an_invalid_env_override_fails_closed(self, fleet, monkeypatch) -> None:
+        monkeypatch.setenv("DASHBOARD_MODEL", "not a model id")
+        with pytest.raises(RuntimeError):
+            completions.dashboard_model_chain()
+
+
+def test_the_endpoint_hands_the_whole_chain_to_llm_call(completion_client) -> None:
+    client, config = completion_client
+    _defaults(
+        config.manifest_dir,
+        {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"},
+    )
+    with patch(
+        "robothor.engine.dashboards.completions.llm_call",
+        new_callable=AsyncMock,
+        return_value=_response("<div>ok</div>"),
+    ) as call:
+        response = client.post(
+            "/api/dashboard/completions",
+            json=_payload(),
+            headers=_headers(config.tenant_id),
+        )
+
+    assert response.status_code == 200
+    call.assert_awaited_once()
+    assert call.await_args.kwargs["model"] == ["vertex_ai/gemini-fast", "anthropic/claude-big"]
+
+
+# ── One deadline for the whole chain ──────────────────────────────────────
+#
+# The dashboard's client aborts a triage after 20s and a render after 130s,
+# for the WHOLE request. A per-model timeout equal to that window meant a
+# first model that hung used it all up: the fallbacks were never reached in
+# time, and the engine went on calling them for a client that had given up.
+
+
+def test_the_budget_is_split_across_the_chain(completion_client) -> None:
+    client, config = completion_client
+    _defaults(
+        config.manifest_dir,
+        {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"},
+    )
+    timeouts: dict[str, float] = {}
+    for purpose in ("triage", "render"):
+        with patch(
+            "robothor.engine.dashboards.completions.llm_call",
+            new_callable=AsyncMock,
+            return_value=_response('{"shouldUpdate":false}'),
+        ) as call:
+            client.post(
+                "/api/dashboard/completions",
+                json=_payload(purpose),
+                headers=_headers(config.tenant_id),
+            )
+        timeouts[purpose] = call.await_args.kwargs["timeout"]
+
+    assert timeouts == {
+        "triage": completions.TRIAGE_BUDGET_SECONDS / 2,
+        "render": completions.RENDER_BUDGET_SECONDS / 2,
+    }
+
+
+def test_the_chain_stops_when_its_budget_is_spent(completion_client, monkeypatch) -> None:
+    import asyncio
+    import time
+
+    client, config = completion_client
+    monkeypatch.setattr(completions, "RENDER_BUDGET_SECONDS", 0.2)
+
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(10)
+
+    started = time.monotonic()
+    with patch("robothor.engine.dashboards.completions.llm_call", side_effect=_hang):
+        response = client.post(
+            "/api/dashboard/completions",
+            json=_payload(),
+            headers=_headers(config.tenant_id),
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "dashboard completion unavailable"}
+    assert time.monotonic() - started < 5
+
+
+def _timeouts_for(client, config, purpose: str, monkeypatch) -> tuple[float, float]:
+    """(per-model timeout handed to llm_call, overall deadline around it)."""
+    import asyncio
+
+    deadlines: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def _recording_wait_for(awaitable, timeout):
+        deadlines.append(timeout)
+        return await real_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(completions.asyncio, "wait_for", _recording_wait_for)
+    with patch(
+        "robothor.engine.dashboards.completions.llm_call",
+        new_callable=AsyncMock,
+        return_value=_response('{"shouldUpdate":false}'),
+    ) as call:
+        response = client.post(
+            "/api/dashboard/completions",
+            json=_payload(purpose),
+            headers=_headers(config.tenant_id),
+        )
+    monkeypatch.setattr(completions.asyncio, "wait_for", real_wait_for)
+    assert response.status_code == 200
+    return call.await_args.kwargs["timeout"], deadlines[-1]
+
+
+def _four_model_chain(config, monkeypatch) -> None:
+    _defaults(
+        config.manifest_dir,
+        {"primary": "anthropic/claude-big", "canvas": "vertex_ai/gemini-fast"},
+    )
+    monkeypatch.setenv("DASHBOARD_MODEL", "gemini/override")
+    monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/local")
+    # The app factory already resolved settings; read the new env.
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    assert len(completions.dashboard_model_chain()) == 4
+
+
+def test_a_long_triage_chain_gives_each_model_its_floor(completion_client, monkeypatch) -> None:
+    """15s split four ways is 3.75s, too short for a slow primary to answer a
+    JSON classification; each model keeps the floor and the tail of the chain
+    may simply not get a turn before the overall deadline."""
+    client, config = completion_client
+    _four_model_chain(config, monkeypatch)
+    assert _timeouts_for(client, config, "triage", monkeypatch) == (
+        completions.TRIAGE_MIN_PER_MODEL_SECONDS,
+        completions.TRIAGE_BUDGET_SECONDS,
+    )
+    assert completions.TRIAGE_MIN_PER_MODEL_SECONDS == 5
+
+
+def test_a_single_model_triage_keeps_the_whole_budget(completion_client, monkeypatch) -> None:
+    client, config = completion_client
+    assert _timeouts_for(client, config, "triage", monkeypatch) == (15, 15)
+
+
+def test_a_long_render_chain_gives_each_model_its_floor(completion_client, monkeypatch) -> None:
+    client, config = completion_client
+    _four_model_chain(config, monkeypatch)
+    assert _timeouts_for(client, config, "render", monkeypatch) == (
+        completions.RENDER_MIN_PER_MODEL_SECONDS,
+        completions.RENDER_BUDGET_SECONDS,
+    )
+    assert completions.RENDER_MIN_PER_MODEL_SECONDS == 30

@@ -77,6 +77,7 @@ async def ingest_content(
 
     stored_ids = []
     skipped = 0
+    kept_confirmed = 0
 
     for fact in facts:
         try:
@@ -86,7 +87,15 @@ async def ingest_content(
                 source_type=content_type,
                 tenant_id=tenant_id,
             )
-            if result.get("new_id"):
+            if result.get("action") == "kept_confirmed":
+                # Overruled by an operator-confirmed fact: stored inactive for
+                # the record, but its entities are the relations the operator
+                # corrected, so it is not a processed fact.
+                kept_confirmed += 1
+                if result.get("new_id"):
+                    _set_source_channel(result["new_id"], source_channel, metadata)
+                logger.info("Kept operator-confirmed fact %s", result.get("existing_id"))
+            elif result.get("new_id"):
                 stored_ids.append(result["new_id"])
                 _set_source_channel(result["new_id"], source_channel, metadata)
                 logger.info("Stored fact %d: %s", result["new_id"], fact["fact_text"][:80])
@@ -132,6 +141,7 @@ async def ingest_content(
         "content_type": content_type,
         "facts_processed": len(stored_ids),
         "facts_skipped": skipped,
+        "facts_kept_confirmed": kept_confirmed,
         "fact_ids": stored_ids,
         "entities_stored": entity_results.get("entities_stored", 0),
         "relations_stored": entity_results.get("relations_stored", 0),

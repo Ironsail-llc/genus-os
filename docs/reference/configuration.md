@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-487 settings in 18 groups.
+491 settings in 18 groups.
 
 ## autonomy
 
@@ -278,13 +278,15 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_DEPLOY_TEST_PYTHON` | str | _(empty)_ | `robothor-engine` | no | legacy | Interpreter a local deploy runs its pre-switch test gate with: the instance's dev interpreter, since runtime releases omit pytest. Empty means <workspace>/venv/bin/python. |
 | `ROBOTHOR_ENGINE_HOST` | str | `127.0.0.1` | `robothor-engine` | no | legacy | Address the engine's HTTP surface binds to. Loopback by default; the auth guard refuses the insecure dev mode on any other address. |
 | `ROBOTHOR_ENGINE_PORT` | int | `18800` | `robothor-engine` | no | legacy | Engine HTTP port. |
-| `ROBOTHOR_ENGINE_URL` | str | `http://127.0.0.1:18800` | `robothor-engine` | no | legacy | Base URL the dashboard's server-side client calls the engine on. |
+| `ROBOTHOR_ENGINE_URL` | str | `http://127.0.0.1:18800` | `robothor-engine` | no | legacy | Base URL the dashboard's server-side client and the bridge call the engine on. |
 | `ROBOTHOR_EXECUTE_CODE_MAX_APPROVALS` | int | `1` | no | no | unreleased | How many human-approval escalations ONE `execute_code` snippet may raise. A proxied call passes the same approval gate a turn's call does -- a snippet can never bypass one -- so without a cap a loop could queue one prompt per proxied call at the operator, each holding the engine for `human_approval_timeout`. Counted as requests, not grants: a refused prompt cost the same attention. 0 refuses them all and tells the agent to call the tool from a turn instead. |
 | `ROBOTHOR_EXECUTE_CODE_MAX_CALLS` | int | `200` | no | no | unreleased | How many tools one `execute_code` snippet may call through `genus_tools` before the proxy refuses the rest. Every proxied call still passes the same admission gates a direct call does; this bounds a runaway loop, not what the code is allowed to reach. |
 | `ROBOTHOR_EXECUTE_CODE_MAX_OUTPUT` | int | `50000` | no | no | unreleased | Characters of a snippet's stdout that reach the model. Past this the output is cut with a marker saying how much was cut, and the FULL text is written to a file under the workspace whose path comes back in the result -- truncation becomes pagination rather than invisible data loss. |
 | `ROBOTHOR_EXECUTE_CODE_TIMEOUT` | int | `300` | no | no | unreleased | Wall-clock seconds one `execute_code` snippet gets. The agent may ask for less and never for more, and the run's own remaining budget still clamps it. On expiry the snippet's process group is killed, along with every descendant the engine has seen it start. A snippet can DEFEAT both deliberately -- a child started in its own session, then `os._exit` to skip the snippet's own cleanup -- so this is a budget for honest work, not a containment boundary for hostile code. Only a delegated cgroup (`Delegate=yes` on the engine's unit) would close that; until then, grant `execute_code` to agents you would grant `exec`. |
 | `ROBOTHOR_EXECUTION_MODE` | str | `auto` | `robothor-engine` | no | legacy | Which tier runs agents: auto, cloud, or local. 'local' switches the budgets as well as the model — cloud-era wall-clock budgets were 78% of local-tier failures. |
 | `ROBOTHOR_EXEC_SPILL_MAX_BYTES` | int | `8388608` | no | no | unreleased | Largest `exec` spill file, in bytes (default 8 MiB). A command whose output is bigger has its spill cut at this size with a marker saying so, and the result says how much the file holds. Before the spill existed nothing from a command reached the disk at all, so a single `exec` under the 900-second ceiling could otherwise fill the workspace. A spill is also refused outright when writing it would leave the filesystem with less than 64 MiB free. |
+| `ROBOTHOR_HOOKS_HOST` | str | `0.0.0.0` | next run | no | unreleased | Address the standalone webhook receiver binds to. All interfaces by default: it serves only the signed webhook POST and two probes, and exists to be reached from outside. |
+| `ROBOTHOR_HOOKS_PORT` | int | `18801` | next run | no | unreleased | Port the standalone webhook receiver (python -m robothor.engine.hooks_server) listens on. |
 | `ROBOTHOR_HOST_EXEC_SOCKET` | str | _(empty)_ | `robothor-engine` | no | legacy | Unix socket of the host-execution service (robothor-host-exec). The service binds it (empty means /run/robothor-host/exec.sock) and the engine's main agent sends owner commands to it; empty in the engine means host execution is not offered and exec stays in the engine's own sandbox. |
 | `ROBOTHOR_IMPORTANCE_THRESHOLD` | float | `0.3` | `robothor-engine` | no | legacy | Minimum importance score for an extracted fact to be stored. |
 | `ROBOTHOR_LOCAL_GATE_WAIT_SECONDS` | int | `120` | no | no | legacy | How long a local-tier run waits for a GPU slot before giving up. |
@@ -323,6 +325,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_SANDBOX_START_RETRY_SECONDS` | int | `3` | `robothor-engine` | no | legacy | Seconds between sandbox container start retries. |
 | `ROBOTHOR_TIMEZONE` | str | `America/New_York` | `robothor-engine` | no | legacy | IANA timezone schedules and human-facing timestamps are rendered in. |
 | `ROBOTHOR_TRAJECTORY_SAMPLE` | float | `0.0` | no | no | legacy | Fraction of runs (0.0-1.0) whose full trajectory is recorded for later analysis. Clamped into range. |
+| `ROBOTHOR_WEBHOOKS_CONFIG` | str | _(empty)_ | `robothor-engine` | no | unreleased | Where the webhook ingress reads its channels: a YAML file (its sibling <stem>.d/ drop-ins are merged after it), or a directory holding webhooks.yaml and webhooks.d/. Read by the engine and by the standalone receiver (python -m robothor.engine.hooks_server). Empty means <workspace>/docs/webhooks.yaml. |
 | `ROBOTHOR_WEB_FETCH_USER_AGENT` | str | _(empty)_ | no | no | legacy | User-Agent web_fetch sends. Empty uses the built-in string; set it when a site blocks the default. |
 | `ROBOTHOR_WEB_RENDER_SANDBOX_HELPER` | str | _(empty)_ | `robothor-engine` | no | legacy | Optional trusted Chromium setuid sandbox helper for web_render on hosts that restrict unprivileged user namespaces. Empty uses Chromium's default sandbox setup; rendering never disables the sandbox. |
 | `ROBOTHOR_WORKFLOW_STREAK_WINDOW_DAYS` | int | `14` | `robothor-engine` | no | legacy | Window the workflow detector counts repeated action streaks over when proposing a new workflow. |
@@ -467,6 +470,7 @@ Side services the instance runs: ports, endpoints and their knobs.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `GENUS_LOGS_URL` | str | _(empty)_ | `robothor-bridge` | no | unreleased | Where this deployment's logs are viewed when journald is not available (a container writes to standard output). The dashboard's Logs page links to it. A credential-free http(s) URL: it is shown to every operator, so it must never carry a token. Empty shows no link. |
 | `ROBOTHOR_API_PORT` | int | `9099` | `robothor-bridge`, `robothor-app` | no | legacy | RAG orchestrator / API server port. |
 | `ROBOTHOR_CAMERA_HEIGHT` | int | `480` | `robothor-bridge`, `robothor-app` | no | legacy | Capture height in pixels. |
 | `ROBOTHOR_CAMERA_HLS_PORT` | int | `8890` | `robothor-bridge`, `robothor-app` | no | legacy | HLS port for browser camera playback. |

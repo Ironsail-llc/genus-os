@@ -29,7 +29,7 @@ def test_the_note_stands_alone_when_there_is_no_preamble() -> None:
 
 
 def test_webchat_is_not() -> None:
-    assert with_surface_note("x", TriggerType.WEBCHAT, _cfg()) == "x"
+    assert TELEGRAM_SURFACE_NOTE not in with_surface_note("x", TriggerType.WEBCHAT, _cfg())
 
 
 def test_a_scheduled_run_announcing_to_telegram_is() -> None:

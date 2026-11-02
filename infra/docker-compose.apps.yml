@@ -225,6 +225,11 @@ services:
       ROBOTHOR_ENGINE_URL: http://engine:18800
       # Browser traffic stays same-origin and is forwarded by the dashboard.
       NEXT_PUBLIC_BRIDGE_URL: /api/bridge
+      # The event-bus client (live event views) reads the cache service. The
+      # port is pinned: the env file may carry a host-published port, which is
+      # not the one the cache listens on inside this network.
+      ROBOTHOR_REDIS_HOST: redis
+      ROBOTHOR_REDIS_PORT: "6379"
     ports:
       - "127.0.0.1:3004:3004"
     healthcheck:

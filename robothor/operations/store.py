@@ -16,9 +16,18 @@ from uuid import uuid4
 from psycopg2.extras import Json, RealDictCursor
 
 from robothor.db.connection import get_connection
+from robothor.events import bus
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
+
+
+#: The event-bus stream, and the event an approval publishes on it.
+OPERATIONS_STREAM = "operations"
+ACTION_APPROVED = "operation_action.approved"
+
+#: The most rows one ``list_actions`` call returns.
+MAX_LIST_ACTIONS = 1000
 
 
 class Conflict(ValueError):  # noqa: N818
@@ -38,6 +47,15 @@ def digest(payload: Any) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     ).hexdigest()
+
+
+def _policy(actor: str) -> tuple[str, str] | None:
+    """``(plugin, version)`` for a ``policy:<plugin>:<version>`` actor, else None."""
+    prefix, _, rest = actor.partition(":")
+    plugin, _, version = rest.partition(":")
+    if prefix != "policy" or not plugin.strip() or not version.strip():
+        return None
+    return plugin, version
 
 
 class Operations:
@@ -386,36 +404,106 @@ class Operations:
         payload: dict[str, Any],
         *,
         expires_seconds: int = 86400,
+        proposed_by: str | None = None,
         cur: Any = None,
     ) -> str:
-        """Create an immutable draft. Changed content needs a new key and approval."""
+        """Create an immutable draft. Changed content needs a new key and approval.
+
+        ``proposed_by`` names the plugin that proposes; only that plugin's
+        policy actor may later decide the draft. A key stays bound to its
+        proposer as well as its content.
+        """
+        if proposed_by is not None and not proposed_by.strip():
+            raise ValueError("Proposer must be a plugin name or None")
         if cur is None:
             with self.transaction() as cursor:
-                return self.propose(kind, key, payload, expires_seconds=expires_seconds, cur=cursor)
+                return self.propose(
+                    kind,
+                    key,
+                    payload,
+                    expires_seconds=expires_seconds,
+                    proposed_by=proposed_by,
+                    cur=cursor,
+                )
         action = str(uuid4())
         cur.execute(
-            "INSERT INTO operation_actions(id,tenant_id,kind,dedup_key,payload,payload_hash,expires_at) "
-            "VALUES(%s,%s,%s,%s,%s,%s,now()+%s*interval '1 second') ON CONFLICT DO NOTHING RETURNING id",
-            (action, self.tenant, kind, key, Json(payload), digest(payload), expires_seconds),
+            "INSERT INTO operation_actions"
+            "(id,tenant_id,kind,dedup_key,payload,payload_hash,expires_at,proposed_by) "
+            "VALUES(%s,%s,%s,%s,%s,%s,now()+%s*interval '1 second',%s) "
+            "ON CONFLICT DO NOTHING RETURNING id",
+            (
+                action,
+                self.tenant,
+                kind,
+                key,
+                Json(payload),
+                digest(payload),
+                expires_seconds,
+                proposed_by,
+            ),
         )
         row = cur.fetchone()
         if row:
-            self.audit(cur, action, "action.proposed")
+            self.audit(
+                cur, action, "action.proposed", f"plugin:{proposed_by}" if proposed_by else "system"
+            )
             return action
         cur.execute(
-            "SELECT id,payload_hash FROM operation_actions WHERE tenant_id=%s AND kind=%s AND dedup_key=%s",
+            "SELECT id,payload_hash,proposed_by FROM operation_actions "
+            "WHERE tenant_id=%s AND kind=%s AND dedup_key=%s",
             (self.tenant, kind, key),
         )
         row = cur.fetchone()
         if row["payload_hash"] != digest(payload):
             raise Conflict("Draft key already bound to different content")
+        if row["proposed_by"] != proposed_by:
+            raise Conflict("Draft key already bound to a different proposer")
         return str(row["id"])
 
+    def list_review(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Drafts still waiting on a human verdict: in review and not expired."""
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT id,kind,payload,created_at,expires_at FROM operation_actions "
+                "WHERE tenant_id=%s AND status='review' AND expires_at>now() "
+                "ORDER BY expires_at LIMIT %s",
+                (self.tenant, limit),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_action(self, action: str) -> dict[str, Any] | None:
+        """Read one action only within this tenant."""
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT * FROM operation_actions WHERE tenant_id=%s AND id=%s",
+                (self.tenant, action),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
     def decide(self, action: str, approved: bool, actor: str) -> None:
-        """Persist a human decision. Caller must authenticate the actor before entry."""
-        if not actor.startswith("operator:"):
+        """Persist a decision by an operator or by the proposing plugin's policy.
+
+        ``operator:<id>`` is a human; the caller must authenticate it before
+        entry. ``policy:<plugin>:<version>`` is an automated rule and may decide
+        only drafts that ``<plugin>`` proposed. An approval publishes
+        ``operation_action.approved`` on the ``operations`` stream once it has
+        committed.
+        """
+        policy = _policy(actor)
+        if policy is None and not actor.startswith("operator:"):
             raise Conflict("Human operator decision required")
         with self.transaction() as cur:
+            cur.execute(
+                "SELECT kind,proposed_by FROM operation_actions WHERE tenant_id=%s AND id=%s "
+                "AND status='review' AND expires_at>now() FOR UPDATE",
+                (self.tenant, action),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise Conflict("Draft is missing, expired, or already decided")
+            if policy is not None and row["proposed_by"] != policy[0]:
+                raise Conflict("A policy may decide only its own plugin's drafts")
             cur.execute(
                 "UPDATE operation_actions SET status=%s,approved_hash=payload_hash,decided_by=%s,decided_at=now() "
                 "WHERE tenant_id=%s AND id=%s AND status='review' AND expires_at>now()",
@@ -423,18 +511,66 @@ class Operations:
             )
             if cur.rowcount != 1:
                 raise Conflict("Draft is missing, expired, or already decided")
-            self.audit(cur, action, "action.approved" if approved else "action.rejected", actor)
+            detail = {"policy": policy[0], "version": policy[1]} if policy else None
+            self.audit(
+                cur, action, "action.approved" if approved else "action.rejected", actor, detail
+            )
+        if approved:
+            self._announce_approval(action, row["kind"], row["proposed_by"], actor)
+
+    def _announce_approval(self, action: str, kind: str, proposer: str | None, actor: str) -> None:
+        """Tell hook workflows a committed approval is ready to execute.
+
+        Best effort, like every bus producer: a lost event leaves the action
+        approved, and a cron sweep calling ``claim_action`` still finds it.
+        """
+        bus.publish(
+            OPERATIONS_STREAM,
+            ACTION_APPROVED,
+            {"action_id": action, "kind": kind, "tenant_id": self.tenant, "proposed_by": proposer},
+            source="operations",
+            actor=actor,
+            tenant_id=self.tenant,
+        )
+
+    def list_actions(
+        self,
+        *,
+        kinds: Iterable[str] | None = None,
+        status: str | None = None,
+        proposed_by: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """This tenant's actions, newest first, narrowed by any filter given."""
+        if type(limit) is not int or not 1 <= limit <= MAX_LIST_ACTIONS:
+            raise ValueError(f"Limit must be an integer from 1 to {MAX_LIST_ACTIONS}")
+        kind_list = None if kinds is None else sorted(set(kinds))
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT * FROM operation_actions WHERE tenant_id=%s "
+                "AND (%s::text[] IS NULL OR kind=ANY(%s::text[])) "
+                "AND (%s::text IS NULL OR status=%s) "
+                "AND (%s::text IS NULL OR proposed_by=%s) "
+                "ORDER BY created_at DESC, id LIMIT %s",
+                (
+                    self.tenant,
+                    kind_list,
+                    kind_list,
+                    status,
+                    status,
+                    proposed_by,
+                    proposed_by,
+                    limit,
+                ),
+            )
+            return [dict(row) for row in cur.fetchall()]
 
     def claim_action(
         self, *, kind: str | None = None, lease_seconds: int = 120
     ) -> dict[str, Any] | None:
         """Claim an approved exact action. Expired sends become UNKNOWN, never ready."""
         with self.transaction() as cur:
-            cur.execute(
-                "UPDATE operation_actions SET status='unknown' WHERE tenant_id=%s "
-                "AND status='executing' AND lease_until<now()",
-                (self.tenant,),
-            )
+            self._expire_leases(cur)
             cur.execute(
                 "SELECT * FROM operation_actions WHERE tenant_id=%s AND status='approved' "
                 "AND expires_at>now() AND (%s IS NULL OR kind=%s) "
@@ -442,21 +578,95 @@ class Operations:
                 (self.tenant, kind, kind),
             )
             row = cur.fetchone()
-            if not row:
-                return None
-            if digest(row["payload"]) != row["approved_hash"]:
-                raise Conflict("Approved payload changed")
-            token = str(uuid4())
+            return self._lease(cur, row, lease_seconds) if row else None
+
+    def claim_action_by_id(self, action: str, *, lease_seconds: int = 120) -> dict[str, Any] | None:
+        """Claim one named approved action, fenced exactly as ``claim_action`` is.
+
+        None when the action is not approved, has expired, belongs to another
+        tenant, or another executor holds it.
+        """
+        with self.transaction() as cur:
+            self._expire_leases(cur)
             cur.execute(
-                "UPDATE operation_actions SET status='executing',lease_token=%s,"
-                "lease_until=now()+%s*interval '1 second' WHERE tenant_id=%s AND id=%s",
-                (token, lease_seconds, self.tenant, row["id"]),
+                "SELECT * FROM operation_actions WHERE tenant_id=%s AND id=%s "
+                "AND status='approved' AND expires_at>now() FOR UPDATE SKIP LOCKED",
+                (self.tenant, action),
             )
-            row = dict(row)
-            row["lease_token"] = token
-            row["status"] = "executing"
-            self.audit(cur, str(row["id"]), "action.claimed")
-            return row
+            row = cur.fetchone()
+            return self._lease(cur, row, lease_seconds) if row else None
+
+    def _expire_leases(self, cur: Any) -> None:
+        cur.execute(
+            "UPDATE operation_actions SET status='unknown' WHERE tenant_id=%s "
+            "AND status='executing' AND lease_until<now()",
+            (self.tenant,),
+        )
+
+    def _lease(self, cur: Any, row: Any, lease_seconds: int) -> dict[str, Any]:
+        """Move a locked approved row to executing under a fresh lease token."""
+        if digest(row["payload"]) != row["approved_hash"]:
+            raise Conflict("Approved payload changed")
+        token = str(uuid4())
+        cur.execute(
+            "UPDATE operation_actions SET status='executing',lease_token=%s,"
+            "lease_until=now()+%s*interval '1 second' WHERE tenant_id=%s AND id=%s",
+            (token, lease_seconds, self.tenant, row["id"]),
+        )
+        claimed = dict(row)
+        claimed["lease_token"] = token
+        claimed["status"] = "executing"
+        self.audit(cur, str(row["id"]), "action.claimed")
+        return claimed
+
+    def cancel_action(
+        self,
+        action: str,
+        reason: str,
+        *,
+        proposed_by: str | None = None,
+        actor: str | None = None,
+    ) -> None:
+        """Withdraw a draft or an unclaimed approval: superseded or refused.
+
+        A plugin's action is withdrawn by its proposer: ``proposed_by`` must
+        name it. An action proposed without one is withdrawn only by a named
+        human, ``actor="operator:<id>"``, which the audit records. Claimed and
+        settled actions cannot be cancelled; an executor records its own
+        outcome with ``finish_action``.
+        """
+        if not reason or not reason.strip():
+            raise ValueError("Cancellation reason required")
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT status,proposed_by FROM operation_actions WHERE tenant_id=%s AND id=%s "
+                "FOR UPDATE",
+                (self.tenant, action),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise Conflict("Action is missing")
+            if row["proposed_by"] is not None:
+                if proposed_by != row["proposed_by"]:
+                    raise Conflict("Only the proposer may cancel an action")
+                audited = f"plugin:{proposed_by}"
+            else:
+                if proposed_by is not None or not (actor or "").startswith("operator:"):
+                    raise Conflict("Human operator decision required")
+                audited = str(actor)
+            if row["status"] not in {"review", "approved"}:
+                raise Conflict("Only a draft or an unclaimed approval can be cancelled")
+            cur.execute(
+                "UPDATE operation_actions SET status='cancelled' WHERE tenant_id=%s AND id=%s",
+                (self.tenant, action),
+            )
+            self.audit(
+                cur,
+                action,
+                "action.cancelled",
+                audited,
+                {"reason": reason[:500], "previous_status": row["status"]},
+            )
 
     def finish_action(
         self,

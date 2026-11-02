@@ -58,6 +58,19 @@ def degraded():
 
 
 @pytest.fixture(autouse=True)
+def _engine_answers(mock_http_client):
+    """The route also lists whether the bridge reaches the engine
+    (test_ready_engine.py). Here the engine is up, so the report's verdict is
+    the doctor's alone."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+
+    mock_http_client.get = AsyncMock(return_value=MagicMock(spec=httpx.Response, status_code=200))
+    return mock_http_client
+
+
+@pytest.fixture(autouse=True)
 def _no_memoised_report():
     """Each test starts with an empty cache. Without this, the first test to
     run would answer every later one."""
@@ -116,7 +129,7 @@ def test_the_payload_mirrors_the_readiness_contract(controls_client_as_operator,
     assert body["summary"] == {
         "required_failed": 0,
         "recommended_failed": 0,
-        "passed": 1,
+        "passed": 2,  # db.connect, and bridge.engine
         "skipped": 0,
     }
 

@@ -19,10 +19,64 @@ describe("TaskBoard", () => {
     expect(screen.getByText("Done")).toBeDefined();
   });
 
-  it("has 4-column grid layout", () => {
+  it("lays its columns out by the board's own width, not the window's", () => {
     render(<TaskBoard tasks={mockTasks} />);
     const board = screen.getByTestId("task-board");
-    expect(board.className).toContain("grid-cols-4");
+    // Four, two or one columns, chosen by the board's container width (never
+    // three, which would leave Done alone on a second row).
+    expect(board.parentElement?.className).toContain("@container");
+    const classes = board.className.split(/\s+/);
+    expect(classes).toContain("grid-cols-1");
+    expect(classes).toContain("@[31rem]:grid-cols-2");
+    expect(classes).toContain("@[63rem]:grid-cols-4");
+    expect(board.className).not.toMatch(/grid-cols-3|auto-fit|(sm|md|lg|xl):grid-cols-/);
+  });
+
+  it("lets columns and cards shrink below their content width", () => {
+    render(<TaskBoard tasks={mockTasks} />);
+    const board = screen.getByTestId("task-board");
+    for (const column of Array.from(board.children)) {
+      expect(column.className).toContain("min-w-0");
+    }
+    for (const card of screen.getAllByTestId("task-card")) {
+      expect(card.className).toContain("min-w-0");
+    }
+  });
+
+  it("renders no badge row on a card without badges", () => {
+    const t = [{ id: "21", title: "Plain task", status: "TODO" as const }];
+    render(<TaskBoard tasks={t} />);
+    expect(screen.queryByTestId("task-card-badges")).toBeNull();
+  });
+
+  it("puts the title on its own line and the badges on a wrapping row beneath", () => {
+    const t = [
+      {
+        id: "20",
+        title: "A long task title that must wrap",
+        status: "REVIEW" as const,
+        priority: "urgent",
+        requiresHuman: true,
+        escalationCount: 2,
+      },
+    ];
+    render(<TaskBoard tasks={t} />);
+    const title = screen.getByText("A long task title that must wrap");
+    // The title is a grid item of the card header: min-w-0 lets it shrink
+    // below its longest word, and wrap-anywhere breaks an unbroken word.
+    expect(title.className).toContain("min-w-0");
+    expect(title.className).toContain("wrap-anywhere");
+    expect(title.className).not.toContain("truncate");
+
+    const badgeRow = screen.getByTestId("task-card-badges");
+    expect(badgeRow.className).toContain("flex-wrap");
+    for (const id of ["priority-badge", "requires-human-badge", "escalation-badge"]) {
+      expect(badgeRow.contains(screen.getByTestId(id))).toBe(true);
+    }
+    // Title and badge row are separate siblings: the title is not inside the
+    // badge row, and the badge row comes after it.
+    expect(badgeRow.contains(title)).toBe(false);
+    expect(title.nextElementSibling).toBe(badgeRow);
   });
 
   it("renders task cards", () => {

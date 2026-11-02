@@ -105,7 +105,7 @@ Standard envelope format. Consumer groups for parallel processing. RBAC via `age
 
 ## Agent RBAC
 
-Each agent declares its capabilities in `agent_capabilities.json`: which tools it can call, which streams it can read/write, which Bridge endpoints it can access. Unknown agents get full access (backward compatible).
+Each agent declares its capabilities in `agent_capabilities.json`: which tools it can call, which streams it can read/write, which Bridge endpoints it can access. Unknown agents get full access (backward compatible). The bridge is stricter: a request carrying an agent's service token (what `log_interaction` sends) is refused with 403 `agent not authorized` unless that agent is listed under `agents`, whatever `default_policy` says.
 
 ## Service Registry
 

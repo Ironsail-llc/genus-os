@@ -19,6 +19,7 @@ from typing import Any
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
+from robothor.memory.confirmed import is_operator_confirmed
 from robothor.memory.conflicts import _supersede_fact, find_similar_facts
 from robothor.memory.facts import store_fact
 
@@ -71,6 +72,10 @@ async def record_resolution(
         source_type="resolution",
         tenant_id=tenant,
     )
+    if not new_id:
+        # store_fact keeps nothing and answers 0 when the quality gate refuses
+        # the fact; reporting that as a resolution would hide it.
+        return {"error": "resolution not stored: the memory quality gate refused it"}
 
     # store_fact stores the default importance (0.5); a confirmed resolution is
     # high-signal — lift it so recency+importance float it above the open noise.
@@ -87,7 +92,9 @@ async def record_resolution(
             open_item, limit=_MAX_SUPERSEDE, threshold=_SUPERSEDE_SIMILARITY, tenant_id=tenant
         )
         for m in matches:
-            if m["id"] == new_id:
+            # An operator-confirmed fact is the operator's word, not an open
+            # item the pipeline may close.
+            if m["id"] == new_id or is_operator_confirmed(m):
                 continue
             _supersede_fact(m["id"], new_id, tenant_id=tenant)
             superseded.append(m["id"])

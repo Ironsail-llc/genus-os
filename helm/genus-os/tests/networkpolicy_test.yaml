@@ -137,6 +137,28 @@ tests:
           path: spec.podSelector.matchExpressions[2].values
           content: dashboard
 
+  - it: ollama egress admits the bridge, which embeds an edited memory fact
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.ollama.cidrs: [10.42.32.7/32]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-ollama-egress
+    asserts:
+      - equal:
+          path: spec.egress[0].ports[0].port
+          value: 11434
+      - contains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: bridge
+      - contains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: engine
+      - notContains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: dashboard
+
   - it: dashboard external egress is limited to the identity destination
     set:
       networkPolicy.enabled: true
@@ -247,3 +269,179 @@ tests:
       - equal:
           path: spec.ingress[0].ports[0].port
           value: 3000
+  - it: bridge internal egress reaches the engine admin port
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-bridge-internal-egress
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: genus-os
+                    app.kubernetes.io/instance: gos
+                    app.kubernetes.io/component: engine
+            ports:
+              - protocol: TCP
+                port: 18800
+
+  - it: bridge internal egress omits the engine when the engine is disabled
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      engine.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-bridge-internal-egress
+    asserts:
+      - notContains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: genus-os
+                    app.kubernetes.io/instance: gos
+                    app.kubernetes.io/component: engine
+          any: true
+
+  - it: engine internal ingress admits the bridge
+    set:
+      networkPolicy.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-engine-internal-ingress
+    asserts:
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: bridge
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 18800
+
+  - it: engine internal ingress omits the bridge when the bridge is disabled
+    set:
+      networkPolicy.enabled: true
+      bridge.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-engine-internal-ingress
+    asserts:
+      - notContains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: bridge
+
+  - it: dashboard egress reaches the in-chart cache on the cache port
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      redis.port: 6380
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-dashboard-internal-egress
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: valkey
+                    app.kubernetes.io/instance: gos
+            ports:
+              - protocol: TCP
+                port: 6380
+
+  - it: dashboard egress has no cache rule when the in-chart cache is disabled
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      valkey.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-dashboard-internal-egress
+    asserts:
+      - notContains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: valkey
+                    app.kubernetes.io/instance: gos
+          any: true
+
+  - it: cache ingress admits the dashboard
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-redis-ingress
+    asserts:
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: dashboard
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: genus-os
+                app.kubernetes.io/instance: gos
+                app.kubernetes.io/component: bridge
+
+
+  - it: hooks reaches the HTTPS egress destination so google_oidc channels can fetch signing certs
+    set:
+      hooks.enabled: true
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.https.cidrs: [10.42.64.0/28]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-https-egress
+    asserts:
+      - contains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: hooks
+      - notContains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: dashboard
+
+  - it: hooks reaches an external cache so it can publish to the event stream
+    set:
+      hooks.enabled: true
+      networkPolicy.enabled: true
+      networkPolicy.egress.enabled: true
+      networkPolicy.egress.destinations.redis.cidrs: [10.42.70.5/32]
+    documentSelector:
+      path: metadata.name
+      value: gos-genus-os-redis-egress
+    asserts:
+      - contains:
+          path: spec.podSelector.matchExpressions[2].values
+          content: hooks
+      - equal:
+          path: spec.egress[0].ports[0].port
+          value: 6379

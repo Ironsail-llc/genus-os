@@ -76,7 +76,7 @@ export interface BridgePoll {
    * over an empty pane.
    */
   status: number | null;
-  /** Read it again now — for a Refresh button, or after a write. */
+  /** Read it again now — for a Refresh button, or after a write. No-op while hidden. */
   reload: () => void;
 }
 
@@ -123,7 +123,14 @@ export function useBridgePoll({
     }
   };
 
+  // `visible: false` means touch nothing, and that includes a Refresh button:
+  // a reload on a pane that is not showing sends the request the pane would
+  // have sent, and its refusal lands on a page that never asked for it.
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+
   const reload = useCallback(() => {
+    if (!visibleRef.current) return;
     void loadRef.current();
   }, []);
 

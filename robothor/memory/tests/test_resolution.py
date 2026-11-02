@@ -62,6 +62,31 @@ class TestRecordResolution:
         assert any("importance_score" in c.args[0] for c in cur.execute.call_args_list)
 
     @pytest.mark.asyncio
+    async def test_an_operator_confirmed_match_is_not_retired(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("MEMORY_RESOLUTION_CAPTURE", "1")
+        ctx, _cur = _mock_conn()
+        supersede = MagicMock()
+        confirmed = {"operator_confirmed": {"at": "2026-01-01T00:00:00+00:00", "by": "op"}}
+        with (
+            patch.object(res, "store_fact", new=AsyncMock(return_value=500)),
+            patch.object(res, "get_connection", return_value=ctx),
+            patch.object(
+                res,
+                "find_similar_facts",
+                new=AsyncMock(
+                    return_value=[
+                        {"id": 10, "metadata": confirmed},
+                        {"id": 11, "metadata": None},
+                    ]
+                ),
+            ),
+            patch.object(res, "_supersede_fact", new=supersede),
+        ):
+            out = await record_resolution("the X alert", "confirmed safe")
+        assert out["superseded_ids"] == [11]
+        assert [c.args[0] for c in supersede.call_args_list] == [11]
+
+    @pytest.mark.asyncio
     async def test_stores_but_no_supersede_when_disabled(self, monkeypatch: Any) -> None:
         monkeypatch.delenv("MEMORY_RESOLUTION_CAPTURE", raising=False)
         ctx, _cur = _mock_conn()
@@ -75,6 +100,49 @@ class TestRecordResolution:
         assert out["resolution_id"] == 501
         assert out["superseded_ids"] == []
         find.assert_not_awaited()  # the risky retirement is gated off
+
+    @pytest.mark.asyncio
+    async def test_a_refused_store_is_an_error_not_a_success(self) -> None:
+        """store_fact answers 0 when it keeps nothing (the quality gate refused
+        the fact). Reporting ``resolution_id: 0`` as success hides that the
+        resolution was never recorded."""
+        ctx, cur = _mock_conn()
+        with (
+            patch.object(res, "store_fact", new=AsyncMock(return_value=0)),
+            patch.object(res, "get_connection", return_value=ctx),
+        ):
+            out = await record_resolution("the X alert", "confirmed safe")
+        assert "error" in out
+        assert "not stored" in out["error"]
+        cur.execute.assert_not_called()
+
+
+class TestHandlerArguments:
+    """An agent that sends the wrong argument names gets told which ones."""
+
+    @staticmethod
+    async def _call(args: dict[str, Any]) -> dict[str, Any]:
+        from robothor.engine.tools.dispatch import ToolContext
+        from robothor.engine.tools.handlers.memory import HANDLERS
+
+        return await HANDLERS["record_resolution"](
+            args, ToolContext(agent_id="example-agent", tenant_id="test-tenant")
+        )
+
+    @pytest.mark.asyncio
+    async def test_wrong_argument_names_are_named_in_the_error(self) -> None:
+        store = AsyncMock()
+        with patch.object(res, "store_fact", new=store):
+            out = await self._call({"item": "the X alert", "resolution": "closed"})
+        assert "missing: open_item, outcome" in out["error"]
+        assert "received: item, resolution" in out["error"]
+        store.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_only_the_blank_argument_is_reported_missing(self) -> None:
+        with patch.object(res, "store_fact", new=AsyncMock()):
+            out = await self._call({"open_item": "the X alert", "outcome": "  "})
+        assert out["error"].split("missing: ")[1].split(";")[0] == "outcome"
 
 
 class TestExtractionAwareness:

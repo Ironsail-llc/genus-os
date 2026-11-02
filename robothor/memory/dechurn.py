@@ -21,6 +21,7 @@ import logging
 from typing import Any
 
 from robothor.db.connection import get_connection
+from robothor.memory.confirmed import NOT_OPERATOR_CONFIRMED_SQL
 from robothor.memory.facts import _norm_tokens
 
 logger = logging.getLogger(__name__)
@@ -67,9 +68,11 @@ def _load_active_facts(cur: Any, tenant: str) -> list[dict[str, Any]]:
     from psycopg2.extras import RealDictCursor
 
     cur2 = cur.connection.cursor(cursor_factory=RealDictCursor)
+    # An operator-confirmed fact is neither a loser nor a winner: it is left
+    # out of the clustering entirely, so it can never be deactivated here.
     cur2.execute(
         "SELECT id, fact_text, entities FROM memory_facts "
-        "WHERE is_active = TRUE AND tenant_id = %s",
+        f"WHERE is_active = TRUE AND tenant_id = %s AND {NOT_OPERATOR_CONFIRMED_SQL}",
         (tenant,),
     )
     return [dict(r) for r in cur2.fetchall()]

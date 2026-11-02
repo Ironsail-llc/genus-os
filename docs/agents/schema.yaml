@@ -70,6 +70,13 @@ recommended:
         without reading the model names back out. Metadata — the engine
         never reads it.
       example: "ox"
+    canvas:
+      type: string
+      description: >
+        Fleet-defaults key (`_defaults.yaml`): the model the dashboard's
+        visual canvas tries first, before the fleet's primary. Agents do not
+        read it themselves; it is declared so the merged manifest validates.
+      example: "openrouter/google/gemini-2.5-flash-lite"
   schedule:
     cron:
       type: string

@@ -91,6 +91,7 @@ exclude_docs: |
   !/AUTONOMOUS_EXECUTION.md
   !/SALES_INTELLIGENCE.md
   !/PLUGINS.md
+  !/OPERATIONS.md
   !/channels/telegram.md
   !/CONNECTORS.md
   !/OBSERVABILITY.md
@@ -153,6 +154,7 @@ nav:
       - Personal autonomy: AUTONOMOUS_EXECUTION.md
       - Sales intelligence: SALES_INTELLIGENCE.md
       - Plugins: PLUGINS.md
+      - Operations ledger: OPERATIONS.md
       - Telegram channel: channels/telegram.md
       - Connectors: CONNECTORS.md
       - Slack channel: channels/slack.md

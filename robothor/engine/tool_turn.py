@@ -49,7 +49,7 @@ from robothor.engine.post_execution import apply_post_execution_guardrails
 from robothor.engine.repeat_guard import drain_repeat_notes
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE
-from robothor.engine.tool_outcome import record_tool_outcome
+from robothor.engine.tool_outcome import error_text, record_tool_outcome
 from robothor.engine.tool_turn_context import tool_turn_context
 from robothor.engine.tools.read_only import declared_read_only_tools
 
@@ -347,7 +347,7 @@ class ToolTurnMixin:
 
         session = req.session
         result: Any = call.result
-        error_msg: str | None = result.get("error") if isinstance(result, dict) else None
+        error_msg = error_text(result)
 
         # ── [GUARDRAILS] Post-execution check ──
         # robothor/engine/post_execution.py. Redaction happens EVERY time a

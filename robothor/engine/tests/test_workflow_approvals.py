@@ -17,6 +17,7 @@ from robothor.engine.approvals import (
     decide_approval,
     expire_overdue_approvals,
     get_approval,
+    get_approval_by_id,
     list_decided_approvals,
     list_pending_approvals,
     request_approval,
@@ -201,6 +202,25 @@ class TestDecisions:
         assert not decide_approval(
             run_id, "nope", ApprovalDecision.APPROVED, decided_by="operator", tenant_id=TENANT
         )
+
+
+class TestReadById:
+    def test_an_approval_is_read_by_id_within_its_tenant_only(self, run_id):
+        try:
+            req = request_approval(
+                run_id=run_id,
+                workflow_id="weekly-report",
+                step_id="confirm-send",
+                prompt="Send it?",
+                tenant_id=TENANT,
+            )
+            found = get_approval_by_id(str(req.id), tenant_id=TENANT)
+            assert found is not None
+            assert str(found.id) == str(req.id)
+            assert get_approval_by_id(str(req.id), tenant_id="acme-child-b") is None
+            assert get_approval_by_id(str(uuid.uuid4()), tenant_id=TENANT) is None
+        finally:
+            _cleanup(run_id)
 
 
 class TestExpiry:

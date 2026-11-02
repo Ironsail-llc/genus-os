@@ -891,6 +891,99 @@ class TestProvider:
         assert FINGERPRINT_PREFIX in blob
 
 
+class TestStoreDefaultModel:
+    """The wizard's model choice goes to the engine, which owns ``_defaults.yaml``.
+
+    In a container deployment the bridge has no workspace volume, so a file
+    written here never reached the process that reads it.
+    """
+
+    async def test_it_sends_the_model_to_the_engines_write_route(self, tmp_path, monkeypatch):
+        import routers.setup as setup_router
+
+        calls: list[tuple[str, str, object]] = []
+
+        async def fake_engine(method, path, *, json=None, timeout=30):
+            calls.append((method, path, json))
+            return 200, {"primary": "openrouter/openai/gpt-5.4", "fallbacks": []}
+
+        manifests = tmp_path / "manifests"
+        manifests.mkdir()
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(manifests))
+        with patch("routers.providers.engine_request", new=fake_engine):
+            await setup_router._store_default_model("openrouter/openai/gpt-5.4")
+
+        assert calls == [
+            ("PUT", "/api/admin/defaults", {"model": "openrouter/openai/gpt-5.4", "fallbacks": []})
+        ]
+        assert list(manifests.iterdir()) == [], "the bridge wrote the file itself"
+
+    async def test_an_engine_refusal_does_not_abort_the_step(self, monkeypatch, caplog):
+        """The test connection that follows reports the verdict the operator
+        acts on; a refused write is logged, not raised."""
+        import routers.setup as setup_router
+
+        async def refusing_engine(method, path, *, json=None, timeout=30):
+            return 502, {"error": "engine unavailable"}
+
+        with patch("routers.providers.engine_request", new=refusing_engine):
+            await setup_router._store_default_model("openrouter/openai/gpt-5.4")
+
+        assert "default model" in caplog.text
+
+    async def test_a_catalog_refusal_does_not_abort_the_step(self, monkeypatch, caplog):
+        """An unknown model id is refused by the test connection too, for the
+        same reason, so the operator still gets the verdict to act on."""
+        import routers.setup as setup_router
+
+        async def refusing_engine(method, path, *, json=None, timeout=30):
+            return 422, {"detail": "unknown model id(s): made/up"}
+
+        with patch("routers.providers.engine_request", new=refusing_engine):
+            await setup_router._store_default_model("made/up")
+
+        assert "default model" in caplog.text
+
+    async def test_a_failed_write_fails_the_step_with_the_engines_detail(self):
+        """A write failure is invisible to the test connection that follows:
+        it would answer ``ok: true`` while the fleet kept its old default."""
+        import routers.setup as setup_router
+        from fastapi import HTTPException
+
+        detail = (
+            "the engine's manifest directory is not writable (/workspace/docs/agents): "
+            "PermissionError; check the workspace volume"
+        )
+
+        async def unwritable_engine(method, path, *, json=None, timeout=30):
+            return 503, {"detail": detail}
+
+        with (
+            patch("routers.providers.engine_request", new=unwritable_engine),
+            pytest.raises(HTTPException) as raised,
+        ):
+            await setup_router._store_default_model("openrouter/openai/gpt-5.4")
+
+        assert raised.value.status_code == 503
+        assert detail in str(raised.value.detail)
+
+    async def test_an_unexpected_engine_answer_fails_the_step(self):
+        import routers.setup as setup_router
+        from fastapi import HTTPException
+
+        async def broken_engine(method, path, *, json=None, timeout=30):
+            return 500, {"error": "engine returned a non-JSON response"}
+
+        with (
+            patch("routers.providers.engine_request", new=broken_engine),
+            pytest.raises(HTTPException) as raised,
+        ):
+            await setup_router._store_default_model("openrouter/openai/gpt-5.4")
+
+        assert raised.value.status_code >= 500
+        assert "non-JSON" in str(raised.value.detail)
+
+
 async def _noop() -> None:
     return None
 
@@ -1526,3 +1619,37 @@ def test_telegram_getme_url_keeps_the_token_colon_but_no_path_characters():
     assert hardened.startswith("https://api.telegram.org/bot123:abc")
     assert "/../" not in hardened and "?" not in hardened and "#" not in hardened
     assert hardened.endswith("/getMe")
+
+
+def test_required_check_rows_reads_the_real_memoised_doctor():
+    """The wizard's strip shares the Health view's memoised doctor run. Every
+    other test here stubs ``_required_check_rows`` away, so this one runs it
+    against the real memo with only the doctor itself stubbed: a change to the
+    memo's contract must not turn /api/setup/detect into a 500."""
+    from routers import setup as setup_router
+    from routers.health import reset_doctor_cache
+
+    from robothor.doctor.runner import CheckResult, DoctorReport
+
+    def row(check_id: str, severity: str, status: str) -> CheckResult:
+        return CheckResult(
+            id=check_id,
+            title=check_id,
+            category="database",
+            severity=severity,
+            status=status,
+            detail="",
+            fixable=False,
+        )
+
+    report = DoctorReport(
+        results=[row("db.connect", "required", "pass"), row("redis.ping", "recommended", "fail")]
+    )
+    reset_doctor_cache()
+    try:
+        with patch("routers.health.run_sync", return_value=report):
+            rows = setup_router._required_check_rows()
+    finally:
+        reset_doctor_cache()
+
+    assert rows == [{"id": "db.connect", "status": "pass"}]

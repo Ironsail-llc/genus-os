@@ -4,7 +4,7 @@ Redis Streams-based publish-subscribe system with consumer groups, RBAC, and JSO
 
 ## Streams
 
-Seven streams carry all system events:
+These streams carry system events:
 
 | Stream | Key | Events |
 |--------|-----|--------|
@@ -15,6 +15,7 @@ Seven streams carry all system events:
 | Health | `robothor:events:health` | `health.check`, `health.alert`, `health.recovery` |
 | Agent | `robothor:events:agent` | `agent.started`, `agent.completed`, `agent.error` |
 | System | `robothor:events:system` | `system.boot`, `system.shutdown`, `system.error` |
+| Operations | `robothor:events:operations` | `operation_action.approved` — see [Operations ledger](OPERATIONS.md#executing-an-approved-action-from-a-workflow) |
 
 Each stream is a circular buffer (default 10,000 entries, configurable via `EVENT_BUS_MAXLEN`).
 
@@ -205,8 +206,42 @@ with the other hook fields in `docs/agents/schema.yaml`.
 A workflow with a `hook` trigger gets the event as its run's `event` context
 (`type`, `stream`, `delivery_id`, the parsed `payload`, and `id` for webhook
 events), so its steps
-can template it, and its trigger takes the same `requeue_if_busy` option. See
+can template it, and its trigger takes the same `requeue_if_busy` option, or
+`concurrent: true` to let its runs overlap. See
 [Agent Builder](AGENT_BUILDER.md#triggered-by-an-event).
+
+### Running the webhook receiver separately
+
+The engine runs as a single writer, so while it restarts its webhook route
+answers nothing. The handler itself keeps no state of its own (the delivery
+ids and rate-limit counters live in Redis), so it can also run as its own
+process, with as many replicas as you like, and keep accepting deliveries
+while the engine is down:
+
+```bash
+python -m robothor.engine.hooks_server
+```
+
+It serves exactly three routes: `POST /api/webhooks/{channel}` (the same
+handler, the same checks, the same stream and dedupe keys as the engine),
+`GET /live` (200 while the process serves) and `GET /ready` (200 when Redis
+answers a ping, 503 otherwise). There is no engine authentication in front of
+it, because each delivery is authenticated by its channel's own scheme, and the
+`GET /api/webhooks` channel listing the engine serves behind its auth is left
+out. Events wait in their streams until the engine is back and reads them.
+Each delivery logs one line (`webhook delivery channel=... outcome=accepted|duplicate|refused
+status=... reason=...`), never the payload.
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `ROBOTHOR_WEBHOOKS_CONFIG` | _(unset)_ | Where the channels are read from: a YAML file (its sibling `<stem>.d/` drop-ins are merged after it), or a directory holding `webhooks.yaml` and `webhooks.d/`. Unset, `$ROBOTHOR_WORKSPACE/docs/webhooks.yaml`. The engine honours it too. |
+| `ROBOTHOR_HOOKS_HOST` | `0.0.0.0` | Address the receiver binds to. |
+| `ROBOTHOR_HOOKS_PORT` | `18801` | Port the receiver listens on. |
+
+The receiver needs the same Redis settings as the engine and each channel's
+`secret_env` variable. Point the public webhook path at the receiver instead of
+the engine; the engine's own route keeps working, so either can take a delivery
+during the switch.
 
 ## Gmail push
 
@@ -307,6 +342,10 @@ length = stream_length("email")
 
 Define per-agent permissions in `agent_capabilities.json`:
 
+The bridge refuses a request carrying an agent's service token (for example
+`log_interaction`) with 403 `agent not authorized` unless that agent is listed
+under `agents`; `default_policy` does not apply to it.
+
 ```json
 {
   "default_policy": "allow",
@@ -385,6 +424,14 @@ for the bus alone; leave it unset unless the bus must reach a different server
 from everything else. Under pytest the resolved destination, whichever way it
 was reached, must be the test namespace (`ROBOTHOR_TEST_REDIS_URL`) or listed
 in `ROBOTHOR_EVENT_BUS_ALLOW`.
+
+The dashboard reads the same streams (its live event views) and resolves its
+connection in the same order: `REDIS_URL` when set, otherwise
+`ROBOTHOR_REDIS_HOST`, `ROBOTHOR_REDIS_PORT` and `ROBOTHOR_REDIS_PASSWORD`,
+otherwise `redis://localhost:6379`; in both of the latter it selects the DB
+from `ROBOTHOR_REDIS_DB` (default 0), as the Python services do. On Kubernetes
+the Helm chart supplies the host, port and password variables to the dashboard
+when the in-chart cache is enabled.
 
 ## Feature Flag
 

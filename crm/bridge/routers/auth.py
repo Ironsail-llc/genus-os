@@ -223,16 +223,43 @@ def sso_exchange(
 
 @router.post("/refresh", response_model=None)
 def refresh(body: RefreshRequest, request: Request) -> dict[str, Any] | JSONResponse:
-    """Rotate the refresh token and reissue an access token."""
-    h = tokens.hash_refresh_token(body.refresh_token)
-    session = accounts.consume_active_session(h)
+    """Rotate the refresh token and reissue an access token.
+
+    A token rotated less than ``tokens.REFRESH_REUSE_GRACE_SECONDS`` ago and
+    presented again gets the SAME pair back: two dashboard replicas refreshing
+    one browser's session at once must both succeed, and they share nothing
+    but this route. The successor and the access token's ``jti`` are derived
+    from the presented token, and the access token's times are pinned to the
+    rotation time (``iat`` backdated by ``ROTATION_CLOCK_SKEW_SECONDS`` so a
+    database clock ahead of this one cannot mint a not-yet-valid token), so
+    the replay rebuilds the first answer byte for byte without any secret
+    being stored. After the window, or for a token that was signed out
+    rather than rotated, it is a 401 as before.
+    """
+    raw = body.refresh_token
+    successor_raw, successor_hash = tokens.successor_refresh_token(raw)
+    ip = request.client.host if request.client else None
+    session = accounts.rotate_session(
+        tokens.hash_refresh_token(raw),
+        successor_hash,
+        ttl_seconds=tokens.REFRESH_TTL_SECONDS,
+        grace_seconds=tokens.REFRESH_REUSE_GRACE_SECONDS,
+        user_agent=request.headers.get("user-agent"),
+        ip=ip,
+    )
     if not session:
         return JSONResponse({"error": "invalid or expired refresh token"}, status_code=401)
     account = accounts.get_account_by_id(str(session["user_id"]))
     if not account or account.get("status") != "active":
         return JSONResponse({"error": "account inactive"}, status_code=401)
-    ip = request.client.host if request.client else None
-    return _issue_for_account(account, user_agent=request.headers.get("user-agent"), ip=ip)
+    if session.get("replayed"):
+        logger.info("refresh token replayed inside the grace window; same pair returned")
+    return accounts.token_pair(
+        account,
+        refresh_token=successor_raw,
+        rotated_at=int(session["rotated_at"].timestamp()),
+        jti=tokens.successor_jti(raw),
+    )
 
 
 @router.post("/logout")

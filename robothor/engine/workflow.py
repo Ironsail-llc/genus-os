@@ -23,7 +23,9 @@ from __future__ import annotations
 import ast as _ast
 import asyncio
 import contextlib
+import json
 import logging
+import math
 import operator as _op
 import re
 import time
@@ -71,6 +73,74 @@ IN_FLIGHT_STEP_KEY = "_in_flight_steps"
 #: first dispatch does not pay for a close-out UPDATE that can only ever match
 #: zero rows. Survives suspend/resume with the rest of the context.
 DISPATCHED_STEPS_KEY = "_dispatched_steps"
+
+#: Ceiling on the JSON stored for one step's ``tool_input`` or ``tool_output``.
+#: A larger payload is replaced by a truncation marker carrying a preview, so
+#: one oversized tool call can neither bloat the table nor fail the run.
+STEP_IO_MAX_BYTES = 64 * 1024
+
+
+def _jsonb_safe(value: Any) -> Any:
+    """``value`` with NUL characters dropped and non-finite floats as text."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            (k.replace("\x00", "") if isinstance(k, str) else k): _jsonb_safe(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_jsonb_safe(v) for v in value]
+    return value
+
+
+def _jsonb_default(value: Any) -> str:
+    return str(value).replace("\x00", "")
+
+
+def _capped_json(value: Any, limit: int = STEP_IO_MAX_BYTES) -> str | None:
+    """Serialise a step input or output for JSONB, capped at ``limit`` bytes.
+
+    Over the cap, the value becomes ``{"_truncated": true, "original_bytes":
+    N, "preview": "<the start of its JSON>"}``, still valid JSON and still
+    within the cap.
+    """
+    if value is None:
+        return None
+    # allow_nan=False and no NUL: Postgres JSONB rejects both, and a rejected
+    # value would lose the whole step row, not just this column.
+    text = json.dumps(_jsonb_safe(value), default=_jsonb_default, allow_nan=False)
+    size = len(text.encode())
+    if size <= limit:
+        return text
+    preview = text.encode()[:limit].decode("utf-8", "ignore")
+    while True:
+        marker = json.dumps(
+            {"_truncated": True, "original_bytes": size, "preview": preview},
+            ensure_ascii=False,
+        )
+        excess = len(marker.encode()) - limit
+        if excess <= 0 or not preview:
+            return marker
+        preview = preview[: max(0, len(preview) - excess)]
+
+
+def _stored_tool_input(result: WorkflowStepResult) -> str | None:
+    """A step's tool input as it is persisted: redacted, then capped.
+
+    The same rule as ``agent_run_steps.tool_input``
+    (``session.record_tool_call``): the row outlives the run and is served by
+    the run-detail routes, so a credential-named argument or a ``vault_set``
+    value is stored as the placeholder. The tool itself still receives the
+    real arguments from ``result.tool_input``.
+    """
+    from robothor.secrets.redaction import redact_tool_arguments
+
+    if result.tool_input is None:
+        return None
+    return _capped_json(redact_tool_arguments(result.tool_name or "", result.tool_input))
 
 
 # Safe expression evaluator for workflow templates/conditions. Replaces raw
@@ -195,9 +265,9 @@ _RATE_LIMIT_WAIT_SECONDS = 5
 _MAX_RATE_LIMIT_WAIT_SECONDS = 30
 
 
-def _run_lock_key(wf: WorkflowDef) -> str:
-    """The one lock key a workflow's runs take and release."""
-    return f"workflow:{wf.id}"
+def _run_lock_key(wf: WorkflowDef) -> str | None:
+    """The one lock key a workflow's runs take and release; None when they overlap."""
+    return None if wf.concurrent else f"workflow:{wf.id}"
 
 
 def _retry_delay(attempt: int) -> int:
@@ -247,9 +317,16 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             cron=t.get("cron", ""),
             timezone=t.get("timezone", "America/New_York"),
             requeue_if_busy=bool(t.get("requeue_if_busy", False)),
+            concurrent=bool(t.get("concurrent", False)),
         )
         for t in data.get("triggers", [])
     ]
+    # A concurrent workflow is never busy, so a busy requeue could never fire.
+    if any(t.concurrent for t in triggers) and any(t.requeue_if_busy for t in triggers):
+        raise ValueError(
+            f"workflow {data.get('id')!r}: a concurrent trigger cannot be combined with "
+            "requeue_if_busy (concurrent runs are never busy)"
+        )
 
     def _parse_step(s: dict[str, Any], *, inside_parallel: bool = False) -> WorkflowStepDef:
         step_type = WorkflowStepType(s.get("type", "noop"))
@@ -293,13 +370,20 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             _parse_step(sub, inside_parallel=True) for sub in s.get("parallel_steps", [])
         ]
 
+        tool_args = s.get("tool_args") or {}
+        if not isinstance(tool_args, dict):
+            raise ValueError(
+                f"step {s.get('id')!r}: tool_args must be a mapping "
+                f"(got {type(tool_args).__name__})"
+            )
+
         return WorkflowStepDef(
             id=s["id"],
             type=step_type,
             agent_id=s.get("agent_id", ""),
             message=s.get("message", ""),
             tool_name=s.get("tool_name", ""),
-            tool_args=s.get("tool_args", {}),
+            tool_args=tool_args,
             tool_timeout_seconds=tool_timeout,
             input_expr=s.get("input", ""),
             branches=branches,
@@ -325,6 +409,19 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             if sid in seen_ids:
                 raise ValueError(f"duplicate step id {sid!r} in workflow {data.get('id')!r}")
             seen_ids.add(sid)
+
+    # An agent step serialises on the agent's own lock and is skipped, not
+    # failed, when that lock is held: two overlapping runs would drop one
+    # event's agent step while its run reads completed.
+    if any(t.concurrent for t in triggers):
+        for step in steps:
+            for candidate in (step, *step.parallel_steps):
+                if candidate.type == WorkflowStepType.AGENT:
+                    raise ValueError(
+                        f"workflow {data.get('id')!r}: a concurrent workflow cannot have "
+                        f"agent steps (step {candidate.id!r}); overlapping runs would skip it "
+                        "while the agent is busy"
+                    )
 
     rate_limit = data.get("rate_limit_per_minute", 0)
     if "rate_limit_per_minute" in data and (
@@ -550,7 +647,7 @@ class WorkflowEngine:
         )
         if refused is not None:
             return refused
-        dedup_key = _run_lock_key(wf)
+        dedup_key = _run_lock_key(wf)  # None: a concurrent run holds no lock
 
         # Initialize run
         run = WorkflowRun(
@@ -653,7 +750,8 @@ class WorkflowEngine:
 
             return run
         finally:
-            await release(dedup_key)
+            if dedup_key is not None:
+                await release(dedup_key)
 
     def _resolve_identity(
         self,
@@ -715,13 +813,15 @@ class WorkflowEngine:
 
         Returns None with the lock held, or an unrecorded ``skipped`` run with
         the lock free: the workflow is already running, or (for a caller that
-        requeues) the tool-call rate limit would block its first step.
+        requeues) the tool-call rate limit would block its first step. A
+        concurrent workflow takes no lock and is never already running.
         """
         from robothor.engine.dedup import release, try_acquire
 
-        # Prevent concurrent runs of the same workflow
+        # Prevent concurrent runs of the same workflow, unless its trigger
+        # allows them.
         dedup_key = _run_lock_key(wf)
-        if not await try_acquire(dedup_key):
+        if dedup_key is not None and not await try_acquire(dedup_key):
             logger.info(
                 "Workflow %s already running, skipping duplicate",
                 _sanitize(wf.id),
@@ -743,7 +843,8 @@ class WorkflowEngine:
         # is checked first, so a busy workflow keeps its trigger's own busy
         # handling (requeue_if_busy) whatever the window holds.
         if requeue_on_rate_limit and self._first_step_rate_limited(wf):
-            await release(dedup_key)
+            if dedup_key is not None:
+                await release(dedup_key)
             logger.info(
                 "Workflow %s deferred: tool-call rate limit reached at first step %s (%s)",
                 _sanitize(wf.id),
@@ -1134,6 +1235,14 @@ class WorkflowEngine:
         redispatch = step.id in dispatched
         if not redispatch:
             dispatched.append(step.id)
+        if step.type == WorkflowStepType.TOOL:
+            # Known before dispatch, so the running row already says what the
+            # step was asked to do — even if it never returns.
+            result.tool_name = step.tool_name
+            # A definition that cannot render is left to _run_tool_step, which
+            # renders again inside the step's try and so fails the step.
+            with contextlib.suppress(Exception):
+                result.tool_input = self._render_tool_args(step, run)
         self._persist_step_start(run, result, redispatch=redispatch)
         run.context.setdefault(IN_FLIGHT_STEP_KEY, []).append(step.id)
 
@@ -1278,17 +1387,22 @@ class WorkflowEngine:
         engines[rate_limit_per_minute] = engine
         return engine
 
+    @staticmethod
+    def _render_tool_args(step: WorkflowStepDef, run: WorkflowRun) -> dict[str, Any]:
+        """The step's arguments with ``{{ }}`` templates rendered against the run."""
+        return {
+            k: _render_template(v, run.context) if isinstance(v, str) else v
+            for k, v in (step.tool_args or {}).items()
+        }
+
     async def _run_tool_step(
         self, step: WorkflowStepDef, run: WorkflowRun, result: WorkflowStepResult
     ) -> None:
         """Execute a tool step directly via registry."""
-        # Render template args
-        rendered_args = {}
-        for k, v in step.tool_args.items():
-            if isinstance(v, str):
-                rendered_args[k] = _render_template(v, run.context)
-            else:
-                rendered_args[k] = v
+        if result.tool_input is None:
+            result.tool_name = step.tool_name
+            result.tool_input = self._render_tool_args(step, run)
+        rendered_args = result.tool_input
 
         # ── [GUARDRAILS] Pre-execution check (workflow steps are otherwise unguarded) ──
         wf = self._workflows.get(run.workflow_id)
@@ -1463,8 +1577,6 @@ class WorkflowEngine:
 
     def _load_suspended_run(self, run_id: str) -> tuple[WorkflowRun, str] | None:
         """Rebuild a suspended run from the ledger. Sync — called via to_thread."""
-        import json
-
         from robothor.db.connection import get_connection
 
         with get_connection() as conn:
@@ -1772,8 +1884,6 @@ class WorkflowEngine:
     def _persist_run_end(self, run: WorkflowRun) -> None:
         """Update workflow run with final status."""
         try:
-            import json
-
             from robothor.db.connection import get_connection
 
             completed = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.COMPLETED)
@@ -1841,14 +1951,17 @@ class WorkflowEngine:
                 cur = conn.cursor()
                 cur.execute(
                     """INSERT INTO workflow_run_steps
-                       (run_id, step_id, step_type, status, started_at)
-                       VALUES (%s, %s, %s, %s, %s)""",
+                       (run_id, step_id, step_type, status, started_at,
+                        tool_name, tool_input)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                     (
                         run.id,
                         result.step_id,
                         result.step_type.value,
                         WorkflowStepStatus.RUNNING.value,
                         result.started_at,
+                        result.tool_name,
+                        _stored_tool_input(result),
                     ),
                 )
                 conn.commit()
@@ -1908,12 +2021,19 @@ class WorkflowEngine:
         never started it.
         """
         try:
-            import json
-
             from robothor.db.connection import get_connection
+            from robothor.engine.guardrails import redact_secrets
 
-            output = json.dumps(result.tool_output, default=str) if result.tool_output else None
-            text = result.output_text[:2000] if result.output_text else None
+            # Redacted as the agent path redacts a tool result before recording
+            # it: the run-detail routes serve both columns.
+            output = (
+                _capped_json(redact_secrets(result.tool_output)) if result.tool_output else None
+            )
+            text = (
+                redact_secrets(result.output_text)[:2000].replace("\x00", "")
+                if result.output_text
+                else None
+            )
 
             with get_connection() as conn:
                 cur = conn.cursor()
@@ -1954,8 +2074,8 @@ class WorkflowEngine:
                             result.status.value,
                             None,
                             result.agent_run_id,
-                            None,
-                            None,
+                            result.tool_name,
+                            _stored_tool_input(result),
                             output,
                             result.condition_branch,
                             text,

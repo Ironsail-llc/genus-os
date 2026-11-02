@@ -28,6 +28,19 @@ const APPROVAL: PendingItem = {
   created_at: "2026-06-15T11:45:00Z",
 };
 
+const PROPOSAL: PendingItem = {
+  kind: "action",
+  id: "44444444-4444-4444-8444-444444444444",
+  run_id: "",
+  agent_id: "",
+  action_kind: "sales.email",
+  question: "sales.email: Intro to Acme",
+  detail: '{"subject": "Intro to Acme"}',
+  options: [],
+  expires_at: "2026-06-16T11:00:00Z",
+  created_at: "2026-06-15T11:00:00Z",
+};
+
 function renderView(overrides: Partial<React.ComponentProps<typeof InboxView>> = {}) {
   const props: React.ComponentProps<typeof InboxView> = {
     visible: true,
@@ -187,6 +200,66 @@ describe("InboxView", () => {
     expect(screen.getByTestId(`inbox-send-${QUESTION.id}`)).toBeDisabled();
     fireEvent.click(screen.getByTestId(`inbox-send-${QUESTION.id}`));
     expect(onAnswer).not.toHaveBeenCalled();
+  });
+
+  it("renders a proposed action as a proposal named by what it would do", () => {
+    renderView({ items: [PROPOSAL] });
+    expect(screen.getByTestId(`inbox-kind-${PROPOSAL.id}`).textContent).toBe("Proposal");
+    expect(screen.getByTestId(`inbox-who-${PROPOSAL.id}`).textContent).toBe("sales.email");
+    expect(screen.queryByTestId(`inbox-run-${PROPOSAL.id}`)).toBeNull();
+  });
+
+  it("approves and rejects a proposed action as a verdict", async () => {
+    const onAnswer = vi.fn().mockResolvedValue({ settled: false, message: "x" });
+    renderView({ items: [PROPOSAL], onAnswer });
+    fireEvent.click(screen.getByTestId(`inbox-approve-${PROPOSAL.id}`));
+    await waitFor(() =>
+      expect(onAnswer).toHaveBeenCalledWith(PROPOSAL.id, "action", { approved: true })
+    );
+    fireEvent.click(screen.getByTestId(`inbox-reject-${PROPOSAL.id}`));
+    await waitFor(() =>
+      expect(onAnswer).toHaveBeenCalledWith(PROPOSAL.id, "action", { approved: false })
+    );
+  });
+
+  it("shows who a proposed email goes to, and everything it says, before Approve", () => {
+    const body = Array.from({ length: 40 }, (_, i) => `Paragraph ${i + 1} of the email.`).join("\n");
+    renderView({
+      items: [
+        {
+          ...PROPOSAL,
+          detail: body,
+          envelope: {
+            sender: "agent@example.com",
+            recipient: "bob@example.com",
+            purpose: "introduction",
+            subject: "Intro to Acme",
+            claims: "claim-1",
+            evidence: "ev-1, ev-2",
+          },
+        },
+      ],
+    });
+    expect(screen.getByTestId(`inbox-envelope-${PROPOSAL.id}`).textContent).toBe(
+      "agent@example.com → bob@example.com · introduction"
+    );
+    expect(screen.getByTestId(`inbox-references-${PROPOSAL.id}`).textContent).toBe(
+      "Claims: claim-1 · Evidence: ev-1, ev-2"
+    );
+    const detail = screen.getByTestId(`inbox-detail-${PROPOSAL.id}`);
+    expect(detail.textContent).toBe(body);
+    expect(detail.className).not.toContain("line-clamp");
+    expect(screen.queryByTestId(`inbox-detail-toggle-${PROPOSAL.id}`)).toBeNull();
+  });
+
+  it("names no envelope for a proposal that carries none", () => {
+    renderView({ items: [PROPOSAL] });
+    expect(screen.queryByTestId(`inbox-envelope-${PROPOSAL.id}`)).toBeNull();
+  });
+
+  it("offers a proposal no note, because the ledger does not keep one", () => {
+    renderView({ items: [PROPOSAL] });
+    expect(screen.queryByTestId(`inbox-note-${PROPOSAL.id}`)).toBeNull();
   });
 
   it("approves with the note beside the button", async () => {

@@ -73,7 +73,8 @@ The Helm deployment has a different boundary from the systemd appliance:
   set and rotate secrets with `robothor vault` on the appliance.
   `/api/vault/list` stays open to operators because it returns key names only.
 - Bridge mutations under `/api/` either call `require_operator(request)` or are
-  scope-gated by the middleware; `crm/bridge/tests/test_mutations_are_gated.py`
+  scope-gated by the middleware (the Inbox answers additionally carry the
+  tenant-local `require_tenant_operator`, pinned by the same test); `crm/bridge/tests/test_mutations_are_gated.py`
   enumerates the assembled app and fails on any route that is neither, so a new
   ungated mutation cannot ship unnoticed. Appliance-global acts (marketplace
   agent install/update/remove) are operator-gated and write an audit row.
@@ -1119,6 +1120,24 @@ fifteen minutes". Rows still `running` when the run ends are closed out as
 were in flight. `WorkflowStepStatus` is held against that CHECK constraint by
 `test_schema_drift.py`, the same guard its three sibling enums already had.
 
+A tool step's row also says what the step was asked to do and what it got
+back: `tool_name` and `tool_input` (its arguments, templates rendered) are
+written with the `running` row, so they are there even if the step never
+returns, and `tool_output` when it ends. The stored input is redacted first,
+as `agent_run_steps.tool_input` is (`redact_tool_arguments`: a credential-named
+argument or a `vault_set` value becomes `<redacted>`); the tool still gets the
+real arguments. Each is capped at 64 KB of JSON
+(`STEP_IO_MAX_BYTES` in `robothor/engine/workflow.py`); a larger payload is
+stored as `{"_truncated": true, "original_bytes": N, "preview": "..."}` and the
+run carries on. Because these payloads hold whatever the tools saw, they are
+read only through routes for owners and admins, and never cached:
+
+| Route | Service | Returns |
+|-------|---------|---------|
+| `GET /api/workflows/runs/{run_id}` | engine (`engine:control`, the engine's tenant) | the run, and each step's tool name, input, output and error |
+| `GET /api/workflows/{workflow_id}/runs` | bridge (operator) | the workflow's recent runs, with `steps_completed`, `steps_failed`, `steps_skipped` |
+| `GET /api/workflows/{workflow_id}/runs/{run_id}` | bridge (operator) | the same step detail as the engine route; 404 for a run of another workflow |
+
 #### Engine admin routes
 
 Everything under `/api/admin` requires the `engine:control` scope
@@ -1127,9 +1146,11 @@ under that prefix inherits the requirement rather than having to remember it.
 
 | Route | Module | Purpose |
 |-------|--------|---------|
-| `GET /api/admin/providers`, `POST .../{id}/test`, `GET /api/admin/models`, `POST /api/admin/secrets/reload`, `POST /api/admin/defaults/reload` | `admin_providers.py` | Credentials, the model catalogue, a real test completion |
+| `GET /api/admin/providers`, `POST .../{id}/test`, `GET /api/admin/models`, `POST /api/admin/secrets/reload` | `admin_providers.py` | Credentials, the model catalogue, a real test completion |
+| `GET /api/admin/defaults`, `PUT /api/admin/defaults`, `POST /api/admin/defaults/reload` | `admin_providers.py` | The fleet default model block in `_defaults.yaml`. `PUT` is the only writer: it validates the ids against the engine's catalogue, replaces `model.primary` / `model.fallbacks` atomically (every other key survives) in the engine's manifest dir, and reloads before it answers. The bridge's `PATCH /api/providers/defaults` (the Providers page) and the setup wizard proxy to it, because the bridge may have no workspace volume. `reload` is for a file changed by hand on the engine's volume |
 | `POST /api/admin/scheduler/reconcile` | `admin_scheduler.py` | Re-derive the job set; answers `{added, replaced, refreshed, pruned, blocked, clean}`, or 503 when this process holds no scheduler |
 | `GET /api/admin/tools` | `admin_scheduler.py` | The registered tool names a manifest may name. The bridge's manifest validator reads this rather than importing `ToolRegistry`, because only the engine process knows what its plugins contributed |
+| `GET /api/admin/agents/{id}/tools`, `GET /api/admin/mcp/servers` | `admin_tools.py` | What an agent can reach, for the chat's Tools dialog: its tools grouped by source (core, plugin distribution, MCP server, opt-in) with its manifest's allow and deny lists, 404 for an unknown agent; and the MCP servers with health and a tool count, never `command` or `url` |
 | `POST /api/admin/approvals/escalation/{id}` | `admin_approvals.py` | Settle a pending permission escalation. The request is an `asyncio.Event` in **this** process, so the bridge proxies here rather than writing a row; 404 when the prompt is gone (timed out, already decided, previous process), 503 when this engine holds no manager |
 
 Engine alerts (`robothor/engine/alerts.py`) route by severity: `critical`
@@ -1417,11 +1438,20 @@ identity caches (60 s, and 300 s for `tenant_users`), both callers finish by
 posting `/api/admin/identities/reload`, best effort. Full rules, tables and CLI:
 [Channel access](channels/access.md).
 
-**Answering from the Helm.** `GET /api/approvals` lists both durable kinds;
-`POST /api/approvals/{kind}/{id}` answers one, with `kind` in `workflow`,
-`question`, `escalation`. Operator-scoped and audited (identifiers only — the
-answer text is content, not an identifier). `escalation` is proxied to the
-engine, because settling it means waking a coroutine in that process.
+**Answering from the Helm.** `GET /api/approvals` lists the three durable
+kinds; `POST /api/approvals/{kind}/{id}` answers one, with `kind` in
+`workflow`, `question`, `action` (an `operation_actions` row in `review`,
+decided through `Operations.decide`), `escalation`. An `action` row carries
+its `envelope` (sender, recipient, purpose, subject, claims, evidence) and its
+whole body, never truncated: approving authorizes the exact payload, so the
+Inbox card shows all of it before Approve, as the Sales review does. The durable kinds are
+tenant-local: `require_tenant_operator` admits an owner or admin of the tenant
+the session acts in, every store call filters on that tenant and runs inside
+`tenant_scope` so RLS binds it too, and another tenant's id is a 404 that
+settles nothing. Audited with `decided_by` and `tenant_id` (identifiers only —
+the answer text is content, not an identifier). `escalation` stays
+platform-only (`require_operator`) and is proxied to the engine, because
+settling it means waking a coroutine in that process.
 
 #### Claude Code driver (`robothor/engine/coding/`)
 
@@ -1733,6 +1763,7 @@ robothor/                                 Project root (git repo)
 │   ├── scheduler.py                      APScheduler cron from YAML manifests
 │   ├── schedule_reconcile.py             The wanted job set, as data (start + reconcile share it)
 │   ├── admin_scheduler.py                POST /api/admin/scheduler/reconcile, GET /api/admin/tools
+│   ├── admin_tools.py                    GET /api/admin/agents/{id}/tools, GET /api/admin/mcp/servers
 │   ├── hooks.py                          Redis Stream event-driven triggers
 │   ├── tracking.py                       agent_runs + agent_run_steps DAL
 │   └── tests/                            89 unit tests

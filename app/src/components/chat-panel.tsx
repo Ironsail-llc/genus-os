@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useRuntimeConfig } from "@/components/runtime-config";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,13 +14,19 @@ import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
 import { MarkerInterceptor, stripMarkers } from "@/lib/engine/marker-interceptor";
 import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
+import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
+import { ChatLanding } from "@/components/chat/chat-landing";
+import { ToolsPopover } from "@/components/chat/tools-popover";
+import { AttachButton, MessageAttachments, NOT_IN_PLAN_OR_DEEP, NOT_WHILE_RUNNING, PendingAttachments, useChatAttachments } from "@/components/chat/chat-attachments";
+import { attachmentKind, historyAttachments, stripAttachmentNote, type AttachmentSummary } from "@/lib/chat/attachments";
+import { repeatsQuickAction } from "@/components/business/quick-action-labels";
 import {
   isKeyableAgentId,
   readStoredChatAgent,
   storeChatAgent,
 } from "@/lib/chat/agent-session";
-import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
+import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain, PanelRightClose } from "lucide-react";
 
 import { forgetRequest, journalRequest, pendingRequests } from "@/lib/chat/request-journal";
 
@@ -36,6 +40,8 @@ interface ChatMessage {
   recovery?: ChatRecoveryRequest;
   /** Where a message sent while the agent was working went (live follow-ups). */
   note?: string;
+  /** Files that went with a user turn. */
+  attachments?: AttachmentSummary[];
 }
 
 /** A message typed while a turn ran. `seq` is typing order: queued ones go out in it. */
@@ -91,9 +97,29 @@ function stripResidualMarkers(text: string): string {
 interface ChatPanelProps {
   /** When true, renders in mobile-optimized layout (no duplicate header, labeled controls) */
   mobile?: boolean;
+  /**
+   * "page" when the panel is the chat home (shows the landing before the
+   * first message); "dock" beside another view (a compact empty state).
+   */
+  variant?: "page" | "dock";
+  /** The owner's first name, for the landing's greeting. */
+  ownerName?: string;
+  /** When true, the panel is docked beside another view and offers to collapse itself */
+  docked?: boolean;
+  /** Called by the header's collapse control; only used when `docked` */
+  onCollapse?: () => void;
+  /** A landing quick action opened its view (the shell decides where to show it). */
+  onViewOpened?: () => void;
 }
 
-export function ChatPanel({ mobile = false }: ChatPanelProps) {
+export function ChatPanel({
+  mobile = false,
+  variant = "dock",
+  ownerName,
+  docked = false,
+  onCollapse,
+  onViewOpened,
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const recoveryScopes = useRef<Record<string, string>>({});
   const requestScopes = useRef<Record<string, string>>({});
@@ -166,6 +192,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [agent, setAgent] = useState("");
   const [chattable, setChattable] = useState<ChattableAgent[]>([]);
   const [defaultAgent, setDefaultAgent] = useState("");
+  // The listing answered 403: a member, on the default agent it may not name.
+  const [listingRefused, setListingRefused] = useState(false);
   const [isPlanExecuting, setIsPlanExecuting] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
@@ -181,6 +209,15 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [deepMode, setDeepMode] = useState(false);
   const [deepPlan, setDeepPlan] = useState(false);
   const [isDeepReasoning, setIsDeepReasoning] = useState(false);
+  // Files go with an ordinary, fresh message only; any other time a paste or a
+  // drop is refused inline, and switching into Plan or Deep drops what waits.
+  const attachBlocked = planMode || deepMode ? NOT_IN_PLAN_OR_DEEP
+    : isStreaming || isPlanExecuting || isPlanning || isDeepReasoning ? NOT_WHILE_RUNNING : null;
+  const attachments = useChatAttachments(attachBlocked);
+  const dropAttachments = attachments.drop;
+  useEffect(() => {
+    if (planMode || deepMode) dropAttachments("Plan and Deep mode do not take files.");
+  }, [planMode, deepMode, dropAttachments]);
   const [deepElapsed, setDeepElapsed] = useState(0);
   const [, setDeepCost] = useState<{ time_s: number; cost: number } | null>(null);
   const throttledStreamingText = useThrottle(streamingText, 100);
@@ -314,7 +351,10 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   useEffect(() => {
     let cancelled = false;
     fetch("/api/bridge/api/agent-manifests")
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => {
+        if (!cancelled && res.status === 403) setListingRefused(true);
+        return res.ok ? res.json() : null;
+      })
       .then((data) => {
         if (cancelled) return;
         const rows: ChattableAgent[] = Array.isArray(data?.agents)
@@ -383,6 +423,11 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     [agent, chattable, defaultAgent]
   );
 
+  // Which chat's history has answered (or failed). The landing waits for it:
+  // shown before the transcript arrives, it would flash and fire its requests
+  // on every load of an existing conversation.
+  const [historySettledFor, setHistorySettledFor] = useState<string | null>(null);
+
   // Load history on mount, and again whenever the chat is pointed elsewhere
   //
   // Cancelled on the way out, like the listing above it. Both the abandoned
@@ -412,19 +457,24 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
               (
                 m: { role: "user" | "assistant"; content: string | Array<{ type: string; text?: string }> },
                 i: number
-              ) => ({
-                id: `hist-${i}`,
-                role: m.role,
-                content: stripResidualMarkers(
+              ) => {
+                const files = m.role === "user" ? historyAttachments(m) : [];
+                const text = stripResidualMarkers(
                   typeof m.content === "string"
                     ? m.content
                     : m.content
                         .filter((b) => b.type === "text")
                         .map((b) => b.text || "")
                         .join("")
-                ),
-                timestamp: new Date(),
-              })
+                );
+                return {
+                  id: `hist-${i}`,
+                  role: m.role,
+                  content: files.length ? stripAttachmentNote(text) : text,
+                  timestamp: new Date(),
+                  ...(files.length ? { attachments: files } : {}),
+                };
+              }
             );
           const restored: ChatMessage[] = scope ? pendingRequests(scope)
             .filter((requestId) => requestId !== requestIdRef.current)
@@ -433,10 +483,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
               timestamp: new Date(), recovery: { requestId, agent, scope },
             })) : [];
           setMessages([...loaded, ...restored]);
+          setHistorySettledFor(agentQuery);
         }
       })
       .catch(() => {
-        // Engine not available on mount
+        // Engine not available on mount. The conversation is unknown, not
+        // known to be long, so the landing may show.
+        if (!cancelled) setHistorySettledFor(agentQuery);
       });
     return () => {
       cancelled = true;
@@ -744,7 +797,9 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
 
     const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : input.trim();
     if (!flushing && text && isStreaming) return sendFollowup(text);
-    if (!text || isStreaming) return;
+    // Files go with a fresh turn only, never with a flushed follow-up.
+    const files = flushing ? [] : attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
+    if ((!text && !files.length) || isStreaming) return;
 
     setActiveAsks([]);
 
@@ -753,6 +808,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       role: "user",
       content: text,
       timestamp: new Date(),
+      ...(files.length ? { attachments: files.map((f) => ({ name: f.name, size: f.size, kind: attachmentKind(f.mime) })) } : {}),
     };
     if (flushing) {
       // Their bubbles are already on screen, where they were typed.
@@ -760,6 +816,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     } else {
       setMessages((prev) => [...prev, userMsg]);
       setInput("");
+      attachments.clear();
     }
     setIsStreaming(true);
     setStreamingText("");
@@ -783,7 +840,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, request_id: requestIdRef.current, ...(agent ? { agent } : {}) }),
+        body: JSON.stringify({ message: text, request_id: requestIdRef.current, ...(agent ? { agent } : {}), ...(files.length ? { attachments: files } : {}) }),
         signal: controller.signal,
       });
 
@@ -1027,7 +1084,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       if (!streamSettled) noteMessages(joinedFollowups.current.map((f) => f.id), DROPPED_NOTE);
       joinedFollowups.current = [];
     }
-  }, [input, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent]);
+  }, [input, attachments, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent]);
 
   // Another agent is another conversation: what waited for this one is not sent there.
   useEffect(() => {
@@ -1295,6 +1352,16 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     "What happened today?",
   ];
 
+  // The landing shows the quick actions beside the prompts; a prompt that says
+  // the same thing as one of them would be a second button with one name.
+  const landingPrompts = suggestedPrompts.filter((prompt) => !repeatsQuickAction(prompt));
+
+  // A suggested prompt fills the composer; it is never sent on its own.
+  const applyPrompt = (prompt: string) => {
+    setInput(prompt);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
   return (
     <div className="h-full w-full flex flex-col bg-background" data-testid="chat-panel">
       {/* Header — richer on mobile since there's no app header above */}
@@ -1363,12 +1430,32 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             Deep reasoning... {deepElapsed}s
           </Badge>
         )}
+        {docked && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            aria-label="Collapse chat panel"
+            title="Collapse chat panel"
+            className="ml-auto rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            data-testid="chat-dock-close"
+          >
+            <PanelRightClose className="size-4" />
+          </button>
+        )}
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
         <div className="space-y-4" data-testid="message-list">
-          {messages.length === 0 && !isStreaming && (
+          {messages.length === 0 && !isStreaming && variant === "page" && historySettledFor === agentQuery && (
+            <ChatLanding
+              ownerName={ownerName}
+              suggestedPrompts={landingPrompts}
+              onPrompt={applyPrompt}
+              onViewOpened={onViewOpened}
+            />
+          )}
+          {messages.length === 0 && !isStreaming && variant === "dock" && (
             <div className="space-y-4" data-testid="empty-state">
               <p className="text-sm text-muted-foreground">
                 Ready when you are.
@@ -1377,10 +1464,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                 {suggestedPrompts.map((prompt) => (
                   <button
                     key={prompt}
-                    onClick={() => {
-                      setInput(prompt);
-                      setTimeout(() => inputRef.current?.focus(), 0);
-                    }}
+                    onClick={() => applyPrompt(prompt)}
                     className="text-xs px-3 py-2 md:py-1.5 rounded-full border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors min-h-[44px] md:min-h-0"
                     data-testid="suggested-prompt"
                   >
@@ -1405,15 +1489,18 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                 }`}
               >
                 {msg.role === "assistant" ? (
-                  <div className="prose prose-sm prose-invert max-w-none">
-                    {msg.recovery ? (
+                  msg.recovery ? (
+                    <div className={CHAT_PROSE}>
                       <ChatRecovery request={msg.recovery} messageId={msg.id} onRecovered={recoverMessage} />
-                    ) : (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    <ChatMarkdown content={msg.content} />
+                  )
                 ) : (
-                  <p>{msg.content}</p>
+                  <>
+                    {msg.content && <p>{msg.content}</p>}
+                    <MessageAttachments attachments={msg.attachments} />
+                  </>
                 )}
                 {msg.note && (
                   <p className="mt-1 text-[11px] opacity-75" data-testid="message-note">{msg.note}</p>
@@ -1451,11 +1538,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                   {activePlan.deep_plan ? <Brain className="w-4 h-4" /> : <ClipboardList className="w-4 h-4" />}
                   <span>{activePlan.deep_plan ? "Deep Research Plan" : "Proposed Plan"}</span>
                 </div>
-                <div className="prose prose-sm prose-invert max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {activePlan.plan_text}
-                  </ReactMarkdown>
-                </div>
+                <ChatMarkdown content={activePlan.plan_text} />
                 <div className="flex gap-2 pt-1">
                   <Button
                     size="sm"
@@ -1525,11 +1608,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                       </span>
                     </div>
                     {throttledStreamingText && (
-                      <div className="prose prose-sm prose-invert max-w-none">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {throttledStreamingText}
-                        </ReactMarkdown>
-                      </div>
+                      <ChatMarkdown content={throttledStreamingText} />
                     )}
                   </div>
                 ) : (
@@ -1544,11 +1623,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                       </div>
                     )}
                     {throttledStreamingText ? (
-                      <div className="prose prose-sm prose-invert max-w-none">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {throttledStreamingText}
-                        </ReactMarkdown>
-                      </div>
+                      <ChatMarkdown content={throttledStreamingText} />
                     ) : activeToolName ? (
                       <div className="flex items-center gap-2 text-xs text-info" data-testid="tool-indicator">
                         <span className="inline-block w-2 h-2 rounded-full bg-info animate-pulse" />
@@ -1570,8 +1645,14 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         </div>
       </div>
 
-      {/* Input area */}
-      <div className="p-3 border-t border-border space-y-2">
+      {/* Input area — files can be dropped anywhere on it */}
+      <div
+        className="p-3 border-t border-border space-y-2"
+        onDragOver={(e) => { if (e.dataTransfer?.types?.includes?.("Files")) e.preventDefault(); }}
+        onDrop={(e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); void attachments.add(e.dataTransfer.files); } }}
+        data-testid="chat-composer"
+      >
+        <PendingAttachments files={attachments.files} refusal={attachments.refusal} onRemove={attachments.remove} />
         {/* Mode toggles — labeled chips on mobile, icon buttons on desktop */}
         {mobile ? (
           <div className="flex gap-2" data-testid="mobile-mode-toggles">
@@ -1588,6 +1669,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                   ? "bg-warning/15 text-warning border border-warning/30"
                   : "bg-muted/50 text-muted-foreground border border-transparent"
               } disabled:opacity-50`}
+              aria-label="Plan mode"
+              aria-pressed={planMode && !deepMode}
               data-testid="plan-toggle"
             >
               <ClipboardList className="w-3.5 h-3.5" />
@@ -1614,11 +1697,14 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                   ? "bg-primary/15 text-primary border border-primary/30"
                   : "bg-muted/50 text-muted-foreground border border-transparent"
               } disabled:opacity-50`}
+              aria-label="Deep mode"
+              aria-pressed={deepMode}
               data-testid="deep-toggle"
             >
               <Brain className="w-3.5 h-3.5" />
               Deep
             </button>
+            <ToolsPopover agentId={agent || defaultAgent || null} listingRefused={listingRefused} mobile />
           </div>
         ) : null}
 
@@ -1639,6 +1725,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                     }}
                     className={planMode && !deepMode ? "text-warning bg-warning/10 hover:bg-warning/20" : planMode && deepMode ? "text-primary bg-primary/10 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"}
                     disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+                    aria-label="Plan mode"
+                    aria-pressed={planMode && !deepMode}
                     data-testid="plan-toggle"
                   >
                     <ClipboardList className="w-4 h-4" />
@@ -1669,6 +1757,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                     }}
                     className={deepMode ? "text-primary bg-primary/10 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"}
                     disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
+                    aria-label="Deep mode"
+                    aria-pressed={deepMode}
                     data-testid="deep-toggle"
                   >
                     <Brain className="w-4 h-4" />
@@ -1680,11 +1770,20 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
               </Tooltip>
             </TooltipProvider>
           )}
+          {!mobile && (
+            <ToolsPopover agentId={agent || defaultAgent || null} listingRefused={listingRefused} />
+          )}
+          <AttachButton
+            onFiles={(files) => void attachments.add(files)}
+            disabled={attachBlocked !== null}
+          />
           <textarea
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            // Files only when the paste carries no text: Word, Excel and OneNote put a picture beside it.
+            onPaste={(e) => { const c = e.clipboardData; if (c?.files?.length && !Array.from(c.types ?? []).includes("text/plain")) { e.preventDefault(); void attachments.add(c.files); } }}
             placeholder={deepMode ? "Ask a deep reasoning question..." : planMode ? "Describe what you want planned..." : isStreaming ? "Add to the running task..." : "Ask me anything..."}
             className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[44px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-primary/30 focus:ring-primary/50" : planMode ? "border-warning/30 focus:ring-warning/50" : "border-border focus:ring-ring"}`}
             rows={1}
@@ -1720,7 +1819,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             <Button
               size="icon"
               onClick={sendMessage}
-              disabled={!input.trim() || isPlanExecuting}
+              disabled={(!input.trim() && !attachments.files.length) || isPlanExecuting}
               className="shrink-0"
               data-testid="send-button"
             >

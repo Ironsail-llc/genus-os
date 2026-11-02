@@ -367,6 +367,27 @@ name, and the credential for each provider comes from the environment. Set one
 key per provider you use and name none you do not: a provider whose key is
 absent is simply never tried.
 
+The fleet default can also be changed from the dashboard's Providers page
+(**Save default**) or the setup wizard. The engine writes `_defaults.yaml` into
+its own manifest directory and reloads it before it answers, so the bridge
+needs no access to the workspace volume for this.
+
+The visual canvas (the dashboard's AI-generated view) has its own, optional
+model: **Canvas model** on the same page, saved by the same **Save default**
+as `model: canvas` in `_defaults.yaml`. A fast model is enough for it. The
+canvas tries, in order, the `DASHBOARD_MODEL` environment variable (an
+override, unset by default), the canvas model, the fleet's `primary`, and
+`ROBOTHOR_LAST_RESORT_MODEL`; the first that answers draws the page. The
+whole chain has one deadline, 15 seconds to decide whether the page needs
+updating and 120 seconds to draw it, shared equally among the models but
+never less than 5 and 30 seconds each, so on a long chain the last models
+may not get a turn: that is why a fast canvas model is worth setting. Leave the
+canvas model at "Same as the fleet default" and the canvas runs on whatever
+the fleet runs on. Every id is dialled exactly as written, with no provider
+prefix added, so the canvas works on any provider the instance has a key for.
+When none of these is set, the canvas falls back to
+`openrouter/google/gemini-2.5-flash-lite`, which needs an OpenRouter key.
+
 | Models | Environment |
 |---|---|
 | `openai/*` | `OPENAI_API_KEY`; `OPENAI_API_BASE` when the key belongs to a regional project (for example a US data-residency key, which `api.openai.com` rejects) |
@@ -793,6 +814,35 @@ claim. The engine runs one replica with the `Recreate` strategy, so a
 replicas with rolling updates, so give them a `ReadWriteMany` claim or a
 per-pod volume such as `emptyDir`.
 
+### Webhook receiver (hooks)
+
+The engine runs as one `Recreate` replica, so webhook deliveries to
+`POST /api/webhooks/{channel}` fail while it restarts. The chart's optional
+`hooks` component serves that path from its own pods (two replicas, a
+surge-only rolling update, a disruption budget): each delivery is verified and
+published to the event stream, and the engine consumes it from there.
+
+```yaml
+hooks:
+  enabled: true
+  channels:
+    example:
+      stream: example
+      secret_env: EXAMPLE_WEBHOOK_SECRET
+      signature_scheme: hmac_hex
+```
+
+`hooks.channels` takes the same keys as `docs/webhooks.yaml` (see
+[Webhook ingress](event-bus.md#webhook-ingress)) and is mounted into the pods
+as their `webhooks.yaml`. Each `secret_env` is read from the `engine-providers`
+Secret. Route the public webhook path to the `<release>-hooks` Service once its
+pods are ready; the engine keeps serving the same path until then. With egress
+policies on, the hooks pods are in the default `redis` and `https` destination
+classes: a `google_oidc` channel fetches Google's signing certificates over
+HTTPS on every push, so an environment layer that overrides those lists must
+keep `hooks` in them. The chart's README ("Hooks") lists every value and the
+network-policy wiring.
+
 ## Production Checklist
 
 - [ ] Set a strong `ROBOTHOR_DB_PASSWORD`
@@ -814,6 +864,11 @@ per-pod volume such as `emptyDir`.
 - [ ] Set `ROBOTHOR_CAPABILITIES_MANIFEST` if the deployment keeps its
       `agent_capabilities.json` outside the workspace
 - [ ] Set up monitoring (health endpoints return JSON)
+- [ ] If a reverse proxy, ingress or tunnel sits in front of the dashboard, let it
+      admit request bodies of about 22 MB on `POST /api/chat/send`: a chat message
+      can carry three 5 MB files, base64-encoded (see
+      [Attaching files](channels/webchat.md#attaching-files)). A smaller limit
+      refuses those messages before they reach the dashboard
 - [ ] Back up PostgreSQL daily (`pg_dump robothor_memory`)
 
 ## Diagnostics (`genus doctor`)
@@ -904,6 +959,26 @@ reported as a failure and the run continues.
 gated on the operator role. Its `status` and `checks` keys mirror the readiness
 contract so the Helm's Health view renders either payload.
 
+The bridge adds one row of its own, `bridge.engine` (severity `recommended`):
+whether it reaches the engine's `GET /live`. Its `detail` names the address it
+tried as `scheme://host:port/live` — never credentials, a path or a query from
+`ROBOTHOR_ENGINE_URL` — and, on failure, the failure class (`ConnectError`,
+`HTTP 403`, `timeout`). The probe has a two-second budget and runs on every
+request, outside the memo.
+
+The bridge's `/ready` probes the same address but does **not** gate on it: an
+unreachable engine breaks every Helm call the bridge proxies, but not sign-in,
+the CRM or this report, and pulling the bridge out of its Service would take
+those down too. So `/ready` still answers by its own checks and adds two keys:
+
+| Key | Value |
+|-----|-------|
+| `engine` | `"ok"`, or `"unreachable:<class>"` (`unreachable:ConnectError`, `unreachable:HTTP 503`) |
+| `degraded` | `true` when the engine is unreachable; absent otherwise |
+
+Alert on `degraded`, not on the status code. Each failed probe also logs
+`Readiness check engine failed: <class>` at warning level.
+
 It runs **offline**, under a 30-second budget for the whole run on top of the
 per-check five seconds, and its report is **memoised for 30 seconds behind a
 single-flight lock** — concurrent polls share one run, and a poll inside the
@@ -939,8 +1014,48 @@ and only the named row changes — supersession chains are not followed. A secon
 forget is a `409`; a fact in another tenant is a `404`. The audit row carries
 the fact id and the reason, never the text.
 
+`PATCH /api/memory/facts/{id}` corrects one **active** fact: a body of
+`fact_text`, `entities` (a list of names) or both, and a `reason` under the
+same 3–500 rule. Before the row changes, its original text, entities and the
+editing operator are written to `memory_facts_audit` with
+`reason = 'operator_edit'`. The row then carries
+`metadata.operator_confirmed = {at, by}`, which `GET /api/memory/facts` returns
+as `operator_confirmed`, and a recomputed `content_hash`. An edit whose text
+matches another active fact is a `409` ("an active fact with this text already
+exists"); an inactive fact is a `409`, as for forget; another tenant's fact
+is a `404`. A text under 15 characters is a `422` unless the fact's category is
+`decision`, `preference` or `resolution`, because the nightly quality prune
+retires shorter facts in every other category. The
+`memory.edit` audit event carries the fact id and the reason, never the old or
+the new text. **A text edit refreshes the fact's vector when the bridge can
+reach the embedding provider**, in the same request; an entities-only edit, or
+one that saves the same words, leaves the vector alone. When the provider is
+not reachable from the bridge the edit still saves, keeps the old vector and
+sets `metadata.embedding_stale = true`, which the fact payload returns as
+`embedding_stale`: vector search ranks the fact by its old wording until it is
+re-indexed (by a later text edit; there is no background re-index yet). The
+vector is never cleared, because nothing backfills a missing one. The
+embedding gets one attempt within 8 seconds, so an unreachable provider costs
+the save at most that long rather than outlasting the dashboard's 30-second
+request timeout.
+
+**An operator-confirmed fact is the operator's word, and no automatic path
+retires it.** When a later extraction contradicts or updates it, the new
+extraction is stored already superseded by the confirmed fact, so the
+pipeline's reading stays on record while the operator's stays active; the
+nightly quality prune, consolidation, dechurn and resolution capture all skip
+it. Only an operator's forget (or another edit) changes it.
+
+The bridge needs `ROBOTHOR_OLLAMA_URL` and `ROBOTHOR_EMBEDDING_MODEL` to reach
+the embedding provider; without them it tries `127.0.0.1:11434`. On the Helm
+chart the `ollama` egress class admits the bridge, but the chart sets neither
+variable: the deployment supplies them in the bridge's environment.
+
 **Audit.** `GET /api/controls/audit` reads the guardrail change log
 (`feature_flag_audit`, written on every `PATCH /api/controls`), newest first.
+Each change is also a `control.set` event in the audit log (flag, value,
+reason, actor), and a change whose reason is blank or longer than 500
+characters is refused with a 422.
 `GET /api/audit/events.csv` exports the audit log itself — same filters as
 `/api/audit/events`, up to 5,000 rows, as a `text/csv` attachment. Both admit
 the `auditor` role as well as an operator; nothing else on `/api/controls`
@@ -970,6 +1085,23 @@ for: membership of `systemd-journal` is enough for the system journal, and the
 route reports `available: false` rather than empty output if it is missing. In
 Kubernetes and Docker Compose, use the container runtime's own log stream.
 
+**Where a container's logs are.** Pods and containers write their logs to
+standard output, and the cluster's log tool (`kubectl logs`, `docker compose
+logs`, or the log service the cluster ships to) is where they are read. When
+there is no `journalctl` at all, the unavailable answer of `GET /api/logs/units`
+says so in a `hint`; a `journalctl` that is installed but fails gets no hint,
+because that is a systemd host. Every unavailable answer carries `logs_url`:
+the value of `GENUS_LOGS_URL`, or `null` when it is unset. Set it to
+the page where this deployment's logs are viewed and the Logs page links to it.
+With the Helm chart, set `logs.url`; the chart renders `GENUS_LOGS_URL` on the
+bridge only when the value is non-empty. The URL is shown to every operator, so
+it must be **credential-free**: never a link that carries a token.
+
+```yaml
+logs:
+  url: https://logs.example.com/search?service=genus-os
+```
+
 ### Using the Observe pages
 
 The Helm's **Observe** group carries three screens over those routes. Memory
@@ -995,6 +1127,18 @@ quotes it** — an agent carrying that block keeps repeating the fact until the
 block is rewritten. For a fact under twelve characters the page says the text
 is too short to check against the blocks rather than claiming there are none.
 
+**Edit** corrects a fact that the pipeline got wrong. It opens an editor under
+the fact with its text, its entities as a comma-separated list (shown back as
+chips), and a reason of 3–500 characters for the audit record. Saving keeps the
+original text in the fact's history first, then shows the row as the bridge
+stored it, with an **Operator-confirmed** badge. If another active fact already
+says the same thing, the save is refused with that message and the editor stays
+open. Inactive facts cannot be edited, and a text under 15 characters is
+refused for most facts, because the nightly quality prune would retire it.
+Changing the text refreshes the fact's search vector when the bridge can reach
+the embedding provider. When it cannot, the card says **search index pending**:
+search ranks the fact by its previous wording until it is re-indexed.
+
 **Observe › Audit** has two tabs: the audit log itself, and the guardrail
 change log (every `PATCH /api/controls`, with the reason its operator typed).
 **Export CSV** is a plain download link carrying the same filters the table is
@@ -1005,8 +1149,12 @@ re-reads a larger window up to the route's 500-row ceiling, and anything bigger
 is an export.
 
 **Observe › Logs needs journald.** In a container there is none, and the page
-says so in the bridge's own words rather than showing an error — nothing is
-broken. Where journald is present, pick a unit from the derived allowlist,
+says so calmly rather than showing an error — nothing is broken. It says the
+deployment writes its logs to standard output and that they are read with the
+cluster's log tool, shows the bridge's reason underneath, and offers **Open
+logs** (a new tab) when `GENUS_LOGS_URL` is configured. Auto-refresh is hidden
+in that state, because there is nothing to beat, and **Refresh** asks the bridge
+again whether journald is available. Where journald is present, pick a unit from the derived allowlist,
 choose 50/200/1000 lines and a time window, and filter. Auto-refresh is off by
 default and beats every ten seconds when switched on: each read is one
 `journalctl` process on the box. The "window full" notice means the line limit
@@ -1031,7 +1179,7 @@ plugin that was turned off is loading again. See
 |---------|----------|----------|
 | Engine | `GET /health` on :18800 | `{"status": "ok"}`; `/ready` is the one an orchestrator gates on, and it carries the fleet check |
 | Orchestrator (RAG API) | `GET /health` on :9099 | `{"status": "ok"}` |
-| Bridge | `GET /health` on :9100 | `{"status": "ok"}`; its `/ready` also checks the orchestrator and the SSO secret |
+| Bridge | `GET /health` on :9100 | `{"status": "ok"}`; its `/ready` also checks the orchestrator and the SSO secret, and reports the engine without gating on it (see below) |
 | Dashboard | `GET /api/health` on :3004 | 200; `/api/ready` is what the compose healthcheck polls |
 | Vision | `GET /health` on :8600 | `{"status": "ok", "mode": "..."}` |
 

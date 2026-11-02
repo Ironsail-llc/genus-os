@@ -172,6 +172,12 @@ governed flag, its rungs, and the verdict — what the control has done, and whe
 it last did it. A change there is live within seconds and needs no restart, and
 it records the reason you type alongside it.
 
+Config lists its sections as soon as it knows which settings exist, and each
+section's values fill in once the instance has read them; config.yaml is read
+once for the whole page, so a slow volume costs one read, not one per setting.
+The list of settings changes only when the bridge restarts, so on every load
+the browser asks whether it changed and downloads it again only when it has.
+
 After a save that is *not* hot, Config shows a banner naming the units to
 restart — `robothor-engine`, `robothor-bridge`, whatever the settings you
 changed declare. Until you restart them the running services keep the values
@@ -460,6 +466,30 @@ SOPS stays — as the bootstrap layer. See
 [the SOPS runbook](runbooks/SOPS_BOOTSTRAP.md) for shrinking the file to just
 that.
 
+### The Secrets page
+
+**Settings › Secrets** in the Helm is `genus secrets status` for an operator
+who is not on the box. It lists every credential the instance declares or
+holds, and for each one shows whether it is configured, which store holds it
+(vault, environment, both, or neither), when the vault row last changed, and
+which services read it: the restart units the setting's declaration names, or
+`robothor-engine` and `robothor-bridge` for a credential nothing declares. A
+row whose two copies differ says which store is not being served.
+
+It never shows a value, a fingerprint or the vault key a row sits under. The
+bridge route behind it (`GET /api/secrets`) does not send them, is
+operator-only (owner or admin of the platform tenant), and is marked
+`no-store`. On the box, `genus secrets status` shows the served value's
+fingerprint, and `genus doctor` reports when an environment value shadows the
+vault. If the vault cannot be read, the page says so and shows a credential
+with no environment value as unknown rather than missing.
+
+A credential whose last change is more than **90 days** old carries a
+*rotation overdue* chip, and one with no recorded change (an environment-only
+value, or a row from before change times were kept) says *never recorded*.
+The page does not write: set or rotate a credential with `genus vault set`,
+then restart the services listed as its readers.
+
 ### The rules the platform enforces
 
 1. **A credential never goes in `config.yaml`.** `genus config set` refuses a
@@ -605,6 +635,10 @@ to "everything" from a page that is meant to be read-only — add the unit to
 is the live answer for any given box. See
 [Deployment](deployment.md#the-helms-observe-pages).
 
+Where there is no journald (a container), `GENUS_LOGS_URL` is the one logs
+setting: a credential-free link to where this deployment's logs are viewed,
+which the Logs page offers as **Open logs**. Helm sets it from `logs.url`.
+
 ## Channels
 
 Which channels exist, and whether each one is actually set up, is visible over
@@ -666,6 +700,19 @@ goes out. `ROBOTHOR_TELEGRAM_RICH_MESSAGES=0` turns the rich path off. Runs
 whose words reach Telegram (an interactive Telegram turn, or a manifest with
 `delivery.mode: announce` to `channel: telegram`) are also told so in their
 engine-context turn, so the model writes for a phone in the first place.
+
+### How replies look in the chat panel
+
+The dashboard's chat panel renders agent replies as Markdown — paragraphs,
+lists, headings, tables and links (which open in a new tab; footnote anchors
+stay on the page) — with typography that follows the light or dark theme. A
+webchat turn (the chat panel, and the terminal client, which shows plain text)
+gets a note in its engine-context turn, in these words: "This reply is read in
+a chat view. Answer the question first. Use short paragraphs with a blank line
+between them. Use headings and lists only when they help the reader, and bold
+sparingly. Do not give a multi-section overview of what you can do unless
+asked." The note lives in `WEBCHAT_SURFACE_NOTE` in
+`robothor/engine/prompts.py`.
 
 ## Integrations
 

@@ -340,7 +340,10 @@ CAPS = {
     # and threw away the three follow-up messages that rode back in those same
     # responses. Eight lines, and the evidence extraction itself is in
     # act_observe.py rather than here.
-    "robothor/engine/tool_proxy.py": 322,
+    # +1: the proxied call reads its error through tool_outcome.error_text, the
+    # same reading as a turn's call, so an object error is counted as a failure
+    # on both paths. The reading itself lives in tool_outcome.py.
+    "robothor/engine/tool_proxy.py": 323,
     # 209 -> 283: the peer-session check. Not a feature, a control: the token
     # alone could not tell one run's snippet from another's, and a probe drove
     # a second run's proxy with a stolen token. Correcting a cap set hours
@@ -756,7 +759,10 @@ CAPS = {
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,
-    "robothor/engine/chat.py": 1600,
+    # 1600 -> 1562: webchat attachments added a call site (the intake itself
+    # is chat_attachments.py) and paid for it by moving the three pure plan
+    # helpers to chat_plan_helpers.py, which chat.py re-exports.
+    "robothor/engine/chat.py": 1562,
     # 1600 -> 1607 (2026-08-27): fleet admission finally has a caller here.
     # The 75-line implementation went to admission.py; what remains is five
     # irreducible call sites (admit / register / complete / import). The

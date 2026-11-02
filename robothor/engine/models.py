@@ -915,6 +915,7 @@ class WorkflowTriggerDef:
     cron: str = ""
     timezone: str = "America/New_York"
     requeue_if_busy: bool = False  # hook only: re-add an event that found the workflow running
+    concurrent: bool = False  # runs of the workflow take no run lock and never skip as busy
 
 
 @dataclass
@@ -934,6 +935,11 @@ class WorkflowDef:
     delivery_channel: str = ""
     delivery_to: str = ""
 
+    @property
+    def concurrent(self) -> bool:
+        """Whether runs of this workflow may overlap: any trigger sets ``concurrent``."""
+        return any(t.concurrent for t in self.triggers)
+
 
 @dataclass
 class WorkflowStepResult:
@@ -944,6 +950,8 @@ class WorkflowStepResult:
     status: WorkflowStepStatus = WorkflowStepStatus.PENDING
     output_text: str | None = None
     agent_run_id: str | None = None
+    tool_name: str | None = None
+    tool_input: dict[str, Any] | None = None
     tool_output: dict[str, Any] | None = None
     condition_branch: str | None = None
     error_message: str | None = None

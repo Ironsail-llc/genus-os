@@ -35,7 +35,7 @@ request regardless of what the page shows.
 | Page | Answers | Who sees it |
 |---|---|---|
 | **Runs** and **Fleet** | What ran, when, what it delivered, which agents are scheduled and which are off | owner, admin |
-| **Memory** | What the instance believes, and what a forget would actually do | owner, admin |
+| **Memory** | What the instance believes, what a forget would actually do, and corrections | owner, admin |
 | **Audit** | Every audited event, plus the guardrail change log, with a CSV export | owner, admin, **auditor** |
 | **Logs** | A unit's journal, redacted | owner, admin |
 
@@ -53,6 +53,16 @@ reason you type goes into the audit record. A fact under twelve characters is
 too short to check against the blocks, and the page says so rather than
 claiming there are none.
 
+**Edit corrects a fact and keeps the original.** Change the text, the entities
+or both, and give a reason. The original goes into the fact's history before
+the change, the audit record carries the fact id and your reason (never the
+text), and the fact shows **Operator-confirmed** afterwards. An edit that would
+duplicate another active fact is refused, and so is a text under 15
+characters for most facts, because the nightly quality prune would retire it.
+Changing the text refreshes the fact's search vector when the bridge can reach
+the embedding provider; when it cannot, the card says **search index pending**
+and search ranks the fact by its previous wording until it is re-indexed.
+
 **Audit** has the audit log and the guardrail change log, and **Export CSV**
 carries the same filters the table is showing, up to five thousand rows. Two
 things to know before you hand one to a regulator: the export is
@@ -64,7 +74,11 @@ audit detail cannot become a formula or carry a credential off the box.
 **Logs need journald**, and a container does not have it. Both routes answer
 "not available on this deployment" with a 200 and a reason, and the page says
 that in the Bridge's own words rather than showing an error — nothing is
-broken; use the container runtime's log stream instead. Where journald is
+broken. The page says the deployment writes its logs to standard output, to be
+read with your cluster's log tool, and when `GENUS_LOGS_URL` (Helm value
+`logs.url`) is set it offers **Open logs**, a link to where this deployment's
+logs are viewed. Auto-refresh is hidden while journald is unavailable, and
+Refresh asks again whether it is. Where journald is
 present, the unit list is derived from the units the installer wrote, so a new
 unit appears without a code change. Auto-refresh is off by default and beats
 every ten seconds when on, because each read is one process on the box. The
@@ -76,7 +90,15 @@ a value it will not show you.
 **Settings › Flags** is every governed flag, its rungs, and the verdict: what
 the control has done, and when it last did it. A change is live within seconds,
 needs no restart, and records the reason you type beside it — that reason is
-the row you will want in six weeks.
+the row you will want in six weeks. The Bridge refuses a change whose reason
+is blank or over 500 characters, and writes each change to the audit log as
+`control.set`, with who made it, the flag, the new value and the reason.
+
+If your session has ended, the page says so and offers **Sign in** instead of
+showing flags it cannot read or change; it retries once first, so a refresh
+that was already under way does not sign you out. A reload that fails clears
+the flags from the screen rather than leaving the last good read beside the
+error.
 
 Every guardrail worth having goes up the same ladder:
 

@@ -81,6 +81,7 @@ Every component is independently disable-able:
 engine.enabled: true
 bridge.enabled: true
 orchestrator.enabled: true
+hooks.enabled: false          # standalone webhook receiver — opt-in, see "Hooks"
 dashboard.enabled: true
 nats.enabled: false           # federation — opt-in
 postgres.enabled: true        # groundhog2k/postgres subchart — disable to use RDS
@@ -121,12 +122,12 @@ boundary. Keep them limited to these classes:
 | Class | Intended keys / consumers |
 |---|---|
 | `database` | `ROBOTHOR_DB_HOST`, `ROBOTHOR_DB_PORT`, `ROBOTHOR_DB_NAME`, `ROBOTHOR_DB_USER`, `ROBOTHOR_DB_PASSWORD`; Python services and migrations |
-| `cache` | `ROBOTHOR_REDIS_HOST`, `ROBOTHOR_REDIS_PORT`, `ROBOTHOR_REDIS_PASSWORD`; Python services only |
+| `cache` | `ROBOTHOR_REDIS_HOST`, `ROBOTHOR_REDIS_PORT`, `ROBOTHOR_REDIS_PASSWORD`; Python services through `secretRefs`. The dashboard reads the cache password key only, for the event-bus stream reads: the chart wires that one key as a `secretKeyRef` (with `ROBOTHOR_REDIS_HOST`/`PORT` when the in-chart cache is enabled), and `dashboard.secretRefs` still refuses `cache` |
 | `auth-signing` | `GENUS_AUTH_SIGNING_KEY`; Engine and Bridge enforce signed identity. It is currently also mounted to Orchestrator, which must remain network-restricted until it independently verifies tokens. |
 | `bridge-sso` | `GENUS_BRIDGE_SSO_SECRET`; Bridge and dashboard BFF only |
 | `bridge-oidc` | `GENUS_OIDC_ISSUERS`; Bridge only |
 | `dashboard-auth` | `AUTH_SECRET`, OIDC issuer/client ID/client secret/name, optional `CF_ACCESS_TEAM_DOMAIN`/`CF_ACCESS_AUD` (sign in via a fronting Cloudflare Access policy instead of a second IdP prompt); dashboard only. `AUTH_URL` is **not** a secret — it is the public origin and belongs in `dashboard.env`, set to `https://<dashboard.ingress.host>`; unset, sign-in redirects fall back to the container's `HOSTNAME=0.0.0.0` bind address. |
-| `engine-providers` | LLM, delivery, and tool-provider tokens required by Engine only — including `BRAVE_SEARCH_API_KEY`, which `web_search` prefers over scraped engines (from a datacenter IP most of those are blocked, so in-cluster this key is the reliable path) |
+| `engine-providers` | LLM, delivery, and tool-provider tokens required by Engine, and the webhook signing secrets the hooks component reads (see "Hooks") — including `BRAVE_SEARCH_API_KEY`, which `web_search` prefers over scraped engines (from a datacenter IP most of those are blocked, so in-cluster this key is the reliable path) |
 | `bridge-integrations` | Bridge webhook/integration tokens only |
 | `orchestrator-providers` | retrieval/reranking provider tokens required by Orchestrator only |
 | `engine-google` | `credentials.json` only: an authorized-user OAuth file (`type`, `client_id`, `client_secret`, `refresh_token`) for the `gws_*` tools. Engine only, and only as a file mount through `engine.googleWorkspace`: `engine.secretRefs` refuses it, so the refresh token never becomes an environment variable. Declare it only where `engine.googleWorkspace.enabled` is on. |
@@ -140,7 +141,7 @@ referenced Secret keeps the workload in `CreateContainerConfigError`; there is
 no plaintext or chart-wide fallback.
 
 The chart creates separate ServiceAccounts for Engine, Bridge, Orchestrator,
-dashboard, migrations, NATS, and the Helm smoke pod. Tokens are disabled by
+hooks (when enabled), dashboard, migrations, NATS, and the Helm smoke pod. Tokens are disabled by
 default. Python pods project a short-lived token only into their read-only,
 release-Job-scoped migration watcher init container; the application container
 cannot mount it. The migration Job and dashboard never receive Kubernetes
@@ -268,6 +269,74 @@ once and shows up as `auth` (a 403) or `unclassified`. A `Mail service not enabl
 instead means the mailbox has no Gmail license in the Workspace admin console;
 the credentials are fine and start working once Gmail is on.
 
+## Logs
+
+Pods write their logs to standard output; there is no journald in a container,
+so the dashboard's Logs page cannot read them itself. Set `logs.url` to where
+this deployment's logs are viewed and the page links to it.
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `logs.url` | `""` | Rendered into the bridge as `GENUS_LOGS_URL` only when set. Credential-free: every operator sees the link, so it must never carry a token. |
+
+## Hooks
+
+An optional component that serves the webhook path (`POST
+/api/webhooks/{channel}`) from its own pods instead of the engine. The engine is
+one `Recreate` replica, so every engine restart is a window in which webhook
+deliveries fail; the hooks pods verify each delivery and publish it to the event
+stream, and the engine consumes it from there once it is back. Off by default;
+nothing renders until `hooks.enabled: true`.
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `hooks.enabled` | `false` | Render the hooks Deployment, Service, PodDisruptionBudget, ServiceAccount and channels ConfigMap. |
+| `hooks.replicaCount` | `2` | Pods behind the Service. With the PDB below, a node drain keeps one answering. |
+| `hooks.strategy` | `RollingUpdate`, `maxUnavailable: 0`, `maxSurge: 1` | A rollout adds a pod before it removes one. |
+| `hooks.port` | `18801` | The port the server listens on (`ROBOTHOR_HOOKS_PORT`) and the `<release>-hooks` Service exposes. |
+| `hooks.command` | `python -m robothor.engine.hooks_server` | The server entry point. |
+| `hooks.channels` | `{}` | Channel definitions, rendered verbatim under `channels:` as `webhooks.yaml` in the `<release>-hooks-webhooks` ConfigMap. The keys are the router's; see "Webhook ingress" in `docs/event-bus.md`. A change rolls the pods (`checksum/webhooks`). |
+| `hooks.secretRefs` | `[cache, engine-providers]` | `cache` for the event stream, `engine-providers` for each channel's `secret_env`. Any other class is refused. |
+| `hooks.probes` | `/live`, `/ready` | Liveness and readiness. |
+| `hooks.podDisruptionBudget` | `enabled: true`, `minAvailable: 1` | |
+| `hooks.ingress` | `enabled: false` | An Ingress in front of the Service, as for the other components. |
+
+The ConfigMap is mounted read-only at `/etc/robothor/webhooks` and
+`ROBOTHOR_WEBHOOKS_CONFIG` is set to `/etc/robothor/webhooks/webhooks.yaml`.
+The pods get no workspace volume and no wait-for-migrations init container:
+they touch neither the workspace nor the database.
+
+```yaml
+hooks:
+  enabled: true
+  channels:
+    example:
+      stream: example
+      secret_env: EXAMPLE_WEBHOOK_SECRET
+      signature_scheme: hmac_hex
+      delivery_id_header: X-Example-Delivery
+```
+
+Name each signing secret by `secret_env`; its value comes from the
+`engine-providers` Secret. That class carries the engine's provider tokens too,
+which this component does not need. A webhook-only secret class is a planned
+follow-up; until then, treat the hooks pods as holding engine-provider
+credentials.
+
+With `networkPolicy.enabled`, the hooks pods admit the ingress controller
+(`networkPolicy.traefikNamespace` / `traefikPodSelector`) and the Helm smoke
+pod on `hooks.port`, whether or not `hooks.ingress` is on, since the public
+route to them may be defined outside this chart. They may reach the in-chart
+cache, and the chart's default `redis` and `https` egress destinations list
+`hooks` next to the engine: an external cache is reachable once its CIDR is
+set, and a `google_oidc` channel can fetch Google's signing certificates (every
+such push is refused with 401 without that route). If an environment layer
+overrides either `components` list, keep `hooks` in it, and repeat any
+`HTTP(S)_PROXY` from `engine.env` in `hooks.env`.
+
+Point the public webhook route at the `<release>-hooks` Service only once the
+hooks pods report ready; until then the engine keeps serving the same path.
+
 ## Extra volumes
 
 Each Python workload can mount additional volumes, rendered verbatim with
@@ -281,6 +350,7 @@ entries by `name`, not by position:
 | `engine.extraVolumeMounts` | `[]` | Raw Kubernetes `volumeMount` objects added to the engine container's `volumeMounts`. |
 | `bridge.extraVolumes` / `bridge.extraVolumeMounts` | `[]` | The same, for the bridge. |
 | `orchestrator.extraVolumes` / `orchestrator.extraVolumeMounts` | `[]` | The same, for the orchestrator. |
+| `hooks.extraVolumes` / `hooks.extraVolumeMounts` | `[]` | The same, for the hooks component. |
 
 ```yaml
 engine:
@@ -294,7 +364,7 @@ engine:
 ```
 
 Names must not collide with the chart's own volumes (`workspace`, `tmp`,
-`runtime-cache`, `db-ca`, `migration-api-token`, `google-workspace`), and the chart does not create
+`runtime-cache`, `db-ca`, `migration-api-token`, `google-workspace`, `webhooks`), and the chart does not create
 the claim. The bridge and orchestrator run several replicas with rolling
 updates, so a `ReadWriteOnce` claim belongs on the single-replica engine only.
 
@@ -341,7 +411,13 @@ store is intended. The check never depends on the environment's name. See
 [Trusting the database's CA](../../docs/deployment.md#trusting-the-databases-ca).
 
 Production and staging NetworkPolicies default-deny ingress and egress, then
-rebuild only the declared component graph. In-chart PostgreSQL/Redis are selected by pod labels. Managed
+rebuild only the declared component graph: the dashboard calls engine, bridge,
+orchestrator and, when the in-chart cache is enabled, the cache port; the engine
+calls bridge, orchestrator and NATS; the bridge calls the engine's admin API (at
+`ROBOTHOR_ENGINE_URL`, which the chart points at the engine Service whenever
+`engine.enabled`) and the orchestrator. In-chart PostgreSQL/Redis are selected by
+pod labels; the cache's ingress admits the Python services and the dashboard, and
+nothing else. Managed
 database, Redis, Ollama, HTTPS API, or egress-proxy access requires exact CIDRs
 and ports in Layer 3:
 
