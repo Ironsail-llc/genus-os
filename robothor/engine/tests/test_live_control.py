@@ -224,7 +224,7 @@ class TestProgressMessage:
     async def test_close_with_a_final_line_writes_it(self):
         fake = _FakeChannel()
         progress = live_control.ProgressMessage(fake.post, fake.edit, min_interval=1.0)
-        await progress.on_event({"event": "iteration_start", "iteration": 1})
+        await progress.on_event({"event": "tool_start", "tool": "web_search"})
         await asyncio.sleep(0.05)
         await progress.close("Done")
         assert fake.edits[-1] == ("msg-1", "Done")
@@ -248,6 +248,29 @@ class TestProgressMessage:
         await asyncio.wait_for(closing, timeout=5)
         assert len(fake.posts) == 1
         assert fake.edits == [("msg-1", "Done")]
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_calls_no_tool_posts_nothing(self):
+        """A one-line reply is one message: no "Step 1" line beside it."""
+        fake = _FakeChannel()
+        progress = live_control.ProgressMessage(fake.post, fake.edit, min_interval=0.01)
+        await progress.on_event({"event": "iteration_start", "iteration": 1})
+        await asyncio.sleep(0.05)
+        await progress.close("Done.")
+        assert fake.posts == [] and fake.edits == []
+
+    @pytest.mark.asyncio
+    async def test_steps_after_the_first_tool_are_shown(self):
+        fake = _FakeChannel()
+        progress = live_control.ProgressMessage(fake.post, fake.edit, min_interval=0.01)
+        await progress.on_event({"event": "iteration_start", "iteration": 1})
+        await progress.on_event({"event": "tool_start", "tool": "web_search"})
+        await asyncio.sleep(0.05)
+        await progress.on_event({"event": "iteration_start", "iteration": 2})
+        await asyncio.sleep(0.05)
+        await progress.close()
+        assert fake.posts and fake.posts[0].startswith("Running web search")
+        assert fake.edits and fake.edits[-1][1].startswith("Step 2")
 
     @pytest.mark.asyncio
     async def test_no_event_means_nothing_is_ever_posted(self):
@@ -379,6 +402,37 @@ class TestASteerDuringTheFinalAnswer:
         assert shown == ["Here is the report."]
 
     @pytest.mark.asyncio
+    async def test_with_no_interim_delivered_the_answer_is_still_the_result(self):
+        """A Slack or Teams run has no interim channel: a steer at the final answer
+        and then /stop must still send the answer the model wrote."""
+        from robothor.engine.live_inbox import keep_going_after_answer
+
+        session = _session()  # no live inbox, so no interim can be delivered
+        session.messages.append({"role": "assistant", "content": "Here is the report."})
+        session.steer("use the EU region")
+        assert await keep_going_after_answer(session, None, "Here is the report.") is True
+        session.interrupt("stop")
+        assert _boundary(session) is True
+        assert session.get_final_text() == "Here is the report."
+
+    @pytest.mark.asyncio
+    async def test_a_delivered_interim_is_never_the_result_again(self):
+        from robothor.engine.live_inbox import LiveInbox, keep_going_after_answer
+
+        session = _session()
+        inbox = LiveInbox()
+
+        async def on_interim(text: str) -> None:
+            return None
+
+        inbox.on_interim = on_interim
+        session.live_inbox = inbox
+        session.messages.append({"role": "assistant", "content": "Here is the report."})
+        session.steer("use the EU region")
+        assert await keep_going_after_answer(session, None, "Here is the report.") is True
+        assert session.get_final_text() is None
+
+    @pytest.mark.asyncio
     async def test_no_steer_means_the_answer_stands(self):
         from robothor.engine.live_inbox import keep_going_after_answer
 
@@ -411,6 +465,40 @@ class TestASteerIsARunStep:
         assert [s.tool_input for s in session.run.steps if s.step_type == StepType.STEER] == [
             {"text": "use the EU region"}
         ]
+
+    def test_a_card_number_in_a_persons_steer_is_masked(self):
+        """The backstop a follow-up gets: the model, the step and the log never see it."""
+        session = AgentSession("main", TriggerType.WEBCHAT, None, TENANT)  # a person typed this
+        session.start("system", "draft the report", [])
+        session.steer("charge 4111 1111 1111 1111 instead")
+        _boundary(session)
+        steers = [s for s in session.run.steps if s.step_type == StepType.STEER]
+        assert "4111 1111 1111 1111" not in str(steers[0].tool_input)
+        assert all("4111 1111 1111 1111" not in str(m["content"]) for m in session.messages)
+
+    @pytest.mark.asyncio
+    async def test_a_steer_is_masked_before_it_is_recorded_as_an_intervention(self, monkeypatch):
+        from robothor.engine import interrupt_api
+
+        recorded: list[str | None] = []
+        monkeypatch.setattr(
+            interrupt_api, "_record_intervention", lambda _s, _k, detail: recorded.append(detail)
+        )
+        session = _session()
+        with live_control.conversation_scope(KEY):
+            async with observe_request(session, None):
+                assert live_control.steer_conversation(
+                    KEY, "use 4111 1111 1111 1111", tenant_id=TENANT
+                )
+        assert recorded and "4111 1111 1111 1111" not in str(recorded[0])
+
+    def test_an_automated_steer_is_left_as_written(self):
+        """Cron and goal steers are not a person typing: no mask."""
+        session = AgentSession("main", TriggerType.CRON, None, TENANT)
+        session.start("system", "draft the report", [])
+        session.steer("ref 4111 1111 1111 1111")
+        _boundary(session)
+        assert "[operator steering update]\nref 4111 1111 1111 1111" in _steering_turns(session)
 
     def test_no_steer_records_no_step(self):
         session = _session()
