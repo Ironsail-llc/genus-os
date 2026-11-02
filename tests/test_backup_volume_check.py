@@ -644,10 +644,15 @@ class TestTheWriteProbeSurvivesASignal:
         vol.mkdir()
         bin_dir = tmp_path / "bin"
         # Hang the WRITE step only; every other step gets the real timeout.
+        # The marker says the script has REACHED the write: the probe file
+        # exists from mktemp on, a moment before the cleanup trap is set, so
+        # signalling on the file alone could land in that gap rather than
+        # mid-write, which is not the case this test is about.
+        write_started = tmp_path / "write-started"
         _stub(
             bin_dir / "timeout",
             'for a in "$@"; do\n'
-            '  case "$a" in *"printf ok"*) sleep 60; exit 1 ;; esac\n'
+            f'  case "$a" in *"printf ok"*) : > "{write_started}"; sleep 60; exit 1 ;; esac\n'
             "done\n"
             f'exec {real_timeout} "$@"',
         )
@@ -669,11 +674,14 @@ class TestTheWriteProbeSurvivesASignal:
         try:
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
-                if list(vol.glob(".robothor-volume-probe.*")):
+                if write_started.exists():
                     break
                 time.sleep(0.05)
             else:  # pragma: no cover - the fixture never reached the write
-                raise AssertionError("the write probe file was never created")
+                raise AssertionError("the probe never reached the write step")
+            assert list(vol.glob(".robothor-volume-probe.*")), (
+                "the write step started with no probe file on the volume"
+            )
 
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
             proc.wait(timeout=30)
