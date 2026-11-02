@@ -1,4 +1,4 @@
-"""Web chat: steer and stop the session's live run, behind ROBOTHOR_STEER_EVERYWHERE.
+"""Web chat: steer and stop the session's live run. Always on: there is no switch.
 
 ``/chat/abort`` cancels the turn's task outright. ``/chat/steer`` and
 ``/chat/interrupt`` reach the run itself: a steer joins it at the next
@@ -41,8 +41,9 @@ def _clear_registry():
 
 
 @pytest.fixture
-def flag_on(monkeypatch):
-    monkeypatch.setattr(live_control, "steer_everywhere_enabled", lambda: True)
+def env_says_off(monkeypatch):
+    """The old switch's name set to off changes nothing: steer is the only path."""
+    monkeypatch.setenv("ROBOTHOR_" + "STEER_EVERYWHERE", "0")
 
 
 @pytest.fixture
@@ -137,7 +138,7 @@ async def _start(client, mock_runner, request_id: str = RID_A) -> tuple[_FakeRun
 
 @pytest.mark.asyncio
 async def test_a_steer_mid_run_lands_once_at_the_next_iteration_boundary(
-    client, mock_runner, flag_on
+    client, mock_runner, env_says_off
 ):
     fake, task = await _start(client, mock_runner)
 
@@ -157,7 +158,9 @@ async def test_a_steer_mid_run_lands_once_at_the_next_iteration_boundary(
 
 
 @pytest.mark.asyncio
-async def test_an_interrupt_ends_the_run_cancelled_at_the_boundary(client, mock_runner, flag_on):
+async def test_an_interrupt_ends_the_run_cancelled_at_the_boundary(
+    client, mock_runner, env_says_off
+):
     fake, task = await _start(client, mock_runner)
 
     res = await client.post("/chat/interrupt", json={"session_key": KEY, "request_id": RID_A})
@@ -172,7 +175,7 @@ async def test_an_interrupt_ends_the_run_cancelled_at_the_boundary(client, mock_
 
 
 @pytest.mark.asyncio
-async def test_with_nothing_running_the_steer_finds_nothing(client, flag_on):
+async def test_with_nothing_running_the_steer_finds_nothing(client, env_says_off):
     res = await client.post(
         "/chat/steer", json={"session_key": KEY, "text": "hello", "request_id": RID_A}
     )
@@ -181,7 +184,7 @@ async def test_with_nothing_running_the_steer_finds_nothing(client, flag_on):
 
 
 @pytest.mark.asyncio
-async def test_a_steer_needs_text(client, flag_on):
+async def test_a_steer_needs_text(client, env_says_off):
     res = await client.post(
         "/chat/steer", json={"session_key": KEY, "text": "  ", "request_id": RID_A}
     )
@@ -189,7 +192,7 @@ async def test_a_steer_needs_text(client, flag_on):
 
 
 @pytest.mark.asyncio
-async def test_another_tenants_run_on_the_same_key_is_out_of_reach(client, flag_on):
+async def test_another_tenants_run_on_the_same_key_is_out_of_reach(client, env_says_off):
     session = AgentSession("main", TriggerType.WEBCHAT, None, "another-tenant")
     session.start("system", "x", [])
     from robothor.engine.chat_steer import webchat_run_key
@@ -209,22 +212,13 @@ async def test_another_tenants_run_on_the_same_key_is_out_of_reach(client, flag_
 
 
 @pytest.mark.asyncio
-async def test_the_flag_is_reported(client, flag_on):
-    res = await client.get("/chat/steer")
-    assert res.status_code == 200 and res.json() == {"enabled": True}
+async def test_there_is_no_mode_probe(client, env_says_off):
+    """Nothing to ask: the composer always steers a live run."""
+    assert (await client.get("/chat/steer")).status_code == 405
 
 
 @pytest.mark.asyncio
-async def test_flag_off_the_routes_are_not_there(client, monkeypatch):
-    monkeypatch.setattr(live_control, "steer_everywhere_enabled", lambda: False)
-    assert (await client.post("/chat/steer", json={"text": "x"})).status_code == 404
-    assert (await client.post("/chat/interrupt", json={})).status_code == 404
-    res = await client.get("/chat/steer")
-    assert res.status_code == 200 and res.json() == {"enabled": False}
-
-
-@pytest.mark.asyncio
-async def test_a_steer_names_the_turn_it_is_for(client, flag_on):
+async def test_a_steer_names_the_turn_it_is_for(client, env_says_off):
     """Without the turn's request id there is no telling which run is meant."""
     steer = await client.post("/chat/steer", json={"session_key": KEY, "text": "x"})
     stop = await client.post("/chat/interrupt", json={"session_key": KEY})
@@ -232,7 +226,9 @@ async def test_a_steer_names_the_turn_it_is_for(client, flag_on):
 
 
 @pytest.mark.asyncio
-async def test_two_turns_on_one_key_each_reach_only_their_own_run(client, mock_runner, flag_on):
+async def test_two_turns_on_one_key_each_reach_only_their_own_run(
+    client, mock_runner, env_says_off
+):
     """Two tabs on one agent are two turns: a steer or Stop from one never lands in the other."""
     first, second = _FakeRun(), _FakeRun()
     runs = iter([first, second])
@@ -270,7 +266,7 @@ async def test_two_turns_on_one_key_each_reach_only_their_own_run(client, mock_r
 
 @pytest.mark.asyncio
 async def test_a_steer_that_landed_is_kept_in_the_conversations_history(
-    client, mock_runner, flag_on
+    client, mock_runner, env_says_off
 ):
     """The next turn, and a reload, must still know the correction the run applied."""
     from robothor.engine.chat import get_shared_session
@@ -288,7 +284,7 @@ async def test_a_steer_that_landed_is_kept_in_the_conversations_history(
 
 
 @pytest.mark.asyncio
-async def test_a_steer_that_never_landed_is_not_claimed_as_heard(client, mock_runner, flag_on):
+async def test_a_steer_that_never_landed_is_not_claimed_as_heard(client, mock_runner, env_says_off):
     from robothor.engine.chat import get_shared_session
 
     fake, task = await _start(client, mock_runner)

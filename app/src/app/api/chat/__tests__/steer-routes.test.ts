@@ -9,7 +9,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const steer = {
   chatSteer: vi.fn(),
   chatInterrupt: vi.fn(),
-  chatSteerEnabled: vi.fn(),
 };
 const resolveChatAgent = vi.fn();
 
@@ -34,7 +33,6 @@ describe("steer and interrupt routes", () => {
       agent === "scheduler" ? { ok: true, key: KEY } : agent === undefined ? { ok: true, key: "" } : { ok: false, status: 403, error: "not yours" });
     steer.chatSteer.mockResolvedValue({ ok: true, found: true });
     steer.chatInterrupt.mockResolvedValue({ ok: true, found: true });
-    steer.chatSteerEnabled.mockResolvedValue({ enabled: true });
   });
 
   afterEach(() => {
@@ -72,16 +70,9 @@ describe("steer and interrupt routes", () => {
     expect(steer.chatSteer).not.toHaveBeenCalled();
   });
 
-  it("reports whether steer mode is on", async () => {
-    const { GET } = await import("../steer/route");
-    const res = await GET();
-    expect(await res.json()).toEqual({ enabled: true });
-  });
-
-  it("reports steer mode off when the engine cannot be asked", async () => {
-    steer.chatSteerEnabled.mockRejectedValueOnce(new Error("down"));
-    const { GET } = await import("../steer/route");
-    expect(await (await GET()).json()).toEqual({ enabled: false });
+  it("has no mode probe: steer is always on", async () => {
+    const route: Record<string, unknown> = await import("../steer/route");
+    expect(route.GET).toBeUndefined();
   });
 
   it("interrupts the main conversation's run when no agent is named", async () => {

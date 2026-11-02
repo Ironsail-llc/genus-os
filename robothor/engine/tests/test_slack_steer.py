@@ -1,8 +1,7 @@
 """Slack: ``/steer`` and ``/stop`` for the channel's live run, and a progress line.
 
-Behind ``ROBOTHOR_STEER_EVERYWHERE``. Off, Slack registers what it always has
-(``/status``, ``/clear``) and a message run passes no progress callback, so a
-workspace sees exactly what it saw before.
+Always on: Slack registers ``/steer`` and ``/stop`` beside ``/status`` and
+``/clear``, and every message run posts one progress line, edited in place.
 """
 
 from __future__ import annotations
@@ -23,10 +22,9 @@ SESSION = "agent:main:slack:C123"
 
 
 @pytest.fixture
-def flag(monkeypatch):
-    state = {"on": True}
-    monkeypatch.setattr(live_control, "steer_everywhere_enabled", lambda: state["on"])
-    return state
+def env_says_off(monkeypatch):
+    """The old switch's name set to off changes nothing: steer is the only path."""
+    monkeypatch.setenv("ROBOTHOR_" + "STEER_EVERYWHERE", "0")
 
 
 @pytest.fixture(autouse=True)
@@ -66,19 +64,19 @@ def _bot() -> SlackBot:
 
 class TestCommands:
     @pytest.mark.asyncio
-    async def test_steer_reaches_the_channels_live_run(self, flag, controls):
+    async def test_steer_reaches_the_channels_live_run(self, env_says_off, controls):
         reply = await _bot()._steer_command("C123", user_id="U1", text="use the EU region")
         assert controls["steer"] == [(SESSION, "use the EU region", TENANT)]
         assert reply == "Steering the run."
 
     @pytest.mark.asyncio
-    async def test_stop_interrupts_the_channels_live_run(self, flag, controls):
+    async def test_stop_interrupts_the_channels_live_run(self, env_says_off, controls):
         reply = await _bot()._stop_command("C123", user_id="U1")
         assert controls["interrupt"] == [(SESSION, TENANT)]
         assert reply == "Stopping the run."
 
     @pytest.mark.asyncio
-    async def test_nothing_running_is_said_plainly(self, flag, controls):
+    async def test_nothing_running_is_said_plainly(self, env_says_off, controls):
         controls["live"][0] = False
         assert await _bot()._steer_command("C123", user_id="U1", text="x") == (
             "Nothing is running here."
@@ -86,7 +84,7 @@ class TestCommands:
         assert await _bot()._stop_command("C123", user_id="U1") == "Nothing is running here."
 
     @pytest.mark.asyncio
-    async def test_a_control_that_fails_is_still_answered(self, flag, monkeypatch):
+    async def test_a_control_that_fails_is_still_answered(self, env_says_off, monkeypatch):
         def _boom(*_a, **_kw):
             raise ValueError("run not found in tenant")
 
@@ -98,20 +96,22 @@ class TestCommands:
         )
 
     @pytest.mark.asyncio
-    async def test_steer_without_text_says_how(self, flag, controls):
+    async def test_steer_without_text_says_how(self, env_says_off, controls):
         reply = await _bot()._steer_command("C123", user_id="U1", text="  ")
         assert controls["steer"] == []
         assert "/steer" in reply
 
     @pytest.mark.asyncio
-    async def test_a_refused_sender_steers_nothing(self, flag, controls, gate):
+    async def test_a_refused_sender_steers_nothing(self, env_says_off, controls, gate):
         gate["decision"] = AccessDecision(allowed=False, refusal="Not paired.")
         assert await _bot()._steer_command("C123", user_id="U9", text="x") == "Not paired."
         assert await _bot()._stop_command("C123", user_id="U9") == "Not paired."
         assert controls["steer"] == [] and controls["interrupt"] == []
 
     @pytest.mark.asyncio
-    async def test_steer_is_gated_like_a_message_in_that_channel(self, flag, controls, gate):
+    async def test_steer_is_gated_like_a_message_in_that_channel(
+        self, env_says_off, controls, gate
+    ):
         await _bot()._steer_command("C123", user_id="U1", text="x")
         assert gate["asked"][0]["channel"] == "slack"
         assert gate["asked"][0]["native_id"] == "U1"
@@ -126,17 +126,10 @@ class _App:
         return lambda fn: fn
 
 
-def test_flag_on_registers_steer_and_stop(flag):
+def test_steer_and_stop_are_registered(env_says_off):
     app = _App()
     _bot()._register_run_commands(app)
     assert app.commands == ["/steer", "/stop"]
-
-
-def test_flag_off_registers_neither(flag):
-    flag["on"] = False
-    app = _App()
-    _bot()._register_run_commands(app)
-    assert app.commands == []
 
 
 def test_start_registers_the_run_commands_beside_status_and_clear():
@@ -181,7 +174,7 @@ async def _say_collector(said: list[dict[str, Any]]):
 
 
 @pytest.mark.asyncio
-async def test_flag_on_a_run_posts_one_progress_message_and_edits_it(flag, monkeypatch):
+async def test_a_run_posts_one_progress_message_and_edits_it(env_says_off, monkeypatch):
     seen: dict[str, Any] = {}
     monkeypatch.setattr(inbound, "handle_message", _run_with_events(seen))
     bot = _bot()
@@ -197,19 +190,3 @@ async def test_flag_on_a_run_posts_one_progress_message_and_edits_it(flag, monke
     assert client.updated, "the progress message is edited in place"
     assert all(u["ts"] == "1700000000.000100" for u in client.updated)
     assert said == [{"args": (), "text": "The answer.", "mrkdwn": True}]
-
-
-@pytest.mark.asyncio
-async def test_flag_off_a_run_shows_no_progress(flag, monkeypatch):
-    flag["on"] = False
-    seen: dict[str, Any] = {}
-    monkeypatch.setattr(inbound, "handle_message", _run_with_events(seen))
-    bot = _bot()
-    client = _Client()
-    bot._app = SimpleNamespace(client=client)
-    said: list[dict[str, Any]] = []
-    await bot._on_message(
-        {"text": "search it", "channel": "C123", "user": "U1"}, await _say_collector(said)
-    )
-    assert "on_progress" not in seen
-    assert client.posted == [] and client.updated == []

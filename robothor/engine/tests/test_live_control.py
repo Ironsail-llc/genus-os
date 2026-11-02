@@ -270,10 +270,81 @@ class TestProgressMessage:
         await progress.close("Done")
 
 
-def test_the_flag_is_off_by_default():
+#: The switch steer once shipped behind, spelled so this file never matches it.
+_SWITCH = "ROBOTHOR_" + "STEER_EVERYWHERE"
+
+
+def test_no_module_mentions_the_steer_switch():
+    """Steer, stop and progress are the only path: there is no switch to read."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    here = Path(__file__).resolve()
+    roots = ["robothor", "plugins", "app/src", "app/e2e", "docs", "changelog.d", "infra"]
+    hits = [
+        str(path.relative_to(root))
+        for top in roots
+        if (root / top).exists()
+        for path in (root / top).rglob("*")
+        if path.is_file()
+        and path.resolve() != here
+        and "node_modules" not in path.parts
+        and path.suffix in {".py", ".ts", ".tsx", ".md", ".yaml", ".yml", ".json"}
+        and _SWITCH in path.read_text(encoding="utf-8", errors="ignore")
+    ]
+    assert hits == []
+
+
+def test_the_settings_declare_no_steer_switch():
     from robothor.settings.model import GenusSettings
 
-    assert GenusSettings().channels.steer_everywhere is False
+    assert not hasattr(GenusSettings().channels, "steer_everywhere")
+
+
+class TestAnInboundRunIsTheConversations:
+    """Every channel's run is steerable and reports progress, whatever the env says."""
+
+    @pytest.mark.asyncio
+    async def test_the_run_starts_inside_the_conversations_scope_with_progress(self, monkeypatch):
+        from robothor.engine.channels import access, inbound
+        from robothor.engine.channels.access import AccessDecision
+
+        monkeypatch.setenv(_SWITCH, "0")
+
+        async def _allow(*_a, **_kw):
+            return AccessDecision(allowed=True)
+
+        class _Shared:
+            history: list = []
+
+        monkeypatch.setattr(access, "evaluate", _allow)
+        monkeypatch.setattr(inbound, "get_shared_session", lambda key: _Shared())
+        seen: dict = {}
+
+        class _Runner:
+            async def execute(self, **kw):
+                claimed = SimpleNamespace()
+                live_control.claim_conversation(claimed)
+                seen["key"] = getattr(claimed, "conversation_key", None)
+                seen["kwargs"] = kw
+                return SimpleNamespace(output_text="", status=RunStatus.COMPLETED, id="r")
+
+        async def _progress(event):
+            return None
+
+        await inbound.handle_message(
+            channel="slack",
+            native_id="U1",
+            text="search it",
+            runner=_Runner(),
+            tenant_id=TENANT,
+            session_key=KEY,
+            record_turn=False,
+            on_progress=_progress,
+        )
+        assert seen["key"] == KEY
+        assert seen["kwargs"]["on_tool"] is _progress
+        assert seen["kwargs"]["on_status"] is _progress
 
 
 class TestASteerDuringTheFinalAnswer:
