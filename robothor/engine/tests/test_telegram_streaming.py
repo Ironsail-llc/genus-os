@@ -1,8 +1,10 @@
 """Telegram turns stream into the "Thinking..." message.
 
 That message becomes the progress message. The runner gets an ``on_content``,
-runs inside a channel-streaming scope, tool events show as a progress line, and
-the answer finalises that same message instead of arriving as a second one.
+runs inside a channel-streaming scope, and tool events show as a progress line.
+The answer then goes out as a NEW message, because Telegram does not notify on
+an edit, and the progress message is deleted once the answer has landed, so the
+chat ends with one message, the answer, and the person is notified of it.
 """
 
 from __future__ import annotations
@@ -94,6 +96,22 @@ def _run() -> AgentRun:
     )
 
 
+def _assert_answer_sent_then_progress_deleted(calls: list[tuple[str, dict[str, Any]]]) -> None:
+    """The answer is a fresh send (it notifies); the progress message goes after it."""
+    names = [c[0] for c in calls]
+    sends = [i for i, n in enumerate(names) if n == "send_message"]
+    assert len(sends) == 2, "the Thinking... message, then the answer"
+    answer = calls[sends[1]][1]
+    assert answer["text"] == telegram_chunks(ANSWER)[0].html
+    assert answer["parse_mode"] == "HTML"
+    deletes = [i for i, n in enumerate(names) if n == "delete_message"]
+    assert [calls[i][1]["message_id"] for i in deletes] == [42]
+    assert deletes[0] > sends[1], "the progress message stays until the answer has landed"
+    edits = [c[1] for c in calls if c[0] == "edit_message_text"]
+    assert all(e["message_id"] == 42 for e in edits)
+    assert not [e for e in edits if e["text"] == answer["text"]], "the answer is not an edit"
+
+
 async def _turn(tg: TelegramBot, execute: Any) -> None:
     tg.runner.execute = execute
     session_key = tg._session_key("12345")
@@ -106,7 +124,7 @@ async def _turn(tg: TelegramBot, execute: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_tool_events_show_on_the_progress_message(bot):
-    """A running tool is a line on the Thinking... message; the answer replaces it."""
+    """A running tool is a line on the Thinking... message; the answer follows it."""
     bot._progress_edit_interval = 0.05
     run = _run()
 
@@ -121,11 +139,8 @@ async def test_tool_events_show_on_the_progress_message(bot):
 
     calls = bot.bot.calls
     edits = [c[1] for c in calls if c[0] == "edit_message_text"]
-    assert {e["message_id"] for e in edits} == {42}
-    assert any("Searching the web" in e["text"] for e in edits[:-1]), edits
-    assert edits[-1]["text"] == telegram_chunks(ANSWER)[0].html
-    assert [c[0] for c in calls].count("send_message") == 1
-    assert not [c for c in calls if c[0] == "delete_message"]
+    assert any("Searching the web" in e["text"] for e in edits), edits
+    _assert_answer_sent_then_progress_deleted(calls)
 
 
 @pytest.mark.asyncio
@@ -150,14 +165,9 @@ async def test_a_turn_streams_into_the_thinking_message(bot):
     assert "on_content" in execute.await_args.kwargs
     assert scoped == [True]
     calls = bot.bot.calls
-    sends = [c for c in calls if c[0] == "send_message"]
     edits = [c for c in calls if c[0] == "edit_message_text"]
-    assert len(sends) == 1, "only the Thinking... message is sent"
-    thinking_id = 42
-    assert {e[1]["message_id"] for e in edits} == {thinking_id}
-    assert len(edits) >= 3  # at least two interim edits, then the final one
-    assert edits[-1][1]["text"] == telegram_chunks(ANSWER)[0].html
-    assert not [c for c in calls if c[0] == "delete_message"]
+    assert len(edits) >= 2  # interim edits while the answer streams
+    _assert_answer_sent_then_progress_deleted(calls)
     assert run.delivery_status == "delivered"
 
 
@@ -188,7 +198,23 @@ async def test_a_turn_streams_even_with_the_old_flag_set_off(bot, monkeypatch):
 
     assert "on_content" in execute.await_args.kwargs
     edits = [c[1] for c in bot.bot.calls if c[0] == "edit_message_text"]
-    interim = [e["text"] for e in edits[:-1]]
-    assert any(t.startswith("tide0") for t in interim), interim
-    assert edits[-1]["message_id"] == 42
-    assert edits[-1]["text"] == telegram_chunks(ANSWER)[0].html
+    assert any(e["text"].startswith("tide0") for e in edits), edits
+    _assert_answer_sent_then_progress_deleted(bot.bot.calls)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_answer_send_keeps_the_streamed_text(bot):
+    """The answer never landed: the progress message, holding the streamed text, stays."""
+    bot._progress_edit_interval = 0.05
+    run = _run()
+
+    async def streaming(**kwargs: Any) -> AgentRun:
+        await kwargs["on_content"]("tide0 ")
+        await asyncio.sleep(0.1)
+        return run
+
+    bot.send_message = AsyncMock(return_value=[])
+    await _turn(bot, AsyncMock(side_effect=streaming))
+
+    assert not [c for c in bot.bot.calls if c[0] == "delete_message"]
+    assert run.delivery_status is not None and run.delivery_status.startswith("failed")
