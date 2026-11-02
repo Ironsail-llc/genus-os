@@ -93,20 +93,20 @@ def stamp_capability_tier(run: Any, trigger_type: Any, identity: Any) -> TierDec
 #: The tier of the run whose tools are executing. Installed and
 #: withdrawn with the run's toolset (toolset_prep.publish_toolset), so a
 #: sub-agent run inline in its parent's task restores the parent's on exit.
-_effective_tier_var: ContextVar[str] = ContextVar("capability_tier", default="")
+_run_tier_var: ContextVar[str] = ContextVar("capability_tier", default="")
 
 
-def set_effective_tier(tier: str) -> Token[str]:
-    return _effective_tier_var.set(tier)
+def set_run_tier(tier: str) -> Token[str]:
+    return _run_tier_var.set(tier)
 
 
-def clear_effective_tier(token: Token[str]) -> None:
-    _effective_tier_var.reset(token)
+def clear_run_tier(token: Token[str]) -> None:
+    _run_tier_var.reset(token)
 
 
-def current_effective_tier() -> str:
+def current_run_tier() -> str:
     """What ``ToolContext.capability_tier`` carries; ``""`` outside a run."""
-    return _effective_tier_var.get()
+    return _run_tier_var.get()
 
 
 def record_tier_event(run_id: str, decision: TierDecision, unlocked: tuple[str, ...]) -> None:

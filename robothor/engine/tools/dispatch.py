@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 import httpx
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.engine.capability_tier import current_effective_tier
+from robothor.engine.capability_tier import current_run_tier
 from robothor.engine.tools.response_failure import http_status_failure, tool_response_failure
 
 if TYPE_CHECKING:
@@ -160,7 +160,7 @@ class ToolContext:
     # made outside a run. A gate that widens
     # for the owner reads this one field instead of re-deriving it from
     # user_role, trigger and identity. Read from the run's published toolset
-    # (capability_tier.current_effective_tier) when the call is dispatched.
+    # (capability_tier.current_run_tier) when the call is dispatched.
     capability_tier: str = ""
 
 
@@ -583,7 +583,7 @@ async def _execute_tool(
         task_author_override=task_author_override,
         is_benchmark=is_benchmark,
         identity=identity,
-        capability_tier=current_effective_tier(),
+        capability_tier=current_run_tier(),
     )
     denial = await _runtime_denial(name, args, ctx)
     if denial:

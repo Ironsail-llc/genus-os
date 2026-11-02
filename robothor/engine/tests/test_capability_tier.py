@@ -192,12 +192,12 @@ class TestRunIdentity:
         json.dumps(stored)
 
 
-# ── Handlers can read the effective tier ─────────────────────────────────
+# ── Handlers can read the run's tier ──────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_the_tool_context_carries_the_effective_tier():
-    from robothor.engine.capability_tier import clear_effective_tier, set_effective_tier
+async def test_the_tool_context_carries_the_runs_tier():
+    from robothor.engine.capability_tier import clear_run_tier, set_run_tier
     from robothor.engine.tools import dispatch
 
     seen = {}
@@ -206,7 +206,7 @@ async def test_the_tool_context_carries_the_effective_tier():
         seen["tier"] = ctx.capability_tier
         return {"error": "stop here"}
 
-    token = set_effective_tier("unrestricted")
+    token = set_run_tier("unrestricted")
     try:
         with (
             patch.object(dispatch, "_refuse_before_handler", AsyncMock(return_value=None)),
@@ -214,7 +214,7 @@ async def test_the_tool_context_carries_the_effective_tier():
         ):
             await dispatch._execute_tool("read_file", {})
     finally:
-        clear_effective_tier(token)
+        clear_run_tier(token)
 
     assert seen["tier"] == "unrestricted"
 
@@ -226,20 +226,20 @@ class TestTheTierIsPublishedWithTheToolset:
         return registry
 
     def test_it_is_visible_while_published_and_gone_after(self):
-        from robothor.engine.capability_tier import current_effective_tier, resolve_tier
+        from robothor.engine.capability_tier import current_run_tier, resolve_tier
         from robothor.engine.toolset_prep import publish_toolset, withdraw_toolset
 
         decision = resolve_tier("owner", interactive=True, identity_verified=True)
         tokens = publish_toolset(self._registry(), _default_agent(), ["read_file"], decision)
         try:
-            assert current_effective_tier() == "unrestricted"
+            assert current_run_tier() == "unrestricted"
         finally:
             withdraw_toolset(tokens)
-        assert current_effective_tier() == ""
+        assert current_run_tier() == ""
 
     def test_a_child_run_inline_restores_its_parents_tier(self):
         """spawn_agent runs the child's execute inline in the parent's task."""
-        from robothor.engine.capability_tier import current_effective_tier, resolve_tier
+        from robothor.engine.capability_tier import current_run_tier, resolve_tier
         from robothor.engine.toolset_prep import publish_toolset, withdraw_toolset
 
         owner = resolve_tier("owner", interactive=True, identity_verified=True)
@@ -247,9 +247,9 @@ class TestTheTierIsPublishedWithTheToolset:
         parent_tokens = publish_toolset(self._registry(), _default_agent(), [], owner)
         try:
             child_tokens = publish_toolset(self._registry(), _default_agent(), [], child)
-            assert current_effective_tier() == "standard"
+            assert current_run_tier() == "standard"
             withdraw_toolset(child_tokens)
-            assert current_effective_tier() == "unrestricted"
+            assert current_run_tier() == "unrestricted"
         finally:
             withdraw_toolset(parent_tokens)
 
@@ -290,9 +290,9 @@ def runner(engine_config):
         registry.tier_seen = []
 
         async def _execute(*args, **kwargs):
-            from robothor.engine.capability_tier import current_effective_tier
+            from robothor.engine.capability_tier import current_run_tier
 
-            registry.tier_seen.append(current_effective_tier())
+            registry.tier_seen.append(current_run_tier())
             return {"ok": True}
 
         registry.execute = AsyncMock(side_effect=_execute)

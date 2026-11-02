@@ -196,7 +196,7 @@ def publish_toolset(
     * the run's capability tier (``capability``, the run's ``TierDecision``,
       None outside a run), which dispatch copies onto ``ToolContext``.
     """
-    from robothor.engine.capability_tier import set_effective_tier
+    from robothor.engine.capability_tier import set_run_tier
     from robothor.engine.tools.dispatch import set_agent_toolset, set_deferred_allowed
 
     tier = capability.tier if capability is not None else ""
@@ -206,19 +206,19 @@ def publish_toolset(
         if registry.should_defer(agent_config, **tier_kw)
         else None
     )
-    return (defer_token, set_agent_toolset(frozenset(tool_names)), set_effective_tier(tier))
+    return (defer_token, set_agent_toolset(frozenset(tool_names)), set_run_tier(tier))
 
 
 def withdraw_toolset(tokens: tuple[Any, ...]) -> None:
     """Undo :func:`publish_toolset`. Safe to call with anything it returned."""
-    from robothor.engine.capability_tier import clear_effective_tier
+    from robothor.engine.capability_tier import clear_run_tier
     from robothor.engine.tools.dispatch import clear_agent_toolset, clear_deferred_allowed
 
     defer_token, toolset_token, tier_token = tokens
     if defer_token is not None:
         clear_deferred_allowed(defer_token)
     clear_agent_toolset(toolset_token)
-    clear_effective_tier(tier_token)
+    clear_run_tier(tier_token)
 
 
 async def prepare_toolset(
