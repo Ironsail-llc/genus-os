@@ -542,24 +542,63 @@ class TestToolsetPrepChecksEveryRun:
 # ── Measurement ──────────────────────────────────────────────────────
 
 
-class TestMeasuredLoadTime:
-    def test_a_warm_load_is_much_faster_with_the_cache(self, fleet, monkeypatch, capsys):
-        """Not a benchmark: a floor that catches a cache that stopped hitting.
-        The numbers print with ``-s`` and go in the pull request."""
-        n = 50
+class TestWarmLoadWork:
+    def test_a_warm_load_skips_the_parse_merge_and_validation(
+        self, fleet, monkeypatch, parses, opens, capsys
+    ):
+        """The floor that catches a cache that stopped hitting, counted rather
+        than timed: without the cache every warm load re-reads, re-parses,
+        re-merges and re-validates the manifest; with it, none does.
 
-        def per_load() -> float:
+        The wall-clock numbers still print with ``-s`` for the pull request,
+        but they are informational only and asserted on nowhere: a ratio of
+        sub-millisecond timings on a shared CI runner is noise."""
+        n = 50
+        merges: list[int] = []
+        validations: list[int] = []
+        real_merge = config._merged_manifest
+        real_validate = manifest_schema.validate
+
+        def counting_merge(*a: Any, **kw: Any) -> Any:
+            merges.append(1)
+            return real_merge(*a, **kw)
+
+        def counting_validate(*a: Any, **kw: Any) -> Any:
+            validations.append(1)
+            return real_validate(*a, **kw)
+
+        monkeypatch.setattr(config, "_merged_manifest", counting_merge)
+        monkeypatch.setattr(manifest_schema, "validate", counting_validate)
+        counters = (parses, opens, merges, validations)
+
+        def warm_loads() -> tuple[dict[str, int], float]:
             load_agent_config("alice", fleet)  # warm whichever path is on
+            for c in counters:
+                c.clear()
             start = time.perf_counter()
             for _ in range(n):
-                load_agent_config("alice", fleet)
-            return (time.perf_counter() - start) / n
+                assert load_agent_config("alice", fleet) is not None
+            elapsed = (time.perf_counter() - start) / n
+            work = {
+                "parses": len(parses),
+                "manifest_opens": opens.count("alice.yaml"),
+                "merges": len(merges),
+                "validations": len(validations),
+            }
+            return work, elapsed
 
         monkeypatch.delenv("ROBOTHOR_CONFIG_CACHE", raising=False)
-        off = per_load()
+        off, off_time = warm_loads()
         monkeypatch.setenv("ROBOTHOR_CONFIG_CACHE", "1")
-        on = per_load()
+        on, on_time = warm_loads()
 
         with capsys.disabled():
-            print(f"\nload_agent_config warm: off {off * 1e6:.0f}us, on {on * 1e6:.0f}us")
-        assert on * 3 < off
+            print(
+                f"\nload_agent_config warm (informational): "
+                f"off {off_time * 1e6:.0f}us, on {on_time * 1e6:.0f}us; work off {off}, on {on}"
+            )
+        # The probes see the expensive path: without the cache, every load
+        # does every step at least once ...
+        assert all(count >= n for count in off.values()), off
+        # ... and with it, a warm load does none of them.
+        assert on == dict.fromkeys(off, 0), on
