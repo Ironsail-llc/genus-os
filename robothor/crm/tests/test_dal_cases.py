@@ -99,3 +99,41 @@ def test_overdue_unowned_returns_exactly_the_unowned_and_waiting_cases(
     }
     ours = found & set(ids.values())
     assert ours == {ids["unowned"], ids["needs_person"]}
+
+
+@pytest.mark.integration
+def test_the_doctor_check_and_list_tasks_agree_on_a_snoozed_task(
+    db_cursor, db_conn, mock_get_connection
+):
+    """A task snoozed until a future follow-up is overdue for neither."""
+    import asyncio
+    import contextlib
+
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.crm.dal import list_tasks
+    from robothor.doctor.context import DoctorContext
+    from robothor.doctor.registry import builtin_checks
+
+    db_cursor.execute("UPDATE crm_tasks SET deleted_at = NOW() WHERE deleted_at IS NULL")
+    unowned, snoozed = str(uuid.uuid4()), str(uuid.uuid4())
+    for task_id, follow_up in ((unowned, None), (snoozed, "+2 days")):
+        db_cursor.execute(
+            """INSERT INTO crm_tasks (id, tenant_id, title, status, due_at, follow_up_at)
+               VALUES (%s, %s, 'case', 'TODO', NOW() - interval '1 day',
+                       NOW() + %s::interval)""",
+            (task_id, DEFAULT_TENANT, follow_up),
+        )
+
+    listed = {t["id"] for t in list_tasks(overdue=True, unowned=True, tenant_id=DEFAULT_TENANT)}
+    assert listed == {unowned}
+
+    @contextlib.contextmanager
+    def factory():
+        yield db_conn
+
+    check = next(c for c in builtin_checks() if c.id == "crm.cases_overdue")
+    result = asyncio.run(check.run(DoctorContext(db_factory=factory)))
+    assert result.status == "fail"
+    assert "1 overdue case:" in result.detail
+    assert unowned in result.detail
+    assert snoozed not in result.detail
