@@ -1,4 +1,4 @@
-"""Ambient follow-ups: the enforce-path defects review found.
+"""Ambient follow-ups: the send-path defects review found.
 
 Each test here pins a way the first version could send, or claim to send,
 something the manifest's tiers did not allow, or miss what it exists to find.
@@ -101,15 +101,14 @@ def _worker(runner: Any, channel: _Channel, *, threads=None, approver=None, step
 
 
 @pytest.fixture
-def enforce(monkeypatch, tmp_path):
-    monkeypatch.setenv("ROBOTHOR_AMBIENT", "enforce")
+def workspace(monkeypatch, tmp_path):
     monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
 
 
 # ── reply_on_behalf must not claim a send it cannot make ──────────────
 
 
-async def test_reply_on_behalf_is_not_written_to_the_crm_log_or_called_sent(enforce, tmp_path):
+async def test_reply_on_behalf_is_not_written_to_the_crm_log_or_called_sent(workspace, tmp_path):
     """The CRM inbox is a log of what happened elsewhere; a row there reaches nobody."""
     runner = _Runner("### reply_on_behalf inbox:12\nHi Alice, we are on it.\n")
     channel = _Channel()
@@ -133,7 +132,7 @@ async def test_reply_on_behalf_is_not_written_to_the_crm_log_or_called_sent(enfo
 # ── an Approve All tap must not outlive the pass ──────────────────────
 
 
-async def test_an_earlier_approve_all_does_not_skip_the_card_on_a_later_pass(enforce, tmp_path):
+async def test_an_earlier_approve_all_does_not_skip_the_card_on_a_later_pass(workspace, tmp_path):
     from robothor.engine.permission_escalation import PermissionEscalationManager
 
     manager = PermissionEscalationManager()
@@ -161,7 +160,7 @@ async def test_an_earlier_approve_all_does_not_skip_the_card_on_a_later_pass(enf
     assert len(guardrails) == 2, "a grant must be scoped to one pass"
 
 
-async def test_approvals_in_one_pass_are_asked_concurrently(enforce, tmp_path):
+async def test_approvals_in_one_pass_are_asked_concurrently(workspace, tmp_path):
     class SlowApprover:
         async def request_approval(self, **kwargs: Any) -> bool:
             await asyncio.sleep(0.2)
@@ -186,7 +185,7 @@ async def test_approvals_in_one_pass_are_asked_concurrently(enforce, tmp_path):
 
 
 @pytest.mark.parametrize("status", [RunStatus.FAILED, RunStatus.TIMEOUT, RunStatus.CANCELLED])
-async def test_an_unfinished_run_proposes_nothing(enforce, tmp_path, status):
+async def test_an_unfinished_run_proposes_nothing(workspace, tmp_path, status):
     channel = _Channel()
     worker = _worker(
         _Runner("### send_digest\nLet me check the conversations first", status),
@@ -198,7 +197,7 @@ async def test_an_unfinished_run_proposes_nothing(enforce, tmp_path, status):
     assert channel.sends == []
 
 
-async def test_output_without_section_headers_is_not_sent_as_a_digest(enforce, tmp_path):
+async def test_output_without_section_headers_is_not_sent_as_a_digest(workspace, tmp_path):
     channel = _Channel()
     worker = _worker(_Runner("Let me check the conversations first."), channel, digest_dir=tmp_path)
     result = await worker.run_pass(_agent(send_digest="auto", nudge_thread="never"))

@@ -912,9 +912,9 @@ class CronScheduler:
 
         The same guards as every scheduled LLM run: leader only, deduplicated,
         the circuit breaker, fleet admission (registered so other runs count
-        it), and the ``agent_schedules`` row updated afterwards. The pass itself
-        decides whether ``ROBOTHOR_AMBIENT`` lets it compose or send anything.
-        No safety timeout: an enforce pass waits on people answering approvals.
+        it), and the ``agent_schedules`` row updated afterwards. What it sends
+        is decided per proposal by the ``ambient:`` block's tiers.
+        No safety timeout: a pass waits on people answering approvals.
         """
         from robothor.engine.ambient import AmbientWorker
         from robothor.engine.leader import is_leader

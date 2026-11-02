@@ -1,10 +1,8 @@
 """The ambient pass: compose, record, and send only what the tier allows.
 
-``observe`` is the first rung and the one that matters most: it must record
-what it would have sent and send nothing at all — no channel send, no approval
-card, no reply in the thread. ``enforce`` sends per tier: ``auto`` sends,
-``approve`` goes through the same approval gate a guarded tool call uses, and
-``never`` is not even proposed.
+``auto`` sends, ``approve`` goes through the same approval gate a guarded tool
+call uses, and ``never`` is not even proposed. Every proposal is recorded as a
+run step and in the day's digest file, whatever its outcome.
 """
 
 from __future__ import annotations
@@ -12,8 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
-
-import pytest
 
 from robothor.engine.ambient import (
     PROPOSAL_STEP,
@@ -154,45 +150,22 @@ def _harness(
     return Harness(runner, channel, approver, steps, replies, worker)
 
 
-@pytest.fixture
-def observe(monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_AMBIENT", "observe")
-
-
-@pytest.fixture
-def enforce(monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_AMBIENT", "enforce")
-
-
-class TestOff:
-    async def test_flag_unset_runs_nothing(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("ROBOTHOR_AMBIENT", raising=False)
-        h = _harness(tmp_path, approver=FakeApprover(answer=True))
-        result = await h.worker.run_pass(_agent())
-        assert result.mode == "off"
-        assert h.runner.calls == []
-        assert h.channel.sends == [] and h.steps == []
-
-    async def test_an_agent_without_the_block_runs_nothing(self, tmp_path, observe):
+class TestNothingToDo:
+    async def test_an_agent_without_the_block_runs_nothing(self, tmp_path):
         h = _harness(tmp_path)
         await h.worker.run_pass(AgentConfig(id="plain", name="Plain"))
         assert h.runner.calls == []
 
-    async def test_nothing_stalled_means_no_run(self, tmp_path, observe):
+    async def test_nothing_stalled_means_no_run(self, tmp_path):
         h = _harness(tmp_path, threads=[])
         result = await h.worker.run_pass(_agent())
         assert h.runner.calls == [] and result.proposals == []
 
 
-class TestObserveRecordsAndSendsNothing:
-    async def test_observe_records_steps_and_a_digest_and_sends_nothing(self, tmp_path, observe):
-        approver = FakeApprover(answer=True)
-        h = _harness(tmp_path, approver=approver)
+class TestEveryProposalIsRecorded:
+    async def test_each_proposal_is_a_step_and_a_digest_line_with_its_outcome(self, tmp_path):
+        h = _harness(tmp_path, approver=FakeApprover(answer=False))
         result = await h.worker.run_pass(_agent(reply_on_behalf="auto"))
-
-        assert h.channel.sends == []
-        assert approver.requests == []
-        assert h.replies == []
 
         proposal_steps = [s for s in h.steps if s.tool_name == PROPOSAL_STEP]
         assert len(proposal_steps) == 3
@@ -202,15 +175,19 @@ class TestObserveRecordsAndSendsNothing:
             "reply_on_behalf",
             "send_digest",
         }
-        assert {s.tool_output["outcome"] for s in proposal_steps} == {"observed"}
+        assert {s.tool_input["kind"]: s.tool_output["outcome"] for s in proposal_steps} == {
+            "nudge_thread": "denied",
+            "reply_on_behalf": "sent",
+            "send_digest": "sent",
+        }
         assert all(s.run_id == result.run_id for s in proposal_steps)
 
         digest = (tmp_path / "example-agent").glob("*.md")
         text = "\n".join(p.read_text() for p in digest)
         assert "Alice asked about her invoice" in text
-        assert "observe" in text
+        assert "nudge_thread -> inbox:12 [approve, denied]" in text
 
-    async def test_the_composing_run_is_the_agents_own_run_and_cannot_send(self, tmp_path, observe):
+    async def test_the_composing_run_is_the_agents_own_run_and_cannot_send(self, tmp_path):
         h = _harness(tmp_path)
         await h.worker.run_pass(_agent())
         [call] = h.runner.calls
@@ -228,10 +205,8 @@ class TestObserveRecordsAndSendsNothing:
         assert "Alice" in call["message"]
 
 
-class TestEnforceRoutesThroughTheTier:
-    async def test_approve_tier_asks_the_gate_once_and_a_denial_sends_nothing(
-        self, tmp_path, enforce
-    ):
+class TestEachProposalIsHeldToItsTier:
+    async def test_approve_tier_asks_the_gate_once_and_a_denial_sends_nothing(self, tmp_path):
         approver = FakeApprover(answer=False)
         h = _harness(tmp_path, approver=approver, output=MODEL_OUTPUT.split("### send_digest")[0])
         result = await h.worker.run_pass(_agent())
@@ -244,7 +219,7 @@ class TestEnforceRoutesThroughTheTier:
         assert h.channel.sends == []
         assert [p.outcome for p in result.proposals if p.kind == "nudge_thread"] == ["denied"]
 
-    async def test_approve_tier_sends_once_when_approved(self, tmp_path, enforce):
+    async def test_approve_tier_sends_once_when_approved(self, tmp_path):
         approver = FakeApprover(answer=True)
         h = _harness(tmp_path, approver=approver, output=MODEL_OUTPUT.split("### send_digest")[0])
         await h.worker.run_pass(_agent())
@@ -254,7 +229,7 @@ class TestEnforceRoutesThroughTheTier:
         assert target == "12345"
         assert "Alice asked about her invoice" in text
 
-    async def test_auto_tier_sends_without_asking(self, tmp_path, enforce):
+    async def test_auto_tier_sends_without_asking(self, tmp_path):
         approver = FakeApprover(answer=False)
         h = _harness(tmp_path, approver=approver)
         result = await h.worker.run_pass(_agent(nudge_thread="never"))
@@ -264,13 +239,13 @@ class TestEnforceRoutesThroughTheTier:
         ]
         assert [(p.kind, p.outcome) for p in result.proposals] == [("send_digest", "sent")]
 
-    async def test_approve_tier_with_no_approver_is_not_sent(self, tmp_path, enforce):
+    async def test_approve_tier_with_no_approver_is_not_sent(self, tmp_path):
         h = _harness(tmp_path, approver=None, output=MODEL_OUTPUT.split("### reply")[0])
         result = await h.worker.run_pass(_agent())
         assert h.channel.sends == []
         assert [p.outcome for p in result.proposals] == ["no_approver"]
 
-    async def test_reply_on_behalf_goes_to_the_thread_not_the_operator(self, tmp_path, enforce):
+    async def test_reply_on_behalf_goes_to_the_thread_not_the_operator(self, tmp_path):
         h = _harness(tmp_path, approver=FakeApprover(answer=True))
         await h.worker.run_pass(
             _agent(nudge_thread="never", send_digest="never", reply_on_behalf="auto")
@@ -281,7 +256,7 @@ class TestEnforceRoutesThroughTheTier:
         ]
         assert h.channel.sends == []
 
-    async def test_every_outcome_is_recorded_as_a_step(self, tmp_path, enforce):
+    async def test_every_outcome_is_recorded_as_a_step(self, tmp_path):
         h = _harness(tmp_path, approver=FakeApprover(answer=False))
         await h.worker.run_pass(_agent())
         outcomes = sorted(
@@ -293,7 +268,7 @@ class TestEnforceRoutesThroughTheTier:
 
 
 class TestNeverIsNotEvenProposed:
-    async def test_never_kinds_are_not_requested_and_not_recorded(self, tmp_path, observe):
+    async def test_never_kinds_are_not_requested_and_not_recorded(self, tmp_path):
         h = _harness(tmp_path)
         result = await h.worker.run_pass(_agent(reply_on_behalf="never"))
         prompt = h.runner.calls[0]["message"]
@@ -304,7 +279,7 @@ class TestNeverIsNotEvenProposed:
             s.tool_input["kind"] for s in h.steps if s.tool_name == PROPOSAL_STEP
         }
 
-    async def test_every_kind_never_means_no_run_at_all(self, tmp_path, observe):
+    async def test_every_kind_never_means_no_run_at_all(self, tmp_path):
         h = _harness(tmp_path)
         await h.worker.run_pass(
             _agent(nudge_thread="never", send_digest="never", reply_on_behalf="never")
@@ -313,14 +288,14 @@ class TestNeverIsNotEvenProposed:
 
 
 class TestUnstructuredOutput:
-    async def test_plain_text_is_not_taken_as_a_digest(self, tmp_path, observe):
+    async def test_plain_text_is_not_taken_as_a_digest(self, tmp_path):
         # Unstructured output is as likely to be narration ("let me check...")
         # as a digest, and under `send_digest: auto` it would be sent.
         h = _harness(tmp_path, output="Alice has waited six hours on the invoice thread.")
         result = await h.worker.run_pass(_agent())
         assert result.proposals == []
 
-    async def test_a_nudge_for_a_thread_that_is_not_stalled_is_dropped(self, tmp_path, observe):
+    async def test_a_nudge_for_a_thread_that_is_not_stalled_is_dropped(self, tmp_path):
         h = _harness(tmp_path, output="### nudge_thread inbox:999\nMade up.\n")
         result = await h.worker.run_pass(_agent())
         assert result.proposals == []

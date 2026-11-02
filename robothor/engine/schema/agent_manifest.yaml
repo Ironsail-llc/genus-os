@@ -366,10 +366,11 @@ optional:
     wake_preamble_history_lines:
       type: integer
       default: 8
-  # ── Ambient follow-ups (opt-in; does nothing while ROBOTHOR_AMBIENT=off) ─
+  # ── Ambient follow-ups (opt-in: the block itself is the only switch) ─
   # See docs/AMBIENT.md. Watches what this agent already reads, finds threads
   # where a person wrote and nobody answered, and proposes follow-ups, each
-  # held to its tier. ROBOTHOR_AMBIENT=observe records them and sends nothing.
+  # held to its tier. A tier left out is approve (reply_on_behalf: never):
+  # nothing is sent without the approval gate unless a tier here says auto.
   ambient:
     watch:
       type: list[string]
@@ -390,6 +391,8 @@ optional:
         ("0 9,15 * * *") or comma-separated HH:MM times ("09:00, 15:30") in
         the agent's schedule timezone. One scheduler job per agent.
     tiers:
+      # Per action kind. Unstated kinds take the default below; none
+      # defaults to auto.
       nudge_thread:
         type: string
         enum: [auto, approve, never]
