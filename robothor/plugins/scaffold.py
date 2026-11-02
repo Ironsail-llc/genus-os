@@ -12,7 +12,10 @@ What the scaffold gets right so the author does not have to rediscover it:
   manifest's ``agents:`` key names the bundle, so ``genus plugin sync`` renders
   the agent onto the workspace;
 * the CI workflow runs the tests, builds the wheel and prints its sha256 -- the
-  hash ``genus plugin install --sha256`` and a registry entry both need.
+  hash ``genus plugin install --sha256`` and a registry entry both need;
+* ``knowledge/`` holds owned, dated records (``owner``, ``source``,
+  ``reviewed_on``) apart from the rules, and the ``<name>.knowledge`` doctor
+  check warns on a record nobody reviewed or verified in 30 days.
 
 Everything generated is generic: the plugin's own name and nothing else.
 """
@@ -536,6 +539,8 @@ A Genus OS plugin. Docs: `docs/PLUGINS.md` in the Genus OS repository.
 | `src/{pkg}/genus-plugin.yaml` | The declaration, read BEFORE import. Keep `handlers`/`schemas` equal to `PLUGIN` |
 | `src/{pkg}/agents/{name}/` | Agent template bundle: `manifest.template.yaml` + `instructions.template.md` (optional `setup.yaml`) |
 | `src/{pkg}/workflows/` | Workflow files; list each under `workflows:` in the manifest |
+| `src/{pkg}/knowledge/` | Owned, dated knowledge records; `knowledge/README.md` says what each carries |
+| `src/{pkg}/knowledge.py` | Reads the records; `findings()` is what the `{name}.knowledge` doctor check reports |
 | `tests/` | Contract tests; run with `pytest` |
 | `.github/workflows/ci.yml` | Tests, builds the wheel, prints its sha256 |
 | `.github/workflows/release.yml` | On a `vX.Y.Z` tag: releases the wheel with its `SHA256SUMS` |
@@ -555,6 +560,10 @@ with `SHA256SUMS`. A released version is never rebuilt: tag a new one.
   package data. `pyproject.toml` already covers `agents/`, `workflows/`,
   `patches/` and `files/`; put new files there, or add the directory to
   `[tool.setuptools.package-data]`.
+- Rules are code: a decision, a route or a write changes by pull request with a
+  test. Knowledge (procedure prose, wording, facts) is a record in `knowledge/`
+  with `owner`, `source` and `reviewed_on`; only a person edits it, and a record
+  with no `reviewed_on` never drives an action.
 - A new tool: handler + schema in `PLUGIN`, its name under `handlers` and
   `schemas` in the manifest. Name tools `{pkg}_*` so they never shadow a built-in.
 - A new agent: a bundle under `agents/`, listed under `agents:`. Its
