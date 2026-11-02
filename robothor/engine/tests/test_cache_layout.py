@@ -1,4 +1,4 @@
-"""Prompt-cache layout v2 (``ROBOTHOR_CACHE_LAYOUT_V2``).
+"""Prompt-cache layout (``robothor.engine.cache_layout``).
 
 Every provider that caches prompts caches a PREFIX: Anthropic up to an explicit
 ``cache_control`` breakpoint, OpenAI automatically for prefixes of 1024+
@@ -7,7 +7,7 @@ tokens, Gemini implicitly. The system prompt used to end with
 every minute and no provider could reuse anything past it: not the guardrail
 summary appended after the time, not one message of the conversation history.
 
-With the flag on the kwargs builder:
+The kwargs builder:
 
 * takes the time line out of the system message and sends it as an engine
   context turn immediately before the latest user message, so the system
@@ -16,8 +16,6 @@ With the flag on the kwargs builder:
   system message, and the last user/tool message before the final two turns;
 * sends no ``cache_control`` at all to OpenAI-family, Gemini or OpenRouter
   routes, which cache the now-stable prefix on their own.
-
-With the flag off every payload is what it was.
 """
 
 from __future__ import annotations
@@ -33,7 +31,6 @@ import pytest
 from robothor.engine import config as engine_config_module
 from robothor.engine.llm_client import LLMClient
 
-FLAG = "ROBOTHOR_CACHE_LAYOUT_V2"
 ANTHROPIC_DIRECT = "anthropic/claude-sonnet-4-6"
 VERTEX_GEMINI = "vertex_ai/gemini-2.5-pro"
 GEMINI = "gemini/gemini-2.5-flash"
@@ -109,16 +106,6 @@ def _dump(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, default=str)
 
 
-@pytest.fixture
-def flag_on(monkeypatch):
-    monkeypatch.setenv(FLAG, "1")
-
-
-@pytest.fixture
-def flag_off(monkeypatch):
-    monkeypatch.delenv(FLAG, raising=False)
-
-
 # ─── The system message is the stable prefix ─────────────────────────────
 
 
@@ -166,8 +153,8 @@ async def _two_runs(engine_config, agent_config, mock_litellm_response) -> list[
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", RUN_MODELS)
-async def test_system_message_byte_identical_across_two_runs_with_flag_on(
-    flag_on, model, engine_config, sample_agent_config, mock_litellm_response
+async def test_system_message_byte_identical_across_two_runs(
+    model, engine_config, sample_agent_config, mock_litellm_response
 ):
     sample_agent_config.model_primary = model
     sample_agent_config.model_fallbacks = []
@@ -178,26 +165,15 @@ async def test_system_message_byte_identical_across_two_runs_with_flag_on(
     assert "CURRENT TASK CONTEXT" not in _dump(first[0])
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("model", RUN_MODELS)
-async def test_system_message_differs_across_two_runs_with_flag_off(
-    flag_off, model, engine_config, sample_agent_config, mock_litellm_response
-):
-    sample_agent_config.model_primary = model
-    sample_agent_config.model_fallbacks = []
-    first, second = await _two_runs(engine_config, sample_agent_config, mock_litellm_response)
-    assert _dump(first[0]) != _dump(second[0])
-
-
 @pytest.mark.parametrize("model", ALL_MODELS)
-def test_guardrail_summary_stays_in_the_system_prefix(flag_on, model):
+def test_guardrail_summary_stays_in_the_system_prefix(model):
     kwargs = _build(model, _messages(_system_at(9, 41), _history(2), "hello"))
     assert json.dumps(GUARDRAIL)[1:-1] in _dump(kwargs["messages"][0])  # JSON-escaped
     assert "Current time:" not in _dump(kwargs["messages"][0])
 
 
 @pytest.mark.parametrize("model", ALL_MODELS)
-def test_time_goes_in_an_engine_turn_just_before_the_latest_user_message(flag_on, model):
+def test_time_goes_in_an_engine_turn_just_before_the_latest_user_message(model):
     kwargs = _build(model, _messages(_system_at(9, 41), _history(4), "what next?"))
     msgs = kwargs["messages"]
     holders = [i for i, m in enumerate(msgs) if "Current time:" in _dump(m)]
@@ -208,19 +184,19 @@ def test_time_goes_in_an_engine_turn_just_before_the_latest_user_message(flag_on
     assert msgs[-1] == {"role": "user", "content": "what next?"}
 
 
-def test_time_turn_is_engine_labelled_on_anthropic(flag_on):
+def test_time_turn_is_engine_labelled_on_anthropic():
     kwargs = _build(ANTHROPIC_DIRECT, _messages(_system_at(9, 41), _history(2), "hi"))
     turn = kwargs["messages"][-2]
     assert turn["role"] == "user"  # Anthropic hoists developer turns; it is rewritten
     assert _dump(turn).count("[engine]") == 1
 
 
-def test_openai_gets_a_native_developer_turn(flag_on):
+def test_openai_gets_a_native_developer_turn():
     kwargs = _build(OPENAI, _messages(_system_at(9, 41), _history(2), "hi"))
     assert kwargs["messages"][-2]["role"] == "developer"
 
 
-def test_session_messages_are_not_mutated(flag_on):
+def test_session_messages_are_not_mutated():
     messages = _messages(_system_at(9, 41), _history(6), "hi")
     tools = copy.deepcopy(TOOLS)
     before_msgs, before_tools = copy.deepcopy(messages), copy.deepcopy(tools)
@@ -232,7 +208,7 @@ def test_session_messages_are_not_mutated(flag_on):
 # ─── Breakpoints ──────────────────────────────────────────────────────────
 
 
-def test_anthropic_direct_breakpoints_after_tools_system_and_before_last_two(flag_on):
+def test_anthropic_direct_breakpoints_after_tools_system_and_before_last_two():
     history = _history(40)
     kwargs = _build(ANTHROPIC_DIRECT, _messages(_system_at(9, 41), history, "next?"))
     msgs = kwargs["messages"]
@@ -254,7 +230,7 @@ def test_anthropic_direct_breakpoints_after_tools_system_and_before_last_two(fla
     assert _dump(kwargs).count("cache_control") == 3  # Anthropic allows at most 4
 
 
-def test_anthropic_breakpoint_lands_on_a_tool_result(flag_on):
+def test_anthropic_breakpoint_lands_on_a_tool_result():
     messages = [
         {"role": "system", "content": _system_at(9, 41)},
         {"role": "user", "content": "look it up"},
@@ -282,15 +258,9 @@ def test_anthropic_breakpoint_lands_on_a_tool_result(flag_on):
 
 
 @pytest.mark.parametrize("model", NO_MARKER_MODELS)
-def test_no_cache_control_sent_to_implicit_cache_routes(flag_on, model):
+def test_no_cache_control_sent_to_implicit_cache_routes(model):
     kwargs = _build(model, _messages(_system_at(9, 41), _history(40), "next?"))
     assert "cache_control" not in _dump(kwargs)
-
-
-def test_flag_off_anthropic_tools_and_history_carry_no_breakpoint(flag_off):
-    kwargs = _build(ANTHROPIC_DIRECT, _messages(_system_at(9, 41), _history(40), "next?"))
-    assert "cache_control" not in _dump(kwargs["tools"])
-    assert all("cache_control" not in _dump(m) for m in kwargs["messages"][1:])
 
 
 # ─── Measurement: shared prefix across two consecutive chat turns ─────────
@@ -333,15 +303,9 @@ def shared_prefix_tokens(model: str) -> tuple[int, int]:
 
 
 @pytest.mark.parametrize("model", ALL_MODELS)
-def test_forty_message_history_shares_at_least_ninety_percent_with_flag_on(flag_on, model):
+def test_forty_message_history_shares_at_least_ninety_percent(model):
     shared, total = shared_prefix_tokens(model)
     assert shared / total >= 0.9
-
-
-@pytest.mark.parametrize("model", ALL_MODELS)
-def test_forty_message_history_shares_only_the_tools_with_flag_off(flag_off, model):
-    shared, total = shared_prefix_tokens(model)
-    assert shared / total < 0.1
 
 
 # ─── One layout, no switch ────────────────────────────────────────────────
