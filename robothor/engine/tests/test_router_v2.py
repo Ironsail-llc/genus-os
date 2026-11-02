@@ -234,3 +234,27 @@ class TestRouteSignal:
         monkeypatch.delenv("ROBOTHOR_ROUTER_V2", raising=False)
         route = _route(chat_agent, LONG_PROSE, TriggerType.WEBCHAT)
         assert route.planning is True
+
+
+class TestNoRouterFlag:
+    """The chat-turn routing is the only code path: no switch turns it off."""
+
+    def test_feature_flags_has_no_router_reader(self):
+        from robothor.engine import feature_flags
+
+        assert not [name for name in dir(feature_flags) if "router" in name.lower()]
+
+    def test_feature_flags_source_does_not_name_the_variable(self):
+        import inspect
+
+        from robothor.engine import feature_flags
+
+        assert "ROBOTHOR_ROUTER_V2" not in inspect.getsource(feature_flags)
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_mock_run_persistence")
+    async def test_env_var_set_off_still_skips_the_planner(self, runner, chat_agent, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_ROUTER_V2", "0")
+        run, fake = await _turn(runner, chat_agent, LONG_PROSE)
+        assert run.status == RunStatus.COMPLETED
+        assert fake.planner_calls == 0
