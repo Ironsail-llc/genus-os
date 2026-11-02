@@ -68,11 +68,36 @@ class FakeDB:
         self.statements: list[str] = []
         self.delay = delay
         self._lock = threading.Lock()
+        #: When set, each warmup-section thread's first statement waits here:
+        #: it only opens once that many sections are in flight at the same time.
+        self.gate: threading.Barrier | None = None
+        self._gated = threading.local()
+        self.in_flight = 0
+        self.max_in_flight = 0
 
     def charge(self, sql: str) -> None:
+        # The deferred read-accounting write runs off the critical path on its
+        # own thread; it is not a section, so it is not counted as in flight.
+        counted = not threading.current_thread().name.startswith("warmup-deferred")
         with self._lock:
             self.statements.append(" ".join(sql.split()))
-        time.sleep(self.delay)
+            if counted:
+                self.in_flight += 1
+                self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            gate = self.gate
+            if (
+                gate is not None
+                and threading.current_thread().name.startswith("warmup-section")
+                and not getattr(self._gated, "done", False)
+            ):
+                self._gated.done = True
+                gate.wait()
+            time.sleep(self.delay)
+        finally:
+            if counted:
+                with self._lock:
+                    self.in_flight -= 1
 
     def count(self, needle: str) -> int:
         with self._lock:
@@ -350,24 +375,27 @@ class TestFewerStatements:
         assert "Bob owns the billing service." in parallel
 
 
-class TestWallTime:
-    def test_parallel_is_near_the_slowest_section_not_the_sum(self, db: FakeDB) -> None:
-        _build(fan_out=False)  # first-call imports are not what is measured
-        db.statements.clear()
-        _, sequential_s = _build(fan_out=False)
-        sequential_statements = len(db.statements)
-        timings: dict[str, float] = {}
-        _, parallel_s = _build(timings=timings)  # the last warmup had slow sections
+class TestOverlapAndTiming:
+    def test_fanned_out_sections_are_all_in_flight_at_once(self, db: FakeDB) -> None:
+        """Structural, not wall-clock: in place, one statement runs at a time;
+        fanned out, every section has started before any of them can finish."""
+        _build(fan_out=False)
+        assert db.max_in_flight == 1  # in place: strictly one after another
 
-        # In place: the sum of every statement, one after another.
-        assert sequential_s >= sequential_statements * STATEMENT_SECONDS * 0.95
-        slowest = max(timings.values())
-        assert parallel_s < 1.5 * slowest, (parallel_s, timings)
-        print(
-            f"\nwarmup sequential={sequential_s * 1000:.0f}ms "
-            f"({sequential_statements} statements) parallel={parallel_s * 1000:.0f}ms "
-            f"slowest_section={slowest * 1000:.0f}ms"
-        )
+        sections = 8  # identity, blocks, entity, hooks, host, tasks, fleet, goal
+        # Each section's first statement blocks until all eight are waiting, so
+        # this only opens if they run concurrently; run in sequence, the first
+        # one would wait alone and the barrier would time out and break.
+        db.gate = threading.Barrier(sections, timeout=10)
+        db.max_in_flight = 0
+        timings: dict[str, float] = {}
+        text, _ = _build(timings=timings)  # the last warmup had slow sections
+
+        assert not db.gate.broken
+        assert db.max_in_flight >= sections
+        assert len(timings) == sections
+        for marker in ("--- CURRENT USER ---", "--- MEMORY BLOCKS ---", "--- AGENT GOAL ---"):
+            assert marker in text, marker
 
     def test_per_section_timings_are_recorded(self, db: FakeDB) -> None:
         timings: dict[str, float] = {}
