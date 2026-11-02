@@ -1183,6 +1183,7 @@ class ToolRegistry:
         task_author_override: str = "",
         is_benchmark: bool = False,
         identity: IdentityContext | None = None,
+        capability_tier: str = "",
     ) -> dict[str, Any]:
         """Execute a tool and return the result dict.
 
@@ -1196,6 +1197,9 @@ class ToolRegistry:
                 for system/cron/heartbeat runs. Threaded onto ToolContext for
                 data-scoping (Task 5); every existing caller omitting this
                 gets the unaffected default.
+            capability_tier: The role capability tier the call runs under.
+                Empty (every ordinary caller) means the run's effective tier;
+                ``tool_call`` passes its caller's through ToolContext.call_kwargs.
         """
         # Match supplied argument names to this tool's declared parameters,
         # ignoring case and underscores. 82 tools are snake_case and 26 are
@@ -1237,6 +1241,7 @@ class ToolRegistry:
                             task_author_override=task_author_override,
                             is_benchmark=is_benchmark,
                             identity=identity,
+                            capability_tier=capability_tier,
                         )
             else:
                 return await _execute_tool(
@@ -1252,6 +1257,7 @@ class ToolRegistry:
                     task_author_override=task_author_override,
                     is_benchmark=is_benchmark,
                     identity=identity,
+                    capability_tier=capability_tier,
                 )
         except (WorkflowDeadlineError, RuntimeDeadlineError):
             # NOT this tool's timeout. `spawn_agent` runs a child

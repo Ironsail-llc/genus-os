@@ -659,6 +659,7 @@ async def _execute_tool(
     task_author_override: str = "",
     is_benchmark: bool = False,
     identity: IdentityContext | None = None,
+    capability_tier: str = "",
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
 
@@ -683,7 +684,8 @@ async def _execute_tool(
         task_author_override=task_author_override,
         is_benchmark=is_benchmark,
         identity=identity,
-        capability_tier=current_run_tier(),
+        # An explicit tier is a caller's (tool_call's call_kwargs); else the run's.
+        capability_tier=capability_tier or current_run_tier(),
     )
     denial = await _runtime_denial(name, args, ctx)
     if denial:

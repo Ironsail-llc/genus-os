@@ -1,7 +1,7 @@
 """The role capability tier travels with a call into the tool it reaches.
 
 The capability tier is a ``ToolContext`` field: dispatch fills it from the
-run's effective tier (``capability_tier.current_effective_tier``), and the
+run's effective tier (``capability_tier.current_run_tier``), and the
 handlers that widen or narrow on it read it from there. A handler that runs
 another tool on its caller's behalf (``tool_call``) hands that call its whole
 context through ``ToolContext.call_kwargs()``, so ``ToolRegistry.execute``
@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from robothor.engine.capability_tier import clear_effective_tier, set_effective_tier
+from robothor.engine.capability_tier import clear_run_tier, set_run_tier
 from robothor.engine.tools import dispatch
 from robothor.engine.tools.dispatch import (
     ToolContext,
@@ -54,11 +54,11 @@ async def test_an_explicit_tier_is_the_one_the_call_runs_under() -> None:
 @pytest.mark.asyncio
 async def test_with_no_tier_given_the_runs_effective_tier_is_used() -> None:
     seen: list[ToolContext] = []
-    token = set_effective_tier("elevated")
+    token = set_run_tier("elevated")
     try:
         await _run("probe", {}, seen)
     finally:
-        clear_effective_tier(token)
+        clear_run_tier(token)
     assert [c.capability_tier for c in seen] == ["elevated"]
 
 
