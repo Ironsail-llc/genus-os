@@ -720,6 +720,7 @@ class TestStreamingToolVisibility:
                         "call_id": "c1",
                     }
                 )
+                await asyncio.sleep(0.05)  # the progress worker edits on its throttle
             if on_content:
                 await on_content("Result here")
             return AgentRun(
@@ -729,6 +730,7 @@ class TestStreamingToolVisibility:
             )
 
         bot.runner.execute = AsyncMock(side_effect=fake_execute)
+        bot._progress_edit_interval = 0.01
 
         session_key = bot._session_key("12345")
         session = get_shared_session(session_key)
@@ -745,50 +747,14 @@ class TestStreamingToolVisibility:
         assert tool_shown, f"Expected 'Searching memory' in edit calls: {edit_calls}"
 
     @pytest.mark.asyncio
-    async def test_no_content_streaming_in_telegram(self, bot):
-        """on_content is not passed to execute — no content streaming edits."""
+    async def test_status_message_deleted_when_the_final_edit_is_refused(self, bot):
+        """Telegram refuses the in-place answer: the status message goes, the answer is sent."""
         from robothor.engine.models import AgentRun, RunStatus, TriggerType
 
         sent_msg = MagicMock()
         sent_msg.message_id = 42
         bot.bot.send_message = AsyncMock(return_value=sent_msg)
-        bot.bot.edit_message_text = AsyncMock()
-        bot.bot.delete_message = AsyncMock()
-        bot.bot.send_chat_action = AsyncMock()
-
-        async def fake_execute(**kwargs):
-            # on_content should NOT be passed
-            assert kwargs.get("on_content") is None, "on_content should not be passed"
-            return AgentRun(
-                status=RunStatus.COMPLETED,
-                output_text="Done",
-                trigger_type=TriggerType.TELEGRAM,
-            )
-
-        bot.runner.execute = AsyncMock(side_effect=fake_execute)
-
-        session_key = bot._session_key("12345")
-        session = get_shared_session(session_key)
-        await bot._run_interactive("12345", session_key, session, "test")
-
-        task = bot._active_tasks.get("12345")
-        if task:
-            await task
-
-        # Final output delivered as new message (send_message), not edit
-        send_calls = bot.bot.send_message.call_args_list
-        final_sent = any("Done" in str(call) for call in send_calls)
-        assert final_sent, f"Expected 'Done' in send_message calls: {send_calls}"
-
-    @pytest.mark.asyncio
-    async def test_status_message_deleted_before_final(self, bot):
-        """The thinking/status message is deleted before the final output is sent."""
-        from robothor.engine.models import AgentRun, RunStatus, TriggerType
-
-        sent_msg = MagicMock()
-        sent_msg.message_id = 42
-        bot.bot.send_message = AsyncMock(return_value=sent_msg)
-        bot.bot.edit_message_text = AsyncMock()
+        bot.bot.edit_message_text = AsyncMock(side_effect=RuntimeError("edit refused"))
         bot.bot.delete_message = AsyncMock()
         bot.bot.send_chat_action = AsyncMock()
 
@@ -809,8 +775,10 @@ class TestStreamingToolVisibility:
         if task:
             await task
 
-        # Status message (id=42) should be deleted
+        # Status message (id=42) should be deleted, the answer sent fresh
         bot.bot.delete_message.assert_called_once_with(chat_id=12345, message_id=42)
+        sent = [str(call) for call in bot.bot.send_message.call_args_list]
+        assert any("Here are your results" in text for text in sent), sent
 
 
 class TestUserResolution:

@@ -1,13 +1,8 @@
-"""Telegram turns with ROBOTHOR_CHANNEL_STREAMING off and on.
+"""Telegram turns stream into the "Thinking..." message.
 
-Off: the turn is today's turn, call for call — ``runner.execute`` gets the same
-keywords (no ``on_content``, so the LLM call stays non-streaming) and the bot
-sees the same sequence of sends, edits and deletes. That is pinned against a
-committed fixture recorded from the code before this change.
-
-On: the "Thinking..." message becomes the progress message. The runner gets an
-``on_content``, runs inside a channel-streaming scope, and the answer finalises
-that same message instead of arriving as a second one.
+That message becomes the progress message. The runner gets an ``on_content``,
+runs inside a channel-streaming scope, tool events show as a progress line, and
+the answer finalises that same message instead of arriving as a second one.
 """
 
 from __future__ import annotations
@@ -15,9 +10,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import enum
-import json
-import os
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -30,7 +22,6 @@ from robothor.engine.models import AgentRun, RunStatus, TriggerType
 from robothor.engine.telegram import TelegramBot
 from robothor.engine.telegram_format import telegram_chunks
 
-FIXTURE = Path(__file__).parent / "fixtures" / "telegram_turn_flag_off.json"
 ANSWER = "**Tides** rise twice a day."
 
 
@@ -113,36 +104,33 @@ async def _turn(tg: TelegramBot, execute: Any) -> None:
         await task
 
 
-def _execute_kwargs(execute: AsyncMock) -> dict[str, Any]:
-    return {k: _plain(v) for k, v in execute.await_args.kwargs.items()}
-
-
 @pytest.mark.asyncio
-async def test_flag_off_turn_matches_the_fixture(bot, channel_streaming):
-    """AC8: kwargs and bot calls identical to the recording made before the change."""
-    channel_streaming(False)
+async def test_tool_events_show_on_the_progress_message(bot):
+    """A running tool is a line on the Thinking... message; the answer replaces it."""
+    bot._progress_edit_interval = 0.05
     run = _run()
 
     async def on_tool_events(**kwargs: Any) -> AgentRun:
         await kwargs["on_tool"]({"event": "tool_start", "tool": "web_search", "call_id": "c1"})
+        await asyncio.sleep(0.15)
         await kwargs["on_tool"]({"event": "tool_end", "tool": "web_search", "call_id": "c1"})
         return run
 
     execute = AsyncMock(side_effect=on_tool_events)
     await _turn(bot, execute)
 
-    # Through JSON so tuples compare as the lists the fixture holds.
-    observed = json.loads(json.dumps({"execute": _execute_kwargs(execute), "bot": bot.bot.calls}))
-    if os.environ.get("REGENERATE_TELEGRAM_FIXTURE"):
-        FIXTURE.write_text(json.dumps(observed, indent=2, sort_keys=True) + "\n")
-    assert observed == json.loads(FIXTURE.read_text())
-    assert "on_content" not in execute.await_args.kwargs
+    calls = bot.bot.calls
+    edits = [c[1] for c in calls if c[0] == "edit_message_text"]
+    assert {e["message_id"] for e in edits} == {42}
+    assert any("Searching the web" in e["text"] for e in edits[:-1]), edits
+    assert edits[-1]["text"] == telegram_chunks(ANSWER)[0].html
+    assert [c[0] for c in calls].count("send_message") == 1
+    assert not [c for c in calls if c[0] == "delete_message"]
 
 
 @pytest.mark.asyncio
-async def test_flag_on_streams_into_the_thinking_message(bot, channel_streaming):
+async def test_a_turn_streams_into_the_thinking_message(bot):
     """AC1 end to end: one message id edited N times, then finalised in place."""
-    channel_streaming(True)
     bot._progress_edit_interval = 0.1
     run = _run()
     scoped: list[bool] = []

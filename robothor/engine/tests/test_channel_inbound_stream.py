@@ -2,11 +2,10 @@
 
 A plugin channel cannot reach ``runner.execute`` itself; it hands a message to
 ``channels.inbound.handle_message`` and gets the reply back. With an optional
-``stream`` callback and ``ROBOTHOR_CHANNEL_STREAMING`` on, the run's cumulative
-text reaches that callback as it is written (the runner's ``on_content``), and
-the run executes inside a channel-streaming scope, so a transient stream failure
-retries in place. With the flag off, or no callback, the call is today's, key
-for key.
+``stream`` callback, the run's cumulative text reaches that callback as it is
+written (the runner's ``on_content``), and the run executes inside a
+channel-streaming scope, so a transient stream failure retries in place. With
+no callback, the call carries no ``on_content`` and runs outside the scope.
 """
 
 from __future__ import annotations
@@ -41,9 +40,8 @@ async def _stream(_text: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_flag_on_passes_the_stream_as_on_content(monkeypatch, channel_streaming):
+async def test_a_stream_is_passed_as_on_content(monkeypatch):
     """AC9."""
-    channel_streaming(True)
     runner = _ScopeRecordingRunner()
 
     result = await _handle(monkeypatch, _allow(), runner, stream=_stream)
@@ -54,24 +52,7 @@ async def test_flag_on_passes_the_stream_as_on_content(monkeypatch, channel_stre
 
 
 @pytest.mark.asyncio
-async def test_flag_off_ignores_the_stream(monkeypatch, channel_streaming):
-    """AC8: byte-identical kwargs with the flag off, even when a stream is passed."""
-    channel_streaming(False)
-    plain, streamed = _ScopeRecordingRunner(), _ScopeRecordingRunner()
-
-    # record_turn=False: the harness's fake session is shared, and the first
-    # call's recorded turn would otherwise become the second call's history.
-    await _handle(monkeypatch, _allow(), plain, record_turn=False)
-    await _handle(monkeypatch, _allow(), streamed, stream=_stream, record_turn=False)
-
-    assert "on_content" not in streamed.calls[0]
-    assert streamed.calls[0] == plain.calls[0]
-    assert streamed.scoped == [False]
-
-
-@pytest.mark.asyncio
-async def test_no_stream_keeps_the_call_unchanged_with_the_flag_on(monkeypatch, channel_streaming):
-    channel_streaming(True)
+async def test_no_stream_keeps_the_call_unchanged(monkeypatch):
     runner = _ScopeRecordingRunner()
 
     await _handle(monkeypatch, _allow(), runner)

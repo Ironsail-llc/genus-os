@@ -2,13 +2,12 @@
 
 Before: a streaming attempt that died with a connection reset, a 5xx or a 529
 was blamed and the chain advanced to the next model, so a provider blip handed
-a Telegram turn to a weaker fallback. With ``ROBOTHOR_CHANNEL_STREAMING`` on and
-the caller inside a channel-streaming scope, the same model gets ONE more try:
-the partial text is discarded and the client is told through the run's status
-sink. Stalls still fall back (a second stall would double the wait), and a
-second failure still falls back. Outside the scope, or with the flag off,
-nothing changes — the webchat client appends deltas and would show the partial
-text twice.
+a Telegram turn to a weaker fallback. With the caller inside a channel-streaming
+scope, the same model gets ONE more try: the partial text is discarded and the
+client is told through the run's status sink. Stalls still fall back (a second
+stall would double the wait), and a second failure still falls back. Outside
+the scope nothing changes — the webchat client appends deltas and would show
+the partial text twice.
 
 Also here: inside the scope, text the model writes in a tool turn keeps
 reaching ``on_content`` (shown as interim progress), where today it is cut off
@@ -133,10 +132,9 @@ TRANSIENT = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", TRANSIENT)
 async def test_a_transient_failure_retries_once_on_the_same_model(
-    breaker, no_retry_pause, channel_streaming, status_events, error
+    breaker, no_retry_pause, status_events, error
 ):
     """AC4: completes on the SAME model; one stream_retry status; partial discarded."""
-    channel_streaming(True)
     seen: list[str] = []
 
     async def on_content(text: str) -> None:
@@ -163,11 +161,8 @@ async def test_a_transient_failure_retries_once_on_the_same_model(
 
 
 @pytest.mark.asyncio
-async def test_a_second_failure_falls_back(
-    breaker, no_retry_pause, channel_streaming, status_events
-):
+async def test_a_second_failure_falls_back(breaker, no_retry_pause, status_events):
     """AC5: one in-place retry, not two."""
-    channel_streaming(True)
     acompletion = AsyncMock(
         side_effect=[
             _Stream([_chunk("p")], fail_with=_ProviderError(502)),
@@ -183,9 +178,8 @@ async def test_a_second_failure_falls_back(
 
 
 @pytest.mark.asyncio
-async def test_a_stall_still_falls_back(breaker, no_retry_pause, channel_streaming, status_events):
+async def test_a_stall_still_falls_back(breaker, no_retry_pause, status_events):
     """AC6: a stalled stream is not retried in place."""
-    channel_streaming(True)
     acompletion = AsyncMock(
         side_effect=[
             _Stream([_chunk("p")], fail_with=TimeoutError("stalled")),
@@ -200,23 +194,15 @@ async def test_a_stall_still_falls_back(breaker, no_retry_pause, channel_streami
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("on", "scoped"), [(False, True), (True, False)])
-async def test_no_retry_without_both_flag_and_scope(
-    breaker, no_retry_pause, channel_streaming, status_events, on, scoped
-):
-    """Today's behaviour: flag off, or a caller (webchat) outside the scope."""
-    channel_streaming(on)
+async def test_no_retry_outside_the_scope(breaker, no_retry_pause, status_events):
+    """A caller outside the scope (the webchat) falls back as before."""
     acompletion = AsyncMock(
         side_effect=[
             _Stream([_chunk("p")], fail_with=_ProviderError(503)),
             _Stream([_chunk("From b.")]),
         ]
     )
-    if scoped:
-        with channel_stream_scope():
-            await _call(acompletion, ["openrouter/a", "openrouter/b"])
-    else:
-        await _call(acompletion, ["openrouter/a", "openrouter/b"])
+    await _call(acompletion, ["openrouter/a", "openrouter/b"])
 
     assert _models_called(acompletion) == ["openrouter/a", "openrouter/b"]
     assert not status_events
@@ -227,9 +213,8 @@ def _tool_turn_stream() -> _Stream:
 
 
 @pytest.mark.asyncio
-async def test_tool_turn_text_reaches_a_streaming_channel(breaker, channel_streaming):
+async def test_tool_turn_text_reaches_a_streaming_channel(breaker):
     """AC7: inside the scope, text after a tool-call delta is not suppressed."""
-    channel_streaming(True)
     seen: list[str] = []
 
     async def on_content(text: str) -> None:
@@ -242,20 +227,13 @@ async def test_tool_turn_text_reaches_a_streaming_channel(breaker, channel_strea
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("on", "scoped"), [(False, True), (True, False)])
-async def test_tool_turn_text_suppressed_as_today_otherwise(breaker, channel_streaming, on, scoped):
-    channel_streaming(on)
+async def test_tool_turn_text_suppressed_outside_the_scope(breaker):
     seen: list[str] = []
 
     async def on_content(text: str) -> None:
         seen.append(text)
 
-    acompletion = AsyncMock(return_value=_tool_turn_stream())
-    if scoped:
-        with channel_stream_scope():
-            await _call(acompletion, ["openrouter/a"], on_content)
-    else:
-        await _call(acompletion, ["openrouter/a"], on_content)
+    await _call(AsyncMock(return_value=_tool_turn_stream()), ["openrouter/a"], on_content)
 
     assert seen == ["Let me check."]
 

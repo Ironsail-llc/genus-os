@@ -36,7 +36,7 @@ from aiogram.types import (
     Message,
 )
 
-from robothor.engine.channel_streaming import channel_stream_scope, channel_streaming_enabled
+from robothor.engine.channel_streaming import channel_stream_scope
 from robothor.engine.chat import (
     get_main_session_key,
     get_shared_session,
@@ -102,7 +102,7 @@ _RESTART_TRIGGERS: dict[str, Path] = {
     "robothor-app.service": Path("/run/robothor/restart-requests/robothor-app"),
 }
 
-#: Runner events the progress message consumes in progress mode.
+#: Runner events the progress message consumes.
 _PROGRESS_EVENTS = frozenset({"progress", "tool_start", "tool_end", "stream_retry"})
 
 # Friendly tool names for streaming indicators
@@ -478,19 +478,13 @@ class TelegramBot(
         except Exception:
             stream_msg_id = None
 
-        # ── Status-only updates (no content streaming) ──
-        # Telegram rate-limits editMessageText to ~20/min.  Instead of streaming
-        # content token-by-token, we show brief tool-status edits on the
-        # "Thinking..." message and deliver the final output as a new message.
-        tool_status_interval = 10.0  # max one status edit per 10 seconds
-        last_status_time: float = 0.0
         checklist_msg_id: int | None = None
 
-        # ── Progress mode (ROBOTHOR_CHANNEL_STREAMING) ──
+        # ── Progress message ──
         # The "Thinking..." message becomes the progress message: the answer
         # streams into it on a throttle and it is finalised in place.
         progress: TelegramProgress | None = None
-        if stream_msg_id is not None and channel_streaming_enabled():
+        if stream_msg_id is not None:
             progress = TelegramProgress(
                 self.bot,
                 chat_id,
@@ -500,32 +494,12 @@ class TelegramBot(
             )
 
         async def on_tool(event: dict[str, Any]) -> None:
-            nonlocal last_status_time, checklist_msg_id
-            if progress is not None and event.get("event") in _PROGRESS_EVENTS:
-                await progress.on_event(event)
+            nonlocal checklist_msg_id
+            if event.get("event") in _PROGRESS_EVENTS:
+                if progress is not None:
+                    await progress.on_event(event)
                 return
-            if event.get("event") == "progress":
-                from robothor.engine.performance import show_progress
-
-                await show_progress(self.bot, chat_id, stream_msg_id, event["text"])
-                return
-            if event.get("event") == "tool_start":
-                now = time.monotonic()
-                if (now - last_status_time) < tool_status_interval:
-                    return
-                label = _friendly_tool_name(event.get("tool", ""))
-                try:
-                    if stream_msg_id is not None:
-                        await self.bot.edit_message_text(
-                            chat_id=int(chat_id),
-                            message_id=stream_msg_id,
-                            text=f"\U0001f527 {label}...",
-                            parse_mode=None,
-                        )
-                        last_status_time = now
-                except Exception:
-                    pass
-            elif event.get("event") == "todo_updated":
+            if event.get("event") == "todo_updated":
                 todos = event.get("todos", [])
                 try:
                     if todos:
@@ -610,13 +584,11 @@ class TelegramBot(
                     "identity": _identity,
                     "live_inbox": inbox,
                 }
-                if progress is None:
-                    run = await self.runner.execute(**execute_kwargs)
-                else:
-                    with channel_stream_scope():
-                        run = await self.runner.execute(
-                            **execute_kwargs, on_content=progress.on_content
-                        )
+                with channel_stream_scope():
+                    run = await self.runner.execute(
+                        **execute_kwargs,
+                        on_content=progress.on_content if progress is not None else None,
+                    )
                 run_for_delivery = run
                 self._seal_live_inbox(chat_id, inbox)  # later messages are a new turn
 
@@ -809,8 +781,8 @@ class TelegramBot(
     ) -> list[Any]:
         """Deliver a finished run's answer; the one place a turn's reply goes out.
 
-        Progress mode (``progress`` set) finalises the progress message in
-        place when the answer fits one edit. Otherwise the status message is
+        The progress message is finalised in place when the answer fits one
+        edit. Otherwise the status message is
         deleted and the answer (or the error, or "no output") is sent as new
         messages. Returns the delivered Message objects, so the caller can
         record delivery and map platform message ids.

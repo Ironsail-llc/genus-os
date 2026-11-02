@@ -1,7 +1,6 @@
-"""Telegram progress mode: one message, edited in place, never too often.
+"""Telegram progress message: one message, edited in place, never too often.
 
-With ``ROBOTHOR_CHANNEL_STREAMING`` on, the "Thinking..." message a Telegram
-turn starts with becomes the place the answer is written: the model's
+The "Thinking..." message a Telegram turn starts with becomes the place the answer is written: the model's
 cumulative text, plain, plus a compact line for the tool that is running
 ("Searching the web · 4s"). When the run ends, :meth:`TelegramProgress.finalise`
 turns the same message into the formatted answer through the existing Markdown

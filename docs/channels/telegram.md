@@ -9,10 +9,7 @@ is working, then pictures and files in both directions.
 
 ## Watching the answer arrive
 
-By default the bot shows "Thinking...", edits it at most every ten seconds to
-name the tool it is running, then replaces it with the answer as a new message.
-
-With `ROBOTHOR_CHANNEL_STREAMING` on, that first message becomes a progress
+The bot shows "Thinking..." straight away, and that message becomes a progress
 message: the answer is written into it as the model produces it, at most one
 edit a second (Telegram's limit for a chat; a "retry after" from Telegram
 pushes the next edit back), with a line such as "Searching the web · 4s" while
