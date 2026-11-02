@@ -139,6 +139,14 @@ def test_the_retired_switch_is_not_a_declared_setting():
     assert STALE_SWITCH not in declared
 
 
+def test_the_handler_says_it_takes_a_credential_in_chat():
+    """Capability copy reads a public marker, and the gate it names stays put."""
+    from robothor.engine.tools.handlers import vault as vault_tools
+
+    assert vault_tools.CREDENTIAL_INTAKE is True
+    assert callable(vault_tools._intake_gate)
+
+
 # ── the owner's hand-over works ──────────────────────────────────────────────
 
 
