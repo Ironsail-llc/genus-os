@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-491 settings in 18 groups.
+494 settings in 18 groups.
 
 ## autonomy
 
