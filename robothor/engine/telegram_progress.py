@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Any
 
 from aiogram.exceptions import TelegramRetryAfter
 
+from robothor.engine.wrapped_call import inner_call
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Awaitable, Callable
 
@@ -97,7 +99,9 @@ class TelegramProgress:
         """A runner tool/status event: tool start and end, a retry, a progress note."""
         kind = event.get("event")
         if kind == "tool_start":
-            self._tool = self._label_for(str(event.get("tool", "")))
+            # tool_call is a wrapper: name the tool it runs, as every control does.
+            tool, _ = inner_call(str(event.get("tool", "")), event.get("args"))
+            self._tool = self._label_for(tool)
             self._tool_started = time.monotonic()
         elif kind == "tool_end":
             self._tool = None
