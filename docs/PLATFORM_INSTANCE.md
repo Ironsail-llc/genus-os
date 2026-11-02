@@ -148,8 +148,9 @@ Agents are built using a CLI + Claude Code workflow:
 
 The Helm's agent builder (`/api/agent-manifests`) is the same flow without the
 ssh session: it scaffolds from the same templates, validates with the same
-checks, writes the same files, and then calls the engine reconcile so the agent
-fires without a restart. See `docs/AGENT_BUILDER.md`.
+checks, writes the same files, and then reconciles the scheduler so the agent
+fires without a restart. The files are written by the engine, which mounts the
+workspace; the bridge only gates, audits and forwards. See `docs/AGENT_BUILDER.md`.
 
 Agent manifests and instructions are instance data — they stay in `docs/agents/` and `brain/agents/` (gitignored). Platform code provides the engine, tools, and templates.
 
