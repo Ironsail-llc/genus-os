@@ -367,21 +367,22 @@ uncontained.
 An explicit `sandbox: docker` always wins, in every mode. Agents without `exec`
 are never in scope, with or without the override.
 
-### Sandbox playground — `ROBOTHOR_SANDBOX_PLAYGROUND`
+### Sandbox playground: when a container cannot be had
 
-A bool, default off. It changes what happens when a container is wanted
-(manifest `sandbox: docker`, or `ROBOTHOR_SANDBOX_DEFAULT_MODE=enforce`) and
-cannot be had, because the engine has no runtime or the container fails to
-start. It does not change which agents are containerised. It does widen what
-the owner or admin driving a run may do, as described below the table.
+There is no switch for this: it is how the engine behaves. It covers a
+container that is wanted (manifest `sandbox: docker`, or
+`ROBOTHOR_SANDBOX_DEFAULT_MODE=enforce`) and cannot be had, because the engine
+has no runtime or the container fails to start. It does not change which agents
+are containerised. It does widen what the owner or admin driving a run may do,
+as described below the table.
 
-| Who is running | Flag off (today) | Flag on |
-|---|---|---|
-| Owner or admin driving a root run | run fails at step 0: "Blocked by sandbox_default: sandbox required but could not be started" | run continues; `exec` runs on the engine host, result has `executed_on: host` and an `execution_note` |
-| Member, automated run (any service role, including `owner`), sub-agent, benchmark | run fails at step 0 | run continues; each `exec` and `execute_code` is refused with `error_type: exec_unavailable`, the gate and an `unlock`, and the desktop and browser tools are blocked by the `sandbox_playground` guardrail. An agent that holds those tools with no guardrails at all (`guardrails_opt_out` and none configured) fails at step 0 as before, because nothing could refuse them per call |
-| Anyone, runtime present | container | container (`executed_on: sandbox`) |
+| Who is running | What happens |
+|---|---|
+| Owner or admin driving a root run | run continues; `exec` runs on the engine host, result has `executed_on: host` and an `execution_note` |
+| Member, automated run (any service role, including `owner`), sub-agent, benchmark | run continues; each `exec` and `execute_code` is refused with `error_type: exec_unavailable`, the gate and an `unlock`, and the desktop and browser tools are blocked by the `sandbox_playground` guardrail. An agent that holds those tools with no guardrails at all (`guardrails_opt_out` and none configured) fails at step 0 as before, because nothing could refuse them per call |
+| Anyone, runtime present | container (`executed_on: sandbox`) |
 
-What the flag widens, and for whom. "Driving" means a person is on the other
+What it widens, and for whom. "Driving" means a person is on the other
 end: an interactive trigger (chat, messaging, IDE, manual), not a cron, hook,
 event, workflow, federation or sub-agent run, not a service credential, and not
 a run the engine resumes on its own after a verified repair (`repair-resume:`),
@@ -405,13 +406,12 @@ A root run is one nothing spawned: a sub-agent never counts as one, even when
 its parent's run row was not recorded. Agents that want no container are never
 probed for a runtime, and runs starting together share one probe.
 
-Before turning it on:
+To see where commands go and what happened:
 
 1. `genus doctor` and read `sandbox.runtime` (is there a runtime) and
    `sandbox.policy` (per exec-holding agent, where an owner and a member would
    run).
-2. Set `ROBOTHOR_SANDBOX_PLAYGROUND=1` in the engine's environment and restart.
-3. Read the evidence:
+2. Read the evidence:
 
    ```sql
    SELECT guardrail_name, action, reason, created_at
@@ -425,5 +425,5 @@ Before turning it on:
    `execute_code`; one `exec_allowlist` row (action `observed`) per allowlist
    bypass.
 
-Rollback: unset the variable and restart. Runs that wanted a container fail
-closed again, as before.
+Installing a runtime (rootless podman, or a backend selected with
+`ROBOTHOR_SANDBOX_BACKEND`) puts every run that wants a container back in one.

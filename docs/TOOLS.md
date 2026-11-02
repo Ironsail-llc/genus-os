@@ -1026,7 +1026,7 @@ resolving to a real spill file, so quoting the path in a comment buys nothing.
 
 ### `exec` — where a command ran
 
-With `ROBOTHOR_SANDBOX_PLAYGROUND` on, every `exec` result carries
+Every `exec` result carries
 `executed_on`: `sandbox` (the run's container), `host` (the engine) or
 `host_service` (the owner's host-execution service). When the agent wanted a
 container and the engine has none, the command of an owner or admin driving
@@ -1038,9 +1038,8 @@ container runs on the host, and its note says so. Anyone else gets
 role, and an `unlock` saying who can run it or what the operator would install.
 `execute_code` is refused the same way, and the desktop and browser tools are
 blocked by the `sandbox_playground` guardrail. Nothing ran, so do not retry it:
-pass the unlock on. With the flag off none of
-these keys appear. The rollout is in
-[Guardrail flips](runbooks/GUARDRAIL_FLIPS.md#sandbox-playground-robothor_sandbox_playground).
+pass the unlock on. Who gets which outcome is in
+[Guardrail flips](runbooks/GUARDRAIL_FLIPS.md#sandbox-playground-when-a-container-cannot-be-had).
 
 ### Calling an API from code: `genus_tools`, not `curl`
 

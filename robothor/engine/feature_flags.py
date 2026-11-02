@@ -443,20 +443,6 @@ def sandbox_default_mode() -> EnforcementMode:
     return _enforcement_mode("ROBOTHOR_SANDBOX_DEFAULT_ENABLED", "ROBOTHOR_SANDBOX_DEFAULT_MODE")
 
 
-def sandbox_playground_enabled() -> bool:
-    """True iff the sandbox widens what can run instead of failing the run.
-
-    Gated on ``ROBOTHOR_SANDBOX_PLAYGROUND`` (default off). When on, a run whose
-    container is wanted but cannot be started is not failed: an owner or admin
-    driving a root run runs ``exec`` on the engine host with a note, and anyone
-    else is refused per call with the gate and the unlock named
-    (``sandbox_policy.resolve_execution_plan``). That owner or admin is also not
-    bound by the exec allowlist and may run ``execute_code`` beside a live
-    container (``sandbox_policy.acting_host_role``). Off is today's behaviour.
-    """
-    return _env_bool("ROBOTHOR_SANDBOX_PLAYGROUND")
-
-
 def rbac_enforcement_mode() -> EnforcementMode:
     """Rollout mode for RBAC over system/cron/hook runs.
 

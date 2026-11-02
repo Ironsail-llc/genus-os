@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-489 settings in 18 groups.
+488 settings in 18 groups.
 
 ## autonomy
 
@@ -319,7 +319,6 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_SANDBOX_DEFAULT_MODE` | str | _(empty)_ | `robothor-engine` | no | legacy | **governed.** Fleet default sandbox mode for agents whose manifest names none. Empty leaves exec unrouted, which is sandboxing in name only. |
 | `ROBOTHOR_SANDBOX_IMAGE` | str | `robothor-sandbox:latest` | `robothor-engine` | no | legacy | Image sandboxed exec runs agent commands inside. |
 | `ROBOTHOR_SANDBOX_NETWORK` | str | `none` | `robothor-engine` | no | legacy | Container network for sandboxed exec. 'none' is the default; only 'bridge' gives sandboxed commands network access. |
-| `ROBOTHOR_SANDBOX_PLAYGROUND` | bool | `false` | `robothor-engine` | no | unreleased | When a container is wanted but cannot start, run exec on the engine host for an owner or admin driving the run (with a note) and refuse it for anyone else with the gate and unlock named, instead of failing the run. Also lets that owner or admin past the exec allowlist and run execute_code on the host beside a live container, each recorded. |
 | `ROBOTHOR_SANDBOX_START_RETRIES` | int | `1` | `robothor-engine` | no | legacy | Retries when the sandbox container fails to start. |
 | `ROBOTHOR_SANDBOX_START_RETRY_SECONDS` | int | `3` | `robothor-engine` | no | legacy | Seconds between sandbox container start retries. |
 | `ROBOTHOR_TIMEZONE` | str | `America/New_York` | `robothor-engine` | no | legacy | IANA timezone schedules and human-facing timestamps are rendered in. |

@@ -803,10 +803,10 @@ class GuardrailEngine:
         (in order). Guardrails that need to inspect context from earlier in the
         run (e.g. "did we already propose the time via email?") read it.
 
-        ``user_role`` is passed only under the sandbox playground, and only the
-        exec allowlist reads it: the role of the owner or admin DRIVING this run,
-        empty for anyone else (``sandbox_policy.acting_host_role``). ``host_refusal`` is a
-        refused execution plan: with no container, a tool a container confines
+        ``user_role`` is read only by the exec allowlist: the role of the owner
+        or admin DRIVING this run, empty for anyone else
+        (``sandbox_policy.acting_host_role``). ``host_refusal`` is a refused
+        execution plan: with no container, a tool a container confines
         (desktop, browser) would reach the engine host, so it is refused here.
         """
         if host_refusal:
@@ -1015,29 +1015,24 @@ class GuardrailEngine:
     ) -> GuardrailResult:
         """The allowlist, as the sandbox playground reads it.
 
-        Under ROBOTHOR_SANDBOX_PLAYGROUND an owner or admin DRIVING this run
-        (``user_role`` is empty for anyone else, including an automated run
-        whose service role reads "owner" and a sub-agent) whose command the
-        allowlist would block is allowed and recorded as an observation: the
-        person's role is the limit. Everyone else keeps the allowlist, inside a
-        container or out. Without the flag it is the allowlist as before.
+        An owner or admin DRIVING this run (``user_role`` is empty for anyone
+        else, including an automated run whose service role reads "owner" and a
+        sub-agent) whose command the allowlist would block is allowed and
+        recorded as an observation: the person's role is the limit. Everyone
+        else keeps the allowlist, inside a container or out.
         """
-        if user_role and self._exec_allowlists.get(agent_id):
-            from robothor.engine.feature_flags import sandbox_playground_enabled
+        verdict = self._exec_allowlist_verdict(tool_name, tool_args, agent_id)
+        if not verdict.allowed and user_role and self._exec_allowlists.get(agent_id):
+            from robothor.engine.sandbox_policy import role_may_run_on_host
 
-            if sandbox_playground_enabled():
-                verdict = self._exec_allowlist_verdict(tool_name, tool_args, agent_id)
-                from robothor.engine.sandbox_policy import role_may_run_on_host
-
-                if not verdict.allowed and role_may_run_on_host(user_role):
-                    return GuardrailResult(
-                        allowed=True,
-                        action="observed",
-                        reason=f"exec_allowlist bypassed by role={user_role.strip().lower()}",
-                        guardrail_name="exec_allowlist",
-                    )
-                return verdict
-        return self._exec_allowlist_verdict(tool_name, tool_args, agent_id)
+            if role_may_run_on_host(user_role):
+                return GuardrailResult(
+                    allowed=True,
+                    action="observed",
+                    reason=f"exec_allowlist bypassed by role={user_role.strip().lower()}",
+                    guardrail_name="exec_allowlist",
+                )
+        return verdict
 
     def _exec_allowlist_verdict(
         self, tool_name: str, tool_args: dict[str, Any], agent_id: str

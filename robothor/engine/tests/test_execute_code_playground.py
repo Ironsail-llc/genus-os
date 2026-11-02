@@ -1,12 +1,12 @@
 """execute_code for an owner whose agent is container-sandboxed.
 
-Today any container-sandboxed agent is refused execute_code: the tool proxy
-lives in the engine and the container has no route to it. Under the playground
-an owner or admin DRIVING the run is not refused -- the snippet runs where the
-proxy is, on the engine host, under their permissions, and that is recorded:
+A container-sandboxed agent is refused execute_code: the tool proxy lives in
+the engine and the container has no route to it. An owner or admin DRIVING the
+run is not refused -- the snippet runs where the proxy is, on the engine host,
+under their permissions, and that is recorded:
 the result says `executed_on: host` and an `exec_location` row names the live
 container it ran beside. A member, an automated run (whatever its service role
-reads) and a sub-agent are refused as today.
+reads) and a sub-agent are refused.
 """
 
 from __future__ import annotations
@@ -57,21 +57,12 @@ def _refusal(role: str) -> dict[str, Any] | None:
     return preflight("print(1)", _Proxy(role))
 
 
-def test_flag_off_refuses_the_owner_as_today(boxed, monkeypatch) -> None:
-    monkeypatch.delenv("ROBOTHOR_SANDBOX_PLAYGROUND", raising=False)
-    refusal = _refusal("owner")
-    assert refusal is not None
-    assert "container-sandboxed" in refusal["error"]
-
-
 @pytest.mark.parametrize("role", ["owner", "admin"])
-def test_playground_lets_an_owner_run(boxed, monkeypatch, role) -> None:
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
+def test_playground_lets_an_owner_run(boxed, role) -> None:
     assert _refusal(role) is None
 
 
-def test_playground_still_refuses_a_member(boxed, monkeypatch) -> None:
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
+def test_playground_still_refuses_a_member(boxed) -> None:
     refusal = _refusal("member")
     assert refusal is not None
     assert "container-sandboxed" in refusal["error"]
@@ -81,10 +72,7 @@ def test_playground_still_refuses_a_member(boxed, monkeypatch) -> None:
     ("trigger", "user_id"),
     [("cron", "service:example-agent"), ("event", ""), ("webchat", "service:example-agent")],
 )
-def test_playground_refuses_an_owner_role_no_person_is_driving(
-    boxed, monkeypatch, trigger, user_id
-) -> None:
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
+def test_playground_refuses_an_owner_role_no_person_is_driving(boxed, trigger, user_id) -> None:
     refusal = preflight("print(1)", _Proxy("owner", trigger=trigger, user_id=user_id))
     assert refusal is not None
     assert "container-sandboxed" in refusal["error"]
@@ -97,7 +85,6 @@ async def test_an_owners_snippet_beside_a_live_container_is_recorded(boxed, monk
     from robothor.engine import sandbox_policy as sp
     from robothor.engine.tools.handlers import code_exec
 
-    monkeypatch.setenv("ROBOTHOR_SANDBOX_PLAYGROUND", "1")
     proxy = _Proxy("owner")
     run_id = proxy._req.session.run.id
     sp.set_exec_plan(run_id, sp.ExecPlan(where="sandbox", user_role="owner"))
