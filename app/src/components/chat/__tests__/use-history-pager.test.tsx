@@ -104,8 +104,8 @@ describe("useHistoryPager", () => {
   });
 
   it("never prepends rows with no stored id, and stops offering when a page has none", async () => {
-    // An engine with pages switched off answers any page with its in-memory
-    // tail: the newest rows, without ids. Prepending them would show the tail twice.
+    // Rows without ids are the in-memory tail: the newest rows. Prepending them
+    // would show the tail twice.
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ messages: [{ role: "user", content: "row 51" }, { role: "assistant", content: "row 52" }] }),

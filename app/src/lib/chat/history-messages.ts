@@ -6,7 +6,7 @@ import { historyAttachments, stripAttachmentNote, type AttachmentSummary } from 
  * panel.
  *
  * The time is the one the engine stored, when it sends one. When it does not
- * (pages off, or a row only in memory) the message has none, and the bubble
+ * (a row only in memory) the message has none, and the bubble
  * shows none: stamping it with the time it loaded is how every message in a
  * week-old conversation used to read "just now".
  */

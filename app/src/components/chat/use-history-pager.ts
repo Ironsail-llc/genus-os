@@ -16,8 +16,8 @@ export const HISTORY_PAGE = 50;
  * above the ones on screen, and any already there are skipped.
  *
  * The panel calls `settle(hasMore)` when its first load answers; only the
- * engine's own `hasMore` turns the button on, so with history pages off
- * nothing is offered. A page that answers after the chat was pointed at
+ * engine's own `hasMore` turns the button on, so a first page the engine
+ * answered from memory offers nothing. A page that answers after the chat was pointed at
  * another agent is dropped, for the reason the panel's first load is.
  *
  * `M` is the panel's message type; the pages it adds are `HistoryMessage`s,
@@ -56,9 +56,9 @@ export function useHistoryPager<M extends { id: string; serverId?: number }>(
       if (!res.ok) return 0;
       const data = await res.json();
       if (latest.current.agentQuery !== asked) return 0;
-      // Only stored rows belong before a cursor. An engine with pages switched
-      // off since this tab loaded answers with its in-memory tail (the NEWEST
-      // rows, no ids); prepending that would show the tail twice.
+      // Only stored rows belong before a cursor. Rows with no id are the
+      // in-memory tail (the NEWEST rows); prepending that would show the tail
+      // twice.
       const onScreen = new Set(latest.current.messages.map((m) => m.id));
       const older: HistoryMessage[] = historyToMessages(data.messages).filter(
         (m) => m.serverId !== undefined && !onScreen.has(m.id),
