@@ -1,4 +1,4 @@
-"""check_tool_permission only reads, and declares it, so a fast checkout skips the transaction."""
+"""check_tool_permission only reads, and declares it, so its checkout skips the transaction."""
 
 from __future__ import annotations
 

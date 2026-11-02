@@ -1,4 +1,4 @@
-"""list_blocks is a pure read and declares it, so a fast checkout skips the transaction."""
+"""list_blocks is a pure read and declares it, so its checkout skips the transaction."""
 
 from __future__ import annotations
 
