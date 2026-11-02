@@ -103,6 +103,36 @@ class TestTheFlag:
         assert fields.get("ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS") == 10
 
 
+class TestThereIsNoSwitch:
+    """Deferral is the only path: no environment variable turns it off."""
+
+    def test_feature_flags_has_no_deferral_switch(self) -> None:
+        import inspect
+
+        from robothor.engine import feature_flags
+
+        assert not hasattr(feature_flags, "deferred_tools_enabled")
+        assert "RIP_16" not in inspect.getsource(feature_flags)
+
+    def test_no_setting_declares_a_switch(self) -> None:
+        from robothor.settings.registry import field_index
+
+        assert "ROBOTHOR_RIP_16_ENABLED" not in field_index()
+
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [("ROBOTHOR_RIP_16_ENABLED", "0"), ("ROBOTHOR_DISABLE_ALL_RIPS", "1")],
+    )
+    def test_a_broad_agent_is_deferred_whatever_the_env_says(
+        self, default_env, registry, monkeypatch, name, value
+    ) -> None:
+        monkeypatch.setenv(name, value)
+        cfg = _cfg(allowed=_broad_allowed(registry))
+
+        assert registry.should_defer(cfg) is True
+        assert _names(registry.build_for_agent(cfg)) >= TOOLSEARCH_TOOLS
+
+
 # ── What a 150-tool agent is shown ────────────────────────────────────
 
 
