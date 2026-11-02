@@ -1,6 +1,6 @@
 """A ``tool_call`` is admitted, and checked afterwards, as the call it wraps.
 
-Found by review on 2026-11-02. With deferred tool loading on by default, a
+Found by review on 2026-11-02. Under deferred tool loading, a
 tool outside an agent's core is reachable only as ``tool_call(name=X,
 arguments=A)``. Every control keyed on a tool's NAME saw the wrapper instead:
 the PRE_TOOL_USE hook, the guardrail engine (``human_approval``,

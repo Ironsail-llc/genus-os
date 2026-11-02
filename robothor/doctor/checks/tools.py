@@ -375,15 +375,15 @@ def _with_meta_tools(filtered: set[str]) -> set[str]:
     three tools its manifest omits. On the live instance that was the check's
     largest single source of noise, and the manifests were right.
 
-    The deferral test is the registry's own (``should_defer``): the flag, and
-    the advertised-tool count against the threshold. An agent below the
+    The deferral test is the registry's own (``should_defer``): the
+    advertised-tool count against the threshold. An agent below the
     threshold does NOT get them, and an instruction telling it to call one is
     the genuine finding this check exists for.
     """
-    from robothor.engine.feature_flags import deferred_tools_enabled, deferred_tools_threshold
+    from robothor.engine.feature_flags import deferred_tools_threshold
     from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
 
-    if deferred_tools_enabled() and len(filtered) > deferred_tools_threshold():
+    if len(filtered) > deferred_tools_threshold():
         return filtered | set(TOOLSEARCH_TOOLS)
     return filtered
 

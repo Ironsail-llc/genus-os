@@ -53,25 +53,16 @@ def registry():
 
 
 class TestDeferralDecision:
-    def test_off_when_switched_off(self, registry, monkeypatch):
-        # Deferral is on by default; ROBOTHOR_RIP_16_ENABLED=0 → never defers,
-        # even for a broad-access agent.
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")
-        assert registry.should_defer(_cfg()) is False
-
-    def test_on_by_default(self, registry, monkeypatch):
-        monkeypatch.delenv("ROBOTHOR_RIP_16_ENABLED", raising=False)
-        monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_RIPS", raising=False)
+    def test_a_broad_agent_is_deferred_at_the_default_threshold(self, registry, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", raising=False)
         assert registry.should_defer(_cfg()) is True
 
     def test_defers_broad_agent_when_enabled(self, registry, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
         monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "5")
         # No allow-list → all tools → well over threshold.
         assert registry.should_defer(_cfg()) is True
 
     def test_small_curated_agent_not_deferred(self, registry, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
         monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "40")
         cfg = _cfg(allowed=["read_file", "list_directory", "search_memory"])
         assert registry.should_defer(cfg) is False
@@ -83,13 +74,13 @@ class TestSchemaReduction:
         assert not (names & TOOLSEARCH_TOOLS)
 
     def test_non_deferred_returns_full_no_meta(self, registry, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")
+        # Under the threshold: every allowed schema, no meta-tools.
+        monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "100000")
         advertised = _names(registry.build_for_agent(_cfg()))
         assert not (advertised & TOOLSEARCH_TOOLS)
         assert len(advertised) > 40  # broad agent, full set
 
     def test_deferred_returns_core_plus_meta(self, registry, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
         monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "5")
         advertised = _names(registry.build_for_agent(_cfg()))
         # Meta-tools present, set is small, and it's a subset of core ∪ meta.
@@ -98,7 +89,6 @@ class TestSchemaReduction:
         assert len(advertised) < 40
 
     def test_deferred_whitelist_is_full_set_plus_meta(self, registry, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
         monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "5")
         wl = registry.deferred_whitelist(_cfg())
         assert wl >= TOOLSEARCH_TOOLS

@@ -1,6 +1,6 @@
 """``tool_call`` accepts the argument shapes models actually send.
 
-With deferral on by default, ``tool_call`` is the normal road to every tool
+Under deferred tool loading, ``tool_call`` is the normal road to every tool
 outside an agent's core. Models often serialise the wrapped call's
 ``arguments`` as a JSON string rather than an object; goal admission rejected
 that with a bare ``ValueError`` that dispatch reported as a tool crash, so the

@@ -1,6 +1,6 @@
 """The deferred meta-tools carry no permission of their own.
 
-With deferral on by default, a member on an interactive run was refused a
+Under deferred tool loading, a member on an interactive run was refused a
 granted tool twice over: the direct call to ``list_tasks`` got the deferred
 unlock ("call it through tool_call"), and the ``tool_call`` was then refused
 by the dispatch RBAC check because the stock member rows (``search_*``,

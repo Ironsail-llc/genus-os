@@ -817,7 +817,7 @@ class ToolRegistry:
     ) -> list[dict[str, Any]]:
         """Return filtered tool schemas for an agent based on allow/deny lists.
 
-        When deferral (Rip 16 / G4) is active for this agent, advertise only its
+        When this agent's toolset is deferred (Rip 16 / G4), advertise only its
         core — CORE_TOOLS plus ``recent`` (the tools it called in its latest
         runs, see :mod:`robothor.engine.recent_tools`), both cut to what it is
         allowed — and the tool_search/tool_describe/tool_call meta-tools; the
@@ -850,17 +850,12 @@ class ToolRegistry:
     def should_defer(self, config: AgentConfig) -> bool:
         """True iff this agent's toolset should be deferred (Rip 16 / G4).
 
-        Deferral kicks in only for broad-access agents — those whose advertised
+        Deferral applies to every broad-access agent — one whose advertised
         tool count exceeds the threshold — so curated small-toolset workers keep
         their full set with no extra tool_search round-trip.
         """
-        from robothor.engine.feature_flags import (
-            deferred_tools_enabled,
-            deferred_tools_threshold,
-        )
+        from robothor.engine.feature_flags import deferred_tools_threshold
 
-        if not deferred_tools_enabled():
-            return False
         return len(self._get_filtered_names(config)) > deferred_tools_threshold()
 
     def deferred_whitelist(self, config: AgentConfig) -> frozenset[str]:

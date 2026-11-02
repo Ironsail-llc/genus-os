@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-490 settings in 18 groups.
+489 settings in 18 groups.
 
 ## autonomy
 
@@ -445,7 +445,6 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_RBAC_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** RBAC ladder position: observe records the denials it would have made, alert also notifies, enforce denies. |
 | `ROBOTHOR_RIP_13_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Rip 13: symbolic compaction of tool logs into a symbol graph. |
 | `ROBOTHOR_RIP_13_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Rip 13 ladder position: observe logs the tokens compaction would have saved, enforce injects the compact graph instead of raw tool output. Two rungs only -- there is nothing to alert about. |
-| `ROBOTHOR_RIP_16_ENABLED` | bool | `true` | `robothor-engine` | no | unreleased | Rip 16: deferred tool loading. A broad agent is shown its core tools and tool_search/tool_describe/tool_call instead of every schema. On by default; 0 sends every allowed schema on every request again. |
 | `ROBOTHOR_RIP_1_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | **governed.** Rip 1: per-agent memory scoping, so an agent reads the blocks it owns rather than the whole workspace. |
 | `ROBOTHOR_RIP_4_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | **governed.** Rip 4: structured tool-result envelopes the runner can check instead of prose it can only quote. |
 | `ROBOTHOR_RIP_5_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | **governed.** Rip 5: the destructive LLM skill-consolidation curator pass. The non-destructive lifecycle runs either way. |

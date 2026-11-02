@@ -46,7 +46,6 @@ def _narrow_config() -> AgentConfig:
 def deferring(monkeypatch: pytest.MonkeyPatch) -> None:
     import robothor.engine.feature_flags as flags
 
-    monkeypatch.setattr(flags, "deferred_tools_enabled", lambda: True)
     monkeypatch.setattr(flags, "deferred_tools_threshold", lambda: 40)
 
 

@@ -18,10 +18,8 @@ narrower thing.
 
 ### Deferred loading
 
-Deferral is **on by default** (`ROBOTHOR_RIP_16_ENABLED`; set it to `0` to send
-every allowed schema on every request again). When an agent's allowed set is
-larger than the deferral threshold (`ROBOTHOR_DEFERRED_TOOLS_THRESHOLD`, 40),
-the engine advertises only the agent's always-loaded core plus three
+When an agent's allowed set is larger than the deferral threshold
+(`ROBOTHOR_DEFERRED_TOOLS_THRESHOLD`, 40), the engine advertises only the agent's always-loaded core plus three
 meta-tools, and the rest load on demand. Curated agents under the threshold
 keep their whole set and never pay a search round-trip.
 

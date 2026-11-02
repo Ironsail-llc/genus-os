@@ -1,13 +1,13 @@
-"""Deferred tool loading is the default (Rip 16), with a per-agent core.
+"""Deferred tool loading (Rip 16) is the only path, with a per-agent core.
 
 A broad agent used to receive every allowed schema on every LLM call — for
 ``main`` on a stock checkout that is over two hundred schemas, roughly 32k
-tokens by the engine's own estimator, before any plugin adds its tools. With
-deferral on by default the model sees the agent's always-loaded core (the
+tokens by the engine's own estimator, before any plugin adds its tools. Now
+the model sees the agent's always-loaded core (the
 static ``CORE_TOOLS`` plus the tools it actually called in its recent runs)
 and the three meta-tools; everything else stays reachable through
-``tool_search`` → ``tool_call``. ``ROBOTHOR_RIP_16_ENABLED=0`` restores the
-old full-schema behaviour.
+``tool_search`` → ``tool_call``. An agent under
+``ROBOTHOR_DEFERRED_TOOLS_THRESHOLD`` keeps its full set; there is no switch.
 """
 
 from __future__ import annotations
@@ -53,8 +53,6 @@ def _cfg(agent_id: str = "broad", allowed: list[str] | None = None):
 def default_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Nothing set: the defaults are what is under test."""
     for name in (
-        "ROBOTHOR_RIP_16_ENABLED",
-        "ROBOTHOR_DISABLE_ALL_RIPS",
         "ROBOTHOR_DEFERRED_TOOLS_THRESHOLD",
         "ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS",
     ):
@@ -73,33 +71,14 @@ def _broad_allowed(registry: ToolRegistry, count: int = 150) -> list[str]:
     return names[:count]
 
 
-# ── The flag ──────────────────────────────────────────────────────────
+# ── No switch ─────────────────────────────────────────────────────────
 
 
-class TestTheFlag:
-    def test_deferral_is_on_when_nothing_is_set(self, default_env) -> None:
-        from robothor.engine.feature_flags import deferred_tools_enabled
-
-        assert deferred_tools_enabled() is True
-
-    @pytest.mark.parametrize("value", ["0", "false", "off", "no"])
-    def test_it_can_still_be_switched_off(self, default_env, monkeypatch, value) -> None:
-        from robothor.engine.feature_flags import deferred_tools_enabled
-
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", value)
-        assert deferred_tools_enabled() is False
-
-    def test_the_panic_switch_still_wins(self, default_env, monkeypatch) -> None:
-        from robothor.engine.feature_flags import deferred_tools_enabled
-
-        monkeypatch.setenv("ROBOTHOR_DISABLE_ALL_RIPS", "1")
-        assert deferred_tools_enabled() is False
-
-    def test_the_setting_is_declared_with_the_same_default(self) -> None:
+class TestTheTunables:
+    def test_the_recent_runs_setting_is_declared_with_the_same_default(self) -> None:
         from robothor.settings.registry import field_index
 
         fields = {env: record["default"] for env, record in field_index().items()}
-        assert fields.get("ROBOTHOR_RIP_16_ENABLED") is True
         assert fields.get("ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS") == 10
 
 
@@ -168,8 +147,10 @@ class TestABroadAgentSeesItsCore:
         advertised = _names(registry.build_for_agent(cfg, recent=frozenset({"no_such_tool"})))
         assert "no_such_tool" not in advertised
 
-    def test_flag_off_keeps_todays_full_set(self, default_env, registry, monkeypatch) -> None:
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")
+    def test_under_the_threshold_the_full_set_is_sent(
+        self, default_env, registry, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "100000")
         cfg = _cfg(allowed=_broad_allowed(registry))
 
         advertised = registry.build_for_agent(cfg, recent=frozenset({"read_file"}))
@@ -427,9 +408,9 @@ def test_main_prompt_tokens_before_and_after(default_env, monkeypatch, capsys) -
     registry = ToolRegistry()
     main = _cfg(agent_id="main")
 
-    monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")
+    monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "100000")
     before = registry.build_for_agent(main)
-    monkeypatch.delenv("ROBOTHOR_RIP_16_ENABLED")
+    monkeypatch.delenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD")
     after = registry.build_for_agent(main)
 
     tokens_before, tokens_after = _schema_tokens(before), _schema_tokens(after)
