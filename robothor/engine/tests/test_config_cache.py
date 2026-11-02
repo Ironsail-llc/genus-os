@@ -602,3 +602,36 @@ class TestWarmLoadWork:
         assert all(count >= n for count in off.values()), off
         # ... and with it, a warm load does none of them.
         assert on == dict.fromkeys(off, 0), on
+
+
+# ── No switch ────────────────────────────────────────────────────────
+
+
+class TestTheCacheIsTheOnlyPath:
+    """The cache is how a load works, not an option an environment picks."""
+
+    def test_feature_flags_has_no_config_cache_reader(self):
+        import inspect
+
+        from robothor.engine import feature_flags
+
+        assert not hasattr(feature_flags, "config_cache_enabled")
+        assert "ROBOTHOR_CONFIG_CACHE" not in inspect.getsource(feature_flags)
+
+    def test_settings_declare_no_config_cache_switch(self):
+        from robothor.settings.registry import declared_env_names
+
+        assert "ROBOTHOR_CONFIG_CACHE" not in declared_env_names()
+
+    def test_a_warm_load_parses_nothing_whatever_the_old_variable_says(
+        self, fleet, adapter_dir, parses, monkeypatch
+    ):
+        monkeypatch.setenv("ROBOTHOR_CONFIG_CACHE", "0")
+        load_agent_config("alice", fleet)
+        adapters.load_adapters(adapter_dir)
+        parses.clear()
+
+        load_agent_config("alice", fleet)
+        adapters.load_adapters(adapter_dir)
+
+        assert parses == []
