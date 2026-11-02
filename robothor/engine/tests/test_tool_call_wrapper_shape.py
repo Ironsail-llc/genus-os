@@ -154,3 +154,34 @@ def test_calendar_receipts_read_the_arguments_of_a_json_string_wrapper() -> None
     auth = SimpleNamespace(tenant_id="fixture", user_id="owner")
     receipts = calendar_receipts(cur, {"id": "run", "agent_id": "main"}, auth)
     assert [r["operation_id"] for r in receipts] == [operation]
+
+
+@pytest.mark.parametrize("arguments", [None, "", [], "invalid"])
+def test_a_wrapper_without_object_arguments_is_no_evidence_of_the_call(arguments: Any) -> None:
+    """Dispatch lets a missing ``arguments`` mean "none" so the call runs, but
+    the readers that audit what a tool was asked to do only trust arguments the
+    model actually sent as an object (or a JSON string of one). A null wrapper
+    cannot claim a calendar receipt from the step's output alone, and the
+    verifier sees no input for it."""
+    from unittest.mock import MagicMock
+
+    from robothor.engine.chat_receipts import CALENDAR_ADD_ATTENDEES_TOOL, calendar_receipts
+    from robothor.engine.run_verification import resolve_tool_input
+
+    operation = "11111111-1111-1111-1111-111111111111"
+    cur = MagicMock()
+    cur.fetchall.return_value = [
+        {
+            "tool_name": "tool_call",
+            "tool_input": {"name": CALENDAR_ADD_ATTENDEES_TOOL, "arguments": arguments},
+            "tool_output": {"operation_id": operation},
+        }
+    ]
+    auth = SimpleNamespace(tenant_id="fixture", user_id="owner")
+    assert calendar_receipts(cur, {"id": "run", "agent_id": "main"}, auth) == []
+    assert cur.execute.call_count == 1
+
+    step = SimpleNamespace(
+        tool_name="tool_call", tool_input={"name": "write_file", "arguments": arguments}
+    )
+    assert resolve_tool_input(step) == {}
