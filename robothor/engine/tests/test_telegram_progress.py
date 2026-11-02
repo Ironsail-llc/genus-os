@@ -19,7 +19,6 @@ from typing import Any
 import pytest
 from aiogram.exceptions import TelegramRetryAfter
 
-from robothor.engine.telegram_format import telegram_chunks
 from robothor.engine.telegram_progress import TelegramProgress
 
 INTERVAL = 0.2  # seconds; the real default is 1.0, scaled down to keep the suite fast
@@ -68,31 +67,25 @@ async def _stream(progress: TelegramProgress, deltas: int, every: float) -> str:
 
 
 @pytest.mark.asyncio
-async def test_one_message_is_edited_on_a_throttle_then_finalised():
+async def test_one_message_is_edited_on_a_throttle():
     """AC1: 20 deltas over ~1.2 s land as a handful of edits on ONE message id."""
     bot = FakeBot()
     progress = _progress(bot)
 
     text = await _stream(progress, deltas=20, every=0.06)
     await asyncio.sleep(INTERVAL * 1.5)  # the throttle catches up before the run ends
-    sent = await progress.finalise("**Done.** The answer.")
+    await progress.aclose()
 
     ids = {e[1] for e in bot.edits}
     assert ids == {MESSAGE_ID}
-    interim = bot.edits[:-1]
+    interim = bot.edits
     # ~1.2 s / 0.2 s: far fewer edits than deltas, more than one.
     assert 2 <= len(interim) <= 8, [e[2] for e in interim]
     gaps = [b[0] - a[0] for a, b in zip(bot.edits, bot.edits[1:], strict=False)]
     assert all(g >= INTERVAL * 0.95 for g in gaps), gaps
     # The last interim edit carries the latest text the model had produced.
     assert any(text.strip() in e[2] for e in interim)
-    # Finalised in place with the existing Markdown rendering, as HTML.
-    final = bot.edits[-1]
-    assert final[2] == telegram_chunks("**Done.** The answer.")[0].html
-    assert final[3] is not None  # HTML parse mode, not plain
-    assert sent is not None
-    assert [m.message_id for m in sent] == [MESSAGE_ID]
-    assert bot.sent == []  # no second message for a single-chunk answer
+    assert bot.sent == []  # the progress message never sends; deliver_reply does
 
 
 @pytest.mark.asyncio
@@ -110,8 +103,8 @@ async def test_a_429_pushes_the_next_edit_out_by_retry_after():
 
 
 @pytest.mark.asyncio
-async def test_tool_line_shows_while_a_tool_runs_and_is_gone_in_the_answer():
-    """AC3: the tool's label and elapsed seconds; the final message has neither."""
+async def test_tool_line_shows_while_a_tool_runs_and_goes_when_it_ends():
+    """AC3: the tool's label and elapsed seconds, gone once the tool ends."""
     bot = FakeBot()
     progress = _progress(bot, tick_interval=INTERVAL)
 
@@ -123,10 +116,11 @@ async def test_tool_line_shows_while_a_tool_runs_and_is_gone_in_the_answer():
     assert any("1s" in e[2] for e in tool_edits), [e[2] for e in tool_edits]
     await progress.on_event({"event": "tool_end", "tool": "web_search", "call_id": "c1"})
 
-    await progress.finalise("Here it is.")
+    await asyncio.sleep(INTERVAL * 2)
+    await progress.aclose()
 
     assert "search" not in bot.edits[-1][2].lower()
-    assert bot.edits[-1][2] == telegram_chunks("Here it is.")[0].html
+    assert bot.edits[-1][2] == "Let me look that up."
 
 
 @pytest.mark.asyncio
@@ -159,19 +153,6 @@ async def test_progress_note_is_shown_while_nothing_else_is():
     await progress.aclose()
 
     assert any("Still working" in e[2] for e in bot.edits)
-
-
-@pytest.mark.asyncio
-async def test_a_long_answer_is_left_to_the_chunked_sender():
-    """A multi-chunk answer is not crammed into one edit: finalise says so."""
-    bot = FakeBot()
-    progress = _progress(bot)
-    long_text = "\n\n".join(f"Paragraph {i}. " + "x" * 300 for i in range(40))
-    assert len(telegram_chunks(long_text)) > 1
-
-    sent = await progress.finalise(long_text)
-
-    assert sent is None
 
 
 @pytest.mark.asyncio

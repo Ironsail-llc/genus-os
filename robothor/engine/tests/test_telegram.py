@@ -747,14 +747,14 @@ class TestStreamingToolVisibility:
         assert tool_shown, f"Expected 'Searching memory' in edit calls: {edit_calls}"
 
     @pytest.mark.asyncio
-    async def test_status_message_deleted_when_the_final_edit_is_refused(self, bot):
-        """Telegram refuses the in-place answer: the status message goes, the answer is sent."""
+    async def test_status_message_deleted_once_the_answer_is_sent(self, bot):
+        """The answer is a new message (it notifies); the status message then goes."""
         from robothor.engine.models import AgentRun, RunStatus, TriggerType
 
         sent_msg = MagicMock()
         sent_msg.message_id = 42
         bot.bot.send_message = AsyncMock(return_value=sent_msg)
-        bot.bot.edit_message_text = AsyncMock(side_effect=RuntimeError("edit refused"))
+        bot.bot.edit_message_text = AsyncMock()
         bot.bot.delete_message = AsyncMock()
         bot.bot.send_chat_action = AsyncMock()
 

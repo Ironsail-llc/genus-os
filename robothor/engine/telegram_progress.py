@@ -1,11 +1,11 @@
 """Telegram progress message: one message, edited in place, never too often.
 
-The "Thinking..." message a Telegram turn starts with becomes the place the answer is written: the model's
-cumulative text, plain, plus a compact line for the tool that is running
-("Searching the web · 4s"). When the run ends, :meth:`TelegramProgress.finalise`
-turns the same message into the formatted answer through the existing Markdown
-renderer (``telegram_format.telegram_chunks``), so a reply looks exactly as it
-did before, only sooner.
+The "Thinking..." message a Telegram turn starts with becomes the place the
+answer is written as it streams: the model's cumulative text, plain, plus a
+compact line for the tool that is running ("Searching the web · 4s"). When the
+run ends, :func:`deliver_reply` sends the formatted answer as a new message
+(Telegram notifies on a send, never on an edit) and then deletes the progress
+message, so the chat is left with the answer alone.
 
 Telegram allows about one ``editMessageText`` per second per chat and answers
 anything faster with a 429 carrying ``retry_after``. A model streams far faster
@@ -20,13 +20,9 @@ import asyncio
 import contextlib
 import logging
 import time
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
-from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
-
-from robothor.engine.telegram_format import SentMessages, needs_rich_message, telegram_chunks
+from aiogram.exceptions import TelegramRetryAfter
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Awaitable, Callable
@@ -41,9 +37,6 @@ _TEXT_BUDGET = 3900
 
 #: How often an edit may refresh only the elapsed seconds of a running tool.
 _DEFAULT_TICK = 3.0
-
-#: Final-edit attempts on a 429 before handing the answer to the chunked sender.
-_FINAL_RETRIES = 3
 
 
 def _default_label(tool: str) -> str:
@@ -114,27 +107,6 @@ class TelegramProgress:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await worker
 
-    async def finalise(self, text: str) -> SentMessages | None:
-        """Turn the progress message into the formatted answer.
-
-        Returns the delivered messages (a list holding this one message), or
-        ``None`` when the answer does not fit one plain edit — several chunks,
-        or a table Telegram draws as a rich message — or Telegram refused the
-        edit. ``None`` means the caller sends it the usual way.
-        """
-        await self.aclose()
-        if not text or needs_rich_message(text):
-            return None
-        chunks = telegram_chunks(text)
-        if len(chunks) != 1:
-            return None
-        chunk = chunks[0]
-        for body, mode in ((chunk.html, ParseMode.HTML), (chunk.plain, None)):
-            message = await self._final_edit(body, mode)
-            if message is not None:
-                return SentMessages([message], expected=1)
-        return None
-
     # ── internals ─────────────────────────────────────────────────────
 
     def _kick(self) -> None:
@@ -198,29 +170,6 @@ class TelegramProgress:
             parse_mode=mode,
         )
 
-    async def _final_edit(self, text: str, mode: Any) -> Any:
-        for _ in range(_FINAL_RETRIES):
-            delay = self._next_allowed - time.monotonic()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            try:
-                result = await self._edit(text, mode)
-            except TelegramRetryAfter as e:
-                self._next_allowed = time.monotonic() + float(e.retry_after)
-                continue
-            except TelegramBadRequest as e:
-                if "not modified" in str(e).lower():
-                    return SimpleNamespace(message_id=self.message_id)
-                logger.debug("Telegram refused the final edit: %s", e)
-                return None
-            except Exception as e:  # noqa: BLE001 - fall back to a fresh send
-                logger.debug("Telegram final edit failed: %s", type(e).__name__)
-                return None
-            if getattr(result, "message_id", None) is None:
-                return SimpleNamespace(message_id=self.message_id)
-            return result
-        return None
-
 
 async def deliver_reply(
     progress: TelegramProgress | None,
@@ -230,25 +179,26 @@ async def deliver_reply(
 ) -> list[Any]:
     """Deliver a finished run's answer; the one place a Telegram turn's reply goes out.
 
-    The progress message is finalised in place when the answer fits one edit.
-    Otherwise it is deleted and the answer (or the error, or "no output") goes
-    out through ``send(chat_id, text)`` as new messages. ``progress`` is
-    ``None`` only when Telegram refused the "Thinking..." message. Returns the
-    delivered Message objects, so the caller can record delivery and map
-    platform message ids.
+    The answer (or the error, or "no output") always goes out through
+    ``send(chat_id, text)`` as new messages: Telegram does not notify on an
+    edit, and someone who put the phone down must still hear the answer
+    arrive. The progress message stops and is deleted once the answer has
+    landed, so the chat ends with the answer alone; if nothing landed, it
+    stays, holding the streamed text. ``progress`` is ``None`` only when
+    Telegram refused the "Thinking..." message. Returns the delivered Message
+    objects, so the caller can record delivery and map platform message ids.
     """
     if progress is not None:
-        if run.output_text:
-            finalised = await progress.finalise(run.output_text)
-            if finalised is not None:
-                return finalised
         await progress.aclose()
+    if run.output_text:
+        sent = await send(chat_id, run.output_text)
+    elif run.error_message:
+        sent = await send(chat_id, f"Error: {run.error_message}")
+    else:
+        sent = await send(chat_id, "Done. No output produced.")
+    if progress is not None and sent:
         with contextlib.suppress(Exception):
             await progress.bot.delete_message(
                 chat_id=int(progress.chat_id), message_id=progress.message_id
             )
-    if run.output_text:
-        return await send(chat_id, run.output_text)
-    if run.error_message:
-        return await send(chat_id, f"Error: {run.error_message}")
-    return await send(chat_id, "Done. No output produced.")
+    return sent

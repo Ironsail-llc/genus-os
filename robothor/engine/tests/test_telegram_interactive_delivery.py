@@ -80,11 +80,6 @@ async def _drive_interactive(bot: TelegramBot, run: AgentRun) -> None:
         await task
 
 
-def _refuse_progress_edits(bot: TelegramBot) -> None:
-    """Telegram refuses every edit, so the answer goes out through ``send_message``."""
-    bot.bot.edit_message_text = AsyncMock(side_effect=RuntimeError("edit refused"))
-
-
 class TestInteractiveDeliveryTruth:
     @pytest.mark.asyncio
     async def test_successful_send_records_delivered(self, bot, persist_spy):
@@ -109,7 +104,6 @@ class TestInteractiveDeliveryTruth:
         undelivered alerts behind an assumed success.
         """
         run = _completed_run()
-        _refuse_progress_edits(bot)
         bot.send_message = AsyncMock(return_value=[])
 
         await _drive_interactive(bot, run)
@@ -124,7 +118,6 @@ class TestInteractiveDeliveryTruth:
     async def test_persistence_failure_does_not_break_the_reply(self, bot):
         """A bookkeeping exception never reaches the user's reply path."""
         run = _completed_run("The answer is 42")
-        _refuse_progress_edits(bot)
         bot.send_message = AsyncMock(return_value=[MagicMock(message_id=778)])
 
         with patch(
