@@ -42,10 +42,12 @@ def _clean_pools(monkeypatch):
     key_pool._env_displaced.clear()
     yield
     key_pool.reset_shared_pools()
-    key_pool._env_displaced.clear()
-    # The vault snapshot is cached process-wide; a case's stub vault must not
-    # answer for the next module's provider lookups.
+    # The snapshot is module state too, filled from whatever `_vault_export`
+    # a case patched in. monkeypatch restores the function, not what it
+    # already returned, so without this the next FILE's pool resolves a
+    # credential this module invented (VAULT_KEY winning over a test's env).
     key_pool.reset_vault_availability()
+    key_pool._env_displaced.clear()
 
 
 def _vault(mapping: dict[str, str]):

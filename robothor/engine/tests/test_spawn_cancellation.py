@@ -438,13 +438,15 @@ class TestTheRegistryEndIsWired:
                         timeout=0,
                     )
                 )
-                # Cancel once the child is running, not after a fixed pause: a
-                # cold first import of the spawn path can take longer than one.
-                for _ in range(500):
-                    if runner.session is not None:
-                        break
+                # Cancel once the child is running, not after a fixed pause:
+                # the tool path's setup ahead of the spawn can outlast 0.1 s on
+                # a busy runner, and a cancel that lands before the child
+                # exists has no child to finalise. The fake registers on the
+                # line before it blocks, so this resumes with it blocked.
+                deadline = asyncio.get_running_loop().time() + 10
+                while runner.session is None:
+                    assert asyncio.get_running_loop().time() < deadline, "the child never started"
                     await asyncio.sleep(0.01)
-                await asyncio.sleep(0.01)
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await task
