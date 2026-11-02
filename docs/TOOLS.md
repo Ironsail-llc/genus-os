@@ -18,10 +18,8 @@ narrower thing.
 
 ### Deferred loading
 
-Deferral is **on by default** (`ROBOTHOR_RIP_16_ENABLED`; set it to `0` to send
-every allowed schema on every request again). When an agent's allowed set is
-larger than the deferral threshold (`ROBOTHOR_DEFERRED_TOOLS_THRESHOLD`, 40),
-the engine advertises only the agent's always-loaded core plus three
+When an agent's allowed set is larger than the deferral threshold
+(`ROBOTHOR_DEFERRED_TOOLS_THRESHOLD`, 40), the engine advertises only the agent's always-loaded core plus three
 meta-tools, and the rest load on demand. Curated agents under the threshold
 keep their whole set and never pay a search round-trip.
 
@@ -51,7 +49,28 @@ The three meta-tools:
 
 **`tool_call` cannot reach outside the agent's allow-list.** It checks the name
 against the allow-set the runner published before it dispatches anything, so a
-denied tool is refused there, not at the registry.
+denied tool is refused there, not at the registry. The three meta-tools need
+no `role_permissions` row of their own: the wrapped tool's permission decides,
+checked under its own name with the same refusal a direct call gets, so
+`tool_call` grants nothing beyond that tool's permission.
+
+**Every gate judges the wrapped call.** The PRE_TOOL_USE and POST_TOOL_USE
+hooks, the guardrail engine (human approval included), its event log, the
+system-run RBAC check and the post-execution guardrails all see `name` with its
+`arguments`, exactly as they would see a direct call of that tool; a refusal
+comes back as the result of the `tool_call`, and a hook that rewrites the
+arguments rewrites the wrapped call's. Recording the step does the same: the
+result of an external-data tool keeps its `<untrusted_content>` boundary and a
+credential argument is redacted, however the tool was reached. The wrapped tool
+runs under the caller's whole tool context, identity included, so a data-scoped
+read through `tool_call` returns exactly what the direct call returns.
+
+**`arguments` is an object of the wrapped tool's parameters.** A JSON string
+that parses to an object is accepted as that object, since models often send
+one. A wrapper with no string `name`, `arguments` that are neither, or a
+`tool_call` wrapping another `tool_call` is refused as a bad call (not a tool
+crash) with an error that says what was wrong; `tool_describe(name)` gives the
+schema to send.
 
 **The agent is told.** On a deferred run the engine's context turn carries one
 sentence:

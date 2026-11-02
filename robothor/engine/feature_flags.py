@@ -158,20 +158,6 @@ def rip_7_enforcement_mode() -> Rip7Mode:
     return "observe"
 
 
-def deferred_tools_enabled() -> bool:
-    """Return True iff deferred/searchable tool loading (Rip 16 / G4) is active.
-
-    When on, broad-access agents are advertised only a small CORE_TOOLS set plus
-    the tool_search/tool_describe/tool_call meta-tools; the rest of their allowed
-    tools load on demand. ON by default (unlike the other rips): set
-    ``ROBOTHOR_RIP_16_ENABLED=0`` to advertise every allowed schema again, and
-    ``ROBOTHOR_DISABLE_ALL_RIPS=1`` still forces it off.
-    """
-    if _disabled_all():
-        return False
-    return _env_bool("ROBOTHOR_RIP_16_ENABLED", default=True)
-
-
 def deferred_tools_recent_runs() -> int:
     """How many of an agent's latest runs seed its always-loaded core.
 

@@ -221,7 +221,10 @@ CAPS = {
     # 362 -> 364: the sandbox playground passes the run's role and container
     # state to the exec allowlist. One import and one kwargs line; the logic
     # lives in sandbox_policy.guardrail_context.
-    "robothor/engine/tool_admission.py": 364,
+    # 364 -> 353 in the fold: the verdict type left for tool_verdict.py, which
+    # also pays for the gates judging a tool_call as the call it wraps (the
+    # unwrapping is in wrapped_call.py; one call site lands here).
+    "robothor/engine/tool_admission.py": 353,
     # Capped at the size it was extracted at, like schedule_reconcile.py: a new
     # module with no cap is how the next branch's "just one more case" lands
     # somewhere the ratchet is not looking. One branch, one dependency, and it
@@ -232,7 +235,9 @@ CAPS = {
     # module that would otherwise absorb every per-turn concern the runner
     # used to, one branch at a time — which is exactly how runner.py became
     # the 4,660-line god-object this file's header blames.
-    "robothor/engine/tool_turn.py": 549,  # +21: the snippet approval budget, read beside the call cap
+    # +21: the snippet approval budget, read beside the call cap. 549 -> 556:
+    # the result checks judge a tool_call as the call it wraps (`_Call.inner`).
+    "robothor/engine/tool_turn.py": 556,
     # The code-sandbox cluster, each piece capped at the size it was written
     # to. They are deliberately four small modules rather than one: the
     # POLICY (which calls may share a batch) is a table of names with no

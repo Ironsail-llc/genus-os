@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
@@ -14,6 +14,7 @@ import httpx
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.capability_tier import current_effective_tier
 from robothor.engine.tools.response_failure import http_status_failure, tool_response_failure
+from robothor.engine.wrapped_call import MalformedToolCallError
 
 if TYPE_CHECKING:
     from robothor.config import Config
@@ -157,6 +158,18 @@ class ToolContext:
         from robothor.engine.services import get_service as _get
 
         return _get(name)
+
+    def call_kwargs(self) -> dict[str, Any]:
+        """Every field, as the keyword arguments ``ToolRegistry.execute`` takes.
+
+        For a handler that runs another tool on its caller's behalf
+        (``tool_call``), so the inner call runs under this whole context.
+        Re-listing the fields by hand is how ``identity`` was once dropped,
+        which made every data-scoped read through the wrapper unrestricted; a
+        field added here now travels without anyone remembering it, or fails
+        loudly if ``execute`` does not take it.
+        """
+        return {f.name: getattr(self, f.name) for f in fields(self)}
 
     agent_id: str = ""
     run_id: str = ""  # current AgentRun id — lets handlers find per-run state
@@ -388,6 +401,8 @@ def _describe_exception(e: BaseException) -> tuple[str, bool]:
     is reclassified — a KeyError from a cache lookup deep inside a handler is
     still a crash, and still says so.
     """
+    if isinstance(e, MalformedToolCallError):
+        return (str(e), False)
     if isinstance(e, KeyError) and e.args:
         key = e.args[0]
         if isinstance(key, str) and _ARG_NAME_RE.match(key):
@@ -532,23 +547,30 @@ async def _refuse_before_handler(
     """
     # ── Permission check (single enforcement gate) ──
     from robothor.engine.permissions import check_tool_permission
+    from robothor.engine.wrapped_call import PERMISSION_TRANSPARENT_TOOLS
 
-    # Permission lookup is database-backed and synchronous.  Keep it off the
-    # Engine event loop so one slow RBAC query cannot stall unrelated chat,
-    # health, or agent sessions.
-    denied = await asyncio.to_thread(
-        check_tool_permission, user_role, tenant_id, name, user_id=user_id
-    )
-    if denied:
-        from robothor.engine.refusal import refusal
-
-        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied)
-        return refusal(
-            denied,
-            gate="role",
-            name="rbac",
-            unlock=_rbac_unlock(user_role, name, denied),
+    # A meta-tool is judged by what it reaches: the tool a tool_call wraps
+    # comes back through this same gate under its own name. A missing role
+    # still fails closed here, for the meta-tools too.
+    if name not in PERMISSION_TRANSPARENT_TOOLS or not user_role:
+        # Permission lookup is database-backed and synchronous.  Keep it off
+        # the Engine event loop so one slow RBAC query cannot stall unrelated
+        # chat, health, or agent sessions.
+        denied = await asyncio.to_thread(
+            check_tool_permission, user_role, tenant_id, name, user_id=user_id
         )
+        if denied:
+            from robothor.engine.refusal import refusal
+
+            _audit_tool_call(
+                name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied
+            )
+            return refusal(
+                denied,
+                gate="role",
+                name="rbac",
+                unlock=_rbac_unlock(user_role, name, denied),
+            )
 
     # ── Per-task tool whitelist (Rip 1) ──
     # If a parent forked us with a restricted toolset (e.g. the

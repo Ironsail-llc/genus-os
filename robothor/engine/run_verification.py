@@ -45,6 +45,7 @@ from robothor.engine.completion_contract import (
     _NEGATION_RE,
     _NEGATION_WINDOW,
 )
+from robothor.engine.wrapped_call import explicit_arguments
 
 __all__ = [
     "RESOLUTION_BLOCKING_STATUSES",
@@ -880,8 +881,8 @@ def resolve_tool_input(step: Any) -> dict[str, Any]:
     if _get(step, "tool_name") != "tool_call":
         return payload
     for _ in range(4):
-        args = payload.get("arguments")
-        if not isinstance(args, dict):
+        args = explicit_arguments(payload.get("arguments"))
+        if args is None:
             return {}
         if args.get("name") == "tool_call" or payload.get("name") == "tool_call":
             payload = args

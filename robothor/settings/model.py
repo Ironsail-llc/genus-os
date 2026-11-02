@@ -2319,14 +2319,6 @@ class FlagSettings(SettingsGroup):
         "non-destructive lifecycle runs either way.",
         governed=True,
     )
-    rip_16_enabled: bool = declare(
-        True,
-        "ROBOTHOR_RIP_16_ENABLED",
-        "Rip 16: deferred tool loading. A broad agent is shown its core tools "
-        "and tool_search/tool_describe/tool_call instead of every schema. On "
-        "by default; 0 sends every allowed schema on every request again.",
-        since="unreleased",
-    )
     rip_7_enabled: bool = declare(
         False,
         "ROBOTHOR_RIP_7_ENABLED",

@@ -52,6 +52,7 @@ from robothor.engine.session import ENGINE_CONTEXT_ROLE
 from robothor.engine.tool_outcome import error_text, record_tool_outcome
 from robothor.engine.tool_turn_context import tool_turn_context
 from robothor.engine.tools.read_only import declared_read_only_tools
+from robothor.engine.wrapped_call import inner_call
 from robothor.secrets.redaction import redact_tool_arguments
 
 if TYPE_CHECKING:
@@ -141,6 +142,11 @@ class _Call:
     result: dict[str, Any] | None = None
     elapsed_ms: int = 0
     refused: bool = False
+
+    @property
+    def inner(self) -> tuple[str, dict[str, Any]]:
+        """The call that ran (for ``tool_call``, the wrapped one): what result checks judge."""
+        return inner_call(self.tool_name, self.tool_args)
 
 
 class ToolTurnMixin:
@@ -353,7 +359,7 @@ class ToolTurnMixin:
         result = apply_post_execution_guardrails(
             session,
             req.guardrail_engine,
-            tool_name=call.tool_name,
+            tool_name=call.inner[0],
             result=result,
             error_msg=error_msg,
             state=req.guard_state,
@@ -448,19 +454,20 @@ class ToolTurnMixin:
             return
         from robothor.engine.hook_registry import HookContext, HookEvent
 
+        tool_name, tool_args = call.inner
         try:
             ctx = HookContext(
                 event=HookEvent.POST_TOOL_USE,
                 agent_id=req.agent_config.id,
                 run_id=req.session.run.id,
-                tool_name=call.tool_name,
-                tool_args=call.tool_args,
+                tool_name=tool_name,
+                tool_args=tool_args,
                 tool_result=result,
             )
             await req.hook_registry.dispatch(HookEvent.POST_TOOL_USE, ctx)
         except Exception as e:
             logger.warning(
-                "POST_TOOL_USE hook error for %s: %s", _sanitize(call.tool_name), _sanitize(e)
+                "POST_TOOL_USE hook error for %s: %s", _sanitize(tool_name), _sanitize(e)
             )
 
     @staticmethod

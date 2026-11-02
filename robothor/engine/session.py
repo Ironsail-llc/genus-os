@@ -24,6 +24,7 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.engine.deliverable_contract import task_text_for_column
 from robothor.engine.models import AgentRun, RunStatus, RunStep, StepType, TriggerType
 from robothor.engine.reasoning_replay import PRODUCER_MODEL_KEY, REASONING_FIELDS
+from robothor.engine.wrapped_call import explicit_arguments, inner_call
 
 if TYPE_CHECKING:
     from robothor.engine.todolist import TodoList
@@ -617,10 +618,19 @@ class AgentSession:
         design, because storing one is its whole job. Per-argument, so that the
         key a write touched stays readable and the verification pass can still
         tell what a run did.
+
+        Every name-keyed treatment below (redaction, the untrusted-content tag,
+        skill text, offload read-back) judges the call that ran: for
+        ``tool_call``, the wrapped tool and its arguments (wrapped_call.py).
+        The step itself stays the wrapper's.
         """
         from robothor.secrets.redaction import redact_tool_arguments
 
         tool_input = redact_tool_arguments(tool_name, tool_input)
+        call_name, call_args = inner_call(tool_name, tool_input)
+        if call_name != tool_name and explicit_arguments(tool_input.get("arguments")) is not None:
+            call_args = redact_tool_arguments(call_name, call_args)
+            tool_input = {**tool_input, "arguments": call_args}
 
         self._step_counter += 1
         step = RunStep(
@@ -652,7 +662,7 @@ class AgentSession:
         # graded on, and `task_text_for_run` reads only the prompt. Kept here
         # so the contract, the check-in and the finalizer all read the same
         # source — three consumers that must never disagree.
-        remember_skill_text(self, tool_name, tool_output)
+        remember_skill_text(self, call_name, tool_output)
 
         # An `exec` spill is an offloaded artifact by every property that
         # matters: the model was handed a path instead of the content and is
@@ -721,7 +731,7 @@ class AgentSession:
 
         # Offload large results to temp file, keeping summary + path in context
         self._last_offload_path = None
-        is_readback = self._is_offload_readback(tool_name, tool_input)
+        is_readback = self._is_offload_readback(call_name, call_args)
         if (
             self._tool_offload_threshold
             and len(content) > self._tool_offload_threshold
@@ -735,8 +745,8 @@ class AgentSession:
         self._record_symbol_node(tool_name, tool_output, raw_len)
 
         # Wrap untrusted external data with tags so the LLM sees a boundary
-        if tool_name in EXTERNAL_DATA_TOOLS:
-            content = f'<untrusted_content source="{tool_name}">\n{content}\n</untrusted_content>'
+        if call_name in EXTERNAL_DATA_TOOLS:
+            content = f'<untrusted_content source="{call_name}">\n{content}\n</untrusted_content>'
 
         self.messages.append(
             {

@@ -256,8 +256,6 @@ class TestTheMetaToolsAreGrantedByDeferral:
 
     @staticmethod
     def _deferral_on(monkeypatch, threshold: int = 2) -> None:
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
-        monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_RIPS", raising=False)
         monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", str(threshold))
 
     @pytest.mark.asyncio
@@ -295,10 +293,14 @@ class TestTheMetaToolsAreGrantedByDeferral:
         assert "tool_search" in result.detail
 
     @pytest.mark.asyncio
-    async def test_with_deferral_off_nobody_gets_them(
+    async def test_no_environment_variable_takes_them_away(
         self, instance: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Deferral has no switch, so the check grants the meta-tools whatever
+        the environment says."""
+        self._deferral_on(monkeypatch)
         monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")
+        monkeypatch.setenv("ROBOTHOR_DISABLE_ALL_RIPS", "1")
         _write_agent(
             instance,
             "broad",
@@ -306,14 +308,12 @@ class TestTheMetaToolsAreGrantedByDeferral:
             instructions="Use `tool_search` to find a tool.",
         )
         result = await _run("agents.tools_named_but_not_granted")
-        assert result.status == "fail"
-        assert "tool_search" in result.detail
+        assert result.status == "pass", result.detail
 
     @pytest.mark.asyncio
     async def test_a_prohibition_is_never_a_mismatch_either_way(
         self, instance: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("ROBOTHOR_RIP_16_ENABLED", raising=False)
         _write_agent(
             instance,
             "narrow",
@@ -1680,14 +1680,13 @@ class TestTheGateIsOfferedNeverRecommended:
 
 
 class TestDeferredToolsReachable:
-    """With deferral on by default, a granted tool the model cannot see has to
+    """Under deferred loading, a granted tool the model cannot see has to
     be findable through ``tool_search``, or it is not granted in any sense
     that matters to the agent."""
 
     @pytest.fixture(autouse=True)
     def _defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        for name in ("ROBOTHOR_RIP_16_ENABLED", "ROBOTHOR_DISABLE_ALL_RIPS"):
-            monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", raising=False)
 
     @pytest.mark.asyncio
     async def test_real_tools_are_reachable(self, instance: Path) -> None:

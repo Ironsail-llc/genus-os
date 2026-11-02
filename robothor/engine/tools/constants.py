@@ -551,7 +551,7 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-# The always-advertised tool set when deferral is active. Chosen as the
+# The always-advertised tool set of a deferred agent. Chosen as the
 # highest-frequency tools so most turns never need a tool_search round-trip;
 # everything else loads on demand via tool_search → tool_describe → tool_call.
 # GOAL_TOOLS are force-added by the registry filter, so they're omitted here.
