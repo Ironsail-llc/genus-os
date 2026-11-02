@@ -88,7 +88,7 @@ Answer these BEFORE writing code or tests:
 | Tenant-scoped data?                                        | Take `tenant_id`; default from `DEFAULT_TENANT`. Never a literal.                                          |
 | Needs the operator?                                        | Rule 12: `get_owner_person()`, never a name search.                                                        |
 | Calls an LLM or external service?                          | Define the fallback; don't swallow errors. Mock LLMs in unit tests; test by properties, not exact output.  |
-| Risky behaviour change?                                    | An off/observe/enforce flag in `infra/flags.yaml` + a runbook (`docs/runbooks/GUARDRAIL_FLIPS.md`).        |
+| Risky behaviour change?                                    | Ship it on as the only code path. Prove the safety as behaviour with tests (approval tiers, allowlists, RBAC, redaction, caps that report). Never a feature flag, kill switch or observe/enforce rung for new behaviour; rollback is `git revert`. |
 | New setting or CLI verb/flag?                              | Regenerate `docs/reference/configuration.md` / `docs/reference/cli.md` (`.claude/rules/commands.md`).      |
 | Dashboard (`app/`) change a user would see?                | Vitest for logic; Playwright for the user flow.                                                            |
 | An operator, admin or agent author would notice it?        | A release-note fragment in `changelog.d/` (`changelog.d/README.md`).                                       |

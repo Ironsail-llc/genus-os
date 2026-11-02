@@ -213,7 +213,7 @@ Useful operating references:
 - [Entity Kernel treasury boundary](docs/ENTITY_KERNEL_TREASURY.md)
 - [Payment-data boundary](docs/compliance/PAYMENT_DATA.md)
 - [Security controls inventory](docs/compliance/SECURITY_CONTROLS.md)
-- [Performance: turn timing, traces and the performance settings](docs/PERFORMANCE.md)
+- [Performance: turn timing, traces and the turn benchmark](docs/PERFORMANCE.md)
 
 Genus OS does not store raw PAN or CVC/CVV for either customers or the
 organization's own cards. Customer flows use payment-provider tokens; Entity

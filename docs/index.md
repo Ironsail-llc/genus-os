@@ -78,7 +78,7 @@ on-premises, in a private cloud, or in a deliberately configured air gap.
   agent authors.
 - [Architecture](architecture.md) — how the pieces fit together.
 - [Performance](PERFORMANCE.md) — how a turn is timed, the turn benchmark,
-  the trace spans, and the switches that make a turn faster.
+  the trace spans, and what the engine does to keep a turn short.
 - [Platform vs Instance](PLATFORM_INSTANCE.md) — the boundary that keeps your
   data out of the platform.
 
