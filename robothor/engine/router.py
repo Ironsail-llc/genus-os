@@ -6,10 +6,9 @@ Classification sources (priority order):
 2. Planning phase output (if planner ran)
 3. Heuristic: message length + tool count
 
-Router v2 (``ROBOTHOR_ROUTER_V2``): for an interactive chat turn the length
-rule no longer buys a planner call on its own. A message the length rule calls
-complex keeps the complex preset, but its planning defers to the agent's
-manifest unless the message itself asks for multi-step work (see
+Chat turns: for an interactive chat turn the length rule does not buy a
+planner call on its own. A message the length rule calls complex keeps the
+complex preset, but its planning defers to the agent's manifest unless the message itself asks for multi-step work (see
 ``requests_multistep_work``). The signal costs no LLM call and never adds a
 planner call the length rule would not have made.
 """
@@ -89,7 +88,7 @@ def classify_difficulty(
     return "moderate"
 
 
-#: Steps a message must list before the router v2 signal asks for a plan.
+#: Steps a message must list before a chat turn asks for a plan.
 MULTI_STEP_MIN = 3
 # A line that opens with a list marker: "1.", "2)", "-", "*" or a bullet.
 _LIST_ITEM = re.compile(r"^\s*(?:\d+[.)]|[-*\u2022])\s+\S", re.MULTILINE)
@@ -118,7 +117,7 @@ def get_route_config(
 ) -> RouteConfig:
     """Get route configuration for a task.
 
-    ``length_forces_planning=False`` (router v2, interactive turns): when the
+    ``length_forces_planning=False`` (interactive chat turns): when the
     message's length is the only reason it is complex, planning defers to the
     agent's config unless ``requests_multistep_work`` says otherwise.
     """
@@ -141,26 +140,19 @@ def get_route_config(
     return route
 
 
-# Interactive surfaces where router v2 stops message length forcing a planner
+# Interactive surfaces where message length alone does not force a planner
 # call: a person is waiting on each turn. Every plugin channel is ``channel``.
 CHAT_TRIGGERS = frozenset({"telegram", "webchat", "channel"})
 
 
-def v2_enabled() -> bool:
-    from robothor.engine.feature_flags import router_v2_enabled
-
-    return router_v2_enabled()
-
-
-def chat_turn_v2(trigger_type: Any, readonly_mode: bool, trigger_detail: Any, resume: Any) -> bool:
-    """True when router v2 governs this run: an ordinary chat turn.
+def is_chat_turn(trigger_type: Any, readonly_mode: bool, trigger_detail: Any, resume: Any) -> bool:
+    """True when this run is an ordinary chat turn.
 
     Plan mode, approved-plan execution (``plan-exec:...``) and resumed runs
     keep today's policy, as does every non-chat trigger.
     """
     return (
-        v2_enabled()
-        and str(trigger_type or "") in CHAT_TRIGGERS
+        str(trigger_type or "") in CHAT_TRIGGERS
         and not readonly_mode
         and not str(trigger_detail or "").startswith("plan")
         and not resume
@@ -172,7 +164,7 @@ def route_for(
 ) -> RouteConfig | None:
     """Route one run from its manifest and message. Returns None on failure.
 
-    ``chat_turn`` (see ``chat_turn_v2``) stops message length alone forcing a
+    ``chat_turn`` (see ``is_chat_turn``) stops message length alone forcing a
     planner call.
     """
     try:

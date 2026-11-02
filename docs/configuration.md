@@ -865,11 +865,10 @@ finding on a live box and a hard failure in CI for a shipped template.
 
 ### When a chat turn pays for a planner call
 
-A planning phase is a separate LLM call made before the tool loop. Today the
-router runs it for any message over 500 characters, so every long chat turn
-costs one call more than its answer. With `ROBOTHOR_ROUTER_V2=1` (off by
-default) a Telegram, webchat or plugin-channel turn plans only when one of
-these holds:
+A planning phase is a separate LLM call made before the tool loop. The router
+calls any message over 500 characters complex, but length alone does not buy
+that call on a chat turn: a Telegram, webchat or plugin-channel turn plans only
+when one of these holds:
 
 - the turn is in plan mode, or executes an approved plan;
 - the manifest asks for it (`planning_enabled: true` or
@@ -877,11 +876,12 @@ these holds:
 - the message lists at least three steps: numbered or bulleted lines, or the
   words "then", "after that", "afterwards" and "finally" between actions. This
   is a text match, not a model call, and it only keeps a plan the length rule
-  would have made; a short message is routed exactly as before.
+  would have made; a short message is routed as any other run.
 
 The run keeps the rest of the complex profile (verification, checkpoints,
 scratchpad), and the model it runs on and its fallback chain do not change.
-Scheduled, workflow, hook and sub-agent runs are not affected.
+Scheduled, workflow, hook and sub-agent runs keep the length rule. The
+classified deadline is written once per run, after routing and any planning.
 
 ## Web fetch and web search
 
