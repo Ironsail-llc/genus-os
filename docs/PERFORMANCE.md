@@ -158,7 +158,6 @@ dashboard's standard output, for any log pipeline that collects container output
 and an entry on the capped Redis stream `robothor:events:vitals`. `rating` is
 web-vitals' own `good` / `needs-improvement` / `poor`; `path` has no query string
 and `view` is the dashboard view. No tenant, user or session is recorded.
-`GENUS_DASHBOARD_WEB_VITALS=false` turns it off at both ends.
 
 **Bundle budget.** `pnpm bundle:check`, after `pnpm build` in `app/`, compares
 each page route's gzipped first-load JavaScript with `bundle-budget.json` (in `app/`) and
