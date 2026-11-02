@@ -1,3 +1,9 @@
+## [1.125.0](https://github.com/Ironsail-llc/genus-os/compare/v1.124.0...v1.125.0) (2026-11-02)
+
+### Features
+
+* **engine:** concurrent hook workflows (GEN-331) ([2dbc376](https://github.com/Ironsail-llc/genus-os/commit/2dbc37668f962b4834e2da0eb1c3572bca0444d5))
+
 ## [1.124.0](https://github.com/Ironsail-llc/genus-os/compare/v1.123.0...v1.124.0) (2026-11-01)
 
 ### Features
