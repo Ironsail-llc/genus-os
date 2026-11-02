@@ -63,6 +63,35 @@ def _stub(path: Path, body: str) -> Path:
     return path
 
 
+def _stub_findmnt(bin_dir: Path, targets: str, options: str) -> None:
+    """A ``findmnt`` that answers TARGET and OPTIONS queries with fixed rows,
+    so a test asserts what the script does with an answer rather than what
+    the host's mount table happens to be."""
+    _stub(
+        bin_dir / "findmnt",
+        'case "$*" in\n'
+        f"  *TARGET*) printf '{targets}' ;;\n"
+        f"  *OPTIONS*) printf '{options}' ;;\n"
+        "esac",
+    )
+
+
+def _on_the_root_filesystem(path: Path) -> bool:
+    """Does the real ``findmnt`` resolve ``path`` to ``/``?
+
+    Not on every host: a runner can mount ``/tmp``, where pytest's tmp_path
+    lives, separately (a tmpfs, or an image that splits it out).
+    """
+    result = subprocess.run(
+        ["findmnt", "-n", "-o", "TARGET", "--target", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    first = (result.stdout.splitlines() or [""])[0].strip()
+    return result.returncode == 0 and first == "/"
+
+
 def _run(
     *args: str,
     env_extra: dict[str, str] | None = None,
@@ -342,20 +371,10 @@ class TestAnUnmountedVolumeIsNotAHealthyOne:
     a flag nobody turns on.
     """
 
-    def test_a_directory_on_the_root_filesystem_is_unhealthy_by_default(
-        self, tmp_path: Path
+    @staticmethod
+    def _assert_refused_as_unmounted(
+        result: subprocess.CompletedProcess[str],
     ) -> None:
-        vol = tmp_path / "vol"
-        vol.mkdir()
-
-        result = subprocess.run(
-            [BASH, str(SCRIPT), "--rw", str(vol)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env={"PATH": os.environ["PATH"]},  # nothing overridden
-        )
-
         assert result.returncode == SKIP, (
             "an unmounted backup volume passed every check — a base backup "
             "written there goes to the root disk and looks like success\n"
@@ -366,6 +385,46 @@ class TestAnUnmountedVolumeIsNotAHealthyOne:
             "the journal line must say the volume is not mounted, not just "
             "'unhealthy'\n" + result.stdout + result.stderr
         )
+
+    def test_a_directory_on_the_root_filesystem_is_unhealthy_by_default(
+        self, tmp_path: Path
+    ) -> None:
+        """Against the host's real mount table, where it can say anything."""
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        if not _on_the_root_filesystem(vol):
+            pytest.skip(
+                "tmp_path is not on the root filesystem on this host (a "
+                "separate /tmp mount); the stubbed twin still asserts this"
+            )
+
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "--rw", str(vol)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={"PATH": os.environ["PATH"]},  # nothing overridden
+        )
+        self._assert_refused_as_unmounted(result)
+
+    def test_a_directory_findmnt_resolves_to_root_is_unhealthy_by_default(
+        self, tmp_path: Path
+    ) -> None:
+        """The same claim on every host: findmnt says ``/``, and nothing but
+        the stub's seam is overridden, so the guard is armed by default."""
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        bin_dir = tmp_path / "bin"
+        _stub_findmnt(bin_dir, r"/\n", r"rw,relatime\n")
+
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "--rw", str(vol)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={"PATH": os.environ["PATH"], "ROBOTHOR_EXTRA_PATH": str(bin_dir)},
+        )
+        self._assert_refused_as_unmounted(result)
 
     def test_the_check_can_be_relaxed_for_an_instance_without_a_separate_volume(
         self, tmp_path: Path
@@ -430,10 +489,15 @@ class TestTheSeparateMountGuardIsOnlyDisabledByExactlyZero:
     ) -> None:
         vol = tmp_path / "vol"
         vol.mkdir()
+        # findmnt says the target is on `/`, whatever this host mounts where:
+        # the question here is how the flag is parsed, not the mount table.
+        bin_dir = tmp_path / "bin"
+        _stub_findmnt(bin_dir, r"/\n", r"rw,relatime\n")
         result = _run(
             "--rw",
             str(vol),
             env_extra={"ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": value},
+            path=f"{bin_dir}:{os.environ['PATH']}",
         )
         assert result.returncode == SKIP, (
             f"ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT={value!r} disarmed the "
@@ -519,23 +583,13 @@ class TestAStackedMountCannotCollapseTheGuard:
     Only the first row describes the mount containing the target.
     """
 
-    @staticmethod
-    def _findmnt(bin_dir: Path, targets: str, options: str) -> None:
-        _stub(
-            bin_dir / "findmnt",
-            'case "$*" in\n'
-            f"  *TARGET*) printf '{targets}' ;;\n"
-            f"  *OPTIONS*) printf '{options}' ;;\n"
-            "esac",
-        )
-
     def test_two_root_rows_do_not_become_a_non_root_path(
         self, tmp_path: Path
     ) -> None:
         vol = tmp_path / "vol"
         vol.mkdir()
         bin_dir = tmp_path / "bin"
-        self._findmnt(bin_dir, r"/\n/\n", r"rw,relatime\n rw,relatime\n")
+        _stub_findmnt(bin_dir, r"/\n/\n", r"rw,relatime\n rw,relatime\n")
 
         result = _run(
             "--rw",
@@ -557,7 +611,7 @@ class TestAStackedMountCannotCollapseTheGuard:
         bin_dir = tmp_path / "bin"
         # Row 1 is the mount that actually contains the target and it is fine.
         # Row 2 belongs to something else and must not be read at all.
-        self._findmnt(
+        _stub_findmnt(
             bin_dir,
             r"/mnt/vol\n/mnt/other\n",
             r"rw,relatime\nro,relatime,emergency_ro\n",
