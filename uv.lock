@@ -1232,7 +1232,7 @@ wheels = [
 
 [[package]]
 name = "genusos"
-version = "1.123.0"
+version = "1.125.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiogram" },
