@@ -326,3 +326,10 @@ def test_old_switch_in_the_env_does_not_bring_the_clock_back(monkeypatch):
     assert "Current time:" not in _dump(kwargs["messages"][0])
     assert kwargs["tools"][-1].get("cache_control") == {"type": "ephemeral"}
     assert any("cache_control" in _dump(m) for m in kwargs["messages"][1:-2])
+
+
+def test_a_catalog_no_cache_override_stops_every_anthropic_marker():
+    """A curated ``supports_cache_control=False`` wins over the ``anthropic/`` prefix."""
+    with patch("robothor.engine.model_registry.supports_cache_control", return_value=False):
+        kwargs = _build(ANTHROPIC_DIRECT, _messages(_system_at(9, 41), _history(40), "next?"))
+    assert "cache_control" not in _dump(kwargs)
