@@ -190,3 +190,36 @@ async def test_a_run_posts_one_progress_message_and_edits_it(env_says_off, monke
     assert client.updated, "the progress message is edited in place"
     assert all(u["ts"] == "1700000000.000100" for u in client.updated)
     assert said == [{"args": (), "text": "The answer.", "mrkdwn": True}]
+
+
+#: A tool reached through ``tool_call``, as the tool turn reports it.
+_WRAPPED_START = {
+    "event": "tool_start",
+    "tool": "tool_call",
+    "args": {"name": "web_search", "arguments": {"query": "tides"}},
+    "call_id": "call-1",
+}
+_WRAPPED_END = {"event": "tool_end", "tool": "tool_call", "call_id": "call-1", "duration_ms": 900}
+
+
+@pytest.mark.asyncio
+async def test_a_wrapped_tool_is_named_in_the_progress_message(env_says_off, monkeypatch):
+    """``tool_call`` is how the tool was reached, not what ran: name what ran."""
+
+    async def _handle_message(**kw: Any) -> Any:
+        await kw["on_progress"](_WRAPPED_START)
+        await asyncio.sleep(0.05)
+        await kw["on_progress"](_WRAPPED_END)
+        return inbound.InboundResult(reply="The answer.", ran=True, kind="answer")
+
+    monkeypatch.setattr(inbound, "handle_message", _handle_message)
+    bot = _bot()
+    client = _Client()
+    bot._app = SimpleNamespace(client=client)
+    said: list[dict[str, Any]] = []
+    await bot._on_message(
+        {"text": "search it", "channel": "C123", "user": "U1"}, await _say_collector(said)
+    )
+    written = [client.posted[0]["text"]] + [u["text"] for u in client.updated]
+    assert written[0].startswith("Running web search")
+    assert not any("tool call" in text for text in written)

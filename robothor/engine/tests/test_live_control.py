@@ -183,6 +183,22 @@ class TestProgressLine:
         )
         assert line is not None and "Step 3" in line and "12s" in line
 
+    @pytest.mark.parametrize(
+        ("args", "shown"),
+        [
+            ({"name": " web_search ", "arguments": {}}, "Running web search"),
+            ({"name": "tool_call"}, "Running tool call"),
+            ({"name": "  "}, "Running tool call"),
+            ({"name": 7}, "Running tool call"),
+            ("not a dict", "Running tool call"),
+        ],
+    )
+    def test_a_wrapped_call_names_the_tool_inside_it(self, args, shown):
+        line = live_control.format_progress_line(
+            {"event": "tool_start", "tool": "tool_call", "args": args}, elapsed_s=1
+        )
+        assert line is not None and line.startswith(shown + " ·")
+
     def test_other_events_give_no_line(self):
         assert live_control.format_progress_line({"event": "delta"}, elapsed_s=1) is None
 
@@ -271,6 +287,28 @@ class TestProgressMessage:
         await progress.close()
         assert fake.posts and fake.posts[0].startswith("Running web search")
         assert fake.edits and fake.edits[-1][1].startswith("Step 2")
+
+    @pytest.mark.asyncio
+    async def test_a_wrapped_tools_end_names_the_tool_its_start_did(self):
+        """``tool_end`` carries no arguments: it is named by its call id."""
+        fake = _FakeChannel()
+        progress = live_control.ProgressMessage(fake.post, fake.edit, min_interval=0.01)
+        await progress.on_event(
+            {
+                "event": "tool_start",
+                "tool": "tool_call",
+                "args": {"name": "web_search", "arguments": {}},
+                "call_id": "call-1",
+            }
+        )
+        await asyncio.sleep(0.05)
+        await progress.on_event(
+            {"event": "tool_end", "tool": "tool_call", "call_id": "call-1", "duration_ms": 900}
+        )
+        await asyncio.sleep(0.05)
+        await progress.close()
+        assert fake.posts[0].startswith("Running web search")
+        assert fake.edits[-1][1].startswith("web search done in 0.9s")
 
     @pytest.mark.asyncio
     async def test_no_event_means_nothing_is_ever_posted(self):
