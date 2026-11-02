@@ -226,8 +226,7 @@ knowing when reading `agent_run_steps` or the journal:
 ### Context Compaction (`robothor/engine/compaction.py`)
 
 When a run's context passes the proactive threshold, `context_budget` calls
-`context.maybe_compress`, which delegates to `compaction.compact`. Off by
-default, `ROBOTHOR_COMPACTION_V2` switches it to a hardened path:
+`context.maybe_compress`, which delegates to `compaction.compact`:
 
 - **The summariser is the agent's own chain** (primary, then fallbacks, minus
   models the run has proven dead), dialled through the same pooled completion
@@ -255,7 +254,7 @@ default, `ROBOTHOR_COMPACTION_V2` switches it to a hardened path:
   records `degraded: true`.
 
 The hard context ceiling (`context_fit.enforce_ceiling`) is enforced after
-every compaction attempt either way, so neither the backoff nor a freeze can
+every compaction attempt, so neither the backoff nor a freeze can
 send a provider more than its window.
 
 ---

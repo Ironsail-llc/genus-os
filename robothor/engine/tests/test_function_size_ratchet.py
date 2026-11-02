@@ -116,7 +116,6 @@ KNOWN_LARGE: dict[str, int] = {
     # what paid for reporting added/replaced as well as pruned.
     "daemon.py::_watchdog": 298,
     "chat.py::plan_approve": 286,
-    "compaction.py::compact": 276,
     # -7: rate-limit wait and the malformed-tool-call verdict extracted;
     # +4: review-requested comments on the malformed-tool-call branch (why the
     # re-roll spends `attempt`, and what skipping `_handle_model_error` costs)

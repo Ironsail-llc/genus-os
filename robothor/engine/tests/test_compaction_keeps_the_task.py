@@ -84,7 +84,7 @@ class TestTheTaskSurvives:
     async def test_the_task_statement_survives_a_compaction(self, monkeypatch):
         monkeypatch.setattr("robothor.engine.compaction.extract_facts", _no_facts, raising=False)
         monkeypatch.setattr(
-            "robothor.engine.compaction.summarize_segment", _fake_summary, raising=False
+            "robothor.engine.compaction.update_summary", _fake_summary, raising=False
         )
         result = await compact(_long_conversation(), models=["x"], threshold=1, drain_to=1)
         assert result.passes_used >= 2, "the fixture must actually compact"
@@ -98,7 +98,7 @@ class TestTheTaskSurvives:
         first one is a defence that holds until the run gets interesting."""
         monkeypatch.setattr("robothor.engine.compaction.extract_facts", _no_facts, raising=False)
         monkeypatch.setattr(
-            "robothor.engine.compaction.summarize_segment", _fake_summary, raising=False
+            "robothor.engine.compaction.update_summary", _fake_summary, raising=False
         )
         once = await compact(_long_conversation(), models=["x"], threshold=1, drain_to=1)
         grown = list(once.messages)
@@ -111,7 +111,7 @@ class TestTheTaskSurvives:
     async def test_the_system_prompt_still_comes_first(self, monkeypatch):
         monkeypatch.setattr("robothor.engine.compaction.extract_facts", _no_facts, raising=False)
         monkeypatch.setattr(
-            "robothor.engine.compaction.summarize_segment", _fake_summary, raising=False
+            "robothor.engine.compaction.update_summary", _fake_summary, raising=False
         )
         result = await compact(_long_conversation(), models=["x"], threshold=1, drain_to=1)
         assert result.messages[0]["role"] == "system"

@@ -1,4 +1,4 @@
-"""Tests for the compaction pre-pass (G7 / Rip 18) + multimodal token estimation.
+"""Tests for the compaction pre-pass + multimodal token estimation.
 
 Covers the two deferred-from-commit gaps the verification audit flagged:
 1. estimate_tokens must size content-block (multimodal) content by characters +

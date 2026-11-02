@@ -51,8 +51,7 @@ recommended:
       description: >
         The chain member context compaction summarises with first, typically
         the chain's small/fast model. Must also appear as primary or in
-        fallbacks; anything else is ignored. Read only when
-        ROBOTHOR_COMPACTION_V2 is on.
+        fallbacks; anything else is ignored.
       example: "openai/gpt-5-mini"
     temperature:
       type: number

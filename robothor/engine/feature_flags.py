@@ -191,29 +191,6 @@ def narrow_memory_search_enabled() -> bool:
     return _env_bool("MEMORY_NARROW_SEARCH")
 
 
-def compaction_hardening_enabled() -> bool:
-    """Return True iff compaction hardening (Rip 18 / G7) is active.
-
-    When on, compaction runs a cheap LLM-free pre-pass before summarizing:
-    dedup identical tool results (keep the newest full copy) and strip
-    historical media (base64 images) outside the protected recent tail — both
-    pure token wins with no information loss the agent can't re-fetch. Off by
-    default; gated by ``ROBOTHOR_RIP_18_ENABLED``.
-    """
-    return is_rip_enabled(18)
-
-
-def compaction_v2_enabled() -> bool:
-    """Return True iff the hardened compaction path is active.
-
-    Agent-chain summariser, LLM-free pre-pass, iterative summary, anti-thrash
-    backoff and freeze-on-failure (``compaction._compact_v2``). Off by default;
-    gated by ``ROBOTHOR_COMPACTION_V2`` and dark under
-    ``ROBOTHOR_DISABLE_ALL_RIPS``.
-    """
-    return not _disabled_all() and _env_bool("ROBOTHOR_COMPACTION_V2")
-
-
 def catalog_backed_models_enabled() -> bool:
     """Return True iff the catalog-backed model registry (Rip 17 / G6) is active.
 

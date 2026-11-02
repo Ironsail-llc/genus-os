@@ -13,7 +13,6 @@ from robothor.engine.compaction import (
     compact,
     extract_facts,
     extract_tool_summary,
-    summarize_segment,
 )
 
 # ── TestExtractToolSummary ────────────────────────────────────────────
@@ -78,6 +77,9 @@ class TestExtractToolSummary:
 # ── TestExtractFacts ──────────────────────────────────────────────────
 
 
+MODEL = "openai/example-primary"
+
+
 class TestExtractFacts:
     @pytest.mark.asyncio
     async def test_valid_json_response(self):
@@ -98,7 +100,8 @@ class TestExtractFacts:
                 [
                     {"role": "user", "content": "Let's use PostgreSQL"},
                     {"role": "assistant", "content": "Done."},
-                ]
+                ],
+                model=MODEL,
             )
 
         assert len(facts) == 2
@@ -113,7 +116,7 @@ class TestExtractFacts:
         mock_resp.choices[0].message.content = "not valid json {{"
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_resp):
-            facts = await extract_facts([{"role": "user", "content": "Hello"}])
+            facts = await extract_facts([{"role": "user", "content": "Hello"}], model=MODEL)
 
         assert facts == []
 
@@ -124,7 +127,7 @@ class TestExtractFacts:
             new_callable=AsyncMock,
             side_effect=RuntimeError("API down"),
         ):
-            facts = await extract_facts([{"role": "user", "content": "Hello"}])
+            facts = await extract_facts([{"role": "user", "content": "Hello"}], model=MODEL)
 
         assert facts == []
 
@@ -143,52 +146,14 @@ class TestExtractFacts:
         mock_resp.choices[0].message.content = facts_json
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_resp):
-            facts = await extract_facts([{"role": "user", "content": "test"}])
+            facts = await extract_facts([{"role": "user", "content": "test"}], model=MODEL)
 
         assert len(facts) == 1
 
     @pytest.mark.asyncio
     async def test_empty_messages_returns_empty(self):
-        facts = await extract_facts([])
+        facts = await extract_facts([], model=MODEL)
         assert facts == []
-
-
-# ── TestSummarizeSegment ─────────────────────────────────────────────
-
-
-class TestSummarizeSegment:
-    @pytest.mark.asyncio
-    async def test_successful_summary(self):
-        mock_resp = MagicMock()
-        mock_resp.choices = [MagicMock()]
-        mock_resp.choices[0].message.content = "Discussed database migration."
-
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_resp):
-            result = await summarize_segment(
-                [
-                    {"role": "user", "content": "Migrate the database"},
-                    {"role": "assistant", "content": "Done, migrated."},
-                ]
-            )
-
-        assert "database migration" in result
-
-    @pytest.mark.asyncio
-    async def test_llm_failure_fallback(self):
-        with patch(
-            "litellm.acompletion",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("fail"),
-        ):
-            result = await summarize_segment([{"role": "user", "content": "test"}])
-
-        assert "Segment:" in result
-        assert "compressed" in result
-
-    @pytest.mark.asyncio
-    async def test_empty_segment_fallback(self):
-        result = await summarize_segment([])
-        assert "Segment:" in result
 
 
 # ── TestCompact ────────────────────────────────────────────────────────
@@ -250,8 +215,8 @@ class TestCompact:
             assert "[tool result:" in content or len(content) < 5000
 
     @pytest.mark.asyncio
-    async def test_pass3_segmented_summary(self):
-        """When fact extraction + segmented summary are needed."""
+    async def test_summary_with_retained_facts(self):
+        """The slice is summarised and its facts are kept as retained context."""
         messages = _make_large_conversation(n_pairs=60)
 
         facts_json = json.dumps(
@@ -276,9 +241,9 @@ class TestCompact:
             return mock_summary_resp
 
         with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=mock_acompletion):
-            result = await compact(messages, threshold=100, drain_to=50_000)
+            result = await compact(messages, models=[MODEL], threshold=100, drain_to=50_000)
 
-        assert result.passes_used >= 2
+        assert result.passes_used == 3
         assert len(result.facts_extracted) == 1
         assert result.facts_extracted[0].text == "Chose PostgreSQL"
         # System prompt preserved
@@ -287,37 +252,6 @@ class TestCompact:
         retained = [m for m in result.messages if RETAINED_CONTEXT_MARKER in m.get("content", "")]
         assert len(retained) == 1
         assert "Chose PostgreSQL" in retained[0]["content"]
-
-    @pytest.mark.asyncio
-    async def test_pass4_progressive_pruning(self):
-        """When segmented summary is still too large, oldest segments get dropped."""
-        messages = _make_large_conversation(n_pairs=100)
-
-        facts_json = json.dumps(
-            {"facts": [{"category": "context", "text": "Important fact", "priority": 4}]}
-        )
-        mock_fact_resp = MagicMock()
-        mock_fact_resp.choices = [MagicMock()]
-        mock_fact_resp.choices[0].message.content = facts_json
-
-        # Make summaries large enough that pruning is needed
-        mock_summary_resp = MagicMock()
-        mock_summary_resp.choices = [MagicMock()]
-        mock_summary_resp.choices[0].message.content = "Summary. " * 500
-
-        async def mock_acompletion(**kwargs):
-            if "response_format" in kwargs:
-                return mock_fact_resp
-            return mock_summary_resp
-
-        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=mock_acompletion):
-            result = await compact(messages, threshold=100, drain_to=500)
-
-        assert result.passes_used == 4
-        # Facts survive pruning
-        retained = [m for m in result.messages if RETAINED_CONTEXT_MARKER in m.get("content", "")]
-        assert len(retained) == 1
-        assert "Important fact" in retained[0]["content"]
 
     @pytest.mark.asyncio
     async def test_retained_context_survives_recompaction(self):
@@ -358,7 +292,7 @@ class TestCompact:
             return mock_summary_resp
 
         with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=mock_acompletion):
-            result = await compact(messages, threshold=100, drain_to=50_000)
+            result = await compact(messages, models=[MODEL], threshold=100, drain_to=50_000)
 
         # Original retained facts should still be present
         retained = [m for m in result.messages if RETAINED_CONTEXT_MARKER in m.get("content", "")]

@@ -1,14 +1,15 @@
 """
-Enhanced Context Compaction — fact-preserving, graduated compression.
+Context compaction — fact-preserving, on the agent's own model chain.
 
-4-pass strategy:
-1. Tool result thinning — heuristic one-liners for large tool results
-2. Structured fact extraction — LLM extracts JSON facts as retained context
-3. Segmented LLM summary — chunk old messages, summarize each separately
-4. Progressive pruning — drop oldest summaries, keep retained facts
+1. LLM-free pre-pass — dedupe repeated tool results, strip historical media,
+   elide oversized old tool results, truncate oversized argument JSON
+2. Iterative summary — the previous summary plus the new slice, folded chunk
+   by chunk, on the agent's chain (the fleet chain when the caller has none)
+3. Structured fact extraction — JSON facts kept as retained context
+4. Freeze on failure — when every model fails, the messages are kept and the
+   result is marked degraded instead of dropping the middle
 
-Core idea: extract structured facts BEFORE summarizing. Facts survive all
-future compactions via the [RETAINED CONTEXT] marker.
+Facts survive all future compactions via the [RETAINED CONTEXT] marker.
 """
 
 from __future__ import annotations
@@ -39,14 +40,9 @@ logger = logging.getLogger(__name__)
 
 RETAINED_CONTEXT_MARKER = "[RETAINED CONTEXT]"
 
-# Segment size for chunked summarization (pass 3)
-SEGMENT_SIZE = 20
-
 # Minimum tool result length to apply summary extraction
 TOOL_SUMMARY_MIN_CHARS = 500
 
-# Model for fact extraction (cheap, fast)
-FACT_EXTRACTION_MODEL = "gemini/gemini-2.5-flash"
 # Hard ceiling on the compaction LLM call. It runs inside the agent loop, so a
 # hung provider (Gemini has been flaky) would otherwise stall the whole run and
 # trip the stall watchdog as if the agent itself froze (audit 2026-05-29).
@@ -86,10 +82,6 @@ Priority: 1=trivial, 3=useful, 5=critical
 
 Only include genuinely important facts. Omit routine tool calls and chatter."""
 
-SEGMENT_SUMMARY_PROMPT = """\
-Summarize this conversation segment concisely. Focus on what was discussed, \
-decisions made, and outcomes. Be brief — 2-4 sentences max."""
-
 
 @dataclass
 class CompactionFact:
@@ -110,7 +102,7 @@ class CompactionResult:
     tokens_before: int = 0
     tokens_after: int = 0
     #: The context was over budget and no model could summarise it, so the
-    #: messages were kept (v2 freeze-on-failure) rather than dropped.
+    #: messages were kept (freeze-on-failure) rather than dropped.
     degraded: bool = False
 
 
@@ -383,7 +375,7 @@ async def _acompletion_over_chain(models: str | list[str], **kwargs: Any) -> Any
 
 async def extract_facts(
     messages: list[dict[str, Any]],
-    model: str | list[str] = FACT_EXTRACTION_MODEL,
+    model: str | list[str],
 ) -> list[CompactionFact]:
     """Extract structured facts from conversation messages via LLM.
 
@@ -433,54 +425,6 @@ async def extract_facts(
     except Exception as e:
         logger.warning("Fact extraction failed: %s", e)
         return []
-
-
-async def summarize_segment(
-    messages: list[dict[str, Any]],
-    model: str | list[str] = FACT_EXTRACTION_MODEL,
-) -> str:
-    """Summarize a segment of conversation messages via LLM.
-
-    Falls back to a static placeholder on failure.
-    """
-    from robothor.engine.context import estimate_tokens
-
-    msg_count = len(messages)
-    token_est = estimate_tokens(messages)
-    fallback = f"[Segment: {msg_count} messages, ~{token_est} tokens, details compressed]"
-
-    if not messages:
-        return fallback
-
-    text_parts: list[str] = []
-    for msg in messages:
-        role = msg.get("role", "unknown")
-        content = msg.get("content")
-        if content and isinstance(content, str) and role in ("user", "assistant"):
-            preview = content[:400] if len(content) > 400 else content
-            text_parts.append(f"{role}: {preview}")
-
-    if not text_parts:
-        return fallback
-
-    try:
-        response = await _acompletion_over_chain(
-            model,
-            messages=[
-                {"role": "system", "content": SEGMENT_SUMMARY_PROMPT},
-                {"role": "user", "content": "\n".join(text_parts)},
-            ],
-            temperature=0.1,
-            max_tokens=300,
-        )
-
-        summary_text: str | None = response.choices[0].message.content
-        if summary_text:
-            return summary_text.strip()
-    except Exception as e:
-        logger.warning("Segment summarization failed: %s", e)
-
-    return fallback
 
 
 def _build_retained_context_message(
@@ -777,268 +721,6 @@ def _shrink_largest(
     return out, shrunk
 
 
-async def compact(
-    messages: list[dict[str, Any]],
-    models: list[str] | None = None,
-    threshold: int = 80_000,
-    drain_to: int = 60_000,
-    broken_models: set[str] | None = None,
-    preferred_model: str | None = None,
-) -> CompactionResult:
-    """4-pass graduated compaction.
-
-    Each pass checks if below drain_to before proceeding to the next.
-    Retained context messages (facts) are never dropped.
-
-    Args:
-        messages: Conversation messages to compact.
-        models: Model list (first used for summarization if provided).
-        threshold: Token count above which compaction triggers.
-        drain_to: Target token count to drain down to.
-
-    Returns:
-        CompactionResult with compacted messages and metadata.
-    """
-    from robothor.engine.feature_flags import compaction_v2_enabled
-
-    if compaction_v2_enabled():
-        return await _compact_v2(
-            messages, models, threshold, drain_to, broken_models, preferred_model
-        )
-
-    from robothor.engine.context import KEEP_RECENT, estimate_tokens
-
-    tokens_before = estimate_tokens(messages)
-
-    if tokens_before < threshold:
-        return CompactionResult(
-            messages=messages,
-            passes_used=0,
-            tokens_before=tokens_before,
-            tokens_after=tokens_before,
-        )
-
-    if len(messages) <= KEEP_RECENT + 1:
-        # The count-based passes below need more messages than this to work
-        # with. They used to return here unchanged, which meant compaction was
-        # gated on MESSAGE COUNT and never on tokens: measured 2026-08-27, a
-        # 21-message conversation of 225,015 tokens reduced by 0.0%. The shape
-        # is "few, enormous messages" — one 750KB tool result re-sent each turn
-        # — and it is the shape that most needs compacting.
-        #
-        # Falling through to a token-bound shrink instead. Only when there is
-        # something worth shrinking: a genuinely short exchange is still left
-        # alone, which is what the floor was protecting.
-        shrunk_messages, shrunk = _shrink_largest(messages, drain_to)
-        if not shrunk:
-            return CompactionResult(
-                messages=messages,
-                passes_used=0,
-                tokens_before=tokens_before,
-                tokens_after=tokens_before,
-            )
-        tokens_after = estimate_tokens(shrunk_messages)
-        logger.info(
-            "Compaction (token-bound): %s oversized message(s) shrunk, ~%d → ~%d tokens",
-            sanitize_log(shrunk),
-            tokens_before,
-            tokens_after,
-        )
-        return CompactionResult(
-            messages=shrunk_messages,
-            # 0 when nothing was reclaimed: a pass that frees no tokens must
-            # not read as success to the runner's "Proactive compaction" log.
-            passes_used=1 if tokens_after < tokens_before else 0,
-            tokens_before=tokens_before,
-            tokens_after=tokens_after,
-        )
-
-    # The WHOLE chain, not models[0]: compaction has to survive a dead primary
-    # or it silently drops the agent's context during exactly the outage the
-    # fallback chain exists for. Models the run has already proven dead are
-    # dropped, so each pass does not re-dial them for a full round trip.
-    _usable = [m for m in (models or []) if m not in (broken_models or set())] or list(models or [])
-    summary_model: str | list[str] = _usable or FACT_EXTRACTION_MODEL
-    working = list(messages)  # Shallow copy
-    all_facts: list[CompactionFact] = []
-
-    # ── Pass 0: LLM-free pre-pass (Rip 18 / G7) — dedup + strip media ──
-    # Cheap, lossless-for-the-agent reclamation before any LLM summary, per the
-    # Hermes pattern. Often recovers enough alone to skip the costlier passes.
-    from robothor.engine.feature_flags import compaction_hardening_enabled
-
-    if compaction_hardening_enabled():
-        from robothor.engine.context import KEEP_RECENT as _KEEP_RECENT
-
-        working, _eli = _dedup_tool_results(working, _KEEP_RECENT)
-        working, _med = _strip_historical_media(working, _KEEP_RECENT)
-        if _eli or _med:
-            logger.info(
-                "Compaction pre-pass: elided %s duplicate tool results, stripped %s media blocks",
-                sanitize_log(_eli),
-                sanitize_log(_med),
-            )
-            est0 = estimate_tokens(working)
-            if est0 < drain_to:
-                logger.info(
-                    "Pre-pass (dedup/media) sufficient: ~%d → ~%d tokens", tokens_before, est0
-                )
-                return CompactionResult(
-                    messages=working,
-                    passes_used=1,
-                    tokens_before=tokens_before,
-                    tokens_after=est0,
-                )
-
-    # ── Pass 1: Tool result thinning ──────────────────────────────────
-    tool_indices = [i for i, m in enumerate(working) if m.get("role") == "tool"]
-    for idx in tool_indices[:-KEEP_RECENT]:
-        content = working[idx].get("content", "")
-        char_count = len(content) if isinstance(content, str) else len(str(content))
-        if char_count > TOOL_SUMMARY_MIN_CHARS:
-            summary = extract_tool_summary(content if isinstance(content, str) else str(content))
-            working[idx] = {**working[idx], "content": f"[tool result: {summary}]"}
-
-    est = estimate_tokens(working)
-    if est < drain_to:
-        logger.info("Pass 1 (tool thinning) sufficient: ~%d → ~%d tokens", tokens_before, est)
-        return CompactionResult(
-            messages=working,
-            passes_used=1,
-            tokens_before=tokens_before,
-            tokens_after=est,
-        )
-
-    # ── Pass 2: Structured fact extraction ────────────────────────────
-    # The pinned HEAD, not just messages[0]: the task statement lives there,
-    # and a run that summarises it away invents its own output's shape.
-    head_msgs, retained_msgs, non_retained = _split_for_summary(working)
-
-    # Split into old and recent (from non-retained messages).
-    # Use a safe split point that never orphans tool_call/tool_result pairs.
-    if len(non_retained) > KEEP_RECENT:
-        split_idx = _recent_split(non_retained, max(1024, drain_to // 3), KEEP_RECENT)
-        old_messages = non_retained[:split_idx]
-        recent_messages = non_retained[split_idx:]
-    else:
-        old_messages = []
-        recent_messages = non_retained
-
-    # Extract facts from old messages, then merge those earlier compactions
-    # retained (deduplicated by text).
-    new_facts = await extract_facts(old_messages, model=summary_model)
-    all_facts = _merge_retained_facts([*all_facts, *new_facts], retained_msgs)
-
-    if not old_messages:
-        # Nothing old to summarize — just inject facts and return
-        result_msgs = list(head_msgs)
-        if all_facts:
-            result_msgs.append(_build_retained_context_message(all_facts, messages))
-        result_msgs.extend(recent_messages)
-        est = estimate_tokens(result_msgs)
-        return CompactionResult(
-            messages=result_msgs,
-            facts_extracted=all_facts,
-            passes_used=2,
-            tokens_before=tokens_before,
-            tokens_after=est,
-        )
-
-    # ── Pass 3: Segmented LLM summary ────────────────────────────────
-    # Split old messages into chunks of SEGMENT_SIZE
-    segments = [
-        old_messages[i : i + SEGMENT_SIZE] for i in range(0, len(old_messages), SEGMENT_SIZE)
-    ]
-
-    segment_summaries: list[str] = []
-    for segment in segments:
-        summary = await summarize_segment(segment, model=summary_model)
-        segment_summaries.append(summary)
-
-    # Build compacted message list
-    result_msgs = list(head_msgs)
-
-    # Retained facts always first (after system)
-    if all_facts:
-        result_msgs.append(_build_retained_context_message(all_facts, messages))
-
-    # Segment summaries as a combined user message
-    if segment_summaries:
-        combined_summary = "[Conversation summary]\n" + "\n---\n".join(segment_summaries)
-        result_msgs.append({"role": "user", "content": combined_summary})
-        result_msgs.append(
-            {
-                "role": "assistant",
-                "content": "Understood. I have context from our previous conversation.",
-            }
-        )
-
-    result_msgs.extend(recent_messages)
-
-    est = estimate_tokens(result_msgs)
-    if est < drain_to:
-        logger.info("Pass 3 (segmented summary) sufficient: ~%d → ~%d tokens", tokens_before, est)
-        return CompactionResult(
-            messages=result_msgs,
-            facts_extracted=all_facts,
-            passes_used=3,
-            tokens_before=tokens_before,
-            tokens_after=est,
-        )
-
-    # ── Pass 4: Progressive pruning ───────────────────────────────────
-    # Drop oldest segment summaries, keep facts
-    while est >= drain_to and len(segment_summaries) > 1:
-        segment_summaries.pop(0)
-        result_msgs = list(head_msgs)
-        if all_facts:
-            result_msgs.append(_build_retained_context_message(all_facts, messages))
-        if segment_summaries:
-            combined_summary = "[Conversation summary]\n" + "\n---\n".join(segment_summaries)
-            result_msgs.append({"role": "user", "content": combined_summary})
-            result_msgs.append(
-                {
-                    "role": "assistant",
-                    "content": "Understood. I have context from our previous conversation.",
-                }
-            )
-        result_msgs.extend(recent_messages)
-        est = estimate_tokens(result_msgs)
-
-    logger.info("Pass 4 (progressive pruning): ~%d → ~%d tokens", tokens_before, est)
-
-    # Pass 5 — token-bound backstop. Every pass above reclaims by MESSAGE:
-    # thin, summarise, prune. None of them helps when the tokens are
-    # concentrated in a handful of enormous ones, and measured 2026-08-27 a
-    # 25-message / 270,019-token conversation still finished at 225,050 — over
-    # any window this fleet runs, including the local tier's 65,536.
-    #
-    # The engine sends num_ctx from that same registry number, so "compacted"
-    # while still three times the window is not a smaller prompt, it is a
-    # silently truncated one.
-    if est > drain_to:
-        result_msgs, shrunk = _shrink_largest(result_msgs, drain_to)
-        if shrunk:
-            est_after = estimate_tokens(result_msgs)
-            logger.info(
-                "Pass 5 (token-bound backstop): %s oversized message(s) shrunk, ~%d → ~%d tokens",
-                sanitize_log(shrunk),
-                est,
-                est_after,
-            )
-            est = est_after
-
-    return CompactionResult(
-        messages=result_msgs,
-        facts_extracted=all_facts,
-        passes_used=4,
-        tokens_before=tokens_before,
-        tokens_after=est,
-    )
-
-
-# ── Compaction v2 (ROBOTHOR_COMPACTION_V2) ─────────────────────────────
-
 #: Old tool results longer than this become a one-line summary plus a reference.
 V2_TOOL_RESULT_MAX_CHARS = 2_000
 
@@ -1148,7 +830,7 @@ def _truncate_tool_arguments(
 def llm_free_pre_pass(
     messages: list[dict[str, Any]], protect_tail: int
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Reclaim tokens with no model call: the v2 pass that runs first.
+    """Reclaim tokens with no model call: the pass that runs first.
 
     Never touches the protected head (the task statement) or the recent tail.
     Dedupe identical tool results, strip historical media, elide oversized old
@@ -1251,7 +933,7 @@ async def _summary_chain(
             # Reads the manifest directory: off the loop.
             chain = list(await asyncio.to_thread(engine_config.fleet_model_chain))
         except Exception as e:  # noqa: BLE001 — no chain is reported by the caller
-            logger.warning("Compaction v2: fleet chain unreadable (%s)", sanitize_log(str(e)))
+            logger.warning("Compaction: fleet chain unreadable (%s)", sanitize_log(str(e)))
             chain = []
     usable = [m for m in chain if m not in (broken_models or set())] or chain
     if preferred_model and preferred_model in usable:
@@ -1312,15 +994,20 @@ def _merge_retained_facts(
     return out
 
 
-async def _compact_v2(
+async def compact(
     messages: list[dict[str, Any]],
-    models: list[str] | None,
-    threshold: int,
-    drain_to: int,
-    broken_models: set[str] | None,
-    preferred_model: str | None,
+    models: list[str] | None = None,
+    threshold: int = 80_000,
+    drain_to: int = 60_000,
+    broken_models: set[str] | None = None,
+    preferred_model: str | None = None,
 ) -> CompactionResult:
-    """Pre-pass, then one iterative summary on the agent's chain; freeze on failure."""
+    """Pre-pass, then one iterative summary on the agent's chain; freeze on failure.
+
+    Retained context messages (facts) are never dropped. With no chain from the
+    caller the fleet chain summarises; when every model fails, the messages are
+    kept and the result is marked ``degraded``.
+    """
     from robothor.engine.context import KEEP_RECENT, estimate_tokens
 
     tokens_before = estimate_tokens(messages)
@@ -1332,7 +1019,7 @@ async def _compact_v2(
     working, counts = llm_free_pre_pass(messages, KEEP_RECENT)
     est = estimate_tokens(working)
     logger.info(
-        "Compaction v2 pre-pass: ~%d → ~%d tokens (%s)", tokens_before, est, sanitize_log(counts)
+        "Compaction pre-pass: ~%d → ~%d tokens (%s)", tokens_before, est, sanitize_log(counts)
     )
 
     def result(msgs: list[dict[str, Any]], passes: int, **extra: Any) -> CompactionResult:
@@ -1348,7 +1035,12 @@ async def _compact_v2(
         return result(working, 1)
 
     if len(working) <= KEEP_RECENT + 1:
-        shrunk, _ = _shrink_largest(working, drain_to)
+        shrunk, n = _shrink_largest(working, drain_to)
+        if not n and est >= tokens_before:
+            # Nothing reclaimed: a no-op must not read as a pass that worked.
+            return CompactionResult(
+                messages=messages, tokens_before=tokens_before, tokens_after=tokens_before
+            )
         return result(shrunk, 1)
 
     head_msgs, retained_msgs, rest = _split_for_summary(working)
@@ -1373,7 +1065,7 @@ async def _compact_v2(
             raise RuntimeError("nothing in the slice to summarise")
     except Exception as e:  # noqa: BLE001 — freeze, never drop the middle
         logger.warning(
-            "Compaction v2: summary failed on every model (%s) — keeping %d messages, "
+            "Compaction: summary failed on every model (%s) — keeping %d messages, "
             "run marked degraded",
             sanitize_log(str(e)[:200]),
             len(working),
@@ -1403,7 +1095,7 @@ async def _compact_v2(
     if estimate_tokens(result_msgs) > drain_to:
         result_msgs, _ = _shrink_largest(result_msgs, drain_to)
     logger.info(
-        "Compaction v2: summary updated on %s, ~%d → ~%d tokens",
+        "Compaction: summary updated on %s, ~%d → ~%d tokens",
         sanitize_log(chain[0]),
         tokens_before,
         estimate_tokens(result_msgs),

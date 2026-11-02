@@ -1,20 +1,20 @@
-"""Compaction v2 (``ROBOTHOR_COMPACTION_V2``): the hardened compaction path.
+"""Compaction: the hardened path, the only one there is.
 
-Five behaviours, each one a way the v1 path loses a long run's work:
+Five behaviours, each one a way the compaction it replaced lost a long run's work:
 
 * it summarised with one hard-coded external model whenever a caller passed no
   chain, so a deployment whose fleet runs on other routes dialled a model it may
-  not be authorised for. v2 uses the agent's own chain, the fleet chain when
+  not be authorised for. It uses the agent's own chain, the fleet chain when
   there is none, and a chain member the manifest names for compaction first;
 * the cheapest tokens to reclaim (tool-call argument JSON, historical media,
-  duplicated and oversized old tool results) were left for the LLM passes. v2
+  duplicated and oversized old tool results) were left for the LLM passes. It
   reclaims them first, with no model call at all;
-* the summary was rebuilt from scratch, segment by segment, every time. v2
+* the summary was rebuilt from scratch, segment by segment, every time. It
   feeds the previous summary plus the new slice to one call;
 * a context that grew by one tool result compacted again on the next
-  iteration. v2 waits ``ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS`` iterations;
+  iteration. It waits ``ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS`` iterations;
 * a failed summary became a placeholder and the drain then dropped the middle of
-  the conversation. v2 keeps the messages and records the compaction degraded.
+  the conversation. It keeps the messages and records the compaction degraded.
 
 The completion every test fakes is ``compaction.pooled_acompletion`` — the name
 the module imports, so the real dispatch is never reached.
@@ -38,11 +38,9 @@ CHAIN = ["openai/example-primary", "vertex_ai/example-small"]
 
 
 @pytest.fixture(autouse=True)
-def _v2_on(monkeypatch):
+def _gap_of_three(monkeypatch):
     from robothor.settings import reset_settings
 
-    monkeypatch.setenv("ROBOTHOR_COMPACTION_V2", "1")
-    monkeypatch.delenv("ROBOTHOR_RIP_18_ENABLED", raising=False)
     monkeypatch.setenv("ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS", "3")
     reset_settings()
     yield
@@ -255,11 +253,6 @@ async def test_a_materially_larger_context_is_not_held_by_the_backoff():
     """The gap damps small growth; a jump far past the trigger still summarises."""
     sizes = {2: FAR_PAST_THRESHOLD_CHARS}
     assert await _iterate([1, 2, 3], sizes) == [1, 2]
-
-
-async def test_without_v2_every_iteration_may_compact(monkeypatch):
-    monkeypatch.delenv("ROBOTHOR_COMPACTION_V2", raising=False)
-    assert await _iterate([1, 2, 3, 4]) == [1, 2, 3, 4]
 
 
 # ── AC4: the model comes from the agent's chain ───────────────────────

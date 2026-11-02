@@ -56,6 +56,9 @@ class TestEstimateTokens:
         assert estimate_tokens(messages) == 0
 
 
+CHAIN_MODEL = "openai/example-primary"
+
+
 class TestMaybeCompress:
     @pytest.mark.asyncio
     async def test_no_compression_below_threshold(self):
@@ -89,7 +92,7 @@ class TestMaybeCompress:
         mock_response.choices[0].message.content = "Summary of conversation."
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
-            result = await maybe_compress(messages)
+            result = await maybe_compress(messages, [CHAIN_MODEL])
 
         # Should be compressed
         assert len(result) < len(messages)
@@ -111,7 +114,7 @@ class TestMaybeCompress:
         mock_response.choices[0].message.content = "Summary."
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
-            result = await maybe_compress(messages)
+            result = await maybe_compress(messages, [CHAIN_MODEL])
 
         assert result[0]["content"] == "IMPORTANT SYSTEM PROMPT"
 
@@ -127,7 +130,7 @@ class TestMaybeCompress:
         mock_response.choices[0].message.content = "Summary."
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
-            result = await maybe_compress(messages)
+            result = await maybe_compress(messages, [CHAIN_MODEL])
 
         # Last KEEP_RECENT messages should be exactly preserved
         recent_in_result = result[-(KEEP_RECENT):]
@@ -135,7 +138,7 @@ class TestMaybeCompress:
         assert recent_in_result == recent_original
 
     @pytest.mark.asyncio
-    async def test_llm_failure_fallback(self):
+    async def test_llm_failure_keeps_every_message(self):
         messages = [{"role": "system", "content": "sys"}]
         for _i in range(100):
             messages.append({"role": "user", "content": "x" * 4000})
@@ -144,13 +147,10 @@ class TestMaybeCompress:
         with patch(
             "litellm.acompletion", new_callable=AsyncMock, side_effect=RuntimeError("API down")
         ):
-            result = await maybe_compress(messages)
+            result = await maybe_compress(messages, [CHAIN_MODEL])
 
-        # Should still compress with fallback summaries
-        assert len(result) < len(messages)
-        # Check that some form of summary/segment placeholder exists
-        all_content = " ".join(m.get("content", "") or "" for m in result)
-        assert "Segment:" in all_content or "summary" in all_content.lower()
+        # Freeze on failure: no placeholder, nothing dropped.
+        assert result == messages
 
 
 class TestGetContextStats:
