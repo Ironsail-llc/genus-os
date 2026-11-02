@@ -387,7 +387,7 @@ jobs:
     # webchat HTTP half runs nightly in install-gate.yml's compose job instead.
     # The comparison is against bench/turn/baselines/ci-inprocess.json, which
     # must be recorded on this runner class, not on a laptop.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       redis:
