@@ -620,6 +620,17 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                         "type": "boolean",
                         "description": "Filter by requires_human flag (true/false)",
                     },
+                    "overdue": {
+                        "type": "boolean",
+                        "description": "Only open tasks past their due time",
+                    },
+                    "unowned": {
+                        "type": "boolean",
+                        "description": (
+                            "Only open tasks no agent owns, or that wait on a person "
+                            "(requires_human)"
+                        ),
+                    },
                     "limit": {
                         "type": "integer",
                         "description": "Max results (default 50)",
@@ -1387,6 +1398,8 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
             exclude_resolved=arguments.get("excludeResolved", False),
             requires_human=arguments.get("requiresHuman"),
             limit=arguments.get("limit", 50),
+            overdue=bool(arguments.get("overdue", False)),
+            unowned=bool(arguments.get("unowned", False)),
         )
         return {"tasks": results, "count": len(results)}
 

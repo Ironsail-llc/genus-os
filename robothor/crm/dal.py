@@ -1461,8 +1461,15 @@ def list_tasks(
     tenant_id: str = DEFAULT_TENANT,
     *,
     scope: DataScope | None = None,
+    overdue: bool = False,
+    unowned: bool = False,
 ) -> list[dict[str, Any]]:
     """List tasks with optional filters.
+
+    The case filters (``docs/CRM_DATA_FABRIC.md``, "Cases"): ``overdue`` keeps
+    tasks whose ``due_at`` has passed; ``unowned`` keeps tasks no agent owns or
+    that wait on a person (``requires_human``). Either one also excludes
+    resolved tasks, whatever ``exclude_resolved`` says.
 
     By default, tasks with a future ``follow_up_at`` are hidden (they're
     "snoozing" until the resurface job clears the field). Pass
@@ -1497,11 +1504,15 @@ def list_tasks(
         if parent_task_id:
             conditions.append("parent_task_id = %s")
             params.append(parent_task_id)
-        if exclude_resolved and not status:
+        if (exclude_resolved or overdue or unowned) and not status:
             conditions.append("status != 'DONE'")
         if requires_human is not None:
             conditions.append("requires_human = %s")
             params.append(requires_human)
+        if overdue:
+            conditions.append("due_at < NOW()")
+        if unowned:
+            conditions.append("(assigned_to_agent IS NULL OR requires_human IS TRUE)")
         # Filter out tasks that are snoozing (follow_up_at in the future).
         # The resurface job clears follow_up_at when it's due; this filter is
         # the user-visible side of the snooze semantic.
