@@ -10,6 +10,7 @@ chat ends with one message, the answer, and the person is notified of it.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import enum
 from types import SimpleNamespace
@@ -218,3 +219,28 @@ async def test_a_failed_answer_send_keeps_the_streamed_text(bot):
 
     assert not [c for c in bot.bot.calls if c[0] == "delete_message"]
     assert run.delivery_status is not None and run.delivery_status.startswith("failed")
+
+
+@pytest.mark.asyncio
+async def test_a_stop_after_the_answer_landed_leaves_it_alone(bot):
+    """/stop (or shutdown) in the bookkeeping after delivery edits nothing to "Stopped."."""
+    bot.runner.execute = AsyncMock(return_value=_run())
+    answered = asyncio.Event()
+
+    async def slow_bookkeeping(*_args: Any, **_kwargs: Any) -> None:
+        answered.set()
+        await asyncio.sleep(10)
+
+    bot._record_interactive_delivery = slow_bookkeeping
+    session_key = bot._session_key("12345")
+    await bot._run_interactive("12345", session_key, get_shared_session(session_key), "hello")
+    task = bot._active_tasks["12345"]
+    await asyncio.wait_for(answered.wait(), 5)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    stopped = [
+        c for c in bot.bot.calls if c[0] == "edit_message_text" and c[1]["text"] == "Stopped."
+    ]
+    assert not stopped, stopped
