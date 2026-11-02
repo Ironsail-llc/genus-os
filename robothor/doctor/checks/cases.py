@@ -52,8 +52,9 @@ async def _cases_overdue(ctx: DoctorContext) -> Result:
         total += int(count)
         kind = "needs a person" if needs_person else "unowned"
         parts.append(f"{int(count)} {kind} (oldest {oldest})")
+    noun = "case" if total == 1 else "cases"
     return fail(
-        f"{total} overdue cases: {', '.join(parts)} — assign an owner, or answer the question"
+        f"{total} overdue {noun}: {', '.join(parts)} — assign an owner, or answer the question"
     )
 
 
