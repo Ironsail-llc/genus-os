@@ -66,7 +66,9 @@ KNOWN_LARGE: dict[str, int] = {
     # run_lifecycle.spawn_post_stall_autodream ("recovery helper spawns" is
     # that module's own contract), which is what paid for classifying a
     # workflow-budget kill and letting it propagate.
-    "runner.py::execute": 986,  # +7: task_id propagated onto the run at INSERT time
+    # 986 -> 978: the switch that gated the answer-first exit went, and the
+    # inline finalization shares that exit's arguments.
+    "runner.py::execute": 978,
     # 775 -> 773 with the step-efficiency work: the guard's note drain, the
     # pace-note call site and the refusal branch cost less than the inlined
     # deadline and check-in blocks returned when they left for run_pacing.py.

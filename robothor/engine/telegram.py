@@ -591,7 +591,7 @@ class TelegramBot(
                     await self._record_interactive_delivery(run, sent)
                     return sent
 
-                early = EarlyRelease(deliver_answer)  # ROBOTHOR_EARLY_DONE
+                early = EarlyRelease(deliver_answer)
                 run = await self.runner.execute(
                     agent_id=self.config.default_chat_agent,
                     message=user_text,
