@@ -316,9 +316,11 @@ genus doctor --only crm.cases_overdue
 ```
 
 The check warns (severity `recommended`) with a count of overdue unowned cases
-and of overdue cases that need a person, each with the oldest task id, and
-passes when there are none. An overdue case an agent owns is not counted: it is
-in that agent's inbox. Answering the operator's question (`answer_question`)
+and of overdue cases that need a person, each with the oldest task id and its
+tenant, and passes when there are none. It counts across every tenant. An
+overdue case an agent owns is not counted: it is in that agent's inbox. A task
+snoozed until a future `follow_up_at` is not overdue for the check or for
+`list_tasks`; it comes back when the follow-up time passes. Answering the operator's question (`answer_question`)
 clears `requires_human`, so an answered case leaves the count.
 
 ## Testing

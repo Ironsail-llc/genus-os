@@ -193,7 +193,8 @@ listing everything and filtering in the model:
 | `unowned: true` | Open tasks no agent owns, or that wait on a person |
 
 Both together list what the `crm.cases_overdue` doctor check counts
-(`genus doctor --only crm.cases_overdue`). Use `list_my_tasks` for an agent's
+(`genus doctor --only crm.cases_overdue`). Neither counts a task snoozed until
+a future follow-up. Use `list_my_tasks` for an agent's
 own inbox. The convention (field mapping, hand-offs) is the "Cases" section of
 `docs/CRM_DATA_FABRIC.md`.
 
