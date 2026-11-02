@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = [
     "WRAPPER_TOOL",
     "MalformedToolCallError",
+    "explicit_arguments",
     "inner_call",
     "is_read_only_call",
     "unwrap",
@@ -39,15 +40,14 @@ class MalformedToolCallError(ValueError):
     """A ``tool_call`` the model built wrongly: a bad call it can fix, not a crash."""
 
 
-def wrapped_arguments(raw: Any) -> dict[str, Any] | None:
-    """The wrapped call's arguments as an object, or ``None`` if they are not one.
+def explicit_arguments(raw: Any) -> dict[str, Any] | None:
+    """The arguments the model actually sent as an object, or ``None``.
 
-    Models often serialise ``arguments`` as a JSON string instead of an object;
-    a string that parses to an object is the same call. Missing (or empty)
-    arguments mean none.
+    An object is itself; a JSON string that parses to an object is the same
+    call. Anything else, a null or an empty string included, is not an object:
+    readers that audit what a tool was asked to do (receipts, verification)
+    must not take the step's output as evidence of a call with no arguments.
     """
-    if raw is None or raw == "":
-        return {}
     if isinstance(raw, dict):
         return raw
     if isinstance(raw, str):
@@ -57,6 +57,18 @@ def wrapped_arguments(raw: Any) -> dict[str, Any] | None:
             return None
         return parsed if isinstance(parsed, dict) else None
     return None
+
+
+def wrapped_arguments(raw: Any) -> dict[str, Any] | None:
+    """The wrapped call's arguments for dispatch: an object, or ``None`` if they
+    are not one.
+
+    Missing (or empty) arguments mean none, so a tool with no parameters runs;
+    otherwise as :func:`explicit_arguments`.
+    """
+    if raw is None or raw == "":
+        return {}
+    return explicit_arguments(raw)
 
 
 def unwrap(args: Any) -> tuple[str, dict[str, Any]]:
