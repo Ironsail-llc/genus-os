@@ -290,7 +290,14 @@ async def test_an_oversized_ordinary_batch_degrades_with_a_count(bot, secure, mo
     messages = [message(photo=photo(uid=f"AgACbig{i}"), media_group_id="MGBIG") for i in range(26)]
     for msg in messages:
         await bot.handle_file(msg)
+    # At least the window this always waited, then until the flush lands: 26
+    # downloads and descriptions can outlast 0.6 s on a busy runner, and an
+    # album still in flight read as "nothing was enqueued".
     await asyncio.sleep(0.6)
+    deadline = asyncio.get_running_loop().time() + 10
+    while not bot._enqueue_message.await_count:
+        assert asyncio.get_running_loop().time() < deadline, "the album never flushed"
+        await asyncio.sleep(0.05)
 
     answers = " ".join(str(msg.answer.call_args_list) for msg in messages)
     assert "Private albums were not saved" not in answers, "an ordinary batch called private"
