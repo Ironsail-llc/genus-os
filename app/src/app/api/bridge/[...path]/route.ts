@@ -37,12 +37,15 @@ async function proxy(
     const ifNoneMatch = req.headers.get("if-none-match");
     if (ifNoneMatch) headers["If-None-Match"] = ifNoneMatch;
 
+    // Every method but GET and HEAD may carry a body, and DELETE does: retiring
+    // an agent sends its confirmation there. An empty one is sent as none.
+    const body =
+      req.method === "GET" || req.method === "HEAD" ? undefined : (await req.text()) || undefined;
+
     const res = await fetch(target.toString(), {
       method: req.method,
       headers,
-      body: ["POST", "PUT", "PATCH"].includes(req.method)
-        ? await req.text()
-        : undefined,
+      body,
       signal: AbortSignal.timeout(30000),
     });
 
