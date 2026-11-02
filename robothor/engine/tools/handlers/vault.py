@@ -160,15 +160,16 @@ def _is_top_level_human_chat(session: Any) -> bool:
 def _intake_gate(ctx: ToolContext) -> str | None:
     """The first credential-intake gate this call fails, or None if it passes.
 
-    ``role`` — the human is not an owner or admin; ``chat_agent`` — this is
-    not the default chat agent; ``human_chat`` — the run is not a top-level
-    run a person started (a sub-agent, a cron, hook or workflow run, or no live
-    run at all). Read from the run, never from message text.
+    ``chat_agent`` — this is not the default chat agent, so only the manifest
+    tier opens it; ``role`` — the human is not an owner or admin;
+    ``human_chat`` — the run is not a top-level run a person started (a
+    sub-agent, a cron, hook or workflow run, or no live run at all). Read from
+    the run, never from message text.
     """
-    if (getattr(ctx, "user_role", "") or "") not in INTAKE_ROLES:
-        return "role"
     if (getattr(ctx, "agent_id", "") or "") != _default_chat_agent():
         return "chat_agent"
+    if (getattr(ctx, "user_role", "") or "") not in INTAKE_ROLES:
+        return "role"
     if not _is_top_level_human_chat(_live_session(ctx)):
         return "human_chat"
     return None
@@ -190,7 +191,8 @@ def _gated_refusal(ctx: ToolContext, tool: str, gate: str) -> dict[str, Any]:
         error = (
             f"{tool} is refused: a credential handed over in chat is kept by the "
             f"default chat agent ({_default_chat_agent()!r}), not by "
-            f"{getattr(ctx, 'agent_id', '') or '(unattributed)'!r}."
+            f"{getattr(ctx, 'agent_id', '') or '(unattributed)'!r}, whose manifest does "
+            f"not declare `{CREDENTIAL_TIER_KEY}: {OPERATOR_TIER}` under `v2:`."
         )
         unlock = (
             "Hand it to the default chat agent, or an operator adds "
