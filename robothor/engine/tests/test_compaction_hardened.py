@@ -460,7 +460,7 @@ def test_the_settings_model_declares_no_compaction_switch():
     assert "ROBOTHOR_COMPACTION_V2" not in inspect.getsource(model)
 
 
-async def test_the_old_switch_off_still_uses_the_fleet_chain(monkeypatch):
+async def test_the_retired_switch_set_off_still_uses_the_fleet_chain(monkeypatch):
     from robothor.settings import reset_settings
 
     monkeypatch.setenv("ROBOTHOR_COMPACTION_V2", "0")
@@ -477,7 +477,7 @@ async def test_the_old_switch_off_still_uses_the_fleet_chain(monkeypatch):
     assert {c["model"] for c in fake.calls} == set(fleet)
 
 
-async def test_the_old_switch_off_still_freezes_on_failure(monkeypatch):
+async def test_the_retired_switch_set_off_still_freezes_on_failure(monkeypatch):
     from robothor.settings import reset_settings
 
     monkeypatch.setenv("ROBOTHOR_COMPACTION_V2", "0")

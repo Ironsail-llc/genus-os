@@ -722,16 +722,16 @@ def _shrink_largest(
 
 
 #: Old tool results longer than this become a one-line summary plus a reference.
-V2_TOOL_RESULT_MAX_CHARS = 2_000
+TOOL_RESULT_MAX_CHARS = 2_000
 
 #: Tool-call argument JSON longer than this is truncated (kept valid JSON).
-V2_ARGUMENT_MAX_CHARS = 1_000
+ARGUMENT_MAX_CHARS = 1_000
 
 #: How much of one long argument string survives truncation.
-V2_ARGUMENT_VALUE_CHARS = 200
+ARGUMENT_VALUE_CHARS = 200
 
 #: Ceiling on the conversation slice handed to one summary update.
-V2_SLICE_MAX_CHARS = 32_000
+SLICE_MAX_CHARS = 32_000
 
 SUMMARY_MARKER = "[Conversation summary]"
 
@@ -746,7 +746,7 @@ summary, at most 300 words."""
 
 
 def _elide_large_tool_results(
-    messages: list[dict[str, Any]], protect_tail: int, max_chars: int = V2_TOOL_RESULT_MAX_CHARS
+    messages: list[dict[str, Any]], protect_tail: int, max_chars: int = TOOL_RESULT_MAX_CHARS
 ) -> tuple[list[dict[str, Any]], int]:
     """Replace old oversized tool results with a one-line summary and a reference.
 
@@ -782,8 +782,8 @@ def _truncate_arguments(raw: str, max_chars: int) -> str:
     if isinstance(parsed, dict):
         short = {
             k: (
-                v[:V2_ARGUMENT_VALUE_CHARS] + f"... [{len(v):,} chars elided by compaction]"
-                if isinstance(v, str) and len(v) > V2_ARGUMENT_VALUE_CHARS
+                v[:ARGUMENT_VALUE_CHARS] + f"... [{len(v):,} chars elided by compaction]"
+                if isinstance(v, str) and len(v) > ARGUMENT_VALUE_CHARS
                 else v
             )
             for k, v in parsed.items()
@@ -795,7 +795,7 @@ def _truncate_arguments(raw: str, max_chars: int) -> str:
 
 
 def _truncate_tool_arguments(
-    messages: list[dict[str, Any]], protect_tail: int, max_chars: int = V2_ARGUMENT_MAX_CHARS
+    messages: list[dict[str, Any]], protect_tail: int, max_chars: int = ARGUMENT_MAX_CHARS
 ) -> tuple[list[dict[str, Any]], int]:
     """Truncate oversized tool-call argument JSON outside the recent tail.
 
@@ -884,7 +884,7 @@ def _take_previous_summary(
     return "\n".join(p for p in previous if p), rest
 
 
-def _slice_chunks(messages: list[dict[str, Any]], cap: int = V2_SLICE_MAX_CHARS) -> list[str]:
+def _slice_chunks(messages: list[dict[str, Any]], cap: int = SLICE_MAX_CHARS) -> list[str]:
     """The slice as summary input, split on message boundaries into chunks of
     at most ``cap`` characters, oldest first.
 
