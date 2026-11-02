@@ -1,11 +1,9 @@
 """The bridge's per-request overhead, and the behaviour that must survive cutting it.
 
-Four costs were paid on every request and none of them bought anything:
+Three costs were paid on every request and none of them bought anything:
 
 * every engine call opened a brand-new ``httpx.AsyncClient`` (a new pool, a new
   connection) although the lifespan already holds a shared one;
-* every ``GET /api/agent-manifests`` re-read and YAML-parsed the whole fleet,
-  and the dashboard asks for it each time a message goes to a named agent;
 * every service-token request rebuilt the known-agent set;
 * four ``BaseHTTPMiddleware`` layers each wrapped every request and every
   streamed body in their own task.
@@ -18,14 +16,12 @@ one cannot quietly change an answer, a header or a status code.
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from typing import Any
 from unittest.mock import patch
 
 import httpx
 import pytest
-import yaml
 from fastapi import (
     Request,  # noqa: TC002 — FastAPI resolves the probe route's annotation at runtime
 )
@@ -278,170 +274,6 @@ class TestTheEngineClientIsShared:
         assert attempts == ["POST", "POST"]
 
 
-# ─── Manifest listing: stat, do not re-parse ─────────────────────────
-
-
-AGENT = {
-    "id": "demo-agent",
-    "name": "Demo Agent",
-    "description": "Does the demo work",
-    "version": "2026-09-01",
-    "department": "operations",
-    "model": {"primary": "openrouter/example/demo-model"},
-    "delivery": {"mode": "none"},
-    "tools_allowed": ["read_file"],
-    "instruction_file": "brain/DEMO_AGENT.md",
-}
-
-
-@pytest.fixture
-def fleet(tmp_path, monkeypatch):
-    """Three agents in a throwaway workspace (never the operator's — rule 11)."""
-    manifests = tmp_path / "docs" / "agents"
-    manifests.mkdir(parents=True)
-    (tmp_path / "brain").mkdir()
-    for index in range(3):
-        agent_id = f"demo-agent-{index}"
-        document = {**AGENT, "id": agent_id, "name": f"Demo Agent {index}"}
-        (manifests / f"{agent_id}.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
-    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
-    monkeypatch.delenv("ROBOTHOR_MANIFEST_DIR", raising=False)
-    return manifests
-
-
-@pytest.fixture
-def manifest_reads(monkeypatch):
-    """Counts every manifest file the engine's loader opens."""
-    from robothor.engine import config
-
-    counter = {"files": 0, "defaults": 0}
-    real_load = config._load_manifest_classified
-    real_defaults = config._load_defaults
-
-    def _counting_load(path, *args, **kwargs):
-        counter["files"] += 1
-        return real_load(path, *args, **kwargs)
-
-    def _counting_defaults(*args, **kwargs):
-        counter["defaults"] += 1
-        return real_defaults(*args, **kwargs)
-
-    monkeypatch.setattr(config, "_load_manifest_classified", _counting_load)
-    monkeypatch.setattr(config, "_load_defaults", _counting_defaults)
-    return counter
-
-
-class TestTheManifestListingIsCached:
-    def test_a_second_listing_reads_no_manifest_file(
-        self, controls_client_as_operator, fleet, manifest_reads
-    ):
-        first = controls_client_as_operator.get("/api/agent-manifests")
-        assert first.status_code == 200, first.text
-        assert first.json()["count"] == 3
-        assert manifest_reads["files"] == 3
-
-        manifest_reads["files"] = manifest_reads["defaults"] = 0
-        second = controls_client_as_operator.get("/api/agent-manifests")
-
-        assert second.status_code == 200
-        assert second.json() == first.json()
-        assert manifest_reads == {"files": 0, "defaults": 0}
-
-    def test_a_file_changed_on_disk_is_seen_by_the_next_listing(
-        self, controls_client_as_operator, fleet, manifest_reads
-    ):
-        controls_client_as_operator.get("/api/agent-manifests")
-        path = fleet / "demo-agent-1.yaml"
-        document = yaml.safe_load(path.read_text())
-        document["name"] = "Renamed Outside The Bridge"
-        path.write_text(yaml.safe_dump(document, sort_keys=False))
-        # A later mtime than the first read, however coarse the filesystem.
-        later = time.time() + 5
-        os.utime(path, (later, later))
-
-        body = controls_client_as_operator.get("/api/agent-manifests").json()
-        names = {row["id"]: row["name"] for row in body["agents"]}
-        assert names["demo-agent-1"] == "Renamed Outside The Bridge"
-
-    def test_a_file_added_or_removed_is_seen_by_the_next_listing(
-        self, controls_client_as_operator, fleet
-    ):
-        assert controls_client_as_operator.get("/api/agent-manifests").json()["count"] == 3
-        (fleet / "demo-agent-0.yaml").unlink()
-        assert controls_client_as_operator.get("/api/agent-manifests").json()["count"] == 2
-        document = {**AGENT, "id": "demo-agent-9", "name": "Demo Agent 9"}
-        (fleet / "demo-agent-9.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
-        assert controls_client_as_operator.get("/api/agent-manifests").json()["count"] == 3
-
-    def test_a_write_through_the_bridge_invalidates_even_when_mtimes_do_not_move(
-        self, controls_client_as_operator, fleet, monkeypatch
-    ):
-        """The explicit invalidation, isolated from the stat signature.
-
-        A filesystem with a coarse clock can give an edit the same mtime as the
-        read before it; the bridge's own writes must not depend on the clock.
-        Simulated by pinning the file back to its original mtime after the
-        route has written it.
-        """
-        controls_client_as_operator.get("/api/agent-manifests")
-        path = fleet / "demo-agent-2.yaml"
-        before = path.stat()
-
-        with patch(
-            "routers.agent_manifests.engine_request",
-            new=_engine_stub,
-        ):
-            response = controls_client_as_operator.post("/api/agent-manifests/demo-agent-2/disable")
-        assert response.status_code == 200, response.text
-        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
-        os.utime(fleet, ns=(fleet.stat().st_atime_ns, fleet.stat().st_mtime_ns))
-
-        body = controls_client_as_operator.get("/api/agent-manifests").json()
-        row = next(row for row in body["agents"] if row["id"] == "demo-agent-2")
-        assert row["enabled"] is False
-
-    def test_an_environment_change_is_seen_by_the_next_listing(
-        self, controls_client_as_operator, fleet, monkeypatch
-    ):
-        """Manifests expand ``${VAR}`` from the environment, so the
-        environment is part of what the cached scan was read under."""
-        monkeypatch.setenv("DEMO_AGENT_BLURB", "first blurb")
-        path = fleet / "demo-agent-0.yaml"
-        document = yaml.safe_load(path.read_text())
-        document["description"] = "${DEMO_AGENT_BLURB}"
-        path.write_text(yaml.safe_dump(document, sort_keys=False))
-
-        def _blurb() -> str:
-            body = controls_client_as_operator.get("/api/agent-manifests").json()
-            return next(row for row in body["agents"] if row["id"] == "demo-agent-0")["description"]
-
-        assert _blurb() == "first blurb"
-        monkeypatch.setenv("DEMO_AGENT_BLURB", "second blurb")
-        assert _blurb() == "second blurb"
-
-    def test_an_invalidation_during_a_scan_is_not_hidden_by_the_cache(self, tmp_path):
-        """A write that lands while a scan is running drops the cache before
-        the scan stores its result; that result must not be kept, or the next
-        listing is served from a view older than the write."""
-        from routers import manifest_listing_cache as cache
-
-        (tmp_path / "demo-agent.yaml").write_text("id: demo-agent\n")
-        cache.invalidate_manifest_listing()
-
-        def _scan_racing_a_write() -> str:
-            cache.invalidate_manifest_listing()
-            return "before the write"
-
-        assert cache.cached_scan(tmp_path, _scan_racing_a_write) == "before the write"
-        assert cache.cached_scan(tmp_path, lambda: "after the write") == "after the write"
-
-
-async def _engine_stub(method, path, *, json=None, timeout=30):
-    if path == "/api/admin/tools":
-        return 200, {"tools": ["read_file"]}
-    return 200, {"added": [], "replaced": [], "pruned": [], "blocked": {}, "clean": True}
-
-
 # ─── Service-token RBAC: the known-agent set is not rebuilt per request ──
 
 
@@ -541,16 +373,13 @@ class TestTheKnownAgentSetIsCached:
             assert response.json() == {"error": "agent not authorized"}
 
     def test_the_installed_agents_routes_invalidate_the_set(self, monkeypatch):
-        """install, update and remove all end by dropping the cached set and
-        the cached manifest listing, whether or not the install succeeded."""
+        """install, update and remove all end by dropping the cached set,
+        whether or not the install succeeded."""
         import middleware
-        from routers import agent_manifests, installed_agents
+        from routers import installed_agents
 
         dropped: list[str] = []
         monkeypatch.setattr(middleware, "invalidate_known_agents", lambda: dropped.append("agents"))
-        monkeypatch.setattr(
-            agent_manifests, "invalidate_manifest_listing", lambda: dropped.append("manifests")
-        )
 
         async def _reconcile():
             return {"applied": True}
@@ -561,7 +390,7 @@ class TestTheKnownAgentSetIsCached:
             installed_agents, "_remove_installed", lambda agent_id, request: {"status": "removed"}
         )
         asyncio.run(installed_agents.remove_agent("demo-agent", request=None))  # type: ignore[arg-type]
-        assert sorted(dropped) == ["agents", "manifests"]
+        assert dropped == ["agents"]
 
 
 # ─── One middleware, four behaviours, in order ───────────────────────

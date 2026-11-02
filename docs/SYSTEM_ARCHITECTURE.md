@@ -1080,8 +1080,11 @@ the milder version of the same reason: a trigger derived from an incomplete
 fleet is one nobody can account for.
 
 A write that does not reconcile is a write that changes nothing, so every
-manifest writer calls it: `POST`/`PATCH`/`DELETE /api/agent-manifests`,
-`/api/installed-agents` install/update/remove, and `POST /api/setup/agent`.
+manifest writer calls it: the agent builder (`POST`/`PATCH`/`DELETE
+/api/agent-manifests`, which the bridge forwards to the engine's
+`/api/admin/agent-manifests` routes, where the write and the reconcile happen
+in-process), `/api/installed-agents` install/update/remove, and `POST
+/api/setup/agent`.
 
 #### Workflow budgets and step visibility
 

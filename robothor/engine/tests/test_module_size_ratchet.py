@@ -834,8 +834,22 @@ CAPS = {
     # seam (nothing there touches the filesystem, the engine or a request, which
     # is what lets it take its inputs as parameters instead of importing the
     # router's resolvers back).
-    # 1060 -> 1047: the listing's scan cache moved to manifest_listing_cache.py.
-    "crm/bridge/routers/agent_manifests.py": 1047,
+    # 1,049 -> 257: the store, the verdict, the reconcile and the trigger moved
+    # into the engine, which is the process that mounts the workspace. What is
+    # left is the operator gate, the audit trail and the forwarding.
+    # 257 -> 328 in review: a write whose answer is lost is still audited, and
+    # writes get their own engine budget. 340 -> 332: re-measured in the fold.
+    "crm/bridge/routers/agent_manifests.py": 332,
+    # The engine half of the agent builder, bounded from the day it lands: the
+    # file operations (manifest_store) and the routes that orchestrate them
+    # with the verdict, the reconcile and the trigger (admin_manifests).
+    # 700 -> 692 and 380 -> 376: re-measured in the fold, with the listing
+    # cache out in manifest_listing.py.
+    "robothor/engine/manifest_store.py": 692,
+    "robothor/engine/admin_manifests.py": 376,
+    # The fleet listing's cached scan, out of manifest_store so the store stays
+    # under its cap: it only knows whether the manifest files changed.
+    "robothor/engine/manifest_listing.py": 93,
     # 250 -> 260: `introduced` now carries the record of getting this wrong
     # twice in opposite directions — keyed too loosely it missed an added
     # fault, keyed too tightly it refused a partial repair — plus the per-fault
@@ -843,7 +857,9 @@ CAPS = {
     # satisfy a line count, which is the trade this repo has explicitly refused
     # before (see runner.py's entry). The fix itself went UPSTREAM into
     # CheckResult.faults rather than growing this file.
-    "crm/bridge/routers/_manifest_validation.py": 260,
+    # Moved from crm/bridge/routers/_manifest_validation.py with the store:
+    # the verdict needs the engine's tool registry and view of the fleet.
+    "robothor/engine/manifest_validation.py": 260,
 }
 
 

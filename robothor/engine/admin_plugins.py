@@ -199,6 +199,15 @@ class LockfileRefusedError(Exception):
     """``sync`` declined to write, and why. Becomes a 409, never a traceback."""
 
 
+def _invalidate_fleet_listing() -> None:
+    """A plugin that ships agents writes or retires their manifests on sync,
+    install and remove; the fleet listing's cached scan is dropped whether or
+    not the operation finished, since a half-done one can still have written."""
+    from robothor.engine import manifest_listing
+
+    manifest_listing.invalidate_listing()
+
+
 def sync_lockfile(force: bool = False) -> dict[str, Any]:
     """Record every installed distribution, and report what changed.
 
@@ -210,7 +219,10 @@ def sync_lockfile(force: bool = False) -> dict[str, Any]:
     from robothor.engine.config import invalidate_config_caches
     from robothor.plugins.lockfile import sync
 
-    result = sync(force=force)
+    try:
+        result = sync(force=force)
+    finally:
+        _invalidate_fleet_listing()
     if not result.ok:
         raise LockfileRefusedError(result.refused or "the lockfile could not be written")
     invalidate_config_caches()
@@ -368,14 +380,17 @@ def install_plugin(
     """
     from robothor.plugins import installer
 
-    outcome = installer.install(
-        name,
-        version=version,
-        index=index,
-        accept_review=accept_review,
-        dry_run=dry_run,
-        cancel=cancel,
-    )
+    try:
+        outcome = installer.install(
+            name,
+            version=version,
+            index=index,
+            accept_review=accept_review,
+            dry_run=dry_run,
+            cancel=cancel,
+        )
+    finally:
+        _invalidate_fleet_listing()
     return outcome.as_json()
 
 
@@ -383,7 +398,10 @@ def remove_plugin(name: str, force: bool = False) -> dict[str, Any]:
     """Uninstall one plugin this platform installed, and drop its row."""
     from robothor.plugins import installer
 
-    return installer.remove(name, force=force)
+    try:
+        return installer.remove(name, force=force)
+    finally:
+        _invalidate_fleet_listing()
 
 
 def reload_plugin_stack() -> dict[str, Any]:

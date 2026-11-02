@@ -273,6 +273,13 @@ def _mount_subsystem_routers(
 
     register_admin_scheduler(app, scheduler)
 
+    # The agent fleet's files. The workspace is mounted on THIS process, so the
+    # Helm's agent builder reads, writes, validates and runs through here; a
+    # bridge with no workspace volume would otherwise see an empty fleet.
+    from robothor.engine.admin_manifests import register as register_admin_manifests
+
+    register_admin_manifests(app, scheduler, runner)
+
     # Dropping the identity caches. The binding is a row anyone can write; the
     # belief about who a sender IS lives in THIS process for up to 300s, so a
     # revoke from the Helm has to reach here to take effect promptly.
@@ -1654,50 +1661,16 @@ def create_health_app(
 
         Added 2026-05-06 for the benchmark-runner verification flow — there
         was no in-engine "fire now" mechanism for agents (only for workflows).
-        Reuses the daemon's runner so sub-agent spawning works.
+        Reuses the daemon's runner so sub-agent spawning works. The body is
+        ``manual_trigger.trigger_agent``, shared with the agent builder's
+        ``run`` route.
         """
-        if not runner:
-            return {"error": "Runner not available"}
-        from robothor.engine.config import load_agent_config
-        from robothor.engine.manifest_schema import ManifestSchemaError
-        from robothor.engine.models import TriggerType
-
-        try:
-            agent_config = load_agent_config(agent_id, config.manifest_dir)
-        except ManifestSchemaError as e:
-            # Broken, not absent, and the caller must be able to tell: the fix
-            # for one is editing a manifest, for the other creating an agent.
-            # An unguarded raise here was a 500 with a traceback.
-            logger.error(
-                "Trigger refused: %s manifest failed the schema: %s", agent_id, e.summary()
-            )
-            return {"error": f"Agent manifest refused by the schema (SchemaError): {agent_id}"}
-        if not agent_config:
-            return {"error": f"Agent not found: {agent_id}"}
-
-        import asyncio
-
+        from robothor.engine import manual_trigger
         from robothor.engine.auth import request_context
 
-        auth = request_context(request)
-
-        async def _go() -> None:
-            try:
-                await runner.execute(
-                    agent_id=agent_id,
-                    message=f"Manual trigger via /api/agents/{agent_id}/trigger at {datetime.now(UTC).isoformat()}",
-                    trigger_type=TriggerType.MANUAL,
-                    trigger_detail="api-manual-trigger",
-                    agent_config=agent_config,
-                    tenant_id=auth.tenant_id,
-                    user_id=auth.user_id,
-                    user_role=auth.role,
-                )
-            except Exception:
-                logger.exception("Manual trigger of %s failed", sanitize_log(agent_id))
-
-        asyncio.create_task(_go())
-        return {"status": "started", "agent_id": agent_id}
+        return await manual_trigger.trigger_agent(
+            runner, config.manifest_dir, agent_id, lambda: request_context(request)
+        )
 
     @app.post("/api/workflows/{workflow_id}/execute")
     async def execute_workflow(workflow_id: str, request: Request) -> dict[str, Any]:

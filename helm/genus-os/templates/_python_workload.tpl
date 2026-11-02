@@ -38,7 +38,9 @@ Renders:
 {{- if eq $component "bridge" -}}
 {{- $_ := set $serviceEnv "ROBOTHOR_BRIDGE_HOST" "0.0.0.0" -}}
 {{- if $root.Values.engine.enabled -}}
-{{- $_ := set $serviceEnv "ROBOTHOR_ENGINE_URL" (printf "http://%s-engine:%v" (include "genus-os.fullname" $root) $root.Values.engine.service.port) -}}
+{{- /* The control Service: it still routes while the engine's /ready fails,
+       which one broken manifest is enough for (engine/control-service.yaml). */ -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_ENGINE_URL" (printf "http://%s-engine-control:%v" (include "genus-os.fullname" $root) $root.Values.engine.service.port) -}}
 {{- end -}}
 {{- if $root.Values.orchestrator.enabled -}}
 {{- $_ := set $serviceEnv "MEMORY_URL" (printf "http://%s-orchestrator:%v" (include "genus-os.fullname" $root) $root.Values.orchestrator.service.port) -}}

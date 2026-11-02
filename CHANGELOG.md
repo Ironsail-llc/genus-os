@@ -1,3 +1,9 @@
+## [1.125.1](https://github.com/Ironsail-llc/genus-os/compare/v1.125.0...v1.125.1) (2026-11-02)
+
+### Bug Fixes
+
+* **bridge:** serve agent manifests from the engine's workspace (GEN-333) ([#851](https://github.com/Ironsail-llc/genus-os/issues/851)) ([13bad31](https://github.com/Ironsail-llc/genus-os/commit/13bad310ca0defa130dee986e444769ce330bbdb))
+
 ## [1.125.0](https://github.com/Ironsail-llc/genus-os/compare/v1.124.0...v1.125.0) (2026-11-02)
 
 ### Features
