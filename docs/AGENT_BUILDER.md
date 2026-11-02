@@ -198,10 +198,15 @@ event is ever skipped or requeued as busy. Use it for a workflow that only
 hands each event on to something that serialises its own work, such as a
 channel pipeline with its own per-conversation lock; without it, an event that
 lands a moment after another waits at least 5 seconds. Every step must be safe
-to run twice at once, since two events can be in the same step together. The
-setting covers every run of the workflow, whichever trigger starts it, and the
-tool-call rate limit (below) still defers a run as usual. `concurrent` and
-`requeue_if_busy` in the same workflow is an error: the workflow does not load.
+to run twice at once, since two events can be in the same step together. A
+concurrent workflow has no `agent` steps, only tool steps and the steps that
+route between them (condition, transform, parallel): an agent step runs one at
+a time per agent and is skipped while that agent is busy, so an overlapping run
+would drop it and still be recorded as completed.
+The setting covers every run of the workflow, whichever trigger starts it, and
+the tool-call rate limit (below) still defers a run as usual. A concurrent
+workflow with an `agent` step (at the top level or inside `parallel`), or with
+`requeue_if_busy` on any trigger, is an error: the workflow does not load.
 
 ```yaml
 id: example-dispatch
