@@ -116,8 +116,9 @@ if recording it failed), and both pass the same access decision as a message: a 
 not drive the agent here cannot steer or stop it either. Add the two commands to
 the app's **Slash Commands** in the Slack app settings, the same way as `/clear`.
 
-While a run works, the bot posts one message and edits it in place, at most once
-a second: one line for the step or tool in progress with the elapsed time
+Once a run calls its first tool, the bot posts one message and edits it in
+place, at most once a second (a reply that needs no tool posts no progress
+line): one line for the step or tool in progress with the elapsed time
 (`Running web search · 4s`). Arguments and results never appear in it. When the
 run ends the line reads `Done.` and the answer arrives as its own message.
 The edit uses `chat.update`, which needs no scope beyond `chat:write`.

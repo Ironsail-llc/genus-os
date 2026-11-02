@@ -3,9 +3,10 @@
 -- records when it takes an operator steer mid-flight (StepType.STEER in
 -- robothor/engine/models.py), so the run steps API and the Runs drawer show it.
 --
--- The list is the full StepType set plus `budget_stop`, which another pending
--- migration adds to the same constraint: whichever of the two applies last,
--- neither value is lost.
+-- The list is the full StepType set plus `budget_stop`, which migration 163
+-- adds to the same constraint. It is not order-independent: 163's list has no
+-- `steer`, so 163 applied after this would drop it. The manifest applies 163
+-- before 164, and a later change to this constraint must list both values.
 
 ALTER TABLE agent_run_steps
   DROP CONSTRAINT IF EXISTS agent_run_steps_step_type_check;

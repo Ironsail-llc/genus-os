@@ -187,11 +187,12 @@ turns, and each tab's steer and Stop name their own turn by its request id.
 For API clients: `POST /chat/steer` with `{"text": "...", "request_id": "..."}`
 and `POST /chat/interrupt` with `{"request_id": "..."}` name the turn by the
 `request_id` it was sent to `/chat/send` with, and resolve the session key
-exactly like `/chat/send`. Only the user who sent that turn can reach it, and a
-turn sent without a `request_id` cannot be steered. Both answer
-`{"ok": …, "found": …}`; `found` is false when that turn has no live run, and a
-missing `request_id` is a 400. `GET /chat/steer` answers `{"enabled": …}`. With the setting off the
-two POST routes answer 404.
+exactly like `/chat/send`. The `request_id` must be a UUID. Only the user who
+sent that turn can reach it, and a turn sent without a `request_id` cannot be
+steered. Both answer `{"ok": …, "found": …}`; `found` is false when that turn
+has no live run, and a missing `request_id` is a 400. A steer that contains a
+payment card number is masked before the run, its steps or its log see it, as a
+follow-up is.
 
 ## Attaching files
 
