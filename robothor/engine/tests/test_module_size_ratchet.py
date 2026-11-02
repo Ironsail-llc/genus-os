@@ -74,7 +74,8 @@ CAPS = {
     # 2219 -> 2214: spawn inheritance, tier stamping, person linkage and tenant
     # access left execute for run_attribution.py, absorbing the fold's growth.
     # 2214 -> 2207: the switch that gated the answer-first exit went.
-    "robothor/engine/runner.py": 2207,
+    # 2207 -> 2206: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/runner.py": 2206,
     # 3850 -> 3150 after the plan-mode cluster left (phase 3), then again after
     # phase 3b (_setup_handlers closures -> methods), and 3150 -> 2000 as the
     # handler and attachment clusters left for telegram_handlers.py and
@@ -92,7 +93,8 @@ CAPS = {
     # platform message ids to the saved rows) left for telegram_delivery.py.
     # 1978 -> 1924: streaming is the only reply path; the old status edits
     # went, and delivering the reply moved to telegram_progress.deliver_reply.
-    "robothor/engine/telegram.py": 1924,
+    # 1924 -> 1923: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/telegram.py": 1923,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new
@@ -106,8 +108,10 @@ CAPS = {
     # the rest of the intake lives — it calls media_ref, _keep_attachment and
     # the same ceiling, so it was always that cluster. The ratchet asked for an
     # extraction rather than a bigger number, and got one.
-    "robothor/engine/telegram_handlers.py": 1082,
-    "robothor/engine/telegram_plan_mode.py": 900,
+    # 1082 -> 1047: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/telegram_handlers.py": 1047,
+    # 900 -> 872: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/telegram_plan_mode.py": 872,
     # 1100 -> 1048: the deliverable-contract cluster (the ladder, the guardrail
     # event, the operator alert and the honest failure) left for
     # deliverable_verdict.py. The shape contract would otherwise have added ~55
@@ -204,7 +208,8 @@ CAPS = {
     # why the fallback and the send are both helpers now rather than more
     # inline branches.
     "robothor/engine/delivery.py": 950,
-    "robothor/engine/run_lifecycle.py": 709,  # -69: dead copy of the tool-timeout tables
+    # 709 -> 701: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/run_lifecycle.py": 701,  # -69: dead copy of the tool-timeout tables
     "robothor/engine/run_llm_calls.py": 381,  # -69: dead copy of the tool-timeout tables
     # 400 -> 405: a sixth gate, the budget's wrap-up rung. This module IS the
     # ordered list of gates — its header calls that order a security property
@@ -239,7 +244,8 @@ CAPS = {
     # the 4,660-line god-object this file's header blames.
     # +21: the snippet approval budget, read beside the call cap. 549 -> 556:
     # the result checks judge a tool_call as the call it wraps (`_Call.inner`).
-    "robothor/engine/tool_turn.py": 556,
+    # 556 -> 553: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/tool_turn.py": 553,
     # The code-sandbox cluster, each piece capped at the size it was written
     # to. They are deliberately four small modules rather than one: the
     # POLICY (which calls may share a batch) is a table of names with no
@@ -406,7 +412,8 @@ CAPS = {
     # ["curl", …])` writes, `http_recorder: absent`, a crash one line later).
     # The merge and the summary live in code_exec_spawns.py; what is here is
     # the second loader call, the branch, and the reasons.
-    "robothor/engine/tools/handlers/code_exec.py": 366,
+    # 366 -> 365: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/tools/handlers/code_exec.py": 365,
     # 103 -> 150: `recorded_http_calls`, the loader that re-bounds what a
     # process the snippet controlled wrote, and the `http_calls` field on the
     # result — requests without bodies, for the model and for the ledger.
@@ -785,7 +792,8 @@ CAPS = {
     # 1562 -> 1533: the startup session restore (read off the loop, apply on
     # it) left for chat_restore.py when the daemon began reading sessions
     # concurrently, which paid for that split rather than raising this cap.
-    "robothor/engine/chat.py": 1533,
+    # 1533 -> 1526: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/chat.py": 1526,
     # 1600 -> 1607 (2026-08-27): fleet admission finally has a caller here.
     # The 75-line implementation went to admission.py; what remains is five
     # irreducible call sites (admit / register / complete / import). The
@@ -801,7 +809,8 @@ CAPS = {
     # schedule_reconcile.RowLedger; what is left here is the call site. This
     # corrects a cap set hours earlier in the same PR, not a long-standing one,
     # and is still 16 lines below where this module started.
-    "robothor/engine/scheduler.py": 1610,
+    # 1610 -> 1558: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/scheduler.py": 1558,
     # The job-set derivation reconcile and start() now share. Bounded from the
     # day it lands: this is the module that would otherwise absorb every
     # scheduling concern that does not fit in scheduler.py's cap.

@@ -65,7 +65,8 @@ KNOWN_LARGE: dict[str, int] = {
     # paid for reporting an unreadable benchmark break-out as null rather than
     # as zero spend — a different claim about the fleet, and one this endpoint
     # was the last place to get wrong.
-    "health.py::create_health_app": 1386,
+    # 1386 -> 1350: re-measured after the catch-up fold (flag paths removed).
+    "health.py::create_health_app": 1350,
     # 990 -> 989: the post-stall autoDream spawn moved to
     # run_lifecycle.spawn_post_stall_autodream ("recovery helper spawns" is
     # that module's own contract), which is what paid for classifying a
@@ -73,7 +74,8 @@ KNOWN_LARGE: dict[str, int] = {
     # 986 -> 970: spawn inheritance, tier stamping, person linkage and tenant
     # access moved to run_attribution.attribute_run. 970 -> 964: the switch
     # that gated the answer-first exit went, and both exits share its arguments.
-    "runner.py::execute": 964,
+    # 964 -> 963: re-measured after the catch-up fold (flag paths removed).
+    "runner.py::execute": 963,
     # 775 -> 773 with the step-efficiency work: the guard's note drain, the
     # pace-note call site and the refusal branch cost less than the inlined
     # deadline and check-in blocks returned when they left for run_pacing.py.
@@ -89,7 +91,8 @@ KNOWN_LARGE: dict[str, int] = {
     # that suppresses it, and the checkpoint save to checkpoint.py beside the
     # loader that reads it. The cap follows the function DOWN rather than
     # banking the difference, which is the point of a ratchet.
-    "runner.py::_run_loop": 508,
+    # 508 -> 478: re-measured after the catch-up fold (flag paths removed).
+    "runner.py::_run_loop": 478,
     # 473 -> 346. The Gmail and Calendar branches left for functions of their
     # own (_gmail_search/_gmail_get, _calendar_list/_calendar_create/
     # _calendar_delete) when each of them grew a real body: decoding a MIME
@@ -100,7 +103,8 @@ KNOWN_LARGE: dict[str, int] = {
     # 350 -> 285: the inline gws argv for threads.get / messages.send /
     # messages.modify moved behind the workspace provider seam
     # (robothor/workspace/google/adapter.py); the guards stayed here.
-    "tools/handlers/gws.py::_handle_gws_tool": 285,
+    # 285 -> 281: re-measured after the catch-up fold (flag paths removed).
+    "tools/handlers/gws.py::_handle_gws_tool": 281,
     # -14: fleet capacity init extracted to _init_fleet_capacity;
     # -26: structlog wiring extracted to _configure_structured_logging, which
     # is what made room for the startup provider-secrets load rather than
@@ -129,7 +133,8 @@ KNOWN_LARGE: dict[str, int] = {
     # 325 -> 326: +1 for reporting an unreadable break-out as None rather than
     # as zero spend, which is a different claim about the fleet.
     "analytics.py::get_agent_stats": 326,
-    "chat.py::plan_approve": 286,
+    # 286 -> 261: re-measured after the catch-up fold (flag paths removed).
+    "chat.py::plan_approve": 261,
     # -7: rate-limit wait and the malformed-tool-call verdict extracted;
     # +4: review-requested comments on the malformed-tool-call branch (why the
     # re-roll spends `attempt`, and what skipping `_handle_model_error` costs)
@@ -148,9 +153,11 @@ KNOWN_LARGE: dict[str, int] = {
     # is what paid for the reasoning-only re-ask, the per-attempt telemetry and
     # the shared per-model time allowance (DIAG 2026-09-13 §4.1/§4.4, review I6)
     # rather than raising this number for any of them.
-    "llm_client.py::_call_llm": 237,
+    # 237 -> 232: re-measured after the catch-up fold (flag paths removed).
+    "llm_client.py::_call_llm": 232,
     # 268 -> 267 on main, kept: this branch does not touch that function.
-    "config.py::manifest_to_agent_config": 267,
+    # 267 -> 263: re-measured after the catch-up fold (flag paths removed).
+    "config.py::manifest_to_agent_config": 263,
     # scheduler.py::start is gone from this list: 266 -> 116. The three
     # hand-written registration blocks (heartbeat, worker, cron) became one
     # loop over schedule_reconcile.agent_job_specs, which is also what
@@ -178,7 +185,8 @@ KNOWN_LARGE: dict[str, int] = {
     "tools/handlers/experiment.py::_experiment_commit": 256,
     "telegram.py::_handle_goal_command": 242,
     "managed_agents/runner.py::run_on_managed_agents": 241,
-    "runner.py::execute_deep": 224,
+    # 224 -> 218: re-measured after the catch-up fold (flag paths removed).
+    "runner.py::execute_deep": 218,
     # workflow.py::execute is gone from this list: 208 -> 179. The finalization
     # cluster (completion stamp, terminal status, the failed->timeout
     # reclassification) became _finalize_status, which is what paid for the
