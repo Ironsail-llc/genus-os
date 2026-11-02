@@ -613,10 +613,10 @@ class TelegramBot(
                     attachments=self._live_attachments(inbox, attachments),
                 )
 
-                # Capture the Telegram Message objects the reply went out as,
-                # so the channel bus can map platform_message_ids to the
-                # assistant chat_message row we'll persist below.
+                # The Message objects the reply went out as: the channel bus maps their
+                # platform_message_ids to the assistant chat_message row persisted below.
                 sent_messages = await deliver_reply(progress, run, chat_id, self.send_message)
+                stream_msg_id = None if sent_messages else stream_msg_id  # gone: no "Stopped."
 
                 await self._record_interactive_delivery(run, sent_messages)
 
