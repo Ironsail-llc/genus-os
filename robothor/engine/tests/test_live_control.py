@@ -183,6 +183,22 @@ class TestProgressLine:
         )
         assert line is not None and "Step 3" in line and "12s" in line
 
+    @pytest.mark.parametrize(
+        ("args", "shown"),
+        [
+            ({"name": " web_search ", "arguments": {}}, "Running web search"),
+            ({"name": "tool_call"}, "Running tool call"),
+            ({"name": "  "}, "Running tool call"),
+            ({"name": 7}, "Running tool call"),
+            ("not a dict", "Running tool call"),
+        ],
+    )
+    def test_a_wrapped_call_names_the_tool_inside_it(self, args, shown):
+        line = live_control.format_progress_line(
+            {"event": "tool_start", "tool": "tool_call", "args": args}, elapsed_s=1
+        )
+        assert line is not None and line.startswith(shown + " ·")
+
     def test_other_events_give_no_line(self):
         assert live_control.format_progress_line({"event": "delta"}, elapsed_s=1) is None
 

@@ -212,3 +212,25 @@ async def test_the_progress_activity_is_posted_then_updated_in_place(http):
     assert [r.method for r in calls] == ["POST", "PUT"]
     conv = quote(CONVERSATION, safe="")
     assert str(calls[1].url).endswith(f"/v3/conversations/{conv}/activities/activity-9")
+
+
+@pytest.mark.asyncio
+async def test_a_wrapped_tool_is_named_in_the_progress_activity(env_says_off, monkeypatch):
+    """``tool_call`` is how the tool was reached, not what ran: name what ran."""
+
+    async def _handle_message(**kw: Any) -> Any:
+        await kw["on_progress"](
+            {
+                "event": "tool_start",
+                "tool": "tool_call",
+                "args": {"name": "web_search", "arguments": {"query": "tides"}},
+                "call_id": "call-1",
+            }
+        )
+        await asyncio.sleep(0.05)
+        return inbound.InboundResult(reply="The answer.", ran=True, kind="answer")
+
+    monkeypatch.setattr(inbound, "handle_message", _handle_message)
+    channel = _Channel()
+    await _say(channel, "search it")
+    assert channel.progress_posts and channel.progress_posts[0][1].startswith("Running web search")
