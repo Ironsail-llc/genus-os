@@ -511,16 +511,23 @@ async def _refuse_before_handler(
     """
     # ── Permission check (single enforcement gate) ──
     from robothor.engine.permissions import check_tool_permission
+    from robothor.engine.wrapped_call import PERMISSION_TRANSPARENT_TOOLS
 
-    # Permission lookup is database-backed and synchronous.  Keep it off the
-    # Engine event loop so one slow RBAC query cannot stall unrelated chat,
-    # health, or agent sessions.
-    denied = await asyncio.to_thread(
-        check_tool_permission, user_role, tenant_id, name, user_id=user_id
-    )
-    if denied:
-        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied)
-        return {"error": denied}
+    # A meta-tool is judged by what it reaches: the tool a tool_call wraps
+    # comes back through this same gate under its own name. A missing role
+    # still fails closed here, for the meta-tools too.
+    if name not in PERMISSION_TRANSPARENT_TOOLS or not user_role:
+        # Permission lookup is database-backed and synchronous.  Keep it off
+        # the Engine event loop so one slow RBAC query cannot stall unrelated
+        # chat, health, or agent sessions.
+        denied = await asyncio.to_thread(
+            check_tool_permission, user_role, tenant_id, name, user_id=user_id
+        )
+        if denied:
+            _audit_tool_call(
+                name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied
+            )
+            return {"error": denied}
 
     # ── Per-task tool whitelist (Rip 1) ──
     # If a parent forked us with a restricted toolset (e.g. the

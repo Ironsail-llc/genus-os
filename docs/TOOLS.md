@@ -51,7 +51,10 @@ The three meta-tools:
 
 **`tool_call` cannot reach outside the agent's allow-list.** It checks the name
 against the allow-set the runner published before it dispatches anything, so a
-denied tool is refused there, not at the registry.
+denied tool is refused there, not at the registry. The three meta-tools need
+no `role_permissions` row of their own: the wrapped tool's permission decides,
+checked under its own name with the same refusal a direct call gets, so
+`tool_call` grants nothing beyond that tool's permission.
 
 **Every gate judges the wrapped call.** The PRE_TOOL_USE and POST_TOOL_USE
 hooks, the guardrail engine (human approval included), its event log, the

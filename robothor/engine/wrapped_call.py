@@ -15,10 +15,13 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
 __all__ = [
+    "PERMISSION_TRANSPARENT_TOOLS",
     "WRAPPER_TOOL",
     "MalformedToolCallError",
     "explicit_arguments",
@@ -29,6 +32,14 @@ __all__ = [
 ]
 
 WRAPPER_TOOL = "tool_call"
+
+#: The meta-tools a deferred run reaches its tools through. They carry no
+#: permission of their own: ``tool_search`` and ``tool_describe`` only read the
+#: run's allow-set, and RBAC on a ``tool_call`` is decided by the tool it wraps,
+#: which the handler runs through the same dispatch and the same permission
+#: check a direct call meets. Requiring a ``role_permissions`` row for them made
+#: every deferred tool unreachable to a role whose rows never name them.
+PERMISSION_TRANSPARENT_TOOLS = TOOLSEARCH_TOOLS
 
 _HOW_TO_SEND = (
     "send tool_call with name set to the tool to run and arguments as an object "
