@@ -53,9 +53,9 @@ logger = logging.getLogger(__name__)
 
 async def reconcile_schedules(scheduler: Any) -> dict[str, Any]:
     """Re-derive the live job set, and report what happened. Never raises."""
-    from robothor.engine.admin_scheduler import _resolve_scheduler
+    from robothor.engine.admin_scheduler import resolve_scheduler
 
-    live = _resolve_scheduler(scheduler)
+    live = resolve_scheduler(scheduler)
     if live is None:
         return {"applied": False, "error": "scheduler not running"}
     try:

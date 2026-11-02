@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _resolve_scheduler(explicit: Any) -> Any:
+def resolve_scheduler(explicit: Any) -> Any:
     """The live scheduler, however this process happens to hold it.
 
     Threaded in from ``daemon.main`` in production. The fallback to
@@ -85,7 +85,7 @@ def register(app: FastAPI, scheduler: Any = None) -> None:
         job (its function, its arguments, its next fire time) is either
         uninteresting or instance data.
         """
-        live = _resolve_scheduler(scheduler)
+        live = resolve_scheduler(scheduler)
         if live is None:
             return JSONResponse({"error": "scheduler not running"}, status_code=503)
         outcome = await live.reconcile()
