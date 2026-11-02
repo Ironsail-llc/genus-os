@@ -276,20 +276,10 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # inner tool's own budget (wrapped_call.inner_call). The registry
     # default here was a second, 120 s deadline under that one, which cut
     # claude_code_wait at two minutes on every deferred run.
-    return await get_registry().execute(
-        name,
-        tool_args,
-        agent_id=ctx.agent_id,
-        run_id=ctx.run_id,
-        tenant_id=ctx.tenant_id,
-        workspace=ctx.workspace,
-        user_id=ctx.user_id,
-        user_role=ctx.user_role,
-        accessible_tenant_ids=ctx.accessible_tenant_ids,
-        task_author_override=ctx.task_author_override,
-        is_benchmark=ctx.is_benchmark,
-        timeout=0,
-    )
+    #
+    # ctx.call_kwargs(): the wrapped tool runs under this call's whole
+    # ToolContext, identity included, exactly as a direct call would.
+    return await get_registry().execute(name, tool_args, timeout=0, **ctx.call_kwargs())
 
 
 HANDLERS["tool_search"] = _tool_search

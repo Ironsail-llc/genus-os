@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
@@ -155,6 +155,18 @@ class ToolContext:
         from robothor.engine.services import get_service as _get
 
         return _get(name)
+
+    def call_kwargs(self) -> dict[str, Any]:
+        """Every field, as the keyword arguments ``ToolRegistry.execute`` takes.
+
+        For a handler that runs another tool on its caller's behalf
+        (``tool_call``), so the inner call runs under this whole context.
+        Re-listing the fields by hand is how ``identity`` was once dropped,
+        which made every data-scoped read through the wrapper unrestricted; a
+        field added here now travels without anyone remembering it, or fails
+        loudly if ``execute`` does not take it.
+        """
+        return {f.name: getattr(self, f.name) for f in fields(self)}
 
     agent_id: str = ""
     run_id: str = ""  # current AgentRun id — lets handlers find per-run state

@@ -60,7 +60,9 @@ system-run RBAC check and the post-execution guardrails all see `name` with its
 comes back as the result of the `tool_call`, and a hook that rewrites the
 arguments rewrites the wrapped call's. Recording the step does the same: the
 result of an external-data tool keeps its `<untrusted_content>` boundary and a
-credential argument is redacted, however the tool was reached.
+credential argument is redacted, however the tool was reached. The wrapped tool
+runs under the caller's whole tool context, identity included, so a data-scoped
+read through `tool_call` returns exactly what the direct call returns.
 
 **`arguments` is an object of the wrapped tool's parameters.** A JSON string
 that parses to an object is accepted as that object, since models often send
