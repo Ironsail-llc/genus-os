@@ -180,13 +180,13 @@ def _without_intake(monkeypatch) -> None:
     """This build has no credential intake, whichever tree the test runs on."""
     from robothor.engine.tools.handlers import vault
 
-    monkeypatch.delattr(vault, "_intake_gate", raising=False)
+    monkeypatch.delattr(vault, "CREDENTIAL_INTAKE", raising=False)
 
 
 def _with_intake(monkeypatch) -> None:
     from robothor.engine.tools.handlers import vault
 
-    monkeypatch.setattr(vault, "_intake_gate", lambda ctx: None, raising=False)
+    monkeypatch.setattr(vault, "CREDENTIAL_INTAKE", True, raising=False)
 
 
 class TestVaultSetFollowsTheCredentialGate:

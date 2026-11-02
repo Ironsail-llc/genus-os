@@ -277,13 +277,13 @@ def settings_facts(settings: Any) -> dict[str, Any]:
 def credential_intake() -> bool:
     """Whether this build's vault handler has credential intake.
 
-    Probed on the handler (its intake gate), not read from the environment:
-    where the handler has intake it is on, and where it does not, no setting
-    admits it.
+    Probed on the handler (its public ``CREDENTIAL_INTAKE`` marker), not read
+    from the environment: where the handler has intake it is on, and where it
+    does not, no setting admits it.
     """
     from robothor.engine.tools.handlers import vault
 
-    return callable(getattr(vault, "_intake_gate", None))
+    return getattr(vault, "CREDENTIAL_INTAKE", False) is True
 
 
 def coding_workspace(settings: Any) -> str | None:

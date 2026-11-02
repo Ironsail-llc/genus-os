@@ -98,7 +98,7 @@ def test_intake_in_the_build_admits_vault_set_for_the_chat_agent(monkeypatch) ->
     from robothor.engine.tools.handlers import vault
 
     monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "off")
-    monkeypatch.setattr(vault, "_intake_gate", lambda ctx: None, raising=False)
+    monkeypatch.setattr(vault, "CREDENTIAL_INTAKE", True, raising=False)
     assert capabilities.credential_intake() is True
     rows = {
         c.key: c

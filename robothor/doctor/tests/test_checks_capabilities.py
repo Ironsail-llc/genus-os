@@ -152,7 +152,7 @@ async def test_vault_set_without_a_tier_is_gated_on_the_tier(instance: Path, mon
     from robothor.engine.tools.handlers import vault
 
     monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
-    monkeypatch.delattr(vault, "_intake_gate", raising=False)
+    monkeypatch.delattr(vault, "CREDENTIAL_INTAKE", raising=False)
     _write_agent(instance, "main", {"tools_allowed": ["vault_set"]})
     row = _by_sub(await _rows("main"))["main:vault_set"]
     assert row.status == "fail"
@@ -166,7 +166,7 @@ async def test_vault_set_passes_for_the_chat_agent_where_the_build_has_intake(
 ) -> None:
     from robothor.engine.tools.handlers import vault
 
-    monkeypatch.setattr(vault, "_intake_gate", lambda ctx: None, raising=False)
+    monkeypatch.setattr(vault, "CREDENTIAL_INTAKE", True, raising=False)
     _write_agent(instance, "main", {"tools_allowed": ["vault_set"]})
     row = _by_sub(await _rows("main"))["main:vault_set"]
     assert row.status == "pass"

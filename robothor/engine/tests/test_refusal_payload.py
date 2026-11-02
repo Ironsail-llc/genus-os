@@ -383,16 +383,16 @@ class TestQaRoundUnlocks:
 
         monkeypatch.setattr(github_api, "_get_token", lambda: "")
         monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "")
-        monkeypatch.delattr(vault, "_intake_gate", raising=False)
+        monkeypatch.delattr(vault, "CREDENTIAL_INTAKE", raising=False)
         out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="owner"))
         assert "vault_set" not in out["unlock"]
         assert "GITHUB_TOKEN" in out["unlock"]
 
-        monkeypatch.setattr(vault, "_intake_gate", lambda ctx: None, raising=False)
+        monkeypatch.setattr(vault, "CREDENTIAL_INTAKE", True, raising=False)
         out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="owner"))
         assert "vault_set" in out["unlock"]
 
-        monkeypatch.delattr(vault, "_intake_gate")
+        monkeypatch.delattr(vault, "CREDENTIAL_INTAKE", raising=False)
         monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "operator")
         out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="member"))
         assert "vault_set" in out["unlock"]
@@ -406,7 +406,7 @@ class TestQaRoundUnlocks:
         monkeypatch.setattr(github_api, "_get_token", lambda: "")
         monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "")
         monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
-        monkeypatch.delattr(vault, "_intake_gate", raising=False)
+        monkeypatch.delattr(vault, "CREDENTIAL_INTAKE", raising=False)
         out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="owner"))
         assert "vault_set" not in out["unlock"]
 
