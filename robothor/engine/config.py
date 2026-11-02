@@ -865,7 +865,7 @@ def reset_defaults_cache() -> None:
     reset_manifest_cache()
 
 
-# ── Merged-manifest cache (ROBOTHOR_CONFIG_CACHE) ───────────────────
+# ── Merged-manifest cache ───────────────────────────────────────────
 
 #: The value of every ``${VAR}`` a file named, when it was read.
 EnvSnapshot = tuple[tuple[str, str | None], ...]
@@ -1433,9 +1433,7 @@ def load_agent_config(
     # agent_id is now validated — safe to use in path construction
     safe_id = str(agent_id)  # break taint chain after validation
     manifest_path = manifest_dir / f"{safe_id}.yaml"
-    from robothor.engine.feature_flags import config_cache_enabled
-
-    cache_path = _inside(manifest_dir, manifest_path) if config_cache_enabled() else None
+    cache_path = _inside(manifest_dir, manifest_path)
     identity = file_identity(cache_path) if cache_path is not None else None
     key = (
         _manifest_cache_key(

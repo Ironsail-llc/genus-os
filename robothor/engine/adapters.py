@@ -271,7 +271,9 @@ def verify_adapter_integrity(adapter: AdapterConfig) -> tuple[bool, str]:
     resolved = exe if Path(exe).is_absolute() else (shutil.which(exe) or "")
     if not resolved or not Path(resolved).is_file():
         return False, f"pinned executable not found: {exe}"
-    identity = _cache_identity(Path(resolved))
+    from robothor.engine.config import file_identity
+
+    identity = file_identity(Path(resolved))
     cached = _digest_cache.get(resolved)
     if identity is not None and cached is not None and cached[0] == identity:
         digest = cached[1]
@@ -364,7 +366,7 @@ def refresh_adapters(adapter_dir: Path | None = None) -> list[AdapterConfig]:
     return _loaded_adapters
 
 
-# ── File caches (ROBOTHOR_CONFIG_CACHE) ──────────────────────────────────────
+# ── File caches ──────────────────────────────────────────────────────────
 
 #: ``{path: (key, ${VAR} values, parsed adapter or None for a refused file)}``.
 _adapter_file_cache: dict[
@@ -381,20 +383,13 @@ def reset_adapter_cache() -> None:
     _digest_cache.clear()
 
 
-def _cache_identity(path: Path) -> tuple[int, int, int, int] | None:
-    """The file's identity when the cache is on; None (do not cache) when off."""
-    from robothor.engine.config import file_identity
-    from robothor.engine.feature_flags import config_cache_enabled
-
-    return file_identity(path) if config_cache_enabled() else None
-
-
 def _adapter_file_key(path: Path) -> tuple[Any, ...] | None:
     """What a parsed adapter depends on besides its ``${VAR}`` values: its
     file, and the plugin set its tool names are checked against."""
-    identity = _cache_identity(path)
-    if identity is None:
-        return None
+    from robothor.engine.config import file_identity
     from robothor.plugins.loader import generation
 
+    identity = file_identity(path)
+    if identity is None:
+        return None
     return (identity, generation())
