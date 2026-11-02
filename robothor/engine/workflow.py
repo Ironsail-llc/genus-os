@@ -265,9 +265,9 @@ _RATE_LIMIT_WAIT_SECONDS = 5
 _MAX_RATE_LIMIT_WAIT_SECONDS = 30
 
 
-def _run_lock_key(wf: WorkflowDef) -> str:
-    """The one lock key a workflow's runs take and release."""
-    return f"workflow:{wf.id}"
+def _run_lock_key(wf: WorkflowDef) -> str | None:
+    """The one lock key a workflow's runs take and release; None when they overlap."""
+    return None if wf.concurrent else f"workflow:{wf.id}"
 
 
 def _retry_delay(attempt: int) -> int:
@@ -634,8 +634,7 @@ class WorkflowEngine:
         )
         if refused is not None:
             return refused
-        # A concurrent workflow took no run lock, so it has none to release.
-        dedup_key = None if wf.concurrent else _run_lock_key(wf)
+        dedup_key = _run_lock_key(wf)  # None: a concurrent run holds no lock
 
         # Initialize run
         run = WorkflowRun(
@@ -808,7 +807,7 @@ class WorkflowEngine:
 
         # Prevent concurrent runs of the same workflow, unless its trigger
         # allows them.
-        dedup_key = None if wf.concurrent else _run_lock_key(wf)
+        dedup_key = _run_lock_key(wf)
         if dedup_key is not None and not await try_acquire(dedup_key):
             logger.info(
                 "Workflow %s already running, skipping duplicate",
