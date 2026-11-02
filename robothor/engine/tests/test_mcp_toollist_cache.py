@@ -815,10 +815,13 @@ class TestNoFeatureFlag:
 
         root = Path(robothor.__file__).parent
         this = Path(__file__).resolve()
+        # The config-adapter cache shared the flag; its own no-switch test names
+        # it to show that setting it changes nothing, as this file does.
+        exempt = {this, (Path(__file__).parent / "test_config_cache.py").resolve()}
         offenders = [
             str(p.relative_to(root))
             for p in root.rglob("*.py")
-            if p.resolve() != this and _FLAG_ENV in p.read_text(encoding="utf-8")
+            if p.resolve() not in exempt and _FLAG_ENV in p.read_text(encoding="utf-8")
         ]
         assert offenders == []
 
