@@ -11,9 +11,11 @@ So this router joins them, and the join is the whole of what it is:
 
 ``_manifests``
     What the automation IS — name, cron, timezone, enabled, delivery target.
-    Read through ``agent_manifests._scan`` / ``_manifest_rows._summary``, imported rather than
-    re-derived: a second reader of the manifest directory is a second set of
-    rules about what a manifest means, and the two would drift.
+    Read through ``robothor.engine.manifest_store.scan`` /
+    ``robothor.engine.manifest_rows._summary`` — the engine's own reader and row
+    builder, imported rather than re-derived: a second reader of the manifest
+    directory is a second set of rules about what a manifest means, and the two
+    would drift.
 ``_schedule_rows``
     What the scheduler BELIEVES — ``next_run_at`` and ``consecutive_errors``,
     which exist nowhere else. Tenant-scoped in the statement, not merely by
@@ -48,11 +50,12 @@ import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Request
 
 from robothor.db.connection import get_connection
+from robothor.engine import manifest_store
+from robothor.engine.manifest_rows import _block, _summary
 from robothor.engine.sanitize import sanitize_log
 from robothor.engine.schedule_reconcile import KIND_AGENT, KIND_HEARTBEAT, KIND_WORKER
 from routers import agent_manifests
 from routers._audit import audited
-from routers._manifest_rows import _block, _summary
 from routers._operator import PLATFORM_TENANT, require_operator
 
 logger = logging.getLogger(__name__)
@@ -191,7 +194,7 @@ def _manifests() -> list[dict[str, Any]]:
     not parse at all still reaches the operator, as a degraded card built from
     its schedule row (see ``_automations``).
     """
-    scan = agent_manifests._scan()
+    scan = manifest_store.scan()
     rows: list[dict[str, Any]] = []
     for document in scan.manifests:
         try:

@@ -1783,9 +1783,7 @@ REMOTE_ROW = {
 
 
 class TestTheFleetLivesInTheEngine:
-    def test_the_listing_is_the_engines_even_when_the_bridge_has_no_fleet(
-        self, client, workspace
-    ):
+    def test_the_listing_is_the_engines_even_when_the_bridge_has_no_fleet(self, client, workspace):
         """The defect: on a deployment where the bridge mounts no workspace,
         the listing was empty and the chat switcher offered nothing."""
         engine = _CannedEngine(

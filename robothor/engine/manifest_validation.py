@@ -1,12 +1,15 @@
 """What can be said about one agent manifest, and what an EDIT is refused for.
 
-Split out of ``agent_manifests.py``, which was the largest new file in the
-change and the only one nothing capped. The cut is along a real seam rather
-than at a line count: everything here is a verdict on a document, and nothing
-here touches the filesystem, the engine or a request. That is what lets it take
-its inputs as parameters — the manifest directory, the repo root, the fleet, the
-engine's tool list — instead of importing the router's resolvers back, which
-would be a cycle.
+Split out of the bridge's ``agent_manifests.py``, which was the largest new
+file in the change and the only one nothing capped, and moved into the engine
+with the manifest store: the verdict needs the engine's tool registry and the
+engine's view of the fleet, and only the engine process has both. The cut is
+along a real seam rather than at a line count: everything here is a verdict on
+a document, and nothing here touches the filesystem, the registry or a request.
+That is what lets it take its inputs as parameters — the manifest directory,
+the repo root, the fleet, the tool list — instead of importing the routes'
+resolvers back (``admin_manifests.py`` assembles the context), which would be a
+cycle.
 
 Two properties the whole module is written around:
 

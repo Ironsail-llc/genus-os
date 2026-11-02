@@ -161,7 +161,13 @@ class TestAuthentication:
         tokens.reset_signing_key_cache()
 
     def test_the_routes_are_mounted_on_the_engine_app(self):
-        paths = {getattr(route, "path", "") for route in _health_app().routes}
+        # FastAPI keeps an included router as a lazy route group, so flatten
+        # it the way ``crm/bridge/tests/test_route_concurrency.py`` does.
+        paths = {
+            getattr(candidate, "path", "")
+            for route in _health_app().routes
+            for candidate in getattr(getattr(route, "original_router", None), "routes", (route,))
+        }
 
         assert "/api/admin/agent-manifests" in paths
         assert "/api/admin/agent-manifests/{agent_id}/run" in paths
