@@ -1,4 +1,4 @@
-"""The answer is released before run finalization (``ROBOTHOR_EARLY_DONE``).
+"""The answer is released before run finalization.
 
 A chat turn's final text is settled long before the run is: after it come
 telemetry, post-run guardrails, verification, the recent-actions file, the
@@ -6,7 +6,7 @@ timeline insert, the run-row persist, the history save, the embedding and the
 memory ingest. None of that changes what the person is shown, yet the SSE
 ``done`` event and the Telegram reply waited for all of it.
 
-With the flag on, ``AgentRunner.execute(on_complete=...)`` awaits the callback
+``AgentRunner.execute(on_complete=...)`` awaits the callback
 the moment the completed run's text is final, and runs the rest of
 finalization as a task under the engine task registry, so ``genus run``'s drain
 and daemon shutdown still wait for it.
@@ -42,16 +42,6 @@ def _fresh_registry():
     reset_task_registry()
     yield
     reset_task_registry()
-
-
-@pytest.fixture
-def early_done_on(monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_EARLY_DONE", "1")
-
-
-@pytest.fixture
-def early_done_off(monkeypatch):
-    monkeypatch.delenv("ROBOTHOR_EARLY_DONE", raising=False)
 
 
 @pytest.fixture
@@ -142,7 +132,6 @@ async def _execute(runner, agent_config, **kwargs) -> AgentRun:
 @pytest.mark.usefixtures("_mock_run_persistence")
 class TestRunnerReleasesTheAnswerFirst:
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on")
     async def test_on_complete_fires_before_a_slow_finish_run(self, runner, agent_config):
         timeline = _Timeline()
         seen: list[AgentRun] = []
@@ -169,20 +158,6 @@ class TestRunnerReleasesTheAnswerFirst:
         assert timeline.marks["on_complete"] < timeline.marks["finish_start"]
 
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_off")
-    async def test_flag_off_keeps_todays_order(self, runner, agent_config):
-        timeline = _Timeline()
-        on_complete = AsyncMock()
-
-        with patch.object(AgentRunner, "_finish_run", _slow_finish(timeline)):
-            await _execute(runner, agent_config, on_complete=on_complete)
-            timeline.mark("execute_returned")
-
-        assert timeline.marks["finish_end"] < timeline.marks["execute_returned"]
-        on_complete.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on")
     async def test_no_callback_keeps_todays_order(self, runner, agent_config):
         """Callers that did not opt in (scheduler, workflows) get a finalized run."""
         timeline = _Timeline()
@@ -194,7 +169,6 @@ class TestRunnerReleasesTheAnswerFirst:
         assert timeline.marks["finish_end"] < timeline.marks["execute_returned"]
 
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on")
     async def test_drain_waits_for_background_finalization(self, runner, agent_config):
         timeline = _Timeline()
 
@@ -207,7 +181,6 @@ class TestRunnerReleasesTheAnswerFirst:
         assert get_task_registry().pending_count == 0
 
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on")
     async def test_finalization_failure_is_logged_and_recorded(self, runner, agent_config, caplog):
         timeline = _Timeline()
         on_complete = AsyncMock()
@@ -233,7 +206,6 @@ class TestRunnerReleasesTheAnswerFirst:
 @pytest.mark.usefixtures("_mock_run_persistence")
 class TestOutputAlteringPolicyRunsBeforeTheAnswer:
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on")
     async def test_a_blocking_post_run_policy_still_suppresses_the_text(self, runner, agent_config):
         calls: list[str] = []
 
@@ -374,8 +346,11 @@ def chat_app_with(engine_config):
 
 class TestWebchatDoneEvent:
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on")
-    async def test_done_arrives_before_slow_finalization(self, engine_config, chat_app_with):
+    async def test_done_arrives_before_slow_finalization(
+        self, engine_config, chat_app_with, monkeypatch
+    ):
+        """Unconditional: the retired switch set to 0 changes nothing."""
+        monkeypatch.setenv("ROBOTHOR_EARLY_DONE", "0")
         timeline = _Timeline()
         runner = _ContractRunner(engine_config, timeline)
         app = chat_app_with(runner)
@@ -396,25 +371,6 @@ class TestWebchatDoneEvent:
         assert callable(runner.kwargs.get("on_complete"))
 
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_off")
-    async def test_flag_off_done_arrives_after_finalization(self, engine_config, chat_app_with):
-        timeline = _Timeline()
-        runner = _ContractRunner(engine_config, timeline)
-        app = chat_app_with(runner)
-
-        with patch("robothor.engine.chat.save_exchange_async", new=AsyncMock()):
-            events = await _stream_chat(
-                app, {"session_key": "test:main:web", "message": "hi"}, timeline
-            )
-
-        done = [e for e in events if e["event"] == "done"]
-        assert len(done) == 1
-        assert done[0]["data"]["text"] == "The answer is 42."
-        assert timeline.marks["finish_end"] < timeline.marks["sse_done"]
-        assert runner.kwargs.get("on_complete") is None
-
-    @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on")
     async def test_history_and_save_still_happen_once(self, engine_config, chat_app_with):
         from robothor.engine.chat import _get_session
 
@@ -485,7 +441,6 @@ async def _telegram_turn(bot, runner: _ContractRunner, timeline: _Timeline) -> l
 
 class TestTelegramAnswer:
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on")
     async def test_answer_sent_before_slow_finalization(self, engine_config, telegram_bot):
         timeline = _Timeline()
         runner = _ContractRunner(engine_config, timeline)
@@ -496,18 +451,6 @@ class TestTelegramAnswer:
 
         assert sent == ["The answer is 42."]
         assert timeline.marks["telegram_sent"] < timeline.marks["finish_end"]
-
-    @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_off")
-    async def test_flag_off_answer_sent_after_finalization(self, engine_config, telegram_bot):
-        timeline = _Timeline()
-        runner = _ContractRunner(engine_config, timeline)
-
-        sent = await _telegram_turn(telegram_bot, runner, timeline)
-
-        assert sent == ["The answer is 42."]
-        assert timeline.marks["finish_end"] < timeline.marks["telegram_sent"]
-        assert runner.kwargs.get("on_complete") is None
 
 
 # ── Execution lanes ──────────────────────────────────────────────────────
@@ -649,7 +592,6 @@ class _BlockingReleaseRunner:
 
 class TestReviewFollowUps:
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on")
     async def test_done_reaches_the_socket_through_http_middleware_before_finalization(
         self, engine_config, chat_app_with
     ):
@@ -671,7 +613,6 @@ class TestReviewFollowUps:
         assert timeline.marks["sse_done"] < timeline.marks["finish_start"], timeline.marks
 
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on")
     async def test_webchat_seals_the_live_inbox_when_it_releases(
         self, engine_config, chat_app_with
     ):
@@ -686,7 +627,6 @@ class TestReviewFollowUps:
         assert runner.inbox_open_after_release is False
 
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on")
     async def test_telegram_seals_the_live_inbox_before_sending(self, engine_config, telegram_bot):
         from robothor.engine.chat import get_shared_session
 
@@ -712,7 +652,7 @@ class TestReviewFollowUps:
         assert open_at_send == [False]
 
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on", "_mock_run_persistence")
+    @pytest.mark.usefixtures("_mock_run_persistence")
     async def test_a_raising_output_policy_still_releases_and_finalizes(
         self, runner, agent_config, caplog
     ):
@@ -734,11 +674,11 @@ class TestReviewFollowUps:
         assert any("policy bug" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
-    @pytest.mark.usefixtures("early_done_on", "_mock_run_persistence")
+    @pytest.mark.usefixtures("_mock_run_persistence")
     async def test_a_raising_output_policy_is_not_retried_after_the_answer(
         self, runner, agent_config
     ):
-        """The policy runs once per run, as with the flag off: a retry in the
+        """The policy runs once per run: a retry in the
         background could change the status after the answer was shown."""
         with patch(
             "robothor.engine.deliverable_verdict.record_deliverable_verdicts",
@@ -760,11 +700,7 @@ class TestTelemetryIsPublishedWithTheFinalStatus:
     final, so the success path makes no publish of its own before that."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("flag", ["1", ""])
-    async def test_every_publish_sees_a_terminal_status(
-        self, runner, agent_config, monkeypatch, flag
-    ):
-        monkeypatch.setenv("ROBOTHOR_EARLY_DONE", flag)
+    async def test_every_publish_sees_a_terminal_status(self, runner, agent_config):
         statuses: list[RunStatus] = []
 
         def spy(self, trace, run) -> None:
@@ -778,13 +714,8 @@ class TestTelemetryIsPublishedWithTheFinalStatus:
         assert RunStatus.RUNNING not in statuses, statuses
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("flag", ["1", ""])
-    async def test_a_successful_run_publishes_its_metrics_once(
-        self, runner, agent_config, monkeypatch, flag
-    ):
-        """With the flag on or off (the default), a completed run still sends
-        its metrics to the event bus, and sends them once."""
-        monkeypatch.setenv("ROBOTHOR_EARLY_DONE", flag)
+    async def test_a_successful_run_publishes_its_metrics_once(self, runner, agent_config):
+        """A completed run still sends its metrics to the event bus, once."""
         published: list[dict[str, Any]] = []
 
         def spy(self, run_data: dict[str, Any]) -> None:
@@ -797,3 +728,33 @@ class TestTelemetryIsPublishedWithTheFinalStatus:
         assert run.status == RunStatus.COMPLETED
         assert len(published) == 1, published
         assert published[0]["status"] == "completed"
+
+
+# ── No switch ────────────────────────────────────────────────────────────
+
+
+class TestThereIsNoSwitch:
+    """Answer-first is the only code path; rollback is a revert."""
+
+    def test_feature_flags_has_no_early_done_reader(self):
+        from pathlib import Path
+
+        from robothor.engine import feature_flags
+
+        assert not [n for n in dir(feature_flags) if "early_done" in n]
+        assert "ROBOTHOR_EARLY_DONE" not in Path(feature_flags.__file__).read_text()
+
+    def test_settings_declare_no_early_done(self):
+        from pathlib import Path
+
+        from robothor.settings import model
+
+        assert "ROBOTHOR_EARLY_DONE" not in Path(model.__file__).read_text()
+
+    def test_the_runner_reads_no_switch(self):
+        from pathlib import Path
+
+        from robothor.engine import early_done, runner
+
+        for mod in (runner, early_done):
+            assert "early_done_enabled" not in Path(mod.__file__).read_text(), mod.__name__

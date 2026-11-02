@@ -71,8 +71,9 @@ KNOWN_LARGE: dict[str, int] = {
     # that module's own contract), which is what paid for classifying a
     # workflow-budget kill and letting it propagate.
     # 986 -> 970: spawn inheritance, tier stamping, person linkage and tenant
-    # access moved to run_attribution.attribute_run.
-    "runner.py::execute": 970,
+    # access moved to run_attribution.attribute_run. 970 -> 964: the switch
+    # that gated the answer-first exit went, and both exits share its arguments.
+    "runner.py::execute": 964,
     # 775 -> 773 with the step-efficiency work: the guard's note drain, the
     # pace-note call site and the refusal branch cost less than the inlined
     # deadline and check-in blocks returned when they left for run_pacing.py.

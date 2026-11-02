@@ -59,7 +59,6 @@ from robothor.engine.context_budget import keep_context_within_budget
 from robothor.engine.deliverable_contract import task_text_for_run  # noqa: E402
 from robothor.engine.early_done import release_then_finalize
 from robothor.engine.error_actions import apply_error_recovery, inject_error_feedback
-from robothor.engine.feature_flags import early_done_enabled
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
 from robothor.engine.journal_resume import maybe_prepend_journal_resume
@@ -580,9 +579,9 @@ class AgentRunner(
                 ``spawn_context.identity`` (attribution only — a child's own
                 prompt never renders the CURRENT USER block, since its
                 trigger_type is SUB_AGENT, not an interactive one).
-            on_complete: with ``ROBOTHOR_EARLY_DONE``, awaited with the completed
-                run before finalization, which then runs in the background
-                under the task registry (``early_done.py``). Success path only.
+            on_complete: awaited with the completed run before finalization,
+                which then runs in the background under the task registry
+                (``early_done.py``). Success path only.
         Returns the completed AgentRun with full metadata.
         """
         message = protect_if_human_chat(message, trigger_type)
@@ -1497,16 +1496,10 @@ class AgentRunner(
         output_text = verified_output if verified else session.get_final_text()
 
         done: AgentRun = validated_completion(session, output_text or "")
-        fin: dict[str, Any] = {
-            "trace": trace,
-            "agent_config": agent_config,
-            "spawn_context": spawn_context,
-        }
-        if on_complete is not None and early_done_enabled():  # answer first
+        fin = {"trace": trace, "agent_config": agent_config, "spawn_context": spawn_context}
+        if on_complete is not None:  # answer first, finalize in the background
             return await release_then_finalize(self, done, session, on_complete, **fin)
-
-        # ── [TELEMETRY] Publish run metrics, now that the status is final ──
-        self._publish_run_telemetry(trace, done)
+        self._publish_run_telemetry(trace, done)  # the status is final
         return self._finish_run(done, session=session, **fin)
 
     # ─── Deep Mode (RLM bypass) ───────────────────────────────────────

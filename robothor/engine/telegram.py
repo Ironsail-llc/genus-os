@@ -604,7 +604,7 @@ class TelegramBot(
                     await self._record_interactive_delivery(run, sent)
                     return sent
 
-                early = EarlyRelease(deliver_answer)  # ROBOTHOR_EARLY_DONE
+                early = EarlyRelease(deliver_answer)
                 execute_kwargs: dict[str, Any] = {
                     "agent_id": self.config.default_chat_agent,
                     "message": user_text,

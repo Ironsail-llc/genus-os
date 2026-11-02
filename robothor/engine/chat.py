@@ -411,7 +411,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 await queue.put(chat_done_event(run, delivered))
                 return delivered
 
-            early = EarlyRelease(send_done)  # ROBOTHOR_EARLY_DONE
+            early = EarlyRelease(send_done)
             run = await _runner.execute(
                 agent_id=agent_id,
                 message=message,

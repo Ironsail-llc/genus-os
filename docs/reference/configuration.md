@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-520 settings in 18 groups.
+519 settings in 18 groups.
 
 ## autonomy
 
@@ -449,7 +449,6 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_DISABLE_ALL_GUARDRAILS` | bool | `false` | `robothor-engine` | no | legacy | Master off switch for every guardrail. A break-glass control: an instance running with this set has no safety checks at all. |
 | `ROBOTHOR_DISABLE_ALL_RIPS` | bool | `false` | `robothor-engine` | no | legacy | Panic switch: forces every rip and every ladder above to 'off' regardless of its own flag. An instance left with this set runs with none of the controls it appears to have. |
 | `ROBOTHOR_DNC_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Do-not-contact ladder position: observe logs an attempted contact of a suppressed person, enforce blocks it. |
-| `ROBOTHOR_EARLY_DONE` | bool | `false` | `robothor-engine` | no | legacy | Send a chat answer (webchat done event, Telegram reply) as soon as the run's final text is settled, and finish telemetry, post-run bookkeeping and persistence in the background. Output-altering post-run policies still run first. |
 | `ROBOTHOR_EXECUTION_LANES` | bool | `false` | `robothor-engine` | no | unreleased | Run interactive turns and background work in separate lanes, each with its own concurrency limit and thread executor, and keep a local inference slot for interactive requests, so a burst of scheduled runs cannot delay a reply. Lane occupancy is on /health and /metrics. The thread executor split is installed at engine start, so a change needs a restart to take full effect. |
 | `ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for rejecting shell-chaining metacharacters in an allowlisted exec command, so an allowlisted binary cannot carry a second one. |
 | `ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Exec-allowlist ladder position: observe logs the chained command, enforce refuses it. |

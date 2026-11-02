@@ -73,7 +73,8 @@ CAPS = {
     # raising this number for it.
     # 2219 -> 2214: spawn inheritance, tier stamping, person linkage and tenant
     # access left execute for run_attribution.py, absorbing the fold's growth.
-    "robothor/engine/runner.py": 2214,
+    # 2214 -> 2207: the switch that gated the answer-first exit went.
+    "robothor/engine/runner.py": 2207,
     # 3850 -> 3150 after the plan-mode cluster left (phase 3), then again after
     # phase 3b (_setup_handlers closures -> methods), and 3150 -> 2000 as the
     # handler and attachment clusters left for telegram_handlers.py and

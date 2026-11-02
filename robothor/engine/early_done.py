@@ -1,12 +1,11 @@
-"""Release a chat answer before run finalization (``ROBOTHOR_EARLY_DONE``).
+"""Release a chat answer before run finalization.
 
 A chat turn's final text is settled long before the run is: telemetry, post-run
 guardrail bookkeeping, claim verification, the recent-actions file, the
 timeline insert and the run-row persist all follow it, and none of them change
-what the person is shown. With the flag on, ``AgentRunner.execute(on_complete=)``
-hands the completed run to the caller first and finishes the rest as a task
-under the engine task registry, so ``genus run``'s drain and daemon shutdown
-still wait for it.
+what the person is shown. So ``AgentRunner.execute(on_complete=)`` hands the
+completed run to the caller first and finishes the rest as a task under the
+engine task registry, which ``genus run``'s drain and daemon shutdown wait for.
 
 The split, made explicit here:
 
@@ -25,7 +24,6 @@ import logging
 from contextlib import AbstractContextManager, nullcontext
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from robothor.engine.feature_flags import early_done_enabled
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.task_registry import get_task_registry
 
@@ -70,7 +68,7 @@ async def release_then_finalize(
     """Apply the output-altering policies, release the run, finalize in the background."""
     try:
         apply_output_policies(completed, session, runner.config.workspace)
-    except Exception as exc:  # degrade as the flag-off path does: lose the verdict, not the run
+    except Exception as exc:  # lose the verdict, not the run
         logger.error(
             "run %s: output policy failed: %s", completed.id, _sanitize(exc), exc_info=True
         )
@@ -136,8 +134,8 @@ class EarlyRelease(Generic[T]):
         self.result = await self._deliver(run)
         self.released = True
 
-    def callback(self) -> Callable[[AgentRun], Awaitable[None]] | None:
-        return self._release if early_done_enabled() else None
+    def callback(self) -> Callable[[AgentRun], Awaitable[None]]:
+        return self._release
 
     async def result_or(self, run: AgentRun) -> T:
         if self.released:
