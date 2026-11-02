@@ -235,3 +235,34 @@ async def test_a_long_retry_after_never_holds_the_answer_back():
     assert time.monotonic() - started < 1.0
     assert bot.sent == ["The answer."]
     assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("args", "label"),
+    [
+        pytest.param(
+            {"name": "web_search", "arguments": {"q": "tides"}}, "Searching", id="wrapped"
+        ),
+        pytest.param({"name": "  web_search "}, "Searching", id="padded-name"),
+        pytest.param({}, "Tool Call", id="no-name"),
+        pytest.param({"name": "tool_call"}, "Tool Call", id="nested-wrapper"),
+        pytest.param({"name": 7}, "Tool Call", id="not-a-string"),
+    ],
+)
+async def test_a_tool_call_wrapper_is_labelled_by_the_tool_it_wraps(args, label):
+    """``tool_call(name=X)`` shows X's label; a malformed wrapper stays "Tool Call"."""
+    from robothor.engine.telegram import _friendly_tool_name
+
+    bot = FakeBot()
+    progress = _progress(bot, label_for=_friendly_tool_name)
+
+    await progress.on_event({"event": "tool_start", "tool": "tool_call", "args": args})
+    await asyncio.sleep(INTERVAL / 2)
+    await progress.aclose()
+
+    assert bot.edits, "the tool line was never shown"
+    line = bot.edits[-1][2]
+    assert label in line, line
+    if label != "Tool Call":
+        assert "Tool Call" not in line, line
