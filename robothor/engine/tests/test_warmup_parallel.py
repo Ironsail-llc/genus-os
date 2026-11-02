@@ -1,11 +1,13 @@
-"""The interactive warmup preamble, built in parallel (``ROBOTHOR_WARMUP_PARALLEL``).
+"""The interactive warmup preamble, built in parallel.
 
-Sequentially, ``build_interactive_preamble`` costs the sum of its sections:
-identity enrichment, one ``read_block`` write transaction per memory block, one
-entity query per candidate, the context hooks, host state, main's task queue and
-fleet surfaces, and the agent goal. With the flag on it must cost roughly its
-slowest section, read the blocks in one statement, batch the entity queries,
-and still produce the same text, byte for byte.
+Run one after another, ``build_interactive_preamble`` costs the sum of its
+sections: identity enrichment, the memory blocks, entity recall, the context
+hooks, host state, main's task queue and fleet surfaces, and the agent goal.
+It reads the blocks in one statement, batches the entity queries, holds the
+identity enrichment for the chat session, times every section, and fans the
+sections out once an agent's previous warmup had a slow one, so it costs
+roughly its slowest section. Fanned out or in place, the text is the same,
+byte for byte. There is no switch: this is the only warmup.
 
 The fake database below charges 50 ms for every statement, which is what makes
 the sum-versus-max difference measurable without a real Postgres.
@@ -158,6 +160,11 @@ def _forget_fan_out() -> None:
     getattr(warmup, "_slowest_section_by_agent", {}).clear()
 
 
+def _remember_slow_sections() -> None:
+    """Make the next warmup of ``main`` fan out, as after a slow previous one."""
+    warmup._slowest_section_by_agent[f"{TENANT}:main"] = 1.0
+
+
 @pytest.fixture
 def db():
     """The fake DB wired under every section the interactive preamble runs."""
@@ -201,7 +208,7 @@ def db():
     _CONTEXT_HOOKS[:] = [_hook]
     enrichment.clear_cache()
     _forget_fan_out()
-    env = {k: v for k, v in os.environ.items() if k != "ROBOTHOR_WARMUP_PARALLEL"}
+    env = dict(os.environ)
     env.pop("ROBOTHOR_DATA_SCOPING", None)
     env.pop("MEMORY_WARMUP_RECALL_V2", None)
     try:
@@ -222,9 +229,15 @@ def db():
         _forget_fan_out()
 
 
-def _build(parallel: bool, timings: dict[str, float] | None = None) -> tuple[str, float]:
+def _build(
+    fan_out: bool | None = None, timings: dict[str, float] | None = None
+) -> tuple[str, float]:
+    """One warmup of ``main``. ``fan_out`` forces the mode; ``None`` leaves it learned."""
     enrichment.clear_cache()
-    os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "1" if parallel else "0"
+    if fan_out is True:
+        _remember_slow_sections()
+    elif fan_out is False:
+        _forget_fan_out()
     start = time.perf_counter()
     text = build_interactive_preamble(
         "main",
@@ -239,9 +252,9 @@ def _build(parallel: bool, timings: dict[str, float] | None = None) -> tuple[str
 
 
 class TestSameText:
-    def test_parallel_text_is_byte_identical_to_sequential(self, db: FakeDB) -> None:
-        sequential, _ = _build(parallel=False)
-        parallel, _ = _build(parallel=True)
+    def test_fanned_out_text_is_byte_identical_to_in_place(self, db: FakeDB) -> None:
+        sequential, _ = _build(fan_out=False)
+        parallel, _ = _build(fan_out=True)
         assert parallel == sequential
         # The fixture exercised every section, so equality means something.
         for marker in (
@@ -261,7 +274,7 @@ class TestSameText:
             assert marker in sequential, marker
 
     def test_section_order_is_preserved(self, db: FakeDB) -> None:
-        parallel, _ = _build(parallel=True)
+        parallel, _ = _build(fan_out=True)
         order = [
             "--- CURRENT USER ---",
             "--- MEMORY BLOCKS ---",
@@ -279,8 +292,8 @@ class TestSameText:
         with patch(
             "robothor.engine.host_state.host_state_section", side_effect=RuntimeError("boom")
         ):
-            sequential, _ = _build(parallel=False)
-            parallel, _ = _build(parallel=True)
+            sequential, _ = _build(fan_out=False)
+            parallel, _ = _build(fan_out=True)
         assert "--- HOST STATE ---" not in parallel
         assert parallel == sequential
 
@@ -288,7 +301,7 @@ class TestSameText:
         big = {**BLOCKS, **{f"extra_{i}": ("z" * 790, None) for i in range(8)}}
         with patch.dict(BLOCKS, big):
             enrichment.clear_cache()
-            os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "0"
+            _forget_fan_out()
             kwargs: dict[str, Any] = {
                 "include_blocks": True,
                 "tenant_id": TENANT,
@@ -297,7 +310,7 @@ class TestSameText:
             }
             sequential = build_interactive_preamble("main", MESSAGE, **kwargs)
             enrichment.clear_cache()
-            os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "1"
+            _remember_slow_sections()
             parallel = build_interactive_preamble("main", MESSAGE, **kwargs)
         assert sequential.endswith("[warmup truncated]")
         assert parallel == sequential
@@ -305,7 +318,7 @@ class TestSameText:
 
 class TestFewerStatements:
     def test_memory_blocks_are_read_in_one_statement(self, db: FakeDB) -> None:
-        _build(parallel=True)
+        _build()
         reads = [
             s
             for s in db.statements
@@ -313,12 +326,8 @@ class TestFewerStatements:
         ]
         assert len(reads) == 1, reads
 
-    def test_sequential_path_still_reads_one_block_per_statement(self, db: FakeDB) -> None:
-        _build(parallel=False)
-        assert db.count("RETURNING content, last_written_at") == 5
-
     def test_read_accounting_still_happens_in_one_batched_write(self, db: FakeDB) -> None:
-        _build(parallel=True)
+        _build()
         warmup.wait_for_deferred_writes(timeout=2.0)
         touches = [
             s
@@ -328,33 +337,29 @@ class TestFewerStatements:
         assert len(touches) == 1, touches
 
     def test_entity_candidates_are_one_statement(self, db: FakeDB) -> None:
-        _build(parallel=True)
+        _build()
         assert db.count("memory_facts") == 1
 
-    def test_sequential_entity_path_is_one_statement_per_candidate(self, db: FakeDB) -> None:
-        _build(parallel=False)
-        assert db.count("memory_facts") == 3
-
-    def test_v2_recall_batched_text_matches(self, db: FakeDB) -> None:
+    def test_v2_recall_is_one_statement_either_way(self, db: FakeDB) -> None:
         os.environ["MEMORY_WARMUP_RECALL_V2"] = "1"
-        sequential, _ = _build(parallel=False)
-        seq_facts = db.count("memory_facts")
-        parallel, _ = _build(parallel=True)
+        sequential, _ = _build(fan_out=False)
+        assert db.count("memory_facts") == 1
+        parallel, _ = _build(fan_out=True)
         assert parallel == sequential
-        assert db.count("memory_facts") - seq_facts == 1
+        assert db.count("memory_facts") == 2
+        assert "Bob owns the billing service." in parallel
 
 
 class TestWallTime:
     def test_parallel_is_near_the_slowest_section_not_the_sum(self, db: FakeDB) -> None:
-        _build(parallel=False)  # first-call imports are not what is measured
+        _build(fan_out=False)  # first-call imports are not what is measured
         db.statements.clear()
-        _, sequential_s = _build(parallel=False)
+        _, sequential_s = _build(fan_out=False)
         sequential_statements = len(db.statements)
-        _build(parallel=True)  # the first flagged warmup learns its sections are slow
         timings: dict[str, float] = {}
-        _, parallel_s = _build(parallel=True, timings=timings)
+        _, parallel_s = _build(timings=timings)  # the last warmup had slow sections
 
-        # Today: the sum of every statement, one after another.
+        # In place: the sum of every statement, one after another.
         assert sequential_s >= sequential_statements * STATEMENT_SECONDS * 0.95
         slowest = max(timings.values())
         assert parallel_s < 1.5 * slowest, (parallel_s, timings)
@@ -366,7 +371,7 @@ class TestWallTime:
 
     def test_per_section_timings_are_recorded(self, db: FakeDB) -> None:
         timings: dict[str, float] = {}
-        _build(parallel=True, timings=timings)
+        _build(timings=timings)
         assert set(timings) == {
             "identity",
             "memory_blocks",
@@ -379,10 +384,13 @@ class TestWallTime:
         }
         assert all(v >= 0 for v in timings.values())
 
-    def test_flag_off_records_no_timings(self, db: FakeDB) -> None:
-        timings: dict[str, float] = {}
-        _build(parallel=False, timings=timings)
-        assert timings == {}
+    def test_sections_run_in_place_are_timed_too(self, db: FakeDB) -> None:
+        in_place: dict[str, float] = {}
+        _build(fan_out=False, timings=in_place)
+        fanned: dict[str, float] = {}
+        _build(fan_out=True, timings=fanned)
+        assert set(in_place) == set(fanned)
+        assert len(in_place) == 8
 
 
 class TestContextVars:
@@ -394,7 +402,6 @@ class TestContextVars:
             return "kind seen"
 
         _CONTEXT_HOOKS[:] = [_hook]
-        os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "1"
         with warmup.set_warmup_kind("interactive"):
             build_interactive_preamble("example-agent", MESSAGE, tenant_id=TENANT)
         assert seen == ["interactive"]
@@ -402,7 +409,6 @@ class TestContextVars:
 
 class TestEventLoop:
     async def test_loop_stays_responsive_while_warmup_runs(self, db: FakeDB) -> None:
-        os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "1"
         gaps: list[float] = []
         done = asyncio.Event()
 
@@ -428,20 +434,18 @@ class TestEventLoop:
 
 
 class TestFollowUpEnrichment:
-    def test_flag_on_uses_the_session_cache(self, db: FakeDB) -> None:
-        os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "1"
+    def test_follow_up_uses_the_session_cache(self, db: FakeDB) -> None:
         first = warmup.enrich_identity_for_turn("main", IDENTITY)
         enrichment._cache.clear()  # the 60 s cache expiring must not matter
         second = warmup.enrich_identity_for_turn("main", IDENTITY)
         assert first == second
         assert db.count("crm_people") == 1
 
-    def test_flag_off_keeps_the_ttl_cache_only(self, db: FakeDB) -> None:
-        os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "0"
-        warmup.enrich_identity_for_turn("main", IDENTITY)
+    def test_the_warmup_and_the_follow_up_share_one_lookup(self, db: FakeDB) -> None:
+        build_interactive_preamble("main", MESSAGE, tenant_id=TENANT, identity=IDENTITY)
         enrichment._cache.clear()
         warmup.enrich_identity_for_turn("main", IDENTITY)
-        assert db.count("crm_people") == 2
+        assert db.count("crm_people") == 1
 
 
 class TestRunnerUsesTheTurnHelper:
@@ -449,17 +453,9 @@ class TestRunnerUsesTheTurnHelper:
         """The runner offloads ``warmup.enrichment_call_for_turn``'s callable
         (the runner-level test lives in test_runner.py, TestIdentityThreading);
         ``enrich_identity_for_turn`` is that callable applied."""
-        os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "1"
-        try:
-            fn, args = warmup.enrichment_call_for_turn("main", IDENTITY)
-            assert fn is enrichment.enrich_identity_for_session
-            assert args == ("main", IDENTITY)
-            os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "0"
-            fn, args = warmup.enrichment_call_for_turn("main", IDENTITY)
-            assert fn is enrichment.enrich_identity
-            assert args == (IDENTITY,)
-        finally:
-            os.environ.pop("ROBOTHOR_WARMUP_PARALLEL", None)
+        fn, args = warmup.enrichment_call_for_turn("main", IDENTITY)
+        assert fn is enrichment.enrich_identity_for_session
+        assert args == ("main", IDENTITY)
 
 
 def _hook_thread_recorder() -> list[str]:
@@ -474,54 +470,40 @@ def _hook_thread_recorder() -> list[str]:
     return names
 
 
-def _median(values: list[float]) -> float:
-    ordered = sorted(values)
-    return ordered[len(ordered) // 2]
-
-
 class TestFanOutOnlyWhenItPays:
     """Threads cost more than a fast database's queries save.
 
     On a fast Postgres the fan-out made the preamble slower (QA measured
-    24.8 ms sequential against 56.3 ms parallel). With the flag on the
-    statement savings always apply; the sections fan out only once the agent's
-    previous warmup had a slow section.
+    24.8 ms in place against 56.3 ms fanned out). The statement savings always
+    apply; the sections fan out only once the agent's previous warmup had a
+    slow section.
     """
 
-    def test_fast_db_stays_on_the_calling_thread_and_is_no_slower(self, db: FakeDB) -> None:
+    def test_fast_db_stays_on_the_calling_thread(self, db: FakeDB) -> None:
         db.delay = 0.002
         threads = _hook_thread_recorder()
         caller = threading.current_thread().name
-        _build(parallel=False)  # imports
-        _build(parallel=True)
-        off: list[float] = []
-        on: list[float] = []
+        _build(fan_out=False)  # imports
         for _ in range(5):
-            off.append(_build(parallel=False)[1])
-            on.append(_build(parallel=True)[1])
+            _build()
         assert set(threads) == {caller}, threads
-        assert _median(on) <= _median(off), (on, off)
 
-    def test_fast_db_flag_on_still_saves_statements(self, db: FakeDB) -> None:
+    def test_fast_db_still_saves_statements(self, db: FakeDB) -> None:
         db.delay = 0.0
-        _build(parallel=False)
-        off_statements = len(db.statements)
-        db.statements.clear()
-        _build(parallel=True)
+        _build(fan_out=False)
         warmup.wait_for_deferred_writes(timeout=2.0)
         assert db.count("memory_facts") == 1  # one entity query
         assert db.count("RETURNING") == 0  # no per-block write-to-read
-        assert len(db.statements) < off_statements
+        assert db.count("agent_memory_blocks") == 2  # one read, one deferred touch
 
     def test_slow_db_fans_out_from_the_second_warmup_and_is_faster(self, db: FakeDB) -> None:
         threads = _hook_thread_recorder()
         caller = threading.current_thread().name
-        _build(parallel=False)  # imports
-        _, sequential_s = _build(parallel=False)
-        _build(parallel=True)
+        _build(fan_out=False)  # imports
+        _, sequential_s = _build(fan_out=False)
         assert threads[-1] == caller  # nothing known yet: run in place
         timings: dict[str, float] = {}
-        _, fanned_s = _build(parallel=True, timings=timings)
+        _, fanned_s = _build(timings=timings)
         assert threads[-1] != caller  # the last warmup had a slow section
         assert fanned_s < sequential_s
         assert fanned_s < 1.5 * max(timings.values())
@@ -534,7 +516,6 @@ class TestFanOutOnlyWhenItPays:
             return "kind seen"
 
         _CONTEXT_HOOKS[:] = [_hook]
-        os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "1"
         with warmup.set_warmup_kind("interactive"):
             build_interactive_preamble("main", MESSAGE, tenant_id=TENANT, identity=IDENTITY)
             build_interactive_preamble("main", MESSAGE, tenant_id=TENANT, identity=IDENTITY)
@@ -560,8 +541,7 @@ class _InterpolatingCursor:
 
 class TestEntitySqlInterpolates:
     @pytest.mark.parametrize("v2", ["0", "1"])
-    @pytest.mark.parametrize("batched", [False, True])
-    def test_every_entity_statement_formats_with_its_params(self, v2: str, batched: bool) -> None:
+    def test_every_entity_statement_formats_with_its_params(self, v2: str) -> None:
         cur = _InterpolatingCursor()
 
         class _Conn:
@@ -576,9 +556,7 @@ class TestEntitySqlInterpolates:
             patch.dict(os.environ, {"MEMORY_WARMUP_RECALL_V2": v2}),
             patch("robothor.db.get_connection", _conn),
         ):
-            warmup._build_entity_context(
-                "Did Bob update the Example plan?", tenant_id=TENANT, batched=batched
-            )
+            warmup._build_entity_context("Did Bob update the Example plan?", tenant_id=TENANT)
         assert cur.statements
         for statement in cur.statements:
             assert TENANT in statement
@@ -588,7 +566,6 @@ class TestEntitySqlInterpolates:
     ) -> None:
         import logging
 
-        os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "0"
         with (
             patch(
                 "robothor.engine.warmup._build_entity_context",
@@ -608,8 +585,7 @@ class TestEntitySqlMogrify:
     """The same statements through a real psycopg2 cursor's ``mogrify``."""
 
     @pytest.mark.parametrize("v2", ["0", "1"])
-    @pytest.mark.parametrize("batched", [False, True])
-    def test_mogrify_accepts_every_entity_statement(self, v2: str, batched: bool) -> None:
+    def test_mogrify_accepts_every_entity_statement(self, v2: str) -> None:
         from robothor.db import get_connection as real_get_connection
 
         with real_get_connection() as real:
@@ -635,7 +611,43 @@ class TestEntitySqlMogrify:
                 patch.dict(os.environ, {"MEMORY_WARMUP_RECALL_V2": v2}),
                 patch("robothor.db.get_connection", _conn),
             ):
-                warmup._build_entity_context(
-                    "Did Bob update the Example plan?", tenant_id=TENANT, batched=batched
-                )
+                warmup._build_entity_context("Did Bob update the Example plan?", tenant_id=TENANT)
         assert mogrified
+
+
+class TestThereIsNoSwitch:
+    """The parallel warmup is the only warmup: no setting turns it off."""
+
+    def test_feature_flags_has_no_warmup_reader(self) -> None:
+        import inspect
+
+        from robothor.engine import feature_flags
+
+        assert not [n for n in dir(feature_flags) if "warmup_parallel" in n]
+        assert "ROBOTHOR_WARMUP_PARALLEL" not in inspect.getsource(feature_flags)
+
+    def test_no_module_reads_the_old_variable(self) -> None:
+        import inspect
+
+        from robothor.engine import runner
+        from robothor.settings import model
+
+        for module in (warmup, runner, model, enrichment):
+            assert "ROBOTHOR_WARMUP_PARALLEL" not in inspect.getsource(module), module
+
+    def test_the_old_variable_set_to_zero_changes_nothing(self, db: FakeDB) -> None:
+        os.environ["ROBOTHOR_WARMUP_PARALLEL"] = "0"
+        timings: dict[str, float] = {}
+        _build(fan_out=False, timings=timings)
+        warmup.wait_for_deferred_writes(timeout=2.0)
+        block_reads = [
+            s
+            for s in db.statements
+            if "agent_memory_blocks" in s and ("RETURNING" in s or s.upper().startswith("SELECT"))
+        ]
+        assert len(block_reads) == 1, block_reads
+        assert db.count("memory_facts") == 1
+        assert len(timings) == 8
+        enrichment._cache.clear()
+        warmup.enrich_identity_for_turn("main", IDENTITY)
+        assert db.count("crm_people") == 1

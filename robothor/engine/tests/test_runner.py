@@ -760,73 +760,16 @@ class TestIdentityThreading:
         assert captured["last_user_msg"] == "follow-up"
 
     @pytest.mark.asyncio
-    async def test_per_turn_identity_enrichment_offloaded_to_executor(
+    async def test_per_turn_identity_enrichment_is_session_held_and_offloaded(
         self, runner, sample_agent_config, mock_litellm_response
     ):
-        """enrich_identity does blocking DB work on a cache miss — the
-        per-turn mini-preamble path (follow-up turns, warmup skipped) must
-        run it via loop.run_in_executor rather than calling it synchronously
-        inside the coroutine, mirroring the first-turn warmup path's own use
-        of run_in_executor (code-review fix)."""
+        """Enrichment does blocking DB work on a cache miss, so the per-turn
+        mini-preamble path (follow-up turns, warmup skipped) runs it via
+        loop.run_in_executor rather than inside the coroutine, mirroring the
+        first-turn warmup. It goes through the session-held cache, not the
+        60-second ``enrich_identity`` alone."""
         import asyncio as _asyncio
 
-        response = mock_litellm_response(content="Hi Bob")
-        history = [
-            {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": "hello"},
-        ]
-
-        real_run_in_executor = _asyncio.base_events.BaseEventLoop.run_in_executor
-        seen_funcs = []
-
-        def spy_run_in_executor(self_loop, executor, func, *args):
-            seen_funcs.append(func)
-            return real_run_in_executor(self_loop, executor, func, *args)
-
-        with (
-            patch("robothor.engine.runner.create_run"),
-            patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.run_finalizer.create_step"),
-            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
-            patch("robothor.identity.enrich_identity", return_value=None) as mock_enrich,
-            # A rapid follow-up: the previous interactive turn was seconds ago,
-            # so warmup is skipped and the mini-preamble path runs. The gate
-            # used to be "history is non-empty", but that never fired on a
-            # persistent session, so it is now a staleness clock.
-            patch(
-                "robothor.engine.runner._seconds_since_last_interactive_run",
-                return_value=5.0,
-            ),
-            patch.object(
-                _asyncio.base_events.BaseEventLoop,
-                "run_in_executor",
-                spy_run_in_executor,
-            ),
-        ):
-            run = await runner.execute(
-                "test-agent",
-                "follow-up",
-                agent_config=sample_agent_config,
-                trigger_type=TriggerType.TELEGRAM,
-                trigger_detail="chat:123|sender:Bob",
-                conversation_history=history,
-                tenant_id="t-alpha",
-                user_id="tg-1",
-                user_role="member",
-            )
-
-        assert run.status == RunStatus.COMPLETED
-        assert mock_enrich in seen_funcs
-
-    @pytest.mark.asyncio
-    async def test_per_turn_enrichment_is_session_held_with_parallel_warmup(
-        self, runner, sample_agent_config, mock_litellm_response, monkeypatch
-    ):
-        """With ROBOTHOR_WARMUP_PARALLEL on, the follow-up turn's enrichment
-        goes through the session-held cache, still offloaded to the executor."""
-        import asyncio as _asyncio
-
-        monkeypatch.setenv("ROBOTHOR_WARMUP_PARALLEL", "1")
         response = mock_litellm_response(content="Hi Bob")
         history = [
             {"role": "user", "content": "hi"},
@@ -849,6 +792,8 @@ class TestIdentityThreading:
             patch(
                 "robothor.identity.enrichment.enrich_identity_for_session", return_value=None
             ) as mock_session,
+            # A rapid follow-up: the previous interactive turn was seconds ago,
+            # so warmup is skipped and the mini-preamble path runs.
             patch(
                 "robothor.engine.runner._seconds_since_last_interactive_run",
                 return_value=5.0,

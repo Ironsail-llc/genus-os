@@ -1,9 +1,8 @@
 """Identity enrichment cached for a chat session's lifetime.
 
 ``enrich_identity`` caches for 60 s, so a chat that pauses for a minute pays
-the CRM and memory-graph lookups again on its next turn. With
-``ROBOTHOR_WARMUP_PARALLEL`` on, the warmup and the follow-up turn use
-``enrich_identity_for_session``: one lookup per (agent, identity) session,
+the CRM and memory-graph lookups again on its next turn. The interactive
+warmup and the follow-up turn use ``enrich_identity_for_session``: one lookup per (agent, identity) session,
 recomputed when the identity itself changes.
 """
 
