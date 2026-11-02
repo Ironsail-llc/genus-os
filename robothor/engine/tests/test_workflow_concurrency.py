@@ -202,3 +202,50 @@ class TestConcurrentField:
         engine = WorkflowEngine(engine_config, runner=MagicMock())
         assert engine.load_workflows(tmp_path) == 0
         assert engine.get_workflow("example-dispatch") is None
+
+
+class TestConcurrentWorkflowsHaveNoAgentSteps:
+    """An agent step serialises on the agent's own lock and is skipped when it is
+    held, so two overlapping runs would drop one event's agent step while the run
+    reads COMPLETED. A concurrent workflow therefore may not have one."""
+
+    @staticmethod
+    def _agent_step(step_id: str = "handle") -> dict[str, Any]:
+        return {"id": step_id, "type": "agent", "agent_id": "example-agent", "message": "m"}
+
+    def test_a_top_level_agent_step_is_rejected(self):
+        data = _definition(concurrent=True)
+        data["steps"].append(self._agent_step("handle"))
+        with pytest.raises(ValueError, match="concurrent.*'handle'"):
+            parse_workflow(data)
+
+    def test_an_agent_step_inside_parallel_is_rejected(self):
+        data = _definition(concurrent=True)
+        data["steps"].append(
+            {
+                "id": "fan",
+                "type": "parallel",
+                "parallel_steps": [
+                    {"id": "note", "type": "tool", "tool_name": "create_task"},
+                    self._agent_step("branch-agent"),
+                ],
+            }
+        )
+        with pytest.raises(ValueError, match="concurrent.*'branch-agent'"):
+            parse_workflow(data)
+
+    def test_a_non_concurrent_workflow_keeps_its_agent_steps(self):
+        data = _definition()
+        data["steps"].append(self._agent_step())
+        wf = parse_workflow(data)
+        assert [s.id for s in wf.steps] == ["dispatch", "handle"]
+
+    def test_the_file_is_not_loaded(self, engine_config, tmp_path):
+        import yaml
+
+        data = _definition(concurrent=True)
+        data["steps"].append(self._agent_step())
+        (tmp_path / "example-dispatch.yaml").write_text(yaml.safe_dump(data))
+        engine = WorkflowEngine(engine_config, runner=MagicMock())
+        assert engine.load_workflows(tmp_path) == 0
+        assert engine.get_workflow("example-dispatch") is None
