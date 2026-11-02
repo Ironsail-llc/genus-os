@@ -799,7 +799,17 @@ CAPS = {
     # seam (nothing there touches the filesystem, the engine or a request, which
     # is what lets it take its inputs as parameters instead of importing the
     # router's resolvers back).
-    "crm/bridge/routers/agent_manifests.py": 1060,
+    # 1,049 -> 257: the store, the verdict, the reconcile and the trigger moved
+    # into the engine, which is the process that mounts the workspace. What is
+    # left is the operator gate, the audit trail and the forwarding.
+    # 257 -> 328 in review: a write whose answer is lost is still audited, and
+    # writes get their own engine budget.
+    "crm/bridge/routers/agent_manifests.py": 340,
+    # The engine half of the agent builder, bounded from the day it lands: the
+    # file operations (manifest_store) and the routes that orchestrate them
+    # with the verdict, the reconcile and the trigger (admin_manifests).
+    "robothor/engine/manifest_store.py": 700,
+    "robothor/engine/admin_manifests.py": 380,
     # 250 -> 260: `introduced` now carries the record of getting this wrong
     # twice in opposite directions — keyed too loosely it missed an added
     # fault, keyed too tightly it refused a partial repair — plus the per-fault
@@ -807,7 +817,9 @@ CAPS = {
     # satisfy a line count, which is the trade this repo has explicitly refused
     # before (see runner.py's entry). The fix itself went UPSTREAM into
     # CheckResult.faults rather than growing this file.
-    "crm/bridge/routers/_manifest_validation.py": 260,
+    # Moved from crm/bridge/routers/_manifest_validation.py with the store:
+    # the verdict needs the engine's tool registry and view of the fleet.
+    "robothor/engine/manifest_validation.py": 260,
 }
 
 

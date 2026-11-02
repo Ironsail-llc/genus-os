@@ -22,6 +22,11 @@ reconcile in one operation. A write answers with a `reconcile` block;
 `applied: false` means the file is on disk and the engine has not picked it up
 yet — the watchdog will, within five minutes.
 
+All of this happens in the engine, the one component that mounts the
+workspace; the Helm's API forwards to it, so no other component needs the
+workspace volume. If the engine cannot be reached, the builder answers with an
+error naming that, not an empty fleet.
+
 **An edit is refused only for the errors it introduced.** Every edit is
 validated twice, as the document was and as the edit leaves it, and the
 difference decides the refusal. "A save must not break a manifest" and "a save

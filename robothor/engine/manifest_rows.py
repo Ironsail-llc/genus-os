@@ -1,14 +1,16 @@
 """A manifest document, as the row a list view shows.
 
-Extracted from ``agent_manifests.py`` when adding ``chattable`` pushed that
-module past its decomposition ratchet. It is a real cluster rather than a place
+Extracted from the bridge's ``agent_manifests.py`` when adding ``chattable``
+pushed that module past its decomposition ratchet, and moved into the engine
+with the rest of the manifest store (``admin_manifests.py`` builds the fleet
+listing here, where the workspace is). It is a real cluster rather than a place
 to put spare lines: everything here turns a PARSED manifest (or a scan failure)
 into the small dict a browser renders, it touches no filesystem, no engine and
-no request, and it has a second caller already — ``automations.py`` reads
-``_summary`` and ``_block`` so the cron it shows is the same cron the fleet
-list shows, rather than a second opinion about the same file.
+no request, and it has a second caller already — the bridge's
+``automations.py`` reads ``_summary`` and ``_block`` so the cron it shows is the
+same cron the fleet list shows, rather than a second opinion about the same file.
 
-Rule 1 and rule 2 apply here as hard as anywhere in the router: a row carries
+Rule 1 and rule 2 apply here as hard as anywhere in the store: a row carries
 ids, dotted schema paths and error TYPES. Never a filesystem path, never a
 parser message that quotes one.
 """

@@ -1,9 +1,10 @@
 /**
  * The agent manifest surface, as the browser sees it.
  *
- * Shapes are the bridge's, read off `crm/bridge/routers/agent_manifests.py`
- * (`_summary`, `_broken`, `CreateRequest`, `PatchRequest`) and
- * `crm/bridge/routers/_manifest_validation.py` (`issue`) — not invented.
+ * Shapes are the bridge's, which forwards them from the engine: read off
+ * `robothor/engine/manifest_rows.py` (`_summary`, `_broken`),
+ * `robothor/engine/manifest_store.py` (`CreateRequest`, `PatchRequest`) and
+ * `robothor/engine/manifest_validation.py` (`issue`) — not invented.
  *
  * Three pure functions live here rather than in the view, because each is a
  * claim about agreeing with something on the other side of the wire:
@@ -43,7 +44,7 @@ export interface BrokenManifest {
   error_type: string;
 }
 
-/** One finding — see `_manifest_validation.issue`. */
+/** One finding — see `manifest_validation.issue`. */
 export interface ValidationIssue {
   path: string;
   code: string;
@@ -391,7 +392,7 @@ export function fieldForPath(path: string): string | null {
  * Checks whose every finding is about one field, whatever it says.
  *
  * `check_issues` keys each A–M check finding to `check.<id>`
- * (`crm/bridge/routers/_manifest_validation.py`), so the path alone says which
+ * (`robothor/engine/manifest_validation.py`), so the path alone says which
  * CHECK complained and not which field — and these are most of the refusals an
  * operator will actually hit from the Advanced drawer.
  */

@@ -414,8 +414,12 @@ Production and staging NetworkPolicies default-deny ingress and egress, then
 rebuild only the declared component graph: the dashboard calls engine, bridge,
 orchestrator and, when the in-chart cache is enabled, the cache port; the engine
 calls bridge, orchestrator and NATS; the bridge calls the engine's admin API (at
-`ROBOTHOR_ENGINE_URL`, which the chart points at the engine Service whenever
-`engine.enabled`) and the orchestrator. In-chart PostgreSQL/Redis are selected by
+`ROBOTHOR_ENGINE_URL`, which the chart points at the `<release>-engine-control`
+Service whenever `engine.enabled`) and the orchestrator. That Service selects
+the same engine pod as the engine's own Service but sets
+`publishNotReadyAddresses: true`: the engine reports not-ready when one
+manifest will not load, and the agent builder the bridge serves is how an
+operator finds and repairs that manifest. In-chart PostgreSQL/Redis are selected by
 pod labels; the cache's ingress admits the Python services and the dashboard, and
 nothing else. Managed
 database, Redis, Ollama, HTTPS API, or egress-proxy access requires exact CIDRs

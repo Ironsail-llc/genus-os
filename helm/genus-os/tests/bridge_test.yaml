@@ -5,7 +5,9 @@ release:
   name: gos
   namespace: genus
 tests:
-  - it: bridge calls the engine through its in-cluster Service
+  - it: bridge calls the engine through its control Service, not the readiness-gated one
+    # The engine's /ready fails on one broken manifest; the bridge's agent
+    # builder is how an operator repairs it, so the bridge must still reach it.
     documentIndex: 0
     asserts:
       - isKind:
@@ -14,7 +16,7 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: ROBOTHOR_ENGINE_URL
-            value: http://gos-genus-os-engine:18800
+            value: http://gos-genus-os-engine-control:18800
 
   - it: bridge gets no engine URL when the engine is disabled
     set:
@@ -41,7 +43,7 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: ROBOTHOR_ENGINE_URL
-            value: http://gos-genus-os-engine:18800
+            value: http://gos-genus-os-engine-control:18800
 
   - it: bridge gets the logs URL when logs.url is set
     set:
