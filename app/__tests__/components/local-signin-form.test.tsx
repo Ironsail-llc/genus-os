@@ -152,3 +152,29 @@ describe("LocalSignInForm", () => {
     await waitFor(() => expect(mockSignIn).not.toHaveBeenCalled());
   });
 });
+
+/*
+  Before React hydrates, the form has no onSubmit handler, so pressing Enter
+  is a native browser submit. A form with no method submits as GET, which puts
+  the email and password in the query string: the address bar, the history and
+  every request log on the way. The markup itself must make that submit a POST
+  to the same endpoint the hydrated handler reaches through signIn().
+*/
+describe("LocalSignInForm before hydration", () => {
+  function form(): HTMLFormElement {
+    const { container } = render(<LocalSignInForm callbackUrl="/" />);
+    const el = container.querySelector("form");
+    if (!el) throw new Error("no form rendered");
+    return el;
+  }
+
+  it("declares method post, so a native submit is never a GET", () => {
+    const el = form();
+    expect(el.getAttribute("method")).toBe("post");
+    expect(el.method).toBe("post");
+  });
+
+  it("posts natively to the local provider's callback, not to the page URL", () => {
+    expect(form().getAttribute("action")).toBe("/api/auth/callback/local");
+  });
+});
