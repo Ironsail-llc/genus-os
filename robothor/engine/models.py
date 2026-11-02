@@ -451,7 +451,7 @@ class AgentConfig:
     # Channel bus — wake-on-surface (main only)
     channel_bus: ChannelBusConfig | None = None
 
-    # Ambient follow-ups — stalled threads and digests (opt-in, ROBOTHOR_AMBIENT)
+    # Ambient follow-ups — stalled threads and digests (opt-in per manifest)
     ambient: AmbientConfig | None = None
 
     # ── v2 enhancements (all default off for backward compat) ──

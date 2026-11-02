@@ -75,7 +75,7 @@ _RUN_COLUMNS = (
 
 #: The engine's job kinds, imported so the two sides cannot drift.
 #: ``schedule_reconcile`` composes ``<id>``, ``<id>:heartbeat``,
-#: ``<id>:worker`` and (while ``ROBOTHOR_AMBIENT`` is on) ``<id>:ambient``;
+#: ``<id>:worker`` and (for an ``ambient:`` block) ``<id>:ambient``;
 #: everything here that parses or builds one of those ids goes through
 #: :func:`_split_job_id` or :func:`_jobs_of`.
 _JOB_SUFFIXES = frozenset({KIND_HEARTBEAT, KIND_WORKER, KIND_AMBIENT})
@@ -190,16 +190,12 @@ def _jobs_of(document: dict[str, Any]) -> list[dict[str, Any]]:
 def _ambient_job(
     document: dict[str, Any], base: dict[str, Any], summary: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    """The ``<id>:ambient`` card, when the engine would be running that job.
+    """The ``<id>:ambient`` card for a manifest whose ``ambient:`` block has a ``digest_at``.
 
-    Only while ``ROBOTHOR_AMBIENT`` is not ``off``, which is exactly when the
-    scheduler registers the job and writes its row; a card for a job the
-    engine is not running would say something false the other way.
+    That is exactly when the scheduler registers the job and writes its row.
     """
-    from robothor.engine.feature_flags import ambient_mode
-
     digest_at = _block(document, KIND_AMBIENT).get("digest_at")
-    if not digest_at or ambient_mode() == "off":
+    if not digest_at:
         return []
     agent_id = base["agent_id"]
     return [

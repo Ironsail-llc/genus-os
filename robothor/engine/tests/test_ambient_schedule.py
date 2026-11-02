@@ -1,8 +1,6 @@
-"""Ambient scheduling: one job per opted-in agent, and none while the flag is off."""
+"""Ambient scheduling: one job per agent whose manifest has an ``ambient:`` block."""
 
 from __future__ import annotations
-
-import pytest
 
 from robothor.engine.ambient import AmbientConfig, ambient_trigger
 from robothor.engine.models import AgentConfig
@@ -27,8 +25,7 @@ def _fleet() -> list[AgentConfig]:
     ]
 
 
-def test_flag_on_gives_one_ambient_job_per_opted_in_agent(monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_AMBIENT", "observe")
+def test_one_ambient_job_per_opted_in_agent():
     specs, errors = desired_job_specs(_fleet())
     assert errors == []
     ambient = {s.job_id: s for s in specs.values() if s.kind == KIND_AMBIENT}
@@ -38,18 +35,7 @@ def test_flag_on_gives_one_ambient_job_per_opted_in_agent(monkeypatch):
     assert "gamma" in specs
 
 
-@pytest.mark.parametrize("value", [None, "", "off", "nonsense"])
-def test_flag_off_gives_no_ambient_jobs(monkeypatch, value):
-    if value is None:
-        monkeypatch.delenv("ROBOTHOR_AMBIENT", raising=False)
-    else:
-        monkeypatch.setenv("ROBOTHOR_AMBIENT", value)
-    specs, _ = desired_job_specs(_fleet())
-    assert [s for s in specs.values() if s.kind == KIND_AMBIENT] == []
-
-
-def test_a_bad_digest_time_costs_that_job_only(monkeypatch):
-    monkeypatch.setenv("ROBOTHOR_AMBIENT", "observe")
+def test_a_bad_digest_time_costs_that_job_only():
     agent = AgentConfig(id="alpha", name="Alpha", cron_expr="0 * * * *", ambient=_ambient("nope"))
     specs, errors = agent_job_specs(agent)
     assert list(specs) == ["alpha"]

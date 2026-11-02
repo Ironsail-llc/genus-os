@@ -7,17 +7,19 @@ each ``digest_at`` time the scheduler runs one pass for it:
    conversation inbox, or a Redis stream the agent already reads): a person
    wrote, ``stalled_after`` has passed, and nothing from us came after.
 2. **Compose** the follow-ups with the agent's own run — its model, its
-   instructions — on a ``cron`` trigger whose detail is ``ambient:<mode>``.
+   instructions — on a ``cron`` trigger whose detail is ``ambient:<digest_at>``.
    That run delivers nothing and holds only read-only tools: what is sent is
    decided here, by tier, never by the composing run.
 3. **Hold each proposal to its tier.** ``never`` kinds are not asked for, and
    dropped if the model writes one anyway. ``approve`` goes through the same
    approval gate a guarded tool call uses (the Telegram keyboard, the webchat
-   card). ``auto`` sends.
+   card). ``auto`` sends. A tier the block does not state is ``approve``
+   (``reply_on_behalf``: ``never``), so nothing goes out alone unless the
+   manifest says so.
+4. **Record** every proposal and its outcome as an ``ambient_proposal`` run
+   step and in a daily digest file.
 
-``ROBOTHOR_AMBIENT`` is the ladder: ``off`` (default) does nothing at all,
-``observe`` records every proposal as an ``ambient_proposal`` run step and in
-a digest file and sends nothing, ``enforce`` sends per tier.
+The block is the only switch: there is no instance-wide flag in front of it.
 
 No migration: a proposal is a ``checkpoint`` step named ``ambient_proposal``
 (the Runs view already renders those), and the run is a ``cron`` run with an
@@ -88,8 +90,9 @@ TIER_APPROVE = "approve"
 TIER_NEVER = "never"
 TIERS = (TIER_AUTO, TIER_APPROVE, TIER_NEVER)
 
-#: Nothing goes out alone unless the manifest says so, and nothing is said in
-#: the thread on our behalf unless the manifest says so.
+#: The tier of a kind the block does not state. Nothing goes out alone unless
+#: the manifest says so (never ``auto``), and nothing is said in the thread on
+#: our behalf unless the manifest says so.
 DEFAULT_TIERS = {NUDGE_THREAD: TIER_APPROVE, SEND_DIGEST: TIER_APPROVE, REPLY_ON_BEHALF: TIER_NEVER}
 
 #: ``tool_name`` of the checkpoint step each proposal is recorded as, and the
@@ -106,7 +109,6 @@ _INBOX_PAGE_SIZE = 100
 _INBOX_MAX_PAGES = 100
 
 #: What happened to a proposal; recorded on its step and in the digest.
-OBSERVED = "observed"
 SENT = "sent"
 DENIED = "denied"
 NO_APPROVER = "no_approver"
@@ -181,15 +183,8 @@ def digest_at_error(value: str) -> str | None:
 
 
 def ambient_schedule(agent: AgentConfig) -> str:
-    """The ambient job's schedule, or ``""`` when the agent should have no job.
-
-    No job at all while ``ROBOTHOR_AMBIENT`` is off: the flag's default must
-    leave the scheduler exactly as it was, not register a job that wakes up
-    to do nothing.
-    """
-    from robothor.engine.feature_flags import ambient_mode
-
-    if agent.ambient is None or ambient_mode() == "off":
+    """The ambient job's schedule, or ``""`` when the agent has no ``ambient:`` block."""
+    if agent.ambient is None:
         return ""
     return agent.ambient.digest_at
 
@@ -524,7 +519,7 @@ def composing_config(agent: AgentConfig) -> AgentConfig:
 
     Delivery off, and tools cut to the read-only ones the agent already had.
     The worker decides what is sent; a composing run that could call a send
-    tool would make ``observe`` a lie.
+    tool would go around the tiers.
     """
     from robothor.engine.tools.constants import GOAL_TOOLS, READONLY_TOOLS
     from robothor.goals.tools import TOOL_NAMES as PURSUIT_GOAL_TOOLS
@@ -551,7 +546,6 @@ def composing_config(agent: AgentConfig) -> AgentConfig:
 @dataclass
 class AmbientPass:
     agent_id: str
-    mode: str
     run_id: str | None = None
     run_status: str | None = None
     duration_ms: int | None = None
@@ -591,12 +585,9 @@ class AmbientWorker:
         self._now = now or (lambda: datetime.now(UTC))
 
     async def run_pass(self, agent: AgentConfig) -> AmbientPass:
-        from robothor.engine.feature_flags import ambient_mode
-
-        mode = ambient_mode()
-        result = AmbientPass(agent_id=agent.id, mode=mode)
+        result = AmbientPass(agent_id=agent.id)
         cfg = agent.ambient
-        if mode == "off" or cfg is None:
+        if cfg is None:
             return result
         kinds = allowed_kinds(cfg.tiers)
         if not kinds or cfg.stalled_after_seconds <= 0:
@@ -606,14 +597,14 @@ class AmbientWorker:
             await self._load_threads(agent), cfg.stalled_after_seconds, now
         )
         if not result.stalled:
-            logger.info("ambient %s (%s): nothing stalled", agent.id, mode)
+            logger.info("ambient %s: nothing stalled", agent.id)
             return result
 
         run: AgentRun = await self._runner.execute(
             agent_id=agent.id,
             message=build_prompt(agent, result.stalled, kinds),
             trigger_type=TriggerType.CRON,
-            trigger_detail=f"ambient:{mode}",
+            trigger_detail=f"{KIND_AMBIENT}:{cfg.digest_at}",
             agent_config=composing_config(agent),
         )
         result.run_id = run.id
@@ -624,35 +615,28 @@ class AmbientWorker:
             # A failed, timed-out or cancelled run's text is whatever the model
             # last said, not a finished proposal.
             logger.warning(
-                "ambient %s (%s): composing run %s ended %s; nothing proposed",
+                "ambient %s: composing run %s ended %s; nothing proposed",
                 agent.id,
-                mode,
                 run.id,
                 run.status.value,
             )
             return result
         result.proposals = parse_proposals(run.output_text or "", result.stalled, kinds, cfg.tiers)
-        if mode == "observe":
-            outcomes = [OBSERVED] * len(result.proposals)
-        else:
-            # Together, not one after another: each approval can wait up to
-            # human_approval_timeout, and the pass holds its dedup lock meanwhile.
-            outcomes = await asyncio.gather(
-                *(self._dispatch(agent, run, p) for p in result.proposals)
-            )
+        # Together, not one after another: each approval can wait up to
+        # human_approval_timeout, and the pass holds its dedup lock meanwhile.
+        outcomes = await asyncio.gather(*(self._dispatch(agent, run, p) for p in result.proposals))
         for proposal, outcome in zip(result.proposals, outcomes, strict=True):
             proposal.outcome = outcome
             logger.info(
-                "ambient %s (%s): %s -> %s [%s, %s]",
+                "ambient %s: %s -> %s [%s, %s]",
                 agent.id,
-                mode,
                 proposal.kind,
                 proposal.target,
                 proposal.tier,
                 proposal.outcome,
             )
-        await self._record(run, result.proposals, mode, now)
-        await self._write_digest(agent, mode, result, now)
+        await self._record(run, result.proposals, now)
+        await self._write_digest(agent, result, now)
         return result
 
     async def _dispatch(self, agent: AgentConfig, run: AgentRun, proposal: Proposal) -> str:
@@ -694,9 +678,7 @@ class AmbientWorker:
             return SEND_FAILED
         return SENT if delivered else SEND_FAILED
 
-    async def _record(
-        self, run: AgentRun, proposals: list[Proposal], mode: str, now: datetime
-    ) -> None:
+    async def _record(self, run: AgentRun, proposals: list[Proposal], now: datetime) -> None:
         start = max((s.step_number for s in run.steps), default=0)
         steps = [
             RunStep(
@@ -708,7 +690,6 @@ class AmbientWorker:
                     "kind": p.kind,
                     "tier": p.tier,
                     "target": p.target,
-                    "mode": mode,
                     "waited_seconds": p.thread.waited_seconds if p.thread else None,
                 },
                 tool_output={"text": p.text, "outcome": p.outcome},
@@ -725,13 +706,11 @@ class AmbientWorker:
         except Exception as error:  # noqa: BLE001 - the digest file still records it
             logger.warning("ambient: could not record steps for run %s: %s", run.id, error)
 
-    async def _write_digest(
-        self, agent: AgentConfig, mode: str, result: AmbientPass, now: datetime
-    ) -> None:
+    async def _write_digest(self, agent: AgentConfig, result: AmbientPass, now: datetime) -> None:
         if not result.proposals:
             return
         lines = [
-            f"## {now.astimezone(UTC).strftime('%Y-%m-%d %H:%M')} UTC, ambient pass ({mode}), "
+            f"## {now.astimezone(UTC).strftime('%Y-%m-%d %H:%M')} UTC, ambient pass, "
             f"run {result.run_id}",
             "",
         ]
