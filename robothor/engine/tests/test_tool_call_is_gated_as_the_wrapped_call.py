@@ -222,7 +222,10 @@ async def test_a_blocking_guardrail_blocks_the_wrapped_call(
 
     assert direct.allowed is False, "the fixture must block the direct call"
     assert wrapped.allowed is False, f"{policy} must block {inner} reached through tool_call"
-    assert wrapped.output == {"guardrail": policy}
+    # The refusal payload (gate, gate_name, unlock) is part of every refusal
+    # in the fold; the wrapped call's must be the direct call's, key for key.
+    assert wrapped.output["guardrail"] == policy
+    assert wrapped.output == direct.output
     assert wrapped.message == direct.message
     assert wrapped.escalate is True
     assert wrapped.tool_args == wrapper
@@ -248,7 +251,8 @@ async def test_a_hook_block_refuses_the_wrapper() -> None:
     verdict = await _admit("tool_call", wrapper, hook_registry=hooks)
 
     assert verdict.allowed is False
-    assert verdict.output == {"hook": "pre_tool_use"}
+    assert verdict.output["hook"] == "pre_tool_use"
+    assert verdict.output.get("gate_name") == "pre_tool_use"  # with its refusal payload
     assert "refunds are paused" in verdict.message
     assert verdict.tool_args == wrapper
 
