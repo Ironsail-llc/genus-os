@@ -2048,19 +2048,6 @@ class FlagSettings(SettingsGroup):
         "escalated, enforce actually asks and denies on timeout.",
         governed=True,
     )
-    role_capabilities_enabled: bool = declare(
-        False,
-        "ROBOTHOR_ROLE_CAPABILITIES_ENABLED",
-        "Switch for the role capability tier: an owner or admin on a verified "
-        "interactive run is offered the opt-in tool families their role permits.",
-    )
-    role_capabilities_mode: str = declare(
-        "observe",
-        "ROBOTHOR_ROLE_CAPABILITIES_MODE",
-        "Role-capability ladder position: observe records the tier and the tools "
-        "it would unlock, enforce offers them.",
-        governed=True,
-    )
     completion_contracts_enabled: bool = declare(
         False,
         "ROBOTHOR_COMPLETION_CONTRACTS_ENABLED",

@@ -82,12 +82,6 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
     "ROBOTHOR_SANDBOX_DEFAULT_MODE": EvidenceSource(
         "agent_guardrail_events", "guardrail_name = 'sandbox_default'"
     ),
-    # Written by robothor/engine/capability_tier.py::record_tier_event once per
-    # run whose verified owner/admin role maps to a widening tier: 'observed'
-    # under observe, 'allowed' under enforce.
-    "ROBOTHOR_ROLE_CAPABILITIES_MODE": EvidenceSource(
-        "agent_guardrail_events", "guardrail_name = 'role_capability'"
-    ),
     "ROBOTHOR_COMPLETION_CONTRACTS_MODE": EvidenceSource(
         "agent_guardrail_events", "guardrail_name = 'completion_contract'"
     ),

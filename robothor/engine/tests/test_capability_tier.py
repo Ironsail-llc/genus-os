@@ -10,9 +10,8 @@ themselves. The role was known the whole time (``AgentRun.user_role``); nothing
 turned it into a capability any gate could read.
 
 The capability tier is that missing value. It only ever WIDENS what a run is
-offered, only for an interactive run with a verified identity, and only under
-``ROBOTHOR_ROLE_CAPABILITIES_MODE=enforce``. ``observe`` records what it would
-have unlocked and changes nothing. Off is today, byte for byte.
+offered, and only for an interactive run with a verified identity. There is no
+switch: it is the only code path, and no stock role loses a tool it had.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from robothor.engine.models import AgentConfig, AgentRun, RunStatus, TriggerType
+from robothor.engine.models import AgentConfig, AgentRun, TriggerType
 from robothor.engine.tools.constants import CLAUDE_CODE_TOOLS, OPT_IN_TOOLS
 from robothor.identity import IdentityContext
 
@@ -32,54 +31,9 @@ from robothor.identity import IdentityContext
 def _clean_flags(monkeypatch):
     for var in (
         "ROBOTHOR_DISABLE_ALL_RIPS",
-        "ROBOTHOR_ROLE_CAPABILITIES_ENABLED",
-        "ROBOTHOR_ROLE_CAPABILITIES_MODE",
         "ROBOTHOR_RIP_16_ENABLED",
     ):
         monkeypatch.delenv(var, raising=False)
-
-
-def _mode(monkeypatch, mode: str | None) -> None:
-    if mode is None:
-        return
-    monkeypatch.setenv("ROBOTHOR_ROLE_CAPABILITIES_ENABLED", "1")
-    monkeypatch.setenv("ROBOTHOR_ROLE_CAPABILITIES_MODE", mode)
-
-
-# ── The flag ─────────────────────────────────────────────────────────────
-
-
-class TestTheFlag:
-    def test_it_is_off_when_unset(self):
-        from robothor.engine.feature_flags import role_capabilities_mode
-
-        assert role_capabilities_mode() == "off"
-
-    def test_enabling_it_lands_in_observe(self, monkeypatch):
-        from robothor.engine.feature_flags import role_capabilities_mode
-
-        monkeypatch.setenv("ROBOTHOR_ROLE_CAPABILITIES_ENABLED", "1")
-        assert role_capabilities_mode() == "observe"
-
-    def test_enforce_is_read_as_written(self, monkeypatch):
-        from robothor.engine.feature_flags import role_capabilities_mode
-
-        _mode(monkeypatch, "enforce")
-        assert role_capabilities_mode() == "enforce"
-
-    def test_the_panic_flag_turns_it_off(self, monkeypatch):
-        from robothor.engine.feature_flags import role_capabilities_mode
-
-        _mode(monkeypatch, "enforce")
-        monkeypatch.setenv("ROBOTHOR_DISABLE_ALL_RIPS", "1")
-        assert role_capabilities_mode() == "off"
-
-    def test_its_evidence_is_the_role_capability_guardrail_row(self):
-        from robothor.flags.evidence import EVIDENCE_SOURCES
-
-        source = EVIDENCE_SOURCES["ROBOTHOR_ROLE_CAPABILITIES_MODE"]
-        assert source.table == "agent_guardrail_events"
-        assert "role_capability" in source.where
 
 
 # ── Role -> tier ─────────────────────────────────────────────────────────
@@ -104,14 +58,14 @@ class TestResolveTier:
     def test_each_role_maps_to_one_tier(self, role, tier):
         from robothor.engine.capability_tier import resolve_tier
 
-        decision = resolve_tier(role, interactive=True, identity_verified=True, mode="enforce")
+        decision = resolve_tier(role, interactive=True, identity_verified=True)
         assert decision.tier == tier
         assert decision.role == role
 
     def test_a_system_run_never_widens_even_for_an_owner_principal(self):
         from robothor.engine.capability_tier import resolve_tier
 
-        decision = resolve_tier("owner", interactive=False, identity_verified=True, mode="enforce")
+        decision = resolve_tier("owner", interactive=False, identity_verified=True)
         assert decision.tier == "standard"
         assert "interactive" in decision.reason
 
@@ -120,19 +74,9 @@ class TestResolveTier:
         unregistered sender; that identity is verified=False."""
         from robothor.engine.capability_tier import resolve_tier
 
-        decision = resolve_tier("owner", interactive=True, identity_verified=False, mode="enforce")
+        decision = resolve_tier("owner", interactive=True, identity_verified=False)
         assert decision.tier == "standard"
         assert "verified" in decision.reason
-
-    def test_the_effective_tier_is_empty_below_enforce(self):
-        from robothor.engine.capability_tier import resolve_tier
-
-        observed = resolve_tier("owner", interactive=True, identity_verified=True, mode="observe")
-        enforced = resolve_tier("owner", interactive=True, identity_verified=True, mode="enforce")
-
-        assert observed.tier == "unrestricted"
-        assert observed.effective == ""
-        assert enforced.effective == "unrestricted"
 
 
 # ── The registry offers opt-ins by tier ──────────────────────────────────
@@ -168,11 +112,7 @@ class TestTheRegistry:
         names = set(registry.get_tool_names(_default_agent(), tier="elevated"))
         assert "web_render" in names
 
-    def test_build_for_agent_advertises_what_get_tool_names_lists(self, registry, monkeypatch):
-        # Deferred loading is on by default; this pins the advertised set of a
-        # run that is not deferred. A deferred run reaches the same tools
-        # through its whitelist (test_a_deferred_run_can_tool_call_...).
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")
+    def test_build_for_agent_advertises_what_get_tool_names_lists(self, registry):
         schemas = registry.build_for_agent(_default_agent(), tier="unrestricted")
         advertised = {s["function"]["name"] for s in schemas}
         assert "claude_code_start" in advertised
@@ -215,41 +155,14 @@ class TestPrepareToolset:
                 capability=decision,
             )
 
-    async def test_observe_advertises_nothing_new_and_names_what_it_would_unlock(self, registry):
+    async def test_a_widening_tier_advertises_what_it_unlocks(self, registry):
         from robothor.engine.capability_tier import resolve_tier
 
-        decision = resolve_tier("owner", interactive=True, identity_verified=True, mode="observe")
-        prepared = await self._prepare(registry, decision)
-
-        assert "claude_code_start" not in prepared.tool_names
-        assert "claude_code_start" in prepared.tier_unlocked
-
-    async def test_enforce_advertises_what_it_unlocks(self, registry, monkeypatch):
-        from robothor.engine.capability_tier import resolve_tier
-
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")  # not deferred: see above
-
-        decision = resolve_tier("owner", interactive=True, identity_verified=True, mode="enforce")
+        decision = resolve_tier("owner", interactive=True, identity_verified=True)
         prepared = await self._prepare(registry, decision)
 
         advertised = {s["function"]["name"] for s in prepared.tool_schemas}
         assert "claude_code_start" in advertised
-        assert "claude_code_start" in prepared.tier_unlocked
-
-    async def test_enforce_on_a_deferred_run_makes_what_it_unlocks_reachable(
-        self, registry, monkeypatch
-    ):
-        from robothor.engine.capability_tier import resolve_tier
-
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
-        monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_RIPS", raising=False)
-        decision = resolve_tier("owner", interactive=True, identity_verified=True, mode="enforce")
-        prepared = await self._prepare(registry, decision)
-
-        advertised = {s["function"]["name"] for s in prepared.tool_schemas}
-        assert "tool_search" in advertised  # the run was deferred
-        assert "claude_code_start" not in advertised
-        assert "claude_code_start" in prepared.reachable_names
         assert "claude_code_start" in prepared.tier_unlocked
 
     async def test_no_decision_is_todays_toolset(self, registry):
@@ -267,25 +180,24 @@ class TestRunIdentity:
 
         assert "capability_tier" not in run_identity(AgentRun(agent_id="probe"))
 
-    def test_a_run_with_a_tier_persists_tier_mode_and_reason(self):
+    def test_a_run_with_a_tier_persists_tier_and_reason(self):
         from robothor.engine.runtime.current import run_identity
 
         run = AgentRun(agent_id="probe")
         run.capability_tier = "unrestricted"
-        run.capability_tier_mode = "observe"
         run.capability_tier_reason = "role owner"
 
         stored = run_identity(run)["capability_tier"]
-        assert stored == {"tier": "unrestricted", "mode": "observe", "reason": "role owner"}
+        assert stored == {"tier": "unrestricted", "reason": "role owner"}
         json.dumps(stored)
 
 
-# ── Handlers can read the effective tier ─────────────────────────────────
+# ── Handlers can read the run's tier ──────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_the_tool_context_carries_the_effective_tier():
-    from robothor.engine.capability_tier import clear_effective_tier, set_effective_tier
+async def test_the_tool_context_carries_the_runs_tier():
+    from robothor.engine.capability_tier import clear_run_tier, set_run_tier
     from robothor.engine.tools import dispatch
 
     seen = {}
@@ -294,7 +206,7 @@ async def test_the_tool_context_carries_the_effective_tier():
         seen["tier"] = ctx.capability_tier
         return {"error": "stop here"}
 
-    token = set_effective_tier("unrestricted")
+    token = set_run_tier("unrestricted")
     try:
         with (
             patch.object(dispatch, "_refuse_before_handler", AsyncMock(return_value=None)),
@@ -302,7 +214,7 @@ async def test_the_tool_context_carries_the_effective_tier():
         ):
             await dispatch._execute_tool("read_file", {})
     finally:
-        clear_effective_tier(token)
+        clear_run_tier(token)
 
     assert seen["tier"] == "unrestricted"
 
@@ -314,45 +226,32 @@ class TestTheTierIsPublishedWithTheToolset:
         return registry
 
     def test_it_is_visible_while_published_and_gone_after(self):
-        from robothor.engine.capability_tier import current_effective_tier, resolve_tier
+        from robothor.engine.capability_tier import current_run_tier, resolve_tier
         from robothor.engine.toolset_prep import publish_toolset, withdraw_toolset
 
-        decision = resolve_tier("owner", interactive=True, identity_verified=True, mode="enforce")
+        decision = resolve_tier("owner", interactive=True, identity_verified=True)
         tokens = publish_toolset(
             self._registry(), _default_agent(), ["read_file"], capability=decision
         )
         try:
-            assert current_effective_tier() == "unrestricted"
+            assert current_run_tier() == "unrestricted"
         finally:
             withdraw_toolset(tokens)
-        assert current_effective_tier() == ""
-
-    def test_observe_publishes_no_tier(self):
-        from robothor.engine.capability_tier import current_effective_tier, resolve_tier
-        from robothor.engine.toolset_prep import publish_toolset, withdraw_toolset
-
-        decision = resolve_tier("owner", interactive=True, identity_verified=True, mode="observe")
-        tokens = publish_toolset(
-            self._registry(), _default_agent(), ["read_file"], capability=decision
-        )
-        try:
-            assert current_effective_tier() == ""
-        finally:
-            withdraw_toolset(tokens)
+        assert current_run_tier() == ""
 
     def test_a_child_run_inline_restores_its_parents_tier(self):
         """spawn_agent runs the child's execute inline in the parent's task."""
-        from robothor.engine.capability_tier import current_effective_tier, resolve_tier
+        from robothor.engine.capability_tier import current_run_tier, resolve_tier
         from robothor.engine.toolset_prep import publish_toolset, withdraw_toolset
 
-        owner = resolve_tier("owner", interactive=True, identity_verified=True, mode="enforce")
-        child = resolve_tier("owner", interactive=False, identity_verified=True, mode="enforce")
+        owner = resolve_tier("owner", interactive=True, identity_verified=True)
+        child = resolve_tier("owner", interactive=False, identity_verified=True)
         parent_tokens = publish_toolset(self._registry(), _default_agent(), [], capability=owner)
         try:
             child_tokens = publish_toolset(self._registry(), _default_agent(), [], capability=child)
-            assert current_effective_tier() == "standard"
+            assert current_run_tier() == "standard"
             withdraw_toolset(child_tokens)
-            assert current_effective_tier() == "unrestricted"
+            assert current_run_tier() == "unrestricted"
         finally:
             withdraw_toolset(parent_tokens)
 
@@ -393,9 +292,9 @@ def runner(engine_config):
         registry.tier_seen = []
 
         async def _execute(*args, **kwargs):
-            from robothor.engine.capability_tier import current_effective_tier
+            from robothor.engine.capability_tier import current_run_tier
 
-            registry.tier_seen.append(current_effective_tier())
+            registry.tier_seen.append(current_run_tier())
             return {"ok": True}
 
         registry.execute = AsyncMock(side_effect=_execute)
@@ -478,38 +377,7 @@ async def _run_one_tool_call(
 
 @pytest.mark.asyncio
 class TestTheRunner:
-    async def test_off_is_todays_run(self, runner, default_agent, mock_litellm_response):
-        run, events = await _run_one_tool_call(
-            runner, default_agent, mock_litellm_response, identity=_owner_identity()
-        )
-
-        assert run.capability_tier == ""
-        assert events == []
-        assert runner.registry.build_for_agent.call_args.kwargs.get("tier", "") == ""
-        # claude_code_start was not offered, so admission refused it.
-        runner.registry.execute.assert_not_awaited()
-
-    async def test_observe_records_one_row_and_changes_nothing(
-        self, runner, default_agent, mock_litellm_response, monkeypatch
-    ):
-        _mode(monkeypatch, "observe")
-        run, events = await _run_one_tool_call(
-            runner, default_agent, mock_litellm_response, identity=_owner_identity()
-        )
-
-        assert run.status == RunStatus.COMPLETED
-        assert run.capability_tier == "unrestricted"
-        assert run.capability_tier_mode == "observe"
-        runner.registry.execute.assert_not_awaited()
-        assert len(events) == 1
-        assert events[0]["action"] == "observed"
-        assert "claude_code_start" in events[0]["reason"]
-        assert events[0]["off_loop"]
-
-    async def test_enforce_owner_admits_opt_in_tool(
-        self, runner, default_agent, mock_litellm_response, monkeypatch
-    ):
-        _mode(monkeypatch, "enforce")
+    async def test_owner_admits_opt_in_tool(self, runner, default_agent, mock_litellm_response):
         run, events = await _run_one_tool_call(
             runner, default_agent, mock_litellm_response, identity=_owner_identity()
         )
@@ -520,13 +388,10 @@ class TestTheRunner:
         assert runner.registry.execute.await_args.args[0] == "claude_code_start"
         assert runner.registry.tier_seen == ["unrestricted"]
         assert [e["action"] for e in events] == ["allowed"]
-        assert events[0]["mode"] == "enforce"
+        assert "claude_code_start" in events[0]["reason"]
         assert events[0]["off_loop"]
 
-    async def test_enforce_admin_is_elevated(
-        self, runner, default_agent, mock_litellm_response, monkeypatch
-    ):
-        _mode(monkeypatch, "enforce")
+    async def test_admin_is_elevated(self, runner, default_agent, mock_litellm_response):
         run, events = await _run_one_tool_call(
             runner,
             default_agent,
@@ -539,10 +404,7 @@ class TestTheRunner:
         assert runner.registry.tier_seen == ["elevated"]
         assert [e["action"] for e in events] == ["allowed"]
 
-    async def test_enforce_member_gets_nothing_new(
-        self, runner, default_agent, mock_litellm_response, monkeypatch
-    ):
-        _mode(monkeypatch, "enforce")
+    async def test_member_gets_nothing_new(self, runner, default_agent, mock_litellm_response):
         run, events = await _run_one_tool_call(
             runner,
             default_agent,
@@ -555,10 +417,7 @@ class TestTheRunner:
         runner.registry.execute.assert_not_awaited()
         assert events == []
 
-    async def test_enforce_cron_gets_nothing_new(
-        self, runner, default_agent, mock_litellm_response, monkeypatch
-    ):
-        _mode(monkeypatch, "enforce")
+    async def test_cron_gets_nothing_new(self, runner, default_agent, mock_litellm_response):
         run, events = await _run_one_tool_call(
             runner,
             default_agent,
@@ -572,10 +431,9 @@ class TestTheRunner:
         assert run.capability_tier == "standard"
         assert events == []
 
-    async def test_enforce_unregistered_telegram_owner_gets_nothing_new(
-        self, runner, default_agent, mock_litellm_response, monkeypatch
+    async def test_unregistered_telegram_owner_gets_nothing_new(
+        self, runner, default_agent, mock_litellm_response
     ):
-        _mode(monkeypatch, "enforce")
         fabricated = IdentityContext(
             tenant_id="test-tenant",
             channel="telegram",
@@ -597,3 +455,197 @@ class TestTheRunner:
         assert run.capability_tier == "standard"
         runner.registry.execute.assert_not_awaited()
         assert events == []
+
+
+# ── The tier is the only code path ───────────────────────────────────────
+
+_RETIRED_SWITCHES = ("ROBOTHOR_ROLE_CAPABILITIES_ENABLED", "ROBOTHOR_ROLE_CAPABILITIES_MODE")
+
+
+def _retired_switches_set_low(monkeypatch) -> None:
+    """The retired switches set to their old off/observe values change nothing."""
+    monkeypatch.setenv("ROBOTHOR_ROLE_CAPABILITIES_ENABLED", "0")
+    monkeypatch.setenv("ROBOTHOR_ROLE_CAPABILITIES_MODE", "observe")
+
+
+class TestNoSwitch:
+    def test_feature_flags_has_no_reader(self):
+        from robothor.engine import feature_flags
+
+        assert not hasattr(feature_flags, "role_capabilities_mode")
+        assert not hasattr(feature_flags, "role_capabilities_enabled")
+
+    def test_feature_flags_source_names_neither_switch(self):
+        import inspect
+
+        from robothor.engine import feature_flags
+
+        source = inspect.getsource(feature_flags)
+        for name in _RETIRED_SWITCHES:
+            assert name not in source
+
+    def test_settings_declare_neither_switch(self):
+        import inspect
+
+        from robothor.settings import model
+
+        source = inspect.getsource(model)
+        for name in _RETIRED_SWITCHES:
+            assert name not in source
+
+
+_STOCK_ROLES = ("owner", "admin", "member", "user", "service", "viewer")
+
+
+def _stamped(role: str, *, trigger=TriggerType.WEBCHAT, verified: bool = True):
+    from robothor.engine.capability_tier import stamp_capability_tier
+
+    run = AgentRun(agent_id="probe", user_role=role)
+    identity = _owner_identity(verified=verified, role=role)
+    decision = stamp_capability_tier(run, trigger, identity)
+    return run, decision
+
+
+_PARITY_AGENTS = {
+    "default": {},
+    "allow-list": {"tools_allowed": ["read_file", "web_fetch", "search_memory"]},
+    "opt-in": {"tools_opt_in": ["web_render"]},
+    "denied": {"tools_denied": ["claude_code_*", "web_*"]},
+}
+
+
+class TestStockRoleParity:
+    """No stock role loses a tool it is offered on main, where no tier exists.
+
+    main's toolset is ``get_tool_names(config)`` with no tier; RBAC
+    (``role_permissions``) is evaluated at dispatch and never reads the tier.
+    """
+
+    @pytest.mark.parametrize("agent", sorted(_PARITY_AGENTS))
+    @pytest.mark.parametrize("role", _STOCK_ROLES)
+    @pytest.mark.parametrize("trigger", [TriggerType.WEBCHAT, TriggerType.CRON])
+    def test_every_tool_offered_on_main_is_still_offered(
+        self, registry, monkeypatch, role, agent, trigger
+    ):
+        _retired_switches_set_low(monkeypatch)
+        config = _default_agent(**_PARITY_AGENTS[agent])
+        _, decision = _stamped(role, trigger=trigger)
+        assert decision is not None
+
+        on_main = set(registry.get_tool_names(config))
+        with_tier = set(registry.get_tool_names(config, tier=decision.tier))
+        assert on_main <= with_tier
+
+    @pytest.mark.parametrize("role", _STOCK_ROLES)
+    def test_every_tool_callable_on_main_is_still_callable_deferred(
+        self, registry, monkeypatch, role
+    ):
+        _retired_switches_set_low(monkeypatch)
+        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
+        config = _default_agent()
+        _, decision = _stamped(role)
+        assert decision is not None
+        assert registry.deferred_whitelist(config) <= registry.deferred_whitelist(
+            config, tier=decision.tier
+        )
+
+    @pytest.mark.parametrize("role", ["member", "user", "service", "viewer"])
+    def test_a_non_widening_stock_role_is_offered_exactly_mains_toolset(
+        self, registry, monkeypatch, role
+    ):
+        _retired_switches_set_low(monkeypatch)
+        for spec in _PARITY_AGENTS.values():
+            config = _default_agent(**spec)
+            _, decision = _stamped(role)
+            assert decision is not None
+            assert registry.get_tool_names(config, tier=decision.tier) == (
+                registry.get_tool_names(config)
+            )
+
+    def test_the_owner_keeps_everything_and_gains_the_opt_ins(self, registry, monkeypatch):
+        _retired_switches_set_low(monkeypatch)
+        config = _default_agent()
+        _, decision = _stamped("owner")
+        assert decision is not None and decision.tier == "unrestricted"
+
+        on_main = set(registry.get_tool_names(config))
+        with_tier = set(registry.get_tool_names(config, tier=decision.tier))
+        assert on_main <= with_tier
+        assert "claude_code_start" in with_tier - on_main
+
+
+@pytest.mark.asyncio
+class TestTheRunnerWithTheRetiredSwitchesSet:
+    async def test_a_member_run_is_tier_shaped(
+        self, runner, default_agent, mock_litellm_response, monkeypatch
+    ):
+        _retired_switches_set_low(monkeypatch)
+        run, events = await _run_one_tool_call(
+            runner,
+            default_agent,
+            mock_litellm_response,
+            tool="read_file",
+            role="member",
+            identity=_owner_identity(role="member"),
+        )
+
+        assert run.capability_tier == "standard"
+        assert runner.registry.tier_seen == ["standard"]
+        assert events == []
+
+    async def test_an_owner_run_is_offered_and_admits_the_opt_in_tool(
+        self, runner, default_agent, mock_litellm_response, monkeypatch
+    ):
+        _retired_switches_set_low(monkeypatch)
+        run, events = await _run_one_tool_call(
+            runner, default_agent, mock_litellm_response, identity=_owner_identity()
+        )
+
+        assert run.capability_tier == "unrestricted"
+        assert runner.registry.build_for_agent.call_args.kwargs["tier"] == "unrestricted"
+        runner.registry.execute.assert_awaited_once()
+        assert [e["action"] for e in events] == ["allowed"]
+
+
+@pytest.mark.asyncio
+class TestTheAuditRowIsHonest:
+    async def test_a_widening_tier_that_unlocks_nothing_writes_no_row(
+        self, runner, default_agent, mock_litellm_response
+    ):
+        """An agent with ``tools_allowed``, or whose opt-ins are already named,
+        is offered the same set at every tier; an ``allowed`` row naming no
+        tool would claim a grant that never happened."""
+
+        def _same_at_every_tier(config, tier=""):
+            return ["read_file", "claude_code_start"]
+
+        def _schemas(config, autonomy=False, tier=""):
+            names = _same_at_every_tier(config, tier)
+            return [{"type": "function", "function": {"name": n}} for n in names]
+
+        runner.registry.get_tool_names.side_effect = _same_at_every_tier
+        runner.registry.build_for_agent.side_effect = _schemas
+
+        run, events = await _run_one_tool_call(
+            runner, default_agent, mock_litellm_response, identity=_owner_identity()
+        )
+
+        assert run.capability_tier == "unrestricted"
+        assert events == []
+
+    async def test_plan_mode_unlocks_nothing_and_writes_no_row(self, registry):
+        from robothor.engine import toolset_prep
+        from robothor.engine.capability_tier import resolve_tier
+
+        decision = resolve_tier("owner", interactive=True, identity_verified=True)
+        with patch.object(toolset_prep, "_autonomy_active", AsyncMock(return_value=False)):
+            prepared = await toolset_prep.prepare_toolset(
+                registry,
+                _default_agent(),
+                agent_id="probe",
+                system_prompt="",
+                readonly_mode=True,
+                deep_plan=False,
+                capability=decision,
+            )
+        assert prepared.tier_unlocked == ()

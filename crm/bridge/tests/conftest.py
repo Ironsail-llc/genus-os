@@ -551,10 +551,6 @@ def engine_flag_readers() -> dict[str, tuple[object, str]]:
         "ROBOTHOR_RIP_4_ENABLED": (lambda: ff.is_rip_enabled(4), ""),
         "ROBOTHOR_RIP_5_ENABLED": (ff.curator_enabled, ""),
         "ROBOTHOR_RIP_7_MODE": (ff.rip_7_enforcement_mode, "ROBOTHOR_RIP_7_ENABLED"),
-        "ROBOTHOR_ROLE_CAPABILITIES_MODE": (
-            ff.role_capabilities_mode,
-            "ROBOTHOR_ROLE_CAPABILITIES_ENABLED",
-        ),
         "ROBOTHOR_RUN_VERIFICATION_MODE": (
             ff.run_verification_mode,
             "ROBOTHOR_RUN_VERIFICATION_ENABLED",

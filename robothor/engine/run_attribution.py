@@ -76,7 +76,7 @@ async def attribute_run(
     """
     identity = inherit_from_spawn(session, spawn_context, identity)
 
-    # Capability tier from the final (post-spawn) user_role; None while off.
+    # Capability tier from the final (post-spawn) user_role.
     tier = stamp_capability_tier(session.run, trigger_type, identity)
 
     # Contact 360 linkage (robothor/engine/run_person_link.py).

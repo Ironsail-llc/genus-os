@@ -229,7 +229,6 @@ def run_identity(run: Any) -> dict[str, Any]:
     if getattr(run, "capability_tier", ""):
         identity["capability_tier"] = {
             "tier": run.capability_tier,
-            "mode": run.capability_tier_mode,
             "reason": run.capability_tier_reason,
         }
     return identity

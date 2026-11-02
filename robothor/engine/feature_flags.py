@@ -485,19 +485,6 @@ def rbac_enforcement_mode() -> EnforcementMode:
     return _enforcement_mode("ROBOTHOR_RBAC_ENABLED", "ROBOTHOR_RBAC_MODE")
 
 
-def role_capabilities_mode() -> EnforcementMode:
-    """Rollout mode for the role capability tier (robothor/engine/capability_tier.py).
-
-    Gated on ``ROBOTHOR_ROLE_CAPABILITIES_ENABLED`` + ``ROBOTHOR_ROLE_CAPABILITIES_MODE``.
-    ``observe`` stamps the tier the human's role maps to on the run and records
-    the opt-in tools it would unlock; ``enforce`` offers them to an owner or
-    admin on a verified interactive run. Default ``off`` is today's toolset.
-    """
-    return _enforcement_mode(
-        "ROBOTHOR_ROLE_CAPABILITIES_ENABLED", "ROBOTHOR_ROLE_CAPABILITIES_MODE"
-    )
-
-
 def approval_mode() -> EnforcementMode:
     """Rollout mode for fail-closed human-approval escalation.
 

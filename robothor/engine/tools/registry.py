@@ -853,7 +853,7 @@ class ToolRegistry:
         schema tokens per turn to every agent on every instance, including the
         overwhelming majority that can never reach a grant.
 
-        ``tier`` is the run's EFFECTIVE capability tier (``capability_tier``);
+        ``tier`` is the run's capability tier (``capability_tier``);
         see :meth:`get_tool_names`.
         """
         self._refresh_plugin_schemas_if_stale()
@@ -1061,9 +1061,9 @@ class ToolRegistry:
     def get_tool_names(self, config: AgentConfig, *, tier: str = "") -> list[str]:
         """Return filtered tool names for an agent.
 
-        ``tier`` is the run's effective capability tier
-        (robothor/engine/capability_tier.py), ``""`` unless
-        ``ROBOTHOR_ROLE_CAPABILITIES_MODE=enforce``. A widening tier (an owner or
+        ``tier`` is the run's capability tier
+        (robothor/engine/capability_tier.py), ``""`` when there is no run. A
+        widening tier (an owner or
         admin on a verified interactive run) adds the opt-in families to an
         agent that declares no ``tools_allowed``; ``tools_denied`` still wins.
         """

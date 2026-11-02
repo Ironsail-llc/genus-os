@@ -99,8 +99,8 @@ manifest names them in `tools_opt_in`. That rule ignores who is asking, so the
 instance's owner — who holds a `*` allow in RBAC — could be told a coding tool
 is "not available to this agent".
 
-With `ROBOTHOR_ROLE_CAPABILITIES_ENABLED=1` the run is stamped with a capability
-tier from the human's role (`robothor/engine/capability_tier.py`):
+Every run is stamped with a capability tier from the human's role
+(`robothor/engine/capability_tier.py`):
 
 | Role | Tier | What it adds |
 |---|---|---|
@@ -117,12 +117,19 @@ tier from the human's role (`robothor/engine/capability_tier.py`):
   plan mode, approval, the secret-path, destructive-command and injection
   guardrails apply to every tier. `tools_denied` still wins, and an explicit
   `tools_allowed` list is not widened.
-* **`ROBOTHOR_ROLE_CAPABILITIES_MODE`.** `observe` (the default once enabled)
-  records the tier on the run (`agent_runs.runtime_context->'capability_tier'`)
-  and writes one `agent_guardrail_events` row, `guardrail_name = 'role_capability'`,
-  action `observed`, naming the tools it would unlock; nothing else changes.
-  `enforce` offers them and writes the row with action `allowed`. Handlers read
-  the effective tier from `ToolContext.capability_tier` (`""` below enforce).
+* **No stock role loses a tool.** `standard` and `restricted` are offered
+  exactly the toolset they had before the tier existed; `owner` and `admin`
+  keep it and gain the opt-in families.
+* **It is recorded.** The tier lands on the run
+  (`agent_runs.runtime_context->'capability_tier'`), and a run the tier added
+  at least one tool to writes one `agent_guardrail_events` row,
+  `guardrail_name = 'role_capability'`, action `allowed`, naming them. An
+  agent with `tools_allowed`, a plan-mode run, or one whose opt-ins are
+  already named gains nothing and writes no row.
+* **To withhold a tool from the owner**, name it (or its family glob) in the
+  agent's `tools_denied`; that wins over every tier. It is configuration in
+  the manifest, not a switch on the feature. Handlers read the tier from
+  `ToolContext.capability_tier`.
 
 ### What this means for agent authors
 
