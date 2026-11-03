@@ -71,7 +71,8 @@ CAPS = {
     # four had already drifted -- `ask_user` was in this one alone). That is
     # what paid for teaching the resolver about self-timed tools, instead of
     # raising this number for it.
-    "robothor/engine/runner.py": 2219,
+    # -> 2198: session seating moved to run_identity.seat_session.
+    "robothor/engine/runner.py": 2198,
     # 3850 -> 3150 after the plan-mode cluster left (phase 3), then again after
     # phase 3b (_setup_handlers closures -> methods), and 3150 -> 2000 as the
     # handler and attachment clusters left for telegram_handlers.py and
@@ -85,10 +86,11 @@ CAPS = {
     # instead of a parser. It came back to the cap when the private-input cut
     # was added to it, and trimming that explanation to fit is the trade this
     # file has refused before.
-    # 1980 -> 1945: interactive delivery accounting moved to
+    # 1980 -> 1945 -> 1933: interactive delivery accounting moved to
     # telegram_delivery.py, which paid for threading the typed text (what the
-    # person typed, apart from reply quotes and file text) to the run.
-    "robothor/engine/telegram.py": 1945,
+    # person typed, apart from reply quotes and file text) to the run; then the
+    # sender lookup moved to telegram_turn.run_sender.
+    "robothor/engine/telegram.py": 1933,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new
@@ -102,7 +104,8 @@ CAPS = {
     # the rest of the intake lives — it calls media_ref, _keep_attachment and
     # the same ceiling, so it was always that cluster. The ratchet asked for an
     # extraction rather than a bigger number, and got one.
-    "robothor/engine/telegram_handlers.py": 1082,
+    # -> 1035: the reply-quote step moved to telegram_turn.with_reply_quote.
+    "robothor/engine/telegram_handlers.py": 1035,
     "robothor/engine/telegram_plan_mode.py": 900,
     # 1100 -> 1048: the deliverable-contract cluster (the ladder, the guardrail
     # event, the operator alert and the honest failure) left for

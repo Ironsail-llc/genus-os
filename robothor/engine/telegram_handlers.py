@@ -878,9 +878,7 @@ class TelegramHandlersMixin:
         # to the model, and the person who typed the message saw nothing.
         docked = marker_truncated(user_text)
         user_text = protect_payment_text(user_text)
-        # What the person typed, before a bundle expands it or a reply quote is
-        # prepended: credential intake reads only this.
-        typed_text = user_text
+        typed_text = user_text  # before a bundle or reply quote: intake reads only this
         if docked:
             await message.answer(
                 "I stopped reading that message at the line starting with /secure and "
@@ -949,29 +947,10 @@ class TelegramHandlersMixin:
         session_key = self._session_key(chat_id)
         session = get_shared_session(session_key)
 
-        # ── Channel-bus reply resolution ──
-        # If this message is a Telegram "Reply to" quote, look up the
-        # original in channel_message_map. When it was a fleet surface
-        # (e.g. a DevOps report), prepend a compact quote so main sees
-        # the thread context inline — and remember the linkage so the
-        # user turn's JSONB records the reference.
-        reply_ctx: dict[str, Any] | None = None
-        if message.reply_to_message and message.reply_to_message.message_id:
-            from robothor.engine.channel_bus import (
-                format_reply_prefix,
-                resolve_reply_context_async,
-            )
+        # ── Channel-bus reply resolution: a compact quote of a fleet surface ──
+        from robothor.engine.telegram_turn import with_reply_quote
 
-            tenant_id = self._get_tenant_id(chat_id)
-            reply_ctx = await resolve_reply_context_async(
-                chat_id=chat_id,
-                platform_message_id=str(message.reply_to_message.message_id),
-                tenant_id=tenant_id,
-            )
-            if reply_ctx:
-                prefix = format_reply_prefix(reply_ctx)
-                user_text = f"{prefix}\n\n{user_text}"
-                self._reply_context_buffers[chat_id] = reply_ctx
+        user_text = await with_reply_quote(self, chat_id, message, user_text)
 
         # Remember this Telegram message id so the drain can record an
         # inbound map row after persistence.
@@ -998,9 +977,8 @@ class TelegramHandlersMixin:
             return
 
         # Execute via coalescing buffer (shared with handle_file)
-        await self._enqueue_message(
-            chat_id, session_key, session, user_text, sender_info=user_info, typed_text=typed_text
-        )
+        turn = {"sender_info": user_info, "typed_text": typed_text}
+        await self._enqueue_message(chat_id, session_key, session, user_text, **turn)
 
     async def on_message_reaction(self, event: Any) -> None:
         """Record operator 👍/👎/😡 reactions as goal-judge signals (Phase 2).

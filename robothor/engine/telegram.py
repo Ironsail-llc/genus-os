@@ -503,26 +503,14 @@ class TelegramBot(
                 async with _lock:
                     history = list(session.history)
 
-                # Build trigger_detail with sender identity for warmup
-                # Task 4: prefer the identity threaded through explicitly for
-                # THIS message (captured in the handler, before any async
-                # gap) over the shared, chat_id-keyed cache — a caller that
-                # bypasses the coalescing buffer (direct _run_interactive
-                # call, no sender_info) falls back to the cache unchanged.
-                _user = (
-                    sender_info if sender_info is not None else self._chat_user_info.get(chat_id)
-                )
-                _sender = _user["display_name"] if _user else ""
-                _detail = f"chat:{chat_id}"
-                if _sender:
-                    _safe = _sender.replace("|", "")
-                    _detail += f"|sender:{_safe}"
-                _tenant = (_user.get("tenant_id") if _user else None) or self._get_tenant_id(
-                    chat_id
-                )
+                # trigger_detail with sender identity for warmup; THIS message's
+                # sender over the shared cache (see telegram_turn.run_sender).
+                from robothor.engine.telegram_turn import run_sender
+
+                _user, _detail, _tenant = run_sender(self, chat_id, sender_info)
 
                 # Unified identity context (robothor.identity) — built from the
-                # same cached lookup_user()/fallback dict as _sender/user_id
+                # same cached lookup_user()/fallback dict as _user/user_id
                 # above. `verified` reflects whether _user came from a real
                 # tenant_users row (carries `user_id`) vs. a fabricated
                 # fallback (unregistered sender, primary-chat/group default).
