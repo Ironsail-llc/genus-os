@@ -433,13 +433,44 @@ def _command_word(tokens: list[str]) -> tuple[str | None, list[str]]:
     return None, []
 
 
-def exec_reads_secret(command: str) -> str | None:
+#: The key-material name pattern (``*.pem``, ``*.key``, ``*.p12`` ...). Unlike an
+#: exact credential name, it also matches words that are not files at all: a jq
+#: filter (``.key``, ``.data.key``) is a bare word ending in ``.key``.
+_KEY_FILE_PATTERN = _SECRET_NAME_PATTERNS[4]
+
+
+def _absent_bare_key_word(candidate: str, cwd: str | None) -> bool:
+    """True for a bare word that is a secret ONLY by the key-file pattern and
+    names no file in *cwd*: ``.key`` in ``jq -r .key``.
+
+    A path spelling (a separator, ``~``, ``$HOME``), an exact credential name
+    (``.env``, ``credentials``), a secrets directory, any other secret pattern,
+    or a file that exists keeps its refusal.
+    """
+    import os as _os
+
+    if "/" in candidate or candidate.startswith(("~", "$HOME", "${HOME}")):
+        return False
+    lowered = candidate.lower()
+    if lowered in _SECRET_NAMES or is_inbox_secret_path(candidate):
+        return False
+    if not _KEY_FILE_PATTERN.fullmatch(candidate):
+        return False
+    if any(p.fullmatch(candidate) for p in _SECRET_NAME_PATTERNS if p is not _KEY_FILE_PATTERN):
+        return False
+    base = Path(cwd) if cwd else Path.cwd()
+    return not _os.path.lexists(base / candidate)
+
+
+def exec_reads_secret(command: str, *, cwd: str | None = None) -> str | None:
     """The reason a shell command is refused, or None when it may run.
 
     Refused: a printing command (``cat``, ``grep``, ``head``, ``sed``,
     ``base64`` ...) given a secrets file, or a bare ``printenv``/``env``.
     Allowed: sourcing the file, testing for it, listing its directory,
-    counting its lines — anything that uses it without printing it.
+    counting its lines — anything that uses it without printing it. *cwd* is
+    where the command runs: a bare key-file-shaped word that names no file
+    there (a jq filter such as ``.key``) is not a secrets file.
     """
     # Before the per-segment walk: a procfs environment read has no command word
     # of its own to catch. ``tr '\0' '\n' < /proc/self/environ`` is a redirect,
@@ -470,7 +501,7 @@ def exec_reads_secret(command: str) -> str | None:
                 if arg.startswith("-"):
                     continue
                 candidate = arg.strip("'\"")
-                if is_secret_path(candidate):
+                if is_secret_path(candidate) and not _absent_bare_key_word(candidate, cwd):
                     return (
                         f"refused: `{word}` would print {PurePath(candidate).name}, a secrets "
                         "file. Credentials are supplied to tools by the platform; source the "
