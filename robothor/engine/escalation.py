@@ -62,6 +62,13 @@ class EscalationManager:
     _error_type_counts: dict[ErrorType, int] = field(default_factory=dict)
     # (tool_name, error_msg_prefix) -> occurrence count for per-kind STOP RETRYING hints
     _error_kind_counts: dict[tuple[str, str], int] = field(default_factory=dict)
+    #: The run's current streak of failures of ONE tool (the wrapped one, for
+    #: ``tool_call``), and whether a recovery helper was spent on it. Error
+    #: recovery counts per tool: three different tools failing auth once each
+    #: is three problems, not one problem three times.
+    _streak_tool: str = ""
+    _streak: int = 0
+    _streak_helped: bool = False
 
     def record_error(self, error_type: ErrorType = ErrorType.UNKNOWN) -> None:
         """Record a tool call error with optional type classification."""
@@ -81,6 +88,21 @@ class EscalationManager:
         prefix = (error_msg or "")[:120].strip()
         key = (tool_name, prefix)
         self._error_kind_counts[key] = self._error_kind_counts.get(key, 0) + 1
+        if tool_name == self._streak_tool:
+            self._streak += 1
+        else:
+            self._streak_tool, self._streak, self._streak_helped = tool_name, 1, False
+
+    def consecutive_for(self, tool_name: str) -> int:
+        """How many times in a row ``tool_name`` has just failed (0 if it is not the streak)."""
+        return self._streak if tool_name == self._streak_tool else 0
+
+    def claim_helper(self, tool_name: str) -> bool:
+        """True once per streak: one recovery helper per run of one tool's failures."""
+        if tool_name != self._streak_tool or self._streak_helped:
+            return False
+        self._streak_helped = True
+        return True
 
     def record_success(self) -> None:
         """Record a successful tool call.
@@ -93,6 +115,7 @@ class EscalationManager:
         """
         self.consecutive_errors = 0
         self._abort_charge = max(0, self._abort_charge - ERRORS_FORGIVEN_PER_SUCCESS)
+        self._streak_tool, self._streak, self._streak_helped = "", 0, False
 
     def should_abort(self) -> bool:
         """Whether the agent should be force-stopped.

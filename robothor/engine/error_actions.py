@@ -55,7 +55,7 @@ async def apply_error_recovery(
     for err_tool, err_msg, err_type in iteration_errors:
         if err_type is None:
             continue
-        consecutive = escalation.consecutive_errors if escalation else 1
+        consecutive = _consecutive(escalation, err_tool)
         logger.debug(
             "Error recovery: tool=%s type=%s consecutive=%d spawns_used=%d",
             err_tool,
@@ -85,6 +85,8 @@ async def apply_error_recovery(
             applied = True
 
         elif action.action == "spawn" and agent_config.can_spawn_agents:
+            if not _claim_helper(escalation, err_tool):
+                continue  # this tool's streak already had its helper
             logger.debug("Error recovery: spawning helper for %s", err_tool)
             helper_result = await spawn_helper(action)
             if helper_result:
@@ -101,6 +103,19 @@ async def apply_error_recovery(
             applied = True
 
     return RecoveryOutcome(applied=applied, helper_spawns_used=helper_spawns_used)
+
+
+def _consecutive(escalation: Any, tool: str) -> int:
+    """How many times in a row THIS tool has failed; the run-wide count without a per-tool one."""
+    if not escalation:
+        return 1
+    per_tool = getattr(escalation, "consecutive_for", None)
+    return max(1, per_tool(tool)) if per_tool else int(escalation.consecutive_errors)
+
+
+def _claim_helper(escalation: Any, tool: str) -> bool:
+    claim = getattr(escalation, "claim_helper", None)
+    return bool(claim(tool)) if claim else True
 
 
 def _say(session: Any, content: str) -> None:
