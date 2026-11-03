@@ -1390,8 +1390,10 @@ redacted again when it is read back: the reading process first registers every
 credential-like value the vault stores (not the identifiers it also holds, such
 as a tenant id or a chat id), so a value handed over before a restart is still
 caught, and what the person typed also loses any opaque run of 32 or more key
-characters (a bare hex key has no other shape; a UUID is kept, and tool results
-keep their hashes).
+characters (a bare hex key has no other shape). What the person pointed at is
+kept: a UUID, a full 40- or 64-hex commit or digest, a Telegram file id, and
+any run labelled commit, sha, file_id, message_id, trace or run_id just before
+it; tool results keep their hashes.
 
 **Every tool result is redacted too.** A tool that returns normally can still
 carry a credential: `exec` printing a CLI credentials file, a provider error
