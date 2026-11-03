@@ -899,11 +899,13 @@ class TelegramHandlersMixin:
                     + (f"\n\nAdditional context: {_extra}" if _extra else "")
                 )
 
+        # The length, never the text: this runs before any intake code, and a
+        # person handing over a credential pastes it into this message.
         logger.info(
-            "Telegram message from %s (chat %s): %s",
+            "Telegram message from %s (chat %s): %d chars",
             message.from_user.first_name,
             chat_id,
-            user_text[:100],
+            len(user_text),
         )
 
         # ── Resolve user identity ──
