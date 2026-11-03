@@ -38,10 +38,51 @@ IMAGE_PLACEHOLDER = "[image omitted from the checkpoint; its path is named in th
 
 
 def _redacted(messages: list[Any]) -> list[Any]:
-    """*messages* with the history redaction (``redact_message``) applied."""
-    from robothor.secrets.redaction import redact_message
+    """*messages* with the history redaction (``redact_message``) applied.
 
-    return [redact_message(m) for m in messages]
+    What the person typed (``user``) and the system turn that carries the task
+    record also lose every opaque run (:func:`redact_opaque_runs`): a bare
+    32-hex key has no shape, and once the process that registered it has
+    restarted only this catches it. Tool results keep theirs: a git SHA there
+    is information.
+    """
+    from robothor.secrets.redaction import redact_message, redact_opaque_runs
+
+    out: list[Any] = []
+    for message in messages:
+        cleaned = redact_message(message)
+        if (
+            isinstance(cleaned, dict)
+            and cleaned.get("role") in ("user", "system")
+            and isinstance(cleaned.get("content"), str)
+        ):
+            cleaned = {**cleaned, "content": redact_opaque_runs(cleaned["content"])}
+        out.append(cleaned)
+    return out
+
+
+def _register_stored_values(tenant_id: str | None) -> None:
+    """Teach this process's redactor every value the vault stores.
+
+    The registry of handed-over values is in-process and empty after a
+    restart, while a checkpoint lives thirty days. Read in-process through the
+    vault, registered, never logged; a vault that cannot be read leaves only
+    the shape and opaque-run passes.
+    """
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.secrets.fingerprint import fingerprint
+    from robothor.secrets.redaction import register_known_value
+
+    try:
+        import robothor.vault as vault
+
+        values = vault.export_env(tenant_id=tenant_id or DEFAULT_TENANT).values()
+    except Exception as exc:  # noqa: BLE001 - the restore still redacts by shape
+        logger.warning("checkpoint restore: vault unreadable (%s)", type(exc).__name__)
+        return
+    for value in values:
+        if isinstance(value, str) and value:
+            register_known_value(value, fingerprint=fingerprint(value))
 
 
 def _at_rest(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -223,6 +264,7 @@ class CheckpointManager:
                 # the raw turn; resume must not read a credential back into
                 # the run (and from it, into ``originating_message``).
                 if isinstance(result.get("messages"), list):
+                    _register_stored_values(tenant_id)
                     result["messages"] = _redacted(result["messages"])
                 from robothor.engine.runtime.contracts import StateEnvelope
 

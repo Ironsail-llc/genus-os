@@ -1385,7 +1385,12 @@ See [Configuration](configuration.md) for the rest of the rule.
 The person's message reaches the model raw for that one turn, or the value
 could not be stored. Every copy kept after it is redacted: chat history, the
 recorded steps, run checkpoints (which resume reads back), and the engine log,
-which records a Telegram message's length, never its text.
+which records a Telegram message's length, never its text. A checkpoint is
+redacted again when it is read back: the reading process first registers every
+value the vault stores, so a value handed over before a restart is still
+caught, and what the person typed also loses any opaque run of 32 or more key
+characters (a bare hex key has no other shape; a UUID is kept, and tool results
+keep their hashes).
 
 **Every tool result is redacted too.** A tool that returns normally can still
 carry a credential: `exec` printing a CLI credentials file, a provider error
