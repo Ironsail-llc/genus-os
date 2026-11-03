@@ -143,7 +143,7 @@ class _Cursor:
         lists = [p for p in params if isinstance(p, list | tuple)]
         if "agent_memory_blocks" in flat:
             self._rows = self._blocks(flat, params, lists)
-        elif "memory_facts" in flat:
+        elif "memory_facts" in flat or "entity_facts_for_candidates" in flat:
             self._rows = self._facts(flat, params, lists)
         else:
             self._rows = []
@@ -365,13 +365,15 @@ class TestFewerStatements:
         _build()
         assert db.count("memory_facts") == 1
 
-    def test_v2_recall_is_one_statement_either_way(self, db: FakeDB) -> None:
+    def test_v2_recall_is_one_definer_call_either_way(self, db: FakeDB) -> None:
+        """One call to migration 166's function, which can use the index under RLS."""
         os.environ["MEMORY_WARMUP_RECALL_V2"] = "1"
         sequential, _ = _build(fan_out=False)
-        assert db.count("memory_facts") == 1
+        assert db.count("entity_facts_for_candidates(") == 1
+        assert db.count("memory_facts") == 0
         parallel, _ = _build(fan_out=True)
         assert parallel == sequential
-        assert db.count("memory_facts") == 2
+        assert db.count("entity_facts_for_candidates(") == 2
         assert "Bob owns the billing service." in parallel
 
 

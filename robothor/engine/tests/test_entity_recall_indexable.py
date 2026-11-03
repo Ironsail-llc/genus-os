@@ -21,20 +21,23 @@ from __future__ import annotations
 
 import inspect
 import re
+from pathlib import Path
 
 from robothor.engine import warmup
 
+ROOT = Path(warmup.__file__).resolve().parents[2]
+DEFINER = ROOT / "crm" / "migrations" / "166_entity_recall_definer.sql"
+
 
 def _entity_sql() -> str:
-    # The statement lives in the batched fetch; one query covers every candidate.
-    return inspect.getsource(warmup._build_entity_context) + inspect.getsource(
-        warmup._fetch_entity_facts_batched
-    )
+    # The case-blind lookup lives in migration 166's function, which the
+    # batched fetch calls; one statement covers every candidate.
+    return DEFINER.read_text() if DEFINER.exists() else ""
 
 
 def test_the_predicate_is_an_indexable_array_overlap():
     sql = _entity_sql()
-    assert "lower_entities(entities)" in sql, "entity recall is not using the indexed expression"
+    assert "lower_entities(m.entities)" in sql, "entity recall is not using the indexed expression"
     assert "&&" in sql, "expected an array-overlap predicate the GIN can serve"
 
 
@@ -65,3 +68,23 @@ def test_the_migration_is_registered_and_immutable():
     assert "IMMUTABLE" in sql
     assert "gin (lower_entities(entities))" in sql
     assert "idx_facts_tenant_created" in sql
+
+
+def test_the_v2_fetch_calls_the_definer_function():
+    """Under RLS the inline lookup cannot use the index (migration 166's header)."""
+    source = inspect.getsource(warmup._fetch_entity_facts_batched)
+    assert "entity_facts_for_candidates(" in source
+    assert "lower_entities(entities)" not in source, "the v2 lookup is inline again"
+
+
+def test_the_definer_function_is_registered_and_guarded():
+    manifest = (ROOT / "robothor" / "migrations" / "manifest.txt").read_text()
+    assert "crm/166_entity_recall_definer.sql" in manifest.splitlines()
+    sql = re.sub(r"\s+", " ", _entity_sql())
+    assert "SECURITY DEFINER" in sql
+    # A definer function with an open search_path runs whatever a caller plants.
+    assert "SET search_path = pg_catalog, public, pg_temp" in sql
+    assert "m.tenant_id = p_tenant_id" in sql
+    # Never wider than the policy: a scoped session gets only its own tenant.
+    assert "current_setting('app.tenant_id', true)" in sql
+    assert "FROM PUBLIC" in sql
