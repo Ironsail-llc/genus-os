@@ -1244,9 +1244,10 @@ tests:
     template: bridge/workload.yaml
     documentIndex: 0
     asserts:
+      # The root engine through its control Service (engine/control-service.yaml).
       - contains:
           path: spec.template.spec.containers[0].env
-          content: {name: ROBOTHOR_ENGINE_URL, value: "http://gos-genus-os-engine:18800"}
+          content: {name: ROBOTHOR_ENGINE_URL, value: "http://gos-genus-os-engine-control:18800"}
       - contains:
           path: spec.template.spec.containers[0].env
           content:

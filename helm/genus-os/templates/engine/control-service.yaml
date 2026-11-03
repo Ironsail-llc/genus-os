@@ -1,0 +1,28 @@
+{{- /*
+The engine as the BRIDGE reaches it. Same pod and port as the engine's own
+Service, but it keeps the pod in its endpoints while /ready answers 503.
+
+The engine reports not-ready as soon as one manifest fails to load, and the
+bridge's agent builder is how an operator sees and repairs that manifest.
+Behind the readiness-gated Service the builder went dark in exactly the state
+it exists for, so the bridge's control calls use this one. Traffic that should
+follow readiness keeps using the engine's own Service.
+*/ -}}
+{{- if .Values.engine.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "genus-os.fullname" . }}-engine-control
+  labels:
+    {{- include "genus-os.labels" (dict "root" . "component" "engine") | nindent 4 }}
+spec:
+  type: ClusterIP
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: {{ .Values.engine.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "genus-os.selectorLabels" (dict "root" . "component" "engine") | nindent 4 }}
+{{- end }}

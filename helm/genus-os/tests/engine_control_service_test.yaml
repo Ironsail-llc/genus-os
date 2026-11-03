@@ -1,0 +1,48 @@
+suite: engine control Service
+# The bridge reaches the engine through a Service that keeps the engine pod in
+# its endpoints while /ready answers 503. The engine's readiness fails on a
+# single broken manifest, and the agent builder is how an operator sees and
+# repairs one: behind the readiness-gated Service, the builder went dark in
+# exactly the state it exists for.
+templates:
+  - engine/control-service.yaml
+release:
+  name: gos
+  namespace: genus
+tests:
+  - it: renders a Service that publishes not-ready engine addresses
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.name
+          value: gos-genus-os-engine-control
+      - equal:
+          path: spec.publishNotReadyAddresses
+          value: true
+      - equal:
+          path: spec.ports[0].port
+          value: 18800
+      - equal:
+          path: spec.ports[0].targetPort
+          value: http
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: engine
+
+  - it: follows the engine's service port
+    set:
+      engine.service.port: 19900
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 19900
+
+  - it: is not rendered when the engine is disabled
+    set:
+      engine.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

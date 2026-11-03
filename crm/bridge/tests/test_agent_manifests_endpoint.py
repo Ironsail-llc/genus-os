@@ -57,29 +57,97 @@ ENGINE_TOOLS = {
 }
 
 
-class FakeEngine:
-    """Stands in for the engine's ``/api/admin`` surface, recording every call.
+class _FakeScheduler:
+    """The engine's live job set, as far as a reconcile can see it."""
 
-    Recorded rather than merely stubbed: the point of this router is that a
-    manifest write is only half the act, so "did it reconcile" is an assertion
-    and not an implementation detail.
+    def __init__(self, engine: FakeEngine) -> None:
+        self._engine = engine
+
+    async def reconcile(self):
+        from robothor.engine.schedule_reconcile import ReconcileResult
+
+        self._engine.calls.append(("POST", "/api/admin/scheduler/reconcile"))
+        return ReconcileResult(**RECONCILED)
+
+
+class FakeEngine:
+    """The engine process, served in-process against the test's workspace.
+
+    The bridge no longer touches ``docs/agents/`` or ``brain/``: on a deployment
+    where only the engine mounts the workspace, it has neither. So this stands
+    in for ``engine_request`` with the engine's REAL manifest routes
+    (``robothor.engine.admin_manifests``) on an ASGI app in this process, which
+    reads and writes the same ``tmp_path`` workspace the assertions inspect.
+
+    The three things only the engine can do are faked and RECORDED, because a
+    manifest write is only half the act and "did it reconcile" is an assertion:
+
+    * ``calls`` — the engine's own effects, named by the routes that used to
+      carry them: the tool-registry read (``GET /api/admin/tools``), the
+      scheduler reconcile, and the manual trigger;
+    * ``forwarded`` — every call the bridge made to the engine's manifest
+      routes.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, monkeypatch) -> None:
+        from unittest.mock import MagicMock
+
+        from fastapi import FastAPI
+
+        from robothor.auth.deps import AuthContext
+        from robothor.engine import admin_manifests, daemon
+
         self.calls: list[tuple[str, str]] = []
-        self.reconcile_status = 200
-        self.reconcile_body: dict = dict(RECONCILED)
+        self.forwarded: list[tuple[str, str]] = []
         self.trigger_body: dict = {"status": "triggered", "agent_id": "demo-agent"}
+        self._monkeypatch = monkeypatch
+        monkeypatch.setattr(daemon, "_ACTIVE_SCHEDULER", _FakeScheduler(self))
+        monkeypatch.setattr(
+            "robothor.engine.admin_scheduler.registered_tool_names", self._tool_names
+        )
+        monkeypatch.setattr("robothor.engine.manual_trigger.trigger_agent", self._trigger)
+
+        app = FastAPI()
+
+        @app.middleware("http")
+        async def _as_the_bridge(request, call_next):
+            # What the engine's auth middleware installs for the bridge's
+            # control token; the boundary itself is tested in the engine suite.
+            request.state.auth = AuthContext(
+                user_id="genus-bridge",
+                tenant_id="default",
+                role="service",
+                typ="service",
+                scopes=frozenset({"engine:control"}),
+            )
+            return await call_next(request)
+
+        admin_manifests.register(app, scheduler=None, runner=MagicMock())
+        self.app = app
+
+    def scheduler_down(self) -> None:
+        from robothor.engine import daemon
+
+        self._monkeypatch.setattr(daemon, "_ACTIVE_SCHEDULER", None)
+
+    def _tool_names(self) -> list[str]:
+        self.calls.append(("GET", "/api/admin/tools"))
+        return list(ENGINE_TOOLS["tools"])
+
+    async def _trigger(self, runner, manifest_dir, agent_id, auth):
+        self.calls.append(("POST", f"/api/agents/{agent_id}/trigger"))
+        return self.trigger_body
 
     async def __call__(self, method, path, *, json=None, timeout=30, tenant=None):
-        self.calls.append((method, path))
-        if path == "/api/admin/tools":
-            return 200, ENGINE_TOOLS
-        if path == "/api/admin/scheduler/reconcile":
-            return self.reconcile_status, self.reconcile_body
-        if path.endswith("/trigger"):
-            return 200, self.trigger_body
-        raise AssertionError(f"unexpected engine call: {method} {path}")
+        import httpx
+
+        if not path.startswith("/api/admin/agent-manifests"):
+            raise AssertionError(f"unexpected engine call: {method} {path}")
+        self.forwarded.append((method, path))
+        transport = httpx.ASGITransport(app=self.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://engine.test") as client:
+            response = await client.request(method, path, json=json)
+        return response.status_code, response.json()
 
     @property
     def reconciles(self) -> int:
@@ -87,8 +155,8 @@ class FakeEngine:
 
 
 @pytest.fixture
-def fake_engine():
-    engine = FakeEngine()
+def fake_engine(monkeypatch):
+    engine = FakeEngine(monkeypatch)
     with patch("routers.agent_manifests.engine_request", new=engine):
         yield engine
 
@@ -526,7 +594,7 @@ class TestChattable:
         including the default agent — a wrong answer shipped into a second
         endpoint by a default argument. The chat fields are added by the fleet
         listing, not by the shared row builder."""
-        from routers._manifest_rows import _summary
+        from robothor.engine.manifest_rows import _summary
 
         row = _summary({"id": "demo-agent", "name": "Demo"})
 
@@ -541,9 +609,9 @@ class TestChattable:
         for index in range(5):
             self._write(manifest_dir, f"agent-{index}", session_target="persistent")
 
-        from routers import agent_manifests
+        from robothor.engine import manifest_store
 
-        with patch.object(agent_manifests, "_main_agent_id", return_value="main") as resolved:
+        with patch.object(manifest_store, "main_agent_id", return_value="main") as resolved:
             client.get("/api/agent-manifests")
 
         assert resolved.call_count == 1
@@ -586,18 +654,22 @@ class TestValidate:
         assert ("GET", "/api/admin/tools") in fake_engine.calls
         assert any("no_such_tool" in issue["message"] for issue in body["errors"])
 
-    def test_an_unreachable_engine_warns_instead_of_blocking(self, client, workspace):
-        """An operator must be able to edit an agent while the engine is down —
-        that is precisely when they want to."""
+    def test_an_unreachable_engine_is_a_502_not_a_verdict(self, client, workspace):
+        """Validation runs in the engine now, where the tool registry and the
+        fleet live, so a bridge that cannot reach it has no verdict to give.
+        It says so as a 502 the editor can show, rather than a 500 — and
+        rather than an ``ok: true`` it never checked. (The registry-down case,
+        which still warns instead of blocking, is the engine's own test:
+        ``test_admin_manifests.py``.)"""
 
         async def _dead(method, path, *, json=None, timeout=30, tenant=None):
             return 502, {"error": "engine unavailable"}
 
         with patch("routers.agent_manifests.engine_request", new=_dead):
-            body = client.post("/api/agent-manifests/validate", json={"manifest": EXISTING}).json()
+            response = client.post("/api/agent-manifests/validate", json={"manifest": EXISTING})
 
-        assert body["ok"] is True
-        assert any(issue["code"] == "tools_unverified" for issue in body["warnings"])
+        assert response.status_code == 502, response.text
+        assert isinstance(response.json()["detail"], str)
 
     def test_a_bad_cron_is_caught_by_the_scheduler_itself(self, client, workspace, fake_engine):
         candidate = {**EXISTING, "schedule": {"cron": "not a cron", "timezone": "UTC"}}
@@ -768,7 +840,7 @@ class TestAWrongTypedManifestIsReportedNotRaised:
         """The backstop, probed rather than assumed — this codebase has shipped
         six controls that were green and inert. The value-level guards cover
         what is known today; this covers the check nobody has written yet."""
-        from routers import _manifest_validation
+        from robothor.engine import manifest_validation as _manifest_validation
 
         def _explode(*args, **kwargs):
             raise RuntimeError("a future check echoed a-secret-value")
@@ -926,9 +998,9 @@ class TestCreate:
         rather than raced, because a race that only sometimes reproduces is a
         test that only sometimes tests anything.
         """
-        from routers import agent_manifests
+        from robothor.engine import manifest_store
 
-        real_dump = agent_manifests._dump
+        real_dump = manifest_store.dump
         rival = {**EXISTING, "id": "invoice-watcher", "name": "Rival"}
 
         def _another_writer_gets_there_first(document):
@@ -937,7 +1009,7 @@ class TestCreate:
             )
             return real_dump(document)
 
-        with patch.object(agent_manifests, "_dump", _another_writer_gets_there_first):
+        with patch.object(manifest_store, "dump", _another_writer_gets_there_first):
             response = client.post("/api/agent-manifests", json=_create_body())
 
         assert response.status_code == 409, response.text
@@ -1055,8 +1127,7 @@ class TestCreate:
         """The file on disk is the source of truth and the watchdog reconciles
         it within five minutes anyway. What must not happen is the operator
         being told the agent is live when it is not."""
-        fake_engine.reconcile_status = 503
-        fake_engine.reconcile_body = {"error": "scheduler not running"}
+        fake_engine.scheduler_down()
 
         body = client.post("/api/agent-manifests", json=_create_body()).json()
 
@@ -1672,3 +1743,272 @@ class TestNoResponseDescribesTheBox:
         rendered = json.dumps(audit.call_args.kwargs, default=str)
         assert str(workspace) not in rendered
         assert ".yaml" not in rendered
+
+
+# ─── The fleet lives in the engine's workspace ───────────────────────
+
+
+class _CannedEngine:
+    """An engine that answers from ITS workspace, which the bridge cannot see.
+
+    The deployment this reproduces: the engine mounts the workspace and the
+    bridge does not, so anything the bridge reads from its own disk is empty
+    and anything it writes there is lost. Unknown paths answer 404 as a real
+    engine would, so a bridge still reading locally fails on the assertion
+    rather than on the fake.
+    """
+
+    def __init__(self, routes: dict[tuple[str, str], tuple[int, dict]]) -> None:
+        self.routes = routes
+        self.calls: list[tuple[str, str, dict | None]] = []
+
+    async def __call__(self, method, path, *, json=None, timeout=30, tenant=None):
+        self.calls.append((method, path, json))
+        return self.routes.get((method, path), (404, {"detail": "Not Found"}))
+
+
+REMOTE_ROW = {
+    "id": "remote-agent",
+    "name": "Remote Agent",
+    "description": "",
+    "version": "",
+    "department": "",
+    "cron": "0 9 * * *",
+    "timezone": "UTC",
+    "enabled": True,
+    "delivery": "none",
+    "model": "",
+    "session_target": "persistent",
+    "chattable": True,
+}
+
+
+class TestTheFleetLivesInTheEngine:
+    def test_the_listing_is_the_engines_even_when_the_bridge_has_no_fleet(self, client, workspace):
+        """The defect: on a deployment where the bridge mounts no workspace,
+        the listing was empty and the chat switcher offered nothing."""
+        engine = _CannedEngine(
+            {
+                ("GET", "/api/admin/agent-manifests"): (
+                    200,
+                    {"agents": [REMOTE_ROW], "broken": [], "count": 1, "default_agent": "main"},
+                )
+            }
+        )
+
+        with patch("routers.agent_manifests.engine_request", new=engine):
+            body = client.get("/api/agent-manifests").json()
+
+        assert [row["id"] for row in body["agents"]] == ["remote-agent"]
+        assert body["default_agent"] == "main"
+
+    def test_a_create_is_written_by_the_engine_and_never_on_the_bridges_disk(
+        self, client, manifest_dir, workspace
+    ):
+        created = {
+            "id": "invoice-watcher",
+            "manifest": {"id": "invoice-watcher", "name": "Invoice Watcher"},
+            "warnings": [],
+            "reconcile": {"applied": True},
+        }
+        engine = _CannedEngine({("POST", "/api/admin/agent-manifests"): (201, created)})
+
+        with patch("routers.agent_manifests.engine_request", new=engine):
+            response = client.post("/api/agent-manifests", json=_create_body())
+
+        assert response.status_code == 201, response.text
+        assert response.json() == created
+        forwarded = [c for c in engine.calls if c[:2] == ("POST", "/api/admin/agent-manifests")]
+        assert forwarded and forwarded[0][2]["name"] == "Invoice Watcher"
+        assert not (manifest_dir / "invoice-watcher.yaml").exists()
+        assert not (workspace / "brain" / "INVOICE_WATCHER.md").exists()
+
+    def test_a_run_is_forwarded_to_the_engines_manifest_route(self, client, workspace):
+        engine = _CannedEngine(
+            {
+                ("POST", "/api/admin/agent-manifests/remote-agent/run"): (
+                    200,
+                    {"id": "remote-agent", "triggered": {"status": "started"}},
+                )
+            }
+        )
+
+        with patch("routers.agent_manifests.engine_request", new=engine):
+            response = client.post("/api/agent-manifests/remote-agent/run")
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {"id": "remote-agent", "triggered": {"status": "started"}}
+
+
+ROUTES = [
+    ("get", "/api/agent-manifests", None),
+    ("get", "/api/agent-manifests/demo-agent", None),
+    ("post", "/api/agent-manifests/validate", {"manifest": EXISTING}),
+    ("post", "/api/agent-manifests", "create"),
+    ("patch", "/api/agent-manifests/demo-agent", {"name": "X"}),
+    ("post", "/api/agent-manifests/demo-agent/enable", None),
+    ("post", "/api/agent-manifests/demo-agent/disable", None),
+    ("delete", "/api/agent-manifests/demo-agent", {"confirm": "demo-agent"}),
+    ("post", "/api/agent-manifests/demo-agent/run", None),
+]
+
+
+def _call(client, method, path, body):
+    payload = _create_body() if body == "create" else body
+    if payload is None:
+        return client.request(method.upper(), path)
+    return client.request(method.upper(), path, json=payload)
+
+
+class TestAnEngineThatCannotAnswerIsAReadableError:
+    """What the dashboard renders is ``detail``. An engine that is down, or
+    that refuses the bridge's own credential, must reach the operator as a
+    502 with a sentence — never a 500 traceback, and never the engine's 401 or
+    403, which would read as "you are not allowed" to an operator who is."""
+
+    @pytest.mark.parametrize(("method", "path", "body"), ROUTES)
+    def test_an_unreachable_engine_is_a_502_with_a_detail(
+        self, client, workspace, method, path, body
+    ):
+        async def _dead(method, path, *, json=None, timeout=30, tenant=None):
+            return 502, {"error": "engine unavailable"}
+
+        with patch("routers.agent_manifests.engine_request", new=_dead):
+            response = _call(client, method, path, body)
+
+        assert response.status_code == 502, response.text
+        detail = response.json()["detail"]
+        assert isinstance(detail, str) and detail
+        assert str(workspace) not in response.text
+
+    @pytest.mark.parametrize("status", [401, 403, 500, 503])
+    @pytest.mark.parametrize(("method", "path", "body"), ROUTES)
+    def test_an_engine_refusal_without_a_detail_is_a_502(
+        self, client, workspace, status, method, path, body
+    ):
+        async def _refusing(method, path, *, json=None, timeout=30, tenant=None):
+            return status, {"error": "insufficient scope"}
+
+        with patch("routers.agent_manifests.engine_request", new=_refusing):
+            response = _call(client, method, path, body)
+
+        assert response.status_code == 502, response.text
+        assert isinstance(response.json()["detail"], str)
+
+    def test_the_engines_own_refusal_reaches_the_operator_unchanged(self, client, workspace):
+        """A 409, 404 or 422 the engine decided is the answer, detail and all —
+        the validator's codes travel in that detail."""
+        verdict = {"ok": False, "errors": [{"path": "", "code": "bad_cron", "message": "x"}]}
+        engine = _CannedEngine(
+            {("PATCH", "/api/admin/agent-manifests/demo-agent"): (422, {"detail": verdict})}
+        )
+
+        with patch("routers.agent_manifests.engine_request", new=engine):
+            response = client.patch("/api/agent-manifests/demo-agent", json={"cron": "nope"})
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == verdict
+
+
+class TestAWriteWhoseAnswerWasLostIsStillAudited:
+    """A create or edit can take effect in the engine while its answer never
+    reaches the bridge (a timeout, a reset). The operator sees a 502, and the
+    audit trail must still name them: before the store moved, the audit event
+    followed the local write and this gap did not exist. Recorded as
+    ``status="error"``, because the bridge cannot know whether it landed."""
+
+    @pytest.fixture
+    def lost(self):
+        async def _lost(method, path, *, json=None, timeout=30, tenant=None):
+            return 502, {"error": "engine unavailable"}
+
+        with patch("routers.agent_manifests.engine_request", new=_lost):
+            yield
+
+    @pytest.mark.parametrize(
+        ("method", "path", "body", "event"),
+        [
+            ("post", "/api/agent-manifests", "create", "helm.agent_manifest.create"),
+            (
+                "patch",
+                "/api/agent-manifests/demo-agent",
+                {"name": "X"},
+                "helm.agent_manifest.update",
+            ),
+            ("post", "/api/agent-manifests/demo-agent/enable", None, "helm.agent_manifest.update"),
+            ("post", "/api/agent-manifests/demo-agent/disable", None, "helm.agent_manifest.update"),
+            (
+                "delete",
+                "/api/agent-manifests/demo-agent",
+                {"confirm": "demo-agent"},
+                "helm.agent_manifest.retire",
+            ),
+        ],
+    )
+    def test_a_502_on_a_write_is_audited_as_an_error(
+        self, client, workspace, lost, method, path, body, event
+    ):
+        with patch("routers.agent_manifests.audited") as audit:
+            response = _call(client, method, path, body)
+
+        assert response.status_code == 502, response.text
+        assert audit.call_count == 1, audit.call_args_list
+        assert audit.call_args.args[1] == event
+        assert audit.call_args.kwargs["status"] == "error"
+
+    def test_a_refusal_the_engine_decided_is_not_audited(self, client, workspace):
+        """The counter-case: a 422 is a write that did NOT happen, as before."""
+        engine = _CannedEngine(
+            {("PATCH", "/api/admin/agent-manifests/demo-agent"): (422, {"detail": "nope"})}
+        )
+
+        with (
+            patch("routers.agent_manifests.engine_request", new=engine),
+            patch("routers.agent_manifests.audited") as audit,
+        ):
+            response = client.patch("/api/agent-manifests/demo-agent", json={"name": "X"})
+
+        assert response.status_code == 422
+        audit.assert_not_called()
+
+    def test_the_502_does_not_claim_the_engine_was_silent(self, client, workspace, lost):
+        """An engine that answered with an unhandled error also lands here, so
+        the message must not send an operator looking for a network fault."""
+        response = client.get("/api/agent-manifests")
+
+        assert "or answered with an error" in response.json()["detail"]
+
+    def test_writes_get_a_longer_budget_than_a_read(self, client, seeded):
+        """One create now covers the scan, the registry build, the write and the
+        reconcile, which used to be two calls with 30s each."""
+        seen: dict[str, float] = {}
+
+        async def _timed(method, path, *, json=None, timeout=30, tenant=None):
+            seen[method] = timeout
+            return 200, {"id": "demo-agent", "manifest": {}, "agents": []}
+
+        with patch("routers.agent_manifests.engine_request", new=_timed):
+            client.get("/api/agent-manifests")
+            client.patch("/api/agent-manifests/demo-agent", json={"name": "X"})
+
+        assert seen["PATCH"] > seen["GET"]
+
+
+@pytest.mark.parametrize("hostile", ["../x", "a" * 4096, "x\ny"])
+def test_a_lost_create_never_audits_an_unvalidated_id(client, workspace, hostile):
+    """On the 502 path the bridge audits the id the engine WOULD have used —
+    and an id the engine would refuse is not a slug, so it must not become the
+    audit event's ``action``."""
+
+    async def _lost(method, path, *, json=None, timeout=30, tenant=None):
+        return 502, {"error": "engine unavailable"}
+
+    with (
+        patch("routers.agent_manifests.engine_request", new=_lost),
+        patch("routers.agent_manifests.audited") as audit,
+    ):
+        response = client.post("/api/agent-manifests", json=_create_body(id=hostile))
+
+    assert response.status_code == 502, response.text
+    assert audit.call_args.kwargs["action"] == "(invalid id)"
+    assert hostile not in json.dumps(audit.call_args.kwargs)

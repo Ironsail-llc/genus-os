@@ -251,9 +251,10 @@ The bridge reaches each tenant's own engine: `GENUS_TENANT_ENGINE_URLS` (a
 JSON `{tenant: url}` map, for local development) wins, then
 `GENUS_TENANT_ENGINE_URL_TEMPLATE` with its literal `{tenant}`; with neither,
 calls fall back to the single engine with one warning per process — and that
-engine refuses a token minted for another tenant. A child tenant's agent
-manifests live on its engine's volume and are read and written through that
-engine's `/api/admin/manifests*` routes.
+engine refuses a token minted for another tenant. Every tenant's agent
+manifests live on its own engine's volume: the agent builder forwards each call
+to the acting tenant's engine (`/api/admin/agent-manifests*`), and the fleet and
+automations views ask a child's engine for its scan (`/api/admin/manifests`).
 
 Audit rows record the tenant they happened in (migration 163). The platform's
 operator or auditor at home reads the whole appliance trail, untenanted rows

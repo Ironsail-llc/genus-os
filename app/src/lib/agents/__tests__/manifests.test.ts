@@ -233,7 +233,7 @@ describe("nextRunText — never an instant in a zone nobody chose", () => {
 
 describe("fieldForIssue — against verdicts the bridge really produces", () => {
   // Every path/message pair below was taken from a real run of
-  // `_manifest_validation.validate` or read off
+  // `manifest_validation.validate` or read off
   // `robothor/templates/manifest_checks.py`. The previous test asserted the
   // map against its own declaration, which is how `check.*` — most real
   // refusals — went unmapped.

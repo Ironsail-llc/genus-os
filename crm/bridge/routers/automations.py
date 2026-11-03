@@ -11,10 +11,13 @@ So this router joins them, and the join is the whole of what it is:
 
 ``_manifests``
     What the automation IS — name, cron, timezone, enabled, delivery target.
-    Read through ``_manifest_backend.scan_from_worker_thread`` /
-    ``_manifest_rows._summary``, imported rather than
-    re-derived: a second reader of the manifest directory is a second set of
-    rules about what a manifest means, and the two would drift.
+    Read through ``_manifest_backend.scan_from_worker_thread`` (the acting
+    tenant's fleet: ``robothor.engine.manifest_store.scan`` for the platform
+    tenant, the tenant cell's engine for a child) and
+    ``robothor.engine.manifest_rows._summary`` — the engine's own reader and row
+    builder, imported rather than re-derived: a second reader of the manifest
+    directory is a second set of rules about what a manifest means, and the two
+    would drift.
 ``_schedule_rows``
     What the scheduler BELIEVES — ``next_run_at`` and ``consecutive_errors``,
     which exist nowhere else. Tenant-scoped in the statement, not merely by
@@ -50,12 +53,12 @@ from deps import get_tenant_id
 from fastapi import APIRouter, HTTPException, Request
 
 from robothor.db.connection import get_connection
+from robothor.engine.manifest_rows import _block, _summary
 from robothor.engine.sanitize import sanitize_log
 from robothor.engine.schedule_reconcile import KIND_AGENT, KIND_HEARTBEAT, KIND_WORKER
 from routers import agent_manifests
 from routers._audit import audited
 from routers._manifest_backend import scan_from_worker_thread
-from routers._manifest_rows import _block, _summary
 from routers._operator import require_tenant_admin
 
 logger = logging.getLogger(__name__)

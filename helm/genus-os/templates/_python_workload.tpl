@@ -68,7 +68,9 @@ Renders:
 {{- $_ := set $serviceEnv "MEMORY_URL" (printf "http://%s-orchestrator:%v" (include "genus-os.fullname" $root) $root.Values.orchestrator.service.port) -}}
 {{- end -}}
 {{- if $root.Values.engine.enabled -}}
-{{- $_ := set $serviceEnv "ROBOTHOR_ENGINE_URL" (include "genus-os.engineUrl" $root) -}}
+{{- /* The control Service: it still routes while the engine's /ready fails,
+       which one broken manifest is enough for (engine/control-service.yaml). */ -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_ENGINE_URL" (include "genus-os.engineControlUrl" $root) -}}
 {{- $_ := set $serviceEnv "GENUS_TENANT_ENGINE_URL_TEMPLATE" (include "genus-os.tenantEngineUrlTemplate" $root) -}}
 {{- end -}}
 {{- with ($root.Values.logs | default dict).url -}}

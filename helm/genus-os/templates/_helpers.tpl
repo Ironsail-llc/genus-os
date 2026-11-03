@@ -133,6 +133,15 @@ on the next sync.
 {{- end -}}
 
 {{/*
+URL of the root engine's control Service (engine/control-service.yaml): the
+same pod, still routed while its /ready fails. The bridge's control calls use
+it, so the agent builder can list and repair a manifest that will not load.
+*/}}
+{{- define "genus-os.engineControlUrl" -}}
+{{- printf "http://%s-engine-control:%v" (include "genus-os.fullname" .) .Values.engine.service.port -}}
+{{- end -}}
+
+{{/*
 URL of any tenant engine cell, with `{tenant}` left as literal text for the
 application to substitute with a tenants[].id. It matches the Service name
 engine/tenants.yaml renders, which is why that template refuses an id whose
