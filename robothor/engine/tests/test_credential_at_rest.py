@@ -251,3 +251,45 @@ class TestRestoreAfterARestart:
         with patch("robothor.vault.export_env", side_effect=RuntimeError("no master key")):
             loaded = _loaded(self._with_request("hello"))
         assert loaded is not None
+
+
+class TestTheTaskRecordStaysValid:
+    """The system turn carries the task record as JSON, where a newline is the
+    two characters backslash and n. A textual pass that starts a run at the
+    ``n`` leaves ``\\<redacted>`` and invalid JSON, and a resumed plan-mode run
+    then loses its record and the write restrictions that come with it."""
+
+    SHA = "3f2a9c1e7b4d6a8f0c2e4b6d8a0c2e4f6b8d0a2c"
+
+    def _system_with(self, request: str, **fields):
+        from robothor.engine.task_context import install_context, make_context
+
+        messages = [{"role": "system", "content": "sys"}]
+        install_context(messages, make_context(request, [], **fields))
+        return messages
+
+    @pytest.mark.parametrize("sep", ["\n", "\t"], ids=["newline", "tab"])
+    def test_an_escape_before_an_opaque_run_keeps_the_record_valid(self, sep):
+        from robothor.engine.checkpoint import _redacted
+        from robothor.engine.task_context import read_context
+
+        cleaned = _redacted(self._system_with(f"plan a revert of{sep}{self.SHA}"))
+        record = read_context(cleaned)
+        assert record is not None, "the task record no longer parses"
+        assert self.SHA not in record["request"]
+        assert record["request"].startswith(f"plan a revert of{sep}")
+
+    def test_a_resumed_plan_mode_record_keeps_its_fields(self):
+        from robothor.engine.task_context import read_context
+
+        plan_id = "plan-" + "a1b2c3d4" * 5
+        messages = self._system_with(
+            f"plan a revert of\n{self.SHA}", mode="plan", plan_id=plan_id, run_id="test"
+        )
+        with patch("robothor.vault.export_env", return_value={}):
+            loaded = _loaded(messages)
+        record = read_context(loaded["messages"])
+        assert record is not None
+        assert record["mode"] == "plan"
+        assert record["plan_id"] == plan_id
+        assert self.SHA not in json.dumps(loaded["messages"])
