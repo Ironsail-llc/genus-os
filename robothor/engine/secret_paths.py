@@ -583,6 +583,15 @@ def _env_chdir_dir(tokens: list[str], base: str | None) -> tuple[bool, str | Non
     return False, None
 
 
+def _cdpath_applies(target: str) -> bool:
+    """True when the shell searches ``CDPATH`` for this ``cd`` *target*: anything
+    but an absolute path, a home spelling, a variable, or one that starts with
+    ``.``/``..`` as a path component (``./x``, ``../x``, ``.``, ``..``)."""
+    if target.startswith(("/", "~", "$")) or target in (".", ".."):
+        return False
+    return not target.startswith(("./", "../"))
+
+
 def _segment_dirs(
     segments: list[list[str]], start: str | None, command: str = ""
 ) -> list[str | None]:
@@ -593,9 +602,14 @@ def _segment_dirs(
     ``popd``) leaves the rest unknown. So does an unquoted ``cd``/``pushd``/
     ``popd`` anywhere else in a segment (``xargs cd``), an ``eval``, and
     ``env --chdir``/``env -C``. ``-C dir`` on git, make or tar moves only its
-    own segment.
+    own segment. Under ``CDPATH`` (named anywhere in the command, or set in the
+    environment) a relative ``cd`` target may land in any of its directories,
+    so it leaves the rest unknown too.
     """
+    from robothor.settings.env import process_env_get
+
     unquoted = _unquoted_words(command) if command else set()
+    cdpath = "CDPATH" in command or bool((process_env_get("CDPATH", "") or "").strip())
     out: list[str | None] = []
     cur = start
     for tokens in segments:
@@ -619,6 +633,8 @@ def _segment_dirs(
             operands = [a for a in args if a == "-" or not a.startswith("-")]
             if not operands:
                 cur = (_home() or None) if word == "cd" else None
+            elif cdpath and _cdpath_applies(operands[0].strip("'\"")):
+                cur = None
             else:
                 cur = _dir_target(operands[0], cur)
         elif word == "popd":
