@@ -505,3 +505,34 @@ def test_a_load_manifest_beside_the_records_is_not_a_record(tmp_path) -> None:
         env={**os.environ, "PYTHONPATH": str(root / "src")},
     )
     assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_the_knowledge_check_warns_when_it_finds_no_records(tmp_path) -> None:
+    """A green line for nothing checked is how missing package data survives."""
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    (root / "src" / PKG / "knowledge" / "facts.json").unlink()
+    _check, result = _run_knowledge_check(root, "scaffold_knowledge_empty")
+    assert result.status == "fail"
+    assert "no knowledge records" in result.detail
+
+
+def test_the_knowledge_check_names_a_file_it_does_not_read(tmp_path) -> None:
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    _write_facts(root, reviewed_on=_days_ago(1), last_verified=_days_ago(1))
+    (root / "src" / PKG / "knowledge" / "sops").mkdir()
+    (root / "src" / PKG / "knowledge" / "sops" / "returns.md").write_text("---\nid: returns\n---\n")
+    (root / "src" / PKG / "knowledge" / "returns.yaml").write_text("id: returns\n")
+    _check, result = _run_knowledge_check(root, "scaffold_knowledge_ignored")
+    assert result.status == "fail"
+    assert "sops" in result.detail
+    assert "returns.yaml" in result.detail
+
+
+def test_the_built_wheel_carries_the_knowledge_files(tmp_path) -> None:
+    from robothor.plugins.wheel import open_wheel
+
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    contents = open_wheel(_build_wheel(root, tmp_path / "dist"), tmp_path / "unpacked")
+    members = {p.relative_to(contents.root).as_posix() for p in contents.root.rglob("*")}
+    for member in ("knowledge.py", "knowledge/README.md", "knowledge/facts.json"):
+        assert f"{PKG}/{member}" in members, member
