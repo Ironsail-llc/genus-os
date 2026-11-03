@@ -316,3 +316,26 @@ class TestWarmupTextIsUnchanged:
 
         assert "Bob owns the billing service." in expected
         assert text == expected
+
+
+class TestReplacesTheEarlierSignature:
+    def test_a_database_with_the_three_argument_version_ends_with_one_overload(
+        self, cluster: str
+    ) -> None:
+        """An earlier draft of 166 had no p_restricted. Re-applying 166 where it
+        ran must drop it, not leave the unfiltered overload callable beside the
+        new one."""
+        with psycopg2.connect(cluster) as conn, conn.cursor() as cur:
+            cur.execute(
+                """CREATE OR REPLACE FUNCTION public.entity_facts_for_candidates(
+                       p_tenant_id text, p_candidates text[], p_person_id uuid DEFAULT NULL)
+                   RETURNS SETOF text LANGUAGE sql AS $$ SELECT NULL::text $$"""
+            )
+            cur.execute((ROOT / "crm" / "migrations" / "166_entity_recall_definer.sql").read_text())
+            cur.execute(
+                "SELECT pg_get_function_identity_arguments(oid) FROM pg_proc "
+                "WHERE proname = 'entity_facts_for_candidates'"
+            )
+            overloads = [r[0] for r in cur.fetchall()]
+        assert len(overloads) == 1, overloads
+        assert "p_restricted boolean" in overloads[0], overloads
