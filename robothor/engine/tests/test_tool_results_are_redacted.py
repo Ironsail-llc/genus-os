@@ -165,3 +165,53 @@ class TestTheCheckpoint:
             assert mgr.save(3, session.messages) is True
         leaked = _leaks(cursor.execute.call_args.args[1][2])
         assert not leaked
+
+
+# ── a result is redacted as data, not as a log line ──────────────────────────
+
+PY_SOURCE = (
+    "import os\n"
+    "api_key = settings.api_key\n"
+    "token = get_token()\n"
+    'PASSWORD = os.environ["PASSWORD"]\n'
+    "secret_key = config.secret_key  # read at startup\n"
+    "access_token = parse(x)\n"
+    'default_secret = "change-me-in-production"\n'
+    "retries = 3\n"
+)
+YAML_SOURCE = "provider:\n  api_key: ${API_KEY}\n  token: ${TOKEN}\n"
+SHELL_SOURCE = 'export TOKEN=$TOKEN\nexport API_KEY="$API_KEY"\nGITHUB_TOKEN=$(gh auth token)\n'
+
+
+@pytest.mark.parametrize("text", [PY_SOURCE, YAML_SOURCE, SHELL_SOURCE], ids=["py", "yaml", "sh"])
+def test_ordinary_code_passes_through_unchanged(text):
+    from robothor.secrets.redaction import redact_tool_result
+
+    assert redact_tool_result({"content": text}) == {"content": text}
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'api_key = "sk-live-' + "Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF" + '"',
+        "TOKEN=ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8",
+        'db_password = "Xk92mQ7vLp04Rt8sWz6n"',
+    ],
+    ids=["sk-live", "ghp", "password"],
+)
+def test_a_real_credential_in_code_is_redacted(line):
+    from robothor.secrets.redaction import redact_tool_result
+
+    cleaned = redact_tool_result({"content": line})["content"]
+    value = line.split("=", 1)[1].strip().strip('"')
+    leaked = value in cleaned
+    assert not leaked, "a credential assigned in code was kept"
+
+
+def test_read_then_write_round_trips_byte_identical():
+    """The model reads the file, edits nothing, writes it back: the bytes it
+    writes are exactly the ones it was given, not ``<redacted>``."""
+    session = _session()
+    session.record_tool_call("read_file", {"path": "app/settings.py"}, {"content": PY_SOURCE}, "c1")
+    seen = json.loads(session.messages[-1]["content"])["content"]
+    assert seen == PY_SOURCE
