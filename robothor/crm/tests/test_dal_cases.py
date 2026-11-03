@@ -47,7 +47,21 @@ class TestListTasksCaseFilters:
 
     def test_the_filters_never_return_resolved_tasks(self) -> None:
         sql = _sql_of(overdue=True, unowned=True, exclude_resolved=False)
-        assert "status != 'DONE'" in sql
+        assert "status IS DISTINCT FROM 'DONE'" in sql
+
+    def test_the_filters_exclude_resolved_tasks_even_when_a_status_is_given(self) -> None:
+        assert "status IS DISTINCT FROM 'DONE'" in _sql_of(status="DONE", overdue=True)
+
+    def test_a_task_with_no_status_is_kept_as_the_doctor_check_keeps_it(self) -> None:
+        # status is nullable; != 'DONE' would drop a NULL-status row the check counts.
+        assert "status != 'DONE'" not in _sql_of(unowned=True)
+
+    def test_overdue_lists_the_oldest_due_first(self) -> None:
+        # Lines up with the doctor's "oldest" and keeps the most urgent inside the limit.
+        assert "ORDER BY due_at ASC" in _sql_of(overdue=True)
+
+    def test_without_overdue_the_newest_created_come_first_as_before(self) -> None:
+        assert "ORDER BY created_at DESC" in _sql_of()
 
 
 @pytest.fixture
