@@ -73,14 +73,13 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Before the sandbox decision, so host and container paths refuse alike:
     # a command that PRINTS a secrets file (or the environment) never runs.
     # Sourcing the file to run an authenticated command is still allowed.
-    from robothor.engine.secret_paths import (
-        credential_roots,
-        exec_names_credential,
-        exec_reads_secret,
-    )
+    from robothor.engine import secret_paths
+    from robothor.engine.secret_paths import exec_reads_secret
 
     # credential_path: named, globbed onto, or symlinked onto a listed path.
-    if gate := exec_names_credential(command, roots=credential_roots(ctx.workspace)):
+    # Off the loop: expanding a glob and resolving a link read the filesystem.
+    roots = secret_paths.credential_roots(ctx.workspace)
+    if gate := await asyncio.to_thread(secret_paths.exec_names_credential, command, roots=roots):
         return gate
     refused = exec_reads_secret(command)
     if refused:

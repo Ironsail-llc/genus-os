@@ -191,6 +191,19 @@ def _normalise_paths(command: str) -> str:
 _INBOX_SECRET = re.compile(r"(?:^|/)inbox/[^/]+/[^/]+/\d{4}-\d{2}-\d{2}/secret/[^/]+$")
 
 
+def _expanduser(path: str | os.PathLike[str]) -> str:
+    """``~`` and ``~user`` expanded, never raising.
+
+    ``Path.expanduser`` raises ``RuntimeError`` for a ``~word`` that names no
+    user, and agents write plenty of those (``"~40% faster"``, ``@~1``,
+    ``mask = ~flags``). ``os.path.expanduser`` returns such a word unchanged,
+    so it stays a literal and every name rule still applies to it.
+    """
+    import os as _os
+
+    return _os.path.expanduser(str(path))  # noqa: PTH111 - Path.expanduser raises
+
+
 def is_inbox_secret_path(path: str | os.PathLike[str]) -> bool:
     """True for the channel inbox's copy of a credentials file. Pure.
 
@@ -211,7 +224,7 @@ def is_inbox_secret_path(path: str | os.PathLike[str]) -> bool:
     """
     import posixpath
 
-    spelled = PurePath(Path(str(path)).expanduser()).as_posix()
+    spelled = PurePath(_expanduser(path)).as_posix()
     return bool(_INBOX_SECRET.search(posixpath.normpath(spelled)))
 
 
@@ -235,7 +248,7 @@ def is_secret_path(path: str | os.PathLike[str]) -> bool:
     Pure: no filesystem access, so the answer is the same for a file that
     does not exist (the refusal must not reveal whether it does).
     """
-    p = PurePath(Path(str(path)).expanduser())
+    p = PurePath(_expanduser(path))
     name = p.name
     lowered = name.lower()
 
@@ -281,7 +294,7 @@ def is_maskable_dotenv_path(path: str | os.PathLike[str]) -> bool:
     files, which are not dotenv names at all. Pure, like
     :func:`is_secret_path`: the body is checked by the masker after reading.
     """
-    p = PurePath(Path(str(path)).expanduser())
+    p = PurePath(_expanduser(path))
     name = p.name
     lowered = name.lower()
     if not is_secret_path(p) or is_inbox_secret_path(p) or _in_secret_location(p):
@@ -539,19 +552,37 @@ def credential_roots(workspace: str | os.PathLike[str] | None = None) -> tuple[s
     relative path token joins onto it."""
     roots: list[str] = []
     if workspace:
-        roots.append(str(Path(str(workspace)).expanduser()))
+        roots.append(_expanduser(workspace))
     if home := _home():
         roots.append(home)
     return tuple(roots)
 
 
+def _home_spelled(word: str) -> str:
+    """*word* with ``$HOME``, ``${HOME}`` and a leading ``~`` expanded. Never raises."""
+    home = _home()
+    if home:
+        word = word.replace("${HOME}", home).replace("$HOME", home)
+    return _expanduser(word)
+
+
+def _is_home_spelling(word: str) -> bool:
+    """True for ``~``, ``~/...``, ``~user/...`` of a real user, ``$HOME...``."""
+    if word.startswith(("$HOME", "${HOME}")):
+        return True
+    return word.startswith("~") and _expanduser(word) != word
+
+
 def is_credential_path(path: str | os.PathLike[str]) -> bool:
-    """True when *path* is on the credential_path list. Pure (no filesystem access)."""
+    """True when *path* is on the credential_path list. Pure (no filesystem access).
+
+    A ``~word`` that names no user stays a literal: the name rules still apply
+    to it, and nothing raises.
+    """
     import posixpath
 
     home = _home()
-    raw = str(path).replace("${HOME}", home or "~").replace("$HOME", home or "~")
-    spelled = posixpath.normpath(PurePath(Path(raw).expanduser()).as_posix())
+    spelled = posixpath.normpath(PurePath(_home_spelled(str(path))).as_posix())
     p = PurePath(spelled)
     parts = [part.lower() for part in p.parts]
     if any(part in _CREDENTIAL_DIRS for part in parts):
@@ -566,8 +597,16 @@ def is_credential_path(path: str | os.PathLike[str]) -> bool:
         pat.fullmatch(name) for pat in _CREDENTIAL_PATTERNS
     ):
         return True
-    under_home = bool(home) and (spelled == home or spelled.startswith(home.rstrip("/") + "/"))
-    return under_home and bool(_HOME_KEY.fullmatch(name))
+    return _under(spelled, home) and bool(_HOME_KEY.fullmatch(name))
+
+
+def _under(path: str, root: str) -> bool:
+    """*path* is *root* or inside it. A string prefix is not enough: ``/a/wsx``
+    is not inside ``/a/ws``."""
+    if not root:
+        return False
+    root = root.rstrip("/") or "/"
+    return path == root or path.startswith(root if root == "/" else root + "/")
 
 
 def credential_refusal(path: str | os.PathLike[str]) -> dict[str, str]:
@@ -591,71 +630,214 @@ _GLOB_MAGIC = re.compile(r"[*?[]|\{[^}]*,[^}]*\}")
 #: not exempt: the directory listing becomes file contents downstream.
 _PIPELINE_READERS = frozenset({"xargs"})
 
-#: How many glob matches to look at before giving up. A credential path tends
-#: to sit among few siblings; a glob with thousands of hits is not how an agent
-#: reaches one, and expanding it in full would be the denial-of-service.
-_GLOB_MATCH_CAP = 2000
+#: Directory entries one glob word may visit before the walk gives up. It bounds
+#: the WALK, not the matches: a ``**`` over a large tree must cost a bounded
+#: number of ``scandir`` entries, whatever it would have matched.
+_GLOB_WALK_CAP = 5000
+
+#: Brace variants one word may expand to. Brace groups multiply, so a word with
+#: twenty ``{a,b}`` groups is a million variants; past the cap the word is not
+#: expanded and only the literal word check applies to it.
+_BRACE_CAP = 64
 
 
-def _expand_braces(word: str) -> list[str]:
-    """``a{b,c}d`` -> ``[abd, acd]``; one level, enough for a shell word."""
-    match = re.search(r"\{([^{}]*,[^{}]*)\}", word)
-    if not match:
-        return [word]
-    out: list[str] = []
-    for option in match.group(1).split(","):
-        out.extend(_expand_braces(word[: match.start()] + option + word[match.end() :]))
+#: A word made only of filename characters and glob or brace syntax: ``*``,
+#: ``l*``, ``{a,link}``, ``*.json``. The shell expands these against the working
+#: directory (the workspace), so they are paths. A JSON body, a ``key=value`` or
+#: a quoted sentence has characters this does not allow.
+_FILENAME_GLOB = re.compile(r"[\w.~$/*?\[\]{},@+-]+")
+
+
+def _looks_like_path(word: str) -> bool:
+    """Only these words are expanded or resolved: a separator, a home or dot
+    start, a filename-shaped glob, or a basename on the list. Never a JSON body
+    (``[{"id": 1}]``)."""
+    if word[:1] in ("[", "{") and '"' in word:
+        return False
+    if "/" in word or word.startswith((".", "~", "$HOME", "${HOME}")):
+        return True
+    if _GLOB_MAGIC.search(word) and _FILENAME_GLOB.fullmatch(word):
+        return True
+    name = word.rsplit("/", 1)[-1]
+    return name.lower() in _CREDENTIAL_NAMES or any(
+        pat.fullmatch(name) for pat in _CREDENTIAL_PATTERNS
+    )
+
+
+def _expand_braces(word: str) -> list[str] | None:
+    """``a{b,c}d`` -> ``[abd, acd]``, or None past :data:`_BRACE_CAP` variants.
+
+    Counted before anything is built, so the cap bounds the work as well as the
+    result.
+    """
+    groups = list(re.finditer(r"\{([^{}]*,[^{}]*)\}", word))
+    total = 1
+    for group in groups:
+        total *= len(group.group(1).split(","))
+        if total > _BRACE_CAP:
+            return None
+    out = [word]
+    for group in reversed(groups):
+        options = group.group(1).split(",")
+        out = [w[: group.start()] + o + w[group.end() :] for w in out for o in options]
     return out
 
 
 def _realpath_is_credential(spelled: str) -> bool:
     """True when *spelled* resolves (symlinks and all) onto a listed path.
 
-    ``Path.resolve`` resolves every component, so a symlink to a listed file
-    and a file under a symlinked directory both land on it. It only reads the
-    filesystem to resolve links.
+    ``os.path.realpath`` resolves every component, so a symlink to a listed file
+    and a file under a symlinked directory both land on it. Never raises.
     """
+    import os as _os
+
     try:
-        return is_credential_path(Path(spelled).resolve())
-    except (OSError, ValueError, RuntimeError):
+        return is_credential_path(_os.path.realpath(spelled))
+    except (OSError, ValueError):
         return False
 
 
-def _glob_hits_credential(word: str, roots: tuple[str, ...]) -> str | None:
-    """A listed path a glob word expands onto, or None. Bounded, and confined to
-    *roots*: the home directory and the workspace, never the whole filesystem."""
-    import glob
-    import itertools
+class _WalkBudget:
+    """Directory entries left for one glob word's walk."""
+
+    def __init__(self, cap: int) -> None:
+        self.left = cap
+
+    def spend(self) -> bool:
+        self.left -= 1
+        return self.left >= 0
+
+
+def _scan(directory: str, budget: _WalkBudget) -> list[tuple[str, bool]]:
+    """``(name, is_dir)`` for *directory*'s entries, within *budget*."""
+    import os as _os
+
+    out: list[tuple[str, bool]] = []
+    try:
+        with _os.scandir(directory) as entries:
+            for entry in entries:
+                if not budget.spend():
+                    break
+                try:
+                    is_dir = entry.is_dir()
+                except OSError:
+                    is_dir = False
+                out.append((entry.name, is_dir))
+    except OSError:
+        pass
+    return out
+
+
+def _bounded_glob(pattern: str, budget: _WalkBudget) -> list[str]:
+    """Shell-style glob of an absolute *pattern*, visiting at most *budget* entries.
+
+    The shell's rules: ``*`` and ``?`` do not match a leading dot unless the
+    component starts with one, and ``**`` is any depth of non-hidden directories.
+    """
+    import fnmatch
     import posixpath
 
-    home = _home()
-    for expanded in _expand_braces(word):
-        raw = expanded.replace("${HOME}", home or "~").replace("$HOME", home or "~")
-        pattern = str(Path(raw).expanduser())
-        if not Path(pattern).is_absolute():
-            pattern = posixpath.join(roots[0], pattern) if roots else pattern
-        if not any(
-            posixpath.normpath(pattern).startswith(posixpath.normpath(r)) for r in roots if r
-        ):
+    parts = [p for p in pattern.split("/") if p]
+    current = ["/"]
+    for i, part in enumerate(parts):
+        last = i == len(parts) - 1
+        nxt: list[str] = []
+        if not _GLOB_MAGIC.search(part):
+            nxt = [posixpath.join(c, part) for c in current]
+        elif part == "**":
+            stack = list(current)
+            while stack and budget.left > 0:
+                d = stack.pop()
+                nxt.append(d)
+                for name, is_dir in _scan(d, budget):
+                    if is_dir and not name.startswith("."):
+                        stack.append(posixpath.join(d, name))
+        else:
+            for c in current:
+                for name, is_dir in _scan(c, budget):
+                    if name.startswith(".") and not part.startswith("."):
+                        continue
+                    if (last or is_dir) and fnmatch.fnmatchcase(name, part):
+                        nxt.append(posixpath.join(c, name))
+        current = nxt
+        if not current or budget.left <= 0:
+            break
+    return current
+
+
+def _glob_hits_credential(word: str, roots: tuple[str, ...]) -> str | None:
+    """A listed path a glob word expands onto, or None.
+
+    Bounded: braces past :data:`_BRACE_CAP` are not expanded, and the walk
+    visits at most :data:`_GLOB_WALK_CAP` entries. Confined: only a pattern
+    inside *roots* (the workspace and the home directory) is walked, and only a
+    hit inside them is considered.
+    """
+    import os as _os
+    import posixpath
+
+    variants = _expand_braces(word)
+    if variants is None:
+        return None
+    budget = _WalkBudget(_GLOB_WALK_CAP)
+    for variant in variants:
+        pattern = _home_spelled(variant)
+        if variant.startswith("~") and not _is_home_spelling(variant):
+            continue  # a `~word` naming no user is a literal, not a home
+        if not posixpath.isabs(pattern):
+            if not roots:
+                continue
+            pattern = posixpath.join(roots[0], pattern)
+        pattern = posixpath.normpath(pattern)
+        if not any(_under(pattern, r) for r in roots):
             continue
-        matches = itertools.islice(
-            glob.iglob(pattern, recursive=True),  # noqa: PTH207 - a shell glob, bounded below
-            _GLOB_MATCH_CAP,
-        )
-        for hit in matches:
+        for hit in _bounded_glob(pattern, budget):
+            if not any(_under(posixpath.normpath(hit), r) for r in roots):
+                continue
+            if not _os.path.lexists(hit):
+                continue
             if is_credential_path(hit) or _realpath_is_credential(hit):
                 return hit
+        if budget.left <= 0:
+            break
+    return None
+
+
+def _resolvable(token: str, roots: tuple[str, ...]) -> str | None:
+    """*token* as an absolute path to resolve, or None for a bare word.
+
+    Only an explicit path (a separator, or a home spelling) or a word naming a
+    file that exists in the workspace is resolved. ``.key`` in ``jq -r .key``
+    is a jq filter, not a key file under home.
+    """
+    import os as _os
+    import posixpath
+
+    word = token.strip("'\"")
+    if not word or not _looks_like_path(word):
+        return None
+    if word.startswith("~") and not _is_home_spelling(word):
+        return None
+    spelled = _home_spelled(word)
+    explicit = "/" in word or _is_home_spelling(word)
+    if not posixpath.isabs(spelled):
+        if not roots:
+            return None
+        spelled = posixpath.join(roots[0], spelled)
+    if explicit or _os.path.lexists(spelled):
+        return spelled
     return None
 
 
 def exec_names_credential(command: str, *, roots: tuple[str, ...] = ()) -> dict[str, str] | None:
     """The refusal for a command that reaches a credential path, or None.
 
-    Three ways a command reaches one: it NAMES it (GEN-396); a word is a glob or
-    brace expansion that expands onto one, or a symlink that resolves onto one
-    (GEN-401); or a metadata verb lists a listed directory upstream of a reader
-    (``ls ~/.ssh | xargs cat``). *roots* bounds glob expansion and symlink
-    resolution to the home directory and the workspace.
+    Three ways a command reaches one: it NAMES it; a path-like word is
+    a glob or brace expansion that expands onto one, or a path that resolves
+    (symlinks and all) onto one; or a metadata verb lists a listed directory
+    upstream of a reader (``ls ~/.ssh | xargs cat``). *roots* bounds glob
+    expansion to the workspace and the home directory. Blocking (it may read the
+    filesystem to expand and resolve): call it off the event loop. Never raises.
     """
     segments = _segments(command)
     feeds_reader = any(_command_word(seg)[0] in _PIPELINE_READERS for seg in segments)
@@ -665,29 +847,17 @@ def exec_names_credential(command: str, *, roots: tuple[str, ...] = ()) -> dict[
         # so it is exempt -- UNLESS its output feeds a reader in the pipeline.
         skip = word in _METADATA_VERBS and not feeds_reader
         for token in tokens:
-            if skip and not _GLOB_MAGIC.search(token):
+            globbed = bool(_GLOB_MAGIC.search(token)) and _looks_like_path(token)
+            if skip and not globbed:
                 continue
             if (hit := _named_credential(token)) is not None:
                 return credential_refusal(hit)
-            if _GLOB_MAGIC.search(token):
+            if globbed:
                 if (hit := _glob_hits_credential(token, roots)) is not None:
                     return credential_refusal(hit)
-            elif roots and _realpath_is_credential(_pathish_abs(token, roots)):
+            elif (path := _resolvable(token, roots)) is not None and _realpath_is_credential(path):
                 return credential_refusal(token)
     return None
-
-
-def _pathish_abs(token: str, roots: tuple[str, ...]) -> str:
-    """A bare path token as an absolute path for realpath: ~ and $HOME expanded,
-    a relative path joined onto the workspace."""
-    import posixpath
-
-    home = _home()
-    raw = token.strip("'\"").replace("${HOME}", home or "~").replace("$HOME", home or "~")
-    raw = str(Path(raw).expanduser())
-    if not Path(raw).is_absolute() and roots:
-        return posixpath.join(roots[0], raw)
-    return raw
 
 
 def code_names_credential(code: str) -> dict[str, str] | None:

@@ -1,9 +1,8 @@
 """credential_path, resolved: a symlink or a glob cannot reach a listed path.
 
-GEN-401. The named-path check (GEN-396) refuses a command or a read that
-SPELLS a listed path. It does not, on its own, refuse a symlink that points at
-one, nor a glob or a command substitution that expands to one. These tests
-pin those down: read_file resolves every path component's realpath before the
+The named-path check refuses a command or a read that SPELLS a listed path.
+It does not, on its own, refuse a symlink that points at one, nor a glob or a
+command substitution that expands to one. These tests pin those down: read_file resolves every path component's realpath before the
 check, and exec refuses a word whose glob expansion (bounded, under the home
 directory and the workspace) hits a listed path, a word that is a symlink into
 one, and a substitution or find/xargs pipeline that names a listed directory.
