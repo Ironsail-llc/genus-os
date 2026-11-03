@@ -85,3 +85,9 @@ async def test_a_service_token_resolves_no_person(monkeypatch):
     seen, calls = await _send(monkeypatch, _auth("service"), object())
     assert calls == []
     assert seen.get("identity") is None
+
+
+@pytest.mark.asyncio
+async def test_an_ide_run_passes_what_the_person_typed(monkeypatch):
+    seen, _calls = await _send(monkeypatch, _auth(), object())
+    assert seen.get("typed_message") == "hello"
