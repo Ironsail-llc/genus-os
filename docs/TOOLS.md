@@ -1044,6 +1044,70 @@ resolving to a real spill file, so quoting the path in a comment buys nothing.
 `execute_code` has the same contract with a bigger window: see
 [its section](#execute_code-calling-tools-from-inside-python) and `stdout_file`.
 
+### `exec` — where a command ran
+
+Every `exec` result carries
+`executed_on`: `sandbox` (the run's container), `host` (the engine) or
+`host_service` (the owner's host-execution service). When the agent wanted a
+container and the engine has none, the command of an owner or admin driving
+the run runs on the engine host and the result adds an `execution_note` saying
+so; repeat it to the person rather than claiming the command was isolated.
+`execute_code` results carry `executed_on` too: an owner's snippet beside a live
+container runs on the host, and its note says so. Anyone else gets
+`error_type: exec_unavailable`, an `error` naming the missing runtime and their
+role, and an `unlock` saying who can run it or what the operator would install.
+`execute_code` is refused the same way, and the desktop and browser tools are
+blocked by the `sandbox_playground` guardrail. Nothing ran, so do not retry it:
+pass the unlock on. Who gets which outcome is in
+[Guardrail flips](runbooks/GUARDRAIL_FLIPS.md#sandbox-playground-when-a-container-cannot-be-had).
+
+### Credential files — `credential_path`
+
+`read_file`, `exec` and `execute_code` refuse credential files for every
+caller, the owner included, before anything is opened. The result has
+`error_type: credential_path` and names the file, never a value. The operator
+hands credentials over through the vault (a `secrets:` grant in the manifest,
+or `vault_get`), so a refusal means: say what is missing and ask, do not look
+for another way to read the file.
+
+The list:
+
+- anywhere on a path: `.ssh/`, `.aws/`, `.kube/`, `.docker/`, `.gnupg/`, `gcloud/`;
+- directly under `.config/`: `gh/`, and any directory whose name starts with
+  `gcloud`, `gws` or `gog` (the Google Cloud and Google Workspace CLIs);
+- by name: `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`, `.git-credentials`,
+  `.vault-key`, `.env` and `.env.*`, `credentials*.json`, `token*.json` and
+  `tokens*.json` (not `tokenizer.json`), `client_secret*.json`;
+- `*.pem` and `*.key` under the home directory.
+
+Documentation files (`*.example`, `*.md` and the like) named like one of these
+stay readable, except inside a listed directory. The gate resolves the path
+before it decides, so neither a symlink nor a glob reaches a listed file:
+`read_file` checks the requested path and its fully resolved real path, so a
+link to a listed file or a file under a linked directory is refused. `exec`
+refuses a command when any argument, redirection or string inside it names a
+listed path (spelled with `~`, `$HOME` or `${HOME}` or not), when a glob or
+brace word expands onto one (expansion is bounded and confined to the home
+directory and the workspace; a final `**` matches files too), and when a word
+is a symlink that resolves onto one — a bare filename included, when it names
+an entry in the directory the command runs in. That directory is the
+workspace, or where an earlier `cd`/`pushd` (or `-C` on `git`, `make` or `tar`)
+to a literal path moves it; a relative glob or brace word expands there too.
+After a `cd` to a directory the text does not spell, a printing command's
+relative glob that could match a secret's name (`*.key`, `id_*`, `*`) is
+refused; one that could not (`*.txt`) runs. The printing gate lets a bare `*.key`-shaped word
+that names no file through (`jq -r .key`); after a `cd` it looks the word up
+where the `cd` lands, and after a `cd` to a directory the text does not spell
+(`cd "$D"`, `cd -`, `popd`) it refuses the word as before. `ls`, `test`/`[`, `stat`, `wc` and `du` are let through, because they
+report on a file without reading it — except when a pipeline feeds their output
+to a reader (`ls ~/.ssh | xargs cat`), which is refused. The check runs before
+the sandbox decision, so it applies inside a container too. `execute_code`
+refuses a snippet whose source names a listed path, and a snippet that reads
+through the `read_file` tool gets the same resolved check. The masked
+`read_file` view of the instance env file (`robothor.env`, `connectors.env`)
+for the verified owner is unchanged. `.env` and `.env.*` are on the list and
+are not masked.
+
 ### Calling an API from code: `genus_tools`, not `curl`
 
 Both work. They differ in what survives the call.
@@ -1466,6 +1530,13 @@ with this instance's account, "Make changes to events". On a Microsoft 365
 instance (`ROBOTHOR_WORKSPACE_PROVIDER=microsoft365`) it passes with a note
 instead: the owner's Exchange calendar is checked by
 `workspace.m365_connection` (see [Microsoft 365](workspace/microsoft365.md)).
+
+**`sandbox.runtime`** and **`sandbox.policy`** (`genus doctor --category
+sandbox`) — whether a container runtime answers on this engine, and for each
+agent holding `exec`, where its commands would run for an owner and for a member
+(`sandbox`, `host`, `host (degraded)`, `refuse`, or `run fails` with the
+playground off). Neither fails on its own: an instance with no podman is not
+broken unless an agent asks for a container.
 
 **`tools.exec_allowlist_bypasses_denied_tool`** — an `exec_allowlist` regex
 that admits a Google CLI (`gog gmail send`, `gws calendar events insert`) for

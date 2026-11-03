@@ -366,3 +366,72 @@ uncontained.
 
 An explicit `sandbox: docker` always wins, in every mode. Agents without `exec`
 are never in scope, with or without the override.
+
+### Sandbox playground: when a container cannot be had
+
+There is no switch for this: it is how the engine behaves. It covers a
+container that is wanted (manifest `sandbox: docker`, or
+`ROBOTHOR_SANDBOX_DEFAULT_MODE=enforce`) and cannot be had, because the engine
+has no runtime or the container fails to start. It does not change which agents
+are containerised. It does widen what the owner or admin driving a run may do,
+as described below the table.
+
+| Who is running | What happens |
+|---|---|
+| Owner or admin driving a root run | run continues; `exec` runs on the engine host, result has `executed_on: host` and an `execution_note` |
+| Member, automated run (any service role, including `owner`), sub-agent, benchmark | run continues; each `exec` and `execute_code` is refused with `error_type: exec_unavailable`, the gate and an `unlock`, and the desktop and browser tools are blocked by the `sandbox_playground` guardrail. An agent that holds those tools with no guardrails at all (`guardrails_opt_out` and none configured) fails at step 0 as before, because nothing could refuse them per call |
+| Anyone, runtime present | container (`executed_on: sandbox`) |
+
+What it widens, and for whom. "Driving" means a person is on the other
+end: an interactive trigger (chat, messaging, IDE, manual), not a cron, hook,
+event, workflow, federation or sub-agent run, not a service credential, and not
+a run the engine resumes on its own after a verified repair (`repair-resume:`),
+even though that run is recorded as manual with the owner's role. A manifest's
+`role: owner` on a cron agent is a service role and earns nothing here.
+
+- **The exec allowlist.** An owner or admin driving the run whose command the
+  allowlist would block is allowed, and the call is recorded as `observed`
+  ("exec_allowlist bypassed by role=owner"). Everyone else keeps the
+  allowlist, inside a container or out: a container may use bridge
+  networking and always has the workspace mounted. This also opens the route
+  `tools.exec_allowlist_bypasses_denied_tool` warns about (a CLI reaching a
+  denied native tool) for that owner's own runs.
+- **`execute_code` beside a live container.** The snippet runs on the engine
+  host, because the tool proxy cannot be reached from the container. The
+  result says `executed_on: host` with an `execution_note`, and an
+  `exec_location` row with `tool_name = 'execute_code'` names the live
+  container. A member is refused as before.
+
+The host fallback does not widen what may be read. `read_file`, `exec` and
+`execute_code` refuse credential files (cloud and Workspace CLI credential
+directories, `~/.aws`, `~/.ssh`, `~/.kube`, `.env` files, token and key files)
+under the `credential_path` gate for every caller, on the host and inside a
+container alike: see [Tools](../TOOLS.md#credential-files--credential_path).
+
+A root run is one nothing spawned: a sub-agent never counts as one, even when
+its parent's run row was not recorded. Agents that want no container are never
+probed for a runtime, and runs starting together share one probe.
+
+To see where commands go and what happened:
+
+1. `genus doctor` and read `sandbox.runtime` (is there a runtime) and
+   `sandbox.policy` (per exec-holding agent, where an owner and a member would
+   run).
+2. Read the evidence:
+
+   ```sql
+   SELECT guardrail_name, action, reason, created_at
+   FROM agent_guardrail_events
+   WHERE guardrail_name IN ('sandbox_playground', 'exec_location')
+   ORDER BY created_at DESC LIMIT 50;
+   ```
+
+   One `sandbox_playground` row (action `observed`) per run whose plan degraded
+   or refused; one `exec_location` row (action `allowed`) per `exec` or
+   `execute_code` that ran on the host because no container could be had, or
+   beside a live container (an exec where nothing was decided writes none;
+   its result still carries `executed_on`); one `exec_allowlist` row (action
+   `observed`) per allowlist bypass.
+
+Installing a runtime (rootless podman, or a backend selected with
+`ROBOTHOR_SANDBOX_BACKEND`) puts every run that wants a container back in one.

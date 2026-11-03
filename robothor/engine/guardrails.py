@@ -793,16 +793,42 @@ class GuardrailEngine:
         tool_args: dict[str, Any],
         agent_id: str = "",
         prior_steps: list[Any] | None = None,
+        *,
+        user_role: str = "",
+        host_refusal: str = "",
     ) -> GuardrailResult:
         """Run all enabled pre-execution guardrails on a tool call.
 
         prior_steps is an optional list of this run's completed RunStep objects
         (in order). Guardrails that need to inspect context from earlier in the
         run (e.g. "did we already propose the time via email?") read it.
+
+        ``user_role`` is read only by the exec allowlist: the role of the owner
+        or admin DRIVING this run, empty for anyone else
+        (``sandbox_policy.acting_host_role``). ``host_refusal`` is a refused
+        execution plan: with no container, a tool a container confines
+        (desktop, browser) would reach the engine host, so it is refused here.
         """
+        if host_refusal:
+            from robothor.engine.sandbox_policy import is_confined_tool
+
+            if is_confined_tool(tool_name):
+                return GuardrailResult(
+                    allowed=False,
+                    action="blocked",
+                    reason=f"{tool_name} did not run: {host_refusal}",
+                    guardrail_name="sandbox_playground",
+                )
         observation: GuardrailResult | None = None
         for policy in self.enabled_policies:
-            result = self._run_pre_policy(policy, tool_name, tool_args, agent_id, prior_steps or [])
+            result = self._run_pre_policy(
+                policy,
+                tool_name,
+                tool_args,
+                agent_id,
+                prior_steps or [],
+                user_role=user_role,
+            )
             if not result.allowed:
                 return result
             # A rollout-gated guardrail in observe mode allows the call but flags
@@ -831,6 +857,8 @@ class GuardrailEngine:
         tool_args: dict[str, Any],
         agent_id: str,
         prior_steps: list[Any],
+        *,
+        user_role: str = "",
     ) -> GuardrailResult:
         """Dispatch to the correct pre-execution policy."""
         if policy == "no_destructive_writes":
@@ -844,7 +872,7 @@ class GuardrailEngine:
         if policy == "rate_limit":
             return self._check_rate_limit(agent_id)
         if policy == "exec_allowlist":
-            return self._check_exec_allowlist(tool_name, tool_args, agent_id)
+            return self._check_exec_allowlist(tool_name, tool_args, agent_id, user_role=user_role)
         if policy == "write_path_restrict":
             return self._check_write_path(tool_name, tool_args, agent_id)
         if policy == "desktop_safety":
@@ -979,6 +1007,34 @@ class GuardrailEngine:
         return GuardrailResult()
 
     def _check_exec_allowlist(
+        self,
+        tool_name: str,
+        tool_args: dict[str, Any],
+        agent_id: str,
+        user_role: str = "",
+    ) -> GuardrailResult:
+        """The allowlist, as the sandbox playground reads it.
+
+        An owner or admin DRIVING this run (``user_role`` is empty for anyone
+        else, including an automated run whose service role reads "owner" and a
+        sub-agent) whose command the allowlist would block is allowed and
+        recorded as an observation: the person's role is the limit. Everyone
+        else keeps the allowlist, inside a container or out.
+        """
+        verdict = self._exec_allowlist_verdict(tool_name, tool_args, agent_id)
+        if not verdict.allowed and user_role and self._exec_allowlists.get(agent_id):
+            from robothor.engine.sandbox_policy import role_may_run_on_host
+
+            if role_may_run_on_host(user_role):
+                return GuardrailResult(
+                    allowed=True,
+                    action="observed",
+                    reason=f"exec_allowlist bypassed by role={user_role.strip().lower()}",
+                    guardrail_name="exec_allowlist",
+                )
+        return verdict
+
+    def _exec_allowlist_verdict(
         self, tool_name: str, tool_args: dict[str, Any], agent_id: str
     ) -> GuardrailResult:
         """Block exec/shell commands not matching the agent's allowlist patterns.

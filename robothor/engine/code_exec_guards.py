@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from robothor.engine.secret_paths import code_names_credential
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["MAX_CODE_CHARS", "harden_this_process", "preflight"]
@@ -26,11 +28,9 @@ MAX_CODE_CHARS = 100_000
 def preflight(code: str, proxy: Any) -> dict[str, Any] | None:
     """The refusal this call earns, or None to go ahead.
 
-    Order is cheapest-first and, where it matters, safest-first: the snippet is
-    checked for being a snippet at all, then for having a run behind it (which
-    is where the allow-set comes from), then for the capability that makes this
-    tool no wider than `exec`, and last for the sandbox — the one refusal that
-    has to read live per-run state.
+    Cheapest-first and, where it matters, safest-first: a snippet at all, a run
+    behind it (the allow-set), the capability that keeps this tool no wider than
+    `exec`, a source naming no credential path, and last the sandbox.
     """
     if not isinstance(code, str) or not code.strip():
         return {"error": "No code provided. Pass the Python source as `code`."}
@@ -55,24 +55,25 @@ def preflight(code: str, proxy: Any) -> dict[str, Any] | None:
                 "does not grant it. Ask the operator to add `exec` to tools_allowed."
             )
         }
-    return _refuse_if_sandboxed()
+    return code_names_credential(code) or _refuse_if_sandboxed(proxy)
 
 
-def _refuse_if_sandboxed() -> dict[str, Any] | None:
+def _refuse_if_sandboxed(proxy: Any = None) -> dict[str, Any] | None:
     """A containerised agent is refused, and told why.
 
     An agent declaring `sandbox: docker` runs its commands inside a container
     with `--network none` and no host environment. The tool proxy lives in the
     engine process, so a snippet in that container could not reach it — and
     running the snippet on the HOST instead would silently undo the isolation
-    the manifest asked for. Refusing names the trade; falling back would hide
-    it, which is the failure this codebase keeps recording.
+    the manifest asked for. Refusing names the trade -- except for the playground's
+    owner or admin DRIVING the run, whose host snippet is recorded (stamp_location).
     """
     from robothor.engine.sandbox import SandboxMode, get_current_sandbox
+    from robothor.engine.sandbox_policy import proxy_may_run_on_host, proxy_plan_refusal
 
     sandbox = get_current_sandbox()
-    if sandbox is None or sandbox.mode == SandboxMode.LOCAL:
-        return None
+    if sandbox is None or sandbox.mode == SandboxMode.LOCAL or proxy_may_run_on_host(proxy):
+        return proxy_plan_refusal(proxy)  # a refused plan with no container
     return {
         "error": (
             "execute_code is not available to a container-sandboxed agent: the "
