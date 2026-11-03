@@ -265,7 +265,7 @@ def test_a_success_does_not_count_against_the_breaker():
     assert failures == {}
 
 
-# ── Wrapped calls (GEN-389) ───────────────────────────────────────────
+# ── Wrapped calls ─────────────────────────────────────────────────────
 #
 # A deferred agent reaches most of its tools through `tool_call`. Recorded
 # under the wrapper's name, three unrelated failures (a Gmail 404, a Jira error,
