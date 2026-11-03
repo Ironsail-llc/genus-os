@@ -16,6 +16,13 @@ Adapter YAML format::
     url: "${BASE_URL}/_mcp"    # HTTP transport
     headers:
       Authorization: "Bearer ${API_TOKEN}"
+    # OR mint short-lived tokens (http only) — see docs/CONNECTORS.md:
+    # auth:
+    #   type: oauth_client_credentials
+    #   token_url: "${AUTH_BASE_URL}/oauth/token"
+    #   client_id: "${CLIENT_ID}"
+    #   client_secret: "${CLIENT_SECRET}"
+    #   scope: "read write"     # optional
     # OR for stdio:
     # transport: stdio
     # command: ["node", "bridge.mjs"]
@@ -35,6 +42,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from robothor.engine.oauth_client_credentials import AUTH_TYPE, OAuthClientCredentials
+
 logger = logging.getLogger(__name__)
 
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)}")
@@ -53,6 +62,9 @@ class AdapterConfig:
     # HTTP transport
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
+    # Optional OAuth client_credentials grant; the minted token is sent as
+    # ``Authorization: Bearer`` on every request (http only).
+    auth: OAuthClientCredentials | None = None
     # stdio transport
     command: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
@@ -107,6 +119,60 @@ def _resolve_list(lst: list[str]) -> list[str]:
     return [_resolve_env(v) for v in lst]
 
 
+_AUTH_REQUIRED = ("token_url", "client_id", "client_secret")
+
+
+def _parse_auth(name: str, transport: str, raw: Any) -> tuple[bool, OAuthClientCredentials | None]:
+    """Parse an adapter's ``auth`` block into ``(ok, credentials)``.
+
+    ``(True, None)`` when no block is declared, ``(True, creds)`` when it is
+    valid, ``(False, None)`` when the adapter must be refused (the reason is
+    logged here, never with a credential value). Same fail-closed shape as
+    an unknown transport: an auth block the engine cannot honour must not load
+    as an unauthenticated adapter.
+    """
+    if raw is None:
+        return True, None
+    if not isinstance(raw, dict):
+        logger.warning("Adapter '%s' has a non-mapping 'auth' block, skipping", name)
+        return False, None
+    auth_type = raw.get("type")
+    if auth_type != AUTH_TYPE:
+        logger.warning(
+            "Adapter '%s' has unknown auth type '%s' (supported: %s), skipping",
+            name,
+            auth_type,
+            AUTH_TYPE,
+        )
+        return False, None
+    if transport != "http":
+        logger.warning(
+            "Adapter '%s' declares auth '%s' on a %s transport; it applies to http only, skipping",
+            name,
+            auth_type,
+            transport,
+        )
+        return False, None
+    values = {key: _resolve_env(str(raw.get(key) or "")) for key in (*_AUTH_REQUIRED, "scope")}
+    missing = [key for key in _AUTH_REQUIRED if not values[key]]
+    if missing:
+        logger.warning(
+            "Adapter '%s' auth is missing %s (absent, or its ${VAR} is unset), skipping",
+            name,
+            ", ".join(missing),
+        )
+        return False, None
+    if not values["token_url"].startswith(("https://", "http://")):
+        logger.warning("Adapter '%s' auth token_url must be an http(s) URL, skipping", name)
+        return False, None
+    return True, OAuthClientCredentials(
+        token_url=values["token_url"],
+        client_id=values["client_id"],
+        client_secret=values["client_secret"],
+        scope=values["scope"],
+    )
+
+
 def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
     """Parse a single adapter YAML dict into an AdapterConfig."""
     name = data.get("name", "")
@@ -116,6 +182,10 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
         return None
     if transport not in ("http", "stdio"):
         logger.warning("Adapter '%s' has unknown transport '%s', skipping", name, transport)
+        return None
+
+    auth_ok, auth = _parse_auth(name, transport, data.get("auth"))
+    if not auth_ok:
         return None
 
     tools_allowed = list(data.get("tools_allowed", []) or [])
@@ -190,6 +260,7 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
         transport=transport,
         url=_resolve_env(data.get("url", "")),
         headers=_resolve_dict(data.get("headers", {})),
+        auth=auth,
         command=_resolve_list(data.get("command", [])),
         env=_resolve_dict(data.get("env", {})),
         timeout_seconds=int(data.get("timeout_seconds", 30)),

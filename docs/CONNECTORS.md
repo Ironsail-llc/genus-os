@@ -19,7 +19,9 @@ the JSON-RPC 2.0 server is hand-rolled (protocol `2024-11-05`).
 
 > **When to use a bridge vs. a native MCP adapter:** if the service already
 > exposes an MCP endpoint, point a `transport: http` adapter straight at it (see
-> `robothor/engine/adapters.py`). Only use this bridge when the service is
+> `robothor/engine/adapters.py`, and
+> [OAuth client_credentials](#native-mcp-servers-that-take-oauth-client_credentials)
+> when it mints tokens instead of issuing a static one). Only use this bridge when the service is
 > REST-only. Tip: probe `/.well-known/mcp` and `/mcp` before assuming MCP exists
 > — a scope named `mcp:...` on an API token does **not** imply an MCP server.
 
@@ -178,6 +180,68 @@ Then add the `example_*` tool names to the agent's `tools_allowed` in
 `docs/agents/<agent>.yaml` (the adapter's `agents:` list scopes *which* agents
 can see them; the allowlist controls *whether* they're exposed). Tools are
 discovered from the bridge's `tools/list` at registration — no per-tool code.
+
+## Native MCP servers that take OAuth client_credentials
+
+Some native MCP servers do not issue a long-lived bearer token. Instead the
+operator registers a client with the service and receives a `client_id` and
+`client_secret`, and the client mints short-lived access tokens at the
+service's token endpoint (OAuth 2.0 `client_credentials`, RFC 6749 §4.4). An
+`http` adapter does that itself when it carries an `auth:` block:
+
+```yaml
+# ~/.config/robothor/adapters/example-platform.yaml
+name: example-platform
+transport: http
+url: "https://platform.example.com/_mcp"
+auth:
+  type: oauth_client_credentials
+  token_url: "https://platform.example.com/oauth/token"
+  client_id: "${EXAMPLE_PLATFORM_CLIENT_ID}"
+  client_secret: "${EXAMPLE_PLATFORM_CLIENT_SECRET}"
+  scope: "platform:read platform:write"   # optional; omit if the server needs none
+headers:                                  # optional; static headers still apply
+  X-Request-Source: "genus-os"
+protocol: "2026-07-28"                    # if the server is stateless; default legacy
+agents: ["main"]
+timeout_seconds: 30
+tools_allowed:
+  - search_actions
+  - describe_action
+  - call_action
+read_only:
+  - search_actions
+  - describe_action
+```
+
+How it behaves:
+
+- **`${VAR}` placeholders resolve from the engine's environment**, exactly as
+  in `headers:`. Keep the client id and secret in SOPS, never in the YAML.
+- **Before every request** the engine sends `Authorization: Bearer <token>`.
+  The token is minted with `grant_type=client_credentials` (secret in the form
+  body) and cached until 60 seconds before its `expires_in`; a burst of calls
+  makes one token request. It overrides any static `Authorization` in
+  `headers:`, and every other static header is still sent.
+- **A 401 from the MCP server** drops the cached token, mints a new one and
+  retries the request **once**. A second 401 is reported to the agent as an
+  error, as is a refusal from the token endpoint (only the OAuth `error` code
+  and the HTTP status are carried, never `error_description`, which some
+  servers use to echo the rejected credential).
+- **Neither the secret nor a token is ever logged.** The engine log names the
+  adapter and the client id only.
+
+Refused at load, with the reason in the engine log (same as an unknown
+`transport:` — an auth block the engine cannot honour must not load as an
+unauthenticated adapter):
+
+- an `auth.type` other than `oauth_client_credentials`, or an `auth:` that is
+  not a mapping;
+- `auth:` on a `stdio` adapter (it applies to `http` only; a stdio server takes
+  its credentials through `env:`);
+- a missing `token_url`, `client_id` or `client_secret`, including one whose
+  `${VAR}` is unset in the environment;
+- a `token_url` that is not an `http(s)://` URL.
 
 ## Verify
 
