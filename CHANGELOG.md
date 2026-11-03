@@ -1,3 +1,9 @@
+## [1.127.1](https://github.com/Ironsail-llc/genus-os/compare/v1.127.0...v1.127.1) (2026-11-03)
+
+### Bug Fixes
+
+* **plugins:** scaffold new plugin workflows on ubuntu-26.04 (RD-3160) ([#859](https://github.com/Ironsail-llc/genus-os/issues/859)) ([7344508](https://github.com/Ironsail-llc/genus-os/commit/7344508e0f84e703b4b51de48617f04b5a5eb9f1))
+
 ## [1.127.0](https://github.com/Ironsail-llc/genus-os/compare/v1.126.0...v1.127.0) (2026-11-03)
 
 ### Features
