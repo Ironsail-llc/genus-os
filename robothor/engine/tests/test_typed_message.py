@@ -49,6 +49,9 @@ def _text_message(text: str, *, reply_to: int | None = None):
     message.from_user.username = None
     message.from_user.first_name = "Alice"
     message.message_id = 7
+    message.forward_origin = None
+    message.forward_from = None
+    message.forward_date = None
     if reply_to is None:
         message.reply_to_message = None
     else:
@@ -173,3 +176,25 @@ class TestRunner:
                 typed_message="hi",
             )
         assert seen == ["hi"]
+
+
+class TestForwarded:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("marker", ["forward_origin", "forward_from", "forward_date"])
+    async def test_a_forwarded_message_is_not_typed_text(self, bot, marker):
+        """A forwarded message is somebody else's words; the person typed none."""
+        bot._enqueue_message = AsyncMock()
+        bot._resolve_user = MagicMock(
+            return_value={
+                "tenant_id": "t",
+                "display_name": "Alice",
+                "role": "owner",
+                "user_id": "u",
+            }
+        )
+        # Built at run time: a literal key-shaped string trips secret scanning.
+        message = _text_message("OPENWEATHER_API_KEY=" + "c0ffee42" * 4)
+        setattr(message, marker, MagicMock())
+        await bot.handle_text(message)
+        _args, kwargs = bot._enqueue_message.call_args
+        assert kwargs.get("typed_text") == ""
