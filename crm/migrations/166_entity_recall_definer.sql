@@ -25,8 +25,10 @@
 -- That second check compares a parameter with a setting, not a row, so it
 -- costs the planner nothing.
 --
--- p_person_id, when given, keeps the restricted-caller filter the inline
--- query had: the person's own facts and facts about no one.
+-- p_restricted keeps the restricted-caller filter the inline query had: the
+-- facts of p_person_id and facts about no one. A restricted caller with no
+-- linked person (p_person_id NULL) gets only facts about no one; restricted
+-- is never inferred from a missing person.
 --
 -- Rows come back per candidate (WITH ORDINALITY, in the order given), at most
 -- three each, ranked by the recency/importance blend
@@ -36,6 +38,7 @@
 CREATE OR REPLACE FUNCTION entity_facts_for_candidates(
     p_tenant_id text,
     p_candidates text[],
+    p_restricted boolean,
     p_person_id uuid DEFAULT NULL
 )
 RETURNS TABLE (
@@ -63,7 +66,7 @@ AS $$
         WHERE m.is_active = TRUE
           AND m.tenant_id = p_tenant_id
           AND public.lower_entities(m.entities) && ARRAY[lower(c.name)]
-          AND (p_person_id IS NULL OR m.person_id = p_person_id OR m.person_id IS NULL)
+          AND (NOT p_restricted OR m.person_id IS NULL OR m.person_id = p_person_id)
         ORDER BY rank_score DESC, m.created_at DESC
         LIMIT 3
     ) f
@@ -71,11 +74,11 @@ AS $$
     ORDER BY c.ord, f.rank_score DESC, f.created_at DESC
 $$;
 
-REVOKE ALL ON FUNCTION entity_facts_for_candidates(text, text[], uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION entity_facts_for_candidates(text, text[], boolean, uuid) FROM PUBLIC;
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'robothor_app') THEN
-        GRANT EXECUTE ON FUNCTION entity_facts_for_candidates(text, text[], uuid)
+        GRANT EXECUTE ON FUNCTION entity_facts_for_candidates(text, text[], boolean, uuid)
             TO robothor_app;
     END IF;
 END $$;
