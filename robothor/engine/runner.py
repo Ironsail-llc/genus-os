@@ -547,6 +547,7 @@ class AgentRunner(
         identity: IdentityContext | None = None,
         live_inbox: LiveInbox | None = None,
         user_images: list[dict[str, Any]] | None = None,
+        typed_message: str | None = None,
     ) -> AgentRun:
         """Execute an agent with the given message.
 
@@ -564,6 +565,9 @@ class AgentRunner(
                 ``spawn_context.identity`` (attribution only — a child's own
                 prompt never renders the CURRENT USER block, since its
                 trigger_type is SUB_AGENT, not an interactive one).
+            typed_message: The raw text the person typed, when a channel
+                assembled ``message`` around it (a reply quote, attachment
+                text). Credential intake reads only this.
         Returns the completed AgentRun with full metadata.
         """
         message = protect_if_human_chat(message, trigger_type)
@@ -638,6 +642,7 @@ class AgentRunner(
 
         await attach_session(session)
         session.live_inbox = live_inbox  # chat sent mid-run; see live_inbox.py
+        session.typed_message = typed_message or ""
         session.response_format = agent_config.response_format
         session.provider_order = agent_config.provider_order
 

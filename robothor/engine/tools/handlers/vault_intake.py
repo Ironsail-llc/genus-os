@@ -4,14 +4,17 @@ Intake is a person handing the chat agent a credential. Who is in the
 conversation is not enough to decide that: after the agent has read an email,
 a web page or any other tool output, an instruction injected there can ask for
 a ``vault_set`` or a ``vault_delete`` in the same run. So the vault tools that
-change or enumerate the vault are admitted only for what the person's OWN
-message this turn (``session.originating_message``) asked for:
+change or enumerate the vault are admitted only for what the person TYPED this
+turn (``session.typed_message``, set by the channel without a reply quote, an
+attachment's text or a forwarded block) asked for:
 
-* ``vault_set`` — the value appears in that message as a whole token (bounded
+* ``vault_set`` — the value appears in that text as a whole token (bounded
   by whitespace, quotes, brackets or sentence punctuation, or after ``=`` or
   ``:``), is credential-sized (at least 16 characters, or at least 8 when it
   contains a character that is not a letter or digit), is not made of letters
-  alone, and the same message names the key;
+  alone, and sits beside a name for THIS key: ``NAME=value`` / ``name: value``,
+  or in the same clause (no newline or ``.;!?`` between them) within
+  :data:`MAX_KEY_DISTANCE` words;
 * ``vault_delete`` — that message asks for a removal (delete, remove, revoke,
   forget, drop, clear, rotate out) and names the key;
 * ``vault_list`` — that message asks which credentials are stored.
@@ -20,8 +23,8 @@ message this turn (``session.originating_message``) asked for:
 (``OPENWEATHER_API_KEY``), or its vendor segment (``openweather``).
 
 ``vault_get`` and ``vault_test`` never return a value and are not narrowed.
-Tool output never reaches ``originating_message``, so nothing a tool returned
-can satisfy these checks.
+Tool output never reaches ``typed_message``, so nothing a tool returned, and
+nothing a file or a quoted message carried in, can satisfy these checks.
 """
 
 from __future__ import annotations
@@ -37,6 +40,12 @@ MIN_SYMBOL_VALUE_CHARS = 8
 #: What may sit around a pasted value without being part of it.
 _WRAPPING = "\"'`()[]{}<>,;.!?"
 _ASSIGNMENT = ("=", ":")
+
+#: How many words may separate a value from the name of the key it is for.
+MAX_KEY_DISTANCE = 6
+
+#: Where one clause ends: a newline, or sentence punctuation before a space.
+_CLAUSE_END = re.compile(r"\n|[.;!?](?=\s|$)")
 
 _REMOVAL = re.compile(
     r"\b(delete|remove|revoke|forget|drop|clear|rotate[\s-]+out)\b", re.IGNORECASE
@@ -103,11 +112,38 @@ def pasted_by_the_person(message: str, value: str) -> bool:
     return _is_credential_sized(value) and _is_a_whole_token(message or "", value)
 
 
+def _token_names_the_key(token: str, key: str) -> bool:
+    return _names_the_key(token.strip(_WRAPPING), key)
+
+
+def _beside_its_key(message: str, key: str, value: str) -> bool:
+    """``value`` and a name for ``key`` share a clause, a few words apart."""
+    for clause in _CLAUSE_END.split(message):
+        tokens = clause.split()
+        values: list[int] = []
+        for index, raw in enumerate(tokens):
+            for token in (raw, raw.strip(_WRAPPING)):
+                if token == value:
+                    values.append(index)
+                for mark in _ASSIGNMENT:
+                    name, sep, rest = token.rpartition(mark)
+                    if sep and rest == value and name and _names_the_key(name, key):
+                        return True
+                    if sep and rest == value:
+                        values.append(index)
+        if not values:
+            continue
+        names = [i for i, raw in enumerate(tokens) if _token_names_the_key(raw, key)]
+        if any(abs(v - n) <= MAX_KEY_DISTANCE for v in values for n in names):
+            return True
+    return False
+
+
 def _handed_over(message: str, key: str, value: str) -> bool:
     return (
         _is_credential_sized(value)
         and _is_a_whole_token(message, value)
-        and _names_the_key(message, key)
+        and _beside_its_key(message, key, value)
     )
 
 

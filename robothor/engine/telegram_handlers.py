@@ -878,6 +878,9 @@ class TelegramHandlersMixin:
         # to the model, and the person who typed the message saw nothing.
         docked = marker_truncated(user_text)
         user_text = protect_payment_text(user_text)
+        # What the person typed, before a bundle expands it or a reply quote is
+        # prepended: credential intake reads only this.
+        typed_text = user_text
         if docked:
             await message.answer(
                 "I stopped reading that message at the line starting with /secure and "
@@ -995,7 +998,9 @@ class TelegramHandlersMixin:
             return
 
         # Execute via coalescing buffer (shared with handle_file)
-        await self._enqueue_message(chat_id, session_key, session, user_text, sender_info=user_info)
+        await self._enqueue_message(
+            chat_id, session_key, session, user_text, sender_info=user_info, typed_text=typed_text
+        )
 
     async def on_message_reaction(self, event: Any) -> None:
         """Record operator 👍/👎/😡 reactions as goal-judge signals (Phase 2).

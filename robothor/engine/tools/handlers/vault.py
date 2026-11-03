@@ -476,8 +476,13 @@ async def _redact_a_refused_paste(args: dict[str, Any], ctx: ToolContext) -> Non
 
 
 def _typed_text(session: Any) -> str:
-    """What the person wrote this turn, as far as the run knows it."""
-    return str(getattr(session, "originating_message", "") or "")
+    """What the person TYPED this turn: no reply quote, no attachment text.
+
+    ``originating_message`` is the assembled turn, and a third party's file or
+    a quoted fleet message inside it is not the person handing anything over.
+    A channel that does not set ``typed_message`` hands nothing over.
+    """
+    return str(getattr(session, "typed_message", "") or "")
 
 
 def _audit_metadata(ctx: ToolContext, session: Any) -> dict[str, Any]:
@@ -513,12 +518,14 @@ async def _forget_the_value_everywhere(value: str, stored_fingerprint: str, sess
     original = session.run.task_text
     cleaned = redact(original) if original else original
     originating = getattr(session, "originating_message", None)
+    placeholder = f"<redacted:{stored_fingerprint}>"
     if originating:
         # Only THIS value: a second key in the same message is still the
         # person's hand-over, and the intake gate looks for it here.
-        session.originating_message = redact_known_value(
-            originating, value.strip(), f"<redacted:{stored_fingerprint}>"
-        )
+        session.originating_message = redact_known_value(originating, value.strip(), placeholder)
+    typed = getattr(session, "typed_message", None)
+    if typed:
+        session.typed_message = redact_known_value(typed, value.strip(), placeholder)
     if cleaned == original:
         return
     session.run.task_text = cleaned

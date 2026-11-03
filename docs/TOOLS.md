@@ -1356,17 +1356,22 @@ have read an email, a web page or some other tool output:
   sender Telegram fills in as the owner without a registration is refused
   with `gate: unverified_sender`.
 - **Where:** a top-level run that person started by typing in chat.
-- **What, this turn:** `vault_set` only stores a value the person's own
-  message this turn carries as a whole token (not inside a longer word), that
-  is credential-sized (16 characters or more, or 8 or more with a character
-  that is not a letter or digit, and never letters alone), and where the same
-  message names the key: the vault key, a name a reader uses such as
-  `OPENWEATHER_API_KEY`, or the vendor. Otherwise `gate: not_handed_over`, so a
-  value that only came from a tool result is refused. `vault_delete` only
-  removes a key when that message asks for a removal (delete, remove, revoke,
-  forget, drop, clear, rotate out) and names it, and `vault_list` only lists
-  when that message asks for a list; otherwise `gate: not_requested`.
-  `vault_get` and `vault_test` never return a value and are not narrowed.
+- **What, this turn, typed:** intake reads only the text the person typed
+  this turn. A quoted message they replied to, the text of a file they attached
+  and a forwarded block are not theirs, so nothing in them counts. `vault_set`
+  only stores a value that text carries as a whole token (not inside a longer
+  word), that is credential-sized (16 characters or more, or 8 or more with a
+  character that is not a letter or digit, and never letters alone), and that
+  sits beside a name for this key: `NAME=value`, `name: value`, or in the same
+  clause (no newline or `.`, `;`, `!`, `?` between them) within six words of
+  the vault key, a reader's name such as `OPENWEATHER_API_KEY`, or the vendor.
+  A vendor named in another clause does not qualify another key. Otherwise
+  `gate: not_handed_over`, so a value that came from a tool result, a file or a
+  quote is refused. `vault_delete` only removes a key when the typed text asks
+  for a removal (delete, remove, revoke, forget, drop, clear, rotate out) and
+  names it, and `vault_list` only lists when it asks for a list; otherwise
+  `gate: not_requested`. `vault_get` and `vault_test` never return a value and
+  are not narrowed.
 
 Every refusal carries `gate` and `unlock`, the sentence the agent can pass on.
 See [Configuration](configuration.md) for the rest of the rule.

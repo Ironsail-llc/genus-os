@@ -239,6 +239,10 @@ class AgentSession:
         # (cron/service) runs. Read by _run_loop to carry onto a fresh
         # SpawnContext for any children this run spawns.
         self.identity: IdentityContext | None = None
+        # The text the person TYPED this turn, set by the channel: no reply
+        # quote, no attachment text, no forwarded block. Credential intake
+        # reads only this; the assembled turn is ``originating_message``.
+        self.typed_message: str = ""
         self._step_counter = 0
         self._start_time: float | None = None
         self._tool_offload_threshold = tool_offload_threshold

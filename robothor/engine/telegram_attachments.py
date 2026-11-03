@@ -661,6 +661,8 @@ class TelegramAttachmentsMixin:
             user_text,
             sender_info=user_info,
             attachments=rows,
+            # Only the caption is typed; the file's text is not the person's.
+            typed_text=str(getattr(message, "caption", "") or ""),
         )
 
 

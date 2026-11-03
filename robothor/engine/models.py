@@ -813,6 +813,12 @@ class DeepRunState:
     trajectory_file: str = ""
     error: str = ""
 
+    def to_dict(self) -> dict[str, Any]:
+        """For JSON responses: every field, as stored."""
+        from dataclasses import asdict
+
+        return asdict(self)
+
 
 # ─── Workflow Engine Models ────────────────────────────────────────────
 

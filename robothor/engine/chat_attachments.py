@@ -128,6 +128,9 @@ class WebchatTurn:
     """What a turn with files becomes: the text, the image blocks, the record."""
 
     text: str
+    #: What the person typed, before any file's text joined it. Credential
+    #: intake reads only this.
+    typed: str = ""
     images: list[dict[str, Any]] = field(default_factory=list)
     rows: list[dict[str, Any]] = field(default_factory=list)
 
@@ -269,14 +272,14 @@ async def prepare_turn(
         # turn left for the files' note or their image blocks to ride on.
         raise AttachmentRefusal(422, "files cannot be added to a running task; send them next")
     if not incoming:
-        return WebchatTurn(text=message)
+        return WebchatTurn(text=message, typed=message)
     from robothor.engine.model_registry import image_capability
 
     # The manifest read is file I/O: off the loop.
     model = await asyncio.to_thread(_model_for, config, session, session_key)
     sees_images = image_capability(model) == "accepts"
     request_id = str(body.get("request_id") or uuid.uuid4())
-    turn = WebchatTurn(text=message)
+    turn = WebchatTurn(text=message, typed=message)
     noted_all: list[attachments.NotedAttachment] = []
     for index, item in enumerate(incoming):
         kind = attachments.kind_for(item.mime, item.name)

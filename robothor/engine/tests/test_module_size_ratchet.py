@@ -85,7 +85,10 @@ CAPS = {
     # instead of a parser. It came back to the cap when the private-input cut
     # was added to it, and trimming that explanation to fit is the trade this
     # file has refused before.
-    "robothor/engine/telegram.py": 1980,
+    # 1980 -> 1945: interactive delivery accounting moved to
+    # telegram_delivery.py, which paid for threading the typed text (what the
+    # person typed, apart from reply quotes and file text) to the run.
+    "robothor/engine/telegram.py": 1945,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new
@@ -762,7 +765,9 @@ CAPS = {
     # 1600 -> 1562: webchat attachments added a call site (the intake itself
     # is chat_attachments.py) and paid for it by moving the three pure plan
     # helpers to chat_plan_helpers.py, which chat.py re-exports.
-    "robothor/engine/chat.py": 1562,
+    # 1562 -> 1546: DeepRunState serialises itself (models.py), which paid for
+    # passing the typed text to the run.
+    "robothor/engine/chat.py": 1546,
     # 1600 -> 1607 (2026-08-27): fleet admission finally has a caller here.
     # The 75-line implementation went to admission.py; what remains is five
     # irreducible call sites (admit / register / complete / import). The
