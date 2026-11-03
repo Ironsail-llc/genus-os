@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import re
 import time
 from collections.abc import Callable  # noqa: TC003
 from dataclasses import dataclass, field
@@ -37,19 +38,22 @@ CHECKPOINT_SCHEMA_VERSION = 1  # increment when checkpoint format changes
 IMAGE_PLACEHOLDER = "[image omitted from the checkpoint; its path is named in the turn]"
 
 
-def _redacted(messages: list[Any]) -> list[Any]:
+def _redacted(messages: list[Any], stored: tuple[str, ...] = ()) -> list[Any]:
     """*messages* with the history redaction (``redact_message``) applied.
 
-    What the person typed (``user``) and the system turn that carries the task
-    record also lose every opaque run (:func:`redact_opaque_runs`): a bare
-    32-hex key has no shape, and once the process that registered it has
-    restarted only this catches it. Tool results keep theirs: a git SHA there
-    is information.
+    ``stored`` is a per-restore set of values the vault holds (see
+    :func:`_stored_credentials`), replaced here whatever the process-wide
+    registry knows. What the person typed (``user``) and the system turn that
+    carries the task record also lose every opaque run
+    (:func:`redact_opaque_runs`): a bare 32-hex key has no shape. Tool results
+    keep theirs: a git SHA there is information.
     """
-    from robothor.secrets.redaction import redact_message, redact_opaque_runs
+    from robothor.secrets.redaction import PLACEHOLDER, redact_message, redact_opaque_runs
 
     out: list[Any] = []
     for message in messages:
+        if stored:
+            message = _replace_values(message, stored, PLACEHOLDER)
         cleaned = redact_message(message)
         if (
             isinstance(cleaned, dict)
@@ -61,13 +65,44 @@ def _redacted(messages: list[Any]) -> list[Any]:
     return out
 
 
-def _register_stored_values(tenant_id: str | None) -> None:
-    """Teach this process's redactor every value the vault stores.
+def _replace_values(value: Any, stored: tuple[str, ...], placeholder: str) -> Any:
+    """A copy of *value* with every string's ``stored`` values replaced."""
+    if isinstance(value, str):
+        for secret in stored:
+            if secret in value:
+                value = value.replace(secret, placeholder)
+        return value
+    if isinstance(value, dict):
+        return {k: _replace_values(v, stored, placeholder) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_replace_values(v, stored, placeholder) for v in value]
+    return value
 
-    The registry of handed-over values is in-process and empty after a
-    restart, while a checkpoint lives thirty days. Read in-process through the
-    vault, registered, never logged; a vault that cannot be read leaves only
-    the shape and opaque-run passes.
+
+#: A UUID, a number, an email address or a URL: an identifier the vault may
+#: hold (a tenant or client id, a chat id), never a credential to scrub.
+_IDENTIFIER = re.compile(
+    r"^(?:[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+    r"|[-+]?\d+|[^@\s]+@[^@\s]+\.\w+|\w+://\S+)$"
+)
+
+
+def _is_credential_like(value: str) -> bool:
+    """At least 16 characters, two of lower case, upper case and digits, and
+    not an identifier (:data:`_IDENTIFIER`)."""
+    if len(value) < 16 or _IDENTIFIER.match(value):
+        return False
+    return sum(any(t(c) for c in value) for t in (str.islower, str.isupper, str.isdigit)) >= 2
+
+
+def _stored_credentials(tenant_id: str | None) -> tuple[str, ...]:
+    """The credential-like values the vault stores, longest first.
+
+    Read in-process through the vault and never logged. Each is also
+    registered with the process-wide redactor, so later tool results and
+    history redact it after a restart; identifiers the vault holds are left
+    out of both. A vault that cannot be read gives none, and the restore still
+    redacts by shape and by opaque run.
     """
     from robothor.constants import DEFAULT_TENANT
     from robothor.secrets.fingerprint import fingerprint
@@ -79,10 +114,12 @@ def _register_stored_values(tenant_id: str | None) -> None:
         values = vault.export_env(tenant_id=tenant_id or DEFAULT_TENANT).values()
     except Exception as exc:  # noqa: BLE001 - the restore still redacts by shape
         logger.warning("checkpoint restore: vault unreadable (%s)", type(exc).__name__)
-        return
-    for value in values:
-        if isinstance(value, str) and value:
-            register_known_value(value, fingerprint=fingerprint(value))
+        return ()
+    found = {v for v in values if isinstance(v, str) and _is_credential_like(v)}
+    stored = tuple(sorted(found, key=len, reverse=True))
+    for value in stored:
+        register_known_value(value, fingerprint=fingerprint(value))
+    return stored
 
 
 def _at_rest(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -264,8 +301,8 @@ class CheckpointManager:
                 # the raw turn; resume must not read a credential back into
                 # the run (and from it, into ``originating_message``).
                 if isinstance(result.get("messages"), list):
-                    _register_stored_values(tenant_id)
-                    result["messages"] = _redacted(result["messages"])
+                    stored = _stored_credentials(tenant_id)
+                    result["messages"] = _redacted(result["messages"], stored)
                 from robothor.engine.runtime.contracts import StateEnvelope
 
                 envelope = (result.get("scratchpad") or {}).get("_runtime")

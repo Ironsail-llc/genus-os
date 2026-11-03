@@ -1387,7 +1387,8 @@ could not be stored. Every copy kept after it is redacted: chat history, the
 recorded steps, run checkpoints (which resume reads back), and the engine log,
 which records a Telegram message's length, never its text. A checkpoint is
 redacted again when it is read back: the reading process first registers every
-value the vault stores, so a value handed over before a restart is still
+credential-like value the vault stores (not the identifiers it also holds, such
+as a tenant id or a chat id), so a value handed over before a restart is still
 caught, and what the person typed also loses any opaque run of 32 or more key
 characters (a bare hex key has no other shape; a UUID is kept, and tool results
 keep their hashes).
