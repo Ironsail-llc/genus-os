@@ -17,6 +17,8 @@ ate every message would trade one unusable outcome for another.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from robothor.secrets.redaction import PLACEHOLDER, redact, redact_unrecognized_arguments
@@ -559,3 +561,63 @@ class TestRedactCarriesNoProductProse:
         out = redact('/secure profile\n{"legal_name":"private-person-canary"}')
         assert "private-person-canary" not in out
         assert "[" not in out and "]" not in out, out
+
+
+#: Google OAuth formats, visibly fake. A CLI's credentials file holds both, and
+#: an agent shell that prints the file puts them in the model's context and in
+#: every stored copy of the tool result.
+GOOGLE_CLIENT_SECRET = "GOCSPX-FAKEfake0000notarealsecret0"
+GOOGLE_REFRESH = "1//0gFAKE-not-a-real-refresh-token-0000000000000000"
+
+
+class TestGoogleOAuthCredentials:
+    @pytest.mark.parametrize(
+        "secret", [GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH], ids=["client-secret", "refresh-token"]
+    )
+    def test_a_bare_google_credential_goes(self, secret: str) -> None:
+        cleaned = redact(f"the value is {secret} and that is all")
+
+        assert secret not in cleaned
+        assert cleaned.endswith("and that is all")
+
+    def test_a_printed_credentials_file_loses_every_secret_and_stays_json(self) -> None:
+        printed = json.dumps(
+            {
+                "client_id": "123-fake.apps.googleusercontent.com",
+                "client_secret": "not-shaped-like-anything-0000",
+                "refresh_token": "also-not-shaped-0000",
+                "token_type": "Bearer",
+                "type": "authorized_user",
+            },
+            indent=2,
+        )
+
+        cleaned = json.loads(redact(printed))
+
+        assert cleaned["client_secret"] == PLACEHOLDER
+        assert cleaned["refresh_token"] == PLACEHOLDER
+        assert cleaned["client_id"] == "123-fake.apps.googleusercontent.com"
+        assert cleaned["token_type"] == "Bearer"
+        assert cleaned["type"] == "authorized_user"
+
+    def test_a_secret_named_key_inside_an_escaped_tool_result_goes(self) -> None:
+        """How it reached storage: the file's JSON, as a string, inside the tool's JSON."""
+        inner = json.dumps({"client_secret": "not-shaped-like-anything-0000"})
+        outer = json.dumps({"stdout": inner, "exit_code": 0})
+
+        cleaned = redact(outer)
+
+        assert "not-shaped-like-anything-0000" not in cleaned
+        assert json.loads(json.loads(cleaned)["stdout"])["client_secret"] == PLACEHOLDER
+
+    @pytest.mark.parametrize(
+        "innocent",
+        [
+            '{"max_tokens": "4096", "input_tokens": "12"}',
+            '{"token_type": "Bearer", "key": "value"}',
+            '{"secret_rotation_days": "30", "token_path": "tokens/bot.json"}',
+            '"client_secret": null',
+        ],
+    )
+    def test_a_key_about_a_credential_keeps_its_value(self, innocent: str) -> None:
+        assert redact(innocent) == innocent
