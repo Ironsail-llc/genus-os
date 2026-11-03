@@ -81,7 +81,7 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     roots = secret_paths.credential_roots(ctx.workspace)
     if gate := await asyncio.to_thread(secret_paths.exec_names_credential, command, roots=roots):
         return gate
-    refused = exec_reads_secret(command)
+    refused = exec_reads_secret(command, cwd=getattr(ctx, "workspace", "") or None)
     if refused:
         return {"error": refused}
 
