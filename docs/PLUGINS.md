@@ -33,8 +33,11 @@ scaffold writes `knowledge/README.md` explaining this, a sample
 `knowledge/facts.json` with one advisory record, `knowledge.py` to read the
 records, and a `<name>.knowledge` doctor check (declared under `checks:` and the
 `genus.doctor` entry point) that warns when a record's `reviewed_on` is null or
-its `last_verified` is more than 30 days old. The sample record makes it warn
-until someone reviews or replaces it.
+its `last_verified` is more than 30 days old, when it finds no records, or when
+a file sits where it does not look (only top-level `.md` and `.json` files in
+`knowledge/` are records and package data; `index.json`, a load manifest, is
+not a record). The sample record makes it warn until someone reviews or
+replaces it.
 
 It also writes two release files. `programmatic.json` is the listing a plugin
 index reads: the plugin's display name, its `id` (the plugin name), the same

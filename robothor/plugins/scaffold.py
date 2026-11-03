@@ -263,8 +263,17 @@ def reviewed(record: Any) -> bool:
 def findings(directory: Path = DIR, today: date | None = None) -> list[str]:
     """What a person has to look at: missing fields, unreviewed records, stale records."""
     today = today or datetime.now(UTC).date()
-    problems: list[str] = []
-    for label, record in records(directory):
+    problems = [
+        f"{path.name}: not read (only top-level .md and .json files are records and package data)"
+        for path in sorted(directory.glob("*"))
+        if path.name not in NOT_RECORDS
+        and not path.name.startswith(".")
+        and (path.is_dir() or path.suffix not in (".md", ".json"))
+    ]
+    found = records(directory)
+    if not found:
+        problems.append(f"no knowledge records found in {directory}")
+    for label, record in found:
         if not isinstance(record, dict) or not record:
             problems.append(f"{label}: not a knowledge record (front matter or a JSON list of objects)")
             continue
@@ -561,8 +570,9 @@ with `SHA256SUMS`. A released version is never rebuilt: tag a new one.
 
 - Every path in `genus-plugin.yaml` is relative to that file and must be
   package data. `pyproject.toml` already covers `agents/`, `workflows/`,
-  `patches/` and `files/`; put new files there, or add the directory to
-  `[tool.setuptools.package-data]`.
+  `patches/`, `files/` and top-level `knowledge/*.md` and `knowledge/*.json`;
+  put new files there, or add the directory to `[tool.setuptools.package-data]`.
+  A knowledge subfolder is neither packaged nor read: the doctor check names it.
 - Rules are code: a decision, a route or a write changes by pull request with a
   test. Knowledge (procedure prose, wording, facts) is a record in `knowledge/`
   with `owner`, `source` and `reviewed_on`; only a person edits it, and a record
