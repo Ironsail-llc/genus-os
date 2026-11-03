@@ -350,3 +350,14 @@ def test_every_builder_call_goes_to_the_acting_tenants_engine(root_workspace):
             headers = {"Authorization": f"Bearer {token}"}
             assert client.get("/api/agent-manifests", headers=headers).status_code == 200
             assert reached[-1] == expected
+
+
+def test_running_an_agent_on_an_old_engine_is_a_502_naming_the_upgrade(root_workspace, old_engine):
+    """Like every other builder route: the missing route is not the agent refusing."""
+    with patch("routers.agent_manifests.audited") as audited:
+        response = _client().post("/api/agent-manifests/child-agent/run")
+    assert response.status_code == 502
+    assert "upgrade the engine" in response.json()["detail"]
+    assert not any(
+        c.kwargs.get("status") == "error" for c in audited.call_args_list
+    ), "an old engine is not recorded as the agent refusing the trigger"
