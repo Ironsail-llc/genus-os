@@ -144,6 +144,75 @@ tests:
           path: spec.template.spec.containers[0].env
           content: {name: ROBOTHOR_TENANT_ID, value: someone-else}
 
+  - it: a tenant env value of null drops the key it would inherit from engine.env
+    template: engine/tenants.yaml
+    set:
+      engine.env.SHARED_FLAG: from-engine
+      engine.env.ACME_CHANNELS: acme-only
+      tenants:
+        - id: acme-child-a
+          env:
+            ACME_CHANNELS: null
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SHARED_FLAG, value: from-engine}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ACME_CHANNELS}
+          any: true
+
+  - it: envOmitPrefixes drops every inherited engine.env key with that prefix, not the cell's own
+    template: engine/tenants.yaml
+    set:
+      engine.env.SHARED_FLAG: from-engine
+      engine.env.ALPHA_MODE: root
+      engine.env.ALPHA_KILL: writes
+      engine.env.BETA_MODE: root
+      tenants:
+        - id: acme-child-a
+          envOmitPrefixes: [ALPHA_]
+          env:
+            ALPHA_OWN: from-tenant
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SHARED_FLAG, value: from-engine}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: BETA_MODE, value: root}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ALPHA_OWN, value: from-tenant}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ALPHA_MODE}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ALPHA_KILL}
+          any: true
+
+  - it: envOmitPrefixes cannot drop the cell's tenant identity
+    template: engine/tenants.yaml
+    set:
+      tenants:
+        - id: acme-child-a
+          envOmitPrefixes: [ROBOTHOR_]
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_TENANT_ID, value: acme-child-a}
+
   - it: a tenant can set its own replica count and resources
     template: engine/tenants.yaml
     set:
