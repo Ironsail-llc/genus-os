@@ -191,3 +191,43 @@ def test_a_final_double_star_under_a_listed_directory_is_refused(home: Path) -> 
     out = _exec(home, "cat ~/.ssh/**")
     assert out.get("error_type") == "credential_path", out
     _refused(out)
+
+
+# ── 4. a relative glob expands where the cd leaves the shell ──────────────────
+
+
+@pytest.mark.parametrize(
+    ("command", "rel"),
+    [
+        ("cd ~ && cat .ss*/id*", ".ssh/id_rsa"),
+        ("cd ~ && cat .config/gh/*", ".config/gh/hosts.yml"),
+        ("cd ~ && cat s*.key", "server.key"),
+        ("cd && cat .aw?/cred*", ".aws/credentials"),
+    ],
+)
+def test_a_relative_glob_after_cd_home_is_refused(home: Path, command: str, rel: str) -> None:
+    _write(home / rel)
+    out = _exec(home, command)
+    assert out.get("error_type") == "credential_path", out
+    _refused(out)
+
+
+def test_a_relative_glob_after_cd_onto_regular_files_is_read(home: Path) -> None:
+    _write(home / "ws" / "sub" / "a.txt", "alpha")
+    _write(home / "ws" / "sub" / "b.txt", "beta")
+    out = _exec(home, "cd sub && cat *.txt")
+    _admitted(out)
+    assert out["stdout"].split() == ["alpha", "beta"], out
+
+
+@pytest.mark.parametrize("command", ['cd "$D" && cat *.key', 'cd "$D" && cat id_*', "popd; cat *"])
+def test_a_glob_that_could_name_a_key_after_an_unknown_cd_is_refused(
+    home: Path, command: str
+) -> None:
+    _refused(_exec(home, command))
+
+
+@pytest.mark.parametrize("command", ['cd "$D" && cat *.txt', "ls *.py"])
+def test_a_glob_that_cannot_name_a_key_is_allowed(home: Path, command: str) -> None:
+    _write(home / "ws" / "tool.py", "print(1)")
+    _admitted(_exec(home, command))
