@@ -147,11 +147,38 @@ def test_every_route_refuses_a_service_token(controls_client_as_service, method,
     assert _call(controls_client_as_service, method, path, body).status_code == 403
 
 
-@pytest.mark.parametrize(("method", "path", "body"), ROUTES)
-def test_every_route_refuses_an_operator_of_another_tenant(
-    controls_client_as_other_tenant_owner, method, path, body
+def test_another_tenants_operator_reads_only_its_own_pairings(
+    controls_client_as_other_tenant_owner,
 ):
-    assert _call(controls_client_as_other_tenant_owner, method, path, body).status_code == 403
+    """Channel access is per tenant now: another tenant's owner is not refused,
+    every DAL call it reaches is scoped to ITS tenant."""
+    with patch("routers.channel_access.identities.list_pending", return_value=[]) as pending:
+        response = controls_client_as_other_tenant_owner.get("/api/channels/slack/pending")
+    assert response.status_code == 200
+    assert pending.call_args.kwargs["tenant_id"] == "acme-corp"
+
+
+def test_every_identity_dal_call_names_the_acting_tenant():
+    """Structural: a DAL call that forgot ``tenant_id`` would default to the
+    platform tenant and hand a child admin the root's pairings."""
+    import inspect
+    import re
+
+    from routers import channel_access
+
+    source = inspect.getsource(channel_access)
+    calls = re.findall(
+        r"identities\.(list_pending|approve_pairing|deny_pairing|list_identities|revoke)\b", source
+    )
+    assert len(calls) >= 6
+    for handler in (
+        channel_access.list_pending,
+        channel_access.approve,
+        channel_access.deny,
+        channel_access.list_bound,
+        channel_access.revoke,
+    ):
+        assert "tenant_id=get_tenant_id(request)" in inspect.getsource(handler), handler.__name__
 
 
 @pytest.mark.parametrize(("method", "path", "body"), ROUTES)
@@ -410,25 +437,13 @@ def test_a_duplicate_binding_is_a_409_not_a_500(controls_client_as_operator, sto
 # ── The tenant gate ─────────────────────────────────────────────────
 
 
-def test_the_router_is_mounted_with_the_primary_tenant_dependency():
-    """Pinned structurally because it cannot be pinned behaviourally here:
-    ``PLATFORM_TENANT`` and ``DEFAULT_TENANT`` are the same value in this suite,
-    so ``require_operator`` already rejects every request this dependency would.
-    Deleting the ``dependencies=[...]`` argument left all 40 tests green."""
+def test_the_router_has_no_primary_tenant_dependency():
+    """The tenant gate is ``require_tenant_admin`` in every handler; the old
+    router-wide "platform tenant only" dependency is gone."""
     from routers import channel_access
 
-    mounted = [dep.dependency for dep in channel_access.router.dependencies]
-    assert channel_access._require_primary_tenant in mounted
-
-
-def test_the_primary_tenant_dependency_refuses_a_secondary_tenant():
-    from fastapi import HTTPException
-    from routers import channel_access
-
-    with pytest.raises(HTTPException) as raised:
-        channel_access._require_primary_tenant(tenant_id="acme-corp")
-
-    assert raised.value.status_code == 403
+    assert not channel_access.router.dependencies
+    assert not hasattr(channel_access, "_require_primary_tenant")
 
 
 # ── Cache invalidation across the process boundary ──────────────────

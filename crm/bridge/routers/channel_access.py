@@ -7,7 +7,7 @@ anything reachable from the channel the code was sent over, which is the whole
 point of the design and is enforced in
 :mod:`robothor.engine.channels.identities`, not here.
 
-So every route's first statement is ``require_operator`` and every mutation
+So every route's first statement is ``require_tenant_admin`` and every mutation
 passes ``actor=f"operator:{...}"`` down to the DAL, which refuses any value
 that does not carry that prefix. A route that forgot the gate would not quietly
 become an open approval endpoint: the DAL would refuse it too. The two checks
@@ -47,39 +47,22 @@ from typing import Any
 
 import psycopg2
 from deps import get_tenant_id
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from robothor.engine.channels import access, identities
 from routers._audit import audited
 from routers._engine_client import engine_request
-from routers._operator import require_operator
+from routers._operator import require_tenant_admin
 
 logger = logging.getLogger(__name__)
 
 
-def _require_primary_tenant(tenant_id: str = Depends(get_tenant_id)) -> None:
-    """Channel access is appliance-global, so deny secondary tenants.
-
-    Symmetric with ``agent_manifests``: one engine owns one set of channels,
-    and a second tenant's operator approving a pairing on them would be
-    granting access to somebody else's instance.
-    """
-    from robothor.constants import DEFAULT_TENANT
-
-    if tenant_id != DEFAULT_TENANT:
-        raise HTTPException(
-            status_code=403,
-            detail="appliance administration not authorized for tenant",
-        )
-
-
-router = APIRouter(
-    prefix="/api/channels",
-    tags=["channel-access"],
-    dependencies=[Depends(_require_primary_tenant)],
-)
+#: Every route is the ACTING tenant's: its pairings and identities (every DAL
+#: call takes the tenant) and its engine (``engine_request(tenant=...)``),
+#: which holds that tenant's channel credentials.
+router = APIRouter(prefix="/api/channels", tags=["channel-access"])
 
 #: What may appear in a channel name. It reaches a SQL parameter, never a
 #: format string, so this is about refusing nonsense early with a 4xx rather
@@ -144,7 +127,7 @@ def _identity_id(value: str) -> str:
         raise HTTPException(status_code=422, detail="not an identity id") from None
 
 
-async def _tell_the_engine_to_forget() -> None:
+async def _tell_the_engine_to_forget(tenant: str) -> None:
     """Drop the engine's identity caches, best effort.
 
     The row is written in THIS process. The engine's belief about who a sender
@@ -159,7 +142,7 @@ async def _tell_the_engine_to_forget() -> None:
     The failure is logged, never raised.
     """
     try:
-        status, _ = await engine_request("POST", "/api/admin/identities/reload")
+        status, _ = await engine_request("POST", "/api/admin/identities/reload", tenant=tenant)
     except Exception:  # noqa: BLE001 - a settled decision must not fail on this
         logger.warning("Could not reach the engine to drop its identity caches", exc_info=True)
         return
@@ -235,7 +218,7 @@ def _target(value: str | None) -> str | None:
     return clean
 
 
-def _local_channel_state(names: list[str]) -> dict[str, dict[str, Any]]:
+def _local_channel_state(names: list[str], tenant_id: str) -> dict[str, dict[str, Any]]:
     """The two facts the ENGINE cannot answer, for each channel it listed.
 
     Blocking (psycopg2 + the settings resolver), so the route hands the whole
@@ -257,7 +240,7 @@ def _local_channel_state(names: list[str]) -> dict[str, dict[str, Any]]:
             mode = None
         pending: int | None
         try:
-            pending = len(identities.list_pending(name))
+            pending = len(identities.list_pending(name, tenant_id=tenant_id))
         except (psycopg2.Error, OSError):
             logger.warning("could not count pending pairings for channel %s", name)
             pending = None
@@ -305,14 +288,15 @@ async def list_channels(request: Request) -> dict[str, Any]:
     credentials for, which is exactly the map an attacker with a member session
     would want before deciding where to send anything.
     """
-    require_operator(request)
-    status, body = await engine_request("GET", "/api/admin/channels")
+    require_tenant_admin(request)
+    tenant_id = get_tenant_id(request)
+    status, body = await engine_request("GET", "/api/admin/channels", tenant=tenant_id)
     if status >= 400 or not isinstance(body, dict):
         raise HTTPException(status_code=502, detail=_listing_failure(status, body))
 
     entries = [entry for entry in (body.get("channels") or []) if isinstance(entry, dict)]
     local = await asyncio.to_thread(
-        _local_channel_state, [str(entry.get("name") or "") for entry in entries]
+        _local_channel_state, [str(entry.get("name") or "") for entry in entries], tenant_id
     )
     return {
         "channels": [
@@ -337,7 +321,7 @@ async def verify_channel(name: str, body: VerifyRequest, request: Request) -> JS
     Audited because it is an act with an effect outside this box — it may send
     a message — even though it writes nothing here.
     """
-    require_operator(request)
+    require_tenant_admin(request)
     channel = _channel(name)
     aimed = _target(body.target)
 
@@ -346,6 +330,7 @@ async def verify_channel(name: str, body: VerifyRequest, request: Request) -> JS
         f"/api/admin/channels/{channel}/verify",
         json={"target": aimed},
         timeout=_VERIFY_TIMEOUT_SECONDS,
+        tenant=get_tenant_id(request),
     )
     steps = result.get("steps") or [] if isinstance(result, dict) else []
     failed = sum(1 for step in steps if isinstance(step, dict) and not step.get("ok"))
@@ -370,10 +355,10 @@ async def verify_channel(name: str, body: VerifyRequest, request: Request) -> JS
 @router.get("/{name}/pending")
 def list_pending(name: str, request: Request) -> dict[str, Any]:
     """Codes waiting on a decision. Never a code, never a native id."""
-    require_operator(request)
+    require_tenant_admin(request)
     channel = _channel(name)
     try:
-        rows = identities.list_pending(channel)
+        rows = identities.list_pending(channel, tenant_id=get_tenant_id(request))
     except psycopg2.Error as exc:
         raise _unavailable(exc) from exc
     return {
@@ -399,7 +384,7 @@ async def approve(name: str, code: str, body: ApproveRequest, request: Request) 
     ``async`` because it awaits the engine after the write; the psycopg2 work
     goes through ``asyncio.to_thread``, so nothing blocking runs on the loop.
     """
-    actor = require_operator(request)
+    actor = require_tenant_admin(request)
     channel = _channel(name)
     checked = _code(code)
 
@@ -432,6 +417,7 @@ async def approve(name: str, code: str, body: ApproveRequest, request: Request) 
             checked,
             actor=actor,
             channel=channel,
+            tenant_id=get_tenant_id(request),
             user_id=body.user_id,
             email=body.email,
             role=body.role,
@@ -456,7 +442,7 @@ async def approve(name: str, code: str, body: ApproveRequest, request: Request) 
         identity_id=str(identity["id"]),
         role=body.role,
     )
-    await _tell_the_engine_to_forget()
+    await _tell_the_engine_to_forget(get_tenant_id(request))
     return {"id": str(identity["id"]), "channel": channel, "role": body.role}
 
 
@@ -468,13 +454,17 @@ async def deny(name: str, code: str, request: Request) -> dict[str, Any]:
     deleting the row, so a denied code can never be approved afterwards by
     somebody holding the same value.
     """
-    actor = require_operator(request)
+    actor = require_tenant_admin(request)
     channel = _channel(name)
     checked = _code(code)
 
     try:
         denied = await asyncio.to_thread(
-            identities.deny_pairing, checked, actor=actor, channel=channel
+            identities.deny_pairing,
+            checked,
+            actor=actor,
+            channel=channel,
+            tenant_id=get_tenant_id(request),
         )
     except identities.PairingError as exc:
         audited(
@@ -489,7 +479,7 @@ async def deny(name: str, code: str, request: Request) -> dict[str, Any]:
         raise _unavailable(exc) from exc
 
     audited(request, "channel.pairing.deny", action=channel, pairing_id=str(denied["id"]))
-    await _tell_the_engine_to_forget()
+    await _tell_the_engine_to_forget(get_tenant_id(request))
     return {"denied": True, "channel": channel}
 
 
@@ -504,10 +494,10 @@ def list_bound(name: str, request: Request) -> dict[str, Any]:
     this instance's own names for its own people, which is a different thing
     from a third-party platform's identifier for them.
     """
-    require_operator(request)
+    require_tenant_admin(request)
     channel = _channel(name)
     try:
-        rows = identities.list_identities(channel)
+        rows = identities.list_identities(channel, tenant_id=get_tenant_id(request))
     except psycopg2.Error as exc:
         raise _unavailable(exc) from exc
     return {
@@ -536,12 +526,14 @@ async def revoke(name: str, identity_id: str, request: Request) -> dict[str, Any
     why it awaits the engine cache drop rather than leaving the revoked sender
     resolvable for another 300 seconds.
     """
-    actor = require_operator(request)
+    actor = require_tenant_admin(request)
     channel = _channel(name)
     checked = _identity_id(identity_id)
 
     try:
-        revoked = await asyncio.to_thread(identities.revoke, checked, actor=actor)
+        revoked = await asyncio.to_thread(
+            identities.revoke, checked, actor=actor, tenant_id=get_tenant_id(request)
+        )
     except psycopg2.Error as exc:
         raise _unavailable(exc) from exc
     audited(
@@ -553,5 +545,5 @@ async def revoke(name: str, identity_id: str, request: Request) -> dict[str, Any
     )
     if not revoked:
         raise HTTPException(status_code=404, detail="no live identity with that id")
-    await _tell_the_engine_to_forget()
+    await _tell_the_engine_to_forget(get_tenant_id(request))
     return {"revoked": True, "channel": channel, "id": checked}

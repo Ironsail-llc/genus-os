@@ -42,6 +42,7 @@ def audited(
     *,
     action: str,
     status: str = "ok",
+    audit_tenant_id: str | None = None,
     **details: Any,
 ) -> None:
     """Write one audit event attributed to the request's verified caller.
@@ -53,6 +54,10 @@ def audited(
 
     Never raises: ``log_event`` swallows its own failures, and an audit write
     must not be the reason a route 500s.
+
+    ``audit_tenant_id`` files the row under a tenant other than the request's
+    scope — a tenant switch is filed under the tenant ENTERED, so that
+    tenant's admins can see who came in.
     """
     auth = getattr(request.state, "auth", None)
     actor = (
@@ -73,4 +78,5 @@ def audited(
         actor=str(actor),
         status=status,
         details=payload,
+        tenant_id=audit_tenant_id,
     )

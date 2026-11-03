@@ -309,6 +309,7 @@ def build_exec_env(
             assistant beats a stale one the box booted with.
         tenant_id: whose vault the grants are resolved against.
     """
+    from robothor.engine.secret_paths import KEY_FILE_SETTINGS
     from robothor.secrets import resolve_secret
     from robothor.secrets.classification import is_bootstrap, non_secret_env_names
     from robothor.settings.env import process_env_snapshot
@@ -335,6 +336,13 @@ def build_exec_env(
         if rung in (MODE_OFF, MODE_OBSERVE)
         else {name: value for name, value in source.items() if name not in set(withheld)}
     )
+
+    # On EVERY rung, ``off`` included: these name the file holding the vault
+    # master key (and the fingerprint salt). A child that can read the
+    # variable can print the file, as `od $GENUS_VAULT_KEY_FILE` did; the
+    # platform resolves the key itself and no agent command ever needs it.
+    for name in KEY_FILE_SETTINGS:
+        child.pop(name, None)
 
     granted: list[str] = []
     refused: list[str] = []

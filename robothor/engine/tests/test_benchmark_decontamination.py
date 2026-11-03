@@ -835,7 +835,7 @@ class TestTheRunbookAuditQueriesActuallyWork:
         assert rows == []
 
 
-class TestTheRlsWideningHasExactlyThreeCallers:
+class TestTheRlsWideningCallersArePinned:
     """``read_every_tenant_in_transaction`` relaxes RLS for its transaction.
 
     It exists because the benchmark spend break-out cannot see the graded
@@ -845,14 +845,28 @@ class TestTheRlsWideningHasExactlyThreeCallers:
     kind of helper that acquires callers: each one is another query that can
     read every tenant's rows, and nothing else in the tree announces it.
 
-    So the caller set is pinned. Adding a fourth call site reds this test and
-    forces the question to be asked out loud.
+    So the caller set is pinned. Adding a call site reds this test and forces
+    the question to be asked out loud.
     """
 
     EXPECTED_CALLERS: set[str] = {
         "robothor/engine/analytics.py::_benchmark_spend",
         "robothor/engine/analytics.py::get_fleet_health",
         "robothor/engine/tracking.py::get_agent_stats",
+        # Operator-only (`genus tenant move-account`): moving an account changes
+        # its rows' tenant, so the transaction must see the source tenant's rows
+        # and write the target's. A connection bound to either tenant would see
+        # half the account and the RLS WITH CHECK would refuse the other half.
+        "robothor/auth/accounts.py::move_account",
+        # The same command's lookup: "which tenant is alice@example.com in?" is
+        # by definition a question across tenants. Projects the credential-free
+        # admin columns only.
+        "robothor/auth/accounts.py::accounts_for_email",
+        # Operator-only (`genus tenant move-workload`): re-tenanting a
+        # workload's history reads the source tenant's rows and writes the
+        # target's in one transaction, for the same reason as move_account.
+        # Its predicates name the source tenant and the workload's own keys.
+        "robothor/tenancy/move_workload.py::move_workload",
     }
 
     HELPER = "read_every_tenant_in_transaction"

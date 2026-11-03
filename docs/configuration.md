@@ -825,6 +825,18 @@ an invited person has to be told out of band: the page offers instructions to
 copy that send them to the dashboard to choose "Sign in with SSO", never to the
 identity provider's own address.
 
+### Tenant switching over the API
+
+On a deployment that serves a tenant hierarchy, a root-tenant owner or admin
+can act in a descendant tenant. Off unless `GENUS_TENANT_SWITCH_MODE=enforce`,
+and enforce additionally requires row-level security to be genuinely
+enforcing — see [Tenant isolation](runbooks/TENANT_RLS.md#tenant-switching).
+
+| Route | What it does |
+|-------|--------------|
+| `GET /api/tenants/accessible` | Any signed-in human: `[{id, display_name, parent_tenant_id, is_home}]`, home first. Owners and admins also get their home's descendants; every other role gets only its home. |
+| `POST /api/auth/switch-tenant` | `{"tenant": "<id>"}` → `{access_token, refresh_token: null, user}`, the access token acting in that tenant (`tid`, `home_tid`, `act`). Naming the home tenant switches back. The refresh token is unchanged and keeps the home tenant. |
+
 ### The forwarded client address needs two allowlists to agree
 
 The dashboard reads `X-Forwarded-For`, walks it from the **right**, and forwards

@@ -320,13 +320,15 @@ def _update_memory_block(results: dict[str, Any], mode: str) -> None:
         logger.debug("Failed to update autodream_log block: %s", e)
 
 
-async def run_autodream(mode: str = "idle") -> dict[str, Any]:
+async def run_autodream(mode: str = "idle", tenant_id: str = "") -> dict[str, Any]:
     """Run an autoDream memory consolidation pass.
 
     Args:
         mode: One of 'idle', 'post_stall', 'deep', 'scheduled'.
               'deep' runs full lifecycle maintenance (importance re-scoring).
               Others run lightweight consolidation + pruning + insights.
+        tenant_id: The engine's tenant (``EngineConfig.tenant_id``), for the
+              steps that take one explicitly. Empty means the default tenant.
 
     Returns:
         Dict with consolidated results and timing.
@@ -401,7 +403,7 @@ async def run_autodream(mode: str = "idle") -> dict[str, Any]:
 
                 rep = await asyncio.to_thread(
                     dechurn,
-                    os.environ.get("ROBOTHOR_TENANT_ID") or DEFAULT_TENANT,
+                    tenant_id or DEFAULT_TENANT,
                     dry_run=(dechurn_mode != "enforce"),
                 )
                 results["dechurn"] = {

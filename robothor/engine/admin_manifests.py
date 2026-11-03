@@ -367,4 +367,11 @@ def register(app: FastAPI, scheduler: Any = None, runner: Any = None) -> None:
     async def run_manifest(agent_id: str, request: Request) -> dict[str, Any]:
         return await _answer(run(agent_id, runner, lambda: request_context(request)))
 
+    # Outside the builder's prefix, so no agent id can shadow it: the raw scan
+    # the bridge's read-only fleet and automations views read for a tenant cell.
+    @app.get("/api/admin/manifests", tags=["admin"])
+    async def scan_manifests() -> dict[str, Any]:
+        scan = await asyncio.to_thread(store.scan)
+        return {"manifests": list(scan.manifests), "broken": _broken(scan)}
+
     app.include_router(router)

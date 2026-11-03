@@ -432,12 +432,18 @@ def test_members_and_viewers_cannot_decide(fixture, kind, item_id, body, request
     assert ops.instances == []
 
 
-def test_an_engine_escalation_stays_platform_only(child_admin):
+def test_an_engine_escalation_is_answered_on_the_acting_tenants_engine(child_admin):
+    """An escalation lives in the engine process that raised it, and with one
+    engine per tenant that is the ACTING tenant's engine: the proxy names the
+    tenant, so the engine client reaches that cell (and mints the control
+    token for it, which any other engine refuses)."""
     engine = AsyncMock(return_value=(200, {"resolved": True}))
     with patch("routers.approvals.engine_request", engine), patch("routers._audit.log_event"):
         response = child_admin.post(
             "/api/approvals/escalation/a1b2c3d4e5f6", json={"approved": True}
         )
 
-    assert response.status_code == 403
-    engine.assert_not_awaited()
+    assert response.status_code == 200, response.text
+    engine.assert_awaited_once()
+    assert engine.await_args.kwargs["tenant"] == CHILD
+    assert engine.await_args.args[1] == "/api/admin/approvals/escalation/a1b2c3d4e5f6"

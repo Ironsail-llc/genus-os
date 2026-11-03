@@ -12,7 +12,7 @@ def fake_workflows(monkeypatch):
     monkeypatch.setattr(
         workflows,
         "_list_workflows",
-        lambda: [
+        lambda tenant_id: [
             {
                 "workflow_id": "intel",
                 "runs": 3,
@@ -25,7 +25,9 @@ def fake_workflows(monkeypatch):
     monkeypatch.setattr(
         workflows,
         "_workflow_runs",
-        lambda wid, limit: [{"id": "wr1", "status": "completed"}] if wid == "intel" else [],
+        lambda wid, limit, tenant_id: (
+            [{"id": "wr1", "status": "completed"}] if wid == "intel" else []
+        ),
     )
     monkeypatch.setattr(workflows, "_defined_workflows", lambda: [])
 
@@ -56,7 +58,7 @@ def ran_and_defined(monkeypatch):
     monkeypatch.setattr(
         workflows,
         "_list_workflows",
-        lambda: [
+        lambda tenant_id: [
             {
                 "workflow_id": "intel",
                 "runs": 3,
@@ -140,6 +142,19 @@ def test_defined_workflows_are_read_from_the_workspace(env_workspace):
     assert rows["local-flow"]["name"] == "local-flow"
 
 
+def test_a_child_tenant_lists_only_what_ran_there(_controls_auth_key, ran_and_defined):
+    """The workflow directory the bridge can read is the ROOT engine's, so a
+    child tenant's admin sees that tenant's run history and no definitions
+    borrowed from the root workspace."""
+    from tests.conftest import _make_controls_client_as_role
+
+    client = _make_controls_client_as_role("admin", "acme-child-a")
+    r = client.get("/api/workflows")
+    assert r.status_code == 200
+    assert [row["workflow_id"] for row in r.json()] == ["intel"]
+    assert r.json()[0]["source"] is None
+
+
 def test_a_workflow_directory_fault_does_not_break_the_listing(
     controls_client_as_operator, monkeypatch
 ):
@@ -147,7 +162,7 @@ def test_a_workflow_directory_fault_does_not_break_the_listing(
     monkeypatch.setattr(
         workflows,
         "_list_workflows",
-        lambda: [{"workflow_id": "intel", "runs": 1, "last_run_at": None, "failures": 0}],
+        lambda tenant_id: [{"workflow_id": "intel", "runs": 1, "last_run_at": None, "failures": 0}],
     )
 
     def boom():
@@ -189,7 +204,7 @@ RUN_ID = "6f1c2a3e-0000-4000-8000-000000000001"
 def fake_run_detail(monkeypatch):
     calls: list[tuple[str, str]] = []
 
-    def _detail(workflow_id, run_id):
+    def _detail(workflow_id, run_id, tenant_id):
         calls.append((workflow_id, run_id))
         if workflow_id != "intel" or run_id != RUN_ID:
             return None
@@ -283,7 +298,7 @@ def test_runs_list_reports_steps_failed(monkeypatch):
         return [{"id": RUN_ID, "steps_completed": 1, "steps_failed": 1}]
 
     monkeypatch.setattr(workflows, "_rows", _rows)
-    rows = workflows._workflow_runs("intel", 5)
+    rows = workflows._workflow_runs("intel", 5, "test-tenant")
     assert "steps_failed" in seen[0]
     assert rows[0]["steps_failed"] == 1
 
@@ -307,9 +322,10 @@ def test_run_detail_reads_steps_with_tool_columns(monkeypatch):
         ]
 
     monkeypatch.setattr(workflows, "_rows", _rows)
-    detail = workflows._workflow_run("intel", RUN_ID)
+    detail = workflows._workflow_run("intel", RUN_ID, "test-tenant")
     run_sql, run_params = seen[0]
-    assert "workflow_id = %s" in run_sql and run_params == (RUN_ID, "intel")
+    assert "workflow_id = %s" in run_sql and "tenant_id = %s" in run_sql
+    assert run_params == (RUN_ID, "intel", "test-tenant")
     step_sql, _ = seen[1]
     for column in ("tool_name", "tool_input", "tool_output", "error_message"):
         assert column in step_sql
@@ -318,7 +334,7 @@ def test_run_detail_reads_steps_with_tool_columns(monkeypatch):
 
 def test_run_detail_helper_returns_none_for_an_unknown_run(monkeypatch):
     monkeypatch.setattr(workflows, "_rows", lambda sql, params: [])
-    assert workflows._workflow_run("intel", RUN_ID) is None
+    assert workflows._workflow_run("intel", RUN_ID, "test-tenant") is None
 
 
 def test_a_plugin_jobs_runs_are_listed_under_its_job_id(controls_client_as_operator, monkeypatch):
@@ -327,7 +343,7 @@ def test_a_plugin_jobs_runs_are_listed_under_its_job_id(controls_client_as_opera
     monkeypatch.setattr(
         workflows,
         "_workflow_runs",
-        lambda wid, limit: (
+        lambda wid, limit, tenant_id: (
             [{"id": "pj1", "status": "failed", "trigger_type": "plugin_job"}]
             if wid == "plugin:nightly_sweep"
             else []
@@ -362,7 +378,7 @@ def test_run_detail_of_a_plugin_job_carries_its_result(monkeypatch):
             }
         ),
     )
-    detail = workflows._workflow_run("plugin:nightly_sweep", RUN_ID)
+    detail = workflows._workflow_run("plugin:nightly_sweep", RUN_ID, "test-tenant")
     assert detail["steps"] == []
     assert detail["result"] == {"swept": 3}
     assert "context" not in detail
@@ -382,7 +398,7 @@ def test_run_detail_of_a_plugin_job_says_when_its_result_was_truncated(monkeypat
             }
         ),
     )
-    detail = workflows._workflow_run("plugin:nightly_sweep", RUN_ID)
+    detail = workflows._workflow_run("plugin:nightly_sweep", RUN_ID, "test-tenant")
     assert detail["result"] == '{"rows": ['
     assert detail["result_truncated"] is True
 
@@ -403,6 +419,6 @@ def test_run_detail_of_a_workflow_never_serves_its_context(monkeypatch):
             }
         ),
     )
-    detail = workflows._workflow_run("intel", RUN_ID)
+    detail = workflows._workflow_run("intel", RUN_ID, "test-tenant")
     assert "context" not in detail
     assert "result" not in detail

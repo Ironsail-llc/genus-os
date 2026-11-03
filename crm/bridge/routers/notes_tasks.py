@@ -184,6 +184,7 @@ def api_create_task(
                 "tenant_id": tenant_id,
             },
             source="bridge",
+            tenant_id=tenant_id,
         )
         # Auto-send task_assigned notification
         if body.assignedToAgent and agent_id:
@@ -286,6 +287,7 @@ def api_update_task(
                 "tenant_id": tenant_id,
             },
             source="bridge",
+            tenant_id=tenant_id,
         )
         # Auto-send review_requested notification when moving to REVIEW
         if body.status and body.status.upper() == "REVIEW" and actor_id:
@@ -323,6 +325,7 @@ def api_resolve_task(
                 "tenant_id": tenant_id,
             },
             source="bridge",
+            tenant_id=tenant_id,
         )
         return {"success": True, "id": task_id}
     return JSONResponse({"error": "task not found"}, status_code=404)
@@ -349,6 +352,7 @@ def api_approve_task(
                 "tenant_id": tenant_id,
             },
             source="bridge",
+            tenant_id=tenant_id,
         )
         return {"success": True, "id": task_id}
     return JSONResponse({"error": "task not found"}, status_code=404)
@@ -381,6 +385,7 @@ def api_reject_task(
                 "tenant_id": tenant_id,
             },
             source="bridge",
+            tenant_id=tenant_id,
         )
         return {"success": True, "id": task_id}
     return JSONResponse({"error": "task not found"}, status_code=404)
@@ -431,6 +436,7 @@ def api_answer_task_question(
             "tenant_id": tenant_id,
         },
         source="bridge",
+        tenant_id=tenant_id,
     )
     return {"success": True, "id": task_id}
 

@@ -40,6 +40,7 @@ from robothor.engine.shutdown_budget import (
 from robothor.engine.telegram import TelegramBot
 from robothor.engine.workflow import WorkflowEngine
 from robothor.engine.workflow_registry import set_workflow_engine
+from robothor.logging_setup import configure_structured_logging, select_log_renderer
 from robothor.plugins import reload_plugins
 
 if TYPE_CHECKING:
@@ -933,25 +934,9 @@ def _log_task_results(done: set[asyncio.Task[Any]]) -> bool:
     return failed
 
 
-def _select_log_renderer() -> Any:
-    """Pick the structlog renderer for this process.
-
-    An explicit ``ROBOTHOR_LOG_FORMAT`` ("json" or "console") always wins.
-    Without it, the dev ConsoleRenderer is used only when stdout is an
-    interactive terminal; under systemd/journald the default is single-line
-    JSON — the rich console renderer used to emit 224-line box-drawing
-    tracebacks (with frame locals, including DSNs) per tool crash.
-    """
-    import structlog
-
-    explicit = os.environ.get("ROBOTHOR_LOG_FORMAT", "").strip().lower()
-    if explicit == "json":
-        return structlog.processors.JSONRenderer()
-    if explicit == "console":
-        return structlog.dev.ConsoleRenderer()
-    if sys.stdout.isatty():
-        return structlog.dev.ConsoleRenderer()
-    return structlog.processors.JSONRenderer()
+#: The renderer choice lives in ``robothor.logging_setup`` so the bridge uses
+#: the same one; the name stays here for callers and tests that import it.
+_select_log_renderer = select_log_renderer
 
 
 #: The running scheduler, so the SIGHUP handler can re-register plugin jobs.
@@ -1209,36 +1194,10 @@ def _install_plugin_reload_signal() -> bool:
 def _configure_structured_logging() -> None:
     """Route stdlib logging through structlog for the whole process.
 
-    Extracted from ``main`` unchanged. It is pure setup with no ordering
-    relationship to anything around it, and leaving thirty lines of processor
-    list inline made the one thing ``main`` is actually for — the order
-    subsystems start in — the hardest thing to read in it.
+    The body lives in ``robothor.logging_setup`` so the bridge configures its
+    logging the same way; the engine always replaces whatever was there.
     """
-    import structlog
-
-    structlog.configure(
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.add_logger_name,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.StackInfoRenderer(),
-            structlog.processors.format_exc_info,
-            structlog.processors.UnicodeDecoder(),
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
-        ],
-        wrapper_class=structlog.stdlib.BoundLogger,
-        context_class=dict,
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        cache_logger_on_first_use=True,
-    )
-
-    handler = logging.StreamHandler()
-    handler.setFormatter(structlog.stdlib.ProcessorFormatter(processor=_select_log_renderer()))
-    root = logging.getLogger()
-    root.handlers.clear()
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
+    configure_structured_logging()
 
 
 async def load_provider_secrets_at_startup() -> int:
@@ -1401,6 +1360,19 @@ async def _bootstrap_owner_links() -> None:
         logger.exception("bootstrap_owner_person_links failed (non-fatal)")
 
 
+async def _claim_lockfile_owner() -> None:
+    """Claim this engine's plugin lockfile for its tenant, at boot.
+
+    A child engine started on another tenant's workspace then refuses to change
+    the plugins the other engine reads (``robothor.plugins.lockfile_owner``).
+    Off the loop, and never fatal: a marker that cannot be written is logged.
+    """
+    from robothor.plugins import lockfile_owner
+
+    if await asyncio.to_thread(lockfile_owner.foreign_owner):
+        logger.error("Plugin lockfile: %s", lockfile_owner.SHARED_REMEDY)
+
+
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
     # Own SIGTERM/SIGINT before anything slow, so a stop during startup also
@@ -1443,6 +1415,7 @@ async def main() -> int:
     # Load config
     config = EngineConfig.from_env()
     logger.info("Tenant: %s", config.tenant_id)
+    await _claim_lockfile_owner()
     logger.info("Workspace: %s", config.workspace)
     logger.info("Health port: %d", config.port)
     logger.info("Telegram bot: %s", "configured" if config.bot_token else "disabled")
@@ -1635,7 +1608,7 @@ async def main() -> int:
             name="health",
         ),
         asyncio.create_task(_watchdog(config, scheduler, workflow_engine), name="watchdog"),
-        asyncio.create_task(_autodream_loop(), name="autodream"),
+        asyncio.create_task(_autodream_loop(config.tenant_id), name="autodream"),
         asyncio.create_task(_federation_heartbeat(), name="federation-heartbeat"),
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
         asyncio.create_task(_curator_loop(scheduler), name="curator"),
@@ -2602,7 +2575,7 @@ def _autodream_defer_decision(
     }
 
 
-async def _autodream_loop() -> None:
+async def _autodream_loop(tenant_id: str = "") -> None:
     """Background loop — triggers autoDream memory consolidation when engine is idle.
 
     Implements exponential backoff on consecutive errors (60s → 120s → ... → 3600s max).
@@ -2648,7 +2621,7 @@ async def _autodream_loop() -> None:
                     # load a post_stall force would reset the staleness clock while
                     # deep maintenance silently never runs — the exact starvation
                     # this MAX_DEFER ceiling exists to prevent.
-                    result = await run_autodream(mode="deep")
+                    result = await run_autodream(mode="deep", tenant_id=tenant_id)
                     if result.get("skipped"):
                         # A concurrent run holds the lock. Back off instead of
                         # re-firing every 60s; keep the defer streak so we retry,
@@ -2664,7 +2637,7 @@ async def _autodream_loop() -> None:
                     consecutive_errors = 0
                 continue
 
-            await run_autodream(mode="idle")
+            await run_autodream(mode="idle", tenant_id=tenant_id)
             _autodream_defer_started_at = None
             consecutive_errors = 0
         except asyncio.CancelledError:

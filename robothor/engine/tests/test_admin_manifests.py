@@ -472,3 +472,173 @@ def test_retire_on_a_read_only_volume_without_retired_yet_is_a_422(client, seede
     assert response.status_code == 422, response.text
     assert "not writable" in response.json()["detail"]
     assert seeded.is_file()
+
+
+# ─── A tenant cell's engine: its own workspace, its own tenant only ──
+#
+# One engine per tenant cell, each with its own workspace volume, and the
+# bridge forwards the acting tenant's builder calls to that tenant's engine.
+# These were the tenant cells' file-store routes (``/api/admin/manifests``)
+# before the store moved into these routes; the behaviour is the same, asked
+# of the routes that now carry it.
+
+
+class TestATenantCellsEngine:
+    @pytest.fixture
+    def _signed_tokens(self, monkeypatch):
+        from robothor.auth import tokens
+
+        monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
+        monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "test-signing-key-at-least-32-bytes-long")
+        tokens.reset_signing_key_cache()
+        yield tokens
+        tokens.reset_signing_key_cache()
+
+    def test_a_control_token_for_another_tenant_is_refused(self, _signed_tokens, seeded):
+        """A child's engine serves its own tenant's fleet, and no one else's.
+
+        The bridge mints each control token for the tenant it is CALLING, so a
+        token for the parent or a sibling reaching this engine is a misroute,
+        and it is refused before any manifest is read or written.
+        """
+        from robothor.engine_control import control_token
+
+        client = TestClient(_health_app(), raise_server_exceptions=False)
+        for other in ("acme-parent", "acme-child-b"):
+            token = control_token("genus-bridge", other, require_existing_key=False)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            assert client.get("/api/admin/agent-manifests", headers=headers).status_code == 403
+            response = client.post(
+                "/api/admin/agent-manifests", json=_create_body(), headers=headers
+            )
+            assert response.status_code == 403
+        assert not (seeded.parent / "invoice-watcher.yaml").exists()
+
+    def test_the_listing_names_a_broken_file_without_its_path(self, client, seeded, workspace):
+        (workspace / "docs" / "agents" / "broken.yaml").write_text("id: [unclosed\n")
+
+        body = client.get("/api/admin/agent-manifests").json()
+
+        assert [row["id"] for row in body["agents"]] == ["demo-agent"]
+        assert [row["filename"] for row in body["broken"]] == ["broken.yaml"]
+        assert str(workspace) not in str(body)
+
+    def test_a_second_create_of_one_id_is_a_409(self, client, workspace):
+        assert client.post("/api/admin/agent-manifests", json=_create_body()).status_code == 201
+        assert (workspace / "brain" / "INVOICE_WATCHER.md").is_file()
+
+        assert client.post("/api/admin/agent-manifests", json=_create_body()).status_code == 409
+
+    def test_an_edit_snapshots_the_previous_version(self, client, seeded, workspace):
+        response = client.patch("/api/admin/agent-manifests/demo-agent", json={"name": "Renamed"})
+
+        assert response.status_code == 200, response.text
+        history = workspace / "docs" / "agents" / ".history" / "demo-agent"
+        assert len(list(history.glob("*.yaml"))) == 1
+
+    def test_an_edit_of_an_absent_agent_is_a_404(self, client, workspace):
+        response = client.patch("/api/admin/agent-manifests/nobody", json={"name": "Nobody"})
+
+        assert response.status_code == 404
+
+    def test_an_instruction_file_outside_brain_is_never_read(self, client, seeded, workspace):
+        outside = workspace.parent / "outside.md"
+        outside.write_text("not the agent's")
+        document = {**EXISTING, "instruction_file": "../outside.md"}
+        seeded.write_text(yaml.safe_dump(document, sort_keys=False))
+
+        body = client.get("/api/admin/agent-manifests/demo-agent").json()
+
+        assert body["instructions"] == ""
+        assert str(workspace.parent) not in str(body)
+
+    def test_a_path_shaped_agent_id_is_refused(self, client, workspace):
+        response = client.post("/api/admin/agent-manifests", json=_create_body(id="../escape"))
+
+        assert response.status_code == 422
+        assert not (workspace / "docs" / "escape.yaml").exists()
+
+    def test_retire_moves_the_manifest_aside_once(self, client, seeded):
+        retire = {"confirm": "demo-agent"}
+
+        first = client.request("DELETE", "/api/admin/agent-manifests/demo-agent", json=retire)
+        second = client.request("DELETE", "/api/admin/agent-manifests/demo-agent", json=retire)
+
+        assert first.status_code == 200, first.text
+        assert not seeded.exists()
+        assert (seeded.parent / "retired" / "demo-agent.yaml").is_file()
+        assert second.status_code == 404
+
+    def test_validation_reads_this_engines_own_workspace(self, client, workspace):
+        """The verdict reads ``_defaults.yaml`` on THIS engine's volume.
+
+        A manifest with no ``model.primary`` inherits the fleet default from
+        the workspace it is validated in, so the same document is refused here
+        until this engine's ``_defaults.yaml`` supplies one.
+        """
+        unpinned = {key: value for key, value in EXISTING.items() if key != "model"}
+        body = {"manifest": unpinned}
+
+        before = client.post("/api/admin/agent-manifests/validate", json=body).json()
+        defaults = workspace / "docs" / "agents" / "_defaults.yaml"
+        defaults.write_text("model:\n  primary: openrouter/example/demo-model\n")
+        after = client.post("/api/admin/agent-manifests/validate", json=body).json()
+
+        assert "model.primary" in str(before["errors"]), before
+        assert "model.primary" not in str(after["errors"]), after
+
+
+class TestTheRawScan:
+    """``GET /api/admin/manifests``: this engine's documents as its loader reads them.
+
+    The bridge's read-only fleet and automations views join a tenant's
+    manifests with its schedule and run rows. For a child tenant those
+    manifests are on its cell's volume, so the bridge asks the cell's engine
+    for the scan instead of reading its own disk — which is the ROOT fleet.
+    """
+
+    def test_it_lists_the_documents_and_names_failures_without_a_path(
+        self, client, seeded, workspace
+    ):
+        (workspace / "docs" / "agents" / "broken.yaml").write_text("id: [unclosed\n")
+
+        response = client.get("/api/admin/manifests")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [m["id"] for m in body["manifests"]] == ["demo-agent"]
+        assert body["manifests"][0]["tools_allowed"] == EXISTING["tools_allowed"]
+        assert [row["filename"] for row in body["broken"]] == ["broken.yaml"]
+        assert str(workspace) not in str(body)
+
+    def test_it_is_mounted_behind_engine_control(self, monkeypatch, seeded):
+        from robothor.auth import tokens
+        from robothor.engine.auth import ENGINE_AUDIENCE
+        from robothor.engine_control import control_token
+
+        monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
+        monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "test-signing-key-at-least-32-bytes-long")
+        tokens.reset_signing_key_cache()
+        try:
+            client = TestClient(_health_app(), raise_server_exceptions=False)
+            read_only = tokens.issue_service_token(
+                "genus-bridge",
+                "test-tenant",
+                audience=ENGINE_AUDIENCE,
+                scopes=("engine:read",),
+                ttl_seconds=60,
+            )
+            other = control_token("genus-bridge", "acme-child-b", require_existing_key=False)
+            own = control_token("genus-bridge", "test-tenant", require_existing_key=False)
+
+            def _get(token):
+                headers = {"Authorization": f"Bearer {token}"}
+                return client.get("/api/admin/manifests", headers=headers)
+
+            assert client.get("/api/admin/manifests").status_code == 401
+            assert _get(read_only).status_code == 403
+            assert _get(other).status_code == 403
+            assert _get(own).status_code == 200
+        finally:
+            tokens.reset_signing_key_cache()

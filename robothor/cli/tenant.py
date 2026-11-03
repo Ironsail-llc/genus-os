@@ -1,7 +1,8 @@
-"""Tenant management CLI — create, list, and inspect tenants."""
+"""Tenant management CLI — create, list, inspect, claim SSO domains, move accounts and workloads."""
 
 from __future__ import annotations
 
+import json
 import sys
 from typing import TYPE_CHECKING
 
@@ -18,8 +19,14 @@ def cmd_tenant(args: argparse.Namespace) -> int:
         return _cmd_list()
     if subcmd == "status":
         return _cmd_status(args)
+    if subcmd == "set-domains":
+        return _cmd_set_domains(args)
+    if subcmd == "move-account":
+        return _cmd_move_account(args)
+    if subcmd == "move-workload":
+        return _cmd_move_workload(args)
 
-    print("Usage: robothor tenant {create|list|status}")
+    print("Usage: robothor tenant {create|list|status|set-domains|move-account|move-workload}")
     return 1
 
 
@@ -33,9 +40,15 @@ def _cmd_create(args: argparse.Namespace) -> int:
     telegram_user_id = getattr(args, "telegram_user_id", None)
     parent = getattr(args, "parent", None)
 
-    # Check if tenant already exists
+    # An existing tenant is finished, not refused, when a previous create was
+    # interrupted after the row was written: seeding is idempotent, so a rerun
+    # adds whatever blocks are missing and says so.
     existing = get_tenant(tenant_id)
     if existing:
+        seeded = seed_blocks_for_tenant(tenant_id)
+        if seeded:
+            print(f"Tenant '{tenant_id}' already existed; seeded {seeded} missing memory blocks.")
+            return 0
         print(f"Error: Tenant '{tenant_id}' already exists.", file=sys.stderr)
         return 1
 
@@ -76,9 +89,10 @@ def _cmd_list() -> int:
     print(f"{'ID':<25} {'Name':<30} {'Active':<8} {'Parent'}")
     print("-" * 80)
     for t in tenants:
+        # list_tenants returns the API shape (models.tenant_to_dict).
         active = "yes" if t.get("active", True) else "no"
-        parent = t.get("parent_tenant_id") or "-"
-        print(f"{t['id']:<25} {t.get('display_name', ''):<30} {active:<8} {parent}")
+        parent = t.get("parentTenantId") or "-"
+        print(f"{t['id']:<25} {t.get('displayName') or '':<30} {active:<8} {parent}")
     return 0
 
 
@@ -92,12 +106,26 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"Tenant '{tenant_id}' not found.", file=sys.stderr)
         return 1
 
-    print(f"Tenant: {tenant['id']}")
-    print(f"  Name:   {tenant.get('display_name', '-')}")
-    print(f"  Active: {tenant.get('active', True)}")
-    print(f"  Parent: {tenant.get('parent_tenant_id') or '-'}")
+    from robothor.crm.tenant_domains import sso_domains_of
 
-    # Memory block stats
+    # get_tenant returns the API shape (camelCase keys).
+    print(f"Tenant: {tenant['id']}")
+    print(f"  Name:   {tenant.get('displayName') or '-'}")
+    print(f"  Active: {tenant.get('active', True)}")
+    print(f"  Parent: {tenant.get('parentTenantId') or '-'}")
+    print(f"  SSO domains: {', '.join(sso_domains_of(tenant)) or '-'}")
+
+    # Read the tenant's rows in ITS scope. With RLS on, a root shell's own
+    # binding sees none of a child's blocks or runs and would report zeros.
+    from robothor.db.connection import tenant_scope
+
+    with tenant_scope(tenant_id):
+        _print_tenant_activity(tenant_id)
+    return 0
+
+
+def _print_tenant_activity(tenant_id: str) -> None:
+    """Memory blocks and the last week's run count for one tenant."""
     try:
         from robothor.memory.blocks import list_blocks
 
@@ -111,7 +139,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"\n  Memory blocks: error ({e})")
 
-    # Recent run counts
     try:
         from robothor.db import get_connection
 
@@ -127,4 +154,132 @@ def _cmd_status(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"\n  Runs: error ({e})")
 
+
+def _cmd_set_domains(args: argparse.Namespace) -> int:
+    """Replace the email domains a tenant claims for SSO provisioning."""
+    from robothor.crm import dal
+    from robothor.crm.tenant_domains import (
+        InvalidSsoDomainError,
+        SsoDomainConflictError,
+        normalize_sso_domains,
+    )
+
+    tenant = dal.get_tenant(args.tenant_id)
+    if not tenant:
+        print(f"Tenant '{args.tenant_id}' not found.", file=sys.stderr)
+        return 1
+    try:
+        domains = normalize_sso_domains(list(args.domains))
+        settings = {**(tenant.get("settings") or {}), "sso_domains": domains}
+        ok = dal.update_tenant(args.tenant_id, settings=settings)
+    except (InvalidSsoDomainError, SsoDomainConflictError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    if not ok:
+        print(f"Error: could not update tenant '{args.tenant_id}'.", file=sys.stderr)
+        return 1
+    print(f"Tenant '{args.tenant_id}' SSO domains: {', '.join(domains) or '(none)'}")
+    return 0
+
+
+def _cmd_move_account(args: argparse.Namespace) -> int:
+    """Move one account, and every row linked to it, to another tenant."""
+    from robothor.auth import accounts
+    from robothor.cli import cli_actor
+
+    found = accounts.accounts_for_email(args.email)
+    if args.from_tenant:
+        found = [a for a in found if a["tenant_id"] == args.from_tenant]
+    if not found:
+        where = f" in tenant '{args.from_tenant}'" if args.from_tenant else ""
+        print(f"Error: no account for {args.email}{where}.", file=sys.stderr)
+        return 1
+    if len(found) > 1:
+        tenants = ", ".join(str(a["tenant_id"]) for a in found)
+        print(
+            f"Error: {args.email} has an account in more than one tenant ({tenants}); "
+            "choose one with --from <tenant>.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        report = accounts.move_account(
+            str(found[0]["id"]),
+            args.to,
+            actor=cli_actor(),
+            role=args.role,
+            dry_run=args.dry_run,
+            detach_person=getattr(args, "detach_person", False),
+        )
+    except accounts.AccountMoveError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+        return 0
+    verb = "Would move" if report.dry_run else "Moved"
+    print(f"{verb} {report.email} from '{report.from_tenant}' to '{report.to_tenant}'")
+    if report.role_after != report.role_before:
+        print(f"  Role: {report.role_before} -> {report.role_after}")
+    for table, n in report.counts.items():
+        print(f"  {table:<25} {n}")
+    if report.company_unlinked:
+        print(
+            f"  Company unlinked: {report.company_unlinked} stays in '{report.from_tenant}'; "
+            "the moved contact no longer points at it"
+        )
+    if report.new_person_id:
+        print(f"  New CRM contact: {report.new_person_id} (the old one stays in the source)")
+    if not report.dry_run:
+        print(f"  Sessions revoked: {report.sessions_revoked}")
+    return 0
+
+
+def _cmd_move_workload(args: argparse.Namespace) -> int:
+    """Move the named agents' and workflows' history to another tenant."""
+    from robothor.cli import cli_actor
+    from robothor.tenancy import move_workload as mw
+
+    try:
+        report = mw.move_workload(
+            from_tenant=args.from_tenant,
+            to_tenant=args.to,
+            agents=list(args.agent or []),
+            workflows=list(args.workflow or []),
+            actor=cli_actor(),
+            dry_run=args.dry_run,
+        )
+    except mw.WorkloadMoveError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+        return 0
+    if not any(report.counts.values()) and not report.links_cleared:
+        print(
+            f"Nothing to move: '{report.from_tenant}' holds no rows of this workload "
+            f"(agents: {', '.join(report.agents) or '-'}; "
+            f"workflows: {', '.join(report.workflows) or '-'}). Nothing was written."
+        )
+        return 0
+    verb = "Would move" if report.dry_run else "Moved"
+    print(f"{verb} workload from '{report.from_tenant}' to '{report.to_tenant}'")
+    print(f"  Agents:    {', '.join(report.agents) or '-'}")
+    print(f"  Workflows: {', '.join(report.workflows) or '-'}")
+    print("  Rows re-tenanted:")
+    for table, n in report.counts.items():
+        print(f"    {table:<28} {n}")
+    if report.followed:
+        print("  Rows that follow their parent (no tenant column):")
+        for table, n in report.followed.items():
+            print(f"    {table:<28} {n}")
+    if report.links_cleared:
+        print("  Links cleared (they named a row that stays in another tenant):")
+        for link, n in report.links_cleared.items():
+            print(f"    {link:<28} {n}")
+    if report.audit_id is not None:
+        print(f"  Audit row: {report.audit_id}")
     return 0

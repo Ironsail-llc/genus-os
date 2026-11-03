@@ -377,7 +377,11 @@ def _last_attempt(key: tuple[str, str]) -> float:
 # ── DAL ──────────────────────────────────────────────────────────────
 
 
-def _load_account(tenant_id: str, email: str) -> dict[str, Any] | None:
+def _load_account(tenant_id: str | None, email: str) -> dict[str, Any] | None:
+    """The account to authenticate. ``tenant_id=None``: whichever tenant holds
+    it (``accounts.login_account_for_email``), the sign-in page's question."""
+    if tenant_id is None:
+        return accounts.login_account_for_email(email)
     return accounts.get_account_by_email(tenant_id, email)
 
 
@@ -726,7 +730,7 @@ def _audit(action: str, *, status: str = "ok", **details: Any) -> None:
 
 
 def authenticate(
-    tenant_id: str,
+    tenant_id: str | None,
     email: str,
     password: str,
     code: str | None = None,
@@ -735,6 +739,10 @@ def authenticate(
     user_agent: str | None = None,
 ) -> LoginResult:
     """Authenticate one local sign-in attempt.
+
+    ``tenant_id=None`` finds the account in whichever tenant holds the
+    address (see ``accounts.login_account_for_email``); the token is issued
+    for that account's own tenant.
 
     Returns a ``LoginResult``. The caller maps ``rate_limited`` to 429,
     ``mfa_required`` to a 401 naming that state, and everything else to a 401

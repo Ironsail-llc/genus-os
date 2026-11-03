@@ -3,6 +3,8 @@
 import pytest
 from routers import runs
 
+from robothor.constants import PLATFORM_TENANT
+
 #: Run ids are UUIDs; the detail route refuses anything else with a 404.
 RUN_ID = "11111111-1111-4111-8111-111111111111"
 
@@ -19,7 +21,7 @@ def fake_runs(monkeypatch):
     monkeypatch.setattr(
         runs,
         "_get_run",
-        lambda run_id: (
+        lambda run_id, tenant_id: (
             {"id": RUN_ID, "agent_id": "main", "status": "completed"} if run_id == RUN_ID else None
         ),
     )
@@ -114,16 +116,17 @@ def test_list_filters_reach_the_query_as_parameters(controls_client_as_operator,
     assert "trigger_type = %s" in sql
     assert "started_at >= NOW() - make_interval(hours => %s)" in sql
     assert "LIMIT %s OFFSET %s" in sql
-    assert params == ("failed", "example-agent", "cron", 24, 25, 50)
+    assert params == (PLATFORM_TENANT, "failed", "example-agent", "cron", 24, 25, 50)
     # User input never reaches the SQL text itself.
     assert "example-agent" not in sql
 
 
-def test_list_without_filters_has_no_where_clause(controls_client_as_operator, captured_sql):
+def test_list_without_filters_filters_only_by_the_tenant(controls_client_as_operator, captured_sql):
     controls_client_as_operator.get("/api/runs")
     sql, params = captured_sql[-1]
-    assert "WHERE" not in sql
-    assert params == (50, 0)
+    # The acting tenant is always the one predicate, filters or none.
+    assert " WHERE tenant_id = %s ORDER BY" in sql
+    assert params == (PLATFORM_TENANT, 50, 0)
 
 
 def test_list_clamps_offset_and_rejects_a_bad_period(controls_client_as_operator, captured_sql):
@@ -178,7 +181,7 @@ def test_summary_counts_by_status_delivery_and_agent(controls_client_as_operator
     assert body["by_agent"][1]["agent_id"] == "worker"
     assert body["total_cost_usd"] == pytest.approx(0.35)
     assert "agent_id = %s" in seen["sql"]
-    assert seen["params"] == ("main", 24)
+    assert seen["params"] == (PLATFORM_TENANT, "main", 24)
 
 
 def test_summary_excludes_benchmark_runs(controls_client_as_operator, monkeypatch, captured_sql):
@@ -212,7 +215,7 @@ def test_delivery_category_sql_names_every_intentional_non_send():
 
 
 def test_detail_selects_the_columns_that_explain_the_run(captured_sql, monkeypatch):
-    runs._get_run("r1")
+    runs._get_run("r1", "test-tenant")
     run_sql = captured_sql[-1][0]
     for column in (
         "task_text",
@@ -262,7 +265,7 @@ def test_a_run_awaiting_approval_is_pending_delivery():
 def test_detail_404_for_an_id_that_is_not_a_uuid(controls_client_as_operator, monkeypatch):
     """A malformed id is an unknown run, not a database error."""
     called = []
-    monkeypatch.setattr(runs, "_get_run", lambda run_id: called.append(run_id))
+    monkeypatch.setattr(runs, "_get_run", lambda run_id, tenant_id: called.append(run_id))
     r = controls_client_as_operator.get("/api/runs/not-a-uuid")
     assert r.status_code == 404
     assert called == []

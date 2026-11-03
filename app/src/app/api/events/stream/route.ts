@@ -8,17 +8,27 @@
  */
 
 import { NextRequest } from "next/server";
+import { auth } from "@/lib/auth";
 import {
   readRecent,
   readSince,
   isValidStream,
   type StreamName,
 } from "@/lib/event-bus/redis-client";
+import { visibleToTenant } from "@/lib/event-bus/tenant-filter";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  // The streams are shared by every tenant's engine and the bridge; this
+  // session sees only the events of the tenant it is acting in.
+  const session = await auth();
+  if (!session?.bridgeAccess || !session.tenantId) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+  const tenant = session.tenantId;
+
   const streamsParam =
     request.nextUrl.searchParams.get("streams") || "email,crm,health,agent";
   const requestedStreams = streamsParam
@@ -37,7 +47,7 @@ export async function GET(request: NextRequest) {
         // Send recent events first (last 20 per stream)
         for (const streamName of requestedStreams) {
           try {
-            const recent = await readRecent(streamName, 20);
+            const recent = visibleToTenant(await readRecent(streamName, 20), tenant);
             for (const event of recent.reverse()) {
               const data = JSON.stringify({
                 stream: streamName,
@@ -75,6 +85,10 @@ export async function GET(request: NextRequest) {
             const results = await readSince(lastIds, 5000);
             for (const { stream: streamName, events } of results) {
               for (const event of events) {
+                // Advance past every event, send only this tenant's.
+                lastIds[streamName] = event.id;
+              }
+              for (const event of visibleToTenant(events, tenant)) {
                 const data = JSON.stringify({
                   stream: streamName,
                   ...event,
@@ -82,7 +96,6 @@ export async function GET(request: NextRequest) {
                 controller.enqueue(
                   encoder.encode(`event: message\ndata: ${data}\n\n`)
                 );
-                lastIds[streamName] = event.id;
               }
             }
 

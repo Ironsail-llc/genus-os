@@ -1390,7 +1390,7 @@ Usage: `genus user list [--tenant TENANT]`
 
 Register a new user with full identity linkage.
 
-Usage: `genus user add [--tenant TENANT] [--name NAME] [--role ROLE] [--telegram-id TELEGRAM_ID] [--email EMAIL] [--person-id PERSON_ID] [--create-person]`
+Usage: `genus user add [--tenant TENANT] [--name NAME] [--role ROLE] [--telegram-id TELEGRAM_ID] [--email EMAIL] [--sso] [--person-id PERSON_ID] [--create-person]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
@@ -1399,6 +1399,7 @@ Usage: `genus user add [--tenant TENANT] [--name NAME] [--role ROLE] [--telegram
 | `--role` | `ROLE` | — | Role: owner/admin/member/user/viewer/auditor |
 | `--telegram-id` | `TELEGRAM_ID` | — | Telegram user id |
 | `--email` | `EMAIL` | — | Email address |
+| `--sso` | — | off | Create the account for SSO sign-in: active, with no password, ready for `auth grant-binding` (the same shape as the Helm's SSO invite) |
 | `--person-id` | `PERSON_ID` | — | Link to an existing crm_people row |
 | `--create-person` | — | off | Force-create a new crm_people row |
 
@@ -1486,9 +1487,9 @@ Usage: `genus import [platform] [--source SOURCE] [--tenant TENANT]`
 
 ## `genus tenant`
 
-Create, list, and inspect tenants.
+Create, list, and inspect tenants; claim SSO domains; move accounts and workloads.
 
-Usage: `genus tenant {create,list,status}`
+Usage: `genus tenant {create,list,status,set-domains,move-account,move-workload}`
 
 ### `genus tenant create`
 
@@ -1521,6 +1522,48 @@ Usage: `genus tenant status <tenant_id>`
 | Argument | Required | Description |
 | --- | --- | --- |
 | `tenant_id` | yes | Tenant ID |
+
+### `genus tenant set-domains`
+
+Set the email domains whose new SSO users are provisioned into this tenant.
+
+Usage: `genus tenant set-domains <tenant_id> [domains]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `tenant_id` | yes | Tenant ID |
+| `domains` | no | Email domains (e.g. example.com); none clears the tenant's claim |
+
+### `genus tenant move-account`
+
+Move an account and every row linked to it to another tenant.
+
+Usage: `genus tenant move-account [--email EMAIL] [--to TO] [--from FROM_TENANT] [--role ROLE] [--detach-person] [--dry-run] [--json]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--email` | `EMAIL` | — | The account's email address |
+| `--to` | `TO` | — | Target tenant ID |
+| `--from` | `FROM_TENANT` | — | Source tenant ID, when the address has an account in more than one tenant |
+| `--role` | `admin` \| `member` \| `viewer` | — | Role in the target tenant (default: keep it; an owner moving into a child tenant needs --role admin) |
+| `--detach-person` | — | off | Leave the account's CRM contact and its history in the source tenant and give the account a new contact in the target (required when that contact has history) |
+| `--dry-run` | — | off | Show what would move; change nothing |
+| `--json` | — | off | Print the report as JSON |
+
+### `genus tenant move-workload`
+
+Move the history of named agents and workflows to another tenant.
+
+Usage: `genus tenant move-workload [--from FROM_TENANT] [--to TO] [--agent AGENT] [--workflow WORKFLOW] [--dry-run] [--json]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--from` | `FROM_TENANT` | — | Tenant the workload ran in |
+| `--to` | `TO` | — | Target tenant ID: a descendant or sibling under the same root |
+| `--agent` | `AGENT` | `[]` | Agent ID to move (repeatable) |
+| `--workflow` | `WORKFLOW` | `[]` | Workflow ID to move (repeatable) |
+| `--dry-run` | — | off | Show what would move; change nothing |
+| `--json` | — | off | Print the report as JSON |
 
 ## `genus run`
 

@@ -133,14 +133,23 @@ def cmd_migrate_check(*, connection: Any | None = None) -> int:
         import psycopg2
 
         from robothor.config import get_config
-        from robothor.db.migrate import status
+        from robothor.db.migrate import AHEAD_STATUS, status
 
         if conn is None:
             cfg = get_config().db
             conn = psycopg2.connect(**cfg.dict, connect_timeout=5)
 
         migration_rows = status(connection=conn)
-        incomplete = [row for row in migration_rows if row["status"] != "applied"]
+        ahead = [row for row in migration_rows if row["status"] == AHEAD_STATUS]
+        if ahead:
+            # A later release's migrations, left by a rollback: the migrator
+            # accepted them, so the Job must too (robothor/db/migrate.py).
+            print(f"Warning: schema is ahead of this release ({len(ahead)} newer migration(s)):")
+            for row in ahead:
+                print(f"  - {row['migration_id']}: {row['status']}")
+        incomplete = [
+            row for row in migration_rows if row["status"] not in {"applied", AHEAD_STATUS}
+        ]
         if incomplete:
             print(f"Schema is not current ({len(incomplete)} migration issue(s)):")
             for row in incomplete:

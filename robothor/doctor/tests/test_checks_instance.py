@@ -268,6 +268,44 @@ def test_a_tenant_mismatch_never_prescribes_creating_another_owner(monkeypatch) 
     assert "owner.yaml" in row.detail
 
 
+def test_a_child_tenant_engine_has_no_owner_by_design_and_passes(monkeypatch) -> None:
+    """A child tenant's most privileged account is an admin; the owner lives on
+    the root. An engine operating as a child (one cell per child) therefore
+    never sees an owner in its RLS scope, and failing there made every child
+    cell's doctor red on a correct deployment."""
+    monkeypatch.setenv("ROBOTHOR_TENANT_ID", "acme-child-a")
+    monkeypatch.setattr(
+        "robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme-child-a")
+    )
+    monkeypatch.setattr(identity_checks, "_first_run_is_pending", lambda _ctx: False)
+    # current_setting -> the child scope; crm_tenants -> its parent; no owners.
+    ctx = make_ctx(db_factory=fake_db([("acme-child-a",), ("acme-parent",)]))
+
+    row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
+
+    assert row.status == "pass"
+    assert "not applicable" in row.detail
+    assert "acme-child-a" in row.detail and "acme-parent" in row.detail
+    assert "genus user add" not in row.detail
+
+
+def test_a_root_tenant_engine_without_an_owner_still_fails(monkeypatch) -> None:
+    """Only a CHILD is exempt. A root with no parent and no owner is the
+    instance nobody can sign in to, exactly as before."""
+    monkeypatch.setenv("ROBOTHOR_TENANT_ID", "acme-parent")
+    monkeypatch.setattr(
+        "robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme-parent")
+    )
+    monkeypatch.setattr(identity_checks, "_first_run_is_pending", lambda _ctx: False)
+    # current_setting -> unscoped; crm_tenants -> no parent; no owners.
+    ctx = make_ctx(db_factory=fake_db([(None,), (None,)]))
+
+    row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
+
+    assert row.status == "fail"
+    assert "genus user add --role owner" in row.detail
+
+
 def test_the_owner_tenant_winning_is_not_disturbed_by_owners_elsewhere(monkeypatch) -> None:
     """A multi-tenant instance is not broken because another tenant has owners."""
     monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))

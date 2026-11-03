@@ -397,3 +397,91 @@ def test_install_and_remove_run_off_the_event_loop() -> None:
     assert "install_plugin" in source
     install_body = source[source.index("async def install(") :]
     assert "_write(" in install_body.split("@router")[0]
+
+
+# ─── A read-only plugin directory ───────────────────────────────────────────
+# A deployment mounts ROBOTHOR_PLUGIN_DIR read-only into the engine and
+# installs through an install Job that mounts the volume itself. The engine's
+# own install and remove would get as far as pip and fail on the filesystem;
+# they say what to do instead, before anything is fetched.
+
+READ_ONLY = "plugin directory is read-only in this engine; install with the install Job"
+
+
+@pytest.fixture
+def read_only_plugin_dir(tmp_path, monkeypatch):
+    plugin_dir = tmp_path / ".plugins"
+    plugin_dir.mkdir()
+    monkeypatch.setenv("ROBOTHOR_PLUGIN_DIR", str(plugin_dir))
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    with patch("robothor.engine.admin_plugins._read_only", return_value=True):
+        yield plugin_dir
+
+
+def test_install_into_a_read_only_plugin_dir_is_refused(client, read_only_plugin_dir) -> None:
+    with patch.object(installer, "install") as install:
+        response = client.post("/api/admin/plugins/install", json={"name": "acme-tools"})
+    assert response.status_code == 409
+    assert READ_ONLY in response.json()["detail"]
+    assert install.call_count == 0
+
+
+def test_remove_from_a_read_only_plugin_dir_is_refused(client, read_only_plugin_dir) -> None:
+    with (
+        patch.object(installer, "_plugin_dir_distribution", return_value=object()),
+        patch.object(installer, "remove") as remove,
+    ):
+        response = client.post("/api/admin/plugins/acme-tools/remove", json={})
+    assert response.status_code == 409
+    assert READ_ONLY in response.json()["detail"]
+    assert remove.call_count == 0
+
+
+def test_a_dry_run_against_a_read_only_plugin_dir_still_plans(client, read_only_plugin_dir) -> None:
+    """A dry run writes nothing, so it still answers the plan."""
+    outcome = installer.InstallOutcome(plan=_plan(), installed=False, dry_run=True)
+    with patch.object(installer, "install", return_value=outcome) as install:
+        response = client.post(
+            "/api/admin/plugins/install", json={"name": "acme-tools", "dry_run": True}
+        )
+    assert response.status_code == 200
+    assert install.call_count == 1
+
+
+def test_removing_a_plugin_not_in_the_plugin_dir_still_runs(client, read_only_plugin_dir) -> None:
+    """The "gone" path only drops the lockfile row and retires workspace files;
+    it never touches the plugin dir, so a read-only one is no reason to refuse."""
+    with (
+        patch.object(installer, "_plugin_dir_distribution", return_value=None),
+        patch.object(installer, "remove", return_value={"name": "acme-tools"}) as remove,
+    ):
+        response = client.post("/api/admin/plugins/acme-tools/remove", json={})
+    assert response.status_code == 200
+    assert remove.call_count == 1
+
+
+def test_a_writable_directory_is_not_read_only(tmp_path) -> None:
+    from robothor.engine import admin_plugins
+
+    assert admin_plugins._read_only(tmp_path) is False
+
+
+def test_a_missing_directory_on_a_writable_filesystem_is_not_read_only(tmp_path) -> None:
+    """pip --target creates a missing directory, so a plugin dir nobody has
+    made yet is an ordinary first install, not a read-only mount."""
+    from robothor.engine import admin_plugins
+
+    assert admin_plugins._read_only(tmp_path / "not-yet" / ".plugins") is False
+
+
+def test_a_read_only_filesystem_is_read_only(tmp_path) -> None:
+    import os
+
+    from robothor.engine import admin_plugins
+
+    real = os.statvfs(tmp_path)
+    fake = MagicMock(f_flag=real.f_flag | os.ST_RDONLY)
+    with patch("robothor.engine.admin_plugins.os.statvfs", return_value=fake):
+        assert admin_plugins._read_only(tmp_path / ".plugins") is True
