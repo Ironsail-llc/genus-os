@@ -1385,14 +1385,20 @@ which records a Telegram message's length, never its text.
 
 **Every tool result is redacted too.** A tool that returns normally can still
 carry a credential: `exec` printing a CLI credentials file, a provider error
-echoing its headers. Each result passes the same secrets redactor (credential
-shapes and every value the vault has been handed) before it reaches the
-agent's context, the run's step row, the effects record, the live tool stream
-or a checkpoint. A call through `tool_call` is treated as the tool it reaches.
-The only exception is a tool on `SECRET_RESULT_TOOLS` (in
-`robothor/engine/session.py`), whose result the agent must read: it reaches the
-agent unchanged and is still masked wherever it is stored. The list is empty;
-`vault_get` and `vault_test` return a fingerprint, never a value.
+echoing its headers. Each result passes the secrets redactor before it reaches
+the agent's context, the run's step row, the effects record, the live tool
+stream or a checkpoint: every value the vault has been handed, every credential
+shape the redactor knows, and a `NAME=value` assignment only when the value
+itself looks like a credential (16 characters or more, mixing at least two of
+lower case, upper case and digits, and not a reference such as `$TOKEN` or
+`${API_KEY}`). An unquoted identifier, dotted name, call or number is code and
+is left alone, so `api_key = settings.api_key` reaches the agent as written and
+a file it reads and writes back comes back byte for byte. A call through
+`tool_call` is treated as the tool it reaches. The only exception is a tool on
+`SECRET_RESULT_TOOLS` (in `robothor/engine/session.py`), whose result the agent
+must read: it reaches the agent unchanged and is still masked wherever it is
+stored. The list is empty; `vault_get` and `vault_test` return a fingerprint,
+never a value.
 
 ### Everything else
 
