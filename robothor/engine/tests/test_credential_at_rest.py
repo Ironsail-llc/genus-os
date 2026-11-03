@@ -259,7 +259,8 @@ class TestTheTaskRecordStaysValid:
     ``n`` leaves ``\\<redacted>`` and invalid JSON, and a resumed plan-mode run
     then loses its record and the write restrictions that come with it."""
 
-    SHA = "3f2a9c1e7b4d6a8f0c2e4b6d8a0c2e4f6b8d0a2c"
+    #: An opaque run that is not a commit SHA (mixed case and digits).
+    SHA = "Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF"
 
     def _system_with(self, request: str, **fields):
         from robothor.engine.task_context import install_context, make_context
@@ -293,3 +294,47 @@ class TestTheTaskRecordStaysValid:
         assert record["mode"] == "plan"
         assert record["plan_id"] == plan_id
         assert self.SHA not in json.dumps(loaded["messages"])
+
+
+class TestWhatThePersonReferredToSurvives:
+    """The opaque pass must not take away what a person pointed at: a commit,
+    a Telegram file id, a run id. A bare 32-hex key still goes."""
+
+    def _user(self, text: str) -> str:
+        from robothor.engine.checkpoint import _redacted
+
+        return _redacted([{"role": "user", "content": text}])[0]["content"]
+
+    @pytest.mark.parametrize(
+        "sha",
+        ["3f2a9c1e7b4d6a8f0c2e4b6d8a0c2e4f6b8d0a2c", "ab12" * 16],
+        ids=["sha1", "sha256"],
+    )
+    def test_a_full_commit_sha_survives(self, sha):
+        text = f"revert {sha}"
+        assert self._user(text) == text
+
+    def test_a_bare_32_hex_key_is_still_replaced(self):
+        key = "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a"
+        leaked = key in self._user(f"my weather key {key}")
+        assert not leaked
+
+    def test_a_telegram_file_id_survives(self):
+        file_id = "AgACAgQAAxkBAAIB" + "x7Yq2_Lm-9Kd" * 5
+        text = f"file_id: {file_id}"
+        assert self._user(text) == text
+
+    @pytest.mark.parametrize("label", ["run_id", "trace", "message_id"])
+    def test_a_labelled_identifier_survives(self, label):
+        ident = "7f3e9a1c5b2d8e4f6a0c3b5d7e9f1a2c"
+        text = f"look at {label} = {ident} please"
+        assert self._user(text) == text
+
+    def test_the_task_record_keeps_a_commit_sha(self):
+        from robothor.engine.checkpoint import _redacted
+        from robothor.engine.task_context import install_context, make_context, read_context
+
+        sha = "3f2a9c1e7b4d6a8f0c2e4b6d8a0c2e4f6b8d0a2c"
+        messages = [{"role": "system", "content": "sys"}]
+        install_context(messages, make_context(f"revert {sha}", []))
+        assert read_context(_redacted(messages))["request"] == f"revert {sha}"
