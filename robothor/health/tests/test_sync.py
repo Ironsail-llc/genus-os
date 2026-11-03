@@ -185,3 +185,34 @@ class TestSyncDate:
         assert isinstance(results, dict)
         assert results["heart_rate"] == 0
         assert results["stress"] == 0
+
+
+class TestGetClientRetries:
+    def _garmin(self, outcomes):
+        """A Garmin() factory whose token load follows ``outcomes`` in order."""
+        calls = iter(outcomes)
+
+        def make():
+            client = MagicMock()
+            outcome = next(calls)
+
+            def load(_dir):
+                if isinstance(outcome, Exception):
+                    raise outcome
+
+            client.garth.load.side_effect = load
+            client.garth.profile = {"displayName": "alice", "fullName": "Alice"}
+            return client
+
+        return make
+
+    def test_a_transient_failure_is_retried(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sync, "Garmin", self._garmin([TimeoutError("t"), None]))
+        monkeypatch.setattr(sync.time, "sleep", lambda s: None)
+        client = sync.get_client(token_dir=tmp_path)
+        assert client.display_name == "alice"
+
+    def test_missing_tokens_are_not_retried(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sync, "Garmin", self._garmin([FileNotFoundError("x")]))
+        with pytest.raises(SystemExit):
+            sync.get_client(token_dir=tmp_path)
