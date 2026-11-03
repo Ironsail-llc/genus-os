@@ -116,8 +116,33 @@ def _token_names_the_key(token: str, key: str) -> bool:
     return _names_the_key(token.strip(_WRAPPING), key)
 
 
+#: Words that say the person is handing over a credential, not just naming a
+#: vendor ("review the github PR").
+_STORE_WORD = re.compile(
+    r"\b(?:api[\s_-]?keys?|keys?|tokens?|secrets?|credentials?|passwords?)\b", re.IGNORECASE
+)
+
+#: A URL, a host path or a filesystem path: a place, never a credential.
+_LOCATION = re.compile(r"://|^(?:\.{0,2}/|~/)|^(?:www\.)?[\w-]+(?:\.[\w-]+)+/")
+
+
+def _means_a_store(clause: str, tokens: list[str], values: list[int], value: str) -> bool:
+    """The clause says "this is a credential": a store word outside the value,
+    or the value right after ``name:`` / ``name=``."""
+    if _STORE_WORD.search(clause.replace(value, " ")):
+        return True
+    return any(v > 0 and tokens[v - 1].endswith((":", "=")) for v in values)
+
+
 def _beside_its_key(message: str, key: str, value: str) -> bool:
-    """``value`` and a name for ``key`` share a clause, a few words apart."""
+    """``value`` and a name for ``key`` share a clause, a few words apart.
+
+    The naming token is never the value's own token, so a URL that contains
+    the vendor does not name itself, and the clause must say the person is
+    handing a credential over.
+    """
+    if _LOCATION.search(value):
+        return False
     for clause in _CLAUSE_END.split(message):
         tokens = clause.split()
         values: list[int] = []
@@ -133,8 +158,11 @@ def _beside_its_key(message: str, key: str, value: str) -> bool:
                         values.append(index)
         if not values:
             continue
-        names = [i for i, raw in enumerate(tokens) if _token_names_the_key(raw, key)]
-        if any(abs(v - n) <= MAX_KEY_DISTANCE for v in values for n in names):
+        names = [
+            i for i, raw in enumerate(tokens) if i not in values and _token_names_the_key(raw, key)
+        ]
+        near = any(abs(v - n) <= MAX_KEY_DISTANCE for v in values for n in names)
+        if near and _means_a_store(clause, tokens, values, value):
             return True
     return False
 

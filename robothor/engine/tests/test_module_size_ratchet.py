@@ -104,8 +104,8 @@ CAPS = {
     # the rest of the intake lives — it calls media_ref, _keep_attachment and
     # the same ceiling, so it was always that cluster. The ratchet asked for an
     # extraction rather than a bigger number, and got one.
-    # -> 1035: the reply-quote step moved to telegram_turn.with_reply_quote.
-    "robothor/engine/telegram_handlers.py": 1035,
+    # -> 1034: the reply-quote step moved to telegram_turn.with_reply_quote.
+    "robothor/engine/telegram_handlers.py": 1034,
     "robothor/engine/telegram_plan_mode.py": 900,
     # 1100 -> 1048: the deliverable-contract cluster (the ladder, the guardrail
     # event, the operator alert and the honest failure) left for

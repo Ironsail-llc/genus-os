@@ -383,20 +383,23 @@ refused.
 Intake is also held to what the person TYPED this turn, never to what a tool
 returned and never to the rest of the assembled turn: each channel passes the
 person's own text apart from a quoted message they replied to, an attached
-file's text and a forwarded block, and only that text counts. `vault_set`
+file's text and a forwarded message, and only that text counts. `vault_set`
 stores a value only when that text carries it as a whole token (not part of a
 longer word), the value is credential-sized (at least 16 characters, or at
 least 8 when it has a character that is not a letter or digit, and never
-letters alone), and the value sits beside a name for where it goes:
-`NAME=value`, `name: value`, or the same clause (no newline or `.`, `;`, `!`,
-`?` between them) within six words of the vault key, a reader's name such as
-`OPENWEATHER_API_KEY`, or the vendor. "My openweather key is X; openrouter is
-fine as is" stores X for openweather and never for openrouter. `vault_delete`
-removes a key only when that text asks for a removal (delete, remove, revoke,
-forget, drop, clear, rotate out) and names it, and `vault_list` lists only when
-it asks for a list. So an instruction injected into an email, a web page, a
-file or a quoted message can make the agent store, remove or list only what the
-person typed. Every refusal carries `gate` (`chat_agent`, `role`,
+letters alone), the value is not a URL or a path, and it sits beside a name for
+where it goes, in a token of its own: `NAME=value`, or the same clause (no
+newline or `.`, `;`, `!`, `?` between them) within six words of the vault key,
+a reader's name such as `OPENWEATHER_API_KEY`, or the vendor, where the clause
+also says it is a credential (key, token, secret, credential, password, or the
+value right after `name:`). "Review https://github.com/acme/app/pull/9" names
+GitHub only inside the value, and hands nothing over. "My openweather key is X;
+openrouter is fine as is" stores X for openweather and never for openrouter.
+`vault_delete` removes a key only when that text asks for a removal (delete,
+remove, revoke, forget, drop, clear, rotate out) and names it, and `vault_list`
+lists only when it asks for a list. So an instruction injected into an email, a
+web page, a file or a quoted message can make the agent store, remove or list
+only what the person typed. Every refusal carries `gate` (`chat_agent`, `role`,
 `unverified_sender`, `human_chat`, `not_handed_over` or `not_requested`) and
 `unlock`, the sentence the agent can give the person. There is no switch for
 any of it; see
