@@ -81,7 +81,13 @@ def _call(i: int, name: str, arguments: dict[str, Any]):
 
 
 async def _drive(
-    cfg, registry: ToolRegistry, calls: list[tuple[str, dict[str, Any]]], engine_config
+    cfg,
+    registry: ToolRegistry,
+    calls: list[tuple[str, dict[str, Any]]],
+    engine_config,
+    *,
+    bypass_effects: bool = True,
+    **execute_kw: Any,
 ):
     """Run ``cfg`` with a model that makes ``calls`` in turn, then answers.
 
@@ -123,13 +129,20 @@ async def _drive(
         patch("robothor.engine.run_finalizer.update_run"),
         patch.object(AgentSession, "flush_new_steps_sync", lambda self: 0),
         patch("litellm.acompletion", side_effect=llm),
-        # The meta-tools are not journalled reads, and this file has no effect
-        # database: dispatch straight through, as a benchmark run does.
-        patch("robothor.engine.runtime.effect_dispatch._bypass", return_value=True),
     ):
+        bypass = (
+            # The meta-tools are not journalled reads, and this file has no
+            # effect database: dispatch straight through, as a benchmark run does.
+            patch("robothor.engine.runtime.effect_dispatch._bypass", return_value=True)
+            if bypass_effects
+            else contextlib.nullcontext()
+        )
         runner = AgentRunner(engine_config)
         runner.registry = registry
-        await asyncio.wait_for(runner.execute(cfg.id, "go", agent_config=cfg), timeout=60)
+        with bypass:
+            await asyncio.wait_for(
+                runner.execute(cfg.id, "go", agent_config=cfg, **execute_kw), timeout=60
+            )
     return seen, results
 
 
