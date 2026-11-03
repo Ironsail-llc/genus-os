@@ -480,6 +480,56 @@ async def test_naming_the_vendor_without_asking_to_remove_is_not_a_delete(intake
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    ["drop me the link to my github PR", "clear the github notifications for me"],
+    ids=["drop", "clear"],
+)
+async def test_an_everyday_drop_or_clear_beside_a_vendor_is_not_a_delete(intake, message):
+    session = intake["live"](task_text=message)
+    intake["rows"]["providers/github/api_key"] = "ghp_FAKE0000_still_here_0000"
+    result = await HANDLERS["vault_delete"]({"key": "providers/github/api_key"}, _ctx(session))
+    assert result.get("gate") == "not_requested", result
+    assert intake["rows"]["providers/github/api_key"] == "ghp_FAKE0000_still_here_0000"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message, key",
+    [
+        ("delete my github token", "providers/github/api_key"),
+        ("remove the openweather api key", KEY),
+    ],
+    ids=["github-token", "openweather-api-key"],
+)
+async def test_a_removal_with_a_store_word_goes_through(intake, message, key):
+    session = intake["live"](task_text=message)
+    intake["rows"][key] = SHAPELESS_KEY
+    result = await HANDLERS["vault_delete"]({"key": key}, _ctx(session))
+    assert result.get("success") is True, result.get("error")
+
+
+@pytest.mark.asyncio
+async def test_an_email_address_is_not_a_hand_over(intake):
+    email = "alice@acme.io"
+    session = intake["live"](task_text=f"ask {email} for the github token")
+    result = await HANDLERS["vault_set"](
+        {"key": "providers/github/api_key", "value": email}, _ctx(session)
+    )
+    assert result.get("gate") == "not_handed_over", result
+    assert intake["writes"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_real_key_beside_github_token_is_still_admitted(intake):
+    session = intake["live"](task_text=f"github token: {SHAPELESS_KEY}")
+    result = await HANDLERS["vault_set"](
+        {"key": "providers/github/api_key", "value": SHAPELESS_KEY}, _ctx(session)
+    )
+    assert result.get("success") is True, result.get("error")
+
+
+@pytest.mark.asyncio
 async def test_a_delete_the_person_did_not_ask_for_is_refused(intake):
     session = intake["live"](task_text="summarise my inbox please")
     intake["rows"][KEY] = SHAPELESS_KEY
