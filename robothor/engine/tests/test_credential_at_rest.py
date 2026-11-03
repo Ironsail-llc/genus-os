@@ -191,3 +191,39 @@ class TestWrappedCall:
             ],
         }
         assert BARE not in _saved([turn])
+
+
+class TestRestoreAfterARestart:
+    """The registry of handed-over values lives in one process and dies with
+    it; a checkpoint lives thirty days. A row written before redaction, read
+    back by a fresh engine, must still lose the value."""
+
+    def _with_request(self, request: str):
+        return TestRestore()._with_request(request)
+
+    def test_a_value_the_vault_holds_is_redacted_by_a_fresh_process(self):
+        forget_known_values()  # a fresh process: nothing registered yet
+        with patch("robothor.vault.export_env", return_value={"OPENWEATHER_API_KEY": BARE}):
+            loaded = _loaded(self._with_request(f"my openweather key is {BARE}"))
+        leaked = BARE in json.dumps(loaded["messages"])
+        assert not leaked, "a stored value came back from an old checkpoint"
+
+    def test_a_bare_hex_run_the_person_typed_is_redacted_even_if_never_stored(self):
+        never_stored = "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a"
+        with patch("robothor.vault.export_env", return_value={}):
+            loaded = _loaded(self._with_request(f"my openweather key is {never_stored}"))
+        leaked = never_stored in json.dumps(loaded["messages"])
+        assert not leaked
+
+    def test_a_git_sha_in_a_tool_result_survives_restore(self):
+        sha = "3f2a9c1e7b4d6a8f0c2e4b6d8a0c2e4f6b8d0a2c"
+        messages = self._with_request("what changed?")
+        messages.append({"role": "tool", "tool_call_id": "c1", "content": f"commit {sha}"})
+        with patch("robothor.vault.export_env", return_value={}):
+            loaded = _loaded(messages)
+        assert sha in json.dumps(loaded["messages"])
+
+    def test_an_unreadable_vault_still_restores(self):
+        with patch("robothor.vault.export_env", side_effect=RuntimeError("no master key")):
+            loaded = _loaded(self._with_request("hello"))
+        assert loaded is not None
