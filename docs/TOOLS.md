@@ -1072,7 +1072,10 @@ directory and the workspace; a final `**` matches files too), and when a word
 is a symlink that resolves onto one — a bare filename included, when it names
 an entry in the directory the command runs in. That directory is the
 workspace, or where an earlier `cd`/`pushd` (or `-C` on `git`, `make` or `tar`)
-to a literal path moves it. The printing gate lets a bare `*.key`-shaped word
+to a literal path moves it; a relative glob or brace word expands there too.
+After a `cd` to a directory the text does not spell, a printing command's
+relative glob that could match a secret's name (`*.key`, `id_*`, `*`) is
+refused; one that could not (`*.txt`) runs. The printing gate lets a bare `*.key`-shaped word
 that names no file through (`jq -r .key`); after a `cd` it looks the word up
 where the `cd` lands, and after a `cd` to a directory the text does not spell
 (`cd "$D"`, `cd -`, `popd`) it refuses the word as before. `ls`, `test`/`[`, `stat`, `wc` and `du` are let through, because they

@@ -536,6 +536,40 @@ def _absent_bare_key_word(candidate: str, cwd: str | None) -> bool:
     return not _os.path.lexists(Path(cwd) / candidate)
 
 
+#: Names a glob is tried against when the shell's directory is unknown: one of
+#: each listed shape, so ``*.key``, ``id_*`` or ``*`` could be a key and
+#: ``*.txt`` could not.
+_SECRET_SAMPLES = (
+    _SECRET_NAMES
+    | _SECRET_DIRS
+    | {".config", "gh", "id_rsa", "id_ed25519", "server.key", "cert.pem", "client.p12"}
+    | {".env.local", "robothor.env", "secrets.json", "secrets.yaml", "x.enc.json"}
+    | {"service-account.json", "credentials", "credentials.json", "token.json"}
+    | {"client_secret.json", ".npmrc", ".pypirc", ".vault-key"}
+)
+
+
+def _glob_could_name_secret(word: str) -> bool:
+    """True when a relative glob or brace *word* could match a secret's name in
+    a directory the text does not spell. Over the brace cap it could."""
+    import fnmatch
+
+    variants = _expand_braces(word)
+    if variants is None:
+        return True
+    for variant in variants:
+        for part in variant.split("/"):
+            if not part or not _GLOB_MAGIC.search(part):
+                continue
+            pat = part.lower()
+            for name in _SECRET_SAMPLES:
+                if name.startswith(".") and not pat.startswith("."):
+                    continue  # `*` and `?` never match a leading dot
+                if fnmatch.fnmatchcase(name, pat):
+                    return True
+    return False
+
+
 def exec_reads_secret(command: str, *, cwd: str | None = None) -> str | None:
     """The reason a shell command is refused, or None when it may run.
 
@@ -578,6 +612,17 @@ def exec_reads_secret(command: str, *, cwd: str | None = None) -> str | None:
                 if arg.startswith("-"):
                     continue
                 candidate = arg.strip("'\"")
+                if (
+                    here is None
+                    and _GLOB_MAGIC.search(candidate)
+                    and not candidate.startswith(("/", "~", "$HOME", "${HOME}"))
+                    and _glob_could_name_secret(candidate)
+                ):
+                    return (
+                        f"refused: `{word}` would expand {candidate} in a directory the "
+                        "command changed to, where it could name a secrets file. Spell the "
+                        "directory, or name the files, instead."
+                    )
                 if is_secret_path(candidate) and not _absent_bare_key_word(candidate, here):
                     return (
                         f"refused: `{word}` would print {PurePath(candidate).name}, a secrets "
@@ -877,13 +922,14 @@ def _bounded_glob(pattern: str, budget: _WalkBudget) -> list[str]:
     return current
 
 
-def _glob_hits_credential(word: str, roots: tuple[str, ...]) -> str | None:
+def _glob_hits_credential(word: str, roots: tuple[str, ...], base: str | None = None) -> str | None:
     """A listed path a glob word expands onto, or None.
 
     Bounded: braces past :data:`_BRACE_CAP` are not expanded, and the walk
     visits at most :data:`_GLOB_WALK_CAP` entries. Confined: only a pattern
     inside *roots* (the workspace and the home directory) is walked, and only a
-    hit inside them is considered.
+    hit inside them is considered. A relative word expands in *base*, the
+    directory its segment runs in (the workspace unless a ``cd`` moved it).
     """
     import os as _os
     import posixpath
@@ -897,9 +943,10 @@ def _glob_hits_credential(word: str, roots: tuple[str, ...]) -> str | None:
         if variant.startswith("~") and not _is_home_spelling(variant):
             continue  # a `~word` naming no user is a literal, not a home
         if not posixpath.isabs(pattern):
-            if not roots:
+            start = base or (roots[0] if roots else None)
+            if start is None:
                 continue
-            pattern = posixpath.join(roots[0], pattern)
+            pattern = posixpath.join(start, pattern)
         pattern = posixpath.normpath(pattern)
         if not any(_under(pattern, r) for r in roots):
             continue
@@ -971,7 +1018,7 @@ def exec_names_credential(command: str, *, roots: tuple[str, ...] = ()) -> dict[
             if (hit := _named_credential(token)) is not None:
                 return credential_refusal(hit)
             if globbed:
-                if (hit := _glob_hits_credential(token, roots)) is not None:
+                if (hit := _glob_hits_credential(token, roots, here)) is not None:
                     return credential_refusal(hit)
             elif (path := _resolvable(token, roots, here)) is not None and _realpath_is_credential(
                 path
