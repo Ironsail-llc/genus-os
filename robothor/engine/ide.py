@@ -191,6 +191,7 @@ async def _handle_chat_send(
                 user_id=session.auth.user_id,
                 user_role=session.auth.role,
                 identity=identity,
+                typed_message=message,
             )
 
             # Update history

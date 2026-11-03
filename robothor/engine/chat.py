@@ -429,6 +429,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 live_inbox=inbox,
                 user_images=attached.images or None,
                 on_complete=early.callback(),
+                typed_message=attached.typed,
             )
             pending.extend(seal_live_inbox(session, inbox))
 
@@ -1330,23 +1331,6 @@ async def plan_status(request: Request, session_key: str = "") -> JSONResponse:
 # ─── Deep Mode Endpoints ─────────────────────────────────────────────
 
 
-def _deep_to_dict(deep: DeepRunState) -> dict[str, Any]:
-    """Serialize DeepRunState for JSON responses."""
-    return {
-        "deep_id": deep.deep_id,
-        "query": deep.query,
-        "status": deep.status,
-        "started_at": deep.started_at,
-        "completed_at": deep.completed_at,
-        "response": deep.response,
-        "execution_time_s": deep.execution_time_s,
-        "cost_usd": deep.cost_usd,
-        "context_chars": deep.context_chars,
-        "trajectory_file": deep.trajectory_file,
-        "error": deep.error,
-    }
-
-
 @router.post("/deep/start", response_model=None)
 async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
     """Start deep reasoning: call RLM directly, return SSE stream with progress."""
@@ -1513,7 +1497,7 @@ async def deep_status(request: Request, session_key: str = "") -> JSONResponse:
         return JSONResponse(
             {
                 "active": True,
-                "deep": _deep_to_dict(session.active_deep),
+                "deep": session.active_deep.to_dict(),
             }
         )
     return JSONResponse({"active": False, "deep": None})

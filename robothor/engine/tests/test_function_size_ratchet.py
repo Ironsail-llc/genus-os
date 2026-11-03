@@ -75,7 +75,9 @@ KNOWN_LARGE: dict[str, int] = {
     # access moved to run_attribution.attribute_run. 970 -> 964: the switch
     # that gated the answer-first exit went, and both exits share its arguments.
     # 964 -> 963: re-measured after the catch-up fold (flag paths removed).
-    "runner.py::execute": 963,
+    # -13: session seating moved to run_identity.seat_session
+    # 963 -> 957: re-measured with the credential-intake refold.
+    "runner.py::execute": 957,
     # 775 -> 773 with the step-efficiency work: the guard's note drain, the
     # pace-note call site and the refusal branch cost less than the inlined
     # deadline and check-in blocks returned when they left for run_pacing.py.
@@ -126,7 +128,9 @@ KNOWN_LARGE: dict[str, int] = {
     # telegram_delivery.persist_and_map. 338 -> 314: the ten-second tool-status
     # edits went with the only streaming path; telegram_progress.deliver_reply
     # delivers the reply.
-    "telegram.py::_run_interactive": 314,
+    # -13: the sender lookup is telegram_turn.run_sender
+    # 314 -> 304: re-measured with the credential-intake refold.
+    "telegram.py::_run_interactive": 304,
     # 343 -> 325: the benchmark break-out moved to _benchmark_spend, which is
     # what paid for un-scoping it from the production tenant (the graded
     # children now run as benchmark-sandbox) rather than raising this number.

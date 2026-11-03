@@ -75,7 +75,9 @@ CAPS = {
     # access left execute for run_attribution.py, absorbing the fold's growth.
     # 2214 -> 2207: the switch that gated the answer-first exit went.
     # 2207 -> 2206: re-measured after the catch-up fold (flag paths removed).
-    "robothor/engine/runner.py": 2206,
+    # -> 2198: session seating moved to run_identity.seat_session.
+    # 2206 -> 2200: re-measured with the credential-intake refold.
+    "robothor/engine/runner.py": 2200,
     # 3850 -> 3150 after the plan-mode cluster left (phase 3), then again after
     # phase 3b (_setup_handlers closures -> methods), and 3150 -> 2000 as the
     # handler and attachment clusters left for telegram_handlers.py and
@@ -94,7 +96,12 @@ CAPS = {
     # 1978 -> 1924: streaming is the only reply path; the old status edits
     # went, and delivering the reply moved to telegram_progress.deliver_reply.
     # 1924 -> 1923: re-measured after the catch-up fold (flag paths removed).
-    "robothor/engine/telegram.py": 1923,
+    # 1980 -> 1945 -> 1933: interactive delivery accounting moved to
+    # telegram_delivery.py, which paid for threading the typed text (what the
+    # person typed, apart from reply quotes and file text) to the run; then the
+    # sender lookup moved to telegram_turn.run_sender.
+    # 1923 -> 1880: re-measured with the credential-intake refold.
+    "robothor/engine/telegram.py": 1880,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new
@@ -109,7 +116,9 @@ CAPS = {
     # the same ceiling, so it was always that cluster. The ratchet asked for an
     # extraction rather than a bigger number, and got one.
     # 1082 -> 1047: re-measured after the catch-up fold (flag paths removed).
-    "robothor/engine/telegram_handlers.py": 1047,
+    # -> 1035: the reply-quote step moved to telegram_turn.with_reply_quote.
+    # 1047 -> 1032: re-measured with the credential-intake refold.
+    "robothor/engine/telegram_handlers.py": 1032,
     # 900 -> 872: re-measured after the catch-up fold (flag paths removed).
     "robothor/engine/telegram_plan_mode.py": 872,
     # 1100 -> 1048: the deliverable-contract cluster (the ladder, the guardrail
@@ -795,7 +804,10 @@ CAPS = {
     # it) left for chat_restore.py when the daemon began reading sessions
     # concurrently, which paid for that split rather than raising this cap.
     # 1533 -> 1526: re-measured after the catch-up fold (flag paths removed).
-    "robothor/engine/chat.py": 1526,
+    # 1562 -> 1546: DeepRunState serialises itself (models.py), which paid for
+    # passing the typed text to the run.
+    # 1526 -> 1510: re-measured with the credential-intake refold.
+    "robothor/engine/chat.py": 1510,
     # 1600 -> 1607 (2026-08-27): fleet admission finally has a caller here.
     # The 75-line implementation went to admission.py; what remains is five
     # irreducible call sites (admit / register / complete / import). The

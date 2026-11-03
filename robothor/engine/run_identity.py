@@ -112,3 +112,26 @@ async def attach_tenant_access(run: Any, tenant_id: str) -> None:
 async def resolve_run_identity_off_loop(identity: Any, **kwargs: Any) -> Any:
     """:func:`resolve_run_identity` in a worker thread (a webchat miss is a DB query)."""
     return await asyncio.to_thread(resolve_run_identity, identity, **kwargs)
+
+
+def seat_session(
+    session: Any,
+    agent_config: Any,
+    live_inbox: Any,
+    typed_message: str | None,
+    actor: tuple[str, str],
+    resume_from_run_id: str | None,
+) -> None:
+    """Seat the run's caller, inbox and per-agent settings on a fresh session.
+
+    ``typed_message`` is the raw text the person typed, when a channel
+    assembled the run's message around it (a reply quote, attachment text);
+    credential intake reads only this. ``actor`` is ``principal()``'s
+    ``(user_id, user_role)``.
+    """
+    session.live_inbox = live_inbox  # chat sent mid-run; see live_inbox.py
+    session.typed_message = typed_message or ""
+    session.response_format = agent_config.response_format
+    session.provider_order = agent_config.provider_order
+    session.run.user_id, session.run.user_role = actor
+    session.run.resume_from_run_id = resume_from_run_id

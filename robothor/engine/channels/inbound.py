@@ -295,6 +295,7 @@ async def handle_message(
             run_kwargs: dict[str, Any] = {
                 "agent_id": agent_id,
                 "message": text,
+                "typed_message": text,
                 "trigger_type": trigger_type,
                 "trigger_detail": detail,
                 "tenant_id": resolved_tenant,

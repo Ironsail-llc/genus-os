@@ -285,9 +285,7 @@ def _request_gate(ctx: ToolContext, tool: str, args: dict[str, Any]) -> str | No
     """What the person's own message this turn asked for, against ``tool``."""
     from robothor.engine.tools.handlers.vault_intake import request_gate
 
-    session = _live_session(ctx)
-    message = str(getattr(session, "originating_message", "") or "")
-    return request_gate(tool, args, message)
+    return request_gate(tool, args, _typed_text(_live_session(ctx)))
 
 
 async def _denial(
@@ -395,12 +393,14 @@ async def _vault_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """
     denial = await _denial(ctx, "vault_set", args)
     if denial:
+        await _redact_a_refused_paste(args, ctx)
         return denial
 
     key = args["key"]
     value = args["value"]
     denial = _refuse_bootstrap(key, "write")
     if denial:
+        await _redact_a_refused_paste(args, ctx)
         return denial
 
     import robothor.vault as vault
@@ -414,7 +414,11 @@ async def _vault_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     }
     if tenant_id:
         kwargs["tenant_id"] = tenant_id
-    await asyncio.to_thread(vault.set, key, value, **kwargs)
+    try:
+        await asyncio.to_thread(vault.set, key, value, **kwargs)
+    except Exception:
+        await _redact_a_refused_paste(args, ctx)
+        raise
 
     # The value is known now, so it can be taken out of the places the
     # person's message already reached — and of everything written after.
@@ -453,6 +457,34 @@ async def _vault_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return answer
 
 
+async def _redact_a_refused_paste(args: dict[str, Any], ctx: ToolContext) -> None:
+    """A hand-over that did not store still takes the pasted value out.
+
+    Refused (any gate) or failed, the person still pasted it, so the value is
+    registered and scrubbed exactly as a stored one is. Only a value the
+    person's own message carries as a credential-sized token qualifies.
+    """
+    from robothor.engine.tools.handlers.vault_intake import pasted_by_the_person
+    from robothor.secrets.fingerprint import fingerprint
+
+    value = str(args.get("value") or "")
+    session = _live_session(ctx)
+    if not pasted_by_the_person(_typed_text(session), value):
+        return
+    pasted_fingerprint = await asyncio.to_thread(fingerprint, value)
+    await _forget_the_value_everywhere(value, pasted_fingerprint, session)
+
+
+def _typed_text(session: Any) -> str:
+    """What the person TYPED this turn: no reply quote, no attachment text.
+
+    ``originating_message`` is the assembled turn, and a third party's file or
+    a quoted fleet message inside it is not the person handing anything over.
+    A channel that does not set ``typed_message`` hands nothing over.
+    """
+    return str(getattr(session, "typed_message", "") or "")
+
+
 def _audit_metadata(ctx: ToolContext, session: Any) -> dict[str, Any]:
     """Who stored the row and how. Identifiers only, never the value."""
     if session is None:
@@ -486,12 +518,14 @@ async def _forget_the_value_everywhere(value: str, stored_fingerprint: str, sess
     original = session.run.task_text
     cleaned = redact(original) if original else original
     originating = getattr(session, "originating_message", None)
+    placeholder = f"<redacted:{stored_fingerprint}>"
     if originating:
         # Only THIS value: a second key in the same message is still the
         # person's hand-over, and the intake gate looks for it here.
-        session.originating_message = redact_known_value(
-            originating, value.strip(), f"<redacted:{stored_fingerprint}>"
-        )
+        session.originating_message = redact_known_value(originating, value.strip(), placeholder)
+    typed = getattr(session, "typed_message", None)
+    if typed:
+        session.typed_message = redact_known_value(typed, value.strip(), placeholder)
     if cleaned == original:
         return
     session.run.task_text = cleaned
