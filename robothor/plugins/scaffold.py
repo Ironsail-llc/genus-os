@@ -171,7 +171,7 @@ def _checks() -> dict[str, Any]:
         problems = await asyncio.to_thread(knowledge.findings)
         if problems:
             return fail(
-                f"{{len(problems)}} knowledge record(s) need their owner's review: "
+                f"knowledge needs its owner's attention ({{len(problems)}} problem(s)): "
                 + "; ".join(problems)
                 + ". See knowledge/README.md"
             )
