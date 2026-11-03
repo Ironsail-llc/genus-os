@@ -23,6 +23,13 @@ spec:
       port: {{ .Values.engine.service.port }}
       targetPort: http
       protocol: TCP
+  {{- /* Narrowed to the root tenant's pod once tenant cells exist, exactly as
+         the root engine's own Service is: every cell's pod is component=engine
+         too, and the bridge's root control calls must not reach a child. */}}
+  {{- $selectTenant := "" }}
+  {{- if gt (len (.Values.tenants | default list)) 0 }}
+  {{- $selectTenant = include "genus-os.rootTenant" . }}
+  {{- end }}
   selector:
-    {{- include "genus-os.selectorLabels" (dict "root" . "component" "engine") | nindent 4 }}
+    {{- include "genus-os.selectorLabels" (dict "root" . "component" "engine" "tenant" $selectTenant) | nindent 4 }}
 {{- end }}
