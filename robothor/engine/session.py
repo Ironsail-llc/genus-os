@@ -807,7 +807,7 @@ class AgentSession:
                 )
             clear_graph(self.run_id)
         except Exception as e:  # noqa: BLE001
-            logger.debug("symbol graph finalize skipped: %s", e)
+            logger.debug("symbol graph finalize skipped: %s", type(e).__name__)
 
     def mark_interrupted(self, note: str | None = None) -> None:
         """Record that the operator halted this run at a checkpoint."""
@@ -950,7 +950,8 @@ class AgentSession:
                 try:
                     create_step(step)
                 except Exception as e:
-                    logger.warning("Failed to record step: %s", e)
+                    # The class only: a DB error can quote the row, tool output included.
+                    logger.warning("Failed to record step: %s", type(e).__name__)
         self.run.persisted_step_count = len(self.run.steps)
         return len(pending)
 
@@ -1008,7 +1009,8 @@ class AgentSession:
                 full_chars=raw_len,
             )
         except Exception as e:  # noqa: BLE001 — never break tool recording
-            logger.debug("symbol node skipped for %s: %s", tool_name, e)
+            # The class only: the text can quote the tool output it choked on.
+            logger.debug("symbol node skipped for %s: %s", tool_name, type(e).__name__)
 
     def thin_previous_tool_results(self, protect_after_index: int) -> int:
         """Compress tool results from previous iterations to one-line summaries.

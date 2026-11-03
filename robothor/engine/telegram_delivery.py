@@ -63,4 +63,4 @@ class TelegramDeliveryMixin:
 
             await _persist_delivery_status(run)
         except Exception as e:
-            logger.warning("Interactive delivery bookkeeping failed: %s", e)
+            logger.warning("Interactive delivery bookkeeping failed: %s", type(e).__name__)
