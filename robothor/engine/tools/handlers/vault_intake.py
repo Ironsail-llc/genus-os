@@ -152,10 +152,15 @@ def _beside_its_key(message: str, key: str, value: str) -> bool:
                     values.append(index)
                 for mark in _ASSIGNMENT:
                     name, sep, rest = token.rpartition(mark)
-                    if sep and rest == value and name and _names_the_key(name, key):
+                    if not sep or rest != value:
+                        continue
+                    # A link's query string (`…?vendor=VALUE`) is not the
+                    # person naming a credential: the whole token is a place.
+                    if _LOCATION.search(name) or "?" in name or "&" in name:
+                        return False
+                    if name and _names_the_key(name, key):
                         return True
-                    if sep and rest == value:
-                        values.append(index)
+                    values.append(index)
         if not values:
             continue
         names = [

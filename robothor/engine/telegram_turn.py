@@ -9,6 +9,16 @@ from __future__ import annotations
 from typing import Any
 
 
+def forget_pending(bot: Any, chat_id: str | None = None) -> None:
+    """Drop a chat's queued, not-yet-run text and typed text (every chat's if
+    ``chat_id`` is None): the two buffers travel together or not at all."""
+    for buffers in (bot._message_buffers, bot._typed_buffers):
+        if chat_id is None:
+            buffers.clear()
+        else:
+            buffers.pop(chat_id, None)
+
+
 def forwarded(message: Any) -> bool:
     """Whether a Telegram update forwards another message.
 

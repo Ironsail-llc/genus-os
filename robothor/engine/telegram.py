@@ -79,6 +79,7 @@ from robothor.engine.telegram_plan_mode import (  # noqa: E402
     TYPING_INTERVAL,
     PlanModeMixin,
 )
+from robothor.engine.telegram_turn import forget_pending, run_sender  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -508,8 +509,6 @@ class TelegramBot(
 
                 # trigger_detail with sender identity for warmup; THIS message's
                 # sender over the shared cache (see telegram_turn.run_sender).
-                from robothor.engine.telegram_turn import run_sender
-
                 _user, _detail, _tenant = run_sender(self, chat_id, sender_info)
 
                 # Unified identity context (robothor.identity) — built from the
@@ -1852,7 +1851,7 @@ class TelegramBot(
             polling_stop_timeout = POLLING_STOP_TIMEOUT_SECONDS
         # Clear message buffers and cancel all active tasks
         self._drop_all_live_inboxes()  # first: a cancelled run's finally requeues them
-        self._message_buffers.clear()
+        forget_pending(self)
         self._drain_scheduled.clear()
         self._attachment_buffers.clear()
         # An album timer outliving the bot would fire into a closed session.

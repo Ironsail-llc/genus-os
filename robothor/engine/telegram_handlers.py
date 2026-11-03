@@ -41,7 +41,7 @@ from robothor.engine.chat_store import (
 from robothor.engine.task_registry import get_task_registry
 from robothor.engine.telegram_attachments import _extract_pdf_text as _extract_pdf_text
 from robothor.engine.telegram_grades import format_agent_grades as format_agent_grades
-from robothor.engine.telegram_turn import forwarded, with_reply_quote
+from robothor.engine.telegram_turn import forget_pending, forwarded, with_reply_quote
 
 logger = logging.getLogger(__name__)
 
@@ -289,7 +289,7 @@ class TelegramHandlersMixin:
     async def cmd_stop(self, message: Message) -> None:
         chat_id = str(message.chat.id)
         # Clear any buffered (not-yet-started) messages
-        self._message_buffers.pop(chat_id, None)
+        forget_pending(self, chat_id)
         self._drain_scheduled.pop(chat_id, None)
         self._drop_live_inbox(chat_id)  # and what was sent to the run mid-flight
         task = self._active_tasks.get(chat_id)

@@ -198,3 +198,22 @@ class TestForwarded:
         await bot.handle_text(message)
         _args, kwargs = bot._enqueue_message.call_args
         assert kwargs.get("typed_text") == ""
+
+
+class TestBuffersAreForgotten:
+    @pytest.mark.asyncio
+    async def test_stop_drops_the_pending_typed_text(self, bot):
+        bot._message_buffers["12345"] = ["queued"]
+        bot._typed_buffers["12345"] = ["queued"]
+        message = _text_message("/stop")
+        await bot.cmd_stop(message)
+        assert "12345" not in bot._typed_buffers
+        assert "12345" not in bot._message_buffers
+
+    @pytest.mark.asyncio
+    async def test_shutdown_drops_every_pending_typed_text(self, bot):
+        bot._typed_buffers["12345"] = ["queued"]
+        bot.dp.stop_polling = AsyncMock()
+        bot.bot.session.close = AsyncMock()
+        await bot.stop(polling_stop_timeout=0.01)
+        assert bot._typed_buffers == {}

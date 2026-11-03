@@ -696,6 +696,17 @@ async def test_a_url_that_names_the_vendor_is_not_a_hand_over(intake):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sep", ["?", "&"])
+async def test_a_query_string_assignment_is_not_a_hand_over(intake, sep):
+    """A link the person pastes can carry ``…?openweather=<attacker value>``."""
+    lead = "https://example.com/cb?x=1" if sep == "&" else "https://example.com/cb"
+    session = intake["live"](task_text=f"open {lead}{sep}openweather={SHAPELESS_KEY} please")
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    assert result.get("gate") == "not_handed_over", result
+    assert intake["writes"] == []
+
+
+@pytest.mark.asyncio
 async def test_the_vendor_only_inside_the_value_does_not_count(intake):
     value = "openweather-" + SHAPELESS_KEY
     session = intake["live"](task_text=f"please keep {value} for me")

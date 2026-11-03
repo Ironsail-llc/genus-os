@@ -131,7 +131,8 @@ KNOWN_LARGE: dict[str, int] = {
     # delivers the reply.
     # -13: the sender lookup is telegram_turn.run_sender
     # 314 -> 304: re-measured with the credential-intake refold.
-    "telegram.py::_run_interactive": 304,
+    # 304 -> 302: re-measured with the credential-intake refold.
+    "telegram.py::_run_interactive": 302,
     # 343 -> 325: the benchmark break-out moved to _benchmark_spend, which is
     # what paid for un-scoping it from the production tenant (the graded
     # children now run as benchmark-sandbox) rather than raising this number.

@@ -101,7 +101,8 @@ CAPS = {
     # person typed, apart from reply quotes and file text) to the run; then the
     # sender lookup moved to telegram_turn.run_sender.
     # 1923 -> 1880: re-measured with the credential-intake refold.
-    "robothor/engine/telegram.py": 1880,
+    # 1880 -> 1879: re-measured with the credential-intake refold.
+    "robothor/engine/telegram.py": 1879,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new

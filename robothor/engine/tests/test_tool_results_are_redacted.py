@@ -178,6 +178,10 @@ PY_SOURCE = (
     "access_token = parse(x)\n"
     'default_secret = "change-me-in-production"\n'
     "retries = 3\n"
+    "self.token = secrets.token_urlsafe(32)\n"
+    "token = request.args.get(TOKEN_PARAM)\n"
+    "api_key = config.get(API_KEY_SETTING)\n"
+    "token = _current_settings.set(Overrides2(values))\n"
 )
 YAML_SOURCE = "provider:\n  api_key: ${API_KEY}\n  token: ${TOKEN}\n"
 SHELL_SOURCE = 'export TOKEN=$TOKEN\nexport API_KEY="$API_KEY"\nGITHUB_TOKEN=$(gh auth token)\n'
@@ -237,7 +241,10 @@ def test_a_failed_symbol_node_logs_no_tool_output(monkeypatch, caplog):
         _session()._record_symbol_node("exec", {"stdout": "x"}, 1)
     leaked = SHAPED in _logged(caplog)
     assert not leaked
-    assert "ValueError" in _logged(caplog)
+    # A constant message: nothing from the call (not even its tool name) is
+    # interpolated into the log.
+    skipped = [r for r in caplog.records if "symbol node skipped" in r.getMessage()]
+    assert skipped and all(not r.args for r in skipped)
 
 
 def test_a_failed_step_insert_logs_no_row(monkeypatch, caplog):

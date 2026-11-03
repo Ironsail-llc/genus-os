@@ -710,12 +710,14 @@ _BINARY_RESULT_KEYS = frozenset({"image_base64", "screenshot_base64"})
 _MAX_RESULT_DEPTH = 32
 
 
-#: An unquoted assignment's right side that is code, not a value: a dotted
-#: name, the start of a call or subscript (``get_token(``, ``os.environ[``), a
-#: number, or a plain identifier with no digit in it (``parse``,
-#: ``default_token``). A quoted value is a literal and never counts as code.
+#: An unquoted assignment's right side that is code, not a value: anything that
+#: starts with a name or dotted name and a ``(`` or ``[`` (a call or subscript,
+#: whatever its arguments: ``secrets.token_urlsafe(32``, ``os.environ[``), a
+#: dotted name, a number, or a plain identifier with no digit in it
+#: (``parse``, ``default_token``). A quoted value is a literal and never counts.
 _VALUE_IS_CODE = re.compile(
-    r"^(?:[A-Za-z_]\w*(?:\.\w+)+[(\[]?|[A-Za-z_]\w*[(\[]|[A-Za-z_][A-Za-z_]*|[-+]?\d[\d_.]*)$"
+    r"^(?:[A-Za-z_][\w.]*[(\[].*|[A-Za-z_]\w*(?:\.\w+)+|[A-Za-z_][A-Za-z_]*|[-+]?\d[\d_.]*)$",
+    re.DOTALL,
 )
 
 
@@ -783,3 +785,21 @@ def redact_tool_result(result: Any, _depth: int = 0) -> Any:
     if isinstance(result, (list, tuple)):
         return [redact_tool_result(value, _depth + 1) for value in result]
     return result
+
+
+#: An opaque run: 32 or more of the characters keys are made of (hex,
+#: base64url, ``+``), with a letter and a digit in it. A bare 32-hex weather
+#: key has no shape the shape pass can see. Not for logs or tool results,
+#: where git SHAs and checksums are information; only for what a PERSON typed
+#: once it is at rest. A canonical UUID is an identifier and is kept.
+_OPAQUE_RUN = re.compile(
+    r"(?<![A-Za-z0-9_+=-])(?=[A-Za-z0-9_+-]*\d)(?=[A-Za-z0-9_+-]*[A-Za-z])[A-Za-z0-9_+-]{32,}={0,2}(?![A-Za-z0-9_+=-])"
+)
+_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def redact_opaque_runs(text: str) -> str:
+    """``text`` with every opaque run (see :data:`_OPAQUE_RUN`) replaced."""
+    if not text:
+        return text
+    return _OPAQUE_RUN.sub(lambda m: m.group(0) if _UUID.match(m.group(0)) else PLACEHOLDER, text)
