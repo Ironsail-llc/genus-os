@@ -37,6 +37,13 @@ CHECKPOINT_SCHEMA_VERSION = 1  # increment when checkpoint format changes
 IMAGE_PLACEHOLDER = "[image omitted from the checkpoint; its path is named in the turn]"
 
 
+def _redacted(messages: list[Any]) -> list[Any]:
+    """*messages* with the history redaction (``redact_message``) applied."""
+    from robothor.secrets.redaction import redact_message
+
+    return [redact_message(m) for m in messages]
+
+
 def _at_rest(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """*messages* as a checkpoint may keep them: no image bytes, no credential.
 
@@ -45,9 +52,7 @@ def _at_rest(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     read back on resume, so it gets the history redaction (``redact_message``)
     that every other copy of the conversation gets.
     """
-    from robothor.secrets.redaction import redact_message
-
-    return [redact_message(m) for m in _without_images(messages)]
+    return _redacted(_without_images(messages))
 
 
 def _without_images(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -213,6 +218,11 @@ class CheckpointManager:
                         CHECKPOINT_SCHEMA_VERSION,
                     )
                     return None
+                # A row written before checkpoints were redacted still holds
+                # the raw turn; resume must not read a credential back into
+                # the run (and from it, into ``originating_message``).
+                if isinstance(result.get("messages"), list):
+                    result["messages"] = _redacted(result["messages"])
                 from robothor.engine.runtime.contracts import StateEnvelope
 
                 envelope = (result.get("scratchpad") or {}).get("_runtime")

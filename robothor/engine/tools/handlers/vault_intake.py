@@ -91,6 +91,18 @@ def _is_a_whole_token(message: str, value: str) -> bool:
     return False
 
 
+def pasted_by_the_person(message: str, value: str) -> bool:
+    """``value`` is a credential-sized whole token the person typed.
+
+    What a refused or failed ``vault_set`` still registers for redaction: the
+    person pasted it, so it must not stay in history. An invented value an
+    injected call supplies is not in their message, and is not registered,
+    which keeps it from crowding real values out of the bounded registry.
+    """
+    value = (value or "").strip()
+    return _is_credential_sized(value) and _is_a_whole_token(message or "", value)
+
+
 def _handed_over(message: str, key: str, value: str) -> bool:
     return (
         _is_credential_sized(value)
