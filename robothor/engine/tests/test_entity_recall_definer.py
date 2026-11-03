@@ -82,6 +82,7 @@ def _seed(cur: Any) -> None:
          PERSON, True),
         (TENANT_A, "Carol's salary review is due.", "person", ["Example"], 0.8,
          OTHER_PERSON, True),
+        (TENANT_A, "The Example plan ships in March.", "project", ["Example"], 0.4, None, True),
         (TENANT_B, "B: Bob is tenant B's contractor.", "person", ["Bob"], 1.0, None, True),
         (TENANT_B, "B: the Example plan is cancelled.", "project", ["example"], 1.0, None, True),
     ]  # fmt: skip
@@ -140,11 +141,18 @@ def _as_app(dsn: str, tenant: str | None):
         conn.close()
 
 
-def _call(conn: Any, tenant: str, names: list[str], person: str | None = None) -> list[str]:
+def _call(
+    conn: Any,
+    tenant: str,
+    names: list[str],
+    *,
+    restricted: bool = False,
+    person: str | None = None,
+) -> list[str]:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT fact_text FROM entity_facts_for_candidates(%s, %s::text[], %s::uuid)",
-            (tenant, names, person),
+            "SELECT fact_text FROM entity_facts_for_candidates(%s, %s::text[], %s, %s::uuid)",
+            (tenant, names, restricted, person),
         )
         return [r[0] for r in cur.fetchall()]
 
@@ -167,20 +175,37 @@ class TestNeverWiderThanThePolicy:
         with _as_app(cluster, TENANT_A) as conn:
             assert "Bob's old desk was on floor two." not in _call(conn, TENANT_A, ["bob"])
 
+    OWN = "Alice reviewed the Example plan."
+    OTHERS = "Carol's salary review is due."
+    NOBODYS = "The Example plan ships in March."
+
     def test_a_restricted_person_sees_own_and_unowned_facts_only(self, cluster: str) -> None:
         with _as_app(cluster, TENANT_A) as conn:
-            facts = _call(conn, TENANT_A, ["Example"], person=PERSON)
-        assert "Alice reviewed the Example plan." in facts
-        assert "Carol's salary review is due." not in facts
+            facts = _call(conn, TENANT_A, ["Example"], restricted=True, person=PERSON)
+        assert self.OWN in facts
+        assert self.NOBODYS in facts
+        assert self.OTHERS not in facts
+
+    def test_restricted_with_no_linked_person_sees_only_unowned_facts(self, cluster: str) -> None:
+        """An unverified or unrecognised caller is restricted with no person:
+        it gets facts about no one, never any person's."""
+        with _as_app(cluster, TENANT_A) as conn:
+            facts = _call(conn, TENANT_A, ["Example"], restricted=True, person=None)
+        assert facts == [self.NOBODYS], facts
+
+    def test_unrestricted_sees_every_persons_facts(self, cluster: str) -> None:
+        with _as_app(cluster, TENANT_A) as conn:
+            facts = _call(conn, TENANT_A, ["Example"])
+        assert {self.OWN, self.OTHERS, self.NOBODYS} <= set(facts), facts
 
     def test_the_app_role_cannot_call_it_without_the_grant(self, cluster: str) -> None:
         """Execute is granted to the app role, not to PUBLIC."""
         with psycopg2.connect(cluster) as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT has_function_privilege('robothor_app', "
-                "'entity_facts_for_candidates(text, text[], uuid)', 'EXECUTE'), "
+                "'entity_facts_for_candidates(text, text[], boolean, uuid)', 'EXECUTE'), "
                 "has_function_privilege('public', "
-                "'entity_facts_for_candidates(text, text[], uuid)', 'EXECUTE')"
+                "'entity_facts_for_candidates(text, text[], boolean, uuid)', 'EXECUTE')"
             )
             app, public = cur.fetchone()
         assert app is True
@@ -223,7 +248,7 @@ class TestUsesTheEntitiesIndex:
         with _as_app(cluster, TENANT_A) as conn:
             plans = _plans(
                 conn,
-                "SELECT * FROM entity_facts_for_candidates(%s, %s::text[], NULL)",
+                "SELECT * FROM entity_facts_for_candidates(%s, %s::text[], false, NULL)",
                 (TENANT_A, ["Bob", "Example"]),
             )
         assert any("idx_facts_entities_lower" in p for p in plans), plans
