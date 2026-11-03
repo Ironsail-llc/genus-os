@@ -53,7 +53,7 @@ from robothor.engine.tool_outcome import error_text, record_tool_outcome
 from robothor.engine.tool_turn_context import tool_turn_context
 from robothor.engine.tools.read_only import declared_read_only_tools
 from robothor.engine.wrapped_call import inner_call
-from robothor.secrets.redaction import redact_tool_arguments
+from robothor.secrets.redaction import redact_tool_arguments, redact_tool_result
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentConfig
@@ -365,7 +365,7 @@ class ToolTurnMixin:
             state=req.guard_state,
         )
 
-        await self._dispatch_post_tool_hook(call, req, result)
+        await self._dispatch_post_tool_hook(call, req, redact_tool_result(result))
 
         # ── [COST] Propagate tool-reported costs (e.g., deep_reason RLM) ──
         if isinstance(result, dict) and not error_msg:
@@ -513,12 +513,12 @@ class ToolTurnMixin:
         if not req.on_tool:
             return
         try:
-            preview = json.dumps(result, default=str)
+            preview = json.dumps(redact_tool_result(result), default=str)
             if len(preview) > 2000:
                 preview = preview[:2000] + "..."
         except Exception as e:
             logger.warning("JSON serialization of tool result failed: %s", _sanitize(e))
-            preview = str(result)[:2000]
+            preview = str(redact_tool_result(result))[:2000]
         with contextlib.suppress(Exception):
             await req.on_tool(
                 {

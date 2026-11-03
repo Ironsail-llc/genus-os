@@ -168,6 +168,13 @@ def _render_history_for_llm(msg: dict[str, Any]) -> dict[str, Any]:
     return {"role": role, "content": content}
 
 
+def _effective_tool(tool_name: str, tool_input: Any) -> str:
+    """The tool a call reaches: ``tool_call`` is judged by the tool it wraps."""
+    if tool_name.strip() == "tool_call" and isinstance(tool_input, dict):
+        return str(tool_input.get("name") or "").strip()
+    return tool_name.strip()
+
+
 # Role for engine-injected context (plan, scratchpad, budget warnings, etc.)
 # LiteLLM translates "developer" → "system" for non-OpenAI providers.
 ENGINE_CONTEXT_ROLE = "developer"
@@ -188,6 +195,13 @@ EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
         "n8n_recent_failures",
     }
 )
+
+#: Tools whose result IS a secret the model must read. Their result reaches
+#: the model unchanged and is still masked wherever it is stored (the step
+#: row, effects, checkpoints, the live stream). Empty on purpose: ``vault_get``
+#: and ``vault_test`` return a fingerprint, never a value, and the internals
+#: that do read values (``vault.export_env``) are not tools the model calls.
+SECRET_RESULT_TOOLS: frozenset[str] = frozenset()
 
 #: Appended to the system prompt ONLY on a run where the owner has delegated
 #: execution enabled and a live standing grant names this agent. Parked at
@@ -634,13 +648,21 @@ class AgentSession:
         ``tool_call``, the wrapped tool and its arguments (wrapped_call.py).
         The step itself stays the wrapper's.
         """
-        from robothor.secrets.redaction import redact_tool_arguments
+        from robothor.secrets.redaction import redact_tool_arguments, redact_tool_result
 
         tool_input = redact_tool_arguments(tool_name, tool_input)
         call_name, call_args = inner_call(tool_name, tool_input)
         if call_name != tool_name and explicit_arguments(tool_input.get("arguments")) is not None:
             call_args = redact_tool_arguments(call_name, call_args)
             tool_input = {**tool_input, "arguments": call_args}
+        # The result too, before anything stores or shows it: an `exec` that
+        # prints a credentials file returns normally. A secret-returning tool
+        # (SECRET_RESULT_TOOLS, a `tool_call` wrapper judged by the tool it
+        # reaches) still hands the model its result unchanged.
+        model_output = tool_output
+        tool_output = redact_tool_result(tool_output)
+        if _effective_tool(tool_name, tool_input) not in SECRET_RESULT_TOOLS:
+            model_output = tool_output
 
         self._step_counter += 1
         step = RunStep(
@@ -705,8 +727,8 @@ class AgentSession:
         #
         # Convention: `image_base64` (+ optional `image_mime`), or the older
         # `screenshot_base64`, which is PNG by definition.
-        if isinstance(tool_output, dict):
-            b64_data = tool_output.get("image_base64") or tool_output.get("screenshot_base64")
+        if isinstance(model_output, dict):
+            b64_data = model_output.get("image_base64") or model_output.get("screenshot_base64")
             if b64_data and isinstance(b64_data, str):
                 mime = tool_output.get("image_mime") or "image/png"
                 w = tool_output.get("width", "?")
@@ -736,7 +758,7 @@ class AgentSession:
                 )
                 return step
 
-        content = json.dumps(tool_output, default=str)
+        content = json.dumps(model_output, default=str)
         raw_len = len(content)
 
         # Offload large results to temp file, keeping summary + path in context

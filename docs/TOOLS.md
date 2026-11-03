@@ -1004,11 +1004,13 @@ own message — **redacted** through the platform's credential redactor and then
 capped. So does every `analyze_image` row that failed: the batch is the worse
 half, because a 401 fails every image, and a failed row is copied into the
 result, the journal **and** the spilled table on disk that the tool tells you
-to open. A provider's 401 carries the request headers and the api_key, and
-nothing redacts a tool result that returns normally, so the redaction happens
-here, before the text reaches the agent's context, the run's step ledger or the
-journal. Redacting after the cap would be worse than useless: a cut can slice a
-token in half and leave a prefix the redactor no longer recognises. Model names
+to open. A provider's 401 carries the request headers and the api_key. Every
+tool result is redacted before it is stored or shown to the agent (see
+[Credentials](#credentials-vault_get-vault_set-vault_test-vault_list-vault_delete)),
+but that pass sees the text after the cap, so this message is redacted here
+first, before it reaches the journal and the spilled table as well. Redacting
+after the cap would be worse than useless: a cut can slice a token in half and
+leave a prefix the redactor no longer recognises. Model names
 are quoted back, because an operator needs them and they are not secrets.
 
 **Both vision tools refuse the same files.** A path that resolves outside the
@@ -1594,6 +1596,17 @@ The person's message reaches the model raw for that one turn, or the value
 could not be stored. Every copy kept after it is redacted: chat history, the
 recorded steps, run checkpoints (which resume reads back), and the engine log,
 which records a Telegram message's length, never its text.
+
+**Every tool result is redacted too.** A tool that returns normally can still
+carry a credential: `exec` printing a CLI credentials file, a provider error
+echoing its headers. Each result passes the same secrets redactor (credential
+shapes and every value the vault has been handed) before it reaches the
+agent's context, the run's step row, the effects record, the live tool stream
+or a checkpoint. A call through `tool_call` is treated as the tool it reaches.
+The only exception is a tool on `SECRET_RESULT_TOOLS` (in
+`robothor/engine/session.py`), whose result the agent must read: it reaches the
+agent unchanged and is still masked wherever it is stored. The list is empty;
+`vault_get` and `vault_test` return a fingerprint, never a value.
 
 ### Everything else
 

@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 from psycopg2.extras import Json
 
 from robothor.engine.runtime import effects
+from robothor.secrets.redaction import redact_tool_result
 
 
 def record(context: ExecutionContext, effect_id: Any, run_id: str, result: Any) -> bool:
@@ -23,7 +24,7 @@ def record(context: ExecutionContext, effect_id: Any, run_id: str, result: Any) 
                WHERE id=%s AND tenant_id=%s AND principal_id=%s AND request_id=%s
                  AND run_id=%s AND state='dispatching'""",
             (
-                Json({"source": "tool_response", "result": result}),
+                Json({"source": "tool_response", "result": redact_tool_result(result)}),
                 effect_id,
                 context.tenant_id,
                 context.principal_id,

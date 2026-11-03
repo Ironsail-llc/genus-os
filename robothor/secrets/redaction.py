@@ -700,3 +700,35 @@ def _redact_value(value: Any, depth: int) -> Any:
     if isinstance(value, dict):
         return _redact_call("", value, depth)
     return [_redact_value(item, depth + 1) for item in value]
+
+
+#: Keys whose value is binary data in text form (an image), never prose: the
+#: shape pass could cut a base64 run that happens to look like a token.
+_BINARY_RESULT_KEYS = frozenset({"image_base64", "screenshot_base64"})
+
+#: Deeper than any real tool result; past it the value is the placeholder.
+_MAX_RESULT_DEPTH = 32
+
+
+def redact_tool_result(result: Any, _depth: int = 0) -> Any:
+    """A copy of a tool result with every string passed through :func:`redact`.
+
+    A tool that returns normally can still carry a credential: ``exec`` that
+    prints a CLI credentials file, a provider error that echoes its request
+    headers. Nothing stored or replayed may keep it, so the step writer, the
+    effects writer, the live stream and the model's context all take this
+    copy. Dict keys and non-string leaves are kept; an image's base64 is kept
+    as data. Never mutates its input.
+    """
+    if _depth > _MAX_RESULT_DEPTH:
+        return PLACEHOLDER
+    if isinstance(result, str):
+        return redact(result) if result else result
+    if isinstance(result, dict):
+        return {
+            key: value if key in _BINARY_RESULT_KEYS else redact_tool_result(value, _depth + 1)
+            for key, value in result.items()
+        }
+    if isinstance(result, (list, tuple)):
+        return [redact_tool_result(value, _depth + 1) for value in result]
+    return result
