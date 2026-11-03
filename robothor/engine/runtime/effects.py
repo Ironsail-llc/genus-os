@@ -92,6 +92,13 @@ class Verification:
     result: dict[str, Any] | None = None
 
 
+def _stored(result: Any) -> Any:
+    """A provider's result as an effects row may keep it: redacted."""
+    from robothor.secrets.redaction import redact_tool_result
+
+    return redact_tool_result(result)
+
+
 def fingerprint(tool_name: str, arguments: Any) -> str:
     if tool_name == "create_task" and isinstance(arguments, dict):
         # Presentation does not change the business action or its retry identity.
@@ -276,7 +283,7 @@ def resolve(
                WHERE id=%s AND tenant_id=%s AND principal_id=%s AND version=%s AND state='uncertain'""",
             (
                 "confirmed" if verdict.outcome == "applied" else "not_applied",
-                Json({"reference": verdict.reference, "result": verdict.result}),
+                Json({"reference": verdict.reference, "result": _stored(verdict.result)}),
                 effect_id,
                 context.tenant_id,
                 context.principal_id,
