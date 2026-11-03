@@ -61,7 +61,10 @@ system-run RBAC check and the post-execution guardrails all see `name` with its
 comes back as the result of the `tool_call`, and a hook that rewrites the
 arguments rewrites the wrapped call's. Recording the step does the same: the
 result of an external-data tool keeps its `<untrusted_content>` boundary and a
-credential argument is redacted, however the tool was reached. The wrapped tool
+credential argument is redacted, however the tool was reached. So does counting
+the outcome: the three-failure circuit breaker, `agent_tool_events` and the
+no-progress detector see `name`, so failures of different wrapped tools never
+add up to a breaker on `tool_call` itself. The wrapped tool
 runs under the caller's whole tool context, identity included, so a data-scoped
 read through `tool_call` returns exactly what the direct call returns.
 
