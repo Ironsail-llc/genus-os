@@ -1468,8 +1468,10 @@ def list_tasks(
 
     The case filters (``docs/CRM_DATA_FABRIC.md``, "Cases"): ``overdue`` keeps
     tasks whose ``due_at`` has passed; ``unowned`` keeps tasks no agent owns or
-    that wait on a person (``requires_human``). Either one also excludes
-    resolved tasks, whatever ``exclude_resolved`` says.
+    that wait on a person (``requires_human``). Either one excludes resolved
+    tasks whatever ``exclude_resolved`` or ``status`` say, with the predicate
+    the ``crm.cases_overdue`` doctor check uses (``IS DISTINCT FROM``, so a
+    task with no status is kept). ``overdue`` lists the oldest due first.
 
     By default, tasks with a future ``follow_up_at`` are hidden (they're
     "snoozing" until the resurface job clears the field). Pass
@@ -1504,7 +1506,9 @@ def list_tasks(
         if parent_task_id:
             conditions.append("parent_task_id = %s")
             params.append(parent_task_id)
-        if (exclude_resolved or overdue or unowned) and not status:
+        if overdue or unowned:
+            conditions.append("status IS DISTINCT FROM 'DONE'")
+        elif exclude_resolved and not status:
             conditions.append("status != 'DONE'")
         if requires_human is not None:
             conditions.append("requires_human = %s")
@@ -1522,9 +1526,9 @@ def list_tasks(
             conditions.append("(person_id = %s OR person_id IS NULL)")
             params.append(scope.person_id)
         params.append(limit)
+        order = "due_at ASC" if overdue else "created_at DESC"
         cur.execute(
-            f"SELECT * FROM crm_tasks WHERE {' AND '.join(conditions)} "
-            f"ORDER BY created_at DESC LIMIT %s",
+            f"SELECT * FROM crm_tasks WHERE {' AND '.join(conditions)} ORDER BY {order} LIMIT %s",
             params,
         )
         return [task_to_dict(r) for r in cur.fetchall()]
