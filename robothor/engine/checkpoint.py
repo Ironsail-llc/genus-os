@@ -44,10 +44,10 @@ def _redacted(messages: list[Any], stored: tuple[str, ...] = ()) -> list[Any]:
 
     ``stored`` is a per-restore set of values the vault holds (see
     :func:`_stored_credentials`), replaced here whatever the process-wide
-    registry knows. What the person typed (``user``) and the system turn that
-    carries the task record also lose every opaque run
-    (:func:`redact_opaque_runs`): a bare 32-hex key has no shape. Tool results
-    keep theirs: a git SHA there is information.
+    registry knows. What the person typed (``user`` turns, and the task
+    record's person strings in the system turn, see :func:`_scrub_task_record`)
+    also loses every opaque run (:func:`redact_opaque_runs`): a bare 32-hex key
+    has no shape. Tool results keep theirs: a git SHA there is information.
     """
     from robothor.secrets.redaction import PLACEHOLDER, redact_message, redact_opaque_runs
 
@@ -56,14 +56,46 @@ def _redacted(messages: list[Any], stored: tuple[str, ...] = ()) -> list[Any]:
         if stored:
             message = _replace_values(message, stored, PLACEHOLDER)
         cleaned = redact_message(message)
-        if (
-            isinstance(cleaned, dict)
-            and cleaned.get("role") in ("user", "system")
-            and isinstance(cleaned.get("content"), str)
-        ):
-            cleaned = {**cleaned, "content": redact_opaque_runs(cleaned["content"])}
-        out.append(cleaned)
+        if not isinstance(cleaned, dict) or not isinstance(cleaned.get("content"), str):
+            out.append(cleaned)
+        elif cleaned.get("role") == "user":
+            out.append({**cleaned, "content": redact_opaque_runs(cleaned["content"])})
+        elif cleaned.get("role") == "system":
+            out.append(_scrub_task_record(cleaned))
+        else:
+            out.append(cleaned)
     return out
+
+
+def _scrub_task_record(message: dict[str, Any]) -> dict[str, Any]:
+    """The system turn with the opaque pass run on the task record's PERSON
+    strings (request, objective, recent turns, steering), decoded first.
+
+    The record is JSON inside the turn, where a newline is a backslash and an
+    ``n``; a textual pass could cut the escape and leave invalid JSON, losing a
+    resumed run's record and its plan-mode restrictions. Decoded, scrubbed
+    and re-serialised, it is valid by construction. The rest of the turn is
+    engine text and is left alone.
+    """
+    from robothor.engine.task_context import install_context, read_context
+    from robothor.secrets.redaction import redact_opaque_runs
+
+    holder = [message]
+    record = read_context(holder)
+    if record is None:
+        return message
+    for field_name in ("request", "objective"):
+        if isinstance(record.get(field_name), str):
+            record[field_name] = redact_opaque_runs(record[field_name])
+    for turn in record.get("recent_context") or []:
+        if isinstance(turn, dict) and isinstance(turn.get("content"), str):
+            turn["content"] = redact_opaque_runs(turn["content"])
+    if isinstance(record.get("steering"), list):
+        record["steering"] = [
+            redact_opaque_runs(t) if isinstance(t, str) else t for t in record["steering"]
+        ]
+    install_context(holder, record)
+    return holder[0]
 
 
 def _replace_values(value: Any, stored: tuple[str, ...], placeholder: str) -> Any:

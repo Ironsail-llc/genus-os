@@ -710,15 +710,29 @@ _BINARY_RESULT_KEYS = frozenset({"image_base64", "screenshot_base64"})
 _MAX_RESULT_DEPTH = 32
 
 
-#: An unquoted assignment's right side that is code, not a value: anything that
-#: starts with a name or dotted name and a ``(`` or ``[`` (a call or subscript,
-#: whatever its arguments: ``secrets.token_urlsafe(32``, ``os.environ[``), a
-#: dotted name, a number, or a plain identifier with no digit in it
-#: (``parse``, ``default_token``). A quoted value is a literal and never counts.
+#: An unquoted assignment's right side that is code, not a value: a call or
+#: subscript (``secrets.token_urlsafe(32``, ``os.environ[``), a dotted name, a
+#: number, or a plain identifier with no digit in it (``parse``,
+#: ``default_token``). A quoted value is a literal and never counts.
 _VALUE_IS_CODE = re.compile(
-    r"^(?:[A-Za-z_][\w.]*[(\[].*|[A-Za-z_]\w*(?:\.\w+)+|[A-Za-z_][A-Za-z_]*|[-+]?\d[\d_.]*)$",
-    re.DOTALL,
+    r"^(?:[A-Za-z_]\w*(?:\.\w+)+|[A-Za-z_][A-Za-z_]*|[-+]?\d[\d_.]*)$",
 )
+#: The callee of a call or subscript: only it is judged, whatever the arguments.
+_CALLEE = re.compile(r"^([A-Za-z_][\w.]*)[(\[]")
+
+
+def _is_code(body: str) -> bool:
+    """Whether an unquoted value is code (see :data:`_VALUE_IS_CODE`).
+
+    A call is judged by its callee alone: ``secrets.token_urlsafe(32`` is code
+    whatever its arguments, but a callee that mixes upper case and digits
+    (``Xk92mQ7vLp04(``) is a value that happens to hold a bracket.
+    """
+    call = _CALLEE.match(body)
+    if call:
+        callee = call.group(1)
+        return not (any(c.isupper() for c in callee) and any(c.isdigit() for c in callee))
+    return bool(_VALUE_IS_CODE.match(body))
 
 
 def _value_looks_like_a_credential(body: str, *, quoted: bool) -> bool:
@@ -730,7 +744,7 @@ def _value_looks_like_a_credential(body: str, *, quoted: bool) -> bool:
     """
     if len(body) < 16 or _VALUE_IS_A_REFERENCE.match(body):
         return False
-    if not quoted and _VALUE_IS_CODE.match(body):
+    if not quoted and _is_code(body):
         return False
     classes = sum(any(test(ch) for ch in body) for test in (str.islower, str.isupper, str.isdigit))
     return classes >= 2
