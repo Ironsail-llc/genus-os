@@ -5,15 +5,23 @@
  * feature stays one set of files.
  */
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
-
-const ENGINE_URL = process.env.ROBOTHOR_ENGINE_URL || "http://127.0.0.1:18800";
+import { engineUrlForAuthorization } from "@/lib/services/registry";
 
 export type SteerResult = { ok: boolean; found: boolean };
 
+/**
+ * One POST to the engine of the tenant the session acts in, chosen from its
+ * bearer exactly as server-client's chat calls choose theirs: a child tenant's
+ * session sent to the root engine is refused there.
+ */
 async function post(path: string, body: Record<string, unknown>): Promise<SteerResult> {
-  const res = await fetch(`${ENGINE_URL}${path}`, {
+  const headers: Record<string, string> = {
+    ...(await bridgeAuthHeaders()),
+    "Content-Type": "application/json",
+  };
+  const res = await fetch(`${engineUrlForAuthorization(headers.Authorization)}${path}`, {
     method: "POST",
-    headers: { ...(await bridgeAuthHeaders()), "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(15_000),
   });
