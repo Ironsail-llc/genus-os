@@ -158,7 +158,7 @@ KNOWN_LARGE: dict[str, int] = {
     # recording its attempts — so `duration_ms` means the provider attempt on
     # BOTH paths instead of one thing streamed and another not (review I5).
     "llm_client.py::_call_llm_streaming": 230,
-    "telegram.py::run_agent": 257,
+    "telegram.py::run_agent": 233,  # the sender lookup and its import moved to telegram_turn
     "tools/handlers/experiment.py::_experiment_commit": 256,
     "telegram.py::_handle_goal_command": 242,
     "managed_agents/runner.py::run_on_managed_agents": 241,

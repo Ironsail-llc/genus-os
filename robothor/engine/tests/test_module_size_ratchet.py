@@ -90,7 +90,7 @@ CAPS = {
     # telegram_delivery.py, which paid for threading the typed text (what the
     # person typed, apart from reply quotes and file text) to the run; then the
     # sender lookup moved to telegram_turn.run_sender.
-    "robothor/engine/telegram.py": 1933,
+    "robothor/engine/telegram.py": 1932,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new
