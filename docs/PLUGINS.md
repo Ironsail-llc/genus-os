@@ -22,6 +22,23 @@ sha256; and a `CLAUDE.md` describing the layout. `<name>` is also the agent id,
 so it follows the agent id rule (lowercase letters, digits, hyphens). It never
 writes into a directory that is not empty.
 
+It also starts the plugin's knowledge. Rules (decisions, routing, guards, which
+writes exist) are code, changed by pull request with a failing test first;
+knowledge (procedures in prose, wording, facts) lives in
+`src/<package>/knowledge/` as owned, dated records the plugin's owner edits.
+Every record carries `id`, `name`, `owner`, `source`, `reviewed_on` and
+`last_verified`, as front matter in a markdown file or as fields in a JSON list.
+A record whose `reviewed_on` is null is advisory: it never drives an action. The
+scaffold writes `knowledge/README.md` explaining this, a sample
+`knowledge/facts.json` with one advisory record, `knowledge.py` to read the
+records, and a `<name>.knowledge` doctor check (declared under `checks:` and the
+`genus.doctor` entry point) that warns when a record's `reviewed_on` is null or
+its `last_verified` is more than 30 days old, when it finds no records, or when
+a file sits where it does not look (only top-level `.md` and `.json` files in
+`knowledge/` are records and package data; `index.json`, a load manifest, is
+not a record). The sample record makes it warn until someone reviews or
+replaces it.
+
 It also writes two release files. `programmatic.json` is the listing a plugin
 index reads: the plugin's display name, its `id` (the plugin name), the same
 `version` as `pyproject.toml`, `format: genus-plugin/v1`, a description and

@@ -365,3 +365,176 @@ def test_the_scaffold_declares_contract_1_and_says_when_to_declare_2(tmp_path) -
     assert '"genus_contract_version": "1.0"' in (package / "__init__.py").read_text()
     guide = (root / "CLAUDE.md").read_text() + (root / "README.md").read_text()
     assert "contract_version: 2" in guide and "append" in guide
+
+
+# --- Knowledge: rules are code, SOPs and facts are owned, dated records ------
+
+
+def _load_package(root: Path, alias: str):
+    """Import the scaffolded package under a unique name, so each test gets
+    the tree it just wrote and not a module cached by an earlier test."""
+    package = root / "src" / PKG
+    spec = importlib.util.spec_from_file_location(
+        alias, package / "__init__.py", submodule_search_locations=[str(package)]
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[alias] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(alias, None)
+    return module
+
+
+def _run_knowledge_check(root: Path, alias: str):
+    import asyncio
+
+    from robothor.doctor.model import Check
+
+    check = _load_package(root, alias).PLUGIN["checks"][f"{NAME}.knowledge"]
+    assert isinstance(check, Check)
+    return check, asyncio.run(check.run(None))
+
+
+def _days_ago(days: int) -> str:
+    from datetime import UTC, datetime, timedelta
+
+    return (datetime.now(UTC).date() - timedelta(days=days)).isoformat()
+
+
+def _write_facts(root: Path, **fields) -> None:
+    import json
+
+    record = {
+        "id": "example-fact",
+        "name": "An example fact",
+        "owner": "role:knowledge-owner",
+        "source": "example SOP",
+        **fields,
+    }
+    (root / "src" / PKG / "knowledge" / "facts.json").write_text(json.dumps([record]))
+
+
+def test_new_plugin_ships_a_knowledge_folder(tmp_path) -> None:
+    import json
+
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    knowledge = root / "src" / PKG / "knowledge"
+    readme = (knowledge / "README.md").read_text()
+    for field in ("id", "name", "owner", "source", "reviewed_on", "last_verified"):
+        assert f"`{field}`" in readme, field
+    assert "advisory" in readme and "30 days" in readme
+    records = json.loads((knowledge / "facts.json").read_text())
+    assert len(records) == 1
+    assert records[0]["reviewed_on"] is None
+    for field in ("id", "name", "owner", "source"):
+        assert records[0][field], field
+
+
+def test_new_plugin_ships_a_knowledge_doctor_check(tmp_path) -> None:
+    import tomllib
+
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    manifest = yaml.safe_load((root / "src" / PKG / "genus-plugin.yaml").read_text())
+    assert manifest["checks"] == [f"{NAME}.knowledge"]
+    assert manifest["entry_points"]["genus.doctor"] == [PKG]
+    project = tomllib.loads((root / "pyproject.toml").read_text())
+    assert project["project"]["entry-points"]["genus.doctor"] == {PKG: f"{PKG}:PLUGIN"}
+    data = project["tool"]["setuptools"]["package-data"][PKG]
+    assert any(p.startswith("knowledge/") for p in data)
+
+
+def test_the_knowledge_check_warns_on_the_sample_advisory_record(tmp_path) -> None:
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    check, result = _run_knowledge_check(root, "scaffold_knowledge_sample")
+    # A warning, not an outage: reported, never fatal.
+    assert check.severity == "recommended"
+    assert result.status == "fail"
+    assert "facts.json" in result.detail
+    assert "reviewed_on" in result.detail
+
+
+def test_the_knowledge_check_passes_a_freshly_reviewed_record(tmp_path) -> None:
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    _write_facts(root, reviewed_on=_days_ago(1), last_verified=_days_ago(1))
+    _check, result = _run_knowledge_check(root, "scaffold_knowledge_fresh")
+    assert result.status == "pass", result.detail
+
+
+def test_the_knowledge_check_warns_on_a_record_31_days_old(tmp_path) -> None:
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    _write_facts(root, reviewed_on=_days_ago(31), last_verified=_days_ago(31))
+    _check, result = _run_knowledge_check(root, "scaffold_knowledge_stale")
+    assert result.status == "fail"
+    assert "facts.json" in result.detail
+
+
+def test_the_knowledge_check_warns_on_a_document_with_no_reviewed_on(tmp_path) -> None:
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    _write_facts(root, reviewed_on=_days_ago(1), last_verified=_days_ago(1))
+    (root / "src" / PKG / "knowledge" / "returns.md").write_text(
+        "---\nid: returns\nname: Returns\nowner: role:knowledge-owner\n"
+        f"source: example SOP\nlast_verified: {_days_ago(1)}\n---\n\nHow returns work.\n"
+    )
+    _check, result = _run_knowledge_check(root, "scaffold_knowledge_doc")
+    assert result.status == "fail"
+    assert "returns.md" in result.detail
+    assert "facts.json" not in result.detail
+
+
+def test_a_load_manifest_beside_the_records_is_not_a_record(tmp_path) -> None:
+    """The README allows an index.json naming which files each playbook loads;
+    the check must not report it and the plugin's own tests must still pass."""
+    import json
+    import os
+
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    _write_facts(root, reviewed_on=_days_ago(1), last_verified=_days_ago(1))
+    (root / "src" / PKG / "knowledge" / "index.json").write_text(
+        json.dumps({"example-playbook": ["facts.json"]})
+    )
+    _check, result = _run_knowledge_check(root, "scaffold_knowledge_index")
+    assert result.status == "pass", result.detail
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_the_knowledge_check_warns_when_it_finds_no_records(tmp_path) -> None:
+    """A green line for nothing checked is how missing package data survives."""
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    (root / "src" / PKG / "knowledge" / "facts.json").unlink()
+    _check, result = _run_knowledge_check(root, "scaffold_knowledge_empty")
+    assert result.status == "fail"
+    assert "no knowledge records" in result.detail
+    # The header counts problems, not records: there are none to count here.
+    assert "record(s)" not in result.detail
+
+
+def test_the_knowledge_check_names_a_file_it_does_not_read(tmp_path) -> None:
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    _write_facts(root, reviewed_on=_days_ago(1), last_verified=_days_ago(1))
+    (root / "src" / PKG / "knowledge" / "sops").mkdir()
+    (root / "src" / PKG / "knowledge" / "sops" / "returns.md").write_text("---\nid: returns\n---\n")
+    (root / "src" / PKG / "knowledge" / "returns.yaml").write_text("id: returns\n")
+    _check, result = _run_knowledge_check(root, "scaffold_knowledge_ignored")
+    assert result.status == "fail"
+    assert "sops" in result.detail
+    assert "returns.yaml" in result.detail
+
+
+def test_the_built_wheel_carries_the_knowledge_files(tmp_path) -> None:
+    from robothor.plugins.wheel import open_wheel
+
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    contents = open_wheel(_build_wheel(root, tmp_path / "dist"), tmp_path / "unpacked")
+    members = {p.relative_to(contents.root).as_posix() for p in contents.root.rglob("*")}
+    for member in ("knowledge.py", "knowledge/README.md", "knowledge/facts.json"):
+        assert f"{PKG}/{member}" in members, member
