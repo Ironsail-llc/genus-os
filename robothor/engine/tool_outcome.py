@@ -70,7 +70,15 @@ def record_tool_outcome(
     Returns the classified error type (or None on success) — consumed
     downstream by escalation, so it is part of the contract rather than a
     convenience.
+
+    A ``tool_call`` is recorded as the tool it wraps. Under the wrapper's name,
+    a deferred agent's unrelated failures shared one breaker, and the third
+    told it never to call ``tool_call`` again: every deferred tool at once.
     """
+    from robothor.engine.wrapped_call import WRAPPER_TOOL, inner_call
+
+    if tool_name == WRAPPER_TOOL:
+        tool_name, tool_args = inner_call(tool_name, tool_args)
     error_type = _classify(tool_name, error_msg, result)
     _log(session, tool_name, elapsed_ms, error_msg, error_type, result)
     _record_on_scratchpad(scratchpad, tool_name, tool_args, result, error_msg)
