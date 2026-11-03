@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -47,18 +48,34 @@ def get_client(
     """Get authenticated Garmin client, using cached tokens if available."""
     token_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        client = Garmin()
-        client.garth.load(token_dir)
-        client.display_name = client.garth.profile["displayName"]
-        client.full_name = client.garth.profile["fullName"]
-        print(f"Authenticated using cached tokens (user: {client.display_name})")
-        return client
-    except (FileNotFoundError, GarthHTTPError, KeyError, Exception) as e:
-        if not prompt_mfa:
-            print(f"Token auth failed: {e}")
-            print("Run with --login to re-authenticate with MFA")
-            sys.exit(1)
+    # Loading cached tokens makes a network call to Garmin to validate/refresh
+    # them. A transient timeout there is NOT a real auth failure, so retry a
+    # couple of times before giving up -- otherwise a flaky network blip pages
+    # the operator and skips a 15-minute sync tick for no reason.
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            client = Garmin()
+            client.garth.load(token_dir)
+            client.display_name = client.garth.profile["displayName"]
+            client.full_name = client.garth.profile["fullName"]
+            print(f"Authenticated using cached tokens (user: {client.display_name})")
+            return client
+        except FileNotFoundError as e:
+            # No cached tokens at all -- retrying cannot help.
+            last_err = e
+            break
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
+                continue
+            break
+
+    if not prompt_mfa:
+        print(f"Token auth failed: {last_err}")
+        print("Run with --login to re-authenticate with MFA")
+        sys.exit(1)
 
     if not email:
         email = os.environ.get("GARMIN_EMAIL")

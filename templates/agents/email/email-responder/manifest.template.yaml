@@ -86,7 +86,7 @@ warmup:
     - email-classifier
     - email-analyst
 
-instruction_file: brain/RESPONDER.md
+instruction_file: brain/agents/EMAIL_RESPONDER.md
 bootstrap_files:
   - brain/AGENTS.md
   - brain/TOOLS.md

@@ -1,7 +1,7 @@
 # Email Responder — template setup
 agent_id: email-responder
 version: "2026-03-09"
-instruction_file_path: brain/RESPONDER.md
+instruction_file_path: brain/agents/EMAIL_RESPONDER.md
 
 variables:
   timezone:

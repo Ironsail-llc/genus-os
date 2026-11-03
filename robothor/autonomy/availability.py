@@ -113,8 +113,17 @@ def autonomy_active(tenant_id: str | None, actor_id: str | None, agent_id: str |
     """True iff autonomy is enabled for this owner and a live grant names ``agent_id``."""
     if not feature_offered() or not tenant_id or not actor_id or not agent_id:
         return False
+    from robothor.autonomy.identity import UnlinkedActor
+
     try:
         return _lookup(tenant_id, actor_id, agent_id)
+    except UnlinkedActor:
+        # An unlinked account (a service account with no person) is a
+        # legitimate "no owner" - the docstring's "anything else is no" - not
+        # a broken enrolment. Quiet, exactly like the feature-off path: a
+        # warning here fires on every cron beat forever and means nothing.
+        logger.debug("Autonomy availability: actor is not linked to a person")
+        return False
     except Exception as exc:  # noqa: BLE001 - a prompt hint must not fail a run
         # WARNING, not DEBUG. We only get here with the feature switched ON,
         # which means somebody enrolled — and the symptom of a silent failure
