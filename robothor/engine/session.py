@@ -806,8 +806,8 @@ class AgentSession:
                     s["saved_tokens"],
                 )
             clear_graph(self.run_id)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("symbol graph finalize skipped: %s", type(e).__name__)
+        except Exception:  # noqa: BLE001
+            logger.debug("symbol graph finalize skipped")
 
     def mark_interrupted(self, note: str | None = None) -> None:
         """Record that the operator halted this run at a checkpoint."""
@@ -1008,9 +1008,9 @@ class AgentSession:
                 ref_path=self._last_offload_path,
                 full_chars=raw_len,
             )
-        except Exception as e:  # noqa: BLE001 — never break tool recording
-            # The class only: the text can quote the tool output it choked on.
-            logger.debug("symbol node skipped for %s: %s", tool_name, type(e).__name__)
+        except Exception:  # noqa: BLE001 — never break tool recording
+            # A constant: the error's text can quote the tool output it choked on.
+            logger.debug("symbol node skipped for one tool call")
 
     def thin_previous_tool_results(self, protect_after_index: int) -> int:
         """Compress tool results from previous iterations to one-line summaries.

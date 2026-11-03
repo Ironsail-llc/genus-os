@@ -710,12 +710,14 @@ _BINARY_RESULT_KEYS = frozenset({"image_base64", "screenshot_base64"})
 _MAX_RESULT_DEPTH = 32
 
 
-#: An unquoted assignment's right side that is code, not a value: a dotted
-#: name, the start of a call or subscript (``get_token(``, ``os.environ[``), a
-#: number, or a plain identifier with no digit in it (``parse``,
-#: ``default_token``). A quoted value is a literal and never counts as code.
+#: An unquoted assignment's right side that is code, not a value: anything that
+#: starts with a name or dotted name and a ``(`` or ``[`` (a call or subscript,
+#: whatever its arguments: ``secrets.token_urlsafe(32``, ``os.environ[``), a
+#: dotted name, a number, or a plain identifier with no digit in it
+#: (``parse``, ``default_token``). A quoted value is a literal and never counts.
 _VALUE_IS_CODE = re.compile(
-    r"^(?:[A-Za-z_]\w*(?:\.\w+)+[(\[]?|[A-Za-z_]\w*[(\[]|[A-Za-z_][A-Za-z_]*|[-+]?\d[\d_.]*)$"
+    r"^(?:[A-Za-z_][\w.]*[(\[].*|[A-Za-z_]\w*(?:\.\w+)+|[A-Za-z_][A-Za-z_]*|[-+]?\d[\d_.]*)$",
+    re.DOTALL,
 )
 
 
