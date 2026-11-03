@@ -387,22 +387,24 @@ file's text and a forwarded message, and only that text counts. `vault_set`
 stores a value only when that text carries it as a whole token (not part of a
 longer word), the value is credential-sized (at least 16 characters, or at
 least 8 when it has a character that is not a letter or digit, and never
-letters alone), the value is not a URL or a path, and it sits beside a name for
-where it goes, in a token of its own: `NAME=value`, or the same clause (no
-newline or `.`, `;`, `!`, `?` between them) within six words of the vault key,
-a reader's name such as `OPENWEATHER_API_KEY`, or the vendor, where the clause
-also says it is a credential (key, token, secret, credential, password, or the
-value right after `name:`). "Review https://github.com/acme/app/pull/9" names
-GitHub only inside the value, and hands nothing over. "My openweather key is X;
-openrouter is fine as is" stores X for openweather and never for openrouter.
-`vault_delete` removes a key only when that text asks for a removal (delete,
-remove, revoke, forget, drop, clear, rotate out) and names it, and `vault_list`
-lists only when it asks for a list. So an instruction injected into an email, a
-web page, a file or a quoted message can make the agent store, remove or list
-only what the person typed. Every refusal carries `gate` (`chat_agent`, `role`,
-`unverified_sender`, `human_chat`, `not_handed_over` or `not_requested`) and
-`unlock`, the sentence the agent can give the person. There is no switch for
-any of it; see
+letters alone), the value is not a URL, a path or an e-mail address, and it
+sits beside a name for where it goes, in a token of its own: `NAME=value`, or
+the same clause (no newline or `.`, `;`, `!`, `?` between them) within six
+words of the vault key, a reader's name such as `OPENWEATHER_API_KEY`, or the
+vendor, where the clause also says it is a credential (key, token, secret,
+credential, password, or the value right after `name:`). "Review
+https://github.com/acme/app/pull/9" names GitHub only inside the value, and
+hands nothing over. "My openweather key is X; openrouter is fine as is" stores
+X for openweather and never for openrouter. `vault_delete` removes a key only
+when one clause of that text asks for a removal (delete, remove, revoke,
+forget, drop, clear, rotate out), names the key, and says it is a credential
+with a store word or by naming the vault key or a reader's name itself, and
+`vault_list` lists only when it asks for a list. So an instruction injected
+into an email, a web page, a file or a quoted message can make the agent store,
+remove or list only what the person typed. Every refusal carries `gate`
+(`chat_agent`, `role`, `unverified_sender`, `human_chat`, `not_handed_over` or
+`not_requested`) and `unlock`, the sentence the agent can give the person.
+There is no switch for any of it; see
 [Tools](TOOLS.md#credentials-vault_get-vault_set-vault_test-vault_list-vault_delete).
 
 A value stored with `vault_set` is then redacted by value, as

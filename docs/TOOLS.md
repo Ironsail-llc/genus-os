@@ -1365,19 +1365,21 @@ have read an email, a web page or some other tool output:
   stores a value that text carries as a whole token (not inside a longer word),
   that is credential-sized (16 characters or more, or 8 or more with a
   character that is not a letter or digit, and never letters alone), that is
-  not a URL or a path, and that sits beside a name for this key in a different
-  token: `NAME=value`, or in the same clause (no newline or `.`, `;`, `!`, `?`
-  between them) within six words of the vault key, a reader's name such as
-  `OPENWEATHER_API_KEY`, or the vendor, where the clause also says it is a
-  credential (key, token, secret, credential, password, API key, or the value
-  right after `name:`). A vendor named in another clause, or only inside the
-  value itself, does not qualify. Otherwise `gate: not_handed_over`, so a value
-  that came from a tool result, a file, a quote or a forward is refused.
-  `vault_delete` only removes a key when the typed text asks for a removal
-  (delete, remove, revoke, forget, drop, clear, rotate out) and names it, and
-  `vault_list` only lists when it asks for a list; otherwise `gate:
-  not_requested`. `vault_get` and `vault_test` never return a value and are not
-  narrowed.
+  not a URL, a path or an e-mail address, and that sits beside a name for this
+  key in a different token: `NAME=value`, or in the same clause (no newline or
+  `.`, `;`, `!`, `?` between them) within six words of the vault key, a
+  reader's name such as `OPENWEATHER_API_KEY`, or the vendor, where the clause
+  also says it is a credential (key, token, secret, credential, password, API
+  key, or the value right after `name:`). A vendor named in another clause, or
+  only inside the value itself, does not qualify. Otherwise `gate:
+  not_handed_over`, so a value that came from a tool result, a file, a quote or
+  a forward is refused. `vault_delete` only removes a key when one clause of
+  the typed text asks for a removal (delete, remove, revoke, forget, drop,
+  clear, rotate out), names the key and says it is a credential (a store word,
+  or the vault key or a reader's name itself); "drop me the link to my github
+  PR" removes nothing, and `vault_list` only lists when it asks for a list;
+  otherwise `gate: not_requested`. `vault_get` and `vault_test` never return a
+  value and are not narrowed.
 
 Every refusal carries `gate` and `unlock`, the sentence the agent can pass on.
 See [Configuration](configuration.md) for the rest of the rule.
