@@ -50,7 +50,7 @@ The three meta-tools:
 
 | Tool | What it does |
 |---|---|
-| `tool_search(query)` | Ranks the agent's reachable tools against a free-text query. Returns names and descriptions, and the top hit's `parameters` when it is not already advertised, so the usual path is `tool_search` then `tool_call`. |
+| `tool_search(query)` | Ranks the agent's reachable tools against a free-text query. Returns names and descriptions, and the top hit's `parameters` when it is not already advertised and its score leads the second hit's by a quarter, so the usual path is `tool_search` then `tool_call`. On a closer race the hits come back without a schema and the hint says to `tool_describe` the one that fits. |
 | `tool_describe(name)` | The full parameter schema for one tool. |
 | `tool_call(name, arguments)` | Runs a tool that is not in the advertised set. |
 
@@ -1448,10 +1448,17 @@ extracted into the agent's first turn by the same code
 vocabulary** — the words a person uses, which are rarely the words a schema
 uses. Nobody asks to "search Gmail messages"; they ask to "check my email".
 
-* A keyword hit counts as much as a hit on the tool's own name.
+* A keyword hit counts as much as a hit on the tool's own name, with one
+  exception: the query's **head**, its last content word that is not a verb
+  ("tasks" in "the five most urgent open tasks"), scores a tool named for it
+  at the weight of the query's rarest word. Rare words count for more, so
+  without this a tool whose keywords said "open" (a pull request) ranked above
+  every `*_task` tool.
 * A verb ("read", "check", "cancel") only earns its routing bonus for a tool
   whose vocabulary mentions the **object** the query named. That is what keeps
   `read_file` behind Gmail for "read my emails".
+* On an equal score an opt-in tool (`OPT_IN_TOOLS`: the coding driver,
+  review posting, ticket writes, `run_workflow`) ranks below a plain one.
 * Ties break on keyword coverage, then name. They used to break alphabetically,
   which is how `browser` came first for "check my email".
 * The description comes back **whole**. It used to be cut at 200 characters,

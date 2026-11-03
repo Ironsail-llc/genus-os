@@ -346,6 +346,11 @@ TOOL_HINTS: dict[str, ToolHint] = {
         keywords=("task", "todo", "queue", "assigned", "work", "backlog"),
         rank_bias=1.0,
     ),
+    # The filtered list: "the five most urgent open tasks" is a question about
+    # priority and status across every task, which only this tool answers.
+    "list_tasks": ToolHint(
+        keywords=("task", "urgent", "priority", "important", "open", "status", "overdue"),
+    ),
     # ── Companies: a family of six, on a noun the sales tools now share ──
     #
     # "look up a company by name" returned `view_image`, `list_companies` and

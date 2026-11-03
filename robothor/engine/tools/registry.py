@@ -539,14 +539,26 @@ def _score_tool(
     coverage count rides along because it decides ties — three tools scored
     7.28 for "check my email" and the answer fell out alphabetically, which is
     how ``browser`` came first.
+
+    One exception to that equality, for the query's HEAD — its last content
+    word that is not an intent verb, the noun its modifiers describe. A tool
+    named for it scores that hit at the weight of the query's rarest term.
+    IDF favours rare modifiers over a common head: "five most urgent open
+    tasks" put a coding tool whose keywords say "open" (a pull request) above
+    the eleven tools named ``*_task``, because "task" is shared by all of them.
     """
     name_words = {_stem(w) for w in _WORD_RE.findall(name.lower())}
     desc_words = _stems(description)
     keyword_set = {_stem(k) for k in keywords}
+    strongest = max((weights or {}).values(), default=1.0)
+    objects = _object_terms(terms)
+    head = objects[-1] if objects else None
     score = 0.0
     for term in terms:
         w = (weights or {}).get(term, 1.0)
-        if term in name_words or term in keyword_set:
+        if term == head and term in name_words:
+            score += 6.0 * max(w, strongest)  # a tool named for what was asked about
+        elif term in name_words or term in keyword_set:
             score += 6.0 * w  # exact word in the tool's own name or vocabulary
         elif term in name.lower():
             score += 3.0 * w  # substring, e.g. "mail" in gws_gmail_send
@@ -908,6 +920,19 @@ class ToolRegistry:
         instead of gws_gmail_send for all replies", the one fact that decides
         between the two tools the search returns together.
         """
+        return [hit for hit, _rank in self.rank_tools(names, query, limit=limit)]
+
+    def rank_tools(self, names: Any, query: str, limit: int = 10) -> list[tuple[SearchHit, float]]:
+        """:meth:`search_tools` with each hit's score.
+
+        On an equal score an opt-in tool (``OPT_IN_TOOLS``: the coding driver,
+        review posting, ticket writes, workflow starts) ranks below a plain
+        one. An agent is given those only by naming them, they spend money or
+        act on other people's work, and a tie is no reason to recommend one.
+
+        ``tool_search`` reads the scores to decide whether the top hit leads by
+        enough to hand over its schema.
+        """
         terms = _query_terms(query)
         corpus: list[_Candidate] = []
         for n in names:
@@ -921,7 +946,7 @@ class ToolRegistry:
                 )
             )
         weights = _term_weights(terms, corpus) if terms else {}
-        scored: list[tuple[float, int, str, str]] = []
+        scored: list[tuple[float, bool, int, str, str]] = []
         for candidate in corpus:
             score, covered = (
                 _score_tool(
@@ -939,13 +964,16 @@ class ToolRegistry:
                 scored.append(
                     (
                         score,
+                        candidate.name in OPT_IN_TOOLS,
                         covered,
                         candidate.name,
                         self._search_description(candidate.name, candidate.description),
                     )
                 )
-        scored.sort(key=lambda x: (-x[0], -x[1], x[2]))
-        return [SearchHit(name=n, description=d) for _s, _c, n, d in scored[: max(1, limit)]]
+        scored.sort(key=lambda x: (-x[0], x[1], -x[2], x[3]))
+        return [
+            (SearchHit(name=n, description=d), s) for s, _gated, _c, n, d in scored[: max(1, limit)]
+        ]
 
     #: Longer than this and a search result stops being scannable. Meant to sit
     #: above the longest DISAMBIGUATING description — one carrying a
