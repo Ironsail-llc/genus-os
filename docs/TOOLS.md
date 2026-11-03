@@ -50,9 +50,19 @@ The three meta-tools:
 
 | Tool | What it does |
 |---|---|
-| `tool_search(query)` | Ranks the agent's reachable tools against a free-text query. Returns names and descriptions, and the top hit's `parameters` when it is not already advertised and its score leads the second hit's by a quarter, so the usual path is `tool_search` then `tool_call`. On a closer race the hits come back without a schema and the hint says to `tool_describe` the one that fits. |
+| `tool_search(query)` | Ranks the agent's reachable tools against a free-text query. Returns names and descriptions, and the top hit's `parameters` when it is not already advertised and its score leads the second hit's by a quarter, On a closer race the hits come back without a schema and the hint says to `tool_describe` the one that fits. Its top three hits that are not advertised yet join the run's toolset with their real schemas from the next model call on (listed as `promoted`), so the model calls them directly. |
 | `tool_describe(name)` | The full parameter schema for one tool. |
 | `tool_call(name, arguments)` | Runs a tool that is not in the advertised set. |
+
+**A search hit becomes a real tool for the rest of the run.** `tool_call`
+declares `arguments` as a bare object with no properties, and some models do
+not manage that nested free-form call. So each `tool_search` promotes up to
+three of its hits, taken from the agent's allow-set, into the advertised
+toolset; the runner checks the allow-set again before adding a schema, and
+stops adding once the run is wrapping up. `tool_call` stays as the fallback,
+`tool_describe` is unchanged, and a promoted tool the agent calls counts
+toward its recent tools like any other direct call. A run that never searches
+is shown exactly its core.
 
 **`tool_call` cannot reach outside the agent's allow-list.** It checks the name
 against the allow-set the runner published before it dispatches anything, so a

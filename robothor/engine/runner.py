@@ -137,6 +137,7 @@ from robothor.engine.tools import get_registry
 from robothor.engine.toolset_prep import (
     planner_tool_names,
     prepare_toolset,
+    promote_into,
     publish_toolset,
     with_discovery_note,
     withdraw_toolset,
@@ -1821,6 +1822,10 @@ class AgentRunner(
         _workspace = getattr(agent_config, "workspace", "") or self.config.workspace
 
         while True:
+            if "wrapup" not in _stop.announced:  # a search's hits join the toolset
+                tool_schemas, _allowed_tool_set = promote_into(
+                    self.registry, agent_config, tool_schemas, _allowed_tool_set
+                )
             # ── [BUDGET] Wrap up at 90%, and END at 100% ──
             # BEFORE the guards below, and that order is load-bearing: the
             # wallclock self-check fires at the same instant and ends the run

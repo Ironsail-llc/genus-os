@@ -111,6 +111,45 @@ def get_advertised_toolset() -> frozenset[str] | None:
     return _advertised_var.get()
 
 
+# ── Search hits promoted into a deferred run's toolset ─────────────────
+# A mutable set the runner publishes on a deferred run. `tool_search` adds its
+# top hits; the runner reads it before every model call and advertises their
+# real schemas from then on, so the model calls the tool directly instead of
+# through `tool_call`'s property-less `arguments` object. The set is shared,
+# not copied, by the child contexts tool handlers run in, which is the whole
+# reason it is a set inside a ContextVar rather than a ContextVar of names.
+_promoted_var: ContextVar[set[str] | None] = ContextVar("_promoted_var", default=None)
+
+
+def set_promotion_sink(sink: set[str]) -> Token[set[str] | None]:
+    """Publish the set this run's promoted tool names collect in."""
+    return _promoted_var.set(sink)
+
+
+def clear_promotion_sink(token: Token[set[str] | None]) -> None:
+    """Withdraw the promotion sink."""
+    _promoted_var.reset(token)
+
+
+def promote_tools(names: list[str]) -> list[str]:
+    """Mark ``names`` for this run's toolset; returns the ones it took.
+
+    Nothing is taken on a run that published no sink: saying a tool was added
+    when no runner will add it would send the agent to call a tool it lacks.
+    """
+    sink = _promoted_var.get()
+    if sink is None:
+        return []
+    sink.update(names)
+    return list(names)
+
+
+def get_promoted_tools() -> frozenset[str]:
+    """The names promoted so far this run."""
+    sink = _promoted_var.get()
+    return frozenset(sink) if sink else frozenset()
+
+
 # ── The agent's toolset, deferred or not ───────────────────────────────
 # Published by the runner on EVERY run, so that `tool_search` has something
 # true to answer with when the run is not deferred. It used to answer

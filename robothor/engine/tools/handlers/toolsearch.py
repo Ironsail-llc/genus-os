@@ -49,13 +49,14 @@ def _advertised_names(ctx: ToolContext) -> set[str]:
     campaign whose current lever is step efficiency.
     """
     from robothor.engine.tools.constants import CORE_TOOLS, TOOLSEARCH_TOOLS
-    from robothor.engine.tools.dispatch import get_advertised_toolset
+    from robothor.engine.tools.dispatch import get_advertised_toolset, get_promoted_tools
     from robothor.engine.tools.registry import get_registry
 
     published = get_advertised_toolset()
     if published is not None:
-        # The run's own advertised set: CORE plus the tools it used recently.
-        return set(published)
+        # The run's own advertised set: CORE plus the tools it used recently,
+        # plus what an earlier search this run promoted into it.
+        return set(published) | get_promoted_tools()
     registry = get_registry()
     return {n for n in (CORE_TOOLS | TOOLSEARCH_TOOLS) if n in registry._schemas}
 
@@ -156,14 +157,21 @@ async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         described = await _tool_describe({"name": top["name"]}, ctx)
         if "parameters" in described:
             top["parameters"] = described["parameters"]
+    promoted = _promote(results) if deferred else []
     if not deferred:
         hint = "These are already in your toolset — call them directly, not via tool_call."
     else:
         lead = []
         if visible:
             lead.append(f"{', '.join(visible)} are already in your toolset — call them directly.")
+        if promoted:
+            lead.append(
+                f"{', '.join(promoted)} are added to your toolset with their own "
+                "parameters: call them directly from your next step."
+            )
         if top is not None and "parameters" in top:
-            lead.append(f"{top['name']}'s parameters are included: tool_call it directly.")
+            how_top = "" if top["name"] in promoted else ": tool_call it directly"
+            lead.append(f"{top['name']}'s parameters are included{how_top}.")
         how = "tool_describe(name=...) then tool_call(name=..., arguments=...)."
         hint = " ".join([*lead, f"For the rest, {how}"]) if lead else f"Use {how}"
     out = {
@@ -171,9 +179,30 @@ async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         "count": len(results),
         "hint": hint,
     }
+    if deferred:
+        out["promoted"] = promoted
     if note:
         out["note"] = note
     return out
+
+
+#: How many of one search's hits join the run's toolset.
+_PROMOTE_MAX = 3
+
+
+def _promote(results: list[Any]) -> list[str]:
+    """Promote the top hits the run does not advertise yet; returns their names.
+
+    ``tool_call``'s own schema declares ``arguments`` as a bare object, and a
+    model that fumbles that nested free-form call can still call a tool whose
+    real parameters it was given. The names come from the run's allow-set,
+    and the runner checks it again before anything reaches the wire.
+    """
+    from robothor.engine.tools.dispatch import promote_tools
+
+    allowed = set(_allowed_names())
+    picks = [h["name"] for h in results if not h["in_toolset"] and h["name"] in allowed]
+    return promote_tools(picks[:_PROMOTE_MAX])
 
 
 #: The only tool whose advertised schema varies with a standing grant. Asking
