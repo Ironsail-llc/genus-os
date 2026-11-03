@@ -435,14 +435,68 @@ def _command_word(tokens: list[str]) -> tuple[str | None, list[str]]:
             # `env FOO=1 cmd` and `env -u X cmd` wrap a command; bare `env` prints.
             i += 1
             while i < len(tokens) and (tokens[i].startswith("-") or "=" in tokens[i]):
-                if tokens[i] in ("-u", "--unset") and i + 1 < len(tokens):
-                    i += 1
+                if tokens[i] in ("-u", "--unset", "-C", "--chdir") and i + 1 < len(tokens):
+                    i += 1  # the option's own value is not the command word
                 i += 1
             if i >= len(tokens):
                 return "env", []
             continue
         return tok.rsplit("/", 1)[-1], tokens[i + 1 :]
     return None, []
+
+
+#: Uploaders are not printers, but they READ a file operand and send it over
+#: the network -- the same leak a printer makes, so their file operands go
+#: through the same secret checks.
+_UPLOADERS = frozenset({"curl", "wget", "scp", "rsync", "sftp"})
+
+#: curl options whose value is a file when it is prefixed with ``@``.
+_CURL_AT_OPTS = frozenset({"-d", "--data", "--data-binary", "--data-ascii"})
+#: curl options whose value is a bare file path.
+_CURL_FILE_OPTS = frozenset({"-T", "--upload-file"})
+
+
+def _upload_read_operands(word: str, args: list[str]) -> list[str]:
+    """The file operands an uploader *word* reads, with ``@``, ``k=@`` and the
+    option prefix stripped, so each can go through the secret checks.
+
+    ``curl -d @X``/``--data-binary @X``, ``curl -T X``/``--upload-file X``,
+    ``curl -F k=@X``, ``wget --post-file=X``/``--body-file=X``, and the local
+    source operands of ``scp``/``rsync``/``sftp`` (a ``host:`` operand is
+    remote, not a local read).
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i].strip("'\"")
+        nxt = args[i + 1].strip("'\"") if i + 1 < len(args) else None
+        if word == "curl":
+            if arg in _CURL_AT_OPTS and nxt is not None:
+                if nxt.startswith("@"):
+                    out.append(nxt[1:])
+                i += 2
+                continue
+            if arg in _CURL_FILE_OPTS and nxt is not None:
+                out.append(nxt)
+                i += 2
+                continue
+            if arg in ("-F", "--form") and nxt is not None:
+                _, _, val = nxt.partition("=")
+                if val.startswith(("@", "<")):
+                    out.append(val[1:])
+                i += 2
+                continue
+        elif word == "wget":
+            for opt in ("--post-file", "--body-file"):
+                if arg.startswith(opt + "="):
+                    out.append(arg.split("=", 1)[1])
+                elif arg == opt and nxt is not None:
+                    out.append(nxt)
+                    i += 1
+        elif word in ("scp", "rsync", "sftp") and not arg.startswith("-") and ":" not in arg:
+            out.append(arg)  # a local source; a `host:` operand is remote
+        i += 1
+    return out
 
 
 #: Verbs that move the shell for every later segment.
@@ -506,17 +560,27 @@ def _unquoted_words(command: str) -> set[str]:
     return out
 
 
-def _env_chdir(tokens: list[str]) -> bool:
-    """True when an ``env`` in *tokens* carries ``-C dir`` or ``--chdir``."""
+def _env_chdir_dir(tokens: list[str], base: str | None) -> tuple[bool, str | None]:
+    """``(found, directory)`` for an ``env -C dir`` / ``env --chdir dir`` (the
+    space-separated and ``=`` forms both), resolved against *base*. ``env``
+    wraps one command, so this moves only its own segment."""
     for i, tok in enumerate(tokens):
         if tok != "env":
             continue
-        for opt in tokens[i + 1 :]:
+        opts = tokens[i + 1 :]
+        for j, opt in enumerate(opts):
             if not (opt.startswith("-") or "=" in opt):
                 break
-            if opt in ("-C", "--chdir") or opt.startswith(("--chdir=", "-C")):
-                return True
-    return False
+            value: str | None = None
+            if opt in ("-C", "--chdir"):
+                value = opts[j + 1] if j + 1 < len(opts) else ""
+            elif opt.startswith("--chdir="):
+                value = opt.split("=", 1)[1]
+            elif opt.startswith("-C") and len(opt) > 2:
+                value = opt[2:]
+            if value is not None:
+                return True, _dir_target(value, base)
+    return False, None
 
 
 def _segment_dirs(
@@ -538,7 +602,6 @@ def _segment_dirs(
         word, args = _command_word(tokens)
         unknown = bool(
             ("eval" in tokens and "eval" in unquoted)
-            or _env_chdir(tokens)
             or (word not in _DIR_CHANGE_WORDS and _DIR_CHANGE_WORDS & unquoted & set(tokens))
         )
         if unknown:
@@ -548,6 +611,9 @@ def _segment_dirs(
             found, moved = _option_dir(args, cur)
             if found:
                 here = moved
+        env_found, env_dir = _env_chdir_dir(tokens, cur)
+        if env_found:
+            here = env_dir  # env wraps one command: its own segment only
         out.append(here)
         if word in _CD_VERBS:
             operands = [a for a in args if a == "-" or not a.startswith("-")]
@@ -664,28 +730,31 @@ def exec_reads_secret(command: str, *, cwd: str | None = None) -> str | None:
             or (word in _ENV_PRINTING_BUILTINS and (not args or args == ["-p"]))
         ):
             return f"refused: `{word}` prints the process environment, which holds credentials"
+        verb = "print" if word in _PRINTERS else "send"
         if word in _PRINTERS:
-            for arg in args:
-                if arg.startswith("-"):
-                    continue
-                candidate = arg.strip("'\"")
-                if (
-                    here is None
-                    and _GLOB_MAGIC.search(candidate)
-                    and not candidate.startswith(("/", "~", "$HOME", "${HOME}"))
-                    and _glob_could_name_secret(candidate)
-                ):
-                    return (
-                        f"refused: `{word}` would expand {candidate} in a directory the "
-                        "command changed to, where it could name a secrets file. Spell the "
-                        "directory, or name the files, instead."
-                    )
-                if is_secret_path(candidate) and not _absent_bare_key_word(candidate, here):
-                    return (
-                        f"refused: `{word}` would print {PurePath(candidate).name}, a secrets "
-                        "file. Credentials are supplied to tools by the platform; source the "
-                        "file to use a value, or ask the operator, but never print it."
-                    )
+            candidates = [a.strip("'\"") for a in args if not a.startswith("-")]
+        elif word in _UPLOADERS:
+            candidates = _upload_read_operands(word, args)
+        else:
+            candidates = []
+        for candidate in candidates:
+            if (
+                here is None
+                and _GLOB_MAGIC.search(candidate)
+                and not candidate.startswith(("/", "~", "$HOME", "${HOME}"))
+                and _glob_could_name_secret(candidate)
+            ):
+                return (
+                    f"refused: `{word}` would expand {candidate} in a directory the "
+                    "command changed to, where it could name a secrets file. Spell the "
+                    "directory, or name the files, instead."
+                )
+            if is_secret_path(candidate) and not _absent_bare_key_word(candidate, here):
+                return (
+                    f"refused: `{word}` would {verb} {PurePath(candidate).name}, a secrets "
+                    "file. Credentials are supplied to tools by the platform; source the "
+                    "file to use a value, or ask the operator, but never print it."
+                )
     return None
 
 
@@ -1064,11 +1133,14 @@ def exec_names_credential(command: str, *, roots: tuple[str, ...] = ()) -> dict[
     feeds_reader = any(_command_word(seg)[0] in _PIPELINE_READERS for seg in segments)
     dirs = _segment_dirs(segments, roots[0] if roots else None, command)
     for tokens, here in zip(segments, dirs, strict=True):
-        word, _args = _command_word(tokens)
+        word, cmd_args = _command_word(tokens)
         # A metadata verb (ls, stat, ...) reports on a file without reading it,
         # so it is exempt -- UNLESS its output feeds a reader in the pipeline.
         skip = word in _METADATA_VERBS and not feeds_reader
-        for token in tokens:
+        # An uploader's file operand carries an `@`/`k=@`/option prefix that
+        # hides the path from the per-token scan, so feed it stripped as well.
+        extra = _upload_read_operands(word, cmd_args) if word in _UPLOADERS else []
+        for token in [*tokens, *extra]:
             globbed = bool(_GLOB_MAGIC.search(token)) and _looks_like_path(token)
             if skip and not globbed:
                 continue

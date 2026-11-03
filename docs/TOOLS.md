@@ -1084,7 +1084,12 @@ that names no file through (`jq -r .key`); after a `cd` it looks the word up
 where the `cd` lands, and after a `cd` to a directory the text does not spell
 (`cd "$D"`, `cd -`, `popd`) it refuses the word as before. `ls`, `test`/`[`, `stat`, `wc` and `du` are let through, because they
 report on a file without reading it — except when a pipeline feeds their output
-to a reader (`ls ~/.ssh | xargs cat`), which is refused. The check runs before
+to a reader (`ls ~/.ssh | xargs cat`), which is refused. An uploader reads its
+file operand and sends it over the network, the same leak a printer makes, so
+that operand gets the printer's check: `curl -d @X`/`--data-binary @X`,
+`curl -T X`/`--upload-file X`, `curl -F k=@X`, `wget --post-file=X`/`--body-file=X`,
+and the local source operands of `scp`/`rsync`/`sftp` (a `host:` operand is
+remote, not a read). The check runs before
 the sandbox decision, so it applies inside a container too. `execute_code`
 refuses a snippet whose source names a listed path, and a snippet that reads
 through the `read_file` tool gets the same resolved check. The masked

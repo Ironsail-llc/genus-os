@@ -377,6 +377,7 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     def _run() -> dict[str, Any]:
         from robothor.engine.secret_paths import (
+            _expanduser,
             credential_refusal,
             is_credential_path,
             is_maskable_dotenv_path,
@@ -384,7 +385,7 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             refusal_for,
         )
 
-        path = Path(args.get("path", "")).expanduser()
+        path = Path(_expanduser(args.get("path", "")))
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
         # For every caller, the owner included: the spelled path, and its
@@ -482,7 +483,9 @@ async def _list_directory(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
-        path = Path(args.get("path", "")).expanduser()
+        from robothor.engine.secret_paths import _expanduser
+
+        path = Path(_expanduser(args.get("path", "")))
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
         if not path.exists():
@@ -535,7 +538,9 @@ async def _write_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
-        path = Path(args.get("path", "")).expanduser()
+        from robothor.engine.secret_paths import _expanduser
+
+        path = Path(_expanduser(args.get("path", "")))
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
         try:
