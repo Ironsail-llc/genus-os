@@ -77,6 +77,11 @@ ENGINE_UNAVAILABLE = (
     "the engine did not answer, or answered with an error, so the request could not be completed"
 )
 
+#: FastAPI's own 404 for a path it has no route for: an engine older than these
+#: routes, which is not the same answer as "no such agent".
+_NO_ROUTE = "Not Found"
+OLD_ENGINE = "the tenant's engine does not support manifest administration; upgrade the engine"
+
 #: One write now covers the scan, the registry build, the write and the
 #: reconcile, which used to be two calls with the client's default each.
 WRITE_TIMEOUT_SECONDS = 90.0
@@ -121,6 +126,9 @@ async def _forward(
     if status < 400:
         return payload
     detail = payload.get("detail") if isinstance(payload, dict) else None
+    if status == 404 and detail == _NO_ROUTE:
+        logger.warning("The engine has no manifest administration routes; upgrade it")
+        raise HTTPException(status_code=502, detail=OLD_ENGINE)
     if detail is not None and status not in (401, 403):
         raise HTTPException(status_code=status, detail=detail)
     logger.warning("Agent-manifest engine call answered %d", status)
@@ -309,7 +317,7 @@ async def run_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     status, body = await engine_request("POST", path, tenant=get_tenant_id(request))
     # 404/422 are the engine's own answers about the id; pass them through.
     detail = body.get("detail") if isinstance(body, dict) else None
-    if status in (404, 422) and detail is not None:
+    if status in (404, 422) and detail not in (None, _NO_ROUTE):
         raise HTTPException(status_code=status, detail=detail)
     triggered = body.get("triggered") if isinstance(body, dict) else None
     # The trigger answers with an ``error`` key for an agent it cannot load,
