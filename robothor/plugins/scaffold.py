@@ -213,6 +213,8 @@ DIR = Path(__file__).resolve().parent / "knowledge"
 #: A record not verified for longer than this is reported as stale.
 STALE_AFTER_DAYS = 30
 REQUIRED = ("id", "name", "owner", "source")
+#: Files beside the records that are not records: this guide and a load manifest.
+NOT_RECORDS = ("README.md", "index.json")
 
 
 def front_matter(text: str) -> dict[str, Any]:
@@ -235,7 +237,7 @@ def records(directory: Path = DIR) -> list[tuple[str, Any]]:
     """Every knowledge record as (label, record): one per markdown file, one per JSON list item."""
     found: list[tuple[str, Any]] = []
     for path in sorted(directory.glob("*")):
-        if path.name == "README.md":
+        if path.name in NOT_RECORDS:
             continue
         if path.suffix == ".md":
             found.append((path.name, front_matter(path.read_text(encoding="utf-8"))))
@@ -335,8 +337,8 @@ A JSON file is a list of records, each carrying the same fields (see `facts.json
 - **Only people change knowledge.** A ticket, an email, an attachment or a model's
   output never edits a record. The agent may propose a change; a person makes it.
 - **Every wrong decision becomes a regression test** before the fix.
-- A load manifest (for example an `index.json` naming which files each playbook
-  loads) is allowed beside the records.
+- A load manifest named `index.json` (which files each playbook loads) may sit
+  beside the records; it is not a record, so it carries no front matter.
 - Keep secrets and personal data out of these files: they ship in the wheel.
 """
 
@@ -424,6 +426,7 @@ def test_the_manifest_declares_the_doctor_checks() -> None:
 
 def test_every_knowledge_record_names_its_owner_and_source() -> None:
     for label, record in knowledge.records():
+        assert isinstance(record, dict), f"{{label}}: not a knowledge record"
         for field in knowledge.REQUIRED:
             assert record.get(field), f"{{label}}: no {{field}}"
 
