@@ -406,11 +406,23 @@ def _segments(command: str) -> list[list[str]]:
     return out
 
 
+#: Reserved words and grouping a command word can sit behind: the verb of
+#: ``{ cd ~; }``, ``if cd ~; then`` or ``builtin cd ~`` is ``cd``.
+_SHELL_KEYWORDS = frozenset(
+    {"{", "}", "!", "if", "then", "else", "elif", "do", "done", "while", "until", "for"}
+    | {"builtin", "eval"}
+)
+
+
 def _command_word(tokens: list[str]) -> tuple[str | None, list[str]]:
-    """The verb of a segment and its arguments, skipping wrappers and VAR=val."""
+    """The verb of a segment and its arguments, skipping shell keywords,
+    wrappers and VAR=val."""
     i = 0
     while i < len(tokens):
         tok = tokens[i]
+        if tok in _SHELL_KEYWORDS:
+            i += 1
+            continue
         if "=" in tok and not tok.startswith("-") and not tok.startswith("/"):
             i += 1  # FOO=bar prefix
             continue
@@ -476,18 +488,61 @@ def _option_dir(args: list[str], base: str | None) -> tuple[bool, str | None]:
     return found, here
 
 
-def _segment_dirs(segments: list[list[str]], start: str | None) -> list[str | None]:
+#: Words that change the shell's directory wherever they sit in a segment.
+_DIR_CHANGE_WORDS = frozenset({"cd", "pushd", "popd"})
+
+
+def _unquoted_words(command: str) -> set[str]:
+    """The words of *command* that are not quoted: ``cd`` in ``xargs cd`` is, in
+    ``echo 'cd'`` it is not."""
+    out: set[str] = set()
+    for line in command.splitlines():
+        lexer = shlex.shlex(line, posix=False, punctuation_chars=True)
+        lexer.whitespace_split = True
+        try:
+            out.update(t for t in lexer if "'" not in t and '"' not in t)
+        except ValueError:
+            out.update(line.split())
+    return out
+
+
+def _env_chdir(tokens: list[str]) -> bool:
+    """True when an ``env`` in *tokens* carries ``-C dir`` or ``--chdir``."""
+    for i, tok in enumerate(tokens):
+        if tok != "env":
+            continue
+        for opt in tokens[i + 1 :]:
+            if not (opt.startswith("-") or "=" in opt):
+                break
+            if opt in ("-C", "--chdir") or opt.startswith(("--chdir=", "-C")):
+                return True
+    return False
+
+
+def _segment_dirs(
+    segments: list[list[str]], start: str | None, command: str = ""
+) -> list[str | None]:
     """The directory each segment runs in, or None where the text cannot say.
 
     The shell starts in *start*. A ``cd``/``pushd`` to a literal directory moves
     every later segment there; one to anything else (``cd "$D"``, ``cd -``, a
-    ``popd``) leaves the rest unknown. ``-C dir`` on git, make or tar moves only
-    its own segment.
+    ``popd``) leaves the rest unknown. So does an unquoted ``cd``/``pushd``/
+    ``popd`` anywhere else in a segment (``xargs cd``), an ``eval``, and
+    ``env --chdir``/``env -C``. ``-C dir`` on git, make or tar moves only its
+    own segment.
     """
+    unquoted = _unquoted_words(command) if command else set()
     out: list[str | None] = []
     cur = start
     for tokens in segments:
         word, args = _command_word(tokens)
+        unknown = bool(
+            ("eval" in tokens and "eval" in unquoted)
+            or _env_chdir(tokens)
+            or (word not in _DIR_CHANGE_WORDS and _DIR_CHANGE_WORDS & unquoted & set(tokens))
+        )
+        if unknown:
+            cur = None
         here = cur
         if word in _DIR_OPTION_VERBS:
             found, moved = _option_dir(args, cur)
@@ -501,6 +556,8 @@ def _segment_dirs(segments: list[list[str]], start: str | None) -> list[str | No
             else:
                 cur = _dir_target(operands[0], cur)
         elif word == "popd":
+            cur = None
+        if unknown:
             cur = None
     return out
 
@@ -595,7 +652,7 @@ def exec_reads_secret(command: str, *, cwd: str | None = None) -> str | None:
         )
 
     segments = _segments(command)
-    dirs = _segment_dirs(segments, cwd or str(Path.cwd()))
+    dirs = _segment_dirs(segments, cwd or str(Path.cwd()), command)
     for tokens, here in zip(segments, dirs, strict=True):
         word, args = _command_word(tokens)
         if word is None:
@@ -1005,7 +1062,7 @@ def exec_names_credential(command: str, *, roots: tuple[str, ...] = ()) -> dict[
     """
     segments = _segments(command)
     feeds_reader = any(_command_word(seg)[0] in _PIPELINE_READERS for seg in segments)
-    dirs = _segment_dirs(segments, roots[0] if roots else None)
+    dirs = _segment_dirs(segments, roots[0] if roots else None, command)
     for tokens, here in zip(segments, dirs, strict=True):
         word, _args = _command_word(tokens)
         # A metadata verb (ls, stat, ...) reports on a file without reading it,
