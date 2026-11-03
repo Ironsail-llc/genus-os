@@ -317,7 +317,10 @@ see it working. A setting named here is a tunable from [Tuning](#tuning).
   autodream, the curator, ingest, embeddings, post-turn saves) run in separate
   lanes, each with its own thread workers, so blocking background work cannot
   delay a turn's own blocking calls. Background runs are capped by
-  `ROBOTHOR_MAX_CONCURRENT_BACKGROUND`. Interactive runs are uncapped by default
+  `ROBOTHOR_MAX_CONCURRENT_BACKGROUND`. The runs of a `concurrent: true` hook
+  workflow, which only hand each event on, take a third lane, `hooks`, capped by
+  `ROBOTHOR_LANE_HOOKS_LIMIT`, so overlapping events neither queue behind
+  background runs nor take their slots. Interactive runs are uncapped by default
   (`ROBOTHOR_MAX_CONCURRENT_INTERACTIVE` is 0); a cap there queues a turn with no
   deadline while other turns hold the slots, including turns waiting on an
   `ask_user` answer. When the interactive lane is capped and a turn is waiting, a
@@ -416,6 +419,7 @@ environment and restart the engine so every part picks the change up. The
 | `ROBOTHOR_MAX_CONCURRENT_INTERACTIVE` | Interactive runs at once; `0` is uncapped. A cap queues turns with no deadline. | `0` |
 | `ROBOTHOR_MAX_CONCURRENT_BACKGROUND` | Background runs at once. | `2` |
 | `ROBOTHOR_LANE_BACKGROUND_YIELD_MS` | How long a background run holds back for a waiting turn when the interactive lane is capped. | `200` |
+| `ROBOTHOR_LANE_HOOKS_LIMIT` | Runs of concurrent hook workflows at once, in their own lane. | `8` |
 | `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` | Iterations between two compactions of one run. | `3` |
 | `ROBOTHOR_HOURLY_COST_CAP_USD` | Fleet spend per rolling hour above which runs are reported and alerted. | `5.0` |
 | `ROBOTHOR_RUNAWAY_ALERT_TOKENS` | Tokens in one run at which it is reported as a possible runaway. | `500000` |

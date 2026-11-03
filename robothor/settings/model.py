@@ -916,6 +916,15 @@ class EngineSettings(SettingsGroup):
         "interactive run is waiting for one. 0 disables the yield.",
         since="unreleased",
     )
+    lane_hooks_limit: int = declare(
+        8,
+        "ROBOTHOR_LANE_HOOKS_LIMIT",
+        "How many runs of concurrent hook workflows (a hook trigger with "
+        "`concurrent: true`) may execute at once. They have their own lane, so "
+        "overlapping events neither queue behind background runs nor take "
+        "their slots. Never below 1. Read at the first run.",
+        since="unreleased",
+    )
     max_iterations: int = declare(
         20,
         "ROBOTHOR_MAX_ITERATIONS",

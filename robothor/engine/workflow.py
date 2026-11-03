@@ -680,8 +680,9 @@ class WorkflowEngine:
 
         try:
             try:
-                # The lane slot before the clock: queue time is not run time.
-                async with run_slot(Lane.BACKGROUND):
+                # The lane slot before the clock: queue time is not run time. A
+                # concurrent hook workflow's runs overlap by design: their own lane.
+                async with run_slot(Lane.HOOKS if wf.concurrent else Lane.BACKGROUND):
                     self._mark_run_running(run)
                     with workflow_budget.workflow_deadline(workflow_id, wf.timeout_seconds):
                         async with asyncio.timeout(wf.timeout_seconds):

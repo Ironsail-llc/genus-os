@@ -7,14 +7,18 @@ a reply twice over: its blocking calls hold the pool's workers when the turn's
 own ``asyncio.to_thread`` calls need one, and its local inference holds the
 GPU slots.
 
-Work runs in one of two lanes:
+Work runs in one of three lanes:
 
 * ``interactive``: runs a person is waiting on (the trigger set
   ``agent_priority`` already treats as interactive: Telegram, webchat, Slack,
   plugin channels, IDE, manual/CLI, channel events);
 * ``background``: everything else, and every piece of work that never said
   which lane it is in (cron, hooks, workflows, autodream, curator, ingest,
-  embeddings, post-turn persistence).
+  embeddings, post-turn persistence);
+* ``hooks``: the runs of a ``concurrent: true`` hook workflow, which only hand
+  each event on and are meant to overlap. Their own bound keeps a burst of
+  events from queuing behind long background runs, and keeps them from taking
+  the background lane's slots.
 
 Each lane has its own concurrency limit, taken once per top-level
 ``runner.execute`` (a nested run inherits the slot, so a run that starts a
@@ -58,11 +62,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_INTERACTIVE_LIMIT = 0
 DEFAULT_BACKGROUND_LIMIT = 2
 DEFAULT_BACKGROUND_YIELD_MS = 200
+DEFAULT_HOOKS_LIMIT = 8
 
 
 class Lane(StrEnum):
     INTERACTIVE = "interactive"
     BACKGROUND = "background"
+    HOOKS = "hooks"
 
 
 #: The lane the current task's work belongs to. Unset means background.
@@ -167,11 +173,13 @@ class ExecutionLanes:
         interactive_limit: int = DEFAULT_INTERACTIVE_LIMIT,
         background_limit: int = DEFAULT_BACKGROUND_LIMIT,
         yield_ms: int = DEFAULT_BACKGROUND_YIELD_MS,
+        hooks_limit: int = DEFAULT_HOOKS_LIMIT,
     ) -> None:
         self._lock = threading.Lock()
         self._states = {
             Lane.INTERACTIVE: _LaneState(interactive_limit, uncapped_at_zero=True),
             Lane.BACKGROUND: _LaneState(background_limit),
+            Lane.HOOKS: _LaneState(hooks_limit),
         }
         self._yield_s = max(0, int(yield_ms)) / 1000.0
         self._interactive_clear: list[asyncio.Future[None]] = []
@@ -289,8 +297,8 @@ def _resolve(fut: asyncio.Future[None]) -> None:
         fut.set_result(None)
 
 
-def _configured_limits() -> tuple[int, int, int]:
-    """(interactive, background, yield_ms) from the declared settings.
+def _configured_limits() -> tuple[int, int, int, int]:
+    """(interactive, background, yield_ms, hooks) from the declared settings.
 
     Read through ``get_settings()`` so config.yaml and the environment both
     apply. Imported here, not at module level: the settings model needs
@@ -306,10 +314,16 @@ def _configured_limits() -> tuple[int, int, int]:
             int(engine.max_concurrent_interactive),
             int(engine.max_concurrent_background),
             int(engine.lane_background_yield_ms),
+            int(engine.lane_hooks_limit),
         )
     except Exception:  # noqa: BLE001 - a bad value is the default, not a crash
         logger.warning("Invalid execution lane settings, using the defaults", exc_info=True)
-        return DEFAULT_INTERACTIVE_LIMIT, DEFAULT_BACKGROUND_LIMIT, DEFAULT_BACKGROUND_YIELD_MS
+        return (
+            DEFAULT_INTERACTIVE_LIMIT,
+            DEFAULT_BACKGROUND_LIMIT,
+            DEFAULT_BACKGROUND_YIELD_MS,
+            DEFAULT_HOOKS_LIMIT,
+        )
 
 
 _LANES: ExecutionLanes | None = None
@@ -321,11 +335,12 @@ def get_lanes() -> ExecutionLanes:
     global _LANES
     with _LANES_LOCK:
         if _LANES is None:
-            interactive, background, yield_ms = _configured_limits()
+            interactive, background, yield_ms, hooks = _configured_limits()
             _LANES = ExecutionLanes(
                 interactive_limit=interactive,
                 background_limit=background,
                 yield_ms=yield_ms,
+                hooks_limit=hooks,
             )
         return _LANES
 

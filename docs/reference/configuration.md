@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-508 settings in 18 groups.
+509 settings in 18 groups.
 
 ## autonomy
 
@@ -297,6 +297,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_HOST_EXEC_SOCKET` | str | _(empty)_ | `robothor-engine` | no | legacy | Unix socket of the host-execution service (robothor-host-exec). The service binds it (empty means /run/robothor-host/exec.sock) and the engine's main agent sends owner commands to it; empty in the engine means host execution is not offered and exec stays in the engine's own sandbox. |
 | `ROBOTHOR_IMPORTANCE_THRESHOLD` | float | `0.3` | `robothor-engine` | no | legacy | Minimum importance score for an extracted fact to be stored. |
 | `ROBOTHOR_LANE_BACKGROUND_YIELD_MS` | int | `200` | `robothor-engine` | no | unreleased | How long a background run asking for a slot holds back while an interactive run is waiting for one. 0 disables the yield. |
+| `ROBOTHOR_LANE_HOOKS_LIMIT` | int | `8` | `robothor-engine` | no | unreleased | How many runs of concurrent hook workflows (a hook trigger with `concurrent: true`) may execute at once. They have their own lane, so overlapping events neither queue behind background runs nor take their slots. Never below 1. Read at the first run. |
 | `ROBOTHOR_LOCAL_GATE_WAIT_SECONDS` | int | `120` | no | no | legacy | How long a local-tier run waits for a GPU slot before giving up. |
 | `ROBOTHOR_LOCAL_MAX_CONCURRENT` | int | `0` | no | no | legacy | Concurrency ceiling while on the local tier. 0 lets the host profile derive one from VRAM and core count. |
 | `ROBOTHOR_LOCAL_PACE_ALL_C` | int | `85` | no | no | legacy | GPU temperature (C) at which all local work is paced down. |
