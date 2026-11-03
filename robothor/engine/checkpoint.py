@@ -38,6 +38,19 @@ CHECKPOINT_SCHEMA_VERSION = 1  # increment when checkpoint format changes
 IMAGE_PLACEHOLDER = "[image omitted from the checkpoint; its path is named in the turn]"
 
 
+def _at_rest(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*messages* as a checkpoint may keep them: no image bytes, no credential.
+
+    The person's own turn stays raw in ``session.messages`` so the model can
+    read a credential once and store it. A checkpoint outlives that turn and is
+    read back on resume, so it gets the history redaction (``redact_message``)
+    that every other copy of the conversation gets.
+    """
+    from robothor.secrets.redaction import redact_message
+
+    return [redact_message(m) for m in _without_images(messages)]
+
+
 def _without_images(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """A copy of *messages* with every image block replaced by a short note."""
     out: list[dict[str, Any]] = []
@@ -137,7 +150,7 @@ class CheckpointManager:
                     (
                         self.run_id,
                         step_number,
-                        json.dumps(_without_images(messages), default=str),
+                        json.dumps(_at_rest(messages), default=str),
                         json.dumps(scratchpad, default=str) if scratchpad else None,
                         json.dumps(plan, default=str) if plan else None,
                         CHECKPOINT_SCHEMA_VERSION,
