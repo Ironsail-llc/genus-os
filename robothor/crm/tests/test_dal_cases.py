@@ -148,6 +148,47 @@ def test_the_doctor_check_and_list_tasks_agree_on_a_snoozed_task(
     check = next(c for c in builtin_checks() if c.id == "crm.cases_overdue")
     result = asyncio.run(check.run(DoctorContext(db_factory=factory)))
     assert result.status == "fail"
-    assert "1 overdue case:" in result.detail
+    assert "1 overdue case " in result.detail
     assert unowned in result.detail
     assert snoozed not in result.detail
+
+
+@pytest.mark.integration
+def test_under_rls_the_check_names_the_scope_it_could_see(db_cursor, db_conn):
+    """Migration 081 FORCEs RLS on crm_tasks. As the non-superuser role with
+    app.tenant_id bound, the check sees one tenant and must say so."""
+    import asyncio
+    import contextlib
+
+    from robothor.doctor.context import DoctorContext
+    from robothor.doctor.registry import builtin_checks
+
+    db_cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = 'robothor_app'")
+    if db_cursor.fetchone() is None:
+        pytest.skip("role robothor_app is absent: apply migration 082 to run this test")
+    db_cursor.execute("UPDATE crm_tasks SET deleted_at = NOW() WHERE deleted_at IS NULL")
+    for tenant in ("test-tenant", "other-tenant"):
+        db_cursor.execute(
+            "INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (tenant, tenant),
+        )
+    seen, hidden = str(uuid.uuid4()), str(uuid.uuid4())
+    for task_id, tenant in ((seen, "test-tenant"), (hidden, "other-tenant")):
+        db_cursor.execute(
+            """INSERT INTO crm_tasks (id, tenant_id, title, status, due_at)
+               VALUES (%s, %s, 'case', 'TODO', NOW() - interval '1 day')""",
+            (task_id, tenant),
+        )
+    db_cursor.execute("SET LOCAL ROLE robothor_app")
+    db_cursor.execute("SELECT set_config('app.tenant_id', 'test-tenant', true)")
+
+    @contextlib.contextmanager
+    def factory():
+        yield db_conn
+
+    check = next(c for c in builtin_checks() if c.id == "crm.cases_overdue")
+    result = asyncio.run(check.run(DoctorContext(db_factory=factory)))
+    assert result.status == "fail"
+    assert "RLS scope test-tenant" in result.detail
+    assert seen in result.detail
+    assert hidden not in result.detail
