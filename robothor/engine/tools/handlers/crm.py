@@ -632,6 +632,8 @@ async def _list_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit=args.get("limit", 50),
         tenant_id=ctx.tenant_id,
         scope=scope_for_query(_mode, ctx.identity),
+        overdue=bool(args.get("overdue", False)),
+        unowned=bool(args.get("unowned", False)),
     )
 
     _obs_scope = observe_scope(_mode, ctx.identity)

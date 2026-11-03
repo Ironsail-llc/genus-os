@@ -83,6 +83,9 @@ CHECK_MODULES = (
     "skills",
     "identity",
     "memory",
+    # Open work in the CRM: an overdue case nobody owns is state of this
+    # instance an operator acts on, like a stale identity block.
+    "cases",
     "secrets",
     # A self-test rather than a reading: it drives a real repeat through the
     # real dispatch, because this control has twice been inert with a green
