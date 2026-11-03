@@ -587,3 +587,58 @@ class TestATenantCellsEngine:
 
         assert "model.primary" in str(before["errors"]), before
         assert "model.primary" not in str(after["errors"]), after
+
+
+class TestTheRawScan:
+    """``GET /api/admin/manifests``: this engine's documents as its loader reads them.
+
+    The bridge's read-only fleet and automations views join a tenant's
+    manifests with its schedule and run rows. For a child tenant those
+    manifests are on its cell's volume, so the bridge asks the cell's engine
+    for the scan instead of reading its own disk — which is the ROOT fleet.
+    """
+
+    def test_it_lists_the_documents_and_names_failures_without_a_path(
+        self, client, seeded, workspace
+    ):
+        (workspace / "docs" / "agents" / "broken.yaml").write_text("id: [unclosed\n")
+
+        response = client.get("/api/admin/manifests")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [m["id"] for m in body["manifests"]] == ["demo-agent"]
+        assert body["manifests"][0]["tools_allowed"] == EXISTING["tools_allowed"]
+        assert [row["filename"] for row in body["broken"]] == ["broken.yaml"]
+        assert str(workspace) not in str(body)
+
+    def test_it_is_mounted_behind_engine_control(self, monkeypatch, seeded):
+        from robothor.auth import tokens
+        from robothor.engine.auth import ENGINE_AUDIENCE
+        from robothor.engine_control import control_token
+
+        monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
+        monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "test-signing-key-at-least-32-bytes-long")
+        tokens.reset_signing_key_cache()
+        try:
+            client = TestClient(_health_app(), raise_server_exceptions=False)
+            read_only = tokens.issue_service_token(
+                "genus-bridge",
+                "test-tenant",
+                audience=ENGINE_AUDIENCE,
+                scopes=("engine:read",),
+                ttl_seconds=60,
+            )
+            other = control_token("genus-bridge", "acme-child-b", require_existing_key=False)
+            own = control_token("genus-bridge", "test-tenant", require_existing_key=False)
+
+            def _get(token):
+                headers = {"Authorization": f"Bearer {token}"}
+                return client.get("/api/admin/manifests", headers=headers)
+
+            assert client.get("/api/admin/manifests").status_code == 401
+            assert _get(read_only).status_code == 403
+            assert _get(other).status_code == 403
+            assert _get(own).status_code == 200
+        finally:
+            tokens.reset_signing_key_cache()
