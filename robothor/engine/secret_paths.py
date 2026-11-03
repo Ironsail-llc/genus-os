@@ -433,6 +433,78 @@ def _command_word(tokens: list[str]) -> tuple[str | None, list[str]]:
     return None, []
 
 
+#: Verbs that move the shell for every later segment.
+_CD_VERBS = frozenset({"cd", "pushd"})
+
+#: Verbs whose ``-C``/``--directory``/``--cwd`` option moves only their own segment.
+_DIR_OPTION_VERBS = frozenset({"git", "make", "tar"})
+
+
+def _dir_target(target: str, base: str | None) -> str | None:
+    """The directory a ``cd`` *target* lands in, or None when it cannot be known
+    from the text: a variable, a substitution, a glob, ``-`` or ``~user``."""
+    import posixpath
+
+    word = target.strip("'\"")
+    if not word or word == "-" or word.startswith("+"):
+        return None
+    if word.startswith("~") and not _is_home_spelling(word):
+        return None
+    spelled = _home_spelled(word)
+    if any(ch in spelled for ch in "$`") or _GLOB_MAGIC.search(spelled):
+        return None
+    if not posixpath.isabs(spelled):
+        if base is None:
+            return None
+        spelled = posixpath.join(base, spelled)
+    return posixpath.normpath(spelled)
+
+
+def _option_dir(args: list[str], base: str | None) -> tuple[bool, str | None]:
+    """``(found, directory)`` for a ``-C dir`` / ``--directory=dir`` / ``--cwd dir``."""
+    found, here = False, base
+    for i, arg in enumerate(args):
+        value: str | None = None
+        if arg in ("-C", "--directory", "--cwd"):
+            value = args[i + 1] if i + 1 < len(args) else ""
+        elif arg.startswith(("--directory=", "--cwd=")):
+            value = arg.split("=", 1)[1]
+        elif arg.startswith("-C") and len(arg) > 2:
+            value = arg[2:]
+        if value is not None:
+            found, here = True, _dir_target(value, base)
+    return found, here
+
+
+def _segment_dirs(segments: list[list[str]], start: str | None) -> list[str | None]:
+    """The directory each segment runs in, or None where the text cannot say.
+
+    The shell starts in *start*. A ``cd``/``pushd`` to a literal directory moves
+    every later segment there; one to anything else (``cd "$D"``, ``cd -``, a
+    ``popd``) leaves the rest unknown. ``-C dir`` on git, make or tar moves only
+    its own segment.
+    """
+    out: list[str | None] = []
+    cur = start
+    for tokens in segments:
+        word, args = _command_word(tokens)
+        here = cur
+        if word in _DIR_OPTION_VERBS:
+            found, moved = _option_dir(args, cur)
+            if found:
+                here = moved
+        out.append(here)
+        if word in _CD_VERBS:
+            operands = [a for a in args if a == "-" or not a.startswith("-")]
+            if not operands:
+                cur = (_home() or None) if word == "cd" else None
+            else:
+                cur = _dir_target(operands[0], cur)
+        elif word == "popd":
+            cur = None
+    return out
+
+
 #: The key-material name pattern (``*.pem``, ``*.key``, ``*.p12`` ...). Unlike an
 #: exact credential name, it also matches words that are not files at all: a jq
 #: filter (``.key``, ``.data.key``) is a bare word ending in ``.key``.
@@ -445,7 +517,8 @@ def _absent_bare_key_word(candidate: str, cwd: str | None) -> bool:
 
     A path spelling (a separator, ``~``, ``$HOME``), an exact credential name
     (``.env``, ``credentials``), a secrets directory, any other secret pattern,
-    or a file that exists keeps its refusal.
+    or a file that exists keeps its refusal. So does any word when *cwd* is None:
+    the command changed directory to somewhere the text does not say.
     """
     import os as _os
 
@@ -458,8 +531,9 @@ def _absent_bare_key_word(candidate: str, cwd: str | None) -> bool:
         return False
     if any(p.fullmatch(candidate) for p in _SECRET_NAME_PATTERNS if p is not _KEY_FILE_PATTERN):
         return False
-    base = Path(cwd) if cwd else Path.cwd()
-    return not _os.path.lexists(base / candidate)
+    if cwd is None:
+        return False
+    return not _os.path.lexists(Path(cwd) / candidate)
 
 
 def exec_reads_secret(command: str, *, cwd: str | None = None) -> str | None:
@@ -470,7 +544,8 @@ def exec_reads_secret(command: str, *, cwd: str | None = None) -> str | None:
     Allowed: sourcing the file, testing for it, listing its directory,
     counting its lines — anything that uses it without printing it. *cwd* is
     where the command runs: a bare key-file-shaped word that names no file
-    there (a jq filter such as ``.key``) is not a secrets file.
+    there (a jq filter such as ``.key``) is not a secrets file; after a ``cd``
+    it is looked up where the ``cd`` lands, and refused when that is unknown.
     """
     # Before the per-segment walk: a procfs environment read has no command word
     # of its own to catch. ``tr '\0' '\n' < /proc/self/environ`` is a redirect,
@@ -485,7 +560,9 @@ def exec_reads_secret(command: str, *, cwd: str | None = None) -> str | None:
             "`secrets:` list."
         )
 
-    for tokens in _segments(command):
+    segments = _segments(command)
+    dirs = _segment_dirs(segments, cwd or str(Path.cwd()))
+    for tokens, here in zip(segments, dirs, strict=True):
         word, args = _command_word(tokens)
         if word is None:
             continue
@@ -501,7 +578,7 @@ def exec_reads_secret(command: str, *, cwd: str | None = None) -> str | None:
                 if arg.startswith("-"):
                     continue
                 candidate = arg.strip("'\"")
-                if is_secret_path(candidate) and not _absent_bare_key_word(candidate, cwd):
+                if is_secret_path(candidate) and not _absent_bare_key_word(candidate, here):
                     return (
                         f"refused: `{word}` would print {PurePath(candidate).name}, a secrets "
                         "file. Credentials are supplied to tools by the platform; source the "
@@ -781,8 +858,12 @@ def _bounded_glob(pattern: str, budget: _WalkBudget) -> list[str]:
                 d = stack.pop()
                 nxt.append(d)
                 for name, is_dir in _scan(d, budget):
-                    if is_dir and not name.startswith("."):
+                    if name.startswith("."):
+                        continue
+                    if is_dir:
                         stack.append(posixpath.join(d, name))
+                    elif last:  # a final ``**`` is ``*`` under sh: files too
+                        nxt.append(posixpath.join(d, name))
         else:
             for c in current:
                 for name, is_dir in _scan(c, budget):
@@ -834,27 +915,32 @@ def _glob_hits_credential(word: str, roots: tuple[str, ...]) -> str | None:
     return None
 
 
-def _resolvable(token: str, roots: tuple[str, ...]) -> str | None:
-    """*token* as an absolute path to resolve, or None for a bare word.
+def _resolvable(token: str, roots: tuple[str, ...], base: str | None = None) -> str | None:
+    """*token* as an absolute path to resolve, or None.
 
-    Only an explicit path (a separator, or a home spelling) or a word naming a
-    file that exists in the workspace is resolved. ``.key`` in ``jq -r .key``
-    is a jq filter, not a key file under home.
+    An explicit path (a separator, or a home spelling) is resolved; any other
+    word only when it names an entry that exists in *base*, the directory the
+    segment runs in (the workspace unless a ``cd`` moved it). So a bare
+    ``innocent.txt`` linked onto a key is resolved, and ``.key`` in
+    ``jq -r .key`` (no such file) is not.
     """
     import os as _os
     import posixpath
 
     word = token.strip("'\"")
-    if not word or not _looks_like_path(word):
+    if not word:
         return None
     if word.startswith("~") and not _is_home_spelling(word):
         return None
-    spelled = _home_spelled(word)
     explicit = "/" in word or _is_home_spelling(word)
+    if explicit and not _looks_like_path(word):
+        return None
+    spelled = _home_spelled(word)
     if not posixpath.isabs(spelled):
-        if not roots:
+        base = base or (roots[0] if roots else None)
+        if base is None:
             return None
-        spelled = posixpath.join(roots[0], spelled)
+        spelled = posixpath.join(base, spelled)
     if explicit or _os.path.lexists(spelled):
         return spelled
     return None
@@ -872,7 +958,8 @@ def exec_names_credential(command: str, *, roots: tuple[str, ...] = ()) -> dict[
     """
     segments = _segments(command)
     feeds_reader = any(_command_word(seg)[0] in _PIPELINE_READERS for seg in segments)
-    for tokens in segments:
+    dirs = _segment_dirs(segments, roots[0] if roots else None)
+    for tokens, here in zip(segments, dirs, strict=True):
         word, _args = _command_word(tokens)
         # A metadata verb (ls, stat, ...) reports on a file without reading it,
         # so it is exempt -- UNLESS its output feeds a reader in the pipeline.
@@ -886,7 +973,9 @@ def exec_names_credential(command: str, *, roots: tuple[str, ...] = ()) -> dict[
             if globbed:
                 if (hit := _glob_hits_credential(token, roots)) is not None:
                     return credential_refusal(hit)
-            elif (path := _resolvable(token, roots)) is not None and _realpath_is_credential(path):
+            elif (path := _resolvable(token, roots, here)) is not None and _realpath_is_credential(
+                path
+            ):
                 return credential_refusal(token)
     return None
 
