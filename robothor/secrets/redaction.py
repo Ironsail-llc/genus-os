@@ -223,7 +223,17 @@ _ASSIGNMENT = re.compile(
 )
 
 
-#: Values that are a REFERENCE to a credential rather than one.
+#: ``"NAME": "value"``: a credential under a JSON key, the way a CLI's
+#: credentials file holds one. The ``:`` that :data:`_ASSIGNMENT` refuses in
+#: prose is safe here because the key must be QUOTED and must be a credential
+#: name in full, so ``"max_tokens"`` and ``"token_type"`` keep their values.
+#: The quote may be escaped (``\"``): a printed file reaches storage as a
+#: string inside the tool result's own JSON.
+_JSON_FIELD = re.compile(
+    rf"(?P<q>\\?\")(?P<name>(?:{_KEY_NAME}|{_TOKEN_NAME}|{_UNAMBIGUOUS_NAME}){_ROTATION_SUFFIX})(?P=q)"
+    r"(?P<sep>\s*:\s*)(?P=q)(?P<value>[^\"\\\n]{1,4096})(?P=q)",
+    re.IGNORECASE,
+)
 #:
 #: ``SSH_KEY=~/.ssh/id_ed25519`` is a path, ``GITHUB_TOKEN=$(gh auth token)`` is
 #: a command, ``KEY=${OTHER}`` is a variable. Redacting these loses the agent
@@ -254,6 +264,13 @@ def _redact_assignment(match: re.Match[str]) -> str:
     if quote:
         return f"{name}={quote}{PLACEHOLDER}{quote}"
     return f"{name}={PLACEHOLDER}"
+
+
+def _redact_json_field(match: re.Match[str]) -> str:
+    if _VALUE_IS_A_REFERENCE.match(match.group("value")):
+        return match.group(0)
+    q = match.group("q")
+    return f"{q}{match.group('name')}{q}{match.group('sep')}{q}{PLACEHOLDER}{q}"
 
 
 #: Vendor token formats, by the prefix their issuer publishes.
@@ -287,6 +304,8 @@ _VENDOR_TOKEN = (
     r"\bA(?:KIA|SIA)[A-Z0-9]{16,}",
     r"\bAIza[A-Za-z0-9_-]{30,}",
     r"\bya29\.[A-Za-z0-9_-]{20,}",
+    r"\bGOCSPX-[A-Za-z0-9_-]{20,}",
+    r"(?<![\w/])1//0[A-Za-z0-9_-]{20,}",
     r"\bSG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}",
     r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
@@ -353,6 +372,7 @@ def redact(text: str) -> str:
         # ``/secure`` and replacing the tail with an advisory sentence was the
         # same injection surface as the payment prose.
         named = _ASSIGNMENT.sub(_redact_assignment, cut_private_input(text))
+        named = _JSON_FIELD.sub(_redact_json_field, named)
         return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
     except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
         # If this ever somehow raises, printing nothing beats printing a token.
