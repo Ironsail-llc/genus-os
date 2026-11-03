@@ -395,7 +395,8 @@ With `vault.enabled: false` (local values), create the
 |-----|---------|-------|
 | `id` | required | Lowercase DNS label, unique, and not `global.rootTenant`. |
 | `replicaCount`, `resources`, `secretRefs`, `podLabels`, `podAnnotations`, `nodeSelector`, `tolerations`, `affinity` | the `engine.*` value | Replaced, not merged. `secretRefs` keeps the engine's allow-list, plus the cell's own `engine-providers-<id>` (see below). |
-| `env` | `engine.env` | Merged over it, key by key. On a persistent, writable workspace the chart sets `ROBOTHOR_PLUGIN_DIR` and `PYTHONPATH` (see below); the entry's `env` overrides either. |
+| `env` | `engine.env` | Merged over it, key by key. On a persistent, writable workspace the chart sets `ROBOTHOR_PLUGIN_DIR` and `PYTHONPATH` (see below); the entry's `env` overrides either. A key set to `null` is dropped instead of inherited. |
+| `envOmitPrefixes` | none | Inherited `engine.env` keys starting with any of these prefixes are dropped, so a cell need not carry the settings of plugins only the root or another cell runs (for example `[ACME_, EXAMPLE_]`). The entry's own `env` and the tenant identity are kept. Each prefix must be a non-empty string. |
 | `workspace.allowEmptyFleet`, `minAgentCount`, `requiredAgentIds`, `readOnly` | the top-level `workspace.*` value | |
 | `workspace.persistence` | `workspace.persistence` without `existingClaim` | Merged key by key. A cell never mounts the root engine's claim. |
 | `workspace.configMap` | none | Never inherited: a bundle holds one tenant's fleet. |

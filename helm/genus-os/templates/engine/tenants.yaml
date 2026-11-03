@@ -42,8 +42,21 @@ An empty list renders nothing.
 {{- range $key := list "replicaCount" "resources" "secretRefs" "podLabels" "podAnnotations" "nodeSelector" "tolerations" "affinity" -}}
 {{- if hasKey $t $key -}}{{- $_ := set $cv $key (index $t $key) -}}{{- end -}}
 {{- end -}}
+{{- /* A cell inherits engine.env, which describes the root engine and so
+       names the root's plugins' settings too. envOmitPrefixes drops every
+       inherited key with one of its prefixes, and a key the cell's env sets
+       to null is dropped, so a cell carries only its own plugins' settings.
+       The tenant identity below is set after this and cannot be dropped. */ -}}
 {{- $env := deepCopy ($cv.env | default dict) -}}
-{{- range $k, $v := ($t.env | default dict) -}}{{- $_ := set $env $k $v -}}{{- end -}}
+{{- range $p := ($t.envOmitPrefixes | default list) -}}
+{{- if not (and (kindIs "string" $p) $p) -}}
+{{- fail (printf "tenants[%s].envOmitPrefixes: each entry must be a non-empty string, got %v" $t.id $p) -}}
+{{- end -}}
+{{- range $k := keys $env -}}{{- if hasPrefix $p $k -}}{{- $_ := unset $env $k -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- range $k, $v := ($t.env | default dict) -}}
+{{- if kindIs "invalid" $v -}}{{- $_ := unset $env $k -}}{{- else -}}{{- $_ := set $env $k $v -}}{{- end -}}
+{{- end -}}
 {{- $_ := set $cv "env" $env -}}
 {{- /* Extra volumes name the root engine's own resources (often a
        ReadWriteOnce claim), so a cell gets only the ones its entry declares. */ -}}
