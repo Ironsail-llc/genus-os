@@ -1371,6 +1371,11 @@ have read an email, a web page or some other tool output:
 Every refusal carries `gate` and `unlock`, the sentence the agent can pass on.
 See [Configuration](configuration.md) for the rest of the rule.
 
+The person's message reaches the model raw for that one turn, or the value
+could not be stored. Every copy kept after it is redacted: chat history, the
+recorded steps, run checkpoints (which resume reads back), and the engine log,
+which records a Telegram message's length, never its text.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
