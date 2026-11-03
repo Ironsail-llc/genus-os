@@ -50,7 +50,6 @@ class TestNoEffectReservation:
                     ("tool_describe", {"name": "gws_calendar_list"}),
                 ],
                 engine_config,
-                bypass_effects=False,
             )
 
         reserve.assert_not_called()
@@ -76,7 +75,6 @@ class TestPlanMode:
             registry,
             [("tool_search", {"query": "send an email to a person"})],
             engine_config,
-            bypass_effects=False,
             readonly_mode=True,
         )
 
