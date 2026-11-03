@@ -25,7 +25,8 @@ from routers._engine_client import engine_request
 
 logger = logging.getLogger(__name__)
 
-#: The child engine's raw scan. Under ``/api/admin``, so ``engine:control``.
+#: The child engine's raw scan (``robothor/engine/admin_manifests.py``). Under
+#: ``/api/admin``, so ``engine:control``; it answers ``manifests`` and ``broken``.
 SCAN_PATH = "/api/admin/manifests"
 
 
@@ -57,11 +58,11 @@ async def remote_scan(tenant: str) -> Scan:
         manifests=[m for m in body.get("manifests") or [] if isinstance(m, dict)],
         failures=[
             SimpleNamespace(
-                agent_id=str(f.get("agent_id") or ""),
+                agent_id=str(f.get("id") or ""),
                 filename=str(f.get("filename") or ""),
                 error_type=str(f.get("error_type") or ""),
             )
-            for f in body.get("failures") or []
+            for f in body.get("broken") or []
             if isinstance(f, dict)
         ],
     )
