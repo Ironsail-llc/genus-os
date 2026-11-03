@@ -1230,12 +1230,20 @@ The list:
 - `*.pem` and `*.key` under the home directory.
 
 Documentation files (`*.example`, `*.md` and the like) named like one of these
-stay readable, except inside a listed directory. `exec` refuses a command when
-any argument, redirection or string inside it names a listed path, spelled
-with `~`, `$HOME` or `${HOME}` or not. `ls`, `test`/`[`, `stat`, `wc` and `du`
-are let through, because they report on a file without reading it. The check
-runs before the sandbox decision, so it applies inside a container too.
-`execute_code` refuses a snippet whose source names a listed path. The masked
+stay readable, except inside a listed directory. The gate resolves the path
+before it decides, so neither a symlink nor a glob reaches a listed file:
+`read_file` checks the requested path and its fully resolved real path, so a
+link to a listed file or a file under a linked directory is refused. `exec`
+refuses a command when any argument, redirection or string inside it names a
+listed path (spelled with `~`, `$HOME` or `${HOME}` or not), when a glob or
+brace word expands onto one (expansion is bounded and confined to the home
+directory and the workspace), and when a word is a symlink that resolves onto
+one. `ls`, `test`/`[`, `stat`, `wc` and `du` are let through, because they
+report on a file without reading it — except when a pipeline feeds their output
+to a reader (`ls ~/.ssh | xargs cat`), which is refused. The check runs before
+the sandbox decision, so it applies inside a container too. `execute_code`
+refuses a snippet whose source names a listed path, and a snippet that reads
+through the `read_file` tool gets the same resolved check. The masked
 `read_file` view of the instance env file (`robothor.env`, `connectors.env`)
 for the verified owner is unchanged. `.env` and `.env.*` are on the list and
 are not masked.

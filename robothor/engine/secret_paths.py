@@ -533,6 +533,18 @@ def _home() -> str:
         return ""
 
 
+def credential_roots(workspace: str | os.PathLike[str] | None = None) -> tuple[str, ...]:
+    """Where a glob may expand and a symlink may resolve: the home directory and
+    the workspace, never the whole filesystem. The workspace is first so a
+    relative path token joins onto it."""
+    roots: list[str] = []
+    if workspace:
+        roots.append(str(Path(str(workspace)).expanduser()))
+    if home := _home():
+        roots.append(home)
+    return tuple(roots)
+
+
 def is_credential_path(path: str | os.PathLike[str]) -> bool:
     """True when *path* is on the credential_path list. Pure (no filesystem access)."""
     import posixpath
@@ -571,18 +583,111 @@ def _named_credential(text: str) -> str | None:
     return None
 
 
-def exec_names_credential(command: str) -> dict[str, str] | None:
-    """The refusal for a command whose arguments or redirections name a credential
-    path, or None. A redirection's target starts a segment of its own, so every
-    token of every segment is checked; only metadata verbs are let through."""
-    for tokens in _segments(command):
-        word, _args = _command_word(tokens)
-        if word in _METADATA_VERBS:
+#: Glob magic in a shell word: ``*``, ``?``, a ``[class]`` or a ``{a,b}`` brace.
+_GLOB_MAGIC = re.compile(r"[*?[]|\{[^}]*,[^}]*\}")
+
+#: A word a pipeline feeds into a reader, so a metadata verb naming a listed
+#: directory upstream (``ls ~/.ssh | xargs cat``, ``find ~/.aws -exec cat``) is
+#: not exempt: the directory listing becomes file contents downstream.
+_PIPELINE_READERS = frozenset({"xargs"})
+
+#: How many glob matches to look at before giving up. A credential path tends
+#: to sit among few siblings; a glob with thousands of hits is not how an agent
+#: reaches one, and expanding it in full would be the denial-of-service.
+_GLOB_MATCH_CAP = 2000
+
+
+def _expand_braces(word: str) -> list[str]:
+    """``a{b,c}d`` -> ``[abd, acd]``; one level, enough for a shell word."""
+    match = re.search(r"\{([^{}]*,[^{}]*)\}", word)
+    if not match:
+        return [word]
+    out: list[str] = []
+    for option in match.group(1).split(","):
+        out.extend(_expand_braces(word[: match.start()] + option + word[match.end() :]))
+    return out
+
+
+def _realpath_is_credential(spelled: str) -> bool:
+    """True when *spelled* resolves (symlinks and all) onto a listed path.
+
+    ``Path.resolve`` resolves every component, so a symlink to a listed file
+    and a file under a symlinked directory both land on it. It only reads the
+    filesystem to resolve links.
+    """
+    try:
+        return is_credential_path(Path(spelled).resolve())
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def _glob_hits_credential(word: str, roots: tuple[str, ...]) -> str | None:
+    """A listed path a glob word expands onto, or None. Bounded, and confined to
+    *roots*: the home directory and the workspace, never the whole filesystem."""
+    import glob
+    import itertools
+    import posixpath
+
+    home = _home()
+    for expanded in _expand_braces(word):
+        raw = expanded.replace("${HOME}", home or "~").replace("$HOME", home or "~")
+        pattern = str(Path(raw).expanduser())
+        if not Path(pattern).is_absolute():
+            pattern = posixpath.join(roots[0], pattern) if roots else pattern
+        if not any(
+            posixpath.normpath(pattern).startswith(posixpath.normpath(r)) for r in roots if r
+        ):
             continue
+        matches = itertools.islice(
+            glob.iglob(pattern, recursive=True),  # noqa: PTH207 - a shell glob, bounded below
+            _GLOB_MATCH_CAP,
+        )
+        for hit in matches:
+            if is_credential_path(hit) or _realpath_is_credential(hit):
+                return hit
+    return None
+
+
+def exec_names_credential(command: str, *, roots: tuple[str, ...] = ()) -> dict[str, str] | None:
+    """The refusal for a command that reaches a credential path, or None.
+
+    Three ways a command reaches one: it NAMES it (GEN-396); a word is a glob or
+    brace expansion that expands onto one, or a symlink that resolves onto one
+    (GEN-401); or a metadata verb lists a listed directory upstream of a reader
+    (``ls ~/.ssh | xargs cat``). *roots* bounds glob expansion and symlink
+    resolution to the home directory and the workspace.
+    """
+    segments = _segments(command)
+    feeds_reader = any(_command_word(seg)[0] in _PIPELINE_READERS for seg in segments)
+    for tokens in segments:
+        word, _args = _command_word(tokens)
+        # A metadata verb (ls, stat, ...) reports on a file without reading it,
+        # so it is exempt -- UNLESS its output feeds a reader in the pipeline.
+        skip = word in _METADATA_VERBS and not feeds_reader
         for token in tokens:
+            if skip and not _GLOB_MAGIC.search(token):
+                continue
             if (hit := _named_credential(token)) is not None:
                 return credential_refusal(hit)
+            if _GLOB_MAGIC.search(token):
+                if (hit := _glob_hits_credential(token, roots)) is not None:
+                    return credential_refusal(hit)
+            elif roots and _realpath_is_credential(_pathish_abs(token, roots)):
+                return credential_refusal(token)
     return None
+
+
+def _pathish_abs(token: str, roots: tuple[str, ...]) -> str:
+    """A bare path token as an absolute path for realpath: ~ and $HOME expanded,
+    a relative path joined onto the workspace."""
+    import posixpath
+
+    home = _home()
+    raw = token.strip("'\"").replace("${HOME}", home or "~").replace("$HOME", home or "~")
+    raw = str(Path(raw).expanduser())
+    if not Path(raw).is_absolute() and roots:
+        return posixpath.join(roots[0], raw)
+    return raw
 
 
 def code_names_credential(code: str) -> dict[str, str] | None:

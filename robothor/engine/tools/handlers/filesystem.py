@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 from typing import TYPE_CHECKING, Any
 
@@ -72,9 +73,14 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Before the sandbox decision, so host and container paths refuse alike:
     # a command that PRINTS a secrets file (or the environment) never runs.
     # Sourcing the file to run an authenticated command is still allowed.
-    from robothor.engine.secret_paths import exec_names_credential, exec_reads_secret
+    from robothor.engine.secret_paths import (
+        credential_roots,
+        exec_names_credential,
+        exec_reads_secret,
+    )
 
-    if gate := exec_names_credential(command):  # credential_path: named at all
+    # credential_path: named, globbed onto, or symlinked onto a listed path.
+    if gate := exec_names_credential(command, roots=credential_roots(ctx.workspace)):
         return gate
     refused = exec_reads_secret(command)
     if refused:
@@ -382,7 +388,10 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         path = Path(args.get("path", "")).expanduser()
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
-        if is_credential_path(path):  # for every caller, the owner included
+        # For every caller, the owner included: the spelled path, and its
+        # realpath, so a symlink to a listed file or a file under a symlinked
+        # directory cannot reach one (os.path.realpath resolves every component).
+        if is_credential_path(path) or is_credential_path(os.path.realpath(path)):
             return credential_refusal(path)
         # Before touching the filesystem: the refusal must not reveal whether
         # the file exists, and a credential file is never opened for a model
