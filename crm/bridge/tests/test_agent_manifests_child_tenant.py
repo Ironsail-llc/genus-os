@@ -318,3 +318,35 @@ def test_a_missing_agent_on_a_current_engine_is_still_no_such_agent(root_workspa
     response = _client().get("/api/agent-manifests/nobody")
     assert response.status_code == 404
     assert response.json()["detail"] == "no such agent"
+
+
+# ─── Which engine each caller reaches ────────────────────────────────
+
+
+def test_every_builder_call_goes_to_the_acting_tenants_engine(root_workspace):
+    """The root at home reaches the root engine; acting in a child, the child's.
+
+    The tenant passed to ``engine_request`` is the one the control token is
+    minted for and the engine URL is resolved by, so this is the whole route.
+    """
+    from bridge_service import app
+    from fastapi.testclient import TestClient
+
+    from robothor.auth import tokens
+
+    reached: list[str | None] = []
+
+    async def _recording(method, path, *, json=None, timeout=30, tenant=None):
+        reached.append(tenant)
+        return 200, {"agents": [], "broken": [], "count": 0, "default_agent": "main"}
+
+    client = TestClient(app, raise_server_exceptions=False)
+    with (
+        patch("routers.agent_manifests.engine_request", new=_recording),
+        patch("routers._audit.log_event"),
+    ):
+        for acting, expected in ((ROOT, ROOT), (CHILD, CHILD)):
+            token = tokens.issue_access_token("alice", acting, "admin", home_tenant_id=ROOT)
+            headers = {"Authorization": f"Bearer {token}"}
+            assert client.get("/api/agent-manifests", headers=headers).status_code == 200
+            assert reached[-1] == expected
