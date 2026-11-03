@@ -43,5 +43,11 @@ def test_a_cdpath_in_the_environment_makes_a_relative_cd_unknown(
     assert secret_paths.exec_reads_secret("cd keys && cat prod.pem", cwd=str(Path.cwd()))
 
 
+def test_a_dot_named_target_is_searched_on_cdpath_too(home: Path) -> None:
+    (home / ".aws").mkdir()
+    (home / ".aws" / "server.key").write_text("K")
+    assert secret_paths.exec_reads_secret("CDPATH=~ cd .aws && cat server.key", cwd=str(Path.cwd()))
+
+
 def test_without_cdpath_a_bare_key_word_that_names_no_file_still_runs(home: Path) -> None:
     assert secret_paths.exec_reads_secret("cd sub && jq -r .key", cwd=str(Path.cwd())) is None
