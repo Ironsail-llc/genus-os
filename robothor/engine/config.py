@@ -484,6 +484,9 @@ def _tool_policy(manifest: dict[str, Any]) -> dict[str, Any]:
             for name in manifest.get("tools_opt_in", []) or []
             if str(name).strip()
         ],
+        "tools_eager": [
+            str(name).strip() for name in manifest.get("tools_eager", []) or [] if str(name).strip()
+        ],
         "secret_grants": [
             str(name).strip() for name in manifest.get("secrets", []) if str(name).strip()
         ],

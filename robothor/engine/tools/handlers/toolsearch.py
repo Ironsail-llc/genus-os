@@ -130,18 +130,23 @@ async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     for hit in results:
         hit["in_toolset"] = hit["name"] in advertised
     visible = [h["name"] for h in results if h["in_toolset"]]
+    # The top hit is usually the tool the agent wanted: its parameters come
+    # inline, so the common case is search then tool_call, with no describe.
+    top = results[0] if deferred and results and not results[0]["in_toolset"] else None
+    if top is not None:
+        described = await _tool_describe({"name": top["name"]}, ctx)
+        if "parameters" in described:
+            top["parameters"] = described["parameters"]
     if not deferred:
         hint = "These are already in your toolset — call them directly, not via tool_call."
-    elif visible:
-        hint = (
-            f"{', '.join(visible)} are already in your toolset — call them directly. "
-            "For the rest, tool_describe(name=...) then tool_call(name=..., arguments=...)."
-        )
     else:
-        hint = (
-            "Use tool_describe(name=...) for the full schema, then "
-            "tool_call(name=..., arguments=...)."
-        )
+        lead = []
+        if visible:
+            lead.append(f"{', '.join(visible)} are already in your toolset — call them directly.")
+        if top is not None and "parameters" in top:
+            lead.append(f"{top['name']}'s parameters are included: tool_call it directly.")
+        how = "tool_describe(name=...) then tool_call(name=..., arguments=...)."
+        hint = " ".join([*lead, f"For the rest, {how}"]) if lead else f"Use {how}"
     out = {
         "results": results,
         "count": len(results),

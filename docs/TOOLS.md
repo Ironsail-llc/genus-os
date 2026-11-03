@@ -23,7 +23,7 @@ When an agent's allowed set is larger than the deferral threshold
 meta-tools, and the rest load on demand. Curated agents under the threshold
 keep their whole set and never pay a search round-trip.
 
-The core is two things, both cut to what the agent is allowed:
+The core is three things, all cut to what the agent is allowed:
 
 * the platform's fixed `CORE_TOOLS` (file, shell, web, memory reads, skills,
   calendar, the CRM task verbs, goals);
@@ -32,18 +32,25 @@ The core is two things, both cut to what the agent is allowed:
   counts as the tool it ran), at most 16, most-used first. So an inbox agent
   that sends mail every day is shown `gws_gmail_send` directly. The lookup runs
   off the event loop, waits at most a second, is cached per agent for ten
-  minutes, and on any failure the core is just `CORE_TOOLS`. `0` turns it off.
+  minutes, and on any failure the core is just `CORE_TOOLS`. `0` turns it off;
+* the manifest's **`tools_eager`** list: tools always shown to this agent,
+  recent history or not, for the ones it reaches for every day. The `main`
+  template makes `list_tasks`, `get_task`, `update_task`, `gws_gmail_search`
+  and `gws_gmail_get` eager. Measured on a live instance before that list, "the
+  five most urgent open tasks" went tool_search, tool_search, tool_describe,
+  tool_call on every run: 4 to 9 model calls instead of 2.
 
-On a stock checkout `main` (no `tools_allowed`, so every registered tool) is
-shown 30 schemas instead of 206: about 6,600 estimated schema tokens per call
-instead of about 32,000, before any plugin adds its tools — and plugin tools
+On a stock checkout an agent with no `tools_allowed` (so every registered tool)
+is shown 30 schemas instead of 206: about 6,600 estimated schema tokens per call
+instead of about 32,000 (the `main` template's eager list adds four, about
+7,500), before any plugin adds its tools — and plugin tools
 add nothing to that figure unless the agent used them recently.
 
 The three meta-tools:
 
 | Tool | What it does |
 |---|---|
-| `tool_search(query)` | Ranks the agent's reachable tools against a free-text query. Returns names and descriptions. |
+| `tool_search(query)` | Ranks the agent's reachable tools against a free-text query. Returns names and descriptions, and the top hit's `parameters` when it is not already advertised, so the usual path is `tool_search` then `tool_call`. |
 | `tool_describe(name)` | The full parameter schema for one tool. |
 | `tool_call(name, arguments)` | Runs a tool that is not in the advertised set. |
 

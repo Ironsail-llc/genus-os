@@ -76,9 +76,9 @@ class TestEagerTools:
     def test_mains_template_makes_its_everyday_tools_eager(self) -> None:
         text = (REPO / "templates/agents/core/main/manifest.template.yaml").read_text()
         manifest = yaml.safe_load(text.replace("{{ timezone }}", "UTC"))
-        assert MAIN_EAGER <= set(manifest["tools_eager"])
+        assert set(manifest["tools_eager"]) >= MAIN_EAGER
         registry = ToolRegistry()
-        assert MAIN_EAGER <= set(registry._schemas), "every eager name is a real tool"
+        assert set(registry._schemas) >= MAIN_EAGER, "every eager name is a real tool"
 
     def test_the_deferred_set_stays_well_below_the_full_set(self, monkeypatch) -> None:
         from robothor.engine.context import estimate_tokens
@@ -93,7 +93,7 @@ class TestEagerTools:
         monkeypatch.delenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD")
         deferred = registry.build_for_agent(main)
 
-        assert MAIN_EAGER <= _names(deferred)
+        assert _names(deferred) >= MAIN_EAGER
         assert tokens(deferred) < tokens(full) * 0.35
 
 
