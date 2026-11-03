@@ -160,3 +160,17 @@ def test_a_sibling_of_the_workspace_is_not_expanded(home: Path) -> None:
     (sibling / "link").symlink_to(home / ".ssh" / "id_rsa")
     roots = (str(home / "ws"),)  # the workspace only, not the home directory
     assert exec_names_credential(f"cat {sibling}/l*", roots=roots) is None
+
+
+# ── a bare filename glob is still a path ─────────────────────────────
+
+
+@pytest.mark.parametrize("command", ["cat *", "cat l*", "cat {a,link}"])
+def test_a_bare_glob_onto_a_workspace_symlink_is_refused(home: Path, command: str) -> None:
+    """``*`` names files in the working directory, the workspace. Leaving bare
+    globs unexpanded would let ``cat *`` print a linked key."""
+    (home / ".ssh").mkdir()
+    (home / ".ssh" / "id_rsa").write_text("x")
+    (home / "ws" / "link").symlink_to(home / ".ssh" / "id_rsa")
+    out = exec_names_credential(command, roots=_roots(home))
+    assert out is not None and out["error_type"] == "credential_path"
