@@ -88,3 +88,56 @@ def test_the_definer_function_is_registered_and_guarded():
     # Never wider than the policy: a scoped session gets only its own tenant.
     assert "current_setting('app.tenant_id', true)" in sql
     assert "FROM PUBLIC" in sql
+
+
+class _Recorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple]] = []
+
+    def execute(self, sql: str, params: tuple = ()) -> None:
+        self.calls.append((sql, tuple(params)))
+
+    def fetchall(self) -> list:
+        return []
+
+
+def _fetch(v2: bool, scope) -> tuple[str, tuple]:
+    from contextlib import contextmanager
+    from unittest.mock import patch
+
+    cur = _Recorder()
+
+    @contextmanager
+    def _conn(*_a, **_kw):
+        class _C:
+            def cursor(self, cursor_factory=None):
+                return cur
+
+        yield _C()
+
+    with (
+        patch.dict("os.environ", {"MEMORY_WARMUP_RECALL_V2": "1" if v2 else "0"}),
+        patch("robothor.db.get_connection", _conn),
+    ):
+        warmup._build_entity_context("Tell Carol about the Example plan", scope=scope)
+    assert len(cur.calls) == 1
+    return cur.calls[0]
+
+
+def test_restricted_with_no_person_still_filters_on_both_paths():
+    """Restricted and unrestricted must not both reach the SQL as ``None``."""
+    from robothor.identity.scope import DataScope
+
+    nobody = DataScope(tenant_id="t", person_id=None, restricted=True)
+    _sql, params = _fetch(True, nobody)
+    assert params[2] is True and params[3] is None, params
+    sql, params = _fetch(False, nobody)
+    assert "AND (person_id = %s OR person_id IS NULL)" in sql
+    assert params[-1] is None
+
+
+def test_unrestricted_passes_no_filter_on_both_paths():
+    _sql, params = _fetch(True, None)
+    assert params[2] is False, params
+    sql, _params = _fetch(False, None)
+    assert "person_id = %s" not in sql

@@ -1323,7 +1323,11 @@ def _build_entity_context(
     from robothor.db import get_connection
     from robothor.identity.scope import log_would_drop, rows_dropped_by_scope
 
-    scope_person_id = scope.person_id if scope is not None and scope.restricted else None
+    # Restricted is passed on its own: a restricted caller with no linked
+    # person must still be filtered (to facts about no one), not treated as
+    # unrestricted because its person id is None.
+    restricted = scope is not None and scope.restricted
+    scope_person_id = scope.person_id if restricted and scope is not None else None
 
     lines = ["--- RELEVANT CONTEXT ---"]
     chars_used = 0
@@ -1336,7 +1340,7 @@ def _build_entity_context(
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         fetched = _fetch_entity_facts_batched(
-            cur, candidates[:max_candidates], tenant_id, v2, scope_person_id
+            cur, candidates[:max_candidates], tenant_id, v2, restricted, scope_person_id
         )
         for rows in fetched:
             if observe_scope_obj is not None:
@@ -1365,13 +1369,14 @@ def _fetch_entity_facts_batched(
     candidates: list[str],
     tenant_id: str,
     v2: bool,
+    restricted: bool,
     scope_person_id: str | None,
 ) -> list[list[dict[str, Any]]]:
     """Every candidate's top facts in one statement, grouped per candidate in order.
 
-    Per candidate: its active facts in the tenant, at most three, and for a
-    restricted scope (``scope_person_id``) only that person's facts and facts
-    about no one. ``candidate_ordinal`` keeps the extraction order.
+    Per candidate: its active facts in the tenant, at most three, and when
+    ``restricted`` only the facts of ``scope_person_id`` and facts about no one
+    (with no linked person, facts about no one alone). ``candidate_ordinal`` keeps the extraction order.
 
     v2 calls ``entity_facts_for_candidates`` (migration 166): the case-blind
     match on idx_facts_entities_lower (migration 109), ranked by a
@@ -1387,12 +1392,14 @@ def _fetch_entity_facts_batched(
     if v2:
         cur.execute(
             "SELECT candidate_ordinal, fact_text, category, importance_score, person_id "
-            "FROM entity_facts_for_candidates(%s, %s::text[], %s::uuid)",
-            (tenant_id, list(candidates), scope_person_id),
+            "FROM entity_facts_for_candidates(%s, %s::text[], %s, %s::uuid)",
+            (tenant_id, list(candidates), restricted, scope_person_id),
         )
     else:
-        scope_clause = "AND (person_id = %s OR person_id IS NULL)" if scope_person_id else ""
-        scope_params = (scope_person_id,) if scope_person_id else ()
+        # person_id = NULL matches nothing, so no linked person leaves only
+        # the facts about no one.
+        scope_clause = "AND (person_id = %s OR person_id IS NULL)" if restricted else ""
+        scope_params = (scope_person_id,) if restricted else ()
         cur.execute(
             f"""
             SELECT c.ord AS candidate_ordinal,
