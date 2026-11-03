@@ -263,6 +263,80 @@ sessions use). The argument classification cannot drift: a test reads every
 `…Id` literal out of both modules and fails on any that is not classified as
 a uuid id, an integer id, or explicitly not an id.
 
+## Cases
+
+A **case** is any piece of open work an agent or the operator has to see
+through: a reply owed, a document to chase, a decision to make. The platform
+has no separate case table. A case is a CRM task (`crm_tasks`), created with
+`create_task` and closed with `resolve_task` or `approve_task`, and every agent
+that sets `task_protocol: true` in its manifest already works its inbox this
+way (`list_my_tasks`, then IN_PROGRESS, then `resolve_task`).
+
+### Field mapping
+
+| Case | Task field | Notes |
+|---|---|---|
+| Id | `id` | The task UUID. Quote it in every message about the case. |
+| Domain | `tags` | One tag per domain, e.g. `domain:billing`. |
+| Entity references | `person_id`, `company_id` | The person or company the case is about. Other references (an order, a ticket in another system) go in `body` as links. |
+| State | `status` | `TODO`, `IN_PROGRESS`, `REVIEW`, `DONE`. |
+| Owner | `assigned_to_agent`, or `requires_human` | An agent id, or `requires_human: true` when a person has to act; the question goes in `question_for_operator`. |
+| Next action | `next_action`, `next_action_agent` | One sentence: what happens next and who does it. |
+| Due | `due_at` | When the case must be done by. The priority's SLA is kept apart, in `sla_deadline_at`. |
+| Level | `tags` | e.g. `level:2`, when the deployment grades its cases. |
+| Blockers | `blockers` | What the case is waiting on. |
+| Evidence | `body` | Links to the messages, documents and runs that support the case. Task history records every transition and who made it. |
+
+`next_action`, `blockers` and `question_for_operator` are written through the
+DAL (`create_task`, `set_next_action`, `set_question` in
+`robothor/crm/dal.py`); the agent-facing `create_task` and `update_task` tools
+do not take them, so an agent states the next action in `body`.
+
+### Hand-off
+
+A hand-off is a reassignment plus a written reason. `update_task` with a new
+`assignedToAgent` (or `requiresHuman: true` to hand it to a person) and a
+`body` line that names **who** takes it, **what** they need to do and **by
+when**, with `dueAt` moved if the deadline changed. Every automated hand-off
+says all three; a hand-off that only changes the assignee leaves the next owner
+to reconstruct the case from its history.
+
+### Finding cases nobody is working
+
+`list_tasks` takes two case filters:
+
+- `overdue: true` keeps open tasks whose `due_at` has passed, oldest due first;
+- `unowned: true` keeps open tasks no agent owns, or that wait on a person
+  (`requires_human`).
+
+Either filter excludes resolved tasks even when `status` is passed, and keeps a
+task with no status. Together they list, for the caller's tenant, what the
+`crm.cases_overdue` doctor check counts:
+
+```bash
+genus doctor --only crm.cases_overdue
+```
+
+`list_tasks` returns at most `limit` rows (50 by default) and its `count` is
+the length of that page, so on a large backlog the doctor's total can be higher
+than the listing. Ordering by due time keeps the oldest case, the one the
+doctor names, on the first page.
+
+The check warns (severity `recommended`) with a count of overdue unowned cases
+and of overdue cases that need a person, each with the oldest task id and its
+tenant, and passes when there are none. It counts every tenant its database
+connection can see. With row-level security on (`ROBOTHOR_RLS_ENABLED=1` and a
+role that does not bypass it), that is the one tenant bound to the connection,
+and the detail says `in RLS scope <tenant>`. Otherwise it says `in any tenant`.
+A scoped pass says nothing about other tenants. Run the check from an unscoped
+session to cover them all.
+
+An overdue case an agent owns is not counted: it is in that agent's inbox. A
+task snoozed until a future `follow_up_at` is not overdue for the check or for
+`list_tasks`; it comes back when the follow-up time passes. Answering the
+operator's question (`answer_question`) clears `requires_human`, so an answered
+case leaves the count.
+
 ## Testing
 
 **Every change is TDD.** Per-channel write-through tests live in
