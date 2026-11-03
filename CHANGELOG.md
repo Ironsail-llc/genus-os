@@ -1,3 +1,9 @@
+## [1.127.0](https://github.com/Ironsail-llc/genus-os/compare/v1.126.0...v1.127.0) (2026-11-03)
+
+### Features
+
+* **platform:** hierarchical tenancy, shipped on (GEN-61) ([b499b28](https://github.com/Ironsail-llc/genus-os/commit/b499b289c7f7e48620d3758313e2748e9d19acea)), closes [#783](https://github.com/Ironsail-llc/genus-os/issues/783) [#785](https://github.com/Ironsail-llc/genus-os/issues/785) [#784](https://github.com/Ironsail-llc/genus-os/issues/784) [#821](https://github.com/Ironsail-llc/genus-os/issues/821)
+
 ## [1.126.0](https://github.com/Ironsail-llc/genus-os/compare/v1.125.1...v1.126.0) (2026-11-03)
 
 ### Features
