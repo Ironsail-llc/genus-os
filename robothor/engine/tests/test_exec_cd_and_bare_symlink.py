@@ -231,3 +231,31 @@ def test_a_glob_that_could_name_a_key_after_an_unknown_cd_is_refused(
 def test_a_glob_that_cannot_name_a_key_is_allowed(home: Path, command: str) -> None:
     _write(home / "ws" / "tool.py", "print(1)")
     _admitted(_exec(home, command))
+
+
+# ── 5. a cd behind a keyword, a group or a wrapper still moves the shell ─────
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "{ cd ~; cat server.key; }",
+        "if cd ~; then :; fi; cat server.key",
+        "builtin cd ~ && cat server.key",
+        "env --chdir=$HOME cat server.key",
+        "{ cd ~; cat s*.key; }",
+        "builtin cd ~ && cat .aw?/cred*",
+        "! cd ~; cat server.key",
+        "eval cd ~; cat server.key",
+        "xargs cd <<< ~; cat server.key",
+    ],
+)
+def test_a_wrapped_cd_home_then_a_key_file_is_refused(home: Path, command: str) -> None:
+    _write(home / "server.key")
+    _write(home / ".aws" / "credentials")
+    _refused(_exec(home, command))
+
+
+@pytest.mark.parametrize("command", ["{ echo ok; }", "echo 'cd' && jq -r .key resp.json"])
+def test_a_group_or_a_quoted_cd_word_is_not_a_directory_change(home: Path, command: str) -> None:
+    _admitted(_exec(home, command))
