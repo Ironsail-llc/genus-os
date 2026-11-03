@@ -43,7 +43,8 @@ import uuid
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any, Protocol
 
-from robothor.engine.tools.constants import SPAWN_TOOLS
+from robothor.engine.proxy_denylist import PROXY_DENIED_TOOLS
+from robothor.engine.wrapped_call import inner_call
 
 if TYPE_CHECKING:
     from robothor.engine.tool_turn import ToolTurnRequest
@@ -59,17 +60,6 @@ __all__ = [
     "proxy_allow_set",
     "set_tool_proxy",
 ]
-
-#: Refused before admission is even asked, whatever the agent is granted.
-#:
-#: ``execute_code`` because a snippet that can start a snippet is an
-#: unbounded recursion the call cap does not bound (each level gets its own
-#: fresh cap). ``spawn_agent``/``spawn_agents`` because a spawn runs a whole
-#: child runner INLINE in the parent's task, and doing that from inside a
-#: subprocess's RPC handler nests two execution models with two deadlines.
-#: ``ask_user`` because it blocks on a person, and a loop that can page the
-#: operator two hundred times is a denial of service aimed at a human.
-PROXY_DENIED_TOOLS: frozenset[str] = frozenset({"execute_code", "ask_user"}) | SPAWN_TOOLS
 
 
 class ToolProxy(Protocol):
@@ -203,7 +193,8 @@ class RunToolProxy:
                     ),
                     "guard": "execute_code_call_cap",
                 }
-            approval_refusal = self._approval_budget_refusal(name)
+            # Judged as the call it wraps, like every gate a turn's call meets.
+            approval_refusal = self._approval_budget_refusal(inner_call(name, args)[0])
             if approval_refusal:
                 return approval_refusal
             self.calls_made += 1
@@ -296,7 +287,7 @@ class RunToolProxy:
         result = apply_post_execution_guardrails(
             session,
             req.guardrail_engine,
-            tool_name=name,
+            tool_name=inner_call(name, verdict.tool_args)[0],
             result=result,
             error_msg=error_msg,
             state=req.guard_state,

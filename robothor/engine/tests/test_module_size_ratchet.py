@@ -348,7 +348,9 @@ CAPS = {
     # +1: the proxied call reads its error through tool_outcome.error_text, the
     # same reading as a turn's call, so an object error is counted as a failure
     # on both paths. The reading itself lives in tool_outcome.py.
-    "robothor/engine/tool_proxy.py": 323,
+    # 323 -> 314: the denylist left for proxy_denylist.py, where it learned to
+    # look through a tool_call, and the cap follows the file down.
+    "robothor/engine/tool_proxy.py": 314,
     # 209 -> 283: the peer-session check. Not a feature, a control: the token
     # alone could not tell one run's snippet from another's, and a probe drove
     # a second run's proxy with a stolen token. Correcting a cap set hours
