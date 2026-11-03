@@ -35,6 +35,12 @@
 --     0.55 * importance + 0.45 * 0.5 ^ (age in hours / 168)
 -- with newer facts first on a tie.
 
+-- An earlier draft of this migration defined a three-argument version with
+-- no p_restricted, which left a restricted caller with no linked person
+-- unfiltered. Where that draft ran, drop it so it cannot stay callable as an
+-- overload beside this one.
+DROP FUNCTION IF EXISTS public.entity_facts_for_candidates(text, text[], uuid);
+
 CREATE OR REPLACE FUNCTION entity_facts_for_candidates(
     p_tenant_id text,
     p_candidates text[],
