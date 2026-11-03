@@ -23,7 +23,7 @@ When an agent's allowed set is larger than the deferral threshold
 meta-tools, and the rest load on demand. Curated agents under the threshold
 keep their whole set and never pay a search round-trip.
 
-The core is two things, both cut to what the agent is allowed:
+The core is three things, all cut to what the agent is allowed:
 
 * the platform's fixed `CORE_TOOLS` (file, shell, web, memory reads, skills,
   calendar, the CRM task verbs, goals);
@@ -32,18 +32,25 @@ The core is two things, both cut to what the agent is allowed:
   counts as the tool it ran), at most 16, most-used first. So an inbox agent
   that sends mail every day is shown `gws_gmail_send` directly. The lookup runs
   off the event loop, waits at most a second, is cached per agent for ten
-  minutes, and on any failure the core is just `CORE_TOOLS`. `0` turns it off.
+  minutes, and on any failure the core is just `CORE_TOOLS`. `0` turns it off;
+* the manifest's **`tools_eager`** list: tools always shown to this agent,
+  recent history or not, for the ones it reaches for every day. The `main`
+  template makes `list_tasks`, `get_task`, `update_task`, `gws_gmail_search`
+  and `gws_gmail_get` eager. Measured on a live instance before that list, "the
+  five most urgent open tasks" went tool_search, tool_search, tool_describe,
+  tool_call on every run: 4 to 9 model calls instead of 2.
 
-On a stock checkout `main` (no `tools_allowed`, so every registered tool) is
-shown 30 schemas instead of 206: about 6,600 estimated schema tokens per call
-instead of about 32,000, before any plugin adds its tools — and plugin tools
+On a stock checkout an agent with no `tools_allowed` (so every registered tool)
+is shown 30 schemas instead of 206: about 6,600 estimated schema tokens per call
+instead of about 32,000 (the `main` template's eager list adds four, about
+7,500), before any plugin adds its tools — and plugin tools
 add nothing to that figure unless the agent used them recently.
 
 The three meta-tools:
 
 | Tool | What it does |
 |---|---|
-| `tool_search(query)` | Ranks the agent's reachable tools against a free-text query. Returns names and descriptions. |
+| `tool_search(query)` | Ranks the agent's reachable tools against a free-text query. Returns names and descriptions, and the top hit's `parameters` when it is not already advertised, so the usual path is `tool_search` then `tool_call`. |
 | `tool_describe(name)` | The full parameter schema for one tool. |
 | `tool_call(name, arguments)` | Runs a tool that is not in the advertised set. |
 
@@ -61,7 +68,10 @@ system-run RBAC check and the post-execution guardrails all see `name` with its
 comes back as the result of the `tool_call`, and a hook that rewrites the
 arguments rewrites the wrapped call's. Recording the step does the same: the
 result of an external-data tool keeps its `<untrusted_content>` boundary and a
-credential argument is redacted, however the tool was reached. The wrapped tool
+credential argument is redacted, however the tool was reached. So does counting
+the outcome: the three-failure circuit breaker, `agent_tool_events` and the
+no-progress detector see `name`, so failures of different wrapped tools never
+add up to a breaker on `tool_call` itself. The wrapped tool
 runs under the caller's whole tool context, identity included, so a data-scoped
 read through `tool_call` returns exactly what the direct call returns.
 
@@ -1069,7 +1079,7 @@ code, or the channel to the engine is gone.
 | | |
 |---|---|
 | Reach | Every tool the agent could call from a turn, and nothing else. Each proxied call passes the same admission gates in the same order, then `registry.execute` — so the repeat guard, the benchmark sandbox, the audit row and post-condition verification all apply. |
-| Never reachable | `execute_code` (no recursion), `spawn_agent`/`spawn_agents` (a spawn runs a whole child runner inline), `ask_user` (it blocks on a person). |
+| Never reachable | `execute_code` (no recursion), `spawn_agent`/`spawn_agents` (a spawn runs a whole child runner inline), `ask_user` (it blocks on a person), and the same tools wrapped in `tool_call`: every name check in the proxy (this denylist, the approval cap, the post-execution guardrails) judges a `tool_call` as the tool it wraps. |
 | Requires | `exec` in the agent's `tools_allowed`. An agent that can run commands already has this process capability; what is new is the tool proxy. |
 | Transport | A unix socket in a 0700 directory, authenticated by a token in a 0600 file. The wire carries a tool name and arguments — there is no `tool_call_id` field, so there is nothing for a snippet to forge. One call at a time, so two writes cannot race. |
 | Environment | The scrubbed child environment at **`enforce`**, always — whatever `ROBOTHOR_EXEC_ENV_MODE` the instance is on. The snippet gets the process essentials, the declared non-secret `ROBOTHOR_*` settings and this agent's own `secrets:` grants: no database password, no provider key, no channel token. Scrubbing removes INHERITANCE, though, not the credentials from the engine — and the snippet's parent IS the engine, whose `/proc/<pid>/environ` a same-uid process may read. So the handler also calls `harden_process()` (`PR_SET_DUMPABLE=0`) before spawning, which makes those entries root-only. That is a **mitigation, not a boundary**: the remedy is the engine's environment ceasing to hold application credentials at all (see the SOPS bootstrap runbook), after which procfs leaks only bootstrap values. `exec` has the same exposure and the same mitigation. |

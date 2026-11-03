@@ -479,6 +479,9 @@ class SearchHit(TypedDict, total=False):
     #: Set by the ``tool_search`` handler, per hit: is this tool already
     #: advertised to the model this turn, or does it need ``tool_call``?
     in_toolset: bool
+    #: The top deferred hit's parameter schema, inline, so the agent can
+    #: ``tool_call`` it without a ``tool_describe`` round-trip.
+    parameters: dict[str, Any]
 
 
 class _Candidate(NamedTuple):
@@ -837,9 +840,9 @@ class ToolRegistry:
         """Return filtered tool schemas for an agent based on allow/deny lists.
 
         When this agent's toolset is deferred (Rip 16 / G4), advertise only its
-        core — CORE_TOOLS plus ``recent`` (the tools it called in its latest
-        runs, see :mod:`robothor.engine.recent_tools`), both cut to what it is
-        allowed — and the tool_search/tool_describe/tool_call meta-tools; the
+        core — CORE_TOOLS, the manifest's ``tools_eager`` and ``recent`` (the
+        tools it called in its latest runs, see
+        :mod:`robothor.engine.recent_tools`), all cut to what it is allowed — and the tool_search/tool_describe/tool_call meta-tools; the
         agent's other allowed tools load on demand. ``recent`` never widens
         reach: a name outside the allowed set is ignored. Enforcement of the real
         allow-list lives in the tool_call/tool_describe handlers, which check the
@@ -861,8 +864,9 @@ class ToolRegistry:
         if self.should_defer(config, tier=tier):
             seen: set[str] = set()
             advertised: list[str] = []
+            eager = set(getattr(config, "tools_eager", None) or ())
             for n in [*names, *sorted(TOOLSEARCH_TOOLS)]:
-                in_core = n in CORE_TOOLS or n in TOOLSEARCH_TOOLS or n in recent
+                in_core = n in CORE_TOOLS or n in TOOLSEARCH_TOOLS or n in recent or n in eager
                 if in_core and n in self._schemas and n not in seen:
                     seen.add(n)
                     advertised.append(n)

@@ -352,6 +352,9 @@ class AgentConfig:
     # meaningful when tools_allowed is empty; an explicit tools_allowed names
     # its opt-in tools directly.
     tools_opt_in: list[str] = field(default_factory=list)
+    # Always in a deferred run's advertised core, recent history or not. Cut to
+    # what the agent may use, like the rest of the core.
+    tools_eager: list[str] = field(default_factory=list)
 
     # Credential tier (manifest key `v2.credentials`). "operator" lets this
     # agent use the vault tools; empty refuses them. Deliberately NOT the

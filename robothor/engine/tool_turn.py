@@ -433,8 +433,8 @@ class ToolTurnMixin:
                 from robothor.engine.models import ErrorType
 
                 req.escalation.record_error(error_type or ErrorType.UNKNOWN)
-                # Track per-kind (tool_name + error_msg_prefix) for STOP RETRYING hints
-                req.escalation.record_error_kind(call.tool_name, error_msg)
+                # Per-kind STOP RETRYING hints, keyed on the wrapped tool's name.
+                req.escalation.record_error_kind(call.inner[0], error_msg)
             elif not refused_by_guard:
                 req.escalation.record_success()
 
