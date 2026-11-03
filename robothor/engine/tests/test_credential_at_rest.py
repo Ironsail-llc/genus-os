@@ -129,3 +129,65 @@ class TestTelegramLog:
         bot._enqueue_message.assert_called_once()
         assert BARE not in caplog.text
         assert "openweather" not in caplog.text
+
+
+def _loaded(messages):
+    """What ``load_latest`` hands back for a row holding *messages*."""
+    from robothor.engine.checkpoint import CHECKPOINT_SCHEMA_VERSION
+
+    conn = MagicMock()
+    conn.__enter__ = MagicMock(return_value=conn)
+    conn.__exit__ = MagicMock(return_value=False)
+    cursor = MagicMock()
+    cursor.fetchone.return_value = {
+        "step_number": 3,
+        "messages": messages,
+        "scratchpad": None,
+        "plan": None,
+        "schema_version": CHECKPOINT_SCHEMA_VERSION,
+    }
+    conn.cursor.return_value = cursor
+    with patch("robothor.db.connection.get_connection", return_value=conn):
+        return CheckpointManager.load_latest("test")
+
+
+class TestRestore:
+    def _with_request(self, request: str):
+        from robothor.engine.task_context import install_context, make_context
+
+        messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": request}]
+        install_context(messages, make_context(request, [], run_id="test"))
+        return messages
+
+    def test_a_checkpoint_written_before_the_fix_is_redacted_on_restore(self):
+        register_known_value(BARE, fingerprint="test")
+        loaded = _loaded(self._with_request(f"my openweather key is {BARE}"))
+        assert loaded is not None
+        assert BARE not in json.dumps(loaded["messages"])
+
+    def test_a_resumed_runs_originating_message_has_the_value_redacted(self):
+        from robothor.engine.task_context import read_context
+
+        register_known_value(BARE, fingerprint="test")
+        loaded = _loaded(self._with_request(f"my openweather key is {BARE}"))
+        record = read_context(loaded["messages"])
+        assert record is not None, "redaction broke the task-context record"
+        assert BARE not in record["request"]
+        assert "my openweather key is" in record["request"]
+
+
+class TestWrappedCall:
+    def test_a_tool_call_wrapped_vault_set_is_not_checkpointed(self):
+        wrapped = {"name": "vault_set", "arguments": {"key": "providers/x/api_key", "value": BARE}}
+        turn = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "tool_call", "arguments": json.dumps(wrapped)},
+                }
+            ],
+        }
+        assert BARE not in _saved([turn])

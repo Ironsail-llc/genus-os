@@ -605,6 +605,58 @@ async def test_the_gate_runs_off_the_event_loop(intake, monkeypatch, tool):
     assert not any(seen), "the gate ran on the event-loop thread"
 
 
+# ── a pasted value is redacted even when the hand-over is refused ───────────
+
+
+def _redacted_now(value: str) -> bool:
+    from robothor.secrets.redaction import redact
+
+    return value not in redact(f"the key was {value}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message, identity",
+    [
+        (HANDOVER, "fabricated"),
+        (f"here you go: {SHAPELESS_KEY}", "verified"),
+    ],
+    ids=["unverified_sender", "not_handed_over"],
+)
+async def test_a_refused_hand_over_still_redacts_what_the_person_pasted(intake, message, identity):
+    session = intake["live"](trigger=TriggerType.TELEGRAM, task_text=message)
+    who = _telegram_fabricated_owner() if identity == "fabricated" else _identity("owner")
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session, identity=who))
+    assert "gate" in result, result
+    assert intake["writes"] == []
+    assert _redacted_now(SHAPELESS_KEY), "a refused hand-over left the value unredacted"
+    leaked = SHAPELESS_KEY in (session.run.task_text or "")
+    assert not leaked, "the run's task text still carries the pasted value"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_store_still_redacts_what_the_person_pasted(intake, monkeypatch):
+    from robothor import vault
+
+    def boom(key, value, **kw):
+        raise RuntimeError("vault master key missing")
+
+    monkeypatch.setattr(vault, "set", boom)
+    session = intake["live"]()
+    with pytest.raises(RuntimeError):
+        await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    assert _redacted_now(SHAPELESS_KEY)
+
+
+@pytest.mark.asyncio
+async def test_a_value_the_person_never_pasted_is_not_registered(intake):
+    """An injected ``vault_set`` with an invented value must not be able to
+    fill the in-process registry (capped at 256) and push real values out."""
+    session = intake["live"](task_text="summarise my inbox please")
+    await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    assert not _redacted_now(SHAPELESS_KEY)
+
+
 # ── a deferred run reaches the gate with the same identity ───────────────────
 
 
