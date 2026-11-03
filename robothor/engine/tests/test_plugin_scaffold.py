@@ -115,7 +115,7 @@ def test_the_release_workflow_releases_the_wheel_and_its_checksums_on_a_tag(tmp_
     job = workflow["jobs"]["release"]
     # The same runner the scaffold's ci.yml tests on.
     ci = yaml.safe_load((root / ".github" / "workflows" / "ci.yml").read_text())
-    assert job["runs-on"] == ci["jobs"]["test-and-build"]["runs-on"] == "ubuntu-latest"
+    assert job["runs-on"] == ci["jobs"]["test-and-build"]["runs-on"] == "ubuntu-26.04"
     assert job["permissions"] == {"contents": "write"}
     steps = " ".join(
         f"{s.get('run', '')} {s.get('with', {}).get('files', '')}" for s in job["steps"]
