@@ -317,7 +317,10 @@ async def run_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     status, body = await engine_request("POST", path, tenant=get_tenant_id(request))
     # 404/422 are the engine's own answers about the id; pass them through.
     detail = body.get("detail") if isinstance(body, dict) else None
-    if status in (404, 422) and detail not in (None, _NO_ROUTE):
+    if status == 404 and detail == _NO_ROUTE:
+        logger.warning("The engine has no manifest administration routes; upgrade it")
+        raise HTTPException(status_code=502, detail=OLD_ENGINE)
+    if status in (404, 422) and detail is not None:
         raise HTTPException(status_code=status, detail=detail)
     triggered = body.get("triggered") if isinstance(body, dict) else None
     # The trigger answers with an ``error`` key for an agent it cannot load,

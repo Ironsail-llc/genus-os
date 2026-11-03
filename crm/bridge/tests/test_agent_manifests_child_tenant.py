@@ -358,6 +358,6 @@ def test_running_an_agent_on_an_old_engine_is_a_502_naming_the_upgrade(root_work
         response = _client().post("/api/agent-manifests/child-agent/run")
     assert response.status_code == 502
     assert "upgrade the engine" in response.json()["detail"]
-    assert not any(
-        c.kwargs.get("status") == "error" for c in audited.call_args_list
-    ), "an old engine is not recorded as the agent refusing the trigger"
+    assert not any(c.kwargs.get("status") == "error" for c in audited.call_args_list), (
+        "an old engine is not recorded as the agent refusing the trigger"
+    )
