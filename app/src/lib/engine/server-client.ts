@@ -167,9 +167,8 @@ class EngineClient {
       (page.offset !== undefined ? `&offset=${page.offset}` : "");
     const headers = await engineHeaders();
     const res = await fetch(
-      `${ENGINE_URL}/chat/history?limit=${limit}${paging}${keyedQuery(sessionKey)}`,
-      { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },
-    const headers = await engineHeaders();
+      `${engineBase(headers)}/chat/history?limit=${limit}${paging}${keyedQuery(sessionKey)}`,
+      { headers, signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);

@@ -14,6 +14,13 @@ vi.mock("@/lib/event-bus/redis-client", async () => {
   };
 });
 
+// The route serves only a signed-in session's acting tenant. These events are
+// untagged, which is the root tenant's, so the session acts in the root.
+vi.mock("@/lib/auth", async () => {
+  const { rootTenant } = await import("@/lib/services/registry");
+  return { auth: vi.fn(async () => ({ bridgeAccess: true, tenantId: rootTenant() })) };
+});
+
 import { GET } from "@/app/api/events/stream/route";
 import * as redis from "@/lib/event-bus/redis-client";
 
