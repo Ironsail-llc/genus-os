@@ -64,6 +64,12 @@ stops adding once the run is wrapping up. `tool_call` stays as the fallback,
 toward its recent tools like any other direct call. A run that never searches
 is shown exactly its core.
 
+**`tool_search` and `tool_describe` are reads.** They are in `READONLY_TOOLS`,
+so they make no effect reservation and work when the effect store is
+unreachable, may run concurrently with other reads, and are offered in plan
+mode. A plan-mode run searches only its read-only tools and promotes nothing.
+`tool_call` is not a read of its own: it is classified as the call it wraps.
+
 **`tool_call` cannot reach outside the agent's allow-list.** It checks the name
 against the allow-set the runner published before it dispatches anything, so a
 denied tool is refused there, not at the registry. The three meta-tools need

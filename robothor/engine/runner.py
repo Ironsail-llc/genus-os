@@ -1308,6 +1308,7 @@ class AgentRunner(
                     agent_config,
                     tool_names,
                     {str(s.get("function", {}).get("name", "")) for s in tool_schemas or []},
+                    readonly=readonly_mode,
                 )
 
                 from robothor.engine.request_runtime import observe_request

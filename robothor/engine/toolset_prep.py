@@ -181,6 +181,8 @@ def publish_toolset(
     agent_config: Any,
     tool_names: list[str],
     advertised: Any = None,
+    *,
+    readonly: bool = False,
 ) -> tuple[Any, ...]:
     """Install this run's tool context vars; returns tokens for withdrawal.
 
@@ -196,6 +198,10 @@ def publish_toolset(
       ``tool_search`` can answer a non-deferred run with the agent's own tools
       instead of "only available on deferred runs", which it returned 18 times
       in one week to an agent that went on calling it.
+
+    A ``readonly`` (plan-mode) run is never published as deferred: it is shown
+    its whole read-only set, so a search there answers from that set and
+    promotes nothing, rather than from an allow-set full of writes.
     """
     from robothor.engine.tools.dispatch import (
         set_advertised_toolset,
@@ -204,7 +210,7 @@ def publish_toolset(
         set_promotion_sink,
     )
 
-    deferred = registry.should_defer(agent_config)
+    deferred = not readonly and registry.should_defer(agent_config)
     defer_token = (
         set_deferred_allowed(registry.deferred_whitelist(agent_config)) if deferred else None
     )

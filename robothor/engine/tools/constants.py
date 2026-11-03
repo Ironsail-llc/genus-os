@@ -336,6 +336,13 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # and not a side effect: nothing on this box or anywhere else changes.
         "view_image",
         "analyze_image",
+        # The deferred-loading meta-tools that only look: a search and a schema
+        # lookup change nothing. Journalled as writes, every search on a
+        # deferred run cost a durable reservation and was refused when the
+        # effect store was unreachable. `tool_call` is NOT here: it is judged
+        # as the call it wraps (wrapped_call.is_read_only_call).
+        "tool_search",
+        "tool_describe",
         # Web
         "web_fetch",
         "web_render",
