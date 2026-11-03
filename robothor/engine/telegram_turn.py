@@ -9,6 +9,18 @@ from __future__ import annotations
 from typing import Any
 
 
+def forwarded(message: Any) -> bool:
+    """Whether a Telegram update forwards another message.
+
+    A forwarded message is somebody else's words: the person typed none of it,
+    so it contributes no typed text (what credential intake reads).
+    """
+    return any(
+        getattr(message, field, None) is not None
+        for field in ("forward_origin", "forward_from", "forward_date")
+    )
+
+
 async def with_reply_quote(bot: Any, chat_id: str, message: Any, user_text: str) -> str:
     """``user_text``, with a compact quote of the fleet message it replies to.
 

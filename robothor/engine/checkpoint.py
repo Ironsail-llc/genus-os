@@ -171,7 +171,8 @@ class CheckpointManager:
             )
             return True
         except Exception as e:
-            logger.warning("Failed to save checkpoint: %s", e)
+            # The class only: a DB error can quote the row, messages included.
+            logger.warning("Failed to save checkpoint: %s", type(e).__name__)
             return False
 
     @staticmethod
@@ -231,7 +232,7 @@ class CheckpointManager:
                     StateEnvelope().require_compatible(StateEnvelope(**envelope))
                 return result
         except Exception as e:
-            logger.warning("Failed to load checkpoint: %s", e)
+            logger.warning("Failed to load checkpoint: %s", type(e).__name__)
             return None
 
 

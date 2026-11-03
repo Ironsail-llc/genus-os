@@ -73,7 +73,7 @@ class TelegramDeliveryMixin:
 
             await _persist_delivery_status(run)
         except Exception as e:
-            _bot_logger.warning("Interactive delivery bookkeeping failed: %s", e)
+            _bot_logger.warning("Interactive delivery bookkeeping failed: %s", type(e).__name__)
 
 
 async def persist_and_map(

@@ -407,7 +407,7 @@ async def test_a_value_in_the_persons_message_is_stored(intake):
 @pytest.mark.asyncio
 async def test_two_keys_in_one_message_are_both_stored(intake):
     other = "ghp_FAKE0000_second_key_in_the_message_0000"
-    session = intake["live"](task_text=f"openweather {SHAPELESS_KEY} and github {other}")
+    session = intake["live"](task_text=f"openweather key {SHAPELESS_KEY} and github token {other}")
     first = await HANDLERS["vault_set"](_store_args(), _ctx(session))
     second = await HANDLERS["vault_set"](
         {"key": "providers/github/api_key", "value": other}, _ctx(session)
@@ -676,6 +676,50 @@ async def test_a_delete_reads_the_typed_text_only(intake):
     result = await HANDLERS["vault_delete"]({"key": KEY}, _ctx(session))
     assert result.get("gate") == "not_requested", result
     assert intake["rows"][KEY] == SHAPELESS_KEY
+
+
+# ── the value's own token never names its key, and the person means a store ──
+
+PR_URL = "https://github.com/acme/app/pull/9"
+
+
+@pytest.mark.asyncio
+async def test_a_url_that_names_the_vendor_is_not_a_hand_over(intake):
+    """``review <url>`` plus an injected ``vault_set(providers/github/api_key,
+    <url>)``: the vendor is inside the value itself."""
+    session = intake["live"](task_text=f"review {PR_URL}")
+    result = await HANDLERS["vault_set"](
+        {"key": "providers/github/api_key", "value": PR_URL}, _ctx(session)
+    )
+    assert result.get("gate") == "not_handed_over", result
+    assert intake["writes"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_vendor_only_inside_the_value_does_not_count(intake):
+    value = "openweather-" + SHAPELESS_KEY
+    session = intake["live"](task_text=f"please keep {value} for me")
+    result = await HANDLERS["vault_set"]({"key": KEY, "value": value}, _ctx(session))
+    assert result.get("gate") == "not_handed_over", result
+
+
+@pytest.mark.asyncio
+async def test_naming_the_vendor_without_a_store_word_is_not_a_hand_over(intake):
+    session = intake["live"](task_text=f"openweather says {SHAPELESS_KEY} today")
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    assert result.get("gate") == "not_handed_over", result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [f"my openweather key: {SHAPELESS_KEY}", f"OPENWEATHER_API_KEY={SHAPELESS_KEY}"],
+    ids=["key-colon", "assignment"],
+)
+async def test_a_store_word_or_assignment_beside_the_vendor_is_admitted(intake, message):
+    session = intake["live"](task_text=message)
+    result = await HANDLERS["vault_set"](_store_args(), _ctx(session))
+    assert result.get("success") is True, result.get("error")
 
 
 # ── a pasted value is redacted even when the hand-over is refused ───────────

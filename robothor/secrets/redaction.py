@@ -710,8 +710,59 @@ _BINARY_RESULT_KEYS = frozenset({"image_base64", "screenshot_base64"})
 _MAX_RESULT_DEPTH = 32
 
 
+#: An unquoted assignment's right side that is code, not a value: a dotted
+#: name, the start of a call or subscript (``get_token(``, ``os.environ[``), a
+#: number, or a plain identifier with no digit in it (``parse``,
+#: ``default_token``). A quoted value is a literal and never counts as code.
+_VALUE_IS_CODE = re.compile(
+    r"^(?:[A-Za-z_]\w*(?:\.\w+)+[(\[]?|[A-Za-z_]\w*[(\[]|[A-Za-z_][A-Za-z_]*|[-+]?\d[\d_.]*)$"
+)
+
+
+def _value_looks_like_a_credential(body: str, *, quoted: bool) -> bool:
+    """Whether an assignment's value is itself credential-like.
+
+    At least 16 characters, not a reference, not code (unquoted only), and
+    mixing at least two of lower case, upper case and digits. A placeholder
+    like ``change-me-in-production`` is one class plus hyphens, and stays.
+    """
+    if len(body) < 16 or _VALUE_IS_A_REFERENCE.match(body):
+        return False
+    if not quoted and _VALUE_IS_CODE.match(body):
+        return False
+    classes = sum(any(test(ch) for ch in body) for test in (str.islower, str.isupper, str.isdigit))
+    return classes >= 2
+
+
+def _redact_result_assignment(match: re.Match[str]) -> str:
+    quote = match.group("quote")
+    body = match.group("quoted") if quote else match.group("value")
+    if not body or not _value_looks_like_a_credential(body, quoted=bool(quote)):
+        return match.group(0)
+    return _redact_assignment(match)
+
+
+def redact_result_text(text: str) -> str:
+    """:func:`redact` for text a tool returned: data, not a log line.
+
+    The same known-value and credential-shape passes, but the ``NAME=value``
+    pass only takes a value that itself looks like a credential. A tool result
+    is often source code, and ``api_key = settings.api_key`` rewritten to
+    ``api_key = <redacted>`` is code the model then edits and writes back
+    into the person's files.
+    """
+    if not text:
+        return text
+    try:
+        known = _redact_known(text) if _known_snapshot else text
+        named = _ASSIGNMENT.sub(_redact_result_assignment, cut_private_input(known))
+        return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
+    except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
+        return PLACEHOLDER
+
+
 def redact_tool_result(result: Any, _depth: int = 0) -> Any:
-    """A copy of a tool result with every string passed through :func:`redact`.
+    """A copy of a tool result with every string passed through :func:`redact_result_text`.
 
     A tool that returns normally can still carry a credential: ``exec`` that
     prints a CLI credentials file, a provider error that echoes its request
@@ -723,7 +774,7 @@ def redact_tool_result(result: Any, _depth: int = 0) -> Any:
     if _depth > _MAX_RESULT_DEPTH:
         return PLACEHOLDER
     if isinstance(result, str):
-        return redact(result) if result else result
+        return redact_result_text(result) if result else result
     if isinstance(result, dict):
         return {
             key: value if key in _BINARY_RESULT_KEYS else redact_tool_result(value, _depth + 1)

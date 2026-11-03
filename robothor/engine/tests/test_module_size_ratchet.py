@@ -116,9 +116,10 @@ CAPS = {
     # the same ceiling, so it was always that cluster. The ratchet asked for an
     # extraction rather than a bigger number, and got one.
     # 1082 -> 1047: re-measured after the catch-up fold (flag paths removed).
-    # -> 1035: the reply-quote step moved to telegram_turn.with_reply_quote.
+    # -> 1035 -> 1034: the reply-quote step moved to telegram_turn.with_reply_quote.
     # 1047 -> 1032: re-measured with the credential-intake refold.
-    "robothor/engine/telegram_handlers.py": 1032,
+    # 1032 -> 1031: re-measured with the credential-intake refold.
+    "robothor/engine/telegram_handlers.py": 1031,
     # 900 -> 872: re-measured after the catch-up fold (flag paths removed).
     "robothor/engine/telegram_plan_mode.py": 872,
     # 1100 -> 1048: the deliverable-contract cluster (the ladder, the guardrail

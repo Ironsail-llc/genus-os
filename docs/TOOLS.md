@@ -1582,20 +1582,24 @@ have read an email, a web page or some other tool output:
 - **Where:** a top-level run that person started by typing in chat.
 - **What, this turn, typed:** intake reads only the text the person typed
   this turn. A quoted message they replied to, the text of a file they attached
-  and a forwarded block are not theirs, so nothing in them counts. `vault_set`
-  only stores a value that text carries as a whole token (not inside a longer
-  word), that is credential-sized (16 characters or more, or 8 or more with a
-  character that is not a letter or digit, and never letters alone), and that
-  sits beside a name for this key: `NAME=value`, `name: value`, or in the same
-  clause (no newline or `.`, `;`, `!`, `?` between them) within six words of
-  the vault key, a reader's name such as `OPENWEATHER_API_KEY`, or the vendor.
-  A vendor named in another clause does not qualify another key. Otherwise
-  `gate: not_handed_over`, so a value that came from a tool result, a file or a
-  quote is refused. `vault_delete` only removes a key when the typed text asks
-  for a removal (delete, remove, revoke, forget, drop, clear, rotate out) and
-  names it, and `vault_list` only lists when it asks for a list; otherwise
-  `gate: not_requested`. `vault_get` and `vault_test` never return a value and
-  are not narrowed.
+  and a forwarded message (Telegram's `forward_origin`, `forward_from` or
+  `forward_date`) are not theirs, so nothing in them counts. `vault_set` only
+  stores a value that text carries as a whole token (not inside a longer word),
+  that is credential-sized (16 characters or more, or 8 or more with a
+  character that is not a letter or digit, and never letters alone), that is
+  not a URL or a path, and that sits beside a name for this key in a different
+  token: `NAME=value`, or in the same clause (no newline or `.`, `;`, `!`, `?`
+  between them) within six words of the vault key, a reader's name such as
+  `OPENWEATHER_API_KEY`, or the vendor, where the clause also says it is a
+  credential (key, token, secret, credential, password, API key, or the value
+  right after `name:`). A vendor named in another clause, or only inside the
+  value itself, does not qualify. Otherwise `gate: not_handed_over`, so a value
+  that came from a tool result, a file, a quote or a forward is refused.
+  `vault_delete` only removes a key when the typed text asks for a removal
+  (delete, remove, revoke, forget, drop, clear, rotate out) and names it, and
+  `vault_list` only lists when it asks for a list; otherwise `gate:
+  not_requested`. `vault_get` and `vault_test` never return a value and are not
+  narrowed.
 
 Every refusal carries `gate` and `unlock`, the sentence the agent can pass on.
 See [Configuration](configuration.md) for the rest of the rule.
@@ -1607,14 +1611,20 @@ which records a Telegram message's length, never its text.
 
 **Every tool result is redacted too.** A tool that returns normally can still
 carry a credential: `exec` printing a CLI credentials file, a provider error
-echoing its headers. Each result passes the same secrets redactor (credential
-shapes and every value the vault has been handed) before it reaches the
-agent's context, the run's step row, the effects record, the live tool stream
-or a checkpoint. A call through `tool_call` is treated as the tool it reaches.
-The only exception is a tool on `SECRET_RESULT_TOOLS` (in
-`robothor/engine/session.py`), whose result the agent must read: it reaches the
-agent unchanged and is still masked wherever it is stored. The list is empty;
-`vault_get` and `vault_test` return a fingerprint, never a value.
+echoing its headers. Each result passes the secrets redactor before it reaches
+the agent's context, the run's step row, the effects record, the live tool
+stream or a checkpoint: every value the vault has been handed, every credential
+shape the redactor knows, and a `NAME=value` assignment only when the value
+itself looks like a credential (16 characters or more, mixing at least two of
+lower case, upper case and digits, and not a reference such as `$TOKEN` or
+`${API_KEY}`). An unquoted identifier, dotted name, call or number is code and
+is left alone, so `api_key = settings.api_key` reaches the agent as written and
+a file it reads and writes back comes back byte for byte. A call through
+`tool_call` is treated as the tool it reaches. The only exception is a tool on
+`SECRET_RESULT_TOOLS` (in `robothor/engine/session.py`), whose result the agent
+must read: it reaches the agent unchanged and is still masked wherever it is
+stored. The list is empty; `vault_get` and `vault_test` return a fingerprint,
+never a value.
 
 ### Everything else
 

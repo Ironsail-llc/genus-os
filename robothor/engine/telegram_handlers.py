@@ -41,6 +41,7 @@ from robothor.engine.chat_store import (
 from robothor.engine.task_registry import get_task_registry
 from robothor.engine.telegram_attachments import _extract_pdf_text as _extract_pdf_text
 from robothor.engine.telegram_grades import format_agent_grades as format_agent_grades
+from robothor.engine.telegram_turn import forwarded, with_reply_quote
 
 logger = logging.getLogger(__name__)
 
@@ -875,7 +876,7 @@ class TelegramHandlersMixin:
         # to the model, and the person who typed the message saw nothing.
         docked = marker_truncated(user_text)
         user_text = protect_payment_text(user_text)
-        typed_text = user_text  # before a bundle or reply quote: intake reads only this
+        typed_text = "" if forwarded(message) else user_text  # intake reads only this
         if docked:
             await message.answer(
                 "I stopped reading that message at the line starting with /secure and "
@@ -945,8 +946,6 @@ class TelegramHandlersMixin:
         session = get_shared_session(session_key)
 
         # ── Channel-bus reply resolution: a compact quote of a fleet surface ──
-        from robothor.engine.telegram_turn import with_reply_quote
-
         user_text = await with_reply_quote(self, chat_id, message, user_text)
 
         # Remember this Telegram message id so the drain can record an
