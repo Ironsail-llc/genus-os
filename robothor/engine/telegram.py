@@ -63,12 +63,16 @@ if TYPE_CHECKING:
     from robothor.identity import IdentityContext
 
 from robothor.engine.telegram_attachments import TelegramAttachmentsMixin  # noqa: E402
+from robothor.engine.telegram_delivery import (  # noqa: E402
+    TelegramDeliveryMixin,
+)
 from robothor.engine.telegram_handlers import (  # noqa: E402
     AVAILABLE_MODELS,
     TelegramHandlersMixin,
 )
 from robothor.engine.telegram_live import TelegramLiveFollowupMixin  # noqa: E402
 from robothor.engine.telegram_plan_mode import TYPING_INTERVAL, PlanModeMixin  # noqa: E402
+from robothor.engine.telegram_turn import forget_pending, run_sender  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +81,6 @@ logger = logging.getLogger(__name__)
 MAX_MESSAGE_LENGTH = TELEGRAM_MAX_MESSAGE_LENGTH
 THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
 
-# Delivery status written onto an interactive run when the Telegram send
-# reported nothing sent. ``TelegramBot.send_message`` swallows per-chunk
-# exceptions and returns an empty list on total failure, so "no messages"
-# is the only signal a lost reply gives us.
-INTERACTIVE_SEND_FAILED_STATUS = "failed: telegram send returned no messages"
 
 # Closed-onboarding operator notification rate limit (Task 4, Unified
 # Identity Context) -- at most one alert per unregistered sender per hour.
@@ -130,7 +129,11 @@ def _format_checklist_html(todos: list[dict[str, str]]) -> str:
 
 
 class TelegramBot(
-    TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin, TelegramLiveFollowupMixin
+    TelegramAttachmentsMixin,
+    TelegramHandlersMixin,
+    PlanModeMixin,
+    TelegramLiveFollowupMixin,
+    TelegramDeliveryMixin,
 ):
     """Aiogram v3 Telegram bot for Genus OS."""
 
@@ -153,6 +156,7 @@ class TelegramBot(
         # Message coalescing — Telegram splits long messages into chunks.
         # Buffer them and drain before acting so fragments become one run.
         self._message_buffers: dict[str, list[str]] = {}  # chat_id → queued texts
+        self._typed_buffers: dict[str, list[str]] = {}  # chat_id → what was typed
         self._drain_scheduled: dict[str, bool] = {}  # chat_id → drain task pending
 
         # Channel-bus reply context: when the user taps "Reply" on a surfaced
@@ -267,8 +271,12 @@ class TelegramBot(
         *,
         sender_info: dict[str, Any] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        typed_text: str = "",
     ) -> None:
         """Buffer a message and schedule a drain if none is pending.
+
+        ``typed_text`` is what the person typed (no reply quote, no file text);
+        it rides beside ``user_text`` and reaches the run as ``typed_message``.
 
         ``attachments`` are the rows ``robothor.engine.attachments`` wrote for
         files that arrived with this message. They EXTEND rather than replace:
@@ -292,6 +300,7 @@ class TelegramBot(
         if await self._join_live_run(chat_id, user_text, sender_info, attachments):
             return
         self._message_buffers.setdefault(chat_id, []).append(user_text)
+        self._typed_buffers.setdefault(chat_id, []).append(typed_text)
         if sender_info is not None:
             self._pending_sender_info[chat_id] = sender_info
         if attachments:
@@ -329,6 +338,7 @@ class TelegramBot(
             return
 
         combined_text = "\n".join(buf)
+        typed_text = "\n".join(t for t in self._typed_buffers.pop(chat_id, []) if t)
         reply_ctx = self._reply_context_buffers.pop(chat_id, None)
         user_message_id = self._user_message_id_buffers.pop(chat_id, None)
         # Popped in the same synchronous stretch as `buf` above — no await
@@ -349,50 +359,8 @@ class TelegramBot(
             user_message_id=user_message_id,
             sender_info=sender_info,
             attachments=attachment_rows,
+            typed_text=typed_text,
         )
-
-    async def _record_interactive_delivery(self, run: Any, sent: Any) -> None:
-        """Record whether an interactive reply actually reached Telegram.
-
-        ``delivery.deliver()`` is only wired into the hook, workflow and
-        scheduler paths — it never runs for an interactive chat turn — so
-        without this every ``trigger_type='telegram'`` run carried
-        ``delivery_status IS NULL`` and a reply that never landed looked
-        exactly like one that did.
-
-        Truth comes from the sender's return value, not from reaching the
-        line after the send: ``TelegramBot.send_message`` swallows per-chunk
-        exceptions and returns one ``Message`` per delivered chunk (``[]``
-        when every chunk failed). Same discipline as
-        ``robothor.engine.alerts._send_telegram``'s ``delivered = bool(sent)``.
-
-        Bookkeeping only — never raises, so a DB hiccup cannot turn a
-        successful reply into an error for the operator.
-
-        Args:
-            run: The ``AgentRun`` this reply belongs to. ``None`` is a no-op
-                (the run may not exist yet when an early failure replies).
-            sent: Whatever ``TelegramBot.send_message`` returned.
-        """
-        if run is None:
-            return
-        try:
-            delivered = bool(sent)
-            run.delivery_status = "delivered" if delivered else INTERACTIVE_SEND_FAILED_STATUS
-            run.delivered_at = datetime.now(UTC) if delivered else None
-            run.delivery_channel = "telegram"
-            if not delivered:
-                logger.warning(
-                    "Interactive Telegram reply reported no sent messages (run=%s)",
-                    getattr(run, "id", None),
-                )
-            # Imported here (not at module scope) so the DB write stays a
-            # lazy dependency and tests can patch it at its source module.
-            from robothor.engine.delivery import _persist_delivery_status
-
-            await _persist_delivery_status(run)
-        except Exception as e:
-            logger.warning("Interactive delivery bookkeeping failed: %s", e)
 
     async def _run_interactive(
         self,
@@ -405,6 +373,7 @@ class TelegramBot(
         user_message_id: str | None = None,
         sender_info: dict[str, Any] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        typed_text: str = "",
     ) -> None:
         """Execute an interactive agent run with streaming, typing indicator, and history management.
 
@@ -535,26 +504,12 @@ class TelegramBot(
                 async with _lock:
                     history = list(session.history)
 
-                # Build trigger_detail with sender identity for warmup
-                # Task 4: prefer the identity threaded through explicitly for
-                # THIS message (captured in the handler, before any async
-                # gap) over the shared, chat_id-keyed cache — a caller that
-                # bypasses the coalescing buffer (direct _run_interactive
-                # call, no sender_info) falls back to the cache unchanged.
-                _user = (
-                    sender_info if sender_info is not None else self._chat_user_info.get(chat_id)
-                )
-                _sender = _user["display_name"] if _user else ""
-                _detail = f"chat:{chat_id}"
-                if _sender:
-                    _safe = _sender.replace("|", "")
-                    _detail += f"|sender:{_safe}"
-                _tenant = (_user.get("tenant_id") if _user else None) or self._get_tenant_id(
-                    chat_id
-                )
+                # trigger_detail with sender identity for warmup; THIS message's
+                # sender over the shared cache (see telegram_turn.run_sender).
+                _user, _detail, _tenant = run_sender(self, chat_id, sender_info)
 
                 # Unified identity context (robothor.identity) — built from the
-                # same cached lookup_user()/fallback dict as _sender/user_id
+                # same cached lookup_user()/fallback dict as _user/user_id
                 # above. `verified` reflects whether _user came from a real
                 # tenant_users row (carries `user_id`) vs. a fabricated
                 # fallback (unregistered sender, primary-chat/group default).
@@ -585,6 +540,7 @@ class TelegramBot(
                     user_role=str((_user or {}).get("role") or "user"),
                     identity=_identity,
                     live_inbox=inbox,
+                    typed_message=typed_text,
                 )
                 run_for_delivery = run
                 self._seal_live_inbox(chat_id, inbox)  # later messages are a new turn
@@ -1948,7 +1904,7 @@ class TelegramBot(
             polling_stop_timeout = POLLING_STOP_TIMEOUT_SECONDS
         # Clear message buffers and cancel all active tasks
         self._drop_all_live_inboxes()  # first: a cancelled run's finally requeues them
-        self._message_buffers.clear()
+        forget_pending(self)
         self._drain_scheduled.clear()
         self._attachment_buffers.clear()
         # An album timer outliving the bot would fire into a closed session.

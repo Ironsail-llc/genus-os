@@ -366,6 +366,55 @@ Everything else is refused, including any sub-agent one of them spawns — a
 spawned child runs under its own agent id, so its own manifest is what is
 checked.
 
+**Credential intake in chat** is the second way through, and the only other
+one. The default chat agent (`ROBOTHOR_DEFAULT_CHAT_AGENT`) may use the vault
+tools without the tier when all three hold: the person in the conversation is
+an `owner` or `admin`, the run is a top-level run a person started by typing in
+chat (webchat, Telegram, Slack, a plugin channel or the IDE), and the run has
+no parent. The person must be one the channel verified as registered: a
+signed-in webchat or IDE account, or a sender registered with `genus user add`.
+An unregistered Telegram sender in the operator's default chat is given the
+`owner` role but not verified, and is refused; so is a run whose channel
+carries no verified identity at all. The CLI and API triggers do not count: the
+same trigger type carries unattended resumes that run as `owner`. A member or
+viewer, a sub-agent, and a cron, hook or workflow run of the same agent are
+refused.
+
+Intake is also held to what the person TYPED this turn, never to what a tool
+returned and never to the rest of the assembled turn: each channel passes the
+person's own text apart from a quoted message they replied to, an attached
+file's text and a forwarded message, and only that text counts. `vault_set`
+stores a value only when that text carries it as a whole token (not part of a
+longer word), the value is credential-sized (at least 16 characters, or at
+least 8 when it has a character that is not a letter or digit, and never
+letters alone), the value is not a URL or a path, and it sits beside a name for
+where it goes, in a token of its own: `NAME=value`, or the same clause (no
+newline or `.`, `;`, `!`, `?` between them) within six words of the vault key,
+a reader's name such as `OPENWEATHER_API_KEY`, or the vendor, where the clause
+also says it is a credential (key, token, secret, credential, password, or the
+value right after `name:`). "Review https://github.com/acme/app/pull/9" names
+GitHub only inside the value, and hands nothing over. "My openweather key is X;
+openrouter is fine as is" stores X for openweather and never for openrouter.
+`vault_delete` removes a key only when that text asks for a removal (delete,
+remove, revoke, forget, drop, clear, rotate out) and names it, and `vault_list`
+lists only when it asks for a list. So an instruction injected into an email, a
+web page, a file or a quoted message can make the agent store, remove or list
+only what the person typed. Every refusal carries `gate` (`chat_agent`, `role`,
+`unverified_sender`, `human_chat`, `not_handed_over` or `not_requested`) and
+`unlock`, the sentence the agent can give the person. There is no switch for
+any of it; see
+[Tools](TOOLS.md#credentials-vault_get-vault_set-vault_test-vault_list-vault_delete).
+
+A value stored with `vault_set` is then redacted by value, as
+`<redacted:b2:xxxxxxxx>`, from every later redaction pass (history, stored chat
+messages, the run's task text, logs) — which is what takes a key with no
+recognisable shape, such as 32 bare hex characters, out of the places the
+person's message reached. Each row records `stored_by`, `via` and `run_id` in
+its metadata, and `vault_get` returns them with `last_resolved_at`, when a
+reader in the engine was last served the credential under any name that
+resolves to that row. A `vault_test` probe does not count as use, the stamp is
+per process, and writing a credential clears its own stamp only.
+
 This is deliberately **not** the `role:` field. `role:` feeds RBAC, and setting
 it to a value no `role_permissions` row seeds (`main`, `operator`) denies that
 agent *every* tool under `ROBOTHOR_RBAC_MODE=enforce`. Two postures, two

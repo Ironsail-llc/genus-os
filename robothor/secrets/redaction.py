@@ -33,13 +33,21 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+from collections import OrderedDict
 from typing import Any
 
 __all__ = [
+    "MAX_KNOWN_VALUES",
+    "MIN_KNOWN_VALUE_CHARS",
     "PLACEHOLDER",
     "SECRET_TOOL_ARGUMENTS",
     "cut_private_input",
+    "forget_known_values",
+    "known_value_count",
     "redact",
+    "redact_known_value",
+    "register_known_value",
     "redact_assistant_turn",
     "redact_message",
     "redact_tool_arguments",
@@ -320,6 +328,74 @@ _SHAPES = (
 _CREDENTIAL_SHAPED = re.compile("|".join(_SHAPES), re.IGNORECASE)
 
 
+# ── known values ─────────────────────────────────────────────────────────────
+#
+# The exception to "shapes, not values" above, and a narrow one: a credential
+# this process has been HANDED and stored. A weather or maps key is often 32
+# bare hex characters with no prefix, so the shape pass cannot see it; once the
+# vault holds it the process knows the exact characters, and every later
+# ``redact`` takes them out. Registered by ``vault_set`` only.
+
+#: Shorter than this is not registered: a short value is an ordinary word, and
+#: redacting it would eat text out of every log line on the instance.
+MIN_KNOWN_VALUE_CHARS = 8
+
+#: How many values are held. Oldest first out. The process already holds each
+#: one in the vault cache; this bounds how many it holds HERE.
+MAX_KNOWN_VALUES = 256
+
+_known_lock = threading.Lock()
+_known: OrderedDict[str, str] = OrderedDict()
+#: Longest first, so a value that contains another is replaced whole. Rebuilt
+#: on every registration; read without the lock as an immutable snapshot.
+_known_snapshot: tuple[tuple[str, str], ...] = ()
+
+
+def redact_known_value(text: str, value: str, replacement: str) -> str:
+    """``text`` with every occurrence of ``value`` replaced."""
+    if not text or not value:
+        return text
+    return text.replace(value, replacement)
+
+
+def register_known_value(value: str, *, fingerprint: str) -> bool:
+    """Redact ``value`` from every later :func:`redact` call, as its fingerprint.
+
+    Returns False, and registers nothing, for a value under
+    :data:`MIN_KNOWN_VALUE_CHARS` once stripped.
+    """
+    global _known_snapshot  # noqa: PLW0603
+    cleaned = (value or "").strip()
+    if len(cleaned) < MIN_KNOWN_VALUE_CHARS:
+        return False
+    with _known_lock:
+        _known.pop(cleaned, None)
+        _known[cleaned] = f"<redacted:{fingerprint}>"
+        while len(_known) > MAX_KNOWN_VALUES:
+            _known.popitem(last=False)
+        _known_snapshot = tuple(sorted(_known.items(), key=lambda kv: -len(kv[0])))
+    return True
+
+
+def forget_known_values() -> None:
+    """Drop every registered value. For the suite."""
+    global _known_snapshot  # noqa: PLW0603
+    with _known_lock:
+        _known.clear()
+        _known_snapshot = ()
+
+
+def known_value_count() -> int:
+    return len(_known_snapshot)
+
+
+def _redact_known(text: str) -> str:
+    for value, replacement in _known_snapshot:
+        if value in text:
+            text = text.replace(value, replacement)
+    return text
+
+
 def redact(text: str) -> str:
     """``text`` with every credential-shaped run replaced by :data:`PLACEHOLDER`.
 
@@ -352,7 +428,8 @@ def redact(text: str) -> str:
         # it goes — as a plain placeholder. Truncating a log at an attacker's
         # ``/secure`` and replacing the tail with an advisory sentence was the
         # same injection surface as the payment prose.
-        named = _ASSIGNMENT.sub(_redact_assignment, cut_private_input(text))
+        known = _redact_known(text) if _known_snapshot else text
+        named = _ASSIGNMENT.sub(_redact_assignment, cut_private_input(known))
         return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
     except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
         # If this ever somehow raises, printing nothing beats printing a token.
@@ -544,21 +621,185 @@ def redact_tool_arguments(tool_name: str, arguments: Any) -> Any:
     wrote stays readable for the same reason — an operator has to be able to see
     which row changed.
 
+    Redacts the EFFECTIVE tool's arguments, not the wrapper's: on a deferred run
+    the model reaches ``vault_set`` as ``tool_call {name: vault_set, arguments:
+    {…}}``, and every site that calls this sees the name ``tool_call``. See
+    :func:`_redact_call`.
+
     Never mutates its input: the handler has already run by the time this is
     called, but a redactor that edited in place would be one refactor away from
     redacting a credential before the vault got it.
     """
     if not isinstance(arguments, dict):
         return arguments
-    named = SECRET_TOOL_ARGUMENTS.get(tool_name, frozenset())
+    return _redact_call(tool_name, arguments, 0)
+
+
+#: How deep a nested argument is followed. Past it, the value is the placeholder:
+#: nothing legitimate nests this far, and a redactor that gave up by passing the
+#: rest through would be the hole it exists to close.
+_MAX_ARGUMENT_DEPTH = 16
+
+
+def _redact_call(tool_name: str, arguments: dict[Any, Any], depth: int) -> dict[str, Any]:
+    """One call's arguments, redacted as the tool ``tool_name`` would need.
+
+    A dict that carries a string ``name`` and an ``arguments`` field is a call
+    to that named tool — ``tool_call {name: vault_set, arguments: {…}}`` on a
+    deferred run, or a wrapper of a wrapper — so its ``arguments`` are redacted
+    as the EFFECTIVE tool's, not the wrapper's. Everything else nested is
+    followed too: a credential one level down is still a credential.
+    """
+    # Stripped as the dispatcher strips it: ``tool_call`` runs `` vault_set``.
+    named = SECRET_TOOL_ARGUMENTS.get(tool_name.strip(), frozenset())
+    inner = arguments.get("name")
+    inner_name = inner if isinstance(inner, str) and "arguments" in arguments else None
     cleaned: dict[str, Any] = {}
     for key, value in arguments.items():
         if key in named or _argument_reads_as_a_credential(str(key)):
             cleaned[key] = PLACEHOLDER
-        elif isinstance(value, str):
+        elif key == "arguments" and inner_name is not None:
+            cleaned[key] = _redact_wrapped_arguments(inner_name, value, depth + 1)
+        else:
             # A credential the model pasted into an ordinary argument still
             # goes; this is the same pass every log line already gets.
-            cleaned[key] = redact(value)
-        else:
-            cleaned[key] = value
+            cleaned[key] = _redact_value(value, depth + 1)
     return cleaned
+
+
+def _redact_wrapped_arguments(tool_name: str, value: Any, depth: int) -> Any:
+    """A wrapper's ``arguments``: an object, or the JSON string of one."""
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return redact(value)
+        if isinstance(parsed, str):
+            # A JSON string of a JSON string: one more encoding is one more
+            # level, and what it wraps is still a call's arguments.
+            return json.dumps(_redact_wrapped_arguments(tool_name, parsed, depth + 1))
+        if not isinstance(parsed, dict):
+            return redact(value)
+        if depth > _MAX_ARGUMENT_DEPTH:
+            # Same rule as the dict branch: past the cap the whole call is
+            # the placeholder, never a shape-only pass over its text.
+            return PLACEHOLDER
+        return json.dumps(_redact_call(tool_name, parsed, depth))
+    if isinstance(value, dict) and depth <= _MAX_ARGUMENT_DEPTH:
+        return _redact_call(tool_name, value, depth)
+    return _redact_value(value, depth)
+
+
+def _redact_value(value: Any, depth: int) -> Any:
+    if isinstance(value, str):
+        return redact(value)
+    if not isinstance(value, (dict, list, tuple)):
+        return value
+    if depth > _MAX_ARGUMENT_DEPTH:
+        return PLACEHOLDER
+    if isinstance(value, dict):
+        return _redact_call("", value, depth)
+    return [_redact_value(item, depth + 1) for item in value]
+
+
+#: Keys whose value is binary data in text form (an image), never prose: the
+#: shape pass could cut a base64 run that happens to look like a token.
+_BINARY_RESULT_KEYS = frozenset({"image_base64", "screenshot_base64"})
+
+#: Deeper than any real tool result; past it the value is the placeholder.
+_MAX_RESULT_DEPTH = 32
+
+
+#: An unquoted assignment's right side that is code, not a value: anything that
+#: starts with a name or dotted name and a ``(`` or ``[`` (a call or subscript,
+#: whatever its arguments: ``secrets.token_urlsafe(32``, ``os.environ[``), a
+#: dotted name, a number, or a plain identifier with no digit in it
+#: (``parse``, ``default_token``). A quoted value is a literal and never counts.
+_VALUE_IS_CODE = re.compile(
+    r"^(?:[A-Za-z_][\w.]*[(\[].*|[A-Za-z_]\w*(?:\.\w+)+|[A-Za-z_][A-Za-z_]*|[-+]?\d[\d_.]*)$",
+    re.DOTALL,
+)
+
+
+def _value_looks_like_a_credential(body: str, *, quoted: bool) -> bool:
+    """Whether an assignment's value is itself credential-like.
+
+    At least 16 characters, not a reference, not code (unquoted only), and
+    mixing at least two of lower case, upper case and digits. A placeholder
+    like ``change-me-in-production`` is one class plus hyphens, and stays.
+    """
+    if len(body) < 16 or _VALUE_IS_A_REFERENCE.match(body):
+        return False
+    if not quoted and _VALUE_IS_CODE.match(body):
+        return False
+    classes = sum(any(test(ch) for ch in body) for test in (str.islower, str.isupper, str.isdigit))
+    return classes >= 2
+
+
+def _redact_result_assignment(match: re.Match[str]) -> str:
+    quote = match.group("quote")
+    body = match.group("quoted") if quote else match.group("value")
+    if not body or not _value_looks_like_a_credential(body, quoted=bool(quote)):
+        return match.group(0)
+    return _redact_assignment(match)
+
+
+def redact_result_text(text: str) -> str:
+    """:func:`redact` for text a tool returned: data, not a log line.
+
+    The same known-value and credential-shape passes, but the ``NAME=value``
+    pass only takes a value that itself looks like a credential. A tool result
+    is often source code, and ``api_key = settings.api_key`` rewritten to
+    ``api_key = <redacted>`` is code the model then edits and writes back
+    into the person's files.
+    """
+    if not text:
+        return text
+    try:
+        known = _redact_known(text) if _known_snapshot else text
+        named = _ASSIGNMENT.sub(_redact_result_assignment, cut_private_input(known))
+        return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
+    except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
+        return PLACEHOLDER
+
+
+def redact_tool_result(result: Any, _depth: int = 0) -> Any:
+    """A copy of a tool result with every string passed through :func:`redact_result_text`.
+
+    A tool that returns normally can still carry a credential: ``exec`` that
+    prints a CLI credentials file, a provider error that echoes its request
+    headers. Nothing stored or replayed may keep it, so the step writer, the
+    effects writer, the live stream and the model's context all take this
+    copy. Dict keys and non-string leaves are kept; an image's base64 is kept
+    as data. Never mutates its input.
+    """
+    if _depth > _MAX_RESULT_DEPTH:
+        return PLACEHOLDER
+    if isinstance(result, str):
+        return redact_result_text(result) if result else result
+    if isinstance(result, dict):
+        return {
+            key: value if key in _BINARY_RESULT_KEYS else redact_tool_result(value, _depth + 1)
+            for key, value in result.items()
+        }
+    if isinstance(result, (list, tuple)):
+        return [redact_tool_result(value, _depth + 1) for value in result]
+    return result
+
+
+#: An opaque run: 32 or more of the characters keys are made of (hex,
+#: base64url, ``+``), with a letter and a digit in it. A bare 32-hex weather
+#: key has no shape the shape pass can see. Not for logs or tool results,
+#: where git SHAs and checksums are information; only for what a PERSON typed
+#: once it is at rest. A canonical UUID is an identifier and is kept.
+_OPAQUE_RUN = re.compile(
+    r"(?<![A-Za-z0-9_+=-])(?=[A-Za-z0-9_+-]*\d)(?=[A-Za-z0-9_+-]*[A-Za-z])[A-Za-z0-9_+-]{32,}={0,2}(?![A-Za-z0-9_+=-])"
+)
+_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def redact_opaque_runs(text: str) -> str:
+    """``text`` with every opaque run (see :data:`_OPAQUE_RUN`) replaced."""
+    if not text:
+        return text
+    return _OPAQUE_RUN.sub(lambda m: m.group(0) if _UUID.match(m.group(0)) else PLACEHOLDER, text)

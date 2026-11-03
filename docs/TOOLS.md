@@ -857,11 +857,13 @@ own message — **redacted** through the platform's credential redactor and then
 capped. So does every `analyze_image` row that failed: the batch is the worse
 half, because a 401 fails every image, and a failed row is copied into the
 result, the journal **and** the spilled table on disk that the tool tells you
-to open. A provider's 401 carries the request headers and the api_key, and
-nothing redacts a tool result that returns normally, so the redaction happens
-here, before the text reaches the agent's context, the run's step ledger or the
-journal. Redacting after the cap would be worse than useless: a cut can slice a
-token in half and leave a prefix the redactor no longer recognises. Model names
+to open. A provider's 401 carries the request headers and the api_key. Every
+tool result is redacted before it is stored or shown to the agent (see
+[Credentials](#credentials-vault_get-vault_set-vault_test-vault_list-vault_delete)),
+but that pass sees the text after the cap, so this message is redacted here
+first, before it reaches the journal and the spilled table as well. Redacting
+after the cap would be worse than useless: a cut can slice a token in half and
+leave a prefix the redactor no longer recognises. Model names
 are quoted back, because an operator needs them and they are not secrets.
 
 **Both vision tools refuse the same files.** A path that resolves outside the
@@ -1363,6 +1365,70 @@ read; the plugins the loader reports are still listed. The tool is read-only.
 "which plugin ships agent or workflow Y?". Use `tool_search` to find a tool by
 what it does, whatever provides it. [Plugins](PLUGINS.md#seeing-what-a-plugin-shipped)
 covers the same data on the dashboard and the admin API.
+
+### Credentials: `vault_get`, `vault_set`, `vault_test`, `vault_list`, `vault_delete`
+
+An agent whose own manifest declares `v2.credentials: operator` holds these
+tools outright. The default chat agent holds them only for credential intake,
+which is narrower on purpose, because by the time the agent calls one it may
+have read an email, a web page or some other tool output:
+
+- **Who:** an `owner` or `admin` the channel verified as a registered person
+  (a signed-in webchat account, or a sender `genus user add` registered). A
+  sender Telegram fills in as the owner without a registration is refused
+  with `gate: unverified_sender`.
+- **Where:** a top-level run that person started by typing in chat.
+- **What, this turn, typed:** intake reads only the text the person typed
+  this turn. A quoted message they replied to, the text of a file they attached
+  and a forwarded message (Telegram's `forward_origin`, `forward_from` or
+  `forward_date`) are not theirs, so nothing in them counts. `vault_set` only
+  stores a value that text carries as a whole token (not inside a longer word),
+  that is credential-sized (16 characters or more, or 8 or more with a
+  character that is not a letter or digit, and never letters alone), that is
+  not a URL or a path, and that sits beside a name for this key in a different
+  token: `NAME=value`, or in the same clause (no newline or `.`, `;`, `!`, `?`
+  between them) within six words of the vault key, a reader's name such as
+  `OPENWEATHER_API_KEY`, or the vendor, where the clause also says it is a
+  credential (key, token, secret, credential, password, API key, or the value
+  right after `name:`). A vendor named in another clause, or only inside the
+  value itself, does not qualify. Otherwise `gate: not_handed_over`, so a value
+  that came from a tool result, a file, a quote or a forward is refused.
+  `vault_delete` only removes a key when the typed text asks for a removal
+  (delete, remove, revoke, forget, drop, clear, rotate out) and names it, and
+  `vault_list` only lists when it asks for a list; otherwise `gate:
+  not_requested`. `vault_get` and `vault_test` never return a value and are not
+  narrowed.
+
+Every refusal carries `gate` and `unlock`, the sentence the agent can pass on.
+See [Configuration](configuration.md) for the rest of the rule.
+
+The person's message reaches the model raw for that one turn, or the value
+could not be stored. Every copy kept after it is redacted: chat history, the
+recorded steps, run checkpoints (which resume reads back), and the engine log,
+which records a Telegram message's length, never its text. A checkpoint is
+redacted again when it is read back: the reading process first registers every
+credential-like value the vault stores (not the identifiers it also holds, such
+as a tenant id or a chat id), so a value handed over before a restart is still
+caught, and what the person typed also loses any opaque run of 32 or more key
+characters (a bare hex key has no other shape; a UUID is kept, and tool results
+keep their hashes).
+
+**Every tool result is redacted too.** A tool that returns normally can still
+carry a credential: `exec` printing a CLI credentials file, a provider error
+echoing its headers. Each result passes the secrets redactor before it reaches
+the agent's context, the run's step row, the effects record, the live tool
+stream or a checkpoint: every value the vault has been handed, every credential
+shape the redactor knows, and a `NAME=value` assignment only when the value
+itself looks like a credential (16 characters or more, mixing at least two of
+lower case, upper case and digits, and not a reference such as `$TOKEN` or
+`${API_KEY}`). An unquoted identifier, dotted name, call or number is code and
+is left alone, so `api_key = settings.api_key` reaches the agent as written and
+a file it reads and writes back comes back byte for byte. A call through
+`tool_call` is treated as the tool it reaches. The only exception is a tool on
+`SECRET_RESULT_TOOLS` (in `robothor/engine/session.py`), whose result the agent
+must read: it reaches the agent unchanged and is still masked wherever it is
+stored. The list is empty; `vault_get` and `vault_test` return a fingerprint,
+never a value.
 
 ### Everything else
 

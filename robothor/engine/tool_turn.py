@@ -52,6 +52,7 @@ from robothor.engine.session import ENGINE_CONTEXT_ROLE
 from robothor.engine.tool_outcome import error_text, record_tool_outcome
 from robothor.engine.tool_turn_context import tool_turn_context
 from robothor.engine.tools.read_only import declared_read_only_tools
+from robothor.secrets.redaction import redact_tool_arguments, redact_tool_result
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentConfig
@@ -285,15 +286,11 @@ class ToolTurnMixin:
         from robothor.engine.runner import _resolve_tool_timeout
 
         if req.on_tool:
+            # Redacted like the stored step: the live SSE stream must not carry a credential.
+            args = redact_tool_arguments(call.tool_name, call.tool_args)
+            event = {"event": "tool_start", "tool": call.tool_name, "args": args}
             with contextlib.suppress(Exception):
-                await req.on_tool(
-                    {
-                        "event": "tool_start",
-                        "tool": call.tool_name,
-                        "args": call.tool_args,
-                        "call_id": call.tc.id,
-                    }
-                )
+                await req.on_tool({**event, "call_id": call.tc.id})
 
         started = time.monotonic()
         timeout = _resolve_tool_timeout(
@@ -362,7 +359,7 @@ class ToolTurnMixin:
             state=req.guard_state,
         )
 
-        await self._dispatch_post_tool_hook(call, req, result)
+        await self._dispatch_post_tool_hook(call, req, redact_tool_result(result))
 
         # ── [COST] Propagate tool-reported costs (e.g., deep_reason RLM) ──
         if isinstance(result, dict) and not error_msg:
@@ -509,12 +506,12 @@ class ToolTurnMixin:
         if not req.on_tool:
             return
         try:
-            preview = json.dumps(result, default=str)
+            preview = json.dumps(redact_tool_result(result), default=str)
             if len(preview) > 2000:
                 preview = preview[:2000] + "..."
         except Exception as e:
             logger.warning("JSON serialization of tool result failed: %s", _sanitize(e))
-            preview = str(result)[:2000]
+            preview = str(redact_tool_result(result))[:2000]
         with contextlib.suppress(Exception):
             await req.on_tool(
                 {

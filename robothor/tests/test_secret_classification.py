@@ -138,3 +138,13 @@ def test_non_secret_names_exclude_every_declared_secret():
             )
     assert "ROBOTHOR_DB_HOST" in safe
     assert "ROBOTHOR_WORKSPACE" in safe
+
+
+@pytest.mark.parametrize("name", ["AUTH_JWT_SIGNING_KEY", "AUTH_MFA_ENCRYPTION_KEY"])
+def test_the_exports_of_auth_rows_are_bootstrap_structurally(name):
+    """``auth/*`` vault rows hold the session signing key and its kin; they
+    export as ``AUTH_*``. Removing or rotating one from a tool or a dashboard
+    signs everybody out and strands every stored MFA secret, so the whole
+    family is bootstrap, by prefix, like ``ROBOTHOR_VAULT_*``."""
+    assert is_bootstrap(name)
+    assert name.startswith(BOOTSTRAP_PREFIXES)

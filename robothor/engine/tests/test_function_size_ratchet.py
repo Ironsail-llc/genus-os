@@ -66,7 +66,7 @@ KNOWN_LARGE: dict[str, int] = {
     # run_lifecycle.spawn_post_stall_autodream ("recovery helper spawns" is
     # that module's own contract), which is what paid for classifying a
     # workflow-budget kill and letting it propagate.
-    "runner.py::execute": 986,  # +7: task_id propagated onto the run at INSERT time
+    "runner.py::execute": 973,  # -13: session seating moved to run_identity.seat_session
     # 775 -> 773 with the step-efficiency work: the guard's note drain, the
     # pace-note call site and the refusal branch cost less than the inlined
     # deadline and check-in blocks returned when they left for run_pacing.py.
@@ -105,7 +105,7 @@ KNOWN_LARGE: dict[str, int] = {
     # is what paid for owning SIGTERM in here (the handler install and the
     # stop-signal task) rather than raising this number for it.
     "daemon.py::main": 354,
-    "telegram.py::_run_interactive": 384,
+    "telegram.py::_run_interactive": 371,  # -13: the sender lookup is telegram_turn.run_sender
     # 343 -> 325: the benchmark break-out moved to _benchmark_spend, which is
     # what paid for un-scoping it from the production tenant (the graded
     # children now run as benchmark-sandbox) rather than raising this number.
@@ -158,7 +158,7 @@ KNOWN_LARGE: dict[str, int] = {
     # recording its attempts — so `duration_ms` means the provider attempt on
     # BOTH paths instead of one thing streamed and another not (review I5).
     "llm_client.py::_call_llm_streaming": 230,
-    "telegram.py::run_agent": 257,
+    "telegram.py::run_agent": 233,  # the sender lookup and its import moved to telegram_turn
     "tools/handlers/experiment.py::_experiment_commit": 256,
     "telegram.py::_handle_goal_command": 242,
     "managed_agents/runner.py::run_on_managed_agents": 241,

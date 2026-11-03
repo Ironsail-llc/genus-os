@@ -28,6 +28,17 @@ its own manifest is what is read. There is deliberately no
 ``vault_rotate_from_message`` tool — the assistant simply calls ``vault_set``
 with what it was handed, and the transcript redactor keeps the argument out of
 the stored step.
+
+The one other way through is credential intake: an owner or admin typing to
+the default chat agent in a top-level human chat run. That is decided from the
+run itself — the caller's ``user_role``, the agent id and the live session's
+trigger and parent — never from what the message says. A refusal under intake names the gate that held
+and what opens it, so the agent can tell the person instead of guessing.
+
+Once ``vault_set`` holds a value, the redactor knows it: every later
+``redact`` replaces the exact characters with the fingerprint, which is what
+takes a key with no recognisable shape out of the history, ``chat_messages``
+and the run's task text.
 """
 
 from __future__ import annotations
@@ -100,11 +111,153 @@ def credential_tier(agent_id: str) -> str:
     return str(v2.get(CREDENTIAL_TIER_KEY, "") or "").strip().lower()
 
 
-def _operator_denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
+#: This handler takes a credential from a person in chat: public marker for capability copy.
+CREDENTIAL_INTAKE = True
+
+#: The human roles that may hand the chat agent a credential. The same pair
+#: every operator surface admits (``crm/bridge/routers/_operator.py``).
+INTAKE_ROLES = frozenset({"owner", "admin"})
+
+
+def _default_chat_agent() -> str:
+    from robothor.engine.config import EngineConfig
+
+    return EngineConfig.from_env().default_chat_agent
+
+
+def _live_session(ctx: ToolContext) -> Any:
+    from robothor.engine.session_registry import lookup
+
+    run_id = getattr(ctx, "run_id", "") or ""
+    return lookup(run_id) if run_id else None
+
+
+def _intake_triggers() -> frozenset[Any]:
+    """The chat surfaces a person types a credential into.
+
+    ``HUMAN_AUTHORED_TRIGGERS`` minus ``MANUAL``: that one is the CLI, but also
+    the API trigger and resume endpoints and the unattended repair-resume of
+    the chat agent, which runs as ``owner`` with nobody typing.
+    """
+    from robothor.engine.chat_backstop import HUMAN_AUTHORED_TRIGGERS
+    from robothor.engine.models import TriggerType
+
+    return HUMAN_AUTHORED_TRIGGERS - {TriggerType.MANUAL}
+
+
+def _is_top_level_human_chat(session: Any) -> bool:
+    """A run a person started in chat, with no parent run above it."""
+    if session is None:
+        return False
+    run = session.run
+    return (
+        run.trigger_type in _intake_triggers()
+        and not run.parent_run_id
+        and not getattr(run, "nesting_depth", 0)
+    )
+
+
+def _is_registered_person(identity: Any) -> bool:
+    """A channel-verified identity with a registered person behind it.
+
+    Telegram hands an UNREGISTERED sender in the operator's default chat the
+    ``owner`` role with ``verified=False``; the legacy sender parse marks an
+    identity verified from an id and a role alone. Neither is a person the
+    instance knows, so neither may hand over a credential.
+    """
+    if identity is None or getattr(identity, "verified", False) is not True:
+        return False
+    return bool(
+        getattr(identity, "user_account_id", None) or getattr(identity, "tenant_user_id", None)
+    )
+
+
+def _intake_gate(ctx: ToolContext) -> str | None:
+    """The first credential-intake gate this call fails, or None if it passes.
+
+    ``chat_agent`` — this is not the default chat agent, so only the manifest
+    tier opens it; ``role`` — the human is not an owner or admin;
+    ``unverified_sender`` — the channel did not verify the sender as a
+    registered person (see :func:`_is_registered_person`); ``human_chat`` —
+    the run is not a top-level run a person started (a sub-agent, a cron, hook
+    or workflow run, or no live run at all). Read from the run and the
+    channel-resolved identity, never from message text.
+    """
+    if (getattr(ctx, "agent_id", "") or "") != _default_chat_agent():
+        return "chat_agent"
+    if (getattr(ctx, "user_role", "") or "") not in INTAKE_ROLES:
+        return "role"
+    identity = getattr(ctx, "identity", None)
+    if not _is_registered_person(identity):
+        return "unverified_sender"
+    if (getattr(identity, "role", "") or "") not in INTAKE_ROLES:
+        return "role"
+    if not _is_top_level_human_chat(_live_session(ctx)):
+        return "human_chat"
+    return None
+
+
+def _gated_refusal(ctx: ToolContext, tool: str, gate: str) -> dict[str, Any]:
+    """The refusal under credential intake: which gate held, and what opens it."""
+    role = getattr(ctx, "user_role", "") or ""
+    if gate == "role":
+        error = (
+            f"{tool} is refused: only an owner or admin of this instance may hand this "
+            f"agent a credential, and this conversation's role is {role or '(none)'!r}."
+        )
+        unlock = (
+            "An owner or admin sends the credential to the agent in chat, or an "
+            "operator stores it with `genus vault set <key>`."
+        )
+    elif gate == "unverified_sender" and getattr(ctx, "identity", None) is None:
+        error = f"{tool} is refused: this run has no verified sender behind it."
+        unlock = (
+            "This channel does not carry a verified identity for the run. The owner "
+            "or an admin hands the credential over in webchat or a registered "
+            "Telegram chat, or an operator stores it with `genus vault set <key>`."
+        )
+    elif gate == "unverified_sender":
+        error = (
+            f"{tool} is refused: the sender is not a registered person this channel "
+            "verified, whatever role the conversation carries."
+        )
+        unlock = (
+            "An operator registers the sender with `genus user add --name <name> "
+            "--role owner --telegram-id <id>` (or the matching channel identifier), "
+            "and they send the credential again."
+        )
+    elif gate in ("not_handed_over", "not_requested"):
+        from robothor.engine.tools.handlers.vault_intake import request_refusal
+
+        error, unlock = request_refusal(tool, gate)
+    elif gate == "chat_agent":
+        error = (
+            f"{tool} is refused: a credential handed over in chat is kept by the "
+            f"default chat agent ({_default_chat_agent()!r}), not by "
+            f"{getattr(ctx, 'agent_id', '') or '(unattributed)'!r}, whose manifest does "
+            f"not declare `{CREDENTIAL_TIER_KEY}: {OPERATOR_TIER}` under `v2:`."
+        )
+        unlock = (
+            "Hand it to the default chat agent, or an operator adds "
+            f"`{CREDENTIAL_TIER_KEY}: {OPERATOR_TIER}` under `v2:` in this agent's manifest."
+        )
+    else:
+        error = (
+            f"{tool} is refused: a credential is accepted only in a conversation a "
+            "person started directly, not in a scheduled, hook, workflow or sub-agent run."
+        )
+        unlock = "The owner or an admin sends the credential to the default chat agent in chat."
+    return {"error": error, "denied_by": "credential_tier", "gate": gate, "unlock": unlock}
+
+
+def _operator_denial(
+    ctx: ToolContext, tool: str, args: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     """``None`` when this caller may use the vault tools, else the refusal.
 
     Fails closed on every uncertainty: no agent id, no manifest, an unreadable
-    manifest directory, a tier that is not ``operator``. The alternative —
+    manifest directory, a tier that is not ``operator`` with a caller that does
+    not pass every credential-intake gate. The alternative —
     allowing when we cannot tell — is how a sub-agent ends up holding the
     instance's credentials. A spawned sub-agent runs under its OWN agent id, so
     its own manifest is what is read here; that is the sub-agent refusal, and
@@ -124,17 +277,26 @@ def _operator_denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
         tier = ""
     if tier == OPERATOR_TIER:
         return None
-    return {
-        "error": (
-            f"{tool} needs the operator credential tier and this agent does not have "
-            f"it (its manifest declares {tier or '(none)'!r}). An operator grants it "
-            f"by adding `{CREDENTIAL_TIER_KEY}: {OPERATOR_TIER}` under `v2:` in that "
-            "agent's manifest. Credentials are otherwise handled by the operator's "
-            "own agent: ask it to store, test or rotate this one, or use a tool that "
-            "holds the credential for you."
-        ),
-        "denied_by": "credential_tier",
-    }
+    gate = _intake_gate(ctx) or _request_gate(ctx, tool, args or {})
+    return None if gate is None else _gated_refusal(ctx, tool, gate)
+
+
+def _request_gate(ctx: ToolContext, tool: str, args: dict[str, Any]) -> str | None:
+    """What the person's own message this turn asked for, against ``tool``."""
+    from robothor.engine.tools.handlers.vault_intake import request_gate
+
+    return request_gate(tool, args, _typed_text(_live_session(ctx)))
+
+
+async def _denial(
+    ctx: ToolContext, tool: str, args: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """:func:`_operator_denial`, off the event loop.
+
+    It reads the agent's manifest from disk, which would stall every other run
+    on the loop thread.
+    """
+    return await asyncio.to_thread(_operator_denial, ctx, tool, args)
 
 
 def _resolve_env_name(key: str) -> str:
@@ -153,7 +315,7 @@ async def _vault_get(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     or a ``secrets:`` grant in its manifest — not the credential in its context
     window.
     """
-    denial = _operator_denial(ctx, "vault_get")
+    denial = await _denial(ctx, "vault_get", args)
     if denial:
         return denial
 
@@ -167,13 +329,57 @@ async def _vault_get(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     status = await asyncio.to_thread(
         status_for_key, key, tenant_id=getattr(ctx, "tenant_id", "") or ""
     )
+    meta = await asyncio.to_thread(_metadata, key, getattr(ctx, "tenant_id", "") or "")
     return {
         "key": key,
         "configured": status.configured,
         "fingerprint": status.fingerprint,
         "source": status.source,
         "updated_at": status.updated_at,
+        "stored_by": meta.get("stored_by"),
+        "via": meta.get("via"),
+        "last_resolved_at": _last_resolved_iso(key, getattr(ctx, "tenant_id", "") or ""),
     }
+
+
+def _metadata(key: str, tenant_id: str) -> dict[str, Any]:
+    """The row's audit metadata, or {} when there is none or it cannot be read."""
+    import robothor.vault as vault
+
+    kwargs: dict[str, Any] = {"tenant_id": tenant_id} if tenant_id else {}
+    try:
+        return dict(vault.get_metadata(key, **kwargs) or {})
+    except Exception as exc:  # noqa: BLE001 - a status answer without its audit half
+        logger.warning("vault_get: could not read the row's metadata (%s)", type(exc).__name__)
+        return {}
+
+
+def _last_resolved_iso(key: str, tenant_id: str) -> str | None:
+    """When a reader in this process was last served the credential, ISO-8601."""
+    from datetime import UTC, datetime
+
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.secrets import last_resolved_at
+
+    tenant = tenant_id or DEFAULT_TENANT
+    stamps = [at for name in _reader_names(key) if (at := last_resolved_at(name, tenant_id=tenant))]
+    return datetime.fromtimestamp(max(stamps), UTC).isoformat() if stamps else None
+
+
+def _reader_names(key: str) -> tuple[str, ...]:
+    """Every name a reader resolves this vault row by, plus its exported name."""
+    from robothor.vault.naming import env_names_for_vault_key, normalise_key
+
+    stored_at = normalise_key(key)
+    return (*env_names_for_vault_key(stored_at), _resolve_env_name(stored_at))
+
+
+def _forget_usage(key: str, tenant_id: str) -> None:
+    """A written or deleted row has not been used yet: drop ITS stamps only."""
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.secrets import forget_last_resolved
+
+    forget_last_resolved(*_reader_names(key), tenant_id=tenant_id or DEFAULT_TENANT)
 
 
 @_handler("vault_set")
@@ -185,24 +391,40 @@ async def _vault_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     conversation. That is asserted in ``test_vault_set_is_redacted.py`` rather
     than assumed here.
     """
-    denial = _operator_denial(ctx, "vault_set")
+    denial = await _denial(ctx, "vault_set", args)
     if denial:
+        await _redact_a_refused_paste(args, ctx)
         return denial
 
     key = args["key"]
     value = args["value"]
     denial = _refuse_bootstrap(key, "write")
     if denial:
+        await _redact_a_refused_paste(args, ctx)
         return denial
 
     import robothor.vault as vault
     from robothor.secrets.fingerprint import fingerprint
 
     tenant_id = getattr(ctx, "tenant_id", "") or ""
-    kwargs: dict[str, Any] = {"category": args.get("category", "credential")}
+    session = _live_session(ctx)
+    kwargs: dict[str, Any] = {
+        "category": args.get("category", "credential"),
+        "metadata": _audit_metadata(ctx, session),
+    }
     if tenant_id:
         kwargs["tenant_id"] = tenant_id
-    await asyncio.to_thread(vault.set, key, value, **kwargs)
+    try:
+        await asyncio.to_thread(vault.set, key, value, **kwargs)
+    except Exception:
+        await _redact_a_refused_paste(args, ctx)
+        raise
+
+    # The value is known now, so it can be taken out of the places the
+    # person's message already reached — and of everything written after.
+    stored_fingerprint = await asyncio.to_thread(fingerprint, value)
+    await _forget_the_value_everywhere(value, stored_fingerprint, session)
+    _forget_usage(key, tenant_id)
 
     # A rotation the assistant cannot make take effect is not a rotation it can
     # perform: key_pool caches provider keys and republishes them into the
@@ -218,7 +440,7 @@ async def _vault_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     answer: dict[str, Any] = {
         "success": True,
         "key": stored_at,
-        "fingerprint": fingerprint(value),
+        "fingerprint": stored_fingerprint,
         "readable_as": list(readers),
     }
     if not readers:
@@ -235,6 +457,89 @@ async def _vault_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return answer
 
 
+async def _redact_a_refused_paste(args: dict[str, Any], ctx: ToolContext) -> None:
+    """A hand-over that did not store still takes the pasted value out.
+
+    Refused (any gate) or failed, the person still pasted it, so the value is
+    registered and scrubbed exactly as a stored one is. Only a value the
+    person's own message carries as a credential-sized token qualifies.
+    """
+    from robothor.engine.tools.handlers.vault_intake import pasted_by_the_person
+    from robothor.secrets.fingerprint import fingerprint
+
+    value = str(args.get("value") or "")
+    session = _live_session(ctx)
+    if not pasted_by_the_person(_typed_text(session), value):
+        return
+    pasted_fingerprint = await asyncio.to_thread(fingerprint, value)
+    await _forget_the_value_everywhere(value, pasted_fingerprint, session)
+
+
+def _typed_text(session: Any) -> str:
+    """What the person TYPED this turn: no reply quote, no attachment text.
+
+    ``originating_message`` is the assembled turn, and a third party's file or
+    a quoted fleet message inside it is not the person handing anything over.
+    A channel that does not set ``typed_message`` hands nothing over.
+    """
+    return str(getattr(session, "typed_message", "") or "")
+
+
+def _audit_metadata(ctx: ToolContext, session: Any) -> dict[str, Any]:
+    """Who stored the row and how. Identifiers only, never the value."""
+    if session is None:
+        via = "tool"
+    elif _is_top_level_human_chat(session):
+        via = f"chat:{session.run.trigger_type}"
+    else:
+        via = f"run:{session.run.trigger_type}"
+    return {
+        "stored_by": getattr(ctx, "user_id", "") or None,
+        "via": via,
+        "run_id": getattr(ctx, "run_id", "") or None,
+        "agent_id": getattr(ctx, "agent_id", "") or None,
+    }
+
+
+async def _forget_the_value_everywhere(value: str, stored_fingerprint: str, session: Any) -> None:
+    """Register the value with the redactor and scrub the live run's task text.
+
+    ``agent_runs.task_text`` is written at run START, before this call, so a
+    shapeless key in the person's message is already in that row. History and
+    ``chat_messages`` are written AFTER the run, through ``redact``, which now
+    knows the value.
+    """
+    from robothor.secrets.redaction import redact, redact_known_value, register_known_value
+
+    if not register_known_value(value, fingerprint=stored_fingerprint):
+        return
+    if session is None:
+        return
+    original = session.run.task_text
+    cleaned = redact(original) if original else original
+    originating = getattr(session, "originating_message", None)
+    placeholder = f"<redacted:{stored_fingerprint}>"
+    if originating:
+        # Only THIS value: a second key in the same message is still the
+        # person's hand-over, and the intake gate looks for it here.
+        session.originating_message = redact_known_value(originating, value.strip(), placeholder)
+    typed = getattr(session, "typed_message", None)
+    if typed:
+        session.typed_message = redact_known_value(typed, value.strip(), placeholder)
+    if cleaned == original:
+        return
+    session.run.task_text = cleaned
+    try:
+        from robothor.engine import tracking
+
+        await asyncio.to_thread(tracking.update_run, session.run.id, task_text=cleaned)
+    except Exception as exc:  # noqa: BLE001 - the write succeeded; this is best effort
+        logger.warning(
+            "vault_set: stored the credential but could not rewrite the run's task text (%s)",
+            type(exc).__name__,
+        )
+
+
 @_handler("vault_test")
 async def _vault_test(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Prove a stored credential works, and say whose it is.
@@ -242,7 +547,7 @@ async def _vault_test(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     The kind is inferred from the KEY, never passed in, so this cannot be used
     to run a vendor probe against an arbitrary value the caller supplies.
     """
-    denial = _operator_denial(ctx, "vault_test")
+    denial = await _denial(ctx, "vault_test", args)
     if denial:
         return denial
 
@@ -322,7 +627,7 @@ def _safe_hint(hint: str | None, value: str) -> str | None:
 
 @_handler("vault_list")
 async def _vault_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    denial = _operator_denial(ctx, "vault_list")
+    denial = await _denial(ctx, "vault_list", args)
     if denial:
         return denial
 
@@ -338,7 +643,7 @@ async def _vault_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
 @_handler("vault_delete")
 async def _vault_delete(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    denial = _operator_denial(ctx, "vault_delete")
+    denial = await _denial(ctx, "vault_delete", args)
     if denial:
         return denial
 
@@ -358,6 +663,7 @@ async def _vault_delete(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         return {"success": False, "key": key}
 
     await _reload_cached_readers()
+    _forget_usage(key, tenant_id)
     answer: dict[str, Any] = {"success": True, "key": key}
 
     # Deleting the vault row does not delete the credential: the accessor falls

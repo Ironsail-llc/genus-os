@@ -41,6 +41,7 @@ from robothor.engine.chat_store import (
 from robothor.engine.task_registry import get_task_registry
 from robothor.engine.telegram_attachments import _extract_pdf_text as _extract_pdf_text
 from robothor.engine.telegram_grades import format_agent_grades as format_agent_grades
+from robothor.engine.telegram_turn import forget_pending, forwarded, with_reply_quote
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +277,7 @@ class TelegramHandlersMixin:
     async def cmd_stop(self, message: Message) -> None:
         chat_id = str(message.chat.id)
         # Clear any buffered (not-yet-started) messages
-        self._message_buffers.pop(chat_id, None)
+        forget_pending(self, chat_id)
         self._drain_scheduled.pop(chat_id, None)
         self._drop_live_inbox(chat_id)  # and what was sent to the run mid-flight
         task = self._active_tasks.get(chat_id)
@@ -878,6 +879,7 @@ class TelegramHandlersMixin:
         # to the model, and the person who typed the message saw nothing.
         docked = marker_truncated(user_text)
         user_text = protect_payment_text(user_text)
+        typed_text = "" if forwarded(message) else user_text  # intake reads only this
         if docked:
             await message.answer(
                 "I stopped reading that message at the line starting with /secure and "
@@ -899,11 +901,13 @@ class TelegramHandlersMixin:
                     + (f"\n\nAdditional context: {_extra}" if _extra else "")
                 )
 
+        # The length, never the text: this runs before any intake code, and a
+        # person handing over a credential pastes it into this message.
         logger.info(
-            "Telegram message from %s (chat %s): %s",
+            "Telegram message from %s (chat %s): %d chars",
             message.from_user.first_name,
             chat_id,
-            user_text[:100],
+            len(user_text),
         )
 
         # ── Resolve user identity ──
@@ -944,29 +948,8 @@ class TelegramHandlersMixin:
         session_key = self._session_key(chat_id)
         session = get_shared_session(session_key)
 
-        # ── Channel-bus reply resolution ──
-        # If this message is a Telegram "Reply to" quote, look up the
-        # original in channel_message_map. When it was a fleet surface
-        # (e.g. a DevOps report), prepend a compact quote so main sees
-        # the thread context inline — and remember the linkage so the
-        # user turn's JSONB records the reference.
-        reply_ctx: dict[str, Any] | None = None
-        if message.reply_to_message and message.reply_to_message.message_id:
-            from robothor.engine.channel_bus import (
-                format_reply_prefix,
-                resolve_reply_context_async,
-            )
-
-            tenant_id = self._get_tenant_id(chat_id)
-            reply_ctx = await resolve_reply_context_async(
-                chat_id=chat_id,
-                platform_message_id=str(message.reply_to_message.message_id),
-                tenant_id=tenant_id,
-            )
-            if reply_ctx:
-                prefix = format_reply_prefix(reply_ctx)
-                user_text = f"{prefix}\n\n{user_text}"
-                self._reply_context_buffers[chat_id] = reply_ctx
+        # ── Channel-bus reply resolution: a compact quote of a fleet surface ──
+        user_text = await with_reply_quote(self, chat_id, message, user_text)
 
         # Remember this Telegram message id so the drain can record an
         # inbound map row after persistence.
@@ -993,7 +976,8 @@ class TelegramHandlersMixin:
             return
 
         # Execute via coalescing buffer (shared with handle_file)
-        await self._enqueue_message(chat_id, session_key, session, user_text, sender_info=user_info)
+        turn = {"sender_info": user_info, "typed_text": typed_text}
+        await self._enqueue_message(chat_id, session_key, session, user_text, **turn)
 
     async def on_message_reaction(self, event: Any) -> None:
         """Record operator 👍/👎/😡 reactions as goal-judge signals (Phase 2).

@@ -103,7 +103,7 @@ from robothor.engine.run_deadline import (
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import _is_service_caller as _is_service_caller
-from robothor.engine.run_identity import attach_tenant_access, resolve_run_identity
+from robothor.engine.run_identity import attach_tenant_access, resolve_run_identity, seat_session
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
@@ -547,6 +547,7 @@ class AgentRunner(
         identity: IdentityContext | None = None,
         live_inbox: LiveInbox | None = None,
         user_images: list[dict[str, Any]] | None = None,
+        typed_message: str | None = None,
     ) -> AgentRun:
         """Execute an agent with the given message.
 
@@ -637,14 +638,7 @@ class AgentRunner(
         )
 
         await attach_session(session)
-        session.live_inbox = live_inbox  # chat sent mid-run; see live_inbox.py
-        session.response_format = agent_config.response_format
-        session.provider_order = agent_config.provider_order
-
-        # User identity threading
-        session.run.user_id = effective_user_id
-        session.run.user_role = effective_user_role
-        session.run.resume_from_run_id = resume_from_run_id
+        seat_session(session, agent_config, live_inbox, typed_message, actor, resume_from_run_id)
 
         # Benchmark sandbox marker — stamps the AgentRun (read by the tool
         # wrappers) and the task-local run context (read by the memory write

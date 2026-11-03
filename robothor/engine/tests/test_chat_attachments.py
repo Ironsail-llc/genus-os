@@ -495,3 +495,14 @@ class TestExtensions:
         res = await _send(client, "here", [_file(name, mime, data)])
         assert res.status_code == 200
         assert len(_inbox(engine_config)) == 1
+
+
+class TestTheTypedMessage:
+    """Credential intake reads only what the person typed, never a file."""
+
+    @pytest.mark.asyncio
+    async def test_the_run_gets_the_typed_text_without_the_file(self, client, mock_runner) -> None:
+        await _send(client, "what is in here?", [_file("notes.md", "text/markdown", b"# hi")])
+        kwargs = mock_runner.execute.call_args.kwargs
+        assert kwargs["typed_message"] == "what is in here?"
+        assert "# hi" in kwargs["message"]
