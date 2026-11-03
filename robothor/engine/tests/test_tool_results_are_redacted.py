@@ -283,3 +283,15 @@ def test_a_failed_checkpoint_logs_no_messages(caplog, action):
     leaked = BARE in _logged(caplog)
     assert not leaked
     assert "RuntimeError" in _logged(caplog)
+
+
+def test_a_callee_that_looks_like_a_key_is_not_code():
+    """Only the callee before the first ``(``/``[`` is judged: a prefix that
+    mixes upper case and digits is a value, not a function name."""
+    from robothor.secrets.redaction import redact_tool_result
+
+    cleaned = redact_tool_result({"content": "TOKEN=Xk92mQ7vLp04(Rt8sWz6n"})["content"]
+    leaked = "Xk92mQ7vLp04" in cleaned
+    assert not leaked
+    code = "token = secrets.token_urlsafe(32)\n"
+    assert redact_tool_result({"content": code}) == {"content": code}
