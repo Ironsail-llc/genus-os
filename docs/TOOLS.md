@@ -189,13 +189,14 @@ listing everything and filtering in the model:
 
 | Argument | Keeps |
 |---|---|
-| `overdue: true` | Open tasks whose `dueAt` has passed |
+| `overdue: true` | Open tasks whose `dueAt` has passed, oldest due first |
 | `unowned: true` | Open tasks no agent owns, or that wait on a person |
 
-Both together list what the `crm.cases_overdue` doctor check counts
-(`genus doctor --only crm.cases_overdue`). Neither counts a task snoozed until
-a future follow-up. Use `list_my_tasks` for an agent's
-own inbox. The convention (field mapping, hand-offs) is the "Cases" section of
+Both together list, for your tenant and up to `limit` rows (50 by default),
+what the `crm.cases_overdue` doctor check counts
+(`genus doctor --only crm.cases_overdue`). `count` is the length of the page,
+not the total. Neither counts a task snoozed until a future follow-up. Use
+`list_my_tasks` for an agent's own inbox. The convention (field mapping, hand-offs) is the "Cases" section of
 `docs/CRM_DATA_FABRIC.md`.
 
 ### Sales intelligence (`sales_*`)

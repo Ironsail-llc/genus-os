@@ -305,23 +305,37 @@ to reconstruct the case from its history.
 
 `list_tasks` takes two case filters:
 
-- `overdue: true` keeps open tasks whose `due_at` has passed;
+- `overdue: true` keeps open tasks whose `due_at` has passed, oldest due first;
 - `unowned: true` keeps open tasks no agent owns, or that wait on a person
   (`requires_human`).
 
-Together they list what the `crm.cases_overdue` doctor check counts:
+Either filter excludes resolved tasks even when `status` is passed, and keeps a
+task with no status. Together they list, for the caller's tenant, what the
+`crm.cases_overdue` doctor check counts:
 
 ```bash
 genus doctor --only crm.cases_overdue
 ```
 
+`list_tasks` returns at most `limit` rows (50 by default) and its `count` is
+the length of that page, so on a large backlog the doctor's total can be higher
+than the listing. Ordering by due time keeps the oldest case, the one the
+doctor names, on the first page.
+
 The check warns (severity `recommended`) with a count of overdue unowned cases
 and of overdue cases that need a person, each with the oldest task id and its
-tenant, and passes when there are none. It counts across every tenant. An
-overdue case an agent owns is not counted: it is in that agent's inbox. A task
-snoozed until a future `follow_up_at` is not overdue for the check or for
-`list_tasks`; it comes back when the follow-up time passes. Answering the operator's question (`answer_question`)
-clears `requires_human`, so an answered case leaves the count.
+tenant, and passes when there are none. It counts every tenant its database
+connection can see. With row-level security on (`ROBOTHOR_RLS_ENABLED=1` and a
+role that does not bypass it), that is the one tenant bound to the connection,
+and the detail says `in RLS scope <tenant>`. Otherwise it says `in any tenant`.
+A scoped pass says nothing about other tenants. Run the check from an unscoped
+session to cover them all.
+
+An overdue case an agent owns is not counted: it is in that agent's inbox. A
+task snoozed until a future `follow_up_at` is not overdue for the check or for
+`list_tasks`; it comes back when the follow-up time passes. Answering the
+operator's question (`answer_question`) clears `requires_human`, so an answered
+case leaves the count.
 
 ## Testing
 
