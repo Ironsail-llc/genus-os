@@ -1,3 +1,10 @@
+## [1.126.0](https://github.com/Ironsail-llc/genus-os/compare/v1.125.1...v1.126.0) (2026-11-03)
+
+### Features
+
+* **cli:** scaffold ships knowledge/ and a reviewed_on doctor check (GEN-362) ([#852](https://github.com/Ironsail-llc/genus-os/issues/852)) ([6652d63](https://github.com/Ironsail-llc/genus-os/commit/6652d63f03a685fe83e8d5f4b3ffe68ec6ce63de))
+* **crm:** cases convention, overdue-cases doctor check and task filter (GEN-359) ([#855](https://github.com/Ironsail-llc/genus-os/issues/855)) ([f5bfbf0](https://github.com/Ironsail-llc/genus-os/commit/f5bfbf0884a4b66b55ccf4462397feea4ec5f3dd))
+
 ## [1.125.1](https://github.com/Ironsail-llc/genus-os/compare/v1.125.0...v1.125.1) (2026-11-02)
 
 ### Bug Fixes
