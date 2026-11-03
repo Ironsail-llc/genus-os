@@ -46,3 +46,23 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # With tenant cells, every engine pod carries component=engine. The control
+  # Service is the ROOT engine's, so it must select the root tenant's pod only,
+  # the way the root engine's own Service narrows; otherwise the bridge's root
+  # control calls would be spread across the children's engines.
+  - it: selects only the root engine's pod when tenant cells exist
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - equal:
+          path: spec.selector["genus-os/tenant"]
+          value: default
+
+  - it: keeps its selector unchanged when there are no tenant cells
+    asserts:
+      - notExists:
+          path: spec.selector["genus-os/tenant"]

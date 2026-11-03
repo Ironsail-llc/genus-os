@@ -62,6 +62,8 @@ BASELINE_DEFAULT = {
     ("Service", "gos-genus-os-bridge"),
     ("Service", "gos-genus-os-dashboard"),
     ("Service", "gos-genus-os-engine"),
+    # The bridge's route to the root engine while its /ready fails.
+    ("Service", "gos-genus-os-engine-control"),
     ("Service", "gos-genus-os-orchestrator"),
     ("Service", "gos-postgres"),
     ("Service", "gos-valkey"),
@@ -189,11 +191,20 @@ def test_no_two_engine_services_select_the_same_pods() -> None:
         and d["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/component")
         == "engine"
     ]
-    assert len(services) == 3
+    # The root engine's Service and its control Service (engine/control-service.yaml)
+    # are two doors to the SAME root pod, by design; every cell has its own.
+    assert len(services) == 4
+    by_pod: dict[str, set[str]] = {}
     for service in services:
         selector = service["spec"]["selector"]
         matched = [p for p in pods if all(p.get(k) == v for k, v in selector.items())]
         assert len(matched) == 1, service["metadata"]["name"]
+        by_pod.setdefault(str(sorted(matched[0].items())), set()).add(service["metadata"]["name"])
+    assert sorted(sorted(names) for names in by_pod.values()) == [
+        ["gos-genus-os-engine", "gos-genus-os-engine-control"],
+        ["gos-genus-os-engine-acme-child-a"],
+        ["gos-genus-os-engine-acme-child-b"],
+    ]
 
 
 def test_engine_url_template_is_literal_and_resolves_to_a_real_service() -> None:
