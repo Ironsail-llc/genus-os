@@ -721,17 +721,37 @@ _VALUE_IS_CODE = re.compile(
 _CALLEE = re.compile(r"^([A-Za-z_][\w.]*)[(\[]")
 
 
+def _class_of(ch: str) -> str:
+    return "u" if ch.isupper() else "l" if ch.islower() else "d" if ch.isdigit() else "o"
+
+
+def _callee_is_a_value(callee: str) -> bool:
+    """Whether a "callee" is really an opaque value with a bracket after it.
+
+    Only a single run with no ``.`` or ``_``, at least 10 characters, no
+    lower-case word in it (three or more lower-case letters in a row, as in
+    ``Ed25519PrivateKey`` or ``OAuth2Session``), and three or more switches
+    between upper case, lower case and digits (``Xk92mQ7vLp04``). Every class,
+    module or function name is code.
+    """
+    if "." in callee or "_" in callee or len(callee) < 10 or re.search(r"[a-z]{3,}", callee):
+        return False
+    switches = sum(
+        1 for a, b in zip(callee, callee[1:], strict=False) if _class_of(a) != _class_of(b)
+    )
+    return switches >= 3
+
+
 def _is_code(body: str) -> bool:
     """Whether an unquoted value is code (see :data:`_VALUE_IS_CODE`).
 
     A call is judged by its callee alone: ``secrets.token_urlsafe(32`` is code
-    whatever its arguments, but a callee that mixes upper case and digits
-    (``Xk92mQ7vLp04(``) is a value that happens to hold a bracket.
+    whatever its arguments, and so is ``Ed25519PrivateKey.generate(``; only a
+    callee that is itself an opaque value (:func:`_callee_is_a_value`) is not.
     """
     call = _CALLEE.match(body)
     if call:
-        callee = call.group(1)
-        return not (any(c.isupper() for c in callee) and any(c.isdigit() for c in callee))
+        return not _callee_is_a_value(call.group(1))
     return bool(_VALUE_IS_CODE.match(body))
 
 

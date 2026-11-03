@@ -182,6 +182,7 @@ PY_SOURCE = (
     "token = request.args.get(TOKEN_PARAM)\n"
     "api_key = config.get(API_KEY_SETTING)\n"
     "token = _current_settings.set(Overrides2(values))\n"
+    "    private_key = Ed25519PrivateKey.generate()\n"
 )
 YAML_SOURCE = "provider:\n  api_key: ${API_KEY}\n  token: ${TOKEN}\n"
 SHELL_SOURCE = 'export TOKEN=$TOKEN\nexport API_KEY="$API_KEY"\nGITHUB_TOKEN=$(gh auth token)\n'
@@ -295,3 +296,20 @@ def test_a_callee_that_looks_like_a_key_is_not_code():
     assert not leaked
     code = "token = secrets.token_urlsafe(32)\n"
     assert redact_tool_result({"content": code}) == {"content": code}
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "    private_key = Ed25519PrivateKey.generate()\n",
+        "private_key = X25519PrivateKey.generate()\n",
+        "token = SHA256(data).hexdigest()\n",
+        "token = OAuth2Session(client_id, scope=scope)\n",
+        "secret_key = S3Client(region).get_secret()\n",
+    ],
+    ids=["ed25519", "x25519", "sha256", "oauth2", "s3"],
+)
+def test_a_class_name_callee_is_code(line):
+    from robothor.secrets.redaction import redact_result_text
+
+    assert redact_result_text(line) == line
