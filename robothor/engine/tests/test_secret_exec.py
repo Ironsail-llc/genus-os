@@ -46,6 +46,8 @@ REFUSED_COMMANDS = [
 ALLOWED_COMMANDS = [
     "set -a; . /run/robothor/secrets.env; set +a; curl -s https://api.example.com/v1",
     "[ -f /run/robothor/secrets.env ] && set -a && . /run/robothor/secrets.env && set +a; python x.py",
+    # Not printing, so this rule allows it; the exec tool still refuses it,
+    # because credential_path refuses any command naming `.env`.
     "source .env && python scripts/run.py",
     "ls -la /run/robothor",
     "test -f /run/robothor/secrets.env && echo present",

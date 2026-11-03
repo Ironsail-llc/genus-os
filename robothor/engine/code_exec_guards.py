@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from robothor.engine.secret_paths import code_names_credential
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["MAX_CODE_CHARS", "harden_this_process", "preflight"]
@@ -26,11 +28,9 @@ MAX_CODE_CHARS = 100_000
 def preflight(code: str, proxy: Any) -> dict[str, Any] | None:
     """The refusal this call earns, or None to go ahead.
 
-    Order is cheapest-first and, where it matters, safest-first: the snippet is
-    checked for being a snippet at all, then for having a run behind it (which
-    is where the allow-set comes from), then for the capability that makes this
-    tool no wider than `exec`, and last for the sandbox — the one refusal that
-    has to read live per-run state.
+    Cheapest-first and, where it matters, safest-first: a snippet at all, a run
+    behind it (the allow-set), the capability that keeps this tool no wider than
+    `exec`, a source naming no credential path, and last the sandbox.
     """
     if not isinstance(code, str) or not code.strip():
         return {"error": "No code provided. Pass the Python source as `code`."}
@@ -55,7 +55,7 @@ def preflight(code: str, proxy: Any) -> dict[str, Any] | None:
                 "does not grant it. Ask the operator to add `exec` to tools_allowed."
             )
         }
-    return _refuse_if_sandboxed(proxy)
+    return code_names_credential(code) or _refuse_if_sandboxed(proxy)
 
 
 def _refuse_if_sandboxed(proxy: Any = None) -> dict[str, Any] | None:
