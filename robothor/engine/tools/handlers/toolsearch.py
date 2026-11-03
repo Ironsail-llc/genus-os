@@ -95,6 +95,17 @@ def _closest(name: str, candidates: list[str], limit: int = 3) -> list[str]:
     return [hit["name"] for hit in hits if hit["name"] != name][:limit]
 
 
+#: How far the top hit must lead the second before its schema comes inline.
+_CLEAR_LEAD = 1.25
+
+
+def _clear_lead(ranked: list[tuple[Any, float]]) -> bool:
+    """Does the top hit's score clear the second's by ``_CLEAR_LEAD``?"""
+    if len(ranked) < 2:
+        return bool(ranked)
+    return ranked[0][1] >= ranked[1][1] * _CLEAR_LEAD
+
+
 async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tools.registry import get_registry
 
@@ -122,7 +133,8 @@ async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
             out["note"] = note
         return out
 
-    results = registry.search_tools(names, query, limit=limit)
+    ranked = registry.rank_tools(names, query, limit=limit)
+    results = [hit for hit, _score in ranked]
     # Per HIT, not per run: on a deferred run the CORE tools are in the
     # searchable set AND already advertised, and telling the agent to
     # tool_call one of those costs two round-trips for nothing.
@@ -132,7 +144,14 @@ async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     visible = [h["name"] for h in results if h["in_toolset"]]
     # The top hit is usually the tool the agent wanted: its parameters come
     # inline, so the common case is search then tool_call, with no describe.
-    top = results[0] if deferred and results and not results[0]["in_toolset"] else None
+    # Only when it clearly leads: the hint says to call it, and one call makes
+    # it a recent tool advertised on every later turn, so a near-tie is a
+    # guess the agent should make for itself after reading the descriptions.
+    top = (
+        results[0]
+        if deferred and results and not results[0]["in_toolset"] and _clear_lead(ranked)
+        else None
+    )
     if top is not None:
         described = await _tool_describe({"name": top["name"]}, ctx)
         if "parameters" in described:
