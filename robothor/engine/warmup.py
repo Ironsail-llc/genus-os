@@ -1323,11 +1323,7 @@ def _build_entity_context(
     from robothor.db import get_connection
     from robothor.identity.scope import log_would_drop, rows_dropped_by_scope
 
-    scope_clause = ""
-    scope_params: tuple[Any, ...] = ()
-    if scope is not None and scope.restricted:
-        scope_clause = "AND (person_id = %s OR person_id IS NULL)"
-        scope_params = (scope.person_id,)
+    scope_person_id = scope.person_id if scope is not None and scope.restricted else None
 
     lines = ["--- RELEVANT CONTEXT ---"]
     chars_used = 0
@@ -1340,7 +1336,7 @@ def _build_entity_context(
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         fetched = _fetch_entity_facts_batched(
-            cur, candidates[:max_candidates], tenant_id, v2, scope_clause, scope_params
+            cur, candidates[:max_candidates], tenant_id, v2, scope_person_id
         )
         for rows in fetched:
             if observe_scope_obj is not None:
@@ -1369,50 +1365,51 @@ def _fetch_entity_facts_batched(
     candidates: list[str],
     tenant_id: str,
     v2: bool,
-    scope_clause: str,
-    scope_params: tuple[Any, ...],
+    scope_person_id: str | None,
 ) -> list[list[dict[str, Any]]]:
     """Every candidate's top facts in one statement, grouped per candidate in order.
 
-    A LATERAL join over the candidate list applies the per-candidate filter,
-    ordering and ``LIMIT 3``; ``WITH ORDINALITY`` keeps the candidates in their
-    extraction order. ``scope_clause`` adds ``AND (person_id = %s OR person_id
-    IS NULL)`` for a restricted scope.
+    Per candidate: its active facts in the tenant, at most three, and for a
+    restricted scope (``scope_person_id``) only that person's facts and facts
+    about no one. ``candidate_ordinal`` keeps the extraction order.
 
-    The v2 match is indexed by idx_facts_entities_lower (migration 109). The
-    earlier ``EXISTS(unnest(...))`` form was unindexable and scanned the
-    tenant's whole active set per candidate. ``lower()`` cannot simply be
-    dropped to reuse the raw-array GIN: entity names that collapse under it
-    were measured losing over a third of matched rows. No bare percent sign
-    may appear in the SQL itself: psycopg2 reads it as a parameter.
+    v2 calls ``entity_facts_for_candidates`` (migration 166): the case-blind
+    match on idx_facts_entities_lower (migration 109), ranked by a
+    recency/importance blend. It is a SECURITY DEFINER function because, as the
+    engine's RLS-bound role, the tenant_isolation policy keeps the planner from
+    using that index (neither ``lower_entities()`` nor ``&&`` is LEAKPROOF), so
+    an inline lookup scanned the tenant's whole fact set per candidate. The
+    function enforces the policy's tenant rule itself.
+
+    The legacy path matches the raw array and ranks by importance alone. No
+    bare percent sign may appear in its SQL: psycopg2 reads it as a parameter.
     """
     if v2:
-        match = "tenant_id = %s AND lower_entities(entities) && ARRAY[lower(c.name)]"
-        rank = (
-            "0.55 * COALESCE(importance_score, 0.5) + 0.45 * POWER(0.5, "
-            "EXTRACT(EPOCH FROM (now() - created_at)) / 3600.0 / 168.0)"
+        cur.execute(
+            "SELECT candidate_ordinal, fact_text, category, importance_score, person_id "
+            "FROM entity_facts_for_candidates(%s, %s::text[], %s::uuid)",
+            (tenant_id, list(candidates), scope_person_id),
         )
     else:
-        match = "c.name = ANY(entities) AND tenant_id = %s"
-        rank = "importance_score"
-    cur.execute(
-        f"""
-        SELECT c.ord AS candidate_ordinal,
-               f.fact_text, f.category, f.importance_score, f.person_id
-        FROM unnest(%s::text[]) WITH ORDINALITY AS c(name, ord)
-        CROSS JOIN LATERAL (
-            SELECT fact_text, category, importance_score, person_id, created_at,
-                   {rank} AS rank_score
-            FROM memory_facts
-            WHERE is_active = TRUE AND {match}
-              {scope_clause}
-            ORDER BY rank_score DESC, created_at DESC
-            LIMIT 3
-        ) f
-        ORDER BY c.ord, f.rank_score DESC, f.created_at DESC
-        """,
-        (list(candidates), tenant_id, *scope_params),
-    )
+        scope_clause = "AND (person_id = %s OR person_id IS NULL)" if scope_person_id else ""
+        scope_params = (scope_person_id,) if scope_person_id else ()
+        cur.execute(
+            f"""
+            SELECT c.ord AS candidate_ordinal,
+                   f.fact_text, f.category, f.importance_score, f.person_id
+            FROM unnest(%s::text[]) WITH ORDINALITY AS c(name, ord)
+            CROSS JOIN LATERAL (
+                SELECT fact_text, category, importance_score, person_id, created_at
+                FROM memory_facts
+                WHERE is_active = TRUE AND c.name = ANY(entities) AND tenant_id = %s
+                  {scope_clause}
+                ORDER BY importance_score DESC, created_at DESC
+                LIMIT 3
+            ) f
+            ORDER BY c.ord, f.importance_score DESC, f.created_at DESC
+            """,
+            (list(candidates), tenant_id, *scope_params),
+        )
     grouped: list[list[dict[str, Any]]] = [[] for _ in candidates]
     for row in cur.fetchall():
         ordinal = int(row["candidate_ordinal"])

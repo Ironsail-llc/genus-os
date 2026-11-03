@@ -74,7 +74,7 @@ def test_the_v2_fetch_calls_the_definer_function():
     """Under RLS the inline lookup cannot use the index (migration 166's header)."""
     source = inspect.getsource(warmup._fetch_entity_facts_batched)
     assert "entity_facts_for_candidates(" in source
-    assert "lower_entities" not in source, "the v2 lookup is inline again"
+    assert "lower_entities(entities)" not in source, "the v2 lookup is inline again"
 
 
 def test_the_definer_function_is_registered_and_guarded():

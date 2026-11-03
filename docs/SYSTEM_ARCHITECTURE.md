@@ -1205,7 +1205,9 @@ hand-offs cost more than the queries they overlap, so the sections stay in
 place and only the statement savings below apply. Memory blocks are read in one `SELECT`
 (`memory.blocks.read_blocks`) with the read count bumped afterwards in one
 batched `UPDATE` (`touch_blocks`); entity candidates are fetched in one
-`LATERAL` query; identity enrichment is held per chat session for up to 15 minutes
+statement, which for the case-blind recall is a call to the `SECURITY DEFINER`
+function `entity_facts_for_candidates` (migration 166) so the entities index
+stays usable under row-level security; identity enrichment is held per chat session for up to 15 minutes
 (`identity.enrichment.enrich_identity_for_session`). Each section is recorded
 as a `warmup_section:<name>` step, as the cron preamble's already are.
 
