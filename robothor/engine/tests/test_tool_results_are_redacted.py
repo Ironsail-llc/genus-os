@@ -215,3 +215,64 @@ def test_read_then_write_round_trips_byte_identical():
     session.record_tool_call("read_file", {"path": "app/settings.py"}, {"content": PY_SOURCE}, "c1")
     seen = json.loads(session.messages[-1]["content"])["content"]
     assert seen == PY_SOURCE
+
+
+# ── a failure on a path that holds a tool result logs its class, not its text ─
+
+
+def _logged(caplog) -> str:
+    return "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_a_failed_symbol_node_logs_no_tool_output(monkeypatch, caplog):
+    from robothor.engine import feature_flags, symbolic_memory
+
+    monkeypatch.setattr(feature_flags, "symbolic_memory_mode", lambda: "observe")
+
+    def boom(run_id):
+        raise ValueError(f"could not index {SHAPED}")
+
+    monkeypatch.setattr(symbolic_memory, "get_or_create_graph", boom)
+    with caplog.at_level("DEBUG", logger="robothor.engine.session"):
+        _session()._record_symbol_node("exec", {"stdout": "x"}, 1)
+    leaked = SHAPED in _logged(caplog)
+    assert not leaked
+    assert "ValueError" in _logged(caplog)
+
+
+def test_a_failed_step_insert_logs_no_row(monkeypatch, caplog):
+    from robothor.engine import tracking
+
+    def boom(*a, **k):
+        raise RuntimeError(f"Failing row contains ({BARE})")
+
+    monkeypatch.setattr(tracking, "create_steps_batch", boom)
+    monkeypatch.setattr(tracking, "create_step", boom)
+    session = _session()
+    session.record_tool_call("exec", {}, {"stdout": "ok"}, "c1")
+    with caplog.at_level("WARNING", logger="robothor.engine.session"):
+        session.flush_new_steps_sync()
+    leaked = BARE in _logged(caplog)
+    assert not leaked
+
+
+@pytest.mark.parametrize("action", ["save", "load"])
+def test_a_failed_checkpoint_logs_no_messages(caplog, action):
+    from robothor.engine.checkpoint import CheckpointManager
+
+    def boom(*a, **k):
+        raise RuntimeError(f"Failing row contains ({BARE})")
+
+    with (
+        patch("robothor.db.connection.get_connection", side_effect=boom),
+        caplog.at_level("WARNING", logger="robothor.engine.checkpoint"),
+    ):
+        if action == "save":
+            mgr = CheckpointManager(run_id="test")
+            mgr.record_success()
+            mgr.save(3, [{"role": "user", "content": "hi"}])
+        else:
+            CheckpointManager.load_latest("test")
+    leaked = BARE in _logged(caplog)
+    assert not leaked
+    assert "RuntimeError" in _logged(caplog)
