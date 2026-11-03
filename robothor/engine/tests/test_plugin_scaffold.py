@@ -481,3 +481,27 @@ def test_the_knowledge_check_warns_on_a_document_with_no_reviewed_on(tmp_path) -
     assert result.status == "fail"
     assert "returns.md" in result.detail
     assert "facts.json" not in result.detail
+
+
+def test_a_load_manifest_beside_the_records_is_not_a_record(tmp_path) -> None:
+    """The README allows an index.json naming which files each playbook loads;
+    the check must not report it and the plugin's own tests must still pass."""
+    import json
+    import os
+
+    root = scaffold.scaffold(NAME, tmp_path / NAME)
+    _write_facts(root, reviewed_on=_days_ago(1), last_verified=_days_ago(1))
+    (root / "src" / PKG / "knowledge" / "index.json").write_text(
+        json.dumps({"example-playbook": ["facts.json"]})
+    )
+    _check, result = _run_knowledge_check(root, "scaffold_knowledge_index")
+    assert result.status == "pass", result.detail
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
