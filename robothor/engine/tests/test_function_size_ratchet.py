@@ -66,7 +66,8 @@ KNOWN_LARGE: dict[str, int] = {
     # as zero spend — a different claim about the fleet, and one this endpoint
     # was the last place to get wrong.
     # 1386 -> 1350: re-measured after the catch-up fold (flag paths removed).
-    "health.py::create_health_app": 1350,
+    # 1350 -> 1316: re-measured after the catch-up fold (flag paths removed).
+    "health.py::create_health_app": 1316,
     # 990 -> 989: the post-stall autoDream spawn moved to
     # run_lifecycle.spawn_post_stall_autodream ("recovery helper spawns" is
     # that module's own contract), which is what paid for classifying a
