@@ -514,6 +514,8 @@ def test_the_knowledge_check_warns_when_it_finds_no_records(tmp_path) -> None:
     _check, result = _run_knowledge_check(root, "scaffold_knowledge_empty")
     assert result.status == "fail"
     assert "no knowledge records" in result.detail
+    # The header counts problems, not records: there are none to count here.
+    assert "record(s)" not in result.detail
 
 
 def test_the_knowledge_check_names_a_file_it_does_not_read(tmp_path) -> None:
