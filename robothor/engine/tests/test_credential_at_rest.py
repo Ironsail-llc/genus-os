@@ -193,6 +193,13 @@ class TestWrappedCall:
         assert BARE not in _saved([turn])
 
 
+#: A stored key below the opaque-run threshold (32), so only registration of
+#: the vault's values can catch it on restore.
+STORED_24 = "Ab3dE6gH9jK2mN5pQ8sT1vW4"
+GUID = "3f8e2a1c-9b7d-4e6f-a5c3-1d2e3f4a5b6c"
+CHAT_ID = "-1001234567890"
+
+
 class TestRestoreAfterARestart:
     """The registry of handed-over values lives in one process and dies with
     it; a checkpoint lives thirty days. A row written before redaction, read
@@ -203,10 +210,27 @@ class TestRestoreAfterARestart:
 
     def test_a_value_the_vault_holds_is_redacted_by_a_fresh_process(self):
         forget_known_values()  # a fresh process: nothing registered yet
-        with patch("robothor.vault.export_env", return_value={"OPENWEATHER_API_KEY": BARE}):
-            loaded = _loaded(self._with_request(f"my openweather key is {BARE}"))
-        leaked = BARE in json.dumps(loaded["messages"])
+        messages = self._with_request(f"my openweather key is {STORED_24}")
+        messages.append({"role": "assistant", "content": f"Stored {STORED_24} for you."})
+        with patch("robothor.vault.export_env", return_value={"OPENWEATHER_API_KEY": STORED_24}):
+            loaded = _loaded(messages)
+        leaked = STORED_24 in json.dumps(loaded["messages"])
         assert not leaked, "a stored value came back from an old checkpoint"
+
+    def test_identifiers_the_vault_holds_are_not_redacted_afterwards(self):
+        """The vault also holds a tenant GUID and a chat id; after a restore
+        they must not become placeholders in every later tool result."""
+        from robothor.secrets.redaction import redact_tool_result
+
+        forget_known_values()
+        vault = {"M365_TENANT_ID": GUID, "TELEGRAM_CHAT_ID": CHAT_ID, "X_API_KEY": STORED_24}
+        with patch("robothor.vault.export_env", return_value=vault):
+            _loaded(self._with_request("hello"))
+        config = f"tenant: {GUID}\nchat: {CHAT_ID}\n"
+        assert redact_tool_result({"content": config}) == {"content": config}
+        later = redact_tool_result({"content": f"key {STORED_24}"})["content"]
+        leaked = STORED_24 in later
+        assert not leaked, "a stored key was not registered for later redaction"
 
     def test_a_bare_hex_run_the_person_typed_is_redacted_even_if_never_stored(self):
         never_stored = "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a"
