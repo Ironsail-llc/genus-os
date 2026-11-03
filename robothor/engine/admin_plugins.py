@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import threading
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -177,13 +178,47 @@ def _with_assets(
     return row
 
 
+class LockfileSharedError(Exception):
+    """This engine's lockfile is another tenant's engine's. Becomes a 409."""
+
+
+def _refuse_a_shared_lockfile() -> None:
+    """Refuse to write a lockfile another tenant's engine owns.
+
+    A child admin may toggle plugins in their own tenant; on a lockfile the
+    root's engine also reads, that toggle would reach the root and every
+    sibling. See ``robothor.plugins.lockfile_owner``.
+    """
+    from robothor.plugins.lockfile_owner import SHARED_REMEDY, foreign_owner
+
+    if foreign_owner() is not None:
+        raise LockfileSharedError(SHARED_REMEDY)
+
+
+class PluginForcedError(Exception):
+    """The root tenant forced this plugin; the child may not toggle it. A 409."""
+
+
 def set_plugin_enabled(name: str, enabled: bool) -> dict[str, Any] | None:
     """Flip one lock row, or None when nothing recorded that distribution.
 
     None is a 404 rather than a created row: a disable that invented a row for
     a name nothing installed would report success and change nothing.
+
+    Raises :class:`PluginForcedError` for a plugin the root tenant forced on or
+    off for this engine's tenant: the row would change and nothing would, which
+    is a control that lies. Only a root operator clearing the grant frees it.
     """
+    from robothor.plugins.grants import canonical, forced_states
     from robothor.plugins.lockfile import set_enabled
+
+    forced = forced_states().get(canonical(name))
+    if forced is not None:
+        raise PluginForcedError(
+            f"this plugin is forced {forced} by the root tenant; only a root "
+            "administrator can change it, by clearing the grant"
+        )
+    _refuse_a_shared_lockfile()
 
     row = set_enabled(name, enabled)
     if row is None:
@@ -219,6 +254,7 @@ def sync_lockfile(force: bool = False) -> dict[str, Any]:
     from robothor.engine.config import invalidate_config_caches
     from robothor.plugins.lockfile import sync
 
+    _refuse_a_shared_lockfile()
     try:
         result = sync(force=force)
     finally:
@@ -358,6 +394,50 @@ def _swallow(future: asyncio.Future[Any]) -> None:
         future.result()
 
 
+#: What install and remove answer when this engine cannot write its plugin
+#: directory: a deployment mounts it read-only into the engine, because code
+#: there runs inside the engine, and installs with a Job that mounts the volume.
+PLUGIN_DIR_READ_ONLY = (
+    "The plugin directory is read-only in this engine; install with the install Job."
+)
+
+
+def _read_only(path: Any) -> bool:
+    """Whether *path* is on a read-only filesystem, as a read-only mount is.
+
+    Asked of the nearest directory that exists: pip ``--target`` creates a
+    missing plugin directory, so one nobody has made yet is an ordinary first
+    install. Permissions are not the question either; only the mount is.
+    """
+    from pathlib import Path
+
+    probe = Path(path)
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        return bool(os.statvfs(probe).f_flag & os.ST_RDONLY)
+    except OSError:
+        return False
+
+
+def _refuse_a_read_only_plugin_dir(name: str | None = None) -> None:
+    """409 when ``ROBOTHOR_PLUGIN_DIR`` is set and on a read-only mount.
+
+    With *name*, only when that distribution is installed there: a remove of
+    one that is not drops its lockfile row and never touches the directory.
+    """
+    from fastapi import HTTPException
+
+    from robothor.plugins import installer
+
+    target = installer._plugin_target_dir()
+    if not target or not _read_only(target):
+        return
+    if name is not None and installer._plugin_dir_distribution(name) is None:
+        return
+    raise HTTPException(status_code=409, detail=PLUGIN_DIR_READ_ONLY)
+
+
 def install_plugin(
     name: str,
     version: str | None = None,
@@ -472,7 +552,7 @@ def register(app: FastAPI) -> None:
 
         try:
             return await _bounded(fn, *args, **kwargs)
-        except LockfileRefusedError as exc:
+        except (LockfileRefusedError, LockfileSharedError, PluginForcedError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (InstallError, RegistryError) as exc:
             # A blocked wheel, an unverifiable index, a hash that did not
@@ -553,6 +633,8 @@ def register(app: FastAPI) -> None:
         index = body.get("index")
         if index is not None and not str(index).startswith("https://"):
             raise HTTPException(status_code=422, detail="index must be an https URL")
+        if not body.get("dry_run"):
+            _refuse_a_read_only_plugin_dir()
         return await _write(
             install_plugin,
             spec,
@@ -566,7 +648,9 @@ def register(app: FastAPI) -> None:
     async def remove(name: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         """Uninstall a plugin this platform installed and drop its row."""
         body = payload or {}
-        return await _write(remove_plugin, _checked(name), force=bool(body.get("force")))
+        plugin = _checked(name)
+        _refuse_a_read_only_plugin_dir(plugin)
+        return await _write(remove_plugin, plugin, force=bool(body.get("force")))
 
     @router.post("/plugins/{name}/enable")
     async def enable(name: str) -> dict[str, Any]:

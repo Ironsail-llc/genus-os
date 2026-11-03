@@ -87,6 +87,33 @@ def insecure_loopback_dev_mode(monkeypatch):
     reset()
 
 
+@pytest.fixture
+def real_session_standing():
+    """Opt out of :func:`sessions_stand`: the test exercises the real check."""
+    return True
+
+
+@pytest.fixture(autouse=True)
+def sessions_stand(request, monkeypatch):
+    """Every human token in this suite names an account that still stands.
+
+    The bridge refuses a human token whose account no longer lives in the
+    token's home tenant, or is disabled (``robothor.auth.session_standing``).
+    The suite's tokens name accounts no database holds, so the check is stubbed
+    to "stands" here; ``test_session_standing.py`` requests
+    ``real_session_standing`` and runs the real one.
+    """
+    if "real_session_standing" in request.fixturenames:
+        return
+    import importlib.util
+
+    if importlib.util.find_spec("robothor.auth.session_standing") is None:
+        return
+    from robothor.auth import session_standing
+
+    monkeypatch.setattr(session_standing, "stands", lambda user_id, home_tenant_id: True)
+
+
 #: Where a bridge test's engine call is allowed to go: nowhere.
 #:
 #: ``.invalid`` is reserved by RFC 2606 and guaranteed never to resolve, so even

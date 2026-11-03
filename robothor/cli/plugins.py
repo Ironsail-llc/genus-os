@@ -127,10 +127,16 @@ def cmd_plugin_list() -> int:
     # A deliberate disable is not a refusal, and printing it under a heading
     # that ends "fix the cause or uninstall the distribution" told an operator
     # their own decision was a fault they should undo.
+    from robothor.plugins.grants import ROOT_DISABLED_REASON
     from robothor.plugins.lockfile import DISABLED_REASON
 
     turned_off = [f for f in result.failures if f.reason == DISABLED_REASON]
-    refused = [f for f in result.failures if f.reason != DISABLED_REASON]
+    # The root tenant's decision for this tenant: not a fault either, and not
+    # one this tenant's operator can undo, so it gets no `enable` hint.
+    by_root = [f for f in result.failures if f.reason == ROOT_DISABLED_REASON]
+    refused = [
+        f for f in result.failures if f.reason not in (DISABLED_REASON, ROOT_DISABLED_REASON)
+    ]
 
     if turned_off:
         print()
@@ -140,6 +146,15 @@ def cmd_plugin_list() -> int:
         print()
         print("  Turn one back on with `genus plugin enable <name>` (the")
         print("  DISTRIBUTION name — `genus plugin list` shows it above).")
+
+    if by_root:
+        print()
+        print("Disabled by the root tenant:")
+        for f in by_root:
+            print(f"  {f.name} [{f.group}]: {ROOT_DISABLED_REASON}")
+        print()
+        print("  Only a root administrator can change this, by clearing the")
+        print("  tenant's plugin grant.")
 
     if refused:
         print()

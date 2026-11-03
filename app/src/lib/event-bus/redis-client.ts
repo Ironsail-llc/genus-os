@@ -32,6 +32,8 @@ export interface EventEnvelope {
   actor: string;
   payload: Record<string, unknown>;
   correlation_id: string;
+  /** The tenant the event happened in; absent on events from before tagging (the root's). */
+  tenant_id?: string;
 }
 
 export type RedisConnection =
@@ -107,6 +109,7 @@ function parseEntry(id: string, fields: string[]): EventEnvelope {
     actor: map.actor || "",
     payload,
     correlation_id: map.correlation_id || "",
+    ...(map.tenant_id ? { tenant_id: map.tenant_id } : {}),
   };
 }
 

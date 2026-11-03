@@ -94,7 +94,7 @@ class FakeEngine:
             ),
         }
 
-    async def __call__(self, method, path, *, json=None, timeout=30):
+    async def __call__(self, method, path, *, json=None, timeout=30, tenant=None):
         self.calls.append((method, path, json))
         if path.endswith("/test"):
             return 200, {

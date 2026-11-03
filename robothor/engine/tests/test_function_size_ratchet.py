@@ -124,7 +124,9 @@ KNOWN_LARGE: dict[str, int] = {
     # the dependency-graph comment rather than raising this number for them.
     # 371 -> 331: the channel-bus main hooks and the startup announcement left for helpers.
     # 331 -> 326: the MCP pre-warm left for `_spawn_mcp_prewarm`.
-    "daemon.py::main": 326,
+    # 326 -> 324: the config log lines left for `_announce_config`, which paid
+    # for main's lockfile claim.
+    "daemon.py::main": 324,
     # 384 -> 338: the post-reply persist-and-map closure left for
     # telegram_delivery.persist_and_map. 338 -> 314: the ten-second tool-status
     # edits went with the only streaming path; telegram_progress.deliver_reply

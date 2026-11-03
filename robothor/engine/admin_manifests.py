@@ -33,6 +33,7 @@ from fastapi import APIRouter, HTTPException, Request
 from robothor.engine import manifest_listing
 from robothor.engine import manifest_store as store
 from robothor.engine import manifest_validation as validation
+from robothor.engine.manifest_context import validation_context
 from robothor.engine.manifest_rows import _broken, _chat_fields, _summary
 from robothor.engine.manifest_store import (
     CreateRequest,
@@ -70,50 +71,8 @@ async def reconcile_schedules(scheduler: Any) -> dict[str, Any]:
     return {"applied": True, **outcome.as_dict()}
 
 
-async def _registered_tools() -> tuple[set[str], list[dict[str, str]]]:
-    """The registry's tool names, and a warning if it would not say.
-
-    A registry that cannot be built downgrades the tool check to a warning
-    rather than failing the save: the operator would otherwise be unable to
-    edit an agent while a plugin is broken, which is exactly when they most
-    want to.
-    """
-    from robothor.engine import admin_scheduler
-
-    try:
-        names = await asyncio.to_thread(admin_scheduler.registered_tool_names)
-    except Exception as error:  # noqa: BLE001 — a warning, not a refusal
-        logger.warning("Tool registry unavailable for validation: %s", type(error).__name__)
-        return set(), [
-            validation.issue(
-                "tools_allowed",
-                "tools_unverified",
-                "the tool registry did not answer, so tool names were not checked",
-            )
-        ]
-    return {str(name) for name in names}, []
-
-
-async def _validation_context() -> validation.ValidationContext:
-    """One view of the world for every verdict in this request.
-
-    Its own function so an edit can validate the BEFORE and AFTER documents
-    against the same fleet and the same tool list — see ValidationContext.
-    """
-    scan = await asyncio.to_thread(store.scan)
-    fleet = {str(m["id"]): m for m in scan.manifests if isinstance(m.get("id"), str)}
-    tools, tool_warnings = await _registered_tools()
-    return validation.ValidationContext(
-        fleet=fleet,
-        tools=tools,
-        manifest_dir=store.manifest_dir(),
-        repo_root=store.workspace(),
-        tool_warnings=tool_warnings,
-    )
-
-
 async def _validate(document: dict[str, Any]) -> dict[str, Any]:
-    return await validation.validate(document, await _validation_context())
+    return await validation.validate(document, await validation_context())
 
 
 def _refuse(verdict: dict[str, Any]) -> None:
@@ -260,7 +219,7 @@ async def apply_patch(
     # ONE context for both verdicts: two reads of the tool list across a single
     # save could disagree about which tools exist, and the difference between
     # the two answers is what decides the refusal.
-    context = await _validation_context()
+    context = await validation_context()
     verdict = validation.introduced(
         await validation.validate(original, context),
         await validation.validate(document, context),
@@ -372,5 +331,12 @@ def register(app: FastAPI, scheduler: Any = None, runner: Any = None) -> None:
     @router.post("/{agent_id}/run")
     async def run_manifest(agent_id: str, request: Request) -> dict[str, Any]:
         return await _answer(run(agent_id, runner, lambda: request_context(request)))
+
+    # Outside the builder's prefix, so no agent id can shadow it: the raw scan
+    # the bridge's read-only fleet and automations views read for a tenant cell.
+    @app.get("/api/admin/manifests", tags=["admin"])
+    async def scan_manifests() -> dict[str, Any]:
+        scan = await asyncio.to_thread(store.scan)
+        return {"manifests": list(scan.manifests), "broken": _broken(scan)}
 
     app.include_router(router)

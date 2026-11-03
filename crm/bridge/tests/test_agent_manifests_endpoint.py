@@ -138,7 +138,7 @@ class FakeEngine:
         self.calls.append(("POST", f"/api/agents/{agent_id}/trigger"))
         return self.trigger_body
 
-    async def __call__(self, method, path, *, json=None, timeout=30):
+    async def __call__(self, method, path, *, json=None, timeout=30, tenant=None):
         import httpx
 
         if not path.startswith("/api/admin/agent-manifests"):
@@ -364,9 +364,10 @@ class TestNoTestReachesARealWorkspace:
 
 
 class TestEveryRouteIsOperatorGated:
-    def test_every_route_calls_require_operator_including_the_gets(self):
+    def test_every_route_calls_the_tenant_admin_gate_including_the_gets(self):
         """A GET here enumerates the fleet, its models and its delivery
-        targets. That is appliance state, not member data."""
+        targets. That is the acting tenant's administration, not member data
+        (``test_tenant_admin_gates.py`` holds the full gate matrix)."""
         import inspect
 
         from routers import agent_manifests
@@ -374,9 +375,9 @@ class TestEveryRouteIsOperatorGated:
         ungated = [
             f"{sorted(route.methods)} {route.path}"
             for route in agent_manifests.router.routes
-            if "require_operator(" not in inspect.getsource(route.endpoint)
+            if "require_tenant_admin(" not in inspect.getsource(route.endpoint)
         ]
-        assert not ungated, f"routes without the operator gate: {ungated}"
+        assert not ungated, f"routes without the tenant admin gate: {ungated}"
 
     def test_a_viewer_session_cannot_list(self, controls_client_as_viewer, workspace):
         assert controls_client_as_viewer.get("/api/agent-manifests").status_code == 403
@@ -661,7 +662,7 @@ class TestValidate:
         which still warns instead of blocking, is the engine's own test:
         ``test_admin_manifests.py``.)"""
 
-        async def _dead(method, path, *, json=None, timeout=30):
+        async def _dead(method, path, *, json=None, timeout=30, tenant=None):
             return 502, {"error": "engine unavailable"}
 
         with patch("routers.agent_manifests.engine_request", new=_dead):
@@ -1761,7 +1762,7 @@ class _CannedEngine:
         self.routes = routes
         self.calls: list[tuple[str, str, dict | None]] = []
 
-    async def __call__(self, method, path, *, json=None, timeout=30):
+    async def __call__(self, method, path, *, json=None, timeout=30, tenant=None):
         self.calls.append((method, path, json))
         return self.routes.get((method, path), (404, {"detail": "Not Found"}))
 
@@ -1869,7 +1870,7 @@ class TestAnEngineThatCannotAnswerIsAReadableError:
     def test_an_unreachable_engine_is_a_502_with_a_detail(
         self, client, workspace, method, path, body
     ):
-        async def _dead(method, path, *, json=None, timeout=30):
+        async def _dead(method, path, *, json=None, timeout=30, tenant=None):
             return 502, {"error": "engine unavailable"}
 
         with patch("routers.agent_manifests.engine_request", new=_dead):
@@ -1885,7 +1886,7 @@ class TestAnEngineThatCannotAnswerIsAReadableError:
     def test_an_engine_refusal_without_a_detail_is_a_502(
         self, client, workspace, status, method, path, body
     ):
-        async def _refusing(method, path, *, json=None, timeout=30):
+        async def _refusing(method, path, *, json=None, timeout=30, tenant=None):
             return status, {"error": "insufficient scope"}
 
         with patch("routers.agent_manifests.engine_request", new=_refusing):
@@ -1918,7 +1919,7 @@ class TestAWriteWhoseAnswerWasLostIsStillAudited:
 
     @pytest.fixture
     def lost(self):
-        async def _lost(method, path, *, json=None, timeout=30):
+        async def _lost(method, path, *, json=None, timeout=30, tenant=None):
             return 502, {"error": "engine unavailable"}
 
         with patch("routers.agent_manifests.engine_request", new=_lost):
@@ -1982,7 +1983,7 @@ class TestAWriteWhoseAnswerWasLostIsStillAudited:
         reconcile, which used to be two calls with 30s each."""
         seen: dict[str, float] = {}
 
-        async def _timed(method, path, *, json=None, timeout=30):
+        async def _timed(method, path, *, json=None, timeout=30, tenant=None):
             seen[method] = timeout
             return 200, {"id": "demo-agent", "manifest": {}, "agents": []}
 
@@ -1999,7 +2000,7 @@ def test_a_lost_create_never_audits_an_unvalidated_id(client, workspace, hostile
     and an id the engine would refuse is not a slug, so it must not become the
     audit event's ``action``."""
 
-    async def _lost(method, path, *, json=None, timeout=30):
+    async def _lost(method, path, *, json=None, timeout=30, tenant=None):
         return 502, {"error": "engine unavailable"}
 
     with (

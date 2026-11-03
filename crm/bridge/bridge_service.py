@@ -25,6 +25,7 @@ import logging
 import httpx
 from fastapi import Depends, FastAPI
 
+from robothor.logging_setup import ensure_logging_configured
 from robothor.sales.api import router as sales_router
 from robothor.sales.ingestion import router as sales_ingestion_router
 
@@ -99,6 +100,7 @@ async def _routine_trigger_loop():
             await asyncio.sleep(60)
             due = get_due_routines()
             for routine in due:
+                tenant_id = routine.get("tenantId", _default_tenant())
                 task_id = create_task(
                     title=routine["title"],
                     body=routine.get("body"),
@@ -108,7 +110,7 @@ async def _routine_trigger_loop():
                     person_id=routine.get("personId"),
                     company_id=routine.get("companyId"),
                     created_by_agent="routine-trigger",
-                    tenant_id=routine.get("tenantId", _default_tenant()),
+                    tenant_id=tenant_id,
                 )
                 if task_id:
                     advance_routine(routine["id"])
@@ -121,6 +123,7 @@ async def _routine_trigger_loop():
                             "title": routine["title"],
                         },
                         source="bridge",
+                        tenant_id=tenant_id,
                     )
                     logger.info("Routine '%s' triggered → task %s", routine["title"], task_id)
         except asyncio.CancelledError:
@@ -133,6 +136,12 @@ async def _routine_trigger_loop():
 async def lifespan(app: FastAPI):
     global http_client, http_client_loop
     from robothor.auth.runtime import validate_auth_configuration
+
+    # First, so everything below can be heard. The bridge never configured
+    # logging, and with no handler on the root logger the stdlib drops every
+    # INFO line — the observe rung of tenant switching included. Respects a
+    # handler something else already installed.
+    ensure_logging_configured()
 
     validate_auth_configuration(bind_host=os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"))
     # Say at boot, once, whether this process can complete a sign-in at all.
@@ -174,11 +183,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# One pure-ASGI middleware, four steps in order: correlation id, then auth
-# (verifies a bridge-issued token into request.state.auth), then tenant, then
-# RBAC. Authentication is fail-closed unless the bridge is explicitly placed in
-# loopback-only insecure development mode. See BridgeMiddleware for what each
-# step answers.
+# One pure-ASGI middleware, five steps in order: correlation id, then auth
+# (verifies a bridge-issued token into request.state.auth), then the tenant
+# scope (everything after authentication runs bound to the token's tenant for
+# RLS), then tenant, then RBAC. Authentication is fail-closed unless the bridge
+# is explicitly placed in loopback-only insecure development mode. See
+# BridgeMiddleware for what each step answers.
 app.add_middleware(BridgeMiddleware)
 
 # Routers

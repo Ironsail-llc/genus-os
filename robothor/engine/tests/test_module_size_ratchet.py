@@ -809,7 +809,8 @@ CAPS = {
     # 1562 -> 1546: DeepRunState serialises itself (models.py), which paid for
     # passing the typed text to the run.
     # 1526 -> 1510: re-measured with the credential-intake refold.
-    "robothor/engine/chat.py": 1510,
+    # 1510 -> 1508: re-measured with main merged into the fold.
+    "robothor/engine/chat.py": 1508,
     # 1600 -> 1607 (2026-08-27): fleet admission finally has a caller here.
     # The 75-line implementation went to admission.py; what remains is five
     # irreducible call sites (admit / register / complete / import). The
@@ -855,14 +856,18 @@ CAPS = {
     # left is the operator gate, the audit trail and the forwarding.
     # 257 -> 328 in review: a write whose answer is lost is still audited, and
     # writes get their own engine budget. 340 -> 332: re-measured in the fold.
-    "crm/bridge/routers/agent_manifests.py": 332,
+    # 338 with main's hierarchical tenancy merged in: the file is main's own,
+    # which routes every call to the acting tenant's engine (main's cap 340).
+    "crm/bridge/routers/agent_manifests.py": 338,
     # The engine half of the agent builder, bounded from the day it lands: the
     # file operations (manifest_store) and the routes that orchestrate them
     # with the verdict, the reconcile and the trigger (admin_manifests).
     # 700 -> 692 and 380 -> 376: re-measured in the fold, with the listing
     # cache out in manifest_listing.py.
     "robothor/engine/manifest_store.py": 692,
-    "robothor/engine/admin_manifests.py": 376,
+    # 376 -> 342: the validation context left for manifest_context.py, which
+    # paid for main's tenant-cell scan route.
+    "robothor/engine/admin_manifests.py": 342,
     # The fleet listing's cached scan, out of manifest_store so the store stays
     # under its cap: it only knows whether the manifest files changed.
     "robothor/engine/manifest_listing.py": 93,

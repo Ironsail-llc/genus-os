@@ -385,7 +385,7 @@ class TestTheKnownAgentSetIsCached:
             return {"applied": True}
 
         monkeypatch.setattr(installed_agents, "reconcile_engine_schedules", _reconcile)
-        monkeypatch.setattr(installed_agents, "require_operator", lambda request: None)
+        monkeypatch.setattr(installed_agents, "require_root_operator", lambda request: None)
         monkeypatch.setattr(
             installed_agents, "_remove_installed", lambda agent_id, request: {"status": "removed"}
         )

@@ -20,6 +20,15 @@ declare module "next-auth" {
     backendAuthorized?: boolean;
     role?: string;
     tenantId?: string;
+    // The tenant the account belongs to. Differs from `tenantId` only while an
+    // owner/admin acts in a descendant tenant. Non-secret.
+    homeTenantId?: string;
+    // The deployment's root tenant (`rootTenant()`). Non-secret; with the two
+    // above it says whether the session is the root operator at home.
+    rootTenantId?: string;
+    // "acting-tenant-reverted" once a refresh could not re-enter the acting
+    // tenant; cleared when the browser acknowledges it. Non-secret.
+    tenantNotice?: "acting-tenant-reverted";
     // Owner accounts on a deployment whose ONLY sign-in method is local
     // email+password must enrol a second factor. Non-secret, so it may cross
     // into the browser session — the banner reads it there.

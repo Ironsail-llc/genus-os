@@ -19,7 +19,9 @@ uses), or :data:`~robothor.settings.operator.DEFAULT_UNITS` for a credential
 nothing declares: naming too few readers is how a rotation reports done while
 a service is still holding the old value.
 
-Operator-only (``require_operator``), ``Cache-Control: no-store``, and a plain
+Root-operator only (``require_root_operator``): the table is the platform
+tenant's vault and the appliance's environment, which no child tenant's admin
+may read, exactly as Settings. ``Cache-Control: no-store``, and a plain
 ``def`` because the table reads the vault through synchronous psycopg2
 (``crm/bridge/tests/test_route_concurrency.py``).
 
@@ -44,7 +46,7 @@ from robothor.secrets.status import SecretStatus, status_table
 from robothor.settings.operator import DEFAULT_UNITS, units_for
 from robothor.settings.registry import field_index
 from routers._audit import audited
-from routers._operator import PLATFORM_TENANT, require_operator
+from routers._operator import PLATFORM_TENANT, require_root_operator
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +98,7 @@ def _refuse(status_code: int, detail: Any) -> HTTPException:
 
 def _require_operator_no_store(request: Request) -> str:
     try:
-        return require_operator(request)
+        return require_root_operator(request)
     except HTTPException as refused:
         # The refusal is no-store too, like the list (``runs.py`` does the same).
         raise _refuse(refused.status_code, refused.detail) from None
@@ -132,7 +134,7 @@ def list_secrets(request: Request) -> JSONResponse:
 
 @router.delete("/{name}")
 def delete_secret(name: str, request: Request) -> JSONResponse:
-    require_operator(request)
+    require_root_operator(request)
     if is_bootstrap(name):
         raise _refuse(
             409,

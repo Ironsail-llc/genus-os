@@ -2,66 +2,269 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+import logging
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from models import CreateTenantRequest, UpdateTenantRequest
 
+from robothor.crm import dal as crm_dal
 from robothor.crm.dal import (
     create_tenant,
     get_tenant,
     list_tenants,
     update_tenant,
 )
+from robothor.crm.tenant_domains import (
+    InvalidSsoDomainError,
+    SsoDomainConflictError,
+    normalize_sso_domains,
+    sso_domains_of,
+)
+from robothor.sanitize import sanitize_log
+from routers._operator import is_root, require_root_operator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"])
+
+_ROOT_REQUIRED = JSONResponse(
+    {"error": "root operator required to change the tenant hierarchy"}, status_code=403
+)
+_NOT_ACCESSIBLE = JSONResponse({"error": "tenant not accessible"}, status_code=403)
+
+
+def _legacy_dev_mode() -> bool:
+    import os
+
+    from robothor.auth.runtime import legacy_headers_allowed
+
+    return legacy_headers_allowed(bind_host=os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"))
+
+
+def _is_root_tenant_operator(request: Request) -> bool:
+    """Whether the caller may shape the tenant hierarchy.
+
+    Tenant switching trusts ``parent_tenant_id``, and ``crm_tenants`` has no
+    RLS, so creating a tenant or changing its parent or ``active`` flag is
+    reserved for a human owner/admin whose home AND acting tenant are both the
+    platform tenant. A root admin acting in a child is not one: it must switch
+    back first. Only the loopback insecure-dev mode, which has no identity at
+    all, bypasses this. Otherwise this is exactly ``require_root_operator``.
+    """
+    if getattr(request.state, "auth", None) is None:
+        return _legacy_dev_mode()
+    try:
+        require_root_operator(request)
+    except HTTPException:
+        return False
+    return True
+
+
+def _visible(request: Request) -> frozenset[str] | None:
+    """The tenant ids this caller may read; ``None`` means every tenant.
+
+    A human sees ``resolve_accessible_tenants(home, role)`` — home, plus its
+    descendants for an owner/admin — rooted at the HOME tenant like the
+    switcher, so a root admin acting in a child still sees the tree it came
+    from. The root operator at home sees every tenant, including roots it did
+    not create. A service token sees its own tenant. The loopback insecure-dev
+    mode, with no identity at all, sees everything as it always did.
+    """
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    auth = getattr(request.state, "auth", None)
+    if auth is None:
+        return None if _legacy_dev_mode() else frozenset()
+    if auth.is_service:
+        return frozenset({auth.tenant_id})
+    if is_root(auth):
+        return None
+    return frozenset(resolve_accessible_tenants(auth.home_tenant_id, auth.role))
+
+
+def _may_edit_tenant(request: Request, tenant_id: str) -> bool:
+    """Display name and settings: any operator, for a tenant it can reach."""
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    auth = getattr(request.state, "auth", None)
+    if auth is None:
+        return _legacy_dev_mode()
+    if auth.is_service:
+        return bool(tenant_id == auth.tenant_id)
+    return tenant_id in resolve_accessible_tenants(auth.home_tenant_id, auth.role)
+
+
+def _changes_sso_domains(tenant_id: str, settings: dict | None) -> bool:
+    """Whether saving ``settings`` would add, change or drop the SSO domain claim.
+
+    ``settings`` replaces the stored object, so a body without ``sso_domains``
+    drops an existing claim. Compared as normalized sets, so a case or order
+    change alone is not a change. A malformed list counts as a change: only a
+    root operator gets as far as the 422 for it.
+    """
+    if settings is None:
+        return False
+    stored = set(sso_domains_of(crm_dal.get_tenant(tenant_id) or {}))
+    try:
+        incoming = set(normalize_sso_domains(settings.get("sso_domains", [])))
+    except InvalidSsoDomainError:
+        return True
+    return incoming != stored
+
+
+def _domain_error(exc: ValueError) -> JSONResponse:
+    """409 for a domain another tenant claims, 422 for a malformed one.
+
+    A fixed message, never the exception text: which tenant holds a domain
+    is not this caller's to learn. The detail goes to the server log.
+    """
+    logger.info("tenant sso_domains refused: %s", sanitize_log(exc))
+    if isinstance(exc, SsoDomainConflictError):
+        return JSONResponse(
+            {"error": "an sso domain is already claimed by another tenant"}, status_code=409
+        )
+    return JSONResponse({"error": "invalid sso_domains"}, status_code=422)
 
 
 @router.get("")
 def api_list_tenants(
+    request: Request,
     parentId: str | None = Query(None),
     activeOnly: bool = Query(True),
 ):
-    return {"tenants": list_tenants(parent_id=parentId, active_only=activeOnly)}
+    visible = _visible(request)
+    rows = list_tenants(parent_id=parentId, active_only=activeOnly)
+    if visible is not None:
+        rows = [row for row in rows if row.get("id") in visible]
+    return {"tenants": rows}
 
 
 @router.post("")
-def api_create_tenant(body: CreateTenantRequest):
+def api_create_tenant(body: CreateTenantRequest, request: Request):
     if not body.id or not body.displayName:
         return JSONResponse(
             {"error": "id and displayName required"},
             status_code=400,
         )
-    tenant_id = create_tenant(
-        tenant_id=body.id,
-        display_name=body.displayName,
-        parent_tenant_id=body.parentTenantId,
-        settings=body.settings,
-    )
+    if not _is_root_tenant_operator(request):
+        return _ROOT_REQUIRED
+    if body.parentTenantId:
+        problem = crm_dal.tenant_parent_problem(body.id, body.parentTenantId)
+        if problem:
+            return JSONResponse({"error": problem}, status_code=422)
+    try:
+        tenant_id = create_tenant(
+            tenant_id=body.id,
+            display_name=body.displayName,
+            parent_tenant_id=body.parentTenantId,
+            settings=body.settings,
+        )
+    except (SsoDomainConflictError, InvalidSsoDomainError) as exc:
+        return _domain_error(exc)
     if tenant_id:
         return {"id": tenant_id, "displayName": body.displayName}
     return JSONResponse({"error": "failed to create tenant (may already exist)"}, status_code=409)
 
 
+@router.get("/accessible", response_model=None)
+def api_accessible_tenants(request: Request) -> list[dict[str, Any]] | JSONResponse:
+    """The tenants this human may act in: home first, then its descendants.
+
+    Rooted at the HOME tenant even while the caller is acting in a child, so
+    the picker always offers the way back. Owners and admins get descendants
+    to depth 3 (``resolve_accessible_tenants``); every other role gets only
+    its home. Declared before ``/{tenant_id}`` so it is not read as an id.
+    """
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    auth = getattr(request.state, "auth", None)
+    if auth is None or auth.is_service:
+        return JSONResponse({"error": "human user required"}, status_code=403)
+    home = auth.home_tenant_id
+    rows: list[dict[str, Any]] = []
+    for tenant_id in resolve_accessible_tenants(home, auth.role):
+        row = crm_dal.get_tenant(tenant_id) or {}
+        rows.append(
+            {
+                "id": tenant_id,
+                "display_name": row.get("displayName") or tenant_id,
+                "parent_tenant_id": row.get("parentTenantId"),
+                "is_home": tenant_id == home,
+            }
+        )
+    rows.sort(key=lambda r: not r["is_home"])  # stable: home first, order kept
+    return rows
+
+
 @router.get("/{tenant_id}")
-def api_get_tenant(tenant_id: str):
-    result = get_tenant(tenant_id)
+def api_get_tenant(tenant_id: str, request: Request):
+    visible = _visible(request)
+    # 404, not 403, for a tenant outside the caller's reach: whether a sibling
+    # exists is itself something a child admin should not learn.
+    result = get_tenant(tenant_id) if visible is None or tenant_id in visible else None
     if not result:
         return JSONResponse({"error": "tenant not found"}, status_code=404)
     return result
 
 
 @router.patch("/{tenant_id}")
-def api_update_tenant(tenant_id: str, body: UpdateTenantRequest):
+def api_update_tenant(tenant_id: str, body: UpdateTenantRequest, request: Request):
+    # Compared with what is stored, so a form that sends every field back
+    # unchanged is an edit, not a reshape: an unchanged parent or flag
+    # changes nothing a child admin is not already allowed to keep.
+    asks_to_reshape = body.parentTenantId is not None or body.active is not None
+    stored = (crm_dal.get_tenant(tenant_id) or {}) if asks_to_reshape else {}
+    new_parent = (
+        body.parentTenantId
+        if body.parentTenantId is not None and body.parentTenantId != stored.get("parentTenantId")
+        else None
+    )
+    new_active = (
+        body.active
+        if body.active is not None and body.active != stored.get("active", True)
+        else None
+    )
+    # A claim routes every new SSO user from a domain, deployment-wide, so
+    # changing one is a root decision like re-parenting (also compared with
+    # what is stored: an unchanged claim is not a change).
+    reshapes = (
+        new_parent is not None
+        or new_active is not None
+        or _changes_sso_domains(tenant_id, body.settings)
+    )
+    if reshapes:
+        if not _is_root_tenant_operator(request):
+            return _ROOT_REQUIRED
+        if new_parent is not None:
+            problem = crm_dal.tenant_parent_problem(tenant_id, new_parent)
+            if problem:
+                return JSONResponse({"error": problem}, status_code=422)
+    elif not _may_edit_tenant(request, tenant_id):
+        return _NOT_ACCESSIBLE
+
     kwargs = {}
     if body.displayName is not None:
         kwargs["display_name"] = body.displayName
-    if body.parentTenantId is not None:
-        kwargs["parent_tenant_id"] = body.parentTenantId
+    if new_parent is not None:
+        kwargs["parent_tenant_id"] = new_parent
     if body.settings is not None:
         kwargs["settings"] = body.settings
-    if body.active is not None:
-        kwargs["active"] = body.active
+    if new_active is not None:
+        kwargs["active"] = new_active
 
-    if update_tenant(tenant_id, **kwargs):
+    if not kwargs:
+        # Nothing to change (e.g. {"parentTenantId": null}): a no-op is not a
+        # missing tenant. update_tenant answers False for an empty change.
+        if crm_dal.get_tenant(tenant_id):
+            return {"success": True, "id": tenant_id}
+        return JSONResponse({"error": "tenant not found"}, status_code=404)
+
+    try:
+        updated = update_tenant(tenant_id, **kwargs)
+    except (SsoDomainConflictError, InvalidSsoDomainError) as exc:
+        return _domain_error(exc)
+    if updated:
         return {"success": True, "id": tenant_id}
     return JSONResponse({"error": "tenant not found"}, status_code=404)

@@ -38,6 +38,24 @@ VALID_ROLES = HUMAN_ROLES
 
 
 def cmd_user(args: Namespace) -> int:
+    """Run one ``user`` verb, bound to ``--tenant`` when it is given.
+
+    With RLS enforcing, a connection is confined to the tenant it is bound to,
+    and a CLI process is bound to its own tenant. So ``--tenant <child>`` from
+    a root shell must also mean "run in the child's scope": otherwise every
+    write into the child is refused by the policy's ``WITH CHECK`` and every
+    lookup in it finds nothing.
+    """
+    from robothor.db.connection import tenant_scope
+
+    tenant = getattr(args, "tenant", None)
+    if tenant:
+        with tenant_scope(tenant):
+            return _dispatch(args)
+    return _dispatch(args)
+
+
+def _dispatch(args: Namespace) -> int:
     command = getattr(args, "user_command", None)
     if command == "list":
         return _cmd_list(args)
@@ -144,6 +162,12 @@ def _cmd_add(args: Namespace) -> int:
         return 2
 
     tenant = getattr(args, "tenant", None) or DEFAULT_TENANT
+    # --sso: the Helm's SSO-invite shape (crm/bridge/routers/users.py). The
+    # account is ACTIVE with no password and no IdP binding: nothing can sign
+    # in as it until a binding grant is armed and a verified SSO claim for the
+    # address spends it. An `invited` row cannot consume a grant at all.
+    sso = bool(getattr(args, "sso", False))
+    account_status = "active" if sso else "invited"
     name = args.name.strip()
     email = (getattr(args, "email", None) or "").strip() or None
     telegram_id = getattr(args, "telegram_id", None)
@@ -240,7 +264,7 @@ def _cmd_add(args: Namespace) -> int:
                     """
                     INSERT INTO user_accounts
                         (tenant_id, email, display_name, role, status, person_id)
-                    VALUES (%s, %s, %s, %s, 'invited', %s)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (tenant_id, email) DO NOTHING
                     RETURNING id
                     """,
@@ -248,7 +272,14 @@ def _cmd_add(args: Namespace) -> int:
                     # sign-in path both casefold what they look up, and a row
                     # written as "Alice@Example.com" must not be a row only
                     # one of them can find. (See migration 114.)
-                    (tenant, crm_accounts.canonical_email(email), name, role, resolved_person_id),
+                    (
+                        tenant,
+                        crm_accounts.canonical_email(email),
+                        name,
+                        role,
+                        account_status,
+                        resolved_person_id,
+                    ),
                 )
                 account_created = bool(cur.fetchone())
     except psycopg2.errors.UniqueViolation as exc:
@@ -313,11 +344,17 @@ def _cmd_add(args: Namespace) -> int:
         print(f"✓ memory entity linked: id={entity_id}")
     if email:
         if account_created:
-            print(f"✓ user_accounts invite created for {email} (status=invited)")
+            print(f"✓ user_accounts account created for {email} (status={account_status})")
         else:
             print(f"  user_accounts: {email} already exists in tenant '{tenant}' (no change)")
-        print("Next step — arm the SSO binding grant so this account can sign in:")
-        print(f"  robothor auth grant-binding --email {email} --tenant {tenant}")
+        cli = _invoked_name()
+        if sso:
+            print("Next step — arm the SSO binding grant so this account can sign in:")
+            print(f"  {cli} auth grant-binding --email {email} --tenant {tenant}")
+        else:
+            print("Next step — for password sign-in, set a password and activate the account:")
+            print(f"  {cli} user set-password --tenant {tenant} {email}")
+            print("  (activation is SQL for now; for SSO sign-in, add the account with --sso)")
     return 0
 
 

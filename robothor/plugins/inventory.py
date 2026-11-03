@@ -87,6 +87,9 @@ class PluginStatus:
     #: What install and sync established about this distribution, composed for
     #: the Helm's trust badge. See :func:`_trust`.
     trust: dict[str, Any] = field(default_factory=dict)
+    #: What the root tenant forced for this engine's tenant: ``"on"``,
+    #: ``"off"``, or None when the child decides (``robothor.plugins.grants``).
+    forced: str | None = None
 
     def as_json(self) -> dict[str, Any]:
         """The wire shape the admin API and the Helm read.
@@ -108,6 +111,7 @@ class PluginStatus:
             "manifest": self.manifest,
             "source": self.source,
             "trust": self.trust,
+            "forced": self.forced,
         }
 
 
@@ -171,6 +175,7 @@ def _trust(row: LockRow | None, drifted: bool, manifest: dict[str, Any] | None) 
 def status_for(name: str, dist: Any, eps: list[Any]) -> PluginStatus:
     """Measure one distribution by loading exactly its entry points."""
     from robothor.plugins import lockfile
+    from robothor.plugins.grants import ROOT_DISABLED_REASON, canonical, forced_states
     from robothor.plugins.loader import load_plugins
 
     lock = lockfile.read_lockfile()
@@ -185,7 +190,8 @@ def status_for(name: str, dist: Any, eps: list[Any]) -> PluginStatus:
         kind: len(getattr(loaded, kind, {}) or {}) for kind in KINDS if getattr(loaded, kind, None)
     }
     reason = loaded.failures[0].reason if loaded.failures else ""
-    if reason == lockfile.DISABLED_REASON:
+    # Both are decisions, not faults: the child's own, or the root tenant's.
+    if reason in (lockfile.DISABLED_REASON, ROOT_DISABLED_REASON):
         state = "disabled"
     elif loaded.failures:
         state = "failed"
@@ -208,6 +214,7 @@ def status_for(name: str, dist: Any, eps: list[Any]) -> PluginStatus:
         manifest=manifest,
         source=row.source.as_json() if row is not None and row.source is not None else None,
         trust=_trust(row, drifted, manifest),
+        forced=forced_states().get(canonical(name)),
     )
 
 

@@ -28,12 +28,57 @@
  * verdicts, never a value — and Settings goes dark if a broader pattern ever
  * swallows them.
  *
+ * `/api/auth/switch-tenant` is denied because its reply IS a bearer: the
+ * bridge answers a tenant switch with a fresh access token in the body, and
+ * this proxy would hand it to browser JavaScript. The Helm switches through
+ * `/api/session/switch-tenant`, which keeps the token in the session cookie.
+ *
  * Matched against the RESOLVED target path (after `new URL` normalizes any
- * `..` segments), never the raw string the caller supplied.
+ * `..` segments), never the raw string the caller supplied — and DECODED
+ * first: the bridge's server percent-decodes the path before it routes, so
+ * `switch%2Dtenant` reaches the switch route while failing a test against the
+ * encoded string. See `normalizedBridgePath`.
  */
 export const DENIED_BRIDGE_PATHS =
-  /^\/(?:api\/)?(?:vault\/(?:get|list)|setup)(?:\/|$)/i;
+  /^\/(?:api\/)?(?:vault\/(?:get|list)|setup|auth\/switch-tenant)(?:\/|$)/i;
+
+const MAX_DECODE_ROUNDS = 3;
+
+/**
+ * The path as the bridge will route it: percent-decoded until it stops
+ * changing (at most three rounds, so `%252D` is caught as well as `%2D`), dot
+ * segments resolved, and runs of slashes collapsed. Null when it cannot be
+ * decoded, or still carries a `%` after the last round — neither is a path
+ * the Helm ever sends, and both are ways to hide one.
+ */
+export function normalizedBridgePath(pathname: string): string | null {
+  let current = pathname;
+  for (let round = 0; round < MAX_DECODE_ROUNDS; round++) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(current);
+    } catch {
+      return null;
+    }
+    if (decoded === current) break;
+    current = decoded;
+  }
+  if (current.includes("%")) return null;
+  return resolveSegments(current);
+}
+
+/** `/a//b/./c/../d` → `/a/b/d`: empty and dot segments as a router sees them. */
+function resolveSegments(path: string): string {
+  const out: string[] = [];
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") out.pop();
+    else out.push(segment);
+  }
+  return `/${out.join("/")}${path.endsWith("/") && out.length ? "/" : ""}`;
+}
 
 export function isDeniedBridgePath(pathname: string): boolean {
-  return DENIED_BRIDGE_PATHS.test(pathname);
+  const normalized = normalizedBridgePath(pathname);
+  return normalized === null || DENIED_BRIDGE_PATHS.test(normalized);
 }

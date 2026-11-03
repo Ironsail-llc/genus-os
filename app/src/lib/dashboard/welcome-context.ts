@@ -3,8 +3,9 @@
  * Server-side only — called from the welcome API route.
  */
 
+import { auth } from "@/lib/auth";
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
-import { getServiceUrl } from "@/lib/services/registry";
+import { getServiceUrl, rootTenant } from "@/lib/services/registry";
 import { OWNER_NAME } from "@/lib/config";
 const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
 const ORCHESTRATOR_URL = getServiceUrl("orchestrator") || "http://localhost:9099";
@@ -164,6 +165,14 @@ const EVENT_BUS_TIMEOUT_MS = 2000;
 
 async function fetchEventBusStats() {
   try {
+    // The counts span every tenant's events on the shared streams: a root
+    // session at home sees them, anyone else skips the section — the same
+    // rule as /api/events/stats.
+    const session = await auth();
+    const root = rootTenant();
+    if (!session || session.tenantId !== root || session.homeTenantId !== root) {
+      return null;
+    }
     const { streamLengths } = await import("@/lib/event-bus/redis-client");
     const streams = await withTimeout(streamLengths(), EVENT_BUS_TIMEOUT_MS, "event bus");
     const total = Object.values(streams).reduce((sum, n) => sum + n, 0);

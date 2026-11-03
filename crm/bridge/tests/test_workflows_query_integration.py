@@ -13,8 +13,8 @@ def test_workflow_queries_valid(db_conn, monkeypatch):
         yield db_conn
 
     monkeypatch.setattr(workflows, "get_connection", _fake)
-    assert isinstance(workflows._list_workflows(), list)
-    assert isinstance(workflows._workflow_runs("none", 5), list)
+    assert isinstance(workflows._list_workflows("test-tenant"), list)
+    assert isinstance(workflows._workflow_runs("none", 5, "test-tenant"), list)
 
 
 def test_workflow_run_detail_query_valid(db_conn, monkeypatch):
@@ -23,4 +23,7 @@ def test_workflow_run_detail_query_valid(db_conn, monkeypatch):
         yield db_conn
 
     monkeypatch.setattr(workflows, "get_connection", _fake)
-    assert workflows._workflow_run("none", "00000000-0000-4000-8000-000000000000") is None
+    assert (
+        workflows._workflow_run("none", "00000000-0000-4000-8000-000000000000", "test-tenant")
+        is None
+    )

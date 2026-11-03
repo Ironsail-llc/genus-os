@@ -9,6 +9,7 @@
  */
 
 import { NextRequest } from "next/server";
+import { auth } from "@/lib/auth";
 import {
   readRecent,
   openStreamReader,
@@ -16,11 +17,20 @@ import {
   type StreamName,
   type StreamReader,
 } from "@/lib/event-bus/redis-client";
+import { visibleToTenant } from "@/lib/event-bus/tenant-filter";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  // The streams are shared by every tenant's engine and the bridge; this
+  // session sees only the events of the tenant it is acting in.
+  const session = await auth();
+  if (!session?.bridgeAccess || !session.tenantId) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+  const tenant = session.tenantId;
+
   const streamsParam =
     request.nextUrl.searchParams.get("streams") || "email,crm,health,agent";
   const requestedStreams = streamsParam
@@ -57,9 +67,12 @@ export async function GET(request: NextRequest) {
           if (!isValidStream(streamName)) continue;
           lastIds[streamName] = "$";
           try {
-            const recent = await readRecent(streamName, 20);
+            const raw = await readRecent(streamName, 20);
+            const recent = visibleToTenant(raw, tenant);
             // XREVRANGE is newest first; an empty stream starts from the beginning.
-            lastIds[streamName] = recent[0]?.id ?? "0-0";
+            // The cursor is the newest id this read covered, including events
+            // filtered out as another tenant's, so the live read resumes after them.
+            lastIds[streamName] = raw[0]?.id ?? "0-0";
             for (const event of recent.reverse()) {
               const data = JSON.stringify({
                 stream: streamName,
@@ -92,6 +105,10 @@ export async function GET(request: NextRequest) {
             if (cancelled) break;
             for (const { stream: streamName, events } of results) {
               for (const event of events) {
+                // Advance past every event, send only this tenant's.
+                lastIds[streamName] = event.id;
+              }
+              for (const event of visibleToTenant(events, tenant)) {
                 const data = JSON.stringify({
                   stream: streamName,
                   ...event,
@@ -99,7 +116,6 @@ export async function GET(request: NextRequest) {
                 controller.enqueue(
                   encoder.encode(`event: message\ndata: ${data}\n\n`)
                 );
-                lastIds[streamName] = event.id;
               }
             }
 

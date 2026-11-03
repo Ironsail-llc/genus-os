@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from fastapi import Request
@@ -16,6 +18,8 @@ from starlette.datastructures import MutableHeaders
 from robothor.audit.logger import log_event
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from starlette.responses import Response
     from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -102,7 +106,7 @@ def _with_header(send: Send, name: str, value: str) -> Send:
 
 
 class BridgeMiddleware:
-    """Correlation id, authentication, tenant binding and RBAC: one ASGI layer.
+    """Correlation id, authentication, tenant scope, tenant binding and RBAC: one ASGI layer.
 
     These were four ``BaseHTTPMiddleware`` classes, and each one wrapped every
     request -- and every streamed body -- in a task and a memory stream of its
@@ -117,6 +121,9 @@ class BridgeMiddleware:
        401 on any route; no token on a private route is a 401 when auth is
        enforced; a verified identity without the route's scope or role is a
        403.
+    2b. **Tenant scope.** Everything after authentication runs inside
+       ``tenant_scope(auth.tenant_id)`` (``_tenant_scoped``), so RLS binds each
+       pooled connection to the ACTING tenant.
     3. **Tenant.** A verified token's tenant is the tenant; an ``X-Tenant-Id``
        that disagrees is a 403. In loopback dev mode the header is trusted.
        ``request.state.tenant_id`` is set, and ``X-Tenant-Id`` goes on the
@@ -184,11 +191,20 @@ class BridgeMiddleware:
         send = _with_header(send, "X-Correlation-Id", correlation_id)
 
         # 2. Authentication.
-        refusal = self._authenticate(request)
+        refusal = await self._authenticate(request)
         if refusal is not None:
             await refusal(scope, receive, send)
             return
 
+        # 2b. Tenant scope: everything after authentication runs bound to the
+        # token's tenant for RLS (``_tenant_scoped``).
+        with self._tenant_scoped(request.state.auth):
+            await self._after_auth(request, scope, receive, send)
+
+    async def _after_auth(
+        self, request: Request, scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        """Steps 3 and 4 and the app, inside the request's tenant scope."""
         # 3. Tenant.
         tenant_id, refusal = self._bind_tenant(request)
         if refusal is not None:
@@ -205,7 +221,7 @@ class BridgeMiddleware:
 
         await self.app(scope, receive, send)
 
-    def _authenticate(self, request: Request) -> Response | None:
+    async def _authenticate(self, request: Request) -> Response | None:
         """Verify a bridge-issued session/service token into ``request.state.auth``.
 
         - valid token  → ``request.state.auth = AuthContext`` (tenant comes from the token).
@@ -245,6 +261,22 @@ class BridgeMiddleware:
                 _log_unauthorized(request, "invalid or expired token")
                 return JSONResponse(status_code=401, content={"error": "invalid or expired token"})
 
+        verified = request.state.auth
+        if verified is not None:
+            refusal = await _session_refusal(verified)
+            if refusal is not None:
+                status, error = refusal
+                log_event(
+                    "auth.denied",
+                    error,
+                    actor=verified.actor_id,
+                    details={"method": request.method, "path": request.url.path},
+                    status="denied",
+                )
+                if status == 401:
+                    _log_unauthorized(request, error)
+                return JSONResponse(status_code=status, content={"error": error})
+
         path = request.url.path
         if _auth_enforced() and request.state.auth is None and path not in self._PUBLIC_PATHS:
             log_event(
@@ -262,6 +294,43 @@ class BridgeMiddleware:
             if denial:
                 return _deny(request, denial, actor=auth.actor_id, public_error=denial)
         return None
+
+    @staticmethod
+    @contextmanager
+    def _tenant_scoped(auth: AuthContext | None) -> Iterator[None]:
+        """Bind the database scope to an authenticated request's ACTING tenant.
+
+        Every pooled connection checked out beneath it binds ``app.tenant_id``
+        to that tenant, and the migration-081 policy refuses another tenant's
+        rows even where a query forgot its WHERE. The scope is a ContextVar;
+        anyio copies the context into the threadpool, so sync handlers see it
+        too. An unauthenticated request gets no scope, and with
+        ``ROBOTHOR_RLS_ENABLED`` unset nothing binds at all. A human caller's
+        audit rows written without an explicit actor (the DAL's CRM audit) are
+        filed under that account, in the acting tenant, with the home tenant in
+        their details.
+        """
+        tenant_id = getattr(auth, "tenant_id", None) if auth is not None else None
+        if not tenant_id:
+            yield
+            return
+
+        from robothor.audit.logger import request_actor
+        from robothor.db.connection import tenant_scope
+
+        if getattr(auth, "is_service", True):
+            with tenant_scope(str(tenant_id)):
+                yield
+            return
+        with (
+            tenant_scope(str(tenant_id)),
+            request_actor(
+                user_id=str(auth.user_id),
+                home_tenant_id=str(auth.home_tenant_id),
+                tenant_id=str(tenant_id),
+            ),
+        ):
+            yield
 
     @staticmethod
     def _bind_tenant(request: Request) -> tuple[str, Response | None]:
@@ -340,6 +409,31 @@ class BridgeMiddleware:
         return None
 
 
+async def _session_refusal(auth: AuthContext) -> tuple[int, str] | None:
+    """Why a verified token may not be honoured right now, or None.
+
+    A signature proves who minted the token, not that what it says is still
+    true. Two things can stop being true before it expires:
+
+    * the switch was turned off — an ACTING token is honoured only while
+      ``GENUS_TENANT_SWITCH_MODE`` is ``enforce`` (403), so turning it off ends
+      every acting session at once;
+    * the account moved tenant or was disabled — a HUMAN token is honoured
+      only while its account still lives in ``home_tid`` and is active (401;
+      ``robothor.auth.session_standing``, cached ~30 s per user).
+    """
+    from robothor.auth import session_standing
+    from robothor.auth.runtime import tenant_switch_mode
+
+    if auth.is_acting and tenant_switch_mode() != "enforce":
+        return 403, "tenant switching disabled"
+    if not auth.is_service and not await asyncio.to_thread(
+        session_standing.stands, auth.user_id, auth.home_tenant_id
+    ):
+        return 401, "session no longer valid"
+    return None
+
+
 def _auth_enforced() -> bool:
     from robothor.auth.runtime import auth_required
 
@@ -354,6 +448,9 @@ def _legacy_headers_allowed() -> bool:
 
 def _bridge_bind_host() -> str:
     return os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1")
+
+
+_ACCESSIBLE_TENANTS_PATH = "/api/tenants/accessible"
 
 
 def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | None:
@@ -373,6 +470,12 @@ def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | No
         auth.is_service or auth.role not in {"owner", "admin"}
     ):
         return "human tenant operator required"
+
+    if path == _ACCESSIBLE_TENANTS_PATH:
+        # The tenant picker: what THIS human may switch into. Every human role
+        # may ask (a single-tenant user gets only their home); an agent has no
+        # picker and no business enumerating the hierarchy.
+        return "human user required" if auth.is_service else None
 
     if path.startswith("/api/tenants"):
         if auth.is_service:
@@ -407,12 +510,12 @@ def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | No
         )
 
     if path == "/api/installed-agents" or path.startswith("/api/installed-agents/"):
-        from robothor.constants import DEFAULT_TENANT
+        from routers._operator import is_root
 
-        # Installation state is appliance-global, not tenant-local.  Until it
-        # is represented as a tenant-scoped resource, only the primary tenant
-        # may administer or inspect it.
-        if auth.tenant_id != DEFAULT_TENANT:
+        # Installation state writes the bridge host's own workspace — the
+        # platform tenant's fleet. Only a caller AT HOME in the platform tenant
+        # may administer or inspect it; a root admin acting in a child is not.
+        if not is_root(auth):
             return "appliance administration not authorized for tenant"
         scope = "agent:read" if method.upper() in {"GET", "HEAD", "OPTIONS"} else "agent:admin"
         return _privileged_access_denial(auth, scope, "agent administration not authorized")
@@ -427,14 +530,15 @@ def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | No
         if denial:
             return denial
 
-        # The current ingestion and pipeline-trigger implementations are
-        # appliance-local and do not accept a tenant boundary.  Fail closed
-        # for every non-primary tenant instead of writing or executing against
-        # another tenant's state.
-        if path == "/api/memory/store" or path.startswith("/api/memory/pipeline/trigger/"):
-            from robothor.constants import DEFAULT_TENANT
+        # Ingestion is tenant-aware (``ingest_content(tenant_id=...)``); the
+        # pipeline trigger is not: it runs the host's own ingestion scripts,
+        # which read the platform tenant's sources. Run under a child's binding
+        # they would copy the platform's data into the child, so it stays with
+        # a caller at home in the platform tenant.
+        if path.startswith("/api/memory/pipeline/trigger/"):
+            from routers._operator import is_root
 
-            if auth.tenant_id != DEFAULT_TENANT:
+            if not is_root(auth):
                 return "memory operation not authorized for tenant"
 
     if method.upper() == "POST" and path.startswith("/api/tasks/"):

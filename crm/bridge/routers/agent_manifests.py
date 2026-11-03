@@ -14,14 +14,20 @@ never reads. So the store, the verdict, the reconcile and the trigger all live
 in the engine (``robothor/engine/admin_manifests.py``, under
 ``/api/admin/agent-manifests``), and this router is the operator-facing front
 door to them: it keeps every path, status code and response shape the
-dashboard knows, the operator gate and the primary-tenant gate, and the audit
-trail that names the operator — and forwards everything else with
-``engine_request``. There is no local-disk fallback: two readers of one fleet
-is how the list and the engine come to disagree.
+dashboard knows, the tenant-admin gate, and the audit trail that names the
+operator — and forwards everything else with ``engine_request``. There is no
+local-disk fallback: two readers of one fleet is how the list and the engine
+come to disagree.
+
+**The engine is the ACTING tenant's.** One engine per tenant cell, each with
+its own workspace, so every call goes to ``get_tenant_id(request)``'s engine
+with a control token minted for that tenant (``_engine_client``): a root admin
+who switched into a child edits the child's fleet, and a child admin never
+reaches the parent's or a sibling's — that engine refuses the token anyway.
 
 Two properties this file is built around:
 
-* **Every route gates before it forwards.** ``require_operator`` on every route,
+* **Every route gates before it forwards.** ``require_tenant_admin`` on every route,
   GETs included (this enumerates the fleet, its models and its delivery
   targets), and the agent id is validated here as well as in the engine, so a
   hostile id never becomes part of an engine URL.
@@ -40,7 +46,7 @@ from typing import Any
 from urllib.parse import quote
 
 from deps import get_tenant_id
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from robothor.engine.manifest_store import (
     CreateRequest,
@@ -53,31 +59,12 @@ from robothor.engine.manifest_store import (
 )
 from routers._audit import audited
 from routers._engine_client import engine_request
-from routers._operator import require_operator
+from routers._operator import require_tenant_admin
 
 logger = logging.getLogger(__name__)
 
 
-def _require_primary_tenant(tenant_id: str = Depends(get_tenant_id)) -> None:
-    """The agent fleet is appliance-global, so deny secondary tenants.
-
-    Symmetric with ``installed_agents``: one engine owns one manifest
-    directory, and a second tenant's operator editing it would be editing
-    somebody else's fleet.
-    """
-    from robothor.constants import DEFAULT_TENANT
-
-    if tenant_id != DEFAULT_TENANT:
-        raise HTTPException(
-            status_code=403,
-            detail="appliance administration not authorized for tenant",
-        )
-
-
-router = APIRouter(
-    tags=["agent-manifests"],
-    dependencies=[Depends(_require_primary_tenant)],
-)
+router = APIRouter(tags=["agent-manifests"])
 
 #: The engine's half of this router. Every path below is built from it and an
 #: id that ``_safe_id`` has already constrained to ``[a-z0-9-]``.
@@ -89,6 +76,11 @@ _ENGINE = "/api/admin/agent-manifests"
 ENGINE_UNAVAILABLE = (
     "the engine did not answer, or answered with an error, so the request could not be completed"
 )
+
+#: FastAPI's own 404 for a path it has no route for: an engine older than these
+#: routes, which is not the same answer as "no such agent".
+_NO_ROUTE = "Not Found"
+OLD_ENGINE = "the tenant's engine does not support manifest administration; upgrade the engine"
 
 #: One write now covers the scan, the registry build, the write and the
 #: reconcile, which used to be two calls with the client's default each.
@@ -116,20 +108,27 @@ def _engine_path(agent_id: str, action: str = "") -> str:
 
 
 async def _forward(
+    request: Request,
     method: str,
     path: str,
     body: dict[str, Any] | None = None,
     *,
     timeout: float | None = None,
 ) -> Any:
-    """One engine call, answered as the browser expects it. See the module header."""
+    """One call to the acting tenant's engine, answered as the browser expects it."""
+    tenant = get_tenant_id(request)
     if timeout is None:
-        status, payload = await engine_request(method, path, json=body)
+        status, payload = await engine_request(method, path, json=body, tenant=tenant)
     else:
-        status, payload = await engine_request(method, path, json=body, timeout=timeout)
+        status, payload = await engine_request(
+            method, path, json=body, timeout=timeout, tenant=tenant
+        )
     if status < 400:
         return payload
     detail = payload.get("detail") if isinstance(payload, dict) else None
+    if status == 404 and detail == _NO_ROUTE:
+        logger.warning("The engine has no manifest administration routes; upgrade it")
+        raise HTTPException(status_code=502, detail=OLD_ENGINE)
     if detail is not None and status not in (401, 403):
         raise HTTPException(status_code=status, detail=detail)
     logger.warning("Agent-manifest engine call answered %d", status)
@@ -154,7 +153,9 @@ async def _forward_write(
     happen, and is not audited, as before.
     """
     try:
-        result: dict[str, Any] = await _forward(method, path, body, timeout=WRITE_TIMEOUT_SECONDS)
+        result: dict[str, Any] = await _forward(
+            request, method, path, body, timeout=WRITE_TIMEOUT_SECONDS
+        )
     except HTTPException as error:
         if error.status_code == 502:
             audited(request, event, action=agent_id, agent_id=agent_id, status="error", **details)
@@ -189,32 +190,34 @@ async def reconcile_engine_schedules() -> dict[str, Any]:
 
 @router.get("/api/agent-manifests")
 async def list_manifests(request: Request) -> dict[str, Any]:
-    """Every agent this appliance has, including the ones that will not load."""
-    require_operator(request)
-    result: dict[str, Any] = await _forward("GET", _ENGINE)
+    """Every agent the ACTING tenant has, including the ones that will not load."""
+    require_tenant_admin(request)
+    result: dict[str, Any] = await _forward(request, "GET", _ENGINE)
     return result
 
 
 @router.get("/api/agent-manifests/{agent_id}")
 async def get_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     """One agent: its document, its raw YAML, its instructions, its verdict."""
-    require_operator(request)
-    result: dict[str, Any] = await _forward("GET", _engine_path(_safe_id(agent_id)))
+    require_tenant_admin(request)
+    result: dict[str, Any] = await _forward(request, "GET", _engine_path(_safe_id(agent_id)))
     return result
 
 
 @router.post("/api/agent-manifests/validate")
 async def validate_manifest(body: ValidateRequest, request: Request) -> dict[str, Any]:
     """Always 200 when the engine answers. The verdict is the payload."""
-    require_operator(request)
-    result: dict[str, Any] = await _forward("POST", f"{_ENGINE}/validate", body.model_dump())
+    require_tenant_admin(request)
+    result: dict[str, Any] = await _forward(
+        request, "POST", f"{_ENGINE}/validate", body.model_dump()
+    )
     return result
 
 
 @router.post("/api/agent-manifests", status_code=201)
 async def create_manifest(body: CreateRequest, request: Request) -> dict[str, Any]:
     """Scaffold an agent, validate it, write it, and make it fire — in the engine."""
-    require_operator(request)
+    require_tenant_admin(request)
     # The id the engine will derive, for an audit event whose answer is lost.
     # An id the engine would refuse is not a slug, so it is not the action.
     try:
@@ -231,7 +234,7 @@ async def create_manifest(body: CreateRequest, request: Request) -> dict[str, An
 @router.patch("/api/agent-manifests/{agent_id}")
 async def patch_manifest(agent_id: str, body: PatchRequest, request: Request) -> dict[str, Any]:
     """Edit the paths the form owns, and nothing else."""
-    require_operator(request)
+    require_tenant_admin(request)
     agent_id = _safe_id(agent_id)
     changes = body.owned_paths()
     result = await _forward_edit(request, agent_id, changes, "PATCH", "", body.model_dump())
@@ -241,7 +244,7 @@ async def patch_manifest(agent_id: str, body: PatchRequest, request: Request) ->
 @router.post("/api/agent-manifests/{agent_id}/enable")
 async def enable_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     """Put the agent back on its schedule. Never a no-op."""
-    require_operator(request)
+    require_tenant_admin(request)
     agent_id = _safe_id(agent_id)
     changes = {"schedule.enabled": True}
     result = await _forward_edit(request, agent_id, changes, "POST", "enable")
@@ -251,7 +254,7 @@ async def enable_manifest(agent_id: str, request: Request) -> dict[str, Any]:
 @router.post("/api/agent-manifests/{agent_id}/disable")
 async def disable_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     """Silence the agent without retiring it — cron, heartbeat and worker."""
-    require_operator(request)
+    require_tenant_admin(request)
     agent_id = _safe_id(agent_id)
     changes = {"schedule.enabled": False}
     result = await _forward_edit(request, agent_id, changes, "POST", "disable")
@@ -296,7 +299,7 @@ def _audited_edit(
 @router.delete("/api/agent-manifests/{agent_id}")
 async def retire_manifest(agent_id: str, body: DeleteRequest, request: Request) -> dict[str, Any]:
     """Move the manifest to ``retired/``; the confirmation is the id, typed."""
-    require_operator(request)
+    require_tenant_admin(request)
     agent_id = _safe_id(agent_id)
     event = "helm.agent_manifest.retire"
     path = _engine_path(agent_id)
@@ -308,12 +311,15 @@ async def retire_manifest(agent_id: str, body: DeleteRequest, request: Request) 
 @router.post("/api/agent-manifests/{agent_id}/run")
 async def run_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     """Fire the agent once, now. The engine owns the runner."""
-    require_operator(request)
+    require_tenant_admin(request)
     agent_id = _safe_id(agent_id)
     path = f"{_ENGINE}/{quote(agent_id, safe='')}/run"
-    status, body = await engine_request("POST", path)
+    status, body = await engine_request("POST", path, tenant=get_tenant_id(request))
     # 404/422 are the engine's own answers about the id; pass them through.
     detail = body.get("detail") if isinstance(body, dict) else None
+    if status == 404 and detail == _NO_ROUTE:
+        logger.warning("The engine has no manifest administration routes; upgrade it")
+        raise HTTPException(status_code=502, detail=OLD_ENGINE)
     if status in (404, 422) and detail is not None:
         raise HTTPException(status_code=status, detail=detail)
     triggered = body.get("triggered") if isinstance(body, dict) else None

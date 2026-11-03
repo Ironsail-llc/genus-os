@@ -29,10 +29,28 @@ def manifests(monkeypatch, tmp_path):
     return root
 
 
+def _root_request():
+    """A verified root operator at home: the listing carries the root gate."""
+    from types import SimpleNamespace
+
+    from routers._operator import PLATFORM_TENANT
+
+    from robothor.auth.deps import AuthContext
+
+    auth = AuthContext(
+        user_id="operator-1",
+        tenant_id=PLATFORM_TENANT,
+        role="owner",
+        typ="user",
+        audience="genus-bridge",
+    )
+    return SimpleNamespace(state=SimpleNamespace(auth=auth))
+
+
 def _list(installed: dict) -> dict:
     config = MagicMock(installed_agents=installed)
     with patch("robothor.templates.instance.InstanceConfig.load", return_value=config):
-        return {row["agent_id"]: row for row in list_installed_agents()["agents"]}
+        return {row["agent_id"]: row for row in list_installed_agents(_root_request())["agents"]}
 
 
 def test_a_hub_agent_carries_the_sha256_it_was_pinned_to(manifests) -> None:
