@@ -1188,6 +1188,36 @@ blocked by the `sandbox_playground` guardrail. Nothing ran, so do not retry it:
 pass the unlock on. Who gets which outcome is in
 [Guardrail flips](runbooks/GUARDRAIL_FLIPS.md#sandbox-playground-when-a-container-cannot-be-had).
 
+### Credential files — `credential_path`
+
+`read_file`, `exec` and `execute_code` refuse credential files for every
+caller, the owner included, before anything is opened. The result has
+`error_type: credential_path` and names the file, never a value. The operator
+hands credentials over through the vault (a `secrets:` grant in the manifest,
+or `vault_get`), so a refusal means: say what is missing and ask, do not look
+for another way to read the file.
+
+The list:
+
+- anywhere on a path: `.ssh/`, `.aws/`, `.kube/`, `.docker/`, `.gnupg/`, `gcloud/`;
+- directly under `.config/`: `gh/`, and any directory whose name starts with
+  `gcloud`, `gws` or `gog` (the Google Cloud and Google Workspace CLIs);
+- by name: `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`, `.git-credentials`,
+  `.vault-key`, `.env` and `.env.*`, `credentials*.json`, `token*.json` and
+  `tokens*.json` (not `tokenizer.json`), `client_secret*.json`;
+- `*.pem` and `*.key` under the home directory.
+
+Documentation files (`*.example`, `*.md` and the like) named like one of these
+stay readable, except inside a listed directory. `exec` refuses a command when
+any argument, redirection or string inside it names a listed path, spelled
+with `~`, `$HOME` or `${HOME}` or not. `ls`, `test`/`[`, `stat`, `wc` and `du`
+are let through, because they report on a file without reading it. The check
+runs before the sandbox decision, so it applies inside a container too.
+`execute_code` refuses a snippet whose source names a listed path. The masked
+`read_file` view of the instance env file (`robothor.env`, `connectors.env`)
+for the verified owner is unchanged. `.env` and `.env.*` are on the list and
+are not masked.
+
 ### Calling an API from code: `genus_tools`, not `curl`
 
 Both work. They differ in what survives the call.

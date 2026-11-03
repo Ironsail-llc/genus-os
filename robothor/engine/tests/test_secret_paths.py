@@ -182,7 +182,7 @@ class TestReadFileRefuses:
     def test_a_plain_dotenv_is_returned_masked_to_the_owner(self, tmp_path: Path) -> None:
         from robothor.identity import IdentityContext
 
-        env = tmp_path / ".env"
+        env = tmp_path / "connectors.env"
         env.write_text("ACME_API_KEY=Qx9v2LmT7pRz4Kd1wq\n")
         owner = IdentityContext(
             tenant_id="test", channel="telegram", identifier="owner", verified=True, role="owner"

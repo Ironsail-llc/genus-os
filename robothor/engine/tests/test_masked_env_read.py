@@ -146,7 +146,7 @@ class TestMaskedDotenvRead:
         assert f"{name}=****e123" in content
 
     def test_a_credential_in_a_comment_is_not_shown(self, tmp_path: Path) -> None:
-        f = tmp_path / ".env"
+        f = tmp_path / "robothor.env"
         f.write_text(f"# old: GITHUB_TOKEN={FAKE_GH}\nX=1\n")
         content = _read(f, tmp_path)["content"]
         assert FAKE_GH not in content
@@ -206,7 +206,7 @@ class TestCommentScrub:
     """
 
     def _content(self, tmp_path: Path, body: str) -> str:
-        f = tmp_path / ".env"
+        f = tmp_path / "robothor.env"
         f.write_text(body)
         return _read(f, tmp_path)["content"]
 
@@ -279,7 +279,7 @@ class TestStillRefused:
 
     def test_a_file_that_is_not_plain_dotenv_is_refused(self, tmp_path: Path) -> None:
         """A PEM pasted into an .env (or any non KEY=VALUE body) is not maskable."""
-        f = tmp_path / ".env"
+        f = tmp_path / "robothor.env"
         f.write_text("-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n")
         out = _read(f, tmp_path)
         assert "content" not in out
@@ -294,7 +294,7 @@ class TestStillRefused:
 class TestPathPredicate:
     @pytest.mark.parametrize(
         "path",
-        [".env", "crm/.env", ".env.local", "robothor.env", "/etc/robothor/robothor.env"],
+        ["robothor.env", "connectors.env", "crm/app.env", "/etc/robothor/robothor.env"],
     )
     def test_plain_dotenv_names_are_maskable(self, path: str) -> None:
         from robothor.engine.secret_paths import is_maskable_dotenv_path
@@ -313,6 +313,11 @@ class TestPathPredicate:
             ".robothor/secrets/a.env",
             ".netrc",
             "notes.md",
+            # credential_path: `.env` and `.env.*` are refused outright, never masked
+            ".env",
+            "crm/.env",
+            ".env.local",
+            ".env.production",
         ],
     )
     def test_everything_else_is_not(self, path: str) -> None:
@@ -350,7 +355,7 @@ class TestQuotedCommentProse:
     def test_quoted_prose_in_a_commented_assignment_is_hidden(self, tmp_path: Path) -> None:
         from robothor.engine.env_masking import COMMENT_PLACEHOLDER
 
-        f = tmp_path / ".env"
+        f = tmp_path / "robothor.env"
         f.write_text('# NOTE="db pw is hunter2-prod"\nROBOTHOR_LOG_LEVEL=INFO\n')
         content = _read(f, tmp_path)["content"]
         assert "hunter2" not in content
@@ -361,7 +366,7 @@ class TestInlineComments:
     """``KEY=value  # note`` is a comment on the same line; it is free text too."""
 
     def _content(self, tmp_path: Path, body: str) -> str:
-        f = tmp_path / ".env"
+        f = tmp_path / "robothor.env"
         f.write_text(body)
         return _read(f, tmp_path)["content"]
 

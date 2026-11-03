@@ -242,7 +242,7 @@ def is_secret_path(path: str | os.PathLike[str]) -> bool:
     # BEFORE the documentation suffixes: a file the operator sent as
     # `notes.md` holding their credentials is quarantined on the way in, and
     # `.md` must not read it back out again.
-    if is_inbox_secret_path(p):
+    if is_inbox_secret_path(p) or is_credential_path(p):
         return True
 
     if lowered.endswith(_DOC_SUFFIXES):
@@ -285,6 +285,8 @@ def is_maskable_dotenv_path(path: str | os.PathLike[str]) -> bool:
     name = p.name
     lowered = name.lower()
     if not is_secret_path(p) or is_inbox_secret_path(p) or _in_secret_location(p):
+        return False
+    if is_credential_path(p):  # `.env`, `.env.*`: refused outright, never masked
         return False
     if lowered in _SECRET_NAMES and lowered != ".env":
         return False
@@ -462,3 +464,128 @@ def exec_reads_secret(command: str) -> str | None:
                         "file to use a value, or ask the operator, but never print it."
                     )
     return None
+
+
+# ── credential_path: never read, never named in a command ─────────────────────
+#
+# A read-only question once led an owner-driven run to fall back to `exec` on
+# the engine host and `cat` a CLI tool's OAuth credentials file under the home
+# directory: its client secret and refresh token reached the model's context
+# and the stored tool output, and the model then called an API with the token.
+# The printing rule above did not apply (the CLI's directory and file names were
+# on no list). These paths are stricter than the rest of the module: a command
+# that so much as NAMES one is refused, whatever its verb, because a CLI or a
+# one-liner can read a file no printer word ever touches. Metadata-only verbs
+# (`ls`, `test`, `stat`, `wc`, `du`) are the exception.
+
+#: The gate a refusal names, as ``error_type`` and in its text.
+CREDENTIAL_GATE = "credential_path"
+
+#: Directories, anywhere on a path, that hold nothing but credentials.
+_CREDENTIAL_DIRS = frozenset({".ssh", ".aws", ".kube", ".docker", ".gnupg", "gcloud"})
+
+#: Directories directly under ``.config`` whose NAME starts with one of these:
+#: the Google Cloud and Google Workspace CLIs (``gws``, ``gog`` and their
+#: suffixed variants) and ``gh``.
+_CONFIG_PREFIXES = ("gcloud", "gws", "gog")
+_CONFIG_EXACT = frozenset({"gh"})
+
+#: Exact basenames.
+_CREDENTIAL_NAMES = frozenset(
+    {".netrc", ".npmrc", ".pypirc", ".vault-key", ".git-credentials", ".pgpass"}
+)
+
+#: Whole-basename patterns. ``token*.json`` is spelled so ``tokenizer.json`` (a
+#: model file, not a credential) stays readable.
+_CREDENTIAL_PATTERNS = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\.env(\.[a-z0-9_-]+)*",
+        r"credentials[a-z0-9_.-]*\.json",
+        r"tokens?([-_.][a-z0-9_.-]*)?\.json",
+        r"client_secrets?[a-z0-9_.-]*\.json",
+    )
+)
+
+#: Key material counts only under the home directory: a ``*.pem`` in a test
+#: fixture tree elsewhere is not the service user's key.
+_HOME_KEY = re.compile(r"[^/]*\.(pem|key)", re.IGNORECASE)
+
+#: Verbs that report on a file without reading what is in it.
+_METADATA_VERBS = frozenset({"ls", "test", "[", "[[", "stat", "wc", "du"})
+
+#: Path-shaped runs inside one shell word (``-d @x``, ``--file=x``, a Python
+#: string literal in ``python3 -c``).
+_PATHISH = re.compile(r"(?:\$\{HOME\}|\$HOME|~)?[\w./~*?\[\]-]+")
+
+CREDENTIAL_REFUSAL = (
+    "refused by credential_path: {name} is a secrets file that holds credentials. "
+    "The operator hands credentials over through the vault (a `secrets:` grant or "
+    "vault_get), never by an agent reading a file; ask the operator for what is "
+    "missing instead of reading, printing or passing the file."
+)
+
+
+def _home() -> str:
+    try:
+        return str(Path.home())
+    except RuntimeError:
+        return ""
+
+
+def is_credential_path(path: str | os.PathLike[str]) -> bool:
+    """True when *path* is on the credential_path list. Pure (no filesystem access)."""
+    import posixpath
+
+    home = _home()
+    raw = str(path).replace("${HOME}", home or "~").replace("$HOME", home or "~")
+    spelled = posixpath.normpath(PurePath(Path(raw).expanduser()).as_posix())
+    p = PurePath(spelled)
+    parts = [part.lower() for part in p.parts]
+    if any(part in _CREDENTIAL_DIRS for part in parts):
+        return True
+    for parent, child in zip(parts, parts[1:], strict=False):
+        if parent == ".config" and (child in _CONFIG_EXACT or child.startswith(_CONFIG_PREFIXES)):
+            return True
+    name = p.name
+    if name.lower().endswith(_DOC_SUFFIXES):
+        return False
+    if name.lower() in _CREDENTIAL_NAMES or any(
+        pat.fullmatch(name) for pat in _CREDENTIAL_PATTERNS
+    ):
+        return True
+    under_home = bool(home) and (spelled == home or spelled.startswith(home.rstrip("/") + "/"))
+    return under_home and bool(_HOME_KEY.fullmatch(name))
+
+
+def credential_refusal(path: str | os.PathLike[str]) -> dict[str, str]:
+    """The result a tool returns for a credential path (names the file, never a value)."""
+    name = PurePath(str(path)).name or str(path)
+    return {"error": CREDENTIAL_REFUSAL.format(name=name), "error_type": CREDENTIAL_GATE}
+
+
+def _named_credential(text: str) -> str | None:
+    for match in _PATHISH.finditer(text):
+        if is_credential_path(match.group(0)):
+            return match.group(0)
+    return None
+
+
+def exec_names_credential(command: str) -> dict[str, str] | None:
+    """The refusal for a command whose arguments or redirections name a credential
+    path, or None. A redirection's target starts a segment of its own, so every
+    token of every segment is checked; only metadata verbs are let through."""
+    for tokens in _segments(command):
+        word, _args = _command_word(tokens)
+        if word in _METADATA_VERBS:
+            continue
+        for token in tokens:
+            if (hit := _named_credential(token)) is not None:
+                return credential_refusal(hit)
+    return None
+
+
+def code_names_credential(code: str) -> dict[str, str] | None:
+    """The refusal for an ``execute_code`` snippet whose source names a credential path."""
+    hit = _named_credential(code)
+    return credential_refusal(hit) if hit is not None else None

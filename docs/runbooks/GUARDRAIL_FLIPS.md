@@ -402,6 +402,12 @@ even though that run is recorded as manual with the owner's role. A manifest's
   `exec_location` row with `tool_name = 'execute_code'` names the live
   container. A member is refused as before.
 
+The host fallback does not widen what may be read. `read_file`, `exec` and
+`execute_code` refuse credential files (cloud and Workspace CLI credential
+directories, `~/.aws`, `~/.ssh`, `~/.kube`, `.env` files, token and key files)
+under the `credential_path` gate for every caller, on the host and inside a
+container alike: see [Tools](../TOOLS.md#credential-files--credential_path).
+
 A root run is one nothing spawned: a sub-agent never counts as one, even when
 its parent's run row was not recorded. Agents that want no container are never
 probed for a runtime, and runs starting together share one probe.
