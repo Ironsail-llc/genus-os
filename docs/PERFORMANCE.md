@@ -79,7 +79,8 @@ metric:
 
 | Metric | A regression when its p50 or p95 is |
 |---|---|
-| `prompt_tokens`, `tool_schemas` (exact) | above the baseline at all. The same code gives the same number every run, so one more tool schema fails. A decrease passes and prints a hint to re-record the baseline. |
+| `tool_schemas` (exact) | above the baseline at all. The same code gives the same number every run, so one more tool schema fails. A decrease passes and prints a hint to re-record the baseline. |
+| `prompt_tokens` | more than 25 tokens or 1% over the baseline, whichever is larger: a word in a template moves it by a token, a longer preamble or a new schema does not pass. A decrease passes with the same hint. |
 | `db_statements` | more than `--threshold` (default 10%) over the baseline. |
 | Every `*_ms` timing | more than `--timing-threshold` over the baseline **and** more than `--min-delta` (default 5 ms) over it. `--timing-threshold` is 30% with `--baseline-set ci` (runners vary by more than 10% on the same code) and `--threshold` otherwise. |
 
