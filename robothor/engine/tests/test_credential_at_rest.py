@@ -305,14 +305,25 @@ class TestWhatThePersonReferredToSurvives:
 
         return _redacted([{"role": "user", "content": text}])[0]["content"]
 
-    @pytest.mark.parametrize(
-        "sha",
-        ["3f2a9c1e7b4d6a8f0c2e4b6d8a0c2e4f6b8d0a2c", "ab12" * 16],
-        ids=["sha1", "sha256"],
-    )
-    def test_a_full_commit_sha_survives(self, sha):
-        text = f"revert {sha}"
+    SHA1 = "3f2a9c1e7b4d6a8f0c2e4b6d8a0c2e4f6b8d0a2c"
+    SHA256 = "ab12" * 16
+
+    @pytest.mark.parametrize("verb", ["revert", "cherry-pick", "checkout", "git show"])
+    def test_a_commit_sha_beside_a_commit_verb_survives(self, verb):
+        text = f"{verb} {self.SHA1}"
         assert self._user(text) == text
+
+    def test_a_digest_labelled_sha256_survives(self):
+        text = f"sha256: {self.SHA256}"
+        assert self._user(text) == text
+
+    @pytest.mark.parametrize("which", ["SHA1", "SHA256"])
+    def test_a_bare_hex_run_with_no_label_is_replaced(self, which):
+        """``openssl rand -hex 32``, a webhook signing secret and a legacy
+        40-hex token look exactly like this; with no label, it goes."""
+        value = getattr(self, which)
+        leaked = value in self._user(f"here you go {value}")
+        assert not leaked
 
     def test_a_bare_32_hex_key_is_still_replaced(self):
         key = "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a"
