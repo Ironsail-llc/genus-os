@@ -77,7 +77,8 @@ CAPS = {
     # 2207 -> 2206: re-measured after the catch-up fold (flag paths removed).
     # -> 2198: session seating moved to run_identity.seat_session.
     # 2206 -> 2200: re-measured with the credential-intake refold.
-    "robothor/engine/runner.py": 2200,
+    # 2200 -> 2197: the spawn-context setup left for spawn_context.install_spawn_context.
+    "robothor/engine/runner.py": 2197,
     # 3850 -> 3150 after the plan-mode cluster left (phase 3), then again after
     # phase 3b (_setup_handlers closures -> methods), and 3150 -> 2000 as the
     # handler and attachment clusters left for telegram_handlers.py and

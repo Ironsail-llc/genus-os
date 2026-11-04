@@ -30,3 +30,19 @@ def make_spawn_context(agent_config: Any, session: Any, trace: Any) -> SpawnCont
         person_id=session.run.person_id,
         identity=getattr(session, "identity", None),
     )
+
+
+def install_spawn_context(
+    spawn_context: SpawnContext | None, agent_config: Any, session: Any, trace: Any
+) -> None:
+    """Set the spawn context sub-agent tools read (a contextvar) for this run.
+
+    A sub-agent run uses the context it was given; a top-level run that may
+    spawn gets a fresh one; any other run sets none.
+    """
+    from robothor.engine.tools import _current_spawn_context
+
+    if spawn_context:
+        _current_spawn_context.set(spawn_context)
+    elif agent_config.can_spawn_agents:
+        _current_spawn_context.set(make_spawn_context(agent_config, session, trace))

@@ -86,6 +86,7 @@ from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
     with_surface_note,
 )
+from robothor.engine.request_runtime import observe_request
 from robothor.engine.run_attribution import attribute_run
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
@@ -1305,8 +1306,6 @@ class AgentRunner(
                     readonly=readonly_mode,
                 )
 
-                from robothor.engine.request_runtime import observe_request
-
                 verified, verified_output = False, None
                 try:
                     async with observe_request(session, on_status) as report_status:
@@ -1748,17 +1747,9 @@ class AgentRunner(
         _replan_count: int = 0
 
         # Set spawn context for sub-agent tools (via contextvars)
-        if spawn_context:
-            # This is a sub-agent run — use the provided context
-            from robothor.engine.tools import _current_spawn_context
+        from robothor.engine.spawn_context import install_spawn_context
 
-            _current_spawn_context.set(spawn_context)
-        elif agent_config.can_spawn_agents:
-            # This is a top-level run that can spawn — create fresh context
-            from robothor.engine.spawn_context import make_spawn_context
-            from robothor.engine.tools import _current_spawn_context
-
-            _current_spawn_context.set(make_spawn_context(agent_config, session, trace))
+        install_spawn_context(spawn_context, agent_config, session, trace)
 
         from robothor.engine.request_runtime import prepare_loop
 

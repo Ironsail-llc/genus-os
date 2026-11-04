@@ -78,7 +78,8 @@ KNOWN_LARGE: dict[str, int] = {
     # 964 -> 963: re-measured after the catch-up fold (flag paths removed).
     # -13: session seating moved to run_identity.seat_session
     # 963 -> 957: re-measured with the credential-intake refold.
-    "runner.py::execute": 957,
+    # 957 -> 956: observe_request is imported at module scope.
+    "runner.py::execute": 956,
     # 775 -> 773 with the step-efficiency work: the guard's note drain, the
     # pace-note call site and the refusal branch cost less than the inlined
     # deadline and check-in blocks returned when they left for run_pacing.py.
@@ -95,7 +96,8 @@ KNOWN_LARGE: dict[str, int] = {
     # loader that reads it. The cap follows the function DOWN rather than
     # banking the difference, which is the point of a ratchet.
     # 508 -> 478: re-measured after the catch-up fold (flag paths removed).
-    "runner.py::_run_loop": 478,
+    # 478 -> 474: the spawn-context setup left for spawn_context.install_spawn_context.
+    "runner.py::_run_loop": 474,
     # 473 -> 346. The Gmail and Calendar branches left for functions of their
     # own (_gmail_search/_gmail_get, _calendar_list/_calendar_create/
     # _calendar_delete) when each of them grew a real body: decoding a MIME
