@@ -1393,9 +1393,11 @@ credential-like value the vault stores (not the identifiers it also holds, such
 as a tenant id or a chat id), so a value handed over before a restart is still
 caught, and what the person typed also loses any opaque run of 32 or more key
 characters (a bare hex key has no other shape). What the person pointed at is
-kept: a UUID, a full 40- or 64-hex commit or digest, a Telegram file id, and
-any run labelled commit, sha, file_id, message_id, trace or run_id just before
-it; tool results keep their hashes.
+kept: a UUID, a Telegram file id, any run labelled file_id, message_id, trace
+or run_id just before it, a 40-hex commit after commit, sha or a git verb
+(revert, cherry-pick, checkout, bisect, rebase, show, diff), and a 64-hex
+digest after sha256 or digest. A bare hex run with no label is also the shape
+of a generated secret, so it goes. Tool results keep their hashes.
 
 **Every tool result is redacted too.** A tool that returns normally can still
 carry a credential: `exec` printing a CLI credentials file, a provider error
