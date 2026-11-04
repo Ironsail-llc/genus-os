@@ -58,21 +58,22 @@ _LIST_NOUN = re.compile(
 )
 
 
-def _names_for(key: str) -> tuple[str, ...]:
-    """Every way a person might name the vault row at ``key``."""
+def _names_for(key: str, *, vendor: bool = True) -> tuple[str, ...]:
+    """Every way a person might name the vault row at ``key`` (without the bare
+    vendor segment when ``vendor`` is False)."""
     from robothor.vault.naming import env_name, env_names_for_vault_key, normalise_key
 
     stored_at = normalise_key(key)
     names = {stored_at, env_name(stored_at), *env_names_for_vault_key(stored_at)}
     segments = [s for s in stored_at.split("/") if s]
-    if len(segments) >= 2 and segments[0] in {"providers", "channels"}:
+    if vendor and len(segments) >= 2 and segments[0] in {"providers", "channels"}:
         names.add(segments[1])
     return tuple(n for n in names if n)
 
 
-def _names_the_key(message: str, key: str) -> bool:
+def _names_the_key(message: str, key: str, *, vendor: bool = True) -> bool:
     lowered = message.lower()
-    for name in _names_for(key):
+    for name in _names_for(key, vendor=vendor):
         pattern = rf"(?<![a-z0-9_]){re.escape(name.lower())}(?![a-z0-9_])"
         if re.search(pattern, lowered):
             return True
@@ -123,7 +124,11 @@ _STORE_WORD = re.compile(
 )
 
 #: A URL, a host path or a filesystem path: a place, never a credential.
-_LOCATION = re.compile(r"://|^(?:\.{0,2}/|~/)|^(?:www\.)?[\w-]+(?:\.[\w-]+)+/")
+_LOCATION = re.compile(
+    r"://|^(?:\.{0,2}/|~/)|^(?:www\.)?[\w-]+(?:\.[\w-]+)+/"
+    # An e-mail address is a person to ask, never their credential.
+    r"|^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$"
+)
 
 
 def _means_a_store(clause: str, tokens: list[str], values: list[int], value: str) -> bool:
@@ -180,6 +185,19 @@ def _handed_over(message: str, key: str, value: str) -> bool:
     )
 
 
+def _asks_to_remove(message: str, key: str) -> bool:
+    """One clause holds a removal word, a name for ``key`` and the sense that
+    it is a credential: a store word, or a name that is itself the vault key or
+    a reader's name (``OPENWEATHER_API_KEY``). "Drop me the link to my github
+    PR" names a vendor and an everyday verb, and removes nothing."""
+    for clause in _CLAUSE_END.split(message):
+        if not (_REMOVAL.search(clause) and _names_the_key(clause, key)):
+            continue
+        if _STORE_WORD.search(clause) or _names_the_key(clause, key, vendor=False):
+            return True
+    return False
+
+
 def _asks_for_a_list(message: str) -> bool:
     return bool(_LIST_VERB.search(message) and _LIST_NOUN.search(message))
 
@@ -192,9 +210,7 @@ def request_gate(tool: str, args: dict[str, Any], message: str) -> str | None:
         key = str(args.get("key") or "")
         return None if _handed_over(message, key, value) else "not_handed_over"
     if tool == "vault_delete":
-        key = str(args.get("key") or "")
-        asked = bool(_REMOVAL.search(message)) and _names_the_key(message, key)
-        return None if asked else "not_requested"
+        return None if _asks_to_remove(message, str(args.get("key") or "")) else "not_requested"
     if tool == "vault_list":
         return None if _asks_for_a_list(message) else "not_requested"
     return None
