@@ -269,8 +269,9 @@ def with_promoted(
     """``schemas`` plus the real schema of every promoted tool it lacks.
 
     ``tool_search`` marks its top hits; this is where they reach the wire, and
-    the allow-set is checked HERE as well as there, so a name marked by
-    anything is advertised only if the agent may run it. An empty list stays
+    the allow-set is checked HERE as well as there — the same published set
+    both times — so a name marked by anything is advertised only if this run
+    may run it. An empty list stays
     empty: it is the loop's signal for a text-only turn.
     """
     from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
@@ -280,7 +281,13 @@ def with_promoted(
     wanted = set(promoted) - present - TOOLSEARCH_TOOLS
     if not schemas or not wanted:
         return schemas
-    allowed = registry.deferred_whitelist(agent_config)
+    from robothor.engine.tools.dispatch import get_deferred_allowed
+
+    # The allow-set this run PUBLISHED, the one the search promoted from: it
+    # can be wider than the manifest's own (a tier may grant an opt-in tool),
+    # and two different sets here is a tool announced and then never shown.
+    published = get_deferred_allowed()
+    allowed = published if published is not None else registry.deferred_whitelist(agent_config)
     added = []
     for name in sorted(wanted & allowed):
         schema = registry.get_schema(name)

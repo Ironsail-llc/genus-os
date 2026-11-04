@@ -216,3 +216,79 @@ class TestARunWithoutSearchesIsUnchanged:
         assert len(seen) == 2
         assert [len(s) for s in seen] == [34, 34]
         assert _by_name(seen[0]) == _by_name(seen[1])
+
+
+class TestTheRecheckIsTheRunsOwnAllowSet:
+    """Both checks read ONE allow-set: the one the run published.
+
+    The search promotes from the deferred allow-set the runner published for
+    this run, which can be wider than the manifest's own set (an owner's tier
+    may grant an opt-in tool). The runner's recheck derived its own set from
+    the manifest alone, so it dropped what the search had just announced:
+    the model was told the tool was added, the schema never reached the wire,
+    a direct call was refused, and the next search called it in the toolset.
+    """
+
+    @staticmethod
+    def _published(names: frozenset[str]):
+        from robothor.engine.tools.dispatch import set_deferred_allowed
+
+        return set_deferred_allowed(names)
+
+    def test_a_tool_the_run_was_granted_is_advertised_and_admitted(self) -> None:
+        from robothor.engine.tools.constants import OPT_IN_TOOLS
+        from robothor.engine.tools.dispatch import clear_deferred_allowed
+        from robothor.engine.toolset_prep import promote_into, with_promoted
+
+        registry = ToolRegistry()
+        cfg = _broad(registry, drop=tuple(OPT_IN_TOOLS))
+        assert "web_render" not in registry.deferred_whitelist(cfg), "precondition"
+        base = registry.build_for_agent(cfg, recent=frozenset())
+        token = self._published(registry.deferred_whitelist(cfg) | {"web_render"})
+        try:
+            grown = with_promoted(registry, cfg, base, {"web_render"})
+            with patch(
+                "robothor.engine.tools.dispatch.get_promoted_tools",
+                return_value=frozenset({"web_render"}),
+            ):
+                _schemas, admitted = promote_into(registry, cfg, base, frozenset(_by_name(base)))
+        finally:
+            clear_deferred_allowed(token)
+
+        assert _by_name(grown)["web_render"] == wire_schema(registry.get_schema("web_render"))
+        assert "web_render" in admitted
+
+    @pytest.mark.asyncio
+    async def test_a_run_not_granted_it_never_promotes_or_advertises_it(self) -> None:
+        from robothor.engine.tools.constants import OPT_IN_TOOLS
+        from robothor.engine.tools.dispatch import ToolContext, clear_deferred_allowed
+        from robothor.engine.tools.handlers import toolsearch
+        from robothor.engine.toolset_prep import (
+            publish_toolset,
+            with_promoted,
+            withdraw_toolset,
+        )
+
+        registry = ToolRegistry()
+        cfg = _broad(registry, drop=tuple(OPT_IN_TOOLS))
+        base = registry.build_for_agent(cfg, recent=frozenset())
+        tokens = publish_toolset(registry, cfg, registry.get_tool_names(cfg), _by_name(base))
+        try:
+            with patch("robothor.engine.tools.registry.get_registry", return_value=registry):
+                found = await toolsearch._tool_search(
+                    {"query": "render a web page in a headless browser"},
+                    ToolContext(agent_id=cfg.id),
+                )
+            grown = with_promoted(registry, cfg, base, {"web_render"})
+        finally:
+            withdraw_toolset(tokens)
+
+        assert "web_render" not in found["promoted"]
+        assert "web_render" not in _by_name(grown)
+        token = self._published(frozenset({"read_file"}))
+        try:
+            assert "gws_gmail_search" not in _by_name(
+                with_promoted(registry, cfg, base, {"gws_gmail_search"})
+            ), "a published allow-set is the boundary, not the manifest's own"
+        finally:
+            clear_deferred_allowed(token)
