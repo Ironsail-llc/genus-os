@@ -832,33 +832,47 @@ _OPAQUE_RUN = re.compile(
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
-#: A full SHA-1 or SHA-256 in hex: a commit or a digest a person points at.
-#: (A short 7-12 character SHA never reaches the 32-character opaque run.)
-_FULL_SHA = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 #: A Telegram file id: base64url, 60-100 characters, a known type prefix.
 _TELEGRAM_FILE_ID = re.compile(r"^(?:AgAC|AwAC|BAAC|BQAC|CAAC|CQAC|DQAC)[A-Za-z0-9_-]{56,96}$")
-#: A label that says the next run is an identifier, within three words before it.
+#: Within three words before a run: the label or verb that says what it is.
+_WITHIN_THREE_WORDS = r"\b\W*(?:\S+\s+){0,2}\S*$"
+#: An identifier label: any run after it is kept.
 _ID_LABEL = re.compile(
-    r"\b(?:commit|sha|file_id|message_id|trace|trace_id|run_id)\b\W*(?:\S+\s+){0,2}\S*$",
+    r"\b(?:file_id|message_id|trace|trace_id|run_id)" + _WITHIN_THREE_WORDS, re.IGNORECASE
+)
+#: A commit label or git verb: a 40-hex run after it is a commit.
+_COMMIT_LABEL = re.compile(
+    r"\b(?:commit|sha|sha1|revert|cherry-pick|checkout|bisect|rebase|show|diff)"
+    + _WITHIN_THREE_WORDS,
     re.IGNORECASE,
 )
+#: A digest label: a 64-hex run after it is a SHA-256 digest.
+_DIGEST_LABEL = re.compile(r"\b(?:sha256|digest)" + _WITHIN_THREE_WORDS, re.IGNORECASE)
+_HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
+_HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def _is_a_reference(run: str, before: str) -> bool:
-    """A UUID, a full SHA, a Telegram file id, or a run a label calls an id."""
-    if _UUID.match(run) or _FULL_SHA.match(run) or _TELEGRAM_FILE_ID.match(run):
+    """A UUID, a Telegram file id, a run an identifier label names, a 40-hex
+    commit after a commit label or git verb, or a 64-hex digest after
+    ``sha256``/``digest``. A bare hex run is also the shape of ``openssl rand
+    -hex``, a webhook signing secret or a legacy token, so with no label it is
+    not kept. (A short 7-12 character SHA never reaches the opaque run.)"""
+    if _UUID.match(run) or _TELEGRAM_FILE_ID.match(run):
         return True
-    return bool(_ID_LABEL.search(before[-80:]))
+    before = before[-80:]
+    if _ID_LABEL.search(before):
+        return True
+    if _HEX40.match(run) and _COMMIT_LABEL.search(before):
+        return True
+    return bool(_HEX64.match(run) and _DIGEST_LABEL.search(before))
 
 
 def redact_opaque_runs(text: str) -> str:
     """``text`` with every opaque run (see :data:`_OPAQUE_RUN`) replaced.
 
-    What a person points at is kept (:func:`_is_a_reference`): a UUID, a full
-    40- or 64-hex SHA, a Telegram file id, or a run labelled ``commit``,
-    ``sha``, ``file_id``, ``message_id``, ``trace`` or ``run_id`` within three
-    words before it. A bare 32-hex key, or a mixed-class run of 32 or more,
-    is replaced.
+    What a person points at is kept (:func:`_is_a_reference`). Any other hex
+    run of 32 or more, or mixed-class run, is replaced.
     """
     if not text:
         return text
