@@ -185,6 +185,8 @@ def publish_toolset(
     tool_names: list[str],
     advertised: Any = None,
     capability: Any = None,
+    *,
+    readonly: bool = False,
 ) -> tuple[Any, ...]:
     """Install this run's tool context vars; returns tokens for withdrawal.
 
@@ -203,17 +205,22 @@ def publish_toolset(
       in one week to an agent that went on calling it;
     * the run's capability tier (``capability``, the run's ``TierDecision``,
       None outside a run), which dispatch copies onto ``ToolContext``.
+
+    A ``readonly`` (plan-mode) run is never published as deferred: it is shown
+    its whole read-only set, so a search there answers from that set and
+    promotes nothing, rather than from an allow-set full of writes.
     """
     from robothor.engine.capability_tier import set_run_tier
     from robothor.engine.tools.dispatch import (
         set_advertised_toolset,
         set_agent_toolset,
         set_deferred_allowed,
+        set_promotion_sink,
     )
 
     tier = capability.tier if capability is not None else ""
     tier_kw = {"tier": tier} if tier else {}
-    deferred = registry.should_defer(agent_config, **tier_kw)
+    deferred = not readonly and registry.should_defer(agent_config, **tier_kw)
     defer_token = set_deferred_allowed(
         registry.deferred_whitelist(agent_config, **tier_kw) if deferred else None
     )
@@ -222,11 +229,13 @@ def publish_toolset(
         if deferred and advertised is not None
         else None
     )
+    promoted_token = set_promotion_sink(set()) if deferred else None
     return (
         defer_token,
         set_agent_toolset(frozenset(tool_names)),
         advertised_token,
         set_run_tier(tier),
+        promoted_token,
     )
 
 
@@ -237,15 +246,66 @@ def withdraw_toolset(tokens: tuple[Any, ...]) -> None:
         clear_advertised_toolset,
         clear_agent_toolset,
         clear_deferred_allowed,
+        clear_promotion_sink,
     )
 
-    defer_token, toolset_token, advertised_token, tier_token = tokens
+    defer_token, toolset_token, advertised_token, tier_token, promoted_token = tokens
+    if promoted_token is not None:
+        clear_promotion_sink(promoted_token)
     if advertised_token is not None:
         clear_advertised_toolset(advertised_token)
     if defer_token is not None:
         clear_deferred_allowed(defer_token)
     clear_agent_toolset(toolset_token)
     clear_run_tier(tier_token)
+
+
+def with_promoted(
+    registry: Any,
+    agent_config: Any,
+    schemas: list[dict[str, Any]],
+    promoted: Any,
+) -> list[dict[str, Any]]:
+    """``schemas`` plus the real schema of every promoted tool it lacks.
+
+    ``tool_search`` marks its top hits; this is where they reach the wire, and
+    the allow-set is checked HERE as well as there, so a name marked by
+    anything is advertised only if the agent may run it. An empty list stays
+    empty: it is the loop's signal for a text-only turn.
+    """
+    from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
+    from robothor.engine.tools.registry import wire_schema
+
+    present = {str(s.get("function", {}).get("name", "")) for s in schemas}
+    wanted = set(promoted) - present - TOOLSEARCH_TOOLS
+    if not schemas or not wanted:
+        return schemas
+    allowed = registry.deferred_whitelist(agent_config)
+    added = []
+    for name in sorted(wanted & allowed):
+        schema = registry.get_schema(name)
+        if schema:
+            added.append(wire_schema(schema))
+    return [*schemas, *added] if added else schemas
+
+
+def promote_into(
+    registry: Any,
+    agent_config: Any,
+    schemas: list[dict[str, Any]],
+    allowed: frozenset[str],
+) -> tuple[list[dict[str, Any]], frozenset[str]]:
+    """The loop's schemas and admission set, with this run's promoted tools.
+
+    Both move together: a schema the model is shown is a tool admission must
+    let it call directly.
+    """
+    from robothor.engine.tools.dispatch import get_promoted_tools
+
+    grown = with_promoted(registry, agent_config, schemas, get_promoted_tools())
+    if grown is schemas:
+        return schemas, allowed
+    return grown, allowed | {str(s.get("function", {}).get("name", "")) for s in grown}
 
 
 async def prepare_toolset(

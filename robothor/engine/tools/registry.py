@@ -1081,13 +1081,20 @@ class ToolRegistry:
     def build_readonly_for_agent(self, config: AgentConfig) -> list[dict[str, Any]]:
         """Return only read-only tool schemas for plan mode."""
         self._refresh_plugin_schemas_if_stale()
-        full_names = set(self.get_tool_names(config))
-        readonly_names = sorted(full_names & self._readonly_names())
+        readonly_names = self.get_readonly_tool_names(config)
         return [wire_schema(self._schemas[n]) for n in readonly_names if n in self._schemas]
 
     def get_readonly_tool_names(self, config: AgentConfig) -> list[str]:
-        """Return read-only tool names for plan mode."""
+        """Return read-only tool names for plan mode.
+
+        A deferred agent also gets the meta-tools that only look
+        (``tool_search``, ``tool_describe``): its executing run has them, and a
+        planning agent finding its way around its reads is what plan mode is
+        for. An agent shown its whole set has neither, in either mode.
+        """
         full_names = set(self.get_tool_names(config))
+        if self.should_defer(config):
+            full_names |= TOOLSEARCH_TOOLS
         return sorted(full_names & self._readonly_names())
 
     def get_tool_names(self, config: AgentConfig, *, tier: str = "") -> list[str]:

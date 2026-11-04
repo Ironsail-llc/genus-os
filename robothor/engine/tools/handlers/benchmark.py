@@ -240,6 +240,9 @@ _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
     }
     # The instance's REAL workflows and their run history.
     | {"list_workflows", "workflow_runs"}
+    # The deferred-loading reads: a graded sub-agent is handed its tools
+    # directly, so a search would only describe tools it may not call.
+    | {"tool_search", "tool_describe"}
 )
 
 
@@ -418,10 +421,8 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         # Arbitrary MCP invocation is an escape hatch by construction.
         "mcp_call_tool",
         "mcp_read_resource",
-        # Deferred-tool meta-layer: the registry strips these anyway, and
-        # tool_call would route around the allow-list.
-        "tool_search",
-        "tool_describe",
+        # Deferred-tool meta-layer: tool_call would route around the
+        # allow-list. Its two reads are withheld above.
         "tool_call",
         # Vault writes.
         "vault_set",

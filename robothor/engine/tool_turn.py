@@ -442,8 +442,8 @@ class ToolTurnMixin:
         if req.checkpoint and not error_msg and not refused_by_guard:
             req.checkpoint.record_success()
 
-        if error_msg:
-            iteration_errors.append((call.tool_name, error_msg, error_type))
+        if error_msg:  # under the wrapped tool's name, which recovery briefs a helper on
+            iteration_errors.append((call.inner[0], error_msg, error_type))
 
     # ── the small pieces the recorder is made of ───────────────────────
 
