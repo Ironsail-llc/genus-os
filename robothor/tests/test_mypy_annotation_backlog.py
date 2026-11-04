@@ -25,6 +25,10 @@ from pathlib import Path
 
 import pytest
 
+# A subprocess here may take up to 1800 s by its own bound; pytest.ini's 30 s
+# would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
+pytestmark = pytest.mark.timeout(1860)
+
 _ROOT = Path(__file__).resolve().parents[2]
 _CONFIG = _ROOT / "mypy.ini"
 

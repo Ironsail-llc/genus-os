@@ -71,7 +71,14 @@ CAPS = {
     # four had already drifted -- `ask_user` was in this one alone). That is
     # what paid for teaching the resolver about self-timed tools, instead of
     # raising this number for it.
-    "robothor/engine/runner.py": 2219,
+    # 2219 -> 2214: spawn inheritance, tier stamping, person linkage and tenant
+    # access left execute for run_attribution.py, absorbing the fold's growth.
+    # 2214 -> 2207: the switch that gated the answer-first exit went.
+    # 2207 -> 2206: re-measured after the catch-up fold (flag paths removed).
+    # -> 2198: session seating moved to run_identity.seat_session.
+    # 2206 -> 2200: re-measured with the credential-intake refold.
+    # 2200 -> 2197: the spawn-context setup left for spawn_context.install_spawn_context.
+    "robothor/engine/runner.py": 2197,
     # 3850 -> 3150 after the plan-mode cluster left (phase 3), then again after
     # phase 3b (_setup_handlers closures -> methods), and 3150 -> 2000 as the
     # handler and attachment clusters left for telegram_handlers.py and
@@ -85,7 +92,18 @@ CAPS = {
     # instead of a parser. It came back to the cap when the private-input cut
     # was added to it, and trimming that explanation to fit is the trade this
     # file has refused before.
-    "robothor/engine/telegram.py": 1980,
+    # 1980 -> 1978: the post-reply bookkeeping (save the exchange, then map the
+    # platform message ids to the saved rows) left for telegram_delivery.py.
+    # 1978 -> 1924: streaming is the only reply path; the old status edits
+    # went, and delivering the reply moved to telegram_progress.deliver_reply.
+    # 1924 -> 1923: re-measured after the catch-up fold (flag paths removed).
+    # 1980 -> 1945 -> 1933: interactive delivery accounting moved to
+    # telegram_delivery.py, which paid for threading the typed text (what the
+    # person typed, apart from reply quotes and file text) to the run; then the
+    # sender lookup moved to telegram_turn.run_sender.
+    # 1923 -> 1880: re-measured with the credential-intake refold.
+    # 1880 -> 1879: re-measured with the credential-intake refold.
+    "robothor/engine/telegram.py": 1879,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new
@@ -99,8 +117,13 @@ CAPS = {
     # the rest of the intake lives — it calls media_ref, _keep_attachment and
     # the same ceiling, so it was always that cluster. The ratchet asked for an
     # extraction rather than a bigger number, and got one.
-    "robothor/engine/telegram_handlers.py": 1082,
-    "robothor/engine/telegram_plan_mode.py": 900,
+    # 1082 -> 1047: re-measured after the catch-up fold (flag paths removed).
+    # -> 1035 -> 1034: the reply-quote step moved to telegram_turn.with_reply_quote.
+    # 1047 -> 1032: re-measured with the credential-intake refold.
+    # 1032 -> 1031: re-measured with the credential-intake refold.
+    "robothor/engine/telegram_handlers.py": 1031,
+    # 900 -> 872: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/telegram_plan_mode.py": 872,
     # 1100 -> 1048: the deliverable-contract cluster (the ladder, the guardrail
     # event, the operator alert and the honest failure) left for
     # deliverable_verdict.py. The shape contract would otherwise have added ~55
@@ -113,7 +136,9 @@ CAPS = {
     # named shape over a strictly smaller set of facts than the task gave it —
     # and the whole ladder for it lives in observation_ledger.py. Nine lines is
     # the comment, the import and the call; there is nothing here to extract.
-    "robothor/engine/run_finalizer.py": 1001,
+    # 1001 -> 933: the todo escalation (lifting unfinished items back onto the
+    # CRM parent task) left for todo_escalation.py; it never touched the runner.
+    "robothor/engine/run_finalizer.py": 933,
     # The deliverable-contract cluster, capped at the size it was split to.
     # Hostile review 2026-09-16 (I6): `deliverable_contract.py` had reached
     # 1,354 lines and none of the three new modules was listed here, so "the
@@ -155,7 +180,8 @@ CAPS = {
     # 368 -> 369: the observation notes are appended as their own messages
     # rather than folded into the pacing note (measured 2026-09-17: folded, the
     # act->observe sentence was read as part of "decide NOW what to deliver").
-    "robothor/engine/loop_guards.py": 369,
+    # 369 -> 365: the runaway hard cap records and never stops, so its stop branch went.
+    "robothor/engine/loop_guards.py": 365,
     # The three modules the budget work landed in, bounded from the day they
     # land — the rule this file states for anything that would otherwise
     # absorb the next concern one branch at a time. `_run_loop` paid for the
@@ -194,7 +220,8 @@ CAPS = {
     # why the fallback and the send are both helpers now rather than more
     # inline branches.
     "robothor/engine/delivery.py": 950,
-    "robothor/engine/run_lifecycle.py": 709,  # -69: dead copy of the tool-timeout tables
+    # 709 -> 701: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/run_lifecycle.py": 701,  # -69: dead copy of the tool-timeout tables
     "robothor/engine/run_llm_calls.py": 381,  # -69: dead copy of the tool-timeout tables
     # 400 -> 405: a sixth gate, the budget's wrap-up rung. This module IS the
     # ordered list of gates — its header calls that order a security property
@@ -210,7 +237,13 @@ CAPS = {
     # for the merged tree, so this is the MEASURED count of the rebase result
     # rather than 405 minus the extraction, which would bank one side's saving
     # as the other's headroom.
-    "robothor/engine/tool_admission.py": 362,
+    # 362 -> 364: the sandbox playground passes the run's role and container
+    # state to the exec allowlist. One import and one kwargs line; the logic
+    # lives in sandbox_policy.guardrail_context.
+    # 364 -> 353 in the fold: the verdict type left for tool_verdict.py, which
+    # also pays for the gates judging a tool_call as the call it wraps (the
+    # unwrapping is in wrapped_call.py; one call site lands here).
+    "robothor/engine/tool_admission.py": 353,
     # Capped at the size it was extracted at, like schedule_reconcile.py: a new
     # module with no cap is how the next branch's "just one more case" lands
     # somewhere the ratchet is not looking. One branch, one dependency, and it
@@ -221,7 +254,10 @@ CAPS = {
     # module that would otherwise absorb every per-turn concern the runner
     # used to, one branch at a time — which is exactly how runner.py became
     # the 4,660-line god-object this file's header blames.
-    "robothor/engine/tool_turn.py": 549,  # +21: the snippet approval budget, read beside the call cap
+    # +21: the snippet approval budget, read beside the call cap. 549 -> 556:
+    # the result checks judge a tool_call as the call it wraps (`_Call.inner`).
+    # 556 -> 553: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/tool_turn.py": 553,
     # The code-sandbox cluster, each piece capped at the size it was written
     # to. They are deliberately four small modules rather than one: the
     # POLICY (which calls may share a batch) is a table of names with no
@@ -343,7 +379,9 @@ CAPS = {
     # +1: the proxied call reads its error through tool_outcome.error_text, the
     # same reading as a turn's call, so an object error is counted as a failure
     # on both paths. The reading itself lives in tool_outcome.py.
-    "robothor/engine/tool_proxy.py": 323,
+    # 323 -> 314: the denylist left for proxy_denylist.py, where it learned to
+    # look through a tool_call, and the cap follows the file down.
+    "robothor/engine/tool_proxy.py": 314,
     # 209 -> 283: the peer-session check. Not a feature, a control: the token
     # alone could not tell one run's snippet from another's, and a probe drove
     # a second run's proxy with a stolen token. Correcting a cap set hours
@@ -388,7 +426,8 @@ CAPS = {
     # ["curl", …])` writes, `http_recorder: absent`, a crash one line later).
     # The merge and the summary live in code_exec_spawns.py; what is here is
     # the second loader call, the branch, and the reasons.
-    "robothor/engine/tools/handlers/code_exec.py": 366,
+    # 366 -> 365: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/tools/handlers/code_exec.py": 365,
     # 103 -> 150: `recorded_http_calls`, the loader that re-bounds what a
     # process the snippet controlled wrote, and the `http_calls` field on the
     # result — requests without bodies, for the model and for the ledger.
@@ -665,7 +704,9 @@ CAPS = {
     "robothor/engine/override_reasons.py": 190,
     "robothor/engine/provenance_markers.py": 286,
     "robothor/engine/skill_contract.py": 73,
-    "robothor/engine/code_exec_guards.py": 116,
+    # 116 -> 117: the sandbox playground lets an owner or admin's snippet run
+    # on the host; one import, and the decision is sandbox_policy's.
+    "robothor/engine/code_exec_guards.py": 117,
     # 122 -> 129: the same disclosure, said where the reaper is, because this
     # is the `finally` that `os._exit` skips and a reader here is the one who
     # would otherwise conclude the reaper is complete.
@@ -755,14 +796,22 @@ CAPS = {
     # Fleet admission (2026-08-27): extracted from the scheduler rather than
     # growing it past its cap — the pool it drives had no production caller for
     # its whole existence, and the wiring is a cohesive unit of its own.
-    "robothor/engine/admission.py": 105,  # +23: observe/enforce ladder; the evidence writer was extracted to admission_evidence.py
+    "robothor/engine/admission.py": 107,  # +23: observe/enforce ladder; the evidence writer was extracted to admission_evidence.py. +3: the two budget_stop call sites; the record itself lives in budget_stops.py. -1: the hourly cap never refuses, so the refusal record went
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,
     # 1600 -> 1562: webchat attachments added a call site (the intake itself
     # is chat_attachments.py) and paid for it by moving the three pure plan
     # helpers to chat_plan_helpers.py, which chat.py re-exports.
-    "robothor/engine/chat.py": 1562,
+    # 1562 -> 1533: the startup session restore (read off the loop, apply on
+    # it) left for chat_restore.py when the daemon began reading sessions
+    # concurrently, which paid for that split rather than raising this cap.
+    # 1533 -> 1526: re-measured after the catch-up fold (flag paths removed).
+    # 1562 -> 1546: DeepRunState serialises itself (models.py), which paid for
+    # passing the typed text to the run.
+    # 1526 -> 1510: re-measured with the credential-intake refold.
+    # 1510 -> 1508: re-measured with main merged into the fold.
+    "robothor/engine/chat.py": 1508,
     # 1600 -> 1607 (2026-08-27): fleet admission finally has a caller here.
     # The 75-line implementation went to admission.py; what remains is five
     # irreducible call sites (admit / register / complete / import). The
@@ -778,7 +827,8 @@ CAPS = {
     # schedule_reconcile.RowLedger; what is left here is the call site. This
     # corrects a cap set hours earlier in the same PR, not a long-standing one,
     # and is still 16 lines below where this module started.
-    "robothor/engine/scheduler.py": 1610,
+    # 1610 -> 1558: re-measured after the catch-up fold (flag paths removed).
+    "robothor/engine/scheduler.py": 1558,
     # The job-set derivation reconcile and start() now share. Bounded from the
     # day it lands: this is the module that would otherwise absorb every
     # scheduling concern that does not fit in scheduler.py's cap.
@@ -787,7 +837,10 @@ CAPS = {
     # decides whether the JOB does. Conflating the two left a model-only edit
     # reconciling to a no-op with a stale row; separating them is what kept the
     # scheduler a call site rather than growing this logic there.
-    "robothor/engine/schedule_reconcile.py": 340,
+    # 340 -> 343: the ambient job kind — one import, one error template, one
+    # builder row. The spec itself and its schedule rule live in ambient.py,
+    # so the derivation stays one loop over every kind.
+    "robothor/engine/schedule_reconcile.py": 343,
     # The bridge's agent builder. Not under robothor/, and that is the point:
     # CAPS was a robothor/-only list, so the largest new file in the manifest-API
     # change was unbounded while every engine file it touched was pinned to
@@ -803,13 +856,22 @@ CAPS = {
     # into the engine, which is the process that mounts the workspace. What is
     # left is the operator gate, the audit trail and the forwarding.
     # 257 -> 328 in review: a write whose answer is lost is still audited, and
-    # writes get their own engine budget.
-    "crm/bridge/routers/agent_manifests.py": 340,
+    # writes get their own engine budget. 340 -> 332: re-measured in the fold.
+    # 338 with main's hierarchical tenancy merged in: the file is main's own,
+    # which routes every call to the acting tenant's engine (main's cap 340).
+    "crm/bridge/routers/agent_manifests.py": 338,
     # The engine half of the agent builder, bounded from the day it lands: the
     # file operations (manifest_store) and the routes that orchestrate them
     # with the verdict, the reconcile and the trigger (admin_manifests).
-    "robothor/engine/manifest_store.py": 700,
-    "robothor/engine/admin_manifests.py": 380,
+    # 700 -> 692 and 380 -> 376: re-measured in the fold, with the listing
+    # cache out in manifest_listing.py.
+    "robothor/engine/manifest_store.py": 692,
+    # 376 -> 342: the validation context left for manifest_context.py, which
+    # paid for main's tenant-cell scan route.
+    "robothor/engine/admin_manifests.py": 342,
+    # The fleet listing's cached scan, out of manifest_store so the store stays
+    # under its cap: it only knows whether the manifest files changed.
+    "robothor/engine/manifest_listing.py": 93,
     # 250 -> 260: `introduced` now carries the record of getting this wrong
     # twice in opposite directions — keyed too loosely it missed an added
     # fault, keyed too tightly it refused a partial repair — plus the per-fault

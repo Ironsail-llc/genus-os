@@ -673,6 +673,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--category", default=None, metavar="C", help="Run one category, e.g. database"
     )
     doctor_parser.add_argument(
+        "--agent",
+        default=None,
+        metavar="ID",
+        help="Per-agent checks (e.g. --category capabilities) report only this agent",
+    )
+    doctor_parser.add_argument(
         "--offline",
         action="store_true",
         help="Make no upstream call; the provider completion check is skipped",

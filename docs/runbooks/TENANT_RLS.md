@@ -31,9 +31,25 @@ That is why migration 082 exists.
 |---|---|
 | `081_tenant_rls_backstop.sql` | `ENABLE` + `FORCE` RLS and a `tenant_isolation` policy on all 59 tenant-scoped tables. **Permissive when `app.tenant_id` is unset** — migrations, `psql`, the CLI and every not-yet-tenant-aware path keep working. |
 | `082_tenant_rls_app_role.sql` | Creates `robothor_app` (`NOSUPERUSER NOBYPASSRLS`) with the grants the engine needs. Created, **not adopted** — switching the connection user inside a schema migration could lock the instance out of its own database. |
+| `166_entity_recall_definer.sql` | `entity_facts_for_candidates(tenant, candidates, restricted, person)`, the warmup's case-blind entity recall as a `SECURITY DEFINER` function. Under the policy the planner cannot use `idx_facts_entities_lower` (neither `lower_entities()` nor `&&` is `LEAKPROOF`), so the inline lookup scanned the tenant's facts per candidate. The function runs as its owner, which must bypass RLS (the role that runs migrations); it returns only `tenant`'s rows and, in a scoped session, nothing for any other tenant; a restricted caller gets its own and unowned facts, or unowned facts alone with no linked person. `EXECUTE` goes to `robothor_app`, not `PUBLIC`. |
 
 `robothor/db/connection.py` binds `app.tenant_id` on each connection when
 `ROBOTHOR_RLS_ENABLED=1`. Off by default, so this is a no-op until you turn it on.
+
+The binding is remembered per pooled connection and `set_config` is sent only
+when the tenant differs from the one the connection already carries; a
+connection reused for another tenant is always re-bound. That memo assumes
+`connection.py` is the only code that sets `app.tenant_id` at session level
+(anything else uses `set_config(..., true)`, which reverts at commit), and it
+assumes the session outlives a transaction, so the engine and bridge must not
+sit behind a transaction-mode pooler. See
+[Connection poolers](../deployment.md#connection-poolers); `genus doctor`'s
+`db.session_settings` check probes it.
+
+A checkout that has to open a connection is bounded by
+`ROBOTHOR_DB_CONNECT_TIMEOUT`, and while the database is unreachable those
+checkouts queue behind the pool lock, one `connect_timeout` each. Keep
+`ROBOTHOR_DB_CONNECT_TIMEOUT` above 0.
 
 ## Turning it on
 

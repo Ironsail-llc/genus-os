@@ -38,6 +38,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.platform_capabilities import needs_tools
+
 REPO = Path(__file__).resolve().parents[1]
 HANDLER = REPO / "infra" / "bin" / "robothor-restart-handler.sh"
 UNIT_DIR = REPO / "infra" / "systemd"
@@ -73,6 +75,7 @@ def _restarted(log: Path) -> list[str]:
 
 
 class TestAllowedUnits:
+    @needs_tools("flock")
     def test_the_engine_can_still_be_restarted(self, tmp_path: Path):
         """#205's original capability must survive."""
         _, log = _run(tmp_path, "robothor-engine")
@@ -93,11 +96,13 @@ class TestAllowedUnits:
             "robothor-delphi-engine" in c for c in _restarted(log)
         ), "the restart broker still accepts the decommissioned Delphi engine"
 
+    @needs_tools("flock")
     def test_several_requests_are_all_honoured(self, tmp_path: Path):
         _, log = _run(tmp_path, "robothor-bridge", "robothor-app")
         calls = " ".join(_restarted(log))
         assert "robothor-bridge.service" in calls and "robothor-app.service" in calls
 
+    @needs_tools("flock")
     def test_the_request_is_consumed(self, tmp_path: Path):
         """A leftover trigger would loop the path unit forever."""
         _, log = _run(tmp_path, "robothor-engine")
@@ -122,6 +127,7 @@ class TestRefusedUnits:
             return  # the filesystem refused it first, which is also fine
         assert _restarted(log) == [], f"{name!r} reached systemctl"
 
+    @needs_tools("flock")
     def test_a_refused_request_is_still_consumed(self, tmp_path: Path):
         """Otherwise a bogus name loops the path unit forever."""
         _run(tmp_path, "sshd")

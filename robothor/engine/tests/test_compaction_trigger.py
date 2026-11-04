@@ -3,8 +3,8 @@
 Measured over the 7 days ending 2026-08-24: ZERO proactive-compaction events
 and ZERO compression events fleet-wide — while 9.7% of LLM calls exceeded 60K
 input tokens carrying 89.6M tokens, and re-sent conversation history was 28%
-of all input. The machinery (4-pass graduated compaction, RIP_18 lossless
-pre-pass, drain-to-60K) was all shipped and live; the TRIGGER was not: it
+of all input. The machinery (compaction's LLM-free pre-pass, its summary on
+the agent's chain, drain-to-60K) was all shipped and live; the TRIGGER was not: it
 fired at 0.5 x the model window, which on the fleet primary's 1M window is
 524,288 tokens — 7.4x the p95 per-call input (70,598). A threshold no real
 run can reach is the inert-control pattern wearing a percentage.

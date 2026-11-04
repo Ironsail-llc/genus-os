@@ -8,9 +8,11 @@ the conversation loop where it left off.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 from collections.abc import Callable  # noqa: TC003
 from dataclasses import dataclass, field
@@ -35,6 +37,133 @@ CHECKPOINT_SCHEMA_VERSION = 1  # increment when checkpoint format changes
 #: up to megabytes and a checkpoint is written many times per run; the turn's
 #: text already names the file's path, which is what a resumed run needs.
 IMAGE_PLACEHOLDER = "[image omitted from the checkpoint; its path is named in the turn]"
+
+
+def _redacted(messages: list[Any], stored: tuple[str, ...] = ()) -> list[Any]:
+    """*messages* with the history redaction (``redact_message``) applied.
+
+    ``stored`` is a per-restore set of values the vault holds (see
+    :func:`_stored_credentials`), replaced here whatever the process-wide
+    registry knows. What the person typed (``user`` turns, and the task
+    record's person strings in the system turn, see :func:`_scrub_task_record`)
+    also loses every opaque run (:func:`redact_opaque_runs`): a bare 32-hex key
+    has no shape. Tool results keep theirs: a git SHA there is information.
+    """
+    from robothor.secrets.redaction import PLACEHOLDER, redact_message, redact_opaque_runs
+
+    out: list[Any] = []
+    for message in messages:
+        if stored:
+            message = _replace_values(message, stored, PLACEHOLDER)
+        cleaned = redact_message(message)
+        if not isinstance(cleaned, dict) or not isinstance(cleaned.get("content"), str):
+            out.append(cleaned)
+        elif cleaned.get("role") == "user":
+            out.append({**cleaned, "content": redact_opaque_runs(cleaned["content"])})
+        elif cleaned.get("role") == "system":
+            out.append(_scrub_task_record(cleaned))
+        else:
+            out.append(cleaned)
+    return out
+
+
+def _scrub_task_record(message: dict[str, Any]) -> dict[str, Any]:
+    """The system turn with the opaque pass run on the task record's PERSON
+    strings (request, objective, recent turns, steering), decoded first.
+
+    The record is JSON inside the turn, where a newline is a backslash and an
+    ``n``; a textual pass could cut the escape and leave invalid JSON, losing a
+    resumed run's record and its plan-mode restrictions. Decoded, scrubbed
+    and re-serialised, it is valid by construction. The rest of the turn is
+    engine text and is left alone.
+    """
+    from robothor.engine.task_context import install_context, read_context
+    from robothor.secrets.redaction import redact_opaque_runs
+
+    holder = [message]
+    record = read_context(holder)
+    if record is None:
+        return message
+    for field_name in ("request", "objective"):
+        if isinstance(record.get(field_name), str):
+            record[field_name] = redact_opaque_runs(record[field_name])
+    for turn in record.get("recent_context") or []:
+        if isinstance(turn, dict) and isinstance(turn.get("content"), str):
+            turn["content"] = redact_opaque_runs(turn["content"])
+    if isinstance(record.get("steering"), list):
+        record["steering"] = [
+            redact_opaque_runs(t) if isinstance(t, str) else t for t in record["steering"]
+        ]
+    install_context(holder, record)
+    return holder[0]
+
+
+def _replace_values(value: Any, stored: tuple[str, ...], placeholder: str) -> Any:
+    """A copy of *value* with every string's ``stored`` values replaced."""
+    if isinstance(value, str):
+        for secret in stored:
+            if secret in value:
+                value = value.replace(secret, placeholder)
+        return value
+    if isinstance(value, dict):
+        return {k: _replace_values(v, stored, placeholder) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_replace_values(v, stored, placeholder) for v in value]
+    return value
+
+
+#: A UUID, a number, an email address or a URL: an identifier the vault may
+#: hold (a tenant or client id, a chat id), never a credential to scrub.
+_IDENTIFIER = re.compile(
+    r"^(?:[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+    r"|[-+]?\d+|[^@\s]+@[^@\s]+\.\w+|\w+://\S+)$"
+)
+
+
+def _is_credential_like(value: str) -> bool:
+    """At least 16 characters, two of lower case, upper case and digits, and
+    not an identifier (:data:`_IDENTIFIER`)."""
+    if len(value) < 16 or _IDENTIFIER.match(value):
+        return False
+    return sum(any(t(c) for c in value) for t in (str.islower, str.isupper, str.isdigit)) >= 2
+
+
+def _stored_credentials(tenant_id: str | None) -> tuple[str, ...]:
+    """The credential-like values the vault stores, longest first.
+
+    Read in-process through the vault and never logged. Each is also
+    registered with the process-wide redactor, so later tool results and
+    history redact it after a restart; identifiers the vault holds are left
+    out of both. A vault that cannot be read gives none, and the restore still
+    redacts by shape and by opaque run.
+    """
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.secrets.fingerprint import fingerprint
+    from robothor.secrets.redaction import register_known_value
+
+    try:
+        import robothor.vault as vault
+
+        values = vault.export_env(tenant_id=tenant_id or DEFAULT_TENANT).values()
+    except Exception as exc:  # noqa: BLE001 - the restore still redacts by shape
+        logger.warning("checkpoint restore: vault unreadable (%s)", type(exc).__name__)
+        return ()
+    found = {v for v in values if isinstance(v, str) and _is_credential_like(v)}
+    stored = tuple(sorted(found, key=len, reverse=True))
+    for value in stored:
+        register_known_value(value, fingerprint=fingerprint(value))
+    return stored
+
+
+def _at_rest(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*messages* as a checkpoint may keep them: no image bytes, no credential.
+
+    The person's own turn stays raw in ``session.messages`` so the model can
+    read a credential once and store it. A checkpoint outlives that turn and is
+    read back on resume, so it gets the history redaction (``redact_message``)
+    that every other copy of the conversation gets.
+    """
+    return _redacted(_without_images(messages))
 
 
 def _without_images(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -136,7 +265,7 @@ class CheckpointManager:
                     (
                         self.run_id,
                         step_number,
-                        json.dumps(_without_images(messages), default=str),
+                        json.dumps(_at_rest(messages), default=str),
                         json.dumps(scratchpad, default=str) if scratchpad else None,
                         json.dumps(plan, default=str) if plan else None,
                         CHECKPOINT_SCHEMA_VERSION,
@@ -152,7 +281,8 @@ class CheckpointManager:
             )
             return True
         except Exception as e:
-            logger.warning("Failed to save checkpoint: %s", e)
+            # The class only: a DB error can quote the row, messages included.
+            logger.warning("Failed to save checkpoint: %s", type(e).__name__)
             return False
 
     @staticmethod
@@ -200,6 +330,12 @@ class CheckpointManager:
                         CHECKPOINT_SCHEMA_VERSION,
                     )
                     return None
+                # A row written before checkpoints were redacted still holds
+                # the raw turn; resume must not read a credential back into
+                # the run (and from it, into ``originating_message``).
+                if isinstance(result.get("messages"), list):
+                    stored = _stored_credentials(tenant_id)
+                    result["messages"] = _redacted(result["messages"], stored)
                 from robothor.engine.runtime.contracts import StateEnvelope
 
                 envelope = (result.get("scratchpad") or {}).get("_runtime")
@@ -207,7 +343,7 @@ class CheckpointManager:
                     StateEnvelope().require_compatible(StateEnvelope(**envelope))
                 return result
         except Exception as e:
-            logger.warning("Failed to load checkpoint: %s", e)
+            logger.warning("Failed to load checkpoint: %s", type(e).__name__)
             return None
 
 
@@ -235,9 +371,12 @@ async def save_iteration(
             todo_state = session.todo_list.to_dict()
         except Exception:  # noqa: BLE001 - a checklist is never worth the run
             todo_state = None
-    checkpoint.save(
+    # json.dumps of the whole conversation plus an INSERT: off the loop. The
+    # thread gets its own copy of the message list, which the loop may extend.
+    await asyncio.to_thread(
+        checkpoint.save,
         step_number=session._step_counter,
-        messages=session.messages,
+        messages=list(session.messages),
         scratchpad=scratchpad.to_dict() if scratchpad else None,
         plan=plan_result.raw if plan_result and hasattr(plan_result, "raw") else None,
         todo_list=todo_state,

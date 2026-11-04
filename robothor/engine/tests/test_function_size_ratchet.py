@@ -49,7 +49,11 @@ KNOWN_LARGE: dict[str, int] = {
     # them gained a `shadow_bundled` argument (writing a skill over a name the
     # platform ships is now asked for explicitly), and the cluster it travelled
     # out with paid 17 lines back 169 times over.
-    "tools/schemas.py::get_engine_schemas": 3248,
+    # 3251 -> 3220: the two team-scratchpad schemas left for `_TEAM_SCRATCHPAD_SCHEMAS`.
+    # 3220 -> 3208: `mcp_list_tools`'s parameters left for
+    # `_mcp_list_tools_properties`, which is what paid for its flag-gated
+    # `refresh` argument.
+    "tools/schemas.py::get_engine_schemas": 3208,
     # -29: every subsystem router mount extracted to _mount_subsystem_routers,
     # which is what made room for the /api/admin registration rather than
     # raising this number for it.
@@ -61,12 +65,21 @@ KNOWN_LARGE: dict[str, int] = {
     # paid for reporting an unreadable benchmark break-out as null rather than
     # as zero spend — a different claim about the fleet, and one this endpoint
     # was the last place to get wrong.
-    "health.py::create_health_app": 1386,
+    # 1386 -> 1350: re-measured after the catch-up fold (flag paths removed).
+    # 1350 -> 1316: re-measured after the catch-up fold (flag paths removed).
+    "health.py::create_health_app": 1316,
     # 990 -> 989: the post-stall autoDream spawn moved to
     # run_lifecycle.spawn_post_stall_autodream ("recovery helper spawns" is
     # that module's own contract), which is what paid for classifying a
     # workflow-budget kill and letting it propagate.
-    "runner.py::execute": 986,  # +7: task_id propagated onto the run at INSERT time
+    # 986 -> 970: spawn inheritance, tier stamping, person linkage and tenant
+    # access moved to run_attribution.attribute_run. 970 -> 964: the switch
+    # that gated the answer-first exit went, and both exits share its arguments.
+    # 964 -> 963: re-measured after the catch-up fold (flag paths removed).
+    # -13: session seating moved to run_identity.seat_session
+    # 963 -> 957: re-measured with the credential-intake refold.
+    # 957 -> 956: observe_request is imported at module scope.
+    "runner.py::execute": 956,
     # 775 -> 773 with the step-efficiency work: the guard's note drain, the
     # pace-note call site and the refusal branch cost less than the inlined
     # deadline and check-in blocks returned when they left for run_pacing.py.
@@ -82,7 +95,9 @@ KNOWN_LARGE: dict[str, int] = {
     # that suppresses it, and the checkpoint save to checkpoint.py beside the
     # loader that reads it. The cap follows the function DOWN rather than
     # banking the difference, which is the point of a ratchet.
-    "runner.py::_run_loop": 508,
+    # 508 -> 478: re-measured after the catch-up fold (flag paths removed).
+    # 478 -> 474: the spawn-context setup left for spawn_context.install_spawn_context.
+    "runner.py::_run_loop": 474,
     # 473 -> 346. The Gmail and Calendar branches left for functions of their
     # own (_gmail_search/_gmail_get, _calendar_list/_calendar_create/
     # _calendar_delete) when each of them grew a real body: decoding a MIME
@@ -93,7 +108,8 @@ KNOWN_LARGE: dict[str, int] = {
     # 350 -> 285: the inline gws argv for threads.get / messages.send /
     # messages.modify moved behind the workspace provider seam
     # (robothor/workspace/google/adapter.py); the guards stayed here.
-    "tools/handlers/gws.py::_handle_gws_tool": 285,
+    # 285 -> 281: re-measured after the catch-up fold (flag paths removed).
+    "tools/handlers/gws.py::_handle_gws_tool": 281,
     # -14: fleet capacity init extracted to _init_fleet_capacity;
     # -26: structlog wiring extracted to _configure_structured_logging, which
     # is what made room for the startup provider-secrets load rather than
@@ -104,19 +120,31 @@ KNOWN_LARGE: dict[str, int] = {
     # 364 -> 354: the shutdown announcement left for _announce_shutdown, which
     # is what paid for owning SIGTERM in here (the handler install and the
     # stop-signal task) rather than raising this number for it.
-    "daemon.py::main": 354,
-    "telegram.py::_run_interactive": 384,
+    # 354 -> 348: the concurrent middle of startup (recovery, coding jobs,
+    # the manifest scan and the webchat session read) left for
+    # _recover_scan_and_restore, which is what paid for the startup clock and
+    # the dependency-graph comment rather than raising this number for them.
+    # 371 -> 331: the channel-bus main hooks and the startup announcement left for helpers.
+    # 331 -> 326: the MCP pre-warm left for `_spawn_mcp_prewarm`.
+    # 326 -> 324: the config log lines left for `_announce_config`, which paid
+    # for main's lockfile claim.
+    "daemon.py::main": 324,
+    # 384 -> 338: the post-reply persist-and-map closure left for
+    # telegram_delivery.persist_and_map. 338 -> 314: the ten-second tool-status
+    # edits went with the only streaming path; telegram_progress.deliver_reply
+    # delivers the reply.
+    # -13: the sender lookup is telegram_turn.run_sender
+    # 314 -> 304: re-measured with the credential-intake refold.
+    # 304 -> 302: re-measured with the credential-intake refold.
+    "telegram.py::_run_interactive": 302,
     # 343 -> 325: the benchmark break-out moved to _benchmark_spend, which is
     # what paid for un-scoping it from the production tenant (the graded
     # children now run as benchmark-sandbox) rather than raising this number.
     # 325 -> 326: +1 for reporting an unreadable break-out as None rather than
     # as zero spend, which is a different claim about the fleet.
     "analytics.py::get_agent_stats": 326,
-    # 303 -> 301: the reconcile reporting moved to _log_reconcile, which is
-    # what paid for reporting added/replaced as well as pruned.
-    "daemon.py::_watchdog": 298,
-    "chat.py::plan_approve": 286,
-    "compaction.py::compact": 276,
+    # 286 -> 261: re-measured after the catch-up fold (flag paths removed).
+    "chat.py::plan_approve": 261,
     # -7: rate-limit wait and the malformed-tool-call verdict extracted;
     # +4: review-requested comments on the malformed-tool-call branch (why the
     # re-roll spends `attempt`, and what skipping `_handle_model_error` costs)
@@ -135,9 +163,11 @@ KNOWN_LARGE: dict[str, int] = {
     # is what paid for the reasoning-only re-ask, the per-attempt telemetry and
     # the shared per-model time allowance (DIAG 2026-09-13 §4.1/§4.4, review I6)
     # rather than raising this number for any of them.
-    "llm_client.py::_call_llm": 237,
+    # 237 -> 232: re-measured after the catch-up fold (flag paths removed).
+    "llm_client.py::_call_llm": 232,
     # 268 -> 267 on main, kept: this branch does not touch that function.
-    "config.py::manifest_to_agent_config": 267,
+    # 267 -> 263: re-measured after the catch-up fold (flag paths removed).
+    "config.py::manifest_to_agent_config": 263,
     # scheduler.py::start is gone from this list: 266 -> 116. The three
     # hand-written registration blocks (heartbeat, worker, cron) became one
     # loop over schedule_reconcile.agent_job_specs, which is also what
@@ -150,6 +180,8 @@ KNOWN_LARGE: dict[str, int] = {
     # 247 -> 245: its own per-call timeout selection now shares
     # _per_call_timeout with _call_llm, which more than paid for the same
     # workflow-deadline clamp landing on this chain walk too.
+    # 230 -> 229: the in-place stream retry's announce, watchdog touch and
+    # pause are one helper, _before_stream_retry.
     # 236 -> 230: the credential rotation and the auth-failure verdict are now
     # the same two helpers _call_llm uses, which is what paid for the streaming
     # emptiness guard (one provider call, one row).
@@ -157,12 +189,14 @@ KNOWN_LARGE: dict[str, int] = {
     # retired pool) moved to _streaming_skip_reason, which is what paid for it
     # recording its attempts — so `duration_ms` means the provider attempt on
     # BOTH paths instead of one thing streamed and another not (review I5).
-    "llm_client.py::_call_llm_streaming": 230,
-    "telegram.py::run_agent": 257,
+    # 235 -> 229: the in-place stream retry's announce and pause left for a
+    # helper. 229 -> 227: that helper is the streaming slice's own module-level one.
+    "llm_client.py::_call_llm_streaming": 227,
     "tools/handlers/experiment.py::_experiment_commit": 256,
     "telegram.py::_handle_goal_command": 242,
     "managed_agents/runner.py::run_on_managed_agents": 241,
-    "runner.py::execute_deep": 224,
+    # 224 -> 218: re-measured after the catch-up fold (flag paths removed).
+    "runner.py::execute_deep": 218,
     # workflow.py::execute is gone from this list: 208 -> 179. The finalization
     # cluster (completion stamp, terminal status, the failed->timeout
     # reclassification) became _finalize_status, which is what paid for the

@@ -14,13 +14,14 @@ another tenant's. A rejected caller never reaches the engine.
 The engine's answer is passed through with its status and never cached; it
 already leaves out how each MCP server is reached.
 
-Plain ``def`` (test_route_concurrency.py): the handler runs in the threadpool
-and drives the one engine call to completion there.
+``async def`` (test_route_concurrency.py): the one engine call is awaited on
+the loop serving the request, which is the loop the lifespan's pooled client
+belongs to. A ``def`` handler would have to start a second loop in its worker
+thread to drive the call.
 """
 
 from __future__ import annotations
 
-import asyncio
 import re
 from typing import Any
 
@@ -38,8 +39,8 @@ router = APIRouter(prefix="/api", tags=["agents"])
 _AGENT_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
-def _proxied(path: str, tenant: str) -> JSONResponse:
-    status, body = asyncio.run(engine_request("GET", path, tenant=tenant))
+async def _proxied(path: str, tenant: str) -> JSONResponse:
+    status, body = await engine_request("GET", path, tenant=tenant)
     if status in (401, 403):
         # The engine refusing the BRIDGE's token or scope, not the caller:
         # passed through, the dialog would tell an operator their session
@@ -58,16 +59,16 @@ def _proxied(path: str, tenant: str) -> JSONResponse:
 
 
 @router.get("/agents/{agent_id}/tools")
-def agent_tools(agent_id: str, request: Request) -> Any:
+async def agent_tools(agent_id: str, request: Request) -> Any:
     """The agent's tools by source, and its manifest's allow and deny lists."""
     require_tenant_admin(request)
     if not _AGENT_ID.fullmatch(agent_id):
         raise HTTPException(status_code=422, detail="not an agent id")
-    return _proxied(f"/api/admin/agents/{agent_id}/tools", get_tenant_id(request))
+    return await _proxied(f"/api/admin/agents/{agent_id}/tools", get_tenant_id(request))
 
 
 @router.get("/mcp/servers")
-def mcp_servers(request: Request) -> Any:
+async def mcp_servers(request: Request) -> Any:
     """Each MCP server's health and tool count."""
     require_tenant_admin(request)
-    return _proxied("/api/admin/mcp/servers", get_tenant_id(request))
+    return await _proxied("/api/admin/mcp/servers", get_tenant_id(request))

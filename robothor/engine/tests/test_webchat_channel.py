@@ -125,9 +125,9 @@ class TestSend:
 
     @pytest.mark.asyncio
     async def test_the_turn_is_readable_from_the_in_memory_session(self, writes):
-        """``GET /chat/history`` reads RAM, and the DB only at boot. A delivery
-        that skipped the in-memory session would be invisible in the Helm until
-        the next engine restart."""
+        """``GET /chat/history`` falls back to RAM when the store cannot answer,
+        and the agent's next turn reads RAM. A delivery that skipped the
+        in-memory session would be missing from both until the next restart."""
         await WebchatChannel().send(MEMBER, "the briefing", config=_config(), run=_run())
 
         session = chat.get_shared_session(chat.derive_user_session_key("assistant", MEMBER))
@@ -138,8 +138,8 @@ class TestSend:
     async def test_no_chat_row_means_no_turn_in_ram_either(self, writes):
         """The in-memory session must not outrun the table behind it.
 
-        ``/chat/history`` reads RAM, and ``_restore_sessions`` refills RAM from
-        the DB at boot. A turn appended without a row would show in the Helm
+        ``/chat/history`` falls back to RAM, and ``_restore_sessions`` refills
+        RAM from the DB at boot. A turn appended without a row would show in the Helm
         until the next restart and then vanish — a message the member saw, then
         did not, with nothing anywhere saying it was never stored.
         """

@@ -2,8 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { isDeniedBridgePath } from "@/lib/bridge-proxy-policy";
+import { forgetChatAgentListings } from "@/lib/chat/agent-guard";
 import { getServiceUrl } from "@/lib/services/registry";
 const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
+
+function changesChatAgents(pathname: string): boolean {
+  return /\/api\/(agent-manifests|agents)(\/|$)/.test(pathname);
+}
 
 async function proxy(
   req: NextRequest,
@@ -37,14 +42,21 @@ async function proxy(
     const ifNoneMatch = req.headers.get("if-none-match");
     if (ifNoneMatch) headers["If-None-Match"] = ifNoneMatch;
 
+    // Every method but GET and HEAD may carry a body, and DELETE does: retiring
+    // an agent sends its confirmation there. An empty one is sent as none.
+    const body =
+      req.method === "GET" || req.method === "HEAD" ? undefined : (await req.text()) || undefined;
+
     const res = await fetch(target.toString(), {
       method: req.method,
       headers,
-      body: ["POST", "PUT", "PATCH"].includes(req.method)
-        ? await req.text()
-        : undefined,
+      body,
       signal: AbortSignal.timeout(30000),
     });
+
+    // The chat's agent guard caches who may address which agent; a change to
+    // a manifest or an agent made here must not wait out that cache.
+    if (req.method !== "GET" && changesChatAgents(target.pathname)) forgetChatAgentListings();
 
     // The two headers that make a revalidation work, carried back as the
     // bridge sent them; anything untagged stays `no-store`.

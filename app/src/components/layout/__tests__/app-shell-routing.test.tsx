@@ -88,6 +88,10 @@ function desktopViewport() {
   }));
 }
 
+// Views load on first visit; the first import of a real view module in a test
+// file includes its transform, which can outlast the default one second.
+const CHUNK_WAIT = { timeout: 5000 };
+
 async function renderShell() {
   const { AppShell } = await import("../app-shell");
   return render(<AppShell />);
@@ -166,14 +170,17 @@ describe("AppShell — URL-synced views", () => {
     await renderShell();
     // The owner must not be told the screen is not theirs before the role is known.
     expect(screen.queryByTestId("settings-restricted")).toBeNull();
-    expect(screen.getByTestId("settings-loading")).toBeInTheDocument();
+    expect(await screen.findByTestId("settings-loading", {}, CHUNK_WAIT)).toBeInTheDocument();
   });
 
   it("round-trips a settings sub-page", async () => {
     window.history.replaceState(null, "", "/?v=settings&s=flags");
     await renderShell();
     expect(screen.getByTestId("header-title").textContent).toBe("Settings");
-    expect(screen.getByTestId("settings-nav-flags")).toHaveAttribute("aria-current", "page");
+    expect(await screen.findByTestId("settings-nav-flags", {}, CHUNK_WAIT)).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   it("shows the canvas as an optional rail on the chat view", async () => {
@@ -234,13 +241,13 @@ describe("AppShell — URL-synced views", () => {
     window.history.replaceState(null, "", "/?v=inbox");
     await renderShell();
     expect(screen.getByTestId("header-title").textContent).toBe("Inbox");
-    expect(screen.getByTestId("inbox-view")).toBeInTheDocument();
+    expect(await screen.findByTestId("inbox-view", {}, CHUNK_WAIT)).toBeInTheDocument();
     expect(screen.queryByTestId("coming-soon-inbox")).toBeNull();
   });
 
   /**
    * The three Observe screens were SOON placeholders until B14b. The shell has
-   * to mount the real views, and — because it mounts every view at once and
+   * to mount the real views, and — because it keeps every opened view mounted and
    * hides the inactive ones with `display: none` — it has to hand each of them
    * the role, so the two that are operator-only do not put an operator-gated
    * read on the bridge for a member who never navigated there.
@@ -253,7 +260,7 @@ describe("AppShell — URL-synced views", () => {
     window.history.replaceState(null, "", `/?v=${view}`);
     await renderShell();
     expect(screen.getByTestId("header-title").textContent).toBe(title);
-    expect(screen.getByTestId(`${view}-view`)).toBeInTheDocument();
+    expect(await screen.findByTestId(`${view}-view`, {}, CHUNK_WAIT)).toBeInTheDocument();
     expect(screen.queryByTestId(`coming-soon-${view}`)).toBeNull();
   });
 
@@ -261,7 +268,7 @@ describe("AppShell — URL-synced views", () => {
     mockSession.role = "member";
     window.history.replaceState(null, "", "/?v=audit");
     await renderShell();
-    expect(screen.getByTestId("audit-not-yours")).toBeInTheDocument();
+    expect(await screen.findByTestId("audit-not-yours", {}, CHUNK_WAIT)).toBeInTheDocument();
   });
 
   it("badges the sidebar Inbox from the same poll the view reads", async () => {

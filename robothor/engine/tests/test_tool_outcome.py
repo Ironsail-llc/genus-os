@@ -263,3 +263,90 @@ def test_a_success_does_not_count_against_the_breaker():
         _record(_session(), error_msg=None, failures=failures)
 
     assert failures == {}
+
+
+# ── Wrapped calls ─────────────────────────────────────────────────────
+#
+# A deferred agent reaches most of its tools through `tool_call`. Recorded
+# under the wrapper's name, three unrelated failures (a Gmail 404, a Jira error,
+# a refusal) tripped one breaker and told the agent never to call `tool_call`
+# again — every deferred tool at once.
+
+
+def _wrapped(name, **arguments):
+    return {"name": name, "arguments": arguments}
+
+
+def test_wrapped_failures_of_different_tools_do_not_share_a_breaker():
+    session = _session()
+    failures = {}
+    with (
+        patch("robothor.engine.tracking.log_tool_event"),
+        patch("robothor.engine.error_recovery.classify_error", return_value="X"),
+    ):
+        for inner in ("gws_gmail_get", "jira_get_issue", "list_tasks"):
+            _record(
+                session,
+                tool_name="tool_call",
+                tool_args=_wrapped(inner, id="1"),
+                error_msg="boom",
+                failures=failures,
+            )
+
+    assert failures == {"gws_gmail_get": 1, "jira_get_issue": 1, "list_tasks": 1}
+    assert session.messages == []
+
+
+def test_the_breaker_names_the_wrapped_tool_not_the_wrapper():
+    session = _session()
+    failures = {}
+    with (
+        patch("robothor.engine.tracking.log_tool_event"),
+        patch("robothor.engine.error_recovery.classify_error", return_value="X"),
+    ):
+        for _ in range(3):
+            _record(
+                session,
+                tool_name="tool_call",
+                tool_args=_wrapped("jira_get_issue", key="ABC-1"),
+                error_msg="boom",
+                failures=failures,
+            )
+
+    assert failures == {"jira_get_issue": 3}
+    content = session.messages[0]["content"]
+    assert "'jira_get_issue'" in content
+    assert "'tool_call'" not in content
+
+
+def test_a_wrapped_call_is_logged_and_recorded_as_the_tool_it_wraps():
+    scratchpad = FakeScratchpad()
+    with patch("robothor.engine.tracking.log_tool_event") as log:
+        _record(
+            _session(),
+            tool_name="tool_call",
+            tool_args=_wrapped("list_tasks", limit=5),
+            result={"tasks": []},
+            scratchpad=scratchpad,
+        )
+
+    assert log.call_args.kwargs["tool_name"] == "list_tasks"
+    assert scratchpad.calls == [("list_tasks", None, {"tasks": []}, {"limit": 5})]
+
+
+def test_a_malformed_wrapper_is_still_recorded_as_the_wrapper():
+    """No inner name to look through: the failure belongs to `tool_call` itself."""
+    failures = {}
+    with (
+        patch("robothor.engine.tracking.log_tool_event"),
+        patch("robothor.engine.error_recovery.classify_error", return_value="X"),
+    ):
+        _record(
+            _session(),
+            tool_name="tool_call",
+            tool_args={"arguments": {}},
+            error_msg="name is required",
+            failures=failures,
+        )
+
+    assert failures == {"tool_call": 1}

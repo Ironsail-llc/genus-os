@@ -12,14 +12,104 @@ was then journalled as an uncertain write that fenced every later wait.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
+# No engine import at module level: ``robothor.engine.tools`` imports dispatch,
+# which imports this module, so a module-level import of the tools package from
+# here is a cycle for whichever of the two is imported first.
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["WRAPPER_TOOL", "inner_call", "is_read_only_call"]
+__all__ = [
+    "PERMISSION_TRANSPARENT_TOOLS",
+    "TOOLSEARCH_TOOLS",
+    "WRAPPER_TOOL",
+    "MalformedToolCallError",
+    "explicit_arguments",
+    "inner_call",
+    "is_read_only_call",
+    "unwrap",
+    "wrapped_arguments",
+]
 
 WRAPPER_TOOL = "tool_call"
+
+#: The meta-tools that drive deferred loading. Defined here, the module with no
+#: engine imports, and re-exported by ``robothor.engine.tools.constants``.
+TOOLSEARCH_TOOLS: frozenset[str] = frozenset({"tool_search", "tool_describe", WRAPPER_TOOL})
+
+#: The meta-tools a deferred run reaches its tools through. They carry no
+#: permission of their own: ``tool_search`` and ``tool_describe`` only read the
+#: run's allow-set, and RBAC on a ``tool_call`` is decided by the tool it wraps,
+#: which the handler runs through the same dispatch and the same permission
+#: check a direct call meets. Requiring a ``role_permissions`` row for them made
+#: every deferred tool unreachable to a role whose rows never name them.
+PERMISSION_TRANSPARENT_TOOLS = TOOLSEARCH_TOOLS
+
+_HOW_TO_SEND = (
+    "send tool_call with name set to the tool to run and arguments as an object "
+    "of its parameters; tool_describe(name=...) gives the schema"
+)
+
+
+class MalformedToolCallError(ValueError):
+    """A ``tool_call`` the model built wrongly: a bad call it can fix, not a crash."""
+
+
+def explicit_arguments(raw: Any) -> dict[str, Any] | None:
+    """The arguments the model actually sent as an object, or ``None``.
+
+    An object is itself; a JSON string that parses to an object is the same
+    call. Anything else, a null or an empty string included, is not an object:
+    readers that audit what a tool was asked to do (receipts, verification)
+    must not take the step's output as evidence of a call with no arguments.
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def wrapped_arguments(raw: Any) -> dict[str, Any] | None:
+    """The wrapped call's arguments for dispatch: an object, or ``None`` if they
+    are not one.
+
+    Missing (or empty) arguments mean none, so a tool with no parameters runs;
+    otherwise as :func:`explicit_arguments`.
+    """
+    if raw is None or raw == "":
+        return {}
+    return explicit_arguments(raw)
+
+
+def unwrap(args: Any) -> tuple[str, dict[str, Any]]:
+    """``(name, arguments)`` of the call a ``tool_call`` wraps.
+
+    Raises :class:`MalformedToolCallError` naming what is wrong with the wrapper
+    and how to send it, so admission and the handler refuse it the same way.
+    """
+    args = args if isinstance(args, dict) else {}
+    inner = args.get("name")
+    if not isinstance(inner, str) or not inner.strip():
+        raise MalformedToolCallError(
+            f"tool_call needs name: the tool to run, as a string; {_HOW_TO_SEND}"
+        )
+    inner = inner.strip()
+    if inner == WRAPPER_TOOL:
+        raise MalformedToolCallError(f"tool_call cannot wrap another tool_call; {_HOW_TO_SEND}")
+    arguments = wrapped_arguments(args.get("arguments"))
+    if arguments is None:
+        raise MalformedToolCallError(
+            f"tool_call arguments for {inner!r} must be an object (or a JSON string of one), "
+            f"not {type(args.get('arguments')).__name__}; {_HOW_TO_SEND}"
+        )
+    return inner, arguments
 
 
 def inner_call(name: str, arguments: Any = None) -> tuple[str, dict[str, Any]]:
@@ -35,8 +125,8 @@ def inner_call(name: str, arguments: Any = None) -> tuple[str, dict[str, Any]]:
     inner = args.get("name")
     if not isinstance(inner, str) or not inner.strip() or inner.strip() == WRAPPER_TOOL:
         return name, args
-    wrapped = args.get("arguments")
-    return inner.strip(), wrapped if isinstance(wrapped, dict) else {}
+    wrapped = wrapped_arguments(args.get("arguments"))
+    return inner.strip(), wrapped if wrapped is not None else {}
 
 
 def _read_only_by_arguments(name: str, arguments: dict[str, Any]) -> bool:

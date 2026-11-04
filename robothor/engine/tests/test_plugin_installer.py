@@ -244,10 +244,14 @@ def test_record_install_writes_the_source_and_sync_keeps_it(tmp_path) -> None:
         publisher_key_id=KEY_ID,
         installed_at="2026-09-15T00:00:00+00:00",
     )
+    # The digest of the distribution the later sync finds, so that sync is
+    # over the SAME bytes. A sync over changed bytes drops the install facts on
+    # purpose (`TestSyncOverChangedBytes` in test_plugin_lockfile.py).
+    dist = SimpleNamespace(name="acme-tools", version="1.2.3", files=(), read_text=lambda n: None)
     lockfile.record_install(
         "acme-tools",
         version="1.2.3",
-        manifest_sha256="a" * 64,
+        manifest_sha256=lockfile.manifest_digest(dist),
         kinds=("genus.tools",),
         verdict="safe",
         dist_sha256="b" * 64,
@@ -267,7 +271,6 @@ def test_record_install_writes_the_source_and_sync_keeps_it(tmp_path) -> None:
     # to tell this platform's install from a hand-rolled one.
     from unittest.mock import patch
 
-    dist = SimpleNamespace(name="acme-tools", version="1.2.3", files=(), read_text=lambda n: None)
     with (
         patch.object(lockfile, "installed_distributions", return_value={"acme-tools": dist}),
         patch.object(lockfile, "entry_point_groups", return_value={"acme-tools": {"genus.tools"}}),
@@ -479,6 +482,31 @@ def test_a_review_wheel_needs_accept_review(registry_fixture) -> None:
     assert outcome.plan.verdict == "review"
     row = lockfile.read_lockfile(registry_fixture.lock).row("acme-tools")
     assert row is not None and row.verdict == "review"
+
+
+def test_the_scan_reasons_reach_the_lock_row(registry_fixture) -> None:
+    """The reasons the operator accepted are part of the record, not only of the
+    install's answer. Without them the Helm can say a plugin was installed under
+    review but not WHAT was reviewed, and that answer is gone once the install
+    response is."""
+    flagged = _wheel_bytes(code="import httpx\n" + _CODE)
+    registry_fixture.served["wheel"] = flagged
+    payload = _index_payload(flagged)
+    raw, sig = registry_fixture.resign(payload)
+    registry_fixture.served["index"], registry_fixture.served["sig"] = raw, sig
+
+    outcome = _install(registry_fixture, pip=_Pip(), accept_review=True)
+    assert outcome.plan.reasons, "the fixture must produce at least one reason"
+    row = lockfile.read_lockfile(registry_fixture.lock).row("acme-tools")
+    assert row is not None
+    assert row.scan_reasons == outcome.plan.reasons
+    assert row.as_json()["scan_reasons"] == list(outcome.plan.reasons)
+
+
+def test_a_lock_row_with_no_scan_reasons_does_not_serialise_them() -> None:
+    """Additive, like `members_accounted`: an empty list would read as "the scan
+    found nothing" on a row nothing scanned."""
+    assert "scan_reasons" not in lockfile.LockRow(name="acme-tools").as_json()
 
 
 def test_an_oversized_wheel_body_is_refused(registry_fixture, monkeypatch) -> None:

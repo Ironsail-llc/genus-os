@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { FleetView } from "../fleet-view";
 
@@ -45,5 +46,50 @@ describe("FleetView states", () => {
     vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => [] } as Response);
     render(<FleetView visible />);
     expect(await screen.findByTestId("fleet-empty")).toBeTruthy();
+  });
+});
+
+describe("FleetView payload", () => {
+  it("shows the empty state, not a crash, when a 200 carries something other than a list", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ messages: [], active: false }),
+    } as Response);
+    render(<FleetView visible />);
+    expect(await screen.findByTestId("fleet-empty")).toBeTruthy();
+  });
+});
+
+describe("FleetView unreadable reply", () => {
+  it("says the bridge could not be read when a 200 body fails to parse", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => { throw new SyntaxError("Unexpected token <"); },
+    } as unknown as Response);
+    render(<FleetView visible />);
+    expect(await screen.findByText("Could not reach the bridge.")).toBeTruthy();
+  });
+});
+
+describe("FleetView cache", () => {
+  it("paints from cache without a request when shown again within a minute", async () => {
+    const spy = vi.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [{ agent_id: "main", name: "Main", findings: [] }],
+    } as Response);
+    const client = new QueryClient();
+    const at = (visible: boolean) => (
+      <QueryClientProvider client={client}>
+        <FleetView visible={visible} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(at(true));
+    expect(await screen.findByTestId("fleet-agent-main")).toBeTruthy();
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    rerender(at(false));
+    rerender(at(true));
+    await waitFor(() => expect(screen.getByTestId("fleet-agent-main")).toBeTruthy());
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });

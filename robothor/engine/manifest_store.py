@@ -47,6 +47,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from robothor.engine.manifest_listing import invalidate_listing
 from robothor.engine.sanitize import sanitize_log
 from robothor.templates.safety import (
     TemplateSecurityError,
@@ -286,6 +287,8 @@ def write_atomically(path: Path, text: str, *, exclusive: bool = False) -> None:
     except BaseException:
         temp_path.unlink(missing_ok=True)
         raise
+    finally:
+        invalidate_listing()
 
 
 def dump(document: dict[str, Any]) -> str:
@@ -346,6 +349,8 @@ def retire(agent_id: str, path: Path) -> None:
         raise _refused(error) from error
     except OSError as error:
         raise _unwritable(error) from error
+    finally:
+        invalidate_listing()
 
 
 def replace_manifest(path: Path, document: dict[str, Any]) -> None:
@@ -360,7 +365,11 @@ def replace_manifest(path: Path, document: dict[str, Any]) -> None:
 
 
 def scan() -> Any:
-    """Every manifest the engine's own loader sees, and every one it refused."""
+    """Every manifest the engine's own loader sees, and every one it refused.
+
+    Always fresh. Validation before a write reads through this: a verdict about
+    a write must not rest on a cached view of the fleet.
+    """
     from robothor.engine.config import load_manifest_dir
 
     return load_manifest_dir(manifest_dir())

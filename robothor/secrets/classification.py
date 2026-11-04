@@ -60,7 +60,14 @@ __all__ = [
 #: environment itself came from. Resolving either of them vault-first is
 #: circular, so the rule is a prefix rather than a name — it holds for the next
 #: variable in the family without anyone remembering to add it.
-BOOTSTRAP_PREFIXES: tuple[str, ...] = ("ROBOTHOR_VAULT_", "SOPS_")
+#:
+#: ``AUTH_*`` is the third family, for the same structural reason: it is what
+#: the vault's own ``auth/*`` rows export as. ``auth/jwt_signing_key`` holds the
+#: session signing key; deleting or rotating it from a tool or a dashboard
+#: signs everybody out and strands every stored MFA secret. Declared names are
+#: still decided by their declaration; the prefix covers the rows nobody
+#: declares under their exported name.
+BOOTSTRAP_PREFIXES: tuple[str, ...] = ("ROBOTHOR_VAULT_", "SOPS_", "AUTH_")
 
 
 def _index() -> dict[str, dict[str, object]]:

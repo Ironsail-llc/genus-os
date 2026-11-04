@@ -12,7 +12,7 @@
  * * a 403 is a sentence about access, not a red error banner;
  * * an unreachable bridge or a refusal is an error state, never an empty table.
  */
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ROTATION_DAYS, SecretsPage } from "../secrets-page";
@@ -34,6 +34,7 @@ function secret(name: string, overrides: Record<string, unknown> = {}) {
     shadowed_by: null,
     env_name: name,
     vault_readable: true,
+    removable: true,
     ...overrides,
   };
 }
@@ -232,5 +233,73 @@ describe("SecretsPage", () => {
     const fetchSpy = mockSecrets(200, { secrets: [] });
     render(<SecretsPage visible={false} role="owner" />);
     await waitFor(() => expect(fetchSpy).not.toHaveBeenCalled());
+  });
+
+  describe("removing a vault row", () => {
+    it("hides Remove on a vault row the bridge says must not be removed", async () => {
+      // The session signing key sits in the vault; removing it signs everyone out.
+      mockSecrets(200, {
+        secrets: [
+          secret("AUTH_JWT_SIGNING_KEY", { removable: false }),
+          secret("EXAMPLE_NO_FLAG_TOKEN", { removable: undefined }),
+        ],
+      });
+      render(<SecretsPage visible role="owner" />);
+      await screen.findByTestId("secrets-row-AUTH_JWT_SIGNING_KEY");
+      expect(screen.queryByTestId("secrets-remove-AUTH_JWT_SIGNING_KEY")).toBeNull();
+      // An older bridge sends no flag at all: no Remove rather than a guess.
+      expect(screen.queryByTestId("secrets-remove-EXAMPLE_NO_FLAG_TOKEN")).toBeNull();
+    });
+
+    it("offers Remove only on a row the vault holds", async () => {
+      mockSecrets(200, {
+        secrets: [
+          secret("EXAMPLE_VAULT_TOKEN"),
+          secret("EXAMPLE_BOTH_TOKEN", { source: "both" }),
+          secret("EXAMPLE_ENV_TOKEN", { source: "env", removable: false }),
+          secret("EXAMPLE_MISSING_TOKEN", { configured: false, source: "none", removable: false }),
+        ],
+      });
+      render(<SecretsPage visible role="owner" />);
+      await screen.findByTestId("secrets-row-EXAMPLE_VAULT_TOKEN");
+      expect(screen.getByTestId("secrets-remove-EXAMPLE_VAULT_TOKEN")).toBeInTheDocument();
+      expect(screen.getByTestId("secrets-remove-EXAMPLE_BOTH_TOKEN")).toBeInTheDocument();
+      expect(screen.queryByTestId("secrets-remove-EXAMPLE_ENV_TOKEN")).toBeNull();
+      expect(screen.queryByTestId("secrets-remove-EXAMPLE_MISSING_TOKEN")).toBeNull();
+    });
+
+    it("asks for confirmation, then deletes and reads the list again", async () => {
+      const fetchMock = vi
+        .spyOn(global, "fetch")
+        .mockResolvedValueOnce(reply(200, { secrets: [secret("EXAMPLE_VAULT_TOKEN")] }))
+        .mockResolvedValueOnce(reply(200, { name: "EXAMPLE_VAULT_TOKEN", deleted: true }))
+        .mockResolvedValueOnce(reply(200, { secrets: [] }));
+      render(<SecretsPage visible role="owner" />);
+
+      fireEvent.click(await screen.findByTestId("secrets-remove-EXAMPLE_VAULT_TOKEN"));
+      // The first click only arms it: nothing is deleted on one click.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByTestId("secrets-remove-confirm-EXAMPLE_VAULT_TOKEN"));
+
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith("/api/bridge/api/secrets/EXAMPLE_VAULT_TOKEN", {
+          method: "DELETE",
+        })
+      );
+      expect(await screen.findByTestId("secrets-empty")).toBeInTheDocument();
+    });
+
+    it("shows the bridge's refusal instead of dropping the row", async () => {
+      vi.spyOn(global, "fetch")
+        .mockResolvedValueOnce(reply(200, { secrets: [secret("EXAMPLE_VAULT_TOKEN")] }))
+        .mockResolvedValueOnce(reply(409, { detail: "bootstrap credential" }));
+      render(<SecretsPage visible role="owner" />);
+      fireEvent.click(await screen.findByTestId("secrets-remove-EXAMPLE_VAULT_TOKEN"));
+      fireEvent.click(screen.getByTestId("secrets-remove-confirm-EXAMPLE_VAULT_TOKEN"));
+      expect(await screen.findByTestId("secrets-remove-error")).toHaveTextContent(
+        /bootstrap credential/i
+      );
+      expect(screen.getByTestId("secrets-row-EXAMPLE_VAULT_TOKEN")).toBeInTheDocument();
+    });
   });
 });

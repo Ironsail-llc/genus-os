@@ -27,6 +27,10 @@ import pytest
 
 from robothor.engine.secret_paths import exec_reads_secret
 
+# A subprocess here may take up to 120 s by its own bound; pytest.ini's 30 s
+# would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
+pytestmark = pytest.mark.timeout(180)
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 #: ``(label, the code that starts this service the way the box starts it)``.

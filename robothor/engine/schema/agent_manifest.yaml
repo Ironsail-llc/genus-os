@@ -46,6 +46,13 @@ recommended:
       example: "openrouter/z-ai/glm-5"
     fallbacks:
       type: list[string]
+    compaction:
+      type: string
+      description: >
+        The chain member context compaction summarises with first, typically
+        the chain's small/fast model. Must also appear as primary or in
+        fallbacks; anything else is ignored.
+      example: "openai/gpt-5-mini"
     temperature:
       type: number
       default: 0.3
@@ -191,6 +198,15 @@ recommended:
       `tools_allowed`. An agent with an explicit `tools_allowed` names opt-in
       tools there instead. `tools_denied` still wins.
     example: ["claude_code_start", "claude_code_wait"]
+  tools_eager:
+    type: list[string]
+    default: []
+    description: >
+      Tools always shown to the model on a deferred run (more tools than
+      ROBOTHOR_DEFERRED_TOOLS_THRESHOLD), whether or not the agent called them
+      recently, so an everyday tool costs no tool_search round-trip. Each name
+      must also be one the agent may use; one it may not is ignored.
+    example: ["list_tasks", "get_task"]
   secrets:
     type: list[string]
     default: []
@@ -366,6 +382,50 @@ optional:
     wake_preamble_history_lines:
       type: integer
       default: 8
+  # ── Ambient follow-ups (opt-in: the block itself is the only switch) ─
+  # See docs/AMBIENT.md. Watches what this agent already reads, finds threads
+  # where a person wrote and nobody answered, and proposes follow-ups, each
+  # held to its tier. A tier left out is approve (reply_on_behalf: never):
+  # nothing is sent without the approval gate unless a tier here says auto.
+  ambient:
+    watch:
+      type: list[string]
+      description: >-
+        Sources to watch. "inbox" is the CRM conversation inbox;
+        "stream:<name>" is a Redis stream this agent already lists in
+        streams.read, whose events carry thread_id and direction
+        (inbound/outbound). Anything else is rejected.
+    stalled_after:
+      type: string
+      description: >-
+        Required. How long a person's message may wait for a reply before the
+        thread counts as stalled: a duration such as 30m, 4h, 1d or 1h30m.
+    digest_at:
+      type: string
+      description: >-
+        Required. When the ambient pass runs: a 5-field cron expression
+        ("0 9,15 * * *") or comma-separated HH:MM times ("09:00, 15:30") in
+        the agent's schedule timezone. One scheduler job per agent.
+    tiers:
+      # Per action kind. Unstated kinds take the default below; none
+      # defaults to auto.
+      nudge_thread:
+        type: string
+        enum: [auto, approve, never]
+        default: approve
+        description: Tell the operator (the agent's delivery target) that a thread is waiting.
+      send_digest:
+        type: string
+        enum: [auto, approve, never]
+        default: approve
+        description: Send the operator one digest of every stalled thread.
+      reply_on_behalf:
+        type: string
+        enum: [auto, approve, never]
+        default: never
+        description: >-
+          Reply in the thread itself, as us. Inbox threads only. auto sends
+          alone, approve asks the approval gate first, never is not proposed.
   # ── Worker (a second cron lane with its own instruction + budget) ─
   # Same shape as heartbeat. Inherits model + tools from the parent agent.
   worker:

@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from robothor.engine.runner import AgentRunner
 
 from robothor.engine import workflow_budget  # noqa: E402
+from robothor.engine.lanes import Lane, run_slot  # noqa: E402
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -658,8 +659,10 @@ class WorkflowEngine:
             trigger_type=trigger_type,
             trigger_detail=trigger_detail,
             correlation_id=correlation_id,
-            status=RunStatus.RUNNING,
-            started_at=datetime.now(UTC),
+            # Pending, with no start time, until the lane slot is taken: a
+            # queued run is not running, and the stuck-run alert, the reaper
+            # and duration_ms all read `running` and started_at.
+            status=RunStatus.PENDING,
             context={"steps": {}, **(initial_context or {})},
         )
         if run_id:
@@ -677,9 +680,13 @@ class WorkflowEngine:
 
         try:
             try:
-                with workflow_budget.workflow_deadline(workflow_id, wf.timeout_seconds):
-                    async with asyncio.timeout(wf.timeout_seconds):
-                        await self._execute_steps(run, wf)
+                # The lane slot before the clock: queue time is not run time. A
+                # concurrent hook workflow's runs overlap by design: their own lane.
+                async with run_slot(Lane.HOOKS if wf.concurrent else Lane.BACKGROUND):
+                    self._mark_run_running(run)
+                    with workflow_budget.workflow_deadline(workflow_id, wf.timeout_seconds):
+                        async with asyncio.timeout(wf.timeout_seconds):
+                            await self._execute_steps(run, wf)
             except TimeoutError:
                 run.status = RunStatus.TIMEOUT
                 run.error_message = self._timeout_message(run, wf)
@@ -1537,9 +1544,10 @@ class WorkflowEngine:
         try:
             # A resumed run gets a fresh budget (the approval wait is not work),
             # and the same deadline its steps' LLM chains must respect.
-            with workflow_budget.workflow_deadline(run.workflow_id, wf.timeout_seconds):
-                async with asyncio.timeout(wf.timeout_seconds):
-                    await self._execute_steps(run, wf, start_step_id=resume_step_id)
+            async with run_slot(Lane.BACKGROUND):
+                with workflow_budget.workflow_deadline(run.workflow_id, wf.timeout_seconds):
+                    async with asyncio.timeout(wf.timeout_seconds):
+                        await self._execute_steps(run, wf, start_step_id=resume_step_id)
         except TimeoutError:
             run.status = RunStatus.TIMEOUT
             run.error_message = f"{self._timeout_message(run, wf)} (resumed)"
@@ -1880,6 +1888,23 @@ class WorkflowEngine:
                 conn.commit()
         except Exception as e:
             logger.warning("Failed to persist workflow run start: %s", e)
+
+    def _mark_run_running(self, run: WorkflowRun) -> None:
+        """The run holds its slot: it starts now, in memory and in the DB."""
+        run.status = RunStatus.RUNNING
+        run.started_at = datetime.now(UTC)
+        try:
+            from robothor.db.connection import get_connection
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE workflow_runs SET status = %s, started_at = %s WHERE id = %s",
+                    (run.status.value, run.started_at, run.id),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning("Failed to mark workflow run running: %s", e)
 
     def _persist_run_end(self, run: WorkflowRun) -> None:
         """Update workflow run with final status."""

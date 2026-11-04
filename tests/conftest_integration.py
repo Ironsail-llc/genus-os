@@ -80,7 +80,7 @@ def redis_client(redis_url: str):
 _current_holder: dict[str, object] = {"wrapper": None, "conn": None, "real": None}
 
 
-def _session_fake_get_connection(autocommit: bool = False):
+def _session_fake_get_connection(autocommit: bool = False, read_only: bool = False):
     """Shared proxy installed at session scope; dispatches to per-test holder,
     or falls through to the real function when no fixture is active."""
     from contextlib import contextmanager
@@ -89,7 +89,7 @@ def _session_fake_get_connection(autocommit: bool = False):
         real = _current_holder["real"]
         if real is None:
             raise RuntimeError("session proxy has no real get_connection to delegate to")
-        return real(autocommit=autocommit)
+        return real(autocommit=autocommit, read_only=read_only)
 
     @contextmanager
     def _cm():

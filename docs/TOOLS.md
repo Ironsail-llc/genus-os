@@ -18,24 +18,85 @@ narrower thing.
 
 ### Deferred loading
 
-When an agent's allowed set is larger than the deferral threshold, the engine
-advertises only a small always-on core plus three meta-tools, and the rest load
-on demand. A broad agent with 98 allowed tools is shown **19** schemas — the 16
-`CORE_TOOLS` that are registered, plus the three meta-tools — so it carries
-about a fifth of the schemas, and rather less than a fifth of the tokens, on
-every call.
+When an agent's allowed set is larger than the deferral threshold
+(`ROBOTHOR_DEFERRED_TOOLS_THRESHOLD`, 40), the engine advertises only the agent's always-loaded core plus three
+meta-tools, and the rest load on demand. Curated agents under the threshold
+keep their whole set and never pay a search round-trip.
+
+The core is three things, all cut to what the agent is allowed:
+
+* the platform's fixed `CORE_TOOLS` (file, shell, web, memory reads, skills,
+  calendar, the CRM task verbs, goals);
+* the tools **this agent called in its latest runs** (`agent_run_steps`, the
+  last `ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS` runs, default 10; a `tool_call`
+  counts as the tool it ran), at most 16, most-used first. So an inbox agent
+  that sends mail every day is shown `gws_gmail_send` directly. The lookup runs
+  off the event loop, waits at most a second, is cached per agent for ten
+  minutes, and on any failure the core is just `CORE_TOOLS`. `0` turns it off;
+* the manifest's **`tools_eager`** list: tools always shown to this agent,
+  recent history or not, for the ones it reaches for every day. The `main`
+  template makes `list_tasks`, `get_task`, `update_task`, `gws_gmail_search`
+  and `gws_gmail_get` eager. Measured on a live instance before that list, "the
+  five most urgent open tasks" went tool_search, tool_search, tool_describe,
+  tool_call on every run: 4 to 9 model calls instead of 2.
+
+On a stock checkout an agent with no `tools_allowed` (so every registered tool)
+is shown 30 schemas instead of 206: about 6,600 estimated schema tokens per call
+instead of about 32,000 (the `main` template's eager list adds four, about
+7,500), before any plugin adds its tools — and plugin tools
+add nothing to that figure unless the agent used them recently.
 
 The three meta-tools:
 
 | Tool | What it does |
 |---|---|
-| `tool_search(query)` | Ranks the agent's reachable tools against a free-text query. Returns names and descriptions. |
+| `tool_search(query)` | Ranks the agent's reachable tools against a free-text query. Returns names and descriptions, and the top hit's `parameters` when it is not already advertised and its score leads the second hit's by a quarter, On a closer race the hits come back without a schema and the hint says to `tool_describe` the one that fits. Its top three hits that are not advertised yet join the run's toolset with their real schemas from the next model call on (listed as `promoted`), so the model calls them directly. |
 | `tool_describe(name)` | The full parameter schema for one tool. |
 | `tool_call(name, arguments)` | Runs a tool that is not in the advertised set. |
 
+**A search hit becomes a real tool for the rest of the run.** `tool_call`
+declares `arguments` as a bare object with no properties, and some models do
+not manage that nested free-form call. So each `tool_search` promotes up to
+three of its hits, taken from the agent's allow-set, into the advertised
+toolset; the runner checks the allow-set again before adding a schema, and
+stops adding once the run is wrapping up. `tool_call` stays as the fallback,
+`tool_describe` is unchanged, and a promoted tool the agent calls counts
+toward its recent tools like any other direct call. A run that never searches
+is shown exactly its core.
+
+**`tool_search` and `tool_describe` are reads.** They are in `READONLY_TOOLS`,
+so they make no effect reservation and work when the effect store is
+unreachable, may run concurrently with other reads, and are offered in plan
+mode. A plan-mode run searches only its read-only tools and promotes nothing.
+`tool_call` is not a read of its own: it is classified as the call it wraps.
+
 **`tool_call` cannot reach outside the agent's allow-list.** It checks the name
 against the allow-set the runner published before it dispatches anything, so a
-denied tool is refused there, not at the registry.
+denied tool is refused there, not at the registry. The three meta-tools need
+no `role_permissions` row of their own: the wrapped tool's permission decides,
+checked under its own name with the same refusal a direct call gets, so
+`tool_call` grants nothing beyond that tool's permission.
+
+**Every gate judges the wrapped call.** The PRE_TOOL_USE and POST_TOOL_USE
+hooks, the guardrail engine (human approval included), its event log, the
+system-run RBAC check and the post-execution guardrails all see `name` with its
+`arguments`, exactly as they would see a direct call of that tool; a refusal
+comes back as the result of the `tool_call`, and a hook that rewrites the
+arguments rewrites the wrapped call's. Recording the step does the same: the
+result of an external-data tool keeps its `<untrusted_content>` boundary and a
+credential argument is redacted, however the tool was reached. So does counting
+the outcome: the three-failure circuit breaker, `agent_tool_events` and the
+no-progress detector see `name`, so failures of different wrapped tools never
+add up to a breaker on `tool_call` itself. The wrapped tool
+runs under the caller's whole tool context, identity included, so a data-scoped
+read through `tool_call` returns exactly what the direct call returns.
+
+**`arguments` is an object of the wrapped tool's parameters.** A JSON string
+that parses to an object is accepted as that object, since models often send
+one. A wrapper with no string `name`, `arguments` that are neither, or a
+`tool_call` wrapping another `tool_call` is refused as a bad call (not a tool
+crash) with an error that says what was wrong; `tool_describe(name)` gives the
+schema to send.
 
 **The agent is told.** On a deferred run the engine's context turn carries one
 sentence:
@@ -54,6 +115,47 @@ shelled out to a CLI.
 so (`in_toolset: true`, and a hint not to wrap them in `tool_call`). It used to
 answer `tool_search is only available on deferred runs`, which taught the agent
 nothing and did not stop it asking again.
+
+### What the human's role adds (capability tier)
+
+An agent that declares no `tools_allowed` is offered every tool except the
+opt-in families (`OPT_IN_TOOLS`: `claude_code_*`, `web_render`, the Jira and
+GitHub review writes, `pr_review_*`, `run_workflow`, `sales_*`) unless its
+manifest names them in `tools_opt_in`. That rule ignores who is asking, so the
+instance's owner — who holds a `*` allow in RBAC — could be told a coding tool
+is "not available to this agent".
+
+Every run is stamped with a capability tier from the human's role
+(`robothor/engine/capability_tier.py`):
+
+| Role | Tier | What it adds |
+|---|---|---|
+| `owner` | `unrestricted` | the opt-in families |
+| `admin` | `elevated` | the opt-in families |
+| `member`, `user`, `service`, any other role | `standard` | nothing |
+| `viewer`, `auditor`, `guest` | `restricted` | nothing |
+
+* **Only on a verified interactive run.** Cron, hook, event, workflow and
+  sub-agent runs stay `standard`, and so does an identity the channel could not
+  verify (an unregistered Telegram sender in the operator's chat is handed role
+  `owner` with `Verified: NO`).
+* **It only widens what the run is offered.** RBAC still decides each call, and
+  plan mode, approval, the secret-path, destructive-command and injection
+  guardrails apply to every tier. `tools_denied` still wins, and an explicit
+  `tools_allowed` list is not widened.
+* **No stock role loses a tool.** `standard` and `restricted` are offered
+  exactly the toolset they had before the tier existed; `owner` and `admin`
+  keep it and gain the opt-in families.
+* **It is recorded.** The tier lands on the run
+  (`agent_runs.runtime_context->'capability_tier'`), and a run the tier added
+  at least one tool to writes one `agent_guardrail_events` row,
+  `guardrail_name = 'role_capability'`, action `allowed`, naming them. An
+  agent with `tools_allowed`, a plan-mode run, or one whose opt-ins are
+  already named gains nothing and writes no row.
+* **To withhold a tool from the owner**, name it (or its family glob) in the
+  agent's `tools_denied`; that wins over every tier. It is configuration in
+  the manifest, not a switch on the feature. Handlers read the tier from
+  `ToolContext.capability_tier`.
 
 ### What this means for agent authors
 
@@ -241,6 +343,65 @@ the engine decides whether it is done.
 | `claude_code_followup` | A specific correction into the same Claude Code session: queued for a running job, or reopening a finished one with a fresh round allowance. |
 | `claude_code_cancel` | Kill the running round and remove the worktree. The branch and any commits stay. |
 
+**From a remote to a pull request.** Two more tools take a job from a
+repository that is not on the host yet to a draft pull request:
+
+| Tool | Purpose |
+|---|---|
+| `claude_code_repo_prepare` | Clone an allowlisted remote (`repo`: `owner/repo` on GitHub, or a clone URL) into `ROBOTHOR_CODING_WORKSPACE/<owner>/<repo>`, or fetch and fast-forward the clone that is already there. Returns the `repo_path` to give `claude_code_start`, the default branch and `head_sha`, and whether it `cloned`. |
+| `claude_code_publish` | Push the commit that passed a `done` job's verify to its `genus/cc-<id>` branch on the clone's origin (refused if the branch has moved since) and open a **draft** pull request through the GitHub REST API: `job_id`, `title`, optional `body`, `ticket` (appended to the title) and `base` (default: the remote's default branch). Returns `pr_url`. Owner or admin only; never merges. |
+
+Use `claude_code_repo_prepare` when the code lives in a remote and
+`ROBOTHOR_CODING_WORKSPACE` is set; use a `repo_path` under
+`ROBOTHOR_CODING_REPO_ROOTS` for a checkout the operator already keeps on the
+host. Use `claude_code_publish` instead of the `git`/`gh` tools for a coding job's
+branch: it publishes only verified work, only to an allowlisted remote, and
+needs no `gh` binary.
+
+- **Inert until configured.** `ROBOTHOR_CODING_WORKSPACE` empty refuses every
+  prepare; `ROBOTHOR_CODING_REMOTES` empty refuses every remote, so there is
+  nothing to clone or push to, and a remote outside it is refused before git
+  runs. There is no separate publish switch: publishing is bounded by that
+  allowlist (every fetch and push URL), the verified commit, the owner or admin
+  role and the vault's `GITHUB_TOKEN`. Each refusal names what to change.
+- **The token.** `GITHUB_TOKEN` comes from the vault (a fine-grained token with
+  contents and pull-request write is enough; nothing here merges). It reaches
+  git only as an `http.https://<host>/.extraheader` passed through
+  `GIT_CONFIG_*` environment variables, and only for `https://github.com`
+  remotes (another host on the allowlist is cloned without it). It is never in
+  a git argv, never in the clone's `.git/config`, and every error is redacted.
+  These git calls run with `core.hooksPath=/dev/null` and `core.fsmonitor=false`,
+  like every other engine-side git call, so no repository hook runs with the
+  token. `claude_code_publish` opens pull requests on GitHub only.
+- **What is pushed, and where.** `claude_code_publish` pushes the verified
+  commit itself (`<sha>:refs/heads/genus/cc-<id>`) and refuses when the branch
+  no longer points at it: another job's shell can write `genus/*` refs, so the
+  tip at publish time is not trusted. Every fetch URL and every push URL of the
+  clone's origin (`pushurl`, several `url` entries, `pushInsteadOf` rewrites)
+  must be the same `ROBOTHOR_CODING_REMOTES` entry, checked again just before
+  the push.
+- **The clone path.** A directory already at `<workspace>/<owner>/<repo>` that
+  is not a clone is refused and left alone; a failed clone removes only the
+  directory it created.
+- **Who.** The handler refuses `claude_code_publish` to anyone but the owner or an
+  admin and writes a `coding.publish` audit event for every refusal, push
+  failure and published pull request. Migration 165 also denies both tools to
+  `user` and `member`, and `claude_code_publish` to `service` (every unattended run).
+- **Where a job's private home goes.** With `ROBOTHOR_CODING_WORKSPACE` set,
+  a job's `HOME`/`CLAUDE_CONFIG_DIR` is `<workspace>/.home/<job>`, so it lands on
+  the writable coding volume even where the service user's home is read-only.
+  Every job runs as the same user, so `<workspace>/.home` is on every job's
+  sandbox `denyRead` list and its `Read`/`Edit`/`Write` deny rules, as
+  `~/.config` is: no job reads another job's home or transcripts.
+- **Progress.** While a run waits on a job, every line the job reports
+  (`recent` in the status view) also reaches that run's live status as a
+  `coding_progress` event.
+- **Hosts without bubblewrap.** `ROBOTHOR_CODING_SANDBOX=off` sends no sandbox
+  settings, for containers that cannot create user namespaces. The job's Bash
+  then runs with the engine's own access inside the container; the Edit/Write
+  confinement and the secret-path read denies still apply. The default,
+  `required`, keeps the sandbox and fails a job that cannot start it.
+
 **How a job runs.** Each job gets its own git worktree
 (`ROBOTHOR_CODING_WORKTREE_ROOT`, default `<workspace>/.genus/worktrees/<job>`)
 on a new branch `genus/cc-<id>`, never on `main`/`master`. The engine runs
@@ -288,7 +449,8 @@ older than `ROBOTHOR_CODING_RETENTION_DAYS` (default 7) and marks the row
 
 **What it sees.** The child environment is built from nothing: `PATH`, locale,
 `TERM`, `TZ`, `TMPDIR`, a private `HOME`/`CLAUDE_CONFIG_DIR` under
-`$XDG_CONFIG_HOME/robothor/claude-code/<job>` (writable under the engine unit),
+`$XDG_CONFIG_HOME/robothor/claude-code/<job>` (writable under the engine unit;
+`<ROBOTHOR_CODING_WORKSPACE>/.home/<job>` when that is set),
 and `CLAUDE_CODE_OAUTH_TOKEN` resolved vault first. No fleet secret is
 inherited. `GH_TOKEN` travels only with `grant_github: true` **and** `GH_TOKEN`
 in the calling agent's own manifest `secrets:`. The engine's own git calls on a
@@ -300,7 +462,8 @@ as the engine's service user. The `main` template opts in to the tools on
 purpose — the operator wants Robothor to code — and the fence is what makes
 that acceptable:
 
-- **Where.** `ROBOTHOR_CODING_REPO_ROOTS` is required: with it empty every
+- **Where.** `ROBOTHOR_CODING_REPO_ROOTS` (or `ROBOTHOR_CODING_WORKSPACE`, which
+  is a root of its own) is required: with both empty every
   `claude_code_start` is refused. `repo_path` is resolved (symlinks included)
   and must sit under a root; the live workspace and the service user's home are
   refused even under a root, as is any directory containing them.
@@ -592,8 +755,8 @@ With the monitor off they return `status: not_configured` and nothing else.
 **Choosing.** These are about the operator's **n8n** automations, not Genus
 workflows (`docs/workflows/*.yaml`) or agent runs. When a `workflow_failure`
 notification carries `source: n8n`, answer from `n8n_recent_failures` and give
-the operator the execution link: the agent cannot rerun or edit an n8n
-workflow, and neither tool calls n8n.
+the operator the execution link: neither tool reruns, edits or calls an n8n
+workflow, so fixing and rerunning one happens in n8n.
 
 ### Vision: `view_image` and `analyze_image`
 
@@ -857,11 +1020,13 @@ own message — **redacted** through the platform's credential redactor and then
 capped. So does every `analyze_image` row that failed: the batch is the worse
 half, because a 401 fails every image, and a failed row is copied into the
 result, the journal **and** the spilled table on disk that the tool tells you
-to open. A provider's 401 carries the request headers and the api_key, and
-nothing redacts a tool result that returns normally, so the redaction happens
-here, before the text reaches the agent's context, the run's step ledger or the
-journal. Redacting after the cap would be worse than useless: a cut can slice a
-token in half and leave a prefix the redactor no longer recognises. Model names
+to open. A provider's 401 carries the request headers and the api_key. Every
+tool result is redacted before it is stored or shown to the agent (see
+[Credentials](#credentials-vault_get-vault_set-vault_test-vault_list-vault_delete)),
+but that pass sees the text after the cap, so this message is redacted here
+first, before it reaches the journal and the spilled table as well. Redacting
+after the cap would be worse than useless: a cut can slice a token in half and
+leave a prefix the redactor no longer recognises. Model names
 are quoted back, because an operator needs them and they are not secrets.
 
 **Both vision tools refuse the same files.** A path that resolves outside the
@@ -952,7 +1117,7 @@ code, or the channel to the engine is gone.
 | | |
 |---|---|
 | Reach | Every tool the agent could call from a turn, and nothing else. Each proxied call passes the same admission gates in the same order, then `registry.execute` — so the repeat guard, the benchmark sandbox, the audit row and post-condition verification all apply. |
-| Never reachable | `execute_code` (no recursion), `spawn_agent`/`spawn_agents` (a spawn runs a whole child runner inline), `ask_user` (it blocks on a person). |
+| Never reachable | `execute_code` (no recursion), `spawn_agent`/`spawn_agents` (a spawn runs a whole child runner inline), `ask_user` (it blocks on a person), and the same tools wrapped in `tool_call`: every name check in the proxy (this denylist, the approval cap, the post-execution guardrails) judges a `tool_call` as the tool it wraps. |
 | Requires | `exec` in the agent's `tools_allowed`. An agent that can run commands already has this process capability; what is new is the tool proxy. |
 | Transport | A unix socket in a 0700 directory, authenticated by a token in a 0600 file. The wire carries a tool name and arguments — there is no `tool_call_id` field, so there is nothing for a snippet to forge. One call at a time, so two writes cannot race. |
 | Environment | The scrubbed child environment at **`enforce`**, always — whatever `ROBOTHOR_EXEC_ENV_MODE` the instance is on. The snippet gets the process essentials, the declared non-secret `ROBOTHOR_*` settings and this agent's own `secrets:` grants: no database password, no provider key, no channel token. Scrubbing removes INHERITANCE, though, not the credentials from the engine — and the snippet's parent IS the engine, whose `/proc/<pid>/environ` a same-uid process may read. So the handler also calls `harden_process()` (`PR_SET_DUMPABLE=0`) before spawning, which makes those entries root-only. That is a **mitigation, not a boundary**: the remedy is the engine's environment ceasing to hold application credentials at all (see the SOPS bootstrap runbook), after which procfs leaks only bootstrap values. `exec` has the same exposure and the same mitigation. |
@@ -1043,6 +1208,79 @@ resolving to a real spill file, so quoting the path in a comment buys nothing.
 
 `execute_code` has the same contract with a bigger window: see
 [its section](#execute_code-calling-tools-from-inside-python) and `stdout_file`.
+
+### `exec` — where a command ran
+
+Every `exec` result carries
+`executed_on`: `sandbox` (the run's container), `host` (the engine) or
+`host_service` (the owner's host-execution service). When the agent wanted a
+container and the engine has none, the command of an owner or admin driving
+the run runs on the engine host and the result adds an `execution_note` saying
+so; repeat it to the person rather than claiming the command was isolated.
+`execute_code` results carry `executed_on` too: an owner's snippet beside a live
+container runs on the host, and its note says so. Anyone else gets
+`error_type: exec_unavailable`, an `error` naming the missing runtime and their
+role, and an `unlock` saying who can run it or what the operator would install.
+`execute_code` is refused the same way, and the desktop and browser tools are
+blocked by the `sandbox_playground` guardrail. Nothing ran, so do not retry it:
+pass the unlock on. Who gets which outcome is in
+[Guardrail flips](runbooks/GUARDRAIL_FLIPS.md#sandbox-playground-when-a-container-cannot-be-had).
+
+### Credential files — `credential_path`
+
+`read_file`, `exec` and `execute_code` refuse credential files for every
+caller, the owner included, before anything is opened. The result has
+`error_type: credential_path` and names the file, never a value. The operator
+hands credentials over through the vault (a `secrets:` grant in the manifest,
+or `vault_get`), so a refusal means: say what is missing and ask, do not look
+for another way to read the file.
+
+The list:
+
+- anywhere on a path: `.ssh/`, `.aws/`, `.kube/`, `.docker/`, `.gnupg/`, `gcloud/`;
+- directly under `.config/`: `gh/`, and any directory whose name starts with
+  `gcloud`, `gws` or `gog` (the Google Cloud and Google Workspace CLIs);
+- by name: `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`, `.git-credentials`,
+  `.vault-key`, `.env` and `.env.*`, `credentials*.json`, `token*.json` and
+  `tokens*.json` (not `tokenizer.json`), `client_secret*.json`;
+- `*.pem` and `*.key` under the home directory.
+
+Documentation files (`*.example`, `*.md` and the like) named like one of these
+stay readable, except inside a listed directory. The gate resolves the path
+before it decides, so neither a symlink nor a glob reaches a listed file:
+`read_file` checks the requested path and its fully resolved real path, so a
+link to a listed file or a file under a linked directory is refused. `exec`
+refuses a command when any argument, redirection or string inside it names a
+listed path (spelled with `~`, `$HOME` or `${HOME}` or not), when a glob or
+brace word expands onto one (expansion is bounded and confined to the home
+directory and the workspace; a final `**` matches files too), and when a word
+is a symlink that resolves onto one — a bare filename included, when it names
+an entry in the directory the command runs in. That directory is the
+workspace, or where an earlier `cd`/`pushd` (or `-C` on `git`, `make` or `tar`)
+to a literal path moves it, behind a group, keyword or wrapper too
+(`{ cd ~; …; }`, `if cd ~; then`, `builtin cd ~`); a relative glob or brace
+word expands there too. An unquoted `cd`, `pushd` or `popd` anywhere else in a
+command (`xargs cd`), an `eval`, or `env --chdir`/`env -C` makes the directory
+unknown for the rest of the command.
+After a `cd` to a directory the text does not spell, a printing command's
+relative glob that could match a secret's name (`*.key`, `id_*`, `*`) is
+refused; one that could not (`*.txt`) runs. The printing gate lets a bare `*.key`-shaped word
+that names no file through (`jq -r .key`); after a `cd` it looks the word up
+where the `cd` lands, and after a `cd` to a directory the text does not spell
+(`cd "$D"`, `cd -`, `popd`) it refuses the word as before. `ls`, `test`/`[`, `stat`, `wc` and `du` are let through, because they
+report on a file without reading it — except when a pipeline feeds their output
+to a reader (`ls ~/.ssh | xargs cat`), which is refused. An uploader reads its
+file operand and sends it over the network, the same leak a printer makes, so
+that operand gets the printer's check: `curl -d @X`/`--data-binary @X`,
+`curl -T X`/`--upload-file X`, `curl -F k=@X`, `wget --post-file=X`/`--body-file=X`,
+and the local source operands of `scp`/`rsync`/`sftp` (a `host:` operand is
+remote, not a read). The check runs before
+the sandbox decision, so it applies inside a container too. `execute_code`
+refuses a snippet whose source names a listed path, and a snippet that reads
+through the `read_file` tool gets the same resolved check. The masked
+`read_file` view of the instance env file (`robothor.env`, `connectors.env`)
+for the verified owner is unchanged. `.env` and `.env.*` are on the list and
+are not masked.
 
 ### Calling an API from code: `genus_tools`, not `curl`
 
@@ -1364,6 +1602,76 @@ read; the plugins the loader reports are still listed. The tool is read-only.
 what it does, whatever provides it. [Plugins](PLUGINS.md#seeing-what-a-plugin-shipped)
 covers the same data on the dashboard and the admin API.
 
+### Credentials: `vault_get`, `vault_set`, `vault_test`, `vault_list`, `vault_delete`
+
+An agent whose own manifest declares `v2.credentials: operator` holds these
+tools outright. The default chat agent holds them only for credential intake,
+which is narrower on purpose, because by the time the agent calls one it may
+have read an email, a web page or some other tool output:
+
+- **Who:** an `owner` or `admin` the channel verified as a registered person
+  (a signed-in webchat account, or a sender `genus user add` registered). A
+  sender Telegram fills in as the owner without a registration is refused
+  with `gate: unverified_sender`.
+- **Where:** a top-level run that person started by typing in chat.
+- **What, this turn, typed:** intake reads only the text the person typed
+  this turn. A quoted message they replied to, the text of a file they attached
+  and a forwarded message (Telegram's `forward_origin`, `forward_from` or
+  `forward_date`) are not theirs, so nothing in them counts. `vault_set` only
+  stores a value that text carries as a whole token (not inside a longer word),
+  that is credential-sized (16 characters or more, or 8 or more with a
+  character that is not a letter or digit, and never letters alone), that is
+  not a URL, a path or an e-mail address, and that sits beside a name for this
+  key in a different token: `NAME=value`, or in the same clause (no newline or
+  `.`, `;`, `!`, `?` between them) within six words of the vault key, a
+  reader's name such as `OPENWEATHER_API_KEY`, or the vendor, where the clause
+  also says it is a credential (key, token, secret, credential, password, API
+  key, or the value right after `name:`). A vendor named in another clause, or
+  only inside the value itself, does not qualify. Otherwise `gate:
+  not_handed_over`, so a value that came from a tool result, a file, a quote or
+  a forward is refused. `vault_delete` only removes a key when one clause of
+  the typed text asks for a removal (delete, remove, revoke, forget, drop,
+  clear, rotate out), names the key and says it is a credential (a store word,
+  or the vault key or a reader's name itself); "drop me the link to my github
+  PR" removes nothing, and `vault_list` only lists when it asks for a list;
+  otherwise `gate: not_requested`. `vault_get` and `vault_test` never return a
+  value and are not narrowed.
+
+Every refusal carries `gate` and `unlock`, the sentence the agent can pass on.
+See [Configuration](configuration.md) for the rest of the rule.
+
+The person's message reaches the model raw for that one turn, or the value
+could not be stored. Every copy kept after it is redacted: chat history, the
+recorded steps, run checkpoints (which resume reads back), and the engine log,
+which records a Telegram message's length, never its text. A checkpoint is
+redacted again when it is read back: the reading process first registers every
+credential-like value the vault stores (not the identifiers it also holds, such
+as a tenant id or a chat id), so a value handed over before a restart is still
+caught, and what the person typed also loses any opaque run of 32 or more key
+characters (a bare hex key has no other shape). What the person pointed at is
+kept: a UUID, a Telegram file id, any run labelled file_id, message_id, trace
+or run_id just before it, a 40-hex commit after commit, sha or a git verb
+(revert, cherry-pick, checkout, bisect, rebase, show, diff), and a 64-hex
+digest after sha256 or digest. A bare hex run with no label is also the shape
+of a generated secret, so it goes. Tool results keep their hashes.
+
+**Every tool result is redacted too.** A tool that returns normally can still
+carry a credential: `exec` printing a CLI credentials file, a provider error
+echoing its headers. Each result passes the secrets redactor before it reaches
+the agent's context, the run's step row, the effects record, the live tool
+stream or a checkpoint: every value the vault has been handed, every credential
+shape the redactor knows, and a `NAME=value` assignment only when the value
+itself looks like a credential (16 characters or more, mixing at least two of
+lower case, upper case and digits, and not a reference such as `$TOKEN` or
+`${API_KEY}`). An unquoted identifier, dotted name, call or number is code and
+is left alone, so `api_key = settings.api_key` reaches the agent as written and
+a file it reads and writes back comes back byte for byte. A call through
+`tool_call` is treated as the tool it reaches. The only exception is a tool on
+`SECRET_RESULT_TOOLS` (in `robothor/engine/session.py`), whose result the agent
+must read: it reaches the agent unchanged and is still masked wherever it is
+stored. The list is empty; `vault_get` and `vault_test` return a fingerprint,
+never a value.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -1396,6 +1704,65 @@ storing an empty fact. `log_interaction` reaches the bridge at `BRIDGE_URL`;
 the bridge refuses it with `agent not authorized` until the calling agent is
 listed in `agent_capabilities.json`.
 
+### When a tool is refused
+
+A refusal is a control declining the call, not the tool failing. Every refusal
+keeps its `error` text. The engine's refusals (plan mode, `tools_allowed`, the wrap-up window, a pre-tool-use hook,
+a guardrail, RBAC for a chat or a scheduled run, a forked task's whitelist,
+`config_get`/`config_set` for a non-owner, `config_set apply=true` without host
+exec, `send_file` to another chat, and every GitHub tool without
+`GITHUB_TOKEN`) also carry:
+
+| Key | Meaning |
+|---|---|
+| `refused` | `true` |
+| `gate` | `role`, `flag`, `allowlist`, `runtime` or `policy` |
+| `gate_name` | the control: `plan_mode`, `tools_allowed`, `rbac`, `owner_role`, `GITHUB_TOKEN`, a guardrail's name |
+| `unlock` | what a person changes for the same call to succeed |
+
+Behavioural rule 21 ships with them: **A refusal names its gate; relay it,
+never claim an inability** — when a tool result has `refused: true` and a
+`gate`, tell the person which gate refused it (`gate`, `gate_name`) and what
+unlocks it (`unlock`), then offer the next step you can take now; do not look
+for a way round it. A `refused: true` without a `gate` is a redirection, not a
+block: change the call as its `reason` says. Never say you cannot do something
+no tool refused: if a tool you have can do it, do it.
+
+A direct call to a tool the agent is granted but that a deferred turn left out
+of its schemas is refused with gate `policy`, name `deferred`, and the unlock
+to call it through `tool_call`; only a tool outside the grant gets the
+`allowlist` refusal naming `tools_allowed`.
+
+The repeat guard's `refused: true` (an identical call run too many times) has
+no `gate` on purpose: it asks for a different call, not a person.
+
+A handler that refuses builds its payload with
+`robothor.engine.refusal.refusal()`.
+
+### What an agent is told it can do
+
+Every agent's system prompt carries
+a "What you can do here" block after its instruction and bootstrap files: the
+capabilities its granted tools give it (`exec`, `write_files`, `git_pr`,
+`coding_jobs`, `browser`, `spawn`, `vault_set`, `send_mail`, and `host_exec` for
+`main`), and for each one it lacks, the gate and the unlock (a manifest key, or
+a setting such as `ROBOTHOR_CODING_REPO_ROOTS` or `ROBOTHOR_HOST_EXEC_SOCKET`).
+`vault_set` is listed as available when the manifest declares
+`credentials: operator` under `v2:`, or, for the default chat agent, in an
+owner's or admin's own chat where the build has credential intake. Coding jobs
+are available when `ROBOTHOR_CODING_REPO_ROOTS` is set, or a coding workspace
+is. Credential intake and the coding workspace (`ROBOTHOR_CODING_WORKSPACE`)
+count only in a build that has them: the block asks the vault handler and the
+coding settings, not the environment, so a variable this build does not read is
+never offered as a fix. The block tells the agent to relay a refusal's gate and
+unlock, since every refusal carries them.
+It reads only the manifest and the engine's settings, so it is the same on every
+turn of a conversation and the prompt prefix stays cacheable; a settings change
+that alters it rebuilds the prompt. `genus doctor --category capabilities
+--agent <id>` prints the same assessment, plus the two facts the prompt leaves
+to call time: whether `GITHUB_TOKEN` resolves and whether the Claude Code CLI is
+installed.
+
 ### `read_file` — documents, not just text
 
 `read_file` returns a text file as it is, and turns the common document formats
@@ -1423,10 +1790,17 @@ extracted into the agent's first turn by the same code
 vocabulary** — the words a person uses, which are rarely the words a schema
 uses. Nobody asks to "search Gmail messages"; they ask to "check my email".
 
-* A keyword hit counts as much as a hit on the tool's own name.
+* A keyword hit counts as much as a hit on the tool's own name, with one
+  exception: the query's **head**, its last content word that is not a verb
+  ("tasks" in "the five most urgent open tasks"), scores a tool named for it
+  at the weight of the query's rarest word. Rare words count for more, so
+  without this a tool whose keywords said "open" (a pull request) ranked above
+  every `*_task` tool.
 * A verb ("read", "check", "cancel") only earns its routing bonus for a tool
   whose vocabulary mentions the **object** the query named. That is what keeps
   `read_file` behind Gmail for "read my emails".
+* On an equal score an opt-in tool (`OPT_IN_TOOLS`: the coding driver,
+  review posting, ticket writes, `run_workflow`) ranks below a plain one.
 * Ties break on keyword coverage, then name. They used to break alphabetically,
   which is how `browser` came first for "check my email".
 * The description comes back **whole**. It used to be cut at 200 characters,
@@ -1445,6 +1819,7 @@ because they are not part of the function-schema contract.
 genus doctor --category agents
 genus doctor --category tools
 genus doctor --category calendar
+genus doctor --category capabilities --agent main
 ```
 
 **`agents.tools_named_but_not_granted`** — for each agent, the registered tool
@@ -1457,6 +1832,13 @@ Results name agents and tools, never instruction text. "Registered" means a
 built-in, an adapter route, or a tool a loaded plugin declares; a disabled or
 failed plugin's tools still resolve to nothing.
 
+**`tools.deferred_tools_reachable`** — every `tools_allowed` entry is either
+in the always-loaded core or registered with words `tool_search` can match
+(an adapter tool counts by its name, since its schema is only known once the
+engine connects), and every registered schema — built-in or plugin — has at
+least one searchable word in its name, description or `keywords`. A granted
+tool that fails this is one a deferred agent can never reach.
+
 **`calendar.operator_calendar_writable`** (required, and skipped entirely on an
 instance where no agent holds a calendar tool) — the instance's Google account
 lists the operator's calendar with `accessRole` `owner` or `writer`. Without it
@@ -1467,12 +1849,31 @@ instance (`ROBOTHOR_WORKSPACE_PROVIDER=microsoft365`) it passes with a note
 instead: the owner's Exchange calendar is checked by
 `workspace.m365_connection` (see [Microsoft 365](workspace/microsoft365.md)).
 
+**`sandbox.runtime`** and **`sandbox.policy`** (`genus doctor --category
+sandbox`) — whether a container runtime answers on this engine, and for each
+agent holding `exec`, where its commands would run for an owner and for a member
+(`sandbox`, `host`, `host (degraded)`, `refuse`, or `run fails` with the
+playground off). Neither fails on its own: an instance with no podman is not
+broken unless an agent asks for a container.
+
 **`tools.exec_allowlist_bypasses_denied_tool`** — an `exec_allowlist` regex
 that admits a Google CLI (`gog gmail send`, `gws calendar events insert`) for
 an agent whose `tools_denied` names the native tool for the same action. The
 denial reads as a policy and is not one: the same account is reached through
 `exec`, past the do-not-contact check, the duplicate-reply guard, the threading
 and the benchmark gate.
+
+**`tools.inability_copy`** — instruction text that tells the agent it cannot
+do something ("I cannot …", "You can't …" at the start of a sentence or list
+item, outside code fences and HTML comments). The agent repeats such a line to
+the person whether or not it holds the tool, and it outlives the restriction it
+described. Say why and what unlocks it instead, or leave the gate to the
+engine, whose refusals name it.
+
+**`capabilities.agent`** (info) — one row per `<agent>:<capability>`: a pass
+for what the agent can do, a fail naming the gate and the unlock for what it
+cannot. Not a verdict on the instance; it is where to look when an agent says it
+cannot do something the person expected. `--agent <id>` reports one agent.
 
 ### Autonomy first
 

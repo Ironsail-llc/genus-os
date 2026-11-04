@@ -38,7 +38,9 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
     assert scenario in {"standalone_task", "task_and_calculation"}
     if "deferred_tools" in settings:
         assert type(settings["deferred_tools"]) is bool
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1" if settings["deferred_tools"] else "0")
+        if not settings["deferred_tools"]:
+            # Under the threshold an agent is sent every allowed schema.
+            monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "100000")
     provider_sort = settings.get("provider_sort")
     assert provider_sort in {None, "latency", "throughput"}
     streaming = settings.get("streaming", False)
@@ -139,7 +141,6 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
         cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
     runner = AgentRunner(replace(engine_config, tenant_id=tenant))
     advertised = runner.registry.build_for_agent(agent)
-    from robothor.engine.feature_flags import deferred_tools_enabled
 
     original_dispatch = runner.registry.execute
     private_tools = {"create_task", "list_tasks", "get_task", "search_records", "todo_write"}
@@ -185,7 +186,7 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         "tools_allowed": len(agent.tools_allowed),
                         "tools_advertised": len(advertised),
                         "schema_characters": len(json.dumps(advertised, ensure_ascii=False)),
-                        "deferred_tools": deferred_tools_enabled(),
+                        "deferred_tools": runner.registry.should_defer(agent),
                         "experimental_model_slice_seconds": model_slice,
                         "experimental_isolate_short_timeout_health": isolate_timeout_health,
                         "experimental_model_slice_cloud_only": cloud_only,

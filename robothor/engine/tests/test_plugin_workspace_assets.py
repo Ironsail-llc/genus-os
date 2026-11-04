@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
+import sys
 import zipfile
 from importlib import metadata
 from types import SimpleNamespace
@@ -179,6 +181,14 @@ def ws(tmp_path, monkeypatch):
     monkeypatch.setattr(installer, "_run_pip", _Pip())
     yield workspace
     reset_settings()
+    # Discovery's `ep.load()` imports the plugin package from this test's
+    # directory, and monkeypatch restores sys.path but not sys.modules. Left
+    # there, the next test's `find_spec("example_agent")` answers with this
+    # test's package instead of searching its own path.
+    for name, module in list(sys.modules.items()):
+        origin = getattr(getattr(module, "__spec__", None), "origin", None) or ""
+        if origin.startswith(f"{tmp_path}{os.sep}"):
+            del sys.modules[name]
 
 
 def _args(command, **kw):
@@ -767,6 +777,9 @@ def test_an_editable_install_finds_the_manifest_next_to_its_package(tmp_path, mo
     (pkg / "__init__.py").write_text("raise RuntimeError('must not be imported')\n")
     (pkg / "genus-plugin.yaml").write_text(_MANIFEST)
     monkeypatch.syspath_prepend(str(src))
+    # find_spec answers from sys.modules first: an earlier test that synced a
+    # plugin of the same name leaves its (since removed) package there.
+    monkeypatch.delitem(sys.modules, "example_agent", raising=False)
 
     class _Editable:
         files = ()

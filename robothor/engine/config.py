@@ -5,6 +5,7 @@ Engine configuration — loads agent configs from YAML manifests and env vars.
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 import os
 import re
@@ -134,7 +135,7 @@ class EngineConfig:
     # Sub-agent spawning
     max_concurrent_spawns: int = 10  # fleet-wide default (per-agent overridable)
     max_spawn_batch: int = 10  # max agents per spawn_agents() call
-    hourly_cost_cap_usd: float = 5.0  # fleet-wide hourly cost cap (0 = unlimited)
+    hourly_cost_cap_usd: float = 5.0  # fleet-wide hourly cost cap, reported (0 = none)
 
     # LLM
     max_iterations: int = 20
@@ -193,8 +194,15 @@ class EngineConfig:
             nats_url=os.environ.get("ROBOTHOR_NATS_URL", ""),
             max_concurrent_spawns=int(os.environ.get("ROBOTHOR_MAX_CONCURRENT_SPAWNS", "10")),
             max_spawn_batch=int(os.environ.get("ROBOTHOR_MAX_SPAWN_BATCH", "10")),
-            hourly_cost_cap_usd=float(os.environ.get("ROBOTHOR_HOURLY_COST_CAP_USD", "5.0")),
+            hourly_cost_cap_usd=_hourly_cost_cap_usd(),
         )
+
+
+def _hourly_cost_cap_usd() -> float:
+    """Through the settings, so a cap in config.yaml is the cap that applies."""
+    from robothor.settings import get_settings
+
+    return float(get_settings().providers.hourly_cost_cap_usd)
 
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -506,6 +514,9 @@ def _tool_policy(manifest: dict[str, Any]) -> dict[str, Any]:
             for name in manifest.get("tools_opt_in", []) or []
             if str(name).strip()
         ],
+        "tools_eager": [
+            str(name).strip() for name in manifest.get("tools_eager", []) or [] if str(name).strip()
+        ],
         "secret_grants": [
             str(name).strip() for name in manifest.get("secrets", []) if str(name).strip()
         ],
@@ -540,6 +551,17 @@ def _normalized_tags(raw: Any) -> list[str]:
         if tag and tag not in out:
             out.append(tag)
     return out
+
+
+def _parse_ambient(raw: Any) -> Any:
+    """The ``ambient:`` block, or ``None`` when the agent has not opted in.
+
+    Imported late: ``robothor.engine.ambient`` reaches into the tool constants,
+    and the manifest loader is imported by nearly everything.
+    """
+    from robothor.engine.ambient import parse_ambient
+
+    return parse_ambient(raw)
 
 
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
@@ -676,6 +698,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         description=manifest.get("description", ""),
         model_primary=model.get("primary", ""),
         model_fallbacks=_with_last_resort(model.get("primary", ""), model.get("fallbacks", [])),
+        model_compaction=str(model.get("compaction") or ""),
         response_format=model.get("response_format", "text"),
         provider_order=parse_provider_order(model.get("provider_order", {})),
         cron_expr=schedule.get("cron", ""),
@@ -722,6 +745,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         heartbeat=heartbeat,
         worker=worker,
         channel_bus=channel_bus_config,
+        ambient=_parse_ambient(manifest.get("ambient")),
         # Safety cap — absolute max iterations (infinite-loop protection only)
         safety_cap=int(schedule.get("safety_cap", v2.get("safety_cap", 200))),
         **_spawn_options(v2),
@@ -875,13 +899,130 @@ _defaults_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def reset_defaults_cache() -> None:
-    """Forget every parsed ``_defaults.yaml``.
+    """Forget every parsed ``_defaults.yaml``, and every manifest built on one.
 
     The mtime check catches an ordinary edit, but not a write that preserved
     the timestamp — so the admin reload route drops the cache outright rather
-    than trusting it to notice.
+    than trusting it to notice. The merged-manifest cache goes with it: a
+    reload means "re-read the disk", and a cached merge is a read of it.
     """
     _defaults_cache.clear()
+    reset_manifest_cache()
+
+
+# ── Merged-manifest cache ───────────────────────────────────────────
+
+#: The value of every ``${VAR}`` a file named, when it was read.
+EnvSnapshot = tuple[tuple[str, str | None], ...]
+
+#: ``{(agent, path, workspace, trigger): (key, config, schema issues, ${VAR}
+#: values)}`` for :func:`load_agent_config`. The key is everything the merged
+#: document depends on (:func:`_manifest_cache_key`), so an entry is served only
+#: for the inputs it was built from; one slot per agent and trigger means an
+#: edit replaces its entry rather than piling up beside it.
+_manifest_cache: dict[
+    tuple[Any, ...], tuple[tuple[Any, ...], AgentConfig, list[Any], EnvSnapshot]
+] = {}
+
+
+def reset_manifest_cache() -> None:
+    """Forget every cached merged manifest."""
+    _manifest_cache.clear()
+
+
+def invalidate_config_caches() -> None:
+    """Drop every config cache this process holds: defaults, manifests, adapters.
+
+    In-process only. The engine's own plugin-sync route calls it; the
+    ``genus plugin sync`` CLI runs in another process and cannot, which is
+    fine: the manifests it rewrites change stat and miss on their own, and
+    the reload it tells the operator to run moves the plugin generation every
+    key carries.
+    """
+    from robothor.engine.adapters import reset_adapter_cache
+
+    reset_defaults_cache()
+    reset_adapter_cache()
+
+
+def file_identity(path: Path) -> tuple[int, int, int, int] | None:
+    """``(inode, size, mtime_ns, ctime_ns)``, or None when the file is not there.
+
+    The inode and ctime are what make this safe against an atomic rename that
+    kept the old mtime and size: ``os.replace`` brings a new inode, and no
+    unprivileged write can put a ctime back.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def environment_fingerprint() -> int:
+    """One number for the ``ROBOTHOR_*`` environment.
+
+    Those variables shape the merged document (``ROBOTHOR_OVERRIDE_*``, the
+    schema mode, the last-resort model, the default service role). The rest of
+    the environment is left out on purpose: libraries set variables of their
+    own on import, and a key over all of them missed on every second load.
+    """
+    return hash(frozenset((k, v) for k, v in os.environ.items() if k.startswith("ROBOTHOR_")))
+
+
+def env_snapshot(text: str, pattern: re.Pattern[str] = _ENV_VAR_RE) -> EnvSnapshot:
+    """The current value of every ``${VAR}`` a file names.
+
+    Read from the raw text, so a placeholder in a comment is counted too: one
+    variable too many costs a needless miss, one too few a stale secret.
+    """
+    return tuple((name, os.environ.get(name)) for name in sorted(set(pattern.findall(text))))
+
+
+def env_snapshot_holds(snapshot: EnvSnapshot) -> bool:
+    """True while every variable in ``snapshot`` still has the value it had."""
+    return all(os.environ.get(name) == value for name, value in snapshot)
+
+
+def _inside(directory: Path, path: Path) -> Path | None:
+    """``path`` resolved, when it resolves inside ``directory``; else None.
+
+    The cache reads the manifest a second time, so it re-proves what the
+    loader's agent-id check already guarantees: the path cannot leave the
+    manifest directory. A manifest symlinked elsewhere is simply not cached.
+    """
+    root = os.path.realpath(directory)
+    real = os.path.realpath(path)
+    if not real.startswith(root + os.sep):
+        return None
+    return Path(real)
+
+
+def _manifest_cache_key(
+    agent_id: str,
+    manifest_path: Path,
+    identity: tuple[int, int, int, int],
+    manifest_dir: Path,
+    workspace: Path | None,
+    trigger_type: str | None,
+) -> tuple[Any, ...]:
+    from robothor.engine.manifest_schema import schema_mode
+    from robothor.plugins.loader import generation
+
+    project = file_identity(workspace / ".robothor" / "config.yaml") if workspace else None
+    return (
+        agent_id,
+        str(manifest_path),
+        identity,
+        file_identity(manifest_dir / "_defaults.yaml"),
+        str(workspace) if workspace else None,
+        project,
+        trigger_type,
+        schema_mode(),
+        environment_fingerprint(),
+        repr(_get_runtime_overrides()),
+        generation(),
+    )
 
 
 def _load_defaults(manifest_dir: Path) -> dict[str, Any]:
@@ -1292,7 +1433,7 @@ def load_agent_config(
     """
     defaults = _load_defaults(manifest_dir)
 
-    def _build_config(manifest_data: dict[str, Any]) -> AgentConfig:
+    def _build_config(manifest_data: dict[str, Any]) -> tuple[AgentConfig, list[Any]]:
         merged = _merged_manifest(
             manifest_data,
             agent_id=agent_id,
@@ -1326,7 +1467,7 @@ def load_agent_config(
 
         config = manifest_to_agent_config(merged)
         config.validation_warnings = warnings
-        return config
+        return config, issues
 
     # Prevent path traversal — agent_id must be a simple identifier
     import re as _re  # noqa: PLC0415
@@ -1337,14 +1478,39 @@ def load_agent_config(
     # agent_id is now validated — safe to use in path construction
     safe_id = str(agent_id)  # break taint chain after validation
     manifest_path = manifest_dir / f"{safe_id}.yaml"
+    cache_path = _inside(manifest_dir, manifest_path)
+    identity = file_identity(cache_path) if cache_path is not None else None
+    key = (
+        _manifest_cache_key(
+            agent_id, manifest_path, identity, manifest_dir, workspace, trigger_type
+        )
+        if identity is not None
+        else None
+    )
+    slot = (agent_id, str(manifest_path), str(workspace) if workspace else None, trigger_type)
+    entry = _manifest_cache.get(slot) if key is not None else None
+    if entry is not None and entry[0] == key and env_snapshot_holds(entry[3]):
+        _key, cached, issues, _snapshot = entry
+        # The ladder runs on every load, hit or miss: observe's counter is
+        # "how often", and enforce must refuse every time it is asked.
+        _apply_schema_mode(agent_id, issues)
+        return copy.deepcopy(cached)
     if manifest_path.is_file():
         data = load_manifest(manifest_path)
         if data:
-            return _build_config(data)
+            config, issues = _build_config(data)
+            if key is not None and cache_path is not None:
+                # A second read, for the ${VAR} names: a file gone since the
+                # parse is simply not cached, never an exception callers of
+                # this function have no answer for.
+                with contextlib.suppress(OSError):
+                    snapshot = env_snapshot(cache_path.read_text())
+                    _manifest_cache[slot] = (key, copy.deepcopy(config), issues, snapshot)
+            return config
     # Fallback: scan all manifests for matching ID
     for m in load_all_manifests(manifest_dir):
         if m["id"] == agent_id:
-            return _build_config(m)
+            return _build_config(m)[0]
     return None
 
 
@@ -1411,8 +1577,10 @@ SECURITY_PREAMBLE = (
 )
 
 
-# Cache: agent_id → (max_mtime_of_files, prompt_without_time)
-_prompt_cache: dict[str, tuple[float, str]] = {}
+#: agent id -> (newest source mtime, capability block, assembled body). The
+#: capability block is part of the stamp: it comes from settings rather than a
+#: file, so a settings change must rebuild the body although no mtime moved.
+_prompt_cache: dict[str, tuple[float, str, str]] = {}
 
 
 @dataclass(frozen=True)
@@ -1465,9 +1633,12 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
         with contextlib.suppress(OSError):
             max_mtime = max(max_mtime, fp.stat().st_mtime)
 
+    from robothor.engine.capabilities import capability_block
+
+    capabilities = capability_block(config)
     cached = _prompt_cache.get(cache_key)
-    if cached and cached[0] == max_mtime:
-        body = cached[1]
+    if cached and cached[0] == max_mtime and cached[1] == capabilities:
+        body = cached[2]
     else:
         # Build from files
         parts: list[str] = []
@@ -1519,6 +1690,11 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
                 f"files instead of silently truncating."
             )
 
+        # What this agent can do here, and what gates the rest. After the
+        # instructions so it reads as this instance's facts about them; outside
+        # the bootstrap limit because it is the platform's text, not the agent's.
+        parts.append(capabilities)
+
         # Skill catalog (if skills exist)
         try:
             from robothor.engine.skills import build_skill_catalog
@@ -1531,7 +1707,7 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
             logger.debug("Skill catalog failed: %s", e)
 
         body = "\n\n---\n\n".join(parts)
-        _prompt_cache[cache_key] = (max_mtime, body)
+        _prompt_cache[cache_key] = (max_mtime, capabilities, body)
 
     return _prompt_with_time(body, config.timezone)
 
@@ -1551,6 +1727,9 @@ def _snapshot_prompt_body(config: AgentConfig) -> str:
     parts.extend(files[path] for path in references if path)
     if sum(map(len, parts)) > BOOTSTRAP_TOTAL_MAX_CHARS:
         raise ValueError("Fleet snapshot system prompt exceeds the bootstrap character limit")
+    from robothor.engine.capabilities import capability_block
+
+    parts.append(capability_block(config))
     try:
         catalog = build_skill_catalog()
         if catalog:

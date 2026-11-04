@@ -13,6 +13,8 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
@@ -44,9 +46,14 @@ DEFAULT_START_RETRIES = 1
 DEFAULT_START_RETRY_SECONDS = 3.0
 
 
+def _env_text(name: str) -> str:
+    """An operator override as stripped text; empty when unset. Read live."""
+    return os.environ.get(name, "").strip()
+
+
 def _env_number(name: str, default: float) -> float:
     """Read an operator override, falling back rather than failing closed."""
-    raw = os.environ.get(name, "").strip()
+    raw = _env_text(name)
     if not raw:
         return default
     try:
@@ -92,7 +99,7 @@ def sandbox_binary() -> str:
     explicit `ROBOTHOR_SANDBOX_BINARY` always wins; otherwise prefer the
     rootless runtime that is actually installed.
     """
-    explicit = os.environ.get("ROBOTHOR_SANDBOX_BINARY", "").strip()
+    explicit = _env_text("ROBOTHOR_SANDBOX_BINARY")
     if explicit:
         return explicit
     for candidate in ("podman", "docker"):
@@ -102,6 +109,104 @@ def sandbox_binary() -> str:
     # points at what should be installed, rather than at a daemon we would
     # not want anyway.
     return "podman"
+
+
+#: Seconds the runtime probe waits for `<binary> info`. Long enough for a
+#: cold rootless podman, short enough that a dead daemon is reported, not waited on.
+RUNTIME_PROBE_TIMEOUT = 5.0
+
+#: How long a probe's answer is trusted. A runtime installed while the engine
+#: runs is noticed within this window; a probe per run would not be cheaper.
+RUNTIME_STATUS_TTL = 300.0
+
+
+@dataclass(frozen=True)
+class RuntimeStatus:
+    """Whether a container runtime exists here, and if not, why not.
+
+    ``reason`` is written to be repeated to a person: it names the binary and
+    what is wrong with it, never a path the operator did not configure.
+    """
+
+    binary: str
+    available: bool
+    reason: str = ""
+
+
+_runtime_cache: tuple[float, RuntimeStatus] | None = None
+_probe_lock = threading.Lock()
+
+
+def reset_runtime_status_cache() -> None:
+    """Forget the cached probe (tests, and after an operator installs a runtime)."""
+    global _runtime_cache
+    _runtime_cache = None
+
+
+def runtime_status(*, refresh: bool = False) -> RuntimeStatus:
+    """Probe the container runtime once per ``RUNTIME_STATUS_TTL``. Blocking.
+
+    ``sandbox_binary()`` names a runtime even when none is installed, so the
+    first anyone heard of the absence was a container that failed to start at
+    step 0 of a run. This answers the question before anything is started.
+
+    A plugin backend selected in ``ROBOTHOR_SANDBOX_BACKEND`` is reported
+    available without a probe: it owns its own argv, and reporting it absent
+    would let a fallback route around the operator's hardening choice.
+    """
+    global _runtime_cache
+    if not refresh and (hit := _cached_status()) is not None:
+        return hit
+    # Single flight: runs that start together while the cache is cold wait on
+    # one `<binary> info`, rather than each forking its own against a slow daemon.
+    with _probe_lock:
+        if not refresh and (hit := _cached_status()) is not None:
+            return hit
+        status = _probe_runtime()
+        _runtime_cache = (time.monotonic(), status)
+        return status
+
+
+def _cached_status() -> RuntimeStatus | None:
+    cached = _runtime_cache
+    if cached is not None and time.monotonic() - cached[0] < RUNTIME_STATUS_TTL:
+        return cached[1]
+    return None
+
+
+def _probe_runtime() -> RuntimeStatus:
+    backend = _env_text(SANDBOX_BACKEND_ENV)
+    if backend:
+        return RuntimeStatus(binary=f"backend:{backend}", available=True)
+
+    binary = sandbox_binary()
+    explicit = bool(_env_text("ROBOTHOR_SANDBOX_BINARY"))
+    if not shutil.which(binary):
+        if explicit:
+            reason = f"ROBOTHOR_SANDBOX_BINARY names {binary}, which is not installed"
+        else:
+            reason = "neither podman nor docker is installed on the engine"
+        return RuntimeStatus(binary=binary, available=False, reason=reason)
+    try:
+        proc = subprocess.run(
+            [binary, "info"],
+            capture_output=True,
+            text=True,
+            timeout=RUNTIME_PROBE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return RuntimeStatus(
+            binary=binary,
+            available=False,
+            reason=f"{binary} did not answer within {RUNTIME_PROBE_TIMEOUT:g}s",
+        )
+    except OSError as exc:
+        return RuntimeStatus(binary=binary, available=False, reason=f"{binary} cannot run: {exc}")
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip().splitlines()
+        tail = detail[-1][:200] if detail else f"exit {proc.returncode}"
+        return RuntimeStatus(binary=binary, available=False, reason=f"{binary} info failed: {tail}")
+    return RuntimeStatus(binary=binary, available=True)
 
 
 def sandbox_network() -> str:
@@ -136,7 +241,7 @@ def active_sandbox_backend() -> Any:
     hardening step into an invisible downgrade, which is the failure this
     whole seam exists to avoid.
     """
-    name = os.environ.get(SANDBOX_BACKEND_ENV, "").strip()
+    name = _env_text(SANDBOX_BACKEND_ENV)
     if not name:
         return None
 

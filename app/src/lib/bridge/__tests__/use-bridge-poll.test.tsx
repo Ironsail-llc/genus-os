@@ -7,7 +7,7 @@
  * re-renders, tell a 403 apart from a failure, and answer a refusal in the
  * server's words.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BRIDGE_UNREACHABLE, useBridgePoll } from "../use-bridge-poll";
@@ -209,6 +209,53 @@ describe("useBridgePoll", () => {
     hide(false);
     await vi.advanceTimersByTimeAsync(60_000);
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("aborts the request in flight when the caller unmounts", async () => {
+    const signals: AbortSignal[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.signal) signals.push(init.signal);
+        return new Promise<Response>(() => {});
+      })
+    );
+    const { unmount } = render(<Probe visible />);
+    await waitFor(() => expect(signals).toHaveLength(1));
+    expect(signals[0].aborted).toBe(false);
+    unmount();
+    expect(signals[0].aborted).toBe(true);
+  });
+
+  it("does not let a late refusal from the previous URL land on the next one", async () => {
+    let releaseOld: (() => void) | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).endsWith("/old")) {
+          return {
+            ok: false,
+            status: 503,
+            json: () =>
+              new Promise((resolve) => {
+                releaseOld = () => resolve({ detail: "the old listing is unavailable" });
+              }),
+          } as unknown as Response;
+        }
+        return { ok: true, status: 200, json: async () => ({ count: 1 }) } as Response;
+      })
+    );
+    const { rerender } = render(<Probe visible url="/api/bridge/api/old" />);
+    await waitFor(() => expect(releaseOld).not.toBeNull());
+    rerender(<Probe visible url="/api/bridge/api/new" />);
+    await waitFor(() => expect(screen.getByTestId("count").textContent).toBe("1"));
+
+    await act(async () => {
+      (releaseOld as (() => void) | null)?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId("error").textContent).toBe("");
+    expect(screen.getByTestId("status").textContent).toBe("null");
   });
 
   it("answers a refusal in the server's own words", async () => {

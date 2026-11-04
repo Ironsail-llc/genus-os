@@ -13,6 +13,9 @@ LLM-actionable errors instead of raw exception text:
   dead service: after ``BREAKER_THRESHOLD`` consecutive connect failures the
   cached offline error is returned without dialing for
   ``BREAKER_COOLDOWN_SECONDS``, then one probe is allowed (half-open).
+- every call goes through one pooled client per event loop
+  (``robothor/http_clients.py``), so repeat calls reuse a kept-alive
+  connection; the caller's ``timeout`` travels with each request.
 
 ``bridge_headers`` mints (and caches) the short-lived service token the
 bridge's fail-closed auth middleware requires — see crm/bridge/middleware.py:
@@ -30,6 +33,7 @@ from typing import Any
 import httpx
 
 from robothor.engine.tools.response_failure import response_failure
+from robothor.http_clients import shared_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +128,8 @@ async def call_service(
         return {**_offline_error(service), "circuit_open": True}
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.request(method, url, json=json, headers=headers)
+        client = shared_async_client("service_client")
+        resp = await client.request(method, url, json=json, headers=headers, timeout=timeout)
     except (httpx.ConnectError, httpx.ConnectTimeout) as e:
         _record_connect_failure(state)
         logger.warning("%s service offline (%s)", service, type(e).__name__)

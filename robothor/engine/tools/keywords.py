@@ -129,6 +129,10 @@ TOOL_HINTS: dict[str, ToolHint] = {
     "claude_code_status": ToolHint(keywords=(*_CODING, "status", "progress", "check")),
     "claude_code_followup": ToolHint(keywords=(*_CODING, "followup", "follow", "correct", "retry")),
     "claude_code_cancel": ToolHint(keywords=(*_CODING, "cancel", "stop", "abort")),
+    "claude_code_repo_prepare": ToolHint(
+        keywords=(*_CODING, "clone", "checkout", "fetch", "prepare")
+    ),
+    "claude_code_publish": ToolHint(keywords=(*_CODING, *_PR, "publish", "push", "open", "draft")),
     # ── Live Gmail ────────────────────────────────────────────────────
     "gws_gmail_search": ToolHint(
         keywords=(
@@ -345,6 +349,11 @@ TOOL_HINTS: dict[str, ToolHint] = {
     "list_my_tasks": ToolHint(
         keywords=("task", "todo", "queue", "assigned", "work", "backlog"),
         rank_bias=1.0,
+    ),
+    # The filtered list: "the five most urgent open tasks" is a question about
+    # priority and status across every task, which only this tool answers.
+    "list_tasks": ToolHint(
+        keywords=("task", "urgent", "priority", "important", "open", "status", "overdue"),
     ),
     # ── Companies: a family of six, on a noun the sales tools now share ──
     #

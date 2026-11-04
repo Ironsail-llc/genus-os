@@ -29,14 +29,17 @@ from typing import TYPE_CHECKING, Any
 from robothor.engine.config import EngineConfig
 from robothor.engine.health import serve_health, validate_engine_auth_configuration
 from robothor.engine.hooks import EventHooks
+from robothor.engine.lanes import install_lane_executor
 from robothor.engine.runner import AgentRunner
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.scheduler import CronScheduler
 from robothor.engine.shutdown_budget import (
     ANNOUNCE_TIMEOUT_SECONDS,
     DRAIN_TIMEOUT_SECONDS,
+    EVENT_WRITER_FLUSH_TIMEOUT_SECONDS,
     POLLING_STOP_TIMEOUT_SECONDS,
 )
+from robothor.engine.startup import StartupClock, warm_db_pool, warm_system_prompts
 from robothor.engine.telegram import TelegramBot
 from robothor.engine.workflow import WorkflowEngine
 from robothor.engine.workflow_registry import set_workflow_engine
@@ -245,7 +248,7 @@ async def _execute_resume(runner: Any, candidate: Any, claim: Any = None) -> Non
             resume_from_run_id=candidate.run_id,
             tenant_id=candidate.tenant_id,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - one failed resume must not stop the others
         logger.exception("Resume of run %s failed", candidate.run_id)
     finally:
         current.reset(claim_token)
@@ -309,7 +312,7 @@ def _resume_scan(tenant_id: str) -> list[ResumeCandidate]:
         # Durable operator controls override restart eligibility before any
         # attempt is charged or a resume task is announced/scheduled.
         rows = [r for r in rows if not stopped(str(r[4]), str(r[0]))]
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a failed scan resumes nothing; the reaper still runs
         logger.warning("Resume scan failed: %s", _sanitize(e))
         return []
 
@@ -385,7 +388,7 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
         work = _execute_resume(runner, candidate, claim)
         try:
             task = asyncio.create_task(work)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 - release the claim, then re-raise
             work.close()
             claim.close()
             raise
@@ -431,7 +434,7 @@ def classify_reap_reason(
         from robothor.engine.tracking import list_steps
 
         steps = list_steps(run_id)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - no steps reads as no evidence, not as a crash
         logger.debug("classify_reap_reason: list_steps failed for %s: %s", run_id, e)
         steps = []
 
@@ -478,7 +481,8 @@ def classify_reap_reason(
 
 
 def _cleanup_stale_workflow_runs(tenant_id: str | None = None) -> int:
-    """Mark workflow_runs stuck 'running' for >2h as 'timeout'.
+    """Mark workflow_runs stuck 'running' for >2h, or queued 'pending' for >2h
+    by an engine that has since died, as 'timeout'.
 
     Engine shutdown mid-run used to leave workflow_runs rows 'running'
     forever: retention excludes 'running' rows, so orphans were immortal
@@ -494,12 +498,19 @@ def _cleanup_stale_workflow_runs(tenant_id: str | None = None) -> int:
 
         with get_connection() as conn:
             cur = conn.cursor()
+            # A run queued for its lane slot is 'pending' with no start time;
+            # an engine that died while it waited leaves that row behind too.
             cur.execute(
                 "UPDATE workflow_runs SET status='timeout', "
                 "completed_at=NOW(), "
                 "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000, "
-                "error_message='Reaped: engine restarted mid-run' "
-                "WHERE tenant_id=%s AND status='running' AND started_at < NOW() - INTERVAL '2 hours'",
+                "error_message=CASE WHEN started_at IS NULL "
+                "THEN 'Reaped: engine restarted while queued' "
+                "ELSE 'Reaped: engine restarted mid-run' END "
+                "WHERE tenant_id=%s AND ("
+                "(status='running' AND started_at < NOW() - INTERVAL '2 hours') "
+                "OR (status='pending' AND started_at IS NULL "
+                "AND created_at < NOW() - INTERVAL '2 hours'))",
                 (tenant_id,),
             )
             reaped = cur.rowcount or 0
@@ -507,7 +518,7 @@ def _cleanup_stale_workflow_runs(tenant_id: str | None = None) -> int:
             if reaped:
                 logger.warning("Cleaned up %d stale workflow runs", reaped)
             return reaped
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - housekeeping; the next pass retries
         logger.warning("Stale workflow run cleanup failed: %s", e)
         return 0
 
@@ -614,7 +625,7 @@ def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
                 release_sync(agent_id)
 
             return len(reaped_agents) + wf_reaped
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - housekeeping; the next pass retries
         logger.warning("Stale run cleanup failed: %s", e)
         return wf_reaped
     finally:
@@ -802,7 +813,7 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
             return None
 
         return nats_mgr
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - federation is optional; the failure is alerted below
         # A crash here used to be a warning line. If connections are configured,
         # the operator needs to know federation is down, not find out months later.
         logger.exception("Federation startup failed (non-fatal)")
@@ -890,7 +901,7 @@ async def _maybe_run_alert_selftest() -> None:
             "confirms alert() runs and reaches the notification inbox. Unset "
             "ROBOTHOR_ALERT_SELFTEST to stop it.",
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - the self-test reports, it never blocks boot
         logger.error("Alert delivery self-test RAISED: %s — the alert path is broken", e)
         return
     if recorded:
@@ -1149,6 +1160,62 @@ def _install_shutdown_signals() -> asyncio.Event:
     return req.event
 
 
+def _register_channel_bus_main_hooks(hook_registry: Any) -> None:
+    """Channel-bus main busy-state hooks, extracted from ``main``.
+
+    AGENT_START/AGENT_END on the main agent flip a flag in the WakeDebouncer
+    so wakes deferred during a concurrent interactive turn can re-fire cleanly
+    when main goes idle.
+    """
+
+    async def _channel_bus_on_main_start(ctx: Any) -> Any:
+        from robothor.engine.channel_bus import get_debouncer
+        from robothor.engine.hook_registry import HookResult
+
+        if ctx.agent_id == "main":
+            deb = get_debouncer()
+            if deb:
+                deb.mark_main_started()
+        return HookResult()
+
+    async def _channel_bus_on_main_end(ctx: Any) -> Any:
+        from robothor.engine.channel_bus import get_debouncer
+        from robothor.engine.hook_registry import HookResult
+
+        if ctx.agent_id == "main":
+            deb = get_debouncer()
+            if deb:
+                await deb.mark_main_finished()
+        return HookResult()
+
+    hook_registry.register_python_handler("channel_bus.main_started", _channel_bus_on_main_start)
+    hook_registry.register_python_handler("channel_bus.main_finished", _channel_bus_on_main_end)
+
+
+async def _announce_startup(config: Any, scan: Any) -> None:
+    """Tell the operator's chat the engine is online, best-effort.
+
+    Extracted from ``main`` for the same reason as ``_announce_shutdown``: a
+    cosmetic leaf with no ordering relationship to the steps around it.
+    """
+    try:
+        from robothor.engine.config import manifest_to_agent_config
+
+        scheduled = sum(1 for m in scan.manifests if manifest_to_agent_config(m).cron_expr)
+        from robothor.engine.delivery import get_telegram_sender
+
+        sender = get_telegram_sender()
+        if sender and config.default_chat_id:
+            await sender(
+                config.default_chat_id,
+                f"*Engine Online*\n\n"
+                f"{scheduled} scheduled agents loaded.\n"
+                f"Port {config.port} | Tenant {config.tenant_id}",
+            )
+    except Exception as e:  # noqa: BLE001 - a startup announcement is cosmetic
+        logger.debug("Startup announcement failed: %s", e)
+
+
 async def _announce_shutdown(config: Any) -> None:
     """Tell the operator's chat the engine is going down, best-effort.
 
@@ -1173,7 +1240,7 @@ async def _announce_shutdown(config: Any) -> None:
                 ),
                 timeout=ANNOUNCE_TIMEOUT_SECONDS,
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - shutdown continues regardless
         logger.debug("Shutdown announcement failed: %s", e)
 
 
@@ -1360,73 +1427,16 @@ async def _bootstrap_owner_links() -> None:
         logger.exception("bootstrap_owner_person_links failed (non-fatal)")
 
 
-async def _claim_lockfile_owner() -> None:
-    """Claim this engine's plugin lockfile for its tenant, at boot.
+async def _recover_interrupted_work(runner: Any, config: Any) -> None:
+    """Resume interrupted runs, reap what is left, then recover repairs.
 
-    A child engine started on another tenant's workspace then refuses to change
-    the plugins the other engine reads (``robothor.plugins.lockfile_owner``).
-    Off the loop, and never fatal: a marker that cannot be written is logged.
+    Resume BEFORE reaping: `_cleanup_stale_runs` marks every interrupted row
+    terminal, which would destroy exactly what resume recovers. This runs
+    after the runner is constructed because resume needs something to resume
+    WITH — when it ran earlier it had no runner, and quietly counted runs it
+    never executed. Repair recovery comes last, so the runs it starts are
+    never mistaken for stale ones.
     """
-    from robothor.plugins import lockfile_owner
-
-    if await asyncio.to_thread(lockfile_owner.foreign_owner):
-        logger.error("Plugin lockfile: %s", lockfile_owner.SHARED_REMEDY)
-
-
-async def main() -> int:
-    """Start all engine subsystems. Returns the process exit code."""
-    # Own SIGTERM/SIGINT before anything slow, so a stop during startup also
-    # takes the drain path instead of the default disposition's instant death.
-    stop_requested = _install_shutdown_signals()
-
-    # Reject unsafe production authentication before touching the database,
-    # loading agents, or starting any background subsystem. The Engine verifies
-    # Bridge-issued tokens but is not an SSO exchange authority, so it must not
-    # require the Bridge's IdP credentials.
-    validate_engine_auth_configuration()
-
-    _configure_structured_logging()
-
-    logger.info("Starting Genus OS Agent Engine...")
-    # State this process's guardrail posture before anything runs. The flags
-    # come from systemd Environment= lines on a single unit, so a second
-    # daemon running this same code inherits none of them — which is exactly
-    # what happened here for four days, silently.
-    _harden_and_state_posture()
-
-    # A tenant env conflict silently discards every default-tenant write in this
-    # process (RLS refuses the row, the caller gets None). Say so at boot rather
-    # than leaking one WARNING per refused write for months.
-    from robothor.constants import tenant_env_conflict
-
-    _tenant_conflict = tenant_env_conflict()
-    if _tenant_conflict:
-        logger.error("%s", _tenant_conflict)
-
-    # Record daemon boot time before reaping so runs started before this boot
-    # can be classified as 'daemon_restart' rather than 'post_llm_crash'.
-    _set_daemon_start_ts()
-
-    await _bootstrap_owner_links()
-
-    # Vault-held provider keys into os.environ before any subsystem reads one.
-    await load_provider_secrets_at_startup()
-
-    # Load config
-    config = EngineConfig.from_env()
-    logger.info("Tenant: %s", config.tenant_id)
-    await _claim_lockfile_owner()
-    logger.info("Workspace: %s", config.workspace)
-    logger.info("Health port: %d", config.port)
-    logger.info("Telegram bot: %s", "configured" if config.bot_token else "disabled")
-
-    runner, sales_runtime_assets = await _create_runner_with_assets(config)
-
-    # Resume BEFORE reaping: `_cleanup_stale_runs` marks every interrupted row
-    # terminal, which would destroy exactly what resume recovers. This block
-    # sits after the runner is constructed because resume needs something to
-    # resume WITH — when it ran earlier it had no runner, and quietly counted
-    # runs it never executed.
     try:
         resumed = await resume_interrupted_runs(runner)
         if resumed:
@@ -1442,7 +1452,141 @@ async def main() -> int:
 
     await recover_repairs(runner, config)
 
-    await _start_coding_jobs()  # resume interrupted Claude Code jobs, reap old ones
+
+async def _scan_fleet_and_warm_prompts(config: Any, clock: StartupClock) -> Any:
+    """Read the manifest directory once for the whole startup, off the loop.
+
+    The one scan feeds the hook loader, the scheduler, the event hooks and the
+    startup announcement, which each used to read the directory again. Then
+    every installed agent's system prompt is built into the cache, so the
+    first turn after a deploy does not pay for it.
+    """
+    from robothor.engine import config as config_mod
+
+    scan = await asyncio.to_thread(config_mod.load_manifest_dir, config.manifest_dir)
+    agent_ids = [str(m.get("id", "")) for m in scan.manifests if m.get("id")]
+    await clock.step(
+        "prompts",
+        asyncio.to_thread(warm_system_prompts, agent_ids, config.manifest_dir, config.workspace),
+    )
+    return scan
+
+
+async def _recover_scan_and_restore(runner: Any, config: Any, clock: StartupClock) -> Any:
+    """The concurrent middle of startup; returns the one manifest scan.
+
+    Recovery, coding jobs, the manifest scan (with the system-prompt warm)
+    and the webchat session read do not depend on one another, so they run
+    together. The sessions are then applied on the loop, with the chat
+    config in place so the cache pins THIS engine's main session key:
+    Telegram, Slack and inbound channels share that cache, and none of them
+    has started yet.
+    """
+    from robothor.engine import chat, chat_restore
+
+    _recovered, _coding, scan, sessions = await clock.together(
+        recovery=_recover_interrupted_work(runner, config),
+        coding_jobs=_start_coding_jobs(),  # resume interrupted Claude Code jobs, reap old ones
+        manifests=_scan_fleet_and_warm_prompts(config, clock),
+        sessions=asyncio.to_thread(chat_restore.load_persisted_sessions, config),
+    )
+    chat.init_chat(runner, config, restore=False)
+    if sessions is not None:
+        chat_restore.apply_restored_sessions(sessions)
+    return scan
+
+
+async def _claim_lockfile_owner() -> None:
+    """Claim this engine's plugin lockfile for its tenant, at boot.
+
+    A child engine started on another tenant's workspace then refuses to change
+    the plugins the other engine reads (``robothor.plugins.lockfile_owner``).
+    Off the loop, and never fatal: a marker that cannot be written is logged.
+    """
+    from robothor.plugins import lockfile_owner
+
+    if await asyncio.to_thread(lockfile_owner.foreign_owner):
+        logger.error("Plugin lockfile: %s", lockfile_owner.SHARED_REMEDY)
+
+
+def _announce_config(config: Any) -> None:
+    """Log the loaded config's tenant, workspace, health port and Telegram state."""
+    logger.info("Tenant: %s", config.tenant_id)
+    logger.info("Workspace: %s", config.workspace)
+    logger.info("Health port: %d", config.port)
+    logger.info("Telegram bot: %s", "configured" if config.bot_token else "disabled")
+
+
+async def main() -> int:
+    """Start all engine subsystems. Returns the process exit code."""
+    # Own SIGTERM/SIGINT before anything slow, so a stop during startup also
+    # takes the drain path instead of the default disposition's instant death.
+    stop_requested = _install_shutdown_signals()
+    clock = StartupClock()
+
+    # Reject unsafe production authentication before touching the database,
+    # loading agents, or starting any background subsystem. The Engine verifies
+    # Bridge-issued tokens but is not an SSO exchange authority, so it must not
+    # require the Bridge's IdP credentials.
+    validate_engine_auth_configuration()
+
+    _configure_structured_logging()
+
+    logger.info("Starting Genus OS Agent Engine...")
+    # State this process's guardrail posture before anything runs. The flags
+    # come from systemd Environment= lines on a single unit, so a second
+    # daemon running this same code inherits none of them — which is exactly
+    # what happened here for four days, silently.
+    _harden_and_state_posture()
+    install_lane_executor(asyncio.get_running_loop())
+
+    # A tenant env conflict silently discards every default-tenant write in this
+    # process (RLS refuses the row, the caller gets None). Say so at boot rather
+    # than leaking one WARNING per refused write for months.
+    from robothor.constants import tenant_env_conflict
+
+    _tenant_conflict = tenant_env_conflict()
+    if _tenant_conflict:
+        logger.error("%s", _tenant_conflict)
+
+    # Record daemon boot time before reaping so runs started before this boot
+    # can be classified as 'daemon_restart' rather than 'post_llm_crash'.
+    _set_daemon_start_ts()
+
+    # Startup dependency graph; an arrow means "must finish before". Steps
+    # inside one {...} do not depend on one another and run concurrently.
+    #
+    #   posture + migrations check -> DB pool
+    #   -> {owner links || vault provider secrets}  (secrets precede config)
+    #   -> config -> runner
+    #   -> {resume -> stale-run reap -> repair recovery
+    #       || coding jobs
+    #       || manifest scan -> system-prompt warm
+    #       || webchat session read}
+    #   -> session cache hydrated, on the loop, before any channel task
+    #   -> hooks, workflows, scheduler, event hooks (all fed the one scan)
+    #   -> federation -> subsystem tasks + channels -> READY=1
+    #
+    # Resume precedes the reap (the reap marks terminal exactly what resume
+    # recovers), and repair recovery follows it so its new runs are never
+    # reaped. A step that raises fails startup as it did in sequence.
+    await clock.step("db_pool", asyncio.to_thread(warm_db_pool))
+    await clock.together(
+        owner_links=_bootstrap_owner_links(),
+        # Vault-held provider keys into os.environ before any subsystem reads one.
+        secrets=load_provider_secrets_at_startup(),
+    )
+
+    # Load config
+    config = EngineConfig.from_env()
+    _announce_config(config)
+    await _claim_lockfile_owner()
+
+    runner, sales_runtime_assets = await clock.step("runner", _create_runner_with_assets(config))
+
+    scan = await _recover_scan_and_restore(runner, config, clock)
+
+    _spawn_mcp_prewarm()
 
     _init_fleet_capacity(config)
 
@@ -1480,31 +1624,7 @@ async def main() -> int:
 
     hook_registry.register_python_handler("channel_bus.surface", _channel_bus_surface)
 
-    # Channel-bus main busy-state hooks: AGENT_START/AGENT_END on the main
-    # agent flip a flag in the WakeDebouncer so wakes deferred during a
-    # concurrent interactive turn can re-fire cleanly when main goes idle.
-    async def _channel_bus_on_main_start(ctx: Any) -> Any:
-        from robothor.engine.channel_bus import get_debouncer
-        from robothor.engine.hook_registry import HookResult
-
-        if ctx.agent_id == "main":
-            deb = get_debouncer()
-            if deb:
-                deb.mark_main_started()
-        return HookResult()
-
-    async def _channel_bus_on_main_end(ctx: Any) -> Any:
-        from robothor.engine.channel_bus import get_debouncer
-        from robothor.engine.hook_registry import HookResult
-
-        if ctx.agent_id == "main":
-            deb = get_debouncer()
-            if deb:
-                await deb.mark_main_finished()
-        return HookResult()
-
-    hook_registry.register_python_handler("channel_bus.main_started", _channel_bus_on_main_start)
-    hook_registry.register_python_handler("channel_bus.main_finished", _channel_bus_on_main_end)
+    _register_channel_bus_main_hooks(hook_registry)
 
     # Plugin-contributed lifecycle handlers, AFTER the engine's own so that an
     # installed package cannot claim a channel_bus.* name. Registering these
@@ -1519,11 +1639,9 @@ async def main() -> int:
         hook_registry.register_many(global_hooks)
         logger.info("Loaded %d global lifecycle hooks", len(global_hooks))
 
-    # Load per-agent lifecycle hooks from manifests
-    from robothor.engine.config import load_all_manifests
-
+    # Load per-agent lifecycle hooks from the startup scan
     agent_hook_count = 0
-    for manifest in load_all_manifests(config.manifest_dir):
+    for manifest in scan.manifests:
         agent_id = manifest.get("id", "")
         agent_hooks = load_hooks_from_manifest(manifest, agent_id)
         if agent_hooks:
@@ -1596,15 +1714,15 @@ async def main() -> int:
         logger.warning("Channel-bus debouncer init failed (non-fatal): %s", e)
 
     # Federation — start NATS if connections exist (no-op otherwise)
-    nats_mgr = await _start_federation(config, runner=runner)
+    nats_mgr = await clock.step("federation", _start_federation(config, runner=runner))
 
     # Start all subsystems concurrently
     tasks = [
         *_background_workers(config.tenant_id),
-        asyncio.create_task(scheduler.start(), name="scheduler"),
-        asyncio.create_task(hooks.start(), name="hooks"),
+        asyncio.create_task(scheduler.start(scan=scan), name="scheduler"),
+        asyncio.create_task(hooks.start(manifests=list(scan.manifests)), name="hooks"),
         asyncio.create_task(
-            serve_health(config, runner, workflow_engine, scheduler),
+            serve_health(config, runner, workflow_engine, scheduler, restore_sessions=False),
             name="health",
         ),
         asyncio.create_task(_watchdog(config, scheduler, workflow_engine), name="watchdog"),
@@ -1622,29 +1740,13 @@ async def main() -> int:
     if bot is not None:
         tasks.insert(0, asyncio.create_task(bot.start_polling(), name="telegram"))
 
-    slack_bot = await _start_channels(runner, config, tasks)
+    slack_bot = await clock.step("channels", _start_channels(runner, config, tasks))
 
     logger.info("All subsystems started")
+    clock.finish()
     _sd_notify("READY=1")
 
-    # Startup announcement (best-effort)
-    try:
-        from robothor.engine.config import load_all_manifests, manifest_to_agent_config
-
-        manifests = load_all_manifests(config.manifest_dir)
-        scheduled = sum(1 for m in manifests if manifest_to_agent_config(m).cron_expr)
-        from robothor.engine.delivery import get_telegram_sender
-
-        sender = get_telegram_sender()
-        if sender and config.default_chat_id:
-            await sender(
-                config.default_chat_id,
-                f"*Engine Online*\n\n"
-                f"{scheduled} scheduled agents loaded.\n"
-                f"Port {config.port} | Tenant {config.tenant_id}",
-            )
-    except Exception as e:
-        logger.debug("Startup announcement failed: %s", e)
+    await _announce_startup(config, scan)
 
     # Alert delivery self-test (env-gated, best-effort) — see docstring.
     await _maybe_run_alert_selftest()
@@ -1690,13 +1792,17 @@ async def main() -> int:
         try:
             await nats_mgr.disconnect()
             logger.info("Federation: NATS disconnected")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - shutdown continues regardless
             logger.debug("Federation NATS disconnect failed: %s", e)
 
     # Drain tracked background tasks before stopping subsystems
     from robothor.engine.task_registry import get_task_registry
 
     await get_task_registry().drain(timeout=DRAIN_TIMEOUT_SECONDS)
+    # Then every audit and guardrail row those tasks queued (event_writer.py).
+    from robothor.engine.event_writer import get_event_writer
+
+    await get_event_writer().shutdown(timeout=EVENT_WRITER_FLUSH_TIMEOUT_SECONDS)
 
     await _stop_coding_jobs()  # unmarked, so the next start resumes them
 
@@ -1707,7 +1813,7 @@ async def main() -> int:
     if slack_bot is not None:
         try:
             await slack_bot.stop()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - shutdown continues regardless
             logger.debug("Slack bot stop failed: %s", e)
 
     # Release the leadership lease explicitly before cancelling its task —
@@ -1715,14 +1821,25 @@ async def main() -> int:
     # leaderless (no cron/heartbeat) for up to that window.
     try:
         await _elector.stop()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - shutdown continues regardless
         logger.debug("Leader elector stop failed: %s", e)
+
+    await _shutdown_mcp_pool()  # last: a later tool call would respawn a session
 
     # Cancel remaining tasks
     for task in pending:
         task.cancel()
 
     await asyncio.gather(*pending, return_exceptions=True)
+
+    # Last: the pooled HTTP clients (backing services, Ollama) outlive every
+    # subsystem that might still be finishing a request.
+    try:
+        from robothor.http_clients import close_shared_clients
+
+        await close_shared_clients()
+    except Exception as e:  # noqa: BLE001 - shutdown must not raise
+        logger.debug("Closing shared HTTP clients failed: %s", e)
     logger.info("Engine stopped")
     return 1 if subsystem_crashed else 0
 
@@ -1788,6 +1905,41 @@ async def _stop_coding_jobs() -> None:
         logger.debug("Coding job shutdown failed: %s", e)
 
 
+def _spawn_mcp_prewarm() -> None:
+    """Start the adapter pre-warm in the background, never awaited: a slow MCP
+    server must not delay startup."""
+    from robothor.engine.task_registry import get_task_registry
+
+    get_task_registry().spawn(_prewarm_mcp_adapters(), name="mcp-adapter-prewarm")
+
+
+async def _prewarm_mcp_adapters() -> None:
+    """Open adapter sessions and cache their tool lists. Never fatal."""
+    try:
+        from robothor.engine.adapters import load_adapters
+        from robothor.engine.mcp_client import prewarm_adapter_sessions
+
+        adapters = await asyncio.to_thread(load_adapters)
+        if not adapters:
+            return
+        warmed = await prewarm_adapter_sessions(adapters)
+        logger.info(
+            "Startup: pre-warmed %d of %d MCP adapter session(s)", len(warmed), len(adapters)
+        )
+    except Exception as e:  # noqa: BLE001 - a warm cache is an optimisation
+        logger.warning("Startup: MCP adapter pre-warm failed: %s", _sanitize(e))
+
+
+async def _shutdown_mcp_pool() -> None:
+    """Stop MCP sessions and close their clients. Never fatal."""
+    try:
+        from robothor.engine.mcp_client import get_mcp_client_pool
+
+        await get_mcp_client_pool().shutdown()
+    except Exception as e:  # noqa: BLE001 - shutdown continues regardless
+        logger.debug("MCP pool shutdown failed: %s", e)
+
+
 def _record_watchdog_event(event_type: str, detail: str) -> None:
     """Append a watchdog event to the watchdog_log memory block."""
     try:
@@ -1803,7 +1955,7 @@ def _record_watchdog_event(event_type: str, detail: str) -> None:
         lines.append(entry)
         lines = lines[-50:]
         write_block("watchdog_log", "\n".join(lines))
-    except Exception:
+    except Exception:  # noqa: BLE001 - bookkeeping must not stop the watchdog
         logger.debug("Watchdog event recording failed", exc_info=True)
 
 
@@ -1836,7 +1988,7 @@ def _read_last_watchdog_event_ts(*event_types: str) -> float | None:
 
         existing = read_block("watchdog_log")
         content = existing.get("content", "") if "error" not in existing else ""
-    except Exception:
+    except Exception:  # noqa: BLE001 - no timestamp means the job is due
         logger.debug("Reading watchdog_log block failed", exc_info=True)
         return None
 
@@ -1993,8 +2145,113 @@ async def _run_outage_detectors(tenant_id: str) -> None:
         fired = await search_quota_detector()
         if fired:
             logger.info("Detectors: Brave quota alert fired")
-    except Exception as e:
-        logger.debug("Detectors: outage checks failed: %s", e)
+    except Exception as e:  # noqa: BLE001 - the next tick retries
+        # WARNING, not DEBUG: a detector that raises means nothing alerts.
+        logger.warning("Detectors: outage checks failed: %s", e)
+
+
+async def _run_tick_detectors(tick_count: int, tenant_id: str) -> None:
+    """The fast failure-mode detectors, each on its own tick cadence.
+
+    Disabled via ROBOTHOR_DETECTORS_ENABLED=0. A detector that raises is a
+    WARNING: it is the alarm, so its failure must not be quieter than DEBUG.
+    """
+    # Runaway burn: every 4 ticks = 2 minutes
+    if tick_count % 4 == 0:
+        try:
+            from robothor.engine.detectors import runaway_burn_detector
+
+            fired = await runaway_burn_detector()
+            if fired:
+                logger.info("Detectors: %d runaway-burn alerts fired", fired)
+        except Exception as e:  # noqa: BLE001 - the alarm's own failure is a WARNING; next tick retries
+            logger.warning("Detectors: runaway_burn check failed: %s", e)
+
+    # Repeat errors + tool degradation: every 10 ticks = 5 minutes
+    if tick_count % 10 == 0:
+        try:
+            from robothor.engine.detectors import (
+                repeat_error_detector,
+                tool_degradation_detector,
+            )
+
+            fired = await repeat_error_detector(tenant_id=tenant_id)
+            if fired:
+                logger.info("Detectors: %d repeat-error alerts fired", fired)
+            fired = await tool_degradation_detector()
+            if fired:
+                logger.info("Detectors: %d tool-degradation alerts fired", fired)
+        except Exception as e:  # noqa: BLE001 - the alarm's own failure is a WARNING; next tick retries
+            logger.warning("Detectors: pattern checks failed: %s", e)
+
+    # Zombie runner: every 20 ticks = 10 minutes
+    if tick_count % 20 == 0:
+        try:
+            from robothor.engine.detectors import zombie_runner_detector
+
+            fired = await zombie_runner_detector()
+            if fired:
+                logger.info("Detectors: %d zombie-runner alerts fired", fired)
+        except Exception as e:  # noqa: BLE001 - the alarm's own failure is a WARNING; next tick retries
+            logger.warning("Detectors: zombie_runner check failed: %s", e)
+
+    # Workflow health (stuck runs + failure streaks): every 20 ticks = 10 min
+    if tick_count % 20 == 0:
+        try:
+            from robothor.engine.detectors import (
+                stuck_workflow_detector,
+                workflow_failure_streak_detector,
+            )
+
+            fired = await stuck_workflow_detector()
+            if fired:
+                logger.info("Detectors: %d stuck-workflow alerts fired", fired)
+            fired = await workflow_failure_streak_detector()
+            if fired:
+                logger.info("Detectors: %d workflow-failure-streak alerts fired", fired)
+        except Exception as e:  # noqa: BLE001 - the alarm's own failure is a WARNING; next tick retries
+            logger.warning("Detectors: workflow health checks failed: %s", e)
+
+
+async def _check_autodream_staleness(config: EngineConfig) -> None:
+    """Warn, then page once per episode, when autoDream has stopped running."""
+    global _autodream_stale_alerted  # noqa: PLW0603
+
+    try:
+        from robothor.engine.autodream import COOLDOWN_SECONDS
+
+        last_run, source = _resolve_last_run()
+        staleness = (time.time() - last_run) if last_run is not None else None
+        decision = _autodream_staleness_decision(
+            staleness,
+            _autodream_stale_alerted,
+            _AUTODREAM_MAX_DEFER_SECONDS,
+            COOLDOWN_SECONDS,
+        )
+        if decision["reset"]:
+            _autodream_stale_alerted = False
+        if decision["warn"] and staleness is not None:
+            logger.warning(
+                "Watchdog: autoDream stale (last run %.0f min ago, source=%s)",
+                staleness / 60,
+                source,
+            )
+        if decision["alert"] and staleness is not None:
+            from robothor.engine.delivery import get_telegram_sender
+
+            sender = get_telegram_sender()
+            if sender and config.default_chat_id:
+                hours = int(staleness / 3600)
+                await sender(
+                    config.default_chat_id,
+                    f"*Watchdog Alert*\n\nautoDream has not run for {hours}h "
+                    f"(source: {source}). Memory consolidation may be stalled.",
+                )
+                # Latch only after a delivered page so a transient
+                # sender outage doesn't suppress the alert.
+                _autodream_stale_alerted = True
+    except Exception as e:  # noqa: BLE001 - logged at WARNING; the next check retries
+        logger.warning("Watchdog: autoDream staleness check failed: %s", e)
 
 
 async def _watchdog(
@@ -2003,8 +2260,6 @@ async def _watchdog(
     workflow_engine: WorkflowEngine | None = None,
 ) -> None:
     """Subsystem watchdog — pings PostgreSQL and Redis every 30s, notifies systemd, cleans stale sessions daily."""
-    global _autodream_stale_alerted  # noqa: PLW0603
-
     pg_failures = 0
     redis_failures = 0
     tick_count = 0
@@ -2041,7 +2296,7 @@ async def _watchdog(
 
             await asyncio.wait_for(loop.run_in_executor(None, _pg_ping), timeout=10.0)
             pg_failures = 0
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - counted; three in a row pages below
             pg_failures += 1
             logger.warning("Watchdog: PostgreSQL ping failed (%d): %s", pg_failures, e)
             if pg_failures in (1, 3, 10) or (pg_failures > 10 and pg_failures % 100 == 0):
@@ -2068,7 +2323,7 @@ async def _watchdog(
 
             await asyncio.wait_for(loop.run_in_executor(None, _redis_ping), timeout=10.0)
             redis_failures = 0
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - counted; three in a row pages below
             redis_failures += 1
             logger.warning("Watchdog: Redis ping failed (%d): %s", redis_failures, e)
             if redis_failures in (1, 3, 10) or (redis_failures > 10 and redis_failures % 100 == 0):
@@ -2080,7 +2335,7 @@ async def _watchdog(
                 # reconcile() pages when a manifest cannot be read, and changes
                 # nothing at all from an incomplete scan.
                 _log_reconcile(await scheduler.reconcile())
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one tick's job; the next tick retries
                 logger.warning("Watchdog: schedule reconciliation failed: %s", e)
 
         # Approval driver (every 2 ticks = 1 minute). A decided approval that
@@ -2101,66 +2356,11 @@ async def _watchdog(
                 reaped = await loop.run_in_executor(None, _cleanup_stale_runs, config.tenant_id)
                 if reaped:
                     logger.warning("Watchdog: reaped %d zombie agent runs", reaped)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one tick's job; the next tick retries
                 logger.warning("Watchdog: zombie reaper failed: %s", e)
 
         # Failure-mode detectors — read-only, alerts only, never kills runs.
-        # Disabled via ROBOTHOR_DETECTORS_ENABLED=0.
-        # Runaway burn: every 4 ticks = 2 minutes
-        if tick_count % 4 == 0:
-            try:
-                from robothor.engine.detectors import runaway_burn_detector
-
-                fired = await runaway_burn_detector()
-                if fired:
-                    logger.info("Detectors: %d runaway-burn alerts fired", fired)
-            except Exception as e:
-                logger.debug("Detectors: runaway_burn check failed: %s", e)
-
-        # Repeat errors + tool degradation: every 10 ticks = 5 minutes
-        if tick_count % 10 == 0:
-            try:
-                from robothor.engine.detectors import (
-                    repeat_error_detector,
-                    tool_degradation_detector,
-                )
-
-                fired = await repeat_error_detector(tenant_id=config.tenant_id)
-                if fired:
-                    logger.info("Detectors: %d repeat-error alerts fired", fired)
-                fired = await tool_degradation_detector()
-                if fired:
-                    logger.info("Detectors: %d tool-degradation alerts fired", fired)
-            except Exception as e:
-                logger.debug("Detectors: pattern checks failed: %s", e)
-
-        # Zombie runner: every 20 ticks = 10 minutes
-        if tick_count % 20 == 0:
-            try:
-                from robothor.engine.detectors import zombie_runner_detector
-
-                fired = await zombie_runner_detector()
-                if fired:
-                    logger.info("Detectors: %d zombie-runner alerts fired", fired)
-            except Exception as e:
-                logger.debug("Detectors: zombie_runner check failed: %s", e)
-
-        # Workflow health (stuck runs + failure streaks): every 20 ticks = 10 min
-        if tick_count % 20 == 0:
-            try:
-                from robothor.engine.detectors import (
-                    stuck_workflow_detector,
-                    workflow_failure_streak_detector,
-                )
-
-                fired = await stuck_workflow_detector()
-                if fired:
-                    logger.info("Detectors: %d stuck-workflow alerts fired", fired)
-                fired = await workflow_failure_streak_detector()
-                if fired:
-                    logger.info("Detectors: %d workflow-failure-streak alerts fired", fired)
-            except Exception as e:
-                logger.debug("Detectors: workflow health checks failed: %s", e)
+        await _run_tick_detectors(tick_count, config.tenant_id)
 
         # Sustained outages (dead tool dependency, primary model unreached):
         # every 2h on wall-clock, first pass ~10 min after boot. These read
@@ -2194,7 +2394,7 @@ async def _watchdog(
                 deleted = await loop.run_in_executor(None, cleanup_stale_sessions)
                 if deleted:
                     logger.info("Watchdog: cleaned up %d stale chat sessions", deleted)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - daily job; logged, the next day retries
                 logger.warning("Watchdog: chat session cleanup failed: %s", e)
 
             try:
@@ -2212,7 +2412,7 @@ async def _watchdog(
             except TimeoutError:
                 logger.warning("Watchdog: retention cleanup timed out after 300s")
                 _record_watchdog_event("retention_timeout", "cleanup exceeded 300s")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - daily job; logged, the next day retries
                 logger.warning("Watchdog: retention cleanup failed: %s", e)
 
         # Chat-message embedding backfill (every 60 ticks = 30 min).
@@ -2225,46 +2425,12 @@ async def _watchdog(
                 embedded = await backfill_chat_embeddings()
                 if embedded:
                     logger.info("Watchdog: backfilled embeddings for %d chat messages", embedded)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - daily job; logged, the next day retries
                 logger.warning("Watchdog: chat embedding backfill failed: %s", e)
 
         # autoDream staleness check (every 20 ticks = 10 min)
         if tick_count % 20 == 0 and tick_count > 20:
-            try:
-                from robothor.engine.autodream import COOLDOWN_SECONDS
-
-                last_run, source = _resolve_last_run()
-                staleness = (time.time() - last_run) if last_run is not None else None
-                decision = _autodream_staleness_decision(
-                    staleness,
-                    _autodream_stale_alerted,
-                    _AUTODREAM_MAX_DEFER_SECONDS,
-                    COOLDOWN_SECONDS,
-                )
-                if decision["reset"]:
-                    _autodream_stale_alerted = False
-                if decision["warn"] and staleness is not None:
-                    logger.warning(
-                        "Watchdog: autoDream stale (last run %.0f min ago, source=%s)",
-                        staleness / 60,
-                        source,
-                    )
-                if decision["alert"] and staleness is not None:
-                    from robothor.engine.delivery import get_telegram_sender
-
-                    sender = get_telegram_sender()
-                    if sender and config.default_chat_id:
-                        hours = int(staleness / 3600)
-                        await sender(
-                            config.default_chat_id,
-                            f"*Watchdog Alert*\n\nautoDream has not run for {hours}h "
-                            f"(source: {source}). Memory consolidation may be stalled.",
-                        )
-                        # Latch only after a delivered page so a transient
-                        # sender outage doesn't suppress the alert.
-                        _autodream_stale_alerted = True
-            except Exception as e:
-                logger.debug("Watchdog: autoDream staleness check failed: %s", e)
+            await _check_autodream_staleness(config)
 
         # Alert after 3 consecutive PG failures
         if pg_failures == 3:
@@ -2277,7 +2443,7 @@ async def _watchdog(
                         config.default_chat_id,
                         "*Watchdog Alert*\n\nPostgreSQL unreachable for 3 consecutive checks.",
                     )
-            except Exception:
+            except Exception:  # noqa: BLE001 - logged at ERROR: the page itself failed
                 # A page that fails silently is worse than no page: the database
                 # outage and the failed alert then look identical from outside —
                 # nothing. The journal is monitored, so ERROR here is the last
@@ -2341,7 +2507,7 @@ async def _curiosity_density_loop(scheduler: Any) -> None:
             await scheduler._run_agent("curiosity-engine")  # noqa: SLF001
         except asyncio.CancelledError:
             return
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the loop must outlive one bad pass
             logger.warning("curiosity-density loop error: %s", e)
 
 
@@ -2484,7 +2650,7 @@ async def _extension_watcher_loop() -> None:
         from robothor.engine.extensions import ExtensionWatcher
 
         await ExtensionWatcher().watch()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a dead watcher only stops hot reload
         logger.debug("Extension watcher exited: %s", e)
 
 
@@ -2523,7 +2689,7 @@ def _resolve_last_run() -> tuple[float | None, str]:
             from datetime import datetime as _dt
 
             return _dt.fromisoformat(_DAEMON_START_TS).timestamp(), "daemon boot"
-        except Exception:
+        except Exception:  # noqa: BLE001 - an unparseable boot stamp means no clock
             return None, "unknown"
     return None, "unknown"
 
@@ -2642,7 +2808,7 @@ async def _autodream_loop(tenant_id: str = "") -> None:
             consecutive_errors = 0
         except asyncio.CancelledError:
             return
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - counted and backed off below
             consecutive_errors += 1
             logger.warning(
                 "autoDream loop error (%d consecutive, next retry in %ds): %s",
@@ -2662,7 +2828,7 @@ def run() -> None:
         # stop and a second one past the echo window is _force_exit(130).
         # Either way: quiet, and zero.
         return
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - top level: log, then exit 1 for systemd
         logger.error("Engine crashed: %s", e, exc_info=True)
         sys.exit(1)
     if exit_code != 0:

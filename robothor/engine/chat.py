@@ -74,12 +74,16 @@ from robothor.engine.chat_store import (
 )
 from robothor.engine.chat_store import (
     clear_session_async,
-    load_all_sessions,
     load_session,
     save_exchange_async,
     save_message_async,
     save_plan_state_async,
 )
+
+# Re-exported on purpose: chat_restore calls it through this module, so tests
+# that patch ``chat.load_all_sessions`` reach the startup restore.
+from robothor.engine.chat_store import load_all_sessions as load_all_sessions
+from robothor.engine.early_done import EarlyRelease, chat_done_event
 from robothor.engine.feature_flags import per_user_sessions_mode
 from robothor.engine.live_inbox import LiveInbox, history_text
 from robothor.engine.models import DeepRunState, PlanState, RunStatus, TriggerType
@@ -88,6 +92,7 @@ from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
+    from robothor.engine.models import AgentRun
     from robothor.engine.runner import AgentRunner
     from robothor.identity import IdentityContext
 
@@ -312,57 +317,25 @@ def get_main_session_key() -> str:
 
 
 def _restore_sessions(config: EngineConfig) -> None:
-    """Restore webchat sessions from PostgreSQL at startup."""
-    try:
-        sessions = load_all_sessions(
-            limit_per_session=MAX_HISTORY,
-            tenant_id=config.tenant_id,
-        )
-        restored = 0
-        for key, data in sessions.items():
-            session = _get_session(key)
-            history = data.get("history", [])
-            if history:
-                session.history = history
-            model = data.get("model_override")
-            if model:
-                session.model_override = model
-            # Hydrate pending plan if present and not expired
-            plan_data = data.get("plan_state")
-            if plan_data and isinstance(plan_data, dict):
-                plan = PlanState(
-                    plan_id=plan_data.get("plan_id", ""),
-                    plan_text=plan_data.get("plan_text", ""),
-                    original_message=plan_data.get("original_message", ""),
-                    status=plan_data.get("status", "pending"),
-                    created_at=plan_data.get("created_at", ""),
-                    exploration_run_id=plan_data.get("exploration_run_id", ""),
-                    approval_request_id=plan_data.get("approval_request_id", ""),
-                    rejection_feedback=plan_data.get("rejection_feedback", ""),
-                    plan_hash=plan_data.get("plan_hash", ""),
-                    task_context=plan_data.get("task_context", {}),
-                    creator_sender_info=plan_data.get("creator_sender_info"),
-                    deep_plan=plan_data.get("deep_plan", False),
-                    revision_count=plan_data.get("revision_count", 0),
-                    revision_history=plan_data.get("revision_history", []),
-                    execution_run_id=plan_data.get("execution_run_id", ""),
-                )
-                if plan.status == "pending" and not _plan_is_expired(plan):
-                    session.active_plan = plan
-                    logger.info("Restored pending plan %s for session %s", plan.plan_id, key)
-            restored += 1
-        if restored:
-            logger.info("Restored %d chat sessions from DB", restored)
-    except Exception as e:
-        logger.warning("Failed to load persisted webchat sessions: %s", e)
+    """Restore webchat sessions from PostgreSQL at startup (``chat_restore``)."""
+    from robothor.engine.chat_restore import apply_restored_sessions, load_persisted_sessions
+
+    sessions = load_persisted_sessions(config)
+    if sessions is not None:
+        apply_restored_sessions(sessions)
 
 
-def init_chat(runner: AgentRunner, config: EngineConfig) -> None:
-    """Initialize module with shared runner and config. Called once from daemon."""
+def init_chat(runner: AgentRunner, config: EngineConfig, restore: bool = True) -> None:
+    """Initialize module with shared runner and config. Called once from daemon.
+
+    ``restore=False`` leaves the session restore to the caller: the daemon
+    reads and applies them through ``chat_restore`` before any channel starts.
+    """
     global _runner, _config
     _runner = runner
     _config = config
-    _restore_sessions(config)
+    if restore:
+        _restore_sessions(config)
     logger.info("Chat endpoints initialized")
 
 
@@ -372,9 +345,10 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
-    identity = _resolve_webchat_identity(auth)
+    identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
+    received_at = datetime.now(UTC)  # the user row's stored time (chat_store.save_exchange)
     session_key: str = body.get("session_key", "")
     message: str = body.get("message", "")
 
@@ -429,6 +403,13 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             if len(parts) >= 2:
                 agent_id = parts[1]
 
+            async def send_done(run: AgentRun) -> dict[str, Any]:
+                pending.extend(seal_live_inbox(session, inbox))  # nothing joins a finished run
+                delivered = await delivery_result(run, auth)
+                await queue.put(chat_done_event(run, delivered))
+                return delivered
+
+            early = EarlyRelease(send_done)
             run = await _runner.execute(
                 agent_id=agent_id,
                 message=message,
@@ -445,10 +426,14 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 identity=identity,
                 live_inbox=inbox,
                 user_images=attached.images or None,
+                on_complete=early.callback(),
+                typed_message=attached.typed,
             )
             pending.extend(seal_live_inbox(session, inbox))
 
-            delivered = await delivery_result(run, auth)
+            delivered = (
+                early.result if early.result is not None else await delivery_result(run, auth)
+            )
             final_text = delivered["text"]
             # Always record user message (plus what joined mid-run) in session history
             append_turn(
@@ -460,7 +445,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 
             # Persist to DB (fire-and-forget)
             if final_text and _config:
-                asyncio.create_task(
+                early.spawn(
                     save_exchange_async(
                         session_key,
                         history_text(message, inbox.taken),
@@ -469,7 +454,9 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                         model_override=session.model_override,
                         tenant_id=auth.tenant_id,
                         user_extras=attached.extras,
-                    )
+                        user_at=received_at,
+                    ),
+                    name=f"chat-save:{session_key}",
                 )
 
             # Ingest conversation to memory (fire-and-forget)
@@ -491,22 +478,8 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                     name=f"conv-ingest:{session_key}",
                 )
 
-            # Signal completion with metadata
-            await queue.put(
-                {
-                    "event": "done",
-                    "data": {
-                        **delivered,
-                        "status": run.status.value,
-                        "model": run.model_used,
-                        "input_tokens": run.input_tokens,
-                        "output_tokens": run.output_tokens,
-                        "duration_ms": run.duration_ms,
-                        "total_cost_usd": round(run.total_cost_usd, 4),
-                        "run_id": run.id,
-                    },
-                }
-            )
+            if not early.released:  # signal completion with metadata
+                await queue.put(chat_done_event(run, delivered))
         except asyncio.CancelledError:
             turn = history_text(message, inbox.taken)
             if await deliver_interruption(queue, session, auth, session_key, turn, aborted=True):
@@ -535,7 +508,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 session.active_task = None
 
     # Start agent as background task
-    task = start(session, run_agent, auth, session_key, body.get("request_id"))
+    task = start(session, run_agent, auth, session_key, body.get("request_id"), steerable=True)
     register_live_inbox(session, auth, inbox)  # before any await: see chat_live.py
 
     async def sse_generator() -> AsyncGenerator[str, None]:
@@ -570,22 +543,14 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 
 @router.get("/history")
 async def chat_history(request: Request, session_key: str = "", limit: int = 50) -> JSONResponse:
-    """Return conversation history for a session."""
+    """Return conversation history for a session (a page of it: chat_history_page.py)."""
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
-    messages = session.history[-limit:] if limit > 0 else session.history
+    from robothor.engine.chat_history_page import history_response
 
-    from robothor.engine.runtime.chat_control import recovery_scope
-
-    return JSONResponse(
-        {
-            "sessionKey": session_key,
-            "messages": messages,
-            "recoveryScope": recovery_scope(auth, session_key),
-        },
-        headers={"Cache-Control": "no-store"},
-    )
+    body = await history_response(session.history, session_key, limit, request.query_params, auth)
+    return JSONResponse(body, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/inject")
@@ -736,7 +701,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
             {"error": "Chat not initialized", "request_admitted": False}, status_code=503
         )
     auth = _auth_context(request)
-    identity = _resolve_webchat_identity(auth)
+    identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -912,7 +877,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
-    identity = _resolve_webchat_identity(auth)
+    identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -1195,7 +1160,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
-    identity = _resolve_webchat_identity(auth)
+    identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -1364,30 +1329,13 @@ async def plan_status(request: Request, session_key: str = "") -> JSONResponse:
 # ─── Deep Mode Endpoints ─────────────────────────────────────────────
 
 
-def _deep_to_dict(deep: DeepRunState) -> dict[str, Any]:
-    """Serialize DeepRunState for JSON responses."""
-    return {
-        "deep_id": deep.deep_id,
-        "query": deep.query,
-        "status": deep.status,
-        "started_at": deep.started_at,
-        "completed_at": deep.completed_at,
-        "response": deep.response,
-        "execution_time_s": deep.execution_time_s,
-        "cost_usd": deep.cost_usd,
-        "context_chars": deep.context_chars,
-        "trajectory_file": deep.trajectory_file,
-        "error": deep.error,
-    }
-
-
 @router.post("/deep/start", response_model=None)
 async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
     """Start deep reasoning: call RLM directly, return SSE stream with progress."""
     if _runner is None or _config is None:
         return JSONResponse({"error": "Chat not initialized"}, status_code=503)
     auth = _auth_context(request)
-    identity = _resolve_webchat_identity(auth)
+    identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
     session_key: str = body.get("session_key", "")
@@ -1547,7 +1495,7 @@ async def deep_status(request: Request, session_key: str = "") -> JSONResponse:
         return JSONResponse(
             {
                 "active": True,
-                "deep": _deep_to_dict(session.active_deep),
+                "deep": session.active_deep.to_dict(),
             }
         )
     return JSONResponse({"active": False, "deep": None})

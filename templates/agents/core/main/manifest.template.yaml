@@ -28,10 +28,23 @@ tools_opt_in:
   - claude_code_wait
   - claude_code_followup
   - claude_code_cancel
+  # Clone an allowlisted remote (ROBOTHOR_CODING_REMOTES) and, for the owner,
+  # push a verified job to that remote and open a draft PR.
+  - claude_code_repo_prepare
+  - claude_code_publish
   - pr_review_intake
   - pr_review_status
   # Starts declared workflows when the operator asks; RBAC denies it to user/member.
   - run_workflow
+
+# main is deferred (it has every default tool), so these everyday tools are
+# always shown to the model rather than found through tool_search each time.
+tools_eager:
+  - list_tasks
+  - get_task
+  - update_task
+  - gws_gmail_search
+  - gws_gmail_get
 
 task_protocol: true
 status_file: brain/memory/main-status.md

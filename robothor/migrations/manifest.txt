@@ -185,3 +185,7 @@ crm/161_session_rotation_grace.sql
 crm/162_agent_runs_started_at.sql
 crm/163_audit_log_tenant.sql
 crm/164_tenant_plugin_grants.sql
+crm/163_step_type_budget_stop.sql
+crm/164_step_type_steer.sql
+crm/165_coding_publish_denies.sql
+crm/166_entity_recall_definer.sql

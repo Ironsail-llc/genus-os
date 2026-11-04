@@ -7,6 +7,7 @@ import { useSession } from "next-auth/react";
 import { PageHeader } from "@/components/business/page-header";
 import { EmptyState } from "@/components/business/empty-state";
 import { Button } from "@/components/ui/button";
+import { TrustBadge } from "@/components/plugins/trust-badge";
 import { PluginInstallCard } from "@/components/views/settings/plugins-install";
 import {
   type ChildTenant,
@@ -15,6 +16,7 @@ import {
 import { refusalSentence, unreachableSentence } from "@/lib/bridge/hop-sentence";
 import { useRowActions } from "@/lib/bridge/row-actions";
 import { BRIDGE_UNREACHABLE, useBridgePoll } from "@/lib/bridge/use-bridge-poll";
+import { pluginTrust, type Trust } from "@/lib/plugins/trust";
 import { isRootAtHome } from "@/lib/tenant-session";
 
 /**
@@ -29,11 +31,14 @@ import { isRootAtHome } from "@/lib/tenant-session";
  *
  * Six rules, each of which the bridge's shape makes it easy to get wrong:
  *
- * **The listing's verdict is not rendered.** A row recorded by `sync` carries
- * `verdict: "unscanned"` — nothing looked at it. A pill reading "unscanned" on
- * the screen where third-party code is turned on invites the reading "scanned,
- * and fine" the moment the word changes, and a field that has never carried a
- * judgement is not a judgement. The INSTALL card is the opposite case and shows
+ * **The listing's verdict is not rendered as a word.** A row recorded by `sync`
+ * carries `verdict: "unscanned"` — nothing looked at it. A pill reading
+ * "unscanned" on the screen where third-party code is turned on invites the
+ * reading "scanned, and fine" the moment the word changes, and a field that has
+ * never carried a judgement is not a judgement. The TRUST badge is what the
+ * row shows instead (`lib/plugins/trust.ts`): such a row reads "Unsigned", and
+ * the scan's own words appear only in the drawer behind it, for a row the
+ * installer actually scanned. The INSTALL card is the opposite case and shows
  * its verdict in full: that one is a measurement of the exact bytes about to be
  * installed, taken before anything is.
  *
@@ -163,6 +168,8 @@ export interface Plugin {
   source: PluginSource | null;
   /** Empty lists from an older engine that sends no `assets`. */
   assets: PluginAssets;
+  /** Derived from the older fields when the engine sends no `trust`. */
+  trust: Trust;
   /**
    * What the root tenant forced for this tenant, or null when this tenant
    * decides. An older engine sends nothing, which reads as null.
@@ -283,6 +290,7 @@ export function normalizePlugin(value: unknown): Plugin | null {
     manifest: normalizeManifest(row.manifest),
     source: normalizeSource(row.source),
     assets: normalizeAssets(row.assets),
+    trust: pluginTrust(row),
     forced: row.forced === "on" || row.forced === "off" ? row.forced : null,
   };
 }
@@ -1057,6 +1065,11 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                   >
                     {pill.label}
                   </span>
+                  <TrustBadge
+                    name={plugin.name}
+                    trust={plugin.trust}
+                    testId={`plugin-trust-${plugin.name}`}
+                  />
                   {plugin.drifted ? (
                     <span
                       data-testid={`plugin-drifted-${plugin.name}`}

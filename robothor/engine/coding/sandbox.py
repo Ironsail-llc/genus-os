@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from robothor.engine.coding.env import job_homes_root
 from robothor.engine.coding.runner import MODES
 
 __all__ = [
@@ -46,6 +47,7 @@ __all__ = [
     "build_sandbox_settings",
     "engine_unit_proc_problems",
     "live_workspace",
+    "required",
     "sandbox_problems",
     "secret_paths",
     "unwritable_login_paths",
@@ -139,11 +141,21 @@ def live_workspace() -> Path | None:
         return None
 
 
+def required() -> bool:
+    """False only when ``ROBOTHOR_CODING_SANDBOX`` is ``off``; anything else fails closed."""
+    from robothor.settings import get_settings
+
+    return str(get_settings().coding.sandbox or "").strip().lower() != "off"
+
+
 def secret_paths(home: Path, workspace: Path | None) -> list[str]:
     """Every path a job may not read, absolute."""
     found = [str(home / rel) for rel in _HOME_SECRETS]
     if workspace is not None:
         found += [str(workspace / rel) for rel in _WORKSPACE_SECRETS]
+    homes = job_homes_root()
+    if homes is not None:
+        found.append(str(homes))  # every job's private home, its own included
     found += list(_SYSTEM_SECRETS)
     return list(dict.fromkeys(found))
 

@@ -91,6 +91,32 @@ Both of those change with the release described at the end of this page. Until
 then, for anything you would not want an agent to be able to echo, use
 `genus vault set` on the box.
 
+### Handing the default chat agent a credential
+
+An owner or admin can paste a key to the default chat agent and it stores it
+with `vault_set`, proves it with `vault_test` and answers with the fingerprint,
+without the agent's manifest declaring `v2.credentials: operator`. Only a
+top-level conversation a person started counts, and only a person the channel
+verified as registered (an unregistered Telegram sender the bot treats as the
+owner is refused); a member, a sub-agent and a scheduled run are refused, and
+the refusal names the gate. The agent reads only what the person typed that
+turn, not a file they attached, a message they quoted or one they forwarded; it
+stores a value only when that text carries it as a whole, credential-sized
+token beside the name of the key it is for, and deletes or lists only when that
+text asks. So an instruction injected into something the agent read, a file or
+a quote can make it store, remove or list only what the person typed. A pasted
+value is redacted even when the hand-over is refused or the store fails, and
+run checkpoints are redacted when written and when read back. Once stored, the
+exact value is redacted from history, stored chat messages, the run's task text
+and logs, shape or no shape, and the live tool stream never carries a
+`vault_set` argument, including a call made through `tool_call` on a deferred
+run. Payment cards stay out of chat: the agent offers the secure enrollment
+link instead. The rules are in [Configuration](../configuration.md).
+
+The Helm's Settings › Secrets page can remove a vault row (**Remove**, then
+**Remove from vault**); a copy in the environment, if there is one, is then
+what readers get.
+
 ## Rotation
 
 Rotation is a vault write, and readers pick it up without a redeploy —

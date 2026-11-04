@@ -185,7 +185,7 @@ Request (any channel)
     │
     X-Tenant-Id header (default: from ROBOTHOR_DEFAULT_TENANT env var)
     │
-    TenantMiddleware (Bridge) → request.state.tenant_id
+    BridgeMiddleware (tenant step) → request.state.tenant_id
     │
     └─ All DAL queries include: AND tenant_id = %s
        All INSERTs include: tenant_id column

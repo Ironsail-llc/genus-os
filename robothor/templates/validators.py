@@ -12,12 +12,15 @@ Post-install:
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from robothor.templates.safety import default_workspace_root
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -216,8 +219,8 @@ def validate_post_install(
 
         registry = ToolRegistry()
         registered_tools = set(registry._schemas.keys())
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - check D then reports itself as skipped
+        logger.warning("Tool registry unavailable, skipping the registered-tools check: %s", e)
 
     results = validate_agent(manifest, all_manifests, registered_tools, repo_root=repo_root)
     messages = [

@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-498 settings in 18 groups.
+509 settings in 18 groups.
 
 ## autonomy
 
@@ -70,9 +70,12 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_CODING_GIT_EMAIL` | str | _(empty)_ | no | no | unreleased | Author email on coding-job commits. Empty uses the target repository's user.email, then a generic placeholder address. |
 | `ROBOTHOR_CODING_GIT_NAME` | str | _(empty)_ | no | no | unreleased | Author name on coding-job commits. Empty uses the target repository's user.name, then a generic agent name. |
 | `ROBOTHOR_CODING_MAX_CONCURRENT` | int | `2` | `robothor-engine` | no | unreleased | Coding jobs one tenant may run at once; more wait as `queued`. |
+| `ROBOTHOR_CODING_REMOTES` | str | _(empty)_ | no | no | unreleased | Comma-separated remotes claude_code_repo_prepare may clone and claude_code_publish may push to: owner/repo (a GitHub repository) or a full clone URL. Empty refuses every remote. |
 | `ROBOTHOR_CODING_REPO_ROOTS` | str | _(empty)_ | no | no | unreleased | Path-separated directories a coding job's repo_path must sit under. REQUIRED: empty refuses every claude_code_start. The live workspace itself, the service user's home itself, and any directory containing either are refused even under a root. The job still works only in its own worktree and never on main/master. |
 | `ROBOTHOR_CODING_RETENTION_DAYS` | int | `7` | no | no | unreleased | Days a finished coding job's worktree, private config directory and genus/cc-* branch are kept before the reaper removes them. Merge or push a job's branch before then. |
+| `ROBOTHOR_CODING_SANDBOX` | str | `required` | no | no | unreleased | `required` (the default) runs a coding job's Bash inside Claude Code's sandbox and fails the job where the sandbox cannot start. `off` sends no sandbox settings, for hosts that cannot run bubblewrap (containers without user namespaces): the job's Bash then runs with the engine's own access, and only the Edit/Write and secret-path permission rules still apply. Any other value is treated as `required`. |
 | `ROBOTHOR_CODING_VERIFY_TIMEOUT` | float | `900.0` | no | no | unreleased | Seconds a coding job's acceptance verify_command may run before it is killed and counted as a failure. |
+| `ROBOTHOR_CODING_WORKSPACE` | str | _(empty)_ | no | no | unreleased | Directory claude_code_repo_prepare clones repositories into, one per remote at <dir>/<owner>/<repo>, created on first use. Empty turns claude_code_repo_prepare off. When set it is also a repo root for claude_code_start, in addition to ROBOTHOR_CODING_REPO_ROOTS. |
 | `ROBOTHOR_CODING_WORKTREE_ROOT` | str | _(empty)_ | no | no | unreleased | Where coding jobs' git worktrees are created, one directory per job. Empty means <workspace>/.genus/worktrees. Must be writable by the engine: under the shipped unit that means inside the workspace or a ReadWritePaths= drop-in. |
 
 ## pr_review
@@ -233,11 +236,13 @@ Cloud model routing, budgets and the failure controls around them.
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `OPENROUTER_API_BASE` | str | _(empty)_ | no | no | unreleased | OpenAI-compatible endpoint every `openrouter/*` model is dialled at, instead of https://openrouter.ai/api/v1. Point it at a corporate gateway, a recording proxy, or the acceptance gate's mock server. Declared here so the knob is documented and inventoried, but litellm reads the ENVIRONMENT VARIABLE itself -- setting this key in config.yaml alone changes nothing. |
+| `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` | int | `3` | no | no | unreleased | The fewest agent-loop iterations between two compactions of one run. A context that grows by one tool result must not be summarised again on the next iteration; the hard context ceiling is still enforced every iteration. |
 | `ROBOTHOR_COMPACTION_PROTECT_FIRST_N` | int | `3` | no | no | unreleased | How many messages at the head of a conversation compaction may never summarise away. The statement of the task lives there, and a run that loses it invents the shape of its own output. |
 | `ROBOTHOR_COMPACTION_TRIGGER_TOKENS` | int | `80000` | no | no | legacy | Absolute prompt-token budget above which a run compacts its context. |
+| `ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS` | int | `10` | no | no | unreleased | How many of an agent's latest runs seed the tools it is always shown when its schemas are deferred: the tools it called in them join the core set. 0 keeps the core to the platform's fixed list. |
 | `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` | int | `40` | no | no | legacy | Number of tools above which schemas are deferred behind tool search rather than sent in full on every request. |
 | `ROBOTHOR_EAGER_TOOL_COMPRESSION` | bool | `false` | `robothor-engine` | no | legacy | Fleet default for compressing tool results as soon as they land rather than at the next compaction. A manifest setting wins over it. |
-| `ROBOTHOR_HOURLY_COST_CAP_USD` | float | `5.0` | no | no | legacy | Fleet-wide spend ceiling per hour. The engine stops dispatching new runs once the rolling hour exceeds it. |
+| `ROBOTHOR_HOURLY_COST_CAP_USD` | float | `5.0` | no | no | legacy | Fleet-wide spend per rolling hour that is reported, checked when fleet admission is on. A scheduled run admitted past it carries a budget_stop step (mode observe) and a warning alert is raised; the cap never defers or stops a run. 0 turns the report off. |
 | `ROBOTHOR_LAST_RESORT_MODEL` | str | _(empty)_ | `robothor-engine` | no | legacy | Model appended to every agent's fallback chain so a run always has somewhere to land when the cloud providers are down. Manifest validation checks each chain ends here. |
 | `ROBOTHOR_MODEL_BREAKER_ALERT_DEDUP` | int | `21600` | `robothor-engine` | no | legacy | Seconds between repeat alerts for the same tripped model. |
 | `ROBOTHOR_MODEL_BREAKER_COOLDOWN` | int | `600` | `robothor-engine` | no | legacy | Seconds an opened model breaker stays open before a trial request. |
@@ -250,6 +255,7 @@ Cloud model routing, budgets and the failure controls around them.
 | `ROBOTHOR_RLM_MAX_TIMEOUT` | int | `240` | `robothor-engine` | no | legacy | Wall-clock seconds a single recursive language model call may take. |
 | `ROBOTHOR_RLM_ROOT_MODEL` | str | `openrouter/anthropic/claude-sonnet-4.6` | `robothor-engine` | no | legacy | Model the recursive language model tool runs its root call on. |
 | `ROBOTHOR_RLM_SUB_MODEL` | str | `openrouter/anthropic/claude-haiku-4.5` | `robothor-engine` | no | legacy | Model the recursive language model tool runs child calls on. |
+| `ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS` | int | `5000000` | `robothor-engine` | no | legacy | Per-run token count (input plus output) at which the runaway guard records a budget_stop step (mode observe) and pages critical, once per run. The run continues. The engine takes the number from the environment variable. |
 | `ROBOTHOR_VISION_BATCH_CONCURRENCY` | int | `4` | no | no | unreleased | Ceiling on the vision calls `analyze_image` keeps in flight at once. An agent may ask for fewer and never for more, so an operator on a single-GPU box can hold it at 1 or 2 without an agent overruling them. Four is what one local VLM serves without queueing into its own timeout; a remote backend takes more, up to the platform's own 16. |
 | `ROBOTHOR_VISION_BATCH_DEADLINE` | float | `600.0` | no | no | unreleased | Seconds one whole `analyze_image` call gets. Images not reached by then come back as errors rather than answers. Without it a backend that hangs for EVERY image would hold a single tool call open for the per-image timeout times 200 divided by the concurrency. |
 | `ROBOTHOR_VISION_BATCH_MAX_CHARS` | int | `3500` | no | no | unreleased | How much of an `analyze_image` result comes back inline. Past it the full per-image table is written to a JSON file under <workspace>/.robothor/analyze_image/ and the result carries the path, the first rows and the totals. The default sits just under the 4000-character cap the step writer truncates a tool result at, so what the agent reads is also what the run record keeps -- and a larger value is clamped back to 3800 for that reason, rather than silently flattening the run's per-image record. 0 or less means the default; there is no way to turn the bound off, because the result it bounds reached 108,000 tokens in one message before it existed. |
@@ -290,6 +296,8 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_HOOKS_PORT` | int | `18801` | next run | no | unreleased | Port the standalone webhook receiver (python -m robothor.engine.hooks_server) listens on. |
 | `ROBOTHOR_HOST_EXEC_SOCKET` | str | _(empty)_ | `robothor-engine` | no | legacy | Unix socket of the host-execution service (robothor-host-exec). The service binds it (empty means /run/robothor-host/exec.sock) and the engine's main agent sends owner commands to it; empty in the engine means host execution is not offered and exec stays in the engine's own sandbox. |
 | `ROBOTHOR_IMPORTANCE_THRESHOLD` | float | `0.3` | `robothor-engine` | no | legacy | Minimum importance score for an extracted fact to be stored. |
+| `ROBOTHOR_LANE_BACKGROUND_YIELD_MS` | int | `200` | `robothor-engine` | no | unreleased | How long a background run asking for a slot holds back while an interactive run is waiting for one. 0 disables the yield. |
+| `ROBOTHOR_LANE_HOOKS_LIMIT` | int | `8` | `robothor-engine` | no | unreleased | How many runs of concurrent hook workflows (a hook trigger with `concurrent: true`) may execute at once. They have their own lane, so overlapping events neither queue behind background runs nor take their slots. Never below 1. Read at the first run. |
 | `ROBOTHOR_LOCAL_GATE_WAIT_SECONDS` | int | `120` | no | no | legacy | How long a local-tier run waits for a GPU slot before giving up. |
 | `ROBOTHOR_LOCAL_MAX_CONCURRENT` | int | `0` | no | no | legacy | Concurrency ceiling while on the local tier. 0 lets the host profile derive one from VRAM and core count. |
 | `ROBOTHOR_LOCAL_PACE_ALL_C` | int | `85` | no | no | legacy | GPU temperature (C) at which all local work is paced down. |
@@ -299,6 +307,8 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_MAIN_SESSION_KEY` | str | `agent:main:primary` | `robothor-engine` | no | legacy | Session key of the operator's primary conversation, which channel deliveries are dual-written into. |
 | `ROBOTHOR_MANIFEST_ALERT_DEDUP` | int | `3600` | `robothor-engine` | no | legacy | Seconds between repeat alerts about the same broken manifest. |
 | `ROBOTHOR_MAX_CONCURRENT_AGENTS` | int | `3` | no | no | legacy | How many agent runs may execute at once. |
+| `ROBOTHOR_MAX_CONCURRENT_BACKGROUND` | int | `2` | `robothor-engine` | no | unreleased | How many background runs (cron, hooks, workflows, everything without a person waiting) may execute at once. Never below 1: 0 is read as 1, not as uncapped. A cron run or workflow takes its slot before its own timeout starts, so time queued is not counted against it. Read at the first run. |
+| `ROBOTHOR_MAX_CONCURRENT_INTERACTIVE` | int | `0` | `robothor-engine` | no | unreleased | How many interactive runs (Telegram, webchat, Slack, plugin channels, IDE, CLI) may execute at once. 0, the default, is uncapped: interactive turns are never queued. A cap queues a turn with no deadline while others hold the slots, including runs waiting on ask_user. Read at the first run. |
 | `ROBOTHOR_MAX_CONCURRENT_SPAWNS` | int | `10` | no | no | legacy | How many sub-agent spawns may be in flight at once. |
 | `ROBOTHOR_MAX_ITERATIONS` | int | `20` | no | no | legacy | Default ceiling on tool-call iterations within one agent run. |
 | `ROBOTHOR_MAX_SPAWN_BATCH` | int | `10` | no | no | legacy | Largest number of sub-agents one parent may spawn in a single batch. |
@@ -388,6 +398,7 @@ Who may reach the bridge and the dashboard, and how that is proven.
 | `GENUS_AUTH_ENFORCE` | bool | `false` | `robothor-bridge`, `robothor-app` | no | legacy | One-way compatibility switch that turns identity checks on. It never relaxes the existing role_permissions policy. |
 | `GENUS_AUTH_SIGNING_KEY` | str | _(unset)_ | `robothor-bridge`, `robothor-app` | yes | legacy | Key session tokens are signed with; at least 32 bytes. Required in production, where startup fails without it. |
 | `GENUS_BRIDGE_SSO_SECRET` | str | _(unset)_ | `robothor-bridge`, `robothor-app` | yes | legacy | Shared secret the dashboard and bridge exchange SSO assertions with. The two must match or every sign-in is refused. |
+| `GENUS_CHAT_AGENT_CACHE_TTL_MS` | int | `30000` | `robothor-app` | no | 1.123.0 | How long (milliseconds) the DASHBOARD keeps a caller's agent listing when checking that a chat message may be sent to the agent it names. Kept per dashboard instance and per caller, and only for a listing the bridge served; any manifest or agent change made through the dashboard forgets it. An agent made unchattable some other way stays addressable for at most this long. 0 asks the bridge on every message. |
 | `GENUS_DASHBOARD_TRUSTED_PROXIES` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Comma-separated addresses or CIDR ranges the DASHBOARD treats as its own edge when reading X-Forwarded-For. It walks that list from the right and forwards the first hop that is not one of these as X-Client-IP. Empty trusts no hop and sends no header at all, so the bridge falls back to its peer address; prefer a /32 over a pod CIDR, which would cover every workload in the namespace. |
 | `GENUS_ENVIRONMENT` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Deployment environment. 'production' makes the auth preconditions hard requirements instead of warnings. Also read from `ROBOTHOR_ENVIRONMENT`. |
 | `GENUS_INSECURE_DEV_MODE` | bool | `false` | `robothor-bridge`, `robothor-app` | no | legacy | Skip authentication for local development. Rejected outright in a production environment or on any non-loopback bind address. |

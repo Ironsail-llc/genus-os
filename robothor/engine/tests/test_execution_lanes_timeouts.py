@@ -1,0 +1,247 @@
+"""Time queued for a lane slot is not run time.
+
+The scheduler wraps a cron run in a safety ``asyncio.timeout`` (the agent's
+timeout plus grace), and a workflow wraps its steps in ``wf.timeout_seconds``.
+If the lane slot were taken inside those clocks, a healthy run queued behind a
+burst of background work would be cancelled for waiting, and the scheduler's
+timeout would count toward its circuit breaker. So both take the slot first.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from robothor.engine import lanes
+from robothor.engine.lanes import ExecutionLanes, Lane
+
+
+@pytest.fixture
+def pool(monkeypatch):
+    pool = ExecutionLanes(interactive_limit=0, background_limit=1, yield_ms=0)
+    monkeypatch.setattr(lanes, "_LANES", pool)
+    yield pool
+    monkeypatch.setattr(lanes, "_LANES", None)
+
+
+@pytest.fixture
+def clock_entries(monkeypatch):
+    """Record the background lane's state each time a timeout clock starts."""
+    real_timeout = asyncio.timeout
+    entries: list[dict[str, int]] = []
+
+    def recording_timeout(delay):
+        snap = lanes.get_lanes().snapshot()["background"]
+        entries.append({"active": snap["active"], "waiting": snap["waiting"]})
+        return real_timeout(delay)
+
+    monkeypatch.setattr(asyncio, "timeout", recording_timeout)
+    return entries
+
+
+def _scheduler(monkeypatch, execute):
+    import robothor.engine.scheduler as sched_mod
+    from robothor.engine.scheduler import CronScheduler
+
+    s = CronScheduler.__new__(CronScheduler)
+    s.config = MagicMock(tenant_id="default")
+    s.runner = MagicMock()
+    monkeypatch.setattr("robothor.engine.leader.is_leader", lambda: True)
+    monkeypatch.setattr(sched_mod, "try_acquire", AsyncMock(return_value=True))
+    monkeypatch.setattr(sched_mod, "release", AsyncMock())
+    monkeypatch.setattr(sched_mod, "admit", lambda *a, **k: True)
+    monkeypatch.setattr(sched_mod, "register", lambda *a, **k: None)
+    monkeypatch.setattr(sched_mod, "complete", lambda *a, **k: None)
+    s._circuit_breaker_tripped = MagicMock(return_value=False)
+    s._record_timeout = MagicMock()
+    s._execute_and_deliver = execute
+    return s
+
+
+class TestTheSchedulerClockStartsAfterTheSlot:
+    async def test_a_queued_cron_run_does_not_start_its_safety_clock(
+        self, pool, clock_entries, monkeypatch
+    ):
+        ran = asyncio.Event()
+
+        async def execute(*args, **kwargs):
+            ran.set()
+
+        s = _scheduler(monkeypatch, execute)
+        agent = MagicMock(timeout_seconds=1)
+        await pool.acquire(Lane.BACKGROUND)  # the lane is full
+        task = asyncio.create_task(s._run_scheduled("example-agent", "example-agent", agent, "c"))
+        await asyncio.sleep(0.05)
+        assert clock_entries == [], "the safety clock started while the run was queued"
+        assert pool.snapshot()["background"]["waiting"] == 1
+
+        pool.release(Lane.BACKGROUND)
+        await asyncio.wait_for(task, timeout=1.0)
+        assert ran.is_set()
+        # The clock started with this run already holding the slot.
+        assert clock_entries[0] == {"active": 1, "waiting": 0}
+        s._record_timeout.assert_not_called()
+        assert pool.snapshot()["background"]["active"] == 0
+
+    async def test_the_run_inside_takes_no_second_slot(self, pool, monkeypatch):
+        seen: list[int] = []
+
+        class FakeRunner:
+            @lanes.lane_gated
+            async def execute(self, agent_id, message, trigger_type=None):
+                seen.append(pool.snapshot()["background"]["active"])
+
+        runner = FakeRunner()
+
+        async def execute(*args, **kwargs):
+            from robothor.engine.models import TriggerType
+
+            await runner.execute("example-agent", "m", trigger_type=TriggerType.CRON)
+
+        s = _scheduler(monkeypatch, execute)
+        await asyncio.wait_for(
+            s._run_scheduled("example-agent", "example-agent", MagicMock(timeout_seconds=1), "c"),
+            timeout=1.0,
+        )
+        assert seen == [1]
+
+
+def _one_step_workflow_engine(tmp_path, *, timeout_seconds: int):
+    """A workflow engine holding one single-step workflow, `test-wf`."""
+    from robothor.engine.config import EngineConfig
+    from robothor.engine.models import WorkflowDef, WorkflowStepDef, WorkflowStepType
+    from robothor.engine.workflow import WorkflowEngine
+
+    engine = WorkflowEngine(
+        EngineConfig(workspace=tmp_path, manifest_dir=tmp_path / "agents"), runner=MagicMock()
+    )
+    step = WorkflowStepDef(id="t", type=WorkflowStepType.TRANSFORM, transform_expr="value")
+    engine._workflows["test-wf"] = WorkflowDef(
+        id="test-wf", name="Test WF", steps=[step], timeout_seconds=timeout_seconds
+    )
+    return engine
+
+
+class TestTheWorkflowClockStartsAfterTheSlot:
+    async def test_a_queued_workflow_does_not_start_its_timeout(
+        self, pool, clock_entries, tmp_path
+    ):
+        engine = _one_step_workflow_engine(tmp_path, timeout_seconds=1)
+        engine._persist_run_start = MagicMock()
+        engine._persist_run_end = MagicMock()
+        engine._persist_step = MagicMock()
+
+        await pool.acquire(Lane.BACKGROUND)
+        task = asyncio.create_task(engine.execute("test-wf"))
+        await asyncio.sleep(0.05)
+        assert clock_entries == [], "the workflow timeout started while it was queued"
+
+        pool.release(Lane.BACKGROUND)
+        run = await asyncio.wait_for(task, timeout=1.0)
+        assert run.status.value == "completed"
+        assert clock_entries[0] == {"active": 1, "waiting": 0}
+
+
+class _RecordingConn:
+    """A connection that records each statement, whitespace-normalised."""
+
+    def __init__(self, log: list[tuple[str, Any]]) -> None:
+        self._log = log
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def cursor(self):
+        log = self._log
+
+        class _Cur:
+            rowcount = 1
+
+            def execute(self, sql, params=None):
+                log.append((" ".join(sql.split()), params))
+
+            def fetchone(self):
+                return None
+
+            def fetchall(self):
+                return []
+
+        return _Cur()
+
+    def commit(self):
+        return None
+
+
+def _run_writes(log: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
+    return [(sql, p) for sql, p in log if "workflow_runs " in sql or "workflow_runs(" in sql]
+
+
+class TestAQueuedWorkflowIsNotYetRunning:
+    """A workflow waiting for its lane slot is recorded as pending, with no start
+    time, so the stuck-run alert, the reaper and duration_ms never read time
+    queued as time running."""
+
+    async def test_the_row_is_pending_until_the_slot_is_taken(self, pool, tmp_path, monkeypatch):
+        log: list[tuple[str, Any]] = []
+        monkeypatch.setattr(
+            "robothor.db.connection.get_connection", lambda *a, **k: _RecordingConn(log)
+        )
+        engine = _one_step_workflow_engine(tmp_path, timeout_seconds=5)
+        engine._persist_step = MagicMock()
+
+        await pool.acquire(Lane.BACKGROUND)  # the lane is full
+        task = asyncio.create_task(engine.execute("test-wf"))
+        await asyncio.sleep(0.2)
+
+        writes = _run_writes(log)
+        assert len(writes) == 1, writes
+        sql, params = writes[0]
+        assert sql.startswith("INSERT INTO workflow_runs")
+        assert "pending" in params
+        assert "running" not in params
+        assert not any(isinstance(p, datetime) for p in params), "started_at set while queued"
+
+        released_at = datetime.now(UTC)
+        pool.release(Lane.BACKGROUND)
+        run = await asyncio.wait_for(task, timeout=2.0)
+
+        assert run.status.value == "completed"
+        assert run.started_at is not None and run.started_at >= released_at
+        assert run.duration_ms is not None and run.duration_ms < 200, "queue time counted"
+        marked = [
+            p
+            for sql, p in _run_writes(log)[1:]
+            if sql.startswith("UPDATE workflow_runs") and "running" in (p or ())
+        ]
+        assert marked, "the row never moved to running once the slot was taken"
+        assert any(isinstance(v, datetime) and v >= released_at for v in marked[0])
+
+
+class TestAPendingRowIsReapedAfterACrash:
+    def test_the_reaper_also_closes_pending_rows_left_by_a_dead_engine(self, monkeypatch):
+        """An engine killed while a workflow was queued leaves a pending row."""
+        from robothor.engine import daemon
+
+        log: list[tuple[str, Any]] = []
+        monkeypatch.setattr(
+            "robothor.db.connection.get_connection", lambda *a, **k: _RecordingConn(log)
+        )
+        daemon._cleanup_stale_workflow_runs("test-tenant")
+        updates = [sql for sql, _ in log if sql.startswith("UPDATE workflow_runs")]
+        assert updates
+        assert any("'pending'" in sql and "created_at" in sql for sql in updates), updates
+
+
+class TestZeroMeansUncappedOnlyForInteractive:
+    def test_a_background_limit_of_zero_still_bounds_to_one(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_MAX_CONCURRENT_BACKGROUND", "0")
+        monkeypatch.setattr(lanes, "_LANES", None)
+        assert lanes.get_lanes().snapshot()["background"]["limit"] == 1
+        monkeypatch.setattr(lanes, "_LANES", None)

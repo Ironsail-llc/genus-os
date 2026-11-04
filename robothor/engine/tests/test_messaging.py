@@ -47,7 +47,7 @@ class TestAgentMessenger:
 
     def test_send_stores_then_wakes(self, monkeypatch):
         cm, conn, cur = self._mock_conn()
-        monkeypatch.setattr("robothor.db.connection.get_connection", lambda: cm)
+        monkeypatch.setattr("robothor.db.connection.get_connection", lambda **_kw: cm)
         r = MagicMock()
         m = AgentMessenger(redis_client=r)
 
@@ -62,7 +62,7 @@ class TestAgentMessenger:
         """The WRITE is the success criterion — a wake ping over a lost
         message is the old fabric's failure mode."""
         cm, _, _ = self._mock_conn(fail=True)
-        monkeypatch.setattr("robothor.db.connection.get_connection", lambda: cm)
+        monkeypatch.setattr("robothor.db.connection.get_connection", lambda **_kw: cm)
         r = MagicMock()
         m = AgentMessenger(redis_client=r)
 
@@ -71,7 +71,7 @@ class TestAgentMessenger:
 
     def test_send_succeeds_when_only_the_wake_fails(self, monkeypatch):
         cm, _, _ = self._mock_conn()
-        monkeypatch.setattr("robothor.db.connection.get_connection", lambda: cm)
+        monkeypatch.setattr("robothor.db.connection.get_connection", lambda **_kw: cm)
         r = MagicMock()
         r.publish.side_effect = ConnectionError("redis down")
         m = AgentMessenger(redis_client=r)
@@ -80,7 +80,7 @@ class TestAgentMessenger:
 
     def test_receive_claims_atomically(self, monkeypatch):
         cm, conn, cur = self._mock_conn(rows=[("a", "b", "hi", 1000.0, "", {"k": "v"})])
-        monkeypatch.setattr("robothor.db.connection.get_connection", lambda: cm)
+        monkeypatch.setattr("robothor.db.connection.get_connection", lambda **_kw: cm)
         m = AgentMessenger(redis_client=False)
 
         msgs = m.receive("b", tenant_id="t1")
@@ -94,7 +94,7 @@ class TestAgentMessenger:
 
     def test_send_with_metadata(self, monkeypatch):
         cm, _, cur = self._mock_conn()
-        monkeypatch.setattr("robothor.db.connection.get_connection", lambda: cm)
+        monkeypatch.setattr("robothor.db.connection.get_connection", lambda **_kw: cm)
         m = AgentMessenger(redis_client=False)
         assert m.send("a", "b", "msg", metadata={"key": "val"}) is True
         assert '"key": "val"' in cur.execute.call_args[0][1][5]

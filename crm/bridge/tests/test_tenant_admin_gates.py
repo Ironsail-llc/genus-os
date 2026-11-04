@@ -166,6 +166,7 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     ("PATCH", "/api/controls/{name}"): R,
     ("GET", "/api/health/system"): R,
     ("GET", "/api/secrets"): R,
+    ("DELETE", "/api/secrets/{name}"): R,
     ("GET", "/api/logs/units"): R,
     ("GET", "/api/logs"): R,
     ("GET", "/api/settings/schema"): R,

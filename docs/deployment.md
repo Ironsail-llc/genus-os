@@ -425,6 +425,20 @@ sudo -u postgres psql -d robothor_memory -c "GRANT ALL ON ALL TABLES IN SCHEMA p
 sudo -u postgres psql -d robothor_memory -c "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO robothor"
 ```
 
+#### Connection poolers
+
+The engine and bridge keep their own connection pool and need a session that
+outlives a transaction: each pooled connection is bound to its tenant and given
+pgvector's scan mode once, and later transactions on it rely on both. Connect
+them to PostgreSQL directly, or through a pooler in **session** mode. A
+transaction-mode pooler (PgBouncer's `pool_mode = transaction`, for example)
+hands each transaction to whichever server connection is free, so the tenant
+binding can belong to another tenant and the scan mode can be missing.
+`genus doctor --only db.session_settings` sets a throwaway session setting and
+reads it back across several transactions; it fails, and `genus doctor` exits
+non-zero, when they do not agree, because a tenant binding that may belong to
+another tenant is a broken data boundary.
+
 **Never hand a SQL file to `psql` to create the schema.** The only thing that
 creates tables is the migrator — `genus init` runs it, the compose stack runs it
 as a one-shot service, and you can run it yourself:
@@ -947,7 +961,12 @@ genus doctor --fix --dry-run        # say what --fix would repair
 | `manifests` | every agent manifest satisfies the schema; none is present-but-unreadable |
 | `identity` | an operator is configured in `owner.yaml`; an owner account exists so somebody can sign in |
 | `secrets` | the secrets backend is usable; the JWT signing key resolves; the bridge SSO secret is set where auth is enforced |
+| `budget_stops` | `budget_stops.recent` (info): how many `budget_stop` steps the last 24 hours recorded, by stop and mode. See `docs/BUDGETS_AND_STOPS.md` (repository only) |
 | `host` | the installed systemd units match the repo (wraps `scripts/instance_doctor.sh`) |
+
+Check ids are dotted `<area>.<name>`, for example `db.migrations` (category
+`database`) or `budget_stops.recent` (category `budget_stops`). `--only` takes
+the full id; `--category` takes the category from the table above.
 
 Installed plugins may add their own checks through the `genus.doctor`
 entry-point group. A plugin's check ids must be prefixed with its distribution
@@ -1110,6 +1129,12 @@ anything a spreadsheet would evaluate is prefixed with an apostrophe, so an
 audit detail cannot become a formula or carry a credential off the box. A
 failed export is a real `500` rather than an empty file.
 
+An agent's tool calls are recorded with the agent's id as `actor`, so
+`?actor=<agent id>` is the filter by agent identity; the Helm's Audit page
+offers the fleet's ids in an Agent picker for an operator (the fleet listing is
+operator-only, so an auditor types the id into Actor instead), and the export
+carries the same filter.
+
 **Who sees which rows.** Since migration 163 every `audit_log` row records the
 tenant it happened in — a bridge request's *acting* tenant, else the writing
 process's own. The platform tenant's operator or auditor, **at home**, still
@@ -1259,10 +1284,22 @@ instead of falling back to the root engine.
 | Service | Endpoint | Expected |
 |---------|----------|----------|
 | Engine | `GET /health` on :18800 | `{"status": "ok"}`; `/ready` is the one an orchestrator gates on, and it carries the fleet check |
-| Orchestrator (RAG API) | `GET /health` on :9099 | `{"status": "ok"}` |
+| Orchestrator (RAG API) | `GET /health` on :9099 | `{"status": "ok"}`; `optional.vision` (beside `components`, so it never degrades the dashboard's view) reports whether the last proxied vision call reached the vision service (`available`, `last_error`), without affecting `status` |
 | Bridge | `GET /health` on :9100 | `{"status": "ok"}`; its `/ready` also checks the orchestrator and the SSO secret, and reports the engine without gating on it (see below) |
 | Dashboard | `GET /api/health` on :3004 | 200; `/api/ready` is what the compose healthcheck polls |
 | Vision | `GET /health` on :8600 | `{"status": "ok", "mode": "..."}` |
+
+The engine's `/health` also carries `startup_ms`: how long this process took
+from start to READY=1, or `null` while it is still starting. The same number
+is logged once at startup as `STARTUP <total>ms <step>=<ms> ...`, one entry
+per startup step, so a slow restart names the step that cost it. Steps that do
+not depend on one another (resuming interrupted runs, coding jobs, the manifest
+scan and system-prompt warm-up) run concurrently; the order the rest keep is
+written out at the top of `daemon.main`. The manifest directory is read once
+per startup and shared, the database pool and every installed agent's system
+prompt are warm before READY=1, and webchat sessions are read off the event
+loop and applied before any channel (web, Telegram, Slack, inbound) starts, so
+the first message after a restart sees its history.
 
 ## Verified fleet artifacts
 

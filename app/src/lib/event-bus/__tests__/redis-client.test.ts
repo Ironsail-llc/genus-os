@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mockXrevrange = vi.fn();
 const mockXread = vi.fn();
 const mockXlen = vi.fn();
+const mockXadd = vi.fn();
 const mockQuit = vi.fn();
 const mockConstructor = vi.fn();
 
@@ -13,6 +14,7 @@ vi.mock("ioredis", () => {
     xrevrange = mockXrevrange;
     xread = mockXread;
     xlen = mockXlen;
+    xadd = mockXadd;
     quit = mockQuit;
     constructor(...args: unknown[]) {
       mockConstructor(...args);
@@ -30,6 +32,8 @@ import {
   streamKey,
   closeRedis,
   resolveRedisConnection,
+  writeVital,
+  openStreamReader,
 } from "../redis-client";
 
 beforeEach(async () => {
@@ -242,5 +246,72 @@ describe("client construction", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("writeVital", () => {
+  it("appends the metric to the vitals stream, capped, outside the event-bus streams", async () => {
+    mockXadd.mockResolvedValue("1-0");
+
+    await writeVital({ name: "LCP", value: 812.4, rating: "good", path: "/", view: "chat" });
+
+    expect(mockXadd).toHaveBeenCalledTimes(1);
+    const args = mockXadd.mock.calls[0];
+    expect(args.slice(0, 4)).toEqual(["robothor:events:vitals", "MAXLEN", "~", "10000"]);
+    expect(args[4]).toBe("*");
+    const fields: Record<string, string> = {};
+    for (let i = 5; i < args.length; i += 2) fields[args[i]] = args[i + 1];
+    expect(fields).toMatchObject({ name: "LCP", value: "812.4", rating: "good", path: "/", view: "chat" });
+    expect(fields.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    // The live views never stream vitals: it is not one of the readable streams.
+    expect(isValidStream("vitals")).toBe(false);
+  });
+});
+
+describe("openStreamReader", () => {
+  it("gives every reader its own connection, so one blocking XREAD never queues behind another", async () => {
+    mockXread.mockResolvedValue(null);
+    const a = openStreamReader();
+    const b = openStreamReader();
+    await a.readSince({ agent: "1-0" }, 5000);
+    await b.readSince({ agent: "1-0" }, 5000);
+
+    expect(mockConstructor).toHaveBeenCalledTimes(2);
+    expect(mockXread).toHaveBeenCalledTimes(2);
+    const [ctxA, ctxB] = mockXread.mock.contexts;
+    expect(ctxA).toBeDefined();
+    expect(ctxA).not.toBe(ctxB);
+  });
+
+  it("does not issue blocking reads on the shared client", async () => {
+    mockXrevrange.mockResolvedValue([]);
+    mockXread.mockResolvedValue(null);
+    await readRecent("agent", 1); // creates the shared client
+    const shared = mockXrevrange.mock.contexts[0];
+    const reader = openStreamReader();
+    await reader.readSince({ agent: "1-0" }, 5000);
+    expect(mockXread.mock.contexts[0]).not.toBe(shared);
+  });
+
+  it("reads with the ids it is given and parses entries", async () => {
+    mockXread.mockResolvedValue([
+      ["robothor:events:agent", [["6-0", ["type", "task.created", "payload", "{}"]]]],
+    ]);
+    const reader = openStreamReader();
+    const out = await reader.readSince({ agent: "5-0" }, 5000);
+    expect(mockXread).toHaveBeenCalledWith(
+      "COUNT", 50, "BLOCK", 5000, "STREAMS", "robothor:events:agent", "5-0"
+    );
+    expect(out[0].stream).toBe("agent");
+    expect(out[0].events[0].id).toBe("6-0");
+  });
+
+  it("closes its own connection on close()", async () => {
+    mockXread.mockResolvedValue(null);
+    const reader = openStreamReader();
+    await reader.readSince({ agent: "1-0" }, 5000);
+    await reader.close();
+    expect(mockQuit).toHaveBeenCalledTimes(1);
+    expect(mockQuit.mock.contexts[0]).toBe(mockXread.mock.contexts[0]);
   });
 });

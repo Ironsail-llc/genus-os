@@ -27,7 +27,10 @@ describe("WorkflowRunsList", () => {
     render(<WorkflowRunsList workflowId={WORKFLOW_ID} onOpenRun={() => {}} />);
 
     const failed = await screen.findByTestId(`workflow-run-${FAILED_RUN_ID}`);
-    expect(spy).toHaveBeenCalledWith(`/api/bridge/api/workflows/${WORKFLOW_ID}/runs`);
+    expect(spy).toHaveBeenCalledWith(
+      `/api/bridge/api/workflows/${WORKFLOW_ID}/runs`,
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
     expect(within(failed).getByTestId("status-badge").textContent).toContain("failed");
     expect(failed.textContent).toContain("4.2 s");
     expect(within(failed).getByTestId(`workflow-run-steps-${FAILED_RUN_ID}`).textContent).toBe(

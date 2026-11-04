@@ -77,14 +77,15 @@ def _judge(rows: list[dict[str, Any]], now: datetime) -> list[str]:
     return problems
 
 
-async def _identity_blocks(ctx: DoctorContext) -> Result:
+async def _identity_blocks(ctx: DoctorContext, now: datetime | None = None) -> Result:
     """``persona`` and ``user_profile`` exist, are not placeholders, and were
-    written within the last ninety days."""
+    written within the last ninety days of ``now`` (the real UTC time unless
+    a caller pins it)."""
     try:
         rows = await ctx.run_blocking(lambda: _rows(ctx))
     except Exception as error:  # noqa: BLE001 - a missing table or database is a skip, not a crash
         return skip(f"could not read agent_memory_blocks ({type(error).__name__})")
-    problems = _judge(rows, datetime.now(UTC))
+    problems = _judge(rows, now if now is not None else datetime.now(UTC))
     if problems:
         return fail("; ".join(problems))
     return ok(f"{len(IDENTITY_BLOCKS)} identity blocks written within {MAX_AGE_DAYS} days")

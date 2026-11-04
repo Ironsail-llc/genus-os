@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 
+// Legitimately slow first test: the first AppShell render
+// imports the whole shell (about 1.8 s idle). Vitest's default 5 s is spent by that cold import alone on a
+// loaded runner, so the test timed out before asserting anything. The
+// assertions are unchanged.
+vi.setConfig({ testTimeout: 30_000 });
+
+
 // ─── Shared mocks ────────────────────────────────────────────────
 vi.mock("@/hooks/use-visual-state", () => ({
   useVisualState: () => ({

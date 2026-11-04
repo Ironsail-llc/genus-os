@@ -33,8 +33,11 @@ import contextlib
 import functools
 import logging
 import os
+import threading
+from collections import OrderedDict
 from typing import Any
 
+from robothor.engine.early_done import apply_output_policies
 from robothor.engine.interactive_recency import (  # noqa: F401
     INTERACTIVE_WARMUP_MAX_AGE_S,
     _seconds_since_last_interactive_run,
@@ -48,6 +51,7 @@ from robothor.engine.interactive_recency import (  # noqa: F401
 from robothor.engine.models import (
     AgentRun,
     DeliveryMode,
+    RunStatus,
 )
 from robothor.engine.reasoning_replay import same_model
 
@@ -65,6 +69,7 @@ from robothor.engine.thin_announce import (
     NOTE_SEPARATOR,
     is_thin_announce_output,
 )
+from robothor.engine.todo_escalation import _escalate_unfinished_todos
 from robothor.engine.tracking import create_step, create_steps_batch, update_run
 
 # Init timeout: max seconds for agent setup before first LLM call.
@@ -80,108 +85,52 @@ INIT_TIMEOUT_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
+# Run exits that export an error span (status code 2) carrying the reason.
+_ERROR_STATUSES = frozenset({RunStatus.FAILED, RunStatus.TIMEOUT, RunStatus.CANCELLED})
+_REASON_MAX = 500
 
-def _escalate_unfinished_todos(
-    todos: Any,
-    parent_task_id: str | None,
-    agent_id: str,
-    tenant_id: str = "",
-    agent_config: Any = None,
-    run_id: str | None = None,
-) -> bool:
-    """Lift unfinished todo_write items back to the CRM parent task so the
-    next heartbeat's planner picks up where this run left off.
+# Run ids whose telemetry has been published: one publish per run, whichever
+# call site gets there first. Bounded; oldest ids are forgotten first.
+_PUBLISHED_RUN_IDS: OrderedDict[str, None] = OrderedDict()
+_PUBLISHED_RUN_IDS_MAX = 10_000
+_PUBLISHED_RUN_IDS_LOCK = threading.Lock()
 
-    Closes the Stage-5 "full circle" gap: a run that exhausted iterations
-    with items still pending or in_progress must propagate that work to
-    the thread pool — silently dropping it is the prior failure mode.
 
-    Behavior:
-      - None/empty todo list → no-op, returns False.
-      - No parent_task_id → no-op (list was standalone).
-      - All items completed → no-op (run finished cleanly).
-      - Otherwise: write set_next_action("Continue: <first_unfinished>")
-        on the parent. If the parent isn't already tagged `thread`, add
-        the tag and seed `objective` from the title if empty. Non-
-        destructive — never touches status, owner, or other tags.
+def _first_publish(run_id: str | None) -> bool:
+    """True the first time ``run_id`` is seen (always True without an id)."""
+    if not run_id:
+        return True
+    with _PUBLISHED_RUN_IDS_LOCK:  # finalizers also run in worker threads
+        if run_id in _PUBLISHED_RUN_IDS:
+            return False
+        _PUBLISHED_RUN_IDS[run_id] = None
+        while len(_PUBLISHED_RUN_IDS) > _PUBLISHED_RUN_IDS_MAX:
+            _PUBLISHED_RUN_IDS.popitem(last=False)
+    return True
 
-    Phase 3 addition: when ``agent_config.todo_list_enabled`` and
-    ``agent_config.task_protocol`` are both true AND the
-    ``ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED`` env is "1", unfinished
-    items are ALSO promoted to real CRM subtasks (idempotent via content
-    hash). The ``next_action`` write above stays — promotion is additive.
+
+def _off_loop(fn: Any, *args: Any, label: str, **kwargs: Any) -> None:
+    """Run blocking run-end bookkeeping in a tracked worker thread. Never raises.
+
+    The spawn-or-run-sync pattern ``_persist_run`` uses: with a running loop the
+    call goes to a thread under the task registry (so the shutdown drain waits
+    for it); with none (CLI, tests) it runs here.
     """
-    if todos is None:
-        return False
-    items = getattr(todos, "items", None) or []
-    if not items:
-        return False
-    if not parent_task_id:
-        return False
 
-    unfinished = [it for it in items if getattr(it, "status", "") in ("pending", "in_progress")]
-    if not unfinished:
-        return False
-
-    from robothor.constants import DEFAULT_TENANT
-    from robothor.crm import dal
-
-    effective_tenant = tenant_id or DEFAULT_TENANT
+    def guarded() -> None:
+        try:
+            fn(*args, **kwargs)
+        except Exception as e:  # noqa: BLE001 - bookkeeping never breaks a run
+            logger.warning("%s error: %s", label, _sanitize(e))
 
     try:
-        parent = dal.get_task(parent_task_id, tenant_id=effective_tenant)
-    except Exception as e:
-        logger.warning("todo escalation: get_task failed for %s: %s", _sanitize(parent_task_id), e)
-        return False
-    if not parent:
-        return False
+        asyncio.get_running_loop()
+    except RuntimeError:
+        guarded()
+        return
+    from robothor.engine.task_registry import get_task_registry
 
-    first = unfinished[0]
-    next_action = f"Continue: {getattr(first, 'content', '').strip()}"[:500]
-
-    dal.set_next_action(
-        task_id=parent_task_id,
-        next_action=next_action,
-        agent=agent_id,
-        by="runtime",
-        tenant_id=effective_tenant,
-    )
-
-    existing_tags = parent.get("tags") or []
-    if "thread" not in existing_tags:
-        new_tags = list(existing_tags) + ["thread"]
-        update_kwargs: dict[str, Any] = {
-            "task_id": parent_task_id,
-            "tags": new_tags,
-            "changed_by": agent_id,
-            "tenant_id": effective_tenant,
-        }
-        # Seed objective from title if empty — the planner needs something
-        # to plan against on the next beat.
-        if not (parent.get("objective") or "").strip():
-            update_kwargs["objective"] = parent.get("title") or ""
-        dal.update_task(**update_kwargs)
-        # Refresh the local parent dict so the promotion step below sees the
-        # freshly added `thread` tag.
-        parent["tags"] = new_tags
-
-    # Phase 3 — promote unfinished items to real subtasks (best-effort).
-    if agent_config is not None:
-        try:
-            from robothor.engine.todo_promotion import promote_unfinished_items
-
-            promote_unfinished_items(
-                parent=parent,
-                items=unfinished,
-                agent_config=agent_config,
-                agent_id=agent_id,
-                run_id=run_id or "",
-                tenant_id=effective_tenant,
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("todo promotion error (non-fatal): %s", _sanitize(e))
-
-    return True
+    get_task_registry().spawn(asyncio.to_thread(guarded), name=f"finish-run:{label}")
 
 
 class RunFinalizationMixin:
@@ -283,9 +232,8 @@ class RunFinalizationMixin:
         # Deliverable contracts: did the run produce the artifact the task
         # named, in the shape it named? The ladder and every side effect live
         # in `deliverable_verdict`, extracted here by this file's own rule.
-        from robothor.engine.deliverable_verdict import record_deliverable_verdicts
-
-        record_deliverable_verdicts(run, session, self.config.workspace)
+        # Output-altering; a no-op if early_done already ran it before the answer.
+        apply_output_policies(run, session, self.config.workspace)
 
         # And what the run never finished reading — a separate question from
         # whether the artefact is right, because a run can write exactly the
@@ -362,27 +310,37 @@ class RunFinalizationMixin:
 
         Best-effort: telemetry must never break a completed run.
         """
-        if not trace:
+        if not trace or getattr(trace, "published", False) is True:
+            return
+        if not _first_publish(getattr(run, "id", None)):
             return
         with contextlib.suppress(Exception):
             from robothor.engine.telemetry import cache_hit_ratio, gen_ai_attributes
 
+            trace.published = True
+            status = str(run.status)
+            failed = run.status in _ERROR_STATUSES
+            reason = (run.error_message or status)[:_REASON_MAX] if failed else ""
             hit_ratio = cache_hit_ratio(run.cache_read_tokens, run.input_tokens)
-            with trace.span(
-                "run_summary",
-                **gen_ai_attributes(
-                    model=run.model_used or "",
-                    input_tokens=run.input_tokens,
-                    output_tokens=run.output_tokens,
-                    cache_read_tokens=run.cache_read_tokens,
-                    cache_creation_tokens=run.cache_creation_tokens,
-                ),
-            ):
-                pass
+            attrs = gen_ai_attributes(
+                model=run.model_used or "",
+                input_tokens=run.input_tokens,
+                output_tokens=run.output_tokens,
+                cache_read_tokens=run.cache_read_tokens,
+                cache_creation_tokens=run.cache_creation_tokens,
+            )
+            attrs["run.status"] = status
+            if failed:
+                attrs["error.message"] = reason
+            with trace.span("run_summary", **attrs) as span:
+                if failed:
+                    span.status = "error"
+                    span.status_message = reason
+            trace.end_run(status=status, trigger_type=str(run.trigger_type), error=reason)
 
             trace.publish_metrics(
                 {
-                    "status": "completed",
+                    "status": status,
                     "duration_ms": run.duration_ms or 0,
                     "input_tokens": run.input_tokens,
                     "output_tokens": run.output_tokens,
@@ -409,6 +367,9 @@ class RunFinalizationMixin:
         (e.g. requires_human_task_closure) will run against the finished run.
         """
         from robothor.engine.task_completion import capture_pending_items
+
+        # ── [TELEMETRY] Every exit path publishes the run's trace, once ──
+        self._publish_run_telemetry(trace, run)
 
         capture_pending_items(run, session)
         # ── [GUARDRAIL] Post-run checks (require finished run + config) ──
@@ -473,23 +434,17 @@ class RunFinalizationMixin:
                 logger.warning("todo escalation error: %s", _sanitize(e))
 
         # ── [RECENT ACTIONS] Cross-session surface for tracked agents ──
-        try:
-            from robothor.engine.recent_actions import record_run
+        # A file write: off the loop (the persisted row does not read it).
+        from robothor.engine.recent_actions import record_run
 
-            record_run(run, agent_config=agent_config)
-        except Exception as e:
-            logger.warning("recent_actions write error: %s", _sanitize(e))
+        _off_loop(record_run, run, agent_config=agent_config, label="recent_actions write")
 
         # ── [CONTACT 360] Timeline activity emission ──
         # Best-effort: no-op when the run is not linked to a person (cron jobs
-        # and the like).  Runs in the caller thread; it's a single idempotent
-        # INSERT, fast enough that backgrounding isn't worth the complexity.
-        try:
-            from robothor.engine.run_person_link import emit_run_timeline_activity
+        # and the like). One idempotent INSERT, off the loop like the rest.
+        from robothor.engine.run_person_link import emit_run_timeline_activity
 
-            emit_run_timeline_activity(run)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("timeline_activity emit error: %s", _sanitize(e))
+        _off_loop(emit_run_timeline_activity, run, label="timeline_activity emit")
 
         # ── [HOOKS] AGENT_END lifecycle hook (fire-and-forget) ──
         try:
@@ -528,7 +483,9 @@ class RunFinalizationMixin:
         # verdict columns. Flag-gated and exception-suppressed — verification
         # is bookkeeping and must never break the agent's actual work.
         self._verify_run_claims(run)
-        self._verify_metric_trends(run)
+        # Reads the agent's previous output (a SELECT) and stamps nothing on
+        # the run, so it runs off the loop beside the persistence below.
+        _off_loop(self._verify_metric_trends, run, label="metric trend check")
 
         # Spawn DB persistence as a background task so the caller gets the run back immediately.
         try:
@@ -715,7 +672,14 @@ class RunFinalizationMixin:
             return None
 
     async def _persist_run(self, run: AgentRun) -> None:
-        """Persist run state and steps to the database in a background thread."""
+        """Persist run state and steps to the database in a background thread.
+
+        Flushes the event writer first: the run's audit and guardrail rows are
+        written by the time its final state is.
+        """
+        from robothor.engine.event_writer import get_event_writer
+
+        await get_event_writer().flush()
         await asyncio.to_thread(self._persist_run_sync, run)
 
     async def _escalate_unfinished_todos_bg(self, kwargs: dict[str, Any]) -> None:

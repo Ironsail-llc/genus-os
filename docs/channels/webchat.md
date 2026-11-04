@@ -91,9 +91,9 @@ escape hatch), so:
   Telegram bot writes into too. A briefing reaches the operator in the
   conversation they already have rather than a second one beside it.
 
-The turn is appended to the in-memory session as well as the database, because
-`GET /chat/history` reads RAM and the database only at boot — without that, a
-delivery would be invisible in the Helm until the next engine restart.
+The turn is appended to the in-memory session as well as the database:
+`GET /chat/history` reads the database, but falls back to RAM when the database
+cannot answer, and the agent's next turn takes its context from RAM.
 
 ## Asking a question
 
@@ -138,7 +138,9 @@ late answer still reaches a later turn.
 The composer stays open while a reply streams. What you type then goes to the
 task that is already running instead of starting a second one, the same as on
 Telegram (see [the Telegram channel](telegram.md#adding-context-while-the-agent-is-working)
-for when the agent picks it up).
+for when the agent picks it up). While the turn's run is live, what you type
+steers it ([below](#steering-the-running-task)); the follow-up described here
+is what happens when no live run can take it.
 
 Under your message the Helm shows where it went:
 
@@ -157,6 +159,40 @@ answers with one SSE event, `followup_joined` or `followup_queued`, and never
 starts a run itself; without the flag the endpoint behaves as it always has. The
 running turn's own stream adds two events: `interim` (a superseded answer) and
 `pending_followups` (messages the turn never took, to send as the next turn).
+
+### Steering the running task
+
+While a reply streams the composer is a steer input: its placeholder reads *Steer the running task...*, and what you
+send is handed to the run as an operator steering update, read before its next
+model call. The note under it reads *Steering the run*. A steer is guidance for
+the run in flight: it is not a turn of its own, but once the run has read it,
+it is kept with the turn in the conversation's history (as
+`[steered while working] …`), so a reload and the next turn still know it. The
+run also records it as a `steer` step carrying the text, so the Runs page's
+run detail and the run steps API show where it landed. A steer that arrives while the agent writes
+its final answer is not lost: the run takes another turn with it, and the
+answer already written stays on screen as its own message, exactly as for a
+follow-up. When no live run can take it, it falls back to the follow-up
+behaviour above.
+
+**Stop** then stops the run the way Telegram's *Interrupt* button and
+`POST /api/runs/{run_id}/interrupt` do, instead of cancelling the browser's
+request: the run's interrupt flag is set and the runtime's durable stop is
+recorded, so the run ends at its next iteration boundary at the latest. If no
+live run is found it falls back to the ordinary stop.
+
+Steer and Stop reach only the turn this tab sent. Two tabs on one agent are two
+turns, and each tab's steer and Stop name their own turn by its request id.
+
+For API clients: `POST /chat/steer` with `{"text": "...", "request_id": "..."}`
+and `POST /chat/interrupt` with `{"request_id": "..."}` name the turn by the
+`request_id` it was sent to `/chat/send` with, and resolve the session key
+exactly like `/chat/send`. The `request_id` must be a UUID. Only the user who
+sent that turn can reach it, and a turn sent without a `request_id` cannot be
+steered. Both answer `{"ok": …, "found": …}`; `found` is false when that turn
+has no live run, and a missing `request_id` is a 400. A steer that contains a
+payment card number is masked before the run, its steps or its log see it, as a
+follow-up is.
 
 ## Attaching files
 
@@ -247,6 +283,20 @@ The names stay with the conversation. The stored user turn records the files
 beside the text (`extras.attachments` on `GET /chat/history`, `attachments` on
 the persisted row), so a reload shows the same chips under your message.
 
+## When `done` arrives
+
+A reply's `done` event carries the final text, `run_id`, `status`, token counts
+and `duration_ms`. It is sent as soon as the final text is settled. Telemetry,
+post-run guardrail bookkeeping, claim verification, the run-row write and the
+history save finish in the background under the engine task registry, so
+`genus run` and engine shutdown still wait for them. Telegram sends its reply
+at the same point.
+
+A post-run policy that can change what you are shown still runs first: the
+deliverable contract in `enforce` mode turns the reply into the failure notice
+before `done` goes out. A failure in the background finalization is logged and
+noted on the run's `error_message`; the reply you already have stands.
+
 ## The docked chat panel
 
 Chat is the Helm's home view. On any other view the chat stays docked as a
@@ -284,6 +334,35 @@ chat whose fleet listing names no default agent says it has no agent to list. Th
 data comes from two engine routes, `GET /api/admin/agents/{id}/tools` and
 `GET /api/admin/mcp/servers`, which the bridge proxies as
 `GET /api/agents/{id}/tools` and `GET /api/mcp/servers` for operators.
+
+## Working with messages
+
+Hover over a message, or Tab into it, for its actions. Every message has
+**Copy** (the markdown as written) and **Copy as plain text**. A reply has
+**Regenerate**, which sends the question before it again as a new turn. Your
+own messages have **Edit**, which puts the text back in the composer and takes
+that message and everything after it off the screen. Both wait while a turn is
+running. Edit changes only what the Helm shows: the engine keeps its history,
+so the agent still has the earlier exchange in context when you send.
+
+Code in a reply shows its language, a **Copy** button that copies the code
+alone, and light highlighting of keywords, strings, comments and numbers.
+
+Press **?** anywhere outside a text field for the keyboard shortcuts. In the
+command palette (Ctrl/⌘+K) the arrow keys move through the list and Enter
+runs the highlighted command.
+
+### Times and older messages
+
+`GET /chat/history` is served from `chat_messages`, not the in-memory tail,
+which keeps only the last 40 rows and no times. Each message carries `id` and
+`timestamp` (when the
+row was stored; a web chat prompt keeps the time it arrived, other channels'
+prompts the time their reply finished), the response carries `hasMore`, and the Helm shows each
+message's time and a **Load earlier messages** button. Pages go back by
+`before=<id>`, or by `offset`; `limit` is the page size (50 from the Helm).
+A first page the database cannot answer falls back to the in-memory tail. A turn that ended with no reply
+text is kept in memory but never stored, so a stored page leaves it out.
 
 ## `genus channel verify webchat` exits 2
 

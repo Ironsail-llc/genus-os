@@ -231,6 +231,40 @@ knowing when reading `agent_run_steps` or the journal:
   per-model allowance, never raise it, and a reasoning-only re-ask is a real
   provider call that has to clear both.
 
+### Context Compaction (`robothor/engine/compaction.py`)
+
+When a run's context passes the proactive threshold, `context_budget` calls
+`context.maybe_compress`, which delegates to `compaction.compact`:
+
+- **The summariser is the agent's own chain** (primary, then fallbacks, minus
+  models the run has proven dead), dialled through the same pooled completion
+  path as the agent's turns. A manifest may name a chain member as
+  `model.compaction` to be tried first, typically its small/fast model (the
+  LLM client's pre-flight compaction reads it from the run's state). A
+  caller with no chain (idle chat compression) gets the fleet chain from
+  `_defaults.yaml`, never a model the platform picked.
+- **An LLM-free pre-pass runs first**, outside the protected head and the
+  recent tail: identical tool results are deduplicated, historical media is
+  replaced by a placeholder, old tool results over 2,000 characters become a
+  one-line summary with their `tool_call_id` and size, and tool-call argument
+  JSON over 1,000 characters is truncated (still valid JSON). When that brings
+  the context under the drain target, no model is called.
+- **The summary is updated, not rebuilt**: the previous `[Conversation
+  summary]` and only the new slice are folded into it, in chunks of at most
+  32,000 characters with the summary carried from one chunk to the next, so
+  every message that leaves context reaches a summary call and a
+  fact-extraction call.
+- **Anti-thrash**: a run does not compact again within
+  `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` iterations of its last compaction,
+  unless the context is already 1.2x past the trigger.
+- **Freeze on failure**: when every model fails to summarise, the messages are
+  kept (no placeholder, no drain of the middle) and the run's `compaction` step
+  records `degraded: true`.
+
+The hard context ceiling (`context_fit.enforce_ceiling`) is enforced after
+every compaction attempt, so neither the backoff nor a freeze can
+send a provider more than its window.
+
 ---
 
 ## Architecture Overview
@@ -1206,6 +1240,23 @@ registered agent context hook; `build_interactive_preamble` calls
 hooks run from the cron builder alone, and the operator was in *chat* when the
 stale fact was asserted, so a section only on the cron path would have missed
 the channel the incident happened on.
+
+**Interactive sections can run in parallel.** `build_interactive_preamble` runs
+its sections — identity,
+memory blocks, entity context, context hooks, host state, open tasks, fleet
+surfaces, agent goal — on a small bounded thread pool and joins them in that
+order, so the text is identical and the turn waits for the slowest section, not
+the sum. It fans out only when the agent's previous warmup had a section
+slower than 30 ms (`FAN_OUT_MIN_SECTION_SECONDS`): on a fast database the thread
+hand-offs cost more than the queries they overlap, so the sections stay in
+place and only the statement savings below apply. Memory blocks are read in one `SELECT`
+(`memory.blocks.read_blocks`) with the read count bumped afterwards in one
+batched `UPDATE` (`touch_blocks`); entity candidates are fetched in one
+statement, which for the case-blind recall is a call to the `SECURITY DEFINER`
+function `entity_facts_for_candidates` (migration 166) so the entities index
+stays usable under row-level security; identity enrichment is held per chat session for up to 15 minutes
+(`identity.enrichment.enrich_identity_for_session`). Each section is recorded
+as a `warmup_section:<name>` step, as the cron preamble's already are.
 
 **The manifest has to reach it.** `runner.execute` threads `agent_config` into
 `build_interactive_preamble`, because the reach sentence needs the configured

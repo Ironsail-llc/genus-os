@@ -74,6 +74,9 @@ _BASE_STREAMS = {
     "system",
     "channel",
     "operations",
+    # Run metrics and budget stops for the dashboards (engine/telemetry.py,
+    # engine/budget_stops.py); docs/OBSERVABILITY.md names the stream.
+    "telemetry",
 }
 
 # Dynamic: extend with ROBOTHOR_EXTRA_STREAMS env var (comma-separated)

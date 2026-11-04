@@ -77,9 +77,11 @@ back to, it is a coroutine blocked in the engine that will time out and deny.
 
 ## Navigation
 
-The Helm is a single client shell: every view is mounted in
-`components/layout/app-shell.tsx` and shown by a `visible` prop — there is no
-App Router route per view.
+The Helm is a single client shell, `components/layout/app-shell.tsx`, with no
+App Router route per view. Each view is its own `next/dynamic` chunk: it is
+downloaded and mounted the first time it is shown, then kept mounted and shown
+or hidden by a `visible` prop, so its state survives switching away. A view
+never opened costs nothing. Settings loads only the active sub-page's chunk.
 
 - **The URL is the state.** `hooks/use-view-route.ts` keeps the active view in
   the query string (`?v=<view>`, plus `&s=<page>` inside Settings), so a reload
@@ -108,6 +110,15 @@ App Router route per view.
 - **Settings is a container view** with its own grouped sub-navigation. Its
   pages are placeholders that say what will live there; Flags is the existing
   controls screen and Appearance carries the theme toggle.
+- **Failures stay local.** The chat panel and every view sit behind their own
+  `SurfaceBoundary` (`components/surface-boundary.tsx`): one that throws while
+  drawing shows a notice with Retry (re-mounts it) and Report (one POST to
+  `/api/dashboard/error`), and the rest of the Helm carries on. A route that
+  throws lands on `app/error.tsx`, the root layout on `app/global-error.tsx`;
+  unknown paths get `app/not-found.tsx`. List views show `ListSkeleton` rows
+  while their first read is in flight.
+- **Theme** follows the OS light/dark setting until the operator picks one
+  with the toggle; the pick is stored per browser and wins from then on.
 - **Mobile** gets Chat · Inbox · Agents · More; More opens a sheet with
   everything else, built from the same config.
 - **Role gating is UX only.** The sidebar, the sheet and the palette hide
@@ -233,7 +244,11 @@ pnpm dev          # http://localhost:3004
 pnpm build        # production build
 npx vitest run    # unit tests (187 tests)
 npx playwright test  # E2E tests
+pnpm bundle:check # after a build: first-load JS per route vs bundle-budget.json
 ```
+
+Web vitals, the bundle budget and the chat perf spec (`e2e/perf.spec.ts`) are
+described in [Observability](../docs/OBSERVABILITY.md#dashboard-web-vitals).
 
 ## Keyboard Shortcuts
 

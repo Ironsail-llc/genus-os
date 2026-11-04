@@ -34,7 +34,9 @@ from typing import TYPE_CHECKING, Any
 import litellm
 
 from robothor.db.connection import current_tenant_scope
+from robothor.engine import budget_stops
 from robothor.engine.cancel_outcome import _cancel_outcome, terminal_run
+from robothor.engine.capability_tier import record_tier_event
 from robothor.engine.chat_backstop import protect_if_human_chat
 from robothor.engine.checkpoint import save_iteration
 from robothor.engine.config import (
@@ -55,10 +57,12 @@ from robothor.engine.context_budget import keep_context_within_budget
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
 from robothor.engine.deliverable_contract import task_text_for_run  # noqa: E402
+from robothor.engine.early_done import release_then_finalize
 from robothor.engine.error_actions import apply_error_recovery, inject_error_feedback
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
 from robothor.engine.journal_resume import maybe_prepend_journal_resume
+from robothor.engine.lanes import lane_gated
 from robothor.engine.last_resort import all_models_failed
 from robothor.engine.live_inbox import keep_going_after_answer
 
@@ -82,6 +86,8 @@ from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
     with_surface_note,
 )
+from robothor.engine.request_runtime import observe_request
+from robothor.engine.run_attribution import attribute_run
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
 )
@@ -103,7 +109,7 @@ from robothor.engine.run_deadline import (
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import _is_service_caller as _is_service_caller
-from robothor.engine.run_identity import attach_tenant_access, resolve_run_identity
+from robothor.engine.run_identity import resolve_run_identity_off_loop, seat_session
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
@@ -118,7 +124,11 @@ from robothor.engine.runtime.setup import (
     principal,
     restored_context,
 )
-from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
+from robothor.engine.sandbox_policy import (
+    agent_holds_exec,
+    playground_decision,
+    resolve_sandbox_decision,
+)
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
 from robothor.engine.stall_watchdog import (
@@ -137,6 +147,7 @@ from robothor.engine.tools import get_registry
 from robothor.engine.toolset_prep import (
     planner_tool_names,
     prepare_toolset,
+    promote_into,
     publish_toolset,
     with_discovery_note,
     withdraw_toolset,
@@ -263,16 +274,17 @@ def _int_env_with_fallback(name: str, default: int) -> int:
 # session.run.input_tokens + session.run.output_tokens across the run.
 #   - Crossing ALERT fires a (batched — see RUNAWAY_SOFT_ALERT_WINDOW_SECONDS
 #     below) Telegram warning so the operator can decide whether to intervene.
-#   - Reaching HARD_CAP stops the loop cleanly with budget_exhausted=True.
+#   - Reaching HARD_CAP records a budget_stop step (mode observe) and pages
+#     critical, once per run. Neither threshold stops the loop.
 # These are fleet-wide, env-tunable but NOT per-agent-manifest-configurable,
-# so a misconfigured manifest can never disable the protection. A main run at
+# so a misconfigured manifest can never silence the report. A main run at
 # Apr 22 16:07 consumed 3.2M input tokens before hitting the 86400s circuit
-# breaker; this guard would have stopped it at 5M.
+# breaker; this guard would have paged at 5M.
 RUNAWAY_TOKEN_ALERT = _int_env_with_fallback("ROBOTHOR_RUNAWAY_ALERT_TOKENS", 500_000)
 RUNAWAY_TOKEN_HARD_CAP = _int_env_with_fallback("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", 5_000_000)
 
 if RUNAWAY_TOKEN_ALERT >= RUNAWAY_TOKEN_HARD_CAP:
-    # Still safe (the hard cap always protects), but the soft-alert branch
+    # The soft-alert branch
     # becomes unreachable — say so at startup instead of failing silently.
     logger.warning(
         "ROBOTHOR_RUNAWAY_ALERT_TOKENS (%d) >= ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS (%d): "
@@ -282,8 +294,8 @@ if RUNAWAY_TOKEN_ALERT >= RUNAWAY_TOKEN_HARD_CAP:
     )
 
 # Soft-alert batching: post-recovery catch-up runs routinely cross the soft
-# threshold several times in quick succession (legitimate backlog burn,
-# contained by the hard cap) — paging once per run turned 6 runs in 90
+# threshold several times in quick succession (legitimate backlog burn)
+# — paging once per run turned 6 runs in 90
 # minutes into 6 pages for ~$0.35 of working-as-designed spend (2026-08-19).
 # At most one page fires per quiet-period boundary: the first soft-runaway
 # event after a quiet window pages immediately (with context); everything
@@ -357,8 +369,8 @@ def _send_soft_runaway_alert(
         # Known trade-off: events that accrue in a window with NO subsequent
         # soft event stay pending until the next crossing, however far away
         # that is. Each crossing is still logger.warning'd per-run at the
-        # call site, and the hard cap contains the runs themselves — only
-        # the page is deferred, never the protection.
+        # call site, and the hard cap pages on its own — only the soft page
+        # is deferred, never the hard one.
         pending = [
             *_soft_runaway_pending,
             {"agent": agent_id, "run_id": run_id, "tokens": tokens, "ts": now},
@@ -372,7 +384,7 @@ def _send_soft_runaway_alert(
         body = (
             f"{count} run{'s' if count != 1 else ''} crossed the soft token "
             f"threshold ({RUNAWAY_TOKEN_ALERT:,}) since the last page: {run_list}. "
-            f"All contained by the budget guard (hard cap {RUNAWAY_TOKEN_HARD_CAP:,})."
+            f"{budget_stops.runaway_cap_note()} (hard cap {RUNAWAY_TOKEN_HARD_CAP:,})."
         )
         get_task_registry().spawn(
             _alert("info", "Runaway-token alerts (batched summary)", body),
@@ -381,14 +393,14 @@ def _send_soft_runaway_alert(
         return
 
     # Quiet period: first soft-runaway event in a while. Page immediately,
-    # with enough context to read severity at a glance — contained-by-guard
-    # and approximate cost up front, so this doesn't read as an emergency.
+    # with enough context to read severity at a glance — containment and
+    # approximate cost up front.
     _soft_runaway_window_started_at = now
     cost_note = f"~${cost_usd:.2f} (negligible)" if cost_usd else "negligible"
     body = (
         f"run_id={run_id} tokens={tokens:,} (soft threshold {RUNAWAY_TOKEN_ALERT:,}, "
         f"hard cap {RUNAWAY_TOKEN_HARD_CAP:,}) model={model_used}. "
-        f"Contained by the budget guard — cost so far {cost_note}. "
+        f"{budget_stops.runaway_cap_note()} — cost so far {cost_note}. "
         f"Further soft alerts batched for {RUNAWAY_SOFT_ALERT_WINDOW_SECONDS // 60}min."
     )
     get_task_registry().spawn(
@@ -484,7 +496,7 @@ class AgentRunner(
         # from this class (Phase A / Slice 1); stateless across runs.
         self._llm = LLMClient()
 
-    def _config_or_refusal(
+    async def _config_or_refusal(
         self,
         agent_id: str,
         agent_config: Any,
@@ -513,7 +525,10 @@ class AgentRunner(
         # `load_for_run` reuses the profile already resolved at admission when
         # there is one, and falls back to `load_agent_config_or_reason`. Reading
         # the manifest again here would undo the runtime's single-lookup work.
-        agent_config, loaded_reason = load_for_run(agent_id, self.config.manifest_dir)
+        # A manifest read (file I/O and YAML parsing): off the event loop.
+        agent_config, loaded_reason = await asyncio.to_thread(
+            load_for_run, agent_id, self.config.manifest_dir
+        )
         if agent_config is not None:
             return agent_config, None
         logger.error("Agent run refused: %s", _sanitize(loaded_reason or reason))
@@ -521,6 +536,7 @@ class AgentRunner(
         session.start("", message, [])
         return None, session.fail(loaded_reason or reason)
 
+    @lane_gated
     @runtime_entrypoint
     async def execute(
         self,
@@ -547,6 +563,8 @@ class AgentRunner(
         identity: IdentityContext | None = None,
         live_inbox: LiveInbox | None = None,
         user_images: list[dict[str, Any]] | None = None,
+        on_complete: Callable[[AgentRun], Awaitable[None]] | None = None,
+        typed_message: str | None = None,
     ) -> AgentRun:
         """Execute an agent with the given message.
 
@@ -564,6 +582,9 @@ class AgentRunner(
                 ``spawn_context.identity`` (attribution only — a child's own
                 prompt never renders the CURRENT USER block, since its
                 trigger_type is SUB_AGENT, not an interactive one).
+            on_complete: awaited with the completed run before finalization,
+                which then runs in the background under the task registry
+                (``early_done.py``). Success path only.
         Returns the completed AgentRun with full metadata.
         """
         message = protect_if_human_chat(message, trigger_type)
@@ -585,7 +606,7 @@ class AgentRunner(
             user_role,
         )
 
-        agent_config, refusal = self._config_or_refusal(
+        agent_config, refusal = await self._config_or_refusal(
             agent_id, agent_config, message, trigger_type, trigger_detail, resolved_tenant
         )
         if refusal is not None:
@@ -611,7 +632,7 @@ class AgentRunner(
         # explicit kwarg > webchat DB resolution > legacy Telegram `|sender:`
         # parse. A spawn_context-carried identity (sub-agent attribution only)
         # is folded in further below, after spawn inheritance is resolved.
-        effective_identity = resolve_run_identity(
+        effective_identity = await resolve_run_identity_off_loop(
             identity,
             agent_id=agent_id,
             trigger_type=trigger_type,
@@ -637,14 +658,7 @@ class AgentRunner(
         )
 
         await attach_session(session)
-        session.live_inbox = live_inbox  # chat sent mid-run; see live_inbox.py
-        session.response_format = agent_config.response_format
-        session.provider_order = agent_config.provider_order
-
-        # User identity threading
-        session.run.user_id = effective_user_id
-        session.run.user_role = effective_user_role
-        session.run.resume_from_run_id = resume_from_run_id
+        seat_session(session, agent_config, live_inbox, typed_message, actor, resume_from_run_id)
 
         # Benchmark sandbox marker — stamps the AgentRun (read by the tool
         # wrappers) and the task-local run context (read by the memory write
@@ -653,58 +667,16 @@ class AgentRunner(
         # robothor/engine/tools/handlers/benchmark.py. See run_context.py.
         mark_benchmark_run(session, agent_config, agent_id)
 
-        # Sub-agent: link to parent run + inherit user identity. An empty
-        # parent_run_id means the parent's own row was never recorded
-        # (tracking_disabled) — insert NULL rather than a dangling FK that
-        # would sink this child's entire row.
-        if spawn_context:
-            session.run.parent_run_id = spawn_context.parent_run_id or None
-            session.run.nesting_depth = spawn_context.nesting_depth
-            if not session.run.user_id and spawn_context.user_id:
-                session.run.user_id = spawn_context.user_id
-                session.run.user_role = spawn_context.user_role
-            # Contact 360 linkage — inherit parent's person.
-            if spawn_context.person_id:
-                session.run.person_id = spawn_context.person_id
-            # Identity — inherit parent's for person_id/user_id attribution
-            # only. A child's own trigger_type is SUB_AGENT, which never
-            # qualifies for the CURRENT USER prompt block (see the warmup /
-            # mini-preamble gating further below), so this never leaks a
-            # prompt section into a worker's context — attribution only.
-            if effective_identity is None and spawn_context.identity:
-                effective_identity = spawn_context.identity
-
-        # Contact 360 linkage — stamp person_id from the effective identity
-        # first (covers WEBCHAT, whose trigger_detail carries no chat_id for
-        # resolve_run_person_id to key off). Fall back to the existing
-        # trigger_detail-based resolver when identity has no person_id.
-        if not session.run.person_id and effective_identity and effective_identity.person_id:
-            session.run.person_id = effective_identity.person_id
-
-        # Contact 360 linkage — resolve from trigger_detail for top-level runs
-        # whose trigger_type is telegram/chat. Best-effort; a miss is fine.
-        if not session.run.person_id and trigger_type in (
-            TriggerType.TELEGRAM,
-            TriggerType.WEBCHAT,
-        ):
-            try:
-                from robothor.engine.run_person_link import resolve_run_person_id
-
-                session.run.person_id = resolve_run_person_id(
-                    trigger_type=trigger_type,
-                    trigger_detail=trigger_detail,
-                    tenant_id=resolved_tenant,
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.debug(
-                    "person_id resolution failed for %s: %s", _sanitize(agent_id), _sanitize(e)
-                )
-
-        # Stash the effective identity on the session so _run_loop can carry
-        # it onto a fresh SpawnContext for any children this run spawns.
-        session.identity = effective_identity
-
-        attach_tenant_access(session.run, resolved_tenant)
+        # Spawn inheritance, capability tier, Contact 360 linkage, session
+        # identity and tenant access, in that order (run_attribution.py).
+        effective_identity, _tier = await attribute_run(
+            session,
+            spawn_context,
+            effective_identity,
+            trigger_type,
+            trigger_detail,
+            resolved_tenant,
+        )
 
         # Build system prompt + warmup in parallel where possible.
         # Both involve sync I/O so we run them concurrently in the executor.
@@ -777,7 +749,7 @@ class AgentRunner(
             None, build_system_prompt, agent_config, self.config.workspace
         )
 
-        warmup_future: asyncio.Future[str | None] | None = None
+        warmup_future: asyncio.Future[tuple[str, dict[str, float]] | None] | None = None
         if warmup_kind == "cron":
             from robothor.engine.warmup import build_warmth_preamble, set_warmup_kind
 
@@ -787,7 +759,7 @@ class AgentRunner(
                         agent_config, self.config.workspace, self.config.tenant_id
                     )
 
-            warmup_future = loop.run_in_executor(None, _build_cron_warmup)  # type: ignore[arg-type]
+            warmup_future = loop.run_in_executor(None, _build_cron_warmup)
         elif warmup_kind == "interactive":
             from robothor.engine.warmup import (
                 build_interactive_preamble,
@@ -805,9 +777,11 @@ class AgentRunner(
             elif self.config.operator_name:
                 _sender = self.config.operator_name
 
-            def _build_interactive_warmup() -> str | None:
+            def _build_interactive_warmup() -> tuple[str, dict[str, float]]:
+                # Filled per section with its elapsed seconds.
+                _timings: dict[str, float] = {}
                 with set_warmup_kind("interactive"):
-                    return build_interactive_preamble(
+                    text = build_interactive_preamble(
                         agent_id,
                         message,
                         include_blocks=True,
@@ -817,7 +791,9 @@ class AgentRunner(
                         identity=effective_identity,
                         # Host state names the configured primary from this.
                         agent_config=agent_config,
+                        section_timings=_timings,
                     )
+                return text, _timings
 
             warmup_future = loop.run_in_executor(None, _build_interactive_warmup)
 
@@ -840,8 +816,8 @@ class AgentRunner(
         if warmup_future is not None:
             try:
                 _warmup_result = await warmup_future
-                # build_warmth_preamble returns (preamble, section_timings) for
-                # cron warmup; build_interactive_preamble still returns str.
+                # Both builders hand back (preamble, section_timings); a bare
+                # str is still accepted.
                 if isinstance(_warmup_result, tuple):
                     warmup_preamble, _warmup_section_timings = _warmup_result
                 else:
@@ -863,12 +839,14 @@ class AgentRunner(
             # only — no other warmup DB work (memory blocks, entity context,
             # etc. are already in the transcript).
             try:
-                from robothor.identity import enrich_identity
+                from robothor.engine.warmup import enrichment_call_for_turn
 
-                # enrich_identity does blocking DB work on a cache miss —
-                # offload to the executor so it never blocks the event loop,
-                # mirroring the first-turn warmup path just above.
-                _enriched = await loop.run_in_executor(None, enrich_identity, effective_identity)
+                # Enrichment does blocking DB work on a cache miss — offload to
+                # the executor so it never blocks the event loop, mirroring the
+                # first-turn warmup path just above. It is held for the chat
+                # session.
+                _enrich_fn, _enrich_args = enrichment_call_for_turn(agent_id, effective_identity)
+                _enriched = await loop.run_in_executor(None, _enrich_fn, *_enrich_args)
             except Exception as e:
                 logger.debug(
                     "Per-turn identity enrichment failed for %s: %s",
@@ -971,6 +949,7 @@ class AgentRunner(
             deep_plan=deep_plan,
             tenant_id=resolved_tenant,
             actor_id=effective_user_id,
+            capability=_tier,
         )
         tool_schemas = _prepared.tool_schemas
         tool_names = _prepared.tool_names
@@ -1048,6 +1027,7 @@ class AgentRunner(
                 # Record run in database (sync DB call — run in executor to avoid blocking event loop)
                 import psycopg2
 
+                budget_stops.adopt_pending(session)  # admission's notes, held until now
                 try:
                     await asyncio.to_thread(create_run, session.run)
                 except (psycopg2.IntegrityError, psycopg2.errors.InsufficientPrivilege) as e:
@@ -1090,6 +1070,11 @@ class AgentRunner(
                         )
                 except Exception as e:
                     logger.warning("Failed to record run start: %s", _sanitize(e))
+
+                if _prepared.tier_unlocked:  # role_capability evidence; needs the run row
+                    await asyncio.to_thread(
+                        record_tier_event, session.run.id, _tier, _prepared.tier_unlocked
+                    )
 
                 # Auto-create CRM task if configured (skip for sub-agent runs)
                 if should_create_auto_task(agent_config, spawn_context):
@@ -1141,7 +1126,14 @@ class AgentRunner(
                     models = ["openrouter/deepseek/deepseek-v4-pro"]
 
                 # ── [ROUTER] Classify difficulty → adjust config ──
-                route = self._apply_routing(agent_config, message, len(tool_names))
+                from robothor.engine.router import is_chat_turn
+
+                chat_turn = is_chat_turn(
+                    trigger_type, readonly_mode, trigger_detail, resume_from_run_id
+                )
+                route = self._apply_routing(
+                    agent_config, message, len(tool_names), chat_turn=chat_turn
+                )
 
                 # ── [PLANNER] Generate plan if enabled ──
                 from robothor.engine.runtime.classified_deadline import (
@@ -1152,9 +1144,6 @@ class AgentRunner(
                 if self._should_plan(agent_config, route):
                     plan_result = await self._run_planner(
                         agent_config, message, planner_tool_names(_prepared), models
-                    )
-                    await apply_classified_deadline(
-                        session, native_window, agent_config, route, plan_result
                     )
                     if plan_result and plan_result.success:
                         self._attach_plan_context(session, plan_result)
@@ -1233,6 +1222,9 @@ class AgentRunner(
                             "guardrail event could not be recorded: %s",
                             _sanitize(_audit_exc),
                         )
+                _sb_decision, _sb_degrade = await playground_decision(
+                    agent_config, sandbox_default_mode(), _sb_decision, agent_id, session.run
+                )
                 sandbox = None
                 if _sb_decision == "docker":
                     from robothor.engine.sandbox import Sandbox, SandboxMode, set_current_sandbox
@@ -1269,7 +1261,8 @@ class AgentRunner(
                         # manifest `sandbox: docker`, container failed to start,
                         # run continued on the host, nothing surfaced.
                         _sb_explicit = agent_config.sandbox == "docker"
-                        if _sb_explicit or sandbox_default_mode() == "enforce":
+                        _sb_required = _sb_explicit or sandbox_default_mode() == "enforce"
+                        if not await _sb_degrade(str(e)) and _sb_required:
                             _sb_reason = f"sandbox required but could not be started: {e}"
                             try:
                                 from robothor.engine.tracking import log_guardrail_event
@@ -1304,9 +1297,14 @@ class AgentRunner(
 
                 # The deferred allow-set that gates tool_call, and the toolset
                 # tool_search reads. toolset_prep says why they are two things.
-                _toolset_tokens = publish_toolset(self.registry, agent_config, tool_names)
-
-                from robothor.engine.request_runtime import observe_request
+                _toolset_tokens = publish_toolset(
+                    self.registry,
+                    agent_config,
+                    tool_names,
+                    {str(s.get("function", {}).get("name", "")) for s in tool_schemas or []},
+                    _tier,
+                    readonly=readonly_mode,
+                )
 
                 verified, verified_output = False, None
                 try:
@@ -1491,16 +1489,12 @@ class AgentRunner(
         # ── [VERIFIER] ran inside the run's scope, above ──
         output_text = verified_output if verified else session.get_final_text()
 
-        # ── [TELEMETRY] Publish run metrics ──
-        self._publish_run_telemetry(trace, session.run)
-
-        return self._finish_run(
-            validated_completion(session, output_text or ""),
-            trace=trace,
-            agent_config=agent_config,
-            session=session,
-            spawn_context=spawn_context,
-        )
+        done: AgentRun = validated_completion(session, output_text or "")
+        fin = {"trace": trace, "agent_config": agent_config, "spawn_context": spawn_context}
+        if on_complete is not None:  # answer first, finalize in the background
+            return await release_then_finalize(self, done, session, on_complete, **fin)
+        self._publish_run_telemetry(trace, done)  # the status is final
+        return self._finish_run(done, session=session, **fin)
 
     # ─── Deep Mode (RLM bypass) ───────────────────────────────────────
 
@@ -1753,17 +1747,9 @@ class AgentRunner(
         _replan_count: int = 0
 
         # Set spawn context for sub-agent tools (via contextvars)
-        if spawn_context:
-            # This is a sub-agent run — use the provided context
-            from robothor.engine.tools import _current_spawn_context
+        from robothor.engine.spawn_context import install_spawn_context
 
-            _current_spawn_context.set(spawn_context)
-        elif agent_config.can_spawn_agents:
-            # This is a top-level run that can spawn — create fresh context
-            from robothor.engine.spawn_context import make_spawn_context
-            from robothor.engine.tools import _current_spawn_context
-
-            _current_spawn_context.set(make_spawn_context(agent_config, session, trace))
+        install_spawn_context(spawn_context, agent_config, session, trace)
 
         from robothor.engine.request_runtime import prepare_loop
 
@@ -1818,6 +1804,10 @@ class AgentRunner(
         _workspace = getattr(agent_config, "workspace", "") or self.config.workspace
 
         while True:
+            if "wrapup" not in _stop.announced:  # a search's hits join the toolset
+                tool_schemas, _allowed_tool_set = promote_into(
+                    self.registry, agent_config, tool_schemas, _allowed_tool_set
+                )
             # ── [BUDGET] Wrap up at 90%, and END at 100% ──
             # BEFORE the guards below, and that order is load-bearing: the
             # wallclock self-check fires at the same instant and ends the run
@@ -1882,6 +1872,7 @@ class AgentRunner(
             append_engine_note(session, _dl_note)
 
             if _safety_cap > 0 and _iteration >= _safety_cap:
+                budget_stops.record(session, **budget_stops.safety_cap(_safety_cap, _iteration))
                 await self._force_wrapup(
                     session,
                     models,
@@ -1930,6 +1921,8 @@ class AgentRunner(
                 budget_status = session.check_budget(0, agent_config.max_cost_usd)
                 if budget_status == "exhausted" and not session.run.budget_exhausted:
                     session.run.budget_exhausted = True
+                    stop = budget_stops.cost_cap(agent_config.max_cost_usd, session.run)
+                    budget_stops.record(session, **stop)
                     await self._force_wrapup(
                         session,
                         models,

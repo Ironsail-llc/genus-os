@@ -36,6 +36,7 @@ from aiogram.types import (
     Message,
 )
 
+from robothor.engine.channel_streaming import channel_stream_scope
 from robothor.engine.chat import (
     get_main_session_key,
     get_shared_session,
@@ -46,8 +47,10 @@ from robothor.engine.chat_store import (
 )
 from robothor.engine.chunking import TELEGRAM_MAX_MESSAGE_LENGTH
 from robothor.engine.delivery import set_telegram_sender
+from robothor.engine.early_done import EarlyRelease
 from robothor.engine.models import TriggerType
 from robothor.engine.task_registry import get_task_registry
+from robothor.engine.telegram_delivery import persist_and_map
 from robothor.engine.telegram_format import (
     SentMessages,
     TelegramChunk,
@@ -55,6 +58,7 @@ from robothor.engine.telegram_format import (
     rich_payload,
     telegram_chunks,
 )
+from robothor.engine.telegram_progress import TelegramProgress, deliver_reply
 from robothor.sanitize import sanitize_preview
 
 if TYPE_CHECKING:
@@ -63,12 +67,19 @@ if TYPE_CHECKING:
     from robothor.identity import IdentityContext
 
 from robothor.engine.telegram_attachments import TelegramAttachmentsMixin  # noqa: E402
+from robothor.engine.telegram_delivery import (  # noqa: E402
+    TelegramDeliveryMixin,
+)
 from robothor.engine.telegram_handlers import (  # noqa: E402
     AVAILABLE_MODELS,
     TelegramHandlersMixin,
 )
 from robothor.engine.telegram_live import TelegramLiveFollowupMixin  # noqa: E402
-from robothor.engine.telegram_plan_mode import TYPING_INTERVAL, PlanModeMixin  # noqa: E402
+from robothor.engine.telegram_plan_mode import (  # noqa: E402
+    TYPING_INTERVAL,
+    PlanModeMixin,
+)
+from robothor.engine.telegram_turn import forget_pending, run_sender  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +88,6 @@ logger = logging.getLogger(__name__)
 MAX_MESSAGE_LENGTH = TELEGRAM_MAX_MESSAGE_LENGTH
 THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
 
-# Delivery status written onto an interactive run when the Telegram send
-# reported nothing sent. ``TelegramBot.send_message`` swallows per-chunk
-# exceptions and returns an empty list on total failure, so "no messages"
-# is the only signal a lost reply gives us.
-INTERACTIVE_SEND_FAILED_STATUS = "failed: telegram send returned no messages"
 
 # Closed-onboarding operator notification rate limit (Task 4, Unified
 # Identity Context) -- at most one alert per unregistered sender per hour.
@@ -99,6 +105,9 @@ _RESTART_TRIGGERS: dict[str, Path] = {
     "robothor-bridge.service": Path("/run/robothor/restart-requests/robothor-bridge"),
     "robothor-app.service": Path("/run/robothor/restart-requests/robothor-app"),
 }
+
+#: Runner events the progress message consumes.
+_PROGRESS_EVENTS = frozenset({"progress", "tool_start", "tool_end", "stream_retry"})
 
 # Friendly tool names for streaming indicators
 _TOOL_LABELS = {
@@ -130,9 +139,16 @@ def _format_checklist_html(todos: list[dict[str, str]]) -> str:
 
 
 class TelegramBot(
-    TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin, TelegramLiveFollowupMixin
+    TelegramAttachmentsMixin,
+    TelegramHandlersMixin,
+    PlanModeMixin,
+    TelegramLiveFollowupMixin,
+    TelegramDeliveryMixin,
 ):
     """Aiogram v3 Telegram bot for Genus OS."""
+
+    #: Seconds between progress edits in a private chat (groups: GROUP_MIN_INTERVAL).
+    _progress_edit_interval: float = 1.0
 
     def __init__(self, config: EngineConfig, runner: AgentRunner) -> None:
         self.config = config
@@ -153,6 +169,7 @@ class TelegramBot(
         # Message coalescing — Telegram splits long messages into chunks.
         # Buffer them and drain before acting so fragments become one run.
         self._message_buffers: dict[str, list[str]] = {}  # chat_id → queued texts
+        self._typed_buffers: dict[str, list[str]] = {}  # chat_id → what was typed
         self._drain_scheduled: dict[str, bool] = {}  # chat_id → drain task pending
 
         # Channel-bus reply context: when the user taps "Reply" on a surfaced
@@ -267,8 +284,12 @@ class TelegramBot(
         *,
         sender_info: dict[str, Any] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        typed_text: str = "",
     ) -> None:
         """Buffer a message and schedule a drain if none is pending.
+
+        ``typed_text`` is what the person typed (no reply quote, no file text);
+        it rides beside ``user_text`` and reaches the run as ``typed_message``.
 
         ``attachments`` are the rows ``robothor.engine.attachments`` wrote for
         files that arrived with this message. They EXTEND rather than replace:
@@ -292,6 +313,7 @@ class TelegramBot(
         if await self._join_live_run(chat_id, user_text, sender_info, attachments):
             return
         self._message_buffers.setdefault(chat_id, []).append(user_text)
+        self._typed_buffers.setdefault(chat_id, []).append(typed_text)
         if sender_info is not None:
             self._pending_sender_info[chat_id] = sender_info
         if attachments:
@@ -329,6 +351,7 @@ class TelegramBot(
             return
 
         combined_text = "\n".join(buf)
+        typed_text = "\n".join(t for t in self._typed_buffers.pop(chat_id, []) if t)
         reply_ctx = self._reply_context_buffers.pop(chat_id, None)
         user_message_id = self._user_message_id_buffers.pop(chat_id, None)
         # Popped in the same synchronous stretch as `buf` above — no await
@@ -349,50 +372,8 @@ class TelegramBot(
             user_message_id=user_message_id,
             sender_info=sender_info,
             attachments=attachment_rows,
+            typed_text=typed_text,
         )
-
-    async def _record_interactive_delivery(self, run: Any, sent: Any) -> None:
-        """Record whether an interactive reply actually reached Telegram.
-
-        ``delivery.deliver()`` is only wired into the hook, workflow and
-        scheduler paths — it never runs for an interactive chat turn — so
-        without this every ``trigger_type='telegram'`` run carried
-        ``delivery_status IS NULL`` and a reply that never landed looked
-        exactly like one that did.
-
-        Truth comes from the sender's return value, not from reaching the
-        line after the send: ``TelegramBot.send_message`` swallows per-chunk
-        exceptions and returns one ``Message`` per delivered chunk (``[]``
-        when every chunk failed). Same discipline as
-        ``robothor.engine.alerts._send_telegram``'s ``delivered = bool(sent)``.
-
-        Bookkeeping only — never raises, so a DB hiccup cannot turn a
-        successful reply into an error for the operator.
-
-        Args:
-            run: The ``AgentRun`` this reply belongs to. ``None`` is a no-op
-                (the run may not exist yet when an early failure replies).
-            sent: Whatever ``TelegramBot.send_message`` returned.
-        """
-        if run is None:
-            return
-        try:
-            delivered = bool(sent)
-            run.delivery_status = "delivered" if delivered else INTERACTIVE_SEND_FAILED_STATUS
-            run.delivered_at = datetime.now(UTC) if delivered else None
-            run.delivery_channel = "telegram"
-            if not delivered:
-                logger.warning(
-                    "Interactive Telegram reply reported no sent messages (run=%s)",
-                    getattr(run, "id", None),
-                )
-            # Imported here (not at module scope) so the DB write stays a
-            # lazy dependency and tests can patch it at its source module.
-            from robothor.engine.delivery import _persist_delivery_status
-
-            await _persist_delivery_status(run)
-        except Exception as e:
-            logger.warning("Interactive delivery bookkeeping failed: %s", e)
 
     async def _run_interactive(
         self,
@@ -405,6 +386,7 @@ class TelegramBot(
         user_message_id: str | None = None,
         sender_info: dict[str, Any] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        typed_text: str = "",
     ) -> None:
         """Execute an interactive agent run with streaming, typing indicator, and history management.
 
@@ -470,38 +452,28 @@ class TelegramBot(
         except Exception:
             stream_msg_id = None
 
-        # ── Status-only updates (no content streaming) ──
-        # Telegram rate-limits editMessageText to ~20/min.  Instead of streaming
-        # content token-by-token, we show brief tool-status edits on the
-        # "Thinking..." message and deliver the final output as a new message.
-        tool_status_interval = 10.0  # max one status edit per 10 seconds
-        last_status_time: float = 0.0
         checklist_msg_id: int | None = None
 
-        async def on_tool(event: dict[str, Any]) -> None:
-            nonlocal last_status_time, checklist_msg_id
-            if event.get("event") == "progress":
-                from robothor.engine.performance import show_progress
+        # ── Progress message ──
+        # The "Thinking..." message becomes the progress message: the answer
+        # streams into it on a throttle and it is finalised in place.
+        progress: TelegramProgress | None = None
+        if stream_msg_id is not None:
+            progress = TelegramProgress(
+                self.bot,
+                chat_id,
+                stream_msg_id,
+                min_interval=self._progress_edit_interval,
+                label_for=_friendly_tool_name,
+            )
 
-                await show_progress(self.bot, chat_id, stream_msg_id, event["text"])
+        async def on_tool(event: dict[str, Any]) -> None:
+            nonlocal checklist_msg_id
+            if event.get("event") in _PROGRESS_EVENTS:
+                if progress is not None:
+                    await progress.on_event(event)
                 return
-            if event.get("event") == "tool_start":
-                now = time.monotonic()
-                if (now - last_status_time) < tool_status_interval:
-                    return
-                label = _friendly_tool_name(event.get("tool", ""))
-                try:
-                    if stream_msg_id is not None:
-                        await self.bot.edit_message_text(
-                            chat_id=int(chat_id),
-                            message_id=stream_msg_id,
-                            text=f"\U0001f527 {label}...",
-                            parse_mode=None,
-                        )
-                        last_status_time = now
-                except Exception:
-                    pass
-            elif event.get("event") == "todo_updated":
+            if event.get("event") == "todo_updated":
                 todos = event.get("todos", [])
                 try:
                     if todos:
@@ -535,26 +507,12 @@ class TelegramBot(
                 async with _lock:
                     history = list(session.history)
 
-                # Build trigger_detail with sender identity for warmup
-                # Task 4: prefer the identity threaded through explicitly for
-                # THIS message (captured in the handler, before any async
-                # gap) over the shared, chat_id-keyed cache — a caller that
-                # bypasses the coalescing buffer (direct _run_interactive
-                # call, no sender_info) falls back to the cache unchanged.
-                _user = (
-                    sender_info if sender_info is not None else self._chat_user_info.get(chat_id)
-                )
-                _sender = _user["display_name"] if _user else ""
-                _detail = f"chat:{chat_id}"
-                if _sender:
-                    _safe = _sender.replace("|", "")
-                    _detail += f"|sender:{_safe}"
-                _tenant = (_user.get("tenant_id") if _user else None) or self._get_tenant_id(
-                    chat_id
-                )
+                # trigger_detail with sender identity for warmup; THIS message's
+                # sender over the shared cache (see telegram_turn.run_sender).
+                _user, _detail, _tenant = run_sender(self, chat_id, sender_info)
 
                 # Unified identity context (robothor.identity) — built from the
-                # same cached lookup_user()/fallback dict as _sender/user_id
+                # same cached lookup_user()/fallback dict as _user/user_id
                 # above. `verified` reflects whether _user came from a real
                 # tenant_users row (carries `user_id`) vs. a fabricated
                 # fallback (unregistered sender, primary-chat/group default).
@@ -571,21 +529,36 @@ class TelegramBot(
                 # _chat_user_info entry, or no from_user on the message).
                 _identity = self._build_identity(_user, chat_id, _tenant)
 
-                run = await self.runner.execute(
-                    agent_id=self.config.default_chat_agent,
-                    message=user_text,
-                    trigger_type=TriggerType.TELEGRAM,
-                    trigger_detail=_detail,
-                    on_tool=on_tool,
-                    on_status=on_tool,
-                    model_override=model,
-                    conversation_history=history or None,
-                    tenant_id=_tenant,
-                    user_id=str((_user or {}).get("user_id") or f"telegram:{chat_id}"),
-                    user_role=str((_user or {}).get("role") or "user"),
-                    identity=_identity,
-                    live_inbox=inbox,
-                )
+                async def deliver_answer(run: Any) -> list[Any]:
+                    nonlocal stream_msg_id
+                    # The Message objects the reply went out as: the channel bus maps
+                    # their platform_message_ids to the persisted row below.
+                    self._seal_live_inbox(chat_id, inbox)  # nothing joins a finished run
+                    sent = await deliver_reply(progress, run, chat_id, self.send_message)
+                    stream_msg_id = None if sent else stream_msg_id  # gone: no "Stopped."
+                    await self._record_interactive_delivery(run, sent)
+                    return sent
+
+                early = EarlyRelease(deliver_answer)
+                with channel_stream_scope():
+                    run = await self.runner.execute(
+                        agent_id=self.config.default_chat_agent,
+                        message=user_text,
+                        trigger_type=TriggerType.TELEGRAM,
+                        trigger_detail=_detail,
+                        on_tool=on_tool,
+                        on_status=on_tool,
+                        on_content=progress.on_content if progress is not None else None,
+                        model_override=model,
+                        conversation_history=history or None,
+                        tenant_id=_tenant,
+                        user_id=str((_user or {}).get("user_id") or f"telegram:{chat_id}"),
+                        user_role=str((_user or {}).get("role") or "user"),
+                        identity=_identity,
+                        live_inbox=inbox,
+                        on_complete=early.callback(),
+                        typed_message=typed_text,
+                    )
                 run_for_delivery = run
                 self._seal_live_inbox(chat_id, inbox)  # later messages are a new turn
 
@@ -613,25 +586,7 @@ class TelegramBot(
                     attachments=self._live_attachments(inbox, attachments),
                 )
 
-                # Delete status message, deliver final output as new message.
-                # Capture the Telegram Message objects returned by send_message
-                # so the channel bus can map platform_message_ids to the
-                # assistant chat_message row we'll persist below.
-                if stream_msg_id is not None:
-                    with contextlib.suppress(Exception):
-                        await self.bot.delete_message(
-                            chat_id=int(chat_id), message_id=stream_msg_id
-                        )
-
-                sent_messages: list[Any] = []
-                if run.output_text:
-                    sent_messages = await self.send_message(chat_id, run.output_text)
-                elif run.error_message:
-                    sent_messages = await self.send_message(chat_id, f"Error: {run.error_message}")
-                else:
-                    sent_messages = await self.send_message(chat_id, "Done. No output produced.")
-
-                await self._record_interactive_delivery(run, sent_messages)
+                sent_messages: list[Any] = await early.result_or(run)
 
                 assistant_platform_ids = [
                     str(m.message_id)
@@ -644,76 +599,20 @@ class TelegramBot(
                 # reply-to lookups resolve against real rows). One background
                 # task keeps the response path snappy but the writes ordered.
                 if run.output_text:
-
-                    async def _persist_and_map(
-                        session_key: str = session_key,
-                        user_text: str = self._live_turn_text(inbox, user_text),
-                        output_text: str | None = run.output_text,
-                        model: Any = model,
-                        tenant_id: str = _tenant,
-                        user_extras: dict[str, Any] | None = user_extras,
-                        user_message_id: str | None = user_message_id,
-                        chat_id: str = chat_id,
-                        assistant_platform_ids: list[str] = assistant_platform_ids,
-                        author_run_id: str | None = run.id,
-                    ) -> None:
-                        from robothor.engine.channel_bus import (
-                            record_inbound,
-                            record_outbound,
-                        )
-
-                        inserted = await save_exchange_async(
-                            session_key,
-                            user_text,
-                            output_text or "",
-                            channel="telegram",
-                            model_override=model,
-                            tenant_id=tenant_id,
-                            user_extras=user_extras,
-                        )
-                        if not inserted or len(inserted) < 2:
-                            return
-                        user_chat_message_id, assistant_chat_message_id = inserted
-
-                        loop = asyncio.get_running_loop()
-
-                        if user_message_id:
-                            try:
-                                await loop.run_in_executor(
-                                    None,
-                                    lambda: record_inbound(
-                                        tenant_id=tenant_id,
-                                        channel="telegram",
-                                        chat_id=chat_id,
-                                        platform_message_id=user_message_id,
-                                        session_key=session_key,
-                                        chat_message_id=user_chat_message_id,
-                                        author_agent_id="user",
-                                    ),
-                                )
-                            except Exception as e:
-                                logger.debug("tg-map-inbound failed for %s: %s", chat_id, e)
-
-                        if assistant_platform_ids:
-                            try:
-                                await loop.run_in_executor(
-                                    None,
-                                    lambda: record_outbound(
-                                        tenant_id=tenant_id,
-                                        channel="telegram",
-                                        chat_id=chat_id,
-                                        platform_message_ids=assistant_platform_ids,
-                                        session_key=session_key,
-                                        chat_message_id=assistant_chat_message_id,
-                                        author_agent_id="main",
-                                        author_run_id=author_run_id,
-                                    ),
-                                )
-                            except Exception as e:
-                                logger.debug("tg-map-outbound failed for %s: %s", chat_id, e)
-
                     get_task_registry().spawn(
-                        _persist_and_map(),
+                        persist_and_map(
+                            save_exchange_async,
+                            session_key=session_key,
+                            user_text=self._live_turn_text(inbox, user_text),
+                            output_text=run.output_text,
+                            model=model,
+                            tenant_id=_tenant,
+                            user_extras=user_extras,
+                            user_message_id=user_message_id,
+                            chat_id=chat_id,
+                            assistant_platform_ids=assistant_platform_ids,
+                            author_run_id=run.id,
+                        ),
                         name=f"tg-persist-and-map:{chat_id}",
                     )
 
@@ -737,6 +636,8 @@ class TelegramBot(
 
             except asyncio.CancelledError:
                 # /stop was called during execution
+                if progress is not None:
+                    await progress.aclose()
                 if stream_msg_id is not None:
                     with contextlib.suppress(Exception):
                         await self.bot.edit_message_text(
@@ -767,6 +668,8 @@ class TelegramBot(
                 if getattr(run_for_delivery, "delivery_status", None) is None:
                     await self._record_interactive_delivery(run_for_delivery, sent_error)
             finally:
+                if progress is not None:
+                    await progress.aclose()
                 nonlocal typing_active
                 typing_active = False
                 typing_task.cancel()
@@ -1948,7 +1851,7 @@ class TelegramBot(
             polling_stop_timeout = POLLING_STOP_TIMEOUT_SECONDS
         # Clear message buffers and cancel all active tasks
         self._drop_all_live_inboxes()  # first: a cancelled run's finally requeues them
-        self._message_buffers.clear()
+        forget_pending(self)
         self._drain_scheduled.clear()
         self._attachment_buffers.clear()
         # An album timer outliving the bot would fire into a closed session.

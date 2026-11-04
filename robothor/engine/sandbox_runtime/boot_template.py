@@ -56,7 +56,7 @@ sys.path.insert(0, _DIR)
 # stop a hostile one.
 try:
     ctypes.CDLL(None, use_errno=True).prctl({subreaper}, 1, 0, 0, 0)
-except Exception:
+except (AttributeError, OSError):  # no prctl: not Linux, or no libc to load
     pass
 
 _GUARDED = {guarded!r}

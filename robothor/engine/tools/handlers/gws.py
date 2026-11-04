@@ -150,8 +150,8 @@ def _resolve_robothor_email() -> str:
         cfg = load_owner_config()
         if cfg is not None and cfg.email:
             return cfg.email.lower().strip()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - callers treat "" as unknown
+        logger.debug("Bot email not resolvable from owner config: %s", e)
     return ""
 
 

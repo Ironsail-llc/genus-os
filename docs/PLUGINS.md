@@ -96,6 +96,15 @@ available to any agent whose manifest lists it in `tools_allowed`.
 A tool normally ships in two groups: the handler and its schema. The engine
 keeps those in separate registries and so does the loader.
 
+A broad agent is shown only its core tools and finds the rest with
+`tool_search` (see [deferred loading](TOOLS.md#deferred-loading)), so a plugin
+tool is usually reached by search. Search ranks the tool's name words and
+description; a schema may also carry `"keywords": ["invoice", "receipt"]`
+inside its `function` block — the words an operator would use for it. They
+are read by search and stripped before the schema is sent to a model.
+`genus doctor` (`tools.deferred_tools_reachable`) fails on a schema with no
+searchable word at all.
+
 ## The rules, and why
 
 **The contract version is checked and mismatches are refused.** This engine
@@ -509,6 +518,13 @@ conversation (per visitor, for a public chat) and call it from as many
 concurrent handlers as you like. Pass `record_turn=False` for a message that
 should not be remembered, and `history_limit=N` to hand the run only the last
 N turns — a cheap bound on prompt size for a chat that can run long.
+
+**Stream if your surface can show it.** Pass `stream=<async callable>` and it
+is called with the run's cumulative text as the model writes it, including
+interim text from a tool turn. The text can restart shorter (a new model call, or a stream retried once on the same
+model after a transient failure), so render it by replacing what you showed,
+never by appending. The returned `reply` is still the complete answer. With
+no callback, the run does not stream.
 
 **Declare your chunk size if you split.** `register_platform_sender(...,
 chunk_size=N)` is how the platform tells a truncated send from a complete one.
@@ -1031,6 +1047,7 @@ install, what gets recorded, and what `enable`/`disable` act on:
       "recorded_at": "2026-09-15T00:00:00+00:00",
       "dist_sha256": "…",
       "members_accounted": 14,
+      "scan_reasons": ["acme_tools/__init__.py:1: imports httpx"],
       "source": {
         "origin": "registry",
         "index_url": "https://ironsail-llc.github.io/genus-plugins/index.json",
@@ -1048,13 +1065,21 @@ a field reading `safe` because no scanner ran would be worse than no field at
 all. A plugin that arrived through `genus plugin install` carries the verdict
 its wheel actually got.
 
-`dist_sha256`, `members_accounted` and `source` appear only for plugins this
-platform installed. Their **absence** is information: a row without a `source`
+`dist_sha256`, `members_accounted`, `scan_reasons` and `source` appear only for
+plugins this platform installed (`scan_reasons` only when the scan gave some). Their **absence** is information: a row without a `source`
 is one an operator pip-installed by hand, and `genus plugin remove` refuses
 those without `--force`; `members_accounted` is how many wheel members the scan
 classified when the row was written, which is what makes the `verdict` beside it
-a measurement rather than a claim. All three are additive — a lockfile written
-before they existed parses unchanged.
+a measurement rather than a claim; `scan_reasons` is what the scan said, so the
+findings an operator accepted with `--accept-review` stay on record after the
+install has answered. These facts describe the bytes that were installed, so a
+`genus plugin sync` over a distribution whose version or manifest has since
+changed (a hand `pip install -U`, an edited package) drops them: `verdict`
+returns to `unscanned`, `dist_sha256`, `members_accounted`, `scan_reasons` and
+the source's `publisher_key_id` are cleared, and only `enabled` and the
+source's origin are kept, so the row reads Unsigned rather than Verified and
+`remove` still knows the platform installed it. All four are additive — a lockfile written before they
+existed parses unchanged.
 
 ### The verbs
 
@@ -1151,7 +1176,7 @@ tenant's engine**, and the gate depends on whose decision the act is:
 
 | route (bridge) | engine | gate | what it does |
 |---|---|---|---|
-| `GET /api/plugins` | `GET /api/admin/plugins` | tenant admin | generation, lockfile state, one row per distribution, each with the `assets` it wrote into the workspace and its `forced` state |
+| `GET /api/plugins` | `GET /api/admin/plugins` | tenant admin | generation, lockfile state, one row per distribution, each with the `assets` it wrote into the workspace, its `forced` state and its `trust` (below) |
 | `POST /api/plugins/sync` | `POST /api/admin/plugins/sync` | root | `{tenant_id?}`; record what is installed; **409** when the existing file's contents cannot be read (`--force` is CLI-only), **503** when the path itself cannot be written |
 | `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | tenant admin | flip the row; 404 if unrecorded; **409** if the root tenant forced it; does **not** reload |
 | `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | tenant admin | as above |
@@ -1161,6 +1186,26 @@ tenant's engine**, and the gate depends on whose decision the act is:
 | `PUT /api/plugins/{name}/tenants/{tenant_id}` | `POST /api/admin/plugins/reload` on that tenant | root | `{state: "on" \| "off" \| null}` → write or clear the grant, then reload that tenant's engine; see [Per tenant](#per-tenant) |
 
 `tenant_id` is the bridge's routing field and is never forwarded to the engine.
+
+Each row's **`trust`** is the lock row read back, never re-derived: nothing in a
+listing fetches, hashes or verifies anything.
+
+| field | meaning |
+|---|---|
+| `signature` | `{verified, key_id, index_url}`. `verified` only for a `registry` install with a publisher key id, which is recorded only after the index signature checked out against a pinned key. A wheel installed from disk is not signed |
+| `wheel` | `{sha256, pinned}`: the wheel hash recorded at install, which matched the index's pin (or `--sha256`) before pip ran |
+| `manifest` | `{sha256, matches}`: the recorded manifest digest and whether the installed manifest still hashes to it; `matches` is `null` with no row |
+| `scan` | `{verdict, reasons, members_accounted}` from the install scan; `unscanned` for a row `sync` recorded |
+| `lockfile` | `{recorded, drifted}` |
+| `contract_version` | what the plugin's manifest declares |
+
+The Helm's Plugins page shows one badge per row from these, worst first —
+Blocked, Drifted, Review, Unsigned, Not scanned, Verified — with the facts in a
+drawer behind it. The Marketplace view shows the same badge on each installed
+agent: a plugin-shipped agent takes its plugin's, and any other agent is
+Unsigned with the bundle sha256 it was pinned to (`source_sha256` and `plugin`
+on `GET /api/installed-agents`). An older engine that sends no `trust` still
+gets a badge, derived from `verdict`, `drifted` and `source`.
 
 The listing also answers **`indexes`** — the index URLs this instance reads, in
 order, **exactly as configured**, including one the install route would refuse.

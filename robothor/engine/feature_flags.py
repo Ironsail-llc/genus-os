@@ -158,14 +158,15 @@ def rip_7_enforcement_mode() -> Rip7Mode:
     return "observe"
 
 
-def deferred_tools_enabled() -> bool:
-    """Return True iff deferred/searchable tool loading (Rip 16 / G4) is active.
+def deferred_tools_recent_runs() -> int:
+    """How many of an agent's latest runs seed its always-loaded core.
 
-    When on, broad-access agents are advertised only a small CORE_TOOLS set plus
-    the tool_search/tool_describe/tool_call meta-tools; the rest of their allowed
-    tools load on demand. Off by default; gated by ``ROBOTHOR_RIP_16_ENABLED``.
+    A deferred agent is advertised ``CORE_TOOLS`` plus the tools it called in
+    this many recent runs, so a tool it uses every day costs no tool_search
+    round-trip. ``0`` keeps the core static. Reads
+    ``ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS`` (default 10).
     """
-    return is_rip_enabled(16)
+    return _env_int("ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS", 10, minimum=0)
 
 
 def cron_warmup_recall_enabled() -> bool:
@@ -189,18 +190,6 @@ def narrow_memory_search_enabled() -> bool:
     Default OFF (observe token delta first); gated by ``MEMORY_NARROW_SEARCH``.
     """
     return _env_bool("MEMORY_NARROW_SEARCH")
-
-
-def compaction_hardening_enabled() -> bool:
-    """Return True iff compaction hardening (Rip 18 / G7) is active.
-
-    When on, compaction runs a cheap LLM-free pre-pass before summarizing:
-    dedup identical tool results (keep the newest full copy) and strip
-    historical media (base64 images) outside the protected recent tail — both
-    pure token wins with no information loss the agent can't re-fetch. Off by
-    default; gated by ``ROBOTHOR_RIP_18_ENABLED``.
-    """
-    return is_rip_enabled(18)
 
 
 def catalog_backed_models_enabled() -> bool:
@@ -248,13 +237,18 @@ def deferred_tools_threshold() -> int:
     tool_search round-trip); only broad-access agents (e.g. main) defer.
     Reads ``ROBOTHOR_DEFERRED_TOOLS_THRESHOLD`` (default 40).
     """
-    raw = os.environ.get("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "").strip()
+    return _env_int("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", 40, minimum=1)
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    """An integer tuning knob: unset or unparseable is ``default``, floored at ``minimum``."""
+    raw = os.environ.get(name, "").strip()
     if not raw:
-        return 40
+        return default
     try:
-        return max(1, int(raw))
+        return max(minimum, int(raw))
     except ValueError:
-        return 40
+        return default
 
 
 def symbolic_memory_mode() -> SymbolicMode:

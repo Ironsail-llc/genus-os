@@ -97,6 +97,9 @@ class DoctorContext:
     #: and failing the install on daemons it chose not to launch is how the
     #: documented quickstart came to exit 1 on a complete, working instance.
     services_expected: bool | None = None
+    #: ``--agent ID``: checks that report per agent report only this one. Empty
+    #: means every agent. A check that does not report per agent ignores it.
+    agent: str = ""
     db_factory: Callable[[], Any] | None = None
     http_fetch: Callable[[str, float], HttpResponse] | None = None
     _settings: Any = field(default=None, repr=False)

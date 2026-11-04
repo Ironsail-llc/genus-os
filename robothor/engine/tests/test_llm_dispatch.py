@@ -157,16 +157,6 @@ class TestBuildLLMKwargs:
                 model, messages, tools or [], input_est=1000, temperature=0.3
             )
 
-    def test_anthropic_direct_splits_system_on_time_marker(self):
-        sys = "STATIC RULES\n\n---\n\nCurrent time: 2026-05-30"
-        kwargs = self._build("anthropic/claude-opus-4-8", [{"role": "system", "content": sys}])
-        content = kwargs["messages"][0]["content"]
-        assert isinstance(content, list)
-        assert len(content) == 2
-        assert content[0]["cache_control"] == {"type": "ephemeral"}
-        assert content[0]["text"] == "STATIC RULES"
-        assert "cache_control" not in content[1]
-
     def test_anthropic_direct_no_marker_caches_whole_system(self):
         kwargs = self._build("anthropic/claude-opus-4-8", [{"role": "system", "content": "ALL"}])
         content = kwargs["messages"][0]["content"]

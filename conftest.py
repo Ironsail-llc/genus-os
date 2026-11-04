@@ -124,15 +124,40 @@ def _fresh_settings():
     The alias warnings are reset with it, for the same reason: they are
     once-per-process by design, so a test asserting that a deprecated name
     warns must not depend on whether an earlier test used it first.
+
+    ``robothor.config.get_config()`` is the same kind of cache and is dropped
+    too. Several suites strip every ``ROBOTHOR_`` variable for a test; a config
+    built in that window holds the default (production) database name, and a
+    later test's pool then refuses to open under the database guard.
     """
+    from robothor.config import reset_config
     from robothor.settings import reset_settings
     from robothor.settings.aliases import reset_alias_warnings
 
     reset_settings()
+    reset_config()
     reset_alias_warnings()
     yield
     reset_settings()
+    reset_config()
     reset_alias_warnings()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_identity_enrichment():
+    """Drop the identity-enrichment caches around every test.
+
+    The interactive warmup holds a caller's enrichment for the whole chat
+    session (``enrichment.enrich_identity_for_session``). That is right for
+    a session and wrong across tests: a later test that patches
+    ``enrich_identity`` for the same caller is served the earlier test's
+    held result and never reaches its patch.
+    """
+    from robothor.identity import enrichment
+
+    enrichment.clear_cache()
+    yield
+    enrichment.clear_cache()
 
 
 #: The two variables that turn any Python sender reading ``os.environ`` into a
@@ -267,3 +292,22 @@ def _reset_validation_warning_log():
     reset_validation_warning_log()
     yield
     reset_validation_warning_log()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_permission_and_stop_caches():
+    """Never let one test's permission rules or stop verdict answer the next.
+
+    ``check_tool_permission`` reuses rule rows for a few seconds and a tool call
+    reuses its iteration's durable-stop verdict -- right in a daemon, where the
+    rows and the stop are facts about the database, and wrong in a suite, where
+    every test fakes a different database under the same tenant and run ids.
+    """
+    from robothor.engine import permissions
+    from robothor.engine.runtime import controls
+
+    permissions.invalidate_permission_cache()
+    controls.invalidate_stop_cache()
+    yield
+    permissions.invalidate_permission_cache()
+    controls.invalidate_stop_cache()

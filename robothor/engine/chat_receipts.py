@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 from uuid import UUID
 
 from robothor.engine.tools.constants import CALENDAR_ADD_ATTENDEES_TOOL
+from robothor.engine.wrapped_call import explicit_arguments
 
 
 def _reference(value: Any) -> str | None:
@@ -36,9 +37,10 @@ def calendar_receipts(cur: Any, run: dict[str, Any], auth: AuthContext) -> list[
             # result directly. Only its explicit calendar target is evidence.
             if str(inputs.get("name", "")).strip() != CALENDAR_ADD_ATTENDEES_TOOL:
                 continue
-            inputs = inputs.get("arguments", {})
-            if not isinstance(inputs, dict):
+            arguments = explicit_arguments(inputs.get("arguments", {}))
+            if arguments is None:
                 continue
+            inputs = arguments
         outputs = step["tool_output"] if isinstance(step["tool_output"], dict) else {}
         before, after = (
             _reference(inputs.get("operation_id")),

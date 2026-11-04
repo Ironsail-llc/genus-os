@@ -44,6 +44,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.platform_capabilities import needs_gnu_coreutils, needs_tools
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _spec = importlib.util.spec_from_file_location(
@@ -246,6 +248,8 @@ class TestTheDailySurfaceRunsTheProbe:
         if os.geteuid() == 0:
             pytest.skip("root ignores directory permissions; the EIO case cannot be staged")
 
+    @needs_gnu_coreutils
+    @needs_tools("timeout", "getent")
     def test_an_unreadable_dump_directory_breaches_the_daily_report(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -261,6 +265,8 @@ class TestTheDailySurfaceRunsTheProbe:
         finally:
             dumps.chmod(0o755)
 
+    @needs_gnu_coreutils
+    @needs_tools("timeout", "getent")
     def test_an_unusable_volume_breaches_the_daily_report(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

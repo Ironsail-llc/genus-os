@@ -375,15 +375,15 @@ def _with_meta_tools(filtered: set[str]) -> set[str]:
     three tools its manifest omits. On the live instance that was the check's
     largest single source of noise, and the manifests were right.
 
-    The deferral test is the registry's own (``should_defer``): the flag, and
-    the advertised-tool count against the threshold. An agent below the
+    The deferral test is the registry's own (``should_defer``): the
+    advertised-tool count against the threshold. An agent below the
     threshold does NOT get them, and an instruction telling it to call one is
     the genuine finding this check exists for.
     """
-    from robothor.engine.feature_flags import deferred_tools_enabled, deferred_tools_threshold
+    from robothor.engine.feature_flags import deferred_tools_threshold
     from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
 
-    if deferred_tools_enabled() and len(filtered) > deferred_tools_threshold():
+    if len(filtered) > deferred_tools_threshold():
         return filtered | set(TOOLSEARCH_TOOLS)
     return filtered
 
@@ -498,6 +498,121 @@ async def _tools_named_but_not_granted(ctx: DoctorContext) -> Result:
     if len(lines) > _MAX_LISTED:
         shown += f"; and {len(lines) - _MAX_LISTED} more"
     return fail(f"{len(lines)} agent(s) with a tools/instructions mismatch: {shown}")
+
+
+# ── tools.deferred_tools_reachable ────────────────────────────────────
+
+
+def _scan_deferred_reachability(directory: Path, adapter_names: set[str]) -> list[str]:
+    """Findings, one line each: unsearchable schemas first, then per agent.
+
+    Builds the registry the engine builds (built-ins plus loaded plugins), so
+    the index judged is the one ``tool_search`` reads. Adapter tools are only
+    names offline — the registry learns their schemas by connecting — so a
+    granted adapter tool counts as reachable by its name.
+    """
+    from robothor.engine.tools.constants import CORE_TOOLS, TOOLSEARCH_TOOLS
+    from robothor.engine.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    schemas = set(registry._schemas)  # noqa: SLF001 - the index tool_search ranks
+    unsearchable = set(registry.unsearchable_names())
+    lines: list[str] = []
+    if unsearchable:
+        lines.append("no searchable words in schema: " + ", ".join(sorted(unsearchable)))
+    # Reachable: registered and either always advertised or in the index; or
+    # an adapter tool, known offline by name only.
+    reachable = {n for n in schemas if n in CORE_TOOLS | TOOLSEARCH_TOOLS or n not in unsearchable}
+    reachable |= adapter_names
+    for manifest in _scan_manifests(directory):
+        agent_id = str(manifest.get("id") or "")
+        declared = {str(n) for n in (manifest.get("tools_allowed") or [])}
+        unreachable = sorted(declared - reachable)
+        if unreachable:
+            lines.append(f"{agent_id}: neither loaded nor searchable: " + ", ".join(unreachable))
+    return lines
+
+
+async def _deferred_tools_reachable(ctx: DoctorContext) -> Result:
+    """Every granted tool can reach the model, deferred or not.
+
+    With deferred loading on (the default), a broad agent is shown its core
+    and finds the rest through ``tool_search``. A ``tools_allowed`` entry that
+    is not advertised and not in the search index is a grant the agent can
+    never use, and from inside the turn it looks like a tool that does not
+    exist. The same holds for a registered schema — a plugin's included —
+    with no searchable word in its name, description or keywords.
+    """
+    directory = _manifest_dir(ctx)
+    if not directory.is_dir():
+        return skip(f"no manifest directory at {directory}")
+    try:
+        adapters = await ctx.run_blocking(_adapter_names)
+        lines = await ctx.run_blocking(_scan_deferred_reachability, directory, adapters)
+    except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
+        return fail(f"cannot scan the tool index: {type(exc).__name__}")
+    if not lines:
+        return ok("every granted tool is either loaded or findable through tool_search")
+    shown = "; ".join(lines[:_MAX_LISTED])
+    if len(lines) > _MAX_LISTED:
+        shown += f"; and {len(lines) - _MAX_LISTED} more"
+    return fail(f"{len(lines)} tool reachability finding(s): {shown}")
+
+
+# ── tools.inability_copy ──────────────────────────────────────────────
+
+#: A first-person or second-person statement of inability, at the start of a
+#: sentence or line. Case-sensitive on purpose: "if you cannot find it" is a
+#: condition, "You cannot edit code." is a claim the agent will repeat to the
+#: person even when it holds the tool.
+_INABILITY_RE = re.compile(
+    r"(?:^|(?<=[.!?:]\s)|(?<=^[-*]\s))(?:I|You)\s+(?:cannot|can't|can not|are unable to"
+    r"|am unable to)\b[^\n]*",
+    re.MULTILINE,
+)
+
+
+def inability_claims(text: str) -> list[str]:
+    """Inability statements in ``text`` outside fenced code and HTML comments."""
+    text = _FENCE_RE.sub("", text)
+    text = _HTML_COMMENT_RE.sub("", text)
+    return [match.group(0).strip() for match in _INABILITY_RE.finditer(text)]
+
+
+def _scan_inability_copy(directory: Path, workspace: Path) -> list[str]:
+    lines: list[str] = []
+    for manifest in _scan_manifests(directory):
+        found = inability_claims(_read_instruction_text(workspace, manifest))
+        if found:
+            lines.append(f"{manifest.get('id')}: " + " | ".join(found[:3]))
+    return lines
+
+
+async def _inability_copy(ctx: DoctorContext) -> Result:
+    """Instructions tell the agent it cannot do something.
+
+    The agent repeats such a line to the person whether or not it holds the
+    tool, and it outlives the restriction it described. State the reason and
+    the unlock instead ("n8n workflows are edited in n8n; send the operator
+    the execution link"), or name the gate the engine enforces.
+    """
+    directory = _manifest_dir(ctx)
+    if not directory.is_dir():
+        return skip(f"no manifest directory at {directory}")
+    workspace = _workspace(ctx)
+    try:
+        lines = await ctx.run_blocking(_scan_inability_copy, directory, workspace)
+    except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
+        return fail(f"cannot scan the instructions: {type(exc).__name__}")
+    if not lines:
+        return ok("no instruction file tells its agent it cannot do something")
+    shown = "; ".join(lines[:_MAX_LISTED])
+    if len(lines) > _MAX_LISTED:
+        shown += f"; and {len(lines) - _MAX_LISTED} more"
+    return fail(
+        f"{len(lines)} agent(s) told they cannot do something; say why and what unlocks "
+        f"it instead: {shown}"
+    )
 
 
 # ── tools.exec_allowlist_bypasses_denied_tool ─────────────────────────
@@ -1037,6 +1152,20 @@ CHECKS: tuple[Check, ...] = (
         category="agents",
         severity="info",
         run=_approval_gate_not_armed,
+    ),
+    Check(
+        id="tools.deferred_tools_reachable",
+        title="Every granted tool is loaded or findable through tool_search",
+        category="tools",
+        severity="recommended",
+        run=_deferred_tools_reachable,
+    ),
+    Check(
+        id="tools.inability_copy",
+        title="Instructions do not tell an agent it cannot do something",
+        category="tools",
+        severity="recommended",
+        run=_inability_copy,
     ),
     Check(
         id="tools.exec_allowlist_bypasses_denied_tool",

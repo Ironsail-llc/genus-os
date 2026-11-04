@@ -52,6 +52,8 @@ from robothor.engine.session import ENGINE_CONTEXT_ROLE
 from robothor.engine.tool_outcome import error_text, record_tool_outcome
 from robothor.engine.tool_turn_context import tool_turn_context
 from robothor.engine.tools.read_only import declared_read_only_tools
+from robothor.engine.wrapped_call import inner_call
+from robothor.secrets.redaction import redact_tool_arguments, redact_tool_result
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentConfig
@@ -140,6 +142,11 @@ class _Call:
     result: dict[str, Any] | None = None
     elapsed_ms: int = 0
     refused: bool = False
+
+    @property
+    def inner(self) -> tuple[str, dict[str, Any]]:
+        """The call that ran (for ``tool_call``, the wrapped one): what result checks judge."""
+        return inner_call(self.tool_name, self.tool_args)
 
 
 class ToolTurnMixin:
@@ -285,15 +292,11 @@ class ToolTurnMixin:
         from robothor.engine.runner import _resolve_tool_timeout
 
         if req.on_tool:
+            # Redacted like the stored step: the live SSE stream must not carry a credential.
+            args = redact_tool_arguments(call.tool_name, call.tool_args)
+            event = {"event": "tool_start", "tool": call.tool_name, "args": args}
             with contextlib.suppress(Exception):
-                await req.on_tool(
-                    {
-                        "event": "tool_start",
-                        "tool": call.tool_name,
-                        "args": call.tool_args,
-                        "call_id": call.tc.id,
-                    }
-                )
+                await req.on_tool({**event, "call_id": call.tc.id})
 
         started = time.monotonic()
         timeout = _resolve_tool_timeout(
@@ -356,13 +359,13 @@ class ToolTurnMixin:
         result = apply_post_execution_guardrails(
             session,
             req.guardrail_engine,
-            tool_name=call.tool_name,
+            tool_name=call.inner[0],
             result=result,
             error_msg=error_msg,
             state=req.guard_state,
         )
 
-        await self._dispatch_post_tool_hook(call, req, result)
+        await self._dispatch_post_tool_hook(call, req, redact_tool_result(result))
 
         # ── [COST] Propagate tool-reported costs (e.g., deep_reason RLM) ──
         if isinstance(result, dict) and not error_msg:
@@ -430,8 +433,8 @@ class ToolTurnMixin:
                 from robothor.engine.models import ErrorType
 
                 req.escalation.record_error(error_type or ErrorType.UNKNOWN)
-                # Track per-kind (tool_name + error_msg_prefix) for STOP RETRYING hints
-                req.escalation.record_error_kind(call.tool_name, error_msg)
+                # Per-kind STOP RETRYING hints, keyed on the wrapped tool's name.
+                req.escalation.record_error_kind(call.inner[0], error_msg)
             elif not refused_by_guard:
                 req.escalation.record_success()
 
@@ -439,8 +442,8 @@ class ToolTurnMixin:
         if req.checkpoint and not error_msg and not refused_by_guard:
             req.checkpoint.record_success()
 
-        if error_msg:
-            iteration_errors.append((call.tool_name, error_msg, error_type))
+        if error_msg:  # under the wrapped tool's name, which recovery briefs a helper on
+            iteration_errors.append((call.inner[0], error_msg, error_type))
 
     # ── the small pieces the recorder is made of ───────────────────────
 
@@ -451,19 +454,20 @@ class ToolTurnMixin:
             return
         from robothor.engine.hook_registry import HookContext, HookEvent
 
+        tool_name, tool_args = call.inner
         try:
             ctx = HookContext(
                 event=HookEvent.POST_TOOL_USE,
                 agent_id=req.agent_config.id,
                 run_id=req.session.run.id,
-                tool_name=call.tool_name,
-                tool_args=call.tool_args,
+                tool_name=tool_name,
+                tool_args=tool_args,
                 tool_result=result,
             )
             await req.hook_registry.dispatch(HookEvent.POST_TOOL_USE, ctx)
         except Exception as e:
             logger.warning(
-                "POST_TOOL_USE hook error for %s: %s", _sanitize(call.tool_name), _sanitize(e)
+                "POST_TOOL_USE hook error for %s: %s", _sanitize(tool_name), _sanitize(e)
             )
 
     @staticmethod
@@ -509,12 +513,12 @@ class ToolTurnMixin:
         if not req.on_tool:
             return
         try:
-            preview = json.dumps(result, default=str)
+            preview = json.dumps(redact_tool_result(result), default=str)
             if len(preview) > 2000:
                 preview = preview[:2000] + "..."
         except Exception as e:
             logger.warning("JSON serialization of tool result failed: %s", _sanitize(e))
-            preview = str(result)[:2000]
+            preview = str(redact_tool_result(result))[:2000]
         with contextlib.suppress(Exception):
             await req.on_tool(
                 {

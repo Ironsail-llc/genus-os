@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.sanitize import sanitize_log as _sanitize
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,9 @@ class PreparedToolset:
     #: prompt paragraph and the browser schema wording turn on together — they
     #: describe one feature, and both used to ship to everyone.
     autonomy_active: bool = False
+    #: Opt-in tools the run's capability tier added. Empty when no widening
+    #: tier was resolved.
+    tier_unlocked: tuple[str, ...] = ()
 
 
 def deferred_toolset_note(visible: int, reachable: int) -> str:
@@ -175,38 +179,140 @@ def with_discovery_note(preamble: str, prepared: PreparedToolset) -> str:
     return "\n\n".join(parts)
 
 
-def publish_toolset(registry: Any, agent_config: Any, tool_names: list[str]) -> tuple[Any, ...]:
+def publish_toolset(
+    registry: Any,
+    agent_config: Any,
+    tool_names: list[str],
+    advertised: Any = None,
+    capability: Any = None,
+    *,
+    readonly: bool = False,
+) -> tuple[Any, ...]:
     """Install this run's tool context vars; returns tokens for withdrawal.
 
-    Two of them, and they are not the same thing:
+    Three of them, and they are not the same thing (plus, on a deferred run
+    given ``advertised``, the schema names the model was shown, which
+    ``tool_search`` uses to say which hits are already directly callable):
 
-    * the DEFERRED allow-set, set only when the toolset is deferred, is what
-      ``tool_call`` checks — it is a security boundary, and setting it on a run
-      that is not deferred would hand ``tool_call`` reach it is not meant to
-      have;
+    * the DEFERRED allow-set is what ``tool_call`` checks — it is a security
+      boundary. It holds the grant only when the toolset is deferred, and is
+      set to ``None`` on a run that is not: a sub-agent runs inline in its
+      parent's task, and leaving the parent's set in place would hand the
+      child's ``tool_call`` (and its refusals' unlocks) the parent's reach;
     * the agent's TOOLSET, set on every run, gates nothing. It exists so
       ``tool_search`` can answer a non-deferred run with the agent's own tools
       instead of "only available on deferred runs", which it returned 18 times
-      in one week to an agent that went on calling it.
-    """
-    from robothor.engine.tools.dispatch import set_agent_toolset, set_deferred_allowed
+      in one week to an agent that went on calling it;
+    * the run's capability tier (``capability``, the run's ``TierDecision``,
+      None outside a run), which dispatch copies onto ``ToolContext``.
 
-    defer_token = (
-        set_deferred_allowed(registry.deferred_whitelist(agent_config))
-        if registry.should_defer(agent_config)
+    A ``readonly`` (plan-mode) run is never published as deferred: it is shown
+    its whole read-only set, so a search there answers from that set and
+    promotes nothing, rather than from an allow-set full of writes.
+    """
+    from robothor.engine.capability_tier import set_run_tier
+    from robothor.engine.tools.dispatch import (
+        set_advertised_toolset,
+        set_agent_toolset,
+        set_deferred_allowed,
+        set_promotion_sink,
+    )
+
+    tier = capability.tier if capability is not None else ""
+    tier_kw = {"tier": tier} if tier else {}
+    deferred = not readonly and registry.should_defer(agent_config, **tier_kw)
+    defer_token = set_deferred_allowed(
+        registry.deferred_whitelist(agent_config, **tier_kw) if deferred else None
+    )
+    advertised_token = (
+        set_advertised_toolset(frozenset(advertised))
+        if deferred and advertised is not None
         else None
     )
-    return (defer_token, set_agent_toolset(frozenset(tool_names)))
+    promoted_token = set_promotion_sink(set()) if deferred else None
+    return (
+        defer_token,
+        set_agent_toolset(frozenset(tool_names)),
+        advertised_token,
+        set_run_tier(tier),
+        promoted_token,
+    )
 
 
 def withdraw_toolset(tokens: tuple[Any, ...]) -> None:
     """Undo :func:`publish_toolset`. Safe to call with anything it returned."""
-    from robothor.engine.tools.dispatch import clear_agent_toolset, clear_deferred_allowed
+    from robothor.engine.capability_tier import clear_run_tier
+    from robothor.engine.tools.dispatch import (
+        clear_advertised_toolset,
+        clear_agent_toolset,
+        clear_deferred_allowed,
+        clear_promotion_sink,
+    )
 
-    defer_token, toolset_token = tokens
+    defer_token, toolset_token, advertised_token, tier_token, promoted_token = tokens
+    if promoted_token is not None:
+        clear_promotion_sink(promoted_token)
+    if advertised_token is not None:
+        clear_advertised_toolset(advertised_token)
     if defer_token is not None:
         clear_deferred_allowed(defer_token)
     clear_agent_toolset(toolset_token)
+    clear_run_tier(tier_token)
+
+
+def with_promoted(
+    registry: Any,
+    agent_config: Any,
+    schemas: list[dict[str, Any]],
+    promoted: Any,
+) -> list[dict[str, Any]]:
+    """``schemas`` plus the real schema of every promoted tool it lacks.
+
+    ``tool_search`` marks its top hits; this is where they reach the wire, and
+    the allow-set is checked HERE as well as there — the same published set
+    both times — so a name marked by anything is advertised only if this run
+    may run it. An empty list stays
+    empty: it is the loop's signal for a text-only turn.
+    """
+    from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
+    from robothor.engine.tools.registry import wire_schema
+
+    present = {str(s.get("function", {}).get("name", "")) for s in schemas}
+    wanted = set(promoted) - present - TOOLSEARCH_TOOLS
+    if not schemas or not wanted:
+        return schemas
+    from robothor.engine.tools.dispatch import get_deferred_allowed
+
+    # The allow-set this run PUBLISHED, the one the search promoted from: it
+    # can be wider than the manifest's own (a tier may grant an opt-in tool),
+    # and two different sets here is a tool announced and then never shown.
+    published = get_deferred_allowed()
+    allowed = published if published is not None else registry.deferred_whitelist(agent_config)
+    added = []
+    for name in sorted(wanted & allowed):
+        schema = registry.get_schema(name)
+        if schema:
+            added.append(wire_schema(schema))
+    return [*schemas, *added] if added else schemas
+
+
+def promote_into(
+    registry: Any,
+    agent_config: Any,
+    schemas: list[dict[str, Any]],
+    allowed: frozenset[str],
+) -> tuple[list[dict[str, Any]], frozenset[str]]:
+    """The loop's schemas and admission set, with this run's promoted tools.
+
+    Both move together: a schema the model is shown is a tool admission must
+    let it call directly.
+    """
+    from robothor.engine.tools.dispatch import get_promoted_tools
+
+    grown = with_promoted(registry, agent_config, schemas, get_promoted_tools())
+    if grown is schemas:
+        return schemas, allowed
+    return grown, allowed | {str(s.get("function", {}).get("name", "")) for s in grown}
 
 
 async def prepare_toolset(
@@ -219,6 +325,7 @@ async def prepare_toolset(
     deep_plan: bool,
     tenant_id: str | None = None,
     actor_id: str | None = None,
+    capability: Any = None,
 ) -> PreparedToolset:
     """Load this agent's adapters, then pick and wrap its toolset.
 
@@ -226,13 +333,35 @@ async def prepare_toolset(
     a live autonomy grant? — and it is answered HERE, once, instead of at each
     of the two places that spend tokens on the answer. Both used to spend them
     unconditionally, on every instance, enrolled or not.
+
+    ``capability`` is the run's ``TierDecision`` (None outside a run). Its
+    tier picks the toolset; a widening tier also reports which opt-in tools
+    it added.
     """
     await _load_adapters(registry, agent_config, agent_id)
 
     if not readonly_mode:
         autonomy = await _autonomy_active(tenant_id, actor_id, agent_id)
-        schemas = registry.build_for_agent(agent_config, autonomy=autonomy)
-        names = registry.get_tool_names(agent_config)
+        # Passed only when there is one, so a caller with no run makes the
+        # same registry calls it always made (any registry, not just ours).
+        tier = capability.tier if capability is not None else ""
+        tier_kw = {"tier": tier} if tier else {}
+        if _defers(registry, agent_config, **tier_kw):
+            # Only a deferred run asks, and only it pays the (cached, off-loop)
+            # lookup: the tools this agent used lately join its core.
+            from robothor.engine import recent_tools
+
+            recent = await recent_tools.recent_tool_names(agent_id, tenant_id or DEFAULT_TENANT)
+            schemas = registry.build_for_agent(
+                agent_config, autonomy=autonomy, recent=recent, **tier_kw
+            )
+        else:
+            schemas = registry.build_for_agent(agent_config, autonomy=autonomy, **tier_kw)
+        names = registry.get_tool_names(agent_config, **tier_kw)
+        unlocked: tuple[str, ...] = ()
+        if capability is not None and capability.widens:
+            baseline = set(registry.get_tool_names(agent_config))
+            unlocked = tuple(n for n in names if n not in baseline)
         advertised = {str(schema.get("function", {}).get("name", "")) for schema in schemas}
         reachable = tuple(n for n in names if n not in advertised)
         return PreparedToolset(
@@ -242,6 +371,7 @@ async def prepare_toolset(
             reachable_names=reachable,
             discovery_note=deferred_toolset_note(len(schemas), len(reachable)),
             autonomy_active=autonomy,
+            tier_unlocked=unlocked,
         )
 
     from robothor.engine.prompts import (
@@ -264,6 +394,12 @@ async def prepare_toolset(
         wrapped = preamble + system_prompt + PLAN_MODE_SUFFIX
 
     return PreparedToolset(tool_schemas=tool_schemas, tool_names=tool_names, system_prompt=wrapped)
+
+
+def _defers(registry: Any, agent_config: Any, **tier_kw: str) -> bool:
+    """Does this registry defer this agent? ``False`` for a registry that cannot say."""
+    should_defer = getattr(registry, "should_defer", None)
+    return bool(should_defer(agent_config, **tier_kw)) if callable(should_defer) else False
 
 
 #: How long a run will wait to find out how wordy its own prompt should be.
@@ -326,6 +462,9 @@ async def _load_adapters(registry: Any, agent_config: Any, agent_id: str) -> Non
         if agent_config.mcp_servers:
             configure_mcp_servers(agent_config.mcp_servers)
 
+        # Through load_adapters on every run, never the watcher's list: its
+        # per-file cache makes this a stat per file, and it still re-checks
+        # each file's identity and ${VAR} values.
         adapters = get_adapters_for_agent(agent_id)
         for adapter in adapters:
             register_adapter(adapter)

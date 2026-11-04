@@ -6,13 +6,15 @@ import asyncio
 import logging
 import re
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.capability_tier import current_run_tier
 from robothor.engine.tools.response_failure import http_status_failure, tool_response_failure
+from robothor.engine.wrapped_call import MalformedToolCallError
 
 if TYPE_CHECKING:
     from robothor.config import Config
@@ -64,15 +66,17 @@ def get_tool_whitelist() -> frozenset[str] | None:
 # enforced by the advertised schema list, which deferral shrinks to core+meta).
 #
 # This is deliberately SEPARATE from _thread_tool_whitelist: it gates only
-# tool_call, not all dispatch, so it cannot wrongly restrict a non-deferring
-# sub-agent that inherits the parent task's context. Default None.
+# tool_call, not all dispatch. Default None. The runner sets it on EVERY run
+# (None when the run is not deferred): spawn_agent runs a child inline in the
+# parent's task, and a child that inherited the parent's set would read the
+# parent's grant as its own.
 _deferred_allowed_var: ContextVar[frozenset[str] | None] = ContextVar(
     "_deferred_allowed_var", default=None
 )
 
 
-def set_deferred_allowed(allowed: frozenset[str]) -> Token[frozenset[str] | None]:
-    """Record the deferred-run allow-set; returns a reset token."""
+def set_deferred_allowed(allowed: frozenset[str] | None) -> Token[frozenset[str] | None]:
+    """Record the deferred-run allow-set (None: not deferred); returns a reset token."""
     return _deferred_allowed_var.set(allowed)
 
 
@@ -84,6 +88,69 @@ def clear_deferred_allowed(token: Token[frozenset[str] | None]) -> None:
 def get_deferred_allowed() -> frozenset[str] | None:
     """The current deferred-run allow-set, or None when not a deferred run."""
     return _deferred_allowed_var.get()
+
+
+# ── What a deferred run was actually shown ────────────────────────────
+# The advertised schema names, published beside the allow-set. tool_search
+# marks a hit ``in_toolset`` from this, so a tool that joined the core because
+# the agent used it recently is reported as directly callable rather than as
+# something to reach through tool_call. Gates nothing. Default None, which
+# tool_search reads as "the static CORE_TOOLS".
+_advertised_var: ContextVar[frozenset[str] | None] = ContextVar("_advertised_var", default=None)
+
+
+def set_advertised_toolset(names: frozenset[str]) -> Token[frozenset[str] | None]:
+    """Record the schema names this run was shown; returns a reset token."""
+    return _advertised_var.set(names)
+
+
+def clear_advertised_toolset(token: Token[frozenset[str] | None]) -> None:
+    """Restore the prior advertised-set record."""
+    _advertised_var.reset(token)
+
+
+def get_advertised_toolset() -> frozenset[str] | None:
+    """The schema names this run was shown, or None when nothing published."""
+    return _advertised_var.get()
+
+
+# ── Search hits promoted into a deferred run's toolset ─────────────────
+# A mutable set the runner publishes on a deferred run. `tool_search` adds its
+# top hits; the runner reads it before every model call and advertises their
+# real schemas from then on, so the model calls the tool directly instead of
+# through `tool_call`'s property-less `arguments` object. The set is shared,
+# not copied, by the child contexts tool handlers run in, which is the whole
+# reason it is a set inside a ContextVar rather than a ContextVar of names.
+_promoted_var: ContextVar[set[str] | None] = ContextVar("_promoted_var", default=None)
+
+
+def set_promotion_sink(sink: set[str]) -> Token[set[str] | None]:
+    """Publish the set this run's promoted tool names collect in."""
+    return _promoted_var.set(sink)
+
+
+def clear_promotion_sink(token: Token[set[str] | None]) -> None:
+    """Withdraw the promotion sink."""
+    _promoted_var.reset(token)
+
+
+def promote_tools(names: list[str]) -> list[str]:
+    """Mark ``names`` for this run's toolset; returns the ones it took.
+
+    Nothing is taken on a run that published no sink: saying a tool was added
+    when no runner will add it would send the agent to call a tool it lacks.
+    """
+    sink = _promoted_var.get()
+    if sink is None:
+        return []
+    sink.update(names)
+    return list(names)
+
+
+def get_promoted_tools() -> frozenset[str]:
+    """The names promoted so far this run."""
+    sink = _promoted_var.get()
+    return frozenset(sink) if sink else frozenset()
 
 
 # ── The agent's toolset, deferred or not ───────────────────────────────
@@ -131,6 +198,18 @@ class ToolContext:
 
         return _get(name)
 
+    def call_kwargs(self) -> dict[str, Any]:
+        """Every field, as the keyword arguments ``ToolRegistry.execute`` takes.
+
+        For a handler that runs another tool on its caller's behalf
+        (``tool_call``), so the inner call runs under this whole context.
+        Re-listing the fields by hand is how ``identity`` was once dropped,
+        which made every data-scoped read through the wrapper unrestricted; a
+        field added here now travels without anyone remembering it, or fails
+        loudly if ``execute`` does not take it.
+        """
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
     agent_id: str = ""
     run_id: str = ""  # current AgentRun id — lets handlers find per-run state
     tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
@@ -154,6 +233,13 @@ class ToolContext:
     # to compute the "own data + shared" DataScope for a call; None is the
     # unaffected, pre-Task-5 default every existing caller gets.
     identity: IdentityContext | None = None
+    # The run's capability tier (robothor/engine/capability_tier.py):
+    # "unrestricted" / "elevated" / "standard" / "restricted", "" for a call
+    # made outside a run. A gate that widens
+    # for the owner reads this one field instead of re-deriving it from
+    # user_role, trigger and identity. Read from the run's published toolset
+    # (capability_tier.current_run_tier) when the call is dispatched.
+    capability_tier: str = ""
 
 
 def get_db() -> Any:
@@ -354,6 +440,8 @@ def _describe_exception(e: BaseException) -> tuple[str, bool]:
     is reclassified — a KeyError from a cache lookup deep inside a handler is
     still a crash, and still says so.
     """
+    if isinstance(e, MalformedToolCallError):
+        return (str(e), False)
     if isinstance(e, KeyError) and e.args:
         key = e.args[0]
         if isinstance(key, str) and _ARG_NAME_RE.match(key):
@@ -424,9 +512,15 @@ def _audit_tool_call(
     status: str = "ok",
     error: str | None = None,
 ) -> None:
-    """Record a tool invocation in the audit log (non-blocking, never raises)."""
+    """Record a tool invocation in the audit log. Never raises.
+
+    The row is queued to the engine's event writer (``event_writer.py``) and
+    INSERTed off the event loop, in call order; with no running loop it is
+    written before this returns.
+    """
     try:
         from robothor.audit.logger import log_event
+        from robothor.engine.event_writer import get_event_writer
         from robothor.secrets.redaction import redact
 
         details: dict[str, Any] = {"tenant_id": tenant_id}
@@ -441,7 +535,8 @@ def _audit_tool_call(
             # anything to compare it against. The arguments were never here;
             # this closes the one field that could carry a value.
             details["error"] = redact(error)[:500]
-        log_event(
+        get_event_writer().submit(
+            log_event,
             event_type="agent.tool_call",
             action=tool_name,
             category="agent",
@@ -452,6 +547,25 @@ def _audit_tool_call(
         )
     except Exception:
         pass
+
+
+def _rbac_unlock(user_role: str, name: str, denied: str) -> str:
+    """What unlocks a per-user RBAC denial, from where the caller stands.
+
+    Telling an owner or admin that "an owner or admin can do it" sends them to
+    themselves; what gates them is the rule itself.
+    """
+    role = user_role or "none"
+    if role in ("owner", "admin"):
+        return (
+            f"Your role '{role}' is refused '{name}' by a specific RBAC rule ({denied}), "
+            "not by its rank. An owner changes that rule: an allow row for role "
+            f"'{role}' and '{name}' in role_permissions"
+        )
+    return (
+        f"Your role here is '{role}', which may not use '{name}'. An owner or admin can "
+        "do it, or grant that role the tool (a role_permissions allow row)"
+    )
 
 
 async def _refuse_before_handler(
@@ -472,16 +586,30 @@ async def _refuse_before_handler(
     """
     # ── Permission check (single enforcement gate) ──
     from robothor.engine.permissions import check_tool_permission
+    from robothor.engine.wrapped_call import PERMISSION_TRANSPARENT_TOOLS
 
-    # Permission lookup is database-backed and synchronous.  Keep it off the
-    # Engine event loop so one slow RBAC query cannot stall unrelated chat,
-    # health, or agent sessions.
-    denied = await asyncio.to_thread(
-        check_tool_permission, user_role, tenant_id, name, user_id=user_id
-    )
-    if denied:
-        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied)
-        return {"error": denied}
+    # A meta-tool is judged by what it reaches: the tool a tool_call wraps
+    # comes back through this same gate under its own name. A missing role
+    # still fails closed here, for the meta-tools too.
+    if name not in PERMISSION_TRANSPARENT_TOOLS or not user_role:
+        # Permission lookup is database-backed and synchronous.  Keep it off
+        # the Engine event loop so one slow RBAC query cannot stall unrelated
+        # chat, health, or agent sessions.
+        denied = await asyncio.to_thread(
+            check_tool_permission, user_role, tenant_id, name, user_id=user_id
+        )
+        if denied:
+            from robothor.engine.refusal import refusal
+
+            _audit_tool_call(
+                name, agent_id, tenant_id, user_id=user_id, status="denied", error=denied
+            )
+            return refusal(
+                denied,
+                gate="role",
+                name="rbac",
+                unlock=_rbac_unlock(user_role, name, denied),
+            )
 
     # ── Per-task tool whitelist (Rip 1) ──
     # If a parent forked us with a restricted toolset (e.g. the
@@ -490,20 +618,37 @@ async def _refuse_before_handler(
     # the handler ever sees it.
     whitelist = _thread_tool_whitelist.get()
     if whitelist is not None and name not in whitelist:
+        from robothor.engine.refusal import refusal
+
         msg = f"Tool '{name}' denied by per-task whitelist"
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=msg)
-        return {"error": msg, "denied_by_whitelist": True}
+        return refusal(
+            msg,
+            gate="allowlist",
+            name="per_task_whitelist",
+            unlock=(
+                "This forked task may use only the tools its parent run gave it; report "
+                f"back and let the parent run call '{name}'"
+            ),
+            denied_by_whitelist=True,
+        )
 
     return None
 
 
 async def _runtime_denial(
-    name: str, args: dict[str, Any], ctx: ToolContext
+    name: str, args: dict[str, Any], ctx: ToolContext, *, fresh_stop: bool = False
 ) -> dict[str, Any] | None:
+    """Stop, lease, deadline and goal admission for one tool call.
+
+    The durable stop is the verdict the iteration's provider attempt read
+    (``controls.stopped_for_iteration``); ``fresh_stop`` reads it again, for the
+    recheck right before a journaled side effect is dispatched.
+    """
     from robothor.goals.runtime import admit_tool
 
     try:
-        from robothor.engine.runtime.controls import stopped
+        from robothor.engine.runtime.controls import stopped_for_iteration
         from robothor.engine.runtime.deadlines import require_time
 
         require_time()
@@ -522,7 +667,9 @@ async def _runtime_denial(
 
         if resume_claim.get() is not None:
             await asyncio.to_thread(require_owned)
-        if bool(ctx.run_id) and await asyncio.to_thread(stopped, ctx.tenant_id, ctx.run_id):
+        if bool(ctx.run_id) and await asyncio.to_thread(
+            stopped_for_iteration, ctx.tenant_id, ctx.run_id, refresh=fresh_stop
+        ):
             raise ValueError(
                 "durable stop denies further tool dispatch; reconcile in-flight effects"
             )
@@ -551,6 +698,7 @@ async def _execute_tool(
     task_author_override: str = "",
     is_benchmark: bool = False,
     identity: IdentityContext | None = None,
+    capability_tier: str = "",
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
 
@@ -575,6 +723,8 @@ async def _execute_tool(
         task_author_override=task_author_override,
         is_benchmark=is_benchmark,
         identity=identity,
+        # An explicit tier is a caller's (tool_call's call_kwargs); else the run's.
+        capability_tier=capability_tier or current_run_tier(),
     )
     denial = await _runtime_denial(name, args, ctx)
     if denial:

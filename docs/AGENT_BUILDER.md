@@ -204,7 +204,11 @@ route between them (condition, transform, parallel): an agent step runs one at
 a time per agent and is skipped while that agent is busy, so an overlapping run
 would drop it and still be recorded as completed.
 The setting covers every run of the workflow, whichever trigger starts it, and
-the tool-call rate limit (below) still defers a run as usual. A concurrent
+the tool-call rate limit (below) still defers a run as usual. Its runs take a
+slot in the `hooks` execution lane, not the background lane, so a burst of
+events neither waits behind long background runs nor takes their slots:
+`ROBOTHOR_LANE_HOOKS_LIMIT` (default 8) caps how many run at once. A
+workflow without `concurrent` is background work and takes a background slot. A concurrent
 workflow with an `agent` step (at the top level or inside `parallel`), or with
 `requeue_if_busy` on any trigger, is an error: the workflow does not load.
 
@@ -1245,6 +1249,19 @@ provider fallback disabled. Provider preferences do not increase the job budget
 or guarantee a response within the agent deadline. They apply to the session's
 main streaming/non-streaming calls; independently invoked auxiliary model calls
 keep their own routing.
+
+Context compaction summarises with the agent's own chain. To have it try the chain's small/fast model first, name that
+member as `model.compaction`; a value that is not the primary or one of the
+fallbacks is ignored, so compaction never dials a model the chain does not
+already authorise.
+
+```yaml
+model:
+  primary: openrouter/example/large-model
+  fallbacks:
+    - openrouter/example/small-model
+  compaction: openrouter/example/small-model
+```
 
 A 3-unit pipeline: **classifier** → **analyst** → **responder**, connected via CRM tasks and event hooks.
 

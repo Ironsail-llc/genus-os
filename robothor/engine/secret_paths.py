@@ -192,6 +192,19 @@ def _normalise_paths(command: str) -> str:
 _INBOX_SECRET = re.compile(r"(?:^|/)inbox/[^/]+/[^/]+/\d{4}-\d{2}-\d{2}/secret/[^/]+$")
 
 
+def _expanduser(path: str | os.PathLike[str]) -> str:
+    """``~`` and ``~user`` expanded, never raising.
+
+    ``Path.expanduser`` raises ``RuntimeError`` for a ``~word`` that names no
+    user, and agents write plenty of those (``"~40% faster"``, ``@~1``,
+    ``mask = ~flags``). ``os.path.expanduser`` returns such a word unchanged,
+    so it stays a literal and every name rule still applies to it.
+    """
+    import os as _os
+
+    return _os.path.expanduser(str(path))  # noqa: PTH111 - Path.expanduser raises
+
+
 def is_inbox_secret_path(path: str | os.PathLike[str]) -> bool:
     """True for the channel inbox's copy of a credentials file. Pure.
 
@@ -212,7 +225,7 @@ def is_inbox_secret_path(path: str | os.PathLike[str]) -> bool:
     """
     import posixpath
 
-    spelled = PurePath(Path(str(path)).expanduser()).as_posix()
+    spelled = PurePath(_expanduser(path)).as_posix()
     return bool(_INBOX_SECRET.search(posixpath.normpath(spelled)))
 
 
@@ -246,7 +259,7 @@ KEY_FILE_SETTINGS = (
 
 def _resolved(path: str) -> str:
     """``realpath``: symlinks followed, ``..`` resolved, missing files allowed."""
-    return str(Path(path).expanduser().resolve(strict=False))
+    return str(Path(_expanduser(path)).resolve(strict=False))
 
 
 def _broad_directories() -> set[str]:
@@ -303,11 +316,11 @@ def _key_file_targets(value: str) -> list[str]:
     """
     from robothor.settings.env import process_env_get
 
-    expanded = Path(value).expanduser()
+    expanded = Path(_expanduser(value))
     if expanded.is_absolute():
         return [_resolved(str(expanded))]
     workspace = (process_env_get("ROBOTHOR_WORKSPACE", "") or "").strip()
-    bases = [Path.cwd(), Path(workspace).expanduser() if workspace else Path.home() / "robothor"]
+    bases = [Path.cwd(), Path(_expanduser(workspace)) if workspace else Path.home() / "robothor"]
     return sorted({_resolved(str(base / expanded)) for base in bases})
 
 
@@ -340,7 +353,7 @@ def is_secret_path(path: str | os.PathLike[str]) -> bool:
     The exception is :func:`_is_moved_key_file`, which resolves symlinks to
     find a vault key or fingerprint salt moved by its setting.
     """
-    p = PurePath(Path(str(path)).expanduser())
+    p = PurePath(_expanduser(path))
     name = p.name
     lowered = name.lower()
 
@@ -352,7 +365,7 @@ def is_secret_path(path: str | os.PathLike[str]) -> bool:
     # BEFORE the documentation suffixes: a file the operator sent as
     # `notes.md` holding their credentials is quarantined on the way in, and
     # `.md` must not read it back out again.
-    if is_inbox_secret_path(p):
+    if is_inbox_secret_path(p) or is_credential_path(p):
         return True
 
     if lowered.endswith(_DOC_SUFFIXES):
@@ -391,10 +404,12 @@ def is_maskable_dotenv_path(path: str | os.PathLike[str]) -> bool:
     files, which are not dotenv names at all. Pure, like
     :func:`is_secret_path`: the body is checked by the masker after reading.
     """
-    p = PurePath(Path(str(path)).expanduser())
+    p = PurePath(_expanduser(path))
     name = p.name
     lowered = name.lower()
     if not is_secret_path(p) or is_inbox_secret_path(p) or _in_secret_location(p):
+        return False
+    if is_credential_path(p):  # `.env`, `.env.*`: refused outright, never masked
         return False
     if lowered in _SECRET_NAMES and lowered != ".env":
         return False
@@ -592,11 +607,23 @@ def _segments(command: str) -> list[list[str]]:
     return out
 
 
+#: Reserved words and grouping a command word can sit behind: the verb of
+#: ``{ cd ~; }``, ``if cd ~; then`` or ``builtin cd ~`` is ``cd``.
+_SHELL_KEYWORDS = frozenset(
+    {"{", "}", "!", "if", "then", "else", "elif", "do", "done", "while", "until", "for"}
+    | {"builtin", "eval"}
+)
+
+
 def _command_word(tokens: list[str]) -> tuple[str | None, list[str]]:
-    """The verb of a segment and its arguments, skipping wrappers and VAR=val."""
+    """The verb of a segment and its arguments, skipping shell keywords,
+    wrappers and VAR=val."""
     i = 0
     while i < len(tokens):
         tok = tokens[i]
+        if tok in _SHELL_KEYWORDS:
+            i += 1
+            continue
         if "=" in tok and not tok.startswith("-") and not tok.startswith("/"):
             i += 1  # FOO=bar prefix
             continue
@@ -609,14 +636,278 @@ def _command_word(tokens: list[str]) -> tuple[str | None, list[str]]:
             # `env FOO=1 cmd` and `env -u X cmd` wrap a command; bare `env` prints.
             i += 1
             while i < len(tokens) and (tokens[i].startswith("-") or "=" in tokens[i]):
-                if tokens[i] in ("-u", "--unset") and i + 1 < len(tokens):
-                    i += 1
+                if tokens[i] in ("-u", "--unset", "-C", "--chdir") and i + 1 < len(tokens):
+                    i += 1  # the option's own value is not the command word
                 i += 1
             if i >= len(tokens):
                 return "env", []
             continue
         return tok.rsplit("/", 1)[-1], tokens[i + 1 :]
     return None, []
+
+
+#: Uploaders are not printers, but they READ a file operand and send it over
+#: the network -- the same leak a printer makes, so their file operands go
+#: through the same secret checks.
+_UPLOADERS = frozenset({"curl", "wget", "scp", "rsync", "sftp"})
+
+#: curl options whose value is a file when it is prefixed with ``@``.
+_CURL_AT_OPTS = frozenset({"-d", "--data", "--data-binary", "--data-ascii"})
+#: curl options whose value is a bare file path.
+_CURL_FILE_OPTS = frozenset({"-T", "--upload-file"})
+
+
+def _upload_read_operands(word: str, args: list[str]) -> list[str]:
+    """The file operands an uploader *word* reads, with ``@``, ``k=@`` and the
+    option prefix stripped, so each can go through the secret checks.
+
+    ``curl -d @X``/``--data-binary @X``, ``curl -T X``/``--upload-file X``,
+    ``curl -F k=@X``, ``wget --post-file=X``/``--body-file=X``, and the local
+    source operands of ``scp``/``rsync``/``sftp`` (a ``host:`` operand is
+    remote, not a local read).
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i].strip("'\"")
+        nxt = args[i + 1].strip("'\"") if i + 1 < len(args) else None
+        if word == "curl":
+            if arg in _CURL_AT_OPTS and nxt is not None:
+                if nxt.startswith("@"):
+                    out.append(nxt[1:])
+                i += 2
+                continue
+            if arg in _CURL_FILE_OPTS and nxt is not None:
+                out.append(nxt)
+                i += 2
+                continue
+            if arg in ("-F", "--form") and nxt is not None:
+                _, _, val = nxt.partition("=")
+                if val.startswith(("@", "<")):
+                    out.append(val[1:])
+                i += 2
+                continue
+        elif word == "wget":
+            for opt in ("--post-file", "--body-file"):
+                if arg.startswith(opt + "="):
+                    out.append(arg.split("=", 1)[1])
+                elif arg == opt and nxt is not None:
+                    out.append(nxt)
+                    i += 1
+        elif word in ("scp", "rsync", "sftp") and not arg.startswith("-") and ":" not in arg:
+            out.append(arg)  # a local source; a `host:` operand is remote
+        i += 1
+    return out
+
+
+#: Verbs that move the shell for every later segment.
+_CD_VERBS = frozenset({"cd", "pushd"})
+
+#: Verbs whose ``-C``/``--directory``/``--cwd`` option moves only their own segment.
+_DIR_OPTION_VERBS = frozenset({"git", "make", "tar"})
+
+
+def _dir_target(target: str, base: str | None) -> str | None:
+    """The directory a ``cd`` *target* lands in, or None when it cannot be known
+    from the text: a variable, a substitution, a glob, ``-`` or ``~user``."""
+    import posixpath
+
+    word = target.strip("'\"")
+    if not word or word == "-" or word.startswith("+"):
+        return None
+    if word.startswith("~") and not _is_home_spelling(word):
+        return None
+    spelled = _home_spelled(word)
+    if any(ch in spelled for ch in "$`") or _GLOB_MAGIC.search(spelled):
+        return None
+    if not posixpath.isabs(spelled):
+        if base is None:
+            return None
+        spelled = posixpath.join(base, spelled)
+    return posixpath.normpath(spelled)
+
+
+def _option_dir(args: list[str], base: str | None) -> tuple[bool, str | None]:
+    """``(found, directory)`` for a ``-C dir`` / ``--directory=dir`` / ``--cwd dir``."""
+    found, here = False, base
+    for i, arg in enumerate(args):
+        value: str | None = None
+        if arg in ("-C", "--directory", "--cwd"):
+            value = args[i + 1] if i + 1 < len(args) else ""
+        elif arg.startswith(("--directory=", "--cwd=")):
+            value = arg.split("=", 1)[1]
+        elif arg.startswith("-C") and len(arg) > 2:
+            value = arg[2:]
+        if value is not None:
+            found, here = True, _dir_target(value, base)
+    return found, here
+
+
+#: Words that change the shell's directory wherever they sit in a segment.
+_DIR_CHANGE_WORDS = frozenset({"cd", "pushd", "popd"})
+
+
+def _unquoted_words(command: str) -> set[str]:
+    """The words of *command* that are not quoted: ``cd`` in ``xargs cd`` is, in
+    ``echo 'cd'`` it is not."""
+    out: set[str] = set()
+    for line in command.splitlines():
+        lexer = shlex.shlex(line, posix=False, punctuation_chars=True)
+        lexer.whitespace_split = True
+        try:
+            out.update(t for t in lexer if "'" not in t and '"' not in t)
+        except ValueError:
+            out.update(line.split())
+    return out
+
+
+def _env_chdir_dir(tokens: list[str], base: str | None) -> tuple[bool, str | None]:
+    """``(found, directory)`` for an ``env -C dir`` / ``env --chdir dir`` (the
+    space-separated and ``=`` forms both), resolved against *base*. ``env``
+    wraps one command, so this moves only its own segment."""
+    for i, tok in enumerate(tokens):
+        if tok != "env":
+            continue
+        opts = tokens[i + 1 :]
+        for j, opt in enumerate(opts):
+            if not (opt.startswith("-") or "=" in opt):
+                break
+            value: str | None = None
+            if opt in ("-C", "--chdir"):
+                value = opts[j + 1] if j + 1 < len(opts) else ""
+            elif opt.startswith("--chdir="):
+                value = opt.split("=", 1)[1]
+            elif opt.startswith("-C") and len(opt) > 2:
+                value = opt[2:]
+            if value is not None:
+                return True, _dir_target(value, base)
+    return False, None
+
+
+def _cdpath_applies(target: str) -> bool:
+    """True when the shell searches ``CDPATH`` for this ``cd`` *target*: anything
+    but an absolute path, a home spelling, a variable, or one that starts with
+    ``.``/``..`` as a path component (``./x``, ``../x``, ``.``, ``..``)."""
+    if target.startswith(("/", "~", "$")) or target in (".", ".."):
+        return False
+    return not target.startswith(("./", "../"))
+
+
+def _segment_dirs(
+    segments: list[list[str]], start: str | None, command: str = ""
+) -> list[str | None]:
+    """The directory each segment runs in, or None where the text cannot say.
+
+    The shell starts in *start*. A ``cd``/``pushd`` to a literal directory moves
+    every later segment there; one to anything else (``cd "$D"``, ``cd -``, a
+    ``popd``) leaves the rest unknown. So does an unquoted ``cd``/``pushd``/
+    ``popd`` anywhere else in a segment (``xargs cd``), an ``eval``, and
+    ``env --chdir``/``env -C``. ``-C dir`` on git, make or tar moves only its
+    own segment. Under ``CDPATH`` (named anywhere in the command, or set in the
+    environment) a relative ``cd`` target may land in any of its directories,
+    so it leaves the rest unknown too.
+    """
+    from robothor.settings.env import process_env_get
+
+    unquoted = _unquoted_words(command) if command else set()
+    cdpath = "CDPATH" in command or bool((process_env_get("CDPATH", "") or "").strip())
+    out: list[str | None] = []
+    cur = start
+    for tokens in segments:
+        word, args = _command_word(tokens)
+        unknown = bool(
+            ("eval" in tokens and "eval" in unquoted)
+            or (word not in _DIR_CHANGE_WORDS and _DIR_CHANGE_WORDS & unquoted & set(tokens))
+        )
+        if unknown:
+            cur = None
+        here = cur
+        if word in _DIR_OPTION_VERBS:
+            found, moved = _option_dir(args, cur)
+            if found:
+                here = moved
+        env_found, env_dir = _env_chdir_dir(tokens, cur)
+        if env_found:
+            here = env_dir  # env wraps one command: its own segment only
+        out.append(here)
+        if word in _CD_VERBS:
+            operands = [a for a in args if a == "-" or not a.startswith("-")]
+            if not operands:
+                cur = (_home() or None) if word == "cd" else None
+            elif cdpath and _cdpath_applies(operands[0].strip("'\"")):
+                cur = None
+            else:
+                cur = _dir_target(operands[0], cur)
+        elif word == "popd":
+            cur = None
+        if unknown:
+            cur = None
+    return out
+
+
+#: The key-material name pattern (``*.pem``, ``*.key``, ``*.p12`` ...). Unlike an
+#: exact credential name, it also matches words that are not files at all: a jq
+#: filter (``.key``, ``.data.key``) is a bare word ending in ``.key``.
+_KEY_FILE_PATTERN = _SECRET_NAME_PATTERNS[4]
+
+
+def _absent_bare_key_word(candidate: str, cwd: str | None) -> bool:
+    """True for a bare word that is a secret ONLY by the key-file pattern and
+    names no file in *cwd*: ``.key`` in ``jq -r .key``.
+
+    A path spelling (a separator, ``~``, ``$HOME``), an exact credential name
+    (``.env``, ``credentials``), a secrets directory, any other secret pattern,
+    or a file that exists keeps its refusal. So does any word when *cwd* is None:
+    the command changed directory to somewhere the text does not say.
+    """
+    import os as _os
+
+    if "/" in candidate or candidate.startswith(("~", "$HOME", "${HOME}")):
+        return False
+    lowered = candidate.lower()
+    if lowered in _SECRET_NAMES or is_inbox_secret_path(candidate):
+        return False
+    if not _KEY_FILE_PATTERN.fullmatch(candidate):
+        return False
+    if any(p.fullmatch(candidate) for p in _SECRET_NAME_PATTERNS if p is not _KEY_FILE_PATTERN):
+        return False
+    if cwd is None:
+        return False
+    return not _os.path.lexists(Path(cwd) / candidate)
+
+
+#: Names a glob is tried against when the shell's directory is unknown: one of
+#: each listed shape, so ``*.key``, ``id_*`` or ``*`` could be a key and
+#: ``*.txt`` could not.
+_SECRET_SAMPLES = (
+    _SECRET_NAMES
+    | _SECRET_DIRS
+    | {".config", "gh", "id_rsa", "id_ed25519", "server.key", "cert.pem", "client.p12"}
+    | {".env.local", "robothor.env", "secrets.json", "secrets.yaml", "x.enc.json"}
+    | {"service-account.json", "credentials", "credentials.json", "token.json"}
+    | {"client_secret.json", ".npmrc", ".pypirc", ".vault-key"}
+)
+
+
+def _glob_could_name_secret(word: str) -> bool:
+    """True when a relative glob or brace *word* could match a secret's name in
+    a directory the text does not spell. Over the brace cap it could."""
+    import fnmatch
+
+    variants = _expand_braces_capped(word)
+    if variants is None:
+        return True
+    for variant in variants:
+        for part in variant.split("/"):
+            if not part or not _GLOB_MAGIC.search(part):
+                continue
+            pat = part.lower()
+            for name in _SECRET_SAMPLES:
+                if name.startswith(".") and not pat.startswith("."):
+                    continue  # `*` and `?` never match a leading dot
+                if fnmatch.fnmatchcase(name, pat):
+                    return True
+    return False
 
 
 def _changed_directories(segments: list[list[str]]) -> list[str]:
@@ -1112,8 +1403,8 @@ def _expand_braces(word: str) -> list[str]:
 
 def _exists_literally(word: str, roots: list[str]) -> bool:
     """Whether ``word`` names an existing file as written (``report[1].txt``)."""
-    if Path(word).expanduser().is_absolute():
-        return Path(word).expanduser().exists()
+    if Path(_expanduser(word)).is_absolute():
+        return Path(_expanduser(word)).exists()
     return any((Path(root) / word).exists() for root in roots)
 
 
@@ -1167,10 +1458,10 @@ def _glob_names_secret(arg: str, shell_dirs: list[str]) -> bool:
         if base[:1] not in ("*", "?") and any(_wildcard_matches(base, n) for n in names):
             return True
         for root in dict.fromkeys(roots):
-            pattern = word if Path(word).expanduser().is_absolute() else str(Path(root) / word)
+            pattern = word if Path(_expanduser(word)).is_absolute() else str(Path(root) / word)
             # glob.glob, not Path.glob: it follows the SHELL's rule that `*`
             # does not match a leading dot, which is what will actually run.
-            expanded = globbing.glob(str(Path(pattern).expanduser()))  # noqa: PTH207
+            expanded = globbing.glob(str(Path(_expanduser(pattern))))  # noqa: PTH207
             for match in expanded[:256]:
                 if is_secret_path(match):
                     return True
@@ -1210,7 +1501,7 @@ def _mentions_moved_key(command: str, tokens: list[str], shell_dirs: list[str]) 
     broad = _broad_directories()
     needles: set[str] = set()
     for value in configured:
-        expanded = Path(value).expanduser()
+        expanded = Path(_expanduser(value))
         spellings = set(_key_file_targets(value))
         if expanded.is_absolute():
             spellings.add(str(expanded))  # as written, before symlinks resolve
@@ -1264,13 +1555,16 @@ def _read_operands(command: str) -> list[str]:
     return [f.strip("'\"") for f in found if f.strip("'\"")]
 
 
-def exec_reads_secret(command: str) -> str | None:
+def exec_reads_secret(command: str, *, cwd: str | None = None) -> str | None:
     """The reason a shell command is refused, or None when it may run.
 
     Refused: a printing command (``cat``, ``grep``, ``head``, ``sed``,
     ``base64`` ...) given a secrets file, or a bare ``printenv``/``env``.
     Allowed: sourcing the file, testing for it, listing its directory,
-    counting its lines — anything that uses it without printing it.
+    counting its lines — anything that uses it without printing it. *cwd* is
+    where the command runs: a bare key-file-shaped word that names no file
+    there (a jq filter such as ``.key``) is not a secrets file; after a ``cd``
+    it is looked up where the ``cd`` lands, and refused when that is unknown.
     """
     # Before the per-segment walk: a procfs environment read has no command word
     # of its own to catch. ``tr '\0' '\n' < /proc/self/environ`` is a redirect,
@@ -1311,7 +1605,8 @@ def exec_reads_secret(command: str) -> str | None:
 
     moved_names = _moved_key_basenames()
     expandable = _expandable_words(command)
-    for tokens in segments:
+    dirs = _segment_dirs(segments, cwd or str(Path.cwd()), command)
+    for tokens, here in zip(segments, dirs, strict=True):
         word, args = _command_word(tokens)
         if word is None:
             continue
@@ -1339,6 +1634,17 @@ def exec_reads_secret(command: str) -> str | None:
                 if arg.startswith("-"):
                     continue
                 candidate = arg.strip("'\"")
+                if (
+                    here is None
+                    and _GLOB_MAGIC.search(candidate)
+                    and not candidate.startswith(("/", "~", "$HOME", "${HOME}"))
+                    and _glob_could_name_secret(candidate)
+                ):
+                    return (
+                        f"refused: `{word}` would expand {candidate} in a directory the "
+                        "command changed to, where it could name a secrets file. Spell the "
+                        "directory, or name the files, instead."
+                    )
                 # Any position, a destination included: `cp {.env,leak.txt}`
                 # is ONE argument until the shell expands it into a source.
                 # Program text is not filename expansion (an interpreter's
@@ -1359,7 +1665,12 @@ def exec_reads_secret(command: str) -> str | None:
                 moved = index not in program_at and _relative_names_moved_key(
                     candidate, shell_dirs, moved_names, file_only=word in _FILE_ONLY_PRINTERS
                 )
-                if is_secret_path(candidate) or moved:
+                # A bare key-shaped word that names no file here (``.key`` in
+                # ``jq -r .key``) is not a secrets file, unless the command's
+                # grammar says this operand is a file it reads (``openssl
+                # dgst server.key``), which is refused whether or not it exists.
+                bare = reads is None and _absent_bare_key_word(candidate, here)
+                if (is_secret_path(candidate) and not bare) or moved:
                     name = PurePath(candidate).name
                     if word in _READERS:
                         return (
@@ -1372,4 +1683,440 @@ def exec_reads_secret(command: str) -> str | None:
                         "file. Credentials are supplied to tools by the platform; source the "
                         "file to use a value, or ask the operator, but never print it."
                     )
+        elif word in _UPLOADERS:
+            # An uploader READS its file operand and sends it over the network:
+            # the same leak a printer makes, so the same checks. Each operand
+            # is a file by its grammar (``@X``, ``-T X``, a source), so the
+            # bare key-word exemption does not apply.
+            for candidate in _upload_read_operands(word, args):
+                if (
+                    here is None
+                    and _GLOB_MAGIC.search(candidate)
+                    and not candidate.startswith(("/", "~", "$HOME", "${HOME}"))
+                    and _glob_could_name_secret(candidate)
+                ):
+                    return (
+                        f"refused: `{word}` would expand {candidate} in a directory the "
+                        "command changed to, where it could name a secrets file. Spell the "
+                        "directory, or name the files, instead."
+                    )
+                if any(ch in candidate for ch in _GLOB_CHARS) and _glob_names_secret(
+                    candidate, shell_dirs
+                ):
+                    return (
+                        f"refused: `{word}` is given {candidate}, a pattern the shell would "
+                        "expand to a secrets file. Name the files you mean explicitly."
+                    )
+                if is_secret_path(candidate) or _relative_names_moved_key(
+                    candidate, shell_dirs, moved_names, file_only=True
+                ):
+                    return (
+                        f"refused: `{word}` would send {PurePath(candidate).name}, a secrets "
+                        "file. Credentials are supplied to tools by the platform; never "
+                        "upload one."
+                    )
     return None
+
+
+# ── credential_path: never read, never named in a command ─────────────────────
+#
+# A read-only question once led an owner-driven run to fall back to `exec` on
+# the engine host and `cat` a CLI tool's OAuth credentials file under the home
+# directory: its client secret and refresh token reached the model's context
+# and the stored tool output, and the model then called an API with the token.
+# The printing rule above did not apply (the CLI's directory and file names were
+# on no list). These paths are stricter than the rest of the module: a command
+# that so much as NAMES one is refused, whatever its verb, because a CLI or a
+# one-liner can read a file no printer word ever touches. Metadata-only verbs
+# (`ls`, `test`, `stat`, `wc`, `du`) are the exception.
+
+#: The gate a refusal names, as ``error_type`` and in its text.
+CREDENTIAL_GATE = "credential_path"
+
+#: Directories, anywhere on a path, that hold nothing but credentials.
+_CREDENTIAL_DIRS = frozenset({".ssh", ".aws", ".kube", ".docker", ".gnupg", "gcloud"})
+
+#: Directories directly under ``.config`` whose NAME starts with one of these:
+#: the Google Cloud and Google Workspace CLIs (``gws``, ``gog`` and their
+#: suffixed variants) and ``gh``.
+_CONFIG_PREFIXES = ("gcloud", "gws", "gog")
+_CONFIG_EXACT = frozenset({"gh"})
+
+#: Exact basenames.
+_CREDENTIAL_NAMES = frozenset(
+    {".netrc", ".npmrc", ".pypirc", ".vault-key", ".git-credentials", ".pgpass"}
+)
+
+#: Whole-basename patterns. ``token*.json`` is spelled so ``tokenizer.json`` (a
+#: model file, not a credential) stays readable.
+_CREDENTIAL_PATTERNS = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\.env(\.[a-z0-9_-]+)*",
+        r"credentials[a-z0-9_.-]*\.json",
+        r"tokens?([-_.][a-z0-9_.-]*)?\.json",
+        r"client_secrets?[a-z0-9_.-]*\.json",
+    )
+)
+
+#: Key material counts only under the home directory: a ``*.pem`` in a test
+#: fixture tree elsewhere is not the service user's key.
+_HOME_KEY = re.compile(r"[^/]*\.(pem|key)", re.IGNORECASE)
+
+#: Verbs that report on a file without reading what is in it.
+_METADATA_VERBS = frozenset({"ls", "test", "[", "[[", "stat", "wc", "du"})
+
+#: Path-shaped runs inside one shell word (``-d @x``, ``--file=x``, a Python
+#: string literal in ``python3 -c``).
+_PATHISH = re.compile(r"(?:\$\{HOME\}|\$HOME|~)?[\w./~*?\[\]-]+")
+
+CREDENTIAL_REFUSAL = (
+    "refused by credential_path: {name} is a secrets file that holds credentials. "
+    "The operator hands credentials over through the vault (a `secrets:` grant or "
+    "vault_get), never by an agent reading a file; ask the operator for what is "
+    "missing instead of reading, printing or passing the file."
+)
+
+
+def _home() -> str:
+    try:
+        return str(Path.home())
+    except RuntimeError:
+        return ""
+
+
+def credential_roots(workspace: str | os.PathLike[str] | None = None) -> tuple[str, ...]:
+    """Where a glob may expand and a symlink may resolve: the home directory and
+    the workspace, never the whole filesystem. The workspace is first so a
+    relative path token joins onto it."""
+    roots: list[str] = []
+    if workspace:
+        roots.append(_expanduser(workspace))
+    if home := _home():
+        roots.append(home)
+    return tuple(roots)
+
+
+def _home_spelled(word: str) -> str:
+    """*word* with ``$HOME``, ``${HOME}`` and a leading ``~`` expanded. Never raises."""
+    home = _home()
+    if home:
+        word = word.replace("${HOME}", home).replace("$HOME", home)
+    return _expanduser(word)
+
+
+def _is_home_spelling(word: str) -> bool:
+    """True for ``~``, ``~/...``, ``~user/...`` of a real user, ``$HOME...``."""
+    if word.startswith(("$HOME", "${HOME}")):
+        return True
+    return word.startswith("~") and _expanduser(word) != word
+
+
+def is_credential_path(path: str | os.PathLike[str]) -> bool:
+    """True when *path* is on the credential_path list. Pure (no filesystem access).
+
+    A ``~word`` that names no user stays a literal: the name rules still apply
+    to it, and nothing raises.
+    """
+    import posixpath
+
+    home = _home()
+    spelled = posixpath.normpath(PurePath(_home_spelled(str(path))).as_posix())
+    p = PurePath(spelled)
+    parts = [part.lower() for part in p.parts]
+    if any(part in _CREDENTIAL_DIRS for part in parts):
+        return True
+    for parent, child in zip(parts, parts[1:], strict=False):
+        if parent == ".config" and (child in _CONFIG_EXACT or child.startswith(_CONFIG_PREFIXES)):
+            return True
+    name = p.name
+    if name.lower().endswith(_DOC_SUFFIXES):
+        return False
+    if name.lower() in _CREDENTIAL_NAMES or any(
+        pat.fullmatch(name) for pat in _CREDENTIAL_PATTERNS
+    ):
+        return True
+    return _under(spelled, home) and bool(_HOME_KEY.fullmatch(name))
+
+
+def _under(path: str, root: str) -> bool:
+    """*path* is *root* or inside it. A string prefix is not enough: ``/a/wsx``
+    is not inside ``/a/ws``."""
+    if not root:
+        return False
+    root = root.rstrip("/") or "/"
+    return path == root or path.startswith(root if root == "/" else root + "/")
+
+
+def credential_refusal(path: str | os.PathLike[str]) -> dict[str, str]:
+    """The result a tool returns for a credential path (names the file, never a value)."""
+    name = PurePath(str(path)).name or str(path)
+    return {"error": CREDENTIAL_REFUSAL.format(name=name), "error_type": CREDENTIAL_GATE}
+
+
+def _named_credential(text: str) -> str | None:
+    for match in _PATHISH.finditer(text):
+        if is_credential_path(match.group(0)):
+            return match.group(0)
+    return None
+
+
+#: Glob magic in a shell word: ``*``, ``?``, a ``[class]`` or a ``{a,b}`` brace.
+_GLOB_MAGIC = re.compile(r"[*?[]|\{[^}]*,[^}]*\}")
+
+#: A word a pipeline feeds into a reader, so a metadata verb naming a listed
+#: directory upstream (``ls ~/.ssh | xargs cat``, ``find ~/.aws -exec cat``) is
+#: not exempt: the directory listing becomes file contents downstream.
+_PIPELINE_READERS = frozenset({"xargs"})
+
+#: Directory entries one glob word may visit before the walk gives up. It bounds
+#: the WALK, not the matches: a ``**`` over a large tree must cost a bounded
+#: number of ``scandir`` entries, whatever it would have matched.
+_GLOB_WALK_CAP = 5000
+
+#: Brace variants one word may expand to. Brace groups multiply, so a word with
+#: twenty ``{a,b}`` groups is a million variants; past the cap the word is not
+#: expanded and only the literal word check applies to it.
+_BRACE_CAP = 64
+
+
+#: A word made only of filename characters and glob or brace syntax: ``*``,
+#: ``l*``, ``{a,link}``, ``*.json``. The shell expands these against the working
+#: directory (the workspace), so they are paths. A JSON body, a ``key=value`` or
+#: a quoted sentence has characters this does not allow.
+_FILENAME_GLOB = re.compile(r"[\w.~$/*?\[\]{},@+-]+")
+
+
+def _looks_like_path(word: str) -> bool:
+    """Only these words are expanded or resolved: a separator, a home or dot
+    start, a filename-shaped glob, or a basename on the list. Never a JSON body
+    (``[{"id": 1}]``)."""
+    if word[:1] in ("[", "{") and '"' in word:
+        return False
+    if "/" in word or word.startswith((".", "~", "$HOME", "${HOME}")):
+        return True
+    if _GLOB_MAGIC.search(word) and _FILENAME_GLOB.fullmatch(word):
+        return True
+    name = word.rsplit("/", 1)[-1]
+    return name.lower() in _CREDENTIAL_NAMES or any(
+        pat.fullmatch(name) for pat in _CREDENTIAL_PATTERNS
+    )
+
+
+def _expand_braces_capped(word: str) -> list[str] | None:
+    """``a{b,c}d`` -> ``[abd, acd]``, or None past :data:`_BRACE_CAP` variants.
+
+    Counted before anything is built, so the cap bounds the work as well as the
+    result.
+    """
+    groups = list(re.finditer(r"\{([^{}]*,[^{}]*)\}", word))
+    total = 1
+    for group in groups:
+        total *= len(group.group(1).split(","))
+        if total > _BRACE_CAP:
+            return None
+    out = [word]
+    for group in reversed(groups):
+        options = group.group(1).split(",")
+        out = [w[: group.start()] + o + w[group.end() :] for w in out for o in options]
+    return out
+
+
+def _realpath_is_credential(spelled: str) -> bool:
+    """True when *spelled* resolves (symlinks and all) onto a listed path.
+
+    ``os.path.realpath`` resolves every component, so a symlink to a listed file
+    and a file under a symlinked directory both land on it. Never raises.
+    """
+    import os as _os
+
+    try:
+        return is_credential_path(_os.path.realpath(spelled))
+    except (OSError, ValueError):
+        return False
+
+
+class _WalkBudget:
+    """Directory entries left for one glob word's walk."""
+
+    def __init__(self, cap: int) -> None:
+        self.left = cap
+
+    def spend(self) -> bool:
+        self.left -= 1
+        return self.left >= 0
+
+
+def _scan(directory: str, budget: _WalkBudget) -> list[tuple[str, bool]]:
+    """``(name, is_dir)`` for *directory*'s entries, within *budget*."""
+    import os as _os
+
+    out: list[tuple[str, bool]] = []
+    try:
+        with _os.scandir(directory) as entries:
+            for entry in entries:
+                if not budget.spend():
+                    break
+                try:
+                    is_dir = entry.is_dir()
+                except OSError:
+                    is_dir = False
+                out.append((entry.name, is_dir))
+    except OSError:
+        pass
+    return out
+
+
+def _bounded_glob(pattern: str, budget: _WalkBudget) -> list[str]:
+    """Shell-style glob of an absolute *pattern*, visiting at most *budget* entries.
+
+    The shell's rules: ``*`` and ``?`` do not match a leading dot unless the
+    component starts with one, and ``**`` is any depth of non-hidden directories.
+    """
+    import fnmatch
+    import posixpath
+
+    parts = [p for p in pattern.split("/") if p]
+    current = ["/"]
+    for i, part in enumerate(parts):
+        last = i == len(parts) - 1
+        nxt: list[str] = []
+        if not _GLOB_MAGIC.search(part):
+            nxt = [posixpath.join(c, part) for c in current]
+        elif part == "**":
+            stack = list(current)
+            while stack and budget.left > 0:
+                d = stack.pop()
+                nxt.append(d)
+                for name, is_dir in _scan(d, budget):
+                    if name.startswith("."):
+                        continue
+                    if is_dir:
+                        stack.append(posixpath.join(d, name))
+                    elif last:  # a final ``**`` is ``*`` under sh: files too
+                        nxt.append(posixpath.join(d, name))
+        else:
+            for c in current:
+                for name, is_dir in _scan(c, budget):
+                    if name.startswith(".") and not part.startswith("."):
+                        continue
+                    if (last or is_dir) and fnmatch.fnmatchcase(name, part):
+                        nxt.append(posixpath.join(c, name))
+        current = nxt
+        if not current or budget.left <= 0:
+            break
+    return current
+
+
+def _glob_hits_credential(word: str, roots: tuple[str, ...], base: str | None = None) -> str | None:
+    """A listed path a glob word expands onto, or None.
+
+    Bounded: braces past :data:`_BRACE_CAP` are not expanded, and the walk
+    visits at most :data:`_GLOB_WALK_CAP` entries. Confined: only a pattern
+    inside *roots* (the workspace and the home directory) is walked, and only a
+    hit inside them is considered. A relative word expands in *base*, the
+    directory its segment runs in (the workspace unless a ``cd`` moved it).
+    """
+    import os as _os
+    import posixpath
+
+    variants = _expand_braces_capped(word)
+    if variants is None:
+        return None
+    budget = _WalkBudget(_GLOB_WALK_CAP)
+    for variant in variants:
+        pattern = _home_spelled(variant)
+        if variant.startswith("~") and not _is_home_spelling(variant):
+            continue  # a `~word` naming no user is a literal, not a home
+        if not posixpath.isabs(pattern):
+            start = base or (roots[0] if roots else None)
+            if start is None:
+                continue
+            pattern = posixpath.join(start, pattern)
+        pattern = posixpath.normpath(pattern)
+        if not any(_under(pattern, r) for r in roots):
+            continue
+        for hit in _bounded_glob(pattern, budget):
+            if not any(_under(posixpath.normpath(hit), r) for r in roots):
+                continue
+            if not _os.path.lexists(hit):
+                continue
+            if is_credential_path(hit) or _realpath_is_credential(hit):
+                return hit
+        if budget.left <= 0:
+            break
+    return None
+
+
+def _resolvable(token: str, roots: tuple[str, ...], base: str | None = None) -> str | None:
+    """*token* as an absolute path to resolve, or None.
+
+    An explicit path (a separator, or a home spelling) is resolved; any other
+    word only when it names an entry that exists in *base*, the directory the
+    segment runs in (the workspace unless a ``cd`` moved it). So a bare
+    ``innocent.txt`` linked onto a key is resolved, and ``.key`` in
+    ``jq -r .key`` (no such file) is not.
+    """
+    import os as _os
+    import posixpath
+
+    word = token.strip("'\"")
+    if not word:
+        return None
+    if word.startswith("~") and not _is_home_spelling(word):
+        return None
+    explicit = "/" in word or _is_home_spelling(word)
+    if explicit and not _looks_like_path(word):
+        return None
+    spelled = _home_spelled(word)
+    if not posixpath.isabs(spelled):
+        base = base or (roots[0] if roots else None)
+        if base is None:
+            return None
+        spelled = posixpath.join(base, spelled)
+    if explicit or _os.path.lexists(spelled):
+        return spelled
+    return None
+
+
+def exec_names_credential(command: str, *, roots: tuple[str, ...] = ()) -> dict[str, str] | None:
+    """The refusal for a command that reaches a credential path, or None.
+
+    Three ways a command reaches one: it NAMES it; a path-like word is
+    a glob or brace expansion that expands onto one, or a path that resolves
+    (symlinks and all) onto one; or a metadata verb lists a listed directory
+    upstream of a reader (``ls ~/.ssh | xargs cat``). *roots* bounds glob
+    expansion to the workspace and the home directory. Blocking (it may read the
+    filesystem to expand and resolve): call it off the event loop. Never raises.
+    """
+    segments = _segments(command)
+    feeds_reader = any(_command_word(seg)[0] in _PIPELINE_READERS for seg in segments)
+    dirs = _segment_dirs(segments, roots[0] if roots else None, command)
+    for tokens, here in zip(segments, dirs, strict=True):
+        word, cmd_args = _command_word(tokens)
+        # A metadata verb (ls, stat, ...) reports on a file without reading it,
+        # so it is exempt -- UNLESS its output feeds a reader in the pipeline.
+        skip = word in _METADATA_VERBS and not feeds_reader
+        # An uploader's file operand carries an `@`/`k=@`/option prefix that
+        # hides the path from the per-token scan, so feed it stripped as well.
+        extra = _upload_read_operands(word, cmd_args) if word in _UPLOADERS else []
+        for token in [*tokens, *extra]:
+            globbed = bool(_GLOB_MAGIC.search(token)) and _looks_like_path(token)
+            if skip and not globbed:
+                continue
+            if (hit := _named_credential(token)) is not None:
+                return credential_refusal(hit)
+            if globbed:
+                if (hit := _glob_hits_credential(token, roots, here)) is not None:
+                    return credential_refusal(hit)
+            elif (path := _resolvable(token, roots, here)) is not None and _realpath_is_credential(
+                path
+            ):
+                return credential_refusal(token)
+    return None
+
+
+def code_names_credential(code: str) -> dict[str, str] | None:
+    """The refusal for an ``execute_code`` snippet whose source names a credential path."""
+    hit = _named_credential(code)
+    return credential_refusal(hit) if hit is not None else None

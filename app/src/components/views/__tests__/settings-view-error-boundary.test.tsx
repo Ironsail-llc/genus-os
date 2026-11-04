@@ -44,12 +44,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// Each sub-page loads on demand; the first import of a real page module in a
+// test file includes its transform, which can outlast the default one second.
+const CHUNK_WAIT = { timeout: 5000 };
+
 describe("Settings sub-page error boundary", () => {
-  it("shows a panel instead of blanking the Helm", () => {
+  it("shows a panel instead of blanking the Helm", async () => {
     render(
       <SettingsView visible page="providers" onPageChange={vi.fn()} role="owner" />
     );
-    const panel = screen.getByTestId("settings-page-error");
+    const panel = await screen.findByTestId("settings-page-error", {}, CHUNK_WAIT);
     expect(panel.textContent).toMatch(/failed to render/i);
     expect(panel.textContent!.length).toBeGreaterThan(30);
   });
@@ -63,14 +67,14 @@ describe("Settings sub-page error boundary", () => {
     expect(onPageChange).toHaveBeenCalledWith("channels");
   });
 
-  it("does not keep a broken page's failure on the next page", () => {
+  it("does not keep a broken page's failure on the next page", async () => {
     const { rerender } = render(
       <SettingsView visible page="providers" onPageChange={vi.fn()} role="owner" />
     );
-    expect(screen.getByTestId("settings-page-error")).toBeInTheDocument();
+    expect(await screen.findByTestId("settings-page-error", {}, CHUNK_WAIT)).toBeInTheDocument();
 
     rerender(<SettingsView visible page="channels" onPageChange={vi.fn()} role="owner" />);
     expect(screen.queryByTestId("settings-page-error")).toBeNull();
-    expect(screen.getByTestId("settings-page-channels")).toBeInTheDocument();
+    expect(await screen.findByTestId("settings-page-channels", {}, CHUNK_WAIT)).toBeInTheDocument();
   });
 });

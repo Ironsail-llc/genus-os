@@ -504,6 +504,44 @@ class TeamsChannel:
             return False
         return response is not None
 
+    async def post_progress(self, conversation_id: str, text: str) -> str | None:
+        """Post a run's progress line; the activity id to update, or ``None``.
+
+        Like a card, progress is not a delivery: no receipt and no chunking. It
+        is one short line, updated in place by :meth:`update_progress`.
+        """
+        reference = await self._reference(conversation_id)
+        if reference is None:
+            return None
+        token = await self._tokens.token()
+        response = await self._post_one(reference, token, {"type": "message", "text": text})
+        activity_id = (response or {}).get("id")
+        return str(activity_id) if activity_id else None
+
+    async def update_progress(self, conversation_id: str, activity_id: str, text: str) -> None:
+        """Replace the text of a progress activity this channel posted.
+
+        ``PUT .../activities/{id}``, the Bot Framework's update. The ids are
+        quoted with nothing safe, for the reason :meth:`_post_one` gives.
+        """
+        reference = await self._reference(conversation_id)
+        if reference is None:
+            return
+        token = await self._tokens.token()
+        url = (
+            f"{str(reference.service_url).rstrip('/')}"
+            f"/v3/conversations/{quote(str(reference.conversation_id), safe='')}"
+            f"/activities/{quote(str(activity_id), safe='')}"
+        )
+        async with build_client() as client:
+            response = await client.put(
+                url,
+                json={"type": "message", "id": activity_id, "text": text},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        if response.status_code >= 300:
+            logger.debug("Teams answered %s to a progress update", response.status_code)
+
     async def _reference(self, target: str) -> Any | None:
         """The conversation reference for ``target``, or ``None``.
 

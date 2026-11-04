@@ -133,6 +133,35 @@ def get_secret(
         conn.close()
 
 
+def get_secret_metadata(
+    key: str,
+    *,
+    tenant_id: str | None = None,
+) -> dict[str, Any] | None:
+    """The row's audit metadata (who stored it, how), without decrypting it.
+
+    ``None`` when there is no such row. Never selects ``encrypted_value``: the
+    question is who wrote the credential, and answering it needs no key.
+    """
+    explicit, tenant_id = tenant_id, _tenant(tenant_id)
+    conn = _bound_conn(explicit)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT metadata FROM vault_secrets WHERE tenant_id = %s AND key = %s",
+                (tenant_id, key),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            meta = row[0]
+            if isinstance(meta, str):
+                meta = json.loads(meta or "{}")
+            return dict(meta or {})
+    finally:
+        conn.close()
+
+
 def get_secrets_updated_at(
     keys: list[str],
     *,

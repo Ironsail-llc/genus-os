@@ -33,9 +33,18 @@ REFUSAL = "Refused: the plugin directory is managed by the install Job; agents c
 _LOCK_COMPANIONS = (".grants.json", ".tenant")
 
 
+def _expanduser(path: str | os.PathLike[str]) -> str:
+    """``~`` expanded; a ``~word`` that names no user stays as written.
+
+    ``Path.expanduser`` raises ``RuntimeError`` for one (``~40%``), and an exec
+    gate must answer every command rather than crash on its text.
+    """
+    return os.path.expanduser(str(path))  # noqa: PTH111 - Path.expanduser raises
+
+
 def _resolve(path: str | os.PathLike[str]) -> Path:
     """Absolute, ``..`` and symlinks resolved, a missing tail allowed."""
-    return Path(path).expanduser().resolve(strict=False)
+    return Path(_expanduser(path)).resolve(strict=False)
 
 
 def _managed() -> tuple[list[Path], list[Path]]:
@@ -179,7 +188,7 @@ def _names_managed(
         if not expanded:
             continue
         for word in _expand_braces(expanded):
-            path = Path(word).expanduser()
+            path = Path(_expanduser(word))
             spellings = [path] if path.is_absolute() else [Path(b) / path for b in bases]
             for spelled in spellings:
                 normal = os.path.normpath(spelled)
@@ -229,7 +238,7 @@ def exec_writes_managed(command: str, *, cwd: str | None = None, _depth: int = 0
     segments = _segments(command)
     bases = [shell_cwd]
     for target in _changed_directories(segments):
-        expanded = Path(_expand_variables(target, shell_cwd)).expanduser()
+        expanded = Path(_expanduser(_expand_variables(target, shell_cwd)))
         bases.extend([os.path.normpath(Path(base) / expanded) for base in bases])
 
     if any(_runs_a_plugin_write(seg) for seg in segments):

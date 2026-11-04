@@ -1,0 +1,83 @@
+{
+  "half": "inprocess",
+  "merged_from": [
+    {
+      "file": "bench-turn-inprocess.json",
+      "host": {
+        "machine": "x86_64",
+        "python": "3.12.15"
+      },
+      "recorded_at": "2026-11-03T19:10:41+00:00"
+    },
+    {
+      "file": "bench-turn-inprocess.json",
+      "host": {
+        "machine": "x86_64",
+        "python": "3.12.16"
+      },
+      "recorded_at": "2026-11-03T20:01:41+00:00"
+    },
+    {
+      "file": "bench-turn-inprocess.json",
+      "host": {
+        "machine": "x86_64",
+        "python": "3.12.15"
+      },
+      "recorded_at": "2026-11-03T20:52:43+00:00"
+    }
+  ],
+  "recorded_at": "2026-11-03T21:45:10+00:00",
+  "runs": 60,
+  "summary": {
+    "db_statements": {
+      "n": 60,
+      "p50": 39.0,
+      "p95": 48.150000000000006
+    },
+    "done_ms": {
+      "n": 60,
+      "p50": 28.42150149999867,
+      "p95": 30.445250399994
+    },
+    "finalize_tail_ms": {
+      "n": 60,
+      "p50": 0.8224255000044423,
+      "p95": 1.532750399982774
+    },
+    "first_llm_ms": {
+      "n": 60,
+      "p50": 18.297235499993292,
+      "p95": 19.76482280000056
+    },
+    "prompt_tokens": {
+      "n": 60,
+      "p50": 11652.0,
+      "p95": 11652.0
+    },
+    "setup_ms": {
+      "n": 60,
+      "p50": 5.0,
+      "p95": 5.0
+    },
+    "setup_total_ms": {
+      "n": 60,
+      "p50": 7.0,
+      "p95": 7.0
+    },
+    "tool_ms": {
+      "n": 60,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "tool_overhead_ms": {
+      "n": 60,
+      "p50": 4.8545,
+      "p95": 5.696100000000001
+    },
+    "tool_schemas": {
+      "n": 60,
+      "p50": 34.0,
+      "p95": 34.0
+    }
+  }
+}

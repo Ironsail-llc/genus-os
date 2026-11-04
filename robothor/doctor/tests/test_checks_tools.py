@@ -256,8 +256,6 @@ class TestTheMetaToolsAreGrantedByDeferral:
 
     @staticmethod
     def _deferral_on(monkeypatch, threshold: int = 2) -> None:
-        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
-        monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_RIPS", raising=False)
         monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", str(threshold))
 
     @pytest.mark.asyncio
@@ -295,10 +293,14 @@ class TestTheMetaToolsAreGrantedByDeferral:
         assert "tool_search" in result.detail
 
     @pytest.mark.asyncio
-    async def test_with_deferral_off_nobody_gets_them(
+    async def test_no_environment_variable_takes_them_away(
         self, instance: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("ROBOTHOR_RIP_16_ENABLED", raising=False)
+        """Deferral has no switch, so the check grants the meta-tools whatever
+        the environment says."""
+        self._deferral_on(monkeypatch)
+        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "0")
+        monkeypatch.setenv("ROBOTHOR_DISABLE_ALL_RIPS", "1")
         _write_agent(
             instance,
             "broad",
@@ -306,14 +308,12 @@ class TestTheMetaToolsAreGrantedByDeferral:
             instructions="Use `tool_search` to find a tool.",
         )
         result = await _run("agents.tools_named_but_not_granted")
-        assert result.status == "fail"
-        assert "tool_search" in result.detail
+        assert result.status == "pass", result.detail
 
     @pytest.mark.asyncio
     async def test_a_prohibition_is_never_a_mismatch_either_way(
         self, instance: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("ROBOTHOR_RIP_16_ENABLED", raising=False)
         _write_agent(
             instance,
             "narrow",
@@ -1674,3 +1674,120 @@ class TestTheGateIsOfferedNeverRecommended:
         assert result.status == "pass", result.detail
         assert "not a gap" in result.detail, result.detail
         assert "opt-in" in result.detail, result.detail
+
+
+# ── tools.deferred_tools_reachable ────────────────────────────────────
+
+
+class TestDeferredToolsReachable:
+    """Under deferred loading, a granted tool the model cannot see has to
+    be findable through ``tool_search``, or it is not granted in any sense
+    that matters to the agent."""
+
+    @pytest.fixture(autouse=True)
+    def _defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_real_tools_are_reachable(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "broad",
+            {"tools_allowed": ["read_file", "gws_gmail_search", "create_person"]},
+        )
+        result = await _run("tools.deferred_tools_reachable")
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_named_tool_that_is_neither_loaded_nor_searchable_fails(
+        self, instance: Path
+    ) -> None:
+        _write_agent(instance, "broad", {"tools_allowed": ["read_file", "no_such_tool_xyz"]})
+        result = await _run("tools.deferred_tools_reachable")
+        assert result.status == "fail"
+        assert "broad" in result.detail
+        assert "no_such_tool_xyz" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_registered_schema_with_no_searchable_words_fails(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from robothor.engine.tools import registry as registry_module
+
+        real = registry_module.builtin_schemas
+
+        def with_a_blank_one() -> dict:
+            schemas = real()
+            schemas["is_it"] = {
+                "type": "function",
+                "function": {"name": "is_it", "description": "", "parameters": {}},
+            }
+            return schemas
+
+        monkeypatch.setattr(registry_module, "builtin_schemas", with_a_blank_one)
+        _write_agent(instance, "broad", {"tools_allowed": ["read_file"]})
+        result = await _run("tools.deferred_tools_reachable")
+        assert result.status == "fail"
+        assert "is_it" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_the_shipped_templates_pass(self, stock_instance: Path) -> None:
+        result = await _run("tools.deferred_tools_reachable")
+        assert result.status == "pass", result.detail
+
+
+# ── tools.inability_copy ──────────────────────────────────────────────
+
+
+class TestInabilityCopy:
+    """Instruction text that tells the agent it cannot do something is how an
+    agent with the tool learns to refuse. A reason belongs there instead."""
+
+    @pytest.mark.asyncio
+    async def test_a_bare_inability_outside_a_fence_is_reported(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "example-agent",
+            {},
+            instructions="Be helpful.\nI cannot send email.\nYou can't edit code here.\n",
+        )
+        result = await _run("tools.inability_copy")
+        assert result.status == "fail"
+        assert "example-agent" in result.detail
+        assert "I cannot send email." in result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_fenced_example_is_not_reported(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "example-agent",
+            {},
+            instructions="Quote it like this:\n```\nI cannot help with that.\n```\n",
+        )
+        result = await _run("tools.inability_copy")
+        assert result.status == "pass"
+
+    @pytest.mark.asyncio
+    async def test_the_shipped_templates_pass(self, stock_instance: Path) -> None:
+        result = await _run("tools.inability_copy")
+        assert result.status == "pass", result.detail
+
+    def test_no_shipped_instruction_template_claims_an_inability(self) -> None:
+        """The stock instance copies manifests only, so read the shipped
+        instruction text directly."""
+        from pathlib import Path as _Path
+
+        from robothor.doctor.checks.tools import inability_claims
+
+        repo = _Path(__file__).resolve().parents[3]
+        found = {
+            str(path.relative_to(repo)): inability_claims(path.read_text())
+            for path in sorted(repo.glob("templates/**/*.md"))
+        }
+        assert {k: v for k, v in found.items() if v} == {}
+
+    def test_conditions_are_not_claims(self) -> None:
+        from robothor.doctor.checks.tools import inability_claims
+
+        assert inability_claims("If you cannot find it, ask.") == []
+        assert inability_claims("- You can't rerun a workflow.") == ["You can't rerun a workflow."]

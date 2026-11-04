@@ -110,7 +110,10 @@ class TestAnOuterDeadlineActuallyBinds:
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("_mock_run_persistence")
     async def test_cancelling_the_task_cancels_the_run(self, runner, agent_config):
+        in_model_call = asyncio.Event()
+
         async def slow_completion(**kwargs):
+            in_model_call.set()
             await asyncio.sleep(30)
             return _response()
 
@@ -119,7 +122,7 @@ class TestAnOuterDeadlineActuallyBinds:
             task = asyncio.create_task(
                 runner.execute("cancel-agent", "go", agent_config=agent_config)
             )
-            await asyncio.sleep(0.1)
+            await asyncio.wait_for(in_model_call.wait(), timeout=10)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
@@ -143,7 +146,10 @@ class TestTheRunIsStillRecorded:
             finished.append(result)
             return result
 
+        in_model_call = asyncio.Event()
+
         async def slow_completion(**kwargs):
+            in_model_call.set()
             await asyncio.sleep(30)
             return _response()
 
@@ -158,7 +164,9 @@ class TestTheRunIsStillRecorded:
             task = asyncio.create_task(
                 runner.execute("cancel-agent", "go", agent_config=agent_config)
             )
-            await asyncio.sleep(0.1)
+            # Cancel during the model call, not after a fixed pause: setup ahead
+            # of it can take longer than 0.1 s on a busy runner.
+            await asyncio.wait_for(in_model_call.wait(), timeout=10)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task

@@ -53,6 +53,9 @@ CLAUDE_CODE_TOOLS = frozenset(
         "claude_code_wait",
         "claude_code_followup",
         "claude_code_cancel",
+        # Clone an allowlisted remote; push a verified job and open a draft PR.
+        "claude_code_repo_prepare",
+        "claude_code_publish",
     }
 )
 
@@ -336,6 +339,13 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # and not a side effect: nothing on this box or anywhere else changes.
         "view_image",
         "analyze_image",
+        # The deferred-loading meta-tools that only look: a search and a schema
+        # lookup change nothing. Journalled as writes, every search on a
+        # deferred run cost a durable reservation and was refused when the
+        # effect store was unreachable. `tool_call` is NOT here: it is judged
+        # as the call it wraps (wrapped_call.is_read_only_call).
+        "tool_search",
+        "tool_describe",
         # Web
         "web_fetch",
         "web_render",
@@ -486,7 +496,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
 # ── Deferred / searchable tool loading (Rip 16 / G4) ──────────────────────
 # The meta-tools that drive tools-as-code. Excluded from the normal advertised
 # set; injected only when an agent's toolset is deferred (see registry).
-TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
+# Declared in ``robothor.engine.wrapped_call``, which dispatch imports while
+# this package initialises, so it cannot import from here.
+from robothor.engine.wrapped_call import TOOLSEARCH_TOOLS as TOOLSEARCH_TOOLS  # noqa: E402
 
 # Workflow control tools that start work. `list_workflows` and `workflow_runs`
 # are reads and are not in this family.
@@ -548,7 +560,7 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-# The always-advertised tool set when deferral is active. Chosen as the
+# The always-advertised tool set of a deferred agent. Chosen as the
 # highest-frequency tools so most turns never need a tool_search round-trip;
 # everything else loads on demand via tool_search → tool_describe → tool_call.
 # GOAL_TOOLS are force-added by the registry filter, so they're omitted here.

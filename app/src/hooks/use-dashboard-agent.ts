@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { useVisualState } from "@/hooks/use-visual-state";
 import { validateDashboardCode } from "@/lib/dashboard/code-validator";
 import { reportDashboardError } from "@/lib/dashboard/error-reporter";
@@ -39,26 +39,33 @@ export function useDashboardAgent(): DashboardAgentState {
   const {
     pendingMessages,
     pendingAgentData,
+    pendingTurn,
+    claimTurn,
+    releaseTurn,
+    turnReleases,
+    canvasError: error,
+    setCanvasError: setError,
+    canvasRequests,
     setIsUpdating,
     setDashboardCode,
   } = useVisualState();
 
   const abortRef = useRef<AbortController | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastRequestRef = useRef<{
-    messages: ConversationMessages;
-    agentData?: Record<string, unknown> | null;
-  } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // This canvas's request in flight, and the turn it generates if it claimed one.
+  const inFlightRef = useRef(false);
+  const ownTurnRef = useRef<number | null>(null);
 
   const handleUpdate = useCallback(
-    async (messages: ConversationMessages, agentData?: Record<string, unknown> | null) => {
-      lastRequestRef.current = { messages, agentData };
+    async (messages: ConversationMessages, agentData?: Record<string, unknown> | null, turn?: number) => {
+      canvasRequests.remember({ messages, agentData });
       setError(null);
       // Cancel any in-flight request
       abortRef.current?.abort();
       const abort = new AbortController();
       abortRef.current = abort;
+      inFlightRef.current = true;
+      ownTurnRef.current = turn ?? null;
 
       // The spinner goes up here, next to the request it describes, and every
       // path below puts it down again.
@@ -70,8 +77,6 @@ export function useDashboardAgent(): DashboardAgentState {
           body.agentData = agentData;
         }
 
-        console.log("[dashboard-agent] Requesting update, messages:", messages.length, "agentData:", agentData ? Object.keys(agentData) : "none");
-
         const res = await fetch("/api/dashboard/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -82,7 +87,6 @@ export function useDashboardAgent(): DashboardAgentState {
         if (abort.signal.aborted) return;
 
         if (res.status === 204) {
-          console.log("[dashboard-agent] Triage: no update needed (204)");
           setIsUpdating(false);
           return;
         }
@@ -110,7 +114,6 @@ export function useDashboardAgent(): DashboardAgentState {
         } else if (data.html) {
           const validation = validateDashboardCode(data.html);
           if (validation.valid) {
-            console.log("[dashboard-agent] Dashboard updated:", data.html.length, "chars");
             setDashboardCode(validation.code, data.type || "html");
           } else {
             console.warn("[dashboard-agent] Client validation failed:", validation.errors);
@@ -130,10 +133,12 @@ export function useDashboardAgent(): DashboardAgentState {
       } finally {
         if (!abort.signal.aborted) {
           setIsUpdating(false);
+          inFlightRef.current = false;
+          ownTurnRef.current = null;
         }
       }
     },
-    [setDashboardCode, setIsUpdating]
+    [canvasRequests, setDashboardCode, setError, setIsUpdating]
   );
 
   // React to pendingMessages changes with debounce
@@ -147,9 +152,10 @@ export function useDashboardAgent(): DashboardAgentState {
 
     // Capture agentData at debounce time so it's consistent with the messages
     const agentDataSnapshot = pendingAgentData;
-    console.log("[dashboard-agent] Scheduling update in", DEBOUNCE_MS, "ms for", pendingMessages.length, "messages");
     debounceRef.current = setTimeout(() => {
-      handleUpdate(pendingMessages, agentDataSnapshot);
+      // One generation per turn, however many canvases are open.
+      if (!claimTurn(pendingTurn)) return;
+      handleUpdate(pendingMessages, agentDataSnapshot, pendingTurn);
     }, DEBOUNCE_MS);
 
     return () => {
@@ -157,25 +163,31 @@ export function useDashboardAgent(): DashboardAgentState {
         clearTimeout(debounceRef.current);
       }
     };
-  }, [pendingMessages, pendingAgentData, handleUpdate]);
+    // `turnReleases`: a turn another canvas gave back is this one's to take.
+  }, [pendingMessages, pendingAgentData, pendingTurn, turnReleases, claimTurn, handleUpdate]);
 
   const retry = useCallback(() => {
-    const last = lastRequestRef.current;
+    const last = canvasRequests.last();
     if (!last) return;
     void handleUpdate(last.messages, last.agentData);
-  }, [handleUpdate]);
+  }, [canvasRequests, handleUpdate]);
 
-  const dismiss = useCallback(() => setError(null), []);
+  const dismiss = useCallback(() => setError(null), [setError]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount. A request still in flight is abandoned: its spinner
+  // comes down, and a turn it was generating goes back for another canvas.
   useEffect(() => {
     return () => {
+      if (inFlightRef.current) {
+        setIsUpdating(false);
+        if (ownTurnRef.current !== null) releaseTurn(ownTurnRef.current);
+      }
       abortRef.current?.abort();
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
       }
     };
-  }, []);
+  }, [releaseTurn, setIsUpdating]);
 
   return { error, retry, dismiss };
 }

@@ -22,6 +22,9 @@ import { useState } from "react";
 
 const GENERIC_FAILURE = "That email or password is not correct.";
 
+/** Where Auth.js takes the local provider's credentials; signIn("local") posts here too. */
+const LOCAL_CALLBACK = "/api/auth/callback/local";
+
 /**
  * `callbackUrl` reaches this component from the query string, so
  * `/signin?callbackUrl=https://evil.example.com` is attacker-controlled.
@@ -119,7 +122,15 @@ export function LocalSignInForm({ callbackUrl }: { callbackUrl: string }) {
     "focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2";
 
   return (
-    <form onSubmit={submit} className="flex w-full flex-col gap-3">
+    // method/action matter only before hydration: a native submit must be a
+    // POST (a GET would put the password in the URL) to the same endpoint
+    // signIn("local") reaches. After hydration submit() prevents it.
+    <form
+      method="post"
+      action={LOCAL_CALLBACK}
+      onSubmit={submit}
+      className="flex w-full flex-col gap-3"
+    >
       <div className="flex flex-col gap-1.5">
         <label htmlFor="local-email" className="text-xs font-medium text-muted-foreground">
           Email

@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 import { PageHeader } from "@/components/business/page-header";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { isOperatorRole } from "@/components/layout/nav-config";
 import type { AnswerBody, AnswerOutcome, PendingItem, PendingKind } from "@/lib/inbox/pending";
 
 import { InboxCard } from "./inbox/inbox-card";
+import { ListSkeleton } from "@/components/business/list-skeleton";
 
 /**
  * The Inbox: everything waiting on a person, in one list, answered in place.
@@ -117,13 +118,7 @@ export function InboxView({
         ) : null}
 
         {isLoading && items.length === 0 && !error && !refusedAsNonOperator ? (
-          <div
-            className="flex items-center gap-2 rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground"
-            data-testid="inbox-loading"
-          >
-            <Loader2 aria-hidden className="size-4 animate-spin" />
-            Reading what is waiting on you…
-          </div>
+          <ListSkeleton testId="inbox-loading" label="Loading what is waiting on you" />
         ) : null}
 
         {!isLoading && !error && !refusedAsNonOperator && items.length === 0 ? (

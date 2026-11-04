@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 import litellm
 
+from robothor.engine.channel_streaming import in_channel_stream_scope
 from robothor.engine.codex_provider import CodexProviderError, is_codex_model
 from robothor.engine.codex_provider import acompletion as codex_acompletion
 from robothor.engine.context import estimate_tokens
@@ -1124,6 +1125,55 @@ def _is_transient_model_error(e: BaseException) -> bool:
     return getattr(e, "status_code", None) in _TRANSIENT_RETRY_STATUSES
 
 
+#: Statuses a channel stream retries in place: the 5xx set plus 529, the
+#: "overloaded" answer one provider family gives under load.
+_TRANSIENT_STREAM_STATUSES = _TRANSIENT_RETRY_STATUSES | {529}
+
+#: Pause before a channel stream's in-place retry. Short: someone is watching.
+STREAM_RETRY_DELAY_SECONDS = 1.0
+
+
+def _is_transient_stream_error(e: BaseException) -> bool:
+    """True for a stream failure worth one more try on the same model.
+
+    A dropped or reset connection, a 5xx, a 529. Not a timeout: a stalled
+    stream has already cost the chunk timeout, and a second stall would double
+    it — those still fall back, as before.
+    """
+    if isinstance(e, TimeoutError):
+        return False
+    if isinstance(e, ConnectionError):
+        return True
+    try:
+        import httpx
+
+        if isinstance(e, httpx.TransportError) and not isinstance(e, httpx.TimeoutException):
+            return True
+    except ImportError:  # pragma: no cover - httpx ships with litellm
+        pass
+    return getattr(e, "status_code", None) in _TRANSIENT_STREAM_STATUSES
+
+
+async def _before_stream_retry(model: str, e: BaseException, watchdog: Any) -> None:
+    """Tell the run's client its partial text is discarded, then pause briefly."""
+    from robothor.engine.run_status import emit_status
+
+    logger.warning(
+        "Model %s stream failed (%s) — retrying once on the same model",
+        _sanitize(model),
+        _sanitize(e),
+    )
+    run_id = _current_run_id_var.get()
+    if run_id:
+        await emit_status(
+            run_id, {"event": "stream_retry", "model": model, "reason": type(e).__name__}
+        )
+    if watchdog:
+        watchdog.touch(f"stream_retry:{model}")
+    if STREAM_RETRY_DELAY_SECONDS > 0:
+        await asyncio.sleep(STREAM_RETRY_DELAY_SECONDS)
+
+
 #: Retries for a model that emitted tool-call JSON nobody can parse. ONE: a
 #: truncated generation is worth re-rolling once, but the failure is usually
 #: deterministic — the unparseable arguments are already in the request being
@@ -2094,11 +2144,7 @@ class LLMClient:
         user turn asking for the answer, because an identical re-roll truncates
         identically.
         """
-        from robothor.engine.model_registry import (
-            get_model_limits,
-            get_output_tokens,
-            supports_cache_control,
-        )
+        from robothor.engine.model_registry import get_model_limits, get_output_tokens
 
         limits = get_model_limits(model)
         actual_model = model
@@ -2117,47 +2163,27 @@ class LLMClient:
 
         messages = strip_engine_keys(messages)
 
-        # For models that support Anthropic-style prompt caching, enable it on
-        # the system message by converting it to content-block format with
-        # cache_control. This is now a catalog-driven capability lookup (see
-        # model_registry's supports_cache_control helper) instead of a bare
-        # provider-prefix string check, so it follows fleet model changes
-        # automatically. See that helper's docstring for why OpenRouter
-        # models (including "openrouter/anthropic/...") are excluded —
-        # litellm sends them via the OpenAI-compatible path and the mixed
-        # content-block format causes tool_use/tool_result pairing failures.
-        if supports_cache_control(model) and messages and messages[0].get("role") == "system":
+        # Which routes get a system-prompt cache_control breakpoint is the
+        # catalog-driven model_registry.supports_cache_control (its docstring
+        # says why OpenRouter and Gemini get none); cache_layout keeps the
+        # system prompt a byte-stable prefix and drops OpenAI-family markers.
+        from robothor.engine import cache_layout
+
+        messages, cache_system = cache_layout.prepare(model, messages)
+        if cache_system and messages and messages[0].get("role") == "system":
             messages = list(messages)  # shallow copy to avoid mutating original
             sys_content = messages[0].get("content")
             if isinstance(sys_content, str):
                 sys_msg = dict(messages[0])
-                # Split into static (cacheable) + dynamic (time context) blocks.
-                # The dynamic tail starts at the last "---" separator before "Current time:".
-                split_marker = "\n\n---\n\nCurrent time:"
-                split_idx = sys_content.rfind(split_marker)
-                if split_idx > 0:
-                    static_part = sys_content[:split_idx]
-                    dynamic_part = sys_content[split_idx + len("\n\n---\n\n") :]
-                    sys_msg["content"] = [
-                        {
-                            "type": "text",
-                            "text": static_part,
-                            "cache_control": {"type": "ephemeral"},
-                        },
-                        {
-                            "type": "text",
-                            "text": dynamic_part,
-                        },
-                    ]
-                else:
-                    # Fallback: cache the whole thing (no time context found)
-                    sys_msg["content"] = [
-                        {
-                            "type": "text",
-                            "text": sys_content,
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ]
+                # cache_layout already moved the per-run time line out, so the
+                # whole system prompt is the stable, cacheable prefix.
+                sys_msg["content"] = [
+                    {
+                        "type": "text",
+                        "text": sys_content,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
                 messages[0] = sys_msg
 
         # Defense in depth: drop orphaned tool_result messages that would
@@ -2178,6 +2204,9 @@ class LLMClient:
             # Appended after every hygiene pass so it cannot be hoisted out of
             # the list or stripped as engine context.
             messages = [*messages, {"role": "user", "content": nudge}]
+
+        if cache_system and cache_layout.has_explicit_breakpoints(model):
+            messages, tools = cache_layout.add_anthropic_breakpoints(messages, tools)
 
         kwargs: dict[str, Any] = {
             "model": actual_model,
@@ -2728,10 +2757,15 @@ class LLMClient:
     ) -> Any:
         """Call LLM with streaming. Returns reconstructed ModelResponse.
 
-        No in-place transient retry here (unlike ``_call_llm``): a retry after
-        partial content has already been emitted to ``on_content`` would show
-        the user duplicated text; stalled streams already fall back via the
-        per-chunk timeout.
+        No in-place transient retry by default (unlike ``_call_llm``): a retry
+        after partial content has already been emitted to ``on_content`` would
+        show an appending client (the dashboard chat) duplicated text. Inside a
+        channel-streaming scope (``robothor.engine.channel_streaming``), whose
+        consumers replace rather than append, a transient failure gets ONE
+        same-model retry: the partial text is discarded, a ``stream_retry``
+        status event goes to the run's status sink, and tool-turn text keeps
+        reaching ``on_content``. Stalled streams fall back via the per-chunk
+        timeout either way.
 
         Emits structured events to ``on_stream_event`` if provided:
         - ``{"type": "text_delta", "delta": "...", "accumulated": "..."}``
@@ -2748,9 +2782,12 @@ class LLMClient:
                 with contextlib.suppress(Exception):
                     await on_stream_event(event)
 
+        channel_stream = in_channel_stream_scope()
+
         for model in models:
             if broken_models and model in broken_models:
                 continue
+            stream_retries_left = 1 if channel_stream else 0
             # Bounds the initial stream-creation await; subsequent chunk reads
             # are guarded by STREAM_CHUNK_TIMEOUT in the consumption loop below.
             per_call_timeout = _per_call_timeout(model, timeout_override)
@@ -2855,7 +2892,9 @@ class LLMClient:
                                     "accumulated": accumulated_content,
                                 }
                             )
-                            if not has_tool_calls and on_content:
+                            # A streaming channel shows tool-turn text as
+                            # interim progress; anyone else stops at the call.
+                            if on_content and (channel_stream or not has_tool_calls):
                                 with contextlib.suppress(Exception):
                                     await on_content(accumulated_content)
                         if getattr(delta, "tool_calls", None):
@@ -2915,6 +2954,10 @@ class LLMClient:
                             continue
                         last_error = e
                         break
+                    if stream_retries_left > 0 and _is_transient_stream_error(e):
+                        stream_retries_left -= 1
+                        await _before_stream_retry(model, e, self._active_watchdog)
+                        continue
                     if _advance_without_blaming_the_model(e, model):
                         last_error = e
                         break

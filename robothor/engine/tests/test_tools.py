@@ -74,8 +74,10 @@ class TestToolRegistry:
         assert "create_task" in names
         assert "delete_task" not in names
 
-    def test_build_for_agent_with_denied(self):
+    def test_build_for_agent_with_denied(self, monkeypatch):
         """Filters out tools in tools_denied list."""
+        # Every schema advertised, so the deny filter is what is observed.
+        monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", "100000")
         with patch("robothor.api.mcp.get_tool_definitions") as mock_defs:
             mock_defs.return_value = [
                 {

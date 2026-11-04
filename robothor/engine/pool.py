@@ -60,7 +60,8 @@ class FleetPool:
 
     Provides two control surfaces:
     - **Concurrency**: limits how many agent runs can execute simultaneously
-    - **Hourly cost cap**: limits total fleet spend per rolling hour
+    - **Hourly cost cap**: reports when fleet spend per rolling hour reaches it
+      (``cost_cap_crossed``); it never refuses a run
 
     Thread-safe — the engine scheduler and async runners may call from
     different threads.
@@ -73,6 +74,8 @@ class FleetPool:
         reserved_slots: int = 0,
     ) -> None:
         self._max_concurrent = max_concurrent
+        # A threshold for the report: admission records a crossing on the run
+        # (`budget_stops.observe_hourly_cap`) and admits it.
         self._hourly_cost_cap_usd = hourly_cost_cap_usd
         # Slots BACKGROUND work may not occupy. A cap alone still lets nightly
         # sweeps fill every slot and leave an operator's message third in line;
@@ -132,15 +135,21 @@ class FleetPool:
                     f"Fleet at capacity: {len(self._active)}/{self._max_concurrent} concurrent runs"
                 )
 
-            # Hourly cost check
-            if self._hourly_cost_cap_usd > 0:
-                current = self._hourly_cost_total()
-                if current >= self._hourly_cost_cap_usd:
-                    return False, (
-                        f"Hourly cost cap reached: ${current:.2f}/${self._hourly_cost_cap_usd:.2f}"
-                    )
-
             return True, ""
+
+    def cost_cap_crossed(self) -> tuple[float, float] | None:
+        """``(spent, cap)`` when the rolling hour has reached the cap, else None."""
+        with self._lock:
+            return self._cost_cap_crossed()
+
+    def _cost_cap_crossed(self) -> tuple[float, float] | None:
+        """Must be called under lock."""
+        if self._hourly_cost_cap_usd <= 0:
+            return None
+        current = self._hourly_cost_total()
+        if current < self._hourly_cost_cap_usd:
+            return None
+        return current, self._hourly_cost_cap_usd
 
     def register_run(self, run_id: str, agent_id: str) -> None:
         """Register a new active run."""

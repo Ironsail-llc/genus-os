@@ -258,6 +258,21 @@ BROWSER_AUTONOMY_DESCRIPTION = (
     "Return setup_path to the user; it expires in 15 minutes and requires their linked personal account."
 )
 
+
+def _mcp_list_tools_properties() -> dict[str, Any]:
+    """``mcp_list_tools``'s parameters, outside ``get_engine_schemas`` for the size ratchet."""
+    return {
+        "server_name": {"type": "string", "description": "Name of the MCP server"},
+        "refresh": {
+            "type": "boolean",
+            "description": (
+                "Ask the server again instead of returning the tool list cached for its "
+                "current session."
+            ),
+        },
+    }
+
+
 # Long descriptions live out here: get_engine_schemas is already one of the
 # engine's largest functions and the size ratchet only lets it shrink.
 _WEB_SEARCH_DESCRIPTION = (
@@ -1455,6 +1470,58 @@ _CLAUDE_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "claude_code_repo_prepare": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_repo_prepare",
+            "description": (
+                "Use this before claude_code_start when the code lives in a remote repository: "
+                "clones an allowlisted remote into the coding workspace (or fetches and "
+                "fast-forwards an existing clone) and returns the repo_path to start a job on."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {
+                        "type": "string",
+                        "description": "owner/repo on GitHub, or the clone URL",
+                    },
+                },
+                "required": ["repo"],
+            },
+        },
+    },
+    "claude_code_publish": {
+        "type": "function",
+        "function": {
+            "name": "claude_code_publish",
+            "description": (
+                "Use this after a claude_code job is done with its verify passed: pushes the "
+                "job's branch to the repository's allowlisted origin and opens a DRAFT pull "
+                "request, returning its URL. It never merges. Owner or admin only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": _JOB_ID_PARAM,
+                    "title": {"type": "string", "description": "Pull request title"},
+                    "body": {
+                        "type": "string",
+                        "description": "Pull request body: what changed, and the job's evidence",
+                    },
+                    "ticket": {
+                        "type": "string",
+                        "description": "Optional ticket key (ABC-123), appended to the title",
+                    },
+                    "base": {
+                        "type": "string",
+                        "description": "Branch to open against (default: the remote's default)",
+                    },
+                },
+                "required": ["job_id", "title"],
+            },
+        },
+    },
 }
 
 
@@ -1731,6 +1798,41 @@ _N8N_SCHEMAS: dict[str, dict[str, Any]] = {
                         "description": "Only this n8n workflow id (from n8n_list_workflows).",
                     },
                 },
+            },
+        },
+    },
+}
+
+
+_TEAM_SCRATCHPAD_SCHEMAS: dict[str, dict[str, Any]] = {
+    "team_scratchpad_read": {
+        "type": "function",
+        "function": {
+            "name": "team_scratchpad_read",
+            "description": "Read a team's shared scratchpad (omit key to read all).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Team id"},
+                    "key": {"type": "string", "description": "Specific key (optional)"},
+                },
+                "required": ["team_id"],
+            },
+        },
+    },
+    "team_scratchpad_write": {
+        "type": "function",
+        "function": {
+            "name": "team_scratchpad_write",
+            "description": "Write a key/value to a team's shared scratchpad.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "team_id": {"type": "string", "description": "Team id"},
+                    "key": {"type": "string", "description": "Scratchpad key"},
+                    "value": {"type": "string", "description": "Value to store"},
+                },
+                "required": ["team_id", "key"],
             },
         },
     },
@@ -3790,12 +3892,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             "description": "List tools available on a specific external MCP server.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "server_name": {
-                        "type": "string",
-                        "description": "Name of the MCP server",
-                    },
-                },
+                "properties": _mcp_list_tools_properties(),
                 "required": ["server_name"],
             },
         },
@@ -4945,38 +5042,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
 
     schemas.update(_HUMAN_IN_THE_LOOP_SCHEMAS)
 
-    schemas["team_scratchpad_read"] = {
-        "type": "function",
-        "function": {
-            "name": "team_scratchpad_read",
-            "description": "Read a team's shared scratchpad (omit key to read all).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "team_id": {"type": "string", "description": "Team id"},
-                    "key": {"type": "string", "description": "Specific key (optional)"},
-                },
-                "required": ["team_id"],
-            },
-        },
-    }
-
-    schemas["team_scratchpad_write"] = {
-        "type": "function",
-        "function": {
-            "name": "team_scratchpad_write",
-            "description": "Write a key/value to a team's shared scratchpad.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "team_id": {"type": "string", "description": "Team id"},
-                    "key": {"type": "string", "description": "Scratchpad key"},
-                    "value": {"type": "string", "description": "Value to store"},
-                },
-                "required": ["team_id", "key"],
-            },
-        },
-    }
+    schemas.update(_TEAM_SCRATCHPAD_SCHEMAS)
 
     from robothor.goals.tools import schemas as pursuit_schemas
 

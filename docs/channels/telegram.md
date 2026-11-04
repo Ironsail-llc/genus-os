@@ -4,8 +4,25 @@ Telegram is a built-in channel and needs no `ROBOTHOR_CHANNELS` entry. Set
 `ROBOTHOR_TELEGRAM_BOT_TOKEN` and it starts; see
 [Channel access](access.md) for who is allowed to reach it.
 
-This page covers adding context while the agent is working, then pictures and
-files in both directions.
+This page covers watching the answer arrive, adding context while the agent
+is working, then pictures and files in both directions.
+
+## Watching the answer arrive
+
+The bot shows "Thinking..." straight away, and that message becomes a progress
+message: the answer is written into it as the model produces it, at most one
+edit a second in a private chat and one every three seconds in a group
+(Telegram's flood limits are stricter there). A "retry after" from Telegram
+pushes the next edit back and doubles the spacing for the rest of the turn; it
+never delays the answer. A line such as "Searching the web · 4s" shows while
+a tool runs. When the answer is complete it arrives as a new message, so your
+phone notifies you even if you looked away during a long run (Telegram never
+notifies on an edit), and the progress message is then deleted: the chat is
+left with the answer alone. If the answer could not be sent, the progress
+message stays, holding what was streamed. If the model's
+stream drops with a transient error, it is retried once on the same model and
+the progress message starts over, rather than the turn moving to a fallback
+model.
 
 ## Adding context while the agent is working
 

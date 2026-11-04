@@ -8,6 +8,7 @@ import math
 import re
 from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
 
+from robothor.engine.capability_tier import WIDENING_TIERS
 from robothor.engine.runtime.deadlines import RuntimeDeadlineError
 from robothor.engine.spawn_cancel import tool_deadline
 from robothor.engine.tools.constants import (
@@ -478,6 +479,9 @@ class SearchHit(TypedDict, total=False):
     #: Set by the ``tool_search`` handler, per hit: is this tool already
     #: advertised to the model this turn, or does it need ``tool_call``?
     in_toolset: bool
+    #: The top deferred hit's parameter schema, inline, so the agent can
+    #: ``tool_call`` it without a ``tool_describe`` round-trip.
+    parameters: dict[str, Any]
 
 
 class _Candidate(NamedTuple):
@@ -536,14 +540,26 @@ def _score_tool(
     coverage count rides along because it decides ties — three tools scored
     7.28 for "check my email" and the answer fell out alphabetically, which is
     how ``browser`` came first.
+
+    One exception to that equality, for the query's HEAD — its last content
+    word that is not an intent verb, the noun its modifiers describe. A tool
+    named for it scores that hit at the weight of the query's rarest term.
+    IDF favours rare modifiers over a common head: "five most urgent open
+    tasks" put a coding tool whose keywords say "open" (a pull request) above
+    the eleven tools named ``*_task``, because "task" is shared by all of them.
     """
     name_words = {_stem(w) for w in _WORD_RE.findall(name.lower())}
     desc_words = _stems(description)
     keyword_set = {_stem(k) for k in keywords}
+    strongest = max((weights or {}).values(), default=1.0)
+    objects = _object_terms(terms)
+    head = objects[-1] if objects else None
     score = 0.0
     for term in terms:
         w = (weights or {}).get(term, 1.0)
-        if term in name_words or term in keyword_set:
+        if term == head and term in name_words:
+            score += 6.0 * max(w, strongest)  # a tool named for what was asked about
+        elif term in name_words or term in keyword_set:
             score += 6.0 * w  # exact word in the tool's own name or vocabulary
         elif term in name.lower():
             score += 3.0 * w  # substring, e.g. "mail" in gws_gmail_send
@@ -691,14 +707,18 @@ class ToolRegistry:
         - 5s timeout per adapter connection (don't block agent startup)
         - Failed adapters cached with exponential backoff (5min initial, 30min max)
         - Failures logged once at WARNING, then suppressed until retry window
+
+        Adapters connect concurrently (bounded, each with its own timeout) and
+        a live session's tool list is reused; schemas are applied in adapter
+        order, so a name clash resolves the same way it would sequentially.
         """
-        import asyncio
         import time
 
+        from robothor.engine import mcp_client
         from robothor.engine.adapters import verify_adapter_integrity
-        from robothor.engine.mcp_client import get_mcp_client_pool
 
-        pool = get_mcp_client_pool()
+        pool = mcp_client.get_mcp_client_pool()
+        admitted: list[Any] = []
         for adapter in adapters:
             # Integrity BEFORE connection: an unverified stdio binary must not
             # even be spawned, let alone asked for its tool list.
@@ -710,81 +730,94 @@ class ToolRegistry:
                     reason,
                 )
                 continue
-            # Check failure cache — skip if in backoff window
-            now = time.monotonic()
-            if adapter.name in self._adapter_failures:
-                fail_time, backoff = self._adapter_failures[adapter.name]
-                if now - fail_time < backoff:
-                    logger.debug(
-                        "Adapter '%s': skipping (backoff %.0fs remaining)",
-                        adapter.name,
-                        backoff - (now - fail_time),
-                    )
-                    continue
+            if self._in_backoff(adapter.name, time.monotonic()):
+                continue
+            admitted.append(adapter)
 
+        if not admitted:
+            return
+        now = time.monotonic()
+        results = await mcp_client.gather_adapter_tools(admitted, pool)
+        for adapter, result in zip(admitted, results, strict=True):
             try:
-                session = await asyncio.wait_for(pool.get_session(adapter.name), timeout=5.0)
-                mcp_tools = await asyncio.wait_for(session.list_tools(), timeout=5.0)
-                allow = set(adapter.tools_allowed)
-                if not allow:
-                    logger.warning(
-                        "Adapter '%s' has no tools_allowed list — registering "
-                        "every tool its server offers (legacy allow-all). Pin "
-                        "the expected tools in the adapter YAML so a changed "
-                        "server cannot sprout new capabilities silently.",
-                        adapter.name,
-                    )
-                drifted: list[str] = []
-                for tool in mcp_tools:
-                    name = tool.get("name", "")
-                    if not name:
-                        continue
-                    if allow and name not in allow:
-                        drifted.append(name)
-                        continue
-                    self._schemas[name] = {
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "description": tool.get("description", ""),
-                            "parameters": tool.get(
-                                "inputSchema", {"type": "object", "properties": {}}
-                            ),
-                        },
-                    }
-                    self._adapter_routes[name] = adapter.name
-                if drifted:
-                    # Loud on purpose: the server offered tools the bundle
-                    # never declared. That is the exact supply-chain move —
-                    # a compromised or auto-updated server growing new
-                    # capabilities — and it must read as an event, not debug.
-                    logger.warning(
-                        "Adapter '%s' DRIFT: server offered %d tool(s) not in "
-                        "tools_allowed, refused: %s",
-                        adapter.name,
-                        len(drifted),
-                        ", ".join(sorted(drifted)),
-                    )
-                # Clear failure cache on success
-                self._adapter_failures.pop(adapter.name, None)
-                logger.info("Adapter '%s': discovered %d tools", adapter.name, len(mcp_tools))
+                if isinstance(result, BaseException):
+                    raise result
+                self._apply_adapter_tools(adapter, result)
             except Exception as e:
-                # Exponential backoff: 300s (5min) -> 600s -> 1200s -> max 1800s (30min)
-                _, prev_backoff = self._adapter_failures.get(adapter.name, (0, 150.0))
-                new_backoff = min(prev_backoff * 2, 1800.0)
-                self._adapter_failures[adapter.name] = (now, new_backoff)
-                if prev_backoff <= 150.0:
-                    # First failure or first retry — log at WARNING
-                    logger.warning(
-                        "Adapter '%s' unavailable (backoff %.0fs): %s",
-                        adapter.name,
-                        new_backoff,
-                        e,
-                    )
-                else:
-                    logger.debug(
-                        "Adapter '%s' still unavailable, backoff %.0fs", adapter.name, new_backoff
-                    )
+                self._record_adapter_failure(adapter.name, now, e)
+
+    def _in_backoff(self, adapter_name: str, now: float) -> bool:
+        """True while a failed adapter sits in its backoff window."""
+        if adapter_name not in self._adapter_failures:
+            return False
+        fail_time, backoff = self._adapter_failures[adapter_name]
+        if now - fail_time < backoff:
+            logger.debug(
+                "Adapter '%s': skipping (backoff %.0fs remaining)",
+                adapter_name,
+                backoff - (now - fail_time),
+            )
+            return True
+        return False
+
+    def _apply_adapter_tools(self, adapter: Any, mcp_tools: list[dict[str, Any]]) -> None:
+        """Register an adapter's offered tools, refusing any outside ``tools_allowed``."""
+        allow = set(adapter.tools_allowed)
+        if not allow:
+            logger.warning(
+                "Adapter '%s' has no tools_allowed list — registering "
+                "every tool its server offers (legacy allow-all). Pin "
+                "the expected tools in the adapter YAML so a changed "
+                "server cannot sprout new capabilities silently.",
+                adapter.name,
+            )
+        drifted: list[str] = []
+        for tool in mcp_tools:
+            name = tool.get("name", "")
+            if not name:
+                continue
+            if allow and name not in allow:
+                drifted.append(name)
+                continue
+            self._schemas[name] = {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("inputSchema", {"type": "object", "properties": {}}),
+                },
+            }
+            self._adapter_routes[name] = adapter.name
+        if drifted:
+            # Loud on purpose: the server offered tools the bundle
+            # never declared. That is the exact supply-chain move —
+            # a compromised or auto-updated server growing new
+            # capabilities — and it must read as an event, not debug.
+            logger.warning(
+                "Adapter '%s' DRIFT: server offered %d tool(s) not in tools_allowed, refused: %s",
+                adapter.name,
+                len(drifted),
+                ", ".join(sorted(drifted)),
+            )
+        # Clear failure cache on success
+        self._adapter_failures.pop(adapter.name, None)
+        logger.info("Adapter '%s': discovered %d tools", adapter.name, len(mcp_tools))
+
+    def _record_adapter_failure(self, adapter_name: str, now: float, e: BaseException) -> None:
+        """Exponential backoff: 300s (5min) -> 600s -> 1200s -> max 1800s (30min)."""
+        _, prev_backoff = self._adapter_failures.get(adapter_name, (0, 150.0))
+        new_backoff = min(prev_backoff * 2, 1800.0)
+        self._adapter_failures[adapter_name] = (now, new_backoff)
+        if prev_backoff <= 150.0:
+            # First failure or first retry — log at WARNING
+            logger.warning(
+                "Adapter '%s' unavailable (backoff %.0fs): %s",
+                adapter_name,
+                new_backoff,
+                e,
+            )
+        else:
+            logger.debug("Adapter '%s' still unavailable, backoff %.0fs", adapter_name, new_backoff)
 
     def get_adapter_route(self, tool_name: str) -> str | None:
         """Return the adapter server name for a tool, or None if not adapter-provided."""
@@ -809,13 +842,21 @@ class ToolRegistry:
         return set(self._adapter_routes)
 
     def build_for_agent(
-        self, config: AgentConfig, *, autonomy: bool = False
+        self,
+        config: AgentConfig,
+        *,
+        autonomy: bool = False,
+        recent: frozenset[str] = frozenset(),
+        tier: str = "",
     ) -> list[dict[str, Any]]:
         """Return filtered tool schemas for an agent based on allow/deny lists.
 
-        When deferral (Rip 16 / G4) is active for this agent, advertise only the
-        CORE_TOOLS subset plus the tool_search/tool_describe/tool_call meta-tools;
-        the agent's other allowed tools load on demand. Enforcement of the real
+        When this agent's toolset is deferred (Rip 16 / G4), advertise only its
+        core — CORE_TOOLS, the manifest's ``tools_eager`` and ``recent`` (the
+        tools it called in its latest runs, see
+        :mod:`robothor.engine.recent_tools`), all cut to what it is allowed — and the tool_search/tool_describe/tool_call meta-tools; the
+        agent's other allowed tools load on demand. ``recent`` never widens
+        reach: a name outside the allowed set is ignored. Enforcement of the real
         allow-list lives in the tool_call/tool_describe handlers, which check the
         ``_deferred_allowed`` set the runner publishes via ``set_deferred_allowed``
         (see deferred_whitelist) — so tool_call cannot reach a denied tool.
@@ -826,37 +867,36 @@ class ToolRegistry:
         that out once, in toolset_prep. Left always-on it cost roughly 1,100
         schema tokens per turn to every agent on every instance, including the
         overwhelming majority that can never reach a grant.
+
+        ``tier`` is the run's capability tier (``capability_tier``);
+        see :meth:`get_tool_names`.
         """
         self._refresh_plugin_schemas_if_stale()
-        names = self._get_filtered_names(config)
-        if self.should_defer(config):
+        names = self._get_filtered_names(config, tier)
+        if self.should_defer(config, tier=tier):
             seen: set[str] = set()
             advertised: list[str] = []
+            eager = set(getattr(config, "tools_eager", None) or ())
             for n in [*names, *sorted(TOOLSEARCH_TOOLS)]:
-                in_core = n in CORE_TOOLS or n in TOOLSEARCH_TOOLS
+                in_core = n in CORE_TOOLS or n in TOOLSEARCH_TOOLS or n in recent or n in eager
                 if in_core and n in self._schemas and n not in seen:
                     seen.add(n)
                     advertised.append(n)
             names = advertised
         return [with_autonomy(wire_schema(self._schemas[n]), autonomy) for n in names]
 
-    def should_defer(self, config: AgentConfig) -> bool:
+    def should_defer(self, config: AgentConfig, *, tier: str = "") -> bool:
         """True iff this agent's toolset should be deferred (Rip 16 / G4).
 
-        Deferral kicks in only for broad-access agents — those whose advertised
+        Deferral applies to every broad-access agent — one whose advertised
         tool count exceeds the threshold — so curated small-toolset workers keep
         their full set with no extra tool_search round-trip.
         """
-        from robothor.engine.feature_flags import (
-            deferred_tools_enabled,
-            deferred_tools_threshold,
-        )
+        from robothor.engine.feature_flags import deferred_tools_threshold
 
-        if not deferred_tools_enabled():
-            return False
-        return len(self._get_filtered_names(config)) > deferred_tools_threshold()
+        return len(self._get_filtered_names(config, tier)) > deferred_tools_threshold()
 
-    def deferred_whitelist(self, config: AgentConfig) -> frozenset[str]:
+    def deferred_whitelist(self, config: AgentConfig, *, tier: str = "") -> frozenset[str]:
         """The deferred-run allow-set the runner publishes via set_deferred_allowed.
 
         The agent's full allowed set plus the meta-tools. tool_describe/tool_call
@@ -864,7 +904,30 @@ class ToolRegistry:
         direct CORE call or a tool_call to any allowed tool passes, while a
         tool_call to a denied tool is refused before registry.execute.
         """
-        return frozenset(self._get_filtered_names(config)) | TOOLSEARCH_TOOLS
+        return frozenset(self._get_filtered_names(config, tier)) | TOOLSEARCH_TOOLS
+
+    def unsearchable_names(self) -> list[str]:
+        """Registered tools ``tool_search`` can never return for any query.
+
+        A schema is in the search index only through its words — its name, its
+        ``keywords`` and its description. One whose every word is a stopword or
+        too short to count has none, and on a deferred run that tool is granted
+        and unreachable. Built-in and plugin schemas alike.
+        """
+        self._refresh_plugin_schemas_if_stale()
+        missing: list[str] = []
+        for name, schema in self._schemas.items():
+            fn = schema.get("function", {})
+            words = " ".join(
+                [
+                    name.replace("_", " "),
+                    str(fn.get("description", "")),
+                    *(str(k) for k in fn.get("keywords", ())),
+                ]
+            )
+            if not _query_terms(words):
+                missing.append(name)
+        return sorted(missing)
 
     def search_tools(self, names: Any, query: str, limit: int = 10) -> list[SearchHit]:
         """Rank a set of tool names against a free-text query.
@@ -879,6 +942,19 @@ class ToolRegistry:
         instead of gws_gmail_send for all replies", the one fact that decides
         between the two tools the search returns together.
         """
+        return [hit for hit, _rank in self.rank_tools(names, query, limit=limit)]
+
+    def rank_tools(self, names: Any, query: str, limit: int = 10) -> list[tuple[SearchHit, float]]:
+        """:meth:`search_tools` with each hit's score.
+
+        On an equal score an opt-in tool (``OPT_IN_TOOLS``: the coding driver,
+        review posting, ticket writes, workflow starts) ranks below a plain
+        one. An agent is given those only by naming them, they spend money or
+        act on other people's work, and a tie is no reason to recommend one.
+
+        ``tool_search`` reads the scores to decide whether the top hit leads by
+        enough to hand over its schema.
+        """
         terms = _query_terms(query)
         corpus: list[_Candidate] = []
         for n in names:
@@ -892,7 +968,7 @@ class ToolRegistry:
                 )
             )
         weights = _term_weights(terms, corpus) if terms else {}
-        scored: list[tuple[float, int, str, str]] = []
+        scored: list[tuple[float, bool, int, str, str]] = []
         for candidate in corpus:
             score, covered = (
                 _score_tool(
@@ -910,13 +986,16 @@ class ToolRegistry:
                 scored.append(
                     (
                         score,
+                        candidate.name in OPT_IN_TOOLS,
                         covered,
                         candidate.name,
                         self._search_description(candidate.name, candidate.description),
                     )
                 )
-        scored.sort(key=lambda x: (-x[0], -x[1], x[2]))
-        return [SearchHit(name=n, description=d) for _s, _c, n, d in scored[: max(1, limit)]]
+        scored.sort(key=lambda x: (-x[0], x[1], -x[2], x[3]))
+        return [
+            (SearchHit(name=n, description=d), s) for s, _gated, _c, n, d in scored[: max(1, limit)]
+        ]
 
     #: Longer than this and a search result stops being scannable. Meant to sit
     #: above the longest DISAMBIGUATING description — one carrying a
@@ -1002,20 +1081,34 @@ class ToolRegistry:
     def build_readonly_for_agent(self, config: AgentConfig) -> list[dict[str, Any]]:
         """Return only read-only tool schemas for plan mode."""
         self._refresh_plugin_schemas_if_stale()
-        full_names = set(self.get_tool_names(config))
-        readonly_names = sorted(full_names & self._readonly_names())
+        readonly_names = self.get_readonly_tool_names(config)
         return [wire_schema(self._schemas[n]) for n in readonly_names if n in self._schemas]
 
     def get_readonly_tool_names(self, config: AgentConfig) -> list[str]:
-        """Return read-only tool names for plan mode."""
+        """Return read-only tool names for plan mode.
+
+        A deferred agent also gets the meta-tools that only look
+        (``tool_search``, ``tool_describe``): its executing run has them, and a
+        planning agent finding its way around its reads is what plan mode is
+        for. An agent shown its whole set has neither, in either mode.
+        """
         full_names = set(self.get_tool_names(config))
+        if self.should_defer(config):
+            full_names |= TOOLSEARCH_TOOLS
         return sorted(full_names & self._readonly_names())
 
-    def get_tool_names(self, config: AgentConfig) -> list[str]:
-        """Return filtered tool names for an agent."""
-        return self._get_filtered_names(config)
+    def get_tool_names(self, config: AgentConfig, *, tier: str = "") -> list[str]:
+        """Return filtered tool names for an agent.
 
-    def _get_filtered_names(self, config: AgentConfig) -> list[str]:
+        ``tier`` is the run's capability tier
+        (robothor/engine/capability_tier.py), ``""`` when there is no run. A
+        widening tier (an owner or
+        admin on a verified interactive run) adds the opt-in families to an
+        agent that declares no ``tools_allowed``; ``tools_denied`` still wins.
+        """
+        return self._get_filtered_names(config, tier)
+
+    def _get_filtered_names(self, config: AgentConfig, tier: str = "") -> list[str]:
         if config.tools_allowed:
             names = [n for n in config.tools_allowed if n in self._schemas]
             unresolved = [n for n in config.tools_allowed if n not in self._schemas]
@@ -1041,6 +1134,11 @@ class ToolRegistry:
                 for n in (getattr(config, "tools_opt_in", None) or [])
                 if n in OPT_IN_TOOLS and n in self._schemas and n not in names
             )
+            # ...or the human driving this run holds a role that may use them.
+            if tier in WIDENING_TIERS:
+                names.extend(
+                    n for n in sorted(OPT_IN_TOOLS) if n in self._schemas and n not in names
+                )
 
         if config.id == "main":
             from robothor.goals.tools import TOOL_NAMES
@@ -1124,6 +1222,7 @@ class ToolRegistry:
         task_author_override: str = "",
         is_benchmark: bool = False,
         identity: IdentityContext | None = None,
+        capability_tier: str = "",
     ) -> dict[str, Any]:
         """Execute a tool and return the result dict.
 
@@ -1137,6 +1236,9 @@ class ToolRegistry:
                 for system/cron/heartbeat runs. Threaded onto ToolContext for
                 data-scoping (Task 5); every existing caller omitting this
                 gets the unaffected default.
+            capability_tier: The role capability tier the call runs under.
+                Empty (every ordinary caller) means the run's effective tier;
+                ``tool_call`` passes its caller's through ToolContext.call_kwargs.
         """
         # Match supplied argument names to this tool's declared parameters,
         # ignoring case and underscores. 82 tools are snake_case and 26 are
@@ -1178,6 +1280,7 @@ class ToolRegistry:
                             task_author_override=task_author_override,
                             is_benchmark=is_benchmark,
                             identity=identity,
+                            capability_tier=capability_tier,
                         )
             else:
                 return await _execute_tool(
@@ -1193,6 +1296,7 @@ class ToolRegistry:
                     task_author_override=task_author_override,
                     is_benchmark=is_benchmark,
                     identity=identity,
+                    capability_tier=capability_tier,
                 )
         except (WorkflowDeadlineError, RuntimeDeadlineError):
             # NOT this tool's timeout. `spawn_agent` runs a child

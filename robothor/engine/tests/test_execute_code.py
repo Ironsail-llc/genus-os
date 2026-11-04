@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import json
 import os
+import select
 import socket
+import time
 from pathlib import Path
 
 import pytest
@@ -30,6 +33,7 @@ import pytest
 from robothor.engine.code_exec_rpc import ToolRpcServer
 from robothor.engine.code_execution import MAX_STDERR_BYTES, truncate_with_marker
 from robothor.engine.tool_proxy import PROXY_DENIED_TOOLS, ToolProxy
+from tests.platform_capabilities import needs_peer_credentials
 
 CLIENT_SOURCE = Path(__file__).resolve().parents[1] / "sandbox_runtime" / "genus_tools.py"
 
@@ -76,30 +80,57 @@ async def _serve(proxy, tmp_path, *, session: int | None = None):
 _TRANSPORT_CLOSED = {"ok": False, "transport": "closed"}
 
 
-def _request(server, payload: dict) -> dict:
+def _request(server, payload: dict, *, server_speaks_first: bool = False) -> dict:
     """One raw request over the socket, as the sandboxed client makes it.
 
-    A refused connection reaches the client as a broken pipe or a reset just
-    as often as it does as an empty reply — the server can close before this
-    thread has finished writing — so all three of those shapes return
-    `_TRANSPORT_CLOSED`, deterministically, and a test that needs the SERVER
-    to have spoken checks for its absence.
+    A refusal is sent without reading the request, then the server closes, so
+    this thread's write can fail with a broken pipe or a reset while the
+    refusal already sits in its receive buffer. A failed write is therefore
+    not the end: what the server sent is still read, and only a connection
+    that delivered NOTHING returns `_TRANSPORT_CLOSED`, which a test that
+    needs the SERVER to have spoken checks for. A server that neither answers
+    nor closes still fails, on the socket timeout.
+
+    ``server_speaks_first`` holds the write until the server has answered and
+    hung up — the ordering a refusal can race into — so a test can pin it.
     """
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.connect(str(server.socket_path))
+    chunks = b""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.connect(str(server.socket_path))
+        if server_speaks_first:
+            _wait_for_the_server_to_hang_up(sock)
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
             sock.sendall(json.dumps(payload).encode() + b"\n")
-            chunks = b""
+        with contextlib.suppress(ConnectionResetError):
             while not chunks.endswith(b"\n"):
                 piece = sock.recv(65536)
                 if not piece:
                     break
                 chunks += piece
-    except (BrokenPipeError, ConnectionResetError):
-        return dict(_TRANSPORT_CLOSED)
     if not chunks.strip():
         return dict(_TRANSPORT_CLOSED)
     return json.loads(chunks.decode())
+
+
+def _wait_for_the_server_to_hang_up(sock: socket.socket) -> None:
+    """Block until the server has answered AND closed, before this side writes.
+
+    The worst ordering for a refusal, made deterministic: the server refuses
+    without reading, so a client that writes after the close gets a broken
+    pipe while the refusal sits unread in its receive buffer. ``POLLHUP`` is
+    the kernel saying the peer is gone (Linux and macOS both set it on an
+    AF_UNIX stream); a server that never closes times out here instead.
+    """
+    poller = select.poll()
+    poller.register(sock, select.POLLIN)
+    deadline = time.monotonic() + (sock.gettimeout() or 10)
+    while time.monotonic() < deadline:
+        # The refusal is readable a moment before the close lands, so POLLIN
+        # alone returns early; wait on, briefly, until POLLHUP joins it.
+        if any(events & select.POLLHUP for _fd, events in poller.poll(100)):
+            return
+        time.sleep(0.005)
+    raise TimeoutError("the server did not hang up")
 
 
 def _spoke(reply: dict) -> bool:
@@ -124,11 +155,73 @@ class TestTheClientModuleIsShippable:
         assert "robothor" not in CLIENT_SOURCE.read_text()
 
 
+#: The smallest ``sun_path`` among the kernels this runs on: 104 bytes on
+#: macOS and the BSDs (108 on Linux), including the terminating NUL.
+_SUN_PATH_MAX = 104
+
+
+@pytest.fixture
+def socket_dir():
+    """A per-test directory short enough to bind an AF_UNIX socket in.
+
+    Under the system temp directory, as production's per-run scratch root is
+    (`code_exec._run_scratch_root`), not under pytest's much longer tmp_path.
+    """
+    import shutil
+    import tempfile
+
+    path = Path(tempfile.mkdtemp(prefix="rpc-"))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
+
+
 class TestTheTransport:
+    def test_the_socket_these_tests_bind_fits_every_kernel(self, socket_dir):
+        """The transport tests bind a real AF_UNIX socket, and the kernel caps
+        its path. pytest's own tmp_path is ~150 bytes on macOS, so every test
+        below failed there with "AF_UNIX path too long" before it tested
+        anything; a short directory is what production uses too
+        (`code_exec._run_scratch_root`)."""
+        server = ToolRpcServer(directory=socket_dir, proxy=_FakeProxy(), max_calls=5)
+        assert len(os.fsencode(server.socket_path)) < _SUN_PATH_MAX, server.socket_path
+
+    @pytest.mark.parametrize(
+        "server_speaks_first", [False, True], ids=["request-first", "refusal-first"]
+    )
     @pytest.mark.asyncio
-    async def test_a_call_reaches_the_proxy_and_the_result_comes_back(self, tmp_path):
+    async def test_a_kernel_without_peer_credentials_refuses_rather_than_hangs(
+        self, socket_dir, monkeypatch, server_speaks_first
+    ):
+        """``SO_PEERCRED`` is Linux's. Where the kernel has no such option the
+        peer cannot be identified, and that has to be the same answer as any
+        other unidentifiable peer: a refusal, sent. It used to raise inside the
+        handler before replying, so the connection stayed open and the snippet
+        blocked in ``recv`` until something killed it — the engine suite's
+        hang on macOS."""
+        monkeypatch.delattr(socket, "SO_PEERCRED", raising=False)
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
+        previous = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(10)  # a hang fails this test instead of the suite
+        try:
+            reply = await asyncio.to_thread(
+                _request,
+                server,
+                {"token": server.token, "op": "call", "name": "read_file", "args": {}},
+                server_speaks_first=server_speaks_first,
+            )
+        finally:
+            socket.setdefaulttimeout(previous)
+            await server.aclose()
+        assert _spoke(reply), "the server must REFUSE an unidentifiable peer, not hang up"
+        assert reply.get("ok") is False
+        assert proxy.seen == []
+
+    @needs_peer_credentials
+    @pytest.mark.asyncio
+    async def test_a_call_reaches_the_proxy_and_the_result_comes_back(self, socket_dir):
+        proxy = _FakeProxy()
+        server = await _serve(proxy, socket_dir)
         try:
             token = server.token
             reply = await asyncio.to_thread(
@@ -142,10 +235,11 @@ class TestTheTransport:
         assert reply["result"]["tool"] == "read_file"
         assert proxy.seen == [("read_file", {"path": "a"})]
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_a_wrong_token_never_reaches_the_proxy(self, tmp_path):
+    async def test_a_wrong_token_never_reaches_the_proxy(self, socket_dir):
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             reply = await asyncio.to_thread(
                 _request,
@@ -159,9 +253,9 @@ class TestTheTransport:
         assert proxy.seen == []
 
     @pytest.mark.asyncio
-    async def test_the_socket_directory_is_private_to_this_user(self, tmp_path):
+    async def test_the_socket_directory_is_private_to_this_user(self, socket_dir):
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             mode = server.directory.stat().st_mode & 0o777
             token_mode = server.token_path.stat().st_mode & 0o777
@@ -170,10 +264,11 @@ class TestTheTransport:
         assert mode == 0o700
         assert token_mode == 0o600
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_the_call_cap_refuses_the_rest_of_the_snippet(self, tmp_path):
+    async def test_the_call_cap_refuses_the_rest_of_the_snippet(self, socket_dir):
         proxy = _FakeProxy(max_calls=2)
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             call = {"token": server.token, "op": "call", "name": "read_file", "args": {}}
             replies = [await asyncio.to_thread(_request, server, call) for _ in range(4)]
@@ -183,12 +278,13 @@ class TestTheTransport:
         assert replies[2]["code"] == "call_cap"
         assert proxy.calls_made == 2, "the cap let a call through to the proxy"
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_a_forged_tool_call_id_is_ignored(self, tmp_path):
+    async def test_a_forged_tool_call_id_is_ignored(self, socket_dir):
         """The wire has no id field. A snippet cannot name one, and the proxy
         mints its own — so there is nothing to forge."""
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             reply = await asyncio.to_thread(
                 _request,
@@ -206,10 +302,11 @@ class TestTheTransport:
         assert reply["ok"] is True
         assert proxy.seen == [("read_file", {})]
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_a_denied_tool_never_reaches_the_proxy(self, tmp_path):
+    async def test_a_denied_tool_never_reaches_the_proxy(self, socket_dir):
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             reply = await asyncio.to_thread(
                 _request,
@@ -222,10 +319,11 @@ class TestTheTransport:
         assert reply["code"] == "denied"
         assert proxy.seen == []
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_an_oversized_request_is_refused_rather_than_buffered(self, tmp_path):
+    async def test_an_oversized_request_is_refused_rather_than_buffered(self, socket_dir):
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             huge = {
                 "token": server.token,
@@ -251,11 +349,11 @@ class TestOnlyThisSnippetMaySpeak:
     speaking."""
 
     @pytest.mark.asyncio
-    async def test_a_peer_in_another_session_is_refused_with_its_token(self, tmp_path):
+    async def test_a_peer_in_another_session_is_refused_with_its_token(self, socket_dir):
         proxy = _FakeProxy()
         # Bound to a session this process is NOT in. pid 1 is init: always
         # alive, always its own session, never ours.
-        server = await _serve(proxy, tmp_path, session=1)
+        server = await _serve(proxy, socket_dir, session=1)
         try:
             reply = await asyncio.to_thread(
                 _request,
@@ -275,11 +373,11 @@ class TestOnlyThisSnippetMaySpeak:
         assert proxy.seen == [], "another run's snippet reached this proxy"
 
     @pytest.mark.asyncio
-    async def test_an_unbound_socket_serves_nobody(self, tmp_path):
+    async def test_an_unbound_socket_serves_nobody(self, socket_dir):
         """Between `start()` and the spawn there is no legitimate caller, so
         there is no legitimate answer either."""
         proxy = _FakeProxy()
-        server = ToolRpcServer(directory=tmp_path, proxy=proxy, max_calls=5)
+        server = ToolRpcServer(directory=socket_dir, proxy=proxy, max_calls=5)
         await server.start()
         try:
             reply = await asyncio.to_thread(
@@ -295,12 +393,13 @@ class TestOnlyThisSnippetMaySpeak:
         assert reply["ok"] is False
         assert proxy.seen == []
 
+    @needs_peer_credentials
     @pytest.mark.asyncio
-    async def test_the_right_session_is_still_served(self, tmp_path):
+    async def test_the_right_session_is_still_served(self, socket_dir):
         """The check must not be so eager that it refuses the snippet — the
         failure mode that makes a control look like it works."""
         proxy = _FakeProxy()
-        server = await _serve(proxy, tmp_path)
+        server = await _serve(proxy, socket_dir)
         try:
             reply = await asyncio.to_thread(
                 _request,

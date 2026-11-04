@@ -56,7 +56,7 @@ import struct
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.tool_proxy import PROXY_DENIED_TOOLS
+from robothor.engine.proxy_denylist import PROXY_DENIED_TOOLS, proxy_denied
 
 if TYPE_CHECKING:
     from robothor.engine.tool_proxy import ToolProxy
@@ -158,7 +158,7 @@ class ToolRpcServer:
                 socket_module.SOL_SOCKET, socket_module.SO_PEERCRED, struct.calcsize(_UCRED)
             )
             peer_pid, peer_uid, _gid = struct.unpack(_UCRED, raw)
-        except (OSError, struct.error):
+        except (AttributeError, OSError, struct.error):  # no SO_PEERCRED off Linux: refuse
             return "the peer could not be identified"
         if peer_uid != os.getuid():
             return "the peer runs as another user"
@@ -277,12 +277,12 @@ class ToolRpcServer:
         if not isinstance(args, dict):
             args = {}
 
-        if name in PROXY_DENIED_TOOLS:
+        if denied := proxy_denied(name, args):
             return {
                 "ok": False,
                 "code": "denied",
                 "error": (
-                    f"'{name}' cannot be called from inside execute_code. "
+                    f"'{denied}' cannot be called from inside execute_code. "
                     "Call it from a turn instead."
                 ),
             }

@@ -21,15 +21,47 @@ Works with any OTLP/HTTP intake:
 
 ## What's emitted
 
+Each run's trace has one root span, `agent_run`, that opens when the run starts
+and closes when it exits, so its duration is the run's turn time. It carries
+`run.status` and `run.trigger_type`. Every `llm_call`, `tool_call` and
+`run_summary` span of the run is its child, and a sub-agent's `agent_run` is a
+child of the parent run's span. Spans carry an OpenTelemetry span kind:
+`agent_run` is SERVER, `llm_call` is CLIENT, everything else is INTERNAL. In a
+backend that names trace metrics by span kind, such as Datadog, the operations
+are `server.request` (`agent_run`), `client.request` (`llm_call`) and
+`Internal` (`tool_call`, `run_summary`), with the span name as the resource.
+
 Per `llm_call` span (GenAI conventions):
 - `gen_ai.system` (anthropic / openai / google / …)
 - `gen_ai.request.model`
 - `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
 - `gen_ai.response.finish_reasons`
 
-Resource attributes: `service.name=robothor-engine`, `agent.id`. Span status uses
-OTLP codes (1 = ok, 2 = error). Run metrics are also published to the Redis
+Resource attributes: `service.name=robothor-engine`, `agent.id`, merged with the
+standard OpenTelemetry environment: `OTEL_RESOURCE_ATTRIBUTES` (comma-separated
+`key=value`, values percent-decoded, e.g.
+`deployment.environment=staging,service.namespace=example`) overrides those
+defaults, and `OTEL_SERVICE_NAME` overrides `service.name` from either. Span status
+uses OTLP codes (1 = ok, 2 = error). Run metrics are also published to the Redis
 stream `robothor:events:telemetry` for the dashboards.
+
+## Publishing never blocks a run
+
+Every run publishes its trace when it ends, whatever the outcome: completed,
+failed, timed out, aborted or interrupted. The `agent_run` and `run_summary` spans carry
+`run.status`; a failed, timed-out or cancelled run exports it with error status
+(OTLP code 2), the reason as the status message and as `error.message`, and the
+Redis entry's `status` is the run's terminal status.
+
+Run metrics go to the Redis the rest of the engine uses (`ROBOTHOR_REDIS_HOST`,
+`_PORT`, `_DB`, `_PASSWORD`); the older `REDIS_HOST` / `REDIS_PORT` still apply
+when `ROBOTHOR_REDIS_HOST` is left at its default. Each run is published once.
+
+Publishing happens off the engine's event loop: the
+Redis entry and the OTLP export run as background tasks on one shared async Redis
+client and one shared HTTP client (5 s timeout). Traces that finish while an export
+is in flight are sent together in the next request. A sink that is down logs one
+warning, then stays quiet at debug level; it never fails or delays the run.
 
 ## Failure-mode detectors
 
@@ -219,6 +251,12 @@ read-only. It has four parts:
   its output, which the engine caps at 4,000 characters when it records it — the
   drawer says so when an output was cut. Warm-up steps are grouped under
   **Warm-up**, and guardrail events are listed with their reason.
+  A spend budget the run reached (mode `observe`: the run continued), or a
+  control that refused or ended it (mode `enforce`), is a `budget_stop` step,
+  whose tool is the stop's name and whose input carries the reason, setting,
+  limit, observed value and mode. The same
+  record is published as `agent.budget_stop` on `robothor:events:telemetry`
+  ([Budgets and Stops](BUDGETS_AND_STOPS.md)).
 
 **Delivery categories.** Delivery is read the same way by the summary
 (`crm/bridge/routers/runs.py`) and the table (`app/src/lib/automations/run-truth.ts`):
@@ -241,6 +279,61 @@ and timing but not its prompt or reply.
 A viewer is refused with 403 on every route and the drawer says operator access
 is required; a run that no longer exists answers 404 and the drawer says it is
 gone.
+
+## Execution lanes
+
+The engine reports how full each execution lane is
+([Configuration](configuration.md)). `GET /health` carries an
+`execution_lanes` block with, for `interactive` and `background`, `active`,
+`waiting` and `limit`. `/metrics` has the gauges
+`robothor_lane_active{lane}` and `robothor_lane_waiting{lane}`. During a burst
+of scheduled runs, background `waiting` rising while interactive `waiting`
+stays at 0 is the lanes doing their job; background `waiting` that never
+returns to 0 means its limit is too low for the schedule.
+
+## Dashboard web vitals
+
+The dashboard reports its own Core Web Vitals (LCP, INP, CLS, FCP, TTFB) from
+every page load. The browser beacons each metric to `POST /api/vitals`, which
+writes it twice:
+
+- **One log line per metric** on the dashboard's standard output, so any log
+  pipeline that collects container output picks it up:
+
+  ```json
+  {"event":"web_vital","name":"LCP","value":812.4,"rating":"good","path":"/","view":"chat","id":"v1-…","navigation_type":"navigate"}
+  ```
+
+- **One entry on the Redis stream `robothor:events:vitals`**, capped at about
+  10,000 entries. It is not one of the live event-bus streams, so the
+  dashboard's own views never read it.
+
+`rating` is web-vitals' own `good` / `needs-improvement` / `poor`. `path` is the
+pathname without its query string and `view` is the dashboard view (`?v=`);
+no tenant, user or session is recorded. A Redis outage loses the stream entry,
+never the log line, and never fails the page.
+
+The route is reachable signed out, so the sign-in page's vitals are kept too.
+That is why it is bounded: the strict schema above, bodies up to 2 KB (413
+otherwise), and 120 beacons per client per minute (429 with `Retry-After`; a
+page load sends about five). The client is the address
+`GENUS_DASHBOARD_TRUSTED_PROXIES` lets the dashboard verify; without that
+setting every client shares one window.
+
+Reporting is always on: every page mounts the reporter, and there is no
+setting that turns it off.
+
+Two CI gates sit beside it, both in `app/`:
+
+- `pnpm bundle:check`, after `pnpm build`, compares each page route's gzipped
+  first-load JavaScript with `app/bundle-budget.json` and fails a route over
+  its budget or without one. `node scripts/bundle-budget.mjs --write` resets
+  every budget to the current size plus 5%; raise one on purpose, in the pull
+  request that needs it.
+- `e2e/perf.spec.ts` fails when the chat takes longer than its budget to paint
+  or to show the first streamed token, or when a tab holds more than one
+  event-stream connection. `PERF_CHAT_PAINT_BUDGET_MS` and
+  `PERF_FIRST_DELTA_BUDGET_MS` override the budgets for a measuring run.
 
 ## Notes
 

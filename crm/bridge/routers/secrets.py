@@ -24,19 +24,31 @@ tenant's vault and the appliance's environment, which no child tenant's admin
 may read, exactly as Settings. ``Cache-Control: no-store``, and a plain
 ``def`` because the table reads the vault through synchronous psycopg2
 (``crm/bridge/tests/test_route_concurrency.py``).
+
+``DELETE /api/secrets/{name}`` removes the VAULT row behind a listed name. It
+takes the environment name the list shows, never a vault key -- the list sends
+none, so the page has none to send back -- and finds that row in the same table
+the list was built from. Each listed row says whether it is ``removable``. Bootstrap credentials are refused (409), as the vault tools refuse them;
+a name with no vault row is 404. Audited as ``secret.delete`` with the name
+only, then the engine is told to reload its cached readers.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from robothor.secrets.classification import is_bootstrap
 from robothor.secrets.status import SecretStatus, status_table
 from robothor.settings.operator import DEFAULT_UNITS, units_for
 from robothor.settings.registry import field_index
+from routers._audit import audited
 from routers._operator import PLATFORM_TENANT, require_root_operator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/secrets", tags=["secrets"])
 
@@ -67,20 +79,86 @@ def _public(row: SecretStatus, index: dict[str, dict[str, Any]]) -> dict[str, An
         # False when the vault could not be read at all. Without it a
         # vault-only credential reads as "not configured" during an outage.
         "vault_readable": row.vault_readable,
+        # Whether DELETE will act on this row: the page offers Remove only here.
+        "removable": _removable(row),
     }
+
+
+def _removable(row: SecretStatus) -> bool:
+    """A vault row, found under a key, that is not a bootstrap credential."""
+    return bool(row.in_vault and row.vault_key and not row.bootstrap and not is_bootstrap(row.name))
+
+
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
+def _refuse(status_code: int, detail: Any) -> HTTPException:
+    return HTTPException(status_code=status_code, detail=detail, headers=_NO_STORE)
+
+
+def _require_operator_no_store(request: Request) -> str:
+    try:
+        return require_root_operator(request)
+    except HTTPException as refused:
+        # The refusal is no-store too, like the list (``runs.py`` does the same).
+        raise _refuse(refused.status_code, refused.detail) from None
+
+
+def _vault_delete(key: str, *, tenant_id: str) -> bool:
+    import robothor.vault as vault
+
+    return vault.delete(key, tenant_id=tenant_id)
+
+
+def _reload_engine() -> None:
+    """Best effort: the engine's own readers pick the change up within seconds
+    anyway (the accessor's cache TTL), but a provider key republished into the
+    engine's environment needs the reload."""
+    from robothor.engine_control import control_request
+
+    try:
+        control_request("POST", "/api/admin/secrets/reload")
+    except Exception as exc:  # noqa: BLE001 - the delete succeeded
+        logger.warning(
+            "secrets: removed a vault row but the engine reload failed (%s)", type(exc).__name__
+        )
 
 
 @router.get("")
 def list_secrets(request: Request) -> JSONResponse:
-    try:
-        require_root_operator(request)
-    except HTTPException as refused:
-        # The refusal is no-store too, like the list (``runs.py`` does the same).
-        raise HTTPException(
-            status_code=refused.status_code,
-            detail=refused.detail,
-            headers={"Cache-Control": "no-store"},
-        ) from None
+    _require_operator_no_store(request)
     index = field_index()
     rows = [_public(row, index) for row in status_table(tenant_id=PLATFORM_TENANT)]
     return JSONResponse({"secrets": rows}, headers={"Cache-Control": "no-store"})
+
+
+@router.delete("/{name}")
+def delete_secret(name: str, request: Request) -> JSONResponse:
+    require_root_operator(request)
+    if is_bootstrap(name):
+        raise _refuse(
+            409,
+            f"{name} is a bootstrap credential: it brings this instance up, so it is "
+            "changed in the instance's secrets file, not removed here.",
+        )
+    # The same table the list was built from, so the row is found under the
+    # vault key the list found it at. Looking the name up again without that
+    # key missed every row nothing reads, and answered 404 for them.
+    row = next((r for r in status_table(tenant_id=PLATFORM_TENANT) if r.name == name), None)
+    if row is not None and row.bootstrap:
+        raise _refuse(409, f"{name} is a bootstrap credential and is not removed here.")
+    if row is None or not _removable(row) or not row.vault_key:
+        raise _refuse(404, f"{name} has no vault row to remove")
+    deleted = _vault_delete(row.vault_key, tenant_id=PLATFORM_TENANT)
+    audited(request, "secret.delete", action=name, status="ok" if deleted else "error")
+    if deleted:
+        _reload_engine()
+    return JSONResponse(
+        {
+            "name": name,
+            "deleted": bool(deleted),
+            # The environment may still hold a copy, which readers are now served.
+            "still_served_from_env": bool(row.in_env),
+        },
+        headers=_NO_STORE,
+    )

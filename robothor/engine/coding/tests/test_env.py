@@ -49,6 +49,25 @@ def test_job_config_dir_lives_under_xdg_config_robothor(tmp_path):
     )
 
 
+def test_job_config_dir_lives_under_the_coding_workspace_when_set(tmp_path, monkeypatch):
+    """A read-only home (a container's /app) cannot hold the job's private home."""
+    monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "coding"))
+    base = {"XDG_CONFIG_HOME": str(tmp_path / "xdg"), "HOME": "/app"}
+    assert job_config_dir("job-1", base=base) == tmp_path / "coding" / ".home" / "job-1"
+    assert job_config_dir("job-1") == tmp_path / "coding" / ".home" / "job-1"
+
+
+def test_a_token_job_gets_its_home_in_the_coding_workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "coding"))
+    base = dict(FLEET_ENV, XDG_CONFIG_HOME=str(tmp_path / "xdg"), HOME=str(tmp_path / "app"))
+    env = build_claude_env(job_id="job-1", oauth_token="sk-ant-oat01-" + "z" * 40, base=base)
+    home = tmp_path / "coding" / ".home" / "job-1"
+    assert env["HOME"] == str(home)
+    assert env["CLAUDE_CONFIG_DIR"] == str(home / ".claude")
+    assert (home / ".claude").is_dir()
+    assert not (tmp_path / "xdg").exists()  # the engine's own XDG root is untouched
+
+
 def test_job_config_dir_refuses_a_path_traversing_job_id(tmp_path):
     with pytest.raises(ValueError):
         job_config_dir("../../etc", base={"XDG_CONFIG_HOME": str(tmp_path)})

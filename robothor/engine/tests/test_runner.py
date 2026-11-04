@@ -267,12 +267,16 @@ class TestAgentRunnerExecute:
         assert messages[1]["content"] == "First message"
         assert messages[2]["role"] == "assistant"
         assert messages[2]["content"] == "First reply"
-        # The engine's own context turn sits between the history and the user's
-        # words — never inside them (#547). It carries who the two principals
-        # are, and on a deferred run how to reach the rest of the toolset.
+        # The engine's own context turns sit between the history and the user's
+        # words — never inside them (#547). The first carries who the two
+        # principals are, and on a deferred run how to reach the rest of the
+        # toolset; the second is the per-run time and task record the prompt-cache
+        # layout moves out of the system prompt (see cache_layout).
         assert messages[3]["role"] == ENGINE_CONTEXT_ROLE
-        assert messages[4]["role"] == "user"
-        assert messages[4]["content"] == "Follow-up"
+        assert messages[4]["role"] == ENGINE_CONTEXT_ROLE
+        assert "Current time:" in messages[4]["content"]
+        assert messages[5]["role"] == "user"
+        assert messages[5]["content"] == "Follow-up"
 
     @pytest.mark.asyncio
     async def test_an_unconfigured_instance_still_gets_the_context_turn(
@@ -326,6 +330,7 @@ class TestAgentRunnerExecute:
             "user",
             "assistant",
             ENGINE_CONTEXT_ROLE,
+            ENGINE_CONTEXT_ROLE,
             "user",
         ]
         context = messages[3]["content"]
@@ -333,7 +338,7 @@ class TestAgentRunnerExecute:
         assert "landed in their account" in context
         # And it invents nothing about principals nobody configured.
         assert "@" not in context
-        assert messages[4]["content"] == "Follow-up"
+        assert messages[5]["content"] == "Follow-up"
 
     @pytest.mark.asyncio
     async def test_all_models_fail(self, runner, sample_agent_config):
@@ -752,7 +757,9 @@ class TestIdentityThreading:
         # --- CURRENT USER --- header" in every reply, 2026-09-14).
         from robothor.engine.session import ENGINE_CONTEXT_ROLE
 
-        engine_turn = captured["messages"][-2]
+        # [-2] is the per-run time and task turn the prompt-cache layout adds.
+        assert captured["messages"][-2]["role"] == ENGINE_CONTEXT_ROLE
+        engine_turn = captured["messages"][-3]
         assert engine_turn["role"] == ENGINE_CONTEXT_ROLE
         assert "--- CURRENT USER ---" in engine_turn["content"]
         assert "Bob" in engine_turn["content"]
@@ -760,14 +767,14 @@ class TestIdentityThreading:
         assert captured["last_user_msg"] == "follow-up"
 
     @pytest.mark.asyncio
-    async def test_per_turn_identity_enrichment_offloaded_to_executor(
+    async def test_per_turn_identity_enrichment_is_session_held_and_offloaded(
         self, runner, sample_agent_config, mock_litellm_response
     ):
-        """enrich_identity does blocking DB work on a cache miss — the
-        per-turn mini-preamble path (follow-up turns, warmup skipped) must
-        run it via loop.run_in_executor rather than calling it synchronously
-        inside the coroutine, mirroring the first-turn warmup path's own use
-        of run_in_executor (code-review fix)."""
+        """Enrichment does blocking DB work on a cache miss, so the per-turn
+        mini-preamble path (follow-up turns, warmup skipped) runs it via
+        loop.run_in_executor rather than inside the coroutine, mirroring the
+        first-turn warmup. It goes through the session-held cache, not the
+        60-second ``enrich_identity`` alone."""
         import asyncio as _asyncio
 
         response = mock_litellm_response(content="Hi Bob")
@@ -789,10 +796,11 @@ class TestIdentityThreading:
             patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch("robothor.identity.enrich_identity", return_value=None) as mock_enrich,
+            patch(
+                "robothor.identity.enrichment.enrich_identity_for_session", return_value=None
+            ) as mock_session,
             # A rapid follow-up: the previous interactive turn was seconds ago,
-            # so warmup is skipped and the mini-preamble path runs. The gate
-            # used to be "history is non-empty", but that never fired on a
-            # persistent session, so it is now a staleness clock.
+            # so warmup is skipped and the mini-preamble path runs.
             patch(
                 "robothor.engine.runner._seconds_since_last_interactive_run",
                 return_value=5.0,
@@ -816,7 +824,9 @@ class TestIdentityThreading:
             )
 
         assert run.status == RunStatus.COMPLETED
-        assert mock_enrich in seen_funcs
+        assert mock_session in seen_funcs
+        assert mock_enrich not in seen_funcs
+        assert mock_session.call_args.args[0] == "test-agent"
 
     @pytest.mark.asyncio
     async def test_no_duplicate_block_on_first_turn(
@@ -1777,11 +1787,12 @@ class TestPublishRunTelemetry:
     """
 
     def _make_run(self, **kw):
-        from robothor.engine.models import AgentRun
+        from robothor.engine.models import AgentRun, RunStatus
 
         defaults = {
             "id": "run-x",
             "agent_id": "main",
+            "status": RunStatus.COMPLETED,
             "model_used": "anthropic/claude-opus-4-8",
             "input_tokens": 1000,
             "output_tokens": 200,

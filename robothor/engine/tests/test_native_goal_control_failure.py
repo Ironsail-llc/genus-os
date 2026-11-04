@@ -54,7 +54,6 @@ async def test_saved_family_control_is_reported_after_model_exhaustion(
         "operator",
     )
     goal = store.get(tenant, goal["id"])
-    monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1" if deferred else "0")
     config = replace(
         sample_agent_config,
         id="main",

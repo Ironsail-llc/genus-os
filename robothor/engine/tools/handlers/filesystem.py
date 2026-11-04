@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 from typing import TYPE_CHECKING, Any
 
@@ -72,9 +73,15 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Before the sandbox decision, so host and container paths refuse alike:
     # a command that PRINTS a secrets file (or the environment) never runs.
     # Sourcing the file to run an authenticated command is still allowed.
+    from robothor.engine import secret_paths
     from robothor.engine.secret_paths import exec_reads_secret
 
-    refused = exec_reads_secret(command)
+    # credential_path: named, globbed onto, or symlinked onto a listed path.
+    # Off the loop: expanding a glob and resolving a link read the filesystem.
+    roots = secret_paths.credential_roots(ctx.workspace)
+    if gate := await asyncio.to_thread(secret_paths.exec_names_credential, command, roots=roots):
+        return gate
+    refused = exec_reads_secret(command, cwd=getattr(ctx, "workspace", "") or None)
     if refused:
         return {"error": refused}
     # Nor may it write what the engine imports: the plugin directory and the
@@ -104,6 +111,13 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if clamp_note and isinstance(result, dict):
             result["timeout_note"] = clamp_note
         return result
+
+    # A refused execution plan never starts a subprocess, and every result
+    # says where it ran.
+    from robothor.engine.sandbox_policy import exec_refusal, stamp_location
+
+    if refusal := exec_refusal(run_id):
+        return refusal
 
     # An agent configured `sandbox: docker` must actually have its shell
     # commands run in the container. This used to go straight to subprocess.run
@@ -143,7 +157,7 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 f"{', '.join(sandboxed_grants)} were not available to the "
                 "command."
             )
-        return _with_note(result)
+        return await stamp_location(_with_note(result), "sandbox", run_id)
 
     # The child's environment is built from an allowlist rather than inherited.
     # Without this, `subprocess.run` with no `env=` handed every shell command
@@ -188,15 +202,8 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     if host_execution.socket_path() and host_execution.eligible(ctx):
         result = await host_execution.execute(ctx, command, timeout, child_env.env)
-        return _with_grant_note(
-            _with_note(
-                shape_exec_result(
-                    result,
-                    workspace=ctx.workspace,
-                    run_id=run_id,
-                )
-            )
-        )
+        result = shape_exec_result(result, workspace=ctx.workspace, run_id=run_id)
+        return await stamp_location(_with_grant_note(_with_note(result)), "host_service", run_id)
 
     def _run() -> dict[str, Any]:
         try:
@@ -237,7 +244,8 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         except Exception as e:
             return {"error": f"Command failed: {e}"}
 
-    return _with_grant_note(_with_note(await asyncio.to_thread(_run)))
+    result = _with_grant_note(_with_note(await asyncio.to_thread(_run)))
+    return await stamp_location(result, "host", run_id)
 
 
 _SEARCH_SKIP_DIRS = frozenset(
@@ -376,14 +384,22 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     def _run() -> dict[str, Any]:
         from robothor.engine.secret_paths import (
+            _expanduser,
+            credential_refusal,
+            is_credential_path,
             is_maskable_dotenv_path,
             is_secret_path,
             refusal_for,
         )
 
-        path = Path(args.get("path", "")).expanduser()
+        path = Path(_expanduser(args.get("path", "")))
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
+        # For every caller, the owner included: the spelled path, and its
+        # realpath, so a symlink to a listed file or a file under a symlinked
+        # directory cannot reach one (os.path.realpath resolves every component).
+        if is_credential_path(path) or is_credential_path(os.path.realpath(path)):
+            return credential_refusal(path)
         # Before touching the filesystem: the refusal must not reveal whether
         # the file exists, and a credential file is never opened for a model
         # (see robothor/engine/secret_paths.py for the live reads behind this).
@@ -474,7 +490,9 @@ async def _list_directory(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
-        path = Path(args.get("path", "")).expanduser()
+        from robothor.engine.secret_paths import _expanduser
+
+        path = Path(_expanduser(args.get("path", "")))
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
         if not path.exists():
@@ -528,8 +546,9 @@ async def _write_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     def _run() -> dict[str, Any]:
         from robothor.engine.plugin_paths import REFUSAL, is_managed_path
+        from robothor.engine.secret_paths import _expanduser
 
-        path = Path(args.get("path", "")).expanduser()
+        path = Path(_expanduser(args.get("path", "")))
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
         # What the engine imports is installed by the install Job, never by an

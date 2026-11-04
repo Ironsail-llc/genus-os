@@ -24,6 +24,7 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.engine.deliverable_contract import task_text_for_column
 from robothor.engine.models import AgentRun, RunStatus, RunStep, StepType, TriggerType
 from robothor.engine.reasoning_replay import PRODUCER_MODEL_KEY, REASONING_FIELDS
+from robothor.engine.wrapped_call import explicit_arguments, inner_call
 
 if TYPE_CHECKING:
     from robothor.engine.todolist import TodoList
@@ -167,6 +168,13 @@ def _render_history_for_llm(msg: dict[str, Any]) -> dict[str, Any]:
     return {"role": role, "content": content}
 
 
+def _effective_tool(tool_name: str, tool_input: Any) -> str:
+    """The tool a call reaches: ``tool_call`` is judged by the tool it wraps."""
+    if tool_name.strip() == "tool_call" and isinstance(tool_input, dict):
+        return str(tool_input.get("name") or "").strip()
+    return tool_name.strip()
+
+
 # Role for engine-injected context (plan, scratchpad, budget warnings, etc.)
 # LiteLLM translates "developer" → "system" for non-OpenAI providers.
 ENGINE_CONTEXT_ROLE = "developer"
@@ -187,6 +195,13 @@ EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
         "n8n_recent_failures",
     }
 )
+
+#: Tools whose result IS a secret the model must read. Their result reaches
+#: the model unchanged and is still masked wherever it is stored (the step
+#: row, effects, checkpoints, the live stream). Empty on purpose: ``vault_get``
+#: and ``vault_test`` return a fingerprint, never a value, and the internals
+#: that do read values (``vault.export_env``) are not tools the model calls.
+SECRET_RESULT_TOOLS: frozenset[str] = frozenset()
 
 #: Appended to the system prompt ONLY on a run where the owner has delegated
 #: execution enabled and a live standing grant names this agent. Parked at
@@ -239,6 +254,10 @@ class AgentSession:
         # (cron/service) runs. Read by _run_loop to carry onto a fresh
         # SpawnContext for any children this run spawns.
         self.identity: IdentityContext | None = None
+        # The text the person TYPED this turn, set by the channel: no reply
+        # quote, no attachment text, no forwarded block. Credential intake
+        # reads only this; the assembled turn is ``originating_message``.
+        self.typed_message: str = ""
         self._step_counter = 0
         self._start_time: float | None = None
         self._tool_offload_threshold = tool_offload_threshold
@@ -281,6 +300,10 @@ class AgentSession:
         # Chat messages sent while this run works (live_inbox.py). The channel
         # owns the inbox; the loop drains it at its safe points.
         self.live_inbox: Any = None
+        # The chat conversation this run answers (live_control.py); None otherwise.
+        self.conversation_key: str | None = None
+        # Where the steers this run absorbs are recorded for its channel.
+        self.steers_taken: list[str] | None = None
         self.late_extensions: int = 0
 
     @property
@@ -316,6 +339,12 @@ class AgentSession:
         """
         if not text:
             return
+        from robothor.engine.chat_backstop import protect_if_human_chat
+
+        # The backstop a follow-up gets: a person's steer is text they just
+        # typed, and from here it reaches the model, the task context and the
+        # steer step.
+        text = protect_if_human_chat(text, self.run.trigger_type)
         # If a prior steer is still pending, concatenate so we don't
         # lose the operator's earlier guidance.
         if self._pending_steer:
@@ -613,10 +642,27 @@ class AgentSession:
         design, because storing one is its whole job. Per-argument, so that the
         key a write touched stays readable and the verification pass can still
         tell what a run did.
+
+        Every name-keyed treatment below (redaction, the untrusted-content tag,
+        skill text, offload read-back) judges the call that ran: for
+        ``tool_call``, the wrapped tool and its arguments (wrapped_call.py).
+        The step itself stays the wrapper's.
         """
-        from robothor.secrets.redaction import redact_tool_arguments
+        from robothor.secrets.redaction import redact_tool_arguments, redact_tool_result
 
         tool_input = redact_tool_arguments(tool_name, tool_input)
+        call_name, call_args = inner_call(tool_name, tool_input)
+        if call_name != tool_name and explicit_arguments(tool_input.get("arguments")) is not None:
+            call_args = redact_tool_arguments(call_name, call_args)
+            tool_input = {**tool_input, "arguments": call_args}
+        # The result too, before anything stores or shows it: an `exec` that
+        # prints a credentials file returns normally. A secret-returning tool
+        # (SECRET_RESULT_TOOLS, a `tool_call` wrapper judged by the tool it
+        # reaches) still hands the model its result unchanged.
+        model_output = tool_output
+        tool_output = redact_tool_result(tool_output)
+        if _effective_tool(tool_name, tool_input) not in SECRET_RESULT_TOOLS:
+            model_output = tool_output
 
         self._step_counter += 1
         step = RunStep(
@@ -648,7 +694,7 @@ class AgentSession:
         # graded on, and `task_text_for_run` reads only the prompt. Kept here
         # so the contract, the check-in and the finalizer all read the same
         # source — three consumers that must never disagree.
-        remember_skill_text(self, tool_name, tool_output)
+        remember_skill_text(self, call_name, tool_output)
 
         # An `exec` spill is an offloaded artifact by every property that
         # matters: the model was handed a path instead of the content and is
@@ -681,8 +727,8 @@ class AgentSession:
         #
         # Convention: `image_base64` (+ optional `image_mime`), or the older
         # `screenshot_base64`, which is PNG by definition.
-        if isinstance(tool_output, dict):
-            b64_data = tool_output.get("image_base64") or tool_output.get("screenshot_base64")
+        if isinstance(model_output, dict):
+            b64_data = model_output.get("image_base64") or model_output.get("screenshot_base64")
             if b64_data and isinstance(b64_data, str):
                 mime = tool_output.get("image_mime") or "image/png"
                 w = tool_output.get("width", "?")
@@ -712,12 +758,12 @@ class AgentSession:
                 )
                 return step
 
-        content = json.dumps(tool_output, default=str)
+        content = json.dumps(model_output, default=str)
         raw_len = len(content)
 
         # Offload large results to temp file, keeping summary + path in context
         self._last_offload_path = None
-        is_readback = self._is_offload_readback(tool_name, tool_input)
+        is_readback = self._is_offload_readback(call_name, call_args)
         if (
             self._tool_offload_threshold
             and len(content) > self._tool_offload_threshold
@@ -731,8 +777,8 @@ class AgentSession:
         self._record_symbol_node(tool_name, tool_output, raw_len)
 
         # Wrap untrusted external data with tags so the LLM sees a boundary
-        if tool_name in EXTERNAL_DATA_TOOLS:
-            content = f'<untrusted_content source="{tool_name}">\n{content}\n</untrusted_content>'
+        if call_name in EXTERNAL_DATA_TOOLS:
+            content = f'<untrusted_content source="{call_name}">\n{content}\n</untrusted_content>'
 
         self.messages.append(
             {
@@ -780,8 +826,8 @@ class AgentSession:
                     s["saved_tokens"],
                 )
             clear_graph(self.run_id)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("symbol graph finalize skipped: %s", e)
+        except Exception:  # noqa: BLE001
+            logger.debug("symbol graph finalize skipped")
 
     def mark_interrupted(self, note: str | None = None) -> None:
         """Record that the operator halted this run at a checkpoint."""
@@ -924,7 +970,8 @@ class AgentSession:
                 try:
                     create_step(step)
                 except Exception as e:
-                    logger.warning("Failed to record step: %s", e)
+                    # The class only: a DB error can quote the row, tool output included.
+                    logger.warning("Failed to record step: %s", type(e).__name__)
         self.run.persisted_step_count = len(self.run.steps)
         return len(pending)
 
@@ -981,8 +1028,9 @@ class AgentSession:
                 ref_path=self._last_offload_path,
                 full_chars=raw_len,
             )
-        except Exception as e:  # noqa: BLE001 — never break tool recording
-            logger.debug("symbol node skipped for %s: %s", tool_name, e)
+        except Exception:  # noqa: BLE001 — never break tool recording
+            # A constant: the error's text can quote the tool output it choked on.
+            logger.debug("symbol node skipped for one tool call")
 
     def thin_previous_tool_results(self, protect_after_index: int) -> int:
         """Compress tool results from previous iterations to one-line summaries.

@@ -40,9 +40,21 @@ def start(
     auth: Any,
     session_key: str,
     client_id: Any = None,
+    *,
+    steerable: bool = False,
 ) -> asyncio.Task[Any]:
+    """Run ``factory`` as this caller's turn.
+
+    ``steerable``: the run this turn starts can be steered and stopped by
+    ``/chat/steer`` and ``/chat/interrupt`` naming the same ``client_id``
+    (``chat_steer.webchat_run_key``). A turn without a ``client_id`` cannot be.
+    """
     identifier = request_key(auth, session_key, client_id)
     context = copy_context()
+    if steerable and client_id:
+        from robothor.engine.live_control import mark_turn
+
+        context.run(mark_turn, f"webchat:{identifier}")
     inherited = active_context.get()
     deadline = (
         inherited.deadline

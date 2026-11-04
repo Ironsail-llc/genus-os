@@ -2,8 +2,9 @@
 
 On Apr 22 16:07, a `main` run consumed 3.2M input tokens before hitting the
 86400s circuit-breaker. The guard introduced in B4 alerts at 500K tokens
-and hard-stops at 5M. Both thresholds are fleet-wide constants so a
-misconfigured manifest cannot disable them.
+and records a budget_stop step and pages at 5M; neither stops the run. Both
+thresholds are fleet-wide constants so a misconfigured manifest cannot
+disable them.
 
 We test the thresholds and the behavior of the guard code directly without
 booting the whole run loop.
@@ -27,7 +28,7 @@ class TestRunawayTokenConstants:
     def test_hard_cap_above_observed_runaway(self) -> None:
         # The observed runaway was 3.2M; cap is higher so the 1M-3M band
         # (common for very long legitimate tasks) is not accidentally caught.
-        # We alert but don't kill in that range — by design.
+        # We alert but do not page critical in that range — by design.
         assert RUNAWAY_TOKEN_HARD_CAP > 3_200_000
 
 
@@ -37,7 +38,7 @@ class TestGuardLogic:
     def _classify(self, used: int, alerted: bool) -> tuple[str, bool]:
         """Mirror of the guard's branching. Returns (action, new_alerted_flag)."""
         if used >= RUNAWAY_TOKEN_HARD_CAP:
-            return ("stop", alerted)
+            return ("record", alerted)
         if not alerted and used >= RUNAWAY_TOKEN_ALERT:
             return ("alert", True)
         return ("continue", alerted)
@@ -60,9 +61,9 @@ class TestGuardLogic:
 
     def test_5m_hard_stop(self) -> None:
         action, _ = self._classify(5_000_000, True)
-        assert action == "stop"
+        assert action == "record"
 
     def test_hard_stop_supersedes_alert(self) -> None:
         # Even if never alerted, 5M+ stops.
         action, _ = self._classify(5_500_000, False)
-        assert action == "stop"
+        assert action == "record"

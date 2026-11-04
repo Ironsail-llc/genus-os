@@ -240,6 +240,9 @@ _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
     }
     # The instance's REAL workflows and their run history.
     | {"list_workflows", "workflow_runs"}
+    # The deferred-loading reads: a graded sub-agent is handed its tools
+    # directly, so a search would only describe tools it may not call.
+    | {"tool_search", "tool_describe"}
 )
 
 
@@ -418,10 +421,8 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         # Arbitrary MCP invocation is an escape hatch by construction.
         "mcp_call_tool",
         "mcp_read_resource",
-        # Deferred-tool meta-layer: the registry strips these anyway, and
-        # tool_call would route around the allow-list.
-        "tool_search",
-        "tool_describe",
+        # Deferred-tool meta-layer: tool_call would route around the
+        # allow-list. Its two reads are withheld above.
         "tool_call",
         # Vault writes.
         "vault_set",
@@ -1260,8 +1261,8 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
                         if is_periodic_quota_exhausted(e)
                         else Retirement.CREDIT_EXHAUSTED,
                     )
-            except Exception:  # noqa: BLE001 — grading must not break on this
-                pass
+            except Exception as retire_exc:  # noqa: BLE001 — grading must not break on this
+                logger.warning("Judge key retirement failed for %s: %s", model, retire_exc)
             last_error = f"judge call failed: {detail}"
             logger.warning(
                 "Judge LLM call failed (attempt %d/%d): %s", attempt + 1, JUDGE_ATTEMPTS, detail

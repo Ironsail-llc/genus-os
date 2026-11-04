@@ -98,6 +98,11 @@ class StepType(StrEnum):
     DEEP_REASON = "deep_reason"
     COMPACTION = "compaction"
     WARMUP_PHASE = "warmup_phase"
+    #: A budget, cap or stop refused, ended or degraded the run -- or, in
+    #: observe mode, would have. Detail in tool_input; see budget_stops.py.
+    BUDGET_STOP = "budget_stop"
+    #: An operator steer the run took mid-flight; ``tool_input`` holds its text.
+    STEER = "steer"
 
 
 class DeliveryMode(StrEnum):
@@ -278,6 +283,23 @@ class ChannelBusConfig:
 
 
 @dataclass
+class AmbientConfig:
+    """The manifest's ``ambient:`` block — ambient follow-ups, opt-in per agent.
+
+    Parsed by :func:`robothor.engine.ambient.parse_ambient`; ``None`` on the
+    agent means not opted in. ``tiers`` maps each action kind
+    (``nudge_thread``, ``send_digest``, ``reply_on_behalf``) to ``auto``,
+    ``approve`` or ``never``. See ``docs/AMBIENT.md``.
+    """
+
+    watch: list[str] = field(default_factory=list)
+    stalled_after: str = ""
+    stalled_after_seconds: int = 0
+    digest_at: str = ""
+    tiers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class AgentConfig:
     """Configuration for a single agent, loaded from YAML manifest."""
 
@@ -288,6 +310,10 @@ class AgentConfig:
     # Models
     model_primary: str = ""
     model_fallbacks: list[str] = field(default_factory=list)
+    # The chain member compaction should summarise with first (manifest
+    # ``model.compaction``), typically its small/fast model. Honoured only when it
+    # names a member of the chain.
+    model_compaction: str = ""
     response_format: str = "text"  # text | json_object; final content, not tool arguments
     provider_order: dict[str, list[str]] = field(default_factory=dict)
 
@@ -326,6 +352,9 @@ class AgentConfig:
     # meaningful when tools_allowed is empty; an explicit tools_allowed names
     # its opt-in tools directly.
     tools_opt_in: list[str] = field(default_factory=list)
+    # Always in a deferred run's advertised core, recent history or not. Cut to
+    # what the agent may use, like the rest of the core.
+    tools_eager: list[str] = field(default_factory=list)
 
     # Credential tier (manifest key `v2.credentials`). "operator" lets this
     # agent use the vault tools; empty refuses them. Deliberately NOT the
@@ -424,6 +453,9 @@ class AgentConfig:
 
     # Channel bus — wake-on-surface (main only)
     channel_bus: ChannelBusConfig | None = None
+
+    # Ambient follow-ups — stalled threads and digests (opt-in per manifest)
+    ambient: AmbientConfig | None = None
 
     # ── v2 enhancements (all default off for backward compat) ──
     # Sub-agent spawning
@@ -586,6 +618,10 @@ class AgentRun:
     tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
     user_id: str = ""
     user_role: str = ""
+    # The capability tier user_role maps to (robothor/engine/capability_tier.py)
+    # and why; stamped by the runner once the run's identity is resolved.
+    capability_tier: str = ""
+    capability_tier_reason: str = ""
     agent_id: str = ""
 
     trigger_type: TriggerType = TriggerType.MANUAL
@@ -812,6 +848,12 @@ class DeepRunState:
     context_chars: int = 0
     trajectory_file: str = ""
     error: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """For JSON responses: every field, as stored."""
+        from dataclasses import asdict
+
+        return asdict(self)
 
 
 # ─── Workflow Engine Models ────────────────────────────────────────────

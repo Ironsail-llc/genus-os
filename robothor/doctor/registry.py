@@ -73,6 +73,10 @@ CHECK_MODULES = (
     # manifest about its tools" is the next question, and the answer explains
     # refusals an operator is otherwise reading one journald line at a time.
     "tools",
+    # What each agent can do here, and the gate and unlock for what it cannot:
+    # the same assessment its own system prompt carries, so the operator and
+    # the agent read one answer.
+    "capabilities",
     # Beside the tools, because a skill IS instruction the tools carry out --
     # and because the one thing neither a checkout nor a manifest can tell an
     # operator is which of two same-named procedures their agents are reading.
@@ -87,8 +91,13 @@ CHECK_MODULES = (
     # real dispatch, because this control has twice been inert with a green
     # suite and an empty evidence table behind it.
     "step_efficiency",
+    # Beside it, and a reading rather than a probe: which budgets, caps and
+    # stops fired in the last day, observed or enforced.
+    "budget_stops",
     # Opt-in: skips on an instance that never set up the Claude Code driver.
     "claude_code",
+    # Where exec runs: the container runtime and each exec-holding agent's plan.
+    "sandbox",
     # Before the host, because a plugin is code this platform did not write and
     # the engine imports it at boot: "what third-party code is running here, and
     # did the operator mean it to" belongs with the instance's own state rather

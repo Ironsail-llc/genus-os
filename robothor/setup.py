@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import platform
 import secrets
@@ -37,6 +38,8 @@ import httpx
 import yaml
 
 from robothor.config import DatabaseConfig, OllamaConfig, RedisConfig
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
@@ -687,8 +690,8 @@ def _find_template_dir(package_dir: Path | None = None) -> Path | None:
             bundled = resource_dir / "bundled_scaffold"
             if bundled.is_dir():
                 return bundled
-        except Exception:  # pragma: no cover - defensive
-            pass
+        except Exception as e:  # noqa: BLE001 - no scaffold found is answered with None
+            logger.debug("importlib.resources lookup for the scaffold failed: %s", e)
     return None
 
 

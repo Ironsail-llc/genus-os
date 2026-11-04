@@ -114,7 +114,12 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: ROBOTHOR_BRIDGE_HOST for the bridge's legacy-header gate.
 #: 467 (measured) with the tenant-onboarding branch folded in: ROBOTHOR_PLATFORM_TENANT
 #: is read once, in robothor/constants.py, and re-exported by the bridge's _operator.
-ENV_READ_SITE_BASELINE = 467
+#: 472 -> 471 with the catch-up fold: its features ship without switches, so
+#: their environment reads went with them.
+#: 468 (measured) with main's hierarchical tenancy merged into the catch-up
+#: fold: main's 467 plus the fold's net reads (the engine's environment
+#: fingerprint, the OTLP resource attributes and service name).
+ENV_READ_SITE_BASELINE = 468
 
 
 def _discovery():

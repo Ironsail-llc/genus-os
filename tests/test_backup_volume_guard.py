@@ -49,6 +49,17 @@ from pathlib import Path
 
 import pytest
 
+from tests.platform_capabilities import needs_bash44, needs_tools
+
+# A subprocess here may take up to 120 s by its own bound; pytest.ini's 30 s
+# would stop the test first whenever the machine is busy (tests/test_suite_hygiene.py).
+# The script under test needs Linux tools on every run (tests/platform_capabilities.py).
+pytestmark = [
+    pytest.mark.timeout(180),
+    needs_tools("flock", "findmnt", "timeout"),
+    needs_bash44,
+]
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GUARD = REPO_ROOT / "scripts" / "backup-volume-guard.sh"
 UNIT_DIR = REPO_ROOT / "infra" / "systemd"

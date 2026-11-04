@@ -34,6 +34,8 @@ on:
       - "crm/bridge/routers/setup.py"
       - "tests/acceptance/**"
       - ".github/workflows/install-gate.yml"
+      # The nightly webchat benchmark step in the compose job.
+      - "bench/turn/**"
       # Where the defects this gate found actually live. Without these four a
       # regression in the wizard's model resolution, the orchestrator's
       # readiness, the Ollama endpoint resolver or an agent template would
@@ -499,6 +501,41 @@ jobs:
           PAGE="$(curl -s -o /dev/null -w '%{http_code}' "${DASHBOARD_URL}/setup")"
           test "$PAGE" = "404"
           echo "assertion OK: /api/setup/status and /setup are closed for good (404)"
+
+      # The webchat half of bench/turn (bench/turn/README.md): 20 turns over
+      # /chat/send on this stack, and the engine's restart-to-/ready time.
+      # Nightly and report-only: the numbers are uploaded, not gated, because
+      # a whole stack per engine pull request is too heavy for ci.yml (which
+      # runs the in-process half instead). The token is minted inside the
+      # engine, which holds the signing key; it never leaves this job.
+      - name: Benchmark webchat turns (report only)
+        continue-on-error: true
+        run: |
+          cd ~/genus
+          COMPOSE=(docker compose --env-file genus.env
+                   -f docker-compose.yml -f docker-compose.apps.yml)
+          TOKEN="$("${COMPOSE[@]}" exec -T engine python -c 'from robothor.auth.tokens import issue_access_token; from robothor.engine.config import EngineConfig; print(issue_access_token("bench-operator", EngineConfig.from_env().tenant_id, "owner", audience="genus-engine", scopes=("engine:*",), ttl_seconds=3600))')"
+          set -a
+          . ./genus.env
+          set +a
+          DB_URL="host=127.0.0.1 port=${ROBOTHOR_DB_PORT:-5432} dbname=${ROBOTHOR_DB_NAME:-robothor} user=${ROBOTHOR_DB_USER:-robothor} password=${ROBOTHOR_DB_PASSWORD:-}"
+          RESTART="cd ~/genus && docker compose --env-file genus.env -f docker-compose.yml -f docker-compose.apps.yml restart engine"
+          cd "$GITHUB_WORKSPACE"
+          # Report-only still has to report: continue-on-error marks a failed
+          # step, and without pipefail tee's 0 would hide the failure.
+          set -o pipefail
+          python -m bench.turn --half http --runs 20 --engine-url "$ENGINE_URL" \
+            --token "$TOKEN" --db-url "$DB_URL" --restart-cmd "$RESTART" \
+            --baseline-set ci \
+            --out "$RUNNER_TEMP/bench-turn-http.json" 2>&1 | tee "$RUNNER_TEMP/bench-turn-http.txt"
+
+      - name: Upload the webchat benchmark
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-turn-http
+          path: ${{ runner.temp }}/bench-turn-http.*
+          if-no-files-found: ignore
 
       - name: Collect the compose logs
         if: always()

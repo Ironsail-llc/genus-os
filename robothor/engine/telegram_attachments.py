@@ -35,6 +35,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 from robothor.engine import attachments
 from robothor.engine.chat import get_shared_session
 from robothor.engine.chat_plan_helpers import _plan_is_expired
+from robothor.engine.telegram_turn import forwarded
 
 logger = logging.getLogger(__name__)
 
@@ -661,6 +662,8 @@ class TelegramAttachmentsMixin:
             user_text,
             sender_info=user_info,
             attachments=rows,
+            # Only the caption is typed; the file's text is not the person's.
+            typed_text="" if forwarded(message) else str(getattr(message, "caption", "") or ""),
         )
 
 

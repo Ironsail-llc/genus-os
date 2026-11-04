@@ -60,7 +60,7 @@ def conn(monkeypatch):
     fake = _Conn()
 
     @contextmanager
-    def _get_connection():
+    def _get_connection(**_kw):
         yield fake
 
     monkeypatch.setattr("robothor.db.connection.get_connection", _get_connection)

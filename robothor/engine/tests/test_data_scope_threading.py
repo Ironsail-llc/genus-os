@@ -82,3 +82,47 @@ async def test_registry_execute_threads_identity_through(monkeypatch) -> None:
 
     assert result == {"ok": True}
     assert seen["identity"] is identity
+
+
+@pytest.mark.asyncio
+async def test_tool_call_threads_identity_to_the_tool_it_wraps() -> None:
+    """On a deferred run ``tool_call`` is how non-core tools are reached, so
+    the identity has to cross the wrapper too, or every scoped read through
+    it computes the unrestricted scope of ``identity=None``."""
+    from unittest.mock import AsyncMock
+
+    from robothor.engine.tools.dispatch import clear_deferred_allowed, set_deferred_allowed
+    from robothor.engine.tools.handlers.toolsearch import _tool_call
+
+    identity = IdentityContext(
+        tenant_id="tenant-a",
+        channel="webchat",
+        identifier="user-1",
+        verified=True,
+        role="member",
+        person_id="person-1",
+    )
+    captured: dict[str, Any] = {}
+
+    async def _capture(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
+        captured["identity"] = ctx.identity
+        return {"ok": True}
+
+    handlers = {"probe": _capture, "tool_call": _tool_call}
+    token = set_deferred_allowed(frozenset({"probe"}))
+    try:
+        with (
+            patch.object(dispatch, "_get_handlers", return_value=handlers),
+            patch.object(dispatch, "_refuse_before_handler", AsyncMock(return_value=None)),
+            patch.object(dispatch, "_runtime_denial", AsyncMock(return_value=None)),
+        ):
+            await dispatch._execute_tool(
+                "tool_call",
+                {"name": "probe", "arguments": {}},
+                user_role="member",
+                identity=identity,
+            )
+    finally:
+        clear_deferred_allowed(token)
+
+    assert captured["identity"] is identity

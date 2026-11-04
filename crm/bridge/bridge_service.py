@@ -39,13 +39,7 @@ def _default_tenant() -> str:
     return DEFAULT_TENANT
 
 
-from middleware import (
-    AuthMiddleware,
-    CorrelationMiddleware,
-    RBACMiddleware,
-    TenantMiddleware,
-    TenantScopeMiddleware,
-)
+from middleware import BridgeMiddleware
 from routers.agent_manifests import router as agent_manifests_router
 from routers.agent_tools import router as agent_tools_router
 from routers.agents import router as agents_router
@@ -91,6 +85,9 @@ _bridge_config: dict = {
 }
 
 http_client: httpx.AsyncClient | None = None
+#: The event loop ``http_client`` was opened on. An httpx client belongs to
+#: one loop, so ``engine_request`` shares it only with callers on that loop.
+http_client_loop: asyncio.AbstractEventLoop | None = None
 
 
 async def _routine_trigger_loop():
@@ -137,7 +134,7 @@ async def _routine_trigger_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global http_client
+    global http_client, http_client_loop
     from robothor.auth.runtime import validate_auth_configuration
 
     # First, so everything below can be heard. The bridge never configured
@@ -152,6 +149,7 @@ async def lifespan(app: FastAPI):
     # not use the SSO exchange), so this is a loud log line rather than a raise.
     sso_secret_present()
     http_client = httpx.AsyncClient(timeout=30.0)
+    http_client_loop = asyncio.get_running_loop()
     from robothor.autonomy.handoff_worker import purge_expired_observations, recover_checks
 
     trigger_task = asyncio.create_task(_routine_trigger_loop())
@@ -170,6 +168,10 @@ async def lifespan(app: FastAPI):
             with suppress(asyncio.CancelledError):
                 await task
         await http_client.aclose()
+        # Forgotten, not just closed: a call after shutdown then takes the
+        # one-off client and reports a dead engine as a 502, not a 500.
+        http_client = None
+        http_client_loop = None
 
 
 # ─── App Assembly ────────────────────────────────────────────────────────
@@ -181,17 +183,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Middleware (applied in reverse order — correlation runs first, then auth,
-# then the tenant scope, then tenant, then RBAC). AuthMiddleware verifies a
-# bridge-issued token and sets request.state.auth. Authentication is
-# fail-closed unless the bridge is explicitly placed in loopback-only insecure
-# development mode. TenantScopeMiddleware sits directly inside it: everything
-# after authentication runs bound to the token's tenant for RLS.
-app.add_middleware(RBACMiddleware)
-app.add_middleware(TenantMiddleware)
-app.add_middleware(TenantScopeMiddleware)
-app.add_middleware(AuthMiddleware)
-app.add_middleware(CorrelationMiddleware)
+# One pure-ASGI middleware, five steps in order: correlation id, then auth
+# (verifies a bridge-issued token into request.state.auth), then the tenant
+# scope (everything after authentication runs bound to the token's tenant for
+# RLS), then tenant, then RBAC. Authentication is fail-closed unless the bridge
+# is explicitly placed in loopback-only insecure development mode. See
+# BridgeMiddleware for what each step answers.
+app.add_middleware(BridgeMiddleware)
 
 # Routers
 app.include_router(health_router)

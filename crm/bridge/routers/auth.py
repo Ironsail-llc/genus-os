@@ -5,7 +5,7 @@ OIDC/SAML), then calls ``POST /api/auth/sso`` with the VERIFIED claims plus a
 shared dashboard↔bridge secret. The bridge JIT-provisions the account and mints
 the access + refresh tokens. The dashboard stores them in httpOnly cookies and
 forwards the access token as ``Authorization: Bearer`` on proxied calls; the
-``AuthMiddleware`` verifies it. The bridge stays IdP-agnostic (it only verifies
+``BridgeMiddleware`` verifies it. The bridge stays IdP-agnostic (it only verifies
 its own JWT).
 """
 
@@ -342,8 +342,8 @@ def me(request: Request) -> dict[str, Any] | JSONResponse:
 #
 # A root-tenant owner/admin may act in a descendant tenant. The acting tenant
 # is carried IN THE TOKEN (tid, with home_tid and act) and never in a header:
-# TenantMiddleware already refuses an X-Tenant-Id that disagrees with tid, and
-# TenantScopeMiddleware binds the request's RLS scope to it.
+# BridgeMiddleware's tenant step already refuses an X-Tenant-Id that disagrees with tid, and
+# its tenant-scope step binds the request's RLS scope to it.
 
 _SWITCH_ROLES = frozenset({"owner", "admin"})
 _SWITCH_OVERRIDE_ENV = "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS"
@@ -541,7 +541,7 @@ def switch_tenant(body: SwitchTenantRequest, request: Request) -> dict[str, Any]
 # ── Local email + password sign-in ───────────────────────────────────
 #
 # Off unless GENUS_LOCAL_LOGIN=true, in which case /methods reports it and
-# /login is a PUBLIC route (see AuthMiddleware._PUBLIC_PATHS). Everything
+# /login is a PUBLIC route (see BridgeMiddleware._PUBLIC_PATHS). Everything
 # these handlers are allowed to say about a failure is decided in
 # robothor/auth/local_login.py — this layer only maps a LoginResult onto a
 # status code, and must never add a detail of its own.

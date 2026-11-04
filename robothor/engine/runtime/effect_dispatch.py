@@ -161,8 +161,8 @@ async def _dispatch_reserved(
 
     started = False
     try:
-        # Reservation may wait. Recheck stop, lease and deadline before dispatch.
-        denial = await _runtime_denial(name, args, ctx)
+        # Reservation may wait. Recheck stop (afresh), lease and deadline before dispatch.
+        denial = await _runtime_denial(name, args, ctx, fresh_stop=True)
         if denial:
             await asyncio.to_thread(
                 effects.finish, context, record["id"], ctx.run_id, uncertain=False

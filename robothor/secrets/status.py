@@ -157,7 +157,11 @@ def status_for_name(
         # "Nobody knows" is not "no row". A caller that conflates them reports
         # green while a dead environment value is being served.
         from_vault, found_at, vault_readable = None, None, False
-    resolved: ResolvedSecret = resolve_secret(name, vault_key=vault_key, tenant_id=tenant)
+    # A status read reports on the credential without using it, so it does not
+    # count as "last resolved".
+    resolved: ResolvedSecret = resolve_secret(
+        name, vault_key=vault_key, tenant_id=tenant, stamp=False
+    )
 
     shadowed = bool(from_env and from_vault and from_env != from_vault)
     return SecretStatus(
@@ -204,7 +208,8 @@ def resolve_for_key(key: str, *, tenant_id: str = DEFAULT_TENANT) -> str | None:
     """
     from robothor.vault.naming import env_name
 
-    return resolve_secret(env_name(key), vault_key=key, tenant_id=tenant_id).value
+    # A probe is not a reader using the credential, so it leaves no usage stamp.
+    return resolve_secret(env_name(key), vault_key=key, tenant_id=tenant_id, stamp=False).value
 
 
 def environment_credential_names() -> set[str]:
@@ -221,14 +226,18 @@ def environment_credential_names() -> set[str]:
     A third, hand-written list would be the drift defect. There isn't one.
     """
     from robothor.engine.exec_env import looks_like_a_credential_name
-    from robothor.secrets.classification import declared_secret_names
+    from robothor.secrets.classification import declared_secret_names, non_secret_env_names
     from robothor.settings.env import process_env_names
 
     declared = declared_secret_names()
+    # A name the settings model declares and does NOT mark secret is a setting,
+    # whatever it is called: ``ROBOTHOR_MAIN_SESSION_KEY`` is a session name,
+    # and the shape match alone lists it as a credential.
+    settings_only = non_secret_env_names()
     return {
         name
         for name in process_env_names()
-        if name in declared or looks_like_a_credential_name(name)
+        if name in declared or (name not in settings_only and looks_like_a_credential_name(name))
     }
 
 

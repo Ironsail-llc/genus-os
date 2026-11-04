@@ -1,0 +1,453 @@
+# Performance
+
+How long a chat turn takes, where that time goes, how to measure it, and what
+the engine does to keep it short. Read this before tuning a busy instance, and
+keep the benchmark numbers from before and after any change.
+
+Everything described here is the engine's only code path: there is nothing to
+switch on. What you can change is the handful of tunables under
+[Tuning](#tuning).
+
+## What the engine's turn path buys, measured
+
+On the local stack with the mock model, 20 turns after one warmup, on the turn
+path that came before this work and on the turn path as it ships:
+
+| | Before | Now |
+|---|---|---|
+| Webchat DB statements per turn (p50) | 80 | 55 |
+| Webchat `done` (p50) | about 40 ms | 28 to 32 ms |
+| Telegram-shaped DB statements per turn (p50) | 64 | 42 |
+| First model call of the main agent: tool schemas | 216 | 30 |
+| First model call of the main agent: prompt tokens | 38,480 | 10,589 |
+
+The mock model answers at once, so the timings are the engine's own time around
+the model; against a real provider, model latency comes on top. The statement and
+token counts carry over as they are. The two tool rows come from deferred tool
+loading alone.
+
+## How a turn is timed
+
+A turn is one message in and one answer out. The engine spends it in these
+phases, in this order:
+
+| Name | What it covers | Where you read it |
+|---|---|---|
+| **SETUP** | From the run starting to the agent being ready to call a model: manifest load, warmup preamble (identity, memory blocks, entity context, open tasks), system prompt. | The runner's `SETUP <n>ms agent=... trigger=...` log line (`robothor/engine/runner.py`). |
+| **Setup plus toolset** | SETUP and building the tool list the model is offered. | The run's `tools_built` step; each warmup section's time is a `warmup_section:<name>` step. |
+| **TTFT** (time to first token) | Message sent to the first streamed text (`delta`) the person sees. A turn that does not stream (Telegram today) has no first token; its equivalent is the first model call returning. | The webchat SSE stream; the `llm_call` span. |
+| **done** | Message sent to the `done` event (webchat) or the reply being sent (Telegram). This is the time the person waits. | The `done` event's `duration_ms`; the `agent_run` span. |
+| **Finalize tail** | The gap between the last text and `done`: telemetry, post-run bookkeeping, the run-row write, history save. It is pure waiting for the person. | `done` minus the last `delta`. |
+| **Tool time** | The tool handlers' own time. | The run's tool-call steps; `tool_call` spans. |
+| **Tool-call overhead** | For each gap between two model calls with tool calls in it: the gap minus the tools' own time. What the loop spends around a tool (admission, audit, guardrails, result shaping). | Derived from the run's steps. |
+| **DB statements** | Statements the engine sent to Postgres for the turn, including the background persist. | `pg_stat_statements`, before and after the turn. |
+| **Prompt tokens** | Size of the first model call: messages plus tool schemas. Most of a large prompt is usually tool schemas. | The first `llm_call` span's `gen_ai.usage.input_tokens`; the benchmark's estimate. |
+| **Cache hit ratio** | Share of input tokens the provider served from its prompt cache. | `gen_ai.usage.cache_hit_ratio` (with the cache read and creation token counts) on the run's `run_summary` span; `cache_hit_ratio` on the telemetry stream. Per-call `llm_call` spans do not carry it. |
+
+Engine restart to `/ready` is measured separately: it is the cold-start time an
+operator waits after an upgrade, not part of any turn.
+
+## The turn benchmark (`bench/turn`)
+
+`bench/turn/README.md` in the repository is the reference for every option.
+
+`python -m bench.turn` drives whole turns against a running stack on the mock
+model and records every number in the table above, per turn. It has two halves,
+chosen with `--half http|inprocess|both`:
+
+| Half | What it drives | What it records |
+|---|---|---|
+| `http` | N webchat turns: `POST /chat/send` on the engine, the SSE stream read as it arrives. Each turn has its own session, so each starts from an empty history. Needs an engine token. | `setup_total_ms`, `ttft_ms`, `done_ms`, `finalize_tail_ms`, `tool_ms`, `tool_overhead_ms`, `db_statements`, and with `--restart-cmd` the restart-to-ready time `engine_ready_ms`. |
+| `inprocess` | N Telegram-shaped turns: `runner.execute` with no streaming callback, as the Telegram channel calls it. Runs where the engine's environment is set (inside the engine container, or CI). | `setup_ms` (the SETUP line), `setup_total_ms`, `first_llm_ms`, `done_ms`, `finalize_tail_ms`, `tool_ms`, `tool_overhead_ms`, `db_statements`, `prompt_tokens` (characters / 4, stable rather than exact) and `tool_schemas`. |
+
+The first (cold) turn is a warmup and is kept out of the summary. Each run prints
+p50 and p95 per metric and, with `--out FILE`, writes the JSON result. With
+`--half both` (the default) it writes one file per half, with `-http` and
+`-inprocess` inserted before the extension (`before.json` becomes
+`before-http.json` and `before-inprocess.json`).
+`db_statements` needs Postgres started with
+`shared_preload_libraries=pg_stat_statements`; without it the count is skipped
+and the reason is kept in the result's `notes`. Run it on a quiet stack: other
+activity on the database in the window is counted too.
+
+### Baselines and the gate
+
+The result is compared with the committed set under `bench/turn/baselines/`:
+`<half>.json` by default, `ci-<half>.json` with `--baseline-set ci` (what CI
+uses), or one file named with `--baseline FILE`. The threshold depends on the
+metric:
+
+| Metric | A regression when its p50 or p95 is |
+|---|---|
+| `tool_schemas` (exact) | above the baseline at all. The same code gives the same number every run, so one more tool schema fails. A decrease passes and prints a hint to re-record the baseline. |
+| `prompt_tokens` | more than 25 tokens or 1% over the baseline, whichever is larger: a word in a template moves it by a token, a longer preamble or a new schema does not pass. A decrease passes with the same hint. |
+| `db_statements` | more than `--threshold` (default 10%) over the baseline. |
+| Every `*_ms` timing | more than `--timing-threshold` over the baseline **and** more than `--min-delta` (default 5 ms) over it. `--timing-threshold` is 30% with `--baseline-set ci` (runners vary by more than 10% on the same code) and `--threshold` otherwise. |
+
+Exit codes: 0 within threshold, 1 regression, 2 the benchmark could not run, a
+turn did not complete, or a baseline named with `--baseline` is missing or empty,
+so a mistyped path cannot pass.
+
+| Baseline | Recorded on | Compared by |
+|---|---|---|
+| `http.json`, `inprocess.json` | The local stack, mock model | You, before and after a change |
+| `ci-inprocess.json` | The `bench-turn` job in CI | That job, on every pull request touching the engine, the templates or the shipped agents: 20 in-process turns against Postgres with `pg_stat_statements`, Redis and the mock model. A regression fails the pull request. |
+| `ci-http.json` | The install gate's compose job | That step, nightly, report only |
+
+A committed baseline that has never been recorded is an empty sentinel; picked
+from the committed set, it prints `no baseline recorded` and passes.
+`--update-baseline` turns a run, or a saved result, into the baseline. One CI run
+is not a baseline: record a CI baseline from at least three dispatched runs with
+`--merge-baselines <three or more results> --out <baseline>`, which keeps the
+median p50 and p95 of each metric. Commit a baseline in its own change so the
+number has a history.
+
+### The before/after loop for a change
+
+1. Stack up on the mock model, on the code before your change. Run one half at a
+   time, for example `--half inprocess --out before.json`.
+2. Apply the change (or the tunable) and restart the engine.
+3. Run the same half again with `--out after.json`.
+4. Compare: `python -m bench.turn --compare after.json --baseline before.json`.
+   Put both p50/p95 tables in the pull request.
+
+With `--half both`, name each half's files on both sides
+(`--compare after-inprocess.json --baseline before-inprocess.json`).
+
+
+## Engine telemetry
+
+The engine builds one trace per run and exports it over OTLP/HTTP when
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set ([Observability](OBSERVABILITY.md) has the
+setup). The same run metrics go to the Redis stream `robothor:events:telemetry`
+for the dashboards.
+
+Every run exports its trace, whatever its outcome: completed, failed, timed
+out, aborted or interrupted.
+
+| Span | Kind | Covers | Attributes worth reading |
+|---|---|---|---|
+| `agent_run` | SERVER | The whole run, from its `started_at` to its exit. **Its duration is the turn time.** A sub-agent's `agent_run` is a child of its parent run's span. | `run.status`, `run.trigger_type`; error status and the reason on a failed, timed-out, cancelled, aborted or interrupted run. |
+| `llm_call` | CLIENT | One model call, including its retries on the same model. | GenAI conventions: `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reasons`. |
+| `tool_call` | INTERNAL | One tool handler. | `tool` (the tool's name); error status when the handler raises. |
+| `run_summary` | INTERNAL | A marker at run end carrying the run's totals. | `run.status`; the run's model and token totals, including `gen_ai.usage.cache_hit_ratio` and the cache read and creation tokens. |
+
+A backend that names operations by span kind (Datadog's OpenTelemetry mapping, for
+one) shows `server.request` for `agent_run`, `client.request` for `llm_call` and
+`Internal` for the rest, with the span name as the resource. Turn-time
+percentiles come from `server.request`; model latency from `client.request`; the
+tool-call overhead of the table above is `agent_run` minus its `llm_call` and
+`tool_call` children.
+
+Resource attributes default to `service.name=robothor-engine` and `agent.id`.
+`OTEL_RESOURCE_ATTRIBUTES` (comma-separated `key=value`, percent-decoded) is
+merged over them, and `OTEL_SERVICE_NAME` overrides `service.name`, in the
+OpenTelemetry order. Use them to tag the environment, for example
+`OTEL_RESOURCE_ATTRIBUTES=deployment.environment=staging`, so one backend can
+compare environments.
+
+Publishing never holds up a run: the Redis entry and the OTLP export are
+background tasks on one shared async Redis client and one shared HTTP client
+(5 s timeout), traces finishing during an export go together in the next request,
+and a sink that is down logs one warning and then stays at debug level.
+
+## Dashboard performance
+
+**Web vitals.** Every page load reports its Core Web Vitals (LCP, INP, CLS, FCP,
+TTFB) to `POST /api/vitals`. Each metric becomes one `web_vital` JSON line on the
+dashboard's standard output, for any log pipeline that collects container output,
+and an entry on the capped Redis stream `robothor:events:vitals`. `rating` is
+web-vitals' own `good` / `needs-improvement` / `poor`; `path` has no query string
+and `view` is the dashboard view. No tenant, user or session is recorded.
+
+**Bundle budget.** `pnpm bundle:check`, after `pnpm build` in `app/`, compares
+each page route's gzipped first-load JavaScript with `bundle-budget.json` (in `app/`) and
+fails a route that is over its budget or has none. CI runs it after the build.
+`node scripts/bundle-budget.mjs --write` resets every budget to the current size
+plus 5%: raise a budget on purpose, in the pull request that causes the growth, so
+the growth is a visible line in review.
+
+**Chat perf spec.** `e2e/perf.spec.ts` in `app/` (Playwright, backends mocked) fails
+when the chat takes longer than its budget to paint (5000 ms) or to show the first
+streamed token after send (1500 ms), or when a tab holds more than one live
+event-stream connection. `PERF_CHAT_PAINT_BUDGET_MS` and
+`PERF_FIRST_DELTA_BUDGET_MS` override the budgets for a measuring run.
+
+## What the engine does on every turn
+
+Each part below says what the engine does, what it costs or saves, and how to
+see it working. A setting named here is a tunable from [Tuning](#tuning).
+
+### Configuration caches
+
+- **Behaviour:** a run reuses the agent's merged and validated manifest, its
+  parsed adapter configs and the sha256 of each pinned adapter binary, instead of
+  reading, merging, validating and hashing them before every run. An entry is
+  used only while every file it came from is unchanged (inode, size, mtime,
+  ctime), the `ROBOTHOR_*` environment and the `${VAR}` values it names are
+  unchanged, and no plugin sync, plugin reload or defaults reload has run since.
+  Schema validation in `observe` and `enforce` still counts and refuses on every
+  load. An edited adapter YAML reaches runs within one extension-watcher poll
+  (10 s); `POST /api/extensions/reload` applies it at once. Each MCP adapter's
+  `tools/list` is kept while its session lives (up to ten minutes; a dropped
+  session, a changed adapter file, a plugin reload or `mcp_list_tools` with
+  `refresh: true` refetches), adapters connect four at a time, each HTTP MCP
+  server has one HTTP client, and every adapter's session opens in the background
+  when the engine starts ([Connectors](CONNECTORS.md)).
+- **Measure:** the benchmark's `setup_ms` and `setup_total_ms`. A warm manifest
+  load takes about 0.15 ms on a small manifest, against about 1 ms uncached. With
+  three slow MCP adapters, registering their tools takes 1.2 s on the first run
+  (3.6 s one after another) and nothing on the next. The saving grows with the
+  number of adapters and pinned binaries.
+
+### Database checkout
+
+- **Behaviour:** a database checkout does not start a thread; the tenant binding
+  (`app.tenant_id`) and the vector-scan setting are sent only when they differ
+  from what the pooled connection already carries (a connection reused for another
+  tenant is always re-bound); the hottest pure reads run without a transaction. A
+  repeat single-statement read costs 1 round trip instead of 5, a write 3.
+- **Needs session-preserving connections:** direct PostgreSQL or session pooling,
+  not a transaction-mode connection pooler. A checkout that has to open a
+  connection is bounded by `ROBOTHOR_DB_CONNECT_TIMEOUT`, which must stay above 0.
+  `docs/runbooks/TENANT_RLS.md` has the detail.
+- **Measure:** the benchmark's `db_statements` per turn, and `setup_ms`.
+
+### Warmup preamble
+
+- **Behaviour:** the interactive warmup preamble's sections (identity, memory
+  blocks, entity context, context hooks, host state, open tasks, fleet surfaces,
+  agent goal) are built concurrently on a small bounded pool, once the agent's
+  previous warmup had a section slower than 30 ms (until then they are built one
+  after another), and joined in a fixed order, so the text is the same every time
+  and a turn waits for the slowest section instead of the sum. Memory blocks are read in one statement,
+  entity candidates in one query, and identity enrichment is held per chat session
+  for up to 15 minutes (a change of who the caller resolves to recomputes it; a
+  CRM edit to that person can lag by up to 15 minutes).
+- **Measure:** `setup_ms`, `db_statements` and the run's `warmup_preamble_build`
+  step, with one `warmup_section:<name>` step per section. The preamble should
+  take about as long as its slowest section.
+
+### Answer before finalization
+
+- **Behaviour:** the webchat `done` event and the Telegram reply go out as soon as
+  the answer's text is settled. Telemetry, post-run bookkeeping, the run-row write
+  and the history save finish in the background under the engine's task
+  registry, so `genus run` and engine shutdown still wait for them. A post-run
+  policy that can change what the person sees (the deliverable contract in
+  `enforce`) still runs first. A background failure is logged and noted on the
+  run; the answer already sent stands ([Web chat](channels/webchat.md)).
+- **Measure:** `finalize_tail_ms` and `done_ms`. The tail is a few milliseconds.
+
+### Provider prompt cache
+
+- **Behaviour:** the request prefix stays byte-stable from turn to turn so
+  providers can serve it from their prompt cache. The `Current time:` line is an
+  `[engine]` turn just before the latest user message rather than part of the
+  system prompt (the person's own text is not edited). Anthropic direct gets
+  breakpoints on the last tool and on the last user or tool message before the
+  final two turns; OpenAI and Gemini get no cache markers and cache the stable
+  prefix themselves. `docs/MODELS.md` has the per-route table.
+- **Measure:** the cache hit ratio (`gen_ai.usage.cache_hit_ratio` on the
+  `run_summary` span, `cache_hit_ratio` on the telemetry stream) and the run's
+  `cache_read_tokens`. The mock model has no cache, so this is measured against a
+  real provider on a test instance. Cost per turn and TTFT follow it.
+
+### Planning on chat turns
+
+- **Behaviour:** on a Telegram, webchat or plugin-channel turn, message length
+  alone does not buy a separate planner model call before the tool loop. Such a
+  turn plans only in plan mode, when its manifest asks for planning, or when the
+  message lists three or more steps. Model selection and fallback chains are as
+  configured; scheduled, workflow, hook and sub-agent runs plan as before
+  ([Configuration](configuration.md)).
+- **Measure:** model calls per long chat turn (the `llm_call` span count under
+  `agent_run`), and `first_llm_ms` / TTFT on a long prose message.
+
+### Context compaction
+
+- **Behaviour:** context compaction summarises with the agent's own model chain
+  (manifest `model.compaction` first, the fleet chain when a caller has none),
+  runs an LLM-free pre-pass first (duplicate tool results, old media, oversized
+  old tool results and tool-call arguments), updates the previous summary instead
+  of rebuilding it, and waits `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` iterations
+  between compactions. When no model can summarise, it keeps the messages and
+  marks the run's `compaction` step `degraded: true`. The hard context ceiling is
+  enforced on every iteration.
+- **Measure:** model calls and wall time spent in compaction on long runs (the
+  `compaction` step), prompt tokens after compaction, and how often a run's
+  compaction step is degraded.
+
+### Deferred tools
+
+- **Behaviour:** an agent allowed more tools than
+  `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` is shown its core tools (the platform's
+  fixed set plus, at most 16, the tools it called in its last
+  `ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS` runs) and `tool_search`, `tool_describe`
+  and `tool_call`; it finds the rest of its allowed tools by search, plugin tools
+  included. An agent at or under the threshold is sent its full set. The
+  `tools.deferred_tools_reachable` check in `genus doctor` reports a granted tool
+  an agent could not reach.
+- **Measure:** the benchmark's `prompt_tokens` and `tool_schemas` on the first
+  model call. On the local stack with the mock model, the main agent's first call
+  carries 30 schemas and 10,589 prompt tokens instead of 216 schemas and 38,480
+  tokens (72% fewer), before any plugin tools, which would add to the larger
+  figure only. A turn that needs a deferred tool costs one extra tool-search
+  round trip.
+
+### Streaming to Telegram and plugin channels
+
+- **Behaviour:** Telegram's "Thinking..." message is a progress message: the
+  answer is edited into it as the model writes it, at most one edit a second (a
+  Telegram "retry after" pushes the next edit back), with a line such as
+  "Searching the web · 4s" while a tool runs, and it becomes the formatted answer
+  at the end (an answer too long for one message, or holding a table, goes out as
+  the usual messages instead). A transient stream failure (connection reset, 5xx,
+  529) is retried once on the same model before falling to the next model.
+  A plugin channel streams by passing a `stream` callback to the inbound
+  pipeline. The dashboard chat streams as it always has.
+- **Measure:** time to the first visible text in Telegram. With a fake run
+  streaming over 3 s, the first answer text appears after 0.15 s instead of at
+  the end (3.25 s), with one message edited in place instead of two sends and a
+  delete. Also watch the model-fallback count on stream errors.
+
+### Execution lanes
+
+- **Behaviour:** interactive turns (Telegram, the chat panel, Slack, plugin
+  channels, the IDE, the CLI) and background work (cron, hooks, workflows,
+  autodream, the curator, ingest, embeddings, post-turn saves) run in separate
+  lanes, each with its own thread workers, so blocking background work cannot
+  delay a turn's own blocking calls. Background runs are capped by
+  `ROBOTHOR_MAX_CONCURRENT_BACKGROUND`. The runs of a `concurrent: true` hook
+  workflow, which only hand each event on, take a third lane, `hooks`, capped by
+  `ROBOTHOR_LANE_HOOKS_LIMIT`, so overlapping events neither queue behind
+  background runs nor take their slots. Interactive runs are uncapped by default
+  (`ROBOTHOR_MAX_CONCURRENT_INTERACTIVE` is 0); a cap there queues a turn with no
+  deadline while other turns hold the slots, including turns waiting on an
+  `ask_user` answer. When the interactive lane is capped and a turn is waiting, a
+  background run asking for a slot holds back for up to
+  `ROBOTHOR_LANE_BACKGROUND_YIELD_MS`. With two or more local inference slots, one
+  is kept for interactive requests. A run waiting for its lane has not started: no
+  run row, timeout or budget is touched.
+- **Measure:** `GET /health` → `execution_lanes` (`active`, `waiting`, `limit` per
+  lane) and the `/metrics` gauges `robothor_lane_active{lane}` and
+  `robothor_lane_waiting{lane}`. During a burst of scheduled runs, interactive
+  `waiting` stays at 0 and the benchmark's `done_ms` does not move; background
+  `waiting` that never returns to 0 means its limit is too low.
+
+### Steer and stop from every chat surface
+
+- **Behaviour:** steer and stop reach a live run from every chat surface. In the
+  dashboard chat, while a reply streams, the composer steers the running task
+  (*Steer the running task...*) and Stop halts it; Slack has `/steer <text>` and
+  `/stop`, and the Teams channel accepts them typed, as Telegram does. A steer
+  joins the run at its next step as an operator steering update; a stop ends it
+  there as cancelled. Both reach only the run of that conversation, in the
+  caller's tenant, and pass the same access decision as a message. Slack and
+  Teams also post one progress line per run (the step or tool and its elapsed
+  time, never arguments or results), edited in place at most once a second
+  ([Web chat](channels/webchat.md), [Slack](channels/slack.md),
+  [Teams](channels/teams.md)).
+- **Measure:** a steer sent mid-run is taken in at the next iteration (one
+  model call later, not after the run), and a stop ends the run with status
+  `cancelled` within one iteration. In Slack and Teams, one progress message per
+  run, edited rather than re-posted.
+
+### Ambient follow-ups
+
+- **Behaviour:** an agent whose manifest has an `ambient:` block watches the
+  sources it already reads (the CRM conversation inbox, or a Redis stream it
+  reads), finds threads where a person wrote and nobody answered within
+  `stalled_after`, and on its `digest_at` schedule proposes a nudge to the
+  operator, a digest, or a reply in the thread. Each kind has a tier in the
+  manifest: `auto` (sent alone), `approve` (through the existing approval gate)
+  or `never` (not even proposed). **A kind with no tier set is `approve`**, so
+  nothing ambient is sent without a person's approval unless the manifest says
+  `auto`. Every proposal is recorded as an `ambient_proposal` run step and in a
+  digest file. A reply in the thread is proposed and recorded but not sent (its
+  outcome is `unsupported`). An agent without an `ambient:` block does none of
+  this.
+- **Measure:** it adds scheduled work, not turn time: check that the interactive
+  `done_ms` does not move and that the background lane's `waiting` returns to 0.
+- **To stop it for one agent:** remove its `ambient:` block, or set each kind to
+  `never`.
+
+### Paged chat history
+
+- **Behaviour:** the engine's chat history is read from the message store: each
+  message carries its stored id and time, and the dashboard chat pages back past
+  the last 50 messages ("Load earlier", by a `before=<id>` cursor) with one
+  statement per page, off the event loop.
+- **Measure:** one statement per history page, and the chat's first paint with a
+  long conversation (the dashboard perf spec's chat paint).
+
+## Operating under load: lanes, budgets that report, compaction
+
+Three things decide whether a busy instance stays responsive and finishes its
+work.
+
+- **Lanes.** A burst of scheduled and hook runs is rationed in the background
+  lane, apart from the person waiting for an answer (see
+  [Execution lanes](#execution-lanes)), and `/health` shows which lane is
+  queueing.
+- **Budgets that report.** The fleet hourly cost cap and the runaway-token hard
+  cap report and never stop a run: a run that crosses one is recorded and
+  alerted and goes on. Every budget or stop that refuses, ends or would have
+  ended a run is recorded as a run step of type `budget_stop` (its stop, reason,
+  setting, limit and observed value) and an `agent.budget_stop` event, and
+  `genus doctor --only budget_stops.recent` counts the last day's. The inventory
+  of every budget, cap and stop, with its setting and what you see, is
+  `BUDGETS_AND_STOPS.md` under `docs/` in the repository. When a run under load
+  ends early, look for a `budget_stop` step before anything else.
+- **Compaction.** A long run's context is compacted when it passes the proactive
+  threshold. Ineffective, repeated compaction is a known way for a run to slow
+  down ([Interactive request performance](runbooks/INTERACTIVE_REQUEST_PERFORMANCE.md)
+  has the incident); the LLM-free pre-pass, the gap between compactions and
+  keeping the messages on failure ([Context compaction](#context-compaction))
+  are what prevent it. The compaction section of `docs/SYSTEM_ARCHITECTURE.md`
+  describes the path in full.
+
+## Tuning
+
+These are the settings that shape the behaviour above. Set them in the engine's
+environment and restart the engine so every part picks the change up. The
+[settings reference](reference/configuration.md) has the full entry for each.
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` | An agent allowed more tools than this gets core tools plus tool search instead of every schema. | `40` |
+| `ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS` | How many of the agent's last runs count when picking its recently used core tools. | `10` |
+| `ROBOTHOR_MAX_CONCURRENT_INTERACTIVE` | Interactive runs at once; `0` is uncapped. A cap queues turns with no deadline. | `0` |
+| `ROBOTHOR_MAX_CONCURRENT_BACKGROUND` | Background runs at once. | `2` |
+| `ROBOTHOR_LANE_BACKGROUND_YIELD_MS` | How long a background run holds back for a waiting turn when the interactive lane is capped. | `200` |
+| `ROBOTHOR_LANE_HOOKS_LIMIT` | Runs of concurrent hook workflows at once, in their own lane. | `8` |
+| `ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS` | Iterations between two compactions of one run. | `3` |
+| `ROBOTHOR_HOURLY_COST_CAP_USD` | Fleet spend per rolling hour above which runs are reported and alerted. | `5.0` |
+| `ROBOTHOR_RUNAWAY_ALERT_TOKENS` | Tokens in one run at which it is reported as a possible runaway. | `500000` |
+| `ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS` | Tokens in one run at which a `budget_stop` step is recorded; the run goes on. | `5000000` |
+| `ROBOTHOR_DB_CONNECT_TIMEOUT` | Seconds a checkout waits to open a connection; must stay above 0. | `5` |
+
+## Rolling back
+
+None of this migrates data. If a release's turn path misbehaves, `git revert`
+the change on `main` and redeploy the resulting release; there is no setting to
+turn it off. Keep the benchmark result from before and after either way.
+
+### Feature flags
+
+New behaviour ships on, as the engine's only code path. It does not go behind a
+feature flag, a kill switch or an observe/enforce rung, and there is no staged
+flip to plan. Its safety is a property of the behaviour itself, proved by tests:
+approval tiers, allowlists, RBAC, redaction, caps that report. What stays
+configurable is a tunable with a default, as in [Tuning](#tuning). The
+guardrail modes that already exist (`infra/flags.yaml` and
+`docs/runbooks/GUARDRAIL_FLIPS.md`) are unchanged by this rule.
+
+## Where else to look
+
+- [Observability](OBSERVABILITY.md): enabling export, the failure-mode
+  detectors, and runs in the dashboard.
+- [Configuration](configuration.md) and the
+  [settings reference](reference/configuration.md): every setting named here.
+- [Interactive request performance](runbooks/INTERACTIVE_REQUEST_PERFORMANCE.md):
+  how routine requests are kept short and bounded.

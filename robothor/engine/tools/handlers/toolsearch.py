@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
 from robothor.engine.tools.dispatch import get_agent_toolset, get_deferred_allowed
+from robothor.engine.wrapped_call import MalformedToolCallError, unwrap
 
 if TYPE_CHECKING:
     from robothor.engine.tools.dispatch import ToolContext
@@ -48,8 +49,14 @@ def _advertised_names(ctx: ToolContext) -> set[str]:
     campaign whose current lever is step efficiency.
     """
     from robothor.engine.tools.constants import CORE_TOOLS, TOOLSEARCH_TOOLS
+    from robothor.engine.tools.dispatch import get_advertised_toolset, get_promoted_tools
     from robothor.engine.tools.registry import get_registry
 
+    published = get_advertised_toolset()
+    if published is not None:
+        # The run's own advertised set: CORE plus the tools it used recently,
+        # plus what an earlier search this run promoted into it.
+        return set(published) | get_promoted_tools()
     registry = get_registry()
     return {n for n in (CORE_TOOLS | TOOLSEARCH_TOOLS) if n in registry._schemas}
 
@@ -89,6 +96,17 @@ def _closest(name: str, candidates: list[str], limit: int = 3) -> list[str]:
     return [hit["name"] for hit in hits if hit["name"] != name][:limit]
 
 
+#: How far the top hit must lead the second before its schema comes inline.
+_CLEAR_LEAD = 1.25
+
+
+def _clear_lead(ranked: list[tuple[Any, float]]) -> bool:
+    """Does the top hit's score clear the second's by ``_CLEAR_LEAD``?"""
+    if len(ranked) < 2:
+        return bool(ranked)
+    return ranked[0][1] >= ranked[1][1] * _CLEAR_LEAD
+
+
 async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tools.registry import get_registry
 
@@ -116,7 +134,8 @@ async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
             out["note"] = note
         return out
 
-    results = registry.search_tools(names, query, limit=limit)
+    ranked = registry.rank_tools(names, query, limit=limit)
+    results = [hit for hit, _score in ranked]
     # Per HIT, not per run: on a deferred run the CORE tools are in the
     # searchable set AND already advertised, and telling the agent to
     # tool_call one of those costs two round-trips for nothing.
@@ -124,26 +143,66 @@ async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     for hit in results:
         hit["in_toolset"] = hit["name"] in advertised
     visible = [h["name"] for h in results if h["in_toolset"]]
+    # The top hit is usually the tool the agent wanted: its parameters come
+    # inline, so the common case is search then tool_call, with no describe.
+    # Only when it clearly leads: the hint says to call it, and one call makes
+    # it a recent tool advertised on every later turn, so a near-tie is a
+    # guess the agent should make for itself after reading the descriptions.
+    top = (
+        results[0]
+        if deferred and results and not results[0]["in_toolset"] and _clear_lead(ranked)
+        else None
+    )
+    if top is not None:
+        described = await _tool_describe({"name": top["name"]}, ctx)
+        if "parameters" in described:
+            top["parameters"] = described["parameters"]
+    promoted = _promote(results) if deferred else []
     if not deferred:
         hint = "These are already in your toolset — call them directly, not via tool_call."
-    elif visible:
-        hint = (
-            f"{', '.join(visible)} are already in your toolset — call them directly. "
-            "For the rest, tool_describe(name=...) then tool_call(name=..., arguments=...)."
-        )
     else:
-        hint = (
-            "Use tool_describe(name=...) for the full schema, then "
-            "tool_call(name=..., arguments=...)."
-        )
+        lead = []
+        if visible:
+            lead.append(f"{', '.join(visible)} are already in your toolset — call them directly.")
+        if promoted:
+            lead.append(
+                f"{', '.join(promoted)} are added to your toolset with their own "
+                "parameters: call them directly from your next step."
+            )
+        if top is not None and "parameters" in top:
+            how_top = "" if top["name"] in promoted else ": tool_call it directly"
+            lead.append(f"{top['name']}'s parameters are included{how_top}.")
+        how = "tool_describe(name=...) then tool_call(name=..., arguments=...)."
+        hint = " ".join([*lead, f"For the rest, {how}"]) if lead else f"Use {how}"
     out = {
         "results": results,
         "count": len(results),
         "hint": hint,
     }
+    if deferred:
+        out["promoted"] = promoted
     if note:
         out["note"] = note
     return out
+
+
+#: How many of one search's hits join the run's toolset.
+_PROMOTE_MAX = 3
+
+
+def _promote(results: list[Any]) -> list[str]:
+    """Promote the top hits the run does not advertise yet; returns their names.
+
+    ``tool_call``'s own schema declares ``arguments`` as a bare object, and a
+    model that fumbles that nested free-form call can still call a tool whose
+    real parameters it was given. The names come from the run's allow-set,
+    and the runner checks it again before anything reaches the wire.
+    """
+    from robothor.engine.tools.dispatch import promote_tools
+
+    allowed = set(_allowed_names())
+    picks = [h["name"] for h in results if not h["in_toolset"] and h["name"] in allowed]
+    return promote_tools(picks[:_PROMOTE_MAX])
 
 
 #: The only tool whose advertised schema varies with a standing grant. Asking
@@ -209,9 +268,10 @@ async def _tool_describe(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tools.registry import get_registry
 
-    name = str(args.get("name", "")).strip()
-    if not name:
-        return {"error": "name is required"}
+    try:
+        name, tool_args = unwrap(args)
+    except MalformedToolCallError as e:
+        return {"error": str(e)}
     if name in TOOLSEARCH_TOOLS:
         return {"error": f"{name} cannot invoke itself or another meta-tool"}
     allowed = _allowed_names()
@@ -256,13 +316,9 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # agent's tools_denied / allow-list is enforced HERE for indirect calls.
         # The suggestion is computed from the SAME set the check just refused,
         # so it can never name a tool the agent may not call.
-        return {
-            "error": f"tool '{name}' is not in your allow-list",
-            "did_you_mean": _closest(name, allowed),
-        }
-    tool_args = args.get("arguments", {})
-    if not isinstance(tool_args, dict):
-        return {"error": "arguments must be an object"}
+        from robothor.engine.tool_verdict import wrapped_allowlist_refusal
+
+        return wrapped_allowlist_refusal(name, ctx.agent_id, did_you_mean=_closest(name, allowed))
 
     # The out-of-allow-list check above (against the _deferred_allowed set) is
     # what prevents escalation; we never reach registry.execute for a denied
@@ -272,20 +328,10 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # inner tool's own budget (wrapped_call.inner_call). The registry
     # default here was a second, 120 s deadline under that one, which cut
     # claude_code_wait at two minutes on every deferred run.
-    return await get_registry().execute(
-        name,
-        tool_args,
-        agent_id=ctx.agent_id,
-        run_id=ctx.run_id,
-        tenant_id=ctx.tenant_id,
-        workspace=ctx.workspace,
-        user_id=ctx.user_id,
-        user_role=ctx.user_role,
-        accessible_tenant_ids=ctx.accessible_tenant_ids,
-        task_author_override=ctx.task_author_override,
-        is_benchmark=ctx.is_benchmark,
-        timeout=0,
-    )
+    #
+    # ctx.call_kwargs(): the wrapped tool runs under this call's whole
+    # ToolContext, identity included, exactly as a direct call would.
+    return await get_registry().execute(name, tool_args, timeout=0, **ctx.call_kwargs())
 
 
 HANDLERS["tool_search"] = _tool_search

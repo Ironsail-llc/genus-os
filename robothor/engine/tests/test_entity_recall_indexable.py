@@ -21,17 +21,23 @@ from __future__ import annotations
 
 import inspect
 import re
+from pathlib import Path
 
 from robothor.engine import warmup
 
+ROOT = Path(warmup.__file__).resolve().parents[2]
+DEFINER = ROOT / "crm" / "migrations" / "166_entity_recall_definer.sql"
+
 
 def _entity_sql() -> str:
-    return inspect.getsource(warmup._build_entity_context)
+    # The case-blind lookup lives in migration 166's function, which the
+    # batched fetch calls; one statement covers every candidate.
+    return DEFINER.read_text() if DEFINER.exists() else ""
 
 
 def test_the_predicate_is_an_indexable_array_overlap():
     sql = _entity_sql()
-    assert "lower_entities(entities)" in sql, "entity recall is not using the indexed expression"
+    assert "lower_entities(m.entities)" in sql, "entity recall is not using the indexed expression"
     assert "&&" in sql, "expected an array-overlap predicate the GIN can serve"
 
 
@@ -44,7 +50,7 @@ def test_the_unindexable_unnest_predicate_is_gone():
 def test_matching_is_still_case_insensitive():
     """Dropping lower() would silently lose 37% of matches on this data."""
     sql = _entity_sql()
-    assert "lower(%s)" in sql or "lower(%(entity)s)" in sql, (
+    assert "ARRAY[lower(c.name)]" in sql, (
         "the probe value is no longer lowercased — matching became case-sensitive"
     )
 
@@ -62,3 +68,76 @@ def test_the_migration_is_registered_and_immutable():
     assert "IMMUTABLE" in sql
     assert "gin (lower_entities(entities))" in sql
     assert "idx_facts_tenant_created" in sql
+
+
+def test_the_v2_fetch_calls_the_definer_function():
+    """Under RLS the inline lookup cannot use the index (migration 166's header)."""
+    source = inspect.getsource(warmup._fetch_entity_facts_batched)
+    assert "entity_facts_for_candidates(" in source
+    assert "lower_entities(entities)" not in source, "the v2 lookup is inline again"
+
+
+def test_the_definer_function_is_registered_and_guarded():
+    manifest = (ROOT / "robothor" / "migrations" / "manifest.txt").read_text()
+    assert "crm/166_entity_recall_definer.sql" in manifest.splitlines()
+    sql = re.sub(r"\s+", " ", _entity_sql())
+    assert "SECURITY DEFINER" in sql
+    # A definer function with an open search_path runs whatever a caller plants.
+    assert "SET search_path = pg_catalog, public, pg_temp" in sql
+    assert "m.tenant_id = p_tenant_id" in sql
+    # Never wider than the policy: a scoped session gets only its own tenant.
+    assert "current_setting('app.tenant_id', true)" in sql
+    assert "FROM PUBLIC" in sql
+
+
+class _Recorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple]] = []
+
+    def execute(self, sql: str, params: tuple = ()) -> None:
+        self.calls.append((sql, tuple(params)))
+
+    def fetchall(self) -> list:
+        return []
+
+
+def _fetch(v2: bool, scope) -> tuple[str, tuple]:
+    from contextlib import contextmanager
+    from unittest.mock import patch
+
+    cur = _Recorder()
+
+    @contextmanager
+    def _conn(*_a, **_kw):
+        class _C:
+            def cursor(self, cursor_factory=None):
+                return cur
+
+        yield _C()
+
+    with (
+        patch.dict("os.environ", {"MEMORY_WARMUP_RECALL_V2": "1" if v2 else "0"}),
+        patch("robothor.db.get_connection", _conn),
+    ):
+        warmup._build_entity_context("Tell Carol about the Example plan", scope=scope)
+    assert len(cur.calls) == 1
+    return cur.calls[0]
+
+
+def test_restricted_with_no_person_still_filters_on_both_paths():
+    """Restricted and unrestricted must not both reach the SQL as ``None``."""
+    from robothor.identity.scope import DataScope
+
+    nobody = DataScope(tenant_id="t", person_id=None, restricted=True)
+    _sql, params = _fetch(True, nobody)
+    assert params[2] is True and params[3] is None, params
+    sql, params = _fetch(False, nobody)
+    assert "AND (person_id = %s OR person_id IS NULL)" in sql
+    assert params[-1] is None
+
+
+def test_unrestricted_passes_no_filter_on_both_paths():
+    _sql, params = _fetch(True, None)
+    assert params[2] is False, params
+    sql, _params = _fetch(False, None)
+    assert "person_id = %s" not in sql

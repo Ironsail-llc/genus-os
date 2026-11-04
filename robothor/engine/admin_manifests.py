@@ -30,8 +30,10 @@ from typing import TYPE_CHECKING, Any
 # module's globals, and a function-local import answered 422 to every caller.
 from fastapi import APIRouter, HTTPException, Request
 
+from robothor.engine import manifest_listing
 from robothor.engine import manifest_store as store
 from robothor.engine import manifest_validation as validation
+from robothor.engine.manifest_context import validation_context
 from robothor.engine.manifest_rows import _broken, _chat_fields, _summary
 from robothor.engine.manifest_store import (
     CreateRequest,
@@ -55,6 +57,8 @@ async def reconcile_schedules(scheduler: Any) -> dict[str, Any]:
     """Re-derive the live job set, and report what happened. Never raises."""
     from robothor.engine.admin_scheduler import resolve_scheduler
 
+    manifest_listing.invalidate_listing()
+
     live = resolve_scheduler(scheduler)
     if live is None:
         return {"applied": False, "error": "scheduler not running"}
@@ -67,50 +71,8 @@ async def reconcile_schedules(scheduler: Any) -> dict[str, Any]:
     return {"applied": True, **outcome.as_dict()}
 
 
-async def _registered_tools() -> tuple[set[str], list[dict[str, str]]]:
-    """The registry's tool names, and a warning if it would not say.
-
-    A registry that cannot be built downgrades the tool check to a warning
-    rather than failing the save: the operator would otherwise be unable to
-    edit an agent while a plugin is broken, which is exactly when they most
-    want to.
-    """
-    from robothor.engine import admin_scheduler
-
-    try:
-        names = await asyncio.to_thread(admin_scheduler.registered_tool_names)
-    except Exception as error:  # noqa: BLE001 — a warning, not a refusal
-        logger.warning("Tool registry unavailable for validation: %s", type(error).__name__)
-        return set(), [
-            validation.issue(
-                "tools_allowed",
-                "tools_unverified",
-                "the tool registry did not answer, so tool names were not checked",
-            )
-        ]
-    return {str(name) for name in names}, []
-
-
-async def _validation_context() -> validation.ValidationContext:
-    """One view of the world for every verdict in this request.
-
-    Its own function so an edit can validate the BEFORE and AFTER documents
-    against the same fleet and the same tool list — see ValidationContext.
-    """
-    scan = await asyncio.to_thread(store.scan)
-    fleet = {str(m["id"]): m for m in scan.manifests if isinstance(m.get("id"), str)}
-    tools, tool_warnings = await _registered_tools()
-    return validation.ValidationContext(
-        fleet=fleet,
-        tools=tools,
-        manifest_dir=store.manifest_dir(),
-        repo_root=store.workspace(),
-        tool_warnings=tool_warnings,
-    )
-
-
 async def _validate(document: dict[str, Any]) -> dict[str, Any]:
-    return await validation.validate(document, await _validation_context())
+    return await validation.validate(document, await validation_context())
 
 
 def _refuse(verdict: dict[str, Any]) -> None:
@@ -144,7 +106,7 @@ async def list_fleet() -> dict[str, Any]:
     can see which one to fix — not in a 500 that takes the other nineteen agents
     off the page with it.
     """
-    scan = await asyncio.to_thread(store.scan)
+    scan = await asyncio.to_thread(manifest_listing.listing)
     main_agent_id = store.main_agent_id()
     agents: list[dict[str, Any]] = []
     undescribable: list[dict[str, str]] = []
@@ -257,7 +219,7 @@ async def apply_patch(
     # ONE context for both verdicts: two reads of the tool list across a single
     # save could disagree about which tools exist, and the difference between
     # the two answers is what decides the refusal.
-    context = await _validation_context()
+    context = await validation_context()
     verdict = validation.introduced(
         await validation.validate(original, context),
         await validation.validate(document, context),
@@ -303,6 +265,9 @@ async def run(agent_id: str, runner: Any, auth: Any) -> dict[str, Any]:
     from robothor.engine import manual_trigger
 
     agent_id, _ = await asyncio.to_thread(store.require_manifest, agent_id)
+    # A run is the operator saying "this agent, as it is on disk now": the next
+    # listing reads the same files the trigger just loaded.
+    manifest_listing.invalidate_listing()
     triggered = await manual_trigger.trigger_agent(runner, store.manifest_dir(), agent_id, auth)
     return {"id": agent_id, "triggered": triggered}
 

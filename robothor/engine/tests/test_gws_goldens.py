@@ -547,7 +547,7 @@ def harness(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Harness:
 
     monkeypatch.setattr(gws_handlers, "_record_sent_email", _sent)
     monkeypatch.setattr(gws_handlers, "_record_calendar_event", _cal)
-    monkeypatch.setattr("robothor.db.connection.get_connection", lambda: _FakeConnection(h))
+    monkeypatch.setattr("robothor.db.connection.get_connection", lambda **_kw: _FakeConnection(h))
     monkeypatch.setattr(gws_handlers, "_resolve_person_by_email", KNOWN_PEOPLE.get)
     monkeypatch.setattr("robothor.constants.DEFAULT_TENANT", DEFAULT_TENANT_PLACEHOLDER)
 

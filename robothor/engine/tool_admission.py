@@ -28,43 +28,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import GUARDRAIL_BLOCKED_ERROR_TYPE
 from robothor.engine.run_deadline import wrapup_refusal
+from robothor.engine.sandbox_policy import guardrail_context
 from robothor.engine.sanitize import sanitize_log as _sanitize
+from robothor.engine.tool_verdict import ToolVerdict as ToolVerdict  # re-exported
+from robothor.engine.tool_verdict import with_gate
+from robothor.engine.wrapped_call import inner_call
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentConfig
     from robothor.engine.session import AgentSession
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ToolVerdict:
-    """What admission control decided about one tool call.
-
-    ``allowed`` is the only field the happy path reads; the rest describe how
-    a refusal should be recorded, and exist so the differences between gates
-    are visible rather than buried in each gate's copy of the refusal tail.
-    """
-
-    allowed: bool
-    #: What the model is told. Also what lands in the step's error_message.
-    message: str = ""
-    #: Merged into the recorded tool_output, e.g. {"guard": "plan_mode"} —
-    #: this is how an operator reading the ledger later knows which control
-    #: fired, without parsing the message text.
-    output: dict[str, Any] = field(default_factory=dict)
-    #: Whether this refusal counts toward the escalation threshold.
-    escalate: bool = False
-    #: Whether this refusal joins the iteration's error list — which drives
-    #: error feedback to the model and the recovery machinery.
-    count_as_iteration_error: bool = True
-    #: Possibly rewritten by a MODIFY hook; the caller uses this, not its own.
-    tool_args: dict[str, Any] = field(default_factory=dict)
 
 
 def _system_trigger_types() -> frozenset[Any]:
@@ -104,7 +83,12 @@ class ToolAdmissionMixin:
         # below and defeat the point of having the contract at all.
         _active_watchdog: Any
 
-    async def _admit_tool_call(
+    async def _admit_tool_call(self, **kw: Any) -> ToolVerdict:
+        """Every gate in order (``_run_gates``); a refusal carries its gate and unlock."""
+        verdict = await self._run_gates(**kw)
+        return with_gate(verdict, kw["tool_name"], kw.get("agent_config"), kw.get("tool_args"))
+
+    async def _run_gates(
         self,
         *,
         tc: Any,
@@ -161,6 +145,11 @@ class ToolAdmissionMixin:
                 tool_args=tool_args,
             )
 
+        # Every gate below judges the call that runs — for ``tool_call``, the
+        # wrapped one (wrapped_call.py) — but the verdict stays the wrapper's.
+        call_name, call_args = inner_call(tool_name, tool_args)
+        wrapped = call_name != tool_name
+
         # ── [HOOKS] Pre-tool-use lifecycle hook ──
         if hook_registry:
             from robothor.engine.hook_registry import HookAction, HookContext, HookEvent
@@ -170,8 +159,8 @@ class ToolAdmissionMixin:
                     event=HookEvent.PRE_TOOL_USE,
                     agent_id=agent_config.id,
                     run_id=session.run.id,
-                    tool_name=tool_name,
-                    tool_args=tool_args,
+                    tool_name=call_name,
+                    tool_args=call_args,
                 )
                 pre_hr = await hook_registry.dispatch(HookEvent.PRE_TOOL_USE, pre_tool_ctx)
                 if pre_hr.action == HookAction.BLOCK:
@@ -183,27 +172,28 @@ class ToolAdmissionMixin:
                         tool_args=tool_args,
                     )
                 if pre_hr.action == HookAction.MODIFY and pre_hr.modified_args:
-                    tool_args = pre_hr.modified_args
+                    call_args = pre_hr.modified_args
+                    tool_args = {**tool_args, "arguments": call_args} if wrapped else call_args
             except Exception as e:
                 # A hook that raises is a broken hook, not a denial. Failing
                 # closed here would let one bad third-party hook halt every
                 # tool call on the box.
                 logger.warning(
-                    "PRE_TOOL_USE hook error for %s: %s", _sanitize(tool_name), _sanitize(e)
+                    "PRE_TOOL_USE hook error for %s: %s", _sanitize(call_name), _sanitize(e)
                 )
 
         # ── [GUARDRAILS] Pre-execution check ──
         if guardrail_engine:
             verdict = await self._check_guardrails(
                 tc=tc,
-                tool_name=tool_name,
-                tool_args=tool_args,
+                tool_name=call_name,
+                tool_args=call_args,
                 session=session,
                 agent_config=agent_config,
                 guardrail_engine=guardrail_engine,
             )
             if verdict is not None:
-                return verdict
+                return replace(verdict, tool_args=tool_args)
 
         # ── [RBAC] System-run permission gate ──
         # Only genuinely autonomous, no-interactive-user runs are governed by
@@ -221,7 +211,7 @@ class ToolAdmissionMixin:
                 classify_system_tool_access,
                 agent_config.service_role,
                 session.run.tenant_id,
-                tool_name,
+                call_name,
                 rbac_mode,
             )
             if rbac_action != "allow":
@@ -229,7 +219,7 @@ class ToolAdmissionMixin:
                     run_id=session.run.id,
                     guardrail_name="rbac",
                     action="blocked" if rbac_action == "block" else "observed",
-                    tool_name=tool_name,
+                    tool_name=call_name,
                     reason=rbac_reason,
                     mode=rbac_mode,
                     step_number=len(session.run.steps),
@@ -261,6 +251,7 @@ class ToolAdmissionMixin:
             tool_args,
             agent_id=agent_config.id,
             prior_steps=session.run.steps,
+            **guardrail_context(session),  # sandbox playground: role + container
         )
 
         # ── [OBSERVE] Allowed, but a rollout-gated guardrail would have

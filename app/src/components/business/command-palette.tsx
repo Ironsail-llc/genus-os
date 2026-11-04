@@ -1,13 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Moon, Search } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Keyboard, Moon, Search } from "lucide-react";
 import { useTheme } from "next-themes";
 import {
   visibleNavGroups,
   type SettingsPageId,
   type ViewId,
 } from "@/components/layout/nav-config";
+import { isTypingTarget, ShortcutsHelp } from "@/components/business/shortcuts-help";
+import { useListNavigation } from "@/components/business/use-list-navigation";
 
 type Command = {
   id: string;
@@ -31,6 +33,8 @@ interface CommandPaletteProps {
 export function CommandPalette({ onNavigate, role }: CommandPaletteProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [helpOpen, setHelpOpen] = useState(false);
+  const listId = useId();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const { resolvedTheme, setTheme } = useTheme();
 
@@ -47,6 +51,10 @@ export function CommandPalette({ onNavigate, role }: CommandPaletteProps) {
         setQuery("");
       } else if (e.key === "Escape") {
         close();
+        setHelpOpen(false);
+      } else if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey && !isTypingTarget(e.target)) {
+        e.preventDefault();
+        setHelpOpen(true);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -83,6 +91,13 @@ export function CommandPalette({ onNavigate, role }: CommandPaletteProps) {
         icon: <Moon className="size-4" />,
         run: () => setTheme(resolvedTheme === "light" ? "dark" : "light"),
       },
+      {
+        id: "shortcuts",
+        label: "Keyboard shortcuts",
+        hint: "Help",
+        icon: <Keyboard className="size-4" />,
+        run: () => setHelpOpen(true),
+      },
     ];
   }, [onNavigate, resolvedTheme, setTheme, role]);
 
@@ -90,14 +105,25 @@ export function CommandPalette({ onNavigate, role }: CommandPaletteProps) {
     c.label.toLowerCase().includes(query.trim().toLowerCase())
   );
 
+  const { active, setActive, onKeyDown } = useListNavigation(visible.length, `${open}:${query}`);
+  const optionId = (i: number) => `${listId}-option-${i}`;
+
+  useEffect(() => {
+    if (active >= 0) document.getElementById(optionId(active))?.scrollIntoView({ block: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
   const runCommand = (c: Command) => {
-    c.run();
     close();
+    c.run();
   };
 
-  if (!open) return null;
+  const help = helpOpen ? <ShortcutsHelp onClose={() => setHelpOpen(false)} /> : null;
+  if (!open) return help;
 
   return (
+    <>
+    {help}
     <div
       data-testid="command-palette"
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[18vh] backdrop-blur-[2px]"
@@ -117,27 +143,34 @@ export function CommandPalette({ onNavigate, role }: CommandPaletteProps) {
             data-testid="command-input"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && visible.length > 0) {
-                e.preventDefault();
-                runCommand(visible[0]);
-              }
-            }}
+            onKeyDown={(e) => onKeyDown(e, (i) => runCommand(visible[i]))}
+            role="combobox"
+            aria-expanded="true"
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={active >= 0 ? optionId(active) : undefined}
             placeholder="Type a command or view…"
             className="h-11 w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70"
           />
           <kbd className="rounded border border-border bg-muted px-1.5 font-mono text-[10px] text-muted-foreground">esc</kbd>
         </div>
-        <ul className="max-h-72 overflow-y-auto p-1.5">
+        <ul id={listId} role="listbox" aria-label="Commands" className="max-h-72 overflow-y-auto p-1.5">
           {visible.length === 0 && (
-            <li className="px-2.5 py-6 text-center text-xs text-muted-foreground">No matching commands.</li>
+            <li role="presentation" className="px-2.5 py-6 text-center text-xs text-muted-foreground">No matching commands.</li>
           )}
-          {visible.map((c) => (
-            <li key={c.id}>
+          {visible.map((c, i) => (
+            <li key={c.id} role="presentation">
               <button
+                id={optionId(i)}
+                role="option"
+                aria-selected={i === active}
+                tabIndex={-1}
                 data-testid={`command-item-${c.id}`}
                 onClick={() => runCommand(c)}
-                className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                onMouseMove={() => setActive(i)}
+                className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors focus-visible:outline-none ${
+                  i === active ? "bg-accent" : ""
+                }`}
               >
                 <span className="text-muted-foreground">{c.icon}</span>
                 {c.label}
@@ -148,5 +181,6 @@ export function CommandPalette({ onNavigate, role }: CommandPaletteProps) {
         </ul>
       </div>
     </div>
+    </>
   );
 }

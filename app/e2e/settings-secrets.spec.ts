@@ -37,6 +37,7 @@ const SECRETS = {
       shadowed_by: null,
       env_name: "EXAMPLE_API_TOKEN",
       vault_readable: true,
+      removable: true,
       // Never sent by the bridge. Here to prove the page renders only the
       // fields it knows, whatever else a reply carries.
       fingerprint: "b2:deadbeef",
@@ -51,6 +52,7 @@ const SECRETS = {
       shadowed: true,
       shadowed_by: "the environment",
       env_name: "EXAMPLE_OLD_SMTP_PASSWORD_WITH_A_LONG_NAME",
+      removable: true,
     },
     {
       name: "EXAMPLE_WEBHOOK_URL",
@@ -158,6 +160,22 @@ for (const width of [1440, 390]) {
 
       const html = await page.locator('[data-testid="settings-page-secrets"]').innerHTML();
       expect(html).not.toMatch(/fingerprint|vault_key|b2:deadbeef|providers\/example/);
+
+      expect(await worstOverflow(page, "settings-page-secrets")).toBeLessThanOrEqual(1);
+    });
+
+    test("the Remove control and its confirmation fit the screen", async ({ page }) => {
+      await setupMocks(page);
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(SECRETS_URL, { waitUntil: "networkidle" });
+
+      const remove = page.locator('[data-testid="secrets-remove-EXAMPLE_API_TOKEN"]');
+      await expect(remove).toBeVisible({ timeout: 15000 });
+      await expect(remove).toHaveAccessibleName(/remove EXAMPLE_API_TOKEN/i);
+      await remove.click();
+      await expect(
+        page.locator('[data-testid="secrets-remove-confirm-EXAMPLE_API_TOKEN"]')
+      ).toBeVisible();
 
       expect(await worstOverflow(page, "settings-page-secrets")).toBeLessThanOrEqual(1);
     });

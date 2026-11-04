@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 import threading
+import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
@@ -34,9 +35,6 @@ logger = logging.getLogger(__name__)
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 _pool_lock = threading.Lock()
-
-
-_POOL_GETCONN_TIMEOUT = 10  # seconds to wait for a connection before raising
 
 
 class DatabaseGuardError(RuntimeError):
@@ -187,18 +185,17 @@ def get_pool(minconn: int = 2, maxconn: int = 30) -> psycopg2.pool.ThreadedConne
         return _pool
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _rls_enabled() -> bool:
     """Whether connections should scope themselves to a tenant via RLS.
 
     Off by default: migration 081 leaves the policy permissive when
     ``app.tenant_id`` is unset, so nothing changes until this is turned on.
     """
-    return os.environ.get("ROBOTHOR_RLS_ENABLED", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return _env_flag("ROBOTHOR_RLS_ENABLED")
 
 
 # One-shot latch: warn once per process, not on every pooled connection.
@@ -351,12 +348,13 @@ def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
     DAL that forgets its WHERE clause — the bridge's crm_dal.py has zero tenant
     predicates — cannot leak across tenants.
 
-    The scope is applied on EVERY checkout, including when there is no tenant to
-    bind: ``set_config`` is session-level, so a pooled connection that was last
-    used inside a ``tenant_scope`` block would otherwise carry that binding into
-    the next borrower and silently empty its result set. Writing an empty string
+    The scope is applied whenever a checkout's tenant differs from the one the
+    connection's session carries, including when there is no tenant to bind:
+    ``set_config`` is session-level, so a pooled connection that was last used
+    inside a ``tenant_scope`` block would otherwise carry that binding into the
+    next borrower and silently empty its result set. Writing an empty string
     restores the policy's permissive branch, which is exactly the pre-scope
-    behaviour.
+    behaviour. :func:`_apply_session_settings` decides when.
 
     Inert while the app connects as a SUPERUSER: superusers bypass RLS
     unconditionally. Migration 082 creates the non-superuser ``robothor_app``
@@ -460,6 +458,53 @@ def read_every_tenant_in_transaction(conn: psycopg2.extensions.connection) -> No
         cur.execute("SELECT set_config('app.tenant_id', '', true)")
 
 
+#: What each pooled connection's SESSION currently carries, as applied by
+#: :func:`_apply_session_settings`: ``{"ann": mode, "tenant": tenant}``. Keyed
+#: weakly by the connection object, so a connection the pool closes and drops
+#: takes its entry with it and a new connection always starts unknown.
+#:
+#: This assumes the session outlives a transaction: the platform must talk to
+#: PostgreSQL directly or through a session-mode pooler, never a
+#: transaction-mode one (``genus doctor``'s ``db.session_settings`` checks it).
+_session_memo: weakref.WeakKeyDictionary[Any, dict[str, str]] = weakref.WeakKeyDictionary()
+_session_memo_lock = threading.Lock()
+
+
+def _forget_session(conn: object) -> None:
+    with _session_memo_lock:
+        _session_memo.pop(conn, None)
+
+
+def _apply_session_settings(conn: psycopg2.extensions.connection) -> None:
+    """Bring this connection's session to the current tenant and scan mode.
+
+    Runs with the connection in autocommit, so the settings are committed on
+    their own and a rollback of the caller's transaction cannot silently undo
+    them behind the memo. Each setting is sent only when the memo says the
+    session carries something else -- in particular a connection last used
+    by a different tenant ALWAYS re-runs ``set_config``.
+    """
+    with _session_memo_lock:
+        known = dict(_session_memo.get(conn, {}))
+
+    _warn_once_about_a_superuser_connection(conn)
+    if _rls_enabled():
+        tenant = effective_tenant()
+        if known.get("tenant") != tenant:
+            # Forget first: if the bind fails the connection's state is unknown.
+            _forget_session(conn)
+            _apply_tenant_scope(conn)
+            known["tenant"] = tenant
+    if known.get("ann") != ANN_ITERATIVE_SCAN_MODE:
+        # Best-effort; remembered either way so an older pgvector does not
+        # pay a failing statement on every checkout.
+        _apply_ann_scan_mode(conn)
+        known["ann"] = ANN_ITERATIVE_SCAN_MODE
+
+    with _session_memo_lock:
+        _session_memo[conn] = known
+
+
 unbound_scope.__doc__ = _RLS_WIDENING_DOC
 read_every_tenant_in_transaction.__doc__ = _RLS_WIDENING_DOC
 
@@ -467,6 +512,7 @@ read_every_tenant_in_transaction.__doc__ = _RLS_WIDENING_DOC
 @contextmanager
 def get_connection(
     autocommit: bool = False,
+    read_only: bool = False,
 ) -> Generator[psycopg2.extensions.connection, None, None]:
     """Get a connection from the pool.
 
@@ -476,76 +522,47 @@ def get_connection(
                 cur.execute("SELECT 1")
         # Connection is returned to pool automatically.
         # On exception, transaction is rolled back.
+
+    ``read_only=True`` declares that the block only reads. It then runs
+    without a transaction (no BEGIN, no COMMIT), so each statement sees its
+    own snapshot and any write it did make would commit at once.
+
+    ``pool.getconn()`` runs in the caller's thread. It never waits for a
+    connection to come free -- psycopg2 raises ``PoolError`` at once when the
+    pool is exhausted. Opening a NEW connection holds the pool lock and is
+    bounded by libpq's ``connect_timeout`` (``ROBOTHOR_DB_CONNECT_TIMEOUT``;
+    0 means wait forever), so against a database that silently drops packets
+    checkouts that must open a connection queue behind each other, the k-th
+    waiting up to about k times ``connect_timeout``. Checkouts served from
+    idle pooled connections are unaffected once the lock is free.
     """
     pool = get_pool()
-    # Use a threading timeout to avoid blocking indefinitely when pool is exhausted
-    conn = None
-    acquisition_error: Exception | None = None
-    acquired = threading.Event()
-    state_lock = threading.Lock()
-    cancelled = False
-
-    def _get() -> None:
-        nonlocal conn, acquisition_error
-        try:
-            candidate = pool.getconn()
-        except Exception as exc:
-            with state_lock:
-                acquisition_error = exc
-            acquired.set()
-            return
-
-        # A timed-out caller cannot consume the eventual result. Coordinate
-        # cancellation under a lock so a connection obtained at the timeout
-        # boundary is always returned to the pool instead of being orphaned.
-        return_late_connection = False
-        with state_lock:
-            if cancelled:
-                return_late_connection = True
-            else:
-                conn = candidate
-            acquired.set()
-        if return_late_connection:
-            pool.putconn(candidate)
-
-    t = threading.Thread(target=_get, daemon=True)
-    t.start()
-    if not acquired.wait(timeout=_POOL_GETCONN_TIMEOUT):
-        late_connection = None
-        with state_lock:
-            cancelled = True
-            # Cover the boundary race where the worker published a connection
-            # immediately after Event.wait returned false.
-            if conn is not None:
-                late_connection = conn
-                conn = None
-        if late_connection is not None:
-            pool.putconn(late_connection)
-        raise ConnectionError(
-            f"Could not acquire DB connection within {_POOL_GETCONN_TIMEOUT}s — pool exhausted"
-        )
-    if conn is None:
-        if acquisition_error is not None:
-            raise ConnectionError(
-                "Failed to acquire DB connection from pool"
-            ) from acquisition_error
-        raise ConnectionError("Failed to acquire DB connection from pool")
     try:
-        if autocommit:
-            conn.autocommit = True
-        _apply_tenant_scope(conn)
-        _apply_ann_scan_mode(conn)
+        conn = pool.getconn()
+    except Exception as exc:
+        raise ConnectionError("Failed to acquire DB connection from pool") from exc
+
+    transactional = not (autocommit or read_only)
+    try:
+        conn.autocommit = True
+        _apply_session_settings(conn)
+        if transactional:
+            conn.autocommit = False
         yield conn
-        if not autocommit:
+        if transactional:
             conn.commit()
-    except Exception:
-        if not autocommit:
+    except BaseException:
+        if transactional and not conn.closed:
             conn.rollback()
         raise
     finally:
-        if autocommit:
-            conn.autocommit = False
-        pool.putconn(conn)
+        try:
+            if conn.closed:
+                _forget_session(conn)
+            elif conn.autocommit:
+                conn.autocommit = False
+        finally:
+            pool.putconn(conn)
 
 
 def release_connection(conn: psycopg2.extensions.connection) -> None:
@@ -560,3 +577,5 @@ def close_pool() -> None:
     if _pool is not None:
         _pool.closeall()
         _pool = None
+    with _session_memo_lock:
+        _session_memo.clear()

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { KeyRound, Loader2, Lock, RefreshCw } from "lucide-react";
+import { KeyRound, Loader2, Lock, RefreshCw, Trash2, X } from "lucide-react";
 
 import { PageHeader } from "@/components/business/page-header";
 import { Button } from "@/components/ui/button";
@@ -16,8 +16,12 @@ import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
  * One route, `GET /api/secrets`, which answers with names, sources, timestamps
  * and readers and nothing value-shaped: no value, no fingerprint, no vault
  * key. The page has no way to show a credential because it is never sent one,
- * and it has no write either — a credential is set with `genus vault set`,
- * the one path that records the change.
+ * and it sets none either — a credential is set with `genus vault set`, or
+ * handed to the assistant in chat where credential intake is on.
+ *
+ * The one write is Remove, on a row the vault holds: `DELETE /api/secrets/<name>`
+ * by the listed name (never a vault key, which the page is never sent), armed
+ * by a first click and sent by a second.
  *
  * Not under `/api/vault/`: the BFF proxy refuses `/api/vault/get|list`
  * outright (`lib/bridge-proxy-policy.ts`), and this route is a status, not a
@@ -49,6 +53,11 @@ interface SecretRow {
   envName: string;
   /** False when the vault could not be read: absent from it is then unknown, not "no". */
   vaultReadable: boolean;
+  /**
+   * The bridge's answer to "will DELETE act on this row": a vault row that is
+   * not a bootstrap credential. Absent (an older bridge) means no.
+   */
+  removable: boolean;
 }
 
 const SOURCE_LABEL: Record<SecretSource, string> = {
@@ -80,6 +89,7 @@ function normalize(body: unknown): SecretRow[] {
       shadowedBy: typeof row.shadowed_by === "string" ? row.shadowed_by : null,
       envName: typeof row.env_name === "string" && row.env_name ? row.env_name : row.name,
       vaultReadable: row.vault_readable !== false,
+      removable: row.removable === true,
     });
   }
   return rows;
@@ -125,6 +135,18 @@ async function readSecrets(): Promise<Load> {
   }
 }
 
+/** `DELETE /api/secrets/<name>`: null on success, else the bridge's reason. */
+async function removeSecret(name: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${BRIDGE}/api/secrets/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+    return res.ok ? null : await readBridgeReply(res);
+  } catch {
+    return BRIDGE_UNREACHABLE;
+  }
+}
+
 export interface SecretsPageProps {
   /** The Settings container unmounts an inactive page; this is the load gate. */
   visible?: boolean;
@@ -153,6 +175,17 @@ export function SecretsPage({ visible = true, role }: SecretsPageProps) {
   }, [visible, operator, refreshes]);
 
   const forbidden = !operator || load.state === "forbidden";
+  const [removeError, setRemoveError] = useState<string | null>(null);
+
+  async function onRemove(name: string) {
+    setRemoveError(null);
+    const refused = await removeSecret(name);
+    if (refused) {
+      setRemoveError(refused);
+      return;
+    }
+    setRefreshes((n) => n + 1);
+  }
 
   return (
     <div className="flex min-w-0 flex-col gap-3 p-4" data-testid="settings-page-secrets">
@@ -178,7 +211,9 @@ export function SecretsPage({ visible = true, role }: SecretsPageProps) {
         changed and which services read it. Values are never sent to this page. A credential last
         changed more than {ROTATION_DAYS} days ago is flagged for rotation. To set or rotate one,
         run <code className="rounded bg-muted px-1 font-mono">genus vault set &lt;key&gt;</code> on
-        the instance, then restart the services listed as its readers.
+        the instance, then restart the services listed as its readers. The bin icon, then its
+        confirmation, takes a credential out of the vault; a copy in the environment, if any, is
+        then what readers get.
       </p>
 
       {forbidden ? (
@@ -234,14 +269,31 @@ export function SecretsPage({ visible = true, role }: SecretsPageProps) {
               vault with <code className="font-mono">genus doctor</code>, then refresh.
             </div>
           )}
-          <SecretsTable rows={load.rows} now={load.readAt} />
+          {removeError && (
+            <div
+              role="alert"
+              className="max-w-2xl rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+              data-testid="secrets-remove-error"
+            >
+              {removeError}
+            </div>
+          )}
+          <SecretsTable rows={load.rows} now={load.readAt} onRemove={onRemove} />
         </>
       )}
     </div>
   );
 }
 
-function SecretsTable({ rows, now }: { rows: SecretRow[]; now: number }) {
+function SecretsTable({
+  rows,
+  now,
+  onRemove,
+}: {
+  rows: SecretRow[];
+  now: number;
+  onRemove: (name: string) => Promise<void>;
+}) {
   return (
     <table
       className="w-full min-w-0 table-fixed border-collapse text-left text-xs"
@@ -254,12 +306,17 @@ function SecretsTable({ rows, now }: { rows: SecretRow[]; now: number }) {
           <th className="py-2 pr-3 font-medium">Source</th>
           <th className="py-2 pr-3 font-medium">Last change</th>
           <th className="py-2 pr-3 font-medium">Readers</th>
-          <th className="py-2 font-medium">Rotation</th>
+          <th className="py-2 pr-3 font-medium">Rotation</th>
+          {/* Fixed and narrow: the controls are icon buttons, so the table still
+              fits beside the sidebar, the settings menu and an open chat dock. */}
+          <th className="w-11 py-2 font-medium">
+            <span className="sr-only">Actions</span>
+          </th>
         </tr>
       </thead>
       <tbody className="block md:table-row-group">
         {rows.map((row) => (
-          <SecretRowView key={row.name} row={row} now={now} />
+          <SecretRowView key={row.name} row={row} now={now} onRemove={onRemove} />
         ))}
       </tbody>
     </table>
@@ -271,7 +328,19 @@ function CellLabel({ children }: { children: string }) {
   return <span className="mr-1.5 text-muted-foreground md:hidden">{children}:</span>;
 }
 
-function SecretRowView({ row, now }: { row: SecretRow; now: number }) {
+function SecretRowView({
+  row,
+  now,
+  onRemove,
+}: {
+  row: SecretRow;
+  now: number;
+  onRemove: (name: string) => Promise<void>;
+}) {
+  const [armed, setArmed] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const inVault = row.source === "vault" || row.source === "both";
+  const canRemove = inVault && row.removable;
   const age = ageInDays(row.updatedAt, now);
   const overdue = age !== null && age > ROTATION_DAYS;
   const cell = "block py-1 md:table-cell md:py-2 md:pr-3 md:align-top";
@@ -345,6 +414,49 @@ function SecretRowView({ row, now }: { row: SecretRow; now: number }) {
         ) : (
           <span className="text-muted-foreground">{age} days old</span>
         )}
+      </td>
+      <td className={cell}>
+        {canRemove &&
+          (armed ? (
+            <span className="inline-flex flex-col gap-1">
+              <Button
+                variant="destructive"
+                size="icon-sm"
+                disabled={removing}
+                onClick={async () => {
+                  setRemoving(true);
+                  await onRemove(row.name);
+                  setRemoving(false);
+                  setArmed(false);
+                }}
+                aria-label={`Confirm: remove ${row.name} from the vault`}
+                title="Remove from vault"
+                data-testid={`secrets-remove-confirm-${row.name}`}
+              >
+                <Trash2 aria-hidden className="size-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setArmed(false)}
+                aria-label="Cancel"
+                title="Cancel"
+              >
+                <X aria-hidden className="size-3.5" />
+              </Button>
+            </span>
+          ) : (
+            <Button
+              variant="outline"
+              size="icon-sm"
+              onClick={() => setArmed(true)}
+              aria-label={`Remove ${row.name} from the vault`}
+              title="Remove from vault"
+              data-testid={`secrets-remove-${row.name}`}
+            >
+              <Trash2 aria-hidden className="size-3.5" />
+            </Button>
+          ))}
       </td>
     </tr>
   );

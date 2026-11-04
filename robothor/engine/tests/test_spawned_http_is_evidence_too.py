@@ -47,6 +47,7 @@ from robothor.engine.observation_ledger import ObservationLedger
 from robothor.engine.tool_proxy import clear_tool_proxy, set_tool_proxy
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.code_exec import _execute_code
+from tests.platform_capabilities import needs_tools
 
 pytestmark = pytest.mark.skipif(
     shutil.which("curl") is None,
@@ -989,6 +990,7 @@ class TestI5AWrapperDoesNotHideTheCurl:
         assert result["http_calls"][0]["via"] == "curl"
         assert result["unread_responses"] == 1
 
+    @needs_tools("timeout")
     async def test_timeout_env_nice_and_nohup_are_skipped(self, service, tmp_path):
         code = f"""
             import subprocess
@@ -1356,6 +1358,7 @@ class TestN7OnlyTheProgramDecides:
         assert result["spawned"]["programs"] == ["cat"]
         assert "egress_unobserved" not in result
 
+    @needs_tools("timeout")
     async def test_an_argument_that_names_curl_is_not_egress(self, tmp_path):
         code = """
             import subprocess

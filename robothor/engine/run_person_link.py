@@ -18,6 +18,7 @@ on, and they're easy to unit-test against the test DB.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -80,6 +81,37 @@ def resolve_run_person_id(
         return None
     pid = row[0] if not isinstance(row, dict) else row.get("person_id")
     return str(pid) if pid is not None else None
+
+
+async def resolve_run_person_id_off_loop(**kwargs: Any) -> str | None:
+    """:func:`resolve_run_person_id` in a worker thread: it is a DB lookup."""
+    return await asyncio.to_thread(resolve_run_person_id, **kwargs)
+
+
+async def link_run_person(
+    run: AgentRun, identity: Any, trigger_type: Any, trigger_detail: str | None
+) -> None:
+    """Stamp ``run.person_id`` at run start. Best-effort; a miss is fine.
+
+    The effective identity's person first (covers WEBCHAT, whose trigger_detail
+    carries no chat_id for ``resolve_run_person_id`` to key off), then the
+    trigger_detail resolver (in a worker thread) for top-level telegram/chat
+    runs. Moved here from ``AgentRunner.execute``.
+    """
+    from robothor.engine.models import TriggerType
+    from robothor.engine.sanitize import sanitize_log as _sanitize
+
+    if not run.person_id and identity and identity.person_id:
+        run.person_id = identity.person_id
+    if not run.person_id and trigger_type in (TriggerType.TELEGRAM, TriggerType.WEBCHAT):
+        try:
+            run.person_id = await resolve_run_person_id_off_loop(
+                trigger_type=trigger_type, trigger_detail=trigger_detail, tenant_id=run.tenant_id
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug(
+                "person_id resolution failed for %s: %s", _sanitize(run.agent_id), _sanitize(e)
+            )
 
 
 def emit_run_timeline_activity(run: AgentRun) -> None:

@@ -12,7 +12,7 @@
 # else. INSTALL_GATE_REPO must point at the checkout.
 set -euo pipefail
 
-real_curl="$(PATH="$(echo "$PATH" | tr ':' '\n' | grep -v "$(dirname "$0")" | paste -sd:)" command -v curl)"
+real_curl="$(PATH="$(echo "$PATH" | tr ':' '\n' | grep -v "$(dirname "$0")" | paste -sd: -)" command -v curl)"
 
 # `-o PATH` matters: the quickstart's compose block uses -O and lands the file
 # in the current directory, while scripts/install.sh writes it into the install

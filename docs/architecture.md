@@ -103,6 +103,8 @@ Seven Redis Streams carry events between services:
 
 Standard envelope format. Consumer groups for parallel processing. RBAC via `agent_capabilities.json`. Dual-write to JSON files as fallback when Redis is unavailable.
 
+The dashboard reads these streams live through `/api/events/stream` (server-sent events). Each browser tab opens one connection, shared by every view that listens, and reconnects with backoff from 1 s to 30 s. On the server each connection replays the last 20 events per stream, then blocks on a Redis connection of its own, reading from the newest event it replayed, so an event written between reads is never skipped and one tab's blocking read never delays another's.
+
 ## Agent RBAC
 
 Each agent declares its capabilities in `agent_capabilities.json`: which tools it can call, which streams it can read/write, which Bridge endpoints it can access. Unknown agents get full access (backward compatible). The bridge is stricter: a request carrying an agent's service token (what `log_interaction` sends) is refused with 403 `agent not authorized` unless that agent is listed under `agents`, whatever `default_policy` says.
@@ -120,3 +122,7 @@ Each agent declares its capabilities in `agent_capabilities.json`: which tools i
 | Non-Python services | Bridge HTTP API on :9100 | REST endpoints for CRM, contacts, search |
 | Dashboards | API server on :9099 | FastAPI with SSE for real-time events |
 | Agent frameworks | Any of the above | Agent Engine calls DAL directly; LangChain can import directly |
+
+## Dashboard Data Layer
+
+The Helm (`app/`) reads every listing through one TanStack Query client that `AppShell` mounts. Readers of the same key share one request and one poll, so the sidebar badges, the chat home and the Dashboard view together cost one `list_tasks` and one `agent_status` request. Each resource sets its own `staleTime` (tasks 30 s, agents and Fleet 60 s); polls stop while the browser tab is hidden, a returning tab re-reads only what is stale, and a request whose last reader unmounts is aborted. Goals and personal automation refresh every 30 s; when the event stream carries their events, those events should invalidate the keys instead. Task events already do: `useTasks({ live: true })` invalidates the tasks key on `task.*`.

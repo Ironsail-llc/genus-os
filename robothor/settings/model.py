@@ -612,9 +612,19 @@ class ProviderSettings(SettingsGroup):
     hourly_cost_cap_usd: float = declare(
         5.0,
         "ROBOTHOR_HOURLY_COST_CAP_USD",
-        "Fleet-wide spend ceiling per hour. The engine stops dispatching new "
-        "runs once the rolling hour exceeds it.",
+        "Fleet-wide spend per rolling hour that is reported, checked when fleet "
+        "admission is on. A scheduled run admitted past it carries a budget_stop "
+        "step (mode observe) and a warning alert is raised; the cap never defers "
+        "or stops a run. 0 turns the report off.",
         restart_required=False,
+    )
+    runaway_hard_cap_tokens: int = declare(
+        5_000_000,
+        "ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS",
+        "Per-run token count (input plus output) at which the runaway guard "
+        "records a budget_stop step (mode observe) and pages critical, once per "
+        "run. The run continues. The engine takes the number from the "
+        "environment variable.",
     )
     model_breaker_threshold: int = declare(
         3,
@@ -648,6 +658,15 @@ class ProviderSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    compaction_min_gap_iterations: int = declare(
+        3,
+        "ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS",
+        "The fewest agent-loop iterations between two compactions of one run. A context that grows by one tool "
+        "result must not be summarised again on the next iteration; the hard "
+        "context ceiling is still enforced every iteration.",
+        restart_required=False,
+        since="unreleased",
+    )
     compaction_trigger_tokens: int = declare(
         80000,
         "ROBOTHOR_COMPACTION_TRIGGER_TOKENS",
@@ -660,6 +679,15 @@ class ProviderSettings(SettingsGroup):
         "Number of tools above which schemas are deferred behind tool search "
         "rather than sent in full on every request.",
         restart_required=False,
+    )
+    deferred_tools_recent_runs: int = declare(
+        10,
+        "ROBOTHOR_DEFERRED_TOOLS_RECENT_RUNS",
+        "How many of an agent's latest runs seed the tools it is always shown "
+        "when its schemas are deferred: the tools it called in them join the "
+        "core set. 0 keeps the core to the platform's fixed list.",
+        restart_required=False,
+        since="unreleased",
     )
     real_tokenizer_enabled: bool = declare(
         False,
@@ -861,6 +889,41 @@ class EngineSettings(SettingsGroup):
         "ROBOTHOR_MAX_CONCURRENT_AGENTS",
         "How many agent runs may execute at once.",
         restart_required=False,
+    )
+    max_concurrent_interactive: int = declare(
+        0,
+        "ROBOTHOR_MAX_CONCURRENT_INTERACTIVE",
+        "How many interactive runs (Telegram, webchat, Slack, plugin channels, "
+        "IDE, CLI) may execute at once. 0, the default, is uncapped: interactive "
+        "turns are never queued. A cap queues a turn with no deadline while others "
+        "hold the slots, including runs waiting on ask_user. Read at the first run.",
+        since="unreleased",
+    )
+    max_concurrent_background: int = declare(
+        2,
+        "ROBOTHOR_MAX_CONCURRENT_BACKGROUND",
+        "How many background runs (cron, hooks, workflows, everything without a "
+        "person waiting) may execute at once. "
+        "Never below 1: 0 is read as 1, not as uncapped. A cron run or workflow "
+        "takes its slot before its own timeout starts, so time queued is not "
+        "counted against it. Read at the first run.",
+        since="unreleased",
+    )
+    lane_background_yield_ms: int = declare(
+        200,
+        "ROBOTHOR_LANE_BACKGROUND_YIELD_MS",
+        "How long a background run asking for a slot holds back while an "
+        "interactive run is waiting for one. 0 disables the yield.",
+        since="unreleased",
+    )
+    lane_hooks_limit: int = declare(
+        8,
+        "ROBOTHOR_LANE_HOOKS_LIMIT",
+        "How many runs of concurrent hook workflows (a hook trigger with "
+        "`concurrent: true`) may execute at once. They have their own lane, so "
+        "overlapping events neither queue behind background runs nor take "
+        "their slots. Never below 1. Read at the first run.",
+        since="unreleased",
     )
     max_iterations: int = declare(
         20,
@@ -1695,6 +1758,18 @@ class AuthSettings(SettingsGroup):
         "bridge falls back to its peer address; prefer a /32 over a pod CIDR, "
         "which would cover every workload in the namespace.",
         since="1.69.0",
+    )
+    chat_agent_cache_ttl_ms: int = declare(
+        30_000,
+        "GENUS_CHAT_AGENT_CACHE_TTL_MS",
+        "How long (milliseconds) the DASHBOARD keeps a caller's agent listing "
+        "when checking that a chat message may be sent to the agent it names. "
+        "Kept per dashboard instance and per caller, and only for a listing the "
+        "bridge served; any manifest or agent change made through the dashboard "
+        "forgets it. An agent made unchattable some other way stays addressable "
+        "for at most this long. 0 asks the bridge on every message.",
+        restart_units=("robothor-app",),
+        since="1.123.0",
     )
     cf_access_team_domain: str = declare(
         "",
@@ -3363,6 +3438,36 @@ class CodingSettings(SettingsGroup):
         "empty refuses every claude_code_start. The live workspace itself, the service "
         "user's home itself, and any directory containing either are refused even under "
         "a root. The job still works only in its own worktree and never on main/master.",
+        restart_required=False,
+        since="unreleased",
+    )
+    workspace: str = declare(
+        "",
+        "ROBOTHOR_CODING_WORKSPACE",
+        "Directory claude_code_repo_prepare clones repositories into, one per remote at "
+        "<dir>/<owner>/<repo>, created on first use. Empty turns claude_code_repo_prepare off. "
+        "When set it is also a repo root for claude_code_start, in addition to "
+        "ROBOTHOR_CODING_REPO_ROOTS.",
+        restart_required=False,
+        since="unreleased",
+    )
+    remotes: str = declare(
+        "",
+        "ROBOTHOR_CODING_REMOTES",
+        "Comma-separated remotes claude_code_repo_prepare may clone and claude_code_publish may "
+        "push to: owner/repo (a GitHub repository) or a full clone URL. Empty refuses "
+        "every remote.",
+        restart_required=False,
+        since="unreleased",
+    )
+    sandbox: str = declare(
+        "required",
+        "ROBOTHOR_CODING_SANDBOX",
+        "`required` (the default) runs a coding job's Bash inside Claude Code's sandbox and "
+        "fails the job where the sandbox cannot start. `off` sends no sandbox settings, for "
+        "hosts that cannot run bubblewrap (containers without user namespaces): the job's "
+        "Bash then runs with the engine's own access, and only the Edit/Write and secret-path "
+        "permission rules still apply. Any other value is treated as `required`.",
         restart_required=False,
         since="unreleased",
     )

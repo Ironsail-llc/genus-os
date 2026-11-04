@@ -42,7 +42,7 @@ def _decision(scratch_db, monkeypatch, role: str, tool: str, through: str) -> st
     _, dsn = scratch_db(through=through)
 
     @contextlib.contextmanager
-    def connect():
+    def connect(**_kw):
         conn = psycopg2.connect(dsn)
         try:
             yield conn

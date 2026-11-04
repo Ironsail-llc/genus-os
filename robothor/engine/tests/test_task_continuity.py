@@ -40,7 +40,11 @@ async def test_compaction_with_all_summarizers_broken_retains_task_and_steering(
         session.messages.append({"role": "user", "content": f"historical noise {i} " * 1500})
     with (
         patch("robothor.engine.compaction.extract_facts", AsyncMock(return_value=[])),
-        patch("robothor.engine.compaction.summarize_segment", AsyncMock(return_value="")),
+        patch(
+            "robothor.engine.compaction.update_summary",
+            AsyncMock(side_effect=RuntimeError("every summariser is down")),
+        ),
+        patch("robothor.engine.config.fleet_model_chain", return_value=["openai/example-fleet"]),
     ):
         for _ in range(2):
             result = await compact(session.messages, threshold=1000, drain_to=5000)

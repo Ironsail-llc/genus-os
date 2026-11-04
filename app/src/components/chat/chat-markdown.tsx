@@ -1,7 +1,9 @@
 "use client";
 
+import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { MarkdownPre } from "@/components/chat/code-block";
 
 /**
  * Typography for rendered markdown. `prose` comes from the typography plugin
@@ -21,14 +23,23 @@ const components: Components = {
     ) : (
       <a {...props} target="_blank" rel="noopener noreferrer" />
     ),
+  // Fenced code: language label, copy button, highlighting (code-block.tsx).
+  pre: ({ children }) => <MarkdownPre>{children}</MarkdownPre>,
 };
 
-export function ChatMarkdown({ content }: { content: string }) {
+const remarkPlugins = [remarkGfm];
+
+/**
+ * Memoised by `content`: parsing markdown is the expensive part of a chat
+ * render, and a bubble whose text has not changed has nothing to re-parse when
+ * the panel around it re-renders for a streaming delta.
+ */
+export const ChatMarkdown = memo(function ChatMarkdown({ content }: { content: string }) {
   return (
     <div className={CHAT_PROSE}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
         {content}
       </ReactMarkdown>
     </div>
   );
-}
+});

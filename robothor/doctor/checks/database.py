@@ -12,16 +12,17 @@ check is what tells an operator whether their database actually has it.
 
 from __future__ import annotations
 
+import secrets
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from robothor.db import rls_exemptions
-from robothor.doctor.model import Check, FixResult, Result, fail, ok
+from robothor.doctor.model import Check, FixResult, Result, fail, ok, skip
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.doctor.context import DoctorContext
 
-__all__ = ["CHECKS", "SERVICE_ROLE_MIGRATION"]
+__all__ = ["CHECKS", "SERVICE_ROLE_MIGRATION", "SESSION_PROBE_ROUNDS"]
 
 #: The migration that seeds the ``service`` role. The repair below EXECUTES
 #: this file rather than carrying a copy of its INSERT: a hand-copied statement
@@ -398,6 +399,71 @@ async def _apply_rls_backstop(ctx: DoctorContext) -> FixResult:
     return FixResult(changed=True, detail=f"executed {RLS_BACKSTOP_MIGRATION}")
 
 
+#: How many separate transactions the session probe reads its setting back in.
+SESSION_PROBE_ROUNDS = 4
+
+#: A placeholder setting nothing else uses. Any role may set a dotted name.
+_SESSION_PROBE_SETTING = "genus.session_probe"
+
+
+def _session_probe_token() -> str:
+    return secrets.token_hex(8)
+
+
+async def _session_settings(ctx: DoctorContext) -> Result:
+    """A session-level setting survives from one transaction to the next.
+
+    The connection factory sets the tenant binding and pgvector's scan mode
+    once per pooled connection and trusts the session to keep them. A
+    transaction-mode pooler hands each transaction to whichever server
+    connection is free, so behind one the tenant binding can be another
+    tenant's and the scan mode can be missing. This sets a throwaway setting,
+    then reads it back in several later transactions along with the server
+    process id. A pooler with spare server connections usually shows up here;
+    an idle one can reuse the same server connection and pass by luck, which is
+    why the requirement is also written down in docs/deployment.md.
+    """
+    token = _session_probe_token()
+
+    def _probe() -> list[tuple[Any, Any]]:
+        seen: list[tuple[Any, Any]] = []
+        with ctx.db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT pg_backend_pid(), set_config(%s, %s, false)",
+                (_SESSION_PROBE_SETTING, token),
+            )
+            seen.append(tuple(cursor.fetchone() or (None, None)))
+            conn.commit()
+            for _ in range(SESSION_PROBE_ROUNDS):
+                cursor.execute(
+                    "SELECT pg_backend_pid(), current_setting(%s, true)",
+                    (_SESSION_PROBE_SETTING,),
+                )
+                seen.append(tuple(cursor.fetchone() or (None, None)))
+                conn.commit()
+            cursor.execute("SELECT set_config(%s, '', false)", (_SESSION_PROBE_SETTING,))
+            conn.commit()
+        return seen
+
+    try:
+        seen = await ctx.run_blocking(_probe)
+    except Exception as exc:  # noqa: BLE001 - db.connect reports an unreachable database
+        return skip(f"cannot probe the session: {type(exc).__name__}")
+    pids = {row[0] for row in seen}
+    lost = [row for row in seen if row[1] != token]
+    if lost or len(pids) != 1:
+        return fail(
+            "a session-level setting did not survive from one transaction to the next "
+            f"({len(lost)} of {len(seen)} reads lost it, {len(pids)} server process(es)), "
+            "so a transaction-mode pooler sits between the platform and PostgreSQL. The "
+            "tenant binding and the vector-scan mode are set once per connection and are "
+            "not reliable there: connect directly or in session mode "
+            "(see docs/deployment.md, Connection poolers)"
+        )
+    return ok(f"session settings persist across {SESSION_PROBE_ROUNDS} transactions")
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         id="db.connect",
@@ -429,5 +495,12 @@ CHECKS: tuple[Check, ...] = (
         severity="required",
         run=_rls_coverage,
         fix=_apply_rls_backstop,
+    ),
+    Check(
+        id="db.session_settings",
+        title="Session settings persist across transactions (no transaction-mode pooler)",
+        category="database",
+        severity="required",
+        run=_session_settings,
     ),
 )

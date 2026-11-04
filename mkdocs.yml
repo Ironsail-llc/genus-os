@@ -89,12 +89,14 @@ exclude_docs: |
   !/PR_REVIEWER.md
   !/DEVOPS_REPORT.md
   !/AUTONOMOUS_EXECUTION.md
+  !/AMBIENT.md
   !/SALES_INTELLIGENCE.md
   !/PLUGINS.md
   !/OPERATIONS.md
   !/channels/telegram.md
   !/CONNECTORS.md
   !/OBSERVABILITY.md
+  !/PERFORMANCE.md
   !/runbooks/SNAPSHOT_RESTORE.md
   !/compliance/SECURITY_CONTROLS.md
   !/compliance/SOC2_MAPPING.md
@@ -152,6 +154,7 @@ nav:
       - PR reviewer: PR_REVIEWER.md
       - Dev team report: DEVOPS_REPORT.md
       - Personal autonomy: AUTONOMOUS_EXECUTION.md
+      - Ambient follow-ups: AMBIENT.md
       - Sales intelligence: SALES_INTELLIGENCE.md
       - Plugins: PLUGINS.md
       - Operations ledger: OPERATIONS.md
@@ -165,6 +168,7 @@ nav:
       - Microsoft 365 workspace: workspace/microsoft365.md
       - n8n monitoring: integrations/n8n.md
       - Observability: OBSERVABILITY.md
+      - Performance: PERFORMANCE.md
       - Snapshot and restore: runbooks/SNAPSHOT_RESTORE.md
       - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md
       - Local fallback: runbooks/LOCAL_FALLBACK.md

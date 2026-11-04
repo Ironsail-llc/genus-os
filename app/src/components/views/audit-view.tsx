@@ -7,10 +7,12 @@ import { EmptyState } from "@/components/business/empty-state";
 import { PageHeader } from "@/components/business/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { isAuditReaderRole } from "@/components/layout/nav-config";
+import { NativeSelect } from "@/components/ui/native-select";
+import { isAuditReaderRole, isOperatorRole } from "@/components/layout/nav-config";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
 import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
 import { isIsoTimestamp } from "@/lib/observe/since";
+import { ListSkeleton } from "@/components/business/list-skeleton";
 
 /**
  * Observe › Audit — what was done, and who widened which guardrail.
@@ -44,6 +46,13 @@ import { isIsoTimestamp } from "@/lib/observe/since";
  * `GET /api/audit/events` has always been for the auditor role. The tenant in
  * the filename names who exported it, not what is inside, and the note under
  * the button says so.
+ *
+ * **Filter by agent is the Actor filter, pre-filled.** An agent's tool calls
+ * are written with `actor = agent.id`, so the Agent picker lists the fleet's
+ * ids (from `/api/agent-manifests`) and fills the same `actor` the table and
+ * the export already carry; no second filter to keep in step. The fleet is
+ * operator-only on the bridge, so an auditor gets no picker — and no request
+ * that is bound to be refused — and keeps the free-text Actor box.
  *
  * `auditor` reads both of these and nothing else on `/api/controls`; Memory and
  * Logs stay operator-only. UX gating here, authorization on the bridge.
@@ -172,7 +181,7 @@ function filterParams(filters: Filters): URLSearchParams {
 }
 
 export interface AuditViewProps {
-  /** The shell keeps every view mounted; this is the load gate. */
+  /** The shell keeps every opened view mounted; this is the load gate. */
   visible?: boolean;
   /** Session role. UX only — the bridge gates both routes itself. */
   role?: string | null;
@@ -211,6 +220,9 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
    * anything about.
    */
   const [forbidden, setForbidden] = useState(false);
+
+  /** The fleet's agent ids, for the Agent picker. Empty hides the picker. */
+  const [agentIds, setAgentIds] = useState<string[]>([]);
 
   const mayRead = isAuditReaderRole(role) || roleLoading;
   const reading = isAuditReaderRole(role);
@@ -294,6 +306,31 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
     },
     [flag]
   );
+
+  const mayListAgents = isOperatorRole(role);
+  useEffect(() => {
+    if (!visible || !mayListAgents) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${BRIDGE}/api/agent-manifests`);
+        if (!res.ok) return;
+        const body = (await res.json()) as Record<string, unknown>;
+        const ids = Array.isArray(body.agents)
+          ? body.agents
+              .map((agent) => (agent && typeof agent === "object" ? (agent as Record<string, unknown>).id : null))
+              .filter((id): id is string => typeof id === "string" && id !== "")
+          : [];
+        if (!cancelled) setAgentIds(ids);
+      } catch {
+        // The picker is a convenience over the Actor box; without the fleet it
+        // is simply not drawn.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, mayListAgents]);
 
   // Per tab, not per view: an auditor who never opens Flag changes should not
   // be putting a query on `feature_flag_audit` on every Helm page load.
@@ -412,6 +449,29 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
               onChange={(event) => setDraft({ ...draft, eventType: event.target.value })}
               className="h-8 min-w-[130px] max-w-[200px] text-sm"
             />
+            {agentIds.length > 0 ? (
+              <NativeSelect
+                data-testid="audit-filter-agent"
+                aria-label="Agent"
+                value={draft.actor}
+                onChange={(event) => setDraft({ ...draft, actor: event.target.value })}
+                className="max-w-[180px]"
+              >
+                <option value="">Any agent</option>
+                {draft.actor && !agentIds.includes(draft.actor) ? (
+                  // The Actor box holds something outside the fleet: say so,
+                  // rather than reading "Any agent" over a filtered table.
+                  <option value={draft.actor} disabled>
+                    {draft.actor} (not a fleet agent)
+                  </option>
+                ) : null}
+                {agentIds.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
+                ))}
+              </NativeSelect>
+            ) : null}
             <Input
               data-testid="audit-filter-actor"
               aria-label="Actor"
@@ -487,13 +547,7 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
           ) : null}
 
           {eventsLoading && events.length === 0 ? (
-            <div
-              className="flex items-center gap-2 p-6 text-xs text-muted-foreground"
-              data-testid="audit-events-loading"
-            >
-              <Loader2 aria-hidden className="size-4 animate-spin" />
-              Reading the audit log…
-            </div>
+            <ListSkeleton testId="audit-events-loading" label="Loading the audit log" className="p-4" />
           ) : null}
 
           {!eventsLoading && !eventsError && events.length === 0 ? (
