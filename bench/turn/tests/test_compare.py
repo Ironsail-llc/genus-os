@@ -102,13 +102,13 @@ def test_the_timing_threshold_defaults_to_the_threshold() -> None:
     assert compare(_metric("ttft_ms", 100.0), _metric("ttft_ms", 111.0)).exit_code == 1
 
 
-@pytest.mark.parametrize("metric", ["db_statements", "prompt_tokens", "tool_schemas"])
+@pytest.mark.parametrize("metric", ["db_statements", "tool_schemas"])
 def test_count_metrics_keep_the_tight_threshold(metric: str) -> None:
     outcome = compare(_metric(metric, 100.0), _metric(metric, 115.0), timing_threshold=0.30)
     assert outcome.exit_code == 1
 
 
-@pytest.mark.parametrize("metric", ["db_statements", "prompt_tokens", "tool_schemas"])
+@pytest.mark.parametrize("metric", ["db_statements", "tool_schemas"])
 def test_count_metrics_ignore_the_min_delta(metric: str) -> None:
     # 10 -> 12 is 20% but only 2 over: still a regression for a count.
     assert compare(_metric(metric, 10.0), _metric(metric, 12.0), min_delta=5.0).exit_code == 1
@@ -118,7 +118,7 @@ def test_timing_metrics_keep_the_min_delta() -> None:
     assert compare(_metric("setup_ms", 4.0), _metric("setup_ms", 8.0), min_delta=5.0).exit_code == 0
 
 
-@pytest.mark.parametrize("metric", ["prompt_tokens", "tool_schemas"])
+@pytest.mark.parametrize("metric", ["tool_schemas"])
 def test_exact_metrics_regress_on_any_increase(metric: str) -> None:
     outcome = compare(_metric(metric, 216.0), _metric(metric, 217.0), threshold=0.10)
     assert outcome.exit_code == 1
@@ -143,3 +143,31 @@ def test_an_unchanged_exact_metric_gives_no_hint() -> None:
         "re-record"
         not in compare(_metric("tool_schemas", 216.0), _metric("tool_schemas", 216.0)).message
     )
+
+
+# prompt_tokens is characters / 4 of the first call, so a one-character change
+# in a template moves it by one: it allows max(25 tokens, 1%) over the baseline.
+def test_a_one_token_prompt_increase_passes() -> None:
+    outcome = compare(_metric("prompt_tokens", 11652.0), _metric("prompt_tokens", 11653.0))
+    assert outcome.exit_code == 0
+
+
+def test_a_prompt_increase_within_25_tokens_passes_on_a_small_prompt() -> None:
+    outcome = compare(_metric("prompt_tokens", 216.0), _metric("prompt_tokens", 241.0))
+    assert outcome.exit_code == 0
+
+
+def test_a_five_percent_prompt_increase_fails() -> None:
+    outcome = compare(_metric("prompt_tokens", 11652.0), _metric("prompt_tokens", 12235.0))
+    assert outcome.exit_code == 1
+    assert [r.metric for r in outcome.regressions] == ["prompt_tokens", "prompt_tokens"]
+
+
+def test_a_prompt_increase_over_both_25_tokens_and_one_percent_fails() -> None:
+    outcome = compare(_metric("prompt_tokens", 1000.0), _metric("prompt_tokens", 1026.0))
+    assert outcome.exit_code == 1
+
+
+def test_one_more_tool_schema_still_fails() -> None:
+    outcome = compare(_metric("tool_schemas", 34.0), _metric("tool_schemas", 35.0))
+    assert outcome.exit_code == 1
