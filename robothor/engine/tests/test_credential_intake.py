@@ -511,7 +511,7 @@ async def test_a_removal_with_a_store_word_goes_through(intake, message, key):
 
 @pytest.mark.asyncio
 async def test_an_email_address_is_not_a_hand_over(intake):
-    email = "alice@acme.io"
+    email = "alice@example.com"
     session = intake["live"](task_text=f"ask {email} for the github token")
     result = await HANDLERS["vault_set"](
         {"key": "providers/github/api_key", "value": email}, _ctx(session)
@@ -730,7 +730,7 @@ async def test_a_delete_reads_the_typed_text_only(intake):
 
 # ── the value's own token never names its key, and the person means a store ──
 
-PR_URL = "https://github.com/acme/app/pull/9"
+PR_URL = "https://github.com/example-org/example-app/pull/9"
 
 
 @pytest.mark.asyncio
