@@ -109,7 +109,9 @@ def _refuse_a_libpq_only_password(config: object | None) -> None:
     if not present:
         return
     named = f"{' and '.join(present)} {'is' if len(present) == 1 else 'are'} set"
-    host = str(getattr(db, "host", "") or "")
+    # The platform's host, or libpq's own when the platform names none: the DSN
+    # leaves an empty host out, and libpq then reads PGHOST.
+    host = str(getattr(db, "host", "") or "") or os.environ.get("PGHOST", "")
     if not host or host.startswith("/"):
         logger.warning(
             "%s but ROBOTHOR_DB_PASSWORD is empty. The engine removes libpq's own "
@@ -169,7 +171,7 @@ def filter_playwright_driver_env() -> bool:
     return True
 
 
-def drop_inherited_credentials() -> tuple[str, ...]:
+def drop_inherited_credentials(*, check_database_password: bool = True) -> tuple[str, ...]:
     """Stop this process's children inheriting the platform's own credentials.
 
     ``env=`` is optional on every spawn call in the standard library, and a
@@ -192,6 +194,8 @@ def drop_inherited_credentials() -> tuple[str, ...]:
     Raises :class:`LibpqOnlyPasswordError` when the database is reached over
     TCP and its password is set only in ``PGPASSWORD`` or ``PGPASSFILE``: the
     drop would take it from libpq.
+    ``check_database_password=False`` skips that check, for a child of an
+    engine that has already made it at its own startup.
     """
     import os
 
@@ -205,7 +209,8 @@ def drop_inherited_credentials() -> tuple[str, ...]:
         config = get_config()
     except Exception as exc:  # noqa: BLE001 - startup reports a bad config itself
         logger.debug("config not loaded before the drop (%s)", type(exc).__name__)
-    _refuse_a_libpq_only_password(config)
+    if check_database_password:
+        _refuse_a_libpq_only_password(config)
 
     filter_playwright_driver_env()
 

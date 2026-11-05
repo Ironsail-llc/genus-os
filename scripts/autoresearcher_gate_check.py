@@ -44,10 +44,17 @@ def check_psql_metric_command() -> tuple[bool, str]:
     from robothor.config import get_config
     from robothor.engine.tools.handlers.experiment import _run_metric_command
 
-    # psql does not read ROBOTHOR_DB_NAME, and without a name it connects to
-    # the database named after the user, so the command names it.
-    database = shlex.quote(get_config().db.name)
-    command = f'psql -d {database} -t -A -c "SELECT count(*) FROM agent_memory_blocks;"'
+    # psql reads none of the ROBOTHOR_DB_* settings, and without a name it
+    # connects to the database named after the user, so the command names the
+    # configured database, host, port and user.
+    db = get_config().db
+    target = [f"-d {shlex.quote(db.name)}", f"-p {int(db.port)}"]
+    if db.host:
+        target.append(f"-h {shlex.quote(db.host)}")
+    if db.user:
+        target.append(f"-U {shlex.quote(db.user)}")
+    query = '"SELECT count(*) FROM agent_memory_blocks;"'
+    command = f"psql {' '.join(target)} -t -A -c {query}"
     try:
         output = _run_metric_command(command, os.environ.get("ROBOTHOR_WORKSPACE", ""))
     except Exception as exc:  # noqa: BLE001 - the gate reports, it does not raise

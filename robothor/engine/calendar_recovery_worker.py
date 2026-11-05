@@ -62,7 +62,9 @@ def _receive_credentials() -> None:
 
     harden_process()
     os.environ.update(json.loads(sys.stdin.buffer.read() or b"{}"))
-    drop_inherited_credentials()
+    # The daemon checked the database password at its own startup; a batch
+    # every 30 seconds saying it again would bury every other warning.
+    drop_inherited_credentials(check_database_password=False)
 
 
 async def run(tenant_id: str) -> None:
