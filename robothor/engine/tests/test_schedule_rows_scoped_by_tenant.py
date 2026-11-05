@@ -58,7 +58,7 @@ async def test_a_finished_run_is_recorded_on_this_tenants_row(status, errors) ->
         patch("robothor.engine.tracking.get_schedule", return_value={"consecutive_errors": 2}),
         patch("robothor.engine.scheduler.update_schedule_state") as write,
         patch("robothor.engine.warmup.build_warmth_preamble", return_value=""),
-        patch("robothor.engine.delivery.deliver", new_callable=AsyncMock),
+        patch("robothor.engine.scheduler.deliver", new_callable=AsyncMock),
     ):
         await scheduler._execute_and_deliver("alice-agent", "alice-agent", agent, "cron")
     assert write.call_args.kwargs["tenant_id"] == TENANT
