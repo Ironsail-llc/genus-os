@@ -483,11 +483,12 @@ the database goes through a tool instead.
 - **Connection settings are judged by value too.** A `ROBOTHOR_DB_*` or
   `ROBOTHOR_REDIS_*` setting whose value holds a credential (a host set to
   `postgresql://user:password@host/db`, say) is held back like the password.
-- **libpq's own password variables are refused at startup.** The engine removes
+- **libpq's own password variables are removed at startup.** The engine removes
   `PGPASSWORD` and `PGPASSFILE` from its environment as it starts, and libpq
-  reads them from there. An engine that has either one set and
-  `ROBOTHOR_DB_PASSWORD` empty refuses to start and says so; set
-  `ROBOTHOR_DB_PASSWORD` instead.
+  reads them from there. An engine that reaches the database over TCP with
+  either one set and `ROBOTHOR_DB_PASSWORD` empty refuses to start and says so;
+  set `ROBOTHOR_DB_PASSWORD` instead. Over the local socket it starts and logs
+  a warning, because peer authentication never reads them.
 - **Lifecycle hooks are not on the ladder.** A `command` hook is written by the
   operator, so it keeps the engine's environment, its own tokens and webhook
   URLs included, less this class only.
