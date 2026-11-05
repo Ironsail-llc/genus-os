@@ -487,8 +487,11 @@ the database goes through a tool instead.
   `PGPASSWORD` and `PGPASSFILE` from its environment as it starts, and libpq
   reads them from there. An engine that reaches the database over TCP with
   either one set and `ROBOTHOR_DB_PASSWORD` empty refuses to start and says so;
-  set `ROBOTHOR_DB_PASSWORD` instead. Over the local socket it starts and logs
-  a warning, because peer authentication never reads them.
+  set `ROBOTHOR_DB_PASSWORD` instead (`PGHOST` counts as the host when
+  `ROBOTHOR_DB_HOST` is empty). Over the local socket it starts and logs a
+  warning, because peer authentication never reads them; a socket install that
+  authenticates with a password must set `ROBOTHOR_DB_PASSWORD`, or every
+  connection fails.
 - **Lifecycle hooks are not on the ladder.** A `command` hook is written by the
   operator, so it keeps the engine's environment, its own tokens and webhook
   URLs included, less this class only.
