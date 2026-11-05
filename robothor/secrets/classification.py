@@ -50,6 +50,7 @@ __all__ = [
     "declared_secret_names",
     "is_bootstrap",
     "is_declared_secret",
+    "is_platform_credential",
     "non_secret_env_names",
 ]
 
@@ -112,6 +113,24 @@ def is_bootstrap(name: str) -> bool:
     if record is not None:
         return bool(record.get("bootstrap"))
     return name.startswith(BOOTSTRAP_PREFIXES)
+
+
+#: Connection strings and libpq's own variables. No settings field declares
+#: them, because the platform composes or ignores them, and each one opens the
+#: same database or cache as a declared bootstrap credential.
+_CONNECTION_NAMES: frozenset[str] = frozenset(
+    {"DATABASE_URL", "REDIS_URL", "PGPASSWORD", "PGPASSFILE"}
+)
+
+
+def is_platform_credential(name: str) -> bool:
+    """True when ``name`` opens the platform itself rather than one integration.
+
+    The bootstrap class plus the connection strings. These reach every tenant
+    at once, so no child process is ever given one: see
+    :mod:`robothor.engine.exec_env`.
+    """
+    return is_bootstrap(name) or name in _CONNECTION_NAMES
 
 
 def is_declared_secret(name: str) -> bool:

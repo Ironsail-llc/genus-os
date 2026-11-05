@@ -52,7 +52,9 @@ def _codex_home() -> str | None:
 
 def _codex_env() -> dict[str, str]:
     """Build a subprocess environment that cannot silently switch to API billing."""
-    env = dict(os.environ)
+    from robothor.engine.exec_env import without_platform_credentials
+
+    env = without_platform_credentials(os.environ)
     # If these are inherited, Codex can authenticate with usage-based billing.
     # Subscription-backed Genus calls must use the cached ChatGPT login instead.
     for key in (

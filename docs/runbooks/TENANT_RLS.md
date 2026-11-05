@@ -51,6 +51,13 @@ A checkout that has to open a connection is bounded by
 checkouts queue behind the pool lock, one `connect_timeout` each. Keep
 `ROBOTHOR_DB_CONNECT_TIMEOUT` above 0.
 
+## What it separates
+
+Row-level security separates tenants for the connections the platform opens. It
+is a backstop for the platform's own code, not a boundary against anything else
+holding the database credentials, which is why those credentials never reach an
+agent's child process (`docs/configuration.md`, "One class is outside the ladder").
+
 ## Turning it on
 
 ```bash

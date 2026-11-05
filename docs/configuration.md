@@ -466,6 +466,12 @@ what your agents actually need, then promote. New installs start at `enforce`.
 Grants apply on every rung, so promoting is never what first gives an agent a
 credential.
 
+**One class is outside the ladder.** The credentials that open the platform
+itself never reach a child process, on any rung, `off` included: the database
+and cache passwords, the signing keys, the vault's key files, and connection
+strings such as `DATABASE_URL`. No manifest can grant them. A command that needs
+the database goes through a tool instead.
+
 #### What the scrub is not
 
 It removes **ambient inheritance**. It is not a process boundary, and it is

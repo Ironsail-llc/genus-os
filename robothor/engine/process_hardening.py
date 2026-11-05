@@ -33,7 +33,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["harden_process"]
+__all__ = ["drop_inherited_credentials", "harden_process"]
 
 #: ``PR_SET_DUMPABLE`` from ``<linux/prctl.h>``. Named rather than inlined so
 #: the call site reads as what it does.
@@ -73,3 +73,51 @@ def harden_process() -> bool:
         "agent's shell command cannot read the engine's environment out of procfs"
     )
     return True
+
+
+def drop_inherited_credentials() -> tuple[str, ...]:
+    """Stop this process's children inheriting the platform's own credentials.
+
+    ``env=`` is optional on every spawn call in the standard library, and a
+    child started without it inherits the process's C ``environ``. Reviewing
+    each call would hold for as long as nobody adds one, so this empties the
+    C ``environ`` of what no child may have, once, at startup.
+
+    ``os.environ`` is a Python copy made at interpreter start, and removing a
+    name from the C side alone leaves it there, so every read in this process
+    keeps working. The cost is the reverse of that: a child handed a copy of
+    ``os.environ`` gets everything back, which ``build_exec_env`` and
+    ``without_platform_credentials`` are for, and which
+    ``test_exec_env_platform_credentials.py`` refuses in an engine module.
+
+    A child that really needs one of these has it passed some other way:
+    see ``calendar_recovery_worker``. Returns the names dropped, never a value.
+    """
+    import os
+
+    from robothor.config import get_config
+    from robothor.secrets.classification import is_platform_credential
+
+    # First, so what it exports for this process is in `os.environ` already
+    # and it has no reason to write it through to the C side again later.
+    try:
+        get_config()
+    except Exception as exc:  # noqa: BLE001 - startup reports a bad config itself
+        logger.debug("config not loaded before the drop (%s)", type(exc).__name__)
+
+    names = tuple(sorted(name for name in os.environ if is_platform_credential(name)))
+    try:
+        import ctypes
+        import ctypes.util
+
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        for name in names:
+            libc.unsetenv(name.encode())
+    except Exception as exc:  # noqa: BLE001 - never a reason not to boot, always a reason to say
+        logger.warning(
+            "could not drop inherited credentials (%s): children of this process "
+            "that pass no environment keep them",
+            type(exc).__name__,
+        )
+        return ()
+    return names

@@ -59,11 +59,20 @@ there. This codebase has shipped that failure enough times.
 The ladder — ``ROBOTHOR_EXEC_ENV_MODE`` ``off`` | ``observe`` | ``enforce`` —
 governs what is TAKEN AWAY, never what is added. ``observe`` (the default for
 an install that never chose, so an upgrade takes nothing from an agent that was
-using it) changes the child environment not at all and logs, per agent, the
-names ``enforce`` would have withheld. That log is what an operator promotes
+using it) leaves the rest of the child environment alone and logs, per agent,
+the names ``enforce`` would have withheld. That log is what an operator promotes
 the flag on: counted from their own fleet, not from hope. Grants apply on every
 rung, including ``off``, so that promoting the flag is never the thing that
 first gives an agent a credential.
+
+**One class is outside the ladder.** The credentials that open the platform
+itself (:func:`robothor.secrets.classification.is_platform_credential`: the
+database, the cache, the signing keys, the vault's key files, and connection
+strings) reach every tenant at once. No rung keeps them, ``off`` included, and
+no manifest grants them. ``off`` and ``observe`` protect an agent's working
+credentials from a surprise; nothing an agent does should depend on these.
+:func:`robothor.engine.process_hardening.drop_inherited_credentials` applies the
+same rule to children that never come through this module.
 """
 
 from __future__ import annotations
@@ -73,8 +82,12 @@ import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from robothor.constants import DEFAULT_TENANT
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +102,7 @@ __all__ = [
     "grants_for_agent",
     "looks_like_a_credential_name",
     "looks_like_a_credential_value",
+    "without_platform_credentials",
 ]
 
 MODE_OFF = "off"
@@ -288,6 +302,17 @@ def _keeps(name: str, value: str, allowed_settings: frozenset[str]) -> bool:
     return name.startswith(_PLATFORM_PREFIXES) and name in allowed_settings
 
 
+def without_platform_credentials(env: Mapping[str, str]) -> dict[str, str]:
+    """``env`` less everything that opens the platform itself.
+
+    For a child that legitimately needs the rest of the environment. One that
+    has no such need goes through :func:`build_exec_env`.
+    """
+    from robothor.secrets.classification import is_platform_credential
+
+    return {name: value for name, value in env.items() if not is_platform_credential(name)}
+
+
 def build_exec_env(
     *,
     agent_id: str,
@@ -309,9 +334,8 @@ def build_exec_env(
             assistant beats a stale one the box booted with.
         tenant_id: whose vault the grants are resolved against.
     """
-    from robothor.engine.secret_paths import KEY_FILE_SETTINGS
     from robothor.secrets import resolve_secret
-    from robothor.secrets.classification import is_bootstrap, non_secret_env_names
+    from robothor.secrets.classification import is_platform_credential, non_secret_env_names
     from robothor.settings.env import process_env_snapshot
 
     rung = mode if mode in _MODES else exec_env_mode()
@@ -337,18 +361,17 @@ def build_exec_env(
         else {name: value for name, value in source.items() if name not in set(withheld)}
     )
 
-    # On EVERY rung, ``off`` included: these name the file holding the vault
-    # master key (and the fingerprint salt). A child that can read the
-    # variable can print the file, as `od $GENUS_VAULT_KEY_FILE` did; the
-    # platform resolves the key itself and no agent command ever needs it.
-    for name in KEY_FILE_SETTINGS:
-        child.pop(name, None)
+    # On EVERY rung, ``off`` included. These open the platform, not one
+    # integration: the database, the cache, the signing keys, and the files
+    # holding the vault master key and the fingerprint salt. The platform
+    # resolves them itself and no agent command ever needs one.
+    child = without_platform_credentials(child)
 
     granted: list[str] = []
     refused: list[str] = []
     unresolved: list[str] = []
     for name in dict.fromkeys(grants):  # de-duplicated, order preserved
-        if is_bootstrap(name):
+        if is_platform_credential(name):
             # Not a policy question the manifest gets to answer. The database
             # password opens every tenant's data AND the vault's own rows; the
             # signing keys mint sessions. An agent holding one of these is not

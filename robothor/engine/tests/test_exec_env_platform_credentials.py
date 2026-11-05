@@ -273,7 +273,10 @@ def _copies_the_process_environment(node: ast.AST) -> bool:
         return isinstance(value, ast.Attribute) and value.attr == "environ"
 
     if isinstance(node, ast.Dict):
-        return any(key is None and is_environ(value) for key, value in zip(node.keys, node.values))
+        return any(
+            key is None and is_environ(value)
+            for key, value in zip(node.keys, node.values, strict=True)
+        )
     if isinstance(node, ast.Call):
         target = node.func
         if isinstance(target, ast.Attribute) and target.attr == "copy":

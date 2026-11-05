@@ -215,7 +215,7 @@ async def test_recovery_loop_survives_batch_failure_and_propagates_shutdown(monk
     launch = AsyncMock(
         side_effect=[
             OSError("spawn failed"),
-            SimpleNamespace(wait=AsyncMock(return_value=0), returncode=0),
+            SimpleNamespace(wait=AsyncMock(return_value=0), returncode=0, stdin=None),
         ]
     )
     sleeps = []
@@ -248,7 +248,7 @@ async def test_recovery_shutdown_terminates_a_live_batch(monkeypatch):
         await asyncio.Event().wait()
 
     process = SimpleNamespace(
-        returncode=None, wait=AsyncMock(side_effect=wait), terminate=Mock(), kill=Mock()
+        returncode=None, wait=AsyncMock(side_effect=wait), terminate=Mock(), kill=Mock(), stdin=None
     )
     monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
     task = asyncio.create_task(worker.run("fixture"))
@@ -272,7 +272,7 @@ async def test_recovery_shutdown_reaps_a_real_isolated_process(monkeypatch):
     started = asyncio.Event()
     children = []
 
-    async def launch(*args):
+    async def launch(*args, **_kwargs):
         assert args[1:3] == ("-m", "robothor.engine.calendar_recovery_worker")
         child = await spawn(sys.executable, "-c", "import time; time.sleep(60)")
         children.append(child)
@@ -374,7 +374,7 @@ async def test_stalled_recovery_batch_is_reaped_before_next_sweep(monkeypatch):
     children = []
     delays = []
 
-    async def launch(*args):
+    async def launch(*args, **_kwargs):
         child = await spawn(sys.executable, "-c", "import time; time.sleep(60)")
         children.append(child)
         return child
