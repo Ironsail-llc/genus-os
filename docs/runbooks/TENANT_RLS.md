@@ -55,8 +55,13 @@ checkouts queue behind the pool lock, one `connect_timeout` each. Keep
 
 Row-level security separates tenants for the connections the platform opens. It
 is a backstop for the platform's own code, not a boundary against anything else
-holding the database credentials, which is why those credentials never reach an
-agent's child process (`docs/configuration.md`, "One class is outside the ladder").
+that can connect to the database. That is why the database credentials are
+kept from an agent's child process (`docs/configuration.md`, "One class is
+outside the ladder"). Keeping the credentials back is only part of it: when
+`ROBOTHOR_DB_HOST` is a local Unix socket and `pg_hba.conf` allows peer
+authentication, a child running as the engine's user can connect without one.
+Where tenants must not reach each other's rows through a shell, connect over
+TCP with password authentication.
 
 ## Turning it on
 

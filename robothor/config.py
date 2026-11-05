@@ -151,9 +151,10 @@ class DatabaseConfig:
     def url(self) -> str:
         """Return a libpq-compatible ``postgresql://`` URL.
 
-        Tool subprocesses (e.g. ``psql $DATABASE_URL -c '...'`` inside
-        ``experiment_measure`` metric commands) expect this format rather than
-        the space-separated DSN.
+        For this process's own URL-taking tooling, which expects this format
+        rather than the space-separated DSN. It is exported as ``DATABASE_URL``,
+        and no child process inherits it: an ``experiment_measure`` metric
+        command cannot ``psql $DATABASE_URL``.
 
         TCP connections use ``postgresql://user:pass@host:port/db``. Unix
         socket connections (``host=""`` or a socket directory path starting
