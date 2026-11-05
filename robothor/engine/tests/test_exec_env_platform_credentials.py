@@ -136,8 +136,14 @@ async def spawned():
     p = await asyncio.create_subprocess_exec(*show, stdout=subprocess.PIPE)
     out, _ = await p.communicate()
     return json.loads(out)
+try:
+    from playwright._impl import _transport
+    driver = sorted(_transport.get_driver_env())
+except ImportError:
+    driver = None
 print(json.dumps({
     "dropped": sorted(dropped),
+    "driver": driver,
     "readable_here": all(os.environ.get(n) for n in names),
     "subprocess": json.loads(subprocess.check_output(show)),
     "shell": subprocess.check_output("env", shell=True, text=True).split(chr(10)),
@@ -146,22 +152,34 @@ print(json.dumps({
 """
 
 
-def _after_the_drop() -> dict:
+def _run_drop(
+    extra: dict[str, str] | None = None, strip: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[str]:
+    """The drop, in a process of its own, with every platform credential set."""
     env = {
         **{k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "TMPDIR", "PYTHONPATH")},
         **dict.fromkeys(PLATFORM_CREDENTIALS, FIXTURE_VALUE),
         "PYTHONPATH": str(REPO_ROOT),
+        # No workspace .env file fills a gap the test left on purpose.
+        "ROBOTHOR_WORKSPACE": "/nonexistent",
+        **(extra or {}),
     }
-    # The two the process reads itself and would choke on as a fixture value.
+    # The process reads this itself and would choke on it as a fixture value.
     env.pop("ROBOTHOR_NATS_URL", None)
+    for name in strip:
+        env.pop(name, None)
     names = ["ROBOTHOR_DB_PASSWORD", "GENUS_AUTH_SIGNING_KEY"]
-    done = subprocess.run(
+    return subprocess.run(
         [sys.executable, "-c", _AFTER_THE_DROP, *names],
         env=env,
         capture_output=True,
         text=True,
         timeout=90,
     )
+
+
+def _after_the_drop(**extra: str) -> dict:
+    done = _run_drop(extra)
     failed = done.returncode != 0
     assert not failed, "the probe process failed"
     return json.loads(done.stdout.strip().splitlines()[-1])
@@ -213,6 +231,185 @@ async def test_a_shell_hook_gets_no_platform_credential(monkeypatch, tmp_path):
     survivors = sorted(seen & set(PLATFORM_CREDENTIALS))
     assert "HOOK_EVENT" in seen, "the hook did not run"
     assert survivors == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rung", RUNGS)
+async def test_a_shell_hook_keeps_its_own_credentials_on_every_rung(rung, monkeypatch, tmp_path):
+    """A hook is operator-written, not model-composed: the exec ladder is not its
+    policy. It loses the platform's credentials and nothing else, so a hook that
+    posts to a webhook or authenticates to a policy service keeps working on
+    ``enforce``."""
+    from robothor.engine import hook_registry as hr
+
+    monkeypatch.setenv("ROBOTHOR_EXEC_ENV_MODE", rung)
+    monkeypatch.setenv("ACME_WEBHOOK_URL", "https://hooks.example.com/fixture")
+    monkeypatch.setenv("ACME_POLICY_TOKEN", FIXTURE_VALUE)
+    for name in PLATFORM_CREDENTIALS:
+        monkeypatch.setenv(name, FIXTURE_VALUE)
+    out = tmp_path / "names.txt"
+    hook = hr.LifecycleHook(
+        event=hr.HookEvent.AGENT_START,
+        handler_type="command",
+        handler=f"{sys.executable} -c \"import os;open(r'{out}','w').write(chr(10).join(os.environ))\"",
+    )
+    context = hr.HookContext(event=hr.HookEvent.AGENT_START, agent_id="researcher", run_id="r1")
+    await hr.HookRegistry()._run_command(hook, context)
+    seen = set(out.read_text().split())
+    kept = sorted({"ACME_WEBHOOK_URL", "ACME_POLICY_TOKEN"} & seen)
+    survivors = sorted(seen & set(PLATFORM_CREDENTIALS))
+    assert kept == ["ACME_POLICY_TOKEN", "ACME_WEBHOOK_URL"]
+    assert survivors == []
+
+
+# ── a credential held in a connection setting's value ────────────────────────
+
+DSN_IN_A_HOST = "postgresql://alice:hunter2@db.example.com/genus"
+REDIS_DSN = "redis://alice:hunter2@cache.example.com:6379/0"
+
+
+def test_a_connection_setting_holding_a_credential_is_a_platform_credential():
+    from robothor.engine.exec_env import without_platform_credentials
+
+    child = without_platform_credentials(
+        {
+            "ROBOTHOR_DB_HOST": DSN_IN_A_HOST,
+            "ROBOTHOR_REDIS_HOST": REDIS_DSN,
+            "ROBOTHOR_DB_NAME": "genus",
+            "ROBOTHOR_REDIS_PORT": "6379",
+        }
+    )
+    assert sorted(child) == ["ROBOTHOR_DB_NAME", "ROBOTHOR_REDIS_PORT"]
+
+
+@pytest.mark.parametrize("rung", RUNGS)
+def test_no_rung_keeps_a_credential_in_a_connection_setting(rung):
+    base = _boxlike(ROBOTHOR_DB_HOST=DSN_IN_A_HOST, ROBOTHOR_REDIS_HOST=REDIS_DSN)
+    child = build_exec_env(agent_id="researcher", mode=rung, base=base).env
+    survivors = sorted({"ROBOTHOR_DB_HOST", "ROBOTHOR_REDIS_HOST"} & set(child))
+    assert survivors == []
+
+
+def test_the_drop_takes_a_credential_out_of_a_connection_setting():
+    report = _after_the_drop(ROBOTHOR_DB_HOST=DSN_IN_A_HOST)
+    survivors = "ROBOTHOR_DB_HOST" in set(report["subprocess"])
+    assert not survivors
+
+
+# ── libpq's own password variables ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", ("PGPASSWORD", "PGPASSFILE"))
+def test_startup_refuses_a_password_only_libpq_can_see(name):
+    """libpq reads these from the C environment the drop empties. An engine that
+    authenticated through one alone would boot and then fail every connection,
+    so it refuses to start and says which setting to use instead."""
+    other = "PGPASSFILE" if name == "PGPASSWORD" else "PGPASSWORD"
+    done = _run_drop({name: FIXTURE_VALUE}, strip=("ROBOTHOR_DB_PASSWORD", other))
+    refused = done.returncode != 0
+    assert refused
+    assert name in done.stderr
+    assert "ROBOTHOR_DB_PASSWORD" in done.stderr
+
+
+def test_startup_accepts_a_libpq_password_alongside_the_platform_one():
+    done = _run_drop({"PGPASSWORD": FIXTURE_VALUE, "ROBOTHOR_DB_PASSWORD": FIXTURE_VALUE})
+    started = done.returncode == 0
+    assert started
+
+
+# ── the Playwright driver ────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def driver_env(monkeypatch):
+    """Playwright's own driver-environment builder, unwrapped for the test."""
+    transport = pytest.importorskip("playwright._impl._transport")
+    from playwright._impl import _driver
+
+    monkeypatch.setattr(transport, "get_driver_env", _driver.get_driver_env)
+    for name in PLATFORM_CREDENTIALS:
+        monkeypatch.setenv(name, FIXTURE_VALUE)
+    monkeypatch.setenv("ACME_UNRELATED", "kept")
+    return transport
+
+
+def _driver_survivors(transport) -> tuple[list[str], bool]:
+    env = transport.get_driver_env()
+    return sorted(set(env) & set(PLATFORM_CREDENTIALS)), env.get("ACME_UNRELATED") == "kept"
+
+
+@pytest.mark.asyncio
+async def test_the_browser_tool_starts_its_driver_without_them(driver_env, monkeypatch):
+    """Playwright's driver copies ``os.environ`` for itself; the browser tool's
+    one long-lived driver would hold every platform credential."""
+    import playwright.async_api as api
+
+    from robothor.engine.tools.handlers import browser
+
+    seen: dict[str, object] = {}
+
+    class _Fake:
+        async def start(self):
+            seen["survivors"], seen["kept"] = _driver_survivors(driver_env)
+            return object()
+
+    monkeypatch.setattr(api, "async_playwright", lambda: _Fake())
+    monkeypatch.setattr(browser, "_playwright_instance", None)
+    await browser._get_playwright()
+    assert seen["survivors"] == []
+    assert seen["kept"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_render_tool_starts_its_driver_without_them(driver_env, monkeypatch):
+    from robothor.engine.tools.handlers import web_render
+
+    class _Stop(Exception):
+        pass
+
+    class _Network:
+        async def get(self, url):
+            raise _Stop
+
+    monkeypatch.setattr(web_render, "RenderNetwork", _Network)
+    with pytest.raises(_Stop):
+        await web_render.render("https://example.com/")
+    survivors, kept = _driver_survivors(driver_env)
+    assert survivors == []
+    assert kept
+
+
+def test_the_startup_drop_covers_every_driver_this_process_starts():
+    report = _after_the_drop()
+    if report["driver"] is None:
+        pytest.skip("playwright is not installed")
+    survivors = sorted(set(report["driver"]) & set(PLATFORM_CREDENTIALS))
+    assert survivors == []
+
+
+@pytest.mark.asyncio
+async def test_a_real_driver_process_is_spawned_without_them(driver_env, monkeypatch):
+    """The environment handed to the driver's actual spawn, not our wrapper's."""
+    from playwright.async_api import async_playwright
+
+    from robothor.engine.process_hardening import filter_playwright_driver_env
+
+    real_spawn = driver_env.asyncio.create_subprocess_exec
+    spawned: list[dict[str, str]] = []
+
+    async def spy(*args, **kwargs):
+        spawned.append(dict(kwargs.get("env") or {}))
+        return await real_spawn(*args, **kwargs)
+
+    monkeypatch.setattr(driver_env.asyncio, "create_subprocess_exec", spy)
+    assert filter_playwright_driver_env()
+    pw = await async_playwright().start()
+    await pw.stop()
+    assert len(spawned) == 1
+    survivors = sorted(set(spawned[0]) & set(PLATFORM_CREDENTIALS))
+    assert survivors == []
+    assert spawned[0].get("ACME_UNRELATED") == "kept"
 
 
 def test_the_codex_child_gets_no_platform_credential(monkeypatch):
