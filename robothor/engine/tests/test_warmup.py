@@ -185,7 +185,7 @@ class TestBuildWarmthPreamble:
             warmup_peer_agents=["email-classifier", "email-analyst"],
         )
 
-        def side_effect(agent_id: str):
+        def side_effect(agent_id: str, tenant_id: str = "default"):
             if agent_id == "test-agent":
                 return None
             if agent_id == "email-classifier":
@@ -268,7 +268,7 @@ class TestBuildWarmthPreamble:
             "consecutive_errors": 0,
         }
 
-        def schedule_side_effect(agent_id: str):
+        def schedule_side_effect(agent_id: str, tenant_id: str = "default"):
             if agent_id == "test-agent":
                 return schedule_self
             return schedule_peer

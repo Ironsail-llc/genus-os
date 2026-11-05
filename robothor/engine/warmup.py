@@ -221,7 +221,7 @@ def build_warmth_preamble(
         return text or None
 
     _run_section("unread_alerts", _unread_alerts)
-    _run_section("history", lambda: _build_history_section(config.id))
+    _run_section("history", lambda: _build_history_section(config.id, tenant_id))
     _run_section(
         "memory_blocks",
         lambda: _build_memory_blocks_section(config.warmup_memory_blocks, tenant_id=tenant_id),
@@ -232,7 +232,7 @@ def build_warmth_preamble(
             config.warmup_context_files, workspace, snapshot=config.knowledge_snapshot
         ),
     )
-    _run_section("peers", lambda: _build_peer_section(config.warmup_peer_agents))
+    _run_section("peers", lambda: _build_peer_section(config.warmup_peer_agents, tenant_id))
     _run_section("context_hooks", lambda: _run_context_hooks(tenant_id))
 
     def _breadcrumbs() -> str | None:
@@ -332,11 +332,11 @@ def build_warmth_preamble(
     return preamble, _section_timings
 
 
-def _build_history_section(agent_id: str) -> str:
+def _build_history_section(agent_id: str, tenant_id: str = DEFAULT_TENANT) -> str:
     """Build session history from agent_schedules."""
     from robothor.engine.tracking import get_schedule
 
-    schedule = get_schedule(agent_id)
+    schedule = get_schedule(agent_id, tenant_id=tenant_id)
     if not schedule:
         return ""
 
@@ -1454,7 +1454,7 @@ def _fetch_entity_facts_batched(
     return grouped
 
 
-def _build_peer_section(peer_agent_ids: list[str]) -> str:
+def _build_peer_section(peer_agent_ids: list[str], tenant_id: str = DEFAULT_TENANT) -> str:
     """Query peer agent schedules for recent status."""
     if not peer_agent_ids:
         return ""
@@ -1464,7 +1464,7 @@ def _build_peer_section(peer_agent_ids: list[str]) -> str:
     lines = ["--- PEER AGENTS ---"]
     for peer_id in peer_agent_ids:
         try:
-            schedule = get_schedule(peer_id)
+            schedule = get_schedule(peer_id, tenant_id=tenant_id)
             if not schedule:
                 lines.append(f"{peer_id}: no data")
                 continue

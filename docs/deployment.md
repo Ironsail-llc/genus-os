@@ -531,6 +531,16 @@ shipped a migration that is not (one that drops or renames something the older
 code reads), restore the database from before it instead (see
 [PITR](runbooks/PITR.md)).
 
+One migration is a deliberate exception that does not need a restore:
+`167_agent_schedules_tenant_key` changes the `agent_schedules` primary key from
+`agent_id` to `(tenant_id, agent_id)`. An older release beside it starts as
+usual, and no ledger row needs deleting, but its `ON CONFLICT (agent_id)` upsert
+no longer finds a matching key. Each write logs `Failed to upsert schedule for
+<agent>`, the jobs stay in memory and keep firing, and rows already written stay
+readable; only new and changed schedules stop reaching the table until you roll
+forward. There is no reverse migration, because restoring the old key would
+mean choosing which tenant's row survives.
+
 The rule lives in the release you roll back **to**. Rolling back to a release
 older than it still refuses a newer ledger, and the migration Job fails; roll
 forward again, or restore the database to a point before the newer release

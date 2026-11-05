@@ -522,7 +522,7 @@ class CronScheduler:
         Returns True when a run was spawned, so the caller advances the
         stagger only for agents that actually launched -- otherwise one
         skipped agent would push every later one out for no reason."""
-        schedule = get_schedule(agent_config.id)
+        schedule = get_schedule(agent_config.id, tenant_id=self.config.tenant_id)
         if not schedule:
             return False  # no schedule row — nothing to catch up against
 
@@ -654,7 +654,7 @@ class CronScheduler:
         try:
             from robothor.engine.tracking import get_schedule
 
-            schedule = get_schedule(dedup_key)
+            schedule = get_schedule(dedup_key, tenant_id=self.config.tenant_id)
             if schedule:
                 errors = schedule.get("consecutive_errors", 0) or 0
                 if errors >= CIRCUIT_BREAKER_THRESHOLD:
@@ -704,12 +704,13 @@ class CronScheduler:
 
             prev_schedule = None
             with contextlib.suppress(Exception):
-                prev_schedule = get_schedule(dedup_key)
+                prev_schedule = get_schedule(dedup_key, tenant_id=self.config.tenant_id)
             consecutive_errors = (
                 (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
             )
             update_schedule_state(
                 agent_id=dedup_key,
+                tenant_id=self.config.tenant_id,
                 last_run_at=datetime.now(UTC),
                 last_status="timeout",
                 consecutive_errors=consecutive_errors,
@@ -822,13 +823,14 @@ class CronScheduler:
             if run.status.value in ("failed", "timeout"):
                 prev_schedule = None
                 with contextlib.suppress(Exception):
-                    prev_schedule = get_schedule(dedup_key)
+                    prev_schedule = get_schedule(dedup_key, tenant_id=self.config.tenant_id)
                 consecutive_errors = (
                     (prev_schedule.get("consecutive_errors", 0) + 1) if prev_schedule else 1
                 )
 
             update_schedule_state(
                 agent_id=dedup_key,
+                tenant_id=self.config.tenant_id,
                 last_run_at=run.started_at,
                 last_run_id=run.id,
                 last_status=run.status.value,
@@ -958,14 +960,14 @@ class CronScheduler:
         finally:
             await release(dedup_key)
 
-    @staticmethod
-    def _record_ambient_state(dedup_key: str, result: Any) -> None:
+    def _record_ambient_state(self, dedup_key: str, result: Any) -> None:
         """The ``<agent>:ambient`` row's last run, for the fleet view and the breaker."""
         failed = result.run_status in ("failed", "timeout")
         try:
-            previous = get_schedule(dedup_key) if failed else None
+            previous = get_schedule(dedup_key, tenant_id=self.config.tenant_id) if failed else None
             update_schedule_state(
                 agent_id=dedup_key,
+                tenant_id=self.config.tenant_id,
                 last_run_at=result.started_at,
                 last_run_id=result.run_id,
                 last_status=result.run_status,

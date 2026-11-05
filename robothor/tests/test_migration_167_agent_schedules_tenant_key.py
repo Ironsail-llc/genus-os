@@ -152,7 +152,5 @@ def test_nothing_references_the_old_key(scratch_db) -> None:
     """No foreign key points at ``agent_schedules``, composite or otherwise."""
     db, _ = scratch_db(through=MIGRATION)
     cur = db.cursor()
-    cur.execute(
-        "SELECT conname FROM pg_constraint WHERE confrelid = 'agent_schedules'::regclass"
-    )
+    cur.execute("SELECT conname FROM pg_constraint WHERE confrelid = 'agent_schedules'::regclass")
     assert cur.fetchall() == []

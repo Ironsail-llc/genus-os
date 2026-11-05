@@ -408,7 +408,9 @@ those runs, their steps, checkpoints, evidence and tool events (which carry
 no tenant column and follow their run), runtime controls and effects,
 breadcrumbs, questions, reviews, interventions, coding jobs, memory-write
 jobs, fact-access records and message reactions. The agents' schedules,
-user cron jobs, benchmark results and managed-agent runs. The workflows'
+user cron jobs, benchmark results and managed-agent runs (a schedule moves
+with all of the agent's jobs: `<agent>`, and its `:heartbeat`, `:worker` and
+`:ambient` rows). The workflows'
 runs, their steps and their approvals. The agents' chat sessions (keys of
 the form `agent:<id>:…`), with their messages, approval receipts and channel
 message map. A delivery the channel bus surfaced into another agent's session
@@ -450,7 +452,11 @@ A move is refused, with nothing written, when:
   operation, workflow or handoff;
 - the target already holds a row with the same unique key as a moved row
   (for example a chat session with the same key); the error names the table
-  and the key;
+  and the key. `agent_schedules` is keyed by tenant and job, so a target whose
+  engine already runs the agent holds the row, which is why the move belongs
+  before that engine's first run. If it has already run, delete the target's
+  `agent_schedules` row for that job and move: the moved row takes its place,
+  and the engine rewrites its schedule columns at its next start;
 - a row that stays in the source references a row that moves.
 
 The command never moves a workload up to an ancestor, so it cannot return a
@@ -459,6 +465,15 @@ Between children it moves both ways (`--from acme-child-a --to acme-child-b`
 and back). Moving back does not restore the links the first move cleared:
 they stay empty, and the audit row records only how many were cleared per
 column.
+
+**Schedule rows after a workload leaves.** Each tenant holds its own
+`agent_schedules` row per job, and two tenants may run the same agent id, so a
+row left in the source no longer gets in the way of the target. It fires
+nothing either: the scheduler runs from manifests. The source engine's next
+reconcile prunes it once the manifest is gone. The exception is a source with no
+scheduled job left at all, because the prune refuses to run from an empty set;
+there the row stays, and shows on that tenant's fleet view, until you delete
+it. `genus tenant move-workload` is the way to carry a row over.
 
 ## Verification queries
 

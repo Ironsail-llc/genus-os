@@ -59,6 +59,9 @@ _RUN_TEXT = "(SELECT id::text FROM _mw_runs)"
 _WF_RUNS = "(SELECT id FROM _mw_wf_runs)"
 _SESSION_KEYS = "(SELECT session_key FROM _mw_sessions)"
 _AGENT = "agent_id = ANY(%(agents)s::text[])"
+# ``agent_schedules.agent_id`` is a JOB id: ``<agent>``, or ``<agent>:<kind>`` for
+# the agent's heartbeat, worker and ambient jobs. Every one of them is the agent's.
+_AGENT_JOBS = "split_part(agent_id, ':', 1) = ANY(%(agents)s::text[])"
 
 #: table -> the rows of the workload in it. In the order they are rewritten.
 MOVED_TABLES: dict[str, str] = {
@@ -69,7 +72,7 @@ MOVED_TABLES: dict[str, str] = {
     "agent_questions": f"{_AGENT} OR run_id IN {_RUNS}",
     "agent_reviews": f"{_AGENT} OR run_id IN {_RUNS}",
     "run_interventions": f"run_id IN {_RUNS}",
-    "agent_schedules": _AGENT,
+    "agent_schedules": _AGENT_JOBS,
     "user_cronjobs": _AGENT,
     "benchmark_results": _AGENT,
     "ma_runs": _AGENT,

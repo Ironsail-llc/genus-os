@@ -8,8 +8,7 @@ defect only exists where row-level security is enforcing.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -22,6 +21,9 @@ from robothor.engine.tracking import (
     upsert_schedule,
 )
 from tests.rls_app_role import app_role, rls_tenants  # noqa: F401 - pytest fixtures
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 pytestmark = pytest.mark.integration
 

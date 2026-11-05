@@ -189,3 +189,4 @@ crm/163_step_type_budget_stop.sql
 crm/164_step_type_steer.sql
 crm/165_coding_publish_denies.sql
 crm/166_entity_recall_definer.sql
+crm/167_agent_schedules_tenant_key.sql

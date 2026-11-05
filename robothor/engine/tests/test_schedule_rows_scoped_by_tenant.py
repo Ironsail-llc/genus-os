@@ -26,7 +26,9 @@ def _scheduler() -> CronScheduler:
 
 def test_the_breaker_reads_this_tenants_row() -> None:
     with patch("robothor.engine.tracking.get_schedule", return_value=None) as read:
-        _scheduler()._circuit_breaker_tripped("alice-agent", AgentConfig(id="alice-agent", name="A"))
+        _scheduler()._circuit_breaker_tripped(
+            "alice-agent", AgentConfig(id="alice-agent", name="A")
+        )
     read.assert_called_once_with("alice-agent", tenant_id=TENANT)
 
 
