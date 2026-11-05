@@ -525,6 +525,40 @@ def test_a_collision_is_refused_in_a_dry_run_too(world) -> None:
         _move(world, dry_run=True)
 
 
+def test_a_schedule_the_target_already_holds_is_refused_and_named(world) -> None:
+    """A tenant's engine writes its own row at start, so one running the agent
+    already has this key. Refused before the first write, never an IntegrityError."""
+    world["cur"].execute(
+        "INSERT INTO agent_schedules (agent_id, tenant_id, cron_expr) VALUES (%s, %s, '* * * * *')",
+        (world["agent"], world["child_a"]),
+    )
+    with pytest.raises(mw.WorkloadMoveError, match="agent_schedules") as exc:
+        _move(world)
+    assert world["agent"] in str(exc.value)
+    _assert_untouched(world)
+
+
+def test_a_moved_agents_heartbeat_worker_and_ambient_rows_move_with_it(world) -> None:
+    """``agent_schedules`` is keyed by JOB id: ``<agent>``, ``<agent>:heartbeat``,
+    ``<agent>:worker``, ``<agent>:ambient``. All of them are the agent's."""
+    cur, parent = world["cur"], world["parent"]
+    jobs = [f"{world['agent']}:{kind}" for kind in ("heartbeat", "worker", "ambient")]
+    bystander = f"{world['neighbour']}:heartbeat"
+    for job in (*jobs, bystander):
+        cur.execute(
+            "INSERT INTO agent_schedules (agent_id, tenant_id, cron_expr) "
+            "VALUES (%s, %s, '* * * * *')",
+            (job, parent),
+        )
+
+    report = _move(world)
+
+    assert report.counts["agent_schedules"] == 1 + len(jobs)
+    for job in jobs:
+        assert _tenant_of(cur, "agent_schedules", "agent_id", job) == [world["child_a"]]
+    assert _tenant_of(cur, "agent_schedules", "agent_id", bystander) == [parent]
+
+
 def test_a_goal_pursuit_on_a_workload_run_is_refused(world) -> None:
     cur, gid = world["cur"], str(uuid.uuid4())
     cur.execute(

@@ -16,6 +16,7 @@ from robothor.engine.tracking import (
     delete_stale_schedules,
     get_agent_stats,
     get_run,
+    get_schedule,
     list_runs,
     list_schedules,
     list_steps,
@@ -255,6 +256,26 @@ class TestSchedules:
         assert result is True
         sql = mock_db["cursor"].execute.call_args[0][0]
         assert "ON CONFLICT" in sql
+
+    def test_upsert_conflicts_on_the_tenant_and_the_job_together(self, mock_db):
+        upsert_schedule("test-agent", tenant_id="test-tenant", cron_expr="0 * * * *")
+        sql = mock_db["cursor"].execute.call_args[0][0]
+        assert "ON CONFLICT (tenant_id, agent_id)" in sql
+        # A row of the key cannot change hands: the conflict matched this tenant's row.
+        assert "tenant_id = EXCLUDED.tenant_id" not in sql
+
+    def test_get_schedule_is_scoped_to_the_tenant(self, mock_db):
+        mock_db["cursor"].fetchone.return_value = None
+        get_schedule("test-agent", tenant_id="test-tenant")
+        sql, params = mock_db["cursor"].execute.call_args[0]
+        assert "tenant_id = %s" in sql
+        assert params == ("test-agent", "test-tenant")
+
+    def test_update_schedule_state_is_scoped_to_the_tenant(self, mock_db):
+        update_schedule_state("test-agent", tenant_id="test-tenant", last_status="completed")
+        sql, params = mock_db["cursor"].execute.call_args[0]
+        assert sql.endswith("WHERE agent_id = %s AND tenant_id = %s")
+        assert params[-2:] == ["test-agent", "test-tenant"]
 
     def test_update_schedule_state(self, mock_db):
         result = update_schedule_state(
