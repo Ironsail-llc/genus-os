@@ -374,7 +374,7 @@ deployed; with it, the bridge and every engine refuse the token within 30 s
 A workload is a set of agents and workflows. When it moves from the tenant
 it ran in (usually the root) to another tenant's engine (usually a child),
 move its history with it, after the child's engine is in place and BEFORE
-the child's engine runs it for the first time. Stop the workload in the
+the agent's manifest reaches the child's engine. Stop the workload in the
 source first: remove the agents and workflows from the source engine's
 manifests (or disable their schedules) and let anything running finish. The
 move runs at `REPEATABLE READ`, so a write the source engine commits during
@@ -452,10 +452,11 @@ A move is refused, with nothing written, when:
   operation, workflow or handoff;
 - the target already holds a row with the same unique key as a moved row
   (for example a chat session with the same key); the error names the table
-  and the key. `agent_schedules` is keyed by tenant and job, so a target whose
-  engine already runs the agent holds the row, which is why the move belongs
-  before that engine's first run. If it has already run, delete the target's
-  `agent_schedules` row for that job and move: the moved row takes its place,
+  and the key. `agent_schedules` is keyed by tenant and job, and an engine
+  writes the row when it loads the manifest, before the job first fires, which
+  is why the move belongs before the manifest reaches the target. If it has
+  already loaded it, delete the target's `agent_schedules` row for that job
+  and move: the moved row takes its place,
   and the engine rewrites its schedule columns at its next start;
 - a row that stays in the source references a row that moves.
 
