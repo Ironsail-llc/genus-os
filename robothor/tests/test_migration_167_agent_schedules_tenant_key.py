@@ -1,7 +1,7 @@
 """``agent_schedules`` is keyed per tenant, not per agent.
 
 The table carries the row-level security policy, and tenants share job ids
-(two tenants can both run a ``concierge``). With ``agent_id`` as the whole key,
+(two tenants can both run an agent of the same name). With ``agent_id`` as the whole key,
 the first tenant to write a job id owned it: every other tenant's upsert hit
 that row through ``ON CONFLICT`` and the policy refused the update.
 
