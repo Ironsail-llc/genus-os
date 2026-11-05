@@ -264,8 +264,8 @@ async def test_a_shell_hook_keeps_its_own_credentials_on_every_rung(rung, monkey
 
 # ── a credential held in a connection setting's value ────────────────────────
 
-DSN_IN_A_HOST = "postgresql://alice:hunter2@db.example.com/genus"
-REDIS_DSN = "redis://alice:hunter2@cache.example.com:6379/0"
+DSN_IN_A_HOST = "postgresql://alice:hunter2@example.com/genus"
+REDIS_DSN = "redis://alice:hunter2@example.com:6379/0"
 
 
 def test_a_connection_setting_holding_a_credential_is_a_platform_credential():
