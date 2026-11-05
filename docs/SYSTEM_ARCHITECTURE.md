@@ -1083,8 +1083,9 @@ and reports `blocked` as `{agent-id: ErrorType}` (or `{"*": "manifest directory
 unreadable"}`). On 2026-08-23 a YAML typo made one manifest unparseable, the
 loader dropped it, reconcile could not tell "broken" from "deleted", and it
 deleted the primary agent's heartbeat and worker schedules; the operator got
-silence for 3h48m. Pruning is one-way and `agent_schedules` has no tombstone, so
-the refusal is not negotiable — and adding from a partial view is refused for
+silence for 3h48m. Pruning is one-way, per tenant (the table's key is
+`(tenant_id, agent_id)`, since tenants share job ids) and `agent_schedules` has
+no tombstone, so the refusal is not negotiable — and adding from a partial view is refused for
 the milder version of the same reason: a trigger derived from an incomplete
 fleet is one nobody can account for.
 

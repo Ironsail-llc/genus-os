@@ -165,8 +165,8 @@ not only by RLS. The same four run columns now come back from `GET /api/runs`
 and `GET /api/runs/{id}`, so the Runs view shows them too.
 
 **One card per job, not per agent.** The scheduler derives up to three jobs from
-one manifest and keys `agent_schedules` — and the circuit breaker — by the job
-id it built: `<agent>` from `schedule.cron`, `<agent>:heartbeat` from
+one manifest and keys `agent_schedules` — and the circuit breaker — by tenant
+and the job id it built: `<agent>` from `schedule.cron`, `<agent>:heartbeat` from
 `heartbeat.cron`, `<agent>:worker` from `worker.cron`
 (`robothor/engine/schedule_reconcile.py`). Automations uses the same ids, so an
 agent scheduled only by a heartbeat and a worker — the shape of the primary

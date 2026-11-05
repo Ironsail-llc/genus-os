@@ -530,11 +530,17 @@ def list_steps(run_id: str) -> list[dict[str, Any]]:
 # ─── Schedules ────────────────────────────────────────────────────────
 
 
-def get_schedule(agent_id: str) -> dict[str, Any] | None:
-    """Get schedule state for an agent."""
+def get_schedule(agent_id: str, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any] | None:
+    """Get schedule state for one job of one tenant.
+
+    ``agent_id`` is a job id, and only unique within a tenant: tenants share them.
+    """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM agent_schedules WHERE agent_id = %s", (agent_id,))
+        cur.execute(
+            "SELECT * FROM agent_schedules WHERE agent_id = %s AND tenant_id = %s",
+            (agent_id, tenant_id),
+        )
         row = cur.fetchone()
         return dict(row) if row else None
 
@@ -564,8 +570,7 @@ def upsert_schedule(
                 timeout_seconds, model_primary, model_fallbacks,
                 delivery_mode, delivery_channel, delivery_to, session_target
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (agent_id) DO UPDATE SET
-                tenant_id = EXCLUDED.tenant_id,
+            ON CONFLICT (tenant_id, agent_id) DO UPDATE SET
                 enabled = EXCLUDED.enabled,
                 cron_expr = EXCLUDED.cron_expr,
                 timezone = EXCLUDED.timezone,
@@ -599,6 +604,7 @@ def upsert_schedule(
 def update_schedule_state(
     agent_id: str,
     *,
+    tenant_id: str = DEFAULT_TENANT,
     last_run_at: datetime | None = None,
     last_run_id: str | None = None,
     last_status: str | None = None,
@@ -624,8 +630,8 @@ def update_schedule_state(
             updates.append(f"{col} = %s")
             values.append(val)
 
-    values.append(agent_id)
-    sql = f"UPDATE agent_schedules SET {', '.join(updates)} WHERE agent_id = %s"
+    values.extend([agent_id, tenant_id])
+    sql = f"UPDATE agent_schedules SET {', '.join(updates)} WHERE agent_id = %s AND tenant_id = %s"
 
     with get_connection() as conn:
         cur = conn.cursor()
