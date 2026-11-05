@@ -48,7 +48,9 @@ def check_psql_metric_command() -> tuple[bool, str]:
     # connects to the database named after the user, so the command names the
     # configured database, host, port and user.
     db = get_config().db
-    target = [f"-d {shlex.quote(db.name)}", f"-p {int(db.port)}"]
+    # -w: never prompt. With no password in its environment, a TCP install
+    # would otherwise sit at a password prompt until the metric timeout.
+    target = ["-w", f"-d {shlex.quote(db.name)}", f"-p {int(db.port)}"]
     if db.host:
         target.append(f"-h {shlex.quote(db.host)}")
     if db.user:
