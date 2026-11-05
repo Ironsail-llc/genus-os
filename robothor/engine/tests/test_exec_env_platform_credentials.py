@@ -1,0 +1,310 @@
+"""The credentials that open the platform itself never reach a child process.
+
+A rung of ``ROBOTHOR_EXEC_ENV_MODE`` decides what an agent's commands may keep
+of the application credentials. It does not get a say over these: they open
+every tenant's data at once, so they are held back on every rung, and they are
+held back from every child the engine starts, not only the ones that go through
+:func:`robothor.engine.exec_env.build_exec_env`.
+
+Each assertion binds its answer to a local first. pytest prints the operands of
+a failing expression, and an operand here would be a child's whole environment.
+"""
+
+from __future__ import annotations
+
+import ast
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from robothor.engine.exec_env import MODE_ENFORCE, MODE_OBSERVE, MODE_OFF, build_exec_env
+from robothor.engine.tools.dispatch import ToolContext
+from robothor.engine.tools.handlers.filesystem import HANDLERS
+from robothor.secrets.classification import bootstrap_names
+
+pytestmark = pytest.mark.timeout(120)
+
+ENGINE_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ENGINE_ROOT.parent.parent
+
+FIXTURE_VALUE = "fixture-not-a-real-credential"
+
+#: Beyond the declared bootstrap names: the ways a connection string arrives.
+CONNECTION_NAMES = ("DATABASE_URL", "REDIS_URL", "PGPASSWORD", "PGPASSFILE")
+
+PLATFORM_CREDENTIALS = tuple(sorted(bootstrap_names())) + CONNECTION_NAMES
+
+RUNGS = (MODE_OFF, MODE_OBSERVE, MODE_ENFORCE)
+
+DUMP_NAMES = f'{sys.executable} -c "import os;print(chr(10).join(sorted(os.environ)))"'
+
+
+def _boxlike(**extra: str) -> dict[str, str]:
+    return {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/nonexistent",
+        "ROBOTHOR_DB_HOST": "db.example.com",
+        "GITHUB_TOKEN": FIXTURE_VALUE,
+        **dict.fromkeys(PLATFORM_CREDENTIALS, FIXTURE_VALUE),
+        **extra,
+    }
+
+
+@pytest.mark.parametrize("rung", RUNGS)
+def test_no_rung_hands_a_platform_credential_to_a_child(rung):
+    child = build_exec_env(agent_id="researcher", mode=rung, base=_boxlike()).env
+    survivors = sorted(set(child) & set(PLATFORM_CREDENTIALS))
+    assert survivors == []
+
+
+@pytest.mark.parametrize("rung", (MODE_OFF, MODE_OBSERVE))
+def test_a_lower_rung_still_leaves_everything_else_where_it_was(rung):
+    """What the rungs are for: nothing an agent uses is taken without a choice."""
+    child = build_exec_env(agent_id="researcher", mode=rung, base=_boxlike()).env
+    kept = child.get("GITHUB_TOKEN") == FIXTURE_VALUE
+    assert kept
+    assert child["ROBOTHOR_DB_HOST"] == "db.example.com"
+
+
+@pytest.mark.parametrize("name", PLATFORM_CREDENTIALS)
+def test_every_platform_credential_is_classified(name):
+    from robothor.secrets.classification import is_platform_credential
+
+    assert is_platform_credential(name)
+
+
+@pytest.mark.parametrize("name", ("GITHUB_TOKEN", "OPENAI_API_KEY", "ROBOTHOR_DB_HOST", "PATH"))
+def test_an_ordinary_name_is_not_a_platform_credential(name):
+    from robothor.secrets.classification import is_platform_credential
+
+    assert not is_platform_credential(name)
+
+
+def test_a_manifest_cannot_grant_a_connection_string(monkeypatch):
+    built = build_exec_env(
+        agent_id="researcher",
+        mode=MODE_ENFORCE,
+        base=_boxlike(),
+        grants=("DATABASE_URL",),
+    )
+    granted = "DATABASE_URL" in built.env
+    assert not granted
+    assert built.refused == ("DATABASE_URL",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rung", ("", MODE_OFF, MODE_OBSERVE, MODE_ENFORCE))
+async def test_a_real_exec_child_sees_none_of_them(rung, monkeypatch, tmp_path):
+    """Through the tool handler, on every rung, the unset default included."""
+    import robothor.engine.exec_env as exec_env
+
+    monkeypatch.setattr(exec_env, "grants_for_agent", lambda agent_id, workspace="": ())
+    if rung:
+        monkeypatch.setenv("ROBOTHOR_EXEC_ENV_MODE", rung)
+    else:
+        monkeypatch.delenv("ROBOTHOR_EXEC_ENV_MODE", raising=False)
+    for name in PLATFORM_CREDENTIALS:
+        # A *_FILE names a path the exec gates resolve, so it has to be one.
+        fixture = str(tmp_path / "absent") if name.endswith("_FILE") else FIXTURE_VALUE
+        monkeypatch.setenv(name, fixture)
+
+    result = await HANDLERS["exec"](
+        {"command": DUMP_NAMES, "timeout": 30},
+        ToolContext(agent_id="researcher", workspace=str(tmp_path)),
+    )
+    seen = set(str(result.get("stdout", "")).split())
+    survivors = sorted(seen & set(PLATFORM_CREDENTIALS))
+    assert "PATH" in seen, "the probe did not run"
+    assert survivors == []
+
+
+# ── children that never pass through the builder ─────────────────────────────
+
+#: Run in a process of its own: the call under test changes the process's
+#: environment, which must not happen to the test runner.
+_AFTER_THE_DROP = """
+import asyncio, json, os, subprocess, sys
+from robothor.engine.process_hardening import drop_inherited_credentials
+names = sys.argv[1:]
+dropped = drop_inherited_credentials()
+show = [sys.executable, "-c", "import os,json;print(json.dumps(sorted(os.environ)))"]
+async def spawned():
+    p = await asyncio.create_subprocess_exec(*show, stdout=subprocess.PIPE)
+    out, _ = await p.communicate()
+    return json.loads(out)
+print(json.dumps({
+    "dropped": sorted(dropped),
+    "readable_here": all(os.environ.get(n) for n in names),
+    "subprocess": json.loads(subprocess.check_output(show)),
+    "shell": subprocess.check_output("env", shell=True, text=True).split(chr(10)),
+    "asyncio": asyncio.run(spawned()),
+}))
+"""
+
+
+def _after_the_drop() -> dict:
+    env = {
+        **{k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "TMPDIR", "PYTHONPATH")},
+        **dict.fromkeys(PLATFORM_CREDENTIALS, FIXTURE_VALUE),
+        "PYTHONPATH": str(REPO_ROOT),
+    }
+    # The two the process reads itself and would choke on as a fixture value.
+    env.pop("ROBOTHOR_NATS_URL", None)
+    names = ["ROBOTHOR_DB_PASSWORD", "GENUS_AUTH_SIGNING_KEY"]
+    done = subprocess.run(
+        [sys.executable, "-c", _AFTER_THE_DROP, *names],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    failed = done.returncode != 0
+    assert not failed, "the probe process failed"
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+def test_a_spawn_with_no_env_argument_inherits_none_of_them():
+    report = _after_the_drop()
+    seen = set(report["subprocess"]) | set(report["asyncio"])
+    seen |= {line.split("=", 1)[0] for line in report["shell"]}
+    survivors = sorted(seen & set(PLATFORM_CREDENTIALS))
+    assert survivors == []
+
+
+def test_the_process_itself_can_still_read_what_it_dropped():
+    """Every platform read goes through ``os.environ``; those keep working."""
+    report = _after_the_drop()
+    assert report["readable_here"] is True
+    assert "ROBOTHOR_DB_PASSWORD" in report["dropped"]
+
+
+def test_the_daemon_startup_path_drops_them(monkeypatch):
+    from robothor.engine import daemon, process_hardening
+
+    called: list[str] = []
+    monkeypatch.setattr(
+        process_hardening, "drop_inherited_credentials", lambda: called.append("drop") or ()
+    )
+    monkeypatch.setattr(process_hardening, "harden_process", lambda: called.append("harden"))
+    monkeypatch.setattr(daemon, "_log_pending_migrations", lambda: None)
+    daemon._harden_and_state_posture()
+    assert called == ["harden", "drop"]
+
+
+@pytest.mark.asyncio
+async def test_a_shell_hook_gets_no_platform_credential(monkeypatch, tmp_path):
+    from robothor.engine import hook_registry as hr
+
+    for name in PLATFORM_CREDENTIALS:
+        monkeypatch.setenv(name, FIXTURE_VALUE)
+    out = tmp_path / "names.txt"
+    hook = hr.LifecycleHook(
+        event=hr.HookEvent.AGENT_START,
+        handler_type="command",
+        handler=f"{sys.executable} -c \"import os;open(r'{out}','w').write(chr(10).join(os.environ))\"",
+    )
+    context = hr.HookContext(event=hr.HookEvent.AGENT_START, agent_id="researcher", run_id="r1")
+    await hr.HookRegistry()._run_command(hook, context)
+    seen = set(out.read_text().split())
+    survivors = sorted(seen & set(PLATFORM_CREDENTIALS))
+    assert "HOOK_EVENT" in seen, "the hook did not run"
+    assert survivors == []
+
+
+def test_the_codex_child_gets_no_platform_credential(monkeypatch):
+    from robothor.engine.codex_provider import _codex_env
+
+    for name in PLATFORM_CREDENTIALS:
+        monkeypatch.setenv(name, FIXTURE_VALUE)
+    survivors = sorted(set(_codex_env()) & set(PLATFORM_CREDENTIALS))
+    assert survivors == []
+
+
+def test_the_recovery_worker_receives_its_credentials_outside_its_environment(monkeypatch):
+    """Its environment is readable while it starts; a pipe is not."""
+    from robothor.engine import calendar_recovery_worker as worker
+
+    monkeypatch.setenv("ROBOTHOR_DB_PASSWORD", FIXTURE_VALUE)
+    payload = worker._credentials_for_child()
+    carried = json.loads(payload)["ROBOTHOR_DB_PASSWORD"] == FIXTURE_VALUE
+    assert carried
+
+    code = (
+        "import io,json,os,sys;"
+        "from robothor.engine import calendar_recovery_worker as w;"
+        "w._receive_credentials();"
+        "print(json.dumps(os.environ.get('ROBOTHOR_DB_PASSWORD')));"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        input=payload,
+        env={"PATH": os.environ["PATH"], "PYTHONPATH": str(REPO_ROOT), "HOME": "/nonexistent"},
+        capture_output=True,
+        timeout=60,
+    )
+    received = done.stdout.strip().endswith(json.dumps(FIXTURE_VALUE).encode())
+    assert received
+
+
+# ── the guard ────────────────────────────────────────────────────────────────
+
+#: A module that copies the process's environment on purpose, and why that
+#: cannot widen what a model reaches.
+ALLOWED_COPIES = {
+    # The builder and the allowlists: a copy is their input, never their output.
+    "robothor/engine/exec_env.py": "the builder",
+    "robothor/engine/coding/env.py": "allowlists built from nothing",
+    "robothor/engine/tools/handlers/browser.py": "passes it to the builder as base",
+    "robothor/engine/tools/handlers/desktop.py": "passes it to the builder as base",
+    "robothor/engine/host_execution.py": "passes it to the builder as base",
+    # Runs in the host service, never in the engine, on an operator's deploy.
+    "robothor/engine/local_deploy.py": "the host service's own test and migration steps",
+    # A fixed script the operator's button runs, which needs the database.
+    "robothor/engine/telegram_handlers.py": "an operator-approved fixed script",
+}
+
+
+def _copies_the_process_environment(node: ast.AST) -> bool:
+    def is_environ(value: ast.AST) -> bool:
+        return isinstance(value, ast.Attribute) and value.attr == "environ"
+
+    if isinstance(node, ast.Dict):
+        return any(key is None and is_environ(value) for key, value in zip(node.keys, node.values))
+    if isinstance(node, ast.Call):
+        target = node.func
+        if isinstance(target, ast.Attribute) and target.attr == "copy":
+            return is_environ(target.value)
+        if isinstance(target, ast.Name) and target.id == "dict":
+            return bool(node.args) and is_environ(node.args[0])
+    return False
+
+
+def test_no_engine_module_copies_the_process_environment_for_a_child():
+    """An explicit copy brings back what the startup drop took out.
+
+    ``os.environ`` keeps every value for the process's own reads, so a child
+    handed a copy of it gets them all. A new copy goes through
+    ``build_exec_env`` or ``without_platform_credentials``, or names its reason
+    above.
+    """
+    found: list[str] = []
+    for path in sorted(ENGINE_ROOT.rglob("*.py")):
+        relative = str(path.relative_to(REPO_ROOT))
+        if "/tests/" in relative or relative in ALLOWED_COPIES:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not _copies_the_process_environment(node):
+                continue
+            found.append(f"{relative}:{getattr(node, 'lineno', 0)}")
+    assert found == []
+
+
+def test_every_allowed_copy_still_exists():
+    """A stale entry is a hole nobody would notice reopening."""
+    missing = [name for name in ALLOWED_COPIES if not (REPO_ROOT / name).is_file()]
+    assert missing == []
