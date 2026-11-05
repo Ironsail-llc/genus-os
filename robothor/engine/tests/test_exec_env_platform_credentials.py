@@ -299,14 +299,16 @@ def test_the_drop_takes_a_credential_out_of_a_connection_setting():
 # ── libpq's own password variables ───────────────────────────────────────────
 
 
+@pytest.mark.parametrize("host_setting", ("ROBOTHOR_DB_HOST", "PGHOST"))
 @pytest.mark.parametrize("name", ("PGPASSWORD", "PGPASSFILE"))
-def test_startup_refuses_a_password_only_libpq_can_see(name):
+def test_startup_refuses_a_password_only_libpq_can_see(name, host_setting):
     """libpq reads these from the C environment the drop empties. An engine that
     authenticated through one alone over TCP would boot and then fail every
-    connection, so it refuses to start and says which setting to use instead."""
+    connection, so it refuses to start and says which setting to use instead.
+    libpq takes the host from ``PGHOST`` when the platform names none."""
     other = "PGPASSFILE" if name == "PGPASSWORD" else "PGPASSWORD"
     done = _run_drop(
-        {name: FIXTURE_VALUE, "ROBOTHOR_DB_HOST": "db.example.com"},
+        {name: FIXTURE_VALUE, host_setting: "db.example.com"},
         strip=("ROBOTHOR_DB_PASSWORD", other),
     )
     refused = done.returncode != 0
@@ -321,10 +323,40 @@ def test_a_socket_install_with_a_leftover_libpq_password_still_starts(host):
     password (peer authentication never does), so it is a warning, not a stop."""
     done = _run_drop(
         {"PGPASSWORD": FIXTURE_VALUE, "ROBOTHOR_DB_HOST": host},
-        strip=("ROBOTHOR_DB_PASSWORD", "PGPASSFILE"),
+        strip=("ROBOTHOR_DB_PASSWORD", "PGPASSFILE", "PGHOST"),
     )
     started = done.returncode == 0
+    warned = "PGPASSWORD" in done.stderr
+    leaked = FIXTURE_VALUE in done.stderr
     assert started
+    assert warned
+    assert not leaked
+
+
+def test_the_recovery_batch_does_not_repeat_the_startup_warning():
+    """The batch runs every 30 seconds; the daemon has already said it once."""
+    payload = json.dumps({"PGPASSWORD": FIXTURE_VALUE}).encode()
+    code = (
+        "import logging;logging.basicConfig();"
+        "from robothor.engine import calendar_recovery_worker as w;"
+        "w._receive_credentials()"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        input=payload,
+        env={
+            "PATH": os.environ["PATH"],
+            "PYTHONPATH": str(REPO_ROOT),
+            "HOME": "/nonexistent",
+            "ROBOTHOR_WORKSPACE": "/nonexistent",
+        },
+        capture_output=True,
+        timeout=60,
+    )
+    started = done.returncode == 0
+    warned = b"PGPASSWORD" in done.stderr
+    assert started
+    assert not warned
 
 
 def test_no_config_is_not_reported_as_an_empty_password(monkeypatch):
