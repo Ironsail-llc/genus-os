@@ -51,7 +51,9 @@ def _credentials_for_child() -> bytes:
     """
     from robothor.secrets.classification import is_platform_credential
 
-    return json.dumps({k: v for k, v in os.environ.items() if is_platform_credential(k)}).encode()
+    return json.dumps(
+        {k: v for k, v in os.environ.items() if is_platform_credential(k, v)}
+    ).encode()
 
 
 def _receive_credentials() -> None:

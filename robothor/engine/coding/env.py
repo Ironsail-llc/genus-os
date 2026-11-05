@@ -51,7 +51,6 @@ import os
 import re
 from pathlib import Path
 
-from robothor.constants import DEFAULT_TENANT
 from robothor.engine.exec_env import looks_like_a_credential_name, looks_like_a_credential_value
 from robothor.secrets import resolve_secret
 
@@ -128,8 +127,12 @@ def job_config_dir(job_id: str, *, base: dict[str, str] | None = None) -> Path:
     return root / "robothor" / "claude-code" / job_id
 
 
-def resolve_oauth_token(tenant_id: str = DEFAULT_TENANT) -> str | None:
-    """The Claude Code token for this tenant, vault first, or None."""
+def resolve_oauth_token(tenant_id: str) -> str | None:
+    """The Claude Code token for this tenant, vault first, or None.
+
+    No default tenant: one that named none read the root's row, so a token the
+    operator stored for the root would have run every tenant's coding jobs.
+    """
     return resolve_secret(TOKEN_ENV, tenant_id=tenant_id).value
 
 

@@ -51,12 +51,14 @@ def load_repos() -> list[str]:
 async def _collect(repos: list[str], start: datetime, end: datetime) -> dict:
     import httpx
 
+    from robothor.constants import DEFAULT_TENANT
     from robothor.engine.tools.handlers.github_api import _get_token, _headers
     from robothor.secrets import get_secret
 
     # A token of its own keeps the report off a quota other agents (the PR
-    # reviewer) can exhaust; falls back to the shared GitHub credential.
-    token = get_secret("DEVOPS_GITHUB_TOKEN") or _get_token()
+    # reviewer) can exhaust; falls back to the shared GitHub credential. An
+    # operator's script, so the root's.
+    token = get_secret("DEVOPS_GITHUB_TOKEN") or _get_token(DEFAULT_TENANT)
     if not token:
         return {
             "repos": {},

@@ -70,11 +70,13 @@ def _store() -> PrReviewStore:
     return PgStore()
 
 
-def _github() -> GitHubPort | None:
+def _github(tenant_id: str) -> GitHubPort | None:
+    """A GitHub client holding the calling tenant's token, or None without one."""
+    from robothor.engine.tools.handlers.github_api import _get_token
     from robothor.pr_review.clients import GitHubClient, GitHubError
 
     try:
-        return GitHubClient()
+        return GitHubClient(token=_get_token(tenant_id))
     except GitHubError:
         return None
 
@@ -285,7 +287,7 @@ async def _intake(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         _store(),
         ctx.tenant_id,
         tasks=_tasks(ctx.tenant_id),
-        github=_github(),
+        github=_github(ctx.tenant_id),
         chat=_chat() if cfg.chat_space else None,
         job_state=_job_state(ctx.tenant_id),
     )
@@ -311,7 +313,7 @@ async def _prepare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     skill = _skill_text()
     if not skill:
         return {"error": f"the {SKILL_NAME} skill is not installed"}
-    github = _github()
+    github = _github(ctx.tenant_id)
     if github is None:
         return {"error": "GITHUB_TOKEN not configured"}
 
@@ -330,7 +332,7 @@ async def _prepare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             number,
             github=github,
             skill_text=skill,
-            token=_get_token(),
+            token=_get_token(ctx.tenant_id),
             start_job=start_job,
             fetch_ticket=_ticket_fetcher(ctx),
             search_tickets=_ticket_searcher(ctx),
@@ -363,7 +365,7 @@ async def _finalize(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             return {"error": f"coding job {job_id!r} not found"}
         if job.mode != "review":
             return {"error": "only a mode=review coding job can be finalized as a review"}
-    github = _github()
+    github = _github(ctx.tenant_id)
     if github is None:
         return {"error": "GITHUB_TOKEN not configured"}
     cfg = load_config()
@@ -462,7 +464,7 @@ async def _status(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         pr=str(args.get("pr") or "").strip(),
         # Dropped-request candidates are checked against the PR's state: a
         # merged one is left out (and its row closed), never alerted on.
-        github=_github(),
+        github=_github(ctx.tenant_id),
     )
 
 

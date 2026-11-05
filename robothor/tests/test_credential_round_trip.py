@@ -80,11 +80,12 @@ def test_the_accessor_serves_the_stored_value_over_the_stale_environment(
 
 
 def test_the_github_tool_serves_the_stored_value(stores, monkeypatch):
+    from robothor.constants import DEFAULT_TENANT
     from robothor.engine.tools.handlers.github_api import _get_token
 
     monkeypatch.setenv("GITHUB_TOKEN", STALE)
     stores["providers/github/api_key"] = FRESH
-    assert _get_token() == FRESH
+    assert _get_token(DEFAULT_TENANT) == FRESH
 
 
 def test_an_exec_grant_injects_the_stored_value(stores, monkeypatch):

@@ -29,17 +29,21 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     return decorator
 
 
-def _get_token() -> str:
-    """The GitHub credential, vault first.
+def _get_token(tenant_id: str) -> str:
+    """The GitHub credential of the tenant making the call, vault first.
 
     Through the accessor rather than the process environment, because the
     environment is a snapshot of a root-owned file taken at boot: an expired
     token in it used to shadow the replacement the assistant had just written
     into the vault, and no amount of rotating fixed that without a restart.
+
+    ``tenant_id`` has no default on purpose. The vault binds every read to the
+    tenant it names, and one that named none read the root's row, so a token
+    the operator stored for the root served every tenant's GitHub calls.
     """
     from robothor.secrets import get_secret
 
-    return get_secret("GITHUB_TOKEN") or ""
+    return get_secret("GITHUB_TOKEN", tenant_id=tenant_id) or ""
 
 
 async def _no_token(ctx: ToolContext) -> dict[str, Any]:
@@ -143,7 +147,7 @@ async def _paginate(
 @_handler("github_list_prs")
 async def _github_list_prs(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """List pull requests for a repository."""
-    token = _get_token()
+    token = _get_token(ctx.tenant_id)
     if not token:
         return await _no_token(ctx)
 
@@ -184,7 +188,7 @@ async def _github_list_prs(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 @_handler("github_get_pr")
 async def _github_get_pr(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Get a single PR with review timeline and details."""
-    token = _get_token()
+    token = _get_token(ctx.tenant_id)
     if not token:
         return await _no_token(ctx)
 
@@ -333,7 +337,7 @@ async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     then fans out per-PR detail fetches for cycle time / size / merged_by.
     Server-side date filtering means high-churn repos no longer undercount.
     """
-    token = _get_token()
+    token = _get_token(ctx.tenant_id)
     if not token:
         return await _no_token(ctx)
 
@@ -449,7 +453,7 @@ async def _github_pr_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 @_handler("github_commit_activity")
 async def _github_commit_activity(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Get commit frequency by contributor."""
-    token = _get_token()
+    token = _get_token(ctx.tenant_id)
     if not token:
         return await _no_token(ctx)
 
@@ -518,7 +522,7 @@ async def _github_commit_activity(args: dict[str, Any], ctx: ToolContext) -> dic
 @_handler("github_review_stats")
 async def _github_review_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Get code review participation stats."""
-    token = _get_token()
+    token = _get_token(ctx.tenant_id)
     if not token:
         return await _no_token(ctx)
 
@@ -778,7 +782,7 @@ async def _github_pr_diff(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
     if isinstance(parsed, dict):
         return parsed
     repo, number = parsed
-    token = _get_token()
+    token = _get_token(ctx.tenant_id)
     if not token:
         return await _no_token(ctx)
 
@@ -814,7 +818,7 @@ async def _github_pr_files(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     if isinstance(parsed, dict):
         return parsed
     repo, number = parsed
-    token = _get_token()
+    token = _get_token(ctx.tenant_id)
     if not token:
         return await _no_token(ctx)
 
@@ -849,7 +853,7 @@ async def _github_compare(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
         return {"error": "repo, base and head are required"}
     if not _valid_repo(repo):
         return {"error": f"repo must be in owner/repo format, got {repo!r}"}
-    token = _get_token()
+    token = _get_token(ctx.tenant_id)
     if not token:
         return await _no_token(ctx)
 
@@ -1070,7 +1074,7 @@ async def _github_create_review(args: dict[str, Any], ctx: ToolContext) -> dict[
     commit_id = str(args.get("commit_id") or "")
     if not commit_id:
         return {"error": "commit_id is required (the head SHA the review was written against)"}
-    token = _get_token()
+    token = _get_token(ctx.tenant_id)
     if not token:
         return await _no_token(ctx)
 
@@ -1248,7 +1252,7 @@ async def _github_reply_review_comment(args: dict[str, Any], ctx: ToolContext) -
         comment_id = int(args.get("comment_id"))  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return {"error": "comment_id must be an integer"}
-    token = _get_token()
+    token = _get_token(ctx.tenant_id)
     if not token:
         return await _no_token(ctx)
 
@@ -1344,7 +1348,7 @@ async def _github_resolve_threads(args: dict[str, Any], ctx: ToolContext) -> dic
         return {"error": "review_ids must be a list of integer review ids"}
     if not review_ids:
         return {"error": "review_ids is required — only threads from these reviews are resolved"}
-    token = _get_token()
+    token = _get_token(ctx.tenant_id)
     if not token:
         return await _no_token(ctx)
 

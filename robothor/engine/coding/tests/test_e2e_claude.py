@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.coding.env import resolve_oauth_token
 from robothor.engine.coding.jobs import Acceptance, CodingJobManager, JobStatus, MemoryJobStore
 from robothor.engine.coding.runner import ClaudeCodeError, resolve_claude_binary
@@ -38,7 +39,7 @@ def _auth_available() -> bool:
     if _host_auth():
         return True
     try:
-        return bool(resolve_oauth_token())
+        return bool(resolve_oauth_token(DEFAULT_TENANT))
     except Exception:  # noqa: BLE001
         return False
 

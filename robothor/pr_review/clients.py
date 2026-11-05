@@ -43,11 +43,12 @@ class GitHubError(RuntimeError):
 class GitHubClient:
     """Read-only GitHub calls for the intake and the review tools."""
 
-    def __init__(self, token: str | None = None) -> None:
+    def __init__(self, token: str) -> None:
+        """``token`` is the calling tenant's: ``github_api._get_token(tenant_id)``."""
         from robothor.engine.tools.handlers import github_api
 
         self._api = github_api
-        self._token = token if token is not None else github_api._get_token()
+        self._token = token
         if not self._token:
             raise GitHubError("GITHUB_TOKEN not configured")
 

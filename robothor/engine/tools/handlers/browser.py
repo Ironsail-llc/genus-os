@@ -396,11 +396,13 @@ def _browser_env(profile_dir: str, agent_id: str) -> dict[str, str]:
     ``base=dict(os.environ)`` deliberately: the semantics are "today's
     environment minus what ``enforce`` would withhold", not a narrower snapshot
     that could silently drop ``PATH``. ``ROBOTHOR_EXEC_ENV_MODE`` defaults to
-    ``observe``, which returns the environment UNCHANGED and only logs what
-    ``enforce`` would remove — so today this is a no-op on the credential
-    question and the removal lands when the operator promotes the flag on their
-    own evidence. ``grants=()``: a browser has no business holding a credential,
-    so nothing is injected.
+    ``observe``, which removes only the platform's own credentials (the
+    database, cache and signing keys, which no rung keeps) and logs what
+    ``enforce`` would also remove; the rest lands when the operator promotes
+    the flag on their own evidence. ``grants=()``: a browser has no business
+    holding a credential, so nothing is injected. The Playwright driver that
+    launches the browser gets its environment separately:
+    :func:`robothor.engine.process_hardening.filter_playwright_driver_env`.
     """
     from robothor.engine.exec_env import build_exec_env
 
@@ -418,6 +420,10 @@ async def _get_playwright() -> Any:
     if _playwright_instance is None:
         from playwright.async_api import async_playwright
 
+        from robothor.engine.process_hardening import filter_playwright_driver_env
+
+        # The driver copies ``os.environ`` for itself and outlives every call.
+        filter_playwright_driver_env()
         _playwright_instance = await async_playwright().start()
     return _playwright_instance
 

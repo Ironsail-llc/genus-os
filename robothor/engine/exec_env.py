@@ -244,7 +244,7 @@ class ExecEnvironment:
     """A child environment and an honest account of what is not in it."""
 
     #: What the child actually gets. At ``off`` and ``observe`` this is the
-    #: caller's environment unchanged.
+    #: caller's environment less the platform credentials, which no rung keeps.
     env: dict[str, str] = field(default_factory=dict)
     #: Names ``enforce`` withholds — reported on every rung, so ``observe``
     #: can say what promotion would cost without costing it.
@@ -310,7 +310,7 @@ def without_platform_credentials(env: Mapping[str, str]) -> dict[str, str]:
     """
     from robothor.secrets.classification import is_platform_credential
 
-    return {name: value for name, value in env.items() if not is_platform_credential(name)}
+    return {name: value for name, value in env.items() if not is_platform_credential(name, value)}
 
 
 def build_exec_env(

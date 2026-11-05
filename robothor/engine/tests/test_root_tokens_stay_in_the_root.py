@@ -121,7 +121,8 @@ def test_a_coding_jobs_github_token_resolves_against_the_jobs_tenant(root_only_v
     from robothor.engine.coding import jobs
 
     monkeypatch.setattr(
-        "robothor.engine.exec_env.grants_for_agent", lambda agent_id, workspace="": ("GITHUB_TOKEN",)
+        "robothor.engine.exec_env.grants_for_agent",
+        lambda agent_id, workspace="": ("GITHUB_TOKEN",),
     )
     assert jobs._default_github_token("researcher", CHILD) is None
     assert jobs._default_github_token("researcher", DEFAULT_TENANT) == ROOT_TOKEN

@@ -365,15 +365,15 @@ async def test_the_browser_tool_starts_its_driver_without_them(driver_env, monke
 async def test_the_render_tool_starts_its_driver_without_them(driver_env, monkeypatch):
     from robothor.engine.tools.handlers import web_render
 
-    class _Stop(Exception):
+    class _StopError(Exception):
         pass
 
     class _Network:
         async def get(self, url):
-            raise _Stop
+            raise _StopError
 
     monkeypatch.setattr(web_render, "RenderNetwork", _Network)
-    with pytest.raises(_Stop):
+    with pytest.raises(_StopError):
         await web_render.render("https://example.com/")
     survivors, kept = _driver_survivors(driver_env)
     assert survivors == []
@@ -460,8 +460,12 @@ ALLOWED_COPIES = {
     "robothor/engine/host_execution.py": "passes it to the builder as base",
     # Runs in the host service, never in the engine, on an operator's deploy.
     "robothor/engine/local_deploy.py": "the host service's own test and migration steps",
-    # A fixed script the operator's button runs, which needs the database.
-    "robothor/engine/telegram_handlers.py": "an operator-approved fixed script",
+    # A KNOWN EXCEPTION, not a safe one. The operator's approve button runs a
+    # script at a fixed workspace PATH, whose contents an agent that can write
+    # the workspace can replace. The script is instance code and reads the
+    # database from its environment, so the platform cannot pipe it the
+    # credentials without changing it. Named in docs/configuration.md.
+    "robothor/engine/telegram_handlers.py": "known exception: a workspace script, named in docs",
 }
 
 

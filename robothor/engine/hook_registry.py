@@ -16,6 +16,7 @@ import fnmatch
 import importlib
 import json
 import logging
+import os
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -434,10 +435,13 @@ class HookRegistry:
 
     async def _run_command(self, hook: LifecycleHook, context: HookContext) -> HookResult:
         """Run shell command. Exit 0 = allow, 1 = block."""
-        from robothor.engine.exec_env import build_exec_env
+        from robothor.engine.exec_env import without_platform_credentials
 
+        # Operator-written, not model-composed, so the exec ladder is not its
+        # policy: it keeps the rest of the environment, and loses only what
+        # opens the platform itself.
         env = {
-            **build_exec_env(agent_id=context.agent_id).env,
+            **without_platform_credentials(os.environ),
             "HOOK_EVENT": context.event.value,
             "HOOK_AGENT_ID": context.agent_id,
             "HOOK_RUN_ID": context.run_id,
