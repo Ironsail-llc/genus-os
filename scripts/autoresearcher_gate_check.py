@@ -36,12 +36,18 @@ def check_psql_metric_command() -> tuple[bool, str]:
     Through ``experiment_measure``'s own runner, so it sees the environment a
     metric command really gets. That environment holds no database credential
     on any rung (no ``DATABASE_URL``, no password), so this passes only where
-    psql can connect without one, such as peer authentication on the local
-    socket.
+    psql can connect to the configured database without one, such as peer
+    authentication on the local socket.
     """
+    import shlex
+
+    from robothor.config import get_config
     from robothor.engine.tools.handlers.experiment import _run_metric_command
 
-    command = 'psql -t -A -c "SELECT count(*) FROM agent_memory_blocks;"'
+    # psql does not read ROBOTHOR_DB_NAME, and without a name it connects to
+    # the database named after the user, so the command names it.
+    database = shlex.quote(get_config().db.name)
+    command = f'psql -d {database} -t -A -c "SELECT count(*) FROM agent_memory_blocks;"'
     try:
         output = _run_metric_command(command, os.environ.get("ROBOTHOR_WORKSPACE", ""))
     except Exception as exc:  # noqa: BLE001 - the gate reports, it does not raise

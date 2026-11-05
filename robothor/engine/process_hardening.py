@@ -90,23 +90,42 @@ def _refuse_a_libpq_only_password(config: object | None) -> None:
     libpq reads ``PGPASSWORD`` and ``PGPASSFILE`` from the C environment, and
     :class:`robothor.config.DatabaseConfig` leaves the password out of the DSN
     when ``ROBOTHOR_DB_PASSWORD`` is empty, so libpq falls back to them. The
-    drop empties the C side, so an engine authenticating that way would boot
-    and then fail every connection. Names only in the message, never a value.
+    drop empties the C side, so an engine authenticating that way over TCP
+    would boot and then fail every connection.
+
+    Over the local socket the config cannot say whether the password is used
+    (peer authentication never reads it), so that case is a warning. With no
+    config at all there is nothing to judge, and startup reports the config
+    itself. Names only in every message, never a value.
     """
     import os
 
+    if config is None:
+        return
     db = getattr(config, "db", None)
-    password = getattr(db, "password", "") if db is not None else ""
-    if password:
+    if db is None or str(getattr(db, "password", "") or ""):
         return
     present = [name for name in ("PGPASSWORD", "PGPASSFILE") if os.environ.get(name)]
-    if present:
-        raise LibpqOnlyPasswordError(
-            f"{' and '.join(present)} {'is' if len(present) == 1 else 'are'} set but "
-            "ROBOTHOR_DB_PASSWORD is empty. Set ROBOTHOR_DB_PASSWORD instead: the engine "
-            "removes libpq's own password variables from its environment at startup, "
-            "so the database would refuse every connection."
+    if not present:
+        return
+    named = f"{' and '.join(present)} {'is' if len(present) == 1 else 'are'} set"
+    host = str(getattr(db, "host", "") or "")
+    if not host or host.startswith("/"):
+        logger.warning(
+            "%s but ROBOTHOR_DB_PASSWORD is empty. The engine removes libpq's own "
+            "password variables from its environment at startup; over the local "
+            "socket that is harmless with peer authentication, and fails every "
+            "connection with password authentication. Set ROBOTHOR_DB_PASSWORD if "
+            "the database needs one.",
+            named,
         )
+        return
+    raise LibpqOnlyPasswordError(
+        f"{named} but ROBOTHOR_DB_PASSWORD is empty and the database is reached over "
+        "TCP. Set ROBOTHOR_DB_PASSWORD instead: the engine removes libpq's own "
+        "password variables from its environment at startup, so the database would "
+        "refuse every connection."
+    )
 
 
 #: The marker on the wrapper, so installing twice wraps once.
@@ -170,8 +189,9 @@ def drop_inherited_credentials() -> tuple[str, ...]:
     A child that really needs one of these has it passed some other way:
     see ``calendar_recovery_worker``. Returns the names dropped, never a value.
 
-    Raises :class:`LibpqOnlyPasswordError` when the database password is set
-    only in ``PGPASSWORD`` or ``PGPASSFILE``: the drop would take it from libpq.
+    Raises :class:`LibpqOnlyPasswordError` when the database is reached over
+    TCP and its password is set only in ``PGPASSWORD`` or ``PGPASSFILE``: the
+    drop would take it from libpq.
     """
     import os
 
