@@ -1,3 +1,9 @@
+## [1.128.1](https://github.com/Ironsail-llc/genus-os/compare/v1.128.0...v1.128.1) (2026-11-05)
+
+### Bug Fixes
+
+* **engine:** key agent_schedules by tenant and job (GEN-448) ([#861](https://github.com/Ironsail-llc/genus-os/issues/861)) ([77c6dbf](https://github.com/Ironsail-llc/genus-os/commit/77c6dbf825d3ecbf8cace107e8f63f31d73479dc))
+
 ## [1.128.0](https://github.com/Ironsail-llc/genus-os/compare/v1.127.1...v1.128.0) (2026-11-04)
 
 ### Features
