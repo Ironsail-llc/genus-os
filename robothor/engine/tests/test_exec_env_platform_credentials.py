@@ -302,14 +302,37 @@ def test_the_drop_takes_a_credential_out_of_a_connection_setting():
 @pytest.mark.parametrize("name", ("PGPASSWORD", "PGPASSFILE"))
 def test_startup_refuses_a_password_only_libpq_can_see(name):
     """libpq reads these from the C environment the drop empties. An engine that
-    authenticated through one alone would boot and then fail every connection,
-    so it refuses to start and says which setting to use instead."""
+    authenticated through one alone over TCP would boot and then fail every
+    connection, so it refuses to start and says which setting to use instead."""
     other = "PGPASSFILE" if name == "PGPASSWORD" else "PGPASSWORD"
-    done = _run_drop({name: FIXTURE_VALUE}, strip=("ROBOTHOR_DB_PASSWORD", other))
+    done = _run_drop(
+        {name: FIXTURE_VALUE, "ROBOTHOR_DB_HOST": "db.example.com"},
+        strip=("ROBOTHOR_DB_PASSWORD", other),
+    )
     refused = done.returncode != 0
     assert refused
     assert name in done.stderr
     assert "ROBOTHOR_DB_PASSWORD" in done.stderr
+
+
+@pytest.mark.parametrize("host", ("", "/var/run/postgresql"))
+def test_a_socket_install_with_a_leftover_libpq_password_still_starts(host):
+    """Over the local socket the config cannot say whether libpq needs the
+    password (peer authentication never does), so it is a warning, not a stop."""
+    done = _run_drop(
+        {"PGPASSWORD": FIXTURE_VALUE, "ROBOTHOR_DB_HOST": host},
+        strip=("ROBOTHOR_DB_PASSWORD", "PGPASSFILE"),
+    )
+    started = done.returncode == 0
+    assert started
+
+
+def test_no_config_is_not_reported_as_an_empty_password(monkeypatch):
+    """Startup reports a config that failed to load itself."""
+    from robothor.engine.process_hardening import _refuse_a_libpq_only_password
+
+    monkeypatch.setenv("PGPASSWORD", FIXTURE_VALUE)
+    _refuse_a_libpq_only_password(None)
 
 
 def test_startup_accepts_a_libpq_password_alongside_the_platform_one():
