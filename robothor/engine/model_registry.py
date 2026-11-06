@@ -82,8 +82,10 @@ class ModelLimits:
     status: str = "current"
     replaced_by: str = ""
     # What the provider's priority lane costs, as a multiple of the prices
-    # above. Used when a call was served on that lane and litellm cannot price
-    # the model itself (a model newer than its bundled list).
+    # above. A row that sets it prices its own lane: a call served on the
+    # priority lane is priced at the standard rate (litellm is handed the
+    # response as standard-lane, the fallback reads the row) and multiplied by
+    # this. A row that leaves it at 1.0 leaves the lane to litellm's own rates.
     priority_cost_multiplier: float = 1.0
 
 

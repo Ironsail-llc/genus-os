@@ -5,7 +5,7 @@
  * POST /api/session — Save current dashboard HTML
  *
  * Uses the agent_memory_blocks table for persistence, one block per signed-in
- * person ("helm_state.<user>"). Blocks are keyed by tenant, and a canvas is
+ * person ("helm_state.<hash>"). Blocks are keyed by tenant, and a canvas is
  * drawn from one person's conversation: a single shared name would show it to
  * everyone in the tenant.
  */
@@ -39,18 +39,19 @@ function safeBackendUrl(base: string, path: string): URL | null {
 }
 
 /**
- * The signed-in person's own block, or null when nobody is signed in. An id
- * that is not already a safe path segment is hashed rather than rewritten, so
- * two different ids can never land on the same block.
+ * The signed-in person's own block, or null when the session identifies nobody.
+ *
+ * A session carries the person's name, email and role; it has an id only where
+ * a deployment's sign-in adds one. The identity is hashed into the block name,
+ * so two people can never share a block and nobody's address is written into a
+ * block name, a URL or a log line.
  */
 async function ownBlockName(): Promise<string | null> {
-  const session = await auth();
-  const id = session?.user?.id;
-  if (!id) return null;
-  const segment = /^[A-Za-z0-9_-]{1,64}$/.test(id)
-    ? id
-    : createHash("sha256").update(id).digest("hex").slice(0, 32);
-  return `${BLOCK_PREFIX}.${segment}`;
+  const user = (await auth())?.user;
+  const identity = (user?.id || user?.email || "").trim().toLowerCase();
+  if (!identity) return null;
+  const key = createHash("sha256").update(identity).digest("hex").slice(0, 32);
+  return `${BLOCK_PREFIX}.${key}`;
 }
 
 const NOT_SIGNED_IN = { error: "Not signed in" };
