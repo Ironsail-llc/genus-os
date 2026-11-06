@@ -170,10 +170,10 @@ def test_the_schema_knows_the_field_and_its_values():
 
 
 def test_a_run_carries_its_agents_tier():
-    """The runner publishes the agent's setting for every call the run makes."""
-    from robothor.engine.runner import _apply_run_model_settings
+    """The runner publishes the agent's settings through this at run start."""
+    from robothor.engine.model_registry import apply_run_model_settings
 
-    _apply_run_model_settings(
+    apply_run_model_settings(
         AgentConfig(id="alice-agent", name="Alice's agent", service_tier="priority")
     )
     assert current_service_tier() == "priority"

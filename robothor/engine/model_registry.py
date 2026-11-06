@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
+    from robothor.engine.models import AgentConfig
+
 from robothor.engine.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
@@ -1158,6 +1160,16 @@ def set_service_tier(tier: str) -> None:
 def current_service_tier() -> str:
     """The service tier of the current run: ``default`` or ``priority``."""
     return _service_tier_ctx.get()
+
+
+def apply_run_model_settings(agent_config: AgentConfig) -> None:
+    """Publish an agent's per-run model settings for every call its run makes.
+
+    Task-local, so concurrent runs do not race: the reasoning effort sizes the
+    thinking budget, and the service tier picks the provider's lane.
+    """
+    set_reasoning_effort(agent_config.reasoning_effort)
+    set_service_tier(agent_config.service_tier)
 
 
 def current_thinking_budget() -> int:

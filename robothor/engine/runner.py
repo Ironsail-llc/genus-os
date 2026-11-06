@@ -445,18 +445,6 @@ from robothor.engine.model_registry import register_pricing_with_litellm  # noqa
 register_pricing_with_litellm()
 
 
-def _apply_run_model_settings(agent_config: AgentConfig) -> None:
-    """Publish the agent's per-run model settings for every call the run makes.
-
-    Task-local, so concurrent runs do not race: the reasoning effort sizes the
-    thinking budget, and the service tier picks the provider's lane.
-    """
-    from robothor.engine.model_registry import set_reasoning_effort, set_service_tier
-
-    set_reasoning_effort(agent_config.reasoning_effort)
-    set_service_tier(agent_config.service_tier)
-
-
 def should_create_auto_task(config: AgentConfig, spawn_context: SpawnContext | None) -> bool:
     """True when this run should file its operator-facing ``auto_task`` CRM row.
 
@@ -655,7 +643,10 @@ class AgentRunner(
             is_service_caller=_is_service_caller(effective_user_role, effective_user_id),
         )
 
-        _apply_run_model_settings(agent_config)
+        # Per-run model settings (reasoning effort, service tier), task-local.
+        from robothor.engine.model_registry import apply_run_model_settings
+
+        apply_run_model_settings(agent_config)
 
         session = AgentSession(
             agent_id=agent_id,
