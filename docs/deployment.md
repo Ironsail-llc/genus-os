@@ -395,6 +395,17 @@ When none of these is set, the canvas falls back to
 | `openrouter/*` | `OPENROUTER_API_KEY` |
 | `gemini/*` | `GEMINI_API_KEY` (the Gemini Developer API, not Vertex) |
 | `vertex_ai/*` | `VERTEXAI_CREDENTIALS` holding the service-account JSON itself (or a path to it), `VERTEXAI_PROJECT`, and `VERTEXAI_LOCATION`: a region such as `us-central1`, or the `us` / `eu` multi-region; `global` processes requests in any location, so a residency commitment usually rules it out |
+| `bedrock/*` | The standard AWS credential chain, with no key of its own: a role attached to the engine's service account or instance, or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, plus `AWS_REGION` (or `AWS_REGION_NAME`) naming the Region the request is sent from |
+
+Amazon Bedrock models are named by inference profile, for example
+`bedrock/us.amazon.nova-2-lite-v1:0`: the `us.` prefix keeps processing inside
+United States Regions, where `global.` may route anywhere. The identity needs
+`bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the
+profile and on the model it routes to. Amazon's own models need nothing more;
+a third-party model on Bedrock is sold through AWS Marketplace, so the account
+also needs a payment method Marketplace accepts, or the first calls are refused
+with an access error that names the payment instrument rather than a
+permission.
 
 Vertex AI is the Gemini surface covered by Google Cloud's enterprise terms; the
 service account needs the Vertex AI User role on the project. The engine-wide

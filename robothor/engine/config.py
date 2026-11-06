@@ -723,6 +723,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             manifest.get("role", manifest.get("service_role", "")),
         ),
         reasoning_effort=str(model.get("reasoning_effort", "medium")),
+        service_tier=str(model.get("service_tier", "default")),
         instruction_file=manifest.get("instruction_file", ""),
         bootstrap_files=manifest.get("bootstrap_files", []),
         reports_to=manifest.get("reports_to", ""),

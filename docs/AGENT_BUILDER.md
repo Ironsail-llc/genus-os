@@ -1286,6 +1286,7 @@ model:
     - openrouter/minimax/minimax-m2.5
     - gemini/gemini-2.5-pro
   reasoning_effort: medium                      # low | medium | high — thinking budget
+  service_tier: default                         # default | priority — the provider's faster lane, where it sells one
 
 schedule:
   cron: "0 6-22/2 * * *"       # safety net every 2h

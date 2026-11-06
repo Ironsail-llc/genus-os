@@ -69,6 +69,15 @@ recommended:
       type: string
       default: medium
       description: Effort hint passed to models that accept one (low/medium/high)
+    service_tier:
+      type: string
+      enum: [default, priority]
+      default: default
+      description: >
+        The provider lane this agent's calls ask for. priority requests the
+        provider's faster per-request lane, at the provider's premium, for
+        every call a run makes; it is sent only to routes that sell one
+        (the OpenAI API today) and changes nothing for the others.
     payload_alias:
       type: string
       description: >

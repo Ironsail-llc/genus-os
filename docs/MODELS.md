@@ -65,6 +65,27 @@ OpenAI accepts at most 128 tools on one request. An agent with broad tool access
 can exceed that; deferred tool loading keeps the
 advertised set small.
 
+### Service tier
+
+Shared pay-as-you-go capacity is first come, first served, so a standard
+request waits when the provider is busy. Some providers sell a faster lane per
+request. `model.service_tier: priority`, in a manifest or in the fleet defaults,
+asks for it on every call a run makes: the agent loop and the planning,
+verification and compaction calls around it.
+
+```yaml
+model:
+  primary: openai/gpt-6-luna
+  service_tier: priority   # default | priority
+```
+
+Today the setting reaches the OpenAI API only (`openai/…` and bare `gpt-…`
+ids), as `service_tier="priority"`; OpenAI bills that lane at a multiple of the
+standard price, and a run's recorded cost follows the tier the response reports.
+Every other route is sent nothing, including a fallback in the same chain, so
+adding the setting to a mixed chain is safe. The dashboard canvas runs outside
+any agent's run and stays on the standard lane.
+
 ## Prompt caching
 
 Providers cache a request's prefix, so whatever changes from one run to the next
@@ -85,6 +106,7 @@ turns. What each route gets on top:
 | OpenAI (`openai/…`, `azure/…`, bare `gpt-…`) | automatic for prefixes of 1024+ tokens | no `cache_control` |
 | Gemini (`gemini/…`, `vertex_ai/gemini…`) | implicit | no `cache_control` (a marker would request explicit context caching, which Gemini refuses on agent calls) |
 | OpenRouter (`openrouter/…`) | whatever the upstream does | no `cache_control` |
+| Amazon Nova on Bedrock (`bedrock/…amazon.nova…`) | not requested | no `cache_control` (not measured on this route) |
 
 The time turn is sent as role `developer`; on Anthropic and Gemini it is
 rewritten to a user turn like every other engine turn. The cache-hit rate is in

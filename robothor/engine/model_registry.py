@@ -490,11 +490,48 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         ttft_hint_ms=2000,
         accepts_images=True,
     ),
+    # GPT-6 Luna on the OpenAI API. Figures from litellm's catalog (2026-10).
+    # The same call shape as GPT-5.6 Luna: `reasoning_effort`, no `thinking`
+    # block, no `temperature`. Prices are the standard tier's; a run on the
+    # priority tier (`model.service_tier`) is billed at twice these.
+    "openai/gpt-6-luna": ModelLimits(
+        max_input_tokens=922_000,
+        max_output_tokens=128_000,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_000_1,  # $0.10/M
+        output_cost_per_token=0.000_000_5,  # $0.50/M
+        cache_write_cost_per_token=0.000_000_125,  # $0.125/M
+        cache_read_cost_per_token=0.000_000_01,  # $0.01/M
+        supports_thinking=True,
+        ttft_hint_ms=2000,
+        accepts_images=True,
+    ),
+    # Amazon Nova 2 Lite on Bedrock, US cross-Region profile. Figures from
+    # litellm's catalog (2026-10). Here for the dashboard canvas: the fastest
+    # full render measured (2026-11). It reasons only when asked to, and the
+    # engine does not ask, so supports_thinking stays False.
+    "bedrock/us.amazon.nova-2-lite-v1:0": ModelLimits(
+        max_input_tokens=1_000_000,
+        max_output_tokens=64_000,
+        default_output_tokens=8_192,
+        input_cost_per_token=0.000_000_33,  # $0.33/M
+        output_cost_per_token=0.000_002_75,  # $2.75/M
+        cache_read_cost_per_token=0.000_000_082_5,  # $0.0825/M
+        ttft_hint_ms=800,
+        # The catalog says it caches prompts and sees images. Neither has been
+        # exercised on this route, and the canvas call needs neither.
+        supports_cache_control=False,
+    ),
 }
 
 # OpenAI reports the bare id back on a response, and cost accounting looks the
 # response id up; _registry_candidates does not strip the `openai/` prefix.
 _MODEL_REGISTRY["gpt-5.6-luna"] = _MODEL_REGISTRY["openai/gpt-5.6-luna"]
+_MODEL_REGISTRY["gpt-6-luna"] = _MODEL_REGISTRY["openai/gpt-6-luna"]
+# Bedrock reports the inference profile id, without the `bedrock/` prefix.
+_MODEL_REGISTRY["us.amazon.nova-2-lite-v1:0"] = _MODEL_REGISTRY[
+    "bedrock/us.amazon.nova-2-lite-v1:0"
+]
 
 # Conservative fallback for unknown models
 _FALLBACK = ModelLimits(
@@ -1106,6 +1143,21 @@ def current_reasoning_effort() -> str:
     the kwargs builder, not here. See ``llm_client._thinking_budget``.
     """
     return _reasoning_effort_ctx.get()
+
+
+# Per-run service tier, carried the same way as the reasoning effort: set by
+# the runner at run start, read wherever a call's kwargs are finished.
+_service_tier_ctx: ContextVar[str] = ContextVar("service_tier", default="default")
+
+
+def set_service_tier(tier: str) -> None:
+    """Set the service tier for the current run's task context."""
+    _service_tier_ctx.set((tier or "default").strip().lower())
+
+
+def current_service_tier() -> str:
+    """The service tier of the current run: ``default`` or ``priority``."""
+    return _service_tier_ctx.get()
 
 
 def current_thinking_budget() -> int:

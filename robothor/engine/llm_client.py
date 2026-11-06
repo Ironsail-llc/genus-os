@@ -749,6 +749,25 @@ def drop_unsupported_sampling(model: str, kwargs: dict[str, Any]) -> dict[str, A
     return kwargs
 
 
+def apply_service_tier(model: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Ask for the provider's priority lane when the running agent wants it, in place.
+
+    The tier is the run's own (``model.service_tier``, published by the runner).
+    Only the OpenAI API is sent anything: it is the one route here that sells a
+    per-request lane under a parameter the engine has measured. Every other
+    route, and every run on the default tier, is left exactly as it was — and a
+    tier the previous model in a chain was sent is removed, so a fallback never
+    inherits a parameter that was not meant for it.
+    """
+    from robothor.engine.model_registry import current_service_tier
+
+    if current_service_tier() == "priority" and _is_openai_direct(model):
+        kwargs["service_tier"] = "priority"
+    else:
+        kwargs.pop("service_tier", None)
+    return kwargs
+
+
 #: Shortest attempt worth dialling. A model whose shared allowance has less
 #: than this left advances the chain instead: the call would be cancelled
 #: mid-generation and the wall clock spent for certain. Always read through
@@ -1448,7 +1467,7 @@ async def llm_call(
         model = kwargs["model"]
         # A copy: the chain walk reuses ``kwargs`` for the next model, which
         # may well want the temperature this one cannot take.
-        call_kwargs = drop_unsupported_sampling(model, dict(kwargs))
+        call_kwargs = apply_service_tier(model, drop_unsupported_sampling(model, dict(kwargs)))
         t0 = _time.monotonic()
         try:
             call = codex_acompletion if is_codex_model(model) else litellm.acompletion
@@ -2267,6 +2286,7 @@ class LLMClient:
             thinking_kwargs_for_call(model, kwargs["max_tokens"], reduced=thinking_reduced)
         )
         drop_unsupported_sampling(model, kwargs)
+        apply_service_tier(model, kwargs)
         from robothor.engine.provider_routing import apply_provider_order
 
         apply_provider_order(model, kwargs)
