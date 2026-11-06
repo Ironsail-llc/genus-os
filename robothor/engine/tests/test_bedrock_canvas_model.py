@@ -9,9 +9,11 @@ an operator to choose it, three things have to hold:
    generic 128K one;
 2. Bedrock reports the model back without the ``bedrock/`` routing prefix, and
    cost accounting looks up the id the response carries;
-3. the canvas call is sent as a plain completion: no thinking block, no
-   reasoning effort, no cache markers, none of which this route has been
-   measured with.
+3. both canvas calls are sent without the parameters this route has not been
+   measured with: no thinking block, no reasoning effort, no cache markers.
+   The render is a plain completion; the triage before it asks for a JSON
+   object, which the model answers (measured 2026-11, inside a markdown fence
+   the dashboard already strips).
 """
 
 from __future__ import annotations
@@ -98,3 +100,18 @@ async def test_a_canvas_render_is_a_plain_completion(captured):
     assert sent["max_tokens"] == 4096
     assert sent["temperature"] == 0.3
     assert not {"thinking", "reasoning_effort", "service_tier"} & set(sent)
+
+
+async def test_a_canvas_triage_asks_for_a_json_object(captured):
+    await llm_call(MESSAGES, model=[NOVA], temperature=0.1, json_mode=True, max_tokens=256)
+    sent = captured[-1]
+    assert sent["response_format"] == {"type": "json_object"}
+    assert sent["max_tokens"] == 256
+    assert not {"thinking", "reasoning_effort", "service_tier"} & set(sent)
+
+
+def test_the_reported_id_dials_bedrock_too():
+    """The cost-lookup alias is listed with every other registry id, so the
+    Providers page can save it. Dialled as written, it must still reach
+    Bedrock (a real call with it answered, 2026-11)."""
+    assert litellm.get_llm_provider(NOVA_REPORTED)[1] == "bedrock"

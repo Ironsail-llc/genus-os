@@ -21,7 +21,13 @@ import pytest
 from robothor.engine.config import manifest_to_agent_config
 from robothor.engine.llm_client import LLMClient, llm_call
 from robothor.engine.manifest_schema import validate
-from robothor.engine.model_registry import current_service_tier, set_service_tier
+from robothor.engine.model_registry import (
+    apply_run_model_settings,
+    current_reasoning_effort,
+    current_service_tier,
+    set_reasoning_effort,
+    set_service_tier,
+)
 from robothor.engine.models import AgentConfig
 
 OPENAI_MODEL = "openai/gpt-6-luna"
@@ -50,8 +56,10 @@ NO_LANE = [
 @pytest.fixture(autouse=True)
 def _default_tier():
     set_service_tier("default")
+    set_reasoning_effort("medium")
     yield
     set_service_tier("default")
+    set_reasoning_effort("medium")
 
 
 @pytest.fixture
@@ -182,3 +190,159 @@ def test_a_run_carries_its_agents_tier():
 def test_an_unset_tier_reads_as_default():
     set_service_tier("")
     assert current_service_tier() == "default"
+
+
+# ─── A run inside a run ────────────────────────────────────────────────────
+#
+# A single spawned sub-agent, and a benchmark run, are awaited inline in the
+# parent's task, so they share its context. Without a restore, the child's
+# settings became the parent's for the rest of the parent's run: an agent that
+# never asked for the priority lane was billed for it, and one that did lost it.
+
+
+def _agent(agent_id: str, tier: str, effort: str = "medium") -> AgentConfig:
+    return AgentConfig(id=agent_id, name=agent_id, service_tier=tier, reasoning_effort=effort)
+
+
+async def _nested_run(config: AgentConfig, *, fail: bool = False) -> None:
+    """What ``AgentRunner.execute`` does with its settings, without the run."""
+    from robothor.engine.model_registry import run_scoped
+
+    @run_scoped
+    async def execute() -> None:
+        apply_run_model_settings(config)
+        assert current_service_tier() == config.service_tier
+        if fail:
+            raise RuntimeError("the child run failed")
+
+    await execute()
+
+
+async def test_a_priority_child_does_not_put_its_parent_in_the_priority_lane():
+    apply_run_model_settings(_agent("alice-agent", "default", effort="high"))
+    await _nested_run(_agent("bob-agent", "priority", effort="low"))
+    kwargs = LLMClient._build_llm_kwargs(OPENAI_MODEL, MESSAGES, TOOLS, 100, 0.3)
+    assert "service_tier" not in kwargs
+    assert current_reasoning_effort() == "high"
+
+
+async def test_a_default_child_does_not_take_its_parent_out_of_the_priority_lane():
+    apply_run_model_settings(_agent("alice-agent", "priority"))
+    await _nested_run(_agent("bob-agent", "default"))
+    kwargs = LLMClient._build_llm_kwargs(OPENAI_MODEL, MESSAGES, TOOLS, 100, 0.3)
+    assert kwargs["service_tier"] == "priority"
+
+
+async def test_a_child_that_fails_still_hands_the_parent_its_settings_back():
+    apply_run_model_settings(_agent("alice-agent", "priority", effort="high"))
+    with pytest.raises(RuntimeError):
+        await _nested_run(_agent("bob-agent", "default", effort="low"), fail=True)
+    assert current_service_tier() == "priority"
+    assert current_reasoning_effort() == "high"
+
+
+def test_every_agent_run_is_scoped():
+    from robothor.engine.runner import AgentRunner
+
+    assert getattr(AgentRunner.execute, "__run_scoped__", False) is True
+
+
+# ─── What a priority call is recorded as costing ───────────────────────────
+#
+# litellm prices a response by the tier it carries. Measured against the
+# provider (2026-11): a call with tools and a reasoning effort, which is every
+# agent turn, comes back through litellm with no tier on it although the raw
+# response names one; and ``stream_chunk_builder`` drops the tier a chunk
+# carried. Either way the call was recorded at the standard rate, half of what
+# it is billed, and every cost cap under-counted by the same factor.
+
+
+def _response(tier: str | None = None, model: str = "gpt-6-luna") -> Any:
+    response = litellm.ModelResponse(
+        model=model,
+        choices=[{"message": {"role": "assistant", "content": "x"}}],
+        usage={"prompt_tokens": 1000, "completion_tokens": 1000, "total_tokens": 2000},
+    )
+    if tier:
+        response.service_tier = tier
+    return response
+
+
+def _recorded_cost(response: Any) -> float:
+    return LLMClient()._response_cost(
+        response=response,
+        model_used=response.model,
+        models=[OPENAI_MODEL],
+        input_tokens=1000,
+        output_tokens=1000,
+        cache_creation_tokens=0,
+        cache_read_tokens=0,
+    )
+
+
+@pytest.fixture
+def standard_cost() -> float:
+    from robothor.engine.model_registry import register_pricing_with_litellm
+
+    register_pricing_with_litellm()
+    cost = _recorded_cost(_response())
+    assert cost > 0
+    return cost
+
+
+@pytest.mark.parametrize("reported", ["priority", "fast"])
+def test_a_response_that_reports_the_priority_lane_costs_twice_the_standard(
+    standard_cost, reported
+):
+    assert _recorded_cost(_response(reported)) == pytest.approx(2 * standard_cost)
+
+
+def test_a_response_that_does_not_say_is_priced_at_the_tier_the_run_asked_for(standard_cost):
+    set_service_tier("priority")
+    assert _recorded_cost(_response()) == pytest.approx(2 * standard_cost)
+
+
+def test_a_response_that_says_standard_is_priced_standard_whatever_was_asked(standard_cost):
+    """The provider may serve a priority request on the standard lane, and
+    bills it as standard when it does."""
+    set_service_tier("priority")
+    assert _recorded_cost(_response("default")) == pytest.approx(standard_cost)
+
+
+def test_a_route_without_a_lane_is_never_priced_as_priority():
+    set_service_tier("priority")
+    response = _response(model="us.amazon.nova-2-lite-v1:0")
+    _recorded_cost(response)
+    assert getattr(response, "service_tier", None) is None
+
+
+def _chunk(content: str | None = None, *, tier: str | None = None, usage: bool = False) -> Any:
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-1",
+        model="gpt-6-luna",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=content, role="assistant"),
+                finish_reason=None if content else "stop",
+            )
+        ],
+    )
+    if tier:
+        chunk.service_tier = tier
+    if usage:
+        chunk.usage = litellm.Usage(prompt_tokens=1000, completion_tokens=1000, total_tokens=2000)
+    return chunk
+
+
+@pytest.mark.parametrize(("reported", "factor"), [("fast", 2), ("default", 1)])
+def test_a_streamed_response_keeps_the_tier_a_chunk_reported(standard_cost, reported, factor):
+    from robothor.engine.llm_client import rebuild_streamed_response
+
+    set_service_tier("priority")
+    chunks = [_chunk("Hel"), _chunk("lo", tier=reported), _chunk(), _chunk(usage=True)]
+    rebuilt = rebuild_streamed_response(chunks)
+    assert rebuilt.service_tier == reported
+    assert _recorded_cost(rebuilt) == pytest.approx(factor * standard_cost)
