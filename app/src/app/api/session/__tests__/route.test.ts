@@ -135,23 +135,45 @@ describe("/api/session — the canvas's saved view", () => {
     vi.mocked(global.fetch).mockResolvedValue(
       new Response(JSON.stringify({ success: true }), { status: 200 }),
     );
-    session.mockResolvedValue({ user: { email: " Alice@Example.COM " } });
+    session.mockResolvedValue({ user: { email: " Alice@Example.COM ", role: "owner" } });
 
     await save(HTML);
 
     expect(calls()[0].url).toBe(BLOCK_URL);
   });
 
-  it("uses a user id instead when a session carries one", async () => {
+  it("uses a user id instead when a session carries one, exactly as given", async () => {
+    // An id can be case-sensitive where an address is not: `Bob` and `bob`
+    // are two people.
     vi.mocked(global.fetch).mockResolvedValue(
       new Response(JSON.stringify({ success: true }), { status: 200 }),
     );
-    session.mockResolvedValue({ user: { id: "user-42", email: "alice@example.com" } });
+    session.mockResolvedValue({ user: { id: "User-42", email: "alice@example.com", role: "admin" } });
 
     await save(HTML);
 
-    expect(calls()[0].url).toBe(blockUrl("user-42"));
+    expect(calls()[0].url).toBe(blockUrl("User-42"));
+    expect(calls()[0].url).not.toBe(blockUrl("user-42"));
   });
+
+  it.each(["member", "user", "viewer", "auditor", undefined])(
+    "does not ask the bridge on behalf of a role it would refuse (%s)",
+    async (role) => {
+      // The bridge keeps memory blocks for owners and admins. Asking for
+      // anyone else is a refusal and an auth.denied audit event on every
+      // canvas load, for a view that was never going to be kept.
+      session.mockResolvedValue({ user: { email: "bob@example.com", role } });
+
+      const restored = await GET();
+      const saved = await save(HTML);
+
+      expect(restored.status).toBe(200);
+      expect(await restored.json()).toEqual({ html: null });
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toEqual({ success: false, kept: false });
+      expect(calls()).toHaveLength(0);
+    },
+  );
 
   it.each([null, {}, { user: {} }, { user: { name: "Alice Example" } }])(
     "neither saves nor restores for a session that identifies nobody (%j)",
