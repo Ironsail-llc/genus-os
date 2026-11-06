@@ -4,15 +4,20 @@
  * GET  /api/session — Restore last saved dashboard HTML
  * POST /api/session — Save current dashboard HTML
  *
- * Uses the agent_memory_blocks table (block: "helm_state") for persistence.
+ * Uses the agent_memory_blocks table for persistence, one block per signed-in
+ * person ("helm_state.<user>"). Blocks are keyed by tenant, and a canvas is
+ * drawn from one person's conversation: a single shared name would show it to
+ * everyone in the tenant.
  */
 
+import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { getServiceUrl } from "@/lib/services/registry";
 
 const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
-const BLOCK_NAME = "helm_state";
+const BLOCK_PREFIX = "helm_state";
 const MAX_DASHBOARD_SIZE = 100_000; // 100KB limit
 
 /**
@@ -34,10 +39,29 @@ function safeBackendUrl(base: string, path: string): URL | null {
 }
 
 /**
+ * The signed-in person's own block, or null when nobody is signed in. An id
+ * that is not already a safe path segment is hashed rather than rewritten, so
+ * two different ids can never land on the same block.
+ */
+async function ownBlockName(): Promise<string | null> {
+  const session = await auth();
+  const id = session?.user?.id;
+  if (!id) return null;
+  const segment = /^[A-Za-z0-9_-]{1,64}$/.test(id)
+    ? id
+    : createHash("sha256").update(id).digest("hex").slice(0, 32);
+  return `${BLOCK_PREFIX}.${segment}`;
+}
+
+const NOT_SIGNED_IN = { error: "Not signed in" };
+
+/**
  * GET /api/session — Restore saved dashboard state
  */
 export async function GET() {
   try {
+    const BLOCK_NAME = await ownBlockName();
+    if (!BLOCK_NAME) return NextResponse.json(NOT_SIGNED_IN, { status: 401 });
     const target = safeBackendUrl(BRIDGE_URL, `api/memory/blocks/${BLOCK_NAME}`);
     if (!target) {
       return new Response("Bad gateway path", { status: 502 });
@@ -94,6 +118,9 @@ export async function POST(request: NextRequest) {
         { status: 413 }
       );
     }
+
+    const BLOCK_NAME = await ownBlockName();
+    if (!BLOCK_NAME) return NextResponse.json(NOT_SIGNED_IN, { status: 401 });
 
     const state = JSON.stringify({
       html,

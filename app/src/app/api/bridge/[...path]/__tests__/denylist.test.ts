@@ -145,7 +145,7 @@ describe("bridge proxy denylist", () => {
       "/api/people",
       "/api/tenants/accessible",
       "/api/auth/me",
-      "/api/memory-blocks/helm_state",
+      "/api/memory/blocks/helm_state",
       "/api/people/alice%20example",
     ]) {
       expect(isDeniedBridgePath(path), path).toBe(false);

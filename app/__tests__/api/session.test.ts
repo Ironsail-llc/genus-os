@@ -15,6 +15,9 @@ vi.mock("@/lib/config", () => ({
 vi.mock("@/lib/bridge-auth", () => ({
   bridgeAuthHeaders: async () => ({ Authorization: "Bearer test-bridge-token" }),
 }));
+// The saved view belongs to the signed-in person; these specs are about the
+// bridge exchange, so one person is signed in throughout.
+vi.mock("@/lib/auth", () => ({ auth: async () => ({ user: { id: "user-alice" } }) }));
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -139,7 +142,7 @@ describe("POST /api/session", () => {
     // Check the fetch call
     expect(mockFetch).toHaveBeenCalledOnce();
     const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toContain("/api/memory/blocks/helm_state");
+    expect(url).toContain("/api/memory/blocks/helm_state.user-alice");
     expect(opts.method).toBe("PUT");
     expect(opts.headers.Authorization).toBe("Bearer test-bridge-token");
 

@@ -753,41 +753,41 @@ def drop_unsupported_sampling(model: str, kwargs: dict[str, Any]) -> dict[str, A
 _PRIORITY_TIERS = frozenset({"priority", "fast"})
 
 
-def rebuild_streamed_response(chunks: list[Any]) -> Any:
-    """``litellm.stream_chunk_builder``, keeping the service tier a chunk reported.
+def note_requested_tier(response: Any, kwargs: dict[str, Any]) -> Any:
+    """Record the lane a call asked for on a response that does not name one.
 
-    The builder drops ``service_tier``, and a response is priced by the tier it
-    carries: a stream served on the priority lane was recorded at the standard
-    rate, half of what it is billed.
+    Called where the call is dispatched, because only that code knows whether
+    this request was sent the tier: the id a response carries does not say
+    which route it came by. Measured against the provider (2026-11): a call
+    with tools and a reasoning effort, which is every agent turn, comes back
+    through litellm with no tier although the raw response names one. Such a
+    response is taken to have been served on the lane it asked for — the
+    provider can serve a priority request on the standard lane, so this can
+    overstate a call's cost, never understate it. A response that does say is
+    believed.
+    """
+    asked = kwargs.get("service_tier") == "priority"
+    if response is not None and asked and not getattr(response, "service_tier", None):
+        setattr(response, "service_tier", "priority")  # noqa: B010 - not on litellm's type
+    return response
+
+
+def rebuild_streamed_response(chunks: list[Any], kwargs: dict[str, Any] | None = None) -> Any:
+    """``litellm.stream_chunk_builder``, keeping the service tier the call was served on.
+
+    The builder drops ``service_tier``, and a call is priced by the lane it
+    was served on: a stream on the priority lane was recorded at the standard
+    rate, half of what it is billed. The tier a chunk reported wins; failing
+    that, the one the request asked for (:func:`note_requested_tier`).
     """
     rebuilt = litellm.stream_chunk_builder(chunks)
     tiers = (getattr(chunk, "service_tier", None) for chunk in reversed(chunks))
     tier = next((tier for tier in tiers if tier), None)
     if rebuilt is not None and tier and not getattr(rebuilt, "service_tier", None):
-        setattr(rebuilt, "service_tier", tier)  # noqa: B010 - not on litellm's type
-    return rebuilt
-
-
-def served_service_tier(response: Any, model: str) -> str:
-    """The lane a response was served on, stamped on it when it does not say.
-
-    Measured against the provider (2026-11): a call with tools and a reasoning
-    effort, which is every agent turn, comes back through litellm with no tier
-    although the raw response names one. Such a response is taken to have been
-    served on the lane the run asked for — the provider can serve a priority
-    request on the standard lane, so this can overstate a call's cost, never
-    understate it. A response that does say is believed.
-    """
-    reported = getattr(response, "service_tier", None)
-    if reported:
-        return str(reported)
-    from robothor.engine.model_registry import current_service_tier
-
-    if current_service_tier() == "priority" and _is_openai_direct(model):
-        with contextlib.suppress(AttributeError, TypeError, ValueError):
-            response.service_tier = "priority"
-        return "priority"
-    return "default"
+        # One name for the priority lane, whatever the provider calls it today.
+        lane = "priority" if tier in _PRIORITY_TIERS else tier
+        setattr(rebuilt, "service_tier", lane)  # noqa: B010 - not on litellm's type
+    return note_requested_tier(rebuilt, kwargs or {})
 
 
 def apply_service_tier(model: str, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -1793,18 +1793,29 @@ class LLMClient:
                 cache_creation_tokens,
                 cache_read_tokens,
             )
-        # Before pricing: litellm reads the lane off the response.
-        tier = served_service_tier(response, model_used)
+        # The lane the call was served on (see note_requested_tier). A curated
+        # row carries its own priority multiplier, applied here to a standard
+        # price whichever way that price is found: litellm prices such a row
+        # at the standard rate when it knows it and not at all when it does
+        # not, and neither is the lane. A model with no row is left to
+        # litellm's own priority rates, under the one name it knows them by.
+        from robothor.engine.model_registry import _declared_limits
+
+        priority = getattr(response, "service_tier", None) in _PRIORITY_TIERS
+        declared = _declared_limits(model_used) if priority else None
+        lane = declared.priority_cost_multiplier if declared else 1.0
+        if priority:
+            setattr(response, "service_tier", "default" if lane != 1.0 else "priority")  # noqa: B010
         try:
             cost = litellm.completion_cost(completion_response=response, model=model_used)
             if cost and cost > 0:
-                return cost
+                return float(lane * cost)
         except Exception as e:
             logger.warning("litellm cost calculation failed, using fallback: %s", e)
-        from robothor.engine.model_registry import get_model_limits
-
-        lane = get_model_limits(model_used).priority_cost_multiplier
-        return (lane if tier in _PRIORITY_TIERS else 1.0) * self._calculate_cost(
+        finally:
+            if priority:
+                setattr(response, "service_tier", "priority")  # noqa: B010
+        return lane * self._calculate_cost(
             model_used,
             input_tokens,
             output_tokens,
@@ -2533,7 +2544,9 @@ class LLMClient:
         model_registry.note_active_model(model)
         async with _local_slot(model):
             try:
-                return await bounded_completion(litellm.acompletion, **kwargs)
+                return note_requested_tier(
+                    await bounded_completion(litellm.acompletion, **kwargs), kwargs
+                )
             except Exception as e:
                 if not is_image_unsupported_error(e):
                     raise
@@ -2546,8 +2559,11 @@ class LLMClient:
                     "the agent is told to inspect the file programmatically",
                     _sanitize(model),
                 )
-                return await bounded_completion(
-                    litellm.acompletion, **{**kwargs, "messages": stripped}
+                return note_requested_tier(
+                    await bounded_completion(
+                        litellm.acompletion, **{**kwargs, "messages": stripped}
+                    ),
+                    kwargs,
                 )
 
     # ─── Non-streaming call ──────────────────────────────────────────
@@ -2979,7 +2995,7 @@ class LLMClient:
                     # Final progress tick — we have a complete response to return.
                     if self._active_watchdog:
                         self._active_watchdog.touch(f"stream_complete:{model}")
-                    rebuilt = rebuild_streamed_response(chunks)
+                    rebuilt = rebuild_streamed_response(chunks, kwargs)
                     merge_streamed_reasoning_details(rebuilt, streamed_reasoning_details)
                     # One meaning for `duration_ms` on both paths: the provider
                     # attempt, never the token-counting prep before it.

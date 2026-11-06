@@ -82,9 +82,11 @@ model:
 Today the setting reaches the OpenAI API only (`openai/…` and bare `gpt-…`
 ids), as `service_tier="priority"`; OpenAI bills that lane at a multiple of the
 standard price. A call is recorded at the tier its response reports, and at the
-tier the run asked for when the response does not say, which is the case for
+tier the request asked for when the response does not say, which is the case for
 every agent turn that carries tools: recorded cost can overstate such a call if
-the provider served it on the standard lane, never understate it.
+the provider served it on the standard lane, never understate it. That is
+decided where the call is sent, so a call on a route that was never sent the
+tier is never recorded as priority, whatever model id its response carries.
 Every other route is sent nothing, including a fallback in the same chain, so
 adding the setting to a mixed chain is safe. The dashboard canvas runs outside
 any agent's run and stays on the standard lane.
