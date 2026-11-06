@@ -38,7 +38,7 @@ function safeBackendUrl(base: string, path: string): URL | null {
  */
 export async function GET() {
   try {
-    const target = safeBackendUrl(BRIDGE_URL, `api/memory-blocks/${BLOCK_NAME}`);
+    const target = safeBackendUrl(BRIDGE_URL, `api/memory/blocks/${BLOCK_NAME}`);
     if (!target) {
       return new Response("Bad gateway path", { status: 502 });
     }
@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
       savedAt: new Date().toISOString(),
     });
 
-    const target = safeBackendUrl(BRIDGE_URL, `api/memory-blocks/${BLOCK_NAME}`);
+    const target = safeBackendUrl(BRIDGE_URL, `api/memory/blocks/${BLOCK_NAME}`);
     if (!target) {
       return new Response("Bad gateway path", { status: 502 });
     }
