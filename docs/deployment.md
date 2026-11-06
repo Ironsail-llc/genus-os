@@ -407,6 +407,12 @@ also needs a payment method Marketplace accepts, or the first calls are refused
 with an access error that names the payment instrument rather than a
 permission.
 
+A provider that sells a faster lane per request can be asked for it:
+`service_tier: priority` beside `primary` in `_defaults.yaml`, or in one
+agent's `model:` block, puts every call that agent's runs make in the lane.
+It reaches the OpenAI API today, is billed at that provider's premium, and is
+sent to no other route, so a fallback on another provider is unaffected.
+
 Vertex AI is the Gemini surface covered by Google Cloud's enterprise terms; the
 service account needs the Vertex AI User role on the project. The engine-wide
 settings whose defaults name a provider (`ROBOTHOR_LAST_RESORT_MODEL`,
