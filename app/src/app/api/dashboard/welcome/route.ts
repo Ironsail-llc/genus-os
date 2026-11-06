@@ -16,7 +16,7 @@ function buildWelcomeUserPrompt(context: Awaited<ReturnType<typeof fetchWelcomeC
   parts.push("\n## Real Data (use ONLY these values — never invent numbers)");
 
   parts.push(`\nGreeting: "${context.greeting}"`);
-  parts.push(`Date: ${context.dayOfWeek}, ${new Date(context.timestamp).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`);
+  parts.push(`Date: ${context.dayOfWeek}, ${context.date}`);
 
   if (context.health) {
     const healthy = context.health.services.filter(s => s.status === "healthy").length;
@@ -59,8 +59,21 @@ Generate the dashboard HTML now. No markdown fences, no explanation, no code fen
   return parts.join("\n");
 }
 
-export async function POST() {
+/** The viewer's IANA time zone from the request body, if it sent one. */
+async function viewerTimeZone(request?: Request): Promise<string | null> {
+  if (!request) return null;
+  try {
+    const body: unknown = await request.json();
+    const zone = (body as { timeZone?: unknown } | null)?.timeZone;
+    return typeof zone === "string" && zone.length <= 64 ? zone : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function POST(request?: Request) {
   const encoder = new TextEncoder();
+  const timeZone = await viewerTimeZone(request);
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -69,7 +82,7 @@ export async function POST() {
       }, 10_000);
 
       try {
-        const context = await fetchWelcomeContext();
+        const context = await fetchWelcomeContext(timeZone);
         const systemPrompt = getDashboardSystemPrompt();
         const userPrompt = buildWelcomeUserPrompt(context);
         const result = await renderDashboard(

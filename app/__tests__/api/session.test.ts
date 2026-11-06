@@ -139,7 +139,7 @@ describe("POST /api/session", () => {
     // Check the fetch call
     expect(mockFetch).toHaveBeenCalledOnce();
     const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toContain("/api/memory-blocks/helm_state");
+    expect(url).toContain("/api/memory/blocks/helm_state");
     expect(opts.method).toBe("PUT");
     expect(opts.headers.Authorization).toBe("Bearer test-bridge-token");
 
