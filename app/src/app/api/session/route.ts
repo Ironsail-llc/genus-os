@@ -38,18 +38,28 @@ function safeBackendUrl(base: string, path: string): URL | null {
   return target;
 }
 
+/** The roles the bridge serves memory blocks to (its privileged-access gate). */
+const KEEPS_A_VIEW = new Set(["owner", "admin"]);
+
 /**
- * The signed-in person's own block, or null when the session identifies nobody.
+ * The signed-in person's own block.
+ *
+ * - `null`: the session identifies nobody.
+ * - `false`: it identifies somebody the bridge keeps no blocks for. Asking
+ *   anyway is a refusal and an `auth.denied` audit event on every canvas load,
+ *   so the bridge is not asked and the canvas is simply not kept for them.
  *
  * A session carries the person's name, email and role; it has an id only where
- * a deployment's sign-in adds one. The identity is hashed into the block name,
- * so two people can never share a block and nobody's address is written into a
- * block name, a URL or a log line.
+ * a deployment's sign-in adds one. An id is used exactly as given, an address
+ * without regard to case. Either is hashed into the block name, so two people
+ * never share a block and nobody's address is written into a block name, a URL
+ * or a log line.
  */
-async function ownBlockName(): Promise<string | null> {
+async function ownBlockName(): Promise<string | false | null> {
   const user = (await auth())?.user;
-  const identity = (user?.id || user?.email || "").trim().toLowerCase();
+  const identity = user?.id || user?.email?.trim().toLowerCase();
   if (!identity) return null;
+  if (!KEEPS_A_VIEW.has(user?.role ?? "")) return false;
   const key = createHash("sha256").update(identity).digest("hex").slice(0, 32);
   return `${BLOCK_PREFIX}.${key}`;
 }
@@ -62,7 +72,8 @@ const NOT_SIGNED_IN = { error: "Not signed in" };
 export async function GET() {
   try {
     const BLOCK_NAME = await ownBlockName();
-    if (!BLOCK_NAME) return NextResponse.json(NOT_SIGNED_IN, { status: 401 });
+    if (BLOCK_NAME === null) return NextResponse.json(NOT_SIGNED_IN, { status: 401 });
+    if (BLOCK_NAME === false) return NextResponse.json({ html: null });
     const target = safeBackendUrl(BRIDGE_URL, `api/memory/blocks/${BLOCK_NAME}`);
     if (!target) {
       return new Response("Bad gateway path", { status: 502 });
@@ -121,7 +132,8 @@ export async function POST(request: NextRequest) {
     }
 
     const BLOCK_NAME = await ownBlockName();
-    if (!BLOCK_NAME) return NextResponse.json(NOT_SIGNED_IN, { status: 401 });
+    if (BLOCK_NAME === null) return NextResponse.json(NOT_SIGNED_IN, { status: 401 });
+    if (BLOCK_NAME === false) return NextResponse.json({ success: false, kept: false });
 
     const state = JSON.stringify({
       html,
