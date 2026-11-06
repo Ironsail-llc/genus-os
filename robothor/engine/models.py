@@ -499,6 +499,9 @@ class AgentConfig:
     # via model_registry.reasoning_budget_tokens. Default medium = the prior
     # global THINKING_BUDGET_TOKENS, so omitting it changes nothing.
     reasoning_effort: str = "medium"
+    # Service tier (default/priority) for providers that sell a faster lane per
+    # request. Sent only to routes that have one; see llm_client.apply_service_tier.
+    service_tier: str = "default"
     exec_allowlist: list[str] = field(
         default_factory=list
     )  # regex patterns for allowed exec commands

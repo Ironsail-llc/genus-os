@@ -39,7 +39,12 @@ export function CanvasView({ visible = true }: { visible?: boolean }) {
     setGenerating(true);
     setGenerationError(null);
     try {
-      const res = await fetch("/api/dashboard/welcome", { method: "POST" });
+      const res = await fetch("/api/dashboard/welcome", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // The greeting follows the viewer's clock, not the server's.
+        body: JSON.stringify({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+      });
       if (!isActive()) return;
       if (!res.ok) {
         setGenerationError(`Generation failed (${res.status})`);

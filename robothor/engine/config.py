@@ -564,6 +564,14 @@ def _parse_ambient(raw: Any) -> Any:
     return parse_ambient(raw)
 
 
+def _run_model_settings(model: dict[str, Any]) -> dict[str, Any]:
+    """The ``model:`` keys a run carries with it rather than sends as a model id."""
+    return {
+        "reasoning_effort": str(model.get("reasoning_effort", "medium")),
+        "service_tier": str(model.get("service_tier", "default")),
+    }
+
+
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     """Convert a YAML manifest dict to an AgentConfig."""
     model = manifest.get("model", {})
@@ -722,7 +730,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             str(manifest.get("id", "")),
             manifest.get("role", manifest.get("service_role", "")),
         ),
-        reasoning_effort=str(model.get("reasoning_effort", "medium")),
+        **_run_model_settings(model),
         instruction_file=manifest.get("instruction_file", ""),
         bootstrap_files=manifest.get("bootstrap_files", []),
         reports_to=manifest.get("reports_to", ""),

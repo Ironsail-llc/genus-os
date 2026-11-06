@@ -440,7 +440,7 @@ litellm.suppress_debug_info = True
 # Register custom pricing so litellm.completion_cost() prices our models.
 # Single-sourced from model_registry._MODEL_REGISTRY (G6) when Rip 17 is on;
 # otherwise the legacy two-model block, preserved inside the function.
-from robothor.engine.model_registry import register_pricing_with_litellm  # noqa: E402
+from robothor.engine.model_registry import register_pricing_with_litellm, run_scoped  # noqa: E402
 
 register_pricing_with_litellm()
 
@@ -538,6 +538,7 @@ class AgentRunner(
 
     @lane_gated
     @runtime_entrypoint
+    @run_scoped
     async def execute(
         self,
         agent_id: str,
@@ -643,10 +644,9 @@ class AgentRunner(
             is_service_caller=_is_service_caller(effective_user_role, effective_user_id),
         )
 
-        # Per-run reasoning effort → extended-thinking budget (task-local).
-        from robothor.engine.model_registry import set_reasoning_effort
+        from robothor.engine.model_registry import apply_run_model_settings
 
-        set_reasoning_effort(agent_config.reasoning_effort)
+        apply_run_model_settings(agent_config)
 
         session = AgentSession(
             agent_id=agent_id,

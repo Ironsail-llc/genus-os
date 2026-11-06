@@ -11,11 +11,13 @@ import logging
 import re
 from contextvars import ContextVar
 from dataclasses import dataclass
-from functools import lru_cache
-from typing import TYPE_CHECKING, Any
+from functools import lru_cache, wraps
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Awaitable, Callable, Iterator, Sequence
+
+    from robothor.engine.models import AgentConfig
 
 from robothor.engine.sanitize import sanitize_log
 
@@ -79,6 +81,12 @@ class ModelLimits:
     # says "deprecated" leaves the operator with nowhere to go.
     status: str = "current"
     replaced_by: str = ""
+    # What the provider's priority lane costs, as a multiple of the prices
+    # above. A row that sets it prices its own lane: a call served on the
+    # priority lane is priced at the standard rate (litellm is handed the
+    # response as standard-lane, the fallback reads the row) and multiplied by
+    # this. A row that leaves it at 1.0 leaves the lane to litellm's own rates.
+    priority_cost_multiplier: float = 1.0
 
 
 # ─── Registry ────────────────────────────────────────────────────────
@@ -489,12 +497,51 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         supports_thinking=True,
         ttft_hint_ms=2000,
         accepts_images=True,
+        priority_cost_multiplier=2.0,
+    ),
+    # GPT-6 Luna on the OpenAI API. Figures from litellm's catalog (2026-10).
+    # The same call shape as GPT-5.6 Luna: `reasoning_effort`, no `thinking`
+    # block, no `temperature`. Prices are the standard tier's; a run on the
+    # priority tier (`model.service_tier`) is billed at twice these.
+    "openai/gpt-6-luna": ModelLimits(
+        max_input_tokens=922_000,
+        max_output_tokens=128_000,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_000_1,  # $0.10/M
+        output_cost_per_token=0.000_000_5,  # $0.50/M
+        cache_write_cost_per_token=0.000_000_125,  # $0.125/M
+        cache_read_cost_per_token=0.000_000_01,  # $0.01/M
+        supports_thinking=True,
+        ttft_hint_ms=2000,
+        accepts_images=True,
+        priority_cost_multiplier=2.0,
+    ),
+    # Amazon Nova 2 Lite on Bedrock, US cross-Region profile. Figures from
+    # litellm's catalog (2026-10). Here for the dashboard canvas: the fastest
+    # full render measured (2026-11). It reasons only when asked to, and the
+    # engine does not ask, so supports_thinking stays False.
+    "bedrock/us.amazon.nova-2-lite-v1:0": ModelLimits(
+        max_input_tokens=1_000_000,
+        max_output_tokens=64_000,
+        default_output_tokens=8_192,
+        input_cost_per_token=0.000_000_33,  # $0.33/M
+        output_cost_per_token=0.000_002_75,  # $2.75/M
+        cache_read_cost_per_token=0.000_000_082_5,  # $0.0825/M
+        ttft_hint_ms=800,
+        # The catalog says it caches prompts and sees images. Neither has been
+        # exercised on this route, and the canvas call needs neither.
+        supports_cache_control=False,
     ),
 }
 
 # OpenAI reports the bare id back on a response, and cost accounting looks the
 # response id up; _registry_candidates does not strip the `openai/` prefix.
 _MODEL_REGISTRY["gpt-5.6-luna"] = _MODEL_REGISTRY["openai/gpt-5.6-luna"]
+_MODEL_REGISTRY["gpt-6-luna"] = _MODEL_REGISTRY["openai/gpt-6-luna"]
+# Bedrock reports the inference profile id, without the `bedrock/` prefix.
+_MODEL_REGISTRY["us.amazon.nova-2-lite-v1:0"] = _MODEL_REGISTRY[
+    "bedrock/us.amazon.nova-2-lite-v1:0"
+]
 
 # Conservative fallback for unknown models
 _FALLBACK = ModelLimits(
@@ -1106,6 +1153,60 @@ def current_reasoning_effort() -> str:
     the kwargs builder, not here. See ``llm_client._thinking_budget``.
     """
     return _reasoning_effort_ctx.get()
+
+
+# Per-run service tier, carried the same way as the reasoning effort: set by
+# the runner at run start, read wherever a call's kwargs are finished.
+_service_tier_ctx: ContextVar[str] = ContextVar("service_tier", default="default")
+
+
+def set_service_tier(tier: str) -> None:
+    """Set the service tier for the current run's task context."""
+    _service_tier_ctx.set((tier or "default").strip().lower())
+
+
+def current_service_tier() -> str:
+    """The service tier of the current run: ``default`` or ``priority``."""
+    return _service_tier_ctx.get()
+
+
+def apply_run_model_settings(agent_config: AgentConfig) -> None:
+    """Publish an agent's per-run model settings for every call its run makes.
+
+    Task-local, so concurrent runs do not race: the reasoning effort sizes the
+    thinking budget, and the service tier picks the provider's lane. A run
+    inside a run shares its parent's task; :func:`run_scoped` is what hands the
+    parent its own settings back.
+    """
+    set_reasoning_effort(agent_config.reasoning_effort)
+    set_service_tier(agent_config.service_tier)
+
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def run_scoped(run: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+    """Give the caller back its own run settings when ``run`` ends.
+
+    A single spawned sub-agent, and a benchmark run, are awaited inline in the
+    parent's task rather than in one of their own, so the child's
+    :func:`apply_run_model_settings` wrote over the parent's values and nothing
+    put them back: for the rest of its run the parent reasoned at the child's
+    effort and was billed for, or dropped out of, the child's service tier.
+    """
+
+    @wraps(run)
+    async def scoped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        effort, tier = _reasoning_effort_ctx.get(), _service_tier_ctx.get()
+        try:
+            return await run(*args, **kwargs)
+        finally:
+            _reasoning_effort_ctx.set(effort)
+            _service_tier_ctx.set(tier)
+
+    scoped.__run_scoped__ = True  # type: ignore[attr-defined]
+    return scoped
 
 
 def current_thinking_budget() -> int:

@@ -74,7 +74,8 @@ export function LiveCanvas() {
         const res = await fetch("/api/dashboard/welcome", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
+          // The greeting follows the viewer's clock, not the server's.
+          body: JSON.stringify({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
           signal: abort.signal,
         });
         // Response may contain leading whitespace (keepalive padding) —

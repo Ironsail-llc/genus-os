@@ -75,6 +75,12 @@ dependencies = [
     # not found" while the OpenAI and OpenRouter paths work, and nothing in
     # the image build or the doctor says why.
     "google-auth>=2.40,<3",
+    # litellm signs every `bedrock/*` request with AWS credentials resolved by
+    # botocore. litellm 1.100 lists boto3 among its own dependencies, so this
+    # adds nothing to the install today; it is declared here so that a litellm
+    # release that moves it into an extra, as google-auth is, cannot quietly
+    # take Amazon Bedrock away from an instance whose canvas or fleet runs on it.
+    "boto3>=1.40,<2",
     "aiohttp>=3.14.3",
     # `view_image` decodes and downscales before an image reaches a model.
     # A core dependency, not an extra: an agent that cannot look at a picture

@@ -7,6 +7,7 @@ import { auth } from "@/lib/auth";
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { getServiceUrl, rootTenant } from "@/lib/services/registry";
 import { OWNER_NAME } from "@/lib/config";
+import { greetingFor, localMoment, viewerFirstName } from "@/lib/dashboard/welcome-greeting";
 const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
 const ORCHESTRATOR_URL = getServiceUrl("orchestrator") || "http://localhost:9099";
 const VISION_URL = getServiceUrl("vision") || "http://localhost:8600";
@@ -22,6 +23,8 @@ interface WelcomeContext {
   timestamp: string;
   hour: number;
   dayOfWeek: string;
+  /** The viewer's local date, e.g. "November 6, 2026". */
+  date: string;
   greeting: string;
   health: {
     status: string;
@@ -42,16 +45,13 @@ interface WelcomeContext {
   } | null;
 }
 
-export async function fetchWelcomeContext(): Promise<WelcomeContext> {
+export async function fetchWelcomeContext(timeZone?: string | null): Promise<WelcomeContext> {
   const now = new Date();
-  const hour = now.getHours();
-  const dayOfWeek = now.toLocaleDateString("en-US", { weekday: "long" });
-
-  let greeting: string;
-  if (hour >= 6 && hour < 12) greeting = "Good morning";
-  else if (hour >= 12 && hour < 17) greeting = "Good afternoon";
-  else if (hour >= 17 && hour < 22) greeting = "Good evening";
-  else greeting = "Hey";
+  // The viewer's time of day and name, not the server's clock (UTC in a
+  // container) or a deployment-wide placeholder.
+  const { hour, dayOfWeek, date } = localMoment(now, timeZone);
+  const session = await auth().catch(() => null);
+  const greeting = greetingFor(hour, viewerFirstName(session?.user?.name, OWNER_NAME));
 
   // These run inside a route handler on behalf of the signed-in operator:
   // resolve that caller's bridge credential once and send it with every
@@ -71,7 +71,8 @@ export async function fetchWelcomeContext(): Promise<WelcomeContext> {
     timestamp: now.toISOString(),
     hour,
     dayOfWeek,
-    greeting: `${greeting}, ${OWNER_NAME}`,
+    date,
+    greeting,
     health,
     inbox,
     calendar,
