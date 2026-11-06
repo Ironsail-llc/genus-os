@@ -1,3 +1,9 @@
+## [1.128.2](https://github.com/Ironsail-llc/genus-os/compare/v1.128.1...v1.128.2) (2026-11-06)
+
+### Bug Fixes
+
+* **engine:** tighten the host-exec environment (GEN-449) ([#862](https://github.com/Ironsail-llc/genus-os/issues/862)) ([cb6ecfa](https://github.com/Ironsail-llc/genus-os/commit/cb6ecfa6bee5e9e6a928c90904a7cfa5290a1e16))
+
 ## [1.128.1](https://github.com/Ironsail-llc/genus-os/compare/v1.128.0...v1.128.1) (2026-11-05)
 
 ### Bug Fixes
