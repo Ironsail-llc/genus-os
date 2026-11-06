@@ -1,3 +1,9 @@
+## [1.129.0](https://github.com/Ironsail-llc/genus-os/compare/v1.128.2...v1.129.0) (2026-11-06)
+
+### Features
+
+* **engine:** priority service tier and a bedrock canvas model (GEN-472) ([#863](https://github.com/Ironsail-llc/genus-os/issues/863)) ([6915a1d](https://github.com/Ironsail-llc/genus-os/commit/6915a1d99c814279955d51fa4fa99ab31624aefb))
+
 ## [1.128.2](https://github.com/Ironsail-llc/genus-os/compare/v1.128.1...v1.128.2) (2026-11-06)
 
 ### Bug Fixes
