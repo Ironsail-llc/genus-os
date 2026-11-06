@@ -1,11 +1,11 @@
-"""``bedrock/*`` models need boto3 in the core install.
+"""``bedrock/*`` models need boto3, and the platform says so itself.
 
 litellm signs every Amazon Bedrock request with AWS credentials resolved by
-botocore, and declares boto3 nowhere in its own core dependencies. An image
-built from the core dependencies would therefore fail every ``bedrock/*`` call
-on import while every other provider worked, the same shape as the
-``vertex_ai/*`` failure ``test_vertex_ai_dependency.py`` pins. A developer venv
-that happens to carry boto3 for another reason hides it.
+botocore. litellm 1.100 lists boto3 among its own dependencies, so the install
+carries it today. It keeps google-auth, which Vertex AI needs the same way, in
+an extra instead, and ``test_vertex_ai_dependency.py`` records what that cost.
+Declaring boto3 in the core dependencies means a litellm release that moves it
+cannot take Bedrock away from an instance that runs on it.
 """
 
 from __future__ import annotations
@@ -26,11 +26,12 @@ def _core_requirements() -> dict[str, Requirement]:
     return {requirement.name.lower(): requirement for requirement in requirements}
 
 
-def test_boto3_is_a_core_dependency_not_an_accident_of_the_venv() -> None:
+def test_boto3_is_a_core_dependency_in_its_own_right() -> None:
     core = _core_requirements()
     assert "boto3" in core, (
         "boto3 must be a core dependency: litellm resolves AWS credentials and "
-        "signs every bedrock/* request through botocore, and does not declare it"
+        "signs every bedrock/* request through botocore, and the platform should "
+        "not depend on litellm continuing to declare it"
     )
     assert core["boto3"].specifier.contains("1.40.0"), core["boto3"]
 

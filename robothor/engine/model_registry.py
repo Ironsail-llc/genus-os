@@ -11,11 +11,11 @@ import logging
 import re
 from contextvars import ContextVar
 from dataclasses import dataclass
-from functools import lru_cache
-from typing import TYPE_CHECKING, Any
+from functools import lru_cache, wraps
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Awaitable, Callable, Iterator, Sequence
 
     from robothor.engine.models import AgentConfig
 
@@ -81,6 +81,10 @@ class ModelLimits:
     # says "deprecated" leaves the operator with nowhere to go.
     status: str = "current"
     replaced_by: str = ""
+    # What the provider's priority lane costs, as a multiple of the prices
+    # above. Used when a call was served on that lane and litellm cannot price
+    # the model itself (a model newer than its bundled list).
+    priority_cost_multiplier: float = 1.0
 
 
 # ─── Registry ────────────────────────────────────────────────────────
@@ -491,6 +495,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         supports_thinking=True,
         ttft_hint_ms=2000,
         accepts_images=True,
+        priority_cost_multiplier=2.0,
     ),
     # GPT-6 Luna on the OpenAI API. Figures from litellm's catalog (2026-10).
     # The same call shape as GPT-5.6 Luna: `reasoning_effort`, no `thinking`
@@ -507,6 +512,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         supports_thinking=True,
         ttft_hint_ms=2000,
         accepts_images=True,
+        priority_cost_multiplier=2.0,
     ),
     # Amazon Nova 2 Lite on Bedrock, US cross-Region profile. Figures from
     # litellm's catalog (2026-10). Here for the dashboard canvas: the fastest
@@ -1166,10 +1172,39 @@ def apply_run_model_settings(agent_config: AgentConfig) -> None:
     """Publish an agent's per-run model settings for every call its run makes.
 
     Task-local, so concurrent runs do not race: the reasoning effort sizes the
-    thinking budget, and the service tier picks the provider's lane.
+    thinking budget, and the service tier picks the provider's lane. A run
+    inside a run shares its parent's task; :func:`run_scoped` is what hands the
+    parent its own settings back.
     """
     set_reasoning_effort(agent_config.reasoning_effort)
     set_service_tier(agent_config.service_tier)
+
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def run_scoped(run: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+    """Give the caller back its own run settings when ``run`` ends.
+
+    A single spawned sub-agent, and a benchmark run, are awaited inline in the
+    parent's task rather than in one of their own, so the child's
+    :func:`apply_run_model_settings` wrote over the parent's values and nothing
+    put them back: for the rest of its run the parent reasoned at the child's
+    effort and was billed for, or dropped out of, the child's service tier.
+    """
+
+    @wraps(run)
+    async def scoped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        effort, tier = _reasoning_effort_ctx.get(), _service_tier_ctx.get()
+        try:
+            return await run(*args, **kwargs)
+        finally:
+            _reasoning_effort_ctx.set(effort)
+            _service_tier_ctx.set(tier)
+
+    scoped.__run_scoped__ = True  # type: ignore[attr-defined]
+    return scoped
 
 
 def current_thinking_budget() -> int:

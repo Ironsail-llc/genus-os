@@ -749,6 +749,47 @@ def drop_unsupported_sampling(model: str, kwargs: dict[str, Any]) -> dict[str, A
     return kwargs
 
 
+#: What a provider calls its priority lane on a response. OpenAI renamed it.
+_PRIORITY_TIERS = frozenset({"priority", "fast"})
+
+
+def rebuild_streamed_response(chunks: list[Any]) -> Any:
+    """``litellm.stream_chunk_builder``, keeping the service tier a chunk reported.
+
+    The builder drops ``service_tier``, and a response is priced by the tier it
+    carries: a stream served on the priority lane was recorded at the standard
+    rate, half of what it is billed.
+    """
+    rebuilt = litellm.stream_chunk_builder(chunks)
+    tiers = (getattr(chunk, "service_tier", None) for chunk in reversed(chunks))
+    tier = next((tier for tier in tiers if tier), None)
+    if rebuilt is not None and tier and not getattr(rebuilt, "service_tier", None):
+        setattr(rebuilt, "service_tier", tier)  # noqa: B010 - not on litellm's type
+    return rebuilt
+
+
+def served_service_tier(response: Any, model: str) -> str:
+    """The lane a response was served on, stamped on it when it does not say.
+
+    Measured against the provider (2026-11): a call with tools and a reasoning
+    effort, which is every agent turn, comes back through litellm with no tier
+    although the raw response names one. Such a response is taken to have been
+    served on the lane the run asked for — the provider can serve a priority
+    request on the standard lane, so this can overstate a call's cost, never
+    understate it. A response that does say is believed.
+    """
+    reported = getattr(response, "service_tier", None)
+    if reported:
+        return str(reported)
+    from robothor.engine.model_registry import current_service_tier
+
+    if current_service_tier() == "priority" and _is_openai_direct(model):
+        with contextlib.suppress(AttributeError, TypeError, ValueError):
+            response.service_tier = "priority"
+        return "priority"
+    return "default"
+
+
 def apply_service_tier(model: str, kwargs: dict[str, Any]) -> dict[str, Any]:
     """Ask for the provider's priority lane when the running agent wants it, in place.
 
@@ -1752,13 +1793,18 @@ class LLMClient:
                 cache_creation_tokens,
                 cache_read_tokens,
             )
+        # Before pricing: litellm reads the lane off the response.
+        tier = served_service_tier(response, model_used)
         try:
             cost = litellm.completion_cost(completion_response=response, model=model_used)
             if cost and cost > 0:
                 return cost
         except Exception as e:
             logger.warning("litellm cost calculation failed, using fallback: %s", e)
-        return self._calculate_cost(
+        from robothor.engine.model_registry import get_model_limits
+
+        lane = get_model_limits(model_used).priority_cost_multiplier
+        return (lane if tier in _PRIORITY_TIERS else 1.0) * self._calculate_cost(
             model_used,
             input_tokens,
             output_tokens,
@@ -1775,13 +1821,19 @@ class LLMClient:
         cache_read_tokens: int = 0,
     ) -> float:
         """Calculate cost from litellm model registry, with cache-aware pricing."""
+        from robothor.engine.model_registry import _declared_limits, get_model_limits
+
+        # A curated row prices a model litellm's bundled list has not heard of
+        # yet; without it every call such a model made was recorded as free. A
+        # model with neither is still free: a guessed price is not a price.
         info = litellm.model_cost.get(model, {})
-        input_rate: float = info.get("input_cost_per_token", 0.0)
-        output_rate: float = info.get("output_cost_per_token", 0.0)
-
-        # Use our registry for cache pricing (litellm doesn't expose these yet)
-        from robothor.engine.model_registry import get_model_limits
-
+        declared = _declared_limits(model)
+        input_rate: float = info.get("input_cost_per_token") or (
+            declared.input_cost_per_token if declared else 0.0
+        )
+        output_rate: float = info.get("output_cost_per_token") or (
+            declared.output_cost_per_token if declared else 0.0
+        )
         limits = get_model_limits(model)
         cache_write_rate = limits.cache_write_cost_per_token or input_rate
         cache_read_rate = limits.cache_read_cost_per_token or (input_rate * 0.1)
@@ -2927,7 +2979,7 @@ class LLMClient:
                     # Final progress tick — we have a complete response to return.
                     if self._active_watchdog:
                         self._active_watchdog.touch(f"stream_complete:{model}")
-                    rebuilt = litellm.stream_chunk_builder(chunks)
+                    rebuilt = rebuild_streamed_response(chunks)
                     merge_streamed_reasoning_details(rebuilt, streamed_reasoning_details)
                     # One meaning for `duration_ms` on both paths: the provider
                     # attempt, never the token-counting prep before it.
