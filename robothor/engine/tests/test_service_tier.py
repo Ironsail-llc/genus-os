@@ -295,29 +295,83 @@ def _recorded_cost(response: Any) -> float:
     )
 
 
-@pytest.fixture(params=["0", "1"], ids=["litellm-cannot-price-it", "litellm-prices-it"])
-def standard_cost(request, monkeypatch) -> Any:
-    """The standard-lane cost of ``_response()``, under both pricing sources.
-
-    With the catalog-backed registry off, litellm's bundled list has never
-    heard of GPT-6 Luna and the curated row prices it. With it on, the row is
-    registered with litellm, which then prices the model itself, at the
-    standard rate and with no priority rate to apply. The lane has to come out
-    the same either way. ``register_pricing_with_litellm`` mutates litellm's
-    process-wide table, so it is put back afterwards.
-    """
+@pytest.fixture
+def _restore_litellm_table():
+    """``register_pricing_with_litellm`` mutates litellm's process-wide table."""
     import copy
 
+    before = copy.deepcopy(litellm.model_cost)
+    yield
+    litellm.model_cost.clear()
+    litellm.model_cost.update(before)
+
+
+@pytest.fixture(params=["0", "1"], ids=["catalog-registry-off", "catalog-registry-on"])
+def standard_cost(request, monkeypatch, _restore_litellm_table) -> float:
+    """The standard-lane cost of ``_response()``, with the catalog-backed registry off and on.
+
+    Off, litellm's bundled list has never heard of GPT-6 Luna. On, the curated
+    row is registered with litellm, but under the bare id the API reports back
+    litellm still cannot price it (it has no provider for it), so in both cases
+    here the price comes from the row. What the two cases pin is that the lane
+    is the same whichever way the flag is set. The path where litellm prices
+    the call itself is ``test_a_call_litellm_prices_itself_...`` below.
+    """
     from robothor.engine.model_registry import register_pricing_with_litellm
 
-    before = copy.deepcopy(litellm.model_cost)
     monkeypatch.setenv("ROBOTHOR_RIP_17_ENABLED", request.param)
     register_pricing_with_litellm()
     cost = _recorded_cost(_response())
     assert cost == pytest.approx(1000 * 1e-07 + 1000 * 5e-07)
-    yield cost
-    litellm.model_cost.clear()
-    litellm.model_cost.update(before)
+    return cost
+
+
+@pytest.fixture
+def litellm_prices(monkeypatch) -> list[tuple[str | None, float]]:
+    """Every price litellm itself returned, with the lane the response named."""
+    seen: list[tuple[str | None, float]] = []
+    real = litellm.completion_cost
+
+    def spy(*args: Any, **kwargs: Any) -> float:
+        cost = real(*args, **kwargs)
+        seen.append((getattr(kwargs["completion_response"], "service_tier", None), cost))
+        return cost
+
+    monkeypatch.setattr(litellm, "completion_cost", spy)
+    return seen
+
+
+def test_a_call_litellm_prices_itself_with_its_own_priority_rate_is_charged_the_lane_once(
+    litellm_prices,
+):
+    """GPT-5.6 Luna is in litellm's bundled list with a priority rate of its
+    own, and has a curated row with a multiplier. Handing litellm the response
+    as priority and then multiplying would charge the lane twice."""
+    standard = _recorded_cost(_response(model="gpt-5.6-luna"))
+    assert standard == pytest.approx(1000 * 2e-07 + 1000 * 1.2e-06)
+
+    response = _response("fast", model="gpt-5.6-luna")
+    assert _recorded_cost(response) == pytest.approx(2 * standard)
+    # litellm did price it, at the standard lane it was handed.
+    assert litellm_prices[-1] == ("default", pytest.approx(standard))
+    assert response.service_tier == "priority"
+
+
+def test_a_call_litellm_prices_itself_at_the_standard_rate_only_is_charged_the_lane(
+    monkeypatch, _restore_litellm_table, litellm_prices
+):
+    """With the catalog-backed registry on, litellm prices ``openai/gpt-6-luna``
+    from the registered row, which has no priority rate. A positive price from
+    litellm is not the lane."""
+    from robothor.engine.model_registry import register_pricing_with_litellm
+
+    monkeypatch.setenv("ROBOTHOR_RIP_17_ENABLED", "1")
+    register_pricing_with_litellm()
+    standard = 1000 * 1e-07 + 1000 * 5e-07
+
+    cost = _recorded_cost(_response("priority", model="openai/gpt-6-luna"))
+    assert litellm_prices[-1] == ("default", pytest.approx(standard))
+    assert cost == pytest.approx(2 * standard)
 
 
 @pytest.mark.parametrize("reported", ["priority", "fast"])

@@ -7,6 +7,7 @@
  * save answered 502 every time, and a restore read the bridge's 404 as "nothing
  * saved yet", so nothing ever said the canvas was not being kept.
  */
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
@@ -21,9 +22,17 @@ vi.mock("@/lib/services/registry", () => ({
 
 import { GET, POST } from "../route";
 
-const ALICE = { user: { id: "user-alice" } };
-const BOB = { user: { id: "auth0|bob/../x" } };
-const BLOCK_URL = "http://bridge.test:9100/api/memory/blocks/helm_state.user-alice";
+// The shape a real session has: the session callback copies the person's
+// name, email and role, and no id. Keying the block on `user.id` refused
+// every signed-in person.
+const ALICE = { user: { name: "Alice Example", email: "alice@example.com", role: "admin" } };
+const BOB = { user: { name: "Bob Example", email: "bob@example.com", role: "admin" } };
+
+function blockUrl(identity: string): string {
+  const key = createHash("sha256").update(identity).digest("hex").slice(0, 32);
+  return `http://bridge.test:9100/api/memory/blocks/helm_state.${key}`;
+}
+const BLOCK_URL = blockUrl("alice@example.com");
 const HTML = '<section class="genus-dashboard"><p>Alice has 3 open tickets</p></section>';
 
 function calls(): Array<{ url: string; init: RequestInit | undefined }> {
@@ -106,11 +115,54 @@ describe("/api/session — the canvas's saved view", () => {
     await GET();
 
     const urls = calls().map((call) => call.url);
-    expect(urls[0]).toBe(urls[1]);
+    expect(urls).toEqual([blockUrl("bob@example.com"), blockUrl("bob@example.com")]);
     expect(urls[0]).not.toBe(BLOCK_URL);
-    // The id is one path segment of the block name, whatever it contains.
-    expect(new URL(urls[0]).pathname).toMatch(/^\/api\/memory\/blocks\/helm_state\.[A-Za-z0-9_-]+$/);
   });
+
+  it("never puts the person's address in the block name", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), { status: 200 }),
+    );
+
+    await save(HTML);
+
+    const { pathname } = new URL(calls()[0].url);
+    expect(pathname).toMatch(/^\/api\/memory\/blocks\/helm_state\.[0-9a-f]{32}$/);
+    expect(pathname).not.toContain("alice");
+  });
+
+  it("finds the same view however the address is capitalised", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), { status: 200 }),
+    );
+    session.mockResolvedValue({ user: { email: " Alice@Example.COM " } });
+
+    await save(HTML);
+
+    expect(calls()[0].url).toBe(BLOCK_URL);
+  });
+
+  it("uses a user id instead when a session carries one", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), { status: 200 }),
+    );
+    session.mockResolvedValue({ user: { id: "user-42", email: "alice@example.com" } });
+
+    await save(HTML);
+
+    expect(calls()[0].url).toBe(blockUrl("user-42"));
+  });
+
+  it.each([null, {}, { user: {} }, { user: { name: "Alice Example" } }])(
+    "neither saves nor restores for a session that identifies nobody (%j)",
+    async (nobody) => {
+      session.mockResolvedValue(nobody);
+
+      expect((await save(HTML)).status).toBe(401);
+      expect((await GET()).status).toBe(401);
+      expect(calls()).toHaveLength(0);
+    },
+  );
 
   it("neither saves nor restores for a request with no signed-in person", async () => {
     session.mockResolvedValue(null);
