@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
 from robothor.engine.models import AgentConfig, AgentRun
+from robothor.engine.runtime.budget import SharedBudget
 from robothor.engine.session import AgentSession
 
 
@@ -64,3 +67,51 @@ class TestBudgetAgentRun:
         assert run.token_budget == 0
         assert run.cost_budget_usd == 0.0  # Still on AgentRun for tracking
         assert run.budget_exhausted is False
+
+
+class TestSharedBudget:
+    """One call's overrun must not poison the whole shared envelope.
+
+    Regression for task f227bd47: goals were blocked with "shared budget
+    exhausted" while >90% of the token budget was unspent. The bound passed to
+    reserve() is a heuristic estimate (context_fit.estimate_for), so a real
+    provider tokenizer can legitimately exceed it; that must be recorded, not
+    latched into a permanent refusal.
+    """
+
+    def test_reserve_charges_and_refuses_when_limit_would_be_exceeded(self):
+        budget = SharedBudget(100)
+        budget.reserve("a", 60)
+        assert budget.charged == 60
+        with pytest.raises(ValueError, match="shared budget exhausted"):
+            budget.reserve("b", 50)
+        assert budget.charged == 60
+
+    def test_overrun_is_recorded_but_does_not_poison_the_budget(self):
+        budget = SharedBudget(100)
+        budget.reserve("a", 60)
+        budget.settle("a", 70)  # provider reports more than the estimate
+        assert budget.charged == 70
+        budget.reserve("b", 30)  # 70 + 30 == 100, still affordable
+        assert budget.charged == 100
+        with pytest.raises(ValueError, match="shared budget exhausted"):
+            budget.reserve("c", 1)
+
+    def test_genuine_exhaustion_still_stops(self):
+        budget = SharedBudget(100)
+        budget.reserve("a", 100)
+        budget.settle("a", 100)
+        with pytest.raises(ValueError, match="shared budget exhausted"):
+            budget.reserve("b", 1)
+
+    def test_unknown_usage_stays_charged(self):
+        budget = SharedBudget(100)
+        budget.reserve("a", 60)
+        budget.settle("a", None)
+        assert budget.charged == 60
+
+    def test_duplicate_reservation_is_refused(self):
+        budget = SharedBudget(100)
+        budget.reserve("a", 10)
+        with pytest.raises(ValueError, match="already reserved"):
+            budget.reserve("a", 10)

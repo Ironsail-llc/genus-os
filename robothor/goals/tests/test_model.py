@@ -217,3 +217,21 @@ def test_a_goal_stored_before_ceilings_existed_is_still_bounded():
     }
     legacy["attempts"] = DEFAULT_MAX_ATTEMPTS
     assert "attempt" in exceeded(legacy)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("token_budget", DEFAULT_TOKEN_BUDGET * 2),
+        ("cost_budget_usd", DEFAULT_COST_BUDGET_USD * 2),
+        ("max_attempts", DEFAULT_MAX_ATTEMPTS * 2),
+        ("deadline_seconds", 7200),
+    ],
+)
+def test_ceilings_are_resume_only_not_silently_ignored(field, value):
+    """A ceiling or deadline on any action but resume is rejected, not dropped."""
+    g = goal()
+    with pytest.raises(ValueError, match="resume"):
+        update(g, "progress", note="Working", **{field: value})
+    g["status"] = "blocked"
+    assert update(g, "resume", **{field: value})["status"] == "queued"

@@ -151,12 +151,25 @@ class GoalController:
         tenant = self.config.tenant_id
         config = load_agent_config_or_broken("main", self.config.manifest_dir, "goal pursuit")
         remaining = self.run_budget(goal, config)
+        # Name the goal whose ceiling actually bound this run. A child with its
+        # own generous ceiling can still be stopped by a nearly-spent parent,
+        # and the blocker used to name neither -- which is what made the
+        # "shared budget exhausted" blocks so hard to diagnose.
+        bound_by = goal["id"]
         if goal["parent_goal_id"]:
             parent = await asyncio.to_thread(store.control, tenant, goal["parent_goal_id"])
-            remaining = min(remaining, self.run_budget(parent, config))
+            parent_remaining = self.run_budget(parent, config)
+            if parent_remaining < remaining:
+                remaining = parent_remaining
+                bound_by = goal["parent_goal_id"]
         if remaining <= 0:
             await asyncio.to_thread(
-                store.finish, tenant, goal["id"], attempt, budget_exhausted=True
+                store.finish,
+                tenant,
+                goal["id"],
+                attempt,
+                budget_exhausted=True,
+                budget_bound_by=bound_by,
             )
             return
         current = Binding(tenant, goal["id"], attempt, remaining)
