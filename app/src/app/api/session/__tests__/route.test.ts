@@ -10,6 +10,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
+const session = vi.fn();
+vi.mock("@/lib/auth", () => ({ auth: () => session() }));
 vi.mock("@/lib/bridge-auth", () => ({
   bridgeAuthHeaders: async () => ({ Authorization: "Bearer test-token" }),
 }));
@@ -19,7 +21,9 @@ vi.mock("@/lib/services/registry", () => ({
 
 import { GET, POST } from "../route";
 
-const BLOCK_URL = "http://bridge.test:9100/api/memory/blocks/helm_state";
+const ALICE = { user: { id: "user-alice" } };
+const BOB = { user: { id: "auth0|bob/../x" } };
+const BLOCK_URL = "http://bridge.test:9100/api/memory/blocks/helm_state.user-alice";
 const HTML = '<section class="genus-dashboard"><p>Alice has 3 open tickets</p></section>';
 
 function calls(): Array<{ url: string; init: RequestInit | undefined }> {
@@ -42,6 +46,7 @@ function save(html: string): Promise<Response> {
 describe("/api/session — the canvas's saved view", () => {
   beforeEach(() => {
     global.fetch = vi.fn();
+    session.mockResolvedValue(ALICE);
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -87,6 +92,32 @@ describe("/api/session — the canvas's saved view", () => {
     );
 
     expect(await (await GET()).json()).toEqual({ html: null });
+  });
+
+  it("keeps each person's view in a block of their own", async () => {
+    // A canvas is drawn from one person's conversation. Blocks are keyed by
+    // tenant, so one shared name would hand it to everyone in the tenant.
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), { status: 200 }),
+    );
+    session.mockResolvedValue(BOB);
+
+    await save(HTML);
+    await GET();
+
+    const urls = calls().map((call) => call.url);
+    expect(urls[0]).toBe(urls[1]);
+    expect(urls[0]).not.toBe(BLOCK_URL);
+    // The id is one path segment of the block name, whatever it contains.
+    expect(new URL(urls[0]).pathname).toMatch(/^\/api\/memory\/blocks\/helm_state\.[A-Za-z0-9_-]+$/);
+  });
+
+  it("neither saves nor restores for a request with no signed-in person", async () => {
+    session.mockResolvedValue(null);
+
+    expect((await save(HTML)).status).toBe(401);
+    expect((await GET()).status).toBe(401);
+    expect(calls()).toHaveLength(0);
   });
 
   it("says so when the bridge refuses a save", async () => {

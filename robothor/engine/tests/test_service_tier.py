@@ -249,15 +249,22 @@ def test_every_agent_run_is_scoped():
 
 # ─── What a priority call is recorded as costing ───────────────────────────
 #
-# litellm prices a response by the tier it carries. Measured against the
-# provider (2026-11): a call with tools and a reasoning effort, which is every
-# agent turn, comes back through litellm with no tier on it although the raw
-# response names one; and ``stream_chunk_builder`` drops the tier a chunk
-# carried. Either way the call was recorded at the standard rate, half of what
-# it is billed, and every cost cap under-counted by the same factor.
+# A call is priced at the lane it was served on. Measured against the provider
+# (2026-11): a call with tools and a reasoning effort, which is every agent
+# turn, comes back through litellm with no tier on it although the raw response
+# names one; and ``stream_chunk_builder`` drops the tier a chunk carried. Either
+# way the call was recorded at the standard rate, half of what it is billed,
+# and every cost cap under-counted by the same factor.
+#
+# The lane is decided where the call is dispatched: that code knows which model
+# was dialled and whether it was sent the tier. The id a response carries does
+# not (an OpenRouter response reports the same ``openai/…`` id a direct one
+# does), and neither does whether litellm happens to know the model's price.
+
+GPT_6_LUNA = "gpt-6-luna"  # what the OpenAI API reports back
 
 
-def _response(tier: str | None = None, model: str = "gpt-6-luna") -> Any:
+def _response(tier: str | None = None, model: str = GPT_6_LUNA) -> Any:
     response = litellm.ModelResponse(
         model=model,
         choices=[{"message": {"role": "assistant", "content": "x"}}],
@@ -266,6 +273,14 @@ def _response(tier: str | None = None, model: str = "gpt-6-luna") -> Any:
     if tier:
         response.service_tier = tier
     return response
+
+
+def _dispatched(dialled: str, response: Any) -> Any:
+    """``response`` as the dispatch code hands it on, for a call to ``dialled``."""
+    from robothor.engine.llm_client import note_requested_tier
+
+    kwargs = LLMClient._build_llm_kwargs(dialled, MESSAGES, TOOLS, 100, 0.3)
+    return note_requested_tier(response, kwargs)
 
 
 def _recorded_cost(response: Any) -> float:
@@ -280,14 +295,29 @@ def _recorded_cost(response: Any) -> float:
     )
 
 
-@pytest.fixture
-def standard_cost() -> float:
+@pytest.fixture(params=["0", "1"], ids=["litellm-cannot-price-it", "litellm-prices-it"])
+def standard_cost(request, monkeypatch) -> Any:
+    """The standard-lane cost of ``_response()``, under both pricing sources.
+
+    With the catalog-backed registry off, litellm's bundled list has never
+    heard of GPT-6 Luna and the curated row prices it. With it on, the row is
+    registered with litellm, which then prices the model itself, at the
+    standard rate and with no priority rate to apply. The lane has to come out
+    the same either way. ``register_pricing_with_litellm`` mutates litellm's
+    process-wide table, so it is put back afterwards.
+    """
+    import copy
+
     from robothor.engine.model_registry import register_pricing_with_litellm
 
+    before = copy.deepcopy(litellm.model_cost)
+    monkeypatch.setenv("ROBOTHOR_RIP_17_ENABLED", request.param)
     register_pricing_with_litellm()
     cost = _recorded_cost(_response())
-    assert cost > 0
-    return cost
+    assert cost == pytest.approx(1000 * 1e-07 + 1000 * 5e-07)
+    yield cost
+    litellm.model_cost.clear()
+    litellm.model_cost.update(before)
 
 
 @pytest.mark.parametrize("reported", ["priority", "fast"])
@@ -297,23 +327,50 @@ def test_a_response_that_reports_the_priority_lane_costs_twice_the_standard(
     assert _recorded_cost(_response(reported)) == pytest.approx(2 * standard_cost)
 
 
-def test_a_response_that_does_not_say_is_priced_at_the_tier_the_run_asked_for(standard_cost):
+def test_a_silent_response_to_a_priority_call_is_priced_as_priority(standard_cost):
     set_service_tier("priority")
-    assert _recorded_cost(_response()) == pytest.approx(2 * standard_cost)
+    response = _dispatched(OPENAI_MODEL, _response())
+    assert _recorded_cost(response) == pytest.approx(2 * standard_cost)
 
 
 def test_a_response_that_says_standard_is_priced_standard_whatever_was_asked(standard_cost):
     """The provider may serve a priority request on the standard lane, and
     bills it as standard when it does."""
     set_service_tier("priority")
-    assert _recorded_cost(_response("default")) == pytest.approx(standard_cost)
+    response = _dispatched(OPENAI_MODEL, _response("default"))
+    assert _recorded_cost(response) == pytest.approx(standard_cost)
+
+
+def test_a_run_that_did_not_ask_is_priced_standard(standard_cost):
+    response = _dispatched(OPENAI_MODEL, _response())
+    assert _recorded_cost(response) == pytest.approx(standard_cost)
+
+
+def test_the_same_model_through_openrouter_is_not_priced_as_priority(standard_cost):
+    """OpenRouter is never sent the tier, and reports the model back under the
+    id the OpenAI API uses. The id alone must not make it a priority call."""
+    set_service_tier("priority")
+    response = _dispatched("openrouter/openai/gpt-6-luna", _response(model="openai/gpt-6-luna"))
+    assert getattr(response, "service_tier", None) is None
+    assert _recorded_cost(response) == pytest.approx(standard_cost)
 
 
 def test_a_route_without_a_lane_is_never_priced_as_priority():
     set_service_tier("priority")
-    response = _response(model="us.amazon.nova-2-lite-v1:0")
+    response = _dispatched(
+        "bedrock/us.amazon.nova-2-lite-v1:0", _response(model="us.amazon.nova-2-lite-v1:0")
+    )
     _recorded_cost(response)
     assert getattr(response, "service_tier", None) is None
+
+
+async def test_the_dispatch_path_stamps_the_lane_it_asked_for(captured):
+    set_service_tier("priority")
+    kwargs = LLMClient._build_llm_kwargs(OPENAI_MODEL, MESSAGES, TOOLS, 100, 0.3)
+    response = await LLMClient()._call_with_image_fallback(
+        model=OPENAI_MODEL, messages=MESSAGES, kwargs=kwargs
+    )
+    assert response.service_tier == "priority"
 
 
 def _chunk(content: str | None = None, *, tier: str | None = None, usage: bool = False) -> Any:
@@ -321,7 +378,7 @@ def _chunk(content: str | None = None, *, tier: str | None = None, usage: bool =
 
     chunk = ModelResponseStream(
         id="chatcmpl-1",
-        model="gpt-6-luna",
+        model=GPT_6_LUNA,
         choices=[
             StreamingChoices(
                 index=0,
@@ -337,12 +394,19 @@ def _chunk(content: str | None = None, *, tier: str | None = None, usage: bool =
     return chunk
 
 
-@pytest.mark.parametrize(("reported", "factor"), [("fast", 2), ("default", 1)])
-def test_a_streamed_response_keeps_the_tier_a_chunk_reported(standard_cost, reported, factor):
+@pytest.mark.parametrize(
+    ("reported", "tier", "factor"),
+    [("fast", "priority", 2), ("default", "default", 1), (None, "priority", 2)],
+    ids=["a-chunk-says-fast", "a-chunk-says-standard", "no-chunk-says"],
+)
+def test_a_streamed_priority_call_is_priced_at_the_lane_it_was_served_on(
+    standard_cost, reported, tier, factor
+):
     from robothor.engine.llm_client import rebuild_streamed_response
 
     set_service_tier("priority")
+    kwargs = LLMClient._build_llm_kwargs(OPENAI_MODEL, MESSAGES, TOOLS, 100, 0.3)
     chunks = [_chunk("Hel"), _chunk("lo", tier=reported), _chunk(), _chunk(usage=True)]
-    rebuilt = rebuild_streamed_response(chunks)
-    assert rebuilt.service_tier == reported
+    rebuilt = rebuild_streamed_response(chunks, kwargs)
+    assert rebuilt.service_tier == tier
     assert _recorded_cost(rebuilt) == pytest.approx(factor * standard_cost)
