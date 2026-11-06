@@ -51,7 +51,8 @@ const KEEPS_A_VIEW = new Set(["owner", "admin"]);
  *
  * A session carries the person's name, email and role; it has an id only where
  * a deployment's sign-in adds one. An id is used exactly as given, an address
- * without regard to case. Either is hashed into the block name, so two people
+ * without regard to case. An id wins over an address, so a sign-in that starts
+ * supplying one re-keys the block and each view is regenerated once. Either is hashed into the block name, so two people
  * never share a block and nobody's address is written into a block name, a URL
  * or a log line.
  */
