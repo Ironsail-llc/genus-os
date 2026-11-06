@@ -668,7 +668,7 @@ principal says "your own Google account" on Google (verbatim, as before) and
 
 ### GitHub pull-request review
 
-Six tools on the instance's `GITHUB_TOKEN` (vault first). The three reads are
+Six tools on the calling tenant's `GITHUB_TOKEN` (vault first; a child tenant does not read the root's row). The three reads are
 offered to every agent. The three writes are **opt-in**: an agent is offered
 them only when its manifest lists them in `tools_allowed`. Every write is
 refused on a benchmark run.

@@ -260,7 +260,7 @@ class TestGithubTokenRefusal:
     async def test_missing_token(self, monkeypatch) -> None:
         from robothor.engine.tools.handlers import github_api
 
-        monkeypatch.setattr(github_api, "_get_token", lambda: "")
+        monkeypatch.setattr(github_api, "_get_token", lambda tenant_id: "")
         # The unlock names vault_set only where vault_set would be admitted
         # (TestQaRoundUnlocks covers the other cases); this agent holds the tier.
         from robothor.engine.tools.handlers import vault
@@ -381,7 +381,7 @@ class TestQaRoundUnlocks:
     ) -> None:
         from robothor.engine.tools.handlers import github_api, vault
 
-        monkeypatch.setattr(github_api, "_get_token", lambda: "")
+        monkeypatch.setattr(github_api, "_get_token", lambda tenant_id: "")
         monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "")
         monkeypatch.delattr(vault, "CREDENTIAL_INTAKE", raising=False)
         out = await github_api._github_list_prs({"repo": "octo/example"}, _ctx(user_role="owner"))
@@ -403,7 +403,7 @@ class TestQaRoundUnlocks:
     ) -> None:
         from robothor.engine.tools.handlers import github_api, vault
 
-        monkeypatch.setattr(github_api, "_get_token", lambda: "")
+        monkeypatch.setattr(github_api, "_get_token", lambda tenant_id: "")
         monkeypatch.setattr(vault, "credential_tier", lambda agent_id: "")
         monkeypatch.setenv("ROBOTHOR_CREDENTIAL_INTAKE", "enforce")
         monkeypatch.delattr(vault, "CREDENTIAL_INTAKE", raising=False)

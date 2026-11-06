@@ -310,6 +310,14 @@ A name nobody declared is an **application** credential — the safe default,
 because the tokens this rule exists for are exactly the ones the platform has
 never heard of.
 
+**A vault row belongs to one tenant.** A tool reads the row of the tenant making
+the call. The GitHub tools, the PR reviewer and Claude Code jobs read
+`GITHUB_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` this way, so a token stored for the
+root tenant is not returned to a call made in a child tenant. The environment
+is not per tenant: a value an application credential falls back to there is
+read by every tenant the engine serves. Store a token meant for the root alone
+in the root's vault, never in the engine's environment.
+
 The set is a marker on the settings declaration itself (`declare(...,
 secret=True, bootstrap=True)`), never a list maintained beside it. `genus
 secrets status` prints the whole table, and `robothor.secrets.classification`
@@ -465,6 +473,41 @@ default for an existing install) changes nothing and logs per agent exactly what
 what your agents actually need, then promote. New installs start at `enforce`.
 Grants apply on every rung, so promoting is never what first gives an agent a
 credential.
+
+**One class is outside the ladder.** The credentials that open the platform
+itself never reach a child process, on any rung, `off` included: the database
+and cache passwords, the signing keys, the vault's key files, and connection
+strings such as `DATABASE_URL`. No manifest can grant them. A command that needs
+the database goes through a tool instead.
+
+- **Connection settings are judged by value too.** A `ROBOTHOR_DB_*` or
+  `ROBOTHOR_REDIS_*` setting whose value holds a credential (a host set to
+  `postgresql://user:password@host/db`, say) is held back like the password.
+- **libpq's own password variables are removed at startup.** The engine removes
+  `PGPASSWORD` and `PGPASSFILE` from its environment as it starts, and libpq
+  reads them from there. An engine that reaches the database over TCP with
+  either one set and `ROBOTHOR_DB_PASSWORD` empty refuses to start and says so;
+  set `ROBOTHOR_DB_PASSWORD` instead (`PGHOST` counts as the host when
+  `ROBOTHOR_DB_HOST` is empty). Over the local socket it starts and logs a
+  warning, because peer authentication never reads them; a socket install that
+  authenticates with a password must set `ROBOTHOR_DB_PASSWORD`, or every
+  connection fails.
+- **Lifecycle hooks are not on the ladder.** A `command` hook is written by the
+  operator, so it keeps the engine's environment, its own tokens and webhook
+  URLs included, less this class only.
+- **The browser's Playwright driver** is started without this class too.
+  Playwright copies the process environment for its driver itself; the engine
+  wraps that copy when it starts.
+- **One known exception.** The Telegram button that applies an approved
+  proposal runs a script from the instance workspace with the engine's full
+  environment, because the script reads the database from it. The path is
+  fixed but the file is not: anything that can write the workspace can replace
+  it. Keep that script read-only to agents, or leave the button unused.
+- **What it does not stop.** With `ROBOTHOR_DB_HOST` empty the engine connects
+  over the local Unix socket, and if `pg_hba.conf` allows peer authentication
+  there, a child running as the engine's user can connect with no credential at
+  all. Use a TCP host with password authentication, or a distinct database role
+  for the engine, where that matters.
 
 #### What the scrub is not
 

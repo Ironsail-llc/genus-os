@@ -33,7 +33,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["harden_process"]
+__all__ = [
+    "LibpqOnlyPasswordError",
+    "drop_inherited_credentials",
+    "filter_playwright_driver_env",
+    "harden_process",
+]
 
 #: ``PR_SET_DUMPABLE`` from ``<linux/prctl.h>``. Named rather than inlined so
 #: the call site reads as what it does.
@@ -73,3 +78,157 @@ def harden_process() -> bool:
         "agent's shell command cannot read the engine's environment out of procfs"
     )
     return True
+
+
+class LibpqOnlyPasswordError(RuntimeError):
+    """The database password is set only where libpq, not the platform, reads it."""
+
+
+def _refuse_a_libpq_only_password(config: object | None) -> None:
+    """Fail before the drop rather than on the first connection after it.
+
+    libpq reads ``PGPASSWORD`` and ``PGPASSFILE`` from the C environment, and
+    :class:`robothor.config.DatabaseConfig` leaves the password out of the DSN
+    when ``ROBOTHOR_DB_PASSWORD`` is empty, so libpq falls back to them. The
+    drop empties the C side, so an engine authenticating that way over TCP
+    would boot and then fail every connection.
+
+    Over the local socket the config cannot say whether the password is used
+    (peer authentication never reads it), so that case is a warning. With no
+    config at all there is nothing to judge, and startup reports the config
+    itself. Names only in every message, never a value.
+    """
+    import os
+
+    if config is None:
+        return
+    db = getattr(config, "db", None)
+    if db is None or str(getattr(db, "password", "") or ""):
+        return
+    present = [name for name in ("PGPASSWORD", "PGPASSFILE") if os.environ.get(name)]
+    if not present:
+        return
+    named = f"{' and '.join(present)} {'is' if len(present) == 1 else 'are'} set"
+    # The platform's host, or libpq's own when the platform names none: the DSN
+    # leaves an empty host out, and libpq then reads PGHOST.
+    host = str(getattr(db, "host", "") or "") or os.environ.get("PGHOST", "")
+    if not host or host.startswith("/"):
+        logger.warning(
+            "%s but ROBOTHOR_DB_PASSWORD is empty. The engine removes libpq's own "
+            "password variables from its environment at startup; over the local "
+            "socket that is harmless with peer authentication, and fails every "
+            "connection with password authentication. Set ROBOTHOR_DB_PASSWORD if "
+            "the database needs one.",
+            named,
+        )
+        return
+    raise LibpqOnlyPasswordError(
+        f"{named} but ROBOTHOR_DB_PASSWORD is empty and the database is reached over "
+        "TCP. Set ROBOTHOR_DB_PASSWORD instead: the engine removes libpq's own "
+        "password variables from its environment at startup, so the database would "
+        "refuse every connection."
+    )
+
+
+#: The marker on the wrapper, so installing twice wraps once.
+_FILTERED = "_robothor_without_platform_credentials"
+
+
+def filter_playwright_driver_env() -> bool:
+    """Start every Playwright driver in this process without the platform credentials.
+
+    playwright-python spawns its Node driver with ``env=get_driver_env()``,
+    which is a copy of ``os.environ``. ``os.environ`` keeps every value for this
+    process's own reads after the startup drop, so the driver, which lives as
+    long as the engine and whose environment its own uid can read, would hold
+    them all. ``launch(env=...)`` only reaches the browser, not the driver.
+
+    So the driver's environment builder is wrapped, once per process. The name
+    is private to Playwright: if it moves, this says so in the log and returns
+    False rather than pretending. Returns True when the filter is in place.
+    """
+    try:
+        from playwright._impl import _transport
+    except ImportError:
+        return False
+    current = getattr(_transport, "get_driver_env", None)
+    if current is None:
+        logger.warning(
+            "playwright no longer exposes get_driver_env: its driver may inherit "
+            "the platform's credentials"
+        )
+        return False
+    if getattr(current, _FILTERED, False):
+        return True
+
+    from robothor.engine.exec_env import without_platform_credentials
+
+    def get_driver_env() -> dict[str, str]:
+        return without_platform_credentials(current())
+
+    setattr(get_driver_env, _FILTERED, True)
+    _transport.get_driver_env = get_driver_env  # type: ignore[attr-defined]
+    return True
+
+
+def drop_inherited_credentials(*, check_database_password: bool = True) -> tuple[str, ...]:
+    """Stop this process's children inheriting the platform's own credentials.
+
+    ``env=`` is optional on every spawn call in the standard library, and a
+    child started without it inherits the process's C ``environ``. Reviewing
+    each call would hold for as long as nobody adds one, so this empties the
+    C ``environ`` of what no child may have, once, at startup.
+
+    ``os.environ`` is a Python copy made at interpreter start, and removing a
+    name from the C side alone leaves it there, so every read in this process
+    keeps working. The cost is the reverse of that: a child handed a copy of
+    ``os.environ`` gets everything back, which ``build_exec_env`` and
+    ``without_platform_credentials`` are for, and which
+    ``test_exec_env_platform_credentials.py`` refuses in an engine module.
+    Playwright's driver makes that copy inside a third-party package, so
+    :func:`filter_playwright_driver_env` is installed here as well.
+
+    A child that really needs one of these has it passed some other way:
+    see ``calendar_recovery_worker``. Returns the names dropped, never a value.
+
+    Raises :class:`LibpqOnlyPasswordError` when the database is reached over
+    TCP and its password is set only in ``PGPASSWORD`` or ``PGPASSFILE``: the
+    drop would take it from libpq.
+    ``check_database_password=False`` skips that check, for a child of an
+    engine that has already made it at its own startup.
+    """
+    import os
+
+    from robothor.config import get_config
+    from robothor.secrets.classification import is_platform_credential
+
+    # First, so what it exports for this process is in `os.environ` already
+    # and it has no reason to write it through to the C side again later.
+    config = None
+    try:
+        config = get_config()
+    except Exception as exc:  # noqa: BLE001 - startup reports a bad config itself
+        logger.debug("config not loaded before the drop (%s)", type(exc).__name__)
+    if check_database_password:
+        _refuse_a_libpq_only_password(config)
+
+    filter_playwright_driver_env()
+
+    names = tuple(
+        sorted(name for name, value in os.environ.items() if is_platform_credential(name, value))
+    )
+    try:
+        import ctypes
+        import ctypes.util
+
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        for name in names:
+            libc.unsetenv(name.encode())
+    except Exception as exc:  # noqa: BLE001 - never a reason not to boot, always a reason to say
+        logger.warning(
+            "could not drop inherited credentials (%s): children of this process "
+            "that pass no environment keep them",
+            type(exc).__name__,
+        )
+        return ()
+    return names

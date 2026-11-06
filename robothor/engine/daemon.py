@@ -1381,9 +1381,10 @@ def _harden_and_state_posture() -> None:
     the rule in that file is that a new step pays for itself.
     """
     from robothor.engine.feature_flags import log_security_posture
-    from robothor.engine.process_hardening import harden_process
+    from robothor.engine.process_hardening import drop_inherited_credentials, harden_process
 
     harden_process()
+    drop_inherited_credentials()
     log_security_posture()
     _log_pending_migrations()
 

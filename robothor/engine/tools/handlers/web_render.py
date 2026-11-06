@@ -73,6 +73,11 @@ async def render(url: str) -> dict[str, Any]:
     from playwright.async_api import TimeoutError as PlaywrightTimeout
     from playwright.async_api import async_playwright
 
+    from robothor.engine.process_hardening import filter_playwright_driver_env
+
+    # The driver copies ``os.environ`` for itself; ``launch(env=...)`` below
+    # only reaches the browser.
+    filter_playwright_driver_env()
     network = RenderNetwork()
     initial = await network.get(url)
     if not 200 <= initial["status"] < 300:

@@ -75,6 +75,11 @@ SECRET_VALUES = (
 )
 
 
+def _less_platform_credentials(env: dict[str, str]) -> dict[str, str]:
+    """What a rung below ``enforce`` leaves: everything but this class."""
+    return {name: value for name, value in env.items() if name != "ROBOTHOR_DB_PASSWORD"}
+
+
 def _no_credential_survives(env: dict[str, str]) -> None:
     leaked = [name for name, value in env.items() if value in SECRET_VALUES]
     assert not leaked, f"credentials reached the child environment: {leaked}"
@@ -179,7 +184,7 @@ def test_off_changes_nothing(boxlike_env):
     """An existing install must not lose a credential its agents were using
     before the operator has seen what would be taken."""
     built = build_exec_env(agent_id="researcher", mode=MODE_OFF, base=boxlike_env)
-    assert built.env == boxlike_env
+    assert built.env == _less_platform_credentials(boxlike_env)
     assert built.withheld == (), (
         "off means the control is off: reporting names nothing acted on would "
         "read, in the doctor and the status table, as though something had"
@@ -188,7 +193,9 @@ def test_off_changes_nothing(boxlike_env):
 
 def test_observe_keeps_everything_and_names_what_enforce_would_take(boxlike_env, caplog):
     built = build_exec_env(agent_id="researcher", mode=MODE_OBSERVE, base=boxlike_env)
-    assert built.env == boxlike_env, "observe must not change behaviour"
+    assert built.env == _less_platform_credentials(boxlike_env), (
+        "observe changes nothing but the one class no rung keeps"
+    )
     assert "GITHUB_TOKEN" in built.withheld
     assert "ROBOTHOR_DB_PASSWORD" in built.withheld
 

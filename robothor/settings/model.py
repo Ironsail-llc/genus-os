@@ -1962,7 +1962,9 @@ class FlagSettings(SettingsGroup):
         "by name under `secrets:`. observe (the default, so an upgrade takes "
         "nothing from an agent that was using it) changes nothing and logs, "
         "per agent, the names enforce would have withheld. off disables the "
-        "control. New installs are set to enforce by the init wizard.",
+        "control. New installs are set to enforce by the init wizard. The "
+        "credentials that open the platform itself never reach a child, on "
+        "any rung.",
         since="1.91.0",
     )
     manifest_schema_mode: str = declare(

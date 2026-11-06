@@ -1,7 +1,9 @@
 """Tenant-scoped readback of durable interrupted writes, independent of chat."""
 
 import asyncio
+import json
 import logging
+import os
 import sys
 from contextlib import suppress
 from types import SimpleNamespace
@@ -40,14 +42,48 @@ def sweep(tenant_id: str) -> int:
     return len(rows)
 
 
+def _credentials_for_child() -> bytes:
+    """What a batch needs from the engine and may not inherit.
+
+    A process's environment is readable by its own uid until it hardens itself,
+    and a batch is a same-uid child that needs the database. So these travel on
+    a pipe, and the batch's environment never holds them.
+    """
+    from robothor.secrets.classification import is_platform_credential
+
+    return json.dumps(
+        {k: v for k, v in os.environ.items() if is_platform_credential(k, v)}
+    ).encode()
+
+
+def _receive_credentials() -> None:
+    """The batch's half: harden first, then take the pipe's contents."""
+    from robothor.engine.process_hardening import drop_inherited_credentials, harden_process
+
+    harden_process()
+    os.environ.update(json.loads(sys.stdin.buffer.read() or b"{}"))
+    # The daemon checked the database password at its own startup; a batch
+    # every 30 seconds saying it again would bury every other warning.
+    drop_inherited_credentials(check_database_password=False)
+
+
 async def run(tenant_id: str) -> None:
     """Isolate blocking provider IO so daemon shutdown can stop it promptly."""
     while True:
         process = None
         try:
             process = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", __name__, "--tenant", tenant_id
+                sys.executable,
+                "-m",
+                __name__,
+                "--tenant",
+                tenant_id,
+                stdin=asyncio.subprocess.PIPE,
             )
+            if process.stdin is not None:
+                process.stdin.write(_credentials_for_child())
+                await process.stdin.drain()
+                process.stdin.close()
             code = await asyncio.wait_for(process.wait(), timeout=BATCH_TIMEOUT_SECONDS)
             if code:
                 logger.warning("Calendar recovery batch exited (%s)", code)
@@ -71,4 +107,6 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--tenant", required=True)
-    sweep(parser.parse_args().tenant)
+    tenant = parser.parse_args().tenant
+    _receive_credentials()
+    sweep(tenant)

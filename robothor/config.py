@@ -151,9 +151,10 @@ class DatabaseConfig:
     def url(self) -> str:
         """Return a libpq-compatible ``postgresql://`` URL.
 
-        Tool subprocesses (e.g. ``psql $DATABASE_URL -c '...'`` inside
-        ``experiment_measure`` metric commands) expect this format rather than
-        the space-separated DSN.
+        For this process's own URL-taking tooling, which expects this format
+        rather than the space-separated DSN. It is exported as ``DATABASE_URL``,
+        and no child process inherits it: an ``experiment_measure`` metric
+        command cannot ``psql $DATABASE_URL``.
 
         TCP connections use ``postgresql://user:pass@host:port/db``. Unix
         socket connections (``host=""`` or a socket directory path starting
@@ -341,9 +342,10 @@ def _load_from_env() -> Config:
         password=os.environ.get("ROBOTHOR_DB_PASSWORD", ""),
         ssl_mode=os.environ.get("ROBOTHOR_DB_SSLMODE", ""),
     )
-    # Export DATABASE_URL for subprocess tooling (e.g. experiment_measure
-    # metric commands that shell out to psql). Respect an explicit override
-    # so ops can point at a replica without editing code.
+    # Export DATABASE_URL for this process's own tooling. No child inherits it:
+    # it opens the platform, so `is_platform_credential` holds it back from
+    # every one. Respect an explicit override so ops can point at a replica
+    # without editing code.
     if "DATABASE_URL" not in os.environ:
         os.environ["DATABASE_URL"] = db.url
 

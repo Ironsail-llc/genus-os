@@ -2,7 +2,7 @@
 """Scope-decision gate for auto-researcher (Phase 4 of the 2026-04-23 overhaul).
 
 Runs AFTER a fresh engine restart so the new `update_task` / `append_to_block`
-tools and the DATABASE_URL env export are in effect. Verifies that the three
+tools are in effect. Verifies that the three
 preconditions from the plan hold:
 
 1. ``experiment_measure`` can run a psql-based metric_command and return a
@@ -16,7 +16,7 @@ result to decide whether to keep auto-researcher running (``enabled: true`` in
 its manifest) or pause it.
 
 This is a *read-mostly* checker — it does NOT launch an agent run. It instead
-probes the infrastructure (DATABASE_URL env, dry subprocess call, tool
+probes the infrastructure (a metric command through the real runner, tool
 availability in the registry). The "completes without timing out" leg is
 validated by inspecting the next scheduled run after the restart; this script
 prints the gate command to follow up with.
@@ -25,45 +25,47 @@ prints the gate command to follow up with.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 
 import psycopg2
 
 
-def check_database_url() -> tuple[bool, str]:
-    """Precondition 1a — DATABASE_URL is present and points at this DB."""
-    url = os.environ.get("DATABASE_URL", "")
-    if not url:
-        # Exporting happens inside get_config(), so trigger it.
-        from robothor.config import get_config, reset_config
+def check_psql_metric_command() -> tuple[bool, str]:
+    """Precondition 1 — a psql metric command returns a number.
 
-        reset_config()
-        get_config()
-        url = os.environ.get("DATABASE_URL", "")
-    if not url:
-        return False, "DATABASE_URL not exported by robothor.config.get_config()"
-    return True, url
-
-
-def check_psql_subprocess(url: str) -> tuple[bool, str]:
-    """Precondition 1b — psql $DATABASE_URL returns a number in a subprocess.
-
-    Mirrors how ``experiment_measure`` shells out to metric commands.
+    Through ``experiment_measure``'s own runner, so it sees the environment a
+    metric command really gets. That environment holds no database credential
+    on any rung (no ``DATABASE_URL``, no password), so this passes only where
+    psql can connect to the configured database without one, such as peer
+    authentication on the local socket.
     """
-    result = subprocess.run(
-        ["psql", url, "-t", "-A", "-c", "SELECT count(*) FROM agent_memory_blocks;"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    if result.returncode != 0:
-        return False, f"psql rc={result.returncode}: {result.stderr.strip()[:200]}"
+    import shlex
+
+    from robothor.config import get_config
+    from robothor.engine.tools.handlers.experiment import _run_metric_command
+
+    # psql reads none of the ROBOTHOR_DB_* settings, and without a name it
+    # connects to the database named after the user, so the command names the
+    # configured database, host, port and user.
+    db = get_config().db
+    # -w: never prompt. With no password in its environment, a TCP install
+    # would otherwise sit at a password prompt until the metric timeout.
+    target = ["-w", f"-d {shlex.quote(db.name)}", f"-p {int(db.port)}"]
+    if db.host:
+        target.append(f"-h {shlex.quote(db.host)}")
+    if db.user:
+        target.append(f"-U {shlex.quote(db.user)}")
+    query = '"SELECT count(*) FROM agent_memory_blocks;"'
+    command = f"psql {' '.join(target)} -t -A -c {query}"
     try:
-        int(result.stdout.strip())
+        output = _run_metric_command(command, os.environ.get("ROBOTHOR_WORKSPACE", ""))
+    except Exception as exc:  # noqa: BLE001 - the gate reports, it does not raise
+        return False, str(exc)[:200]
+    try:
+        int(output.strip())
     except ValueError:
-        return False, f"psql output is not numeric: {result.stdout!r}"
-    return True, f"count={result.stdout.strip()}"
+        return False, f"psql output is not numeric: {output!r}"
+    return True, f"count={output.strip()}"
 
 
 def check_tool_registry() -> tuple[bool, str]:
@@ -133,19 +135,14 @@ def check_recent_auto_researcher_health(conn) -> tuple[bool, str]:
 
 def main() -> int:
     print("=== Auto-Researcher Scope Gate ===\n")
-    conn = psycopg2.connect(dbname="robothor_memory", user="philip", host="/var/run/postgresql")
+    from robothor.config import get_config
+
+    conn = psycopg2.connect(**get_config().db.dict)
 
     results: list[tuple[str, bool, str]] = []
 
-    ok, msg = check_database_url()
-    results.append(("DATABASE_URL exported", ok, msg))
-
-    url = msg if ok else os.environ.get("DATABASE_URL", "")
-    if url:
-        ok, msg = check_psql_subprocess(url)
-        results.append(("psql subprocess returns numeric", ok, msg))
-    else:
-        results.append(("psql subprocess returns numeric", False, "skipped (no DATABASE_URL)"))
+    ok, msg = check_psql_metric_command()
+    results.append(("psql metric command returns numeric", ok, msg))
 
     ok, msg = check_tool_registry()
     results.append(("tool registry + manifest allowlist", ok, msg))

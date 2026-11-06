@@ -50,6 +50,7 @@ __all__ = [
     "declared_secret_names",
     "is_bootstrap",
     "is_declared_secret",
+    "is_platform_credential",
     "non_secret_env_names",
 ]
 
@@ -112,6 +113,43 @@ def is_bootstrap(name: str) -> bool:
     if record is not None:
         return bool(record.get("bootstrap"))
     return name.startswith(BOOTSTRAP_PREFIXES)
+
+
+#: Connection strings and libpq's own variables. No settings field declares
+#: them, and each one opens the same database or cache as a declared bootstrap
+#: credential. The platform composes ``DATABASE_URL`` and ``REDIS_URL`` itself.
+#: libpq reads ``PGPASSWORD`` and ``PGPASSFILE`` from the C environment, which
+#: the startup drop empties, so an engine that authenticates through one of
+#: them alone refuses to start: see
+#: :func:`robothor.engine.process_hardening.drop_inherited_credentials`.
+_CONNECTION_NAMES: frozenset[str] = frozenset(
+    {"DATABASE_URL", "REDIS_URL", "PGPASSWORD", "PGPASSFILE"}
+)
+
+#: Connection settings declared non-secret, because a host or a port is not a
+#: credential. Their VALUE can be one: ``postgresql://alice:hunter2@db/genus``
+#: is an ordinary value for ``ROBOTHOR_DB_HOST``, and the pool will connect
+#: with it.
+_CONNECTION_SETTING_PREFIXES: tuple[str, ...] = ("ROBOTHOR_DB_", "ROBOTHOR_REDIS_")
+
+
+def is_platform_credential(name: str, value: str | None = None) -> bool:
+    """True when ``name`` opens the platform itself rather than one integration.
+
+    The bootstrap class plus the connection strings, and, given ``value``, a
+    connection setting whose value holds a credential. These reach every
+    tenant at once, so no child process is ever given one: see
+    :mod:`robothor.engine.exec_env`. Pass ``value`` wherever there is one; a
+    name-only answer is for a name with no value yet, such as a grant.
+    """
+    if is_bootstrap(name) or name in _CONNECTION_NAMES:
+        return True
+    if value is None or not name.startswith(_CONNECTION_SETTING_PREFIXES):
+        return False
+    from robothor.secrets.redaction import redact
+
+    candidate = value.strip()
+    return bool(candidate) and redact(candidate) != candidate
 
 
 def is_declared_secret(name: str) -> bool:
