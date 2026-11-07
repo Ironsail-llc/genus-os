@@ -1266,6 +1266,35 @@ def find_task_by_thread_id(
     )
 
 
+_FK_VIOLATION = "23503"
+
+
+def classify_create_task_error(
+    exc: BaseException, parent_task_id: str | None
+) -> dict[str, Any] | None:
+    """Return a settled error dict when a create_* failure is a known input error.
+
+    A ``parent_task_id`` foreign-key violation means the INSERT wrote nothing, so
+    the outcome is fully known. Returning ``None`` for it would make the tool
+    handler report ``outcome_unknown``, which fences every later ``create_task``
+    for that principal with no sanctioned way to settle it (task b81d34e8).
+    Anything we cannot classify stays ``None``, leaving recovery unchanged.
+    """
+    if not parent_task_id or getattr(exc, "pgcode", None) != _FK_VIOLATION:
+        return None
+    constraint = getattr(getattr(exc, "diag", None), "constraint_name", None) or ""
+    if constraint and "parent_task_id" not in constraint:
+        # A different FK (person, company, tenant) - not ours to reinterpret.
+        return None
+    return {
+        "error": f"parentTaskId does not exist: {parent_task_id}",
+        "code": "invalid_parent_task",
+        "outcome_unknown": False,
+        "retryable": False,
+        "applied": False,
+    }
+
+
 def create_task(
     title: str,
     body: str | None = None,
@@ -1421,6 +1450,15 @@ def create_task(
             return task_id
         except Exception as e:
             conn.rollback()
+            classified = classify_create_task_error(e, parent_task_id)
+            if classified is not None:
+                # Deterministic input error: nothing was written. Say so, so the
+                # effect settles as not_applied instead of fencing the principal
+                # forever behind an unresolvable outcome_unknown.
+                logger.error(
+                    "Rejected task create (parent_task_id=%s): %s", parent_task_id, e
+                )
+                return classified
             logger.error("Failed to create task: %s", e)
             return None
 
