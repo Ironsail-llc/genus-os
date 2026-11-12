@@ -33,17 +33,9 @@ ALERTED_KEY_PREFIX = f"{KEY_PREFIX}alerted:"
 
 
 def _client(ctx: DoctorContext) -> Any:
-    import redis as redis_lib
+    from robothor.doctor.checks.redis import client
 
-    settings = ctx.settings.redis
-    return redis_lib.Redis(
-        host=settings.host,
-        port=settings.port,
-        db=settings.db,
-        password=settings.password or None,
-        socket_timeout=ctx.timeout_s,
-        socket_connect_timeout=ctx.timeout_s,
-    )
+    return client(ctx)
 
 
 async def _alert_once(ctx: DoctorContext, client: Any, title: str, body: str) -> None:
