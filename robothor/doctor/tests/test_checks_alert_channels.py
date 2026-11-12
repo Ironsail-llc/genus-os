@@ -80,6 +80,23 @@ def test_nothing_configured_fails_with_no_alert_channel(channels) -> None:
     assert "no alert channel can deliver" in rows[0].detail
 
 
+def test_doctor_only_alerts_delivery_exits_non_zero_with_no_channel(channels) -> None:
+    from robothor.doctor.runner import run_sync
+
+    report = run_sync(make_ctx(), only="alerts.delivery")
+    assert not report.errored, report.error_detail
+    assert any("no alert channel can deliver" in row.detail for row in report.results)
+    assert report.exit_code == 1
+
+
+def test_doctor_only_alerts_delivery_exits_zero_when_a_channel_can_send(settings, channels) -> None:
+    from robothor.doctor.runner import run_sync
+
+    settings(ROBOTHOR_ALERT_FALLBACK_CHANNELS="email:agent@example.com")
+    channels["email"] = FakeChannel("email", can_send=True)
+    assert run_sync(make_ctx(), only="alerts.delivery").exit_code == 0
+
+
 def test_a_configured_primary_passes(settings, channels) -> None:
     settings(ROBOTHOR_TELEGRAM_BOT_TOKEN=FAKE_TOKEN, ROBOTHOR_TELEGRAM_CHAT_ID="12345")
     rows = _run(make_ctx(offline=True))
