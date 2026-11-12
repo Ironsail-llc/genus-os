@@ -567,3 +567,17 @@ def test_every_line_has_the_documented_fields() -> None:
 
     assert set(FIELDS) <= set(call_log.FIELDS)
     assert call_log.OUTCOMES == ("ok", "error", "refused", "deferred")
+
+
+@pytest.mark.asyncio
+async def test_an_action_whose_outcome_is_pending_logs_a_deferred_line(handlers, lines) -> None:
+    """An effect still awaiting reconciliation has not failed and has not succeeded."""
+    handlers[TOOL] = _ok(
+        {"error": "effect pending reconciliation", "outcome_unknown": True, "retryable": False}
+    )
+
+    await _call()
+
+    assert len(lines) == 1
+    assert lines[0].outcome == "deferred"
+    assert "pending" in lines[0].reason
