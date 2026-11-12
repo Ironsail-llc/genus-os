@@ -519,6 +519,10 @@ def _audit_tool_call(
     written before this returns.
     """
     try:
+        from robothor.engine.tools.call_log import note_audit_status
+
+        # The call's one log line takes its outcome from this same status.
+        note_audit_status(status)
         from robothor.audit.logger import log_event
         from robothor.engine.event_writer import get_event_writer
         from robothor.secrets.redaction import redact

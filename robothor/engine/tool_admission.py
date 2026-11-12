@@ -85,7 +85,9 @@ class ToolAdmissionMixin:
 
     async def _admit_tool_call(self, **kw: Any) -> ToolVerdict:
         """Every gate in order (``_run_gates``); a refusal carries its gate and unlock."""
-        verdict = await self._run_gates(**kw)
+        from robothor.engine.tools.call_log import log_admission  # a refusal's one log line
+
+        verdict = await log_admission(self._run_gates(**kw), kw)
         return with_gate(verdict, kw["tool_name"], kw.get("agent_config"), kw.get("tool_args"))
 
     async def _run_gates(

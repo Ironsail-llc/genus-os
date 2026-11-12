@@ -1433,22 +1433,33 @@ class WorkflowEngine:
             )
             await asyncio.sleep(wait)
             wait = min(wait * 2, _MAX_RATE_LIMIT_WAIT_SECONDS)
+        from robothor.engine.tools import call_log
+
         if not gr.allowed:
             result.status = WorkflowStepStatus.FAILED
             result.error_message = f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"
             result.output_text = result.error_message
+            call_log.emit(
+                step.tool_name,
+                agent_id=f"workflow:{run.workflow_id}",
+                run_id=run.id,
+                outcome="refused",
+                reason=result.error_message,
+                arguments=rendered_args,
+            )
             return
 
-        tool_result = await self.runner.registry.execute(
-            step.tool_name,
-            rendered_args,
-            agent_id=f"workflow:{run.workflow_id}",
-            tenant_id=run.tenant_id,
-            workspace=str(self.config.workspace),
-            user_id=run.user_id,
-            user_role=run.user_role,
-            timeout=step.tool_timeout_seconds,
-        )
+        with call_log.workflow_run_scope(run.id):
+            tool_result = await self.runner.registry.execute(
+                step.tool_name,
+                rendered_args,
+                agent_id=f"workflow:{run.workflow_id}",
+                tenant_id=run.tenant_id,
+                workspace=str(self.config.workspace),
+                user_id=run.user_id,
+                user_role=run.user_role,
+                timeout=step.tool_timeout_seconds,
+            )
 
         # ── [GUARDRAILS] Post-execution check (secrets in output, etc.) ──
         post = guardrails.check_post_execution(step.tool_name, tool_result)

@@ -197,6 +197,33 @@ audited `POST /api/automations/{id}/reset-breaker`, operator-only and
 tenant-scoped — zeroes `consecutive_errors` so it fires again on its next
 scheduled run. Before this the only way back was an `UPDATE` typed into psql.
 
+## One log line per tool call
+
+Every tool call the engine handles writes exactly one INFO line on the
+`robothor.engine.tools.call_log` logger, whether an agent turn, a workflow
+`tool` step, an `execute_code` snippet or `tool_call` made it, and whether the
+tool is built in or comes from a plugin:
+
+```text
+event=tool_call tool=example_tool agent=example-agent run_id=<id> outcome=ok duration_ms=42 reason=""
+```
+
+| Field | Meaning |
+|-------|---------|
+| `event` | Always `tool_call`. |
+| `tool` | The tool that ran or was refused. A `tool_call` wrapper is logged as the tool it wraps, once. |
+| `agent` | The calling agent's id. Absent on a workflow step. |
+| `workflow` | The workflow's id, for a workflow `tool` step. Takes the place of `agent`. |
+| `run_id` | The agent run, or for a workflow step the workflow run. |
+| `outcome` | `ok`, `error` (the tool failed, raised, timed out or is unknown), `refused` (a gate declined it: RBAC, plan mode, the manifest's tools, a hook, a guardrail, an operator's approval, a durable stop, a snippet cap) or `deferred` (the action's outcome is pending, `outcome_unknown`). |
+| `reason` | Empty on a plain `ok`. Otherwise the error class and a short message, or the refusal's message, redacted, at most 200 characters, with any argument value it quotes replaced by `[argument]`. A write the tool recorded instead of making because no write connection is configured (`would_have_done: true` in its result) is `ok` with `reason="no write connection: would have done"`. |
+| `duration_ms` | Wall time of the call, admission included for a refusal. |
+
+The same fields are on the log record as attributes. A retried call writes one
+line per attempt. The arguments and the result are never logged, not even
+redacted. Writing the line cannot fail the call: if the logger raises, the call
+completes and one ERROR line on the same logger says the line was lost.
+
 ## Workflow runs, step by step
 
 A workflow run records what each tool step was given and what it returned: the
