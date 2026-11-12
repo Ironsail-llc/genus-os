@@ -11,7 +11,8 @@ did not cause. Its contract, in order of how expensive getting it wrong is:
    the exception type. A doctor that crashes on a broken box is a second
    incident.
 3. **Exit codes mean one thing each.** 0 no required failure, 1 a required
-   check failed, 2 the doctor itself could not run -- an unknown ``--only`` id,
+   check failed (or the one check ``--only`` named failed, whatever its
+   severity), 2 the doctor itself could not run -- an unknown ``--only`` id,
    a registry that would not import. The third is separate from the second on
    purpose: "nothing is wrong" and "nothing was checked" must never share a
    code, which is how a typo in a CI gate turns into a green build.
@@ -102,6 +103,10 @@ class DoctorReport:
     results: list[CheckResult] = field(default_factory=list)
     errored: bool = False
     error_detail: str = ""
+    #: True when ``--only`` named the one check that ran. Its failure is then
+    #: the answer to the question asked, so it sets exit 1 whatever its
+    #: severity; severity only decides what fails a sweep of many checks.
+    named: bool = False
 
     @property
     def summary(self) -> dict[str, int]:
@@ -140,6 +145,8 @@ class DoctorReport:
     def exit_code(self) -> int:
         if self.errored:
             return 2
+        if self.named and any(row.status == "fail" for row in self.results):
+            return 1
         return 1 if self.summary["required_failed"] else 0
 
     def as_dict(self) -> dict[str, Any]:
@@ -500,7 +507,7 @@ async def run(
     finally:
         pool.close()
         ctx._pool = None
-    return DoctorReport(results=rows)
+    return DoctorReport(results=rows, named=only is not None)
 
 
 #: Why a check was not run. Both are failures, never skips.

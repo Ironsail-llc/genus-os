@@ -1774,7 +1774,7 @@ Two commands make promises about their exit code, because scripts gate on them:
 | Command | 0 | 1 | 2 |
 | --- | --- | --- | --- |
 | `genus init` | the instance is initialized | a required check failed and **nothing was written** | — |
-| `genus doctor` | no `required` check failed | a `required` check failed | the doctor could not run (an unknown `--only` id, a registry that would not import) |
+| `genus doctor` | no `required` check failed | a `required` check failed, or the check `--only` named failed (any severity) | the doctor could not run (an unknown `--only` id, a registry that would not import) |
 
 `genus doctor`'s 2 is deliberately separate from its 1: "nothing is wrong" and
 "nothing was checked" must never share an exit code, or a typo in a CI gate

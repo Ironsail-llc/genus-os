@@ -397,7 +397,7 @@ the record.
 | Exit code | Meaning |
 |-----------|---------|
 | 0 | no `required` check failed |
-| 1 | a `required` check failed |
+| 1 | a `required` check failed, or the one check `--only` named failed, whatever its severity |
 | 2 | the doctor itself could not run — an unknown `--only` id, a registry that would not import |
 
 2 is deliberately separate from 1: "nothing is wrong" and "nothing was checked"

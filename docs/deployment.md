@@ -1005,7 +1005,7 @@ its checks skipped and the refusal logged.
 | Severity | Meaning |
 |----------|---------|
 | `required` | the instance does not work. Exit code 1 |
-| `recommended` | it works, but something an operator would want is missing or drifting. Reported, never fatal |
+| `recommended` | it works, but something an operator would want is missing or drifting. Reported; fatal only when `--only` names the check |
 | `info` | recorded for the record; not a verdict |
 
 A check that could not run — no credential, no systemd, Ollama not configured —
@@ -1016,7 +1016,7 @@ is reported as `skip` with the reason. A skip is never a pass.
 | Code | Meaning |
 |------|---------|
 | 0 | no required check failed |
-| 1 | a required check failed |
+| 1 | a required check failed, or the one check `--only` named failed, whatever its severity |
 | 2 | the doctor itself could not run (an unknown `--only` id, a registry that would not import) |
 
 2 is deliberately separate from 1: "nothing is wrong" and "nothing was checked"

@@ -629,8 +629,10 @@ without an id are never suppressed.
 its own row and fails with "no alert channel can deliver" when neither Telegram
 nor any fallback can send, including when nothing is configured at all. It
 reads each fallback channel's `health()` and sends nothing. The check is
-`recommended`: a failure marks the instance degraded on the Health view, and
-does not fail an install gate that asserts no `required` failure.
+`recommended`: in a full run a failure marks the instance degraded on the
+Health view without failing an install gate that asserts no `required`
+failure, and `genus doctor --only alerts.delivery` exits 1 when it fails, so a
+cron or a monitor can gate on it.
 
 ### `ROBOTHOR_ALERT_SELFTEST` must not page critical in production
 
