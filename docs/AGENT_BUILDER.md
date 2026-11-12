@@ -260,13 +260,27 @@ limit's window holds.
 There is one exception. When the limit would block a hook-triggered run's
 first step, which is a tool step, the run does not start: the engine checks
 the limit before it records the run or runs any step, so no step, wait or
-`retry_count` retry happens and the run leaves no `workflow_runs` row, only an
-engine log line ("deferred: tool-call rate limit reached"). Its event is
-requeued for this workflow on the same budget and backoff as
+`retry_count` retry happens and the run leaves no `workflow_runs` row. Its
+event is requeued for this workflow on the same budget and backoff as
 `requeue_if_busy`, whether or not the trigger sets that, and goes to
 `<stream>:dlq` only once that budget is spent. That is the usual shape of a
 burst; the workflow is never held by a deferred run, and a burst leaves one
 run row per event.
+
+Deferrals are counted, not logged one by one. The engine counts each deferred
+run per workflow and per minute window (UTC) in Redis, and when a window
+closes it logs one warning line per workflow that was deferred in it:
+
+```text
+Workflow runs deferred by the tool-call rate limit: workflow=order-events deferred=15 window=2026-01-01T10:00:00Z
+```
+
+A window with no deferral logs nothing, and a deferred run that later runs is
+not counted again. `genus doctor --only deferred_runs.recent` sums the last
+hour and warns, naming the workflows that deferred most, once the total passes
+`ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD` (default 100); see
+[Deployment](deployment.md#what-it-checks). The per-run line ("deferred:
+tool-call rate limit reached") is still there at debug level.
 A run resumed after an approval step always waits.
 
 #### Asking a human mid-workflow

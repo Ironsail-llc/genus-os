@@ -309,9 +309,7 @@ class TestFirstStepDefers:
         assert engine._persist_step_start.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_a_deferral_is_logged_at_debug_only(
-        self, engine_config, clock, no_dedup, caplog
-    ):
+    async def test_a_deferral_is_logged_at_debug_only(self, engine_config, clock, no_dedup, caplog):
         # A burst defers thousands of runs; each is counted and summarised
         # once per window (test_deferred_runs.py), so its own line is debug.
         import logging

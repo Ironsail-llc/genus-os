@@ -29,6 +29,7 @@ import yaml
 
 from robothor.engine.config import ROOT_EVENT_GROUP
 from robothor.engine.dedup import release, try_acquire
+from robothor.engine.deferrals import DeferredRuns
 from robothor.engine.delivery import deliver
 from robothor.engine.models import RunStatus, TriggerType
 from robothor.engine.task_registry import get_task_registry
@@ -319,6 +320,8 @@ class EventHooks:
         self._tree_failures = 0
         # Set while this engine holds the root group; its refresh task reads it.
         self._holds_root_group = False
+        # Workflow runs the tool-call rate limit deferred, counted per window.
+        self.deferred_runs = DeferredRuns()
 
     def _owns_event(self, decoded: dict[str, Any]) -> bool:
         """Whether this engine's tenant is the one the event belongs to.
@@ -821,6 +824,7 @@ class EventHooks:
                     count=5,
                     block=int(os.environ.get("EVENT_BUS_BLOCK_MS", "2000")),
                 )
+                self.deferred_runs.flush()
                 if not results:
                     continue
 
@@ -1167,13 +1171,21 @@ class EventHooks:
             return
         if not run.rate_limited and not _requeues_when_busy(wf, stream, event_type):
             return
+        if run.rate_limited:
+            await self.deferred_runs.record(workflow_id, redis_client)
         busy_count = int(envelope.get("_busy_requeue_count", "0"))
         busy_data = {k: v for k, v in envelope.items() if k != RETRY_AGENTS_FIELD}
         busy_data[RETRY_WORKFLOWS_FIELD] = workflow_id
         if busy_count < MAX_BUSY_REQUEUES:
             reason = "rate limited" if run.rate_limited else "busy"
-            logger.info(
-                "Requeueing %s:%s — workflow %s %s", stream, event_type, workflow_id, reason
+            # A rate-limited requeue is summarised per window by deferred_runs.
+            logger.log(
+                logging.DEBUG if run.rate_limited else logging.INFO,
+                "Requeueing %s:%s — workflow %s %s",
+                stream,
+                event_type,
+                workflow_id,
+                reason,
             )
             busy_data["_busy_requeue_count"] = str(busy_count + 1)
             await self._delayed_requeue(

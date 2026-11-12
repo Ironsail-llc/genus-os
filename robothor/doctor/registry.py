@@ -94,6 +94,9 @@ CHECK_MODULES = (
     # Beside it, and a reading rather than a probe: which budgets, caps and
     # stops fired in the last day, observed or enforced.
     "budget_stops",
+    # Also a reading: hook workflow runs the tool-call rate limit deferred in
+    # the last hour, which warns past a threshold.
+    "deferred_runs",
     # Opt-in: skips on an instance that never set up the Claude Code driver.
     "claude_code",
     # Where exec runs: the container runtime and each exec-holding agent's plan.

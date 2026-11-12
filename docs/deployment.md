@@ -989,6 +989,7 @@ genus doctor --fix --dry-run        # say what --fix would repair
 | `identity` | an operator is configured in `owner.yaml`; an owner account exists so somebody can sign in |
 | `secrets` | the secrets backend is usable; the JWT signing key resolves; the bridge SSO secret is set where auth is enforced |
 | `budget_stops` | `budget_stops.recent` (info): how many `budget_stop` steps the last 24 hours recorded, by stop and mode. See `docs/BUDGETS_AND_STOPS.md` (repository only) |
+| `deferred_runs` | `deferred_runs.recent` (recommended): how many hook workflow runs the tool-call rate limit deferred in the last hour, by workflow. Warns past `ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD` (default 100), naming the top five workflows, and sends the warning to the alert channel (a `warning` alert) at most once an hour; `--dry-run` sends nothing. It only reads the counts, so a second run reports the same number. Skips when Redis is unreachable. See [Agent Builder](AGENT_BUILDER.md#tool-call-rate-limit) |
 | `host` | the installed systemd units match the repo (wraps `scripts/instance_doctor.sh`) |
 
 Check ids are dotted `<area>.<name>`, for example `db.migrations` (category

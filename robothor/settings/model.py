@@ -1335,6 +1335,18 @@ class EngineSettings(SettingsGroup):
         "instance's dev interpreter, since runtime releases omit pytest. Empty "
         "means <workspace>/venv/bin/python.",
     )
+    deferred_runs_warn_threshold: int = declare(
+        100,
+        "ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD",
+        "How many hook workflow runs the tool-call rate limit may defer in the "
+        "last hour before genus doctor's deferred_runs.recent check warns (and "
+        "sends that warning to the alert channel once an hour). The count is "
+        "summed over every workflow; the warning names the workflows that "
+        "deferred most.",
+        restart_required=False,
+        restart_units=(),
+        since="unreleased",
+    )
 
 
 # ---------------------------------------------------------------------------
