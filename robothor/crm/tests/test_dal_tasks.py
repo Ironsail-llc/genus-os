@@ -857,6 +857,7 @@ class TestAnswerQuestion:
         update_calls = [c for c in mock_cur.execute.call_args_list if "UPDATE crm_tasks" in c[0][0]]
         assert update_calls == []
 
+
 class _FakeDiag:
     def __init__(self, constraint_name):
         self.constraint_name = constraint_name

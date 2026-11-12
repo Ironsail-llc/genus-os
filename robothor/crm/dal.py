@@ -1455,9 +1455,7 @@ def create_task(
                 # Deterministic input error: nothing was written. Say so, so the
                 # effect settles as not_applied instead of fencing the principal
                 # forever behind an unresolvable outcome_unknown.
-                logger.error(
-                    "Rejected task create (parent_task_id=%s): %s", parent_task_id, e
-                )
+                logger.error("Rejected task create (parent_task_id=%s): %s", parent_task_id, e)
                 return classified
             logger.error("Failed to create task: %s", e)
             return None
