@@ -275,8 +275,9 @@ closes it logs one warning line per workflow that was deferred in it:
 Workflow runs deferred by the tool-call rate limit: workflow=order-events deferred=15 window=2026-01-01T10:00:00Z
 ```
 
-A window with no deferral logs nothing, and a deferred run that later runs is
-not counted again. `genus doctor --only deferred_runs.recent` sums the last
+A window with no deferral logs nothing. Each deferred run counts once: its
+requeued event, deferred again while the limit is still full, is not counted
+again, and neither is the run when it finally goes ahead. `genus doctor --only deferred_runs.recent` sums the last
 hour and warns, naming the workflows that deferred most, once the total passes
 `ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD` (default 100); see
 [Deployment](deployment.md#what-it-checks). The per-run line ("deferred:

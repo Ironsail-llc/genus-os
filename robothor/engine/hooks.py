@@ -49,6 +49,9 @@ MAX_BUSY_REQUEUES = 80
 RETRY_AGENTS_FIELD = "_retry_agents"
 # A busy workflow's requeued copy names the workflows it is for, and no agents.
 RETRY_WORKFLOWS_FIELD = "_retry_workflows"
+# Set on a copy requeued because the tool-call rate limit deferred its run, so
+# a retry deferred again is not counted as another deferred run.
+RATE_DEFERRED_FIELD = "_rate_deferred"
 
 # Events handled at once. Each event runs off the consumer loop, so a long
 # agent run holds up only later events for that same agent.
@@ -1171,11 +1174,13 @@ class EventHooks:
             return
         if not run.rate_limited and not _requeues_when_busy(wf, stream, event_type):
             return
-        if run.rate_limited:
+        if run.rate_limited and not envelope.get(RATE_DEFERRED_FIELD):
             await self.deferred_runs.record(workflow_id, redis_client)
         busy_count = int(envelope.get("_busy_requeue_count", "0"))
         busy_data = {k: v for k, v in envelope.items() if k != RETRY_AGENTS_FIELD}
         busy_data[RETRY_WORKFLOWS_FIELD] = workflow_id
+        if run.rate_limited:
+            busy_data[RATE_DEFERRED_FIELD] = "1"
         if busy_count < MAX_BUSY_REQUEUES:
             reason = "rate limited" if run.rate_limited else "busy"
             # A rate-limited requeue is summarised per window by deferred_runs.
