@@ -14,12 +14,16 @@ hold anything a person typed. ``reason`` is the failure's text (an error class
 and a short message), redacted, cut short, and with any argument value it
 quotes replaced.
 
-Emitted from three places, which between them see every call exactly once:
-``ToolRegistry.execute`` (every call that reaches dispatch, from an agent
-turn, a workflow step, ``execute_code`` or ``tool_call``), admission
-(``tool_admission``: a call a gate refused before dispatch), and the two
-pre-dispatch refusals that bypass both (a workflow step's guardrail block,
-the ``execute_code`` snippet caps). Writing the line can never fail the call.
+Written from three places, which between them see every call exactly once:
+``ToolRegistry.execute`` (:func:`begin` / :func:`finish`: every call that
+reaches dispatch, from an agent turn, a workflow step, ``execute_code`` or
+``tool_call``), admission (:func:`log_admission`: a call a gate refused before
+dispatch), and the two refusals that precede both (a workflow step's guardrail
+block, and :func:`log_snippet_refusal` for the ``execute_code`` caps). The
+outcome of a dispatched call comes from the status its audit row records
+(:func:`note_audit_status`) and the result's structural markers (``refused``,
+``guard``, ``outcome_unknown``, ``would_have_done``), never from message text.
+Writing the line can never fail the call.
 """
 
 from __future__ import annotations
@@ -45,6 +49,8 @@ __all__ = [
     "begin",
     "emit",
     "finish",
+    "log_admission",
+    "log_snippet_refusal",
     "note_audit_status",
     "workflow_run_scope",
 ]
@@ -159,17 +165,20 @@ def emit(
         from robothor.sanitize import sanitize_log
 
         reason = _clean_reason(reason, arguments)
-        fields: dict[str, Any] = {"event": "tool_call", "tool": sanitize_log(tool)}
         if agent_id.startswith(_WORKFLOW_PREFIX):
-            fields["workflow"] = sanitize_log(agent_id[len(_WORKFLOW_PREFIX) :])
+            who, caller = "workflow", agent_id[len(_WORKFLOW_PREFIX) :]
             run_id = run_id or (_workflow_run.get() or "")
         else:
-            fields["agent"] = sanitize_log(agent_id or "unknown")
-        fields["run_id"] = sanitize_log(run_id)
-        fields["outcome"] = outcome
-        fields["reason"] = reason
-        fields["duration_ms"] = int(duration_ms)
-        who = "workflow" if "workflow" in fields else "agent"
+            who, caller = "agent", agent_id or "unknown"
+        fields: dict[str, Any] = {
+            "event": "tool_call",
+            "tool": sanitize_log(tool),
+            who: sanitize_log(caller),
+            "run_id": sanitize_log(run_id),
+            "outcome": outcome,
+            "reason": reason,
+            "duration_ms": int(duration_ms),
+        }
         logger.info(
             "event=tool_call tool=%s %s=%s run_id=%s outcome=%s duration_ms=%d reason=%s",
             fields["tool"],
@@ -278,18 +287,12 @@ def _clean_reason(reason: str, arguments: Any) -> str:
 
 
 def _string_values(value: Any, depth: int = 0) -> set[str]:
-    if depth > 4:
-        return set()
+    """Every string in ``value`` long enough to be worth taking out of a reason."""
     if isinstance(value, str):
         return {value} if len(value) >= _MIN_SCRUB_LEN else set()
-    if isinstance(value, dict):
-        out: set[str] = set()
-        for v in value.values():
-            out |= _string_values(v, depth + 1)
-        return out
-    if isinstance(value, (list, tuple)):
-        out = set()
-        for v in value:
-            out |= _string_values(v, depth + 1)
-        return out
-    return set()
+    if depth > 4:
+        return set()
+    if not isinstance(value, (dict, list, tuple)):
+        return set()
+    children = value.values() if isinstance(value, dict) else value
+    return set().union(*(_string_values(v, depth + 1) for v in children))
