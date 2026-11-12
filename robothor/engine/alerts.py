@@ -117,21 +117,28 @@ async def channel_can_deliver(channel: Any) -> tuple[bool, str]:
     return False, str(report.get("error") or "no send credentials configured")
 
 
+def _cooldown_seconds() -> float:
+    from robothor.settings import get_settings
+
+    return float(get_settings().engine.alert_cooldown_seconds)
+
+
 def _suppressed(alert_id: str | None) -> bool:
     if not alert_id:
         return False
     last = _delivered_at.get(alert_id)
-    if last is None:
-        return False
-    from robothor.settings import get_settings
-
-    window = get_settings().engine.alert_cooldown_seconds
-    return time.monotonic() - last < window
+    return last is not None and time.monotonic() - last < _cooldown_seconds()
 
 
-def _record_delivery(alert_id: str | None) -> None:
-    if alert_id:
-        _delivered_at[alert_id] = time.monotonic()
+def _record_delivery(alert_id: str | None, delivered: bool) -> bool:
+    """Remember a delivered id, forget expired ones; returns ``delivered``."""
+    if delivered and alert_id:
+        now = time.monotonic()
+        window = _cooldown_seconds()
+        for stale in [key for key, at in _delivered_at.items() if now - at >= window]:
+            del _delivered_at[stale]
+        _delivered_at[alert_id] = now
+    return delivered
 
 
 def _derived_id(level: str, title: str) -> str:
@@ -189,15 +196,11 @@ async def alert(
     if channel == "telegram":
         if level in _PAGE_LEVELS:
             return await _page(level, title, body, alert_id)
-        delivered = await _write_notification("alert_digest", level, title, body, metadata)
-        if delivered:
-            _record_delivery(alert_id)
-        return delivered
+        return _record_delivery(
+            alert_id, await _write_notification("alert_digest", level, title, body, metadata)
+        )
     elif channel == "webhook":
-        delivered = await _send_webhook(level, title, body, metadata)
-        if delivered:
-            _record_delivery(alert_id)
-        return delivered
+        return _record_delivery(alert_id, await _send_webhook(level, title, body, metadata))
     else:
         logger.warning("Unknown alert channel: %s", channel)
         return False
@@ -283,8 +286,7 @@ async def _page(level: str, title: str, body: str, alert_id: str | None) -> bool
     shown_id = alert_id or _derived_id(level, title)
     if await _send_telegram(level, title, body):
         logger.info("Alert %s delivered via telegram", shown_id)
-        _record_delivery(alert_id)
-        return True
+        return _record_delivery(alert_id, True)
 
     why = "is not configured" if not _telegram_configured() else "failed to deliver"
     tried = ["telegram"]
@@ -297,8 +299,7 @@ async def _page(level: str, title: str, body: str, alert_id: str | None) -> bool
                 name,
                 why,
             )
-            _record_delivery(alert_id)
-            return True
+            return _record_delivery(alert_id, True)
 
     logger.error(
         "Alert %s reached no one: every alert channel failed (tried %s). "
