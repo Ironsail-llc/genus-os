@@ -254,6 +254,8 @@ def _classify(result: Any, exc: BaseException | None, audit_status: str) -> tupl
         return "refused", error
     if error and result.get("guard"):
         return "refused", error
+    if result.get("outcome_unknown") is True:
+        return "deferred", error  # an effect awaiting reconciliation
     if audit_status == "timeout":
         return "error", f"TimeoutError: {error}"
     if error:
