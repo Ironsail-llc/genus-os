@@ -274,6 +274,40 @@ class TestCountedOnce:
         assert h.counted() == 1
 
     @pytest.mark.asyncio
+    async def test_a_requeued_event_deferred_again_is_not_counted_again(
+        self, engine_config, limiter_clock, no_dedup, caplog
+    ):
+        # The requeue comes back after a few seconds, while the limiter's
+        # minute is still full, so each retry is deferred again. It is still
+        # one deferred run.
+        h = _Harness(engine_config, limit=10)
+        with caplog.at_level(logging.INFO):
+            await h.trigger(25)
+            for _ in range(3):
+                retries, h.requeued = h.requeued, []
+                for envelope in retries:
+                    await h.fire(envelope)
+            assert len(h.requeued) == 15  # still waiting, still requeued
+            h.clock.now = WINDOW_START + WINDOW_SECONDS + 1
+            h.hooks.deferred_runs.flush()
+        assert h.redis.hashes[window_key(WINDOW_START)] == {WORKFLOW: 15}
+        assert _summaries(caplog) == [
+            f"Workflow runs deferred by the tool-call rate limit: "
+            f"workflow={WORKFLOW} deferred=15 window={_label(WINDOW_START)}"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_retry_deferred_in_a_later_window_is_not_counted_again(
+        self, engine_config, limiter_clock, no_dedup
+    ):
+        h = _Harness(engine_config, limit=1)
+        await h.trigger(2)
+        h.clock.now = WINDOW_START + WINDOW_SECONDS + 1  # next window, limiter still full
+        await h.fire(h.requeued[-1])
+        assert h.runs[-1].rate_limited is True
+        assert h.counted() == 1
+
+    @pytest.mark.asyncio
     async def test_a_deferred_write_is_counted_and_never_made(
         self, engine_config, limiter_clock, no_dedup
     ):
