@@ -424,6 +424,12 @@ The three findings a fresh install actually hits:
 | `provider.keys` or `provider.completion` fails | No credential resolved, or the fleet's default model would not answer one token | Store the key where the platform reads it: `genus vault set providers/openrouter/api_key <key>`, then re-run. A 402 means the key is capped, a 403 means the key may not use *that model* — a model problem, not a credential one |
 | `secrets.bridge_sso` fails | `GENUS_BRIDGE_SSO_SECRET` is not where the process that needs it reads it — on systemd the units read `/etc/robothor/robothor.env`, not the workspace's `genus.env` | Point the units at it, per [the sign-in secrets](deployment.md#the-sign-in-secrets-the-units-need). Until you do, the bridge refuses every SSO exchange and nobody can sign in. This used to be invisible — the bridge reported ready for eight days while nobody could get in; the bridge's `/ready` now carries an `sso_secret` check of its own, and this doctor check is the other half |
 
+`alerts.delivery` failing with "no alert channel can deliver" means a critical
+alert would reach no one: configure Telegram, or set
+`ROBOTHOR_ALERT_FALLBACK_CHANNELS` (for example `email:you@example.com`) and give
+that channel its send credentials. See
+`docs/runbooks/PAGING.md`, "Fallback channels for a page" (repository only).
+
 `identity.owner_account` failing on a box where you have not opened `/setup`
 yet is not a fault — the doctor reports it as a skip while first-run setup is
 legitimately pending.

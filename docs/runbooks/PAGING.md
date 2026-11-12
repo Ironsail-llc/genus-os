@@ -593,8 +593,44 @@ journalctl -u 'robothor-alert@*' --since '-5min' | grep start-limit-hit   # must
 
 Application-level alerts go through `robothor/engine/alerts.py::alert()`:
 `critical` pages Telegram immediately; `warning`/`info` are written as
-`alert_digest` notification rows instead of paging. A failed page falls back to
-an `alert_fallback` notification row so the alert is not lost.
+`alert_digest` notification rows instead of paging. A page Telegram cannot
+deliver goes to the fallback channels below; only when none of them delivers
+is an `alert_fallback` notification row written, so the alert is not lost.
+
+### Fallback channels for a page
+
+Telegram is the primary pager. When it is not set up (no sender registered, or
+no `ROBOTHOR_TELEGRAM_CHAT_ID`), or its send fails, the page is tried on each
+entry of `ROBOTHOR_ALERT_FALLBACK_CHANNELS`, in order:
+
+```bash
+ROBOTHOR_ALERT_FALLBACK_CHANNELS="email:ops@example.com,slack:C0123456"
+```
+
+Each entry is `<channel>:<target>`: any channel `genus channel list` shows
+(email, Slack, an armed plugin channel), and the address that channel sends to.
+The first channel whose receipt is complete ends the attempt. The engine log
+says which channel delivered each alert:
+
+| Log line | Meaning |
+|---|---|
+| `Alert <id> delivered via telegram` | The primary delivered; no fallback was tried |
+| `Alert <id> delivered via email (fallback: the primary channel telegram is not configured)` | Telegram is not set up; the fallback delivered |
+| `Alert <id> delivered via email (fallback: the primary channel telegram failed to deliver)` | Telegram was tried and failed (its own warning precedes this line) |
+| `would have sent alert <id> via email (...)` | That fallback has no send credentials (its `health()` says it cannot send), so it was not called |
+| `Alert <id> reached no one: every alert channel failed (tried telegram, email)` | ERROR. Nothing delivered; an `alert_fallback` row was written for the next briefing |
+
+An alert raised with an `alert_id` and delivered once is not sent again for
+the same id inside `ROBOTHOR_ALERT_COOLDOWN_SECONDS`. A repeat of an alert that
+was **not** delivered is a retry, so it is never suppressed. Alerts raised
+without an id are never suppressed.
+
+`genus doctor --only alerts.delivery` reports each configured alert channel on
+its own row and fails with "no alert channel can deliver" when neither Telegram
+nor any fallback can send, including when nothing is configured at all. It
+reads each fallback channel's `health()` and sends nothing. The check is
+`recommended`: a failure marks the instance degraded on the Health view, and
+does not fail an install gate that asserts no `required` failure.
 
 ### `ROBOTHOR_ALERT_SELFTEST` must not page critical in production
 

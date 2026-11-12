@@ -12,9 +12,14 @@ Routing policy — page only what needs the operator:
   briefing and heartbeat surface them without paging.
 
 Delivery is verified, not assumed: the Telegram sender signals total
-failure with an empty result list, and a failed page falls back to an
-``alert_fallback`` notification row so the alert still reaches the next
-briefing. ``alert()`` returns whether delivery actually happened.
+failure with an empty result list. A page Telegram cannot deliver (not
+configured, or the send failed) is tried on each channel in
+``ROBOTHOR_ALERT_FALLBACK_CHANNELS``, in order, through the channel registry;
+a channel whose ``health()`` says it cannot send is skipped with a "would have
+sent" line. Only when every channel fails is an ``alert_fallback``
+notification row written, so the alert still reaches the next briefing, and
+``genus doctor`` (``alerts.delivery``) reports the configuration that let it
+happen. ``alert()`` returns whether delivery actually happened.
 
 Usage::
 
@@ -26,8 +31,10 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import logging
+import time
 from typing import Any
 
 from robothor.constants import BENCHMARK_DIGEST_NOTIFICATION_TYPE
@@ -57,6 +64,81 @@ BENCHMARK_DIGEST_TYPE = BENCHMARK_DIGEST_NOTIFICATION_TYPE
 BENCHMARK_SUBJECT_TAG = "[benchmark]"
 
 
+#: ``alert_id -> monotonic time it was last delivered``. Only alerts raised with
+#: an explicit id are suppressed; a repeat of one nobody received is a retry,
+#: so the time is recorded on delivery, never on an attempt.
+_delivered_at: dict[str, float] = {}
+
+
+def parse_fallback_channels(raw: str) -> list[tuple[str, str]]:
+    """``"email:a@example.com, slack:C1"`` -> ``[("email", ...), ("slack", "C1")]``.
+
+    Split on the FIRST colon, so a target may carry colons of its own. An entry
+    with no channel or no target is dropped with a warning: it names nowhere.
+    """
+    entries: list[tuple[str, str]] = []
+    for part in (raw or "").split(","):
+        item = part.strip()
+        if not item:
+            continue
+        name, _, target = item.partition(":")
+        name, target = name.strip(), target.strip()
+        if not name or not target:
+            logger.warning("Ignoring alert fallback entry %r: expected <channel>:<target>", item)
+            continue
+        entries.append((name, target))
+    return entries
+
+
+def alert_fallback_channels() -> list[tuple[str, str]]:
+    """The configured fallback channels, in the order they are tried."""
+    from robothor.settings import get_settings
+
+    return parse_fallback_channels(get_settings().engine.alert_fallback_channels)
+
+
+async def channel_can_deliver(channel: Any) -> tuple[bool, str]:
+    """Whether ``channel`` says it could send at all, and why not.
+
+    Read from the channel's own ``health()``, which opens nothing for the
+    built-ins that matter here (email reports whether a transport is
+    configured). Channels report ``ok`` or, for sender shims,
+    ``sender_registered``.
+    """
+    try:
+        report = await channel.health()
+    except Exception as exc:  # noqa: BLE001 — a health probe is a report
+        return False, f"health check raised {type(exc).__name__}"
+    if not isinstance(report, dict):
+        return False, "health check returned no report"
+    able = report.get("ok") if "ok" in report else report.get("sender_registered")
+    if able:
+        return True, ""
+    return False, str(report.get("error") or "no send credentials configured")
+
+
+def _suppressed(alert_id: str | None) -> bool:
+    if not alert_id:
+        return False
+    last = _delivered_at.get(alert_id)
+    if last is None:
+        return False
+    from robothor.settings import get_settings
+
+    window = get_settings().engine.alert_cooldown_seconds
+    return time.monotonic() - last < window
+
+
+def _record_delivery(alert_id: str | None) -> None:
+    if alert_id:
+        _delivered_at[alert_id] = time.monotonic()
+
+
+def _derived_id(level: str, title: str) -> str:
+    """A stable id for log lines when the caller gave none."""
+    return hashlib.sha256(f"{level}:{title}".encode()).hexdigest()[:12]
+
+
 async def alert(
     level: str,
     title: str,
@@ -64,6 +146,7 @@ async def alert(
     *,
     channel: str = "telegram",
     metadata: dict[str, Any] | None = None,
+    alert_id: str | None = None,
 ) -> bool:
     """Send an alert, routed by severity.
 
@@ -75,10 +158,14 @@ async def alert(
         body: Alert details (can be multiline).
         channel: Delivery channel — "telegram" (default), "webhook".
         metadata: Optional structured data for the alert.
+        alert_id: Optional stable id. A repeat of a delivered alert with the
+            same id inside ``ROBOTHOR_ALERT_COOLDOWN_SECONDS`` is not sent
+            again. Without one, nothing is suppressed.
 
     Returns:
-        True if the alert was verifiably delivered (Telegram send returned
-        sent messages, or the digest/fallback notification row was written).
+        True if the alert was verifiably delivered (Telegram or a fallback
+        channel acknowledged it, or the digest notification row was written),
+        or was delivered earlier and this repeat was suppressed.
     """
     from robothor.engine.run_context import in_benchmark_run
 
@@ -95,12 +182,22 @@ async def alert(
             metadata,
         )
 
+    if _suppressed(alert_id):
+        logger.info("Alert %s suppressed: delivered inside its cooldown window", alert_id)
+        return True
+
     if channel == "telegram":
         if level in _PAGE_LEVELS:
-            return await _send_telegram(level, title, body)
-        return await _write_notification("alert_digest", level, title, body, metadata)
+            return await _page(level, title, body, alert_id)
+        delivered = await _write_notification("alert_digest", level, title, body, metadata)
+        if delivered:
+            _record_delivery(alert_id)
+        return delivered
     elif channel == "webhook":
-        return await _send_webhook(level, title, body, metadata)
+        delivered = await _send_webhook(level, title, body, metadata)
+        if delivered:
+            _record_delivery(alert_id)
+        return delivered
     else:
         logger.warning("Unknown alert channel: %s", channel)
         return False
@@ -176,8 +273,97 @@ def note_benchmark_runaway(agent_id: str, run_id: str, tokens: int, model_used: 
     )
 
 
+async def _page(level: str, title: str, body: str, alert_id: str | None) -> bool:
+    """Page the operator: Telegram first, then each configured fallback.
+
+    The first channel that proves delivery ends the attempt, and one line says
+    which it was. When none does, one ERROR line names every channel tried and
+    an ``alert_fallback`` row is left for the next briefing.
+    """
+    shown_id = alert_id or _derived_id(level, title)
+    if await _send_telegram(level, title, body):
+        logger.info("Alert %s delivered via telegram", shown_id)
+        _record_delivery(alert_id)
+        return True
+
+    why = "is not configured" if not _telegram_configured() else "failed to deliver"
+    tried = ["telegram"]
+    for name, target in alert_fallback_channels():
+        tried.append(name)
+        if await _send_via_channel(name, target, level, title, body, shown_id):
+            logger.warning(
+                "Alert %s delivered via %s (fallback: the primary channel telegram %s)",
+                shown_id,
+                name,
+                why,
+            )
+            _record_delivery(alert_id)
+            return True
+
+    logger.error(
+        "Alert %s reached no one: every alert channel failed (tried %s). "
+        "Run `genus doctor --only alerts.delivery`.",
+        shown_id,
+        ", ".join(tried),
+    )
+    # The page was lost — leave a durable trace the briefing will surface.
+    await _write_notification("alert_fallback", level, title, body, None)
+    return False
+
+
+def _telegram_configured() -> bool:
+    """Whether the primary pager has both a registered sender and a chat id."""
+    try:
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.delivery import get_telegram_sender
+
+        return get_telegram_sender() is not None and bool(EngineConfig.from_env().default_chat_id)
+    except Exception:  # noqa: BLE001 — only decides a log line's wording
+        return False
+
+
+async def _send_via_channel(
+    name: str, target: str, level: str, title: str, body: str, shown_id: str
+) -> bool:
+    """Deliver through one registry channel; True only on a complete receipt."""
+    from robothor.engine.channels.registry import get_channel
+
+    channel = get_channel(name)
+    if channel is None:
+        logger.warning("Alert fallback channel %r is not an available channel", name)
+        return False
+    able, reason = await channel_can_deliver(channel)
+    if not able:
+        logger.warning("would have sent alert %s via %s (%s)", shown_id, name, reason)
+        return False
+
+    from types import SimpleNamespace
+
+    from robothor.constants import DEFAULT_TENANT
+
+    # Channels that guard per-tenant state (the email opt-out list) read the
+    # tenant off the run; an alert has no run, so it carries the default one.
+    run = SimpleNamespace(id="", tenant_id=DEFAULT_TENANT, is_benchmark=False)
+    try:
+        receipt = await channel.send(
+            target, f"[{level}] {title}\n\n{body}", subject=f"[{level}] {title}", run=run
+        )
+    except Exception as exc:  # noqa: BLE001 — a raising channel is a failed send
+        logger.warning("Alert %s delivery via %s raised: %s", shown_id, name, exc)
+        return False
+    if not getattr(receipt, "complete", False):
+        logger.warning(
+            "Alert %s delivery via %s was not acknowledged (status=%s)",
+            shown_id,
+            name,
+            getattr(receipt, "status", None),
+        )
+        return False
+    return True
+
+
 async def _send_telegram(level: str, title: str, body: str) -> bool:
-    """Page via Telegram; on failure, fall back to a notification row.
+    """Page via Telegram. True only when Telegram acknowledged the message.
 
     ``TelegramBot.send_message`` swallows per-chunk exceptions and returns
     a list of sent messages — empty on total failure — so the result must
@@ -215,10 +401,6 @@ async def _send_telegram(level: str, title: str, body: str) -> bool:
                     )
     except Exception as e:
         logger.warning("Alert delivery to Telegram failed: %s", e)
-
-    if not delivered:
-        # The page was lost — leave a durable trace the briefing will surface.
-        await _write_notification("alert_fallback", level, title, body, None)
     return delivered
 
 

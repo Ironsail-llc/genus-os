@@ -10,6 +10,7 @@ wrongly is an error.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from robothor.doctor.model import Check, Result, fail, ok, skip
@@ -423,6 +424,57 @@ async def _email(ctx: DoctorContext) -> Result:
     return ok(f"the SMTP server at ROBOTHOR_EMAIL_SMTP_HOST accepted a session{source}")
 
 
+async def _alert_delivery(ctx: DoctorContext) -> list[Result]:
+    """Can a critical alert reach the operator through any configured channel?
+
+    The primary pager is Telegram; ``ROBOTHOR_ALERT_FALLBACK_CHANNELS`` lists
+    the channels a page goes to, in order, when Telegram cannot deliver it.
+    Each configured channel gets its own row. A failure means alerts on this
+    instance reach no one (they are only left as a notification row for the
+    next briefing): configure Telegram, or name a fallback such as
+    ``email:<address>`` and give that channel its send credentials. A fallback
+    row that fails names a channel the engine will skip with "would have sent
+    alert ... via ...". Nothing is sent by this check, and no target is
+    printed.
+    """
+    from robothor.engine.alerts import channel_can_deliver, parse_fallback_channels
+    from robothor.engine.channels.registry import get_channel
+
+    channels = ctx.settings.channels
+    results: list[Result] = []
+    if channels.telegram_bot_token and channels.telegram_chat_id:
+        results.append(
+            Result(status="pass", detail="primary: telegram is configured", sub_id="telegram")
+        )
+
+    for name, _target in parse_fallback_channels(ctx.settings.engine.alert_fallback_channels):
+        channel = get_channel(name)
+        if channel is None:
+            results.append(
+                fail(f"fallback {name}: not an available channel on this instance", sub_id=name)
+            )
+            continue
+        try:
+            able, reason = await asyncio.wait_for(channel_can_deliver(channel), ctx.timeout_s)
+        except TimeoutError:
+            able, reason = False, "its health check did not answer"
+        if able:
+            results.append(Result(status="pass", detail=f"fallback {name}: can send", sub_id=name))
+        else:
+            results.append(fail(f"fallback {name}: cannot deliver ({reason})", sub_id=name))
+
+    if not any(row.status == "pass" for row in results):
+        results.append(
+            fail(
+                "no alert channel can deliver: Telegram is not configured and no "
+                "ROBOTHOR_ALERT_FALLBACK_CHANNELS entry can send, so critical alerts "
+                "reach no one",
+                sub_id="any",
+            )
+        )
+    return results
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         id="telegram.token",
@@ -451,5 +503,12 @@ CHECKS: tuple[Check, ...] = (
         category="channels",
         severity="info",
         run=_email,
+    ),
+    Check(
+        id="alerts.delivery",
+        title="A critical alert can reach the operator",
+        category="channels",
+        severity="recommended",
+        run=_alert_delivery,
     ),
 )

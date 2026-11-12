@@ -1201,7 +1201,8 @@ under that prefix inherits the requirement rather than having to remember it.
 | `POST /api/admin/approvals/escalation/{id}` | `admin_approvals.py` | Settle a pending permission escalation. The request is an `asyncio.Event` in **this** process, so the bridge proxies here rather than writing a row; 404 when the prompt is gone (timed out, already decided, previous process), 503 when this engine holds no manager |
 
 Engine alerts (`robothor/engine/alerts.py`) route by severity: `critical`
-pages Telegram immediately; `warning`/`info` become `alert_digest`
+pages Telegram immediately, then each `ROBOTHOR_ALERT_FALLBACK_CHANNELS`
+channel in order when Telegram cannot deliver; `warning`/`info` become `alert_digest`
 notification rows in `crm_agent_notifications` addressed to the operator-facing
 agent. `robothor/engine/warmup.py` is the reader: both the heartbeat preamble
 and the operator's first interactive turn render an `UNREAD ALERTS (N)` section
