@@ -268,8 +268,9 @@ burst; the workflow is never held by a deferred run, and a burst leaves one
 run row per event.
 
 Deferrals are counted, not logged one by one. The engine counts each deferred
-run per workflow and per minute window (UTC) in Redis, and when a window
-closes it logs one warning line per workflow that was deferred in it:
+run per workflow and per minute window (UTC) in Redis, under its own tenant,
+and when a window closes it logs one warning line per workflow that was
+deferred in it:
 
 ```text
 Workflow runs deferred by the tool-call rate limit: workflow=order-events deferred=15 window=2026-01-01T10:00:00Z

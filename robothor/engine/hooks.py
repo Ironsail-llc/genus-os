@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.config import ROOT_EVENT_GROUP
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.deferrals import DeferredRuns
@@ -324,7 +325,7 @@ class EventHooks:
         # Set while this engine holds the root group; its refresh task reads it.
         self._holds_root_group = False
         # Workflow runs the tool-call rate limit deferred, counted per window.
-        self.deferred_runs = DeferredRuns()
+        self.deferred_runs = DeferredRuns(config.tenant_id or DEFAULT_TENANT)
 
     def _owns_event(self, decoded: dict[str, Any]) -> bool:
         """Whether this engine's tenant is the one the event belongs to.
