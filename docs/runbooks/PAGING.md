@@ -620,6 +620,13 @@ says which channel delivered each alert:
 | `would have sent alert <id> via email (...)` | That fallback has no send credentials (its `health()` says it cannot send), so it was not called |
 | `Alert <id> reached no one: every alert channel failed (tried telegram, email)` | ERROR. Nothing delivered; an `alert_fallback` row was written for the next briefing |
 
+An email fallback target must be an address, not a CRM person id: a person id
+resolves through the database, and the alert that matters most is the one
+about the database. For the same reason an alert to its configured email
+target is sent even when the opt-out list cannot be read (the email channel
+logs a warning); a readable list that flags the address still refuses it, and
+every other email send still refuses with the list unread.
+
 An alert raised with an `alert_id` and delivered once is not sent again for
 the same id inside `ROBOTHOR_ALERT_COOLDOWN_SECONDS`. A repeat of an alert that
 was **not** delivered is a retry, so it is never suppressed. Alerts raised

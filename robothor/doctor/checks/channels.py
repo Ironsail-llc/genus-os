@@ -447,7 +447,18 @@ async def _alert_delivery(ctx: DoctorContext) -> list[Result]:
             Result(status="pass", detail="primary: telegram is configured", sub_id="telegram")
         )
 
-    for name, _target in parse_fallback_channels(ctx.settings.engine.alert_fallback_channels):
+    for name, target in parse_fallback_channels(ctx.settings.engine.alert_fallback_channels):
+        if name == "email" and "@" not in target:
+            # A CRM person id resolves through the database, and the alert that
+            # matters most is the one about the database being down.
+            results.append(
+                fail(
+                    "fallback email: the target must be an email address, not a CRM "
+                    "person id, so an alert can be sent while the database is down",
+                    sub_id=name,
+                )
+            )
+            continue
         channel = get_channel(name)
         if channel is None:
             results.append(

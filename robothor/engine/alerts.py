@@ -347,7 +347,11 @@ async def _send_via_channel(
     run = SimpleNamespace(id="", tenant_id=DEFAULT_TENANT, is_benchmark=False)
     try:
         receipt = await channel.send(
-            target, f"[{level}] {title}\n\n{body}", subject=f"[{level}] {title}", run=run
+            target,
+            f"[{level}] {title}\n\n{body}",
+            subject=f"[{level}] {title}",
+            run=run,
+            operator_alert=True,
         )
     except Exception as exc:  # noqa: BLE001 — a raising channel is a failed send
         logger.warning("Alert %s delivery via %s raised: %s", shown_id, name, exc)

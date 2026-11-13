@@ -617,6 +617,7 @@ class EmailChannel:
         run: AgentRun | None = None,
         html: str | None = None,
         sender: str | None = None,
+        operator_alert: bool = False,
         **kw: Any,
     ) -> SendReceipt:
         """Mail ``text`` to ``target``, and report only what a transport proved.
@@ -628,6 +629,12 @@ class EmailChannel:
         Microsoft 365 send as their signed-in account and ignore it. A
         ``sender`` that is not one mailbox is ``failed:email_invalid_sender``,
         checked after the opt-out list and before any transport.
+
+        ``operator_alert`` is set only by the engine's alert fallback, for a
+        target the operator configured as where alerts go. The opt-out list is
+        still honoured when it can be read; when it cannot -- the database is
+        down, which is exactly what the alert may be about -- the alert is sent
+        rather than refused. Every other send refuses with the list unread.
 
         The order is the contract. Guards run before the tenant is read, the
         tenant before the recipient is resolved, and the opt-out list before any
@@ -695,7 +702,9 @@ class EmailChannel:
             logger.error("Email delivery target for %s resolved to no address", agent)
             return SendReceipt(acknowledged=0, expected=1, status=STATUS_UNRESOLVED, target=clean)
 
-        refusal = await self._opt_out_refusal(address, tenant, run, flagged_on_row=flagged_on_row)
+        refusal = await self._opt_out_refusal(
+            address, tenant, run, flagged_on_row=flagged_on_row, operator_alert=operator_alert
+        )
         if refusal is not None:
             return SendReceipt(acknowledged=0, expected=1, status=refusal, target=address)
 
@@ -774,6 +783,7 @@ class EmailChannel:
         run: AgentRun | None,
         *,
         flagged_on_row: bool,
+        operator_alert: bool = False,
     ) -> str | None:
         """``None`` to proceed, or the status to record instead of sending.
 
@@ -795,7 +805,7 @@ class EmailChannel:
             # table, and a carve-out keyed on the type would turn any of those
             # going missing into a silent allow.
             if "do_not_contact" not in str(exc):
-                return await self._unreadable(address, exc, run)
+                return await self._unreadable(address, exc, run, operator_alert=operator_alert)
             logger.error(
                 "do_not_contact check skipped for the email channel — this schema "
                 "predates migration 113 (%s). Run `robothor migrate`.",
@@ -803,7 +813,7 @@ class EmailChannel:
             )
             blocked = set()
         except Exception as exc:  # noqa: BLE001 — an unreadable list is a receipt
-            return await self._unreadable(address, exc, run)
+            return await self._unreadable(address, exc, run, operator_alert=operator_alert)
 
         if not blocked and not flagged_on_row:
             return None
@@ -832,7 +842,9 @@ class EmailChannel:
         return STATUS_DNC
 
     @staticmethod
-    async def _unreadable(address: str, exc: BaseException, run: AgentRun | None) -> str | None:
+    async def _unreadable(
+        address: str, exc: BaseException, run: AgentRun | None, *, operator_alert: bool = False
+    ) -> str | None:
         """Refuse a send whose opt-out lookup could not be read.
 
         Its own status, never ``failed:email_dnc``: that token is a claim about
@@ -841,7 +853,17 @@ class EmailChannel:
         Deliberately files NO guardrail event. That write goes to the database
         the lookup just failed on, so it raises too, buying a second traceback
         stacked on the real one. The ERROR line is this branch's evidence.
+
+        An operator alert to its configured target is the one exception: it is
+        sent, because refusing it would silence the page about the outage.
         """
+        if operator_alert:
+            logger.warning(
+                "The email channel could not read the opt-out list (%s); sending the "
+                "operator alert to its configured target anyway.",
+                _describe(exc),
+            )
+            return None
         logger.error(
             "The email channel could not read the opt-out list for a delivery to %s: "
             "%s. Not sending.",

@@ -184,7 +184,7 @@ send call returning:
 | `delivered` | The transport returned a message id |
 | `failed:email_send` | The transport refused, raised, or accepted the call without returning an id |
 | `failed:email_dnc` | The recipient is flagged `do_not_contact`. Nothing was sent, and the refusal is in `agent_guardrail_events` |
-| `failed:email_dnc_unreadable` | The opt-out list could not be read. "We could not check" is not "nobody opted out", so it is its own status and not a claim about a person |
+| `failed:email_dnc_unreadable` | The opt-out list could not be read. "We could not check" is not "nobody opted out", so it is its own status and not a claim about a person. One exception: an engine alert sent to the operator's configured fallback target (`ROBOTHOR_ALERT_FALLBACK_CHANNELS`) goes out anyway with a warning, because the alert may be about the database the list lives in |
 | `failed:email_no_transport` | Neither the `gws` CLI nor `ROBOTHOR_EMAIL_SMTP_HOST` + `ROBOTHOR_EMAIL_FROM` |
 | `failed:email_no_target` | The manifest names no `delivery.to` |
 | `failed:email_unexpanded_target` | A literal `${VAR}` reached the target |
