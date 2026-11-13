@@ -211,6 +211,11 @@ def finish(
         _current.reset(token)
     try:
         if call.parent is not None and call.parent.wrapper:
+            if isinstance(exc, asyncio.CancelledError):
+                # The wrapper's own deadline (or the run) cancelled this call:
+                # the wrapper sees why and writes the one line, as a timeout
+                # when its deadline fired, under this call's name.
+                return
             call.parent.inner_logged = True
         if call.wrapper and call.inner_logged:
             return  # the wrapped tool's own call already wrote the line
