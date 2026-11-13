@@ -19,12 +19,16 @@ from robothor.doctor.checks import deferred_runs
 from robothor.doctor.tests.conftest import make_ctx
 from robothor.engine.deferrals import WINDOW_SECONDS, window_key
 
+#: The tenant a doctor with no tenant configured runs as.
+TENANT = "default"
+
 
 class FakeRedis:
     def __init__(self, hashes: dict[str, dict[str, int]] | None = None) -> None:
         self.hashes = hashes or {}
         self.strings: dict[str, str] = {}
         self.writes = 0
+        self.closed = 0
 
     def hgetall(self, key: str) -> dict[bytes, bytes]:
         return {f.encode(): str(v).encode() for f, v in self.hashes.get(key, {}).items()}
@@ -36,8 +40,11 @@ class FakeRedis:
         self.strings[key] = value
         return True
 
+    def delete(self, key: str) -> int:
+        return 1 if self.strings.pop(key, None) is not None else 0
+
     def close(self) -> None:
-        pass
+        self.closed += 1
 
 
 def _this_window() -> int:
@@ -68,8 +75,11 @@ def busy() -> FakeRedis:
     start = _this_window()
     return FakeRedis(
         {
-            window_key(start): {"example-workflow": 90, "other-workflow": 5},
-            window_key(start - WINDOW_SECONDS): {"example-workflow": 40, "third-workflow": 12},
+            window_key(TENANT, start): {"example-workflow": 90, "other-workflow": 5},
+            window_key(TENANT, start - WINDOW_SECONDS): {
+                "example-workflow": 40,
+                "third-workflow": 12,
+            },
         }
     )
 
@@ -95,7 +105,7 @@ def test_past_the_threshold_it_warns_with_the_count_and_top_workflows(monkeypatc
 
 
 def test_under_the_threshold_it_passes(monkeypatch):
-    client = FakeRedis({window_key(_this_window()): {"example-workflow": 100}})
+    client = FakeRedis({window_key(TENANT, _this_window()): {"example-workflow": 100}})
     sent = _with(monkeypatch, client)
     result = _run(make_ctx())
     assert result.status == "pass"
@@ -112,7 +122,7 @@ def test_nothing_deferred_passes(monkeypatch):
 
 def test_windows_older_than_the_look_back_are_not_counted(monkeypatch):
     old = _this_window() - deferred_runs.LOOKBACK_SECONDS - WINDOW_SECONDS
-    _with(monkeypatch, FakeRedis({window_key(old): {"example-workflow": 5000}}))
+    _with(monkeypatch, FakeRedis({window_key(TENANT, old): {"example-workflow": 5000}}))
     assert _run(make_ctx()).status == "pass"
 
 
@@ -161,3 +171,65 @@ def test_unreachable_redis_is_a_skip(monkeypatch):
     result = _run(make_ctx())
     assert result.status == "skip"
     assert "ConnectionError" in result.detail
+
+
+def _as_tenant(monkeypatch, tenant: str) -> None:
+    monkeypatch.setenv("ROBOTHOR_TENANT_ID", tenant)
+
+
+def test_a_doctor_reads_only_its_own_tenants_deferrals(monkeypatch):
+    start = _this_window()
+    shared = FakeRedis(
+        {
+            window_key("tenant-a", start): {"example-workflow": 3},
+            window_key("tenant-b", start): {"example-workflow": 500},
+        }
+    )
+    _with(monkeypatch, shared)
+    _as_tenant(monkeypatch, "tenant-a")
+    result = _run(make_ctx())
+    assert result.status == "pass"
+    assert "3 deferred" in result.detail
+
+    _as_tenant(monkeypatch, "tenant-b")
+    assert _run(make_ctx()).status == "fail"
+
+
+def test_each_tenant_gets_its_own_hourly_alert(monkeypatch):
+    start = _this_window()
+    shared = FakeRedis(
+        {
+            window_key("tenant-a", start): {"example-workflow": 500},
+            window_key("tenant-b", start): {"example-workflow": 500},
+        }
+    )
+    sent = _with(monkeypatch, shared)
+    _as_tenant(monkeypatch, "tenant-a")
+    _run(make_ctx())
+    _as_tenant(monkeypatch, "tenant-b")
+    _run(make_ctx())
+    assert sent.await_count == 2
+
+
+def test_an_alert_that_was_not_delivered_is_tried_again(monkeypatch, busy):
+    sent = _with(monkeypatch, busy)
+    sent.return_value = False
+    _run(make_ctx())
+    sent.return_value = True
+    _run(make_ctx())
+    _run(make_ctx())
+    assert sent.await_count == 2  # the failed send, its retry, then nothing
+
+
+def test_an_alert_that_raised_is_tried_again(monkeypatch, busy):
+    sent = _with(monkeypatch, busy)
+    sent.side_effect = [RuntimeError("no channel"), True]
+    _run(make_ctx())
+    _run(make_ctx())
+    assert sent.await_count == 2
+
+
+def test_the_store_client_is_closed(monkeypatch, busy):
+    _with(monkeypatch, busy)
+    _run(make_ctx())
+    assert busy.closed == 1

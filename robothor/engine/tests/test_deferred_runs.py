@@ -31,6 +31,8 @@ from robothor.engine.workflow import WorkflowEngine, parse_workflow
 STREAM = f"{STREAM_PREFIX}platform"
 EVENT = "platform.order.created"
 WORKFLOW = "example-workflow"
+#: The engine_config fixture's tenant.
+TENANT = "test-tenant"
 #: A wall-clock instant ten seconds into a minute window.
 WINDOW_START = 1_699_999_980
 T0 = WINDOW_START + 10
@@ -129,7 +131,7 @@ class _Harness:
         self.redis = FakeAsyncRedis()
         self.hooks = EventHooks(engine_config, MagicMock())
         self.hooks.workflow_engine = self.engine
-        self.hooks.deferred_runs = DeferredRuns(clock=self.clock)
+        self.hooks.deferred_runs = DeferredRuns(TENANT, clock=self.clock)
         self.requeued: list[dict[str, Any]] = []
         self.runs: list[Any] = []
         real_execute = self.engine.execute
@@ -180,7 +182,7 @@ class TestCountedPerWindow:
             h.clock.now = WINDOW_START + WINDOW_SECONDS + 1  # the window closes
             h.hooks.deferred_runs.flush()
 
-        assert h.redis.hashes[window_key(WINDOW_START)] == {WORKFLOW: 15}
+        assert h.redis.hashes[window_key(TENANT, WINDOW_START)] == {WORKFLOW: 15}
         assert _summaries(caplog) == [
             f"Workflow runs deferred by the tool-call rate limit: "
             f"workflow={WORKFLOW} deferred=15 window={_label(WINDOW_START)}"
@@ -228,7 +230,7 @@ class TestCountedPerWindow:
             f"Workflow runs deferred by the tool-call rate limit: "
             f"workflow={WORKFLOW} deferred=2 window={_label(WINDOW_START)}"
         ]
-        assert h.redis.hashes[window_key(WINDOW_START + WINDOW_SECONDS)] == {WORKFLOW: 1}
+        assert h.redis.hashes[window_key(TENANT, WINDOW_START + WINDOW_SECONDS)] == {WORKFLOW: 1}
 
     @pytest.mark.asyncio
     async def test_the_counter_outlives_the_doctors_look_back(
@@ -238,7 +240,7 @@ class TestCountedPerWindow:
 
         h = _Harness(engine_config, limit=1)
         await h.trigger(2)
-        ttl = h.redis.ttls[window_key(WINDOW_START)]
+        ttl = h.redis.ttls[window_key(TENANT, WINDOW_START)]
         assert ttl >= LOOKBACK_SECONDS + WINDOW_SECONDS
 
 
@@ -290,7 +292,7 @@ class TestCountedOnce:
             assert len(h.requeued) == 15  # still waiting, still requeued
             h.clock.now = WINDOW_START + WINDOW_SECONDS + 1
             h.hooks.deferred_runs.flush()
-        assert h.redis.hashes[window_key(WINDOW_START)] == {WORKFLOW: 15}
+        assert h.redis.hashes[window_key(TENANT, WINDOW_START)] == {WORKFLOW: 15}
         assert _summaries(caplog) == [
             f"Workflow runs deferred by the tool-call rate limit: "
             f"workflow={WORKFLOW} deferred=15 window={_label(WINDOW_START)}"
@@ -337,17 +339,49 @@ class TestRedisTrouble:
 class TestReadBack:
     def test_recent_deferrals_sums_the_windows_in_the_look_back(self):
         hashes = {
-            window_key(WINDOW_START): {WORKFLOW: 15, "other-workflow": 2},
-            window_key(WINDOW_START - WINDOW_SECONDS): {WORKFLOW: 5},
+            window_key(TENANT, WINDOW_START): {WORKFLOW: 15, "other-workflow": 2},
+            window_key(TENANT, WINDOW_START - WINDOW_SECONDS): {WORKFLOW: 5},
             # Older than an hour: outside the look-back.
-            window_key(WINDOW_START - 3600 - WINDOW_SECONDS): {WORKFLOW: 900},
+            window_key(TENANT, WINDOW_START - 3600 - WINDOW_SECONDS): {WORKFLOW: 900},
         }
-        counts = recent_deferrals(FakeSyncRedis(hashes), now=T0, lookback=3600)
+        counts = recent_deferrals(FakeSyncRedis(hashes), TENANT, now=T0, lookback=3600)
         assert counts == {WORKFLOW: 20, "other-workflow": 2}
 
     def test_reading_twice_reads_the_same_count(self):
-        hashes = {window_key(WINDOW_START): {WORKFLOW: 15}}
+        hashes = {window_key(TENANT, WINDOW_START): {WORKFLOW: 15}}
         client = FakeSyncRedis(hashes)
-        first = recent_deferrals(client, now=T0, lookback=3600)
-        second = recent_deferrals(client, now=T0, lookback=3600)
+        first = recent_deferrals(client, TENANT, now=T0, lookback=3600)
+        second = recent_deferrals(client, TENANT, now=T0, lookback=3600)
         assert first == second == {WORKFLOW: 15}
+
+
+class FakeSharedRedis(FakeAsyncRedis):
+    """One store that several tenants' engines and doctors share."""
+
+    def hgetall(self, key: str) -> dict[bytes, bytes]:
+        return FakeSyncRedis(self.hashes).hgetall(key)
+
+
+class TestOneStoreSeveralTenants:
+    @pytest.mark.asyncio
+    async def test_a_tenant_reads_only_its_own_deferrals(self):
+        shared = FakeSharedRedis()
+        engine_a = DeferredRuns("tenant-a", clock=_Clock(T0))
+        engine_b = DeferredRuns("tenant-b", clock=_Clock(T0))
+        for _ in range(3):
+            await engine_b.record("orders-sync", shared)
+        await engine_a.record("orders-sync", shared)
+
+        assert recent_deferrals(shared, "tenant-a", now=T0) == {"orders-sync": 1}
+        assert recent_deferrals(shared, "tenant-b", now=T0) == {"orders-sync": 3}
+
+    @pytest.mark.asyncio
+    async def test_the_engine_counts_under_its_own_tenant(
+        self, engine_config, limiter_clock, no_dedup
+    ):
+        h = _Harness(engine_config, limit=1)
+        h.hooks.deferred_runs = EventHooks(engine_config, MagicMock()).deferred_runs
+        await h.trigger(2)
+        (key,) = h.redis.hashes
+        assert key.startswith(window_key(TENANT, 0).rsplit(":", 1)[0] + ":")
+        assert h.redis.hashes[key] == {WORKFLOW: 1}
