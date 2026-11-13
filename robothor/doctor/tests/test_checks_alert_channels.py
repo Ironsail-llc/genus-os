@@ -149,3 +149,15 @@ def test_a_fallback_target_never_reaches_a_row(settings, channels) -> None:
     channels["email"] = FakeChannel("email", can_send=True)
     rows = _run(make_ctx())
     assert all("agent@example.com" not in row.detail for row in rows), rows
+
+
+def test_an_email_alert_target_that_is_a_person_id_is_reported(settings, channels) -> None:
+    """A CRM person id resolves through the database, which is what the most
+    important alert is about: an alert target has to be an address."""
+    settings(ROBOTHOR_ALERT_FALLBACK_CHANNELS="email:00000000-0000-4000-8000-000000000001")
+    channels["email"] = FakeChannel("email", can_send=True)
+    rows = _run(make_ctx())
+    assert any(
+        row.status == "fail" and row.sub_id == "email" and "address" in row.detail for row in rows
+    ), rows
+    assert any("no alert channel can deliver" in row.detail for row in rows), rows

@@ -348,3 +348,88 @@ def test_the_fallback_list_parses_in_order() -> None:
         f" email:{FALLBACK_TARGET} , slack:C0123456,, plugin-pager:team-a "
     ) == [("email", FALLBACK_TARGET), ("slack", "C0123456"), ("plugin-pager", "team-a")]
     assert alerts.parse_fallback_channels("") == []
+
+
+# ── the real email channel, with the database down ──────────────────────────
+#
+# The alert most worth delivering is the one about the database. The email
+# channel reads its opt-out list from that database before every send, so the
+# fallback must not depend on the list being readable for an operator-configured
+# alert target, while an ordinary outbound mail still refuses to send unread.
+
+
+class _RecordingSMTP:
+    def __init__(self) -> None:
+        self.messages: list[Any] = []
+
+    def __call__(self, host: str, port: int, *, timeout: float = 30.0) -> _RecordingSMTP:
+        return self
+
+    def starttls(self) -> None:
+        return
+
+    def login(self, user: str, password: str) -> None:
+        return
+
+    def send_message(self, message: Any) -> dict[str, Any]:
+        self.messages.append(message)
+        return {}
+
+    def quit(self) -> None:
+        return
+
+
+@pytest.fixture
+def email_with_db_down(monkeypatch, configure):
+    """The real EmailChannel over a recording SMTP server, database unreachable."""
+    import psycopg2
+
+    from robothor.engine.channels import email as email_module
+    from robothor.engine.channels import registry
+
+    monkeypatch.setenv("ROBOTHOR_EMAIL_SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("ROBOTHOR_EMAIL_FROM", "agent@example.com")
+    configure(fallback=f"email:{FALLBACK_TARGET}")
+
+    def database_down(*_a: Any, **_kw: Any) -> set[str]:
+        raise psycopg2.OperationalError("connection refused")
+
+    monkeypatch.setattr(email_module, "_opt_out_lookup", database_down)
+    monkeypatch.setattr(email_module, "_dnc_mode", lambda: "enforce")
+
+    smtp = _RecordingSMTP()
+    channel = email_module.EmailChannel()
+    channel.gws_probe = lambda: False
+    channel.smtp_factory = smtp
+    monkeypatch.setattr(registry, "get_channel", lambda name: channel if name == "email" else None)
+    return channel, smtp
+
+
+@pytest.mark.asyncio
+async def test_a_database_down_alert_still_reaches_the_email_fallback(
+    email_with_db_down, no_telegram, notification_rows
+):
+    _channel, smtp = email_with_db_down
+
+    delivered = await alerts.alert("critical", "Database down", "3 failed pings")
+
+    assert delivered is True, "the alert about the database was blocked by the database"
+    assert len(smtp.messages) == 1
+    assert smtp.messages[0]["To"] == FALLBACK_TARGET
+
+
+@pytest.mark.asyncio
+async def test_ordinary_mail_still_refuses_when_the_opt_out_list_is_unreadable(
+    email_with_db_down,
+):
+    from types import SimpleNamespace
+
+    from robothor.engine.channels.email import STATUS_DNC_UNREADABLE
+
+    channel, smtp = email_with_db_down
+    run = SimpleNamespace(id="", tenant_id="test-tenant", is_benchmark=False)
+
+    receipt = await channel.send("bob@example.com", "hello", run=run)
+
+    assert receipt.status == STATUS_DNC_UNREADABLE
+    assert smtp.messages == [], "an ordinary send went out with the opt-out list unread"
