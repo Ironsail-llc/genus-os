@@ -694,3 +694,78 @@ def test_every_reason_code_is_a_fixed_engine_code() -> None:
         "other",
         call_log.WOULD_HAVE_DONE_REASON,
     } <= set(call_log.REASONS)
+
+
+# ── a tool_call whose wrapped tool times out ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_wrapped_tool_that_times_out_is_logged_once_as_a_timeout(handlers, lines) -> None:
+    """The wrapped call ends cancelled when the wrapper's deadline fires; the
+    one line must say timeout, under the wrapped tool's name."""
+    from robothor.engine.tools.dispatch import clear_deferred_allowed, set_deferred_allowed
+    from robothor.engine.tools.handlers.toolsearch import _tool_call
+
+    async def slow(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
+        await asyncio.sleep(5)
+        return {"ok": True}
+
+    handlers[TOOL] = slow
+    handlers["tool_call"] = _tool_call
+    token = set_deferred_allowed(frozenset({TOOL}))
+    try:
+        result = await _call("tool_call", {"name": TOOL, "arguments": {}}, timeout=0.05)
+    finally:
+        clear_deferred_allowed(token)
+
+    assert "timed out" in result["error"]
+    assert [(line.tool, line.outcome, line.reason) for line in lines] == [
+        (TOOL, "error", "timeout")
+    ]
+
+
+# ── the message is never read on the hot path ─────────────────────────
+
+
+class _Untouchable(str):
+    """A message that records every way its content is read.
+
+    Its length is not counted: telling an empty error from a present one is a
+    constant-time check that reads none of the text."""
+
+    reads: list[str] = []
+
+    def __new__(cls, size: int) -> _Untouchable:
+        return super().__new__(cls, "x" * size)
+
+    def __getattribute__(self, name: str) -> Any:
+        if not name.startswith("__") or name in ("__str__", "__contains__", "__iter__"):
+            _Untouchable.reads.append(name)
+        return super().__getattribute__(name)
+
+    def __str__(self) -> str:
+        _Untouchable.reads.append("__str__")
+        return str.__str__(self)
+
+
+class _LoudError(Exception):
+    def __str__(self) -> str:
+        _Untouchable.reads.append("exception.__str__")
+        return "x" * 3_000_000
+
+
+def test_a_multi_megabyte_error_is_never_read_by_the_log_line(handlers, lines) -> None:
+    from robothor.engine.tools import call_log
+
+    _Untouchable.reads.clear()
+    big = _Untouchable(3_000_000)
+    args = {"items": [f"value-{i:05d}" for i in range(2000)]}
+
+    call, token = call_log.begin(TOOL, args, agent_id=AGENT, run_id="run-1")
+    call_log.note_failure("tool_error", _LoudError())
+    call_log.finish(call, token, {"error": big})
+    call, token = call_log.begin(TOOL, args, agent_id=AGENT, run_id="run-1")
+    call_log.finish(call, token, None, _LoudError())
+
+    assert [line.reason for line in lines] == ["tool_error", "tool_error"]
+    assert _Untouchable.reads == []
