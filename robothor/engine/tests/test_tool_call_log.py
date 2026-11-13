@@ -2,7 +2,7 @@
 
 What an agent did has to be reconstructable from the engine's logs alone: the
 tool, who called it (an agent, or a workflow and its run), the outcome, a
-short reason when it was not ``ok``, and how long it took. Every path a call
+fixed reason code when it was not ``ok``, and how long it took. Every path a call
 can take ends in exactly one ``event=tool_call`` line: a handler that answers,
 one that raises, the RBAC gate, an admission gate (plan mode, human approval),
 an unknown tool, a timeout, a workflow ``tool`` step, a proxied call from
@@ -153,7 +153,7 @@ async def test_a_tool_that_raises_logs_an_error_line_with_the_error_class(handle
     assert "error" in result
     assert len(lines) == 1
     assert lines[0].outcome == "error"
-    assert "ValueError" in lines[0].reason
+    assert (lines[0].reason, lines[0].error_class) == ("tool_error", "ValueError")
 
 
 @pytest.mark.asyncio
@@ -161,8 +161,12 @@ async def test_an_unknown_tool_logs_an_error_line(handlers, lines) -> None:
     await _call("no_such_tool")
 
     assert len(lines) == 1
-    assert (lines[0].tool, lines[0].outcome) == ("no_such_tool", "error")
-    assert "Unknown tool" in lines[0].reason
+    # The name is the model's text, not a registered tool: it is not logged.
+    assert (lines[0].tool, lines[0].outcome, lines[0].reason) == (
+        "unknown",
+        "error",
+        "unknown_tool",
+    )
 
 
 @pytest.mark.asyncio
@@ -178,7 +182,7 @@ async def test_a_timeout_logs_an_error_line_naming_the_timeout(handlers, lines) 
     assert "timed out" in result["error"]
     assert len(lines) == 1
     assert lines[0].outcome == "error"
-    assert "TimeoutError" in lines[0].reason
+    assert lines[0].reason == "timeout"
 
 
 # ── 3. refused by permissions ─────────────────────────────────────────
@@ -199,7 +203,7 @@ async def test_a_call_refused_by_permissions_logs_a_refused_line(
     assert result.get("refused") is True
     assert len(lines) == 1
     assert lines[0].outcome == "refused"
-    assert f"Role 'viewer' denied '{TOOL}'" in lines[0].reason
+    assert lines[0].reason == "permission_denied"
 
 
 @pytest.mark.asyncio
@@ -218,7 +222,7 @@ async def test_a_runtime_denial_logs_a_refused_line(handlers, lines, monkeypatch
     await _call()
 
     assert len(lines) == 1
-    assert lines[0].outcome == "refused"
+    assert (lines[0].outcome, lines[0].reason) == ("refused", "runtime_denied")
 
 
 # ── 4. a write recorded as "would have done" ──────────────────────────
@@ -274,7 +278,7 @@ async def test_an_error_that_quotes_an_argument_does_not_carry_it_into_the_line(
     await _call(args={"note": "secret-value-123"})
 
     assert len(lines) == 1
-    assert "ValueError" in lines[0].reason
+    assert lines[0].error_class == "ValueError"
     assert "secret-value-123" not in lines[0].getMessage()
     assert "secret-value-123" not in lines[0].reason
 
@@ -348,7 +352,8 @@ async def test_a_workflow_step_blocked_by_a_guardrail_logs_a_refused_line(
         run.id,
         "refused",
     )
-    assert "not on this path" in lines[0].reason
+    assert lines[0].reason == "guardrail"
+    assert "not on this path" not in lines[0].getMessage()
 
 
 # ── 7. retries: one line per attempt ──────────────────────────────────
@@ -475,19 +480,23 @@ async def _admit(*, readonly_mode: bool = False, guardrail_engine: Any = None) -
 
 
 @pytest.mark.asyncio
-async def test_a_plan_mode_refusal_at_admission_logs_a_refused_line(lines) -> None:
+async def test_a_plan_mode_refusal_at_admission_logs_a_refused_line(handlers, lines) -> None:
+    handlers[TOOL] = _ok()
     verdict = await _admit(readonly_mode=True)
 
     assert verdict.allowed is False
     assert len(lines) == 1
     line = lines[0]
     assert (line.tool, line.agent, line.run_id, line.outcome) == (TOOL, AGENT, "run-1", "refused")
-    assert "plan mode" in line.reason
+    assert line.reason == "plan_mode"
     assert "secret-value-123" not in line.getMessage()
 
 
 @pytest.mark.asyncio
-async def test_an_approval_the_operator_refuses_logs_a_refused_line(lines, monkeypatch) -> None:
+async def test_an_approval_the_operator_refuses_logs_a_refused_line(
+    handlers, lines, monkeypatch
+) -> None:
+    handlers[TOOL] = _ok()
     from robothor.engine import tool_admission
     from robothor.engine.guardrails import GuardrailEngine
 
@@ -510,7 +519,7 @@ async def test_an_approval_the_operator_refuses_logs_a_refused_line(lines, monke
     assert verdict.allowed is False
     assert len(lines) == 1
     assert lines[0].outcome == "refused"
-    assert "Denied by operator" in lines[0].reason
+    assert lines[0].reason == "approval_refused"
 
 
 @pytest.mark.asyncio
@@ -523,8 +532,9 @@ async def test_an_admitted_call_logs_nothing_at_admission(lines) -> None:
 
 @pytest.mark.asyncio
 async def test_a_proxied_call_over_the_snippet_cap_logs_a_refused_line(
-    engine_config, lines
+    engine_config, handlers, lines
 ) -> None:
+    handlers[TOOL] = _ok()
     from robothor.engine.models import AgentConfig, DeliveryMode
     from robothor.engine.runner import AgentRunner
     from robothor.engine.session import AgentSession
@@ -558,7 +568,12 @@ async def test_a_proxied_call_over_the_snippet_cap_logs_a_refused_line(
     assert "limit reached" in result["error"]
     registry.execute.assert_not_awaited()
     assert len(lines) == 1
-    assert (lines[0].tool, lines[0].agent, lines[0].outcome) == (TOOL, AGENT, "refused")
+    assert (lines[0].tool, lines[0].agent, lines[0].outcome, lines[0].reason) == (
+        TOOL,
+        AGENT,
+        "refused",
+        "snippet_cap",
+    )
 
 
 def test_every_line_has_the_documented_fields() -> None:
@@ -580,4 +595,101 @@ async def test_an_action_whose_outcome_is_pending_logs_a_deferred_line(handlers,
 
     assert len(lines) == 1
     assert lines[0].outcome == "deferred"
-    assert "pending" in lines[0].reason
+    assert lines[0].reason == "pending"
+
+
+# ── the reason is a fixed code, never text from a tool or a service ───
+
+
+REMOTE_TEXT = "HTTP 422 from the service: record for Alice Example, born 1980-01-02"
+
+
+@pytest.mark.asyncio
+async def test_no_text_from_the_tool_or_a_remote_service_reaches_the_line(
+    handlers, lines, caplog
+) -> None:
+    """An argument echoed in another case, a number, a JSON-escaped value and a
+    remote service's error body: none of it may reach the line."""
+    args = {"name": "Bob Sample", "phone": 5550100199, "note": "O'Brien \u00e9t\u00e9"}
+
+    async def chatty(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
+        raise RuntimeError(
+            f"no match for {args['name'].upper()}; invalid phone {args['phone']}; "
+            '{"note":"O\\u0027Brien \\u00e9t\\u00e9"}; ' + REMOTE_TEXT
+        )
+
+    handlers[TOOL] = chatty
+
+    await _call(args=args)
+
+    assert len(lines) == 1
+    line = lines[0]
+    assert (line.outcome, line.reason, line.error_class) == ("error", "tool_error", "RuntimeError")
+    for leaked in ("BOB SAMPLE", "Bob Sample", "5550100199", "Brien", "u00e9", "Alice", "1980"):
+        assert leaked not in line.getMessage(), leaked
+        for field in ("tool", "agent", "run_id", "outcome", "reason", "duration_ms"):
+            assert leaked not in str(getattr(line, field, "")), (leaked, field)
+    assert "HTTP 422" not in line.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_an_error_result_carrying_service_text_logs_only_a_code(handlers, lines) -> None:
+    handlers[TOOL] = _ok({"error": REMOTE_TEXT})
+
+    await _call()
+
+    assert (lines[0].outcome, lines[0].reason) == ("error", "tool_error")
+    assert "Alice" not in lines[0].getMessage()
+    assert not hasattr(lines[0], "error_class")
+
+
+@pytest.mark.asyncio
+async def test_a_wrapped_name_that_is_not_a_registered_tool_is_logged_as_unknown(
+    handlers, lines, monkeypatch
+) -> None:
+    from robothor.engine.tools.dispatch import clear_deferred_allowed, set_deferred_allowed
+    from robothor.engine.tools.handlers import toolsearch
+    from robothor.engine.tools.handlers.toolsearch import _tool_call
+
+    monkeypatch.setattr(toolsearch, "_closest", lambda *a, **k: [])
+    handlers["tool_call"] = _tool_call
+    token = set_deferred_allowed(frozenset({TOOL}))
+    try:
+        await _call("tool_call", {"name": "Alice Example", "arguments": {}})
+    finally:
+        clear_deferred_allowed(token)
+
+    assert len(lines) == 1
+    assert lines[0].tool == "unknown"
+    assert "Alice" not in lines[0].getMessage()
+
+
+def test_a_reason_outside_the_closed_set_is_never_written(lines) -> None:
+    from robothor.engine.tools import call_log
+
+    call_log.emit(TOOL, agent_id=AGENT, run_id="run-1", outcome="error", reason=REMOTE_TEXT)
+
+    assert lines[0].reason == "other"
+    assert "Alice" not in lines[0].getMessage()
+
+
+def test_every_reason_code_is_a_fixed_engine_code() -> None:
+    from robothor.engine.tools import call_log
+
+    assert {
+        "timeout",
+        "permission_denied",
+        "approval_refused",
+        "not_allowed",
+        "plan_mode",
+        "guardrail",
+        "rate_limited",
+        "runtime_denied",
+        "snippet_cap",
+        "unknown_tool",
+        "validation",
+        "tool_error",
+        "pending",
+        "other",
+        call_log.WOULD_HAVE_DONE_REASON,
+    } <= set(call_log.REASONS)
