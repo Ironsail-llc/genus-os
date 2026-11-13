@@ -288,8 +288,9 @@ async def test_an_error_that_quotes_an_argument_does_not_carry_it_into_the_line(
 
 @pytest.mark.asyncio
 async def test_a_workflow_tool_step_logs_the_workflow_and_its_run_id(
-    engine_config, lines, monkeypatch
+    engine_config, handlers, lines, monkeypatch
 ) -> None:
+    handlers[TOOL] = _ok()  # a registered tool, so its name is logged
     from robothor.engine.models import (
         WorkflowRun,
         WorkflowStepDef,

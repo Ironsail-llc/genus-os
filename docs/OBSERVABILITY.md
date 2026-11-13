@@ -211,17 +211,18 @@ event=tool_call tool=example_tool agent=example-agent run_id=<id> outcome=ok dur
 | Field | Meaning |
 |-------|---------|
 | `event` | Always `tool_call`. |
-| `tool` | The tool that ran or was refused. A `tool_call` wrapper is logged as the tool it wraps, once. |
+| `tool` | The tool that ran or was refused, when it names a registered tool; otherwise `unknown` (a name the model made up, inside a `tool_call` or not, is not logged). A `tool_call` wrapper is logged as the tool it wraps, once. |
 | `agent` | The calling agent's id. Absent on a workflow step. |
 | `workflow` | The workflow's id, for a workflow `tool` step. Takes the place of `agent`. |
 | `run_id` | The agent run, or for a workflow step the workflow run. |
-| `outcome` | `ok`, `error` (the tool failed, raised, timed out or is unknown), `refused` (a gate declined it: RBAC, plan mode, the manifest's tools, a hook, a guardrail, an operator's approval, a durable stop, a snippet cap) or `deferred` (the action's outcome is pending, `outcome_unknown`). |
-| `reason` | Empty on a plain `ok`. Otherwise the error class and a short message, or the refusal's message, redacted, at most 200 characters, with any argument value it quotes replaced by `[argument]`. A write the tool recorded instead of making because no write connection is configured (`would_have_done: true` in its result) is `ok` with `reason="no write connection: would have done"`. |
+| `outcome` | `ok`, `error` (the tool failed, raised, timed out or is unknown), `refused` (a gate declined it) or `deferred` (the action's outcome is pending, `outcome_unknown`). |
+| `reason` | A fixed code, never message text: empty on a plain `ok`; `no write connection: would have done` for a write the tool recorded instead of making (`would_have_done: true` in its result); otherwise one of `timeout`, `cancelled`, `permission_denied`, `approval_refused`, `not_allowed`, `plan_mode`, `wrap_up`, `hook`, `guardrail`, `rate_limited`, `policy`, `disabled`, `runtime_denied`, `repeat_guard`, `sandbox`, `snippet_cap`, `unknown_tool`, `validation` (a bad call, such as a missing argument), `backing_service`, `tool_error`, `pending`, or `other`. |
+| `error_class` | Present only when an exception was caught: its class name, such as `ValueError`. Never its message. |
 | `duration_ms` | Wall time of the call, admission included for a refusal. |
 
 The same fields are on the log record as attributes. A retried call writes one
-line per attempt. The arguments and the result are never logged, not even
-redacted. Writing the line cannot fail the call: if the logger raises, the call
+line per attempt. The arguments, the result and any message text from a
+tool or a service it called are never logged, not even redacted. Writing the line cannot fail the call: if the logger raises, the call
 completes and one ERROR line on the same logger says the line was lost.
 
 ## Workflow runs, step by step

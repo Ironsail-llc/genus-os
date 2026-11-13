@@ -1444,8 +1444,7 @@ class WorkflowEngine:
                 agent_id=f"workflow:{run.workflow_id}",
                 run_id=run.id,
                 outcome="refused",
-                reason=result.error_message,
-                arguments=rendered_args,
+                reason=call_log.guardrail_reason(gr.guardrail_name),
             )
             return
 
