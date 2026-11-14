@@ -156,6 +156,7 @@ class TestEffectiveSessionKeyEnforce:
 
     def test_short_key_falls_back_to_default_agent(self, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
+        monkeypatch.setattr("robothor.engine.chat._config", None)
         auth = _member_auth(user_id="bob")
         # No colon-separated agent segment — fall back to default_chat_agent ("main"
         # when _config is None, matching the same fallback the rest of chat.py uses).

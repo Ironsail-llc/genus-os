@@ -1335,6 +1335,34 @@ class EngineSettings(SettingsGroup):
         "instance's dev interpreter, since runtime releases omit pytest. Empty "
         "means <workspace>/venv/bin/python.",
     )
+    deferred_runs_warn_threshold: int = declare(
+        100,
+        "ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD",
+        "How many hook workflow runs the tool-call rate limit may defer in the "
+        "last hour before genus doctor's deferred_runs.recent check warns. Past "
+        "it the check also sends a warning-level alert, which becomes an "
+        "alert-digest row and does not page, at most once an hour. The count is "
+        "summed over every workflow; the warning names the workflows that "
+        "deferred most.",
+        restart_required=False,
+        restart_units=(),
+        since="unreleased",
+    )
+    deferred_runs_page_threshold: int = declare(
+        500,
+        "ROBOTHOR_DEFERRED_RUNS_PAGE_THRESHOLD",
+        "How many hook workflow runs the tool-call rate limit may defer in the "
+        "last hour before genus doctor's deferred_runs.recent check sends a "
+        "critical alert. From the doctor's own process that reaches a person "
+        "only when an alert channel can deliver outside the engine daemon; "
+        "otherwise it is recorded as an undelivered alert (an alert_fallback "
+        "notification row). One attempt an hour, or every ten minutes while "
+        "undelivered. Never lower than ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD: a smaller value "
+        "is read as that threshold.",
+        restart_required=False,
+        restart_units=(),
+        since="unreleased",
+    )
 
 
 # ---------------------------------------------------------------------------
