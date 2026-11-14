@@ -10,8 +10,14 @@ until the requeue budget runs out and events reach the dead-letter stream.
 It alerts in two tiers, following :mod:`robothor.engine.alerts`, where only
 ``critical`` pages and ``warning`` becomes an alert-digest row: past the warn
 threshold a ``warning`` alert, past ``ROBOTHOR_DEFERRED_RUNS_PAGE_THRESHOLD``
-(never below the warn threshold) a ``critical`` one. Each tier alerts at most
-once per look-back period, counted from its last alert.
+(never below the warn threshold) a ``critical`` one. ``critical`` goes to the
+Telegram sender, which only the engine daemon registers, so from the doctor's
+own process a page reaches a person only where an alert channel can deliver
+outside the daemon; otherwise it is recorded as an undelivered alert and the
+failing check is the signal. Each tier makes at most one attempt per look-back
+period, counted from its last attempt, and an attempt that was not delivered is
+retried after :data:`ALERT_RETRY_SECONDS`. The detail line says what happened
+to the page.
 """
 
 from __future__ import annotations
@@ -45,40 +51,81 @@ def _client(ctx: DoctorContext) -> Any:
     return client(ctx)
 
 
+#: How long an attempt that was not delivered holds the lock before the next
+#: run may try again. Ten minutes: a doctor run every minute writes at most six
+#: undelivered-alert rows an hour instead of sixty, and a channel that was down
+#: for a moment is retried well inside the hour rather than after it.
+ALERT_RETRY_SECONDS = 600
+
+#: What :func:`_alert_once` found, for the check's detail line.
+DELIVERED = "delivered"
+ALREADY_SENT = "already sent"
+NOT_DELIVERED = "not delivered"
+FAILED = "failed"
+
+#: The lock's value once an attempt was not delivered.
+_UNDELIVERED = "undelivered"
+
+
 async def _alert_once(
     ctx: DoctorContext, client: Any, tenant_id: str, level: str, title: str, body: str
-) -> None:
-    """Send the alert at ``level``, once per tenant and level per look-back period.
+) -> str:
+    """Send the alert at ``level``: at most one attempt per tenant and level a period.
 
-    The tenant's lock for the level is claimed before sending, with the period
-    as its TTL, so two doctors never both send and the period runs from this
-    alert rather than from the clock hour. It is released again when the alert
-    was not delivered, so the next run tries again instead of waiting it out.
-    A warning already sent does not hold back a critical alert: each level has
-    its own lock.
+    The tenant's lock for the level is claimed before sending, with the
+    look-back period as its TTL, so two doctors never both send and the period
+    runs from this attempt rather than from the clock hour. The lock is never
+    released: an attempt that was not delivered keeps it with the shorter
+    :data:`ALERT_RETRY_SECONDS` TTL, so the next attempt comes after that and
+    not on every run. A warning already sent does not hold back a critical
+    alert: each level has its own lock.
+
+    Returns :data:`DELIVERED`; :data:`ALREADY_SENT` when a delivered alert
+    holds the lock; :data:`NOT_DELIVERED` when this attempt, or one still
+    holding the short lock, was not delivered; :data:`FAILED` when the lock
+    could not be taken.
     """
     from robothor.engine import alerts
 
     lock = alert_lock_key(tenant_id, level)
     try:
         claimed = await ctx.run_blocking(
-            lambda: client.set(lock, "1", nx=True, ex=LOOKBACK_SECONDS)
+            lambda: client.set(lock, "sent", nx=True, ex=LOOKBACK_SECONDS)
         )
+        if not claimed:
+            held = await ctx.run_blocking(lambda: client.get(lock))
+            held = held.decode() if isinstance(held, bytes) else held
+            return NOT_DELIVERED if held == _UNDELIVERED else ALREADY_SENT
     except Exception as exc:  # noqa: BLE001 - the printed warning still stands
         logger.warning("doctor: could not send the deferred-runs alert: %s", exc)
-        return
-    if not claimed:
-        return
+        return FAILED
     delivered = False
     try:
         delivered = bool(await alerts.alert(level, title, body))
     except Exception as exc:  # noqa: BLE001 - the printed warning still stands
         logger.warning("doctor: could not send the deferred-runs alert: %s", exc)
-    if not delivered:
-        try:
-            await ctx.run_blocking(lambda: client.delete(lock))
-        except Exception as exc:  # noqa: BLE001 - the lock expires on its own
-            logger.warning("doctor: could not release the deferred-runs alert lock: %s", exc)
+    if delivered:
+        return DELIVERED
+    try:
+        await ctx.run_blocking(lambda: client.set(lock, _UNDELIVERED, ex=ALERT_RETRY_SECONDS))
+    except Exception as exc:  # noqa: BLE001 - the full-period lock still stands
+        logger.warning("doctor: could not shorten the deferred-runs alert lock: %s", exc)
+    return NOT_DELIVERED
+
+
+def _page_note(outcome: str) -> str:
+    """What happened to the page, for the detail line."""
+    if outcome == DELIVERED:
+        return "page sent"
+    if outcome == ALREADY_SENT:
+        return "page already sent this hour"
+    if outcome == NOT_DELIVERED:
+        return (
+            "page not delivered from this process: no alert channel here can deliver "
+            "it, so it is recorded as an undelivered alert (an alert_fallback "
+            f"notification row); tried again after {ALERT_RETRY_SECONDS // 60} minutes"
+        )
+    return "page not sent: the alert lock could not be taken"
 
 
 async def _recent(ctx: DoctorContext) -> Result:
@@ -91,7 +138,7 @@ async def _recent(ctx: DoctorContext) -> Result:
     what feeds their stream. The engine log has one summary line per workflow
     per minute: search it for ``deferred=``. Past the warn threshold the check
     also sends a warning alert (an alert-digest row); past the page threshold
-    a critical alert, which pages. Each at most once an hour.
+    a critical alert, and the detail line says whether it was delivered.
     """
     threshold = int(ctx.settings.engine.deferred_runs_warn_threshold)
     page_threshold = max(threshold, int(ctx.settings.engine.deferred_runs_page_threshold))
@@ -128,9 +175,11 @@ async def _verdict(
     if level == "critical":
         detail += f" (past the page threshold {page_threshold})"
     if not ctx.dry_run:
-        await _alert_once(
+        outcome = await _alert_once(
             ctx, client, tenant_id, level, "Workflow runs deferred by the rate limit", detail
         )
+        if level == "critical":
+            detail += f"; {_page_note(outcome)}"
     return fail(detail)
 
 

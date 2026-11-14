@@ -283,8 +283,11 @@ hour and warns, naming the workflows that deferred most, once the total passes
 `ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD` (default 100). Past that it sends a
 `warning` alert, a row in the alert digest that does not page; past
 `ROBOTHOR_DEFERRED_RUNS_PAGE_THRESHOLD` (default 500) it sends a `critical`
-alert, which pages. Each at most once an hour; see
-[Deployment](deployment.md#what-it-checks). The per-run line ("deferred:
+alert. From the doctor's own process that reaches a person only when an alert
+channel can deliver outside the engine daemon; otherwise it is recorded as an
+undelivered alert (an `alert_fallback` notification row) and the failing check
+is the signal. Each at most once an hour, an undelivered page every ten
+minutes; see [Deployment](deployment.md#what-it-checks). The per-run line ("deferred:
 tool-call rate limit reached") is still there at debug level.
 A run resumed after an approval step always waits.
 

@@ -1353,8 +1353,11 @@ class EngineSettings(SettingsGroup):
         "ROBOTHOR_DEFERRED_RUNS_PAGE_THRESHOLD",
         "How many hook workflow runs the tool-call rate limit may defer in the "
         "last hour before genus doctor's deferred_runs.recent check sends a "
-        "critical alert, which pages the alert channel, at most once an hour. "
-        "Never lower than ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD: a smaller value "
+        "critical alert. From the doctor's own process that reaches a person "
+        "only when an alert channel can deliver outside the engine daemon; "
+        "otherwise it is recorded as an undelivered alert (an alert_fallback "
+        "notification row). One attempt an hour, or every ten minutes while "
+        "undelivered. Never lower than ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD: a smaller value "
         "is read as that threshold.",
         restart_required=False,
         restart_units=(),
