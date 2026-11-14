@@ -309,16 +309,19 @@ class TestFirstStepDefers:
         assert engine._persist_step_start.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_a_deferral_is_logged_once(self, engine_config, clock, no_dedup, caplog):
+    async def test_a_deferral_is_logged_at_debug_only(self, engine_config, clock, no_dedup, caplog):
+        # A burst defers thousands of runs; each is counted and summarised
+        # once per window (test_deferred_runs.py), so its own line is debug.
         import logging
 
         engine = _engine(engine_config, _definition(rate_limit_per_minute=1))
         await _run(engine, requeue=True)
-        with caplog.at_level(logging.INFO, logger="robothor.engine.workflow"):
+        with caplog.at_level(logging.DEBUG, logger="robothor.engine.workflow"):
             await _run(engine, requeue=True)
         lines = [r for r in caplog.records if "deferred" in r.getMessage()]
         assert len(lines) == 1
         assert "order-flow" in lines[0].getMessage()
+        assert lines[0].levelno == logging.DEBUG
 
     @pytest.mark.asyncio
     async def test_a_parallel_first_step_waits_not_defers(

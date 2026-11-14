@@ -27,8 +27,10 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.config import ROOT_EVENT_GROUP
 from robothor.engine.dedup import release, try_acquire
+from robothor.engine.deferrals import DeferredRuns
 from robothor.engine.delivery import deliver
 from robothor.engine.models import RunStatus, TriggerType
 from robothor.engine.task_registry import get_task_registry
@@ -48,6 +50,9 @@ MAX_BUSY_REQUEUES = 80
 RETRY_AGENTS_FIELD = "_retry_agents"
 # A busy workflow's requeued copy names the workflows it is for, and no agents.
 RETRY_WORKFLOWS_FIELD = "_retry_workflows"
+# Set on a copy requeued because the tool-call rate limit deferred its run, so
+# a retry deferred again is not counted as another deferred run.
+RATE_DEFERRED_FIELD = "_rate_deferred"
 
 # Events handled at once. Each event runs off the consumer loop, so a long
 # agent run holds up only later events for that same agent.
@@ -319,6 +324,8 @@ class EventHooks:
         self._tree_failures = 0
         # Set while this engine holds the root group; its refresh task reads it.
         self._holds_root_group = False
+        # Workflow runs the tool-call rate limit deferred, counted per window.
+        self.deferred_runs = DeferredRuns(getattr(config, "tenant_id", "") or DEFAULT_TENANT)
 
     def _owns_event(self, decoded: dict[str, Any]) -> bool:
         """Whether this engine's tenant is the one the event belongs to.
@@ -821,6 +828,7 @@ class EventHooks:
                     count=5,
                     block=int(os.environ.get("EVENT_BUS_BLOCK_MS", "2000")),
                 )
+                self.deferred_runs.flush()
                 if not results:
                     continue
 
@@ -1167,13 +1175,23 @@ class EventHooks:
             return
         if not run.rate_limited and not _requeues_when_busy(wf, stream, event_type):
             return
+        if run.rate_limited and not envelope.get(RATE_DEFERRED_FIELD):
+            await self.deferred_runs.record(workflow_id, redis_client)
         busy_count = int(envelope.get("_busy_requeue_count", "0"))
         busy_data = {k: v for k, v in envelope.items() if k != RETRY_AGENTS_FIELD}
         busy_data[RETRY_WORKFLOWS_FIELD] = workflow_id
+        if run.rate_limited:
+            busy_data[RATE_DEFERRED_FIELD] = "1"
         if busy_count < MAX_BUSY_REQUEUES:
             reason = "rate limited" if run.rate_limited else "busy"
-            logger.info(
-                "Requeueing %s:%s — workflow %s %s", stream, event_type, workflow_id, reason
+            # A rate-limited requeue is summarised per window by deferred_runs.
+            logger.log(
+                logging.DEBUG if run.rate_limited else logging.INFO,
+                "Requeueing %s:%s — workflow %s %s",
+                stream,
+                event_type,
+                workflow_id,
+                reason,
             )
             busy_data["_busy_requeue_count"] = str(busy_count + 1)
             await self._delayed_requeue(
