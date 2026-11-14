@@ -627,6 +627,13 @@ target is sent even when the opt-out list cannot be read (the email channel
 logs a warning); a readable list that flags the address still refuses it, and
 every other email send still refuses with the list unread.
 
+The email fallback counts the `gws` CLI as a transport only when it is
+installed **and** signed in; a binary with no credential is ignored, so a
+configured SMTP server is used instead, and `alerts.delivery` fails naming the
+missing sign-in when there is no SMTP either. An alert whose first email
+transport fails at send time (a revoked sign-in, say) is tried once on the next
+one this instance has, and the engine logs which transport failed.
+
 An alert raised with an `alert_id` and delivered once is not sent again for
 the same id inside `ROBOTHOR_ALERT_COOLDOWN_SECONDS`. A repeat of an alert that
 was **not** delivered is a retry, so it is never suppressed. Alerts raised

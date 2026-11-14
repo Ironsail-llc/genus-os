@@ -320,9 +320,8 @@ async def _email(ctx: DoctorContext) -> Result:
     Health panel refreshes is not a diagnostic. The SMTP session it does open
     is skipped under ``--offline``.
     """
-    from robothor.engine.channels.email import cleartext_login_refusal
+    from robothor.engine.channels.email import cleartext_login_refusal, gws_usable
     from robothor.engine.channels.email_credentials import SMTP_PASSWORD_ENV, email_credentials
-    from robothor.engine.tools.handlers.gws import gws_available
 
     channels = ctx.settings.channels
     host = (channels.email_smtp_host or "").strip()
@@ -334,7 +333,8 @@ async def _email(ctx: DoctorContext) -> Result:
     # presence (or absence) says nothing; Microsoft Graph is proved by
     # workspace.m365_connection. SMTP, if configured, is still policed below.
     microsoft365 = ctx.settings.workspace.workspace_provider == "microsoft365"
-    gws = False if microsoft365 else bool(await ctx.run_blocking(gws_available))
+    # Installed AND signed in: the same rule the channel picks its transport by.
+    gws = False if microsoft365 else bool(await ctx.run_blocking(gws_usable))
 
     mailbox = (ctx.settings.workspace.m365_assistant_mailbox or "").strip() if microsoft365 else ""
 

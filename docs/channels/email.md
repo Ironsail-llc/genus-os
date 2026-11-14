@@ -21,17 +21,24 @@ mailbox (`ROBOTHOR_M365_ASSISTANT_MAILBOX`), through the same provider the
 back to SMTP. See [Microsoft 365](../workspace/microsoft365.md).
 
 **Otherwise there are two transports, and the fallback is for absence only.** The `gws`
-CLI when it is installed, SMTP when it is not. A `gws` *error* — an expired
+CLI when it is installed and signed in, SMTP when it is not. A `gws` binary with
+no credential (no stored sign-in in its config directory, no
+`GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE`, no `GOOGLE_WORKSPACE_CLI_TOKEN`) counts
+as absent: every send through it would fail, and the container image installs
+the binary whether or not anyone signs it in. A `gws` *error* — an expired
 OAuth grant, a quota — is a failed send and **not** a reason to retry over SMTP:
 the from-address and the audit trail differ between the two, so a silent swap
-after an auth failure would deliver your briefing as somebody else.
+after an auth failure would deliver your briefing as somebody else. The one
+exception is an engine alert to its configured fallback target
+(`ROBOTHOR_ALERT_FALLBACK_CHANNELS`): a failed transport is followed by one
+attempt on the next, because the alert is the message of last resort.
 
 ## Configure this instance
 
 ### If you already use the `gws` CLI
 
-Nothing to do. The channel finds the binary and sends through the Google
-Workspace account it is authenticated to, exactly as the `gws_gmail_send` agent
+Nothing to do once the CLI is signed in. The channel finds the binary and its
+credential and sends through the Google Workspace account it is authenticated to, exactly as the `gws_gmail_send` agent
 tool does. Check with:
 
 ```bash
@@ -92,7 +99,7 @@ named every time.
 
 | Step | What a failure means |
 |------|----------------------|
-| `transport` | No `gws` binary and no SMTP host, or the SMTP server refused the session or the password |
+| `transport` | No signed-in `gws` CLI and no SMTP host, or the SMTP server refused the session or the password |
 | `send` | No `--to`; an address that is not one; an address on the opt-out list; or the transport accepted the call and returned no message id |
 
 Exit codes, because this is a command scripts wrap: **0** every step passed,
@@ -185,7 +192,7 @@ send call returning:
 | `failed:email_send` | The transport refused, raised, or accepted the call without returning an id |
 | `failed:email_dnc` | The recipient is flagged `do_not_contact`. Nothing was sent, and the refusal is in `agent_guardrail_events` |
 | `failed:email_dnc_unreadable` | The opt-out list could not be read. "We could not check" is not "nobody opted out", so it is its own status and not a claim about a person. One exception: an engine alert sent to the operator's configured fallback target (`ROBOTHOR_ALERT_FALLBACK_CHANNELS`) goes out anyway with a warning, because the alert may be about the database the list lives in |
-| `failed:email_no_transport` | Neither the `gws` CLI nor `ROBOTHOR_EMAIL_SMTP_HOST` + `ROBOTHOR_EMAIL_FROM` |
+| `failed:email_no_transport` | Neither a signed-in `gws` CLI nor `ROBOTHOR_EMAIL_SMTP_HOST` + `ROBOTHOR_EMAIL_FROM` |
 | `failed:email_no_target` | The manifest names no `delivery.to` |
 | `failed:email_unexpanded_target` | A literal `${VAR}` reached the target |
 | `failed:email_unresolved_target` | Neither an address nor a `crm_people` id, or a person with no primary email |
