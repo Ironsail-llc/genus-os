@@ -130,6 +130,53 @@ class TestTheHandlersThatCrashed:
         assert dal_list_tasks.call_args.kwargs["person_id"] == person_id
 
 
+class TestABlankOptionalIdIsNotAnId:
+    """An empty string is how a model spells "I did not pass this".
+
+    `create_task` takes an optional `parentTaskId`. A caller that has no
+    parent to name sends `""` rather than omitting the key, and `""` is not a
+    uuid: it reached the typed SQL parameter, Postgres raised
+    InvalidTextRepresentation, and the DAL reported that as an *unknown*
+    outcome — which fences every later write in the run. The guard already
+    knew an absent optional id is fine; it now treats a blank one the same
+    way, clearing it in place so the empty string never reaches SQL.
+    """
+
+    async def test_a_blank_optional_parent_id_reaches_the_dal_as_none(self):
+        with patch("robothor.crm.dal.create_task", return_value={"id": "x"}) as dal_create:
+            result = await HANDLERS["create_task"]({"title": "Follow up", "parentTaskId": ""}, CTX)
+        assert "error" not in result, result
+        dal_create.assert_called_once()
+        assert dal_create.call_args.kwargs["parent_task_id"] is None
+
+    async def test_a_blank_optional_filter_reaches_the_dal_as_none(self):
+        with patch("robothor.crm.dal.list_tasks", return_value=[]) as dal_list:
+            result = await HANDLERS["list_tasks"]({"personId": ""}, CTX)
+        assert result == {"tasks": [], "count": 0}
+        assert dal_list.call_args.kwargs["person_id"] is None
+
+    async def test_a_whitespace_only_optional_id_is_cleared_too(self):
+        """Stripping runs first, so "   " collapses to "" and is cleared."""
+        with patch("robothor.crm.dal.create_task", return_value={"id": "x"}) as dal_create:
+            result = await HANDLERS["create_task"]({"title": "T", "parentTaskId": "   "}, CTX)
+        assert "error" not in result, result
+        assert dal_create.call_args.kwargs["parent_task_id"] is None
+
+    async def test_a_blank_required_id_is_still_refused(self):
+        """Clearing is only for optional arguments; a required id that is
+        blank is a missing id and must keep its friendly error."""
+        result = await HANDLERS["get_task"]({"id": ""}, CTX)
+        assert "error" in result
+        assert "UUID" in result["error"]
+
+    def test_the_guard_clears_the_argument_in_place(self):
+        """The handler passes the same dict to the DAL, so the clearing has
+        to happen on that dict — not on a copy the DAL never sees."""
+        args = {"title": "T", "parentTaskId": ""}
+        assert tool_ids.id_argument_error("create_task", args) is None
+        assert args["parentTaskId"] is None
+
+
 # Every id-bearing argument in the module, with an id an LLM might invent.
 # A handler added later inherits the guard from the decorator; a handler
 # added later with a NEW id argument name has to be added here.
