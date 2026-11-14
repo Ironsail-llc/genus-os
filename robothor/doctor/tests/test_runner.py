@@ -323,6 +323,27 @@ def test_exit_one_when_a_required_check_failed() -> None:
     assert report.status == "degraded"
 
 
+@pytest.mark.parametrize("severity", ["recommended", "info"])
+def test_a_check_named_by_only_that_fails_exits_one_whatever_its_severity(severity) -> None:
+    """Severity decides whether a finding fails the WHOLE instance. A check the
+    caller named on its own is the question asked, so its failure is the answer:
+    a cron or a gate running `genus doctor --only <id>` must see it."""
+    checks = [_check("a.one"), _check("b.one", status="fail", severity=severity)]
+    report = run_sync(_ctx(), checks=checks, only="b.one")
+    assert report.exit_code == 1
+
+
+def test_a_check_named_by_only_that_passes_exits_zero() -> None:
+    checks = [_check("a.one", status="fail"), _check("b.one", severity="recommended")]
+    assert run_sync(_ctx(), checks=checks, only="b.one").exit_code == 0
+
+
+def test_a_category_run_keeps_the_severity_rule() -> None:
+    """Only a single named check changes the rule; a category is a sweep."""
+    checks = [_check("a.one", category="a", status="fail", severity="recommended")]
+    assert run_sync(_ctx(), checks=checks, category="a").exit_code == 0
+
+
 def test_exit_two_when_the_doctor_itself_errored() -> None:
     def blow_up() -> list[Check]:
         raise RuntimeError("the registry is broken")

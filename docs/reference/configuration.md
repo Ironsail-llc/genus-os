@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-509 settings in 18 groups.
+510 settings in 18 groups.
 
 ## autonomy
 
@@ -271,7 +271,8 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `GENUS_EVENT_CONSUMER_GROUP` | str | `engine` | `robothor-engine` | no | unreleased | Redis consumer group this engine reads the event streams with. Redis hands each event to one reader per group, so every engine sharing a Redis needs a group of its own. The root tenant's engine keeps 'engine' so its stream offsets survive upgrades; each child-tenant engine needs its own, e.g. 'engine-<tenant>', set by its deployment. An engine on any other group ignores events that carry no tenant. The root group is only ever read by a root tenant (one with no parent in crm_tenants); a child engine on it stops reading and logs an error naming this setting. Also read from `ROBOTHOR_EVENT_CONSUMER_GROUP`. |
-| `ROBOTHOR_ALERT_COOLDOWN_SECONDS` | int | `3600` | `robothor-engine` | no | legacy | Minimum seconds between repeats of the same unit-failure alert. |
+| `ROBOTHOR_ALERT_COOLDOWN_SECONDS` | int | `3600` | `robothor-engine` | no | legacy | Minimum seconds between repeats of the same alert: per unit for the unit-failure sender, per alert id for an engine alert raised with one. |
+| `ROBOTHOR_ALERT_FALLBACK_CHANNELS` | str | _(empty)_ | `robothor-engine` | no | unreleased | Ordered, comma-separated <channel>:<target> entries a critical alert is delivered through when the primary pager (Telegram) is not configured or fails, for example 'email:ops@example.com,slack:C0123456'. Any channel `genus channel list` shows can be named; the first that delivers ends the attempt. Empty means no fallback, which `genus doctor` reports when the primary cannot deliver either. |
 | `ROBOTHOR_ALERT_SELFTEST` | bool | `false` | `robothor-engine` | no | legacy | Fire one info-level alert shortly after boot to prove the alert path delivers. Leave off outside a delivery test. |
 | `ROBOTHOR_ALERT_SPOOL_CAP` | int | `50` | `robothor-engine` | no | legacy | Most alerts held on the retry spool; beyond it the oldest are dropped. |
 | `ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS` | int | `86400` | `robothor-engine` | no | legacy | Age at which a spooled alert is discarded rather than delivered late. |

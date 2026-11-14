@@ -639,9 +639,11 @@ def no_gws(monkeypatch):
 
 @pytest.fixture
 def has_gws(monkeypatch):
+    """A gws CLI that is installed and signed in: one that can send."""
     from robothor.engine.tools.handlers import gws
 
     monkeypatch.setattr(gws, "gws_available", lambda: True)
+    monkeypatch.setattr(gws, "gws_signed_in", lambda: True)
 
 
 def test_email_transport_skips_when_unconfigured(no_gws) -> None:
