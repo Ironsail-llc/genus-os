@@ -1,3 +1,9 @@
+## [1.130.0](https://github.com/Ironsail-llc/genus-os/compare/v1.129.1...v1.130.0) (2026-11-14)
+
+### Features
+
+* **engine:** count rate-limit deferrals and warn in the doctor (GEN-524) ([#868](https://github.com/Ironsail-llc/genus-os/issues/868)) ([8e349b9](https://github.com/Ironsail-llc/genus-os/commit/8e349b9503c3f409cebf42116205f9e57ba08776)), closes [#867](https://github.com/Ironsail-llc/genus-os/issues/867)
+
 ## [1.129.1](https://github.com/Ironsail-llc/genus-os/compare/v1.129.0...v1.129.1) (2026-11-14)
 
 ### Bug Fixes
