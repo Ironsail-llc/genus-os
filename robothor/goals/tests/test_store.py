@@ -513,3 +513,45 @@ def test_task_creation_retry_reuses_linked_task(db):
             assert prepare_task(cur, db, "Different report", "Draft", "writer") is None
     finally:
         binding.reset(token)
+
+
+def test_budget_blocker_names_the_binding_parent_goal(db):
+    """A child stopped by its PARENT's ceiling must say so.
+
+    controller.execute() clamps a child's remaining to min(child, parent), so a
+    child with its own generous ceiling can be blocked by a nearly-spent parent.
+    The blocker used to read "execution budget exhausted" and name neither goal,
+    which is the same diagnosability defect that made the original "shared
+    budget exhausted" blocks so hard to trace.
+    """
+    parent = create(db, kind="long")
+    child = create(db, parent_goal_id=parent["id"])
+    with store.transaction() as cur:
+        cur.execute(
+            "UPDATE pursuit_goals SET priority=9 WHERE tenant_id=%s AND id=%s",
+            (db, child["id"]),
+        )
+    claimed = store.claim(db)
+    assert claimed is not None and claimed[0]["id"] == child["id"]
+
+    store.finish(
+        db, child["id"], claimed[1], budget_exhausted=True, budget_bound_by=parent["id"]
+    )
+    blocked = store.get(db, child["id"])
+    assert blocked["status"] == "blocked"
+    assert "bound by parent goal" in blocked["blocker"]
+    assert parent["id"] in blocked["blocker"]
+
+
+def test_budget_blocker_stays_plain_when_the_goal_itself_bound(db):
+    """A goal stopped by its OWN ceiling keeps the unqualified message."""
+    goal = create(db, kind="long")
+    claimed = store.claim(db)
+    assert claimed is not None and claimed[0]["id"] == goal["id"]
+
+    store.finish(
+        db, goal["id"], claimed[1], budget_exhausted=True, budget_bound_by=goal["id"]
+    )
+    blocked = store.get(db, goal["id"])
+    assert blocked["status"] == "blocked"
+    assert blocked["blocker"] == "execution budget exhausted"
