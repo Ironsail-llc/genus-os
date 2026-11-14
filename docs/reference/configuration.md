@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-510 settings in 18 groups.
+511 settings in 18 groups.
 
 ## autonomy
 
@@ -282,7 +282,8 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_BUDDY_GRADER_DRYRUN` | bool | `false` | `robothor-engine` | no | legacy | Run the verification grader without writing its verdicts, for checking a grading change against live runs. |
 | `ROBOTHOR_DAEMON_START_TS` | str | _(empty)_ | `robothor-engine` | no | legacy | ISO timestamp the daemon sets on itself at boot and child processes read to report uptime. Set by the engine, not by an operator. |
 | `ROBOTHOR_DEFAULT_CHAT_AGENT` | str | `main` | `robothor-engine` | no | legacy | Agent an inbound chat is routed to when nothing names one. |
-| `ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD` | int | `100` | no | no | unreleased | How many hook workflow runs the tool-call rate limit may defer in the last hour before genus doctor's deferred_runs.recent check warns (and sends that warning to the alert channel once an hour). The count is summed over every workflow; the warning names the workflows that deferred most. |
+| `ROBOTHOR_DEFERRED_RUNS_PAGE_THRESHOLD` | int | `500` | no | no | unreleased | How many hook workflow runs the tool-call rate limit may defer in the last hour before genus doctor's deferred_runs.recent check sends a critical alert, which pages the alert channel, at most once an hour. Never lower than ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD: a smaller value is read as that threshold. |
+| `ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD` | int | `100` | no | no | unreleased | How many hook workflow runs the tool-call rate limit may defer in the last hour before genus doctor's deferred_runs.recent check warns. Past it the check also sends a warning-level alert, which becomes an alert-digest row and does not page, at most once an hour. The count is summed over every workflow; the warning names the workflows that deferred most. |
 | `ROBOTHOR_DEPLOY_TEST_PYTHON` | str | _(empty)_ | `robothor-engine` | no | legacy | Interpreter a local deploy runs its pre-switch test gate with: the instance's dev interpreter, since runtime releases omit pytest. Empty means <workspace>/venv/bin/python. |
 | `ROBOTHOR_ENGINE_HOST` | str | `127.0.0.1` | `robothor-engine` | no | legacy | Address the engine's HTTP surface binds to. Loopback by default; the auth guard refuses the insecure dev mode on any other address. |
 | `ROBOTHOR_ENGINE_PORT` | int | `18800` | `robothor-engine` | no | legacy | Engine HTTP port. |

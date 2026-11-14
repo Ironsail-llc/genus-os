@@ -280,7 +280,10 @@ A window with no deferral logs nothing. Each deferred run counts once: its
 requeued event, deferred again while the limit is still full, is not counted
 again, and neither is the run when it finally goes ahead. `genus doctor --only deferred_runs.recent` sums the last
 hour and warns, naming the workflows that deferred most, once the total passes
-`ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD` (default 100); see
+`ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD` (default 100). Past that it sends a
+`warning` alert, a row in the alert digest that does not page; past
+`ROBOTHOR_DEFERRED_RUNS_PAGE_THRESHOLD` (default 500) it sends a `critical`
+alert, which pages. Each at most once an hour; see
 [Deployment](deployment.md#what-it-checks). The per-run line ("deferred:
 tool-call rate limit reached") is still there at debug level.
 A run resumed after an approval step always waits.

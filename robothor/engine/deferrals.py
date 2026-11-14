@@ -53,7 +53,9 @@ LOOKBACK_SECONDS = 3600
 #: complete the key: several engines, one per tenant, may share one Redis.
 KEY_PREFIX = "robothor:workflow:deferred:"
 
-#: The doctor's hourly alert lock, per tenant; the tenant and the hour follow.
+#: The doctor's alert lock, per tenant and alert level; the tenant and the
+#: level follow. It is set with the look-back period as its TTL, so the period
+#: runs from the alert that took it, not from the clock hour.
 ALERT_LOCK_PREFIX = "robothor:workflow:deferred-alerted:"
 
 #: Each window's hash outlives the doctor's look-back, then expires.
@@ -71,9 +73,10 @@ def window_key(tenant_id: str, start: int) -> str:
     return f"{KEY_PREFIX}{tenant_id}:{start}"
 
 
-def alert_lock_key(tenant_id: str, period: int) -> str:
-    """The key that says one tenant's deferral alert went out in one look-back period."""
-    return f"{ALERT_LOCK_PREFIX}{tenant_id}:{period}"
+def alert_lock_key(tenant_id: str, level: str) -> str:
+    """The key that says one tenant's deferral alert at ``level`` went out within
+    the last look-back period (it expires that long after it was taken)."""
+    return f"{ALERT_LOCK_PREFIX}{tenant_id}:{level}"
 
 
 def process_tenant_id() -> str:

@@ -1339,10 +1339,23 @@ class EngineSettings(SettingsGroup):
         100,
         "ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD",
         "How many hook workflow runs the tool-call rate limit may defer in the "
-        "last hour before genus doctor's deferred_runs.recent check warns (and "
-        "sends that warning to the alert channel once an hour). The count is "
+        "last hour before genus doctor's deferred_runs.recent check warns. Past "
+        "it the check also sends a warning-level alert, which becomes an "
+        "alert-digest row and does not page, at most once an hour. The count is "
         "summed over every workflow; the warning names the workflows that "
         "deferred most.",
+        restart_required=False,
+        restart_units=(),
+        since="unreleased",
+    )
+    deferred_runs_page_threshold: int = declare(
+        500,
+        "ROBOTHOR_DEFERRED_RUNS_PAGE_THRESHOLD",
+        "How many hook workflow runs the tool-call rate limit may defer in the "
+        "last hour before genus doctor's deferred_runs.recent check sends a "
+        "critical alert, which pages the alert channel, at most once an hour. "
+        "Never lower than ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD: a smaller value "
+        "is read as that threshold.",
         restart_required=False,
         restart_units=(),
         since="unreleased",
