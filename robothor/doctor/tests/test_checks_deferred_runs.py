@@ -4,9 +4,11 @@ The engine counts each deferral in Redis per workflow and per minute window
 (``robothor.engine.deferrals``). This check sums the last hour, warns past a
 threshold naming the workflows that deferred most, and alerts in two tiers:
 past the warn threshold a ``warning`` alert (an alert-digest row), past the
-higher page threshold a ``critical`` alert (paged). Each tier alerts at most
-once per look-back period, measured from when it last alerted. It only reads
-the counts, so running it again reports the same number.
+higher page threshold a ``critical`` alert, which pages where a sender is
+registered. Each tier makes at most one attempt per look-back period, measured
+from when it last alerted; an attempt that was not delivered is retried after a
+shorter period, never on every run. It only reads the counts, so running it
+again reports the same number.
 """
 
 from __future__ import annotations
@@ -26,25 +28,44 @@ TENANT = "default"
 
 
 class FakeRedis:
+    """Strings expire by ``time.time()``, so a test that moves the clock sees
+    a lock lapse the way Redis would."""
+
     def __init__(self, hashes: dict[str, dict[str, int]] | None = None) -> None:
         self.hashes = hashes or {}
         self.strings: dict[str, str] = {}
         self.ttls: dict[str, int | None] = {}
+        self.expires: dict[str, float] = {}
         self.writes = 0
         self.closed = 0
 
     def hgetall(self, key: str) -> dict[bytes, bytes]:
         return {f.encode(): str(v).encode() for f, v in self.hashes.get(key, {}).items()}
 
+    def _expire(self) -> None:
+        now = time.time()
+        for key in [k for k, at in self.expires.items() if at <= now]:
+            self.strings.pop(key, None)
+            self.expires.pop(key, None)
+
     def set(self, key: str, value: str, nx: bool = False, ex: int | None = None):
+        self._expire()
         self.writes += 1
         if nx and key in self.strings:
             return None
         self.strings[key] = value
         self.ttls[key] = ex
+        if ex is not None:
+            self.expires[key] = time.time() + ex
         return True
 
+    def get(self, key: str) -> bytes | None:
+        self._expire()
+        value = self.strings.get(key)
+        return None if value is None else value.encode()
+
     def delete(self, key: str) -> int:
+        self.expires.pop(key, None)
         return 1 if self.strings.pop(key, None) is not None else 0
 
     def close(self) -> None:
@@ -215,10 +236,20 @@ def test_each_tenant_gets_its_own_hourly_alert(monkeypatch):
     assert sent.await_count == 2
 
 
+def _clock(monkeypatch) -> dict[str, float]:
+    clock = {"now": float(_this_window() + 1)}
+    monkeypatch.setattr(time, "time", lambda: clock["now"])
+    return clock
+
+
 def test_an_alert_that_was_not_delivered_is_tried_again(monkeypatch, busy):
+    clock = _clock(monkeypatch)
     sent = _with(monkeypatch, busy)
     sent.return_value = False
     _run(make_ctx())
+    _run(make_ctx())
+    assert sent.await_count == 1  # not retried on the very next run
+    clock["now"] += deferred_runs.ALERT_RETRY_SECONDS + 1
     sent.return_value = True
     _run(make_ctx())
     _run(make_ctx())
@@ -226,9 +257,11 @@ def test_an_alert_that_was_not_delivered_is_tried_again(monkeypatch, busy):
 
 
 def test_an_alert_that_raised_is_tried_again(monkeypatch, busy):
+    clock = _clock(monkeypatch)
     sent = _with(monkeypatch, busy)
     sent.side_effect = [RuntimeError("no channel"), True]
     _run(make_ctx())
+    clock["now"] += deferred_runs.ALERT_RETRY_SECONDS + 1
     _run(make_ctx())
     assert sent.await_count == 2
 
@@ -315,3 +348,94 @@ def test_the_period_runs_from_the_alert_not_the_clock_hour(monkeypatch):
     assert sent.await_count == 1
     (ttl,) = client.ttls.values()
     assert ttl == deferred_runs.LOOKBACK_SECONDS
+
+
+# --- The real alert path, as the doctor's own process has it -----------------
+#
+# The cases above replace ``alerts.alert`` with a mock. These drive the real
+# one: a ``critical`` alert goes to the Telegram sender, which only the engine
+# daemon registers, and an undelivered page is written as an ``alert_fallback``
+# notification row.
+
+
+class _Notifications:
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+
+    def __call__(self, **row):
+        self.rows.append(row)
+        return len(self.rows)
+
+    def of(self, kind: str) -> list[dict]:
+        return [r for r in self.rows if r["notification_type"] == kind]
+
+
+@pytest.fixture
+def real_alerts(monkeypatch):
+    """The real ``alerts.alert`` with no sender registered, rows captured."""
+    from robothor.engine import delivery
+
+    monkeypatch.delitem(delivery._platform_senders, "telegram", raising=False)
+    monkeypatch.setenv("ROBOTHOR_TELEGRAM_CHAT_ID", "12345")
+    rows = _Notifications()
+    monkeypatch.setattr("robothor.crm.dal.send_notification", rows)
+    return rows
+
+
+def _paging(monkeypatch, total: int) -> tuple[FakeRedis, dict[str, float]]:
+    clock = _clock(monkeypatch)
+    client = _deferred(total)
+    monkeypatch.setattr(deferred_runs, "_client", lambda _ctx: client)
+    return client, clock
+
+
+def test_with_no_sender_the_page_is_one_fallback_row_per_retry_period(monkeypatch, real_alerts):
+    client, clock = _paging(monkeypatch, 600)
+
+    first = _run(make_ctx())
+    assert first.status == "fail"
+    assert "600" in first.detail
+    assert "not delivered" in first.detail
+    assert "alert_fallback" in first.detail
+    assert len(real_alerts.of("alert_fallback")) == 1
+    (lock,) = client.strings
+    assert client.ttls[lock] == deferred_runs.ALERT_RETRY_SECONDS
+
+    clock["now"] += deferred_runs.ALERT_RETRY_SECONDS - 60
+    second = _run(make_ctx())
+    assert second.status == "fail"
+    assert "not delivered" in second.detail
+    assert len(real_alerts.of("alert_fallback")) == 1
+
+    clock["now"] += 120
+    _run(make_ctx())
+    assert len(real_alerts.of("alert_fallback")) == 2
+
+
+def test_with_a_sender_the_page_is_delivered_once_a_period(monkeypatch, real_alerts):
+    from robothor.engine import delivery
+
+    send = AsyncMock(return_value=[object()])
+    monkeypatch.setitem(delivery._platform_senders, "telegram", send)
+    client, clock = _paging(monkeypatch, 600)
+
+    first = _run(make_ctx())
+    assert first.status == "fail"
+    assert "page sent" in first.detail
+    send.assert_awaited_once()
+    assert real_alerts.of("alert_fallback") == []
+    (lock,) = client.strings
+    assert client.ttls[lock] == deferred_runs.LOOKBACK_SECONDS
+
+    clock["now"] += deferred_runs.ALERT_RETRY_SECONDS + 60
+    second = _run(make_ctx())
+    assert "already sent" in second.detail
+    send.assert_awaited_once()
+
+
+def test_the_warning_tier_writes_one_digest_row_a_period(monkeypatch, real_alerts):
+    _paging(monkeypatch, 150)
+    _run(make_ctx())
+    _run(make_ctx())
+    assert len(real_alerts.of("alert_digest")) == 1
+    assert real_alerts.of("alert_fallback") == []
