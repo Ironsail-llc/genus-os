@@ -31,12 +31,20 @@ collapsed:
 
 Two transports, and the fallback is for ABSENCE only
 ----------------------------------------------------
-``gws`` first when the CLI is installed, SMTP when it is not. A gws *error* —
-expired OAuth, a quota — is a receipt and not a reason to send the same message
-from a different address: the from-address and the audit trail differ between
-the two transports, so a silent swap after an auth failure delivers the
-operator's briefing as somebody else.
+``gws`` first when the CLI is installed AND has a credential, SMTP when it does
+not. A CLI with no credential at all is absent: every send through it fails
+with "No credentials", and the stock image installs the binary whether or not
+anyone signs it in. A gws *error* — expired OAuth, a quota — is a receipt and
+not a reason to send the same message from a different address: the
+from-address and the audit trail differ between the two transports, so a silent
+swap after an auth failure delivers the operator's briefing as somebody else.
 ``test_a_gws_error_does_not_re_send_the_same_mail_over_smtp`` is that rule.
+
+The one exception is an operator alert (``operator_alert=True``): it is the
+message of last resort, so a failed transport falls through to the next one
+this instance has, once each. :meth:`EmailChannel._transports` is the single
+answer to "which transports can send", read by the send path, ``health`` (and
+so the doctor's ``alerts.delivery``) and ``email.transport`` alike.
 
 What is proof, here
 -------------------
@@ -229,6 +237,38 @@ def _gws_available() -> bool:
     from robothor.engine.tools.handlers.gws import gws_available
 
     return gws_available()
+
+
+def _gws_signed_in() -> bool:
+    """Whether the gws CLI has a credential to send with. Spawns nothing."""
+    from robothor.engine.tools.handlers.gws import gws_signed_in
+
+    return gws_signed_in()
+
+
+def gws_usable() -> bool:
+    """The gws CLI is installed and has a credential: the only gws that can send.
+
+    The default of the channel's ``gws_probe`` seam, and what the doctor's
+    ``email.transport`` reads, so the two answer the same question the same way.
+    """
+    return _gws_available() and _gws_signed_in()
+
+
+def no_transport_reason() -> str:
+    """Why this instance has no email transport, in one sentence. Opens nothing."""
+    try:
+        if not _gws_available():
+            gws = "the gws CLI is not installed"
+        elif not _gws_signed_in():
+            gws = "the gws CLI is installed but not signed in (no credential to send with)"
+        else:
+            gws = "the gws CLI is unavailable"
+    except Exception as exc:  # noqa: BLE001 — a reason must not raise
+        gws = f"the gws CLI could not be probed ({type(exc).__name__})"
+    return f"no email transport on this instance: {gws}, and " + (
+        "ROBOTHOR_EMAIL_SMTP_HOST + ROBOTHOR_EMAIL_FROM are not both set"
+    )
 
 
 def _gws_send(args: list[str], timeout: int = GWS_TIMEOUT_S) -> dict[str, Any]:
@@ -453,32 +493,44 @@ class EmailChannel:
         #: The three seams the suite replaces. Production probes the filesystem
         #: for a gws binary, shells out to it, and builds an ``smtplib``
         #: connection — none of which a test may do.
-        self.gws_probe: Callable[[], bool] = _gws_available
+        self.gws_probe: Callable[[], bool] = gws_usable
         self.gws_send: Callable[..., dict[str, Any]] = _gws_send
         self.smtp_factory: Callable[..., Any] = _build_smtp
 
     # ── configuration ────────────────────────────────────────────────────
 
-    def _transport(self) -> _Transport:
-        """Which transport this send would use. Opens nothing.
+    def _transports(self) -> list[_Transport]:
+        """Every transport that can send, in the order they are used. Opens nothing.
+
+        The ONE answer to "which transports can send": :meth:`_transport` (and
+        so ``send``, ``health``, ``verify`` and the doctor) is its first entry,
+        and an operator alert tries each entry in turn. An empty transport that
+        carries a ``refusal`` is returned alone, so the reason survives.
 
         On a Microsoft 365 workspace, Microsoft Graph -- as the assistant's
         Exchange mailbox -- and nothing else: the gws CLI is not probed at all,
         because an operator who chose Outlook must not have a briefing go out
         as whatever Google account a leftover CLI is signed in to.
 
-        Otherwise gws first, SMTP only when the CLI is absent. Never the other
-        way round and never both: see the module docstring.
+        Otherwise a signed-in gws first, then SMTP: see the module docstring.
         """
         microsoft365 = self._microsoft365_transport()
         if microsoft365 is not None:
-            return microsoft365
+            return [microsoft365]
+        usable: list[_Transport] = []
         try:
             if self.gws_probe():
-                return _Transport(kind="gws")
+                usable.append(_Transport(kind="gws"))
         except Exception as exc:  # noqa: BLE001 — a probe is a report
             logger.warning("Could not probe for the gws CLI: %s", exc)
-        return self._smtp_transport()
+        smtp = self._smtp_transport()
+        if smtp.kind or not usable:
+            usable.append(smtp)
+        return usable
+
+    def _transport(self) -> _Transport:
+        """Which transport an ordinary send uses: the first that can send."""
+        return self._transports()[0]
 
     @staticmethod
     def _microsoft365_transport() -> _Transport | None:
@@ -605,6 +657,8 @@ class EmailChannel:
         }
         if transport.refusal:
             report["error"] = transport.refusal
+        elif not transport.kind:
+            report["error"] = no_transport_reason()
         return report
 
     async def send(
@@ -617,6 +671,7 @@ class EmailChannel:
         run: AgentRun | None = None,
         html: str | None = None,
         sender: str | None = None,
+        operator_alert: bool = False,
         **kw: Any,
     ) -> SendReceipt:
         """Mail ``text`` to ``target``, and report only what a transport proved.
@@ -628,6 +683,12 @@ class EmailChannel:
         Microsoft 365 send as their signed-in account and ignore it. A
         ``sender`` that is not one mailbox is ``failed:email_invalid_sender``,
         checked after the opt-out list and before any transport.
+
+        ``operator_alert`` is set only by the engine's alert fallback, for a
+        target the operator configured as where alerts go. The opt-out list is
+        still honoured when it can be read; when it cannot -- the database is
+        down, which is exactly what the alert may be about -- the alert is sent
+        rather than refused. Every other send refuses with the list unread.
 
         The order is the contract. Guards run before the tenant is read, the
         tenant before the recipient is resolved, and the opt-out list before any
@@ -695,7 +756,9 @@ class EmailChannel:
             logger.error("Email delivery target for %s resolved to no address", agent)
             return SendReceipt(acknowledged=0, expected=1, status=STATUS_UNRESOLVED, target=clean)
 
-        refusal = await self._opt_out_refusal(address, tenant, run, flagged_on_row=flagged_on_row)
+        refusal = await self._opt_out_refusal(
+            address, tenant, run, flagged_on_row=flagged_on_row, operator_alert=operator_alert
+        )
         if refusal is not None:
             return SendReceipt(acknowledged=0, expected=1, status=refusal, target=address)
 
@@ -715,8 +778,7 @@ class EmailChannel:
             logger.warning(
                 "Agent %s announces by email but this instance has no usable transport: %s",
                 agent,
-                transport.refusal
-                or "neither the gws CLI nor ROBOTHOR_EMAIL_SMTP_HOST + ROBOTHOR_EMAIL_FROM",
+                transport.refusal or no_transport_reason(),
             )
             return SendReceipt(
                 acknowledged=0,
@@ -732,12 +794,53 @@ class EmailChannel:
                 transport.kind,
                 agent,
             )
+        if not operator_alert:
+            return await self._send_through(
+                transport, address, line, body, agent, tenant, html=html, sender=from_override
+            )
+        # An operator alert is the message of last resort: each further
+        # transport this instance has is tried once, in order, until one lands.
+        # Each transport has its own timeout, so the whole attempt is bounded.
+        receipt = SendReceipt(
+            acknowledged=0, expected=1, status=STATUS_NO_TRANSPORT, target=address, body=body
+        )
+        previous = ""
+        for candidate in self._transports():
+            if previous:
+                logger.warning(
+                    "The email channel's %s transport did not deliver an operator alert "
+                    "(%s); trying %s",
+                    previous,
+                    receipt.status,
+                    candidate.kind,
+                )
+            receipt = await self._send_through(
+                candidate, address, line, body, agent, tenant, html=html, sender=from_override
+            )
+            if receipt.complete:
+                return receipt
+            previous = candidate.kind
+        return receipt
+
+    async def _send_through(
+        self,
+        transport: _Transport,
+        address: str,
+        line: str,
+        body: str,
+        agent: str,
+        tenant: str,
+        *,
+        html: str | None,
+        sender: str,
+    ) -> SendReceipt:
+        """One attempt on one transport."""
         if transport.kind == MICROSOFT365:
             return await self._send_workspace(address, line, body, agent, tenant, html=html)
         if transport.kind == "gws":
             return await self._send_gws(address, line, body, agent, html=html)
-        if from_override:
-            transport = replace(transport, sender=from_override)
+        if sender:
+            transport = replace(transport, sender=sender)
         return await self._send_smtp(transport, address, line, body, agent, html=html)
 
     # ── recipient ────────────────────────────────────────────────────────
@@ -774,6 +877,7 @@ class EmailChannel:
         run: AgentRun | None,
         *,
         flagged_on_row: bool,
+        operator_alert: bool = False,
     ) -> str | None:
         """``None`` to proceed, or the status to record instead of sending.
 
@@ -795,7 +899,7 @@ class EmailChannel:
             # table, and a carve-out keyed on the type would turn any of those
             # going missing into a silent allow.
             if "do_not_contact" not in str(exc):
-                return await self._unreadable(address, exc, run)
+                return await self._unreadable(address, exc, run, operator_alert=operator_alert)
             logger.error(
                 "do_not_contact check skipped for the email channel — this schema "
                 "predates migration 113 (%s). Run `robothor migrate`.",
@@ -803,7 +907,7 @@ class EmailChannel:
             )
             blocked = set()
         except Exception as exc:  # noqa: BLE001 — an unreadable list is a receipt
-            return await self._unreadable(address, exc, run)
+            return await self._unreadable(address, exc, run, operator_alert=operator_alert)
 
         if not blocked and not flagged_on_row:
             return None
@@ -832,7 +936,9 @@ class EmailChannel:
         return STATUS_DNC
 
     @staticmethod
-    async def _unreadable(address: str, exc: BaseException, run: AgentRun | None) -> str | None:
+    async def _unreadable(
+        address: str, exc: BaseException, run: AgentRun | None, *, operator_alert: bool = False
+    ) -> str | None:
         """Refuse a send whose opt-out lookup could not be read.
 
         Its own status, never ``failed:email_dnc``: that token is a claim about
@@ -841,7 +947,17 @@ class EmailChannel:
         Deliberately files NO guardrail event. That write goes to the database
         the lookup just failed on, so it raises too, buying a second traceback
         stacked on the real one. The ERROR line is this branch's evidence.
+
+        An operator alert to its configured target is the one exception: it is
+        sent, because refusing it would silence the page about the outage.
         """
+        if operator_alert:
+            logger.warning(
+                "The email channel could not read the opt-out list (%s); sending the "
+                "operator alert to its configured target anyway.",
+                _describe(exc),
+            )
+            return None
         logger.error(
             "The email channel could not read the opt-out list for a delivery to %s: "
             "%s. Not sending.",
@@ -1054,8 +1170,7 @@ class EmailChannel:
                 (
                     UNCONFIGURED_STEP,
                     False,
-                    "no email transport on this instance: the gws CLI is not installed "
-                    "and ROBOTHOR_EMAIL_SMTP_HOST + ROBOTHOR_EMAIL_FROM are not both set",
+                    no_transport_reason(),
                 )
             ]
         if transport.refusal:
@@ -1095,10 +1210,7 @@ class EmailChannel:
             # set none of them — and send them after the wrong fix.
             return resolved.refusal
         if not resolved.kind:
-            return (
-                "no email transport on this instance: the gws CLI is not installed "
-                "and ROBOTHOR_EMAIL_SMTP_HOST + ROBOTHOR_EMAIL_FROM are not both set"
-            )
+            return no_transport_reason()
         if resolved.kind in ("gws", MICROSOFT365):
             # Microsoft Graph is proved by the doctor's workspace.m365_connection
             # (credential, token, assistant inbox); nothing more is free here.

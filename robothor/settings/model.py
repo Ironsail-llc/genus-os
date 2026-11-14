@@ -1180,10 +1180,22 @@ class EngineSettings(SettingsGroup):
         "path or the query string.",
         secret=True,
     )
+    alert_fallback_channels: str = declare(
+        "",
+        "ROBOTHOR_ALERT_FALLBACK_CHANNELS",
+        "Ordered, comma-separated <channel>:<target> entries a critical alert is "
+        "delivered through when the primary pager (Telegram) is not configured or "
+        "fails, for example 'email:ops@example.com,slack:C0123456'. Any channel "
+        "`genus channel list` shows can be named; the first that delivers ends "
+        "the attempt. Empty means no fallback, which `genus doctor` reports when "
+        "the primary cannot deliver either.",
+        since="unreleased",
+    )
     alert_cooldown_seconds: int = declare(
         3600,
         "ROBOTHOR_ALERT_COOLDOWN_SECONDS",
-        "Minimum seconds between repeats of the same unit-failure alert.",
+        "Minimum seconds between repeats of the same alert: per unit for the "
+        "unit-failure sender, per alert id for an engine alert raised with one.",
     )
     alert_spool_cap: int = declare(
         50,

@@ -1066,6 +1066,32 @@ def gws_available() -> bool:
     return shutil.which("gws") is not None
 
 
+def gws_signed_in() -> bool:
+    """Whether the gws CLI has a credential to send with. Spawns nothing.
+
+    The sources the CLI reads, as :mod:`robothor.engine.calendar_transport`
+    reads them: an access token or a credentials file named in the
+    environment, or a stored credential in its config directory. Presence, not
+    validity -- a revoked credential is found only by sending -- but an
+    installed CLI with none of these fails every send with "No credentials",
+    and the stock image installs the CLI whether or not anyone signs it in.
+    """
+    from robothor.settings import get_settings
+
+    settings = get_settings().channels
+    if (settings.google_workspace_token or "").strip():
+        return True
+    named = (settings.google_workspace_credentials_file or "").strip()
+    if named and Path(named).expanduser().is_file():
+        return True
+    config_dir = (
+        Path(settings.google_workspace_config_dir).expanduser()
+        if settings.google_workspace_config_dir
+        else Path.home() / ".config" / "gws"
+    )
+    return any((config_dir / name).is_file() for name in ("credentials.enc", "credentials.json"))
+
+
 def run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
     """Run one gws CLI command. The public name for :func:`_run_gws`.
 

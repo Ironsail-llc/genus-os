@@ -181,6 +181,9 @@ async def test_the_doctor_needs_no_google(
     monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
     monkeypatch.setenv("ROBOTHOR_M365_SCOPE_CANARY_MAILBOX", CANARY)
     monkeypatch.setenv("ROBOTHOR_AI_EMAIL", ASSISTANT)
+    # Alerts need a channel that can deliver; on this instance it is email over
+    # Microsoft Graph, so alerts.delivery passes without Google too.
+    monkeypatch.setenv("ROBOTHOR_ALERT_FALLBACK_CHANNELS", f"email:{ASSISTANT}")
     reset_settings()
     env = m365_env
     env.tenant.deny(CANARY)  # type: ignore[attr-defined]
