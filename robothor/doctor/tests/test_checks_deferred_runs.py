@@ -2,9 +2,11 @@
 
 The engine counts each deferral in Redis per workflow and per minute window
 (``robothor.engine.deferrals``). This check sums the last hour, warns past a
-threshold naming the workflows that deferred most, and sends that warning to
-the operator's alert channel once per look-back period. It only reads the
-counts, so running it again reports the same number.
+threshold naming the workflows that deferred most, and alerts in two tiers:
+past the warn threshold a ``warning`` alert (an alert-digest row), past the
+higher page threshold a ``critical`` alert (paged). Each tier alerts at most
+once per look-back period, measured from when it last alerted. It only reads
+the counts, so running it again reports the same number.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ class FakeRedis:
     def __init__(self, hashes: dict[str, dict[str, int]] | None = None) -> None:
         self.hashes = hashes or {}
         self.strings: dict[str, str] = {}
+        self.ttls: dict[str, int | None] = {}
         self.writes = 0
         self.closed = 0
 
@@ -38,6 +41,7 @@ class FakeRedis:
         if nx and key in self.strings:
             return None
         self.strings[key] = value
+        self.ttls[key] = ex
         return True
 
     def delete(self, key: str) -> int:
@@ -233,3 +237,81 @@ def test_the_store_client_is_closed(monkeypatch, busy):
     _with(monkeypatch, busy)
     _run(make_ctx())
     assert busy.closed == 1
+
+
+def _deferred(total: int, tenant: str = TENANT, start: int | None = None) -> FakeRedis:
+    start = _this_window() if start is None else start
+    return FakeRedis({window_key(tenant, start): {"example-workflow": total}})
+
+
+def _levels(sent: AsyncMock) -> list[str]:
+    return [call.args[0] for call in sent.await_args_list]
+
+
+def test_past_the_page_threshold_the_alert_is_critical(monkeypatch):
+    sent = _with(monkeypatch, _deferred(600))
+    result = _run(make_ctx())
+    assert result.status == "fail"
+    assert "600" in result.detail
+    assert _levels(sent) == ["critical"]
+    body = sent.await_args.args[2]
+    assert "600" in body and "example-workflow" in body
+
+
+def test_between_the_two_thresholds_the_alert_is_a_warning(monkeypatch):
+    sent = _with(monkeypatch, _deferred(500))
+    assert _run(make_ctx()).status == "fail"
+    assert _levels(sent) == ["warning"]
+
+
+def test_the_critical_alert_goes_out_once_a_period(monkeypatch):
+    sent = _with(monkeypatch, _deferred(600))
+    _run(make_ctx())
+    _run(make_ctx())
+    assert _levels(sent) == ["critical"]
+
+
+def test_the_page_threshold_is_a_setting(monkeypatch):
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_DEFERRED_RUNS_PAGE_THRESHOLD", "1000")
+    reset_settings()
+    sent = _with(monkeypatch, _deferred(600))
+    _run(make_ctx())
+    assert _levels(sent) == ["warning"]
+
+
+def test_the_page_threshold_is_never_below_the_warn_threshold(monkeypatch):
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD", "1000")
+    monkeypatch.setenv("ROBOTHOR_DEFERRED_RUNS_PAGE_THRESHOLD", "200")
+    reset_settings()
+    sent = _with(monkeypatch, _deferred(600))
+    assert _run(make_ctx()).status == "pass"
+    sent.assert_not_awaited()
+
+
+def test_a_warning_already_sent_does_not_hold_back_the_page(monkeypatch):
+    client = _deferred(150)
+    sent = _with(monkeypatch, client)
+    _run(make_ctx())
+    client.hashes[window_key(TENANT, _this_window())]["example-workflow"] = 600
+    _run(make_ctx())
+    _run(make_ctx())
+    assert _levels(sent) == ["warning", "critical"]
+
+
+def test_the_period_runs_from_the_alert_not_the_clock_hour(monkeypatch):
+    """Two runs a few seconds apart across an hour boundary alert once, not twice."""
+    boundary = (int(time.time()) // 3600 + 1) * 3600
+    clock = {"now": float(boundary - 2)}
+    monkeypatch.setattr(time, "time", lambda: clock["now"])
+    client = _deferred(150, start=boundary - WINDOW_SECONDS)
+    sent = _with(monkeypatch, client)
+    _run(make_ctx())
+    clock["now"] = float(boundary + 2)
+    _run(make_ctx())
+    assert sent.await_count == 1
+    (ttl,) = client.ttls.values()
+    assert ttl == deferred_runs.LOOKBACK_SECONDS
