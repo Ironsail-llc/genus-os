@@ -243,7 +243,9 @@ CAPS = {
     # 364 -> 353 in the fold: the verdict type left for tool_verdict.py, which
     # also pays for the gates judging a tool_call as the call it wraps (the
     # unwrapping is in wrapped_call.py; one call site lands here).
-    "robothor/engine/tool_admission.py": 353,
+    # 353 -> 355: a refused call's one tool_call log line. A lazy import and
+    # the gates' await wrapped in it; the line itself is in tools/call_log.py.
+    "robothor/engine/tool_admission.py": 355,
     # Capped at the size it was extracted at, like schedule_reconcile.py: a new
     # module with no cap is how the next branch's "just one more case" lands
     # somewhere the ratchet is not looking. One branch, one dependency, and it
@@ -381,7 +383,10 @@ CAPS = {
     # on both paths. The reading itself lives in tool_outcome.py.
     # 323 -> 314: the denylist left for proxy_denylist.py, where it learned to
     # look through a tool_call, and the cap follows the file down.
-    "robothor/engine/tool_proxy.py": 314,
+    # 314 -> 319: a call a snippet cap refuses writes its tool_call log line.
+    # The two caps moved into one method so the call site is a single branch;
+    # the line itself is written in tools/call_log.py.
+    "robothor/engine/tool_proxy.py": 319,
     # 209 -> 283: the peer-session check. Not a feature, a control: the token
     # alone could not tell one run's snippet from another's, and a probe drove
     # a second run's proxy with a stolen token. Correcting a cap set hours

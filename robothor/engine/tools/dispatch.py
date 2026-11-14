@@ -13,6 +13,7 @@ import httpx
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.capability_tier import current_run_tier
+from robothor.engine.tools.call_log import note_failure
 from robothor.engine.tools.response_failure import http_status_failure, tool_response_failure
 from robothor.engine.wrapped_call import MalformedToolCallError
 
@@ -519,6 +520,10 @@ def _audit_tool_call(
     written before this returns.
     """
     try:
+        from robothor.engine.tools.call_log import note_audit_status
+
+        # The call's one log line takes its outcome from this same status.
+        note_audit_status(status)
         from robothor.audit.logger import log_event
         from robothor.engine.event_writer import get_event_writer
         from robothor.secrets.redaction import redact
@@ -752,6 +757,7 @@ async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) 
             return result
         except Exception as e:
             logger.error("Adapter tool %s (server=%s) failed: %s", name, route, e)
+            note_failure("tool_error", e)
             _audit_tool_call(
                 name, agent_id, tenant_id, user_id=user_id, status="error", error=str(e)
             )
@@ -762,6 +768,7 @@ async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) 
     handlers = _get_handlers()
     handler = handlers.get(name)
     if handler is None:
+        note_failure("unknown_tool")
         return {"error": f"Unknown tool: {name}"}
 
     # ── Repeat-call guard ──
@@ -817,6 +824,7 @@ async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) 
         status = e.response.status_code
         err_msg = f"backing service error (HTTP {status})"
         logger.warning("Tool %s: %s", name, err_msg)
+        note_failure("backing_service", e)
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
         return http_status_failure(name, status, err_msg)
     except httpx.HTTPError as e:
@@ -826,10 +834,12 @@ async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) 
         # state, not a bug: one warning line, no traceback, no crash flag.
         err_msg = f"backing service unreachable: {type(e).__name__}"
         logger.warning("Tool %s: %s", name, err_msg)
+        note_failure("backing_service", e)
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
         return tool_response_failure(name, {"error": err_msg, "retryable": True})
     except Exception as e:
         err_msg, crashed = _describe_exception(e)
+        note_failure("tool_error" if crashed else "validation", e)
         if crashed:
             logger.exception("Tool %s raised unhandled exception", name)
         else:
