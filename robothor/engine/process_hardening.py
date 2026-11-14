@@ -148,7 +148,7 @@ def filter_playwright_driver_env() -> bool:
     False rather than pretending. Returns True when the filter is in place.
     """
     try:
-        from playwright._impl import _transport
+        from playwright._impl import _transport  # type: ignore[attr-defined]
     except ImportError:
         return False
     current = getattr(_transport, "get_driver_env", None)
@@ -167,7 +167,7 @@ def filter_playwright_driver_env() -> bool:
         return without_platform_credentials(current())
 
     setattr(get_driver_env, _FILTERED, True)
-    _transport.get_driver_env = get_driver_env  # type: ignore[attr-defined]
+    _transport.get_driver_env = get_driver_env
     return True
 
 
