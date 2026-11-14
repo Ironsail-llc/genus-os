@@ -852,7 +852,9 @@ class WorkflowEngine:
         if requeue_on_rate_limit and self._first_step_rate_limited(wf):
             if dedup_key is not None:
                 await release(dedup_key)
-            logger.info(
+            # Debug: the hook consumer counts deferrals and logs one summary
+            # line per workflow per window (robothor.engine.deferrals).
+            logger.debug(
                 "Workflow %s deferred: tool-call rate limit reached at first step %s (%s)",
                 _sanitize(wf.id),
                 wf.steps[0].id,

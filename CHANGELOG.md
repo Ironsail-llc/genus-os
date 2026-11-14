@@ -1,3 +1,15 @@
+## [1.130.0](https://github.com/Ironsail-llc/genus-os/compare/v1.129.1...v1.130.0) (2026-11-14)
+
+### Features
+
+* **engine:** count rate-limit deferrals and warn in the doctor (GEN-524) ([#868](https://github.com/Ironsail-llc/genus-os/issues/868)) ([8e349b9](https://github.com/Ironsail-llc/genus-os/commit/8e349b9503c3f409cebf42116205f9e57ba08776)), closes [#867](https://github.com/Ironsail-llc/genus-os/issues/867)
+
+## [1.129.1](https://github.com/Ironsail-llc/genus-os/compare/v1.129.0...v1.129.1) (2026-11-14)
+
+### Bug Fixes
+
+* **engine:** mypy attr-defined on playwright._impl._transport (GEN-509) ([#866](https://github.com/Ironsail-llc/genus-os/issues/866)) ([fc5b3a4](https://github.com/Ironsail-llc/genus-os/commit/fc5b3a4f68b1163f4adc90a73cecdc4bee21f49f)), closes [#864](https://github.com/Ironsail-llc/genus-os/issues/864)
+
 ## [1.129.0](https://github.com/Ironsail-llc/genus-os/compare/v1.128.2...v1.129.0) (2026-11-06)
 
 ### Features

@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from robothor.doctor.model import Check, Result, fail, ok
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.doctor.context import DoctorContext
 
-__all__ = ["CHECKS"]
+__all__ = ["CHECKS", "client"]
+
+
+def client(ctx: DoctorContext) -> Any:
+    """A synchronous Redis client for the configured instance, on the doctor's budget."""
+    import redis as redis_lib
+
+    settings = ctx.settings.redis
+    return redis_lib.Redis(
+        host=settings.host,
+        port=settings.port,
+        db=settings.db,
+        password=settings.password or None,
+        socket_timeout=ctx.timeout_s,
+        socket_connect_timeout=ctx.timeout_s,
+    )
 
 
 async def _connect(ctx: DoctorContext) -> Result:
@@ -24,20 +39,11 @@ async def _connect(ctx: DoctorContext) -> Result:
     settings = ctx.settings.redis
 
     def _ping() -> None:
-        import redis as redis_lib
-
-        client = redis_lib.Redis(
-            host=settings.host,
-            port=settings.port,
-            db=settings.db,
-            password=settings.password or None,
-            socket_timeout=ctx.timeout_s,
-            socket_connect_timeout=ctx.timeout_s,
-        )
+        connection = client(ctx)
         try:
-            client.ping()
+            connection.ping()
         finally:
-            client.close()
+            connection.close()
 
     try:
         await ctx.run_blocking(_ping)

@@ -479,6 +479,9 @@ class TestSessionRestoreIsOffTheLoop:
             chat, "load_all_sessions", lambda **_k: {ALICE_KEY: {"history": list(ALICE_HISTORY)}}
         )
         monkeypatch.setattr("robothor.engine.ide.init_ide", lambda *_a: None)
+        # init_chat sets these module globals; restore them after the test.
+        monkeypatch.setattr(chat, "_config", None)
+        monkeypatch.setattr(chat, "_runner", None)
         chat._cache.sessions.pop(ALICE_KEY, None)
         config = MagicMock()
         config.tenant_id = "test-tenant"
