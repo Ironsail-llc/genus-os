@@ -367,7 +367,8 @@ class TestHighAvailability:
             assert b.hooks.backlog.stats("order-flow")[0] == 5
 
             leader["now"] = True
-            await vt.run_until()
+            await vt.run_until(lambda: len(b.calls) >= 5)
+            await b.hooks.backlog.stop()
         assert b.handled() == _expected(5)
 
     @pytest.mark.asyncio
@@ -377,7 +378,8 @@ class TestHighAvailability:
         monkeypatch.setenv("ROBOTHOR_HA_LEADER_ENABLED", "1")
         with patch("robothor.engine.leader.is_leader", return_value=True):
             leader = Burst(engine_config, vt, _definition())
-            await leader.hooks.resume_workflow_backlog(leader.redis)  # nothing yet
+            await leader.hooks.resume_workflow_backlog(leader.redis)
+            await vt.settle()  # it has looked: nothing yet, so it waits
             # Another replica, same Redis, reads the events and writes them.
             replica = leader.new_hooks()
             replica.backlog._leader = lambda: False  # its own process's verdict

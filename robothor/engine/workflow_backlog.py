@@ -17,7 +17,9 @@ deletes the entry once the run has finished. So:
 
 A workflow whose trigger is ``concurrent`` has up to
 :data:`MAX_CONCURRENT_RUNS` runs in flight, started in arrival order; any
-other workflow runs its backlog one event at a time. A non-concurrent
+other workflow runs its backlog one event at a time. Under HA every replica
+may write to a backlog but only the leader runs it, so no event runs twice
+because two replicas drained it. A non-concurrent
 workflow without ``requeue_if_busy`` keeps its old contract: an event that
 arrives while a run is in flight is dropped (``EventHooks``), never queued.
 
@@ -58,6 +60,10 @@ MAX_CONCURRENT_RUNS = 100
 #: backlog (a cron or manual run) holds a non-concurrent workflow.
 LOCK_WAIT_SECONDS = 1.0
 
+#: Under HA, how often a drainer looks again: whether this replica now leads,
+#: and for events another replica wrote (its writes wake no one here).
+HA_RECHECK_SECONDS = 5.0
+
 #: On stop, how long runs in flight get to finish; the rest stay in the backlog.
 STOP_DRAIN_SECONDS = 20
 
@@ -69,6 +75,29 @@ TYPE_FIELD = "_backlog_event_type"
 _INTERNAL_FIELDS = frozenset(
     {"_retry_agents", "_retry_workflows", "_rate_deferred", "_busy_requeue_count", "_retry_count"}
 )
+
+
+async def _wake_or_sleep(wake: asyncio.Event, seconds: float) -> None:
+    """Return when ``wake`` is set or ``seconds`` have passed, whichever is first."""
+    waiting = [asyncio.ensure_future(wake.wait()), asyncio.ensure_future(asyncio.sleep(seconds))]
+    try:
+        await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in waiting:
+            task.cancel()
+        await asyncio.gather(*waiting, return_exceptions=True)
+
+
+def _ha() -> bool:
+    from robothor.engine.leader import ha_leader_enabled
+
+    return ha_leader_enabled()
+
+
+def _is_leader() -> bool:
+    from robothor.engine import leader
+
+    return leader.is_leader()
 
 
 def backlog_key(tenant_id: str, workflow_id: str) -> str:
@@ -120,8 +149,11 @@ class WorkflowBacklog:
         tenant_id: str,
         engine: Callable[[], Any],
         deferred: Callable[[], DeferredRuns | None] = lambda: None,
+        leader: Callable[[], bool] | None = None,
     ) -> None:
         self.tenant_id = tenant_id
+        # Whether this process may run backlogs (always, unless HA says otherwise).
+        self._leader = leader or _is_leader
         self._engine = engine
         self._deferred = deferred
         self._redis: Any = None
@@ -189,6 +221,8 @@ class WorkflowBacklog:
                 for msg_id, _ in page:
                     pending.setdefault(_text(msg_id), None)
                 low = "(" + _text(page[-1][0])
+            if _ha():
+                self._start(workflow_id)  # the leader may be another replica's writes away
             if pending:
                 depth, oldest = self.stats(workflow_id)
                 logger.info(
@@ -239,11 +273,22 @@ class WorkflowBacklog:
         key = self.key(workflow_id)
         cursor = "-"
         slots: asyncio.Semaphore | None = None
+        ha = _ha()
         while True:
+            if ha and not self._leader():
+                # Another replica leads and runs this backlog. Start over from
+                # the oldest entry once this one leads: the other has deleted
+                # what it finished.
+                cursor = "-"
+                await asyncio.sleep(HA_RECHECK_SECONDS)
+                continue
             wake.clear()
             entries = await self._redis.xrange(key, min=cursor, max="+", count=1)
             if not entries:
-                await wake.wait()
+                if ha:
+                    await _wake_or_sleep(wake, HA_RECHECK_SECONDS)
+                else:
+                    await wake.wait()
                 continue
             raw_id, raw = entries[0]
             msg_id = _text(raw_id)
