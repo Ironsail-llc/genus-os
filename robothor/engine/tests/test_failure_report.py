@@ -154,3 +154,13 @@ class TestCommand:
 
         args = argparse.Namespace(hours=hours, json=False, tenant=None, limit=50)
         assert _cmd_engine_failures(args) == 2
+
+
+def test_a_denial_recorded_in_both_tables_is_one_group(monkeypatch) -> None:
+    """A dispatch denial writes an audit row and a failed tool event: count it once."""
+    denial = ("example_tool", "example-agent", "role 'viewer' may not use example_tool", 3, T0)
+    _rows(monkeypatch, tools=[denial], denied=[denial])
+    groups = failure_report.collect(hours=24, tenant_id="test-tenant")
+    assert len(groups) == 1
+    assert groups[0]["source"] == "denied"
+    assert groups[0]["count"] == 3
