@@ -322,3 +322,45 @@ class TestTheExactTokenizerPathAgreesToo:
 
         assert result.tokens_before == estimate_context_tokens(messages, model)
         assert result.tokens_after < result.tokens_before
+
+    async def test_the_exact_count_runs_off_the_event_loop(self, monkeypatch):
+        """``litellm.token_counter`` is synchronous and CPU-bound; compaction
+        counts many times, and each count on the loop stalls every session."""
+        import asyncio
+        import threading
+        import time
+
+        from robothor.engine.compaction import compact
+
+        loop = asyncio.get_running_loop()
+        gate = threading.Barrier(8, timeout=2)
+        await asyncio.gather(*(asyncio.to_thread(gate.wait) for _ in range(8)))
+        lags: list[float] = []
+
+        def slow_counter(model, messages):
+            entered = time.monotonic()
+            loop.call_soon_threadsafe(lambda: lags.append(time.monotonic() - entered))
+            time.sleep(0.05)
+            return 4 * estimate_for(messages)
+
+        monkeypatch.setenv("ROBOTHOR_REAL_TOKENIZER_ENABLED", "1")
+        monkeypatch.setattr("litellm.token_counter", slow_counter)
+        messages = _start()
+        for i in range(6):
+            messages.append(_call(i))
+            messages.append(
+                {"role": "tool", "tool_call_id": f"call_{i}", "content": _catalog_json(i, 20_000)}
+            )
+        threshold = estimate_for(messages) * 2
+
+        with patch("robothor.engine.compaction._acompletion_over_chain", new=_Summariser()):
+            await compact(
+                messages,
+                models=["provider/large-window-model"],
+                threshold=threshold,
+                drain_to=int(threshold * 0.75),
+            )
+        await asyncio.sleep(0.05)
+
+        assert lags, "the exact counter was never reached"
+        assert max(lags) <= 0.02, f"a loop callback waited {max(lags) * 1000:.0f} ms"
