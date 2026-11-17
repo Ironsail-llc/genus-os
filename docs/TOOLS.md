@@ -1720,13 +1720,23 @@ exec, `send_file` to another chat, and every GitHub tool without
 | `gate_name` | the control: `plan_mode`, `tools_allowed`, `rbac`, `owner_role`, `GITHUB_TOKEN`, a guardrail's name |
 | `unlock` | what a person changes for the same call to succeed |
 
-Behavioural rule 21 ships with them: **A refusal names its gate; relay it,
+Behavioural rule 21 ships with them: **Relay a refusal as it states itself,
 never claim an inability** — when a tool result has `refused: true` and a
 `gate`, tell the person which gate refused it (`gate`, `gate_name`) and what
 unlocks it (`unlock`), then offer the next step you can take now; do not look
 for a way round it. A `refused: true` without a `gate` is a redirection, not a
-block: change the call as its `reason` says. Never say you cannot do something
-no tool refused: if a tool you have can do it, do it.
+block: change the call as its `reason` says. When a tool fails or another
+system refuses the call and the result names no gate or unlock, the agent
+reports what the result itself says, says that it does not state the cause,
+and says that the administrator of the system that refused can check. It never
+attributes a refusal to a switch, mode, setting or gate the refusal does not
+name, even one it saw in other tool output, and a message to an end customer
+carries no error text, tool names, setting names or ids. Never say you cannot
+do something no tool refused: if a tool you have can do it, do it.
+
+The "What you can do here" block says the same: a refusal by one of the gates
+it lists names the gate and the unlock; a refusal that names no gate is
+relayed in its own words, with its cause stated as not given.
 
 A direct call to a tool the agent is granted but that a deferred turn left out
 of its schemas is refused with gate `policy`, name `deferred`, and the unlock
