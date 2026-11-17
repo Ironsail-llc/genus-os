@@ -1743,8 +1743,9 @@ The engine backs this up. Within one run, a call identical in tool and
 arguments to one that was refused or denied (an engine gate, or an HTTP 401 or
 403 answer) is not made again: it returns at once with the original refusal
 and an instruction not to retry, and logs `outcome=refused reason="repeat of a
-refused call"`. A plain error or a timeout is never short-circuited, and a call
-a `tool_call` wrapper makes (a deferred tool's unlock) always runs.
+refused call"`. A plain error, a timeout or a gate-less redirection (the repeat guard's
+"change the call") is never short-circuited, and a call a `tool_call` wrapper
+makes (a deferred tool's unlock) always runs.
 
 The "What you can do here" block says the same: a refusal by one of the gates
 it lists names the gate and the unlock; a refusal that names no gate is

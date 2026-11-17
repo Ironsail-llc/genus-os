@@ -222,6 +222,8 @@ def _repeat_of_refusal(run_id: str, key: str) -> dict[str, Any] | None:
 def _remember_refusal(run_id: str, key: str, outcome: str, error_type: str, reason: str) -> None:
     if not run_id or (outcome not in _REFUSED_OUTCOMES and error_type not in _REFUSED_ERROR_TYPES):
         return
+    if error_type == "redirect":  # no gate: "change the call", a one-shot redirection
+        return
     calls = _refused_calls.setdefault(run_id, {})
     _refused_calls.move_to_end(run_id)
     if len(calls) < _REFUSALS_PER_RUN:

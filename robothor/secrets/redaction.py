@@ -896,9 +896,12 @@ def redact_opaque_runs(text: str) -> str:
 
 #: Anchored on the ``@``: the longest local part and domain around it, whatever
 #: touches them, since an address is often joined into a file name, key or slug
-#: (``missing-<address>-<number>``). Domain labels start with a letter, so a
-#: dotted number after the address is not taken for part of its domain.
-_EMAIL = re.compile(r"[\w.%+-]+@[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z][A-Za-z0-9-]*)*\.[A-Za-z]{2,}")
+#: (``missing-<address>-<number>``). The domain ends at its first all-letter
+#: label (lazy), so a dotted number after the address is not taken for part of
+#: it, while a digit-led label (``163.com``) still is.
+_EMAIL = re.compile(
+    r"[\w.%+-]+@[A-Za-z0-9][A-Za-z0-9-]*(?:\.[A-Za-z0-9][A-Za-z0-9-]*)*?\.[A-Za-z]{2,}"
+)
 #: A number may touch letters, ``-``, ``_`` or ``.``, but not another digit, and
 #: not a digit one separator away: a 3-3-4 group inside a longer dashed or
 #: dotted number (an account, a serial, a version) is left alone.
