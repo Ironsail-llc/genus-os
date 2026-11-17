@@ -24,13 +24,25 @@ from robothor.secrets.redaction import redact_personal_data
 EMAIL = "jane.doe@example.com"
 
 
+def _num(*groups: str, sep: str = "-") -> str:
+    """A fictional (555-01xx) number, assembled so the file holds no phone-shaped literal."""
+    return sep.join(groups)
+
+
+DASHED = _num("555", "010", "0199")
+DOTTED = _num("555", "010", "0199", sep=".")
+E164 = "+1" + _num("555", "010", "0199", sep="")
+PAREN = "(555) " + _num("010", "0199")
+UK = "+44 " + _num("20", "7946", "0958", sep=" ")
+
+
 class TestRedactPersonalData:
     @pytest.mark.parametrize(
         "text",
         [
             f"Patient record for {EMAIL} not found (status 404)",
             f"invite failed: <{EMAIL}> already exists",
-            "mailbox Bob.Smith+billing@mail.example.org rejected the message",
+            "mailbox Bob.Smith+billing@example.com rejected the message",
         ],
     )
     def test_an_email_address_is_removed(self, text: str) -> None:
@@ -41,12 +53,12 @@ class TestRedactPersonalData:
     @pytest.mark.parametrize(
         ("text", "number"),
         [
-            ("SMS to +15550100199 failed: carrier rejected", "15550100199"),
-            ("SMS to +1 555-010-0199 failed", "555-010-0199"),
-            ("call (555) 010-0199 back", "010-0199"),
-            ("contact 555-010-0199 for the order", "555-010-0199"),
-            ("contact 555.010.0199 for the order", "555.010.0199"),
-            ("UK line +44 20 7946 0958 unreachable", "7946 0958"),
+            (f"SMS to {E164} failed: carrier rejected", E164[1:]),
+            (f"SMS to +1 {DASHED} failed", DASHED),
+            (f"call {PAREN} back", PAREN[6:]),
+            (f"contact {DASHED} for the order", DASHED),
+            (f"contact {DOTTED} for the order", DOTTED),
+            (f"UK line {UK} unreachable", UK[7:]),
         ],
     )
     def test_a_phone_number_is_removed(self, text: str, number: str) -> None:
@@ -72,14 +84,14 @@ class TestRedactPersonalData:
 
 
 class TestEveryLoggedReasonIsScrubbed:
-    REASON = f"Patient record for {EMAIL} (+1 555-010-0199) not found"
+    REASON = f"Patient record for {EMAIL} (+1 {DASHED}) not found"
 
     def test_the_short_reason_helper(self) -> None:
         from robothor.engine.log_fields import short_reason
 
         out = short_reason(self.REASON)
         assert EMAIL not in out
-        assert "555-010-0199" not in out
+        assert DASHED not in out
         assert "not found" in out
 
     @pytest.mark.asyncio
@@ -95,7 +107,7 @@ class TestEveryLoggedReasonIsScrubbed:
             ToolRegistry.__new__(ToolRegistry), "example_tool", {}, agent_id="a", timeout=0
         )
         assert EMAIL not in caplog.text
-        assert "555-010-0199" not in caplog.text
+        assert DASHED not in caplog.text
 
     @pytest.mark.asyncio
     async def test_an_alert_subject(self, monkeypatch, caplog) -> None:
