@@ -182,3 +182,21 @@ async def test_following_a_deferred_refusals_unlock_still_runs(monkeypatch) -> N
     )
     assert results[1] == {"ok": True}
     assert [name for name, _ in calls] == ["example_tool", "tool_call", "example_tool"]
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_that_names_no_gate_is_a_one_shot_redirection(monkeypatch) -> None:
+    """The repeat guard's refusal says "change the call" and lets the next one
+    run; it is not a refusal a person grants, so it is never remembered."""
+    redirection = {
+        "refused": True,
+        "reason": "change something first",
+        "repeat_guard": "refused_variant",
+    }
+    answers = iter([redirection, {"stdout": "ok", "exit_code": 0}])
+    _results, calls = await _run(
+        monkeypatch,
+        {"exec": lambda: next(answers)},
+        [("exec", {"command": "python test_x.py"}), ("exec", {"command": "python test_x.py"})],
+    )
+    assert len(calls) == 2
