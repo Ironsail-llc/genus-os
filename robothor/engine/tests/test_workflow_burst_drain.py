@@ -350,3 +350,48 @@ class TestBurstDrains:
         depth, oldest = b.hooks.backlog.stats("order-flow")  # type: ignore[attr-defined]
         assert depth == 60
         assert oldest == pytest.approx(vt.now - START, abs=1)
+
+
+class TestHighAvailability:
+    """Replicas share one Redis: each may write to a backlog, only the leader runs it."""
+
+    @pytest.mark.asyncio
+    async def test_only_the_leader_runs_the_backlog(self, engine_config, vt, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_HA_LEADER_ENABLED", "1")
+        leader = {"now": False}
+        with patch("robothor.engine.leader.is_leader", side_effect=lambda: leader["now"]):
+            b = Burst(engine_config, vt, _definition())
+            await b.publish(5)
+            await vt.run_until(lambda: vt.now - START > 120)
+            assert b.handled() == []  # a replica keeps them, never runs them
+            assert b.hooks.backlog.stats("order-flow")[0] == 5
+
+            leader["now"] = True
+            await vt.run_until()
+        assert b.handled() == _expected(5)
+
+    @pytest.mark.asyncio
+    async def test_the_leader_finds_events_another_replica_wrote(
+        self, engine_config, vt, monkeypatch
+    ):
+        monkeypatch.setenv("ROBOTHOR_HA_LEADER_ENABLED", "1")
+        with patch("robothor.engine.leader.is_leader", return_value=True):
+            leader = Burst(engine_config, vt, _definition())
+            await leader.hooks.resume_workflow_backlog(leader.redis)  # nothing yet
+            # Another replica, same Redis, reads the events and writes them.
+            replica = leader.new_hooks()
+            replica.backlog._leader = lambda: False  # its own process's verdict
+            for i in range(3):
+                await replica.backlog.enqueue(
+                    leader.redis,
+                    leader.engine.get_workflow("order-flow"),
+                    "platform",
+                    EVENT,
+                    {"id": f"evt-{i}", "type": EVENT, "payload": "{}"},
+                )
+            await vt.settle()
+            assert leader.handled() == []  # not woken: it has to look
+            await vt.run_until(lambda: len(leader.calls) >= 3)
+            await replica.backlog.stop()
+            await leader.hooks.backlog.stop()
+        assert leader.handled() == _expected(3)
