@@ -139,33 +139,75 @@ def capture_reasoning_fields(message: Any) -> dict[str, Any]:
     return captured
 
 
+#: Content-block types that carry a model's reasoning inside ``content``. An
+#: Anthropic-shaped reply puts a signed ``thinking`` block before its text; only
+#: that family accepts one back, and every other provider rejects the request.
+THINKING_BLOCK_TYPES: Final[frozenset[str]] = frozenset(
+    {"thinking", "redacted_thinking", "reasoning"}
+)
+
+
+def has_thinking_blocks(message: Any) -> bool:
+    """True when ``message``'s content is a block list with a reasoning block in it."""
+    content = message.get("content") if isinstance(message, dict) else None
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") in THINKING_BLOCK_TYPES for block in content
+    )
+
+
+def _anthropic_family(model: str) -> bool:
+    lowered = model.lower()
+    return "anthropic/" in lowered or "claude" in lowered
+
+
+def _without_thinking_blocks(message: dict[str, Any]) -> dict[str, Any]:
+    kept = [
+        block
+        for block in message["content"]
+        if not (isinstance(block, dict) and block.get("type") in THINKING_BLOCK_TYPES)
+    ]
+    return {**message, "content": kept or ""}
+
+
 def strip_reasoning_for_model(messages: list[dict[str, Any]], model: str) -> list[dict[str, Any]]:
     """Messages safe to send to ``model``.
 
     Drops the ``_model`` bookkeeping key from every message that carries it,
     and with it the reasoning fields whenever that message was produced by a
-    different model. Returns the same list object when there is nothing to
+    different model. Reasoning content blocks (:data:`THINKING_BLOCK_TYPES`)
+    follow the same rule; a message stored before its producer was recorded
+    keeps them only for an Anthropic-family target, the one family that emits
+    and accepts them. Returns the same list object when there is nothing to
     change, so ordinary payloads stay byte-identical, and never mutates the
     caller's messages — the history stays intact for the next leg of the
     fallback chain.
     """
-    if not any(isinstance(m, dict) and PRODUCER_MODEL_KEY in m for m in messages):
+    if not any(
+        isinstance(m, dict) and (PRODUCER_MODEL_KEY in m or has_thinking_blocks(m))
+        for m in messages
+    ):
         return messages
 
     cleaned: list[dict[str, Any]] = []
     for message in messages:
-        producer = message.get(PRODUCER_MODEL_KEY) if isinstance(message, dict) else None
+        if not isinstance(message, dict):
+            cleaned.append(message)
+            continue
+        producer = message.get(PRODUCER_MODEL_KEY)
         if producer is None:
+            if has_thinking_blocks(message) and not _anthropic_family(model):
+                message = _without_thinking_blocks(message)
             cleaned.append(message)
             continue
         keep_reasoning = same_model(str(producer), model)
-        cleaned.append(
-            {
-                key: value
-                for key, value in message.items()
-                if key != PRODUCER_MODEL_KEY and (keep_reasoning or key not in REASONING_FIELDS)
-            }
-        )
+        stripped = {
+            key: value
+            for key, value in message.items()
+            if key != PRODUCER_MODEL_KEY and (keep_reasoning or key not in REASONING_FIELDS)
+        }
+        if not keep_reasoning and has_thinking_blocks(stripped):
+            stripped = _without_thinking_blocks(stripped)
+        cleaned.append(stripped)
     return cleaned
 
 
