@@ -338,3 +338,20 @@ async def test_a_classification_failure_never_fails_the_call(monkeypatch, caplog
     result = await _call(monkeypatch, {"error": "x"})
     assert result == {"error": "x"}
     assert len(_lines(caplog)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["status_code", "status"])
+async def test_an_http_error_status_is_an_error_outcome(monkeypatch, caplog, key) -> None:
+    """A generic API tool reports a 403 as a result, not an ``error`` key."""
+    await _call(monkeypatch, {key: 403, "body": "result-value-456"})
+    f = _fields(_lines(caplog)[0].getMessage())
+    assert f["outcome"] == "error"
+    assert f["error_type"] == "http_403"
+    assert "result-value-456" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_success_status_stays_ok(monkeypatch, caplog) -> None:
+    await _call(monkeypatch, {"status_code": 200, "body": "fine"})
+    assert _fields(_lines(caplog)[0].getMessage())["outcome"] == "ok"

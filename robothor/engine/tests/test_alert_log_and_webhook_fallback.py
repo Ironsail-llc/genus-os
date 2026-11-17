@@ -128,3 +128,16 @@ class TestWebhookFallback:
         assert delivered is False
         send.assert_not_awaited()
         assert any(r.get("notification_type") == "alert_fallback" for r in _isolated)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_delivery_prints_no_cant_deliver_warning(monkeypatch, caplog) -> None:
+    """The primary not being set up is said once, in the line naming the fallback."""
+    monkeypatch.setattr(alerts, "alert_webhook_url", lambda: "https://hooks.example.com/x")
+    monkeypatch.setattr(alerts, "_send_webhook", AsyncMock(return_value=True))
+    assert await alerts.alert("critical", "Database down", "3 failed pings") is True
+    assert not [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "can't deliver alert" in r.getMessage()
+    ]
