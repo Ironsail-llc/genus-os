@@ -128,7 +128,10 @@ def logged(execute: _F) -> _F:
         outcome, error_type, reason = "ok", "", ""
         try:
             result = await execute(self, tool_name, arguments, *args, **kwargs)
-            outcome, error_type, reason = classify_result(tool_name, result)
+            try:
+                outcome, error_type, reason = classify_result(tool_name, result)
+            except Exception:  # noqa: BLE001 — classifying never fails the call
+                outcome, error_type = "unknown", "unclassified"
             return result
         except asyncio.CancelledError:
             outcome, error_type = "cancelled", "cancelled"

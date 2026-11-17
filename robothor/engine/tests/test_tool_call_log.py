@@ -315,3 +315,16 @@ def test_the_audit_row_bounds_an_error_before_redacting_it(monkeypatch) -> None:
     )
     assert seen and max(seen) <= 8192
     assert len(submitted[0]["details"]["error"]) <= 500
+
+
+@pytest.mark.asyncio
+async def test_a_classification_failure_never_fails_the_call(monkeypatch, caplog) -> None:
+    from robothor.engine import tool_call_log
+
+    def _broken(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("classifier broke")
+
+    monkeypatch.setattr(tool_call_log, "classify_result", _broken)
+    result = await _call(monkeypatch, {"error": "x"})
+    assert result == {"error": "x"}
+    assert len(_lines(caplog)) == 1
