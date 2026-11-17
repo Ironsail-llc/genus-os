@@ -82,12 +82,12 @@ class TestCapabilityBlock:
         assert "refused by one of the gates above" in block
         assert "names the gate and the unlock" in block
 
-    def test_the_block_says_what_to_do_when_a_refusal_names_no_gate(self) -> None:
+    def test_the_block_sends_a_refusal_that_names_no_gate_to_rule_21(self) -> None:
+        """The rule says how; the block only points at it, to keep the prompt short."""
         block = _block()
         assert "names no gate" in block
-        assert "cause is not stated" in block
-        assert "administrator" in block
-        assert "never name a gate, switch, mode or setting the refusal did not name" in block
+        assert "relay its own words" in block
+        assert "rule 21" in block
 
     def test_the_block_no_longer_promises_every_refusal_names_its_gate(self) -> None:
         assert "When a tool is refused, its result names the gate" not in _block()

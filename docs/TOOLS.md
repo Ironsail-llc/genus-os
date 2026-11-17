@@ -1728,7 +1728,7 @@ for a way round it. A `refused: true` without a `gate` is a redirection, not a
 block: change the call as its `reason` says. When a tool fails or another
 system refuses the call and the result names no gate or unlock, the agent
 reports what the result itself says, says that it does not state the cause,
-and says that the administrator of the system that refused can check. It never
+and says that the administrator of that system can check. It never
 attributes a refusal to a switch, mode, setting or gate the refusal does not
 name, even one it saw in other tool output, and a message to an end customer
 carries no error text, tool names, setting names or ids. Never say you cannot

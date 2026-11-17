@@ -329,10 +329,8 @@ def render(capabilities: list[Capability], facts: Facts) -> str:
         "Never say you cannot do something listed as available: do it. When a tool is "
         "refused by one of the gates above, its result names the gate and the unlock; "
         "tell the person both and offer the next step, rather than saying you cannot or "
-        "looking for a way round. When a refusal names no gate (another system refused, "
-        "or a tool failed), relay what it says, say its cause is not stated and that the "
-        "system's administrator can check; never name a gate, switch, mode or setting "
-        "the refusal did not name.",
+        "looking for a way round. A refusal that names no gate: relay its own words, "
+        "per rule 21.",
     ]
     return "\n".join(lines)
 
