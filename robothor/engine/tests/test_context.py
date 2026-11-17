@@ -89,7 +89,9 @@ class TestMaybeCompress:
 
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Summary of conversation."
+        mock_response.choices[
+            0
+        ].message.content = "Summary of conversation. The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do."
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
             result = await maybe_compress(messages, [CHAIN_MODEL])
@@ -111,7 +113,9 @@ class TestMaybeCompress:
 
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Summary."
+        mock_response.choices[
+            0
+        ].message.content = "Summary. The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do."
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
             result = await maybe_compress(messages, [CHAIN_MODEL])
@@ -130,7 +134,9 @@ class TestMaybeCompress:
 
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Summary."
+        mock_response.choices[
+            0
+        ].message.content = "Summary. The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do."
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
             result = await maybe_compress(messages, [CHAIN_MODEL])

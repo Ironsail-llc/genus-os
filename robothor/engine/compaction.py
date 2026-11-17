@@ -708,8 +708,10 @@ def _shrink_largest(
     out = list(messages)
     tail_start = max(0, len(out) - keep_intact)
     # Biggest first: one 750KB tool result is worth more than twenty small ones.
+    from robothor.engine.compaction_ledger import is_ledger
+
     order = sorted(
-        (i for i in range(1, tail_start)),
+        (i for i in range(1, tail_start) if not is_ledger(out[i])),
         key=lambda i: len(_content_text(out[i].get("content"))),
         reverse=True,
     )
@@ -1155,6 +1157,18 @@ def _merge_retained_facts(
     return out
 
 
+#: A summary shorter than this, standing in for at least
+#: ``DEGENERATE_SOURCE_CHARS`` of conversation, is a failed summary. A real one
+#: is up to 300 words; a summarizer that extracts nothing answers a phrase.
+DEGENERATE_SUMMARY_CHARS = 100
+DEGENERATE_SOURCE_CHARS = 4_000
+
+
+def _degenerate_summary(summary: str, replaced: list[dict[str, Any]]) -> bool:
+    source = sum(len(_content_text(m.get("content"))) for m in replaced)
+    return source >= DEGENERATE_SOURCE_CHARS and len(summary.strip()) < DEGENERATE_SUMMARY_CHARS
+
+
 def _set_aside_stub_exchanges(
     messages: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1166,6 +1180,8 @@ def _set_aside_stub_exchanges(
     lab run, that is how the one result holding the fact the answer needed
     disappeared. Whole exchanges only, so every call keeps its result.
     """
+    from robothor.engine.compaction_ledger import is_ledger
+
     summarize: list[dict[str, Any]] = []
     kept: list[dict[str, Any]] = []
     i = 0
@@ -1173,7 +1189,7 @@ def _set_aside_stub_exchanges(
         m = messages[i]
         calls = m.get("tool_calls") if m.get("role") == "assistant" else None
         if not calls:
-            summarize.append(m)
+            (kept if is_ledger(m) else summarize).append(m)
             i += 1
             continue
         ids = {str(c.get("id")) for c in calls if isinstance(c, dict)}
@@ -1252,17 +1268,34 @@ async def compact(
             **extra,
         )
 
-    if est < drain_to:
+    async def fold(msgs: list[dict[str, Any]], head: int, tail: int) -> list[dict[str, Any]]:
+        """Stubs that alone do not fit are folded into the ledger, never dropped."""
+        from robothor.engine.compaction_ledger import fold_stub_exchanges
+
+        if await measure(msgs) <= drain_to:
+            return msgs
+        # Folding is triggered by the drain target, but excerpts are cut only
+        # while the result is still at the trigger: that is the bound, and the
+        # excerpt is what a summarizer that extracts nothing would lose.
+        folded, n = await asyncio.to_thread(
+            fold_stub_exchanges, msgs, head, tail, max(1, threshold - 1), sizing
+        )
+        if n:
+            logger.info("Compaction: folded %d elided exchange(s) into the ledger", n)
+        return folded
+
+    if est <= drain_to:
         return await result(working, 1)
 
     if len(working) <= KEEP_RECENT + 1:
         shrunk, n = await asyncio.to_thread(_shrink_largest, working, drain_to, model=sizing)
-        if not n and est >= tokens_before:
+        folded = await fold(shrunk, head_len, protect)
+        if not n and folded is shrunk and est >= tokens_before:
             # Nothing reclaimed: a no-op must not read as a pass that worked.
             return CompactionResult(
                 messages=messages, tokens_before=tokens_before, tokens_after=tokens_before
             )
-        return await result(shrunk, 1)
+        return await result(folded, 1)
 
     head_msgs, retained_msgs, rest = _split_for_summary(working)
     previous, rest = _take_previous_summary(rest)
@@ -1274,7 +1307,7 @@ async def compact(
     old_messages, recent_messages = rest[:split_idx], rest[split_idx:]
     old_messages, kept_stubs = _set_aside_stub_exchanges(old_messages)
     if not old_messages:
-        return await result(working, 1)
+        return await result(await fold(working, head_len, protect), 1)
 
     chain = await _summary_chain(models, broken_models, preferred_model)
     try:
@@ -1295,6 +1328,18 @@ async def compact(
             len(working),
         )
         return await result(working, 1, degraded=True)
+
+    if _degenerate_summary(summary, old_messages):
+        # A few characters standing in for thousands is a failed summary, not a
+        # short one. Keep the originals, shrunk; never discard them for it.
+        logger.warning(
+            "Compaction: summary of %d characters for %d messages is degenerate — "
+            "shrinking the originals instead, run marked degraded",
+            len(summary.strip()),
+            len(old_messages),
+        )
+        shrunk, _ = await asyncio.to_thread(_shrink_largest, working, drain_to, model=sizing)
+        return await result(await fold(shrunk, head_len, protect), 1, degraded=True)
 
     # Extraction reads at most FACT_INPUT_MESSAGES messages per call
     # (`build_extraction_input`), so it walks the slice the same way.
@@ -1321,6 +1366,7 @@ async def compact(
         result_msgs, _ = await asyncio.to_thread(
             _shrink_largest, result_msgs, drain_to, model=sizing
         )
+        result_msgs = await fold(result_msgs, len(head_msgs), len(recent_messages))
     done = await result(result_msgs, 3, facts_extracted=facts)
     logger.info(
         "Compaction: summary updated on %s, ~%d → ~%d tokens",

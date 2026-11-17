@@ -60,7 +60,9 @@ class _Summariser:
 
 
 def _start(history_pairs: int = 0, system_reps: int = 300) -> list[dict]:
-    messages: list[dict] = [{"role": "system", "content": "You are a careful agent. " * system_reps}]
+    messages: list[dict] = [
+        {"role": "system", "content": "You are a careful agent. " * system_reps}
+    ]
     for i in range(history_pairs):
         messages.append({"role": "user", "content": f"Earlier question {i}. " * 15})
         messages.append({"role": "assistant", "content": f"Earlier answer {i}. " * 40})
@@ -231,11 +233,15 @@ class TestTheLogSaysWhatHappened:
                 assert "nothing reduced:" in line, f"a no-op without a reason: {line}"
 
 
-def _wire(messages: list[dict]) -> list[dict]:
-    """What the provider receives: engine keys stripped, system turn hoisted."""
+def _wire(messages: list[dict], model: str = "anthropic/claude-model") -> list[dict]:
+    """What the provider receives: engine keys stripped, the engine's own
+    context turns relabeled the way the client does for this model family,
+    system turn hoisted."""
     from robothor.engine.context_control import strip_engine_keys
+    from robothor.engine.llm_client import LLMClient
 
-    return [m for m in strip_engine_keys(messages) if m.get("role") != "system"]
+    wire = LLMClient._normalize_developer_role(model, strip_engine_keys(messages))
+    return [m for m in wire if m.get("role") != "system"]
 
 
 class TestCallsAndResultsStayPaired:
@@ -291,7 +297,7 @@ class TestCallsAndResultsStayPaired:
         )
 
         for messages in await self._histories():
-            wire = _gemini_convert_messages_with_history(_wire(messages))
+            wire = _gemini_convert_messages_with_history(_wire(messages, "gemini/model"))
             calls = [p for t in wire for p in t["parts"] if "function_call" in p]
             responses = [p for t in wire for p in t["parts"] if "function_response" in p]
             assert len(calls) == len(responses)
@@ -510,9 +516,11 @@ class TestStubsAreNeverSummarizedAway:
             content_for=_file_with_an_early_fact,
             system_reps=1_500,
         )
-        text = json.dumps(run.sent[-1])
-        for i in range(29):
-            assert f"data/file-{i}.txt" in text, f"read {i} vanished without a trace"
+        text = "\n".join(
+            str(m.get("content")) + json.dumps(m.get("tool_calls") or []) for m in run.sent[-1]
+        )
+        for i in range(29):  # every read before the newest, whose call is on the wire
+            assert f'{{"page": {i}}}' in text, f"read {i} vanished without a trace"
         assert "same arguments" in text
 
     async def test_pairing_stays_valid_after_folding(self):

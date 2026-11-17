@@ -122,7 +122,7 @@ async def _no_facts(*_a, **_k):
 
 
 async def _fake_summary(*_a, **_k):
-    return "summary of some turns"
+    return "summary of some turns. The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do."
 
 
 class TestTheStickyContract:
