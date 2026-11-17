@@ -287,3 +287,38 @@ class TestCallsAndResultsStayPaired:
             calls = [p for t in wire for p in t["parts"] if "function_call" in p]
             responses = [p for t in wire for p in t["parts"] if "function_response" in p]
             assert len(calls) == len(responses)
+
+
+class TestTheExactTokenizerPathAgreesToo:
+    """With ``ROBOTHOR_REAL_TOKENIZER_ENABLED`` the trigger counts exactly for
+    the sizing model. Compaction must count the same way, or a context the
+    trigger sees as over is measured under and returned unchanged."""
+
+    async def test_compact_measures_with_the_sizing_model(self, monkeypatch):
+        from robothor.engine.compaction import compact
+        from robothor.engine.context import estimate_context_tokens
+
+        monkeypatch.setenv("ROBOTHOR_REAL_TOKENIZER_ENABLED", "1")
+        # An exact counter that sees four times what the heuristics see.
+        monkeypatch.setattr(
+            "litellm.token_counter",
+            lambda model, messages: 4 * estimate_for(messages),
+        )
+        messages = _start()
+        for i in range(6):
+            messages.append(_call(i))
+            messages.append(
+                {"role": "tool", "tool_call_id": f"call_{i}", "content": _catalog_json(i, 20_000)}
+            )
+        model = "provider/large-window-model"
+        heuristic = estimate_for(messages)
+        threshold = heuristic * 2
+        assert estimate_context_tokens(messages, model) > threshold > heuristic
+
+        with patch("robothor.engine.compaction._acompletion_over_chain", new=_Summariser()):
+            result = await compact(
+                messages, models=[model], threshold=threshold, drain_to=int(threshold * 0.75)
+            )
+
+        assert result.tokens_before == estimate_context_tokens(messages, model)
+        assert result.tokens_after < result.tokens_before
