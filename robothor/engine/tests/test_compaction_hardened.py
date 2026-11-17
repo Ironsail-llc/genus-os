@@ -197,7 +197,9 @@ async def test_a_failed_summary_is_not_drained_and_is_recorded_degraded():
 
 
 #: Message size that puts the conversation just over the 64,000-token trigger
-#: the example chain sizes to (chars / 4), and one well past it.
+#: the example chain sizes to, and one well past it. Prose (spaced words), so
+#: the content-aware estimate the trigger and compaction share prices it near
+#: chars / 4; an unbroken run of one character is priced as dense content.
 NEAR_THRESHOLD_CHARS = 4_400
 FAR_PAST_THRESHOLD_CHARS = 9_000
 
@@ -205,7 +207,7 @@ FAR_PAST_THRESHOLD_CHARS = 9_000
 def _big_conversation(tag: int, chars: int = NEAR_THRESHOLD_CHARS) -> list[dict]:
     msgs = _head()
     msgs.extend(
-        {"role": "user" if i % 2 == 0 else "assistant", "content": f"iter-{tag} " + "x" * chars}
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"iter-{tag} " + "x " * (chars // 2)}
         for i in range(60)
     )
     return msgs

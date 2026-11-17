@@ -587,7 +587,7 @@ def _find_safe_split_index(messages: list[dict[str, Any]], target_idx: int) -> i
 
 def _recent_split(messages: list[dict[str, Any]], budget: int, keep_recent: int) -> int:
     """Retain a token-bounded tail, cutting only before complete exchanges."""
-    from robothor.engine.context import estimate_tokens
+    from robothor.engine.context import estimate_context_tokens as estimate_tokens
 
     start = max(0, len(messages) - keep_recent)
     if start < len(messages) - 1:
@@ -692,7 +692,7 @@ def _shrink_largest(
     handed to a server that allocated a third of the room it needs, and
     truncated there in silence.
     """
-    from robothor.engine.context import estimate_tokens
+    from robothor.engine.context import estimate_context_tokens as estimate_tokens
 
     out = list(messages)
     tail_start = max(0, len(out) - keep_intact)
@@ -750,9 +750,13 @@ def _elide_large_tool_results(
 ) -> tuple[list[dict[str, Any]], int]:
     """Replace old oversized tool results with a one-line summary and a reference.
 
-    The reference is the ``tool_call_id`` and the original size, so the agent
-    can tell what it ran and re-run it; the pairing with its call is untouched.
+    The reference names the tool, the ``tool_call_id`` and the original size,
+    so the agent can tell what it ran and fetch it again; the pairing with its
+    call is untouched (content only). Deterministic, and a stub is far under
+    ``max_chars``, so an elided result is never rewritten by a later pass: the
+    prompt-cache prefix up to it stays byte-identical between compactions.
     """
+    names = _call_names(messages)
     cut = len(messages) - protect_tail
     out = list(messages)
     elided = 0
@@ -762,15 +766,65 @@ def _elide_large_tool_results(
         if m.get("role") != "tool" or not isinstance(content, str) or len(content) <= max_chars:
             continue
         line = extract_tool_summary(content).replace("\n", " ")[:200]
+        name = names.get(str(m.get("tool_call_id")), "the tool")
         out[i] = {
             **m,
             "content": (
-                f"[tool result elided by compaction: {len(content):,} chars, "
-                f"ref {m.get('tool_call_id', '?')}] {line}"
+                f"[tool result elided by compaction: {name}, {len(content):,} chars, "
+                f"ref {m.get('tool_call_id', '?')}. If you need the full result and the "
+                f"call only read data, call {name} again.] {line}"
             ),
         }
         elided += 1
     return out, elided
+
+
+def _call_names(messages: list[dict[str, Any]]) -> dict[str, str]:
+    """``tool_call_id`` -> the tool it called, for every call in *messages*."""
+    names: dict[str, str] = {}
+    for m in messages:
+        for call in m.get("tool_calls") or []:
+            fn = call.get("function") if isinstance(call, dict) else None
+            if isinstance(fn, dict) and call.get("id"):
+                names[str(call["id"])] = str(fn.get("name") or "the tool")
+    return names
+
+
+def newest_exchange_start(messages: list[dict[str, Any]]) -> int:
+    """Index of the newest assistant tool call: the results the model has not
+    read yet start after it. ``len - 1`` when there is no call at all."""
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("tool_calls"):
+            return i
+    return max(0, len(messages) - 1)
+
+
+def protected_tail_len(messages: list[dict[str, Any]], budget: int, cap: int) -> int:
+    """How many trailing messages the pre-pass keeps verbatim.
+
+    Bounded by TOKENS as well as by count. A fixed count of recent messages
+    (twenty) is right when they are small, and wrong for one turn of large tool
+    results: twenty messages there is ten results, the whole turn, and nothing
+    could ever be elided — measured, a single tool-heavy turn grew to 900k
+    tokens through a compaction that fired every iteration and reduced nothing.
+
+    The newest exchange is always kept whole, whatever it costs: the model
+    asked for those results and has not seen them. Older messages join the
+    tail newest-first while they fit in *budget*, up to *cap* messages.
+    """
+    from robothor.engine.context import estimate_context_tokens
+
+    if not messages:
+        return 0
+    start = newest_exchange_start(messages)
+    used = estimate_context_tokens(messages[start:])
+    while start > 0 and len(messages) - start < cap:
+        cost = estimate_context_tokens([messages[start - 1]])
+        if used + cost > budget:
+            break
+        used += cost
+        start -= 1
+    return len(messages) - start
 
 
 def _truncate_arguments(raw: str, max_chars: int) -> str:
@@ -1008,7 +1062,8 @@ async def compact(
     caller the fleet chain summarises; when every model fails, the messages are
     kept and the result is marked ``degraded``.
     """
-    from robothor.engine.context import KEEP_RECENT, estimate_tokens
+    from robothor.engine.context import KEEP_RECENT
+    from robothor.engine.context import estimate_context_tokens as estimate_tokens
 
     tokens_before = estimate_tokens(messages)
     if tokens_before < threshold:
@@ -1016,7 +1071,10 @@ async def compact(
             messages=messages, tokens_before=tokens_before, tokens_after=tokens_before
         )
 
-    working, counts = llm_free_pre_pass(messages, KEEP_RECENT)
+    recent_budget = max(1024, drain_to // 3)
+    head_len = protected_prefix_len(messages)
+    protect = protected_tail_len(messages[head_len:], recent_budget, KEEP_RECENT)
+    working, counts = llm_free_pre_pass(messages, protect)
     est = estimate_tokens(working)
     logger.info(
         "Compaction pre-pass: ~%d → ~%d tokens (%s)", tokens_before, est, sanitize_log(counts)
@@ -1046,7 +1104,7 @@ async def compact(
     head_msgs, retained_msgs, rest = _split_for_summary(working)
     previous, rest = _take_previous_summary(rest)
     split_idx = (
-        _recent_split(rest, max(1024, drain_to // 3), KEEP_RECENT) if len(rest) > KEEP_RECENT else 0
+        _recent_split(rest, recent_budget, KEEP_RECENT) if len(rest) > KEEP_RECENT else 0
     )
     old_messages, recent_messages = rest[:split_idx], rest[split_idx:]
     if not old_messages:

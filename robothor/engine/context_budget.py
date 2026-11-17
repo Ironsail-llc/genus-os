@@ -149,14 +149,7 @@ async def _compact_and_enforce(
             broken_models=broken_models,
             preferred_model=str(getattr(agent_config, "model_compaction", "") or "") or None,
         )
-        logger.info(
-            "Proactive compaction at iter %d: %d→%d messages (est %d tokens, threshold %d)",
-            iteration,
-            pre_len,
-            len(session.messages),
-            est_tokens,
-            threshold,
-        )
+        _log_outcome(iteration, pre_len, est_tokens, session.messages, fit)
 
         await _dispatch(
             hook_registry,
@@ -171,6 +164,34 @@ async def _compact_and_enforce(
         enforce_hard_limit(session, fit)
     except Exception as e:  # noqa: BLE001 — never take the run down for this
         logger.warning("Context ceiling could not be enforced: %s", _sanitize(e))
+
+
+def _log_outcome(
+    iteration: int, pre_len: int, before: int, messages: list[dict[str, Any]], fit: Any
+) -> None:
+    """One line per pass: messages and tokens before and after, by the trigger's
+    own estimate, and — when nothing shrank — the reason. A line that read
+    "34→34 messages" on every iteration was the only trace of a compaction that
+    could not act, and said nothing about why."""
+    from robothor.engine.context_control import control
+    from robothor.engine.context_fit import estimate_for
+
+    after = estimate_for(messages, fit.model)
+    why = ""
+    if after >= before:
+        state = control.get()
+        reason = (state.last_outcome if state is not None else "") or "no compaction state"
+        why = f"; nothing reduced: {reason}"
+    logger.info(
+        "Proactive compaction at iter %d: %d→%d messages, ~%s→~%s tokens (threshold %s)%s",
+        iteration,
+        pre_len,
+        len(messages),
+        f"{before:,}",
+        f"{after:,}",
+        f"{fit.threshold:,}",
+        _sanitize(why),
+    )
 
 
 def enforce_hard_limit(session: Any, fit: Any) -> bool:
