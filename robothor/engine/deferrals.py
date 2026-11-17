@@ -1,21 +1,22 @@
 """Hook workflow runs deferred by the tool-call rate limit: counted and summarised.
 
-When the rate limit would block a hook-triggered run's first step, the run is
-deferred and its event requeued (``WorkflowEngine._admit_or_defer`` and
-``EventHooks._run_workflow``). A burst can defer thousands of runs, so instead
-of one log line per deferral each one is:
+A hook event whose run cannot start at once, because the limit's free slots
+are already spoken for by the events waiting ahead of it, is a deferred run: it
+waits in the workflow's backlog and runs in turn
+(``robothor.engine.workflow_backlog``). A burst can defer thousands of runs, so
+instead of one log line per deferral each one is:
 
 * counted in Redis, in a hash per minute window keyed by workflow id, so the
   doctor (``deferred_runs.recent``) can read it from its own process; and
 * tallied in memory, so that when a window closes one summary line per
   workflow is logged::
 
-      Workflow runs deferred by the tool-call rate limit: workflow=<id> deferred=<n> window=<start>
+      Workflow runs deferred by the tool-call rate limit: workflow=<id> deferred=<n> window=<start> backlog=<depth> oldest=<age>s
 
 Windows are wall-clock minutes (UTC), the same length as the limiter's own
 per-minute window, so counts from several engines and the doctor agree on which
 window is which. This module changes what is visible, never what is scheduled:
-a counter that cannot be written is logged and the event is requeued anyway.
+a counter that cannot be written is logged and the event runs anyway.
 """
 
 from __future__ import annotations

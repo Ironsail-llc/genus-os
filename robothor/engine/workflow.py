@@ -859,16 +859,16 @@ class WorkflowEngine:
                 error_message="Skipped: workflow already running",
             )
 
-        # A hook run whose first step the tool-call rate limit would block is
-        # deferred before anything is recorded: the hook consumer requeues the
-        # event, and a deferral is a log line, not a workflow_runs row. Busy
+        # A run whose first step the tool-call rate limit would block is
+        # deferred before anything is recorded when its caller requeues it
+        # (requeue_on_rate_limit): a deferral is a log line, not a
+        # workflow_runs row. The hook backlog does not use this; it waits for
+        # the limiter before it calls execute (robothor.engine.workflow_backlog). Busy
         # is checked first, so a busy workflow keeps its trigger's own busy
         # handling (requeue_if_busy) whatever the window holds.
         if requeue_on_rate_limit and self._first_step_rate_limited(wf):
             if dedup_key is not None:
                 await release(dedup_key)
-            # Debug: the hook consumer counts deferrals and logs one summary
-            # line per workflow per window (robothor.engine.deferrals).
             logger.debug(
                 "Workflow %s deferred: tool-call rate limit reached at first step %s (%s)",
                 _sanitize(wf.id),
