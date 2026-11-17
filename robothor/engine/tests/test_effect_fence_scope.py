@@ -50,8 +50,15 @@ def _begin(ctx: Any, args: dict[str, Any], *, tool: str = TOOL) -> dict[str, Any
 
 @pytest.fixture
 def declared(monkeypatch):
-    """The effect declarations installed plugins make, set per test."""
-    specs: dict[str, effect_tools.EffectSpec] = {}
+    """The effect declarations installed plugins make, set per test.
+
+    By default the plugin declares what its message tool acts on, as a plugin
+    should: a target the engine is not told cannot be relied on to narrow
+    anything (see test_an_undeclared_tool_keeps_the_whole_tool_fence).
+    """
+    specs: dict[str, effect_tools.EffectSpec] = {
+        TOOL: effect_tools.EffectSpec(target=("thread_id",))
+    }
     monkeypatch.setattr(effect_tools, "plugin_specs", lambda: specs)
     return specs
 
@@ -75,6 +82,31 @@ class TestScope:
         _uncertain(ctx, {"thread_id": "thread-1", "text": "hello"})
         with pytest.raises(effects.EffectPendingError):
             _begin(_later(ctx), {"thread_id": "thread-1", "text": "hello again, reworded"})
+
+    def test_an_undeclared_tool_keeps_the_whole_tool_fence(self, effect_db, declared):
+        # Without a declared target nothing says what the write acts on: an
+        # added optional argument or a blank one would make a retried send look
+        # like another target. So every later call of the tool waits, as before.
+        declared.pop(TOOL)
+        ctx = context()
+        _uncertain(ctx, {"thread_id": "thread-1", "text": "hello"})
+        for args in (
+            {"thread_id": "thread-2", "text": "hello"},
+            {"thread_id": "thread-1", "text": "hello", "cc": ""},
+            {"thread_id": "thread-1", "text": "hello", "format": "plain"},
+        ):
+            with pytest.raises(effects.EffectPendingError):
+                _begin(_later(ctx), args)
+
+    def test_a_declared_target_ignores_other_arguments_on_a_retry(self, effect_db, declared):
+        ctx = context()
+        _uncertain(ctx, {"thread_id": "thread-1", "text": "hello"})
+        for args in (
+            {"thread_id": "thread-1", "text": "hello", "cc": ""},
+            {"thread_id": "thread-1", "text": "hello", "format": "plain", "cc": None},
+        ):
+            with pytest.raises(effects.EffectPendingError):
+                _begin(_later(ctx), args)
 
     def test_another_tool_is_not_fenced(self, effect_db, declared):
         ctx = context()
@@ -238,10 +270,49 @@ class TestVerifier:
         assert str(seen[0]["id"]) == str(row["id"])
 
     def test_a_tool_with_a_verifier_is_never_expired_unverified(self, effect_db, declared):
+        from robothor.engine.runtime import effect_recovery
+
         declared[TOOL] = effect_tools.EffectSpec(verify=lambda r: effects.Verification("unknown"))
         assert effect_tools.has_verifier(TOOL)
         assert effect_tools.has_verifier("create_task")
         assert not effect_tools.has_verifier("acme_other_tool")
+        ctx = context()
+        verifiable = _uncertain(ctx, {"thread_id": "thread-1", "text": "hello"})
+        unverifiable = _uncertain(_later(ctx), {"id": "x"}, tool="acme_other_tool")
+        with effect_db() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE agent_runtime_effects SET updated_at=now()-interval '3 days' "
+                "WHERE tenant_id=%s",
+                (ctx.tenant_id,),
+            )
+        assert effect_recovery.reconcile_unverifiable(ctx.tenant_id) == 1
+        assert effects.read(ctx, verifiable["id"])["state"] == "uncertain"
+        assert effects.read(ctx, unverifiable["id"])["state"] == "finished"
+
+    def test_the_verifier_gets_the_declared_target_exactly(self, effect_db, declared):
+        seen: list[dict[str, Any]] = []
+
+        def verify(record):
+            seen.append(record["target"])
+            return effects.Verification("unknown")
+
+        declared[TOOL] = effect_tools.EffectSpec(target=("thread_id", "to"), verify=verify)
+        long_id = "thread-" + "x" * 300
+        ctx = context()
+        row = _uncertain(ctx, {"thread_id": long_id, "to": ["a", "b"], "text": "hi"})
+        effect_tools.recover(
+            SimpleNamespace(tenant_id=ctx.tenant_id, principal_id=ctx.principal_id), row["id"]
+        )
+        assert seen == [{"thread_id": long_id, "to": ["a", "b"]}]
+
+    def test_a_long_target_is_shortened_only_where_it_is_shown(self, effect_db, declared):
+        long_id = "thread-" + "x" * 300
+        ctx = context()
+        _uncertain(ctx, {"thread_id": long_id, "text": "hi"})
+        with pytest.raises(effects.EffectPendingError) as raised:
+            _begin(_later(ctx), {"thread_id": long_id, "text": "again"})
+        assert long_id not in str(raised.value)
+        assert "thread_id=thread-xxx" in str(raised.value)
 
     def test_the_sweep_runs_plugin_verifiers(self, effect_db, declared, monkeypatch):
         from robothor.engine.runtime import effect_recovery
@@ -402,3 +473,25 @@ class TestWhatTheModelIsTold:
         assert len(sent) == 1
         assert again["not_sent"] is True
         assert again["outcome_unknown"] and again["effect_id"] == first["effect_id"]
+
+
+class TestBuiltinTools:
+    def test_a_plugin_cannot_declare_effects_for_a_builtin_tool(self, monkeypatch):
+        """Narrowing a core tool's fence, or settling its writes, is not a plugin's to do."""
+        from unittest.mock import MagicMock
+
+        from robothor.engine.tools.dispatch import builtin_handlers
+
+        builtin = sorted(builtin_handlers())[0]
+        loaded = MagicMock(
+            effects={
+                builtin: effect_tools.EffectSpec(target=("x",), verify=lambda r: None),
+                TOOL: effect_tools.EffectSpec(target=("thread_id",)),
+            }
+        )
+        monkeypatch.setattr(effect_tools, "_cache", None)
+        monkeypatch.setattr("robothor.plugins.load_plugins", lambda **kw: loaded)
+        specs = effect_tools.plugin_specs()
+        assert builtin not in specs and TOOL in specs
+        assert not effect_tools.fences_whole_tool(TOOL)
+        assert effect_tools.verifier(builtin) is None
