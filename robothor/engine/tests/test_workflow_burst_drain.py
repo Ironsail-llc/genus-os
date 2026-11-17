@@ -397,3 +397,82 @@ class TestHighAvailability:
             await replica.backlog.stop()
             await leader.hooks.backlog.stop()
         assert leader.handled() == _expected(3)
+
+    @pytest.mark.asyncio
+    async def test_a_replica_sees_what_the_leader_drained(self, engine_config, vt, monkeypatch):
+        # A follower writes events and never runs them: its view of the
+        # backlog (the bound, the deferral count, the stats) is Redis's, not
+        # everything it ever wrote.
+        monkeypatch.setenv("ROBOTHOR_HA_LEADER_ENABLED", "1")
+        monkeypatch.setattr("robothor.engine.workflow_backlog.MAX_BACKLOG", 3)
+        with patch("robothor.engine.leader.is_leader", return_value=True):
+            leader = Burst(engine_config, vt, _definition(rate_limit_per_minute=100))
+            await leader.hooks.resume_workflow_backlog(leader.redis)
+            replica = leader.new_hooks()
+            replica.backlog._leader = lambda: False
+            wf = leader.engine.get_workflow("order-flow")
+            for batch in range(3):
+                for i in range(3):
+                    n = batch * 3 + i
+                    event = {"id": f"evt-{n}", "type": EVENT, "payload": "{}"}
+                    assert await replica.backlog.enqueue(leader.redis, wf, "platform", EVENT, event)
+                await vt.run_until(lambda b=batch: len(leader.calls) >= (b + 1) * 3)
+            await vt.settle()
+            depth, _ = replica.backlog.stats("order-flow")
+            await replica.backlog.stop()
+            await leader.hooks.backlog.stop()
+        assert leader.handled() == _expected(9)
+        assert leader.redis.dlq() == 0
+        assert depth <= 3  # what Redis held at its last write, not 9
+
+
+class TestRedisTrouble:
+    @pytest.mark.asyncio
+    async def test_a_redis_error_mid_drain_neither_stalls_nor_repeats(self, engine_config, vt):
+        b = Burst(engine_config, vt, _definition())
+        await b.publish(90)
+        await vt.run_until(lambda: len(b.calls) >= 40)
+        real_xrange = b.redis.xrange
+        failures = {"left": 2}
+
+        async def flaky(*args: Any, **kwargs: Any) -> Any:
+            if failures["left"]:
+                failures["left"] -= 1
+                raise ConnectionError("connection reset")
+            return await real_xrange(*args, **kwargs)
+
+        b.redis.xrange = flaky  # type: ignore[method-assign]
+        # No new event arrives: the drain must carry on by itself.
+        await vt.run_until(lambda: len(b.calls) >= 90 and not failures["left"])
+        await vt.run_until()
+        assert b.handled() == _expected(90)
+
+    @pytest.mark.asyncio
+    async def test_a_lost_and_regained_lead_does_not_rerun_what_is_in_flight(
+        self, engine_config, vt, monkeypatch
+    ):
+        monkeypatch.setenv("ROBOTHOR_HA_LEADER_ENABLED", "1")
+        leader = {"now": True}
+        gate: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        data = _definition(trigger={"concurrent": True}, rate_limit_per_minute=100)
+        with patch("robothor.engine.leader.is_leader", side_effect=lambda: leader["now"]):
+            b = Burst(engine_config, vt, data)
+            tool = b.engine.runner.registry.execute.side_effect
+
+            async def slow(name: str, args: dict[str, Any], **kw: Any) -> Any:
+                result = await tool(name, args, **kw)
+                await gate
+                return result
+
+            b.engine.runner.registry.execute.side_effect = slow
+            await b.publish(5)
+            await vt.settle()
+            assert len(b.calls) == 5  # all five in flight
+            leader["now"] = False
+            await vt.run_until(lambda: vt.now - START > 30)
+            leader["now"] = True  # it leads again while they are still running
+            await vt.run_until(lambda: vt.now - START > 60)
+            gate.set_result(None)
+            await vt.run_until(lambda: vt.now - START > 90)
+            await b.hooks.backlog.stop()
+        assert b.handled() == _expected(5)
