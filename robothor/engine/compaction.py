@@ -972,6 +972,7 @@ def llm_free_pre_pass(
     *,
     target: int | None = None,
     model: str | None = None,
+    elide_all: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Reclaim tokens with no model call: the pass that runs first.
 
@@ -979,8 +980,9 @@ def llm_free_pre_pass(
     Dedupe identical tool results, strip historical media, truncate oversized
     argument JSON, then elide oversized old tool results — in that order, so
     the dedupe compares the originals and elision, the lossy step, comes last.
-    With a *target* (tokens), elision stops as soon as the conversation fits it;
-    without one, every candidate is elided.
+    With a *target* (tokens), elision stops as soon as the conversation fits it
+    (sizing the excerpt budget from it); without one, or with *elide_all*, every
+    candidate is elided.
     """
     from robothor.engine.context import estimate_context_tokens
 
@@ -993,7 +995,7 @@ def llm_free_pre_pass(
     budget = 6_000
     if target is not None:
         whole = [*messages[:head_len], *body]
-        over_by = max(0, estimate_context_tokens(whole, model) - target)
+        over_by = None if elide_all else max(0, estimate_context_tokens(whole, model) - target)
         budget = max(EXCERPT_MIN_CHARS * 4, target // 12)
     body, elided = (
         _elide_large_tool_results(
@@ -1228,6 +1230,15 @@ async def compact(
         llm_free_pre_pass, messages, protect, target=drain_to, model=sizing
     )
     est = await measure(working)
+    if est >= drain_to:
+        # Targeted elision can stop at, or a token over, the target: every
+        # remaining old result becomes a stub before anything is summarized,
+        # or a summary that extracts nothing takes it whole.
+        working, more = await asyncio.to_thread(
+            llm_free_pre_pass, working, protect, target=drain_to, model=sizing, elide_all=True
+        )
+        counts["elided"] += more["elided"]
+        est = await measure(working)
     logger.info(
         "Compaction pre-pass: ~%d → ~%d tokens (%s)", tokens_before, est, sanitize_log(counts)
     )
