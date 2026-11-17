@@ -457,9 +457,13 @@ class WorkflowEngine:
         self.config: EngineConfig = config
         self.runner: AgentRunner = runner
         self._workflows: dict[str, WorkflowDef] = {}
-        # Run id -> the limiter slot its first tool call was given before the
-        # run started (execute(rate_slot=...)), until that call takes it.
-        self._rate_slots: dict[str, float] = {}
+
+    @property
+    def _rate_slots(self) -> dict[str, float]:
+        """Run id -> the limiter slot its first tool call was given before the
+        run started (execute(rate_slot=...)), until that call takes it."""
+        slots: dict[str, float] = self.__dict__.setdefault("_rate_slot_map", {})
+        return slots
 
     def load_workflows(self, workflow_dir: Path) -> int:
         """Load all workflow YAML files from a directory."""
