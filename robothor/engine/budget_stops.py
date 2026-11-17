@@ -235,6 +235,36 @@ def runaway_cap_hit(session: Any, cap: int, used: int, reason: str) -> None:
     )
 
 
+#: What the person who asked is told. Plain words and something to do: they
+#: asked a question, and the engine's accounting is not the answer.
+RUNAWAY_CAP_ANSWER = (
+    "I had to stop: this request grew too large to finish in one go. "
+    "Please narrow it (fewer items, a shorter period, one part at a time) "
+    "or split it into smaller requests, and ask again."
+)
+
+
+def stop_at_runaway_cap(session: Any, cap: int, used: int, reason: str) -> None:
+    """End a run at the runaway-token hard cap: the record and the bookkeeping.
+    Never raises. The caller pages (the critical alert) and ends the loop.
+
+    The cap used to record and let the run go on: measured, a run crossed it at
+    5,086,365 tokens and carried on to iteration 50. The run now ends where it
+    stands, with ``budget_exhausted``, the reason as its error and an ERROR
+    step. No wrap-up model call: it would re-send the very context that crossed
+    the cap. The answer it delivers is :data:`RUNAWAY_CAP_ANSWER`.
+    """
+    runaway_cap_hit(session, cap, used, reason)
+    try:
+        session.run.budget_exhausted = True
+        if not getattr(session.run, "error_message", None):
+            session.run.error_message = reason
+        session.record_error(reason)
+        session.messages.append({"role": "assistant", "content": RUNAWAY_CAP_ANSWER})
+    except Exception:  # noqa: BLE001 - the stop itself must still happen
+        logger.debug("runaway stop bookkeeping failed", exc_info=True)
+
+
 def safety_cap(cap: int, iteration: int) -> dict[str, Any]:
     """The iteration safety valve: a control, so it always enforces."""
     return _detail(

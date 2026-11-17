@@ -130,15 +130,7 @@ def _watchdog_aborted(session: Any, watchdog: Any) -> bool:
 
 
 def _runaway(session: Any, agent_config: Any, state: GuardState) -> bool:
-    """Fleet-wide token guard: alert at 500K; the 5M hard cap stops the run.
-
-    The hard cap used to record and page and let the run go on: measured, a run
-    crossed it at 5,086,365 tokens and carried on to iteration 50. It now ends
-    the run where it stands — no wrap-up call, which would re-send the very
-    context that crossed the cap — with ``budget_exhausted`` set, the reason
-    on the run and an ERROR step, and a plain answer for whoever asked. The
-    critical page still goes out, which is how a scheduled run's stop is heard.
-    """
+    """Token guard: alert at 500K; the 5M cap stops the run (budget_stops.stop_at_runaway_cap)."""
     from robothor.engine.runner import (
         RUNAWAY_TOKEN_ALERT,
         RUNAWAY_TOKEN_HARD_CAP,
@@ -156,9 +148,8 @@ def _runaway(session: Any, agent_config: Any, state: GuardState) -> bool:
             used,
         )
         _spawn_hard_cap_alert(session, agent_config, used)
-        budget_stops.runaway_cap_hit(session, RUNAWAY_TOKEN_HARD_CAP, used, reason)
         state.runaway_cap_observed = True
-        _stop_at_the_cap(session, reason)
+        budget_stops.stop_at_runaway_cap(session, RUNAWAY_TOKEN_HARD_CAP, used, reason)
         return True
 
     if not state.runaway_alerted and used >= RUNAWAY_TOKEN_ALERT:
@@ -180,27 +171,6 @@ def _runaway(session: Any, agent_config: Any, state: GuardState) -> bool:
         except Exception:
             logger.debug("Runaway-token alert dispatch failed", exc_info=True)
     return False
-
-
-#: What the person who asked is told. Plain words and something to do: they
-#: asked a question, and the engine's accounting is not the answer.
-RUNAWAY_CAP_ANSWER = (
-    "I had to stop: this request grew too large to finish in one go. "
-    "Please narrow it (fewer items, a shorter period, one part at a time) "
-    "or split it into smaller requests, and ask again."
-)
-
-
-def _stop_at_the_cap(session: Any, reason: str) -> None:
-    """Record why the run ended and leave the answer it delivers. Never raises."""
-    try:
-        session.run.budget_exhausted = True
-        if not getattr(session.run, "error_message", None):
-            session.run.error_message = reason
-        session.record_error(reason)
-        session.messages.append({"role": "assistant", "content": RUNAWAY_CAP_ANSWER})
-    except Exception:  # noqa: BLE001 - the stop itself must still happen
-        logger.debug("runaway stop bookkeeping failed", exc_info=True)
 
 
 def _spawn_hard_cap_alert(session: Any, agent_config: Any, used: int) -> None:

@@ -121,9 +121,12 @@ class TestMaybeCompress:
     @pytest.mark.asyncio
     async def test_recent_messages_preserved(self):
         messages = [{"role": "system", "content": "sys"}]
+        # Prose (spaced words): an unbroken run of one character is priced as
+        # dense content by the estimate compaction shares with its trigger, and
+        # twenty of those would no longer fit the recent window's token budget.
         for i in range(100):
-            messages.append({"role": "user", "content": f"user_{i} " + "x" * 3000})
-            messages.append({"role": "assistant", "content": f"asst_{i} " + "y" * 3000})
+            messages.append({"role": "user", "content": f"user_{i} " + "x " * 1500})
+            messages.append({"role": "assistant", "content": f"asst_{i} " + "y " * 1500})
 
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
