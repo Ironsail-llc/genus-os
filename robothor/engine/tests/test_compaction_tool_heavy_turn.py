@@ -59,8 +59,8 @@ class _Summariser:
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
-def _start(history_pairs: int = 0) -> list[dict]:
-    messages: list[dict] = [{"role": "system", "content": "You are a careful agent. " * 300}]
+def _start(history_pairs: int = 0, system_reps: int = 300) -> list[dict]:
+    messages: list[dict] = [{"role": "system", "content": "You are a careful agent. " * system_reps}]
     for i in range(history_pairs):
         messages.append({"role": "user", "content": f"Earlier question {i}. " * 15})
         messages.append({"role": "assistant", "content": f"Earlier answer {i}. " * 40})
@@ -94,12 +94,13 @@ async def _scripted_run(
     history_pairs: int = 0,
     window: int = WINDOW,
     content_for=None,
+    system_reps: int = 300,
 ):
     """Run the real budget step before every model call of a one-turn run.
 
     Returns, per iteration, the messages the model would have been sent.
     """
-    messages = _start(history_pairs)
+    messages = _start(history_pairs, system_reps)
     session = SimpleNamespace(
         messages=messages, run_id="run-1", thin_previous_tool_results=lambda **_: 0
     )
@@ -478,3 +479,87 @@ class TestElisionStopsUnderTheTarget:
 
         kept = {m.get("tool_call_id") for m in result.messages if m.get("role") == "tool"}
         assert kept == {"call_0", "call_1", "call_2", "call_3"}, f"summarized away: {kept}"
+
+
+class TestStubsAreNeverSummarizedAway:
+    """Lab pass three: on a 128k window with a production-sized system prompt,
+    thirty reads of stubs plus their calls crossed the trigger by themselves,
+    and the last-resort drain dropped every one of them, the early fact's
+    excerpt included (63 -> 5 messages). Stubs are kept; when they alone do
+    not fit, they are folded into one deterministic ledger, never dropped."""
+
+    async def test_the_early_fact_survives_thirty_reads_under_a_large_system_prompt(self):
+        run = await _scripted_run(
+            iterations=31,
+            result_chars=40_000,
+            window=128_000,
+            content_for=_file_with_an_early_fact,
+            system_reps=1_500,
+        )
+        last = run.sent[-1]
+        assert FACT in json.dumps(last), "the early fact left the context"
+        for messages in run.sent[1:]:
+            bound = int(64_000 * BACKOFF_YIELD_RATIO) + estimate_for(_newest_exchange(messages))
+            assert estimate_for(messages) <= bound
+
+    async def test_every_read_is_still_named_with_its_arguments(self):
+        run = await _scripted_run(
+            iterations=31,
+            result_chars=40_000,
+            window=128_000,
+            content_for=_file_with_an_early_fact,
+            system_reps=1_500,
+        )
+        text = json.dumps(run.sent[-1])
+        for i in range(29):
+            assert f"data/file-{i}.txt" in text, f"read {i} vanished without a trace"
+        assert "same arguments" in text
+
+    async def test_pairing_stays_valid_after_folding(self):
+        from robothor.engine.llm_client import LLMClient
+
+        run = await _scripted_run(
+            iterations=31,
+            result_chars=40_000,
+            window=128_000,
+            content_for=_file_with_an_early_fact,
+            system_reps=1_500,
+        )
+        for messages in run.sent:
+            assert LLMClient._validate_tool_pairs(messages) is messages
+            calls = {c["id"] for m in messages for c in m.get("tool_calls") or []}
+            results = {m["tool_call_id"] for m in messages if m.get("role") == "tool"}
+            assert calls == results
+
+
+class TestADegenerateSummaryIsNotTrusted:
+    async def test_a_near_empty_summary_does_not_replace_the_originals(self, caplog):
+        """A summary of a few characters standing in for tens of thousands of
+        tokens is a failed summary. The originals are shrunk, not discarded."""
+        import logging
+
+        from robothor.engine.compaction import compact
+
+        messages = _start(history_pairs=30)
+        for i in range(3):
+            messages.append({"role": "user", "content": f"Note {i}: the code is BLUE-{i}. " * 400})
+            messages.append({"role": "assistant", "content": f"Noted {i}. " * 50})
+        before = estimate_for(messages)
+
+        class _Tiny(_Summariser):
+            async def __call__(self, models, **kwargs):
+                response = await super().__call__(models, **kwargs)
+                if "Extract key facts" not in kwargs["messages"][0]["content"]:
+                    response.choices[0].message.content = "ok"
+                return response
+
+        caplog.set_level(logging.WARNING, logger="robothor.engine.compaction")
+        with patch("robothor.engine.compaction._acompletion_over_chain", new=_Tiny()):
+            result = await compact(
+                messages, models=["provider/m"], threshold=before // 2, drain_to=before // 3
+            )
+
+        text = json.dumps(result.messages)
+        assert all(f"BLUE-{i}" in text for i in range(3)), "originals were discarded"
+        assert "Conversation summary]\\nok" not in text
+        assert any("summary" in r.getMessage().lower() for r in caplog.records)
