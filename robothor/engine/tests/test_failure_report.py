@@ -117,6 +117,12 @@ class TestCommand:
             tools=[("example_tool", "example-agent", "boom 42", 3, T0)],
             steps=[("fetch", "example-flow", "answered 503", 1, T0)],
         )
+        monkeypatch.setattr(
+            "robothor.engine.tracking.get_tool_stats",
+            lambda hours, tenant_id=None: [
+                {"tool_name": "example_tool", "total_calls": 30, "failures": 3}
+            ],
+        )
         args = argparse.Namespace(hours=hours, json=as_json, tenant=None, limit=50)
         assert _cmd_engine_failures(args) == 0
         return capsys.readouterr().out
@@ -126,6 +132,7 @@ class TestCommand:
         assert out["hours"] == 24
         assert out["total"] == 4
         assert {g["tool"] for g in out["groups"]} == {"example_tool", "fetch"}
+        assert out["tool_calls"] == {"example_tool": {"calls": 30, "failures": 3}}
 
     def test_text_names_tool_agent_and_error(self, monkeypatch, capsys) -> None:
         out = self._run(monkeypatch, capsys, as_json=False)
