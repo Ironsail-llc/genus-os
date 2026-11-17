@@ -248,8 +248,10 @@ def logged(execute: _F) -> _F:
         started = time.monotonic()
         outcome, error_type, reason = "ok", "", ""
         run_id = str(kwargs.get("run_id") or _scoped_run_id.get())
-        # A call a wrapper makes is the wrapper's unlock being followed: never answered here.
-        key = canonical_key(tool_name, arguments) if holder is None else ""
+        # A wrapper's inner call follows its unlock; a workflow step has its own retries.
+        agent = str(kwargs.get("agent_id") or "")
+        followed = holder is not None or agent.startswith(_WORKFLOW_PREFIX)
+        key = "" if followed else canonical_key(tool_name, arguments)
         try:
             repeat = _repeat_of_refusal(run_id, key) if key else None
             if repeat is not None:
