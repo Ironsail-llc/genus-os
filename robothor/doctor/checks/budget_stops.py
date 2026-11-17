@@ -33,8 +33,9 @@ _SQL = """
 async def _recent(ctx: DoctorContext) -> Result:
     """Budget stops recorded in the last 24 hours, by stop and mode.
 
-    ``observe`` means the budget was reached and the run carried on; ``enforce``
-    means it stopped or refused the run. Open the Runs view and filter the steps
+    ``observe`` means the budget was reached and the run carried on (the hourly
+    cost cap); ``enforce`` means it stopped or refused the run (the
+    runaway-token hard cap, the iteration safety cap, an operator stop). Open the Runs view and filter the steps
     by ``budget_stop`` to see which runs, or read docs/BUDGETS_AND_STOPS.md for
     what each stop is and the setting that controls it. Nothing to fix here.
     """
