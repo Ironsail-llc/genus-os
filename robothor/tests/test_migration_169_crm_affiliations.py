@@ -64,7 +64,9 @@ def _person(cur: Any, tenant: str, first: str) -> str:
 def _snapshot(cur: Any) -> tuple[list[Any], list[Any]]:
     cur.execute("SELECT id, name, tenant_id, updated_at FROM crm_companies ORDER BY id")
     companies = cur.fetchall()
-    cur.execute("SELECT id, first_name, company_id, tenant_id, updated_at FROM crm_people ORDER BY id")
+    cur.execute(
+        "SELECT id, first_name, company_id, tenant_id, updated_at FROM crm_people ORDER BY id"
+    )
     return companies, cur.fetchall()
 
 

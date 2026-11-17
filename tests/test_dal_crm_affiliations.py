@@ -61,7 +61,9 @@ class TestUpsertCompanyByIdentifier:
         db_cursor.execute("SELECT updated_at FROM crm_companies WHERE id = %s", (first["id"],))
         assert db_cursor.fetchone()["updated_at"] == stamp
         assert (
-            _count(db_cursor, "SELECT count(*) FROM crm_companies WHERE name = %s", ("Acme Holdings",))
+            _count(
+                db_cursor, "SELECT count(*) FROM crm_companies WHERE name = %s", ("Acme Holdings",)
+            )
             == 1
         )
 
@@ -147,9 +149,7 @@ class TestUpsertCompanyByIdentifier:
 
         foreign = upsert_company_by_identifier(SYSTEM, _ext(), name="B", tenant_id=other_tenant)
         with pytest.raises(ValueError):
-            upsert_company_by_identifier(
-                SYSTEM, _ext(), name="A", parent_company_id=foreign["id"]
-            )
+            upsert_company_by_identifier(SYSTEM, _ext(), name="A", parent_company_id=foreign["id"])
 
 
 class TestHierarchy:
@@ -180,7 +180,9 @@ class TestHierarchy:
         from robothor.crm.dal import get_company, set_company_parent, upsert_company_by_identifier
 
         top = upsert_company_by_identifier(SYSTEM, _ext(), name="Top")
-        leaf = upsert_company_by_identifier(SYSTEM, _ext(), name="Leaf", parent_company_id=top["id"])
+        leaf = upsert_company_by_identifier(
+            SYSTEM, _ext(), name="Leaf", parent_company_id=top["id"]
+        )
         with pytest.raises(ValueError):
             set_company_parent(top["id"], leaf["id"])
         assert set_company_parent(leaf["id"], None) is True
@@ -192,7 +194,11 @@ class TestHierarchy:
 
 class TestUpsertPersonByIdentifier:
     def test_creates_maps_and_is_idempotent(self, db_cursor, mock_get_connection):
-        from robothor.crm.dal import get_person, get_person_by_identifier, upsert_person_by_identifier
+        from robothor.crm.dal import (
+            get_person,
+            get_person_by_identifier,
+            upsert_person_by_identifier,
+        )
 
         ext = _ext("user")
         first = upsert_person_by_identifier(
@@ -318,7 +324,9 @@ class TestAffiliations:
         assert [a["id"] for a in list_affiliations(person_id=org["alice"], active_only=False)] == [
             made["id"]
         ]
-        assert close_affiliation(org["alice"], org["company"], "manager")["until"] == closed["until"]
+        assert (
+            close_affiliation(org["alice"], org["company"], "manager")["until"] == closed["until"]
+        )
         assert close_affiliation(org["bob"], org["company"], "manager") is None
 
         reopened = set_affiliation(org["alice"], org["company"], "manager")
@@ -338,16 +346,20 @@ class TestAffiliations:
         }
         assert at_company[0]["companyName"] == "Child Office"
         assert all(a["personName"] for a in at_company)
-        assert [a["role"] for a in list_affiliations(company_id=org["company"], role="provider")] == [
-            "provider"
-        ]
+        assert [
+            a["role"] for a in list_affiliations(company_id=org["company"], role="provider")
+        ] == ["provider"]
         assert {a["companyId"] for a in list_affiliations(person_id=org["bob"])} == {
             org["company"],
             org["parent"],
         }
 
     def test_refuses_unknown_or_foreign_rows(self, other_tenant, org):
-        from robothor.crm.dal import list_affiliations, set_affiliation, upsert_company_by_identifier
+        from robothor.crm.dal import (
+            list_affiliations,
+            set_affiliation,
+            upsert_company_by_identifier,
+        )
 
         foreign = upsert_company_by_identifier(SYSTEM, _ext(), name="B Co", tenant_id=other_tenant)
         with pytest.raises(ValueError):
@@ -445,7 +457,9 @@ class TestMerges:
         assert merge_companies(org["company"], loser) is not None
 
         assert get_company_by_identifier(SYSTEM, loser_ext)["id"] == org["company"]
-        assert {(a["personId"], a["role"]) for a in list_affiliations(company_id=org["company"])} == {
+        assert {
+            (a["personId"], a["role"]) for a in list_affiliations(company_id=org["company"])
+        } == {
             (org["alice"], "owner"),
             (org["bob"], "provider"),
         }
@@ -529,10 +543,14 @@ def test_concurrent_upserts_make_one_row(committed_tenant, db_dsn):
     )
 
     companies = _race(
-        lambda: upsert_company_by_identifier(SYSTEM, "race-1", name="Race Co", tenant_id=committed_tenant)
+        lambda: upsert_company_by_identifier(
+            SYSTEM, "race-1", name="Race Co", tenant_id=committed_tenant
+        )
     )
     people = _race(
-        lambda: upsert_person_by_identifier(SYSTEM, "race-u1", first_name="Alice", tenant_id=committed_tenant)
+        lambda: upsert_person_by_identifier(
+            SYSTEM, "race-u1", first_name="Alice", tenant_id=committed_tenant
+        )
     )
     assert len({c["id"] for c in companies}) == 1
     assert sum(c["created"] for c in companies) == 1
