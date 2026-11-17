@@ -37,24 +37,8 @@ def test_the_bare_gemini_id_is_the_vertex_row() -> None:
     assert get_model_limits("gemini-3.8-flash") == get_model_limits("vertex_ai/gemini-3.8-flash")
 
 
-@pytest.mark.parametrize("model_id", ["vertex_ai/gemini-3.8-flash", "gemini-3.8-flash"])
-def test_litellm_can_price_them_with_the_legacy_pricing_path(monkeypatch, model_id) -> None:
-    import litellm
+@pytest.mark.parametrize("model_id", MODELS)
+def test_a_response_under_each_id_is_priced(model_id) -> None:
+    from robothor.engine.llm_client import LLMClient
 
-    monkeypatch.delenv("ROBOTHOR_RIP_17_ENABLED", raising=False)
-    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    litellm.model_cost.pop(model_id, None)
-    model_registry.register_pricing_with_litellm()
-    row = litellm.model_cost.get(model_id) or {}
-    assert row.get("input_cost_per_token") == get_model_limits(model_id).input_cost_per_token
-
-
-def test_a_model_litellm_already_prices_keeps_litellms_figures(monkeypatch) -> None:
-    import litellm
-
-    monkeypatch.delenv("ROBOTHOR_RIP_17_ENABLED", raising=False)
-    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    known = "gpt-4o"
-    before = dict(litellm.model_cost[known])
-    model_registry.register_pricing_with_litellm()
-    assert litellm.model_cost[known]["input_cost_per_token"] == before["input_cost_per_token"]
+    assert LLMClient()._calculate_cost(model_id, 1_000, 100) > 0

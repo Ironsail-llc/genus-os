@@ -538,6 +538,8 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
 # response id up; _registry_candidates does not strip the `openai/` prefix.
 _MODEL_REGISTRY["gpt-5.6-luna"] = _MODEL_REGISTRY["openai/gpt-5.6-luna"]
 _MODEL_REGISTRY["gpt-6-luna"] = _MODEL_REGISTRY["openai/gpt-6-luna"]
+# Vertex reports a Gemini response under the bare id, for the same reason.
+_MODEL_REGISTRY["gemini-3.8-flash"] = _MODEL_REGISTRY["vertex_ai/gemini-3.8-flash"]
 # Bedrock reports the inference profile id, without the `bedrock/` prefix.
 _MODEL_REGISTRY["us.amazon.nova-2-lite-v1:0"] = _MODEL_REGISTRY[
     "bedrock/us.amazon.nova-2-lite-v1:0"
