@@ -91,6 +91,8 @@ class CompletionShape:
     reasoning_tokens: int | None = None
     #: Prompt tokens served from the provider's cache, where it reports them.
     cached_tokens: int | None = None
+    #: The provider reported no usage; the counts are the engine's estimate.
+    estimated: bool = False
 
     @property
     def no_answer(self) -> bool:
@@ -153,7 +155,31 @@ def describe_completion(result: Any) -> CompletionShape:
         output_tokens=_int_or_none(getattr(usage, "completion_tokens", None)),
         reasoning_tokens=_int_or_none(getattr(details, "reasoning_tokens", None)),
         cached_tokens=_cached_tokens(usage),
+        estimated=getattr(result, "usage_estimated", False) is True,
     )
+
+
+def estimate_missing_usage(rebuilt: Any, chunks: list[Any], messages: list[dict[str, Any]]) -> Any:
+    """``rebuilt`` with an estimated input count when no chunk carried usage.
+
+    A stream is asked for its usage, but a provider that does not report it
+    leaves the rebuilt response with input 0 (and output counted from the
+    text). The engine's own estimate replaces the zero, and the response is
+    marked so the ``event=llm_call`` line says ``estimated=true``. Never raises.
+    """
+    try:
+        if rebuilt is None or any(getattr(chunk, "usage", None) for chunk in chunks):
+            return rebuilt
+        from robothor.engine.context import estimate_tokens
+
+        usage = getattr(rebuilt, "usage", None)
+        if usage is not None:
+            usage.prompt_tokens = estimate_tokens(messages)
+            usage.total_tokens = usage.prompt_tokens + (usage.completion_tokens or 0)
+            setattr(rebuilt, "usage_estimated", True)  # noqa: B010 - not on litellm's type
+    except Exception:  # noqa: BLE001 - accounting must never fail the call
+        logger.debug("usage estimate failed", exc_info=True)
+    return rebuilt
 
 
 def _cached_tokens(usage: Any) -> int | None:
@@ -387,6 +413,8 @@ def _log_call(
             fields["output_tokens"] = shape.output_tokens or 0
             fields["cached_tokens"] = shape.cached_tokens or 0
             fields["finish_reason"] = shape.finish_reason
+            if shape.estimated:
+                fields["estimated"] = True
         fields["latency_ms"] = duration_ms
         fields["streamed"] = bool(scope["streamed"]) if scope else "-"
         fields["attempt"] = attempt

@@ -59,6 +59,7 @@ from robothor.engine.llm_attempts import (
     begin_call_log,
     describe_completion,
     end_call_log,
+    estimate_missing_usage,
     note_outcome,
 )
 
@@ -783,12 +784,14 @@ def rebuild_streamed_response(chunks: list[Any], kwargs: dict[str, Any] | None =
     that, the one the request asked for (:func:`note_requested_tier`).
     """
     rebuilt = litellm.stream_chunk_builder(chunks)
+    # With no usage on any chunk, input is the engine's estimate, marked so.
     tiers = (getattr(chunk, "service_tier", None) for chunk in reversed(chunks))
     tier = next((tier for tier in tiers if tier), None)
     if rebuilt is not None and tier and not getattr(rebuilt, "service_tier", None):
         # One name for the priority lane, whatever the provider calls it today.
         lane = "priority" if tier in _PRIORITY_TIERS else tier
         setattr(rebuilt, "service_tier", lane)  # noqa: B010 - not on litellm's type
+    rebuilt = estimate_missing_usage(rebuilt, chunks, (kwargs or {}).get("messages") or [])
     return note_requested_tier(rebuilt, kwargs or {})
 
 
@@ -2350,6 +2353,8 @@ class LLMClient:
             }
         if stream:
             kwargs["stream"] = True
+            if not is_codex_model(model):  # litellm withholds usage from a stream otherwise
+                kwargs["stream_options"] = {"include_usage": True}
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice(tools)
