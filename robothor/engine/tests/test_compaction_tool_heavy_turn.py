@@ -452,3 +452,29 @@ class TestElisionStopsUnderTheTarget:
         ]
         assert changed == ["call_1"], f"elided {changed}; one, the largest, was enough"
         assert result.tokens_after <= drain_to
+
+    async def test_a_pass_that_lands_on_the_target_stubs_every_old_result_before_summarizing(
+        self,
+    ):
+        """Targeted elision can stop exactly at, or a token over, the drain
+        target. The summary that follows must not take the large results that
+        were never elided with it, unstubbed."""
+        from robothor.engine.compaction import compact, llm_free_pre_pass
+
+        messages = _start(history_pairs=10)  # long enough to reach the summary path
+        for i, chars in enumerate([30_000, 30_000, 90_000, 30_000]):
+            messages.append(_call(i))
+            messages.append(
+                {"role": "tool", "tool_call_id": f"call_{i}", "content": _catalog_json(i, chars)}
+            )
+        before = estimate_for(messages)
+        one_elided, _ = llm_free_pre_pass(messages, 2, target=before - 1)
+        drain_to = estimate_for(one_elided)  # exactly where targeted elision stops
+
+        with patch("robothor.engine.compaction._acompletion_over_chain", new=_Summariser()):
+            result = await compact(
+                messages, models=["provider/m"], threshold=before - 1, drain_to=drain_to
+            )
+
+        kept = {m.get("tool_call_id") for m in result.messages if m.get("role") == "tool"}
+        assert kept == {"call_0", "call_1", "call_2", "call_3"}, f"summarized away: {kept}"
