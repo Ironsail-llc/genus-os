@@ -585,9 +585,14 @@ def _find_safe_split_index(messages: list[dict[str, Any]], target_idx: int) -> i
     return idx
 
 
-def _recent_split(messages: list[dict[str, Any]], budget: int, keep_recent: int) -> int:
+def _recent_split(
+    messages: list[dict[str, Any]], budget: int, keep_recent: int, model: str | None = None
+) -> int:
     """Retain a token-bounded tail, cutting only before complete exchanges."""
-    from robothor.engine.context import estimate_context_tokens as estimate_tokens
+    from robothor.engine.context import estimate_context_tokens
+
+    def estimate_tokens(msgs: list[dict[str, Any]]) -> int:
+        return estimate_context_tokens(msgs, model)
 
     start = max(0, len(messages) - keep_recent)
     if start < len(messages) - 1:
@@ -679,7 +684,10 @@ SHRINK_HEAD_CHARS = 2_000
 
 
 def _shrink_largest(
-    messages: list[dict[str, Any]], drain_to: int, keep_intact: int = SHRINK_KEEP_INTACT
+    messages: list[dict[str, Any]],
+    drain_to: int,
+    keep_intact: int = SHRINK_KEEP_INTACT,
+    model: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Truncate the biggest old messages until the conversation fits.
 
@@ -692,7 +700,10 @@ def _shrink_largest(
     handed to a server that allocated a third of the room it needs, and
     truncated there in silence.
     """
-    from robothor.engine.context import estimate_context_tokens as estimate_tokens
+    from robothor.engine.context import estimate_context_tokens
+
+    def estimate_tokens(msgs: list[dict[str, Any]]) -> int:
+        return estimate_context_tokens(msgs, model)
 
     out = list(messages)
     tail_start = max(0, len(out) - keep_intact)
@@ -799,7 +810,9 @@ def newest_exchange_start(messages: list[dict[str, Any]]) -> int:
     return max(0, len(messages) - 1)
 
 
-def protected_tail_len(messages: list[dict[str, Any]], budget: int, cap: int) -> int:
+def protected_tail_len(
+    messages: list[dict[str, Any]], budget: int, cap: int, model: str | None = None
+) -> int:
     """How many trailing messages the pre-pass keeps verbatim.
 
     Bounded by TOKENS as well as by count. A fixed count of recent messages
@@ -817,9 +830,9 @@ def protected_tail_len(messages: list[dict[str, Any]], budget: int, cap: int) ->
     if not messages:
         return 0
     start = newest_exchange_start(messages)
-    used = estimate_context_tokens(messages[start:])
+    used = estimate_context_tokens(messages[start:], model)
     while start > 0 and len(messages) - start < cap:
-        cost = estimate_context_tokens([messages[start - 1]])
+        cost = estimate_context_tokens([messages[start - 1]], model)
         if used + cost > budget:
             break
         used += cost
@@ -1062,8 +1075,15 @@ async def compact(
     caller the fleet chain summarises; when every model fails, the messages are
     kept and the result is marked ``degraded``.
     """
-    from robothor.engine.context import KEEP_RECENT
-    from robothor.engine.context import estimate_context_tokens as estimate_tokens
+    from robothor.engine.context import KEEP_RECENT, estimate_context_tokens
+    from robothor.engine.context_fit import next_reachable_model
+
+    # The model the trigger sized against, so an exact tokenizer, when it is
+    # switched on, counts here exactly as it counted there.
+    sizing = next_reachable_model(list(models or []), broken_models) or None
+
+    def estimate_tokens(msgs: list[dict[str, Any]]) -> int:
+        return estimate_context_tokens(msgs, sizing)
 
     tokens_before = estimate_tokens(messages)
     if tokens_before < threshold:
@@ -1073,7 +1093,7 @@ async def compact(
 
     recent_budget = max(1024, drain_to // 3)
     head_len = protected_prefix_len(messages)
-    protect = protected_tail_len(messages[head_len:], recent_budget, KEEP_RECENT)
+    protect = protected_tail_len(messages[head_len:], recent_budget, KEEP_RECENT, sizing)
     working, counts = llm_free_pre_pass(messages, protect)
     est = estimate_tokens(working)
     logger.info(
@@ -1093,7 +1113,7 @@ async def compact(
         return result(working, 1)
 
     if len(working) <= KEEP_RECENT + 1:
-        shrunk, n = _shrink_largest(working, drain_to)
+        shrunk, n = _shrink_largest(working, drain_to, model=sizing)
         if not n and est >= tokens_before:
             # Nothing reclaimed: a no-op must not read as a pass that worked.
             return CompactionResult(
@@ -1103,7 +1123,9 @@ async def compact(
 
     head_msgs, retained_msgs, rest = _split_for_summary(working)
     previous, rest = _take_previous_summary(rest)
-    split_idx = _recent_split(rest, recent_budget, KEEP_RECENT) if len(rest) > KEEP_RECENT else 0
+    split_idx = (
+        _recent_split(rest, recent_budget, KEEP_RECENT, sizing) if len(rest) > KEEP_RECENT else 0
+    )
     old_messages, recent_messages = rest[:split_idx], rest[split_idx:]
     if not old_messages:
         return result(working, 1)
@@ -1149,7 +1171,7 @@ async def compact(
     )
     result_msgs.extend(recent_messages)
     if estimate_tokens(result_msgs) > drain_to:
-        result_msgs, _ = _shrink_largest(result_msgs, drain_to)
+        result_msgs, _ = _shrink_largest(result_msgs, drain_to, model=sizing)
     logger.info(
         "Compaction: summary updated on %s, ~%d → ~%d tokens",
         sanitize_log(chain[0]),
