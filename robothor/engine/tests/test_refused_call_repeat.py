@@ -200,3 +200,20 @@ async def test_a_refusal_that_names_no_gate_is_a_one_shot_redirection(monkeypatc
         [("exec", {"command": "python test_x.py"}), ("exec", {"command": "python test_x.py"})],
     )
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_workflow_step_keeps_its_own_retries(monkeypatch) -> None:
+    """A workflow step's declared retries are its own policy: a 403 there is
+    retried as the workflow says, not answered from the run's refusals."""
+    from robothor.engine.tool_call_log import run_id_scope
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+    registry, fake = _dispatch({"example_tool": FORBIDDEN}, calls)
+    monkeypatch.setattr("robothor.engine.tools.registry._execute_tool", fake)
+    with run_id_scope("wr-1"):
+        for _ in range(2):
+            await ToolRegistry.execute(
+                registry, "example_tool", {"a": 1}, agent_id="workflow:example-flow", timeout=0
+            )
+    assert len(calls) == 2

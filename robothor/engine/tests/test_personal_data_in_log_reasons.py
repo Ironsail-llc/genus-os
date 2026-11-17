@@ -120,6 +120,13 @@ class TestRedactPersonalData:
     def test_ids_dates_codes_and_versions_are_kept(self, text: str) -> None:
         assert redact_personal_data(text) == text
 
+    @pytest.mark.parametrize(
+        "domain", ["us.mail.bigcorp.com", "mail.example.org", "163.com", "mail.2u.com"]
+    )
+    def test_the_whole_address_goes_however_many_labels(self, domain: str) -> None:
+        out = redact_personal_data("to alice" + "@" + domain + " failed")
+        assert out == "to <email> failed"
+
     def test_empty_and_none_are_safe(self) -> None:
         assert redact_personal_data("") == ""
 
