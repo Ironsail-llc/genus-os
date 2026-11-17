@@ -99,6 +99,7 @@ class FakeRedis:
         self.vt = vt
         self.streams: dict[str, list[tuple[bytes, dict[bytes, bytes]]]] = {}
         self.hashes: dict[str, dict[str, int]] = {}
+        self.ttls: dict[str, int] = {}
         self.acked: list[bytes] = []
         self._seq = itertools.count()
         self.on_retry: Any = None  # the consumer reading an engine's retry stream
@@ -116,7 +117,11 @@ class FakeRedis:
         return msg_id
 
     async def xrange(
-        self, key: str, min: str = "-", max: str = "+", count: int | None = None
+        self,
+        key: str,
+        min: str = "-",  # noqa: A002 - redis-py's names
+        max: str = "+",  # noqa: A002
+        count: int | None = None,
     ) -> list[tuple[bytes, dict[bytes, bytes]]]:
         def _key(msg_id: bytes) -> tuple[int, int]:
             a, b = msg_id.decode().split("-")
@@ -153,6 +158,7 @@ class FakeRedis:
         return h[field]
 
     async def expire(self, key: str, seconds: int) -> bool:
+        self.ttls[key] = seconds
         return True
 
     async def scan_iter(self, match: str = "*", **kw: Any) -> Any:
@@ -240,8 +246,9 @@ class Burst:
         return [ref for ref, _ in self.calls]
 
 
-@pytest.fixture
-def vt():
+@contextlib.contextmanager
+def virtual_time() -> Any:
+    """Every sleep, the limiter's clock and the backlog's clock on one virtual clock."""
     clock = VirtualTime()
     fake_time = SimpleNamespace(monotonic=clock.monotonic, time=clock.time)
     with contextlib.ExitStack() as stack:
@@ -253,6 +260,12 @@ def vt():
         dedup.clear()
         yield clock
         dedup.clear()
+
+
+@pytest.fixture
+def vt():
+    with virtual_time() as clock:
+        yield clock
 
 
 def _max_calls_in_any_minute(times: list[float]) -> int:
@@ -280,7 +293,9 @@ class TestBurstDrains:
         await vt.run_until()
 
         handled = b.handled()
-        out_of_order = sum(1 for a, c in zip(handled, handled[1:]) if int(a[4:]) > int(c[4:]))
+        out_of_order = sum(
+            1 for a, c in zip(handled, handled[1:], strict=False) if int(a[4:]) > int(c[4:])
+        )
         assert (b.redis.dlq(), len(handled), out_of_order) == (0, EVENTS, 0)
         assert handled == _expected(EVENTS)  # each once, in arrival order
         assert len(set(b.redis.acked)) == EVENTS
@@ -289,7 +304,7 @@ class TestBurstDrains:
         assert _max_calls_in_any_minute(times) <= LIMIT
         drain = times[-1] - START
         minutes = math.ceil(EVENTS / LIMIT)
-        assert drain <= minutes * 60
+        assert drain == pytest.approx((minutes - 1) * 60, abs=1)  # the limiter's rate
         # The longest any event waited is the drain itself: no event is
         # starved behind later ones.
         assert max(t - START for t in times) == drain

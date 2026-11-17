@@ -29,11 +29,12 @@ import yaml
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.config import ROOT_EVENT_GROUP
-from robothor.engine.dedup import release, try_acquire
+from robothor.engine.dedup import is_running, release, try_acquire
 from robothor.engine.deferrals import DeferredRuns
 from robothor.engine.delivery import deliver
-from robothor.engine.models import RunStatus, TriggerType
+from robothor.engine.models import TriggerType
 from robothor.engine.task_registry import get_task_registry
+from robothor.engine.workflow_backlog import WorkflowBacklog, workflow_event
 
 MAX_RETRIES = 3
 
@@ -48,11 +49,11 @@ MAX_BUSY_REQUEUES = 80
 # Retry copies name the agents they are for, so the agents that already
 # handled the event (and the workflows already dispatched) do not run again.
 RETRY_AGENTS_FIELD = "_retry_agents"
-# A busy workflow's requeued copy names the workflows it is for, and no agents.
+# A copy addressed to workflows names them, and no agents. Workflow events now
+# wait in the workflow's backlog (robothor.engine.workflow_backlog) instead of
+# being requeued; copies an older engine left on the retry stream still arrive
+# and go to the backlog of the workflows they name.
 RETRY_WORKFLOWS_FIELD = "_retry_workflows"
-# Set on a copy requeued because the tool-call rate limit deferred its run, so
-# a retry deferred again is not counted as another deferred run.
-RATE_DEFERRED_FIELD = "_rate_deferred"
 
 # Events handled at once. Each event runs off the consumer loop, so a long
 # agent run holds up only later events for that same agent.
@@ -266,20 +267,7 @@ def busy_requeue_delay(count: int) -> int:
     return int(min(BUSY_REQUEUE_DELAY_SECONDS * 2 ** (count // 10), MAX_BUSY_REQUEUE_DELAY_SECONDS))
 
 
-def _workflow_event(stream: str, envelope: dict[str, Any]) -> dict[str, Any]:
-    """The event as a workflow run's context: the payload parsed when it is JSON."""
-    raw = envelope.get("payload", "")
-    try:
-        payload: Any = json.loads(raw) if raw else {}
-    except (TypeError, ValueError):
-        payload = raw
-    return {
-        "id": envelope.get("id", ""),
-        "type": envelope.get("type", ""),
-        "stream": stream,
-        "delivery_id": envelope.get("delivery_id", ""),
-        "payload": payload,
-    }
+_workflow_event = workflow_event
 
 
 def _requeues_when_busy(wf: Any, stream: str, event_type: str) -> bool:
@@ -324,8 +312,16 @@ class EventHooks:
         self._tree_failures = 0
         # Set while this engine holds the root group; its refresh task reads it.
         self._holds_root_group = False
-        # Workflow runs the tool-call rate limit deferred, counted per window.
-        self.deferred_runs = DeferredRuns(getattr(config, "tenant_id", "") or DEFAULT_TENANT)
+        tenant = getattr(config, "tenant_id", "") or DEFAULT_TENANT
+        # Every hook workflow event, kept in Redis and run in arrival order.
+        self.backlog = WorkflowBacklog(
+            tenant, lambda: self.workflow_engine, lambda: self.deferred_runs
+        )
+        # Workflow runs the tool-call rate limit deferred, counted per window,
+        # each summary line carrying the workflow's backlog.
+        self.deferred_runs = DeferredRuns(tenant, backlog=self.backlog.stats)
+        # Events reach the backlog in the order the consumer read them.
+        self._enqueue_order = asyncio.Lock()
 
     def _owns_event(self, decoded: dict[str, Any]) -> bool:
         """Whether this engine's tenant is the one the event belongs to.
@@ -789,6 +785,10 @@ class EventHooks:
                 await r.xgroup_create(retry, consumer_group, id="0", mkstream=True)
 
         logger.info("Listening on streams: %s", ", ".join(prefixed_streams))
+        try:
+            await self.resume_workflow_backlog(r)
+        except Exception as e:
+            logger.error("Resuming the workflow backlog failed: %s", e, exc_info=True)
         # Rivals matter only on the shared streams; replay and reads cover both.
         shared_streams = prefixed_streams
         prefixed_streams = prefixed_streams + retry_streams
@@ -849,6 +849,7 @@ class EventHooks:
         with contextlib.suppress(asyncio.CancelledError):
             await refresher
         await self._stop_in_flight()
+        await self.stop_workflow_backlog()
         await r.aclose()
 
     async def _handle_event(
@@ -895,26 +896,21 @@ class EventHooks:
         retry_workflows = {w for w in decoded.get(RETRY_WORKFLOWS_FIELD, "").split(",") if w}
         addressed = bool(retry_agents or retry_workflows)
 
-        # Dispatch matching workflows first, so the event's agent
-        # runs below never delay them (fire-and-forget).
+        # Matching workflows first: the event goes to each one's backlog, in
+        # the order events were read, before it is acknowledged; the backlog
+        # runs it, so the event's agent runs below never delay it.
         # A retry copy addressed to agents was already dispatched once.
         if self.workflow_engine and (not addressed or retry_workflows):
             matching_workflows = self.workflow_engine.get_workflows_for_event(
                 bare_stream, event_type
             )
-            for wf in matching_workflows:
-                if retry_workflows and wf.id not in retry_workflows:
-                    continue
-                logger.info(
-                    "Hook triggering workflow: %s via %s:%s",
-                    wf.id,
-                    bare_stream,
-                    event_type,
-                )
-                get_task_registry().spawn(
-                    self._run_workflow(wf, bare_stream, event_type, decoded, redis_client, stream),
-                    name=f"hook-workflow:{wf.id}:{bare_stream}:{event_type}",
-                )
+            async with self._enqueue_order:
+                for wf in matching_workflows:
+                    if retry_workflows and wf.id not in retry_workflows:
+                        continue
+                    await self._run_workflow(
+                        wf, bare_stream, event_type, decoded, redis_client, stream
+                    )
 
         failed_agents: list[str] = []
         busy_agents: list[str] = []
@@ -1140,73 +1136,69 @@ class EventHooks:
         redis_client: Any,
         prefixed_stream: str,
     ) -> None:
-        """Execute a workflow triggered by an event (fire-and-forget).
+        """Hand an event to the workflow's backlog, which runs it in turn.
 
         The event is the run's ``event`` context, so steps can template its
-        fields. A run skipped because the workflow was already running is
-        re-added for that workflow when its trigger sets ``requeue_if_busy``;
-        a run deferred by the tool-call rate limit is re-added always.
+        fields. A workflow that is neither ``concurrent`` nor
+        ``requeue_if_busy`` on this trigger keeps its old contract: an event
+        that arrives while a run of it is in flight is dropped. Every other
+        event waits in the backlog, in arrival order, for as long as the
+        workflow is busy or the tool-call rate limit is full.
         """
         workflow_id = wf.id
+        if (
+            not wf.concurrent
+            and not _requeues_when_busy(wf, stream, event_type)
+            and is_running(f"workflow:{workflow_id}")
+        ):
+            logger.info("Workflow %s already running, skipping duplicate", workflow_id)
+            return
+        logger.info("Hook triggering workflow: %s via %s:%s", workflow_id, stream, event_type)
         try:
-            run = await self.workflow_engine.execute(
-                workflow_id=workflow_id,
-                trigger_type="hook",
-                trigger_detail=f"{stream}:{event_type}",
-                initial_context={"event": _workflow_event(stream, envelope)},
-                user_id=f"service:workflow:{workflow_id}",
-                user_role="service",
-                requeue_on_rate_limit=True,
-            )
+            accepted = await self.backlog.enqueue(redis_client, wf, stream, event_type, envelope)
         except Exception as e:
+            # Redis refused the write: run it now, as before the backlog, so
+            # the event is not left to the restart replay alone.
             logger.error(
-                "Workflow %s failed (hook %s:%s): %s",
+                "Could not queue workflow %s for %s:%s, running it directly: %s",
                 workflow_id,
                 stream,
                 event_type,
                 e,
             )
+            get_task_registry().spawn(
+                self.backlog.run_now(wf, stream, event_type, envelope),
+                name=f"hook-workflow:{workflow_id}:{stream}:{event_type}",
+            )
             return
-
-        # A busy workflow is requeued when its trigger asks for it; a run the
-        # tool-call rate limit deferred always is, so a burst slows down
-        # instead of losing events. Both spend the same busy-requeue budget.
-        if run.status != RunStatus.SKIPPED:
-            return
-        if not run.rate_limited and not _requeues_when_busy(wf, stream, event_type):
-            return
-        if run.rate_limited and not envelope.get(RATE_DEFERRED_FIELD):
-            await self.deferred_runs.record(workflow_id, redis_client)
-        busy_count = int(envelope.get("_busy_requeue_count", "0"))
-        busy_data = {k: v for k, v in envelope.items() if k != RETRY_AGENTS_FIELD}
-        busy_data[RETRY_WORKFLOWS_FIELD] = workflow_id
-        if run.rate_limited:
-            busy_data[RATE_DEFERRED_FIELD] = "1"
-        if busy_count < MAX_BUSY_REQUEUES:
-            reason = "rate limited" if run.rate_limited else "busy"
-            # A rate-limited requeue is summarised per window by deferred_runs.
-            logger.log(
-                logging.DEBUG if run.rate_limited else logging.INFO,
-                "Requeueing %s:%s — workflow %s %s",
+        if not accepted:
+            logger.error(
+                "Workflow %s backlog is full: %s:%s goes to the dead-letter stream",
+                workflow_id,
                 stream,
                 event_type,
-                workflow_id,
-                reason,
             )
-            busy_data["_busy_requeue_count"] = str(busy_count + 1)
-            await self._delayed_requeue(
-                redis_client,
-                self._retry_key.get(prefixed_stream, prefixed_stream),
-                busy_data,
-                busy_requeue_delay(busy_count),
-            )
-        else:
             await self._dead_letter(
                 redis_client,
                 self._source_key.get(prefixed_stream, prefixed_stream),
-                busy_data,
+                {**envelope, RETRY_WORKFLOWS_FIELD: workflow_id},
                 event_type,
             )
+
+    async def resume_workflow_backlog(self, redis_client: Any) -> None:
+        """Pick up the backlog a previous engine left, for every loaded hook workflow."""
+        if not self.workflow_engine:
+            return
+        ids = [
+            wf.id
+            for wf in self.workflow_engine.list_workflows()
+            if any(t.type == "hook" for t in wf.triggers)
+        ]
+        await self.backlog.resume(redis_client, ids)
+
+    async def stop_workflow_backlog(self) -> None:
+        """Stop the backlog's drainers; what has not run stays in Redis."""
+        await self.backlog.stop()
 
     async def _idle(self) -> None:
         """Idle loop when Redis is not available."""

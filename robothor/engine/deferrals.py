@@ -95,10 +95,17 @@ def _label(start: int) -> str:
 class DeferredRuns:
     """Counts deferrals per window and logs one summary line per closed window."""
 
-    def __init__(self, tenant_id: str, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self,
+        tenant_id: str,
+        clock: Callable[[], float] = time.time,
+        backlog: Callable[[str], tuple[int, float]] | None = None,
+    ) -> None:
         self.tenant_id = tenant_id
         self._clock = clock
         self._open: dict[int, Counter[str]] = {}
+        # Workflow id -> (backlog depth, oldest entry's age), for the summary line.
+        self._backlog = backlog
 
     async def record(self, workflow_id: str, redis_client: Any) -> None:
         """Count one deferral of ``workflow_id`` in the current window."""
@@ -119,12 +126,15 @@ class DeferredRuns:
     def _summarise_before(self, current: int) -> None:
         for start in sorted(s for s in self._open if s < current):
             for workflow_id, count in sorted(self._open.pop(start).items()):
+                depth, oldest = self._backlog(workflow_id) if self._backlog else (0, 0.0)
                 logger.warning(
                     "Workflow runs deferred by the tool-call rate limit: "
-                    "workflow=%s deferred=%d window=%s",
+                    "workflow=%s deferred=%d window=%s backlog=%d oldest=%ds",
                     workflow_id,
                     count,
                     _label(start),
+                    depth,
+                    int(oldest),
                 )
 
 
