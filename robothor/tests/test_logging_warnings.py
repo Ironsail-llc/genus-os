@@ -39,6 +39,11 @@ def captured(monkeypatch: pytest.MonkeyPatch):
     with warnings.catch_warnings():
         warnings.simplefilter("always")
         configure_structured_logging()
+        # Another test's dictConfig can leave the logger disabled; isolate.
+        warnings_logger = logging.getLogger("py.warnings")
+        monkeypatch.setattr(warnings_logger, "disabled", False)
+        monkeypatch.setattr(warnings_logger, "propagate", True)
+        monkeypatch.setattr(warnings_logger, "level", logging.NOTSET)
         handler = root.handlers[0]
         assert isinstance(handler, logging.StreamHandler)
         handler.setStream(buffer)

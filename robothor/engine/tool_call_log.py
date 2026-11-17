@@ -39,7 +39,15 @@ from robothor.engine.log_fields import kv_line, short_reason
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
 
-__all__ = ["OUTCOMES", "classify_result", "log_refused", "log_tool_call", "logged", "run_id_scope"]
+__all__ = [
+    "OUTCOMES",
+    "classify_result",
+    "log_refused",
+    "log_tool_call",
+    "logged",
+    "logs_guard_refusals",
+    "run_id_scope",
+]
 
 _F = TypeVar("_F", bound="Callable[..., Awaitable[Any]]")
 
@@ -154,6 +162,29 @@ def log_refused(tool_name: str, result: dict[str, Any], *, tool_args: Any, sessi
     except Exception:  # noqa: BLE001 — a log line must never fail the call
         with contextlib.suppress(Exception):
             logger.error("tool_call log line failed for %s", tool_name, exc_info=True)
+
+
+def logs_guard_refusals(*guards: str) -> Callable[[_F], _F]:
+    """Wrap a caller's own ``call(name, args)`` so its named refusals log.
+
+    For refusals a caller makes before admission or the registry, such as the
+    ``execute_code`` proxy's call and approval caps. Each is matched on its
+    ``guard`` key and logged as ``outcome=refused error_type=policy.<guard>``.
+    """
+    names = frozenset(guards)
+
+    def _wrap(call: _F) -> _F:
+        @functools.wraps(call)
+        async def _call(self: Any, name: str, args: Any) -> Any:
+            result = await call(self, name, args)
+            if isinstance(result, dict) and result.get("guard") in names:
+                session = getattr(getattr(self, "_req", None), "session", None)
+                log_refused(name, result, tool_args=args, session=session)
+            return result
+
+        return cast("_F", _call)
+
+    return _wrap
 
 
 def logged(execute: _F) -> _F:

@@ -44,6 +44,7 @@ from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any, Protocol
 
 from robothor.engine.proxy_denylist import PROXY_DENIED_TOOLS
+from robothor.engine.tool_call_log import logs_guard_refusals
 from robothor.engine.wrapped_call import inner_call
 
 if TYPE_CHECKING:
@@ -182,25 +183,21 @@ class RunToolProxy:
         #: second copy of two hundred responses in RAM is not a diagnostic.
         self.responses: list[tuple[str, tuple[str, ...]]] = []
 
+    @logs_guard_refusals("execute_code_call_cap", "execute_code_approval_cap")
     async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         """One proxied tool call, through every gate a turn's call passes."""
-        from robothor.engine.tool_call_log import log_refused
-
         async with self._lock:
             if self.calls_made >= self.max_calls:
-                cap = {
+                return {
                     "error": (
                         f"execute_code tool-call limit reached ({self.max_calls}). "
                         "Narrow the loop, or do the remaining work in a second snippet."
                     ),
                     "guard": "execute_code_call_cap",
                 }
-                log_refused(name, cap, tool_args=args, session=self._req.session)
-                return cap
             # Judged as the call it wraps, like every gate a turn's call meets.
             approval_refusal = self._approval_budget_refusal(inner_call(name, args)[0])
             if approval_refusal:
-                log_refused(name, approval_refusal, tool_args=args, session=self._req.session)
                 return approval_refusal
             self.calls_made += 1
             return await self._dispatch(name, args)
@@ -262,9 +259,6 @@ class RunToolProxy:
                 batch_position=position,
                 append_message=False,
             )
-            from robothor.engine.tool_admission import _log_refusal
-
-            _log_refusal(verdict, name, tool_args=verdict.tool_args, session=session)
             return refusal
 
         timeout = _resolve_tool_timeout(

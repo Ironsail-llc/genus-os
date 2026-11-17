@@ -99,7 +99,7 @@ class TestCollect:
             def cursor(self, *a: Any, **k: Any) -> _Cursor:
                 return _Cursor()
 
-        monkeypatch.setattr("robothor.db.connection.get_connection", lambda: _Conn())
+        monkeypatch.setattr("robothor.db.connection.get_connection", lambda *a, **k: _Conn())
         failure_report.collect(hours=6, tenant_id="test-tenant")
         assert len(seen) == 3
         for sql, params in seen:

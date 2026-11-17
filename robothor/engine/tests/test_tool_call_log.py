@@ -254,14 +254,14 @@ async def test_a_wrapper_refusal_is_logged_under_the_wrapped_tool(monkeypatch, c
     assert f["outcome"] == "denied"
 
 
-def test_a_call_refused_at_admission_writes_one_line(caplog) -> None:
+@pytest.mark.asyncio
+async def test_a_call_refused_at_admission_writes_one_line(caplog) -> None:
+    """Logged by admission itself, so the refusal recorder adds no second line."""
     from types import SimpleNamespace
 
     from robothor.engine.tool_admission import ToolAdmissionMixin
     from robothor.engine.tool_verdict import ToolVerdict
 
-    run = SimpleNamespace(id="run-1", agent_id="example-agent")
-    session = SimpleNamespace(run=run, record_tool_call=lambda **k: None)
     verdict = ToolVerdict(
         allowed=False,
         message="Blocked by guardrail (example_guard): not allowed now",
@@ -273,8 +273,18 @@ def test_a_call_refused_at_admission_writes_one_line(caplog) -> None:
         },
         gate="policy",
     )
+
+    class _Admission(ToolAdmissionMixin):
+        async def _run_gates(self, **kw: Any) -> ToolVerdict:
+            return verdict
+
+    run = SimpleNamespace(id="run-1", agent_id="example-agent")
+    session = SimpleNamespace(run=run, record_tool_call=lambda **k: None)
+    admitted = await _Admission()._admit_tool_call(
+        tool_name="example_tool", tool_args={}, session=session, agent_config=None
+    )
     ToolAdmissionMixin._record_refusal(
-        verdict,
+        admitted,
         tc=SimpleNamespace(id="c1"),
         tool_name="example_tool",
         session=session,

@@ -138,7 +138,9 @@ CAPS = {
     # the comment, the import and the call; there is nothing here to extract.
     # 1001 -> 933: the todo escalation (lifting unfinished items back onto the
     # CRM parent task) left for todo_escalation.py; it never touched the runner.
-    "robothor/engine/run_finalizer.py": 933,
+    # 933 -> 935: the one-line event=run_end call site and its import; the
+    # line itself is built in run_log.py.
+    "robothor/engine/run_finalizer.py": 935,
     # The deliverable-contract cluster, capped at the size it was split to.
     # Hostile review 2026-09-16 (I6): `deliverable_contract.py` had reached
     # 1,354 lines and none of the three new modules was listed here, so "the
@@ -222,7 +224,9 @@ CAPS = {
     "robothor/engine/delivery.py": 950,
     # 709 -> 701: re-measured after the catch-up fold (flag paths removed).
     "robothor/engine/run_lifecycle.py": 701,  # -69: dead copy of the tool-timeout tables
-    "robothor/engine/run_llm_calls.py": 381,  # -69: dead copy of the tool-timeout tables
+    # 381 -> 383: a reply with thinking content blocks is tagged with its
+    # producer, so reasoning_replay.py can strip them for another model.
+    "robothor/engine/run_llm_calls.py": 383,  # -69: dead copy of the tool-timeout tables
     # 400 -> 405: a sixth gate, the budget's wrap-up rung. This module IS the
     # ordered list of gates — its header calls that order a security property
     # — so there is nothing cohesive to extract here, and taking one gate out
@@ -243,7 +247,9 @@ CAPS = {
     # 364 -> 353 in the fold: the verdict type left for tool_verdict.py, which
     # also pays for the gates judging a tool_call as the call it wraps (the
     # unwrapping is in wrapped_call.py; one call site lands here).
-    "robothor/engine/tool_admission.py": 353,
+    # 353 -> 354: the decorator that logs every admission refusal; the
+    # logging is in tool_verdict.py and tool_call_log.py.
+    "robothor/engine/tool_admission.py": 354,
     # Capped at the size it was extracted at, like schedule_reconcile.py: a new
     # module with no cap is how the next branch's "just one more case" lands
     # somewhere the ratchet is not looking. One branch, one dependency, and it
@@ -381,7 +387,9 @@ CAPS = {
     # on both paths. The reading itself lives in tool_outcome.py.
     # 323 -> 314: the denylist left for proxy_denylist.py, where it learned to
     # look through a tool_call, and the cap follows the file down.
-    "robothor/engine/tool_proxy.py": 314,
+    # 314 -> 316: the decorator (and its import) that logs the two cap
+    # refusals; the logging is in tool_call_log.py.
+    "robothor/engine/tool_proxy.py": 316,
     # 209 -> 283: the peer-session check. Not a feature, a control: the token
     # alone could not tell one run's snippet from another's, and a probe drove
     # a second run's proxy with a stolen token. Correcting a cap set hours

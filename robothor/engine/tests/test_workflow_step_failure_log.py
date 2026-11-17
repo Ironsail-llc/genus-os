@@ -19,7 +19,7 @@ from robothor.engine.workflow import WorkflowEngine
 
 
 def _persist(monkeypatch, result: WorkflowStepResult) -> None:
-    def _no_db():
+    def _no_db(*_a, **_k):
         raise RuntimeError("no database in this test")
 
     monkeypatch.setattr("robothor.db.connection.get_connection", _no_db)
