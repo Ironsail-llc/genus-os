@@ -47,6 +47,7 @@ __all__ = [
     "known_value_count",
     "redact",
     "redact_known_value",
+    "redact_personal_data",
     "register_known_value",
     "redact_assistant_turn",
     "redact_message",
@@ -882,3 +883,35 @@ def redact_opaque_runs(text: str) -> str:
         return run if _is_a_reference(run, text[: match.start()]) else PLACEHOLDER
 
     return _OPAQUE_RUN.sub(_replace, text)
+
+
+# ─── Personal data in error text ──────────────────────────────────────────
+#
+# Error text a provider, plugin or remote API wrote routinely names the record
+# it failed on, and that record is often a person. A log reason and a failure
+# report must not carry them. Closed and conservative, like the credential
+# shapes above: an email address, and a phone number that is either written
+# with a leading ``+`` (E.164 and international forms) or in the 3-3-4 grouping.
+# Ids, dates, times, versions, status codes and addresses are left alone.
+
+_EMAIL = re.compile(
+    r"(?<![\w.+-])[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![\w-])"
+)
+_PHONE = re.compile(
+    r"(?<![\w.+-])(?:"
+    r"\+\d{1,3}(?:[\s.-]?\(?\d{1,4}\)?){1,5}[\s.-]?\d{3,4}"  # +15550100199, +44 20 7946 0958
+    r"|\(\d{3}\)\s?\d{3}[\s.-]\d{4}"  # (555) 010-0199
+    r"|\d{3}[.-]\d{3}[.-]\d{4}"  # 555-010-0199, 555.010.0199
+    r")(?![\w-])"
+)
+
+
+def redact_personal_data(text: str) -> str:
+    """``text`` with email addresses and phone numbers replaced.
+
+    For text that is logged or printed, never stored: ``<email>`` and
+    ``<phone>`` say what was there without saying who.
+    """
+    if not text:
+        return text
+    return _PHONE.sub("<phone>", _EMAIL.sub("<email>", text))

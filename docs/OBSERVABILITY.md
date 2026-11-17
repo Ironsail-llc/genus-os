@@ -69,8 +69,10 @@ Five events are written as one `key=value` line each, so a log pipeline can
 count and group them without parsing prose. Every line starts with
 `event=<name>`; a value with spaces is double-quoted; an empty value is `-`.
 None carries prompt text, tool arguments, result bodies or personal data, and
-every `reason` is cut to a bounded length, then redacted, then cut to 200
-characters.
+every `reason` (and an alert's `subject`) is cut to a bounded length, then has
+credentials, email addresses and phone numbers replaced (`<redacted>`, `<email>`,
+`<phone>`), then is cut to 200 characters. `genus engine failures` scrubs its
+error text the same way when it prints it; the stored rows are unchanged.
 
 | Event | Logger | Level | Fields |
 |---|---|---|---|

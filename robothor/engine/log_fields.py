@@ -9,7 +9,10 @@ never becomes two. An empty or ``None`` value is written as ``-``.
 a bounded length BEFORE redaction (redacting megabytes of text on the event
 loop is slow), redacted with :func:`robothor.secrets.redaction.redact`, and cut
 to its final length afterwards. The pre-cut is many times the final length, so
-a credential split at the pre-cut point lies far outside what is kept.
+a credential split at the pre-cut point lies far outside what is kept. Email
+addresses and phone numbers are replaced too
+(:func:`robothor.secrets.redaction.redact_personal_data`): an error message
+often names the person whose record failed.
 """
 
 from __future__ import annotations
@@ -54,7 +57,7 @@ def short_reason(text: Any, limit: int = REASON_CHARS) -> str:
     from robothor.secrets import redaction
 
     raw = str(text)[:_PRE_REDACT_CHARS]
-    clean = _WHITESPACE.sub(" ", redaction.redact(raw)).strip()
+    clean = _WHITESPACE.sub(" ", redaction.redact_personal_data(redaction.redact(raw))).strip()
     if len(clean) > limit:
         clean = clean[: limit - 1] + "…"
     return clean
