@@ -87,7 +87,11 @@ class TestAPluginPinsItsToolsWithToolsEager:
         assert set(PLUGIN_TOOLS[:2]) <= advertised
 
     def test_pinning_never_widens_reach(self, registry):
-        cfg = _cfg({"id": "narrow-ish", "tools_eager": [PLUGIN_TOOLS[0]], "tools_denied": [
-            PLUGIN_TOOLS[0]
-        ]})
+        cfg = _cfg(
+            {
+                "id": "narrow-ish",
+                "tools_eager": [PLUGIN_TOOLS[0]],
+                "tools_denied": [PLUGIN_TOOLS[0]],
+            }
+        )
         assert PLUGIN_TOOLS[0] not in _names(registry.build_for_agent(cfg))

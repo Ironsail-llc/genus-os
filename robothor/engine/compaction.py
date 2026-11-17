@@ -1103,9 +1103,7 @@ async def compact(
 
     head_msgs, retained_msgs, rest = _split_for_summary(working)
     previous, rest = _take_previous_summary(rest)
-    split_idx = (
-        _recent_split(rest, recent_budget, KEEP_RECENT) if len(rest) > KEEP_RECENT else 0
-    )
+    split_idx = _recent_split(rest, recent_budget, KEEP_RECENT) if len(rest) > KEEP_RECENT else 0
     old_messages, recent_messages = rest[:split_idx], rest[split_idx:]
     if not old_messages:
         return result(working, 1)

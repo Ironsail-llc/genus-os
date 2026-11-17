@@ -207,7 +207,10 @@ FAR_PAST_THRESHOLD_CHARS = 9_000
 def _big_conversation(tag: int, chars: int = NEAR_THRESHOLD_CHARS) -> list[dict]:
     msgs = _head()
     msgs.extend(
-        {"role": "user" if i % 2 == 0 else "assistant", "content": f"iter-{tag} " + "x " * (chars // 2)}
+        {
+            "role": "user" if i % 2 == 0 else "assistant",
+            "content": f"iter-{tag} " + "x " * (chars // 2),
+        }
         for i in range(60)
     )
     return msgs
