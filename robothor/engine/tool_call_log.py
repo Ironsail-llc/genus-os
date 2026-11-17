@@ -32,7 +32,7 @@ import contextvars
 import functools
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from robothor.engine.log_fields import kv_line, short_reason
 
@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 __all__ = ["OUTCOMES", "classify_result", "log_tool_call", "logged"]
+
+_F = TypeVar("_F", bound="Callable[..., Awaitable[Any]]")
 
 logger = logging.getLogger(__name__)
 line_logger = logging.getLogger("robothor.engine.tool_calls")
@@ -109,7 +111,7 @@ def log_tool_call(
             logger.error("tool_call log line failed for %s", tool, exc_info=True)
 
 
-def logged(execute: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+def logged(execute: _F) -> _F:
     """Wrap ``ToolRegistry.execute`` so every call writes one line."""
     from robothor.engine.wrapped_call import WRAPPER_TOOL, inner_call
 
@@ -150,4 +152,4 @@ def logged(execute: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[An
                     duration_ms=int((time.monotonic() - started) * 1000),
                 )
 
-    return _execute
+    return cast("_F", _execute)

@@ -516,7 +516,7 @@ def _cmd_engine_failures(args: argparse.Namespace) -> int:
             {**g, "last_seen": str(g["last_seen"]) if g["last_seen"] else None}
             for g in groups[:limit]
         ]
-        tool_calls = {t: c for t, c in calls.items() if any(g["tool"] == t for g in groups)}
+        seen_calls = {t: c for t, c in calls.items() if any(g["tool"] == t for g in groups)}
         print(
             json.dumps(
                 {
@@ -524,7 +524,7 @@ def _cmd_engine_failures(args: argparse.Namespace) -> int:
                     "tenant_id": tenant,
                     "total": total,
                     "groups": shown,
-                    "tool_calls": tool_calls,
+                    "tool_calls": seen_calls,
                 },
                 indent=2,
             )

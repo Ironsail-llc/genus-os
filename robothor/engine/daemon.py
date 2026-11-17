@@ -2473,6 +2473,8 @@ async def _offcycle_agent_configured(scheduler: Any, agent_id: str) -> bool:
     from robothor.engine.config import load_agent_config_or_broken
 
     manifest_dir = getattr(getattr(scheduler, "config", None), "manifest_dir", None)
+    if manifest_dir is None:
+        return True  # nothing to judge by: spawn as before
     config = await asyncio.to_thread(
         load_agent_config_or_broken, agent_id, manifest_dir, "off-cycle spawn"
     )

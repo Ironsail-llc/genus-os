@@ -52,7 +52,7 @@ def _query(sql: str, params: tuple[Any, ...]) -> list[_Row]:
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(sql, params)
-        return [tuple(r) for r in cur.fetchall()]  # type: ignore[misc]
+        return [tuple(r) for r in cur.fetchall()]
 
 
 def _tool_event_rows(hours: int, tenant_id: str) -> list[_Row]:
