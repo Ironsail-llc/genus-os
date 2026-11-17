@@ -464,3 +464,47 @@ def test_a_streamed_priority_call_is_priced_at_the_lane_it_was_served_on(
     rebuilt = rebuild_streamed_response(chunks, kwargs)
     assert rebuilt.service_tier == tier
     assert _recorded_cost(rebuilt) == pytest.approx(factor * standard_cost)
+
+
+# ─── GPT-6.2 Sol ───────────────────────────────────────────────────────────
+#
+# $2.00/M input, $0.10/M cached input, $2.50/M cache write, $10.00/M output on
+# the standard lane; the priority lane is billed at twice that.
+
+GPT_6_2_SOL = "gpt-6.2-sol"  # what the OpenAI API reports back
+SOL_STANDARD = 1000 * 2e-06 + 1000 * 1e-05
+
+
+def test_gpt_6_2_sol_costs_its_token_counts_at_the_standard_rate():
+    cost = _recorded_cost(_response(model=GPT_6_2_SOL))
+    assert cost > 0
+    assert cost == pytest.approx(SOL_STANDARD)
+
+
+@pytest.mark.parametrize("reported", ["priority", "fast"])
+def test_gpt_6_2_sol_on_the_priority_lane_costs_twice_the_standard(litellm_prices, reported):
+    """The row prices the lane: litellm is handed the call as standard-lane and
+    the row's multiplier doubles it, so the lane is charged exactly once."""
+    response = _response(reported, model=GPT_6_2_SOL)
+    assert _recorded_cost(response) == pytest.approx(2 * SOL_STANDARD)
+    assert litellm_prices[-1] == ("default", pytest.approx(SOL_STANDARD))
+
+
+def test_gpt_6_2_sol_registry_fallback_prices_every_token_class():
+    """The price cost accounting falls back to when litellm cannot price the
+    response: the configured id, which litellm's table does not list."""
+    cost = LLMClient()._calculate_cost(
+        "openai/gpt-6.2-sol",
+        input_tokens=10_000,
+        output_tokens=1_000,
+        cache_creation_tokens=2_000,
+        cache_read_tokens=4_000,
+    )
+    assert cost == pytest.approx(6_000 * 2e-06 + 1_000 * 1e-05 + 2_000 * 2.5e-06 + 4_000 * 1e-07)
+
+
+def test_priority_reaches_a_gpt_6_2_sol_call():
+    set_service_tier("priority")
+    for model in ("openai/gpt-6.2-sol", GPT_6_2_SOL):
+        kwargs = LLMClient._build_llm_kwargs(model, MESSAGES, TOOLS, 100, 0.3)
+        assert kwargs["service_tier"] == "priority", model
