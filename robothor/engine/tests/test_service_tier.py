@@ -482,17 +482,39 @@ def test_gpt_6_2_sol_costs_its_token_counts_at_the_standard_rate():
 
 
 @pytest.mark.parametrize("reported", ["priority", "fast"])
-def test_gpt_6_2_sol_on_the_priority_lane_costs_twice_the_standard(litellm_prices, reported):
-    """The row prices the lane: litellm is handed the call as standard-lane and
-    the row's multiplier doubles it, so the lane is charged exactly once."""
-    response = _response(reported, model=GPT_6_2_SOL)
-    assert _recorded_cost(response) == pytest.approx(2 * SOL_STANDARD)
+@pytest.mark.parametrize("catalog_registry", ["0", "1"], ids=["registry-off", "registry-on"])
+def test_gpt_6_2_sol_on_the_priority_lane_costs_twice_the_standard(
+    monkeypatch, _restore_litellm_table, catalog_registry, reported
+):
+    """litellm's bundled list has not heard of the model, so under the bare id
+    the API reports back the price comes from the row, and the row's
+    multiplier doubles it whichever way the catalog-backed registry is set."""
+    from robothor.engine.model_registry import register_pricing_with_litellm
+
+    monkeypatch.setenv("ROBOTHOR_RIP_17_ENABLED", catalog_registry)
+    register_pricing_with_litellm()
+    assert _recorded_cost(_response(model=GPT_6_2_SOL)) == pytest.approx(SOL_STANDARD)
+    assert _recorded_cost(_response(reported, model=GPT_6_2_SOL)) == pytest.approx(2 * SOL_STANDARD)
+
+
+def test_gpt_6_2_sol_priced_by_litellm_from_the_row_is_charged_the_lane_once(
+    monkeypatch, _restore_litellm_table, litellm_prices
+):
+    """With the catalog-backed registry on, litellm prices the configured id
+    from the registered row at the standard rate; the lane is the row's
+    multiplier, applied once."""
+    from robothor.engine.model_registry import register_pricing_with_litellm
+
+    monkeypatch.setenv("ROBOTHOR_RIP_17_ENABLED", "1")
+    register_pricing_with_litellm()
+    cost = _recorded_cost(_response("priority", model="openai/gpt-6.2-sol"))
     assert litellm_prices[-1] == ("default", pytest.approx(SOL_STANDARD))
+    assert cost == pytest.approx(2 * SOL_STANDARD)
 
 
 def test_gpt_6_2_sol_registry_fallback_prices_every_token_class():
     """The price cost accounting falls back to when litellm cannot price the
-    response: the configured id, which litellm's table does not list."""
+    response: litellm's bundled table does not list the model."""
     cost = LLMClient()._calculate_cost(
         "openai/gpt-6.2-sol",
         input_tokens=10_000,

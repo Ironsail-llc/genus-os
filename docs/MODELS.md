@@ -65,6 +65,22 @@ OpenAI accepts at most 128 tools on one request. An agent with broad tool access
 can exceed that; deferred tool loading keeps the
 advertised set small.
 
+The registry carries three models on the OpenAI API, each also under the bare id
+the API reports back on a response:
+
+| Model id | Window the engine sizes to | Output | Price per 1M tokens (input / cached input / cache write / output) |
+|---|---|---|---|
+| `openai/gpt-5.6-luna` | 922,000 | 128,000 | $0.20 / $0.02 / $0.25 / $1.20 |
+| `openai/gpt-6-luna` | 922,000 | 128,000 | $0.10 / $0.01 / $0.125 / $0.50 |
+| `openai/gpt-6.2-sol` | 272,000 | 128,000 | $2.00 / $0.10 / $2.50 / $10.00 |
+
+All three take images and are billed at twice these prices on the priority
+tier. GPT-6.2 Sol accepts up to 922,000 input tokens, but a request above
+272,000 is billed at twice the input rate and 1.5 times the output rate for the
+whole request. The registry has no field for a tiered price, so its entry sizes
+the window to that boundary: compaction fires long before it, and the ceiling
+the engine enforces after compaction keeps every request below it.
+
 ### Service tier
 
 Shared pay-as-you-go capacity is first come, first served, so a standard

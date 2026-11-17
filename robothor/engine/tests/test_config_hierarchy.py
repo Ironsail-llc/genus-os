@@ -213,9 +213,10 @@ class TestConditionalModelChain:
     def test_no_model_in_either_chain_is_unregistered(self, tmp_path: Path, monkeypatch):
         for trigger in ("webchat", "cron", "hook"):
             config = self._load(tmp_path, monkeypatch, trigger)
-            assert not any(
-                "not in the model registry" in w for w in config.validation_warnings
-            ), (trigger, config.validation_warnings)
+            assert not any("not in the model registry" in w for w in config.validation_warnings), (
+                trigger,
+                config.validation_warnings,
+            )
 
 
 # ─── Lifecycle Hooks Merge ───────────────────────────────────────────
