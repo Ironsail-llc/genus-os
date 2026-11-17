@@ -351,6 +351,73 @@ transition writes `operation_audit`.
 [Operations ledger](OPERATIONS.md) has the statuses, the event's payload and a
 complete workflow.
 
+## A write tool's target and read-back
+
+When one of your write tools returns an unknown outcome (`outcome_unknown:
+True`: the request reached the other system, the answer did not come back),
+the engine refuses a later write that could repeat it until it is settled
+([Tools](TOOLS.md#writes-whose-outcome-is-unknown)). Two declarations in your
+`genus.tools` payload make that precise and let it clear on its own:
+
+```python
+# acme_tools/__init__.py
+from robothor.engine.runtime import effects
+
+
+async def acme_post_message(args, ctx=None):
+    record = effects.active_effect.get()       # this write's effect, while it is sent
+    client_id = str(record["id"]) if record else None
+    # Hand the effect id to the provider as the idempotency / client message key,
+    # so the read-back below can find exactly this message.
+    return await post(args["thread_id"], args["text"], client_message_id=client_id)
+
+
+def verify_acme_post_message(record):
+    """Called with the effect record: its ``id`` and its recorded ``target``."""
+    thread = record["target"]["thread_id"]
+    try:
+        found = find_by_client_id(thread, str(record["id"]))
+    except ProviderUnavailable:
+        return effects.Verification("unknown")         # cannot tell: stays fenced
+    if found:
+        return effects.Verification(
+            "applied", True, f"acme:message:{found['id']}", {"id": found["id"]}
+        )
+    if thread_history_is_complete(thread):              # absence that is definitive
+        return effects.Verification("not_applied", True, f"acme:thread:{thread}")
+    return effects.Verification("unknown")
+
+
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "handlers": {"acme_post_message": acme_post_message},
+    "effects": {
+        "acme_post_message": {
+            "target": ["thread_id"],               # what the write acts on
+            "verify": verify_acme_post_message,    # optional read-back
+        },
+    },
+}
+```
+
+- **`target`**: the argument names that say what the write acts on. A lost
+  message to `thread-1` then holds back another message to `thread-1`, and
+  nothing else. Without it the target is every argument that is not wording.
+- **`fence`**: `"target"` (the default), or `"tool"` when calls of the tool
+  cannot be told apart by their arguments: every later call then waits.
+- **`verify`**: a synchronous function, run off the event loop, returning an
+  `effects.Verification`. `applied` and `not_applied` must be *settled*
+  (`True`) and carry a provider reference; `applied` also carries the result
+  the tool would have returned. Answer `unknown` whenever you cannot be sure:
+  an absence that may still change (an eventually consistent search, a request
+  still in flight) is not `not_applied`. The engine calls it right after an
+  uncertain call and on its periodic sweep; a verifier that raises leaves the
+  write uncertain. A tool with a verifier is never released by time alone,
+  but `genus effects resolve` still works.
+
+As with `read_only`, a plugin declares this only for tools it provides; a
+declaration naming another tool, or a malformed one, refuses the plugin.
+
 ## An operator command
 
 ```python

@@ -279,6 +279,46 @@ and report `kind: "own"` — they degrade honestly rather than pretending.
 
 ---
 
+## Writes whose outcome is unknown
+
+Every write a tool makes is recorded before it is sent. When the answer never
+comes back (the connection dropped after the request reached the other
+system), the write is *uncertain*: it may or may not have happened, and it is
+never sent again blind. Until it is settled, the engine refuses a later write
+that could repeat it, **before anything is sent**:
+
+| The later write | Refused while the earlier one is uncertain? |
+|---|---|
+| The identical call (same tool, same arguments), in any request | Yes, until it is settled |
+| Any write in the same request, goal or goal family | Yes: the agent must not route around an action it just lost track of, and a goal's family is reconciled by the goal |
+| The same tool on the **same target** in a later request, however it is worded | Yes, for 24 hours for a tool nothing can read back; until settled for one that can |
+| The same tool on a **different** target, or any other tool, in a later request | No |
+
+The *target* is what a write acts on: a thread, a recipient, a record. A plugin
+declares it for its own tools ([Plugins](PLUGINS.md#a-write-tools-target-and-read-back));
+otherwise it is every argument that is not wording (`body`, `text`, `subject`,
+`title` and the like), so "send that again" in other words is still caught. A
+tool whose calls cannot be told apart by their arguments can declare that every
+later call of it waits, as every tool did before. A refusal says so plainly:
+the write was **not sent**, which earlier action it waits on (tool, target and
+time), and how that action is cleared.
+
+An uncertain write is settled by:
+
+- **A read-back.** `create_task`, `create_note`, and any plugin tool that
+  registers a verifier, are read back right after the uncertain call and by
+  the engine's periodic sweep. A read-back that finds the write applied or
+  definitely not applied clears it; one that cannot tell leaves it.
+- **An operator.** `genus effects list` shows a tenant's unresolved writes
+  (tool, target, when). Having checked the other system,
+  `genus effects resolve <effect-id> --outcome applied|not-applied --reason "..."`
+  records what you found, with the reason, against the effect. `applied` keeps
+  the identical call in its own request from being sent again; `not-applied`
+  lets a new attempt go. Neither counts as the provider's evidence. A write
+  owned by a goal is left to the goal.
+- **Time**, for a tool nothing can read back: 24 hours after the call the sweep
+  releases it as expired (an audit entry, not a finding).
+
 ## The catalogue
 
 ### Cases: `list_tasks` with `overdue` and `unowned`

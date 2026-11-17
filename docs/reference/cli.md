@@ -28,7 +28,7 @@ Where to start, rather than reading this top to bottom:
 Settings are documented in the [configuration reference](configuration.md),
 not here: a flag belongs to one command, a setting to the whole instance.
 
-39 verbs.
+40 verbs.
 
 ## `genus plugin`
 
@@ -562,6 +562,38 @@ Usage: `genus goals update <goal_id> [--file FILE]`
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--file` | `FILE` | — | JSON file, or - for stdin |
+
+## `genus effects`
+
+List unresolved writes and record what happened to one.
+
+Usage: `genus effects {list,resolve} [--tenant TENANT]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant` | `TENANT` | — | Tenant id (default: the default tenant) |
+
+### `genus effects list`
+
+Writes whose outcome is unknown, oldest first.
+
+Usage: `genus effects list`
+
+### `genus effects resolve`
+
+Record whether an unresolved write took effect, and why you know.
+
+Usage: `genus effects resolve <effect_id> [--outcome OUTCOME] [--reason REASON] [--actor ACTOR]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `effect_id` | yes | The effect id the refusal or `list` names |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--outcome` | `applied` \| `not-applied` | — |  |
+| `--reason` | `REASON` | — | What you checked, kept with the record |
+| `--actor` | `ACTOR` | `operator:cli` | Who is recording it (default: operator:cli) |
 
 ## `genus goal`
 

@@ -12,6 +12,7 @@ import hashlib
 import json
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
@@ -66,7 +67,7 @@ READBACK_TOOLS: frozenset[str] = frozenset({"create_task", "create_note"})
 HOST_LOCAL_TOOLS: frozenset[str] = frozenset({"exec", "execute_code", "browser", "write_file"})
 
 # How long an uncertain effect from a tool with no verifier fences a reworded
-# call of the same tool in a later request. Every other tool (mail, calendar,
+# call of the same tool, on the same target, in a later request. Every other tool (mail, calendar,
 # CRM writes, messages) cannot be read back, so a "send that again" after a
 # timed-out send waits this long for reconciliation instead of sending twice.
 # After it, effect_recovery.reconcile_unverifiable() releases the row as
@@ -76,12 +77,79 @@ UNCERTAIN_FENCE_WINDOW = "24 hours"
 active_effect: ContextVar[dict[str, Any] | None] = ContextVar("active_effect", default=None)
 
 
+#: The operator verb that records an unresolved effect's outcome.
+RESOLVE_COMMAND = "genus effects resolve"
+
+
 class EffectPendingError(ValueError):
-    def __init__(self, effect_id: Any) -> None:
+    """A write refused BEFORE dispatch because an earlier one is unresolved.
+
+    Nothing was sent. ``same_action`` says whether the refused call is the very
+    call whose outcome is unknown (so it may already have taken effect) or a
+    different call on the same target. The message names the earlier action and
+    how it is cleared, so neither the model nor a person reads the refusal as
+    "may have been delivered".
+    """
+
+    not_sent = True
+
+    def __init__(
+        self,
+        effect_id: Any,
+        *,
+        record: dict[str, Any] | None = None,
+        same_action: bool = False,
+        verifiable: bool = False,
+    ) -> None:
         self.effect_id = str(effect_id)
-        super().__init__(
-            "An earlier action is unresolved; audit/readback is required before another write"
+        self.record = dict(record or {})
+        self.same_action = same_action
+        self.tool = str(self.record.get("tool_name") or "")
+        self.target = dict(self.record.get("target") or {})
+        when = self.record.get("created_at")
+        self.at = (
+            when.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+            if isinstance(when, datetime)
+            else ""
         )
+        super().__init__(self._message(verifiable))
+
+    def _message(self, verifiable: bool) -> str:
+        tool = self.tool or "write"
+        on = ", ".join(f"{key}={value}" for key, value in self.target.items())
+        earlier = f"the earlier {tool} call" + (f" to {on}" if on else "")
+        if self.at:
+            earlier += f" at {self.at}"
+        if self.same_action:
+            head = (
+                f"This call was NOT sent again: it repeats {earlier}, whose outcome is "
+                f"unknown (effect {self.effect_id}) and which may already have taken effect."
+            )
+        else:
+            head = (
+                f"This write was NOT sent: {earlier} has an unknown outcome "
+                f"(effect {self.effect_id}), and sending now could act on it twice."
+            )
+        resolve = (
+            f"an operator can record its outcome with `{RESOLVE_COMMAND} {self.effect_id} "
+            '--outcome applied|not-applied --reason "..."`'
+        )
+        if self.record.get("goal_id"):
+            clear = "Its goal's reconciliation settles it."
+        elif verifiable:
+            clear = f"A read-back of that call clears it when it can tell; {resolve}."
+        else:
+            clear = f"It is released 24 hours after that call, or {resolve}."
+        return f"{head} {clear}"
+
+    def blocked_by(self) -> dict[str, Any]:
+        """What the refusal names, for a tool result."""
+        return {
+            "effect_id": self.effect_id,
+            "tool": self.tool,
+            "target": self.target,
+            "at": self.at,
+        }
 
 
 @dataclass(frozen=True)
@@ -126,7 +194,11 @@ def begin(
     arguments: Any,
 ) -> dict[str, Any]:
     """Reserve one dispatch or return an already reconciled result for this request."""
+    from robothor.engine.runtime import effect_tools
+
     digest = fingerprint(tool_name, arguments)
+    target = effect_tools.target_of(tool_name, arguments)
+    key = effect_tools.target_key(tool_name, target)
     with (
         tenant_scope(context.tenant_id),
         get_connection() as conn,
@@ -136,23 +208,35 @@ def begin(
         cur.execute(
             """SELECT * FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
                AND request_id=%s AND fingerprint=%s AND (state='confirmed'
-                 OR state='finished' AND resolution->>'source'='tool_response')
+                 OR state='finished' AND resolution->>'source' IN ('tool_response','operator'))
                ORDER BY created_at DESC LIMIT 1""",
             (context.tenant_id, context.principal_id, context.request_id, digest),
         )
         confirmed = cur.fetchone()
         if confirmed:
             return dict(confirmed)
-        # The bare cross-request same-tool fence: unbounded for tools a verifier
-        # settles, never for host-local tools, and for every other tool only
-        # while the uncertain row is younger than UNCERTAIN_FENCE_WINDOW. Before
-        # that bound nothing could clear it, and one uncertain call refused
-        # every later call of the tool indefinitely.
+        # Three fences, each with its reason:
+        # 1. the identical call (same tool and arguments) while unresolved, in
+        #    any request, for as long as it is unresolved: never send twice;
+        # 2. any uncertain write in this request, goal or goal family: a goal's
+        #    family is reconciled by the goal machinery, and within one request
+        #    the agent must not route around an action it just lost track of;
+        # 3. across requests, the same tool on the same TARGET (what the write
+        #    acts on; effect_tools.target_of), however it is worded: a reworded
+        #    "send that again" must wait. Unbounded for tools a verifier settles,
+        #    never for host-local tools, else only while the uncertain row is
+        #    younger than UNCERTAIN_FENCE_WINDOW. A tool may declare the whole-
+        #    tool scope instead, and a row recorded before targets were has no
+        #    target_key and keeps that scope too. This fence used to be the
+        #    whole tool for everyone: one lost send refused every later send of
+        #    that tool, to anyone, for a day.
         cur.execute(
-            """SELECT id FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
+            """SELECT id,tool_name,target,fingerprint,goal_id,created_at
+               FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
                AND (state IN ('prepared','dispatching','uncertain') AND fingerprint=%s
                  OR state='uncertain' AND (request_id=%s OR goal_id=%s OR budget_id=%s
                    OR (goal_id IS NULL AND budget_id IS NULL AND tool_name=%s AND NOT %s
+                       AND (%s OR target_key IS NULL OR target_key=%s)
                        AND (%s OR updated_at > now() - %s::interval))))
                ORDER BY created_at LIMIT 1""",
             (
@@ -164,18 +248,26 @@ def begin(
                 context.budget_id,
                 tool_name,
                 tool_name in HOST_LOCAL_TOOLS,
-                tool_name in READBACK_TOOLS,
+                effect_tools.fences_whole_tool(tool_name),
+                key,
+                effect_tools.has_verifier(tool_name),
                 UNCERTAIN_FENCE_WINDOW,
             ),
         )
         pending = cur.fetchone()
         if pending:
-            raise EffectPendingError(pending["id"])
+            raise EffectPendingError(
+                pending["id"],
+                record=dict(pending),
+                same_action=pending["fingerprint"] == digest,
+                verifiable=effect_tools.has_verifier(pending["tool_name"]),
+            )
         identifier = str(uuid4())
         cur.execute(
             """INSERT INTO agent_runtime_effects
                (id,tenant_id,principal_id,request_id,run_id,agent_id,goal_id,budget_id,
-                tool_name,fingerprint,state) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'prepared')
+                tool_name,fingerprint,target,target_key,state)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'prepared')
                RETURNING *""",
             (
                 identifier,
@@ -188,6 +280,8 @@ def begin(
                 context.budget_id,
                 tool_name,
                 digest,
+                Json(effect_tools.summary(target)),
+                key,
             ),
         )
         return dict(cur.fetchone())
@@ -324,6 +418,66 @@ def _release(context: EffectScope, effect_id: Any, *, source: str, actor: str, n
                 effect_id,
                 context.tenant_id,
                 context.principal_id,
+            ),
+        )
+        return bool(cur.rowcount == 1)
+
+
+def unresolved(tenant_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    """One tenant's unresolved effects, oldest first, for an operator. Reads only."""
+    with (
+        tenant_scope(tenant_id),
+        get_connection() as conn,
+        conn.cursor(cursor_factory=RealDictCursor) as cur,
+    ):
+        cur.execute(
+            """SELECT id,principal_id,request_id,goal_id,tool_name,target,state,
+                      created_at,updated_at
+               FROM agent_runtime_effects
+               WHERE tenant_id=%s AND state IN ('prepared','dispatching','uncertain')
+               ORDER BY created_at,id LIMIT %s""",
+            (tenant_id, max(1, min(int(limit), 1000))),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+OPERATOR_OUTCOMES = frozenset({"applied", "not_applied"})
+
+
+def operator_resolve(
+    tenant_id: str, effect_id: Any, *, outcome: str, actor: str, reason: str
+) -> bool:
+    """Record an operator's finding about an uncertain effect, with the reason.
+
+    ``applied``: the operator saw it take effect; the row is finished, and the
+    identical call in its own request is answered from it, never sent again.
+    ``not_applied``: the operator established it did not; a new attempt may go.
+    Neither is provider evidence (``verified`` stays false). Only an uncertain,
+    goal-less effect of this tenant can be resolved this way: an in-flight
+    dispatch must stop first, and a goal's family is the goal's to reconcile.
+    """
+    if outcome not in OPERATOR_OUTCOMES:
+        raise ValueError("outcome must be 'applied' or 'not_applied'")
+    if not str(actor).strip() or not str(reason).strip():
+        raise ValueError("an operator resolution requires an actor and a reason")
+    resolution = {
+        "source": "operator",
+        "outcome": outcome,
+        "verified": False,
+        "actor": actor,
+        "note": reason,
+        "result": {"outcome": outcome, "resolved_by": "operator", "note": reason},
+    }
+    with tenant_scope(tenant_id), get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE agent_runtime_effects SET state=%s,resolution=%s,
+               version=version+1,updated_at=now()
+               WHERE id=%s AND tenant_id=%s AND goal_id IS NULL AND state='uncertain'""",
+            (
+                "finished" if outcome == "applied" else "not_applied",
+                Json(resolution),
+                str(effect_id),
+                tenant_id,
             ),
         )
         return bool(cur.rowcount == 1)

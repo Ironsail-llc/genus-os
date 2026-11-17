@@ -142,6 +142,9 @@ class TestRefusal:
         assert "NOT sent" in text
         assert TOOL in text and "thread_id=thread-1" in text
         assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC", text)
+        from datetime import UTC
+
+        assert earlier["created_at"].astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC") in text
         # How it is cleared: the operator verb, naming this effect.
         assert f"genus effects resolve {earlier['id']}" in text
         # No verifier and no goal: the day-long release is named too.

@@ -29,6 +29,7 @@ def effect_db(private_database, monkeypatch):  # noqa: F811
         cur.execute(migration.read_text())
         cur.execute(migration.read_text())
         cur.execute(migration.with_name("142_goal_effect_lookup.sql").read_text())
+        cur.execute(migration.with_name("168_runtime_effect_targets.sql").read_text())
     monkeypatch.setattr(effects, "get_connection", connect)
     return connect
 
