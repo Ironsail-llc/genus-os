@@ -292,16 +292,15 @@ that could repeat it, **before anything is sent**:
 | The identical call (same tool, same arguments), in any request | Yes, until it is settled |
 | Any write in the same request, goal or goal family | Yes: the agent must not route around an action it just lost track of, and a goal's family is reconciled by the goal |
 | The same tool on the **same target** in a later request, however it is worded | Yes, for 24 hours for a tool nothing can read back; until settled for one that can |
-| The same tool on a **different** target, or any other tool, in a later request | No |
+| The same tool on a **different** target, or any other tool, in a later request | No, when the tool declares its target; a tool that declares none waits on any later call of it, as every tool did before |
 
 The *target* is what a write acts on: a thread, a recipient, a record. A plugin
-declares it for its own tools ([Plugins](PLUGINS.md#a-write-tools-target-and-read-back));
-otherwise it is every argument that is not wording (`body`, `text`, `subject`,
-`title` and the like), so "send that again" in other words is still caught. A
-tool whose calls cannot be told apart by their arguments can declare that every
-later call of it waits, as every tool did before. A refusal says so plainly:
-the write was **not sent**, which earlier action it waits on (tool, target and
-time), and how that action is cleared.
+declares it for its own write tools ([Plugins](PLUGINS.md#a-write-tools-target-and-read-back)).
+Only a declared target narrows the fence: one guessed from the arguments would
+let a retry that adds a blank optional argument look like another target and
+go out twice, so core tools and undeclared plugin tools keep the whole-tool
+fence. A refusal says so plainly: the write was **not sent**, which earlier
+action it waits on (tool, target and time), and how that action is cleared.
 
 An uncertain write is settled by:
 

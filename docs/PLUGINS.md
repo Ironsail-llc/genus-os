@@ -401,10 +401,16 @@ PLUGIN = {
 ```
 
 - **`target`**: the argument names that say what the write acts on. A lost
-  message to `thread-1` then holds back another message to `thread-1`, and
-  nothing else. Without it the target is every argument that is not wording.
-- **`fence`**: `"target"` (the default), or `"tool"` when calls of the tool
-  cannot be told apart by their arguments: every later call then waits.
+  message to `thread-1` then holds back another message to `thread-1`, however
+  it is worded and whatever else changes, and nothing else. Without it every
+  later call of the tool waits until the lost one is settled. The values are
+  kept exactly as sent (credential-shaped values are redacted), so your
+  verifier can look them up; still key the read-back on `record["id"]` where
+  the provider lets you.
+- **`fence`**: `"target"` (the default), or `"tool"` to keep every later call
+  waiting even though you declared a target (for the verifier's sake).
+- A plugin cannot declare any of this for a built-in tool; such an entry is
+  ignored.
 - **`verify`**: a synchronous function, run off the event loop, returning an
   `effects.Verification`. `applied` and `not_applied` must be *settled*
   (`True`) and carry a provider reference; `applied` also carries the result

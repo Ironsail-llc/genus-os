@@ -7,14 +7,16 @@ fence now compares the TARGET -- what the write acts on (a thread, a recipient,
 a record) -- so a different action goes ahead while a repeat of the same one,
 however it is reworded, still waits.
 
-A tool's target is, in order of authority:
+The fence narrows only where the target is KNOWN: the argument names a plugin
+declares for its own tool (``EffectSpec.target``). Everywhere else -- every core
+tool, and a plugin tool that declares no target -- every later call of the tool
+still waits, as before. A target guessed from the arguments is not safe to
+narrow on: a retried send that adds ``cc: ""`` or an optional flag would look
+like another target and go out twice. ``fence="tool"`` keeps the whole-tool
+scope for a tool that declares a target only for its read-back.
 
-* the argument names its plugin declares (``EffectSpec.target``), or
-* every argument that is not wording (:data:`PROSE_KEYS`): a reworded "send that
-  again" changes the text, not where it goes.
-
-A plugin may instead declare ``fence="tool"`` for a tool whose calls cannot be
-told apart by their arguments; that keeps the old whole-tool scope for it alone.
+A plugin cannot declare any of this for a built-in tool: narrowing a core tool's
+fence, or settling its writes, is not a plugin's to do.
 
 A plugin may also register a read-back verifier for its write tool
 (``EffectSpec.verify``). It is called with the effect record -- its ``id`` (pass
@@ -98,7 +100,14 @@ def plugin_specs() -> dict[str, EffectSpec]:
         current = generation()
         if _cache is not None and _cache[0] == current:
             return _cache[1]
-        specs = dict(load_plugins(reserved_names=set()).effects)
+        from robothor.engine.tools.dispatch import builtin_handlers
+
+        # The tool registry refuses a plugin that shadows a built-in; this
+        # loader call does not reserve names, so drop such declarations here,
+        # as effect_dispatch does for read_only.
+        core = set(builtin_handlers()) | set(effects.READBACK_TOOLS)
+        loaded = load_plugins(reserved_names=set()).effects
+        specs = {name: value for name, value in loaded.items() if name not in core}
         _cache = (current, specs)
         return specs
     except Exception as exc:  # noqa: BLE001 - one broken package is not an outage
@@ -110,13 +119,23 @@ def spec(tool_name: str) -> EffectSpec | None:
     return plugin_specs().get(tool_name)
 
 
+def declared_target(tool_name: str) -> tuple[str, ...] | None:
+    declared = spec(tool_name)
+    return declared.target if declared is not None and declared.target else None
+
+
 def target_of(tool_name: str, arguments: Any) -> dict[str, Any]:
-    """The arguments that name what this write acts on."""
+    """What this write acts on: its declared target arguments, exactly as sent.
+
+    A tool with no declared target is described (for an operator and a
+    refusal) by its arguments that are not wording; that description never
+    narrows the fence.
+    """
     if not isinstance(arguments, dict):
         return {}
-    declared = spec(tool_name)
-    if declared is not None and declared.target:
-        return {key: arguments.get(key) for key in declared.target}
+    keys = declared_target(tool_name)
+    if keys:
+        return {key: arguments.get(key) for key in keys}
     return {
         key: value
         for key, value in arguments.items()
@@ -124,28 +143,41 @@ def target_of(tool_name: str, arguments: Any) -> dict[str, Any]:
     }
 
 
-def target_key(tool_name: str, target: dict[str, Any]) -> str:
+def target_key(tool_name: str, target: dict[str, Any]) -> str | None:
+    """The hash the fence compares; None (fence the whole tool) without a declared target."""
+    if not declared_target(tool_name):
+        return None
     payload = json.dumps([tool_name, target], sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def summary(target: dict[str, Any]) -> dict[str, Any]:
-    """The target as an effects row keeps it: redacted, every value cut short."""
+def stored(tool_name: str, target: dict[str, Any]) -> dict[str, Any]:
+    """The target as an effects row keeps it, redacted.
+
+    A declared target is kept exactly as sent (the verifier looks it up with
+    it). A described one -- every non-wording argument of a tool that declares
+    none -- is cut short, since it may carry anything.
+    """
     from robothor.secrets.redaction import redact_tool_result
 
-    def short(value: Any) -> Any:
-        if value is None or isinstance(value, bool | int | float):
-            return value
-        text = value if isinstance(value, str) else json.dumps(value, default=str)
-        return text if len(text) <= MAX_TARGET_VALUE else text[: MAX_TARGET_VALUE - 1] + "…"
-
-    redacted = redact_tool_result({key: short(value) for key, value in target.items()})
+    kept = target if declared_target(tool_name) else {k: short(v) for k, v in target.items()}
+    redacted = redact_tool_result(kept)
     return redacted if isinstance(redacted, dict) else {}
 
 
+def short(value: Any) -> Any:
+    """One target value as a person reads it: at most :data:`MAX_TARGET_VALUE` long."""
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    return text if len(text) <= MAX_TARGET_VALUE else text[: MAX_TARGET_VALUE - 1] + "…"
+
+
 def fences_whole_tool(tool_name: str) -> bool:
+    """Whether every later call of the tool waits on an uncertain one: unless it
+    declares a target and has not asked for the whole-tool scope."""
     declared = spec(tool_name)
-    return declared is not None and declared.fence == "tool"
+    return declared is None or not declared.target or declared.fence == "tool"
 
 
 def verifier(tool_name: str) -> Callable[[dict[str, Any]], effects.Verification] | None:

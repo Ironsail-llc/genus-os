@@ -116,7 +116,9 @@ class EffectPendingError(ValueError):
 
     def _message(self, verifiable: bool) -> str:
         tool = self.tool or "write"
-        on = ", ".join(f"{key}={value}" for key, value in self.target.items())
+        from robothor.engine.runtime.effect_tools import short
+
+        on = ", ".join(f"{key}={short(value)}" for key, value in self.target.items())
         earlier = f"the earlier {tool} call" + (f" to {on}" if on else "")
         if self.at:
             earlier += f" at {self.at}"
@@ -225,11 +227,12 @@ def begin(
         #    acts on; effect_tools.target_of), however it is worded: a reworded
         #    "send that again" must wait. Unbounded for tools a verifier settles,
         #    never for host-local tools, else only while the uncertain row is
-        #    younger than UNCERTAIN_FENCE_WINDOW. A tool may declare the whole-
-        #    tool scope instead, and a row recorded before targets were has no
-        #    target_key and keeps that scope too. This fence used to be the
-        #    whole tool for everyone: one lost send refused every later send of
-        #    that tool, to anyone, for a day.
+        #    younger than UNCERTAIN_FENCE_WINDOW. Only a target its plugin
+        #    declares narrows this (effect_tools.fences_whole_tool): a target
+        #    guessed from the arguments could let a retry with one more optional
+        #    argument through. Every other tool, and any row with no target_key
+        #    (recorded before targets were, or for a tool with no declared
+        #    target), fences the whole tool, as all of them did before.
         cur.execute(
             """SELECT id,tool_name,target,fingerprint,goal_id,created_at
                FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
@@ -280,7 +283,7 @@ def begin(
                 context.budget_id,
                 tool_name,
                 digest,
-                Json(effect_tools.summary(target)),
+                Json(effect_tools.stored(tool_name, target)),
                 key,
             ),
         )
