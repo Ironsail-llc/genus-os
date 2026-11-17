@@ -176,7 +176,12 @@ runs them one at a time in arrival order, however long the workflow stays busy.
 Nothing is retried on a timer and nothing is dead-lettered for waiting. A
 backlog survives a restart: the next start carries on from the oldest event
 still in it, so a run cut off by the stop runs again (handlers should be
-idempotent, as for any hook). A backlog that reaches 50,000 events sends
+idempotent, as for any hook). Under HA every replica writes the events it reads
+to the backlog and only the leader runs it; when the lead moves, a run the old
+leader had in flight can run again on the new one, for the same reason. The
+drop for a busy workflow without `requeue_if_busy` is decided by the replica
+that read the event, so under HA such an event read by another replica than the
+one running the workflow is kept rather than dropped. A backlog that reaches 50,000 events sends
 further events to `<stream>:dlq`, with an error in the log.
 
 ```yaml

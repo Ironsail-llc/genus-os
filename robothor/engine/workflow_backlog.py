@@ -64,6 +64,11 @@ LOCK_WAIT_SECONDS = 1.0
 #: and for events another replica wrote (its writes wake no one here).
 HA_RECHECK_SECONDS = 5.0
 
+#: After a Redis error, how long a drainer waits before it reads again, and how
+#: many times a finished entry's delete is tried.
+ERROR_RETRY_SECONDS = 5.0
+DELETE_ATTEMPTS = 3
+
 #: On stop, how long runs in flight get to finish; the rest stay in the backlog.
 STOP_DRAIN_SECONDS = 20
 
@@ -160,10 +165,14 @@ class WorkflowBacklog:
         self._drainers: dict[str, asyncio.Task[None]] = {}
         self._wake: dict[str, asyncio.Event] = {}
         self._runs: dict[str, set[asyncio.Task[None]]] = {}
-        # Entry ids written and not yet finished, oldest first, per workflow,
-        # and how many of those have started.
-        self._pending: dict[str, dict[str, None]] = {}
-        self._started: dict[str, int] = {}
+        # Entry ids this process started and has not yet removed from Redis:
+        # a drainer that reads from the start again (a lost and regained
+        # lead, a Redis error) skips them instead of running them twice.
+        self._inflight: dict[str, set[str]] = {}
+        # The backlog as Redis last showed it: depth and the oldest entry id.
+        # Every replica may write to a backlog that another one drains, so
+        # nothing here is counted locally.
+        self._seen: dict[str, tuple[int, str | None]] = {}
 
     def bind(self, redis_client: Any) -> None:
         self._redis = redis_client
@@ -172,11 +181,23 @@ class WorkflowBacklog:
         return backlog_key(self.tenant_id, workflow_id)
 
     def stats(self, workflow_id: str) -> tuple[int, float]:
-        """The workflow's backlog depth and the age (seconds) of its oldest entry."""
-        pending = self._pending.get(workflow_id)
-        if not pending:
+        """The workflow's backlog depth and the age (seconds) of its oldest entry.
+
+        As Redis showed it at this process's last write, run or look: cheap
+        and synchronous, for the summary line.
+        """
+        depth, oldest = self._seen.get(workflow_id, (0, None))
+        if not depth or oldest is None:
             return 0, 0.0
-        return len(pending), entry_age(next(iter(pending)), time.time())
+        return depth, entry_age(oldest, time.time())
+
+    async def _refresh(self, workflow_id: str) -> int:
+        """Read the backlog's depth and oldest entry from Redis into :meth:`stats`."""
+        key = self.key(workflow_id)
+        depth = int(await self._redis.xlen(key) or 0)
+        head = await self._redis.xrange(key, min="-", max="+", count=1) if depth else []
+        self._seen[workflow_id] = (depth, _text(head[0][0]) if head else None)
+        return depth
 
     async def enqueue(
         self, redis_client: Any, wf: Any, stream: str, event_type: str, envelope: dict[str, Any]
@@ -188,8 +209,8 @@ class WorkflowBacklog:
         """
         if self._redis is None:
             self._redis = redis_client
-        pending = self._pending.setdefault(wf.id, {})
-        if len(pending) >= MAX_BACKLOG:
+        depth = int(await self._redis.xlen(self.key(wf.id)) or 0)
+        if depth >= MAX_BACKLOG:
             return False
         fields = {k: v for k, v in envelope.items() if k not in _INTERNAL_FIELDS}
         fields[STREAM_FIELD] = stream
@@ -197,13 +218,14 @@ class WorkflowBacklog:
         # Deferred by the rate limit: the limit's free slots are already
         # spoken for by the events waiting ahead of this one. Counted once,
         # here; however long it then waits, it is one deferred run.
-        ahead = len(pending) - self._started.get(wf.id, 0)
+        ahead = depth - len(self._inflight.get(wf.id, ()))
         free = self._engine().first_step_free_slots(wf)
         deferred = self._deferred() if free is not None and ahead >= free else None
-        msg_id = _text(await self._redis.xadd(self.key(wf.id), fields))
+        await self._redis.xadd(self.key(wf.id), fields)
         # Written: from here on nothing may raise, or the caller would run it twice.
-        pending[msg_id] = None
         self._start(wf.id)
+        with contextlib.suppress(Exception):
+            await self._refresh(wf.id)
         if deferred is not None:
             await deferred.record(wf.id, self._redis)  # logs, never raises
         return True
@@ -212,25 +234,17 @@ class WorkflowBacklog:
         """Pick up what a previous engine left in the backlogs of ``workflow_ids``."""
         self._redis = redis_client
         for workflow_id in workflow_ids:
-            pending = self._pending.setdefault(workflow_id, {})
-            low = "-"
-            while True:
-                page = await self._redis.xrange(self.key(workflow_id), min=low, max="+", count=500)
-                if not page:
-                    break
-                for msg_id, _ in page:
-                    pending.setdefault(_text(msg_id), None)
-                low = "(" + _text(page[-1][0])
-            if _ha():
-                self._start(workflow_id)  # the leader may be another replica's writes away
-            if pending:
-                depth, oldest = self.stats(workflow_id)
+            depth = await self._refresh(workflow_id)
+            if depth:
+                _, oldest = self.stats(workflow_id)
                 logger.info(
                     "Resuming workflow backlog: workflow=%s backlog=%d oldest=%ds",
                     workflow_id,
                     depth,
                     int(oldest),
                 )
+            # Under HA the leader may be another replica's writes away.
+            if depth or _ha():
                 self._start(workflow_id)
 
     async def stop(self, timeout: float = STOP_DRAIN_SECONDS) -> None:
@@ -253,8 +267,8 @@ class WorkflowBacklog:
         self._drainers.clear()
         self._runs.clear()
         self._wake.clear()
-        self._pending.clear()
-        self._started.clear()
+        self._inflight.clear()
+        self._seen.clear()
 
     def _start(self, workflow_id: str) -> None:
         wake = self._wake.setdefault(workflow_id, asyncio.Event())
@@ -266,10 +280,14 @@ class WorkflowBacklog:
             )
 
     async def _drain(self, workflow_id: str) -> None:
-        """Start the backlog's runs oldest first, each once the limiter admits it."""
+        """Start the backlog's runs oldest first, each once the limiter admits it.
+
+        A Redis error is logged and retried after a pause, the read position
+        kept: the drain carries on by itself, without waiting for a new event.
+        """
         wake = self._wake[workflow_id]
         runs = self._runs.setdefault(workflow_id, set())
-        pending = self._pending.setdefault(workflow_id, {})
+        inflight = self._inflight.setdefault(workflow_id, set())
         key = self.key(workflow_id)
         cursor = "-"
         slots: asyncio.Semaphore | None = None
@@ -278,12 +296,22 @@ class WorkflowBacklog:
             if ha and not self._leader():
                 # Another replica leads and runs this backlog. Start over from
                 # the oldest entry once this one leads: the other has deleted
-                # what it finished.
+                # what it finished, and what this one started is skipped.
                 cursor = "-"
                 await asyncio.sleep(HA_RECHECK_SECONDS)
                 continue
             wake.clear()
-            entries = await self._redis.xrange(key, min=cursor, max="+", count=1)
+            try:
+                entries = await self._redis.xrange(key, min=cursor, max="+", count=1)
+            except Exception as e:
+                logger.warning(
+                    "Workflow %s backlog unreadable, retrying in %ds: %s",
+                    workflow_id,
+                    int(ERROR_RETRY_SECONDS),
+                    e,
+                )
+                await asyncio.sleep(ERROR_RETRY_SECONDS)
+                continue
             if not entries:
                 if ha:
                     await _wake_or_sleep(wake, HA_RECHECK_SECONDS)
@@ -293,20 +321,19 @@ class WorkflowBacklog:
             raw_id, raw = entries[0]
             msg_id = _text(raw_id)
             cursor = "(" + msg_id
-            pending.setdefault(msg_id, None)
+            if msg_id in inflight:
+                continue  # started here already, still running or not yet removed
             wf = self._engine().get_workflow(workflow_id)
             if wf is None:
                 logger.warning(
-                    "Workflow %s is no longer loaded: its backlog of %d waits in Redis",
-                    workflow_id,
-                    len(pending),
+                    "Workflow %s is no longer loaded: its backlog waits in Redis", workflow_id
                 )
                 return
             if slots is None:
                 slots = asyncio.Semaphore(MAX_CONCURRENT_RUNS if wf.concurrent else 1)
             await slots.acquire()
             stamp = await self._admit(wf)
-            self._started[workflow_id] = self._started.get(workflow_id, 0) + 1
+            inflight.add(msg_id)
             fields = {_text(k): _text(v) for k, v in raw.items()}
             task = asyncio.create_task(
                 self._run(wf, msg_id, fields, stamp), name=f"workflow-backlog-run:{workflow_id}"
@@ -333,13 +360,23 @@ class WorkflowBacklog:
         stream = fields.pop(STREAM_FIELD, "")
         event_type = fields.pop(TYPE_FIELD, fields.get("type", ""))
         await self._execute(wf, stream, event_type, fields, stamp)
-        try:
-            await self._redis.xdel(self.key(wf.id), msg_id)
-        except Exception as e:
-            logger.warning("Could not remove a finished entry from %s's backlog: %s", wf.id, e)
-        if msg_id in self._pending.get(wf.id, {}):
-            del self._pending[wf.id][msg_id]
-            self._started[wf.id] = max(self._started.get(wf.id, 0) - 1, 0)
+        for attempt in range(DELETE_ATTEMPTS):
+            try:
+                await self._redis.xdel(self.key(wf.id), msg_id)
+            except Exception as e:
+                if attempt + 1 == DELETE_ATTEMPTS:
+                    # Kept in _inflight, so this process never runs it again;
+                    # a restart before Redis is back would.
+                    logger.error(
+                        "Could not remove a finished entry from %s's backlog: %s", wf.id, e
+                    )
+                    return
+                await asyncio.sleep(ERROR_RETRY_SECONDS)
+            else:
+                break
+        self._inflight.get(wf.id, set()).discard(msg_id)
+        with contextlib.suppress(Exception):
+            await self._refresh(wf.id)
 
     async def _execute(
         self, wf: Any, stream: str, event_type: str, fields: dict[str, Any], stamp: float | None

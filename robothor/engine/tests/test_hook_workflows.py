@@ -68,7 +68,7 @@ async def _settle(hooks) -> None:
     import asyncio
 
     for _ in range(200):
-        if not any(hooks.backlog._pending.values()):
+        if not hooks.backlog.stats("order-flow")[0] and not any(hooks.backlog._inflight.values()):
             break
         await asyncio.sleep(0)
     await hooks.backlog.stop()
