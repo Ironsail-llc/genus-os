@@ -1464,6 +1464,14 @@ def _build_parser() -> argparse.ArgumentParser:
     eng_history = eng_sub.add_parser("history", help="Show recent agent runs")
     eng_history.add_argument("--agent", help="Filter by agent ID")
     eng_history.add_argument("--limit", type=int, default=20, help="Max results")
+    eng_failures = eng_sub.add_parser(
+        "failures",
+        help="Failed, refused and denied tool calls and failed workflow steps, grouped",
+    )
+    eng_failures.add_argument("--hours", type=int, default=24, help="Window in hours (default 24)")
+    eng_failures.add_argument("--json", action="store_true", help="Print JSON")
+    eng_failures.add_argument("--tenant", default=None, help="Tenant id (default: this one)")
+    eng_failures.add_argument("--limit", type=int, default=50, help="Max groups printed")
 
     # engine workflow subcommands
     eng_wf = eng_sub.add_parser("workflow", help="Manage workflows")

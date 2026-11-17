@@ -1,4 +1,4 @@
-"""Engine commands (run, start, stop, status, list, history, agents shortcut, costs)."""
+"""Engine commands (run, start, stop, status, list, history, failures, agents shortcut, costs)."""
 
 from __future__ import annotations
 
@@ -216,11 +216,13 @@ def cmd_engine(args: argparse.Namespace) -> int:
         return _cmd_engine_list()
     if sub == "history":
         return _cmd_engine_history(args)
+    if sub == "failures":
+        return _cmd_engine_failures(args)
     if sub == "workflow":
         from robothor.cli.workflow import cmd_engine_workflow
 
         return cmd_engine_workflow(args)
-    print("Usage: robothor engine {run|start|stop|status|list|history|workflow}")
+    print("Usage: robothor engine {run|start|stop|status|list|history|failures|workflow}")
     return 0
 
 
@@ -478,4 +480,69 @@ def _cmd_engine_history(args: argparse.Namespace) -> int:
             f"{r.get('trigger_type', '-'):<10} {model_short:<20} {created}"
         )
 
+    return 0
+
+
+def _cmd_engine_failures(args: argparse.Namespace) -> int:
+    """Failed, refused and denied tool calls and failed workflow steps, grouped."""
+    import json
+
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.engine.failure_report import collect
+    from robothor.engine.tracking import get_tool_stats
+
+    hours = int(args.hours)
+    if hours <= 0:
+        print("Error: --hours must be a positive number of hours.")
+        return 2
+    tenant = getattr(args, "tenant", None) or DEFAULT_TENANT
+    try:
+        groups = collect(hours=hours, tenant_id=tenant)
+        stats = get_tool_stats(hours, tenant_id=tenant)
+    except Exception as e:
+        print(f"Error: Cannot query failures: {e}")
+        return 1
+    calls = {
+        str(s["tool_name"]): {
+            "calls": int(s.get("total_calls") or 0),
+            "failures": int(s.get("failures") or 0),
+        }
+        for s in stats
+    }
+    limit = max(1, int(getattr(args, "limit", 50) or 50))
+    total = sum(g["count"] for g in groups)
+    if getattr(args, "json", False):
+        shown = [
+            {**g, "last_seen": str(g["last_seen"]) if g["last_seen"] else None}
+            for g in groups[:limit]
+        ]
+        tool_calls = {t: c for t, c in calls.items() if any(g["tool"] == t for g in groups)}
+        print(
+            json.dumps(
+                {
+                    "hours": hours,
+                    "tenant_id": tenant,
+                    "total": total,
+                    "groups": shown,
+                    "tool_calls": tool_calls,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if not groups:
+        print(f"No tool failures in the last {hours}h.")
+        return 0
+    print(f"{total} failures in the last {hours}h, {len(groups)} groups (tenant {tenant})")
+    print(f"{'Count':>6}  {'Source':<14} {'Tool':<28} {'Agent / workflow':<28} {'Calls':>7}  Error")
+    print("-" * 120)
+    for g in groups[:limit]:
+        who = g["agent"] or f"workflow:{g['workflow']}"
+        tool_calls = calls.get(g["tool"], {}).get("calls")
+        shown_calls = str(tool_calls) if tool_calls is not None and g["source"] == "tool" else "-"
+        print(
+            f"{g['count']:>6}  {g['source']:<14} {g['tool'][:28]:<28} {who[:28]:<28} {shown_calls:>7}  {g['error']}"
+        )
+    if len(groups) > limit:
+        print(f"... {len(groups) - limit} more groups (raise --limit, or use --json)")
     return 0
