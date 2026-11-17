@@ -34,6 +34,7 @@ import asyncio
 import hashlib
 import html
 import logging
+import re
 import time
 from typing import Any
 
@@ -154,6 +155,7 @@ async def alert(
     channel: str = "telegram",
     metadata: dict[str, Any] | None = None,
     alert_id: str | None = None,
+    kind: str | None = None,
 ) -> bool:
     """Send an alert, routed by severity.
 
@@ -168,6 +170,8 @@ async def alert(
         alert_id: Optional stable id. A repeat of a delivered alert with the
             same id inside ``ROBOTHOR_ALERT_COOLDOWN_SECONDS`` is not sent
             again. Without one, nothing is suppressed.
+        kind: What sort of alert this is, for the log line. Defaults to the
+            part of ``title`` before its first colon, as ``snake_case``.
 
     Returns:
         True if the alert was verifiably delivered (Telegram or a fallback
@@ -177,6 +181,7 @@ async def alert(
     from robothor.engine.run_context import in_benchmark_run
 
     if in_benchmark_run():
+        _log_alert(level, title, kind, alert_id, benchmark=True)
         # A graded child is not production. Whatever the level, whatever the
         # channel: no page, no webhook, and a row in a type the operator's
         # heartbeat does not read. Checked before the channel switch so a
@@ -192,6 +197,8 @@ async def alert(
     if _suppressed(alert_id):
         logger.info("Alert %s suppressed: delivered inside its cooldown window", alert_id)
         return True
+
+    _log_alert(level, title, kind, alert_id)
 
     if channel == "telegram":
         if level in _PAGE_LEVELS:
@@ -301,6 +308,16 @@ async def _page(level: str, title: str, body: str, alert_id: str | None) -> bool
             )
             return _record_delivery(alert_id, True)
 
+    if alert_webhook_url():
+        tried.append("webhook")
+        if await _send_webhook(level, title, body, None):
+            logger.warning(
+                "Alert %s delivered via webhook (fallback: the primary channel telegram %s)",
+                shown_id,
+                why,
+            )
+            return _record_delivery(alert_id, True)
+
     logger.error(
         "Alert %s reached no one: every alert channel failed (tried %s). "
         "Run `genus doctor --only alerts.delivery`.",
@@ -310,6 +327,44 @@ async def _page(level: str, title: str, body: str, alert_id: str | None) -> bool
     # The page was lost — leave a durable trace the briefing will surface.
     await _write_notification("alert_fallback", level, title, body, None)
     return False
+
+
+_NOT_A_WORD = re.compile(r"[^a-z0-9]+")
+
+
+def _kind_and_subject(title: str, kind: str | None) -> tuple[str, str]:
+    """``("tool_outage", "example_tool")`` for ``"Tool outage: example_tool"``."""
+    head, sep, rest = title.partition(":")
+    subject = rest.strip() if sep and rest.strip() else title
+    derived = _NOT_A_WORD.sub("_", (head if sep else title).lower()).strip("_")[:60]
+    return (kind or derived or "alert"), subject
+
+
+def _log_alert(
+    level: str, title: str, kind: str | None, alert_id: str | None, *, benchmark: bool = False
+) -> None:
+    """One ``event=alert`` line, at ERROR, whatever happens to delivery.
+
+    Every instance has a log pipeline even when it has no alert channel, so
+    this is the route that always exists. The body is never logged: it is free
+    text a detector filled. A benchmark alert is logged at INFO, since graded
+    traffic is not an incident.
+    """
+    try:
+        from robothor.engine.log_fields import kv_line, short_reason
+
+        name, subject = _kind_and_subject(title, kind)
+        fields: dict[str, Any] = {
+            "kind": name,
+            "severity": level,
+            "subject": short_reason(subject),
+            "alert_id": alert_id or _derived_id(level, title),
+        }
+        if benchmark:
+            fields["benchmark"] = True
+        logger.log(logging.INFO if benchmark else logging.ERROR, "%s", kv_line("alert", **fields))
+    except Exception:  # noqa: BLE001 — the log line never blocks the alert
+        logger.debug("alert log line failed", exc_info=True)
 
 
 def _telegram_configured() -> bool:
