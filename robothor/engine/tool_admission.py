@@ -351,3 +351,24 @@ class ToolAdmissionMixin:
             scratchpad.record_tool_call(tool_name, error=verdict.message)
         if verdict.escalate and escalation:
             escalation.record_error()
+        _log_refusal(verdict, tool_name, tool_args=verdict.tool_args, session=session)
+
+
+def _log_refusal(verdict: ToolVerdict, tool_name: str, *, tool_args: Any, session: Any) -> None:
+    """The ``event=tool_call`` line for a call refused before the registry."""
+    from robothor.engine.tool_call_log import classify_result, log_tool_call
+
+    tool, _ = inner_call(tool_name, tool_args)
+    result = {"error": verdict.message, **verdict.output}
+    if not result.get("refused"):
+        result["refused"] = True
+    outcome, error_type, reason = classify_result(tool, result)
+    run = getattr(session, "run", None)
+    log_tool_call(
+        tool=tool,
+        agent_id=str(getattr(run, "agent_id", "") or ""),
+        run_id=str(getattr(run, "id", "") or ""),
+        outcome=outcome,
+        error_type=error_type,
+        reason=reason,
+    )

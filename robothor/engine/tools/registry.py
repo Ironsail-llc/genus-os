@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
 from robothor.engine.capability_tier import WIDENING_TIERS
 from robothor.engine.runtime.deadlines import RuntimeDeadlineError
 from robothor.engine.spawn_cancel import tool_deadline
+from robothor.engine.tool_call_log import logged as _logged_tool_call
 from robothor.engine.tools.constants import (
     CORE_TOOLS,
     GOAL_TOOLS,
@@ -1206,6 +1207,7 @@ class ToolRegistry:
             name=f"tool-drift-alert:{agent_id}",
         )
 
+    @_logged_tool_call
     async def execute(
         self,
         tool_name: str,
@@ -1317,7 +1319,7 @@ class ToolRegistry:
             }
         except Exception as e:
             logger.error("Tool %s failed: %s", tool_name, e, exc_info=True)
-            return {"error": f"Tool execution failed: {e}"}
+            return {"error": f"Tool execution failed: {e}", "exception": type(e).__name__}
 
 
 #: What to tell a model whose tool ran out of time, when the tool itself has a

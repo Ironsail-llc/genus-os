@@ -89,14 +89,14 @@ async def test_a_tool_error_writes_one_warning_with_type_and_reason(monkeypatch,
 
 @pytest.mark.asyncio
 async def test_a_raised_exception_names_its_class(monkeypatch, caplog) -> None:
-    class ExampleBoom(RuntimeError):
+    class ExampleBoomError(RuntimeError):
         pass
 
-    await _call(monkeypatch, ExampleBoom("it broke"))
+    await _call(monkeypatch, ExampleBoomError("it broke"))
     (line,) = _lines(caplog)
     f = _fields(line.getMessage())
     assert f["outcome"] == "error"
-    assert f["error_type"] == "ExampleBoom"
+    assert f["error_type"] == "ExampleBoomError"
 
 
 @pytest.mark.asyncio
@@ -265,8 +265,12 @@ def test_a_call_refused_at_admission_writes_one_line(caplog) -> None:
     verdict = ToolVerdict(
         allowed=False,
         message="Blocked by guardrail (example_guard): not allowed now",
-        output={"guardrail": "example_guard", "refused": True, "gate": "policy",
-                "gate_name": "example_guard"},
+        output={
+            "guardrail": "example_guard",
+            "refused": True,
+            "gate": "policy",
+            "gate_name": "example_guard",
+        },
         gate="policy",
     )
     ToolAdmissionMixin._record_refusal(
@@ -284,3 +288,30 @@ def test_a_call_refused_at_admission_writes_one_line(caplog) -> None:
     assert f["agent"] == "example-agent"
     assert f["outcome"] == "refused"
     assert f["error_type"] == "policy.example_guard"
+
+
+def test_the_audit_row_bounds_an_error_before_redacting_it(monkeypatch) -> None:
+    """The audit row kept its 500 characters, but redacted the whole text first."""
+    import robothor.secrets.redaction as redaction
+    from robothor.engine.tools import dispatch
+
+    seen: list[int] = []
+    real = redaction.redact
+
+    def _spy(text: str, *a: Any, **k: Any) -> str:
+        seen.append(len(text))
+        return real(text, *a, **k)
+
+    submitted: list[dict[str, Any]] = []
+
+    class _Writer:
+        def submit(self, fn: Any, **kw: Any) -> None:
+            submitted.append(kw)
+
+    monkeypatch.setattr(redaction, "redact", _spy)
+    monkeypatch.setattr("robothor.engine.event_writer.get_event_writer", lambda: _Writer())
+    dispatch._audit_tool_call(
+        "example_tool", "example-agent", "test-tenant", status="denied", error="y" * 5_000_000
+    )
+    assert seen and max(seen) <= 8192
+    assert len(submitted[0]["details"]["error"]) <= 500
