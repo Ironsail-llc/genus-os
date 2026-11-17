@@ -36,6 +36,7 @@ def bare_root(monkeypatch: pytest.MonkeyPatch):
 
     libraries = {name: logging.getLogger(name).level for name in ("httpx", "httpcore")}
     yield _Root()
+    logging.captureWarnings(False)  # the setup under test captures warnings
     root.handlers[:] = stripped
     root.setLevel(saved_level)
     for name, level in libraries.items():

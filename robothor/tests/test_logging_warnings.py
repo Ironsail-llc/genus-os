@@ -38,6 +38,10 @@ def captured(monkeypatch: pytest.MonkeyPatch):
     buffer = io.StringIO()
     with warnings.catch_warnings():
         warnings.simplefilter("always")
+        # An earlier test that configured logging may have left warnings
+        # captured; captureWarnings(True) is then a no-op and would not take
+        # over this block's showwarning. Start from "not captured".
+        logging.captureWarnings(False)
         configure_structured_logging()
         # Another test's dictConfig can leave the logger disabled; isolate.
         warnings_logger = logging.getLogger("py.warnings")
