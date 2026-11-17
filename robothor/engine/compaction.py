@@ -1082,10 +1082,13 @@ async def compact(
     # switched on, counts here exactly as it counted there.
     sizing = next_reachable_model(list(models or []), broken_models) or None
 
-    def estimate_tokens(msgs: list[dict[str, Any]]) -> int:
-        return estimate_context_tokens(msgs, sizing)
+    # Every count runs in a worker thread: with the exact tokenizer on, each one
+    # is a synchronous, CPU-bound ``litellm.token_counter`` call, and this pass
+    # counts many times. On the loop that stalls every other session.
+    async def measure(msgs: list[dict[str, Any]]) -> int:
+        return await asyncio.to_thread(estimate_context_tokens, msgs, sizing)
 
-    tokens_before = estimate_tokens(messages)
+    tokens_before = await measure(messages)
     if tokens_before < threshold:
         return CompactionResult(
             messages=messages, tokens_before=tokens_before, tokens_after=tokens_before
@@ -1093,42 +1096,46 @@ async def compact(
 
     recent_budget = max(1024, drain_to // 3)
     head_len = protected_prefix_len(messages)
-    protect = protected_tail_len(messages[head_len:], recent_budget, KEEP_RECENT, sizing)
+    protect = await asyncio.to_thread(
+        protected_tail_len, messages[head_len:], recent_budget, KEEP_RECENT, sizing
+    )
     working, counts = llm_free_pre_pass(messages, protect)
-    est = estimate_tokens(working)
+    est = await measure(working)
     logger.info(
         "Compaction pre-pass: ~%d → ~%d tokens (%s)", tokens_before, est, sanitize_log(counts)
     )
 
-    def result(msgs: list[dict[str, Any]], passes: int, **extra: Any) -> CompactionResult:
+    async def result(msgs: list[dict[str, Any]], passes: int, **extra: Any) -> CompactionResult:
         return CompactionResult(
             messages=msgs,
             passes_used=passes,
             tokens_before=tokens_before,
-            tokens_after=estimate_tokens(msgs),
+            tokens_after=await measure(msgs),
             **extra,
         )
 
     if est < drain_to:
-        return result(working, 1)
+        return await result(working, 1)
 
     if len(working) <= KEEP_RECENT + 1:
-        shrunk, n = _shrink_largest(working, drain_to, model=sizing)
+        shrunk, n = await asyncio.to_thread(_shrink_largest, working, drain_to, model=sizing)
         if not n and est >= tokens_before:
             # Nothing reclaimed: a no-op must not read as a pass that worked.
             return CompactionResult(
                 messages=messages, tokens_before=tokens_before, tokens_after=tokens_before
             )
-        return result(shrunk, 1)
+        return await result(shrunk, 1)
 
     head_msgs, retained_msgs, rest = _split_for_summary(working)
     previous, rest = _take_previous_summary(rest)
     split_idx = (
-        _recent_split(rest, recent_budget, KEEP_RECENT, sizing) if len(rest) > KEEP_RECENT else 0
+        await asyncio.to_thread(_recent_split, rest, recent_budget, KEEP_RECENT, sizing)
+        if len(rest) > KEEP_RECENT
+        else 0
     )
     old_messages, recent_messages = rest[:split_idx], rest[split_idx:]
     if not old_messages:
-        return result(working, 1)
+        return await result(working, 1)
 
     chain = await _summary_chain(models, broken_models, preferred_model)
     try:
@@ -1148,7 +1155,7 @@ async def compact(
             sanitize_log(str(e)[:200]),
             len(working),
         )
-        return result(working, 1, degraded=True)
+        return await result(working, 1, degraded=True)
 
     # Extraction reads at most FACT_INPUT_MESSAGES messages per call
     # (`build_extraction_input`), so it walks the slice the same way.
@@ -1170,12 +1177,15 @@ async def compact(
         }
     )
     result_msgs.extend(recent_messages)
-    if estimate_tokens(result_msgs) > drain_to:
-        result_msgs, _ = _shrink_largest(result_msgs, drain_to, model=sizing)
+    if await measure(result_msgs) > drain_to:
+        result_msgs, _ = await asyncio.to_thread(
+            _shrink_largest, result_msgs, drain_to, model=sizing
+        )
+    done = await result(result_msgs, 3, facts_extracted=facts)
     logger.info(
         "Compaction: summary updated on %s, ~%d → ~%d tokens",
         sanitize_log(chain[0]),
         tokens_before,
-        estimate_tokens(result_msgs),
+        done.tokens_after,
     )
-    return result(result_msgs, 3, facts_extracted=facts)
+    return done
