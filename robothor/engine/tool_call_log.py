@@ -32,9 +32,11 @@ import contextvars
 import functools
 import logging
 import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from robothor.engine.log_fields import kv_line, short_reason
+from robothor.engine.repeat_guard import canonical_key
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
@@ -192,6 +194,42 @@ def logs_guard_refusals(*guards: str) -> Callable[[_F], _F]:
     return _wrap
 
 
+#: Calls refused in a run: ``run_id -> {canonical call -> refusal text}``. An
+#: identical call later in the same run is answered from here, not made again.
+#: Bounded: the oldest runs are dropped first.
+_refused_calls: OrderedDict[str, dict[str, str]] = OrderedDict()
+_REFUSAL_RUNS, _REFUSALS_PER_RUN = 256, 128
+#: Outcomes and error types that mean "refused", not "failed": a plain error or
+#: a timeout may succeed on a retry, so it is never remembered.
+_REFUSED_OUTCOMES = frozenset({"refused", "denied"})
+_REFUSED_ERROR_TYPES = frozenset({"http_401", "http_403"})
+
+
+def _repeat_of_refusal(run_id: str, key: str) -> dict[str, Any] | None:
+    original = _refused_calls.get(run_id, {}).get(key) if run_id else None
+    if original is None:
+        return None
+    return {
+        "error": (
+            "This exact call was already refused in this run: "
+            f"{original} Do not retry it; tell the person what refused it and who can grant it."
+        ),
+        "refused": True,
+        "repeat_of_refused_call": True,
+    }
+
+
+def _remember_refusal(run_id: str, key: str, outcome: str, error_type: str, reason: str) -> None:
+    if not run_id or (outcome not in _REFUSED_OUTCOMES and error_type not in _REFUSED_ERROR_TYPES):
+        return
+    calls = _refused_calls.setdefault(run_id, {})
+    _refused_calls.move_to_end(run_id)
+    if len(calls) < _REFUSALS_PER_RUN:
+        calls[key] = short_reason(reason) or error_type
+    while len(_refused_calls) > _REFUSAL_RUNS:
+        _refused_calls.popitem(last=False)
+
+
 def logged(execute: _F) -> _F:
     """Wrap ``ToolRegistry.execute`` so every call writes one line."""
     from robothor.engine.wrapped_call import WRAPPER_TOOL, inner_call
@@ -207,10 +245,23 @@ def logged(execute: _F) -> _F:
         token = _wrapped.set(own)
         started = time.monotonic()
         outcome, error_type, reason = "ok", "", ""
+        run_id = str(kwargs.get("run_id") or _scoped_run_id.get())
+        # A call a wrapper makes is the wrapper's unlock being followed: never answered here.
+        key = canonical_key(tool_name, arguments) if holder is None else ""
         try:
+            repeat = _repeat_of_refusal(run_id, key) if key else None
+            if repeat is not None:
+                outcome, error_type, reason = (
+                    "refused",
+                    "repeat_refused",
+                    "repeat of a refused call",
+                )
+                return repeat
             result = await execute(self, tool_name, arguments, *args, **kwargs)
             try:
                 outcome, error_type, reason = classify_result(tool_name, result)
+                if key:
+                    _remember_refusal(run_id, key, outcome, error_type, reason)
             except Exception:  # noqa: BLE001 — classifying never fails the call
                 outcome, error_type = "unknown", "unclassified"
             return result
@@ -229,7 +280,7 @@ def logged(execute: _F) -> _F:
                 log_tool_call(
                     tool=own["tool"] if own is not None else tool_name,
                     agent_id=str(kwargs.get("agent_id") or ""),
-                    run_id=str(kwargs.get("run_id") or _scoped_run_id.get()),
+                    run_id=run_id,
                     outcome=outcome,
                     error_type=error_type,
                     reason=reason,

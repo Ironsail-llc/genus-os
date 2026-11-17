@@ -91,7 +91,9 @@ event=run_end agent=example-agent run_id=9b1c… trigger=telegram outcome=comple
 `denied` is a role or allowlist gate; `refused` is any other engine gate, or a
 redirection such as the repeat guard. A tool that failed, or another system
 that refused the call, is `error`; so is a result that carries an HTTP status of
-400 or above (`error_type=http_<code>`, the body never logged). A `tool_call` wrapper is logged once, under
+400 or above (`error_type=http_<code>`, the body never logged). An identical repeat of a call already refused or
+denied in the same run is not made again and logs `outcome=refused
+error_type=repeat_refused reason="repeat of a refused call"`. A `tool_call` wrapper is logged once, under
 the tool it wraps. A call refused at admission, before it reaches the registry,
 is logged too, from a model turn or from an `execute_code` snippet (whose own
 call and approval caps log as `refused`). A workflow tool step's line names the
