@@ -30,6 +30,13 @@ tools_allowed:
   - update_company
   - merge_contacts
   - merge_companies
+  # Company hierarchy and people's roles at companies, so a merge or a
+  # hygiene pass can see (and keep) the structure.
+  - list_affiliations
+  - list_company_children
+  - find_company_by_identifier
+  - find_person_by_identifier
+  - set_affiliation
   # The 0.2 hygiene scan calls delete_person on furniture, system accounts and
   # automated senders. It was in the instructions and not the manifest, so the
   # scan reported a count it had not deleted.

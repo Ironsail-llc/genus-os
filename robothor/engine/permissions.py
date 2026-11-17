@@ -311,6 +311,10 @@ def seed_default_permissions() -> None:
         ("viewer", "search_*", "allow"),
         ("viewer", "get_*", "allow"),
         ("viewer", "list_*", "allow"),
+        # Read-only CRM lookups outside the get_/list_/search_ patterns
+        # (migration 170). Exact names: never a find_* pattern.
+        ("viewer", "find_company_by_identifier", "allow"),
+        ("viewer", "find_person_by_identifier", "allow"),
         ("viewer", "memory_block_read", "allow"),
         ("viewer", "memory_block_list", "allow"),
         ("viewer", "*", "deny"),

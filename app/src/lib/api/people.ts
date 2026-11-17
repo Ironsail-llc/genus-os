@@ -1,5 +1,5 @@
 import { apiFetch } from "./client";
-import type { Person } from "./types";
+import type { Affiliation, Person } from "./types";
 
 interface RawPerson {
   id: string;
@@ -48,4 +48,15 @@ export async function createPerson(
 
 export async function searchPeople(query: string): Promise<Person[]> {
   return fetchPeople(query);
+}
+
+/** A person's roles at companies; ended ones too unless activeOnly. */
+export async function fetchPersonAffiliations(
+  id: string,
+  activeOnly = false
+): Promise<Affiliation[]> {
+  const res = await apiFetch<{ affiliations: Affiliation[] }>(
+    `/api/bridge/api/people/${id}/affiliations?activeOnly=${activeOnly}`
+  );
+  return res.affiliations;
 }

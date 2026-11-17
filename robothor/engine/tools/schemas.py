@@ -2119,14 +2119,20 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             "name": "get_contact_360",
             "description": (
                 "Get the unified view of a contact: identity, counts, recent "
-                "timeline, open tasks, recent notes, and memory snippets. Look up "
-                "by person id, or by a channel identifier (email, phone, telegram "
-                "id)."
+                "timeline, open tasks, recent notes, memory snippets, and their "
+                "roles at companies (affiliations, each with the company's parent "
+                "chain). Look up by person id, or by a channel identifier (email, "
+                "phone, telegram id). Pass companyId instead to get a company's "
+                "parent, children and people by role."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "person_id UUID (preferred)"},
+                    "companyId": {
+                        "type": "string",
+                        "description": "Company UUID — returns the company's structure instead",
+                    },
                     "identifier": {
                         "type": "string",
                         "description": "Channel identifier string (email, phone, telegram id) — used when id is not given",
@@ -2417,6 +2423,112 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         },
                     },
                     "required": ["keeperId", "loserId"],
+                },
+            },
+        }
+
+    # ── Company hierarchy, outside ids, affiliations ──
+    schemas["set_affiliation"] = {
+        "type": "function",
+        "function": {
+            "name": "set_affiliation",
+            "description": (
+                "Record a person's role at a company (owner, admin, manager, provider, ...). "
+                "One row per person, company and role; calling again with the same values "
+                "changes nothing. isActive=false closes it (keeps the row, sets the end date). "
+                "Use update_person's companyId only for a person's single primary company."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "personId": {"type": "string", "description": "Person UUID"},
+                    "companyId": {"type": "string", "description": "Company UUID"},
+                    "role": {
+                        "type": "string",
+                        "description": "Role at the company, stored lower-case (e.g. owner)",
+                    },
+                    "attributes": {
+                        "type": "object",
+                        "description": "Optional details; replaces the stored object when given",
+                    },
+                    "isActive": {
+                        "type": "boolean",
+                        "description": "false closes the affiliation (default true)",
+                        "default": True,
+                    },
+                },
+                "required": ["personId", "companyId", "role"],
+            },
+        },
+    }
+    schemas["list_affiliations"] = {
+        "type": "function",
+        "function": {
+            "name": "list_affiliations",
+            "description": (
+                "List people's roles at companies: a person's companies (personId) or a "
+                "company's people (companyId), optionally one role."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "personId": {"type": "string", "description": "Person UUID"},
+                    "companyId": {"type": "string", "description": "Company UUID"},
+                    "role": {"type": "string", "description": "Only this role"},
+                    "activeOnly": {
+                        "type": "boolean",
+                        "description": "Hide closed affiliations (default true)",
+                        "default": True,
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 200)",
+                        "default": 200,
+                    },
+                },
+            },
+        },
+    }
+    schemas["list_company_children"] = {
+        "type": "function",
+        "function": {
+            "name": "list_company_children",
+            "description": "List the companies directly under a company.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "companyId": {"type": "string", "description": "Parent company UUID"},
+                },
+                "required": ["companyId"],
+            },
+        },
+    }
+    for find_name, obj_type in (
+        ("find_company_by_identifier", "company"),
+        ("find_person_by_identifier", "person"),
+    ):
+        schemas[find_name] = {
+            "type": "function",
+            "function": {
+                "name": find_name,
+                "description": (
+                    f"Resolve an outside system's id to the CRM {obj_type} it maps to "
+                    f"(exact match on system and identifier). Returns found=false and "
+                    f"{obj_type}=null when nothing maps to it."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "system": {
+                            "type": "string",
+                            "description": "Name of the outside system the id belongs to",
+                        },
+                        "identifier": {
+                            "type": "string",
+                            "description": f"The {obj_type}'s id in that system",
+                        },
+                    },
+                    "required": ["system", "identifier"],
                 },
             },
         }

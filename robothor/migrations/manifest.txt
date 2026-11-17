@@ -191,3 +191,4 @@ crm/165_coding_publish_denies.sql
 crm/166_entity_recall_definer.sql
 crm/167_agent_schedules_tenant_key.sql
 crm/169_crm_affiliations.sql
+crm/170_crm_find_tools_read_only.sql

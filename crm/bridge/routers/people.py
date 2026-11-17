@@ -11,19 +11,25 @@ from fastapi.responses import JSONResponse
 # string annotation and FastAPI incorrectly treats it as a required query
 # parameter.
 from models import (  # noqa: TC002
+    CloseAffiliationRequest,
     CreatePersonRequest,
     MergeRequest,
+    SetAffiliationRequest,
     UpdateCompanyRequest,
     UpdatePersonRequest,
 )
 
 from robothor.crm.dal import (
+    close_affiliation,
     create_person,
     delete_company,
     delete_person,
     get_company,
+    get_company_by_identifier,
+    get_company_view,
     get_contact_360,
     get_person,
+    get_person_by_identifier,
     get_person_calls,
     get_person_events,
     get_person_memory,
@@ -33,10 +39,13 @@ from robothor.crm.dal import (
     get_person_summary,
     get_person_tasks,
     get_person_timeline,
+    list_affiliations,
     list_companies,
+    list_company_children,
     list_people,
     merge_companies,
     merge_people,
+    set_affiliation,
     update_company,
     update_person,
 )
@@ -71,6 +80,20 @@ def api_create_person(
     if person_id:
         return {"id": person_id, "firstName": body.firstName, "lastName": body.lastName}
     return JSONResponse({"error": "failed to create person (may be blocked)"}, status_code=500)
+
+
+@router.get("/people/by-identifier")
+def api_person_by_identifier(
+    system: str = Query(..., min_length=1),
+    identifier: str = Query(..., min_length=1),
+    tenant_id: str = Depends(get_tenant_id),
+):
+    """The person an outside system knows as ``identifier``. Declared before
+    ``/people/{person_id}`` so the literal path is not read as an id."""
+    result = get_person_by_identifier(system, identifier, tenant_id=tenant_id)
+    if not result:
+        return JSONResponse({"error": "person not found"}, status_code=404)
+    return result
 
 
 @router.get("/people/{person_id}")
@@ -219,6 +242,58 @@ def api_person_contact_360(
     return result
 
 
+# ── Affiliations: a person's roles at companies ──────────────────────────
+
+
+@router.get("/people/{person_id}/affiliations")
+def api_person_affiliations(
+    person_id: str,
+    activeOnly: bool = Query(True),  # noqa: N803 - camelCase like the rest of the API
+    tenant_id: str = Depends(get_tenant_id),
+):
+    return {
+        "affiliations": list_affiliations(
+            person_id=person_id, active_only=activeOnly, tenant_id=tenant_id
+        )
+    }
+
+
+@router.post("/people/{person_id}/affiliations")
+def api_set_affiliation(
+    person_id: str,
+    body: SetAffiliationRequest,
+    tenant_id: str = Depends(get_tenant_id),
+):
+    """Create or update one (person, company, role). Idempotent."""
+    try:
+        return set_affiliation(
+            person_id,
+            body.companyId,
+            body.role,
+            attributes=body.attributes,
+            is_active=body.isActive,
+            tenant_id=tenant_id,
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@router.post("/people/{person_id}/affiliations/close")
+def api_close_affiliation(
+    person_id: str,
+    body: CloseAffiliationRequest,
+    tenant_id: str = Depends(get_tenant_id),
+):
+    """Close an affiliation (inactive, ``until`` set). Nothing is deleted."""
+    try:
+        result = close_affiliation(person_id, body.companyId, body.role, tenant_id=tenant_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if result is None:
+        return JSONResponse({"error": "affiliation not found"}, status_code=404)
+    return result
+
+
 @router.delete("/people/{person_id}")
 def api_delete_person(
     person_id: str,
@@ -256,6 +331,20 @@ def api_list_companies(
     return {"companies": result}
 
 
+@router.get("/companies/by-identifier")
+def api_company_by_identifier(
+    system: str = Query(..., min_length=1),
+    identifier: str = Query(..., min_length=1),
+    tenant_id: str = Depends(get_tenant_id),
+):
+    """The company an outside system knows as ``identifier``. Declared before
+    ``/companies/{company_id}`` so the literal path is not read as an id."""
+    result = get_company_by_identifier(system, identifier, tenant_id=tenant_id)
+    if not result:
+        return JSONResponse({"error": "company not found"}, status_code=404)
+    return result
+
+
 @router.get("/companies/{company_id}")
 def api_get_company(
     company_id: str,
@@ -263,6 +352,40 @@ def api_get_company(
 ):
     result = get_company(company_id, tenant_id=tenant_id)
     if not result:
+        return JSONResponse({"error": "company not found"}, status_code=404)
+    return result
+
+
+@router.get("/companies/{company_id}/children")
+def api_company_children(
+    company_id: str,
+    tenant_id: str = Depends(get_tenant_id),
+):
+    return {"children": list_company_children(company_id, tenant_id=tenant_id)}
+
+
+@router.get("/companies/{company_id}/affiliations")
+def api_company_affiliations(
+    company_id: str,
+    role: str | None = Query(None),
+    activeOnly: bool = Query(True),  # noqa: N803 - camelCase like the rest of the API
+    tenant_id: str = Depends(get_tenant_id),
+):
+    return {
+        "affiliations": list_affiliations(
+            company_id=company_id, role=role, active_only=activeOnly, tenant_id=tenant_id
+        )
+    }
+
+
+@router.get("/companies/{company_id}/structure")
+def api_company_structure(
+    company_id: str,
+    tenant_id: str = Depends(get_tenant_id),
+):
+    """Parent, parent chain, children, people by role and outside ids."""
+    result = get_company_view(company_id, tenant_id=tenant_id)
+    if result is None:
         return JSONResponse({"error": "company not found"}, status_code=404)
     return result
 

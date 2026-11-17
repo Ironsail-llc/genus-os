@@ -48,6 +48,7 @@ _CRM_MUTATING_TOOLS: frozenset[str] = frozenset(
         "merge_people",
         "merge_contacts",
         "merge_companies",
+        "set_affiliation",
         # Tasks.
         "create_task",
         "update_task",
@@ -1245,6 +1246,96 @@ async def _merge_companies(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     return {"error": "Merge failed — one or both IDs not found"}
 
 
+# ── Company hierarchy, outside ids, affiliations ─────────────────────────
+#
+# The DAL refuses bad input with ValueError (a person or company not in this
+# tenant, a blank role); that comes back as a recoverable {"error": ...}.
+
+
+@_handler("set_affiliation")
+async def _set_affiliation(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from robothor.crm.dal import set_affiliation
+
+    person_id = (args.get("personId") or "").strip()
+    company_id = (args.get("companyId") or "").strip()
+    role = (args.get("role") or "").strip()
+    if not role:
+        return {"error": "role is required"}
+    attributes = args.get("attributes")
+    if attributes is not None and not isinstance(attributes, dict):
+        return {"error": "attributes must be an object"}
+    try:
+        return cast(
+            "dict[str, Any]",
+            await asyncio.to_thread(
+                set_affiliation,
+                person_id,
+                company_id,
+                role,
+                attributes=attributes,
+                is_active=bool(args.get("isActive", True)),
+                tenant_id=ctx.tenant_id,
+            ),
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
+@_handler("list_affiliations")
+async def _list_affiliations(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from robothor.crm.dal import list_affiliations
+
+    person_id = (args.get("personId") or "").strip() or None
+    company_id = (args.get("companyId") or "").strip() or None
+    if person_id is None and company_id is None:
+        return {"error": "personId or companyId is required"}
+    role = (args.get("role") or "").strip() or None
+    rows = await asyncio.to_thread(
+        list_affiliations,
+        person_id=person_id,
+        company_id=company_id,
+        role=role,
+        active_only=bool(args.get("activeOnly", True)),
+        limit=int(args.get("limit") or 200),
+        tenant_id=ctx.tenant_id,
+    )
+    return {"affiliations": rows, "count": len(rows)}
+
+
+@_handler("list_company_children")
+async def _list_company_children(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from robothor.crm.dal import list_company_children
+
+    company_id = (args.get("companyId") or "").strip()
+    children = await asyncio.to_thread(list_company_children, company_id, tenant_id=ctx.tenant_id)
+    return {"companyId": company_id, "children": children, "count": len(children)}
+
+
+async def _find_by_identifier(
+    args: dict[str, Any], ctx: ToolContext, lookup: Callable[..., Any], key: str
+) -> dict[str, Any]:
+    system = (args.get("system") or "").strip()
+    identifier = (args.get("identifier") or "").strip()
+    if not system or not identifier:
+        return {"error": "system and identifier are required"}
+    found = await asyncio.to_thread(lookup, system, identifier, tenant_id=ctx.tenant_id)
+    return {"found": found is not None, key: found}
+
+
+@_handler("find_company_by_identifier")
+async def _find_company_by_identifier(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from robothor.crm.dal import get_company_by_identifier
+
+    return await _find_by_identifier(args, ctx, get_company_by_identifier, "company")
+
+
+@_handler("find_person_by_identifier")
+async def _find_person_by_identifier(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from robothor.crm.dal import get_person_by_identifier
+
+    return await _find_by_identifier(args, ctx, get_person_by_identifier, "person")
+
+
 # ── Contact 360 — agent-facing holistic lookup ───────────────────────────
 
 
@@ -1255,6 +1346,7 @@ async def _get_contact_360(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 
     Args:
       id:              person_id UUID (preferred)
+      companyId:       OR a company UUID — returns the company's structure instead
       identifier:      OR a channel identifier string (email, phone, telegram id)
       channel:         channel for identifier lookup — default 'email'
       timeline_limit:  how many timeline rows to include (default 50)
@@ -1267,6 +1359,13 @@ async def _get_contact_360(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     )
 
     person_id = (args.get("id") or "").strip()
+    company_id = (args.get("companyId") or "").strip()
+    if not person_id and company_id:
+        # A company's view: parent, chain, children, people by role, outside ids.
+        from robothor.crm.dal import get_company_view
+
+        view = await asyncio.to_thread(get_company_view, company_id, tenant_id=ctx.tenant_id)
+        return view if view is not None else {"error": f"company not found: {company_id}"}
     if not person_id:
         identifier = (args.get("identifier") or "").strip()
         if not identifier:
