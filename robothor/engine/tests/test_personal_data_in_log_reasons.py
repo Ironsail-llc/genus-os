@@ -66,6 +66,45 @@ class TestRedactPersonalData:
         assert number not in out
         assert "<phone>" in out
 
+    # Lab strings: the values joined into one identifier with separators.
+    TOKEN = "sk_" + "live_" + "ABCDEF1234567890XYZ"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            f"missing-{EMAIL}-{DASHED}-{TOKEN}",
+            f"block qa-3-{EMAIL}-{DASHED}-{TOKEN} failed",
+            f"file report_{EMAIL}_{DASHED}.txt not found",
+            f"key user.{EMAIL}.{DOTTED}.json",
+            f"slug=x{DASHED}y and +{EMAIL}+",
+            f"path /tmp/{EMAIL}/{E164}/out",
+        ],
+    )
+    def test_values_joined_into_one_identifier_are_removed(self, text: str) -> None:
+        from robothor.secrets.redaction import redact
+
+        out = redact_personal_data(redact(text))
+        assert "jane.doe" not in out
+        assert "example.com" not in out
+        assert "0199" not in out
+        assert "ABCDEF1234567890XYZ" not in out
+        assert "<email>" in out
+        assert "<phone>" in out
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "commit 3f786850e387550fdab836ed7e6dc881de23001b on main",
+            "uuid 123e4567-e89b-12d3-a456-426614174000 and 1111-2222-3333",
+            "account " + _num("12", "555", "010", "0199", "77") + " is closed",
+            "serial " + _num("9555", "010", "0199") + " and " + _num("555", "010", "01990"),
+            "built 2026.11.17-1.130.0 at 10.20.30.40:8080",
+            "ids 5550100199 and 155501001991234 are long digit runs",
+        ],
+    )
+    def test_ambiguous_digit_groups_in_longer_runs_are_kept(self, text: str) -> None:
+        assert redact_personal_data(text) == text
+
     @pytest.mark.parametrize(
         "text",
         [
