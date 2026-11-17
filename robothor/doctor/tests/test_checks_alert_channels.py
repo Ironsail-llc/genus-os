@@ -161,3 +161,20 @@ def test_an_email_alert_target_that_is_a_person_id_is_reported(settings, channel
         row.status == "fail" and row.sub_id == "email" and "address" in row.detail for row in rows
     ), rows
     assert any("no alert channel can deliver" in row.detail for row in rows), rows
+
+
+def test_a_configured_alert_webhook_is_a_route(channels, monkeypatch) -> None:
+    from robothor.engine import alerts
+
+    monkeypatch.setattr(alerts, "alert_webhook_url", lambda: "https://hooks.example.com/x")
+    rows = _run(make_ctx())
+    assert [row.status for row in rows] == ["pass"]
+    assert rows[0].sub_id == "webhook"
+    assert "https://hooks.example.com" not in rows[0].detail
+
+
+def test_the_failure_names_every_route_to_configure(channels) -> None:
+    rows = _run(make_ctx())
+    detail = rows[-1].detail
+    for name in ("Telegram", "ROBOTHOR_ALERT_FALLBACK_CHANNELS", "ROBOTHOR_ALERT_WEBHOOK_URL"):
+        assert name in detail
