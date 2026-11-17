@@ -10,13 +10,16 @@ not a broken instance. It changes nothing about how any agent runs.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import yaml
 
 from robothor.doctor.checks import manifests as manifest_checks
 from robothor.doctor.tests.conftest import make_ctx
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _BASE = {
     "name": "Example",

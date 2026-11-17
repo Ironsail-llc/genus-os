@@ -24,7 +24,9 @@ from robothor.constants import SANDBOX_DENIED_ERROR_TYPE
 
 __all__ = ["collect", "normalize_error"]
 
-_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
+_UUID = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE
+)
 _HEX = re.compile(r"\b(?:0x)?[0-9a-f]{8,}\b", re.IGNORECASE)
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
 
