@@ -74,7 +74,7 @@
   {
     "id": "GHSA-fc5q-39xc-vjpf",
     "package": "picomatch",
-    "reason": "dev-only release tooling (micromatch under @semantic-release/commit-analyzer, tinyglobby under @semantic-release/github and the bundled npm CLI); globs come from our own release config, never from input; every published picomatch (<=4.0.7) is affected as of 2026-11-17 — remove when a patched release lands",
+    "reason": "ReDoS through single-branch repeated extglobs; the advisory range is <=4.0.7 and 4.0.7 is the newest published release, so no patched version exists to move to and an override has nothing to point at. Reached only through release tooling (micromatch under @semantic-release/commit-analyzer; tinyglobby under @semantic-release/github and the npm CLI bundle), which matches globs from this repo's own release config, never untrusted input, and is not product runtime — remove when a patched picomatch is published and the lock can take it",
     "added": "2026-11-17"
   }
 ]
