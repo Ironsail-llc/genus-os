@@ -87,7 +87,14 @@ def _newest_exchange(messages: list[dict]) -> list[dict]:
     return messages[start:]
 
 
-async def _scripted_run(*, iterations: int, result_chars: int, history_pairs: int = 0):
+async def _scripted_run(
+    *,
+    iterations: int,
+    result_chars: int,
+    history_pairs: int = 0,
+    window: int = WINDOW,
+    content_for=None,
+):
     """Run the real budget step before every model call of a one-turn run.
 
     Returns, per iteration, the messages the model would have been sent.
@@ -102,7 +109,7 @@ async def _scripted_run(*, iterations: int, result_chars: int, history_pairs: in
     summariser = _Summariser()
     sent: list[list[dict]] = []
     originals: dict[str, str] = {}
-    limits = SimpleNamespace(max_input_tokens=WINDOW)
+    limits = SimpleNamespace(max_input_tokens=window)
     try:
         with (
             patch("robothor.engine.compaction._acompletion_over_chain", new=summariser),
@@ -121,7 +128,7 @@ async def _scripted_run(*, iterations: int, result_chars: int, history_pairs: in
                 )
                 sent.append([dict(m) for m in session.messages])
                 session.messages.append(_call(iteration))
-                content = _catalog_json(iteration, result_chars)
+                content = (content_for or _catalog_json)(iteration, result_chars)
                 originals[f"call_{iteration}"] = content
                 session.messages.append(
                     {"role": "tool", "tool_call_id": f"call_{iteration}", "content": content}
@@ -364,3 +371,84 @@ class TestTheExactTokenizerPathAgreesToo:
 
         assert lags, "the exact counter was never reached"
         assert max(lags) <= 0.02, f"a loop callback waited {max(lags) * 1000:.0f} ms"
+
+
+FACT = "EARLY_FACT=EXAMPLE-7731"
+
+
+def _file_with_an_early_fact(iteration: int, chars: int) -> str:
+    """A ``read_file`` result; only the first file carries the fact, at its head."""
+    text = (FACT + "\n" if iteration == 0 else "") + _catalog_json(iteration, chars)
+    return json.dumps({"path": f"data/file-{iteration}.txt", "content": text})
+
+
+class TestElisionLosesLittle:
+    """Measured in a lab run on a 128k-window model: the only result holding the
+    fact the final answer needed was compacted away, the summarizer extracted
+    nothing, and the answer missed it. Elision must keep a bounded excerpt, and
+    a context only just over the drain target must not drop whole exchanges."""
+
+    async def test_an_early_fact_survives_a_long_turn_on_a_128k_window(self):
+        run = await _scripted_run(
+            iterations=30,
+            result_chars=40_000,
+            window=128_000,
+            content_for=_file_with_an_early_fact,
+        )
+        assert FACT in json.dumps(run.sent[-1]), "the early fact left the context"
+        for messages in run.sent[1:]:
+            assert estimate_for(messages) <= int(64_000 * BACKOFF_YIELD_RATIO) + estimate_for(
+                _newest_exchange(messages)
+            )
+
+    async def test_the_stub_says_it_was_removed_and_to_call_again_with_the_same_arguments(
+        self,
+    ):
+        run = await _scripted_run(iterations=6, result_chars=44_000)
+        stub = next(
+            m["content"]
+            for m in run.sent[-1]
+            if m.get("role") == "tool" and m["content"] != run.originals[m["tool_call_id"]]
+        )
+        assert "removed to save space" in stub
+        assert "same arguments" in stub
+        assert '{"page": ' in stub, "the arguments to repeat are shown"
+
+    async def test_excerpts_shrink_as_more_results_are_elided(self):
+        run = await _scripted_run(iterations=30, result_chars=44_000)
+        stubs = [
+            m["content"]
+            for m in run.sent[-1]
+            if m.get("role") == "tool" and m["content"] != run.originals[m["tool_call_id"]]
+        ]
+        assert len(stubs) > 10
+        assert all(len(stub) < 2_000 for stub in stubs)
+        assert len(stubs[0]) > len(stubs[-1]), "the excerpt budget does not scale down"
+
+
+class TestElisionStopsUnderTheTarget:
+    async def test_only_as_many_results_as_needed_are_elided_largest_first(self):
+        from robothor.engine.compaction import compact
+
+        messages = _start()
+        sizes = [30_000, 90_000, 30_000, 30_000]
+        for i, chars in enumerate(sizes):
+            messages.append(_call(i))
+            messages.append(
+                {"role": "tool", "tool_call_id": f"call_{i}", "content": _catalog_json(i, chars)}
+            )
+        before = estimate_for(messages)
+        largest = estimate_for([messages[5]])
+        drain_to = before - largest // 2
+        with patch("robothor.engine.compaction._acompletion_over_chain", new=_Summariser()):
+            result = await compact(
+                messages, models=["provider/m"], threshold=before - 1, drain_to=drain_to
+            )
+
+        changed = [
+            m["tool_call_id"]
+            for m, original in zip(result.messages, messages, strict=False)
+            if m.get("role") == "tool" and m["content"] != original["content"]
+        ]
+        assert changed == ["call_1"], f"elided {changed}; one, the largest, was enough"
+        assert result.tokens_after <= drain_to
