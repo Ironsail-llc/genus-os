@@ -356,7 +356,15 @@ async def maybe_compress(
     # Freeze on failure: a summary that could not be written must not be
     # followed by a drain that drops the middle it was meant to replace. The
     # provider ceiling is still enforced by the caller.
-    if not result.degraded:
+    #
+    # Last resort only: draining drops whole exchanges, stubs and all, oldest
+    # first, and the oldest result is often the one the task started from.
+    # Measured in a lab run, a pass that ended a few dozen tokens over the drain
+    # target dropped the only result holding the fact the answer needed. Below
+    # the trigger the context already fits; the next pass elides again.
+    if not result.degraded and (
+        await asyncio.to_thread(estimate_context_tokens, compressed, model or None) >= compress_at
+    ):
         compressed = await asyncio.to_thread(drain_history, compressed, model, target)
     after = await asyncio.to_thread(estimate_context_tokens, compressed, model or None)
     if state is not None:

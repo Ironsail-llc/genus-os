@@ -756,49 +756,121 @@ and unfinished work; drop what the slice supersedes. Return only the updated \
 summary, at most 300 words."""
 
 
-def _elide_large_tool_results(
-    messages: list[dict[str, Any]], protect_tail: int, max_chars: int = TOOL_RESULT_MAX_CHARS
-) -> tuple[list[dict[str, Any]], int]:
-    """Replace old oversized tool results with a one-line summary and a reference.
+#: The marker a stub's excerpt follows. Also how a later pass finds how much
+#: of the excerpt budget earlier stubs already spent.
+STUB_PREFIX = "[tool result elided by compaction"
+EXCERPT_MARKER = "\nExcerpt:\n"
 
-    The reference names the tool, the ``tool_call_id`` and the original size,
-    so the agent can tell what it ran and fetch it again; the pairing with its
-    call is untouched (content only). Deterministic, and a stub is far under
-    ``max_chars``, so an elided result is never rewritten by a later pass: the
-    prompt-cache prefix up to it stays byte-identical between compactions.
-    """
-    names = _call_names(messages)
-    cut = len(messages) - protect_tail
-    out = list(messages)
-    elided = 0
-    for i in range(max(0, cut)):
-        m = messages[i]
-        content = m.get("content")
-        if m.get("role") != "tool" or not isinstance(content, str) or len(content) <= max_chars:
-            continue
-        line = extract_tool_summary(content).replace("\n", " ")[:200]
-        name = names.get(str(m.get("tool_call_id")), "the tool")
-        out[i] = {
-            **m,
-            "content": (
-                f"[tool result elided by compaction: {name}, {len(content):,} chars, "
-                f"ref {m.get('tool_call_id', '?')}. If you need the full result and the "
-                f"call only read data, call {name} again.] {line}"
-            ),
-        }
-        elided += 1
-    return out, elided
+#: Excerpt length bounds for one stub, in characters. The budget for all of a
+#: conversation's excerpts is a twelfth of the drain target; each new stub takes a
+#: quarter of what is left, so the first ones keep the most and the total stays
+#: bounded however many results are elided. The floor keeps every stub useful.
+EXCERPT_MAX_CHARS = 1_000
+EXCERPT_MIN_CHARS = 120
+_EXCERPT_CUT = "\n[... {n:,} characters removed ...]\n"
 
 
-def _call_names(messages: list[dict[str, Any]]) -> dict[str, str]:
-    """``tool_call_id`` -> the tool it called, for every call in *messages*."""
-    names: dict[str, str] = {}
+def _call_details(messages: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
+    """``tool_call_id`` -> (tool name, argument JSON) for every call in *messages*."""
+    details: dict[str, tuple[str, str]] = {}
     for m in messages:
         for call in m.get("tool_calls") or []:
             fn = call.get("function") if isinstance(call, dict) else None
             if isinstance(fn, dict) and call.get("id"):
-                names[str(call["id"])] = str(fn.get("name") or "the tool")
-    return names
+                raw = fn.get("arguments")
+                args = raw if isinstance(raw, str) else json.dumps(raw or {})
+                details[str(call["id"])] = (str(fn.get("name") or "the tool"), args)
+    return details
+
+
+def _excerpt(content: str, chars: int) -> str:
+    """Head and tail of *content* within *chars*: two thirds head, where a
+    result's identifying fields usually are, one third tail."""
+    if len(content) <= chars:
+        return content
+    head = (chars * 2) // 3
+    tail = chars - head
+    return content[:head] + _EXCERPT_CUT.format(n=len(content) - head - tail) + content[-tail:]
+
+
+def _stub(name: str, args: str, call_id: str, content: str, excerpt_chars: int) -> str:
+    """What the model sees in place of a result: that most of it was removed,
+    how to get it back, and a bounded head/tail excerpt. Kept short: a long
+    turn can carry dozens of these."""
+    shown_args = args if len(args) <= 120 else args[:120] + "..."
+    return (
+        f"{STUB_PREFIX}: {name} {shown_args} returned {len(content):,} chars (ref {call_id}); "
+        f"removed to save space. Before relying on a detail not in this excerpt, call "
+        f"{name} again with the same arguments, if it only reads data.]"
+        f"{EXCERPT_MARKER}{_excerpt(content, excerpt_chars)}"
+    )
+
+
+def _excerpt_chars_spent(messages: list[dict[str, Any]]) -> int:
+    spent = 0
+    for m in messages:
+        content = m.get("content")
+        if m.get("role") == "tool" and isinstance(content, str) and content.startswith(STUB_PREFIX):
+            _, _, excerpt = content.partition(EXCERPT_MARKER)
+            spent += len(excerpt)
+    return spent
+
+
+def _elide_large_tool_results(
+    messages: list[dict[str, Any]],
+    protect_tail: int,
+    max_chars: int = TOOL_RESULT_MAX_CHARS,
+    *,
+    over_by: int | None = None,
+    excerpt_budget: int = 6_000,
+    model: str | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Replace old oversized tool results with a stub: what it was, how to get
+    it back, and a bounded head/tail excerpt.
+
+    Largest first, oldest first among equals, and only until the conversation
+    has shed *over_by* tokens (every candidate when it is None). A turn just
+    over its target loses one result, not all of them: measured in a lab run,
+    the result that held the fact the final answer needed went with the rest.
+
+    Content only, so a call stays paired with its result. A stub is shorter
+    than *max_chars* and deterministic, so it is never rewritten by a later
+    pass: the prompt-cache prefix up to it stays byte-identical.
+    """
+    from robothor.engine.context import estimate_context_tokens
+
+    details = _call_details(messages)
+    cut = max(0, len(messages) - protect_tail)
+    candidates = [
+        i
+        for i in range(cut)
+        if messages[i].get("role") == "tool"
+        and isinstance(messages[i].get("content"), str)
+        and len(messages[i]["content"]) > max_chars
+    ]
+    candidates.sort(key=lambda i: (-len(messages[i]["content"]), i))
+    left = max(0, excerpt_budget - _excerpt_chars_spent(messages))
+    out = list(messages)
+    elided = 0
+    shed = 0
+    for i in candidates:
+        if over_by is not None and shed >= over_by:
+            break
+        m = messages[i]
+        content = m["content"]
+        call_id = str(m.get("tool_call_id", "?"))
+        name, args = details.get(call_id, ("the tool", "{}"))
+        chars = max(EXCERPT_MIN_CHARS, min(EXCERPT_MAX_CHARS, left // 4))
+        stub = _stub(name, args, call_id, content, chars)
+        if len(stub) >= max_chars:  # never a candidate again, whatever the arguments
+            stub = stub[: max_chars - 1]
+        left = max(0, left - chars)
+        replaced = {**m, "content": stub}
+        if over_by is not None:
+            shed += estimate_context_tokens([m], model) - estimate_context_tokens([replaced], model)
+        out[i] = replaced
+        elided += 1
+    return out, elided
 
 
 def newest_exchange_start(messages: list[dict[str, Any]]) -> int:
@@ -895,21 +967,41 @@ def _truncate_tool_arguments(
 
 
 def llm_free_pre_pass(
-    messages: list[dict[str, Any]], protect_tail: int
+    messages: list[dict[str, Any]],
+    protect_tail: int,
+    *,
+    target: int | None = None,
+    model: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Reclaim tokens with no model call: the pass that runs first.
 
     Never touches the protected head (the task statement) or the recent tail.
-    Dedupe identical tool results, strip historical media, elide oversized old
-    tool results, truncate oversized argument JSON — in that order, so the
-    dedupe compares the originals.
+    Dedupe identical tool results, strip historical media, truncate oversized
+    argument JSON, then elide oversized old tool results — in that order, so
+    the dedupe compares the originals and elision, the lossy step, comes last.
+    With a *target* (tokens), elision stops as soon as the conversation fits it;
+    without one, every candidate is elided.
     """
+    from robothor.engine.context import estimate_context_tokens
+
     head_len = protected_prefix_len(messages)
     body = messages[head_len:]
     body, deduped = _dedup_tool_results(body, protect_tail)
     body, media = _strip_historical_media(body, protect_tail)
-    body, elided = _elide_large_tool_results(body, protect_tail)
     body, args = _truncate_tool_arguments(body, protect_tail)
+    over_by = None
+    budget = 6_000
+    if target is not None:
+        whole = [*messages[:head_len], *body]
+        over_by = max(0, estimate_context_tokens(whole, model) - target)
+        budget = max(EXCERPT_MIN_CHARS * 4, target // 12)
+    body, elided = (
+        _elide_large_tool_results(
+            body, protect_tail, over_by=over_by, excerpt_budget=budget, model=model
+        )
+        if over_by != 0
+        else (body, 0)
+    )
     counts = {"deduped": deduped, "media": media, "elided": elided, "arguments": args}
     return [*messages[:head_len], *body], counts
 
@@ -1061,6 +1153,39 @@ def _merge_retained_facts(
     return out
 
 
+def _set_aside_stub_exchanges(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(messages to summarize, exchanges kept as they are).
+
+    An exchange whose every result is already an elision stub is kept whole:
+    it is small, it is the run's own evidence, and a summary model that
+    extracts nothing would otherwise take the excerpt with it. Measured in a
+    lab run, that is how the one result holding the fact the answer needed
+    disappeared. Whole exchanges only, so every call keeps its result.
+    """
+    summarize: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    i = 0
+    while i < len(messages):
+        m = messages[i]
+        calls = m.get("tool_calls") if m.get("role") == "assistant" else None
+        if not calls:
+            summarize.append(m)
+            i += 1
+            continue
+        ids = {str(c.get("id")) for c in calls if isinstance(c, dict)}
+        j = i + 1
+        while j < len(messages) and messages[j].get("role") == "tool":
+            j += 1
+        results = messages[i + 1 : j]
+        whole = ids == {str(r.get("tool_call_id")) for r in results}
+        stubs = all(str(r.get("content") or "").startswith(STUB_PREFIX) for r in results)
+        (kept if whole and results and stubs else summarize).extend(messages[i:j])
+        i = j
+    return summarize, kept
+
+
 async def compact(
     messages: list[dict[str, Any]],
     models: list[str] | None = None,
@@ -1099,7 +1224,9 @@ async def compact(
     protect = await asyncio.to_thread(
         protected_tail_len, messages[head_len:], recent_budget, KEEP_RECENT, sizing
     )
-    working, counts = llm_free_pre_pass(messages, protect)
+    working, counts = await asyncio.to_thread(
+        llm_free_pre_pass, messages, protect, target=drain_to, model=sizing
+    )
     est = await measure(working)
     logger.info(
         "Compaction pre-pass: ~%d → ~%d tokens (%s)", tokens_before, est, sanitize_log(counts)
@@ -1134,6 +1261,7 @@ async def compact(
         else 0
     )
     old_messages, recent_messages = rest[:split_idx], rest[split_idx:]
+    old_messages, kept_stubs = _set_aside_stub_exchanges(old_messages)
     if not old_messages:
         return await result(working, 1)
 
@@ -1176,6 +1304,7 @@ async def compact(
             "content": "Understood. I have context from our previous conversation.",
         }
     )
+    result_msgs.extend(kept_stubs)
     result_msgs.extend(recent_messages)
     if await measure(result_msgs) > drain_to:
         result_msgs, _ = await asyncio.to_thread(
