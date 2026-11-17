@@ -56,7 +56,9 @@ from robothor.engine.last_resort import last_resort_attempt
 from robothor.engine.llm_attempts import (
     REASONING_ONLY_NUDGE,
     CompletionShape,
+    begin_call_log,
     describe_completion,
+    end_call_log,
     note_outcome,
 )
 
@@ -1887,6 +1889,11 @@ class LLMClient:
         # Expose the run id to the model breaker so a trip during this call
         # can be recorded as a guardrail event against the run.
         run_token = _current_run_id_var.set(getattr(session.run, "id", None))
+        call_log_token = begin_call_log(
+            agent_id=str(getattr(session.run, "agent_id", "") or ""),
+            run_id=str(getattr(session.run, "id", "") or ""),
+            streamed=bool(on_content or on_stream_event),
+        )
         format_token = _response_format_var.set(
             "json_object"
             if getattr(session, "response_format", "text") == "json_object"
@@ -1931,6 +1938,7 @@ class LLMClient:
                 # steps of the run that ended "All models failed to respond".)
                 return await last_resort_attempt(self, session, models)
         finally:
+            end_call_log(call_log_token)
             _current_run_id_var.reset(run_token)
             _response_format_var.reset(format_token)
 

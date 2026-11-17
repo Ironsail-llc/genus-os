@@ -142,7 +142,9 @@ class TestLLMCallLine:
 
         async def _streaming(self: Any, *a: Any, **k: Any) -> Any:
             response = _response()
-            note_outcome("openrouter/primary", time.monotonic(), shape=describe_completion(response))
+            note_outcome(
+                "openrouter/primary", time.monotonic(), shape=describe_completion(response)
+            )
             return response
 
         async def _on_content(_text: str) -> None:
