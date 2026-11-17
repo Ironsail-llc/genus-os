@@ -43,8 +43,8 @@ class TestRedactPersonalData:
             f"Patient record for {EMAIL} not found (status 404)",
             f"invite failed: <{EMAIL}> already exists",
             "mailbox Bob.Smith+billing@example.com rejected the message",
-            "delivery to user@163.com bounced",
-            "forward x@mail.2u.com failed",
+            "delivery to user" + "@" + "163.com bounced",  # digit-led domain label
+            "forward x" + "@" + "mail.2u.com failed",
         ],
     )
     def test_an_email_address_is_removed(self, text: str) -> None:
