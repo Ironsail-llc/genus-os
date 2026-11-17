@@ -1441,16 +1441,19 @@ class WorkflowEngine:
             result.output_text = result.error_message
             return
 
-        tool_result = await self.runner.registry.execute(
-            step.tool_name,
-            rendered_args,
-            agent_id=f"workflow:{run.workflow_id}",
-            tenant_id=run.tenant_id,
-            workspace=str(self.config.workspace),
-            user_id=run.user_id,
-            user_role=run.user_role,
-            timeout=step.tool_timeout_seconds,
-        )
+        from robothor.engine.tool_call_log import run_id_scope
+
+        with run_id_scope(run.id):  # names the run on the tool_call line only
+            tool_result = await self.runner.registry.execute(
+                step.tool_name,
+                rendered_args,
+                agent_id=f"workflow:{run.workflow_id}",
+                tenant_id=run.tenant_id,
+                workspace=str(self.config.workspace),
+                user_id=run.user_id,
+                user_role=run.user_role,
+                timeout=step.tool_timeout_seconds,
+            )
 
         # ── [GUARDRAILS] Post-execution check (secrets in output, etc.) ──
         post = guardrails.check_post_execution(step.tool_name, tool_result)

@@ -37,9 +37,9 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from robothor.engine.log_fields import kv_line, short_reason
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterator
 
-__all__ = ["OUTCOMES", "classify_result", "log_tool_call", "logged"]
+__all__ = ["OUTCOMES", "classify_result", "log_refused", "log_tool_call", "logged", "run_id_scope"]
 
 _F = TypeVar("_F", bound="Callable[..., Awaitable[Any]]")
 
@@ -49,6 +49,22 @@ line_logger = logging.getLogger("robothor.engine.tool_calls")
 OUTCOMES = frozenset({"ok", "error", "refused", "denied", "timeout", "cancelled"})
 _DENIED_GATES = frozenset({"role", "allowlist"})
 _WORKFLOW_PREFIX = "workflow:"
+
+#: The run a caller that passes no ``run_id`` belongs to (a workflow step).
+_scoped_run_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "robothor_tool_call_run_id", default=""
+)
+
+
+@contextlib.contextmanager
+def run_id_scope(run_id: str) -> Iterator[None]:
+    """Name ``run_id`` on the lines of calls inside that pass none of their own."""
+    token = _scoped_run_id.set(run_id or "")
+    try:
+        yield
+    finally:
+        _scoped_run_id.reset(token)
+
 
 #: Set by a ``tool_call`` wrapper for the one wrapped call it runs.
 _wrapped: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
@@ -111,6 +127,35 @@ def log_tool_call(
             logger.error("tool_call log line failed for %s", tool, exc_info=True)
 
 
+def log_refused(tool_name: str, result: dict[str, Any], *, tool_args: Any, session: Any) -> None:
+    """The line for a call refused before the registry: admission, or a caller's own cap.
+
+    ``result`` is the refusal handed back; one with no ``refused`` key is
+    logged as a refusal all the same. Never raises.
+    """
+    try:
+        from robothor.engine.wrapped_call import inner_call
+
+        tool, _ = inner_call(tool_name, tool_args)
+        shaped = dict(result)
+        shaped.setdefault("refused", True)
+        if not shaped.get("gate") and shaped.get("guard"):
+            shaped["gate"], shaped["gate_name"] = "policy", shaped["guard"]
+        outcome, error_type, reason = classify_result(tool, shaped)
+        run = getattr(session, "run", None)
+        log_tool_call(
+            tool=tool,
+            agent_id=str(getattr(run, "agent_id", "") or ""),
+            run_id=str(getattr(run, "id", "") or ""),
+            outcome=outcome,
+            error_type=error_type,
+            reason=reason,
+        )
+    except Exception:  # noqa: BLE001 — a log line must never fail the call
+        with contextlib.suppress(Exception):
+            logger.error("tool_call log line failed for %s", tool_name, exc_info=True)
+
+
 def logged(execute: _F) -> _F:
     """Wrap ``ToolRegistry.execute`` so every call writes one line."""
     from robothor.engine.wrapped_call import WRAPPER_TOOL, inner_call
@@ -148,7 +193,7 @@ def logged(execute: _F) -> _F:
                 log_tool_call(
                     tool=own["tool"] if own is not None else tool_name,
                     agent_id=str(kwargs.get("agent_id") or ""),
-                    run_id=str(kwargs.get("run_id") or ""),
+                    run_id=str(kwargs.get("run_id") or _scoped_run_id.get()),
                     outcome=outcome,
                     error_type=error_type,
                     reason=reason,

@@ -121,6 +121,15 @@ def collect(*, hours: int, tenant_id: str) -> list[dict[str, Any]]:
                 ("", str(who or "")) if source == "workflow_step" else (str(who or ""), "")
             )
             key = (source, str(tool or ""), agent, workflow, normalize_error(error))
+            if source == "denied":
+                # A denial at dispatch writes an audit row AND a failed tool
+                # event for the same call. Count it once, as a denial.
+                twin = groups.pop(("tool", *key[1:]), None)
+                if twin is not None:
+                    twin["source"] = "denied"
+                    twin["count"] = max(twin["count"], int(count or 0))
+                    groups[key] = twin
+                    continue
             group = groups.setdefault(
                 key,
                 {

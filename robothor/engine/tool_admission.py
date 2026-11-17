@@ -356,19 +356,11 @@ class ToolAdmissionMixin:
 
 def _log_refusal(verdict: ToolVerdict, tool_name: str, *, tool_args: Any, session: Any) -> None:
     """The ``event=tool_call`` line for a call refused before the registry."""
-    from robothor.engine.tool_call_log import classify_result, log_tool_call
+    from robothor.engine.tool_call_log import log_refused
 
-    tool, _ = inner_call(tool_name, tool_args)
-    result = {"error": verdict.message, **verdict.output}
-    if not result.get("refused"):
-        result["refused"] = True
-    outcome, error_type, reason = classify_result(tool, result)
-    run = getattr(session, "run", None)
-    log_tool_call(
-        tool=tool,
-        agent_id=str(getattr(run, "agent_id", "") or ""),
-        run_id=str(getattr(run, "id", "") or ""),
-        outcome=outcome,
-        error_type=error_type,
-        reason=reason,
+    log_refused(
+        tool_name,
+        {"error": verdict.message, **verdict.output},
+        tool_args=tool_args,
+        session=session,
     )

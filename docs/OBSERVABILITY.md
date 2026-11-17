@@ -90,7 +90,9 @@ event=run_end agent=example-agent run_id=9b1c… trigger=telegram outcome=comple
 redirection such as the repeat guard. A tool that failed, or another system
 that refused the call, is `error`. A `tool_call` wrapper is logged once, under
 the tool it wraps. A call refused at admission, before it reaches the registry,
-is logged too.
+is logged too, from a model turn or from an `execute_code` snippet (whose own
+call and approval caps log as `refused`). A workflow tool step's line names the
+workflow run in `run_id`.
 
 ### Failures over a window
 
@@ -102,7 +104,8 @@ genus engine failures --hours 6 --json
 Groups failed tool calls (`agent_tool_events`), denied calls (`audit_log`) and
 failed workflow steps (`workflow_run_steps`) by source, tool, agent or workflow
 and normalized error (ids and numbers collapsed, redacted), largest first, with
-each tool's call count over the same window.
+each tool's call count over the same window. A denial recorded in both
+`audit_log` and `agent_tool_events` is counted once, as `denied`.
 
 ## Failure-mode detectors
 
