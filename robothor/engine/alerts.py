@@ -436,7 +436,7 @@ async def _send_telegram(level: str, title: str, body: str) -> bool:
 
         send_fn = get_telegram_sender()
         if send_fn is None:
-            logger.warning("Telegram sender not initialized, can't deliver alert")
+            logger.info("Telegram sender not initialized; trying the alert fallbacks")
         else:
             # send_fn is TelegramBot.send_message(self, chat_id, text, **_ignored) —
             # alerts.py has no chat-id source of its own, so pull it from

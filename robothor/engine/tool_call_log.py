@@ -94,6 +94,11 @@ def classify_result(tool_name: str, result: Any) -> tuple[str, str, str]:
         outcome = "denied" if gate in _DENIED_GATES else "refused"
         return outcome, error_type, message or str(result.get("reason") or "")
     if not message:
+        status = result.get("status_code", result.get("status"))
+        if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
+            # A generic API tool hands back an HTTP failure as a result. Only
+            # the code is logged, never the body.
+            return "error", f"http_{status}", f"HTTP {status}"
         return "ok", "", ""
     if message.startswith(f"Tool '{tool_name}' timed out after"):
         return "timeout", "timeout", message
