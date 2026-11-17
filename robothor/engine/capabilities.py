@@ -329,7 +329,7 @@ def render(capabilities: list[Capability], facts: Facts) -> str:
         "Never say you cannot do something listed as available: do it. When a tool is "
         "refused by one of the gates above, its result names the gate and the unlock; "
         "tell the person both and offer the next step. A refusal that names no gate: "
-        "relay its own words (rule 21). All are final for this run.",
+        "relay its own words. Rule 21 says when a refusal is final.",
     ]
     return "\n".join(lines)
 

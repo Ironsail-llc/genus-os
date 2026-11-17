@@ -1720,18 +1720,19 @@ exec, `send_file` to another chat, and every GitHub tool without
 | `gate_name` | the control: `plan_mode`, `tools_allowed`, `rbac`, `owner_role`, `GITHUB_TOKEN`, a guardrail's name |
 | `unlock` | what a person changes for the same call to succeed |
 
-Behavioural rule 21 ships with them: **Relay a refusal as stated; it is
-final** — when a tool result has `refused: true` and a `gate`, the agent tells
-the person which gate refused it (`gate_name`) and what unlocks it (`unlock`).
-A `refused: true` without a `gate` is a redirection, not a block: change the
-call as its `reason` says. When a tool fails or another system refuses the call
+Behavioural rule 21 ships with them: **Relay a refusal as stated** — when a
+tool result has `refused: true` and a `gate`, the agent tells the person which
+gate refused it (`gate_name`) and what unlocks it (`unlock`); when the unlock is
+a call the agent can make now (a deferred tool's "call it through `tool_call`",
+say), it makes that call. A `refused: true` without a `gate` is a redirection,
+not a block: change the call as its `reason` says. When a tool fails or another system refuses the call
 and the result names no gate or unlock, the agent reports what the result
 itself says, says that it does not state the cause, and says that the
 administrator of that system can check. It never attributes a refusal to a
 switch, mode, setting or gate the refusal does not name, even one it saw in
 other tool output.
 
-A refusal is final for that action for the rest of the run. The agent stops and
+Any other refusal is final for that action for the rest of the run. The agent stops and
 offers who can grant it. It never seeks the same effect through another tool,
 shell or code execution, another credential or connection, or by reading
 source, configuration or the environment to find a way round. A message to an
@@ -1740,7 +1741,7 @@ you cannot do something no tool refused: if a tool you have can do it, do it.
 
 The "What you can do here" block says the same: a refusal by one of the gates
 it lists names the gate and the unlock; a refusal that names no gate is
-relayed in its own words; every refusal is final for the run.
+relayed in its own words; rule 21 says when a refusal is final.
 
 A direct call to a tool the agent is granted but that a deferred turn left out
 of its schemas is refused with gate `policy`, name `deferred`, and the unlock

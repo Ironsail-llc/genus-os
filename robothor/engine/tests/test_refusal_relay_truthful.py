@@ -82,7 +82,20 @@ class TestARefusalIsFinal:
     another component's connection with different credentials."""
 
     def test_the_rule_says_a_refusal_is_final_for_the_run(self) -> None:
-        assert "A refusal is final for that action in this run" in _rule21()
+        assert "a refusal is final for that action in this run" in _rule21()
+
+    def test_an_unlock_the_model_can_act_on_is_followed(self) -> None:
+        """A deferred tool's refusal says to call it through tool_call: that
+        is the unlock, a call the model makes now, not a way round."""
+        rule = _rule21()
+        assert "if the unlock is a call you can make now, make it" in rule
+        assert rule.index("make it.") < rule.index("Otherwise a refusal is final")
+
+    def test_a_redirection_is_not_final(self) -> None:
+        rule = _rule21()
+        assert rule.index("change the call as its `reason` says") < rule.index(
+            "Otherwise a refusal is final"
+        )
 
     def test_the_rule_names_every_way_round(self) -> None:
         rule = _rule21()
@@ -97,8 +110,8 @@ class TestARefusalIsFinal:
     def test_the_rule_offers_the_legitimate_next_step(self) -> None:
         assert "who can grant it" in _rule21()
 
-    def test_the_block_says_a_refusal_is_final(self) -> None:
-        assert "final for this run" in _block()
+    def test_the_block_points_to_rule_21_for_finality(self) -> None:
+        assert "Rule 21 says when a refusal is final" in _block()
 
 
 class TestCapabilityBlock:
@@ -112,7 +125,7 @@ class TestCapabilityBlock:
         block = _block()
         assert "names no gate" in block
         assert "relay its own words" in block
-        assert "rule 21" in block
+        assert "Rule 21" in block
 
     def test_the_block_no_longer_promises_every_refusal_names_its_gate(self) -> None:
         assert "When a tool is refused, its result names the gate" not in _block()
