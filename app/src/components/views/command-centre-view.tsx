@@ -113,7 +113,7 @@ function Metric({ testId, label, value, hint }: { testId: string; label: string;
       <div className="text-[10.5px] uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="font-mono text-sm text-foreground">
         {value}
-        {hint && <span className="ml-1.5 text-[11px] text-muted-foreground">{hint}</span>}
+        {hint && <span className="block text-[11px] text-muted-foreground">{hint}</span>}
       </div>
     </div>
   );
@@ -135,20 +135,20 @@ function CompanyFigures({ entry }: { entry: CompanyEntry }) {
   const tasks = entry.tasks ?? { open: 0, overdue: 0, oldest_overdue: [] };
   return (
     <>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Metric testId="runs-24h" label="Runs 24 h" value={String(entry.runs_24h ?? 0)} />
-        <Metric testId="failures-24h" label="Failures 24 h" value={String(entry.failures_24h ?? 0)} />
-        <Metric testId="success-7d" label="Success 7 d" value={formatRate(entry.success_rate_7d)} />
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2 2xl:grid-cols-4">
+        <Metric testId="runs-24h" label="Runs 24h" value={String(entry.runs_24h ?? 0)} />
+        <Metric testId="failures-24h" label="Failures 24h" value={String(entry.failures_24h ?? 0)} />
+        <Metric testId="success-7d" label="Success 7d" value={formatRate(entry.success_rate_7d)} />
         <Metric
           testId="cost"
-          label="Cost 7 d"
+          label="Cost 7d"
           value={formatCost(entry.cost_usd_7d)}
-          hint={`${formatCost(entry.cost_usd_24h)} 24 h`}
+          hint={`${formatCost(entry.cost_usd_24h)} in 24h`}
         />
       </div>
 
       {failures.length > 0 && (
-        <Section testId="top-failures" title="Failing agents (24 h)">
+        <Section testId="top-failures" title="Failing agents (24h)">
           {failures.map((f) => (
             <li key={`${f.agent_id}-${f.error_type}`} className="flex flex-wrap gap-x-1.5">
               <span className="font-mono">{f.agent_id}</span>
@@ -361,7 +361,7 @@ export function CommandCentreView({
       )}
 
       {data && !error && data.has_children && (
-        <div className="grid gap-3 lg:grid-cols-2">
+        <div className="grid items-start gap-3 lg:grid-cols-2">
           {companies.map((entry) => (
             <CompanyCard
               key={entry.tenant_id}
