@@ -1337,8 +1337,10 @@ company with its status in words (OK, Needs attention, No activity, Could not
 read), runs and failures in 24 hours, the 7-day success rate, cost, failing
 agents with the classified reason, agents failing in a row, overdue schedules,
 open and overdue tasks with the oldest overdue ones and their age in days, and
-the last activity, all as of one time shown in the header. Companies needing
-attention come first. While acting in a child the entry is hidden and the page
+the last activity, all as of one time shown in the header. The page reads the
+figures when it is opened and when **Refresh** beside that time is clicked,
+never on its own, because each read leaves an audit row in every child.
+Companies needing attention come first. While acting in a child the entry is hidden and the page
 is refused; switch back first. Clicking a card switches into that company when
 `GENUS_TENANT_SWITCH_MODE=enforce`, and is not a link otherwise. Who sees what
 is in [Tenant hierarchy](runbooks/TENANT_HIERARCHY.md#the-command-centre); the

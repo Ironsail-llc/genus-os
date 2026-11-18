@@ -598,8 +598,11 @@ instead of showing zeros.
 
 Clicking a card switches into that company through the usual tenant switch, so
 it works only while `GENUS_TENANT_SWITCH_MODE=enforce`; otherwise the cards
-are not links. Each load writes one `org.overview` row to `audit_log` for every
-child read, filed under that child, so the child's admins can see who looked.
+are not links. The page reads the overview when it is opened and when
+**Refresh** in its header is clicked, never on its own (not on returning to
+the tab, nor on a timer); the as-of time says how old the figures are. Each
+read writes one `org.overview` row to `audit_log` for every child read, filed
+under that child, so the child's admins can see who looked.
 The endpoint is `GET /api/org/overview`
 ([configuration](../configuration.md#the-command-centre-over-the-api)).
 

@@ -982,7 +982,8 @@ acting in another tenant gets a `403`.
 | `tenants` | One entry per tenant, in the shape the `org_overview` tool returns ([Tools](TOOLS.md#child-tenants-org_overview-the-tenant-argument-and-dry_run)), including `status: "error"` with an `error` for a tenant that could not be read. |
 
 Every descendant read writes an `org.overview` audit row filed under that
-descendant. The Helm's page over this route is described in
+descendant, so each call leaves one row per child. The dashboard calls it only
+when its page is opened or refreshed. The Helm's page over this route is described in
 [Tenant hierarchy](runbooks/TENANT_HIERARCHY.md#the-command-centre).
 
 ### The forwarded client address needs two allowlists to agree
