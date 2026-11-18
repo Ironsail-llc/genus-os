@@ -1844,6 +1844,9 @@ pointer to `view_image`; any other binary file returns its size and guessed MIME
 type instead of a decode error. Telegram attachments in these formats are
 extracted into the agent's first turn by the same code
 (`robothor/engine/file_extract.py`). Secret-path refusals run first, unchanged.
+A directory is not an error: `read_file` returns its entries (as
+`list_directory` does, unfiltered) with `"is_directory": true` and a note to
+read one of them.
 
 ---
 
