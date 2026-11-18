@@ -107,7 +107,9 @@ async def _record_all(calls: list[_Call]) -> tuple[_Session, Any]:
 
 
 def _breaker_notes(session: _Session) -> list[str]:
-    return [m["content"] for m in session.messages if "Do NOT call it again" in m["content"]]
+    # Queued until the batch's results are in (post_execution.drain_engine_notes).
+    queued = getattr(session, "_pending_engine_notices", [])
+    return [text for text in queued if "Do NOT call it again" in text]
 
 
 async def test_three_different_wrapped_failures_do_not_trip_the_breaker(

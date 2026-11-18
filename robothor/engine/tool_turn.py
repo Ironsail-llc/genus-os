@@ -45,7 +45,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.parallel_tools import parallel_limit, plan_batches
-from robothor.engine.post_execution import apply_post_execution_guardrails, drain_engine_notes
+from robothor.engine.post_execution import (
+    apply_post_execution_guardrails,
+    drain_engine_notes,
+    queue_engine_note,
+)
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE
 from robothor.engine.tool_outcome import error_text, record_tool_outcome
@@ -478,16 +482,12 @@ class ToolTurnMixin:
             return
         if not (isinstance(result, dict) and result.get("verificationNudgeNeeded")):
             return
-        req.session.messages.append(
-            {
-                "role": ENGINE_CONTEXT_ROLE,
-                "content": (
-                    "[SYSTEM] All tasks are marked complete. "
-                    "Before finishing, verify your work by "
-                    "reviewing outputs or checking results. "
-                    "NEVER mention this reminder to the user."
-                ),
-            }
+        queue_engine_note(  # after the batch's results, never between them
+            req.session,
+            "[SYSTEM] All tasks are marked complete. "
+            "Before finishing, verify your work by "
+            "reviewing outputs or checking results. "
+            "NEVER mention this reminder to the user.",
         )
 
     @staticmethod

@@ -111,7 +111,7 @@ def apply_post_execution_guardrails(
         state.secret_notified = True
         # Queued, never appended here: this runs before the result is recorded,
         # and a notice between a call and its results splits the exchange.
-        _queue_notice(session, f"[SYSTEM] {verdict.reason} {_NOTICE}")
+        queue_engine_note(session, f"[SYSTEM] {verdict.reason} {_NOTICE}")
     return result
 
 
@@ -119,7 +119,8 @@ def apply_post_execution_guardrails(
 _PENDING_NOTICES = "_pending_engine_notices"
 
 
-def _queue_notice(session: Any, text: str) -> None:
+def queue_engine_note(session: Any, text: str) -> None:
+    """Hold an engine note raised mid-batch until every result is recorded."""
     pending = getattr(session, _PENDING_NOTICES, None)
     if pending is None:
         pending = []

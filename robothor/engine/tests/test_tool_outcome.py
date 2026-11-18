@@ -23,6 +23,15 @@ from unittest.mock import patch
 from robothor.engine.tool_outcome import record_tool_outcome
 
 
+def _queued(session):
+    """Engine notes waiting for the end of the batch, as the model will see them.
+
+    The breaker's note is queued, not appended: it is raised per call, and a
+    note between two results of one assistant message splits the exchange.
+    """
+    return [{"content": t} for t in getattr(session, "_pending_engine_notices", [])]
+
+
 def _session():
     return SimpleNamespace(
         run=SimpleNamespace(id="run-1"),
@@ -207,7 +216,7 @@ def test_two_failures_do_not_trip_it():
         for _ in range(2):
             _record(session, error_msg="boom", failures=failures)
 
-    assert session.messages == []
+    assert _queued(session) == []
 
 
 def test_the_third_failure_tells_the_agent_to_stop_calling_it():
@@ -221,8 +230,8 @@ def test_the_third_failure_tells_the_agent_to_stop_calling_it():
         for _ in range(3):
             _record(session, error_msg="boom", failures=failures)
 
-    assert len(session.messages) == 1
-    content = session.messages[0]["content"]
+    assert len(_queued(session)) == 1
+    content = _queued(session)[0]["content"]
     assert "exec" in content and "Do NOT call it again" in content
 
 
@@ -238,7 +247,7 @@ def test_the_nudge_repeats_while_the_agent_keeps_calling_the_broken_tool():
         for _ in range(5):
             _record(session, error_msg="boom", failures=failures)
 
-    assert len(session.messages) == 3, "failures 3, 4 and 5 each earn a nudge"
+    assert len(_queued(session)) == 3, "failures 3, 4 and 5 each earn a nudge"
 
 
 def test_the_breaker_is_scoped_to_one_tool():
@@ -254,7 +263,7 @@ def test_the_breaker_is_scoped_to_one_tool():
         _record(session, tool_name="read_file", error_msg="boom", failures=failures)
 
     assert failures == {"exec": 3, "read_file": 1}
-    assert len(session.messages) == 1
+    assert len(_queued(session)) == 1
 
 
 def test_a_success_does_not_count_against_the_breaker():
@@ -294,7 +303,7 @@ def test_wrapped_failures_of_different_tools_do_not_share_a_breaker():
             )
 
     assert failures == {"gws_gmail_get": 1, "jira_get_issue": 1, "list_tasks": 1}
-    assert session.messages == []
+    assert _queued(session) == []
 
 
 def test_the_breaker_names_the_wrapped_tool_not_the_wrapper():
@@ -314,7 +323,7 @@ def test_the_breaker_names_the_wrapped_tool_not_the_wrapper():
             )
 
     assert failures == {"jira_get_issue": 3}
-    content = session.messages[0]["content"]
+    content = _queued(session)[0]["content"]
     assert "'jira_get_issue'" in content
     assert "'tool_call'" not in content
 

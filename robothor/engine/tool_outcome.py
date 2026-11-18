@@ -23,7 +23,6 @@ import logging
 from typing import Any
 
 from robothor.constants import SANDBOX_DENIAL_PREFIX, SANDBOX_DENIED_ERROR_TYPE
-from robothor.engine.session import ENGINE_CONTEXT_ROLE
 
 logger = logging.getLogger(__name__)
 
@@ -164,14 +163,14 @@ def _count_failure(
     # the tool again after being told not to is exactly the agent that needs
     # telling again. Changing it here would be a behaviour change smuggled
     # into a refactor.
-    session.messages.append(
-        {
-            "role": ENGINE_CONTEXT_ROLE,
-            "content": (
-                f"[SYSTEM] Tool '{tool_name}' has failed "
-                f"{failures[tool_name]} times this run. "
-                "Do NOT call it again. Find an alternative "
-                "approach or skip this step and move on."
-            ),
-        }
+    # Queued, not appended: this runs per call, and a note between two results
+    # of one assistant message splits the exchange.
+    from robothor.engine.post_execution import queue_engine_note
+
+    queue_engine_note(
+        session,
+        f"[SYSTEM] Tool '{tool_name}' has failed "
+        f"{failures[tool_name]} times this run. "
+        "Do NOT call it again. Find an alternative "
+        "approach or skip this step and move on.",
     )
