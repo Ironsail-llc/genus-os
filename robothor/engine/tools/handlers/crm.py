@@ -1333,7 +1333,7 @@ async def _list_affiliations(args: dict[str, Any], ctx: ToolContext) -> dict[str
     if scope is not None:
         # A restricted caller pages through its own person's rows only, so the
         # total it is told counts nobody else.
-        if person_id is not None and person_id != scope.person_id:
+        if scope.person_id is None or (person_id is not None and person_id != scope.person_id):
             empty: dict[str, Any] = {"affiliations": [], "count": 0, "total": 0}
             return {**empty, "offset": offset, "limit": limit, "hasMore": False}
         person_id = scope.person_id
@@ -1434,9 +1434,16 @@ async def _get_contact_360(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
         if view is None:
             return {"error": f"company not found: {company_id}"}
         # The company is unscoped; the people attached to it are not.
+        rows = view.get("affiliations") or []
         view["affiliations"] = _scope_people_rows(
-            view.get("affiliations") or [], ctx, tool_name="get_contact_360", id_key="personId"
+            rows, ctx, tool_name="get_contact_360", id_key="personId"
         )
+        from robothor.engine.feature_flags import data_scoping_mode
+        from robothor.identity.scope import scope_for_query
+
+        if scope_for_query(data_scoping_mode(), ctx.identity) is not None:
+            # Scoped: the total counts only the rows this caller may see.
+            view["affiliationsTotal"] = len(view["affiliations"])
         return view
     if not person_id:
         identifier = (args.get("identifier") or "").strip()
