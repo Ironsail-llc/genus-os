@@ -1329,6 +1329,22 @@ the `GENUS_` name wins when both are set. The root tenant
 `ROBOTHOR_ENGINE_URL`, and a malformed override or template fails the request
 instead of falling back to the root engine.
 
+### The command centre
+
+An owner or admin of a tenant with child tenants, signed in to that tenant, gets
+**Command centre** at the top of the Workspace group (`?v=org`): one card per
+company with its status in words (OK, Needs attention, No activity, Could not
+read), runs and failures in 24 hours, the 7-day success rate, cost, failing
+agents with the classified reason, agents failing in a row, overdue schedules,
+open and overdue tasks with the oldest overdue ones and their age in days, and
+the last activity, all as of one time shown in the header. Companies needing
+attention come first. While acting in a child the entry is hidden and the page
+is refused; switch back first. Clicking a card switches into that company when
+`GENUS_TENANT_SWITCH_MODE=enforce`, and is not a link otherwise. Who sees what
+is in [Tenant hierarchy](runbooks/TENANT_HIERARCHY.md#the-command-centre); the
+route is in
+[configuration](configuration.md#the-command-centre-over-the-api).
+
 ## Health Endpoints
 
 | Service | Endpoint | Expected |

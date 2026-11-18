@@ -966,6 +966,25 @@ enforcing — see [Tenant isolation](runbooks/TENANT_RLS.md#tenant-switching).
 | `GET /api/tenants/accessible` | Any signed-in human: `[{id, display_name, parent_tenant_id, is_home}]`, home first. Owners and admins also get their home's descendants; every other role gets only its home. |
 | `POST /api/auth/switch-tenant` | `{"tenant": "<id>"}` → `{access_token, refresh_token: null, user}`, the access token acting in that tenant (`tid`, `home_tid`, `act`). Naming the home tenant switches back. The refresh token is unchanged and keeps the home tenant. |
 
+### The command centre over the API
+
+`GET /api/org/overview` answers a human `owner` or `admin` signed in to their
+own tenant (not acting in another) with how their tenant and each of its
+descendants is doing. A member or other role, a service token, or a person
+acting in another tenant gets a `403`.
+
+| Field | Meaning |
+|-------|---------|
+| `as_of` | When the figures were read, for the whole reply. |
+| `home_tenant_id` | The caller's tenant, whose entry is in `tenants`. |
+| `has_children` | `false` when the tenant has no descendants; `tenants` then holds only its own entry. |
+| `switching_enabled` | Whether `GENUS_TENANT_SWITCH_MODE` is `enforce`, so a switch into a listed tenant can succeed. |
+| `tenants` | One entry per tenant, in the shape the `org_overview` tool returns ([Tools](TOOLS.md#child-tenants-org_overview-the-tenant-argument-and-dry_run)), including `status: "error"` with an `error` for a tenant that could not be read. |
+
+Every descendant read writes an `org.overview` audit row filed under that
+descendant. The Helm's page over this route is described in
+[Tenant hierarchy](runbooks/TENANT_HIERARCHY.md#the-command-centre).
+
 ### The forwarded client address needs two allowlists to agree
 
 The dashboard reads `X-Forwarded-For`, walks it from the **right**, and forwards
