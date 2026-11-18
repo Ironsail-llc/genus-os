@@ -181,3 +181,29 @@ describe("settingsPages", () => {
     }
   });
 });
+
+describe("command centre", () => {
+  const items = (role: string | undefined, hasChildTenants?: boolean) =>
+    visibleNavGroups(role, { hasChildTenants }).flatMap((g) => g.items.map((i) => i.id));
+
+  it("is a view with a title", () => {
+    expect(ALL_VIEW_IDS).toContain("org");
+    expect(viewTitles.org).toBe("Command centre");
+  });
+
+  it("is shown to an owner or admin whose account has child tenants", () => {
+    expect(items("owner", true)).toContain("org");
+    expect(items("admin", true)).toContain("org");
+  });
+
+  it("is hidden from an operator whose account has no child tenants", () => {
+    expect(items("owner", false)).not.toContain("org");
+    expect(items("owner")).not.toContain("org");
+  });
+
+  it("is hidden from a role that is not an operator, even with child tenants", () => {
+    expect(items("member", true)).not.toContain("org");
+    expect(items("auditor", true)).not.toContain("org");
+    expect(items(undefined, true)).not.toContain("org");
+  });
+});

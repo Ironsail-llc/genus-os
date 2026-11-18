@@ -271,6 +271,64 @@ describe("AppShell — URL-synced views", () => {
     expect(await screen.findByTestId("audit-not-yours", {}, CHUNK_WAIT)).toBeInTheDocument();
   });
 
+  describe("command centre", () => {
+    const ACCESSIBLE = [
+      { id: "acme-parent", display_name: "Acme Holdings", parent_tenant_id: null, is_home: true },
+      { id: "acme-child-a", display_name: "Acme Child A", parent_tenant_id: "acme-parent", is_home: false },
+    ];
+
+    function routedFetch(accessible: unknown) {
+      global.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : String(input);
+        const body = url.includes("/api/tenants/accessible")
+          ? accessible
+          : url.includes("/api/org/overview")
+            ? { as_of: "2026-11-18T12:00:00+00:00", has_children: true, switching_enabled: false, tenants: [] }
+            : { messages: [], active: false };
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(body),
+          text: () => Promise.resolve(JSON.stringify(body)),
+        });
+      }) as unknown as typeof fetch;
+    }
+
+    function accessibleCalls() {
+      return (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([input]) =>
+        String(input).includes("/api/tenants/accessible"),
+      );
+    }
+
+    it("is in the nav for an owner whose account has child tenants, and opens at ?v=org", async () => {
+      routedFetch(ACCESSIBLE);
+      await renderShell();
+
+      fireEvent.click(await screen.findByTestId("nav-org"));
+
+      expect(window.location.search).toBe("?v=org");
+      expect(screen.getByTestId("header-title").textContent).toBe("Command centre");
+      expect(await screen.findByTestId("command-centre-view", {}, CHUNK_WAIT)).toBeInTheDocument();
+    });
+
+    it("is not in the nav for an owner with no child tenants", async () => {
+      routedFetch([ACCESSIBLE[0]]);
+      await renderShell();
+
+      await waitFor(() => expect(accessibleCalls().length).toBeGreaterThan(0));
+      expect(screen.queryByTestId("nav-org")).toBeNull();
+    });
+
+    it("asks for the accessible tenants once, for the nav and the tenant picker together", async () => {
+      routedFetch(ACCESSIBLE);
+      await renderShell();
+
+      await screen.findByTestId("nav-org");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(accessibleCalls()).toHaveLength(1);
+    });
+  });
+
   it("badges the sidebar Inbox from the same poll the view reads", async () => {
     // One hook in the shell feeds both, so a single GET has to serve them.
     const pending = {
