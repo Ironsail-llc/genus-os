@@ -525,6 +525,43 @@ the allowlisted reads in every child, and of the writes only create a task or
 send a notification. Revoke by setting either back to false; the next run picks
 it up.
 
+### The organisation watch
+
+The parent's `main` agent can brief the owner when something changes in one of
+the companies, instead of waiting to be asked. Its heartbeat calls
+[`org_watch`](../TOOLS.md#child-tenants-org_overview-the-tenant-argument-and-dry_run),
+which compares every reachable company with what it saw last time and returns a
+plain-language briefing of what changed: an agent that started failing or keeps
+failing, a schedule that is late, a newly overdue task, a company that went
+quiet or could not be read, and each of those clearing. A problem is told once,
+not on every beat. Once a day, `daily: true` adds every company's state.
+
+The template's `main` ships without a heartbeat, so nothing runs until you add
+one. In the parent instance's own `main` manifest (instance data, not in this
+repository):
+
+```yaml
+heartbeat:
+  cron: "0 * * * *"           # hourly; the daily summary rides the 08:00 beat
+  delivery:
+    mode: announce
+    channel: telegram          # the owner's channel
+v2:
+  child_tenant_access: true   # with crm_tenants.child_data_access, as above
+```
+
+The heartbeat follows the "Organisation watch" section of `main`'s starter
+instructions (`templates/agents/core/main/instructions.template.md`): call
+`org_watch`, add `daily: true` on the beat that runs in the 08:00 hour, and send the
+briefing only when it is not empty. On a quiet beat the agent answers "nothing
+to report", which delivery suppresses.
+
+Without both grants the watch covers the parent only and says so (`limited`).
+The first watch reports every problem present at that moment, so problems that
+existed before it was switched on are not hidden; after that only changes are
+reported. What it saw is kept in the parent tenant's `org_watch_snapshot`
+memory block; deleting that block makes the next watch a first watch again.
+
 ## Verification queries
 
 Run these as the non-superuser application role (see

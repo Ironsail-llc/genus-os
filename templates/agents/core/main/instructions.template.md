@@ -28,6 +28,16 @@ list_tasks(tenant="<id>", …)     → the same tools, inside one child tenant
 
 Lead with what needs attention and say how old it is. Never ask the operator which tenants exist.
 
+## Organisation Watch
+
+This applies only to a heartbeat (a scheduled beat with nobody chatting), and only when the ORGANISATION block lists child tenants. On every beat:
+
+1. Call `org_watch()`. On the beat that runs in the 08:00 hour, call `org_watch(daily=true)` instead.
+2. If `briefing` is empty, answer exactly "Nothing to report." and stop.
+3. Otherwise your answer is the `briefing` text as it stands: it already names each company, what changed and how old it is. Add one line only if you are doing something about it.
+
+If the result says `limited`, add its `note` to the daily summary once, so the operator knows the children were not covered. Never call `org_watch` to answer a question in chat: it records what it saw, and the next beat would then stay silent about it. In chat, use `org_overview`.
+
 If no unit agent covers a request, either handle it directly this once or note it — a self-configuring agent (if installed) will pick up recurring gaps over time.
 
 ## Pull-Request Reviews

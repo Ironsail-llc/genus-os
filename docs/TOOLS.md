@@ -1709,11 +1709,37 @@ Every call that names another tenant, allowed or refused, dry run or not,
 writes an `agent.cross_tenant_call` audit row naming the home tenant, the
 target tenant, the user, the tool and the outcome.
 
+**`org_watch`** reports what changed across the same tenants since its last
+call. It takes `daily` (default false) and `preview` (default false) and
+returns `changes`, `briefing`, `as_of`, `tenants_seen`, `stored` and
+`limited`. A change is an agent that started failing (with the most frequent
+failure class), an agent with new consecutive errors, a schedule that became
+overdue, a newly overdue task (with its age), more overdue tasks than the five
+listed, a tenant that went quiet or could not be read, a status moving between
+`ok` and `attention`, and each problem clearing. A problem already seen is not
+reported again; a tenant that could not be read keeps the problems it had
+rather than being reported as recovered. `briefing` is plain text, one
+paragraph per company that changed, naming it by display name, and is empty
+when nothing changed. `daily: true` puts every company's current state first,
+problems and persisting problems before healthy companies, with the as-of
+time. The first call (or one after the snapshot was deleted) reports every
+problem present. `limited` is true when the run reaches only its own tenant,
+and a `note` says the parent has not granted child access.
+
+`org_watch` stores what it saw in the run's own tenant's
+`org_watch_snapshot` memory block, unless `preview: true`, so it is not
+read-only: plan mode does not offer it, and a benchmark run never gets it. It
+never sends anything; the agent that called it delivers the briefing. Each
+child it reads leaves an audit row, as for `org_overview`.
+
 **Which to use.** Ask `org_overview` first for "how are the companies doing?":
 one call covers every company and shows which one needs attention. Then drill
 into that company by calling the ordinary tool with `tenant`, for example
-`list_tasks` with `tenant` and `overdue: true`. Use `dry_run` before any write
-in another tenant, and show the operator what it would change.
+`list_tasks` with `tenant` and `overdue: true`. Use `org_watch` only on a
+heartbeat or schedule, to brief the owner when something changed: called from
+chat, it would record what it showed and the next beat would stay silent about
+it (use `preview: true` to look without recording). Use `dry_run` before any
+write in another tenant, and show the operator what it would change.
 
 ### Credentials: `vault_get`, `vault_set`, `vault_test`, `vault_list`, `vault_delete`
 

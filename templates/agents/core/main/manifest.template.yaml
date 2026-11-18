@@ -62,3 +62,18 @@ warmup:
 v2:
   can_spawn_agents: true
   error_feedback: true
+
+# Organisation watch (a parent tenant with child tenants). Deliberately NOT
+# enabled here: a heartbeat would start scheduled runs on every instance. To
+# have main brief the owner when a company's state changes (instructions:
+# "Organisation Watch"), add a heartbeat and the child grant to the instance
+# manifest, and set crm_tenants.child_data_access for the parent tenant
+# (docs/runbooks/TENANT_HIERARCHY.md, "The organisation watch"):
+#
+# heartbeat:
+#   cron: "0 * * * *"          # hourly; the 08:00 beat adds the daily summary
+#   delivery:
+#     mode: announce
+#     channel: telegram         # the owner's channel
+# v2:
+#   child_tenant_access: true   # merge into the v2 block above
