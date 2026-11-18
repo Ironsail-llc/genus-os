@@ -23,7 +23,12 @@ def _user(login: str) -> dict[str, str]:
 
 def _thread(last_login: str) -> list[dict]:
     return [
-        {"id": 77, "user": _user(US), "body": "missing retry", "created_at": "2026-10-01T00:00:00Z"},
+        {
+            "id": 77,
+            "user": _user(US),
+            "body": "missing retry",
+            "created_at": "2026-10-01T00:00:00Z",
+        },
         {
             "id": 78,
             "in_reply_to_id": 77,

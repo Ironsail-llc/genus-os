@@ -54,6 +54,8 @@ class ReviewerConfig:
     repos: tuple[str, ...] = ()
     watch_repos: bool = False
     bot_login: str = ""
+    #: Other automated reviewers on the same pull requests, lowercased.
+    peer_logins: tuple[str, ...] = ()
     chat_space: str = ""
     chat_self_users: tuple[str, ...] = ()
     chat_lookback_minutes: int = 60
@@ -160,6 +162,7 @@ def load_config() -> ReviewerConfig:
         repos=repos,
         watch_repos=bool(s.watch_repos),
         bot_login=s.bot_login.strip(),
+        peer_logins=tuple(login.lower() for login in _csv(s.peer_logins)),
         chat_space=s.chat_space.strip(),
         chat_self_users=_csv(s.chat_self_users),
         chat_lookback_minutes=max(1, int(s.chat_lookback_minutes)),
