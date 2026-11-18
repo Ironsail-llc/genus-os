@@ -636,3 +636,47 @@ class TestAffiliationReadsScoping:
             )
         assert result["affiliations"] == [] and result["total"] == 0
         mock_list.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_restricted_caller_with_no_person_gets_no_total(self):
+        identity = IdentityContext(
+            tenant_id="tenant-a",
+            channel="webchat",
+            identifier="user-2",
+            verified=True,
+            role="member",
+            person_id=None,
+        )
+        with (
+            _mode_env("enforce"),
+            patch("robothor.crm.dal.list_affiliations_page") as mock_list,
+        ):
+            result = await _call(
+                "list_affiliations",
+                {"companyId": self.COMPANY_ID},
+                identity=identity,
+                user_role="member",
+            )
+        assert result["affiliations"] == [] and result["total"] == 0
+        mock_list.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_company_view_total_counts_only_what_a_restricted_caller_sees(self):
+        view = {
+            "company": {"id": self.COMPANY_ID},
+            "children": [],
+            "affiliations": self._rows(),
+            "affiliationsTotal": 600,
+        }
+        with (
+            _mode_env("enforce"),
+            patch("robothor.crm.dal.get_company_view") as mock_view,
+        ):
+            mock_view.return_value = view
+            result = await _call(
+                "get_contact_360",
+                {"companyId": self.COMPANY_ID},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert result["affiliationsTotal"] == 1
