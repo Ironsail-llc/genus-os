@@ -20,7 +20,10 @@ def service_session_key(main_session_key: str, service_id: str) -> str:
     """``agent:<agent>:service:<service id>`` for the main session's agent.
 
     ``:`` is the key's delimiter, so a service id cannot add segments to it.
+    It is percent-encoded (``%`` first, then ``:``) rather than replaced, so
+    the mapping is one-to-one: ``a:b`` and ``a-b`` are two sessions.
     """
     parts = main_session_key.split(":")
     agent_id = parts[1] if len(parts) >= 2 and parts[1] else "main"
-    return f"agent:{agent_id}:service:{service_id.replace(':', '-')}"
+    encoded = service_id.replace("%", "%25").replace(":", "%3A")
+    return f"agent:{agent_id}:service:{encoded}"
