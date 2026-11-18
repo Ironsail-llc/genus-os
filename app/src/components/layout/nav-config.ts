@@ -2,6 +2,7 @@ import {
   Activity,
   Bot,
   Brain,
+  Building2,
   FileText,
   Flag,
   HeartPulse,
@@ -30,6 +31,7 @@ import {
 
 export type ViewId =
   | "chat"
+  | "org"
   | "inbox"
   | "tasks"
   | "sales"
@@ -78,7 +80,17 @@ export interface NavItem {
    * checks the caller's role on every one of these routes, and a member who
    * types `?v=memory` gets a refusal from the server, not from this file.
    */
-  requires?: "operator" | "audit";
+  requires?: "operator" | "audit" | "parent";
+}
+
+/** What the nav knows about the account besides its role. UX only. */
+export interface NavContext {
+  /**
+   * An owner or admin, at home, whose tenant has child tenants: the command
+   * centre's audience (`useHasChildTenants`). The bridge refuses everyone else
+   * on `GET /api/org/overview` whatever this says.
+   */
+  hasChildTenants?: boolean;
 }
 
 export interface NavGroup {
@@ -117,7 +129,12 @@ export function isAuditReaderRole(role: string | null | undefined): boolean {
 }
 
 /** Whether `role` may see one nav item. UX only — see `NavItem.requires`. */
-export function isNavItemVisible(item: NavItem, role: string | null | undefined): boolean {
+export function isNavItemVisible(
+  item: NavItem,
+  role: string | null | undefined,
+  context: NavContext = {},
+): boolean {
+  if (item.requires === "parent") return isOperatorRole(role) && Boolean(context.hasChildTenants);
   if (item.requires === "operator") return isOperatorRole(role);
   if (item.requires === "audit") return isAuditReaderRole(role);
   return true;
@@ -209,6 +226,8 @@ export const navGroups: NavGroup[] = [
     id: "workspace",
     label: "Workspace",
     items: [
+      // Only for a parent tenant's owner or admin, at home: one card per company.
+      { id: "org", label: "Command centre", view: "org", icon: Building2, requires: "parent" },
       { id: "inbox", label: "Inbox", view: "inbox", icon: Inbox },
       // Tasks is not in the operator's Workspace list; it is here because the
       // existing tasks view must stay reachable. Inbox is its successor but
@@ -259,16 +278,23 @@ export const navGroups: NavGroup[] = [
  * nothing. The sidebar, the mobile More sheet and the ⌘K palette all read this
  * one function, so none of them can disagree about who sees what.
  */
-export function visibleNavGroups(role: string | null | undefined): NavGroup[] {
+export function visibleNavGroups(
+  role: string | null | undefined,
+  context: NavContext = {},
+): NavGroup[] {
   const operator = isOperatorRole(role);
   return navGroups
     .filter((group) => !group.requiresOperator || operator)
-    .map((group) => ({ ...group, items: group.items.filter((item) => isNavItemVisible(item, role)) }))
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => isNavItemVisible(item, role, context)),
+    }))
     .filter((group) => group.items.length > 0);
 }
 
 export const viewTitles: Record<ViewId, string> = {
   chat: "Chat",
+  org: "Command centre",
   inbox: "Inbox",
   tasks: "Tasks",
   sales: "Sales",

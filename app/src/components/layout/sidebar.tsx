@@ -25,6 +25,11 @@ interface SidebarProps {
    * checks the caller's role on every settings route.
    */
   role?: string | null;
+  /**
+   * The parent tenant's owner or admin, at home (`useHasChildTenants`): shows
+   * the command centre. UX gate only; the bridge authorizes.
+   */
+  hasChildTenants?: boolean;
 }
 
 function SoonPill({ id }: { id: string }) {
@@ -48,6 +53,7 @@ export function Sidebar({
   unhealthyCount,
   inboxCount,
   role,
+  hasChildTenants,
 }: SidebarProps) {
   const badgeCounts: Record<string, number> = {
     inbox: inboxCount,
@@ -80,7 +86,7 @@ export function Sidebar({
 
       <div className="border-t border-sidebar-border mb-1" data-testid="sidebar-separator" />
 
-      {visibleNavGroups(role).map((group) => (
+      {visibleNavGroups(role, { hasChildTenants }).map((group) => (
         <div key={group.id} className="flex flex-col gap-0.5">
           <div
             data-testid={`nav-group-${group.id}`}

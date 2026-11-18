@@ -28,9 +28,14 @@ interface CommandPaletteProps {
   onNavigate: (view: ViewId, settingsPage?: SettingsPageId) => void;
   /** Session role — the palette shows exactly what the sidebar shows. UX gate only. */
   role?: string | null;
+  /**
+   * The parent tenant's owner or admin, at home (`useHasChildTenants`): shows
+   * the command centre. UX gate only; the bridge authorizes.
+   */
+  hasChildTenants?: boolean;
 }
 
-export function CommandPalette({ onNavigate, role }: CommandPaletteProps) {
+export function CommandPalette({ onNavigate, role, hasChildTenants }: CommandPaletteProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [helpOpen, setHelpOpen] = useState(false);
@@ -68,7 +73,7 @@ export function CommandPalette({ onNavigate, role }: CommandPaletteProps) {
   // Entries are derived from the one nav config the sidebar and the mobile
   // sheet read, so the palette can never drift from the navigation.
   const commands = useMemo<Command[]>(() => {
-    const nav = visibleNavGroups(role).flatMap((group) =>
+    const nav = visibleNavGroups(role, { hasChildTenants }).flatMap((group) =>
       group.items
         .filter((item) => !item.soon)
         .map((item) => ({
@@ -99,7 +104,7 @@ export function CommandPalette({ onNavigate, role }: CommandPaletteProps) {
         run: () => setHelpOpen(true),
       },
     ];
-  }, [onNavigate, resolvedTheme, setTheme, role]);
+  }, [onNavigate, resolvedTheme, setTheme, role, hasChildTenants]);
 
   const visible = commands.filter((c) =>
     c.label.toLowerCase().includes(query.trim().toLowerCase())

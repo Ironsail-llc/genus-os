@@ -18,14 +18,8 @@ import { useSession } from "next-auth/react";
 import { Building2 } from "lucide-react";
 
 import { NativeSelect } from "@/components/ui/native-select";
+import { useAccessibleTenants } from "@/hooks/use-accessible-tenants";
 import { actingTenantId } from "@/lib/tenant-session";
-
-export interface AccessibleTenant {
-  id: string;
-  display_name: string;
-  parent_tenant_id: string | null;
-  is_home: boolean;
-}
 
 type SwitchProps = {
   /** After a successful switch. Defaults to a full reload. */
@@ -34,37 +28,6 @@ type SwitchProps = {
 
 function reload() {
   window.location.reload();
-}
-
-function isTenantList(value: unknown): value is AccessibleTenant[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (t) => t && typeof t.id === "string" && typeof t.display_name === "string",
-    )
-  );
-}
-
-function useAccessibleTenants(enabled: boolean): AccessibleTenant[] | null {
-  const [tenants, setTenants] = useState<AccessibleTenant[] | null>(null);
-  useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/bridge/api/tenants/accessible", { cache: "no-store" });
-        if (!res.ok) return;
-        const body: unknown = await res.json();
-        if (!cancelled && isTenantList(body)) setTenants(body);
-      } catch {
-        // No listing, no picker: a switcher that cannot list tenants offers nothing.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled]);
-  return tenants;
 }
 
 async function requestSwitch(tenant: string): Promise<string | null> {
@@ -83,7 +46,7 @@ async function requestSwitch(tenant: string): Promise<string | null> {
 }
 
 /** One switch at a time; a refusal is kept to show, a success hands off. */
-function useTenantSwitch(onSwitched: () => void) {
+export function useTenantSwitch(onSwitched: () => void) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function switchTo(tenant: string) {
