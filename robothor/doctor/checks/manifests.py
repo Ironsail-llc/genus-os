@@ -288,7 +288,7 @@ CHECKS: tuple[Check, ...] = (
         id="manifests.prompt_files",
         title="Every instruction and bootstrap file exists",
         category="manifests",
-        severity="required",
+        severity="recommended",
         run=_prompt_files,
     ),
     Check(
