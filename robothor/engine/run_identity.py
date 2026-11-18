@@ -94,19 +94,76 @@ def _is_service_caller(user_role: str, user_id: str) -> bool:
     )
 
 
-async def attach_tenant_access(run: Any, tenant_id: str) -> None:
-    """Resolve hierarchical access, restricting failures to the run's own tenant.
+async def attach_tenant_access(run: Any, tenant_id: str, identity: Any = None) -> None:
+    """Resolve the tenants this run may reach; any failure leaves its own tenant only.
 
-    The lookup is a DB query, so it runs in a worker thread, off the loop.
+    Reach beyond the run's own tenant is what lets a parent tenant's agent read
+    and act in its children (``tools/cross_tenant.py``), so it is granted
+    narrowly:
+
+    * a sub-agent or benchmark run: its own tenant, always. A sub-agent
+      inherits its parent's user for attribution, which is not authority;
+    * an attended run -- a verified human, on a trigger a human starts: what
+      that human's role reaches (owner and admin: the descendants);
+    * an unattended run (no verified human, or a system trigger): its own
+      tenant, plus the descendants only when BOTH the tenant
+      (``crm_tenants.child_data_access``) and the agent's manifest
+      (``v2.child_tenant_access``) grant it. Its ``service_role`` is not a
+      person and grants nothing here.
+
+    The lookups are DB and file reads, so they run in a worker thread.
     """
-    from robothor.engine.permissions import resolve_accessible_tenants
-
+    own = (tenant_id,)
     try:
         run.accessible_tenant_ids = await asyncio.to_thread(
-            resolve_accessible_tenants, tenant_id, run.user_role
+            _accessible_tenants, run, tenant_id, identity
         )
     except Exception:
-        run.accessible_tenant_ids = (tenant_id,)
+        logger.warning("tenant access lookup failed; restricting run to its own tenant")
+        run.accessible_tenant_ids = own
+
+
+def _accessible_tenants(run: Any, tenant_id: str, identity: Any) -> tuple[str, ...]:
+    from robothor.engine.models import TriggerType
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    own = (tenant_id,)
+    if (
+        getattr(run, "is_benchmark", False)
+        or getattr(run, "parent_run_id", None)
+        or int(getattr(run, "nesting_depth", 0) or 0) > 0
+        or getattr(run, "trigger_type", None) == TriggerType.SUB_AGENT
+    ):
+        return own
+    from robothor.engine.runner import _SYSTEM_TRIGGER_TYPES
+
+    attended = (
+        identity is not None
+        and bool(getattr(identity, "verified", False))
+        and getattr(run, "trigger_type", None) not in _SYSTEM_TRIGGER_TYPES
+    )
+    if attended:
+        return tuple(resolve_accessible_tenants(tenant_id, run.user_role))
+    from robothor.crm.dal import tenant_child_data_access
+
+    if tenant_child_data_access(tenant_id) and _agent_opts_in(getattr(run, "agent_id", "")):
+        # The role here only unlocks the descendant walk; the grant is above.
+        return tuple(resolve_accessible_tenants(tenant_id, "admin"))
+    return own
+
+
+def _agent_opts_in(agent_id: str) -> bool:
+    """The agent manifest's ``v2.child_tenant_access``. Unreadable: not opted in."""
+    if not agent_id:
+        return False
+    try:
+        from robothor.engine.config import EngineConfig, load_agent_config
+
+        cfg = load_agent_config(agent_id, EngineConfig.from_env().manifest_dir)
+    except Exception:  # noqa: BLE001 - absence of evidence is not an opt-in
+        logger.warning("child_tenant_access: manifest for %s unreadable", _sanitize(agent_id))
+        return False
+    return bool(cfg is not None and cfg.child_tenant_access)
 
 
 async def follow_up_preamble(

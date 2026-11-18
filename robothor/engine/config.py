@@ -768,6 +768,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         todo_list_enabled=v2.get("todo_list_enabled", False),
         guardrails=v2.get("guardrails", []),
         rate_limit_per_minute=int(v2.get("rate_limit_per_minute", 0)),
+        child_tenant_access=v2.get("child_tenant_access", False) is True,
         guardrails_opt_out=v2.get("guardrails_opt_out", False),
         exec_allowlist=v2.get("exec_allowlist", []),
         write_path_allowlist=v2.get("write_path_allowlist", []),

@@ -688,6 +688,16 @@ optional:
       type: integer
       default: 0
       description: Tool-call ceiling per minute for this agent (0 = engine default).
+    child_tenant_access:
+      type: boolean
+      default: false
+      description: >-
+        Let this agent's unattended runs (cron, hook, event, workflow) reach the
+        child tenants of its tenant, for the allowlisted cross-tenant reads and
+        for creating a task or a notification there. Takes effect only when the
+        tenant's crm_tenants.child_data_access is also true. Sub-agent and
+        benchmark runs never reach another tenant. See
+        docs/runbooks/TENANT_HIERARCHY.md.
     tool_timeout_seconds:
       type: integer
       default: 120
