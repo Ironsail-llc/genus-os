@@ -809,12 +809,22 @@ def _stub(name: str, args: str, call_id: str, content: str, excerpt_chars: int) 
 
 
 def _excerpt_chars_spent(messages: list[dict[str, Any]]) -> int:
+    """Excerpt characters already in context: in stubs and in the ledger.
+
+    The ledger counts too. Without it every fold reset the budget, each new
+    stub took the largest excerpt again, and the ledger grew until its oldest
+    excerpts, the ones a long task started from, had to be cut.
+    """
+    from robothor.engine.compaction_ledger import ledger_excerpt_chars
+
     spent = 0
     for m in messages:
         content = m.get("content")
         if m.get("role") == "tool" and isinstance(content, str) and content.startswith(STUB_PREFIX):
             _, _, excerpt = content.partition(EXCERPT_MARKER)
             spent += len(excerpt)
+        else:
+            spent += ledger_excerpt_chars(m)
     return spent
 
 
@@ -1157,6 +1167,10 @@ def _merge_retained_facts(
     return out
 
 
+#: Stub exchanges folded into the ledger at a time while the context is still
+#: under the trigger (a fold rewrites the ledger, and the cache after it).
+FOLD_BATCH = 8
+
 #: A summary shorter than this, standing in for at least
 #: ``DEGENERATE_SOURCE_CHARS`` of conversation, is a failed summary. A real one
 #: is up to 300 words; a summarizer that extracts nothing answers a phrase.
@@ -1277,8 +1291,17 @@ async def compact(
         # Folding is triggered by the drain target, but excerpts are cut only
         # while the result is still at the trigger: that is the bound, and the
         # excerpt is what a summarizer that extracts nothing would lose.
+        # Below the trigger, fold only a batch at a time: each fold rewrites
+        # the ledger near the head, and everything after it leaves the cache.
+        batch = 1 if await measure(msgs) >= threshold else FOLD_BATCH
         folded, n = await asyncio.to_thread(
-            fold_stub_exchanges, msgs, head, tail, max(1, threshold - 1), sizing
+            fold_stub_exchanges,
+            msgs,
+            head,
+            tail,
+            max(1, threshold - 1),
+            sizing,
+            min_exchanges=batch,
         )
         if n:
             logger.info("Compaction: folded %d elided exchange(s) into the ledger", n)

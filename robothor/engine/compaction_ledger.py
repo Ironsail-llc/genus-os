@@ -52,6 +52,13 @@ def is_ledger(message: dict[str, Any]) -> bool:
     return message.get(LEDGER_KEY) is True and message.get("role") == "user"
 
 
+def ledger_excerpt_chars(message: dict[str, Any]) -> int:
+    """Excerpt characters a ledger holds (0 for any other message)."""
+    if not is_ledger(message):
+        return 0
+    return sum(len(entry.partition(_EXCERPT_SEP)[2]) for entry in _entries_of(message))
+
+
 def _entries_of(ledger: dict[str, Any]) -> list[str]:
     lines = str(ledger.get("content") or "").split("\n")[1:]
     return [line for line in lines if line.startswith(_ENTRY_PREFIX)]
@@ -121,6 +128,8 @@ def fold_stub_exchanges(
     protect_tail: int,
     target: int,
     model: str | None = None,
+    *,
+    min_exchanges: int = 1,
 ) -> tuple[list[dict[str, Any]], int]:
     """Replace stub exchanges outside the head and tail with one ledger.
 
@@ -133,7 +142,7 @@ def fold_stub_exchanges(
 
     stop = max(head_len, len(messages) - protect_tail)
     spans = _stub_exchange_spans(messages, head_len, stop)
-    if not spans:
+    if not spans or len(spans) < min_exchanges:
         return messages, 0
     inside = {k for i, j in spans for k in range(i, j)}
     # From index 1, not the head: a ledger written at the head's edge is
