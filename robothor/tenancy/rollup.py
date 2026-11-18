@@ -178,6 +178,7 @@ def _tasks(tenant_id: str, as_of: datetime) -> dict[str, Any]:
                 "id": t.get("id"),
                 "title": t.get("title"),
                 "status": t.get("status"),
+                "priority": t.get("priority") or "normal",
                 "assignedToAgent": t.get("assignedToAgent"),
                 "dueAt": t.get("dueAt"),
                 "overdueDays": _days_between(t.get("dueAt"), as_of),

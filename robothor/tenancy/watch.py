@@ -117,6 +117,7 @@ def _problems(entry: dict[str, Any]) -> dict[str, dict[str, Any]]:
         out[f"overdue_task:{t.get('id')}"] = {
             "problem": "overdue_task",
             "subject": t.get("title") or "an untitled task",
+            "priority": t.get("priority") or "normal",
             "overdue_days": t.get("overdueDays"),
             "age_days": t.get("ageDays"),
         }
@@ -265,8 +266,12 @@ def _problem_phrase(p: dict[str, Any]) -> str:
     if problem == "late_schedule":
         return f"the {p['subject']} agent's scheduled run is {_minutes(p['minutes'])} late"
     if problem == "overdue_task":
-        return f'the task "{p["subject"]}" is {_overdue(p)}'
+        return f'the {_task_noun(p)} "{p["subject"]}" is {_overdue(p)}'
     return "something needs a look"
+
+
+def _task_noun(p: dict[str, Any]) -> str:
+    return "urgent task" if p.get("priority") == "urgent" else "task"
 
 
 def _state_paragraph(entry: dict[str, Any], as_of: datetime) -> str:
