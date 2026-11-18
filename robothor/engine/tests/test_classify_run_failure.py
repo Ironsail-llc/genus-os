@@ -8,11 +8,15 @@ reaper and the self-diagnosis tool never disagree.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from robothor.engine.tools.handlers.observability import HANDLERS
+
+#: The handler reads only its caller's tenant's runs, so it needs a context.
+_CTX = SimpleNamespace(tenant_id="test-tenant")
 
 
 @pytest.fixture
@@ -22,14 +26,14 @@ def classify_handler():
 
 @pytest.mark.asyncio
 async def test_missing_run_id(classify_handler) -> None:
-    result = await classify_handler({}, None)
+    result = await classify_handler({}, _CTX)
     assert "error" in result
 
 
 @pytest.mark.asyncio
 async def test_run_not_found(classify_handler) -> None:
     with patch("robothor.engine.tracking.get_run", return_value=None):
-        result = await classify_handler({"run_id": "00000000-0000-4000-8000-00000000fffe"}, None)
+        result = await classify_handler({"run_id": "00000000-0000-4000-8000-00000000fffe"}, _CTX)
     assert "error" in result
     assert "not found" in result["error"]
 
@@ -60,7 +64,7 @@ async def test_post_tool_crash_classification(classify_handler) -> None:
         patch("robothor.engine.tracking.get_run", return_value=run),
         patch("robothor.engine.tracking.list_steps", return_value=steps),
     ):
-        result = await classify_handler({"run_id": "00000000-0000-4000-8000-000000000001"}, None)
+        result = await classify_handler({"run_id": "00000000-0000-4000-8000-000000000001"}, _CTX)
 
     assert result["agent_id"] == "buddy"
     assert result["status"] == "timeout"
@@ -91,7 +95,7 @@ async def test_daemon_restart_classification(classify_handler, monkeypatch) -> N
         patch("robothor.engine.tracking.get_run", return_value=run),
         patch("robothor.engine.tracking.list_steps", return_value=[]),
     ):
-        result = await classify_handler({"run_id": "00000000-0000-4000-8000-00000000000a"}, None)
+        result = await classify_handler({"run_id": "00000000-0000-4000-8000-00000000000a"}, _CTX)
 
     assert result["category"] == "daemon_restart"
     assert result["daemon_restart_in_window"] is True
@@ -117,7 +121,7 @@ async def test_no_steps_classification(classify_handler, monkeypatch) -> None:
         patch("robothor.engine.tracking.get_run", return_value=run),
         patch("robothor.engine.tracking.list_steps", return_value=[]),
     ):
-        result = await classify_handler({"run_id": "00000000-0000-4000-8000-00000000000b"}, None)
+        result = await classify_handler({"run_id": "00000000-0000-4000-8000-00000000000b"}, _CTX)
 
     assert result["category"] == "no_steps"
     assert result["llm_was_called"] is False
