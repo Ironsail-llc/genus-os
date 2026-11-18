@@ -21,8 +21,17 @@ UNVERIFIABLE_GRACE = effects.UNCERTAIN_FENCE_WINDOW
 
 
 def has_verifier(tool_name: str) -> bool:
-    """Whether a host-owned readback verifier can settle this tool's effects."""
-    return tool_name in effects.READBACK_TOOLS
+    """Whether a readback verifier, the host's or the tool's plugin's, can settle it."""
+    from robothor.engine.runtime import effect_tools
+
+    return effect_tools.has_verifier(tool_name)
+
+
+def _verified_tools() -> list[str]:
+    from robothor.engine.runtime import effect_tools
+
+    plugin = {name for name, spec in effect_tools.plugin_specs().items() if spec.verify}
+    return sorted(effects.READBACK_TOOLS | plugin)
 
 
 def reconcile_unverifiable(tenant_id: str) -> int:
@@ -38,7 +47,7 @@ def reconcile_unverifiable(tenant_id: str) -> int:
                  AND NOT (tool_name = ANY(%s))
                  AND updated_at < now() - %s::interval
                ORDER BY updated_at,id LIMIT 100""",
-            (tenant_id, sorted(effects.READBACK_TOOLS), UNVERIFIABLE_GRACE),
+            (tenant_id, _verified_tools(), UNVERIFIABLE_GRACE),
         )
         rows = cur.fetchall()
     settled = 0
@@ -57,6 +66,17 @@ def reconcile_unverifiable(tenant_id: str) -> int:
 
 def sweep_terminal(tenant_id: str) -> int:
     """Bounded, repeatable housekeeping; failures leave the existing fence intact."""
+    try:
+        return _sweep_terminal(tenant_id)
+    finally:
+        # Plugin read-backs run whatever happened above: a run table this
+        # sweep could not read is no reason to leave a verifiable write fenced.
+        from robothor.engine.runtime import effect_tools
+
+        effect_tools.sweep(tenant_id)
+
+
+def _sweep_terminal(tenant_id: str) -> int:
     try:
         with tenant_scope(tenant_id), effects.get_connection() as conn, conn.cursor() as cur:
             cur.execute(

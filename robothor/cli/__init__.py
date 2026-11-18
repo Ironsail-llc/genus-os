@@ -698,6 +698,9 @@ def _build_parser() -> argparse.ArgumentParser:
     from robothor.cli.pursuit import add_parser as add_pursuit_parser
 
     add_pursuit_parser(subparsers)
+    from robothor.cli.effects import add_parser as add_effects_parser
+
+    add_effects_parser(subparsers)
 
     # goal — long-running session goal (operator objective).
     # Backed by a crm_task with the session_goal tag; see migration 065.
@@ -1552,6 +1555,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.pursuit import cmd_goals
 
         return cmd_goals(args)
+    if args.command == "effects":
+        from robothor.cli.effects import cmd_effects
+
+        return cmd_effects(args)
     if args.command in {"goal", "legacy-goal"}:
         from robothor.cli.goal import cmd_goal
 
