@@ -40,11 +40,10 @@ WATCH_LIMITED_NOTE = (
 
 async def _reachable_rollup(ctx: ToolContext, tool: str) -> tuple[tuple[str, ...], dict[str, Any]]:
     """The rollup for every tenant this run may reach, each other tenant audited."""
-    from robothor.engine.tools.cross_tenant import audit_cross_tenant, reachable_tenants
-    from robothor.tenancy.rollup import tenant_rollup
-
     from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.engine.tools.cross_tenant import audit_cross_tenant, reachable_tenants
     from robothor.identity.scope import scope_for_query
+    from robothor.tenancy.rollup import tenant_rollup
 
     tenants = reachable_tenants(ctx)  # in-memory: the session registry
     rollup: dict[str, Any] = await asyncio.to_thread(
