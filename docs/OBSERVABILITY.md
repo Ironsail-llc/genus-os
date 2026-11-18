@@ -197,6 +197,34 @@ audited `POST /api/automations/{id}/reset-breaker`, operator-only and
 tenant-scoped — zeroes `consecutive_errors` so it fires again on its next
 scheduled run. Before this the only way back was an `UPDATE` typed into psql.
 
+## One log line per tool call
+
+Every tool call the engine handles writes exactly one INFO line on the
+`robothor.engine.tools.call_log` logger, whether an agent turn, a workflow
+`tool` step, an `execute_code` snippet or `tool_call` made it, and whether the
+tool is built in or comes from a plugin:
+
+```text
+event=tool_call tool=example_tool agent=example-agent run_id=<id> outcome=ok duration_ms=42 reason=""
+```
+
+| Field | Meaning |
+|-------|---------|
+| `event` | Always `tool_call`. |
+| `tool` | The tool that ran or was refused, when it names a registered tool; otherwise `unknown` (a name the model made up, inside a `tool_call` or not, is not logged). A `tool_call` wrapper is logged as the tool it wraps, once. |
+| `agent` | The calling agent's id. Absent on a workflow step. |
+| `workflow` | The workflow's id, for a workflow `tool` step. Takes the place of `agent`. |
+| `run_id` | The agent run, or for a workflow step the workflow run. |
+| `outcome` | `ok`, `error` (the tool failed, raised, timed out or is unknown), `refused` (a gate declined it) or `deferred` (the action's outcome is pending, `outcome_unknown`). |
+| `reason` | A fixed code, never message text: empty on a plain `ok`; `no write connection: would have done` for a write the tool recorded instead of making (`would_have_done: true` in its result); otherwise one of `timeout`, `cancelled`, `permission_denied`, `approval_refused`, `not_allowed`, `plan_mode`, `wrap_up`, `hook`, `guardrail`, `rate_limited`, `policy`, `disabled`, `runtime_denied`, `repeat_guard`, `sandbox`, `snippet_cap`, `unknown_tool`, `validation` (a bad call, such as a missing argument), `backing_service`, `tool_error`, `pending`, or `other`. |
+| `error_class` | Present only when an exception was caught: its class name, such as `ValueError`. Never its message. |
+| `duration_ms` | Wall time of the call, admission included for a refusal. |
+
+The same fields are on the log record as attributes. A retried call writes one
+line per attempt. The arguments, the result and any message text from a
+tool or a service it called are never logged, not even redacted. Writing the line cannot fail the call: if the logger raises, the call
+completes and one ERROR line on the same logger says the line was lost.
+
 ## Workflow runs, step by step
 
 A workflow run records what each tool step was given and what it returned: the

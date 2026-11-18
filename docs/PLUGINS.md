@@ -76,6 +76,12 @@ PLUGIN = {
 `pip install genus-acme-tools`, restart the engine, and `coin_flip` is
 available to any agent whose manifest lists it in `tools_allowed`.
 
+Every call to a plugin tool writes the engine's one `event=tool_call` log line
+([Observability](OBSERVABILITY.md#one-log-line-per-tool-call)). A tool that
+writes, and records what it would have written when no write connection is
+configured, says so with `"would_have_done": true` in its result; the line then
+reads `outcome=ok reason="no write connection: would have done"`.
+
 ## Groups
 
 | Entry-point group | Payload key | Contributes |

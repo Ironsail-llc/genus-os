@@ -185,20 +185,25 @@ class RunToolProxy:
     async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         """One proxied tool call, through every gate a turn's call passes."""
         async with self._lock:
-            if self.calls_made >= self.max_calls:
-                return {
-                    "error": (
-                        f"execute_code tool-call limit reached ({self.max_calls}). "
-                        "Narrow the loop, or do the remaining work in a second snippet."
-                    ),
-                    "guard": "execute_code_call_cap",
-                }
-            # Judged as the call it wraps, like every gate a turn's call meets.
-            approval_refusal = self._approval_budget_refusal(inner_call(name, args)[0])
-            if approval_refusal:
-                return approval_refusal
+            refusal = self._cap_refusal(name, args)
+            if refusal:
+                from robothor.engine.tools.call_log import log_snippet_refusal
+
+                return log_snippet_refusal(self._req, name, args, refusal)
             self.calls_made += 1
             return await self._dispatch(name, args)
+
+    def _cap_refusal(self, name: str, args: dict[str, Any]) -> dict[str, Any] | None:
+        if self.calls_made >= self.max_calls:
+            return {
+                "error": (
+                    f"execute_code tool-call limit reached ({self.max_calls}). "
+                    "Narrow the loop, or do the remaining work in a second snippet."
+                ),
+                "guard": "execute_code_call_cap",
+            }
+        # Judged as the call it wraps, like every gate a turn's call meets.
+        return self._approval_budget_refusal(inner_call(name, args)[0])
 
     def _approval_budget_refusal(self, name: str) -> dict[str, Any] | None:
         """None unless this call would page a person once too often.

@@ -1224,7 +1224,79 @@ class ToolRegistry:
         identity: IdentityContext | None = None,
         capability_tier: str = "",
     ) -> dict[str, Any]:
-        """Execute a tool and return the result dict.
+        """Execute a tool, write its one ``event=tool_call`` line, return the result.
+
+        The line (``call_log.py``) carries the outcome, a short reason and the
+        duration, never the arguments or the result, and writing it can never
+        fail the call. Arguments are documented on :meth:`_execute_timed`.
+        """
+        from robothor.engine.tools import call_log
+
+        call, token = call_log.begin(tool_name, arguments, agent_id=agent_id, run_id=run_id)
+        result: dict[str, Any] | None = None
+        exc: BaseException | None = None
+        try:
+            # Match supplied argument names to this tool's declared parameters,
+            # ignoring case and underscores. 82 tools are snake_case and 26 are
+            # camelCase, so a model that has just called get_task({"id": ...})
+            # sends `to_agent` to a tool declaring `toAgent` — and gets a generic
+            # failure with nothing naming the wrong key. Exact matches win;
+            # ambiguity is left alone. See normalise_arguments.
+            from robothor.engine.tools.dispatch import normalise_arguments
+
+            # getattr, not self._schemas: this method is exercised with stub
+            # registries that never build a schema map, and argument normalisation
+            # must never be the reason a tool call fails.
+            _schemas = getattr(self, "_schemas", None) or {}
+            _props = (
+                ((_schemas.get(tool_name) or {}).get("function") or {})
+                .get("parameters", {})
+                .get("properties")
+            )
+            arguments = normalise_arguments(arguments, _props)
+
+            result = await self._execute_timed(
+                tool_name,
+                arguments,
+                agent_id=agent_id,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                workspace=workspace,
+                user_id=user_id,
+                user_role=user_role,
+                accessible_tenant_ids=accessible_tenant_ids,
+                timeout=timeout,
+                task_author_override=task_author_override,
+                is_benchmark=is_benchmark,
+                identity=identity,
+                capability_tier=capability_tier,
+            )
+            return result
+        except BaseException as e:
+            exc = e
+            raise
+        finally:
+            call_log.finish(call, token, result, exc)
+
+    async def _execute_timed(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        agent_id: str = "",
+        run_id: str = "",
+        tenant_id: str = "",
+        workspace: str = "",
+        user_id: str = "",
+        user_role: str = "",
+        accessible_tenant_ids: tuple[str, ...] = (),
+        timeout: int = 120,
+        task_author_override: str = "",
+        is_benchmark: bool = False,
+        identity: IdentityContext | None = None,
+        capability_tier: str = "",
+    ) -> dict[str, Any]:
+        """Execute a tool under its deadline and return the result dict.
 
         Args:
             timeout: Per-tool timeout in seconds. 0 = unlimited.
@@ -1240,25 +1312,6 @@ class ToolRegistry:
                 Empty (every ordinary caller) means the run's effective tier;
                 ``tool_call`` passes its caller's through ToolContext.call_kwargs.
         """
-        # Match supplied argument names to this tool's declared parameters,
-        # ignoring case and underscores. 82 tools are snake_case and 26 are
-        # camelCase, so a model that has just called get_task({"id": ...})
-        # sends `to_agent` to a tool declaring `toAgent` — and gets a generic
-        # failure with nothing naming the wrong key. Exact matches win;
-        # ambiguity is left alone. See normalise_arguments.
-        from robothor.engine.tools.dispatch import normalise_arguments
-
-        # getattr, not self._schemas: this method is exercised with stub
-        # registries that never build a schema map, and argument normalisation
-        # must never be the reason a tool call fails.
-        _schemas = getattr(self, "_schemas", None) or {}
-        _props = (
-            ((_schemas.get(tool_name) or {}).get("function") or {})
-            .get("parameters", {})
-            .get("properties")
-        )
-        arguments = normalise_arguments(arguments, _props)
-
         try:
             if timeout > 0:
                 # tool_deadline names this deadline for the frames below it.
@@ -1311,6 +1364,9 @@ class ToolRegistry:
             raise
         except TimeoutError:
             logger.warning("Tool %s timed out after %ds", tool_name, timeout)
+            from robothor.engine.tools.call_log import note_audit_status
+
+            note_audit_status("timeout")
             return {
                 "error": f"Tool '{tool_name}' timed out after {timeout}s. "
                 + timeout_guidance(tool_name)
