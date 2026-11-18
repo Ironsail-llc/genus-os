@@ -827,6 +827,12 @@ class ToolRegistry:
         """Return the adapter server name for a tool, or None if not adapter-provided."""
         return self._adapter_routes.get(tool_name)
 
+    def declared_parameters(self, tool_name: str) -> frozenset[str]:
+        """The parameter names the tool's registered schema declares (none if unknown)."""
+        fn = self._schemas.get(tool_name, {}).get("function") or {}
+        props = (fn.get("parameters") or {}).get("properties") or {}
+        return frozenset(props) if isinstance(props, dict) else frozenset()
+
     def registered_tool_names(self) -> set[str]:
         """Every tool name this instance can dispatch, right now.
 

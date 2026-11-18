@@ -1680,7 +1680,10 @@ with the database scope bound to it, exactly as the same call made by that
 tenant's own agent would. Without `tenant` a call is unchanged. Naming a tenant
 the run cannot reach, or one that does not exist, is refused with the same
 sentence, and nothing runs; so is a `tenant` that is not a string or is longer
-than 128 characters. Naming `tenant` on any other tool is refused too.
+than 128 characters. Naming `tenant` on any other built-in tool is refused
+too. An external MCP server's tool or a plugin tool whose own schema declares a
+`tenant` (or `dry_run`) parameter gets it untouched: the engine does not read
+it, refuse it or audit it as a crossing.
 
 - Reads: `list_agent_runs`, `get_agent_run`, `list_agent_schedules`,
   `get_agent_stats`, `list_agent_reviews`, `get_agent_review`,

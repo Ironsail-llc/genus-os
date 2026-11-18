@@ -24,6 +24,10 @@ is a dry run in the run's own tenant, never a real write. A ``dry_run`` that
 is present but not a JSON boolean (``"true"``, ``1``, ``null``) is refused and
 runs nothing: neither a real write nor a preview is guessed from it.
 
+A tool that declares ``tenant`` in its OWN schema -- an external MCP server's
+or a plugin's -- is none of this module's business: its ``tenant`` and
+``dry_run`` reach it untouched (:func:`_argument_owner`).
+
 Then :func:`run_handler` strips the argument and runs the handler inside
 ``tenant_scope(target)`` with a copy of the context whose ``tenant_id`` is the
 target. Everything else is refused with one sentence and runs nothing. A
@@ -183,6 +187,30 @@ def _bad_dry_run(name: str) -> dict[str, Any]:
     )
 
 
+def _argument_owner(name: str) -> str | None:
+    """Who gives ``tenant`` and ``dry_run`` their meaning on a call to ``name``.
+
+    ``"engine"``: an allowlisted built-in; :func:`admit` reads them. ``"tool"``:
+    the tool's OWN registered schema declares ``tenant`` -- an external MCP
+    server's tool or a plugin's -- so both reach it untouched, never refused,
+    stripped or audited as a crossing. ``stamp_tenant_arguments`` adds the
+    engine's property only to allowlisted names, and an adapter's schema is the
+    server's own, so ``tenant`` in any other registered schema was declared by
+    the tool itself. ``None``: neither; a ``tenant`` argument is refused, since
+    the handler would ignore it and answer about the home tenant.
+    """
+    from robothor.engine.tools import get_registry
+    from robothor.engine.tools.constants import CROSS_TENANT_READS, CROSS_TENANT_WRITES
+
+    registry = get_registry()
+    adapter = registry.get_adapter_route(name) is not None
+    if not adapter and name in CROSS_TENANT_READS | CROSS_TENANT_WRITES:
+        return "engine"
+    if TENANT_ARG in registry.declared_parameters(name):
+        return "tool"
+    return None
+
+
 def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[str, Any] | None:
     """Decide a call's tenant. ``None``: no ``tenant`` argument, run as always.
 
@@ -191,11 +219,15 @@ def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[
     ``dry_run``) removed.
     """
     from robothor.engine.tools.constants import (
-        CROSS_TENANT_READS,
         CROSS_TENANT_WRITES,
         UNATTENDED_CROSS_TENANT_WRITES,
     )
 
+    if TENANT_ARG not in args and DRY_RUN_ARG not in args:
+        return None
+    owner = _argument_owner(name)
+    if owner == "tool":
+        return None
     target = _tenant_target(args.get(TENANT_ARG))
     if target is None:
         # Malformed: answered exactly as an unreachable tenant, the audited
@@ -209,7 +241,7 @@ def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[
             gate_name="cross_tenant_reach",
             unlock=_UNREACHABLE_UNLOCK,
         )
-    is_write = name in CROSS_TENANT_WRITES
+    is_write = owner == "engine" and name in CROSS_TENANT_WRITES
     if is_write and DRY_RUN_ARG in args and not isinstance(args[DRY_RUN_ARG], bool):
         # "true", 1, null: never guessed at, in either direction.
         return _bad_dry_run(name)
@@ -221,7 +253,7 @@ def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[
     if not target:
         return Crossing(None, stripped, dry)
 
-    if name not in CROSS_TENANT_READS and not is_write:
+    if owner is None:
         return _refuse(
             name,
             target,
