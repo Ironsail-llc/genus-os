@@ -281,8 +281,8 @@ waits in place and is counted once. No step, wait or `retry_count` retry
 happens before then, and the run leaves no `workflow_runs` row until it
 starts. That is the usual shape of a burst: N events drain in arrival order at
 the limit, one run row per event, the last starting about N ÷ limit minutes
-after the first. A burst of 3,000 events at the default 30 a minute takes
-about 100 minutes; at `rate_limit_per_minute: 300` about 10. Raise the limit
+after the first. A burst of 3,000 events at the default 60 a minute takes
+about 50 minutes; at `rate_limit_per_minute: 300` about 10. Raise the limit
 for a workflow whose bursts must finish sooner, counting every tool call a run
 makes, not only the first.
 
