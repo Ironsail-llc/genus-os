@@ -457,6 +457,16 @@ class TestAffiliationReadsScoping:
 
     COMPANY_ID = "33333333-3333-4333-8333-333333333333"
 
+    def _page(self):
+        rows = self._rows()
+        return {
+            "affiliations": rows,
+            "total": len(rows),
+            "offset": 0,
+            "limit": 200,
+            "hasMore": False,
+        }
+
     def _rows(self):
         return [
             {"id": "a1", "personId": OWN_PERSON_ID, "role": "owner"},
@@ -530,9 +540,9 @@ class TestAffiliationReadsScoping:
     async def test_list_affiliations_keeps_only_own_rows_in_enforce(self):
         with (
             _mode_env("enforce"),
-            patch("robothor.crm.dal.list_affiliations") as mock_list,
+            patch("robothor.crm.dal.list_affiliations_page") as mock_list,
         ):
-            mock_list.return_value = self._rows()
+            mock_list.return_value = self._page()
             result = await _call(
                 "list_affiliations",
                 {"companyId": self.COMPANY_ID},
@@ -541,6 +551,8 @@ class TestAffiliationReadsScoping:
             )
         assert [a["id"] for a in result["affiliations"]] == ["a1"]
         assert result["count"] == 1
+        # The query itself is narrowed to the caller's person, so the total counts only those.
+        assert mock_list.call_args.kwargs["person_id"] == OWN_PERSON_ID
 
     @pytest.mark.asyncio
     async def test_list_affiliations_observe_logs_without_filtering(self, caplog):
@@ -549,9 +561,9 @@ class TestAffiliationReadsScoping:
         caplog.set_level(logging.INFO, logger="robothor.identity.scope")
         with (
             _mode_env("observe"),
-            patch("robothor.crm.dal.list_affiliations") as mock_list,
+            patch("robothor.crm.dal.list_affiliations_page") as mock_list,
         ):
-            mock_list.return_value = self._rows()
+            mock_list.return_value = self._page()
             result = await _call(
                 "list_affiliations",
                 {"companyId": self.COMPANY_ID},
@@ -566,9 +578,9 @@ class TestAffiliationReadsScoping:
     async def test_list_affiliations_owner_sees_all(self):
         with (
             _mode_env("enforce"),
-            patch("robothor.crm.dal.list_affiliations") as mock_list,
+            patch("robothor.crm.dal.list_affiliations_page") as mock_list,
         ):
-            mock_list.return_value = self._rows()
+            mock_list.return_value = self._page()
             result = await _call("list_affiliations", {"companyId": self.COMPANY_ID})
         assert result["count"] == 2
 
@@ -609,3 +621,18 @@ class TestAffiliationReadsScoping:
         assert len(result["affiliations"]) == 2
         msgs = [r.getMessage() for r in caplog.records]
         assert any("data_scoping" in m and "would_drop=1" in m for m in msgs)
+
+    @pytest.mark.asyncio
+    async def test_list_affiliations_for_someone_else_is_empty_in_enforce(self):
+        with (
+            _mode_env("enforce"),
+            patch("robothor.crm.dal.list_affiliations_page") as mock_list,
+        ):
+            result = await _call(
+                "list_affiliations",
+                {"personId": OTHER_PERSON_ID},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert result["affiliations"] == [] and result["total"] == 0
+        mock_list.assert_not_called()

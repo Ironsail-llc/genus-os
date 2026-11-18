@@ -144,25 +144,27 @@ class TestReads:
     @pytest.mark.asyncio
     async def test_list_affiliations(self):
         rows = [{"id": "a1"}]
-        with patch("robothor.crm.dal.list_affiliations", return_value=rows) as mock:
+        page = {"affiliations": rows, "total": 1, "offset": 0, "limit": 200, "hasMore": False}
+        with patch("robothor.crm.dal.list_affiliations_page", return_value=page) as mock:
             result = await _execute_tool(
                 "list_affiliations",
                 {"companyId": CID, "role": "provider", "activeOnly": False},
                 tenant_id="t",
             )
-        assert result == {"affiliations": rows, "count": 1}
+        assert result["affiliations"] == rows and result["count"] == 1
         assert mock.call_args.kwargs == {
             "person_id": None,
             "company_id": CID,
             "role": "provider",
             "active_only": False,
             "limit": 200,
+            "offset": 0,
             "tenant_id": "t",
         }
 
     @pytest.mark.asyncio
     async def test_list_affiliations_needs_a_person_or_company(self):
-        with patch("robothor.crm.dal.list_affiliations") as mock:
+        with patch("robothor.crm.dal.list_affiliations_page") as mock:
             result = await _execute_tool("list_affiliations", {}, tenant_id="t")
         assert "error" in result
         mock.assert_not_called()
@@ -224,3 +226,35 @@ class TestContact360:
             await _execute_tool("get_contact_360", {"id": PID}, tenant_id="t")
         person.assert_called_once()
         company.assert_not_called()
+
+
+class TestPaging:
+    @pytest.mark.asyncio
+    async def test_list_affiliations_pages_and_reports_the_total(self):
+        page = {
+            "affiliations": [{"id": "a1", "personId": PID}],
+            "total": 600,
+            "offset": 100,
+            "limit": 1,
+            "hasMore": True,
+        }
+        with patch("robothor.crm.dal.list_affiliations_page", return_value=page) as mock:
+            result = await _execute_tool(
+                "list_affiliations",
+                {"companyId": CID, "limit": 1, "offset": 100},
+                tenant_id="t",
+            )
+        assert result == {
+            "affiliations": page["affiliations"],
+            "count": 1,
+            "total": 600,
+            "offset": 100,
+            "limit": 1,
+            "hasMore": True,
+        }
+        assert mock.call_args.kwargs["offset"] == 100
+        assert mock.call_args.kwargs["limit"] == 1
+
+    def test_the_schema_offers_offset(self):
+        props = _registry()._schemas["list_affiliations"]["function"]["parameters"]["properties"]
+        assert "offset" in props

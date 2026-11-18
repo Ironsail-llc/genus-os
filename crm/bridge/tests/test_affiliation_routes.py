@@ -23,13 +23,14 @@ AFF = {"id": "a1", "personId": PID, "companyId": CID, "role": "owner", "isActive
 
 @pytest.mark.asyncio
 async def test_person_affiliations_lists_with_the_tenant(test_client):
-    with patch("routers.people.list_affiliations", return_value=[AFF]) as mock:
+    page = {"affiliations": [AFF], "total": 1, "offset": 0, "limit": 100, "hasMore": False}
+    with patch("routers.people.list_affiliations_page", return_value=page) as mock:
         r = await test_client.get(
             f"/api/people/{PID}/affiliations?activeOnly=false",
             headers={"X-Tenant-Id": "tenant-b"},
         )
     assert r.status_code == 200
-    assert r.json() == {"affiliations": [AFF]}
+    assert r.json()["affiliations"] == [AFF]
     kw = mock.call_args.kwargs
     assert kw["person_id"] == PID
     assert kw["active_only"] is False
@@ -98,7 +99,8 @@ async def test_company_children(test_client):
 
 @pytest.mark.asyncio
 async def test_company_affiliations_filters_by_role(test_client):
-    with patch("routers.people.list_affiliations", return_value=[AFF]) as mock:
+    page = {"affiliations": [AFF], "total": 1, "offset": 0, "limit": 100, "hasMore": False}
+    with patch("routers.people.list_affiliations_page", return_value=page) as mock:
         r = await test_client.get(f"/api/companies/{CID}/affiliations?role=owner")
     assert r.status_code == 200
     kw = mock.call_args.kwargs
@@ -166,3 +168,23 @@ async def test_existing_company_and_person_routes_are_unchanged(test_client):
         r = await test_client.get("/api/companies?search=ac")
     assert r.json() == {"companies": []}
     assert mock.call_args.args[0] == "ac"
+
+
+@pytest.mark.asyncio
+async def test_company_affiliations_page_with_a_total(test_client):
+    page = {"affiliations": [AFF], "total": 600, "offset": 50, "limit": 1, "hasMore": True}
+    with patch("routers.people.list_affiliations_page", return_value=page) as mock:
+        r = await test_client.get(f"/api/companies/{CID}/affiliations?limit=1&offset=50")
+    assert r.status_code == 200
+    assert r.json() == page
+    kw = mock.call_args.kwargs
+    assert (kw["limit"], kw["offset"], kw["company_id"]) == (1, 50, CID)
+
+
+@pytest.mark.asyncio
+async def test_person_affiliations_page_with_a_total(test_client):
+    page = {"affiliations": [AFF], "total": 1, "offset": 0, "limit": 100, "hasMore": False}
+    with patch("routers.people.list_affiliations_page", return_value=page) as mock:
+        r = await test_client.get(f"/api/people/{PID}/affiliations")
+    assert r.json() == page
+    assert mock.call_args.kwargs["person_id"] == PID

@@ -571,3 +571,57 @@ def test_concurrent_upserts_make_one_row(committed_tenant, db_dsn):
         cur.execute("SELECT count(*) FROM crm_people WHERE tenant_id = %s", (committed_tenant,))
         assert cur.fetchone() == (1,)
     conn.close()
+
+
+# ── paging: a caller can tell a list was cut ─────────────────────────────────
+
+
+class TestAffiliationPaging:
+    def _many(self, n: int) -> str:
+        from robothor.crm.dal import (
+            set_affiliation,
+            upsert_company_by_identifier,
+            upsert_person_by_identifier,
+        )
+
+        company = upsert_company_by_identifier(SYSTEM, _ext(), name="Big Office")["id"]
+        for i in range(n):
+            pid = upsert_person_by_identifier(SYSTEM, _ext("user"), first_name=f"Person{i:03d}")[
+                "id"
+            ]
+            set_affiliation(pid, company, "manager" if i % 2 else "provider")
+        return company
+
+    def test_page_reports_the_total_and_whether_more_follow(self, mock_get_connection):
+        from robothor.crm.dal import list_affiliations_page
+
+        company = self._many(7)
+        first = list_affiliations_page(company_id=company, limit=3)
+        assert first["total"] == 7
+        assert (first["offset"], first["limit"], first["hasMore"]) == (0, 3, True)
+        assert len(first["affiliations"]) == 3
+        rest = list_affiliations_page(company_id=company, limit=3, offset=6)
+        assert len(rest["affiliations"]) == 1 and rest["hasMore"] is False
+        seen = [
+            a["id"]
+            for off in (0, 3, 6)
+            for a in list_affiliations_page(company_id=company, limit=3, offset=off)["affiliations"]
+        ]
+        assert len(seen) == len(set(seen)) == 7
+        assert list_affiliations_page(company_id=company, role="manager")["total"] == 3
+
+    def test_offset_is_additive_on_the_plain_list(self, mock_get_connection):
+        from robothor.crm.dal import list_affiliations
+
+        company = self._many(4)
+        everything = list_affiliations(company_id=company)
+        assert len(everything) == 4
+        assert list_affiliations(company_id=company, limit=2, offset=2) == everything[2:]
+
+    def test_company_view_carries_the_total(self, mock_get_connection):
+        from robothor.crm.dal import get_company_view
+
+        company = self._many(3)
+        view = get_company_view(company)
+        assert view["affiliationsTotal"] == 3
+        assert len(view["affiliations"]) == 3
