@@ -52,9 +52,10 @@ class _Rollup:
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
 
-    def __call__(self, tenant_ids: Any, **_: Any) -> dict[str, Any]:
+    def __call__(self, tenant_ids: Any, **kw: Any) -> dict[str, Any]:
         ids = list(tenant_ids)
         self.calls.append(ids)
+        self.kwargs = kw
         return {
             "as_of": "2026-11-18T12:00:00+00:00",
             "tenants": [{"tenant_id": t, "status": "ok"} for t in ids],
@@ -133,6 +134,34 @@ def test_reaching_children_is_audited_as_a_cross_tenant_read(rollup):
         assert c.kwargs["tool"] == "org_overview"
         assert c.kwargs["user_id"] == "alice"
         assert c.kwargs["outcome"] == "ok"
+
+
+def test_a_restricted_member_sees_own_tenant_tasks_through_their_data_scope(rollup, monkeypatch):
+    from robothor.identity import IdentityContext
+
+    monkeypatch.setenv("ROBOTHOR_DATA_SCOPING", "enforce")
+    member = IdentityContext(
+        tenant_id=PARENT,
+        channel="webchat",
+        identifier="bob",
+        verified=True,
+        role="member",
+        person_id="22222222-2222-2222-2222-222222222222",
+    )
+    ctx = _ctx(user_role="member", accessible_tenant_ids=(PARENT,), identity=member)
+    _run({}, ctx, _session())
+
+    assert rollup.kwargs["own_tenant"] == PARENT
+    scope = rollup.kwargs["own_scope"]
+    assert scope is not None and scope.restricted
+    assert scope.person_id == member.person_id
+
+
+def test_an_owner_reads_own_tenant_tasks_unscoped(rollup, monkeypatch):
+    monkeypatch.setenv("ROBOTHOR_DATA_SCOPING", "enforce")
+    _run({}, _ctx(), _session())
+
+    assert rollup.kwargs.get("own_scope") is None
 
 
 def test_registered_read_only_and_withheld_from_benchmarks():

@@ -282,6 +282,43 @@ def test_duplicates_are_reported_once_in_the_order_given(world):
     assert [t["tenant_id"] for t in result["tenants"]] == ["acme-parent", "acme-child-a"]
 
 
+def test_the_own_tenant_overdue_titles_are_read_with_the_callers_scope(world):
+    from robothor.tenancy.rollup import tenant_rollup
+
+    seen: list[tuple[str, Any]] = []
+    real = world.list_tasks
+
+    def list_tasks(**kw: Any) -> list[dict[str, Any]]:
+        seen.append((kw.get("tenant_id", ""), kw.get("scope")))
+        return real(**kw)
+
+    scope = object()
+    with patch("robothor.crm.dal.list_tasks", side_effect=list_tasks):
+        result = tenant_rollup(
+            ["acme-child-a", "acme-parent"], now=NOW, own_tenant="acme-child-a", own_scope=scope
+        )
+
+    assert dict(seen) == {"acme-child-a": scope, "acme-parent": None}
+    # The counts are unscoped, as list_tasks_summary shows them; the shape is unchanged.
+    assert _by_id(result)["acme-child-a"]["tasks"]["overdue"] == 1
+
+
+def test_without_an_own_scope_nothing_is_scoped(world):
+    from robothor.tenancy.rollup import tenant_rollup
+
+    seen: list[Any] = []
+    real = world.list_tasks
+
+    def list_tasks(**kw: Any) -> list[dict[str, Any]]:
+        seen.append(kw.get("scope"))
+        return real(**kw)
+
+    with patch("robothor.crm.dal.list_tasks", side_effect=list_tasks):
+        tenant_rollup(["acme-parent", "acme-child-a"], now=NOW)
+
+    assert seen == [None, None]
+
+
 def test_the_rollup_does_not_import_engine_tool_modules():
     """The dashboard bridge imports this module; a tool module would drag the engine in."""
     import ast
