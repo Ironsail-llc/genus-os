@@ -343,6 +343,47 @@ Give only one of the pair a Chat space (`ROBOTHOR_PR_REVIEW_CHAT_SPACE`): a
 link is claimed and announced once. The other picks its pull requests up from
 `ROBOTHOR_PR_REVIEW_WATCH_REPOS` or from a review requested of its login.
 
+### Comparing a pair
+
+With a peer named, `pr_review_status` adds a `paired` section, computed in
+code from GitHub with no model, so the operator can see whether each reviewer
+pulls its weight:
+
+```json
+"paired": {
+  "peers": ["peer-bot"],
+  "heads": [
+    {"pr": "acme/widgets#7", "url": "...", "head_sha": "3f2a9c01b7de",
+     "reviewed_at": "2026-11-17T10:02:00+00:00", "verdict": "APPROVED",
+     "peers": {"peer-bot": {"verdict": "CHANGES_REQUESTED", "agree": false,
+                            "only_ours": 1, "only_peer": 2, "both": 1}}}
+  ],
+  "heads_not_compared": 0,
+  "summary": {"peer-bot": {"heads_compared": 1, "agreement_rate": 0.0,
+                           "only_ours": 1, "only_peer": 2, "both": 1}}
+}
+```
+
+- **Which heads.** Every pull request this reviewer posted a review on in the
+  window, at the head commit of its latest review, newest first, up to 10
+  per report (two GitHub calls each); `heads_not_compared` counts the rest.
+- **Verdict.** The peer's latest review at that same commit: `APPROVED`,
+  `CHANGES_REQUESTED` or `COMMENTED`; `DISMISSED` when its review there was
+  dismissed, for example by a later push (it did post, so no alert, but the
+  head is left out of the agreement rate); `null` when it has posted none
+  yet; `"unknown"` when GitHub could not be read (no alert then). `agree` is
+  `null` unless both verdicts are known.
+- **Findings.** Ours are the findings stored with the review that name a
+  file; the peer's are its inline comments on its reviews at that commit
+  (replies left out). Two match on the same file with lines at most 3 apart;
+  each matches once. A finding about the pull request as a whole, with no
+  file, is not counted on either side.
+- **Summary.** Per peer: heads where it posted a verdict, the share where the
+  verdicts agree, and the finding totals.
+- **Alerts.** One reviewer approves while the other requests changes; or the
+  peer has posted nothing on a head reviewed longer ago than
+  `ROBOTHOR_PR_REVIEW_STALE_AFTER_MINUTES` (180 by default).
+
 ## Parity with an existing review bot
 
 The suite is built to replace a team's own review bot (Claude Code over the
@@ -486,7 +527,10 @@ coding jobs in flight:
   to 20 per call): one that is merged or closed is left out and its row
   closed, so it is never checked again; one that could not be checked is
   listed with `verified: false` and raises no alert;
-- **`pr=`** — one pull request's state, links and review history.
+- **`pr=`** — one pull request's state, links and review history;
+- **paired** — only with [paired reviewers](#paired-reviewers) configured:
+  how this reviewer compares with each peer. See
+  [Comparing a pair](#comparing-a-pair).
 
 Main opts into it: the operator can ask "how are reviews going?", "where is
 #123?" or "give me the week's review report" (`since_hours=168`), and main can

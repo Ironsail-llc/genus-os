@@ -49,7 +49,7 @@ async def _row(store, n, **kw) -> PrReviewRow:
     return row
 
 
-async def _report(store, tasks=(), jobs=None, **kw):
+async def _report(store, tasks=(), jobs=None, cfg=CFG, **kw):
     async def job_lookup(job_id):
         return (jobs or {}).get(job_id)
 
@@ -57,7 +57,7 @@ async def _report(store, tasks=(), jobs=None, **kw):
         return list(tasks)
 
     return await status_report(
-        CFG, store, TENANT, list_tasks=list_tasks, job_lookup=job_lookup, now=NOW, **kw
+        cfg, store, TENANT, list_tasks=list_tasks, job_lookup=job_lookup, now=NOW, **kw
     )
 
 
@@ -370,3 +370,205 @@ async def test_window_review_list_is_capped_and_says_how_many_it_left_out():
     assert len(window["reviews"]) == 50
     assert window["reviews"][0]["url"] == "https://example.com/1"
     assert window["reviews_not_listed"] == 10
+
+
+# Paired reviewers: how this reviewer's verdicts and findings compare with a
+# peer's on the same head commit. Computed from GitHub, no model.
+
+PEER = "peer-bot"
+PAIRED = ReviewerConfig(repos=(REPO,), workers=3, stale_after_minutes=180, peer_logins=(PEER,))
+
+
+def _sha(n: int) -> str:
+    return (f"{n:x}" * 40)[:40]
+
+
+async def _reviewed(store, n, verdict, *, ago=timedelta(hours=1), issues=()):
+    """A row whose last review was posted ``ago`` at head ``_sha(n)``, and its task."""
+    await _row(
+        store,
+        n,
+        status="approved" if verdict == "APPROVE" else "changes_requested",
+        head_sha=_sha(n),
+        last_reviewed_sha=_sha(n),
+        last_review={"verdict": verdict, "sha": _sha(n), "issues": list(issues)},
+    )
+    posted = NOW - ago
+    return _task(
+        n,
+        created=posted - timedelta(minutes=5),
+        resolved=posted,
+        resolution=f"{verdict}: https://github.com/{REPO}/pull/{n}#r",
+    )
+
+
+def _review(rid, login, state, commit):
+    return {"id": rid, "user": {"login": login}, "state": state, "commit_id": commit}
+
+
+def _comment(cid, login, review_id, path, line, reply_to=None):
+    return {
+        "id": cid,
+        "user": {"login": login},
+        "pull_request_review_id": review_id,
+        "path": path,
+        "line": line,
+        "in_reply_to_id": reply_to,
+    }
+
+
+class _Counting(FakeGitHub):
+    def __init__(self) -> None:
+        super().__init__()
+        self.review_calls = 0
+        self.comment_calls = 0
+
+    async def list_reviews(self, repo, number):
+        self.review_calls += 1
+        return await super().list_reviews(repo, number)
+
+    async def list_review_comments(self, repo, number):
+        self.comment_calls += 1
+        return await super().list_review_comments(repo, number)
+
+
+async def test_without_peers_there_is_no_paired_section_and_no_extra_calls():
+    store = MemoryStore()
+    task = await _reviewed(store, 1, "APPROVE")
+    github = _Counting()
+    report = await _report(store, [task], github=github)
+    assert "paired" not in report
+    assert github.review_calls == 0 and github.comment_calls == 0
+
+
+async def test_paired_compares_verdicts_and_findings_at_the_same_head():
+    store = MemoryStore()
+    ours = [
+        {"path": "src/a.py", "line": 10, "title": "off by one"},
+        {"path": "src/b.py", "line": 5, "title": "unchecked error"},
+    ]
+    tasks = [
+        await _reviewed(store, 1, "APPROVE", issues=ours),
+        await _reviewed(store, 2, "REQUEST_CHANGES"),
+    ]
+    github = FakeGitHub()
+    github.reviews[(REPO, 1)] = [
+        _review(90, PEER, "APPROVED", "0" * 40),  # an older head: not compared
+        _review(91, PEER, "CHANGES_REQUESTED", _sha(1)),
+        _review(92, "alice", "APPROVED", _sha(1)),
+    ]
+    github.thread_comments[(REPO, 1)] = [
+        _comment(1, PEER, 91, "src/a.py", 12),  # within a few lines of ours: both
+        _comment(2, PEER, 91, "src/c.py", 1),  # only the peer
+        _comment(3, PEER, 91, "src/b.py", 40),  # same file, far away: only the peer
+        _comment(4, PEER, 91, "src/b.py", 6, reply_to=99),  # a reply is not a finding
+        _comment(5, PEER, 90, "src/b.py", 5),  # on the older head's review
+        _comment(6, "alice", 92, "src/b.py", 5),  # a person, not the peer
+    ]
+    github.reviews[(REPO, 2)] = [_review(93, PEER, "CHANGES_REQUESTED", _sha(2))]
+    report = await _report(store, tasks, cfg=PAIRED, github=github)
+    paired = report["paired"]
+    assert paired["peers"] == [PEER]
+    heads = {h["pr"]: h for h in paired["heads"]}
+    first = heads[f"{REPO}#1"]
+    assert first["head_sha"] == _sha(1)[:12]
+    assert first["verdict"] == "APPROVED"
+    assert first["peers"][PEER] == {
+        "verdict": "CHANGES_REQUESTED",
+        "agree": False,
+        "only_ours": 1,
+        "only_peer": 2,
+        "both": 1,
+    }
+    assert heads[f"{REPO}#2"]["peers"][PEER]["agree"] is True
+    assert paired["summary"][PEER] == {
+        "heads_compared": 2,
+        "agreement_rate": 0.5,
+        "only_ours": 1,
+        "only_peer": 2,
+        "both": 1,
+    }
+    assert paired["heads_not_compared"] == 0
+    mismatch = [a for a in report["alerts"] if PEER in a]
+    assert len(mismatch) == 1 and "#1" in mismatch[0]
+
+
+async def test_a_silent_peer_is_flagged_only_after_the_stale_window():
+    store = MemoryStore()
+    tasks = [
+        await _reviewed(store, 1, "APPROVE", ago=timedelta(hours=4)),
+        await _reviewed(store, 2, "APPROVE", ago=timedelta(hours=1)),
+    ]
+    report = await _report(store, tasks, cfg=PAIRED, github=FakeGitHub())
+    heads = {h["pr"]: h for h in report["paired"]["heads"]}
+    for n in (1, 2):
+        assert heads[f"{REPO}#{n}"]["peers"][PEER]["verdict"] is None
+        assert heads[f"{REPO}#{n}"]["peers"][PEER]["agree"] is None
+    assert report["paired"]["summary"][PEER]["heads_compared"] == 0
+    assert report["paired"]["summary"][PEER]["agreement_rate"] is None
+    silent = [a for a in report["alerts"] if PEER in a]
+    assert len(silent) == 1 and "#1" in silent[0]
+
+
+async def test_a_failing_github_lookup_leaves_the_peer_unknown():
+    store = MemoryStore()
+    task = await _reviewed(store, 1, "APPROVE", ago=timedelta(hours=4))
+    github = FakeGitHub()
+
+    async def boom(repo, number):
+        raise RuntimeError("502")
+
+    github.list_reviews = boom  # type: ignore[method-assign]
+    report = await _report(store, [task], cfg=PAIRED, github=github)
+    [head] = report["paired"]["heads"]
+    assert head["peers"][PEER]["verdict"] == "unknown"
+    assert head["peers"][PEER]["agree"] is None
+    assert report["alerts"] == []
+
+
+async def test_paired_heads_compared_are_capped_per_report():
+    from robothor.pr_review.report import MAX_PAIRED_HEADS
+
+    store = MemoryStore()
+    tasks = [await _reviewed(store, n, "APPROVE") for n in range(1, MAX_PAIRED_HEADS + 3)]
+    github = _Counting()
+    report = await _report(store, tasks, cfg=PAIRED, github=github)
+    assert github.review_calls == MAX_PAIRED_HEADS
+    assert github.comment_calls <= MAX_PAIRED_HEADS
+    assert len(report["paired"]["heads"]) == MAX_PAIRED_HEADS
+    assert report["paired"]["heads_not_compared"] == 2
+
+
+async def test_a_finding_without_a_file_is_not_counted_on_either_side():
+    store = MemoryStore()
+    ours = [
+        {"path": "", "line": None, "title": "no ticket"},
+        {"path": "src/a.py", "line": 10, "title": "off by one"},
+    ]
+    task = await _reviewed(store, 1, "REQUEST_CHANGES", issues=ours)
+    github = FakeGitHub()
+    github.reviews[(REPO, 1)] = [_review(91, PEER, "CHANGES_REQUESTED", _sha(1))]
+    github.thread_comments[(REPO, 1)] = [_comment(1, PEER, 91, "src/a.py", 11)]
+    report = await _report(store, [task], cfg=PAIRED, github=github)
+    [head] = report["paired"]["heads"]
+    entry = head["peers"][PEER]
+    assert (entry["only_ours"], entry["only_peer"], entry["both"]) == (0, 0, 1)
+    assert report["paired"]["summary"][PEER]["only_ours"] == 0
+
+
+async def test_a_dismissed_peer_review_is_not_a_silent_peer():
+    store = MemoryStore()
+    ours = [{"path": "src/a.py", "line": 10, "title": "off by one"}]
+    task = await _reviewed(store, 1, "APPROVE", ago=timedelta(hours=4), issues=ours)
+    github = FakeGitHub()
+    github.reviews[(REPO, 1)] = [_review(91, PEER, "DISMISSED", _sha(1))]
+    github.thread_comments[(REPO, 1)] = [_comment(1, PEER, 91, "src/a.py", 10)]
+    report = await _report(store, [task], cfg=PAIRED, github=github)
+    [head] = report["paired"]["heads"]
+    entry = head["peers"][PEER]
+    assert entry["verdict"] == "DISMISSED"
+    assert entry["agree"] is None
+    assert entry["both"] == 1
+    assert report["alerts"] == []
+    summary = report["paired"]["summary"][PEER]
+    assert summary["heads_compared"] == 0 and summary["agreement_rate"] is None
