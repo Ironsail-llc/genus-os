@@ -1,3 +1,9 @@
+## [1.133.0](https://github.com/Ironsail-llc/genus-os/compare/v1.132.0...v1.133.0) (2026-11-18)
+
+### Features
+
+* **pr-review:** paired reviewers stay blind to each other (GEN-658) ([#879](https://github.com/Ironsail-llc/genus-os/issues/879)) ([6d89f65](https://github.com/Ironsail-llc/genus-os/commit/6d89f65080d871c27759c998f2efa49d3a1c09db))
+
 ## [1.132.0](https://github.com/Ironsail-llc/genus-os/compare/v1.131.0...v1.132.0) (2026-11-18)
 
 ### Features
