@@ -104,7 +104,12 @@ async def attach_tenant_access(run: Any, tenant_id: str, identity: Any = None) -
     * a sub-agent or benchmark run: its own tenant, always. A sub-agent
       inherits its parent's user for attribution, which is not authority;
     * an attended run -- a verified human, on a trigger a human starts: what
-      that human's role reaches (owner and admin: the descendants);
+      that human reaches from the run's tenant (owner and admin: the
+      descendants), judged by the WEAKER of the identity's role and the run's
+      ``user_role``, and nothing beyond the run's own tenant when the identity
+      was resolved in another tenant. An owner switched into a child resolves
+      in that child (``identity.resolvers._resolve_webchat``), so reaches the
+      child and the child's own descendants, never the parent or a sibling;
     * an unattended run -- a trigger in ``UNATTENDED_GRANT_TRIGGERS`` (cron and
       heartbeat, hook, event, workflow, channel event): its own tenant, plus
       the descendants only when BOTH the tenant
@@ -181,7 +186,12 @@ def _accessible_tenants(run: Any, tenant_id: str, identity: Any) -> tuple[str, .
         and getattr(run, "trigger_type", None) not in _SYSTEM_TRIGGER_TYPES
     )
     if attended:
-        return tuple(resolve_accessible_tenants(tenant_id, run.user_role))
+        # The verified identity is the authority; the run's role only narrows
+        # it. An identity resolved in another tenant vouches for nothing here.
+        if getattr(identity, "tenant_id", None) != tenant_id:
+            return own
+        role = _weaker_role(getattr(identity, "role", None), getattr(run, "user_role", None))
+        return tuple(resolve_accessible_tenants(tenant_id, role))
     if getattr(run, "trigger_type", None) not in UNATTENDED_GRANT_TRIGGERS:
         # A person started this run but nobody vouched for them: no grant.
         return own
@@ -191,6 +201,18 @@ def _accessible_tenants(run: Any, tenant_id: str, identity: Any) -> tuple[str, .
         # The role here only unlocks the descendant walk; the grant is above.
         return tuple(resolve_accessible_tenants(tenant_id, "admin"))
     return own
+
+
+#: The roles that reach descendant tenants, strongest first.
+_REACHING_ROLES = ("owner", "admin")
+
+
+def _weaker_role(first: Any, second: Any) -> str | None:
+    """The less privileged of two roles, for reach: a role outside
+    ``_REACHING_ROLES`` (member, viewer, none) is weaker than both."""
+    if first not in _REACHING_ROLES or second not in _REACHING_ROLES:
+        return None
+    return str(max(first, second, key=_REACHING_ROLES.index))
 
 
 def _agent_opts_in(agent_id: str) -> bool:
