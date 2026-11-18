@@ -309,3 +309,18 @@ def test_an_agent_no_plugin_patches_is_written_exactly_as_before(fleet, capsys) 
     before = (manifest.read_bytes(), manifest.stat().st_mtime_ns)
     assert fleet.sync_all() == 0
     assert (manifest.read_bytes(), manifest.stat().st_mtime_ns) == before
+
+
+def test_a_waiting_patch_backs_up_an_operator_agent_the_first_time_it_writes(fleet) -> None:
+    """A patch recorded while its target was missing still keeps the
+    original of a manifest it did not create the first time it changes it."""
+    fleet.put(_patcher("alpha-patcher", ["card_lookup"]))
+    fleet.sync_one("alpha-patcher")
+    original = "# The operator's own agent. Keep me.\n" + _AGENT_MANIFEST.format(
+        version="1.0.0", description="Hand made"
+    )
+    (fleet.ws / AGENT_YAML).write_text(original)
+    fleet.sync_one("alpha-patcher")
+    assert fleet.tools() == [*BASE, "card_lookup"]
+    backup = fleet.ws / f"{AGENT_YAML}.pre-alpha-patcher"
+    assert backup.read_text() == original
