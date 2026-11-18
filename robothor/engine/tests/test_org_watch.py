@@ -34,6 +34,19 @@ def _session(**run: Any) -> SimpleNamespace:
     return SimpleNamespace(run=SimpleNamespace(**base))
 
 
+def _person() -> Any:
+    from robothor.identity.context import IdentityContext
+
+    return IdentityContext(
+        tenant_id=PARENT,
+        channel="webchat",
+        identifier="alice",
+        verified=True,
+        display_name="Alice",
+        role="member",
+    )
+
+
 def _ctx(**kw: Any) -> ToolContext:
     base: dict[str, Any] = {
         "agent_id": "main",
@@ -153,12 +166,15 @@ def test_a_run_without_child_reach_is_told_it_is_limited(world):
     assert "not granted" in result["note"].lower()
 
 
-def test_a_limited_run_reports_but_never_stores(world):
+def test_a_person_without_reach_reports_but_never_stores(world):
+    """Someone in chat who reaches only their own tenant cannot move the
+    snapshot: their watch would otherwise swallow what the owner's next beat
+    should report."""
     _run({})
     writes = len(world.blocks.writes)
     world.rollup.failing.add(CHILD_A)
 
-    limited = _run({}, _ctx(accessible_tenant_ids=(PARENT,)))
+    limited = _run({}, _ctx(accessible_tenant_ids=(PARENT,), identity=_person()))
     full = _run({})
 
     assert limited["stored"] is False
@@ -166,6 +182,32 @@ def test_a_limited_run_reports_but_never_stores(world):
     assert "not stored" in limited["note"].lower() or "not saved" in limited["note"].lower()
     # The children's state survived the limited run, so the change is still news.
     assert full["changes"] and "Acme Child A" in full["briefing"]
+
+
+def test_an_unattended_run_without_the_grant_does_not_repeat_itself(world):
+    """A scheduled watch the parent has not granted child access sees only its
+    own tenant. It must still remember what it reported, or every beat would
+    announce the same problems again."""
+    world.rollup.failing.add(PARENT)
+    ctx = _ctx(accessible_tenant_ids=(PARENT,), identity=None)
+
+    first = _run({}, ctx)
+    second = _run({}, ctx)
+
+    assert first["limited"] is True and first["stored"] is True
+    assert first["changes"]
+    assert second["changes"] == [] and second["briefing"] == ""
+
+
+def test_an_ungranted_watch_keeps_what_a_full_watch_knew_about_the_children(world):
+    world.rollup.failing.add(CHILD_A)
+    _run({})  # full: records child A's failure
+
+    _run({}, _ctx(accessible_tenant_ids=(PARENT,), identity=None))  # limited, stores
+    full = _run({})
+
+    # Child A was already reported; the limited run in between did not forget it.
+    assert not any(c.get("tenant_id") == CHILD_A for c in full["changes"])
 
 
 def test_a_sub_agent_is_limited_to_its_own_tenant(world):

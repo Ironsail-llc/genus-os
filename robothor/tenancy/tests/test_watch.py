@@ -562,3 +562,15 @@ def test_an_overdue_task_of_ordinary_priority_is_not_called_urgent():
     text = _briefing(_diff(_snap(_healthy()), after), after, daily=False)
 
     assert "urgent" not in text
+
+
+def test_a_snapshot_keeps_a_tenant_the_rollup_did_not_cover():
+    """A run that sees fewer tenants must not make the next run forget the rest."""
+    full = _snap(_rollup(_entry(PARENT), _failing(CHILD_A), _entry(CHILD_B)))
+
+    from robothor.tenancy.watch import snapshot
+
+    narrowed = snapshot(_rollup(_entry(PARENT)), full)
+
+    assert set(narrowed["tenants"]) == {PARENT, CHILD_A, CHILD_B}
+    assert narrowed["tenants"][CHILD_A] == full["tenants"][CHILD_A]
