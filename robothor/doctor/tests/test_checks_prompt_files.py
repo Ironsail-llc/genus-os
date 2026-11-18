@@ -47,9 +47,14 @@ def _run():
     return check, ctx, (answer if isinstance(answer, list) else [answer])
 
 
-def test_the_check_is_required() -> None:
+def test_the_check_warns_rather_than_blocks_an_install() -> None:
+    """Recommended, not required: the install's ``verify`` step runs the
+    required checks, and a fresh install's default fleet already names files
+    the installer does not create. That gap is reported loudly here; it must
+    not stop an install that worked the day before this check existed.
+    """
     check = next(c for c in manifest_checks.CHECKS if c.id == "manifests.prompt_files")
-    assert check.severity == "required"
+    assert check.severity == "recommended"
     assert check.category == "manifests"
 
 
