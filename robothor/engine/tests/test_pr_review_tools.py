@@ -83,7 +83,10 @@ async def test_prepare_validates_arguments():
 
 
 async def test_prepare_needs_the_skill():
-    with patch.object(pr_review, "_skill_text", return_value=None):
+    with (
+        patch.object(pr_review, "_skill_text", return_value=None),
+        patch.object(pr_review, "_store", return_value=MemoryStore()),
+    ):
         result = await pr_review._prepare({"repo": REPO, "number": 7}, _CTX)
     assert "skill" in result["error"]
 

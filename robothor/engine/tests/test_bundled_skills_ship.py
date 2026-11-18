@@ -181,3 +181,19 @@ class TestTheWheelCarriesTheSkills:
         build_data: dict = {}
         _Hook(tmp_path).initialize("standard", build_data)
         assert "robothor/bundled_skills/shipped/SKILL.md" in build_data["force_include"].values()
+
+
+# ── Export ───────────────────────────────────────────────────────────
+
+
+class TestExportCarriesWhatTheInstanceOwns:
+    def test_an_export_leaves_out_the_copy_shipped_with_the_code(self, workspace, tmp_path):
+        # Exported skills are imported as instance overlays; a shipped skill in
+        # an export would pin that version on the receiving instance.
+        from robothor.cli.exporter import _export_skills
+
+        _write_skill(workspace / "brain" / "skills", "mine", "the instance's own")
+        out = tmp_path / "export"
+        out.mkdir()
+        assert _export_skills(out) == 1
+        assert sorted(p.name for p in (out / "skills").iterdir()) == ["mine"]
