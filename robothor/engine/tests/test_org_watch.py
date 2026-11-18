@@ -153,6 +153,21 @@ def test_a_run_without_child_reach_is_told_it_is_limited(world):
     assert "not granted" in result["note"].lower()
 
 
+def test_a_limited_run_reports_but_never_stores(world):
+    _run({})
+    writes = len(world.blocks.writes)
+    world.rollup.failing.add(CHILD_A)
+
+    limited = _run({}, _ctx(accessible_tenant_ids=(PARENT,)))
+    full = _run({})
+
+    assert limited["stored"] is False
+    assert len(world.blocks.writes) == writes + 1, "only the full run stored"
+    assert "not stored" in limited["note"].lower() or "not saved" in limited["note"].lower()
+    # The children's state survived the limited run, so the change is still news.
+    assert full["changes"] and "Acme Child A" in full["briefing"]
+
+
 def test_a_sub_agent_is_limited_to_its_own_tenant(world):
     result = _run({}, session=_session(parent_run_id="parent-run", nesting_depth=1))
 
