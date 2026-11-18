@@ -272,7 +272,10 @@ A workflow with a `hook` trigger gets the event as its run's `event` context
 (`type`, `stream`, `delivery_id`, the parsed `payload`, and `id` for webhook
 events), so its steps
 can template it, and its trigger takes the same `requeue_if_busy` option, or
-`concurrent: true` to let its runs overlap. See
+`concurrent: true` to let its runs overlap. A workflow's event is written to
+that workflow's backlog in Redis before it is acknowledged, and runs from there
+in arrival order, at the workflow's tool-call rate limit, across restarts,
+rather than being re-added after a pause. See
 [Agent Builder](AGENT_BUILDER.md#triggered-by-an-event).
 
 ### Running the webhook receiver separately

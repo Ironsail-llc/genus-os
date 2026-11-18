@@ -31,8 +31,14 @@ class FakeRedis:
     """Strings expire by ``time.time()``, so a test that moves the clock sees
     a lock lapse the way Redis would."""
 
-    def __init__(self, hashes: dict[str, dict[str, int]] | None = None) -> None:
+    def __init__(
+        self,
+        hashes: dict[str, dict[str, int]] | None = None,
+        streams: dict[str, list[str]] | None = None,
+    ) -> None:
         self.hashes = hashes or {}
+        # Stream key -> entry ids, oldest first (a workflow backlog).
+        self.streams = streams or {}
         self.strings: dict[str, str] = {}
         self.ttls: dict[str, int | None] = {}
         self.expires: dict[str, float] = {}
@@ -68,8 +74,27 @@ class FakeRedis:
         self.expires.pop(key, None)
         return 1 if self.strings.pop(key, None) is not None else 0
 
+    def scan_iter(self, match: str = "*"):
+        prefix = match.rstrip("*")
+        return iter([k.encode() for k in self.streams if k.startswith(prefix)])
+
+    def xlen(self, key: str) -> int:
+        return len(self.streams.get(key, []))
+
+    def xrange(self, key: str, min: str = "-", max: str = "+", count: int | None = None):  # noqa: A002
+        ids = self.streams.get(key, [])[:count]
+        return [(i.encode(), {}) for i in ids]
+
     def close(self) -> None:
         self.closed += 1
+
+
+def _backlog(workflow_id: str, depth: int, age: float) -> dict[str, list[str]]:
+    """A workflow backlog of ``depth`` entries, the oldest written ``age`` seconds ago."""
+    from robothor.engine.workflow_backlog import backlog_key
+
+    born = int((time.time() - age) * 1000)
+    return {backlog_key(TENANT, workflow_id): [f"{born + i}-0" for i in range(depth)]}
 
 
 def _this_window() -> int:
@@ -439,3 +464,46 @@ def test_the_warning_tier_writes_one_digest_row_a_period(monkeypatch, real_alert
     _run(make_ctx())
     assert len(real_alerts.of("alert_digest")) == 1
     assert real_alerts.of("alert_fallback") == []
+
+
+# ── the backlog still waiting ────────────────────────────────────────────
+
+
+def test_the_backlog_waiting_is_reported(monkeypatch):
+    client = FakeRedis(
+        {window_key(TENANT, _this_window()): {"example-workflow": 40}},
+        streams=_backlog("example-workflow", 1200, 600),
+    )
+    _with(monkeypatch, client)
+    result = _run(make_ctx())
+    assert result.status == "pass"
+    assert "example-workflow: 1200 waiting, oldest 600s" in result.detail
+
+
+def test_a_backlog_older_than_the_look_back_fails_and_warns(monkeypatch):
+    # Few deferrals this hour, but an event has waited more than an hour:
+    # the workflow is not keeping up.
+    client = FakeRedis(streams=_backlog("example-workflow", 3, deferred_runs.LOOKBACK_SECONDS + 60))
+    sent = _with(monkeypatch, client)
+    result = _run(make_ctx())
+    assert result.status == "fail"
+    assert "example-workflow: 3 waiting" in result.detail
+    sent.assert_awaited_once()
+    assert sent.await_args.args[0] == "warning"
+
+
+def test_an_empty_backlog_says_nothing_is_waiting(monkeypatch):
+    _with(monkeypatch, FakeRedis())
+    assert "nothing waiting" in _run(make_ctx()).detail
+
+
+def test_an_unreadable_backlog_still_gives_the_deferral_verdict(monkeypatch, busy):
+    def broken(match: str = "*"):
+        raise ConnectionError("refused")
+
+    busy.scan_iter = broken  # type: ignore[method-assign]
+    _with(monkeypatch, busy)
+    result = _run(make_ctx())
+    assert result.status == "fail"
+    assert "147" in result.detail
+    assert "backlog unreadable" in result.detail
