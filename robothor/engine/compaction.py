@@ -557,7 +557,13 @@ def protected_prefix_len(messages: list[dict[str, Any]], protect_first_n: int | 
         except Exception:  # noqa: BLE001 — compaction must never fail on config
             protect_first_n = DEFAULT_PROTECT_FIRST_N
     n = max(1, min(int(protect_first_n or 0), len(messages)))
-    while n > 1 and messages[n - 1].get("tool_calls"):
+    inside = _in_tool_exchange(messages)
+    # Nor inside one: an engine notice can sit between a call and its results,
+    # and a head ending on it keeps the call while the results are dropped.
+    while n > 1 and (
+        messages[n - 1].get("tool_calls")
+        or (n < len(messages) and inside[n] and not messages[n].get("tool_calls"))
+    ):
         n -= 1
     return n
 
@@ -566,22 +572,21 @@ def _find_safe_split_index(messages: list[dict[str, Any]], target_idx: int) -> i
     """Find a split point that never orphans tool_call/tool_result pairs.
 
     Walks backward from *target_idx* until the boundary sits between two
-    independent message groups (not inside an assistant→tool sequence).
+    independent message groups. An exchange is everything from the assistant
+    tool-call message to its last matching result, whatever sits in between:
+    an engine notice recorded mid-batch once made this stop at the notice and
+    keep the results while their call was dropped, and every provider rejects
+    that request.
     """
     if target_idx <= 0 or target_idx >= len(messages):
         return target_idx
 
+    inside = _in_tool_exchange(messages)
     idx = target_idx
-    while idx > 0:
-        msg = messages[idx]
-        # tool result must stay with its preceding assistant message
-        if msg.get("role") == "tool":
-            idx -= 1
-            continue
-        # The boundary BEFORE a call retains both the call and its results.
-        # Walking past it joins consecutive exchanges into one unbounded tail.
-        break
-
+    # The boundary BEFORE a call retains both the call and its results.
+    # Walking past it joins consecutive exchanges into one unbounded tail.
+    while idx > 0 and inside[idx] and not messages[idx].get("tool_calls"):
+        idx -= 1
     return idx
 
 

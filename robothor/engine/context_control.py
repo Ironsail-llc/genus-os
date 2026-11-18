@@ -86,7 +86,11 @@ def drain_history(messages: list[dict[str, Any]], model: str, target: int) -> li
     ``ROBOTHOR_REAL_TOKENIZER_ENABLED`` the estimator is ``litellm.token_counter``,
     a synchronous CPU-bound call.
     """
-    from robothor.engine.compaction import _find_safe_split_index, _split_for_summary
+    from robothor.engine.compaction import (
+        _find_safe_split_index,
+        _in_tool_exchange,
+        _split_for_summary,
+    )
     from robothor.engine.context import estimate_context_tokens as estimate_tokens
 
     remaining = estimate_tokens(messages, model or None)
@@ -102,10 +106,12 @@ def drain_history(messages: list[dict[str, Any]], model: str, target: int) -> li
         return messages
     # Only the messages that may actually be dropped are priced individually.
     cost = [estimate_tokens([m], model or None) for m in tail[:keep]]
+    # Whole exchanges only: a call and every result, whatever sits between.
+    inside = _in_tool_exchange(tail)
     start = 0
     while start < keep and remaining > target:
         end = start + 1
-        while end < keep and tail[end].get("role") == "tool":
+        while end < keep and inside[end] and not tail[end].get("tool_calls"):
             end += 1
         remaining -= sum(cost[start:end])
         start = end

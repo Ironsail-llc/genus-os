@@ -45,9 +45,7 @@ def _report(chars: int) -> str:
 
 
 def _history(two_calls: bool) -> list[dict]:
-    calls = [
-        {"id": CALL_A, "type": "function", "function": {"name": "report", "arguments": "{}"}}
-    ]
+    calls = [{"id": CALL_A, "type": "function", "function": {"name": "report", "arguments": "{}"}}]
     if two_calls:
         calls.append(
             {"id": CALL_B, "type": "function", "function": {"name": "report", "arguments": "{}"}}
@@ -148,8 +146,8 @@ class TestThePairingCheckIsTheLastLine:
 
 class TestTheGuardrailNoticeComesAfterTheResults:
     def test_the_notice_is_queued_not_appended_mid_batch(self):
-        from robothor.engine.guardrails import SENSITIVE_DATA_GUARDRAIL
         from robothor.engine.post_execution import (
+            SENSITIVE_DATA_GUARDRAIL,
             apply_post_execution_guardrails,
             drain_engine_notes,
         )

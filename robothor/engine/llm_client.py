@@ -2026,9 +2026,8 @@ class LLMClient:
                     if tc_id:
                         valid_ids.add(tc_id)
 
-        if not valid_ids:
-            return messages  # no tool calls at all — nothing to validate
-
+        # No early return when no call is left: that is exactly when every
+        # remaining result is an orphan, and a provider rejects the request.
         cleaned: list[dict[str, Any]] = []
         dropped = 0
         for msg in messages:
@@ -2038,6 +2037,7 @@ class LLMClient:
             cleaned.append(msg)
 
         if dropped:
+            # Always an upstream bug: something split a call from its results.
             logger.warning(
                 "Dropped %d orphaned tool_result message(s) — "
                 "no matching tool_use in assistant messages",
@@ -2452,7 +2452,11 @@ class LLMClient:
             elif is_provider_down:
                 reason = f"provider unavailable: {e}"
             else:
-                reason = str(status)
+                # The provider's own words: "failed (403)" alone hid a pairing
+                # rejection for two weeks. Redacted, then cut short.
+                from robothor.secrets.redaction import redact
+
+                reason = f"{status}: {redact(str(e))[:300]}"
             if is_primary:
                 logger.error(
                     "PRIMARY model %s failed (%s), falling back — primary_model_fallback=True",
