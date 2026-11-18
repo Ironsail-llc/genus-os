@@ -295,6 +295,33 @@ def test_dry_run_without_a_tenant_is_a_dry_run_in_the_own_tenant(env):
     assert result["tenant"] == PARENT
 
 
+# ── dry_run must be a real boolean ─────────────────────────────────────────
+
+
+NOT_BOOLEANS = ["true", "false", 1, 0, None]
+
+
+@pytest.mark.parametrize("value", NOT_BOOLEANS, ids=repr)
+@pytest.mark.parametrize("tenant", [CHILD_A, None], ids=["child", "own"])
+def test_a_dry_run_that_is_not_a_boolean_is_refused_and_runs_nothing(env, value, tenant):
+    args: dict[str, Any] = {"dry_run": value, "title": "x"}
+    if tenant:
+        args["tenant"] = tenant
+    with patch("robothor.engine.runtime.effect_dispatch.invoke") as invoke:
+        message = _refused(_call("create_task", args), env)
+
+    invoke.assert_not_called()
+    assert "dry_run" in message and "true or false" in message
+
+
+def test_dry_run_false_is_a_real_write(env):
+    result = _call("create_task", {"tenant": CHILD_A, "dry_run": False, "title": "x"})
+
+    assert "error" not in result, result
+    (call,) = env.seen.calls
+    assert "dry_run" not in call["args"]
+
+
 # ── The allowlist and the schemas ──────────────────────────────────────────
 
 
