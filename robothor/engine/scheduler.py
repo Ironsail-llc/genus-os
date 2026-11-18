@@ -139,6 +139,10 @@ def _is_agent_job(job_id: str) -> bool:
     return not job_id.startswith(_SYSTEM_JOB_PREFIXES)
 
 
+def _run_config(agent_id: str, directory: Any, where: str, trigger: str = "cron") -> Any:
+    return load_agent_config_or_broken(agent_id, directory, where, trigger_type=trigger)
+
+
 def _now_iso() -> str:
     """UTC ISO timestamp for log correlation."""
     return datetime.now(UTC).isoformat()
@@ -856,7 +860,7 @@ class CronScheduler:
 
     async def _run_agent(self, agent_id: str) -> None:
         """Execute an agent as a scheduled cron job."""
-        agent_config = load_agent_config_or_broken(agent_id, self.config.manifest_dir, "cron job")
+        agent_config = _run_config(agent_id, self.config.manifest_dir, "cron job")
         if not agent_config:
             logger.error("Agent config not found for cron job: %s", agent_id)
             return
@@ -892,7 +896,7 @@ class CronScheduler:
 
     async def _run_heartbeat(self, agent_id: str) -> None:
         """Execute a heartbeat run for an agent."""
-        agent_config = load_agent_config_or_broken(agent_id, self.config.manifest_dir, "heartbeat")
+        agent_config = _run_config(agent_id, self.config.manifest_dir, "heartbeat")
         if not agent_config or not agent_config.heartbeat:
             logger.error("Agent config or heartbeat not found for: %s", agent_id)
             return
@@ -924,7 +928,7 @@ class CronScheduler:
 
         if not is_leader():
             return
-        agent_config = load_agent_config_or_broken(agent_id, self.config.manifest_dir, "ambient")
+        agent_config = _run_config(agent_id, self.config.manifest_dir, "ambient")
         if not agent_config or not agent_config.ambient:
             logger.error("Agent config or ambient block not found for: %s", agent_id)
             return
@@ -978,7 +982,7 @@ class CronScheduler:
         Uses `{agent_id}:worker` dedup key so it never collides with the
         heartbeat or an interactive session.
         """
-        agent_config = load_agent_config_or_broken(agent_id, self.config.manifest_dir, "worker")
+        agent_config = _run_config(agent_id, self.config.manifest_dir, "worker")
         if not agent_config or not agent_config.worker:
             logger.debug("Agent config or worker not found for: %s", agent_id)
             return
@@ -1009,7 +1013,9 @@ class CronScheduler:
         key so it can't collide with main's heartbeat or a user-interactive
         turn that happens to be in flight.
         """
-        agent_config = load_agent_config_or_broken("main", self.config.manifest_dir, "channel wake")
+        agent_config = _run_config(
+            "main", self.config.manifest_dir, "channel wake", "channel_event"
+        )
         if agent_config is None:
             logger.warning("trigger_channel_event: main config not found")
             return

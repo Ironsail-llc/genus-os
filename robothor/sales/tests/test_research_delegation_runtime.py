@@ -44,7 +44,9 @@ def fleet(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "robothor.templates.fleet_snapshot.load_snapshot", lambda *a, **kw: snapshot
     )
-    monkeypatch.setattr("robothor.engine.config.load_agent_config", lambda *a: deepcopy(parent))
+    monkeypatch.setattr(
+        "robothor.engine.config.load_agent_config", lambda *a, **k: deepcopy(parent)
+    )
     engine = SimpleNamespace(
         config=SimpleNamespace(workspace=tmp_path, manifest_dir=tmp_path), execute=AsyncMock()
     )

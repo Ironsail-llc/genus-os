@@ -44,7 +44,7 @@ async def test_chat_ack_progress_stop_and_audit_during_profile_lookup(
     sessions = [chat.ChatSession()]
     gates = []
 
-    def blocked(*args):
+    def blocked(*args, trigger_type=None):
         entered, release, finished = gates[-1]
         entered.set()
         try:
@@ -124,6 +124,7 @@ async def test_chat_ack_progress_stop_and_audit_during_profile_lookup(
         model.assert_not_awaited()
         engine.registry.execute.assert_not_called()
         assert loader.call_count == 30
+        assert {call.kwargs["trigger_type"] for call in loader.call_args_list} == {"webchat"}
     finally:
         for _, release, _ in gates:
             release.set()

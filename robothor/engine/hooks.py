@@ -1008,7 +1008,9 @@ class EventHooks:
             try:
                 from robothor.engine.config import load_agent_config
 
-                agent_config = load_agent_config(agent_id, self.config.manifest_dir)
+                agent_config = load_agent_config(
+                    agent_id, self.config.manifest_dir, trigger_type=TriggerType.HOOK
+                )
 
                 # Warmup is handled centrally by runner.execute()
                 message = trigger["message"]
@@ -1100,7 +1102,9 @@ class EventHooks:
         try:
             from robothor.engine.config import load_agent_config
 
-            agent_config = load_agent_config(agent_id, self.config.manifest_dir)
+            agent_config = load_agent_config(
+                agent_id, self.config.manifest_dir, trigger_type=TriggerType.HOOK
+            )
             if not agent_config:
                 logger.warning("Downstream agent config not found: %s", agent_id)
                 return

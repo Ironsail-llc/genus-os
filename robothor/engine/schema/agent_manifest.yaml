@@ -363,12 +363,20 @@ optional:
   when:
     type: list[WhenClause]
     description: >
-      Conditional overrides applied for one trigger type, then dropped from
-      the manifest. Later clauses win.
+      Conditional overrides applied per run. A run whose trigger type matches
+      a clause gets that clause's overrides deep-merged over the agent's
+      config (fleet defaults, manifest, project and environment overrides
+      first), then the block is dropped. Later clauses win. A load that is not
+      for a run (scans, the doctor, admin pages) reads the manifest without
+      them.
     items:
       trigger_type:
         type: string
-        description: Trigger this clause applies to (e.g. "hook", "cron")
+        description: >
+          Trigger this clause applies to: cron (scheduled, heartbeat, worker
+          and ambient runs), hook, event, manual, telegram, webchat, slack,
+          workflow, sub_agent, federation, webhook, ide, channel_event or
+          channel.
       overrides:
         type: object
         description: Manifest fragment deep-merged over the agent's config

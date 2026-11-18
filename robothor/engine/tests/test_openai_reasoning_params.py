@@ -226,3 +226,26 @@ def test_fleet_models_have_curated_rows_priced_from_the_catalog(model):
         limits.cache_read_cost_per_token,
     ) == CATALOG[model]
     assert limits.accepts_images
+
+
+#: GPT-6.2 Sol, under the id a manifest names and the id the API reports back.
+SOL_IDS = ["openai/gpt-6.2-sol", "gpt-6.2-sol"]
+
+
+@pytest.mark.parametrize("model", SOL_IDS)
+async def test_gpt_6_2_sol_gets_reasoning_effort_and_no_temperature_or_thinking(captured, model):
+    """The same call shape as GPT-6 Luna, sized from its own row."""
+    assert await _sent(model, captured) == {
+        "model": model,
+        "max_tokens": 16_384,
+        "tools": TOOLS,
+        "tool_choice": "auto",
+        "reasoning_effort": "medium",
+    }
+
+
+@pytest.mark.parametrize("model", SOL_IDS)
+def test_gpt_6_2_sol_is_an_openai_reasoning_model_with_a_row(model):
+    assert is_openai_reasoning_model(model)
+    assert model in _MODEL_REGISTRY
+    assert get_model_limits(model).supports_thinking is True

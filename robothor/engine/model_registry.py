@@ -516,6 +516,28 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         accepts_images=True,
         priority_cost_multiplier=2.0,
     ),
+    # GPT-6.2 Sol on the OpenAI API. Figures from litellm's catalog (2026-11).
+    # The same call shape as GPT-6 Luna. Prices are the standard tier's; the
+    # priority tier is billed at twice these.
+    #
+    # max_input_tokens is 272,000, not the catalog's 922,000: above 272,000
+    # input tokens the whole request is billed at 2x input and 1.5x output, and
+    # this row has no tiered-price field. Compaction fires well before the
+    # window and the ceiling enforced after it sits below it, so a request
+    # stays on the price stated here.
+    "openai/gpt-6.2-sol": ModelLimits(
+        max_input_tokens=272_000,
+        max_output_tokens=128_000,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_002,  # $2.00/M
+        output_cost_per_token=0.000_01,  # $10.00/M
+        cache_write_cost_per_token=0.000_002_5,  # $2.50/M
+        cache_read_cost_per_token=0.000_000_1,  # $0.10/M
+        supports_thinking=True,
+        ttft_hint_ms=2000,
+        accepts_images=True,
+        priority_cost_multiplier=2.0,
+    ),
     # Amazon Nova 2 Lite on Bedrock, US cross-Region profile. Figures from
     # litellm's catalog (2026-10). Here for the dashboard canvas: the fastest
     # full render measured (2026-11). It reasons only when asked to, and the
@@ -538,6 +560,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
 # response id up; _registry_candidates does not strip the `openai/` prefix.
 _MODEL_REGISTRY["gpt-5.6-luna"] = _MODEL_REGISTRY["openai/gpt-5.6-luna"]
 _MODEL_REGISTRY["gpt-6-luna"] = _MODEL_REGISTRY["openai/gpt-6-luna"]
+_MODEL_REGISTRY["gpt-6.2-sol"] = _MODEL_REGISTRY["openai/gpt-6.2-sol"]
 # Bedrock reports the inference profile id, without the `bedrock/` prefix.
 _MODEL_REGISTRY["us.amazon.nova-2-lite-v1:0"] = _MODEL_REGISTRY[
     "bedrock/us.amazon.nova-2-lite-v1:0"
