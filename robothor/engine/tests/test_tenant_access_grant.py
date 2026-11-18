@@ -140,6 +140,57 @@ def test_a_verified_human_on_a_system_trigger_is_unattended(grant):
     assert _attach(_run(trigger_type=TriggerType.WORKFLOW), OWNER) == (PARENT,)
 
 
+#: Triggers a person starts. Without a verified human on them, nobody is
+#: vouched for: the unattended grant is for scheduled and system work only.
+HUMAN_TRIGGERS = (
+    TriggerType.WEBCHAT,
+    TriggerType.TELEGRAM,
+    TriggerType.SLACK,
+    TriggerType.CHANNEL,
+    TriggerType.MANUAL,
+    TriggerType.IDE,
+    TriggerType.WEBHOOK,
+)
+
+#: Triggers with no person behind them that the unattended grant covers.
+GRANT_TRIGGERS = (
+    TriggerType.CRON,
+    TriggerType.HOOK,
+    TriggerType.EVENT,
+    TriggerType.WORKFLOW,
+    TriggerType.CHANNEL_EVENT,
+)
+
+
+@pytest.mark.parametrize("trigger", HUMAN_TRIGGERS)
+@pytest.mark.parametrize("identity", [None, UNVERIFIED], ids=["no-identity", "unverified"])
+def test_an_unidentified_person_never_gets_the_unattended_grant(grant, trigger, identity):
+    grant.tenant_flag = grant.opt_in = True
+    run = _run(trigger_type=trigger, user_role="viewer")
+    assert _attach(run, identity) == (PARENT,)
+
+
+@pytest.mark.parametrize("trigger", GRANT_TRIGGERS)
+def test_both_grants_reach_the_descendants_on_every_system_trigger(grant, trigger):
+    grant.tenant_flag = grant.opt_in = True
+    run = _run(trigger_type=trigger, user_role="service")
+    assert _attach(run, None) == EVERYTHING
+
+
+def test_a_heartbeat_with_both_grants_reaches_the_descendants(grant):
+    grant.tenant_flag = grant.opt_in = True
+    run = _run(trigger_type=TriggerType.CRON, trigger_detail="heartbeat:main", user_role="service")
+    assert _attach(run, None) == EVERYTHING
+
+
+def test_a_federated_run_never_gets_the_unattended_grant(grant):
+    # A request from a peer instance is not this tenant's scheduled work.
+    grant.tenant_flag = grant.opt_in = True
+    assert _attach(_run(trigger_type=TriggerType.FEDERATION, user_role="service"), None) == (
+        PARENT,
+    )
+
+
 def test_a_failed_lookup_restricts_to_the_own_tenant():
     from robothor.engine.run_identity import attach_tenant_access
 
