@@ -494,18 +494,28 @@ given `tenant: acme-child-a` runs in that child.
 | Run | Reaches |
 |-----|---------|
 | A person signed in to the parent as `owner` or `admin` (a verified identity, on chat or another channel a person uses) | The parent and its descendants. |
+| An `owner` or `admin` of the parent who has switched into a child | That child and the child's own descendants: never the parent or a sibling from there. |
 | A `member` or `viewer` | Their own tenant only. |
 | A person signed in to a child, even its `admin` | That child only: never a sibling, never the parent. |
+| A person nobody verified: an unpaired or unverified sender, or a chat with no resolved identity, on any channel a person uses | Their own tenant only, whatever the grants below say. |
 | A sub-agent, even one spawned by the owner's chat | Its own tenant only. |
-| A benchmark run | Its own tenant only. |
-| An unattended run (cron, hook, event, workflow) | Its own tenant only, unless both grants below are set. |
+| A benchmark run, or the engine's own continuation of a task after a verified repair | Its own tenant only. |
+| A request from a federated peer instance | Its own tenant only. |
+| An unattended run (cron and heartbeat, hook, event, workflow) | Its own tenant only, unless both grants below are set. |
+
+A verified person's reach is judged by the weaker of their own role and the
+role the run carries, in the tenant they were verified in: a `member` on a run
+that says `owner` reaches their own tenant only.
 
 **Writes.** Any run that reaches a child may create a task or send a
 notification there, which leaves work for that child's team. Updating a task
 and creating or updating a note in a child take the verified owner of the
 parent, on a top-level run. Each write keeps the approval tier and role check
 it has in the parent. Every write accepts `dry_run: true`, which checks it,
-audits it, and reports what would change without changing anything.
+audits it, and reports what would change without changing anything; it reads
+the record it would change only as far as the caller may read it. `dry_run`
+must be the boolean `true` or `false`: any other value (`"true"`, `1`, `null`)
+is refused and nothing runs.
 
 **The unattended grant.** A scheduled agent in the parent reaches the children
 only when the parent tenant allows it AND the agent's manifest asks for it:
@@ -522,7 +532,9 @@ v2:
 
 Either one alone grants nothing. With both, the agent's unattended runs can use
 the allowlisted reads in every child, and of the writes only create a task or
-send a notification. Revoke by setting either back to false; the next run picks
+send a notification. The grant covers unattended runs only: the same agent
+answering a person on chat reaches the children only when that person is a
+verified `owner` or `admin` of the parent. Revoke by setting either back to false; the next run picks
 it up.
 
 ### The organisation watch
@@ -556,11 +568,15 @@ instructions (`templates/agents/core/main/instructions.template.md`): call
 briefing only when it is not empty. On a quiet beat the agent answers "nothing
 to report", which delivery suppresses.
 
-Without both grants the watch covers the parent only and says so (`limited`).
-The first watch reports every problem present at that moment, so problems that
-existed before it was switched on are not hidden; after that only changes are
-reported. What it saw is kept in the parent tenant's `org_watch_snapshot`
-memory block; deleting that block makes the next watch a first watch again.
+Without both grants the watch covers the parent only and says so (`limited`);
+a limited watch reports but stores nothing, so it never erases what the full
+watch last saw of the children. The first watch reports every problem present
+at that moment, so problems that existed before it was switched on are not
+hidden; after that only changes are reported. What it saw is kept in the
+parent tenant's `org_watch_snapshot` memory block. That block is engine state:
+no agent can read, write, append to or list it, and no manifest can load it
+into an agent's context. Deleting the row (an operator, in the database) makes
+the next watch a first watch again.
 
 ## Verification queries
 

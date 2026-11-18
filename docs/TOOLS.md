@@ -1647,7 +1647,9 @@ In a [tenant hierarchy](runbooks/TENANT_HIERARCHY.md) a parent tenant's agent
 can read and act in its child tenants. Which tenants a run may reach is decided
 once, when the run starts (see the runbook's
 [Agents in a parent tenant](runbooks/TENANT_HIERARCHY.md#agents-in-a-parent-tenant)).
-A sub-agent run and a benchmark run never reach another tenant.
+A sub-agent run and a benchmark run never reach another tenant, and neither
+does a run a person started without a verified identity, whatever grants the
+agent has.
 
 **`org_overview`** takes no arguments. It returns `as_of` and one entry per
 tenant: the run's own tenant first, then every tenant it may reach. Each entry
@@ -1666,15 +1668,19 @@ oldest overdue with `priority`, `overdueDays` and `ageDays`), `last_activity_at`
 | `error` | That tenant could not be read; the others are still answered. |
 
 A run that reaches no other tenant gets its own entry and a `note` saying so.
-Benchmark spend is not broken out per tenant. The tool is read-only, and each
-child it reads leaves an audit row.
+Benchmark spend is not broken out per tenant. The five oldest overdue tasks of
+the caller's own tenant are those the caller may read under data scoping, as
+`list_tasks` would show them; the counts are the tenant's, as
+`list_tasks_summary` shows them. The tool is read-only, and each child it reads
+leaves an audit row.
 
 **The `tenant` argument.** The tools below take an optional `tenant`: a child
 tenant's id, as `org_overview` lists them. The call then runs in that tenant,
 with the database scope bound to it, exactly as the same call made by that
 tenant's own agent would. Without `tenant` a call is unchanged. Naming a tenant
 the run cannot reach, or one that does not exist, is refused with the same
-sentence, and nothing runs. Naming `tenant` on any other tool is refused too.
+sentence, and nothing runs; so is a `tenant` that is not a string or is longer
+than 128 characters. Naming `tenant` on any other tool is refused too.
 
 - Reads: `list_agent_runs`, `get_agent_run`, `list_agent_schedules`,
   `get_agent_stats`, `list_agent_reviews`, `get_agent_review`,
@@ -1703,11 +1709,16 @@ one and changes nothing. The result says what would happen: `would` (the
 fields a create or a notification would send) or `changes` (each field an
 update would change, `from` and `to`, read from the record in that tenant). A
 missing record or a malformed id is an `error`, as it would be for the real
-call. `dry_run` without `tenant` is a dry run in the run's own tenant.
+call, and so is a record the caller may not read under data scoping. `dry_run`
+without `tenant` is a dry run in the run's own tenant, audited like the real
+call. `dry_run` must be the boolean `true` or `false`; any other value
+(`"true"`, `1`, `null`) is refused and nothing runs.
 
 Every call that names another tenant, allowed or refused, dry run or not,
 writes an `agent.cross_tenant_call` audit row naming the home tenant, the
-target tenant, the user, the tool and the outcome.
+target tenant, the user, the tool and the outcome, including one answered from
+an earlier identical call (outcome `repeat`) or replayed from the effect
+ledger (outcome `replay`).
 
 **`org_watch`** reports what changed across the same tenants since its last
 call. It takes `daily` (default false) and `preview` (default false) and
@@ -1724,13 +1735,18 @@ when nothing changed. `daily: true` puts every company's current state first,
 problems and persisting problems before healthy companies, with the as-of
 time. The first call (or one after the snapshot was deleted) reports every
 problem present. `limited` is true when the run reaches only its own tenant,
-and a `note` says the parent has not granted child access.
+and a `note` says the parent has not granted child access; a limited watch
+reports but never stores (`stored: false`).
 
 `org_watch` stores what it saw in the run's own tenant's
-`org_watch_snapshot` memory block, unless `preview: true`, so it is not
-read-only: plan mode does not offer it, and a benchmark run never gets it. It
-never sends anything; the agent that called it delivers the briefing. Each
-child it reads leaves an audit row, as for `org_overview`.
+`org_watch_snapshot` memory block, unless `preview: true` or `limited`, so it
+is not read-only. That block is engine state: `memory_block_read`,
+`memory_block_write`, `append_to_block` and `memory_block_list` refuse or omit
+it, and the warm-up never loads it. Any text the briefing repeats from it is cut
+to one short line. Because it is not read-only, plan mode does not offer it,
+and a benchmark run never gets it. It never sends anything; the agent that
+called it delivers the briefing. Each child it reads leaves an audit row, as
+for `org_overview`.
 
 **Which to use.** Ask `org_overview` first for "how are the companies doing?":
 one call covers every company and shows which one needs attention. Then drill
