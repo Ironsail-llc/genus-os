@@ -237,7 +237,7 @@ is given.
 #### Tool-call rate limit
 
 A workflow's tool steps share one ceiling of tool calls a minute, counted
-for the whole workflow across all its runs. It is the fleet default (30)
+for the whole workflow across all its runs. It is the fleet default (60)
 unless the workflow sets its own with a top-level `rate_limit_per_minute`
 (a positive integer). Raise it for a workflow that takes bursts, such as a
 hook workflow whose run makes several tool calls:
