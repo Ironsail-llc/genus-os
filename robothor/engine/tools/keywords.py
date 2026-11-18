@@ -374,6 +374,10 @@ TOOL_HINTS: dict[str, ToolHint] = {
             "employer",
             "firm",
             "crm",
+            # "look up a company": the affiliation tools (set_affiliation,
+            # list_company_children, find_company_by_identifier) made the noun
+            # commoner again, so the entry point carries the verb people use.
+            "look",
         ),
         rank_bias=1.0,
     ),

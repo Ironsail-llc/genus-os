@@ -229,7 +229,9 @@ get_company_parent_chain(company_id)        # nearest first
 list_company_identifiers(company_id)
 set_affiliation(person_id, company_id, role, *, attributes=None, is_active=True)
 close_affiliation(person_id, company_id, role)
-list_affiliations(*, person_id=None, company_id=None, role=None, active_only=True)
+list_affiliations(*, person_id=None, company_id=None, role=None, active_only=True, limit=500, offset=0)
+list_affiliations_page(...)                 # same filters: {affiliations, total, offset, limit, hasMore}
+count_affiliations(...)                     # same filters: the total alone
 get_company_view(company_id)                # company, parent, chain, children, people by role, ids
 ```
 
@@ -301,7 +303,23 @@ GET /api/people/{id}/notes
 GET /api/people/{id}/runs
 GET /api/people/{id}/memory
 GET /api/people/{id}/contact-360
+GET /api/people/{id}/affiliations?activeOnly=true&limit=100&offset=0
+POST /api/people/{id}/affiliations          {companyId, role, attributes?, isActive?}
+POST /api/people/{id}/affiliations/close    {companyId, role}
+GET /api/people/by-identifier?system=&identifier=
+GET /api/companies/by-identifier?system=&identifier=
+GET /api/companies/{id}/children
+GET /api/companies/{id}/affiliations?role=&activeOnly=true&limit=100&offset=0
+GET /api/companies/{id}/structure           # parent, chain, children, people by role, ids
 ```
+
+The affiliation routes answer 400 with `{"error"}` when the DAL refuses the
+input (a person or company outside the tenant, a blank role), and every route
+is pinned to the request's tenant like the rest of `/api/people` and
+`/api/companies`. The two affiliation lists answer one page,
+`{affiliations, total, offset, limit, hasMore}` (`limit` at most 500), so a
+caller can tell a list was cut; the company view's `affiliations` stops at
+500 and carries `affiliationsTotal`.
 
 ## Agent tools
 
@@ -311,6 +329,14 @@ Delivery agents can call these directly:
 - `get_contact_360(identifier="jane@example.com", channel="email")` —
   resolve first, then fetch
 - `list_contact_messages(id=..., channel=?, limit=?)` — full bodies
+- `get_contact_360(companyId=...)` — a company's parent, chain, children,
+  people by role and outside ids
+- `set_affiliation(personId, companyId, role, attributes?, isActive?)`,
+  `list_affiliations(personId? | companyId?, role?, activeOnly?)`,
+  `list_company_children(companyId)`,
+  `find_company_by_identifier(system, identifier)`,
+  `find_person_by_identifier(system, identifier)` — see
+  [Organization structure](#organization-structure) and `docs/TOOLS.md`
 
 Every id argument is validated at the tool boundary before the query runs:
 person, company, note, task and notification ids must be UUIDs and
@@ -437,6 +463,7 @@ per-test rollback stays intact.
 | `crm/migrations/049_timeline_activity.sql` | timeline_activity + initial backfill |
 | `crm/migrations/113_add_do_not_contact.sql` | `crm_people.do_not_contact` + partial index on the opted-out rows |
 | `crm/migrations/148_calendar_event_provider_identity.sql` | `calendar_event.provider` + `external_event_id` (backfilled), unique on `(tenant, provider, external_event_id)` |
+| `crm/migrations/170_crm_find_tools_read_only.sql` | lets viewer and member roles use the two `find_*_by_identifier` reads |
 | `crm/migrations/169_crm_affiliations.sql` | `crm_companies.parent_company_id`, `crm_company_identifiers`, `crm_affiliations`, with the tenant and hierarchy guards |
 
 ## Open work

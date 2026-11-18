@@ -71,6 +71,21 @@ class UpdateCompanyRequest(BaseModel):
     idealCustomerProfile: bool | None = None
 
 
+# ─── Affiliations ────────────────────────────────────────────────────────
+
+
+class SetAffiliationRequest(BaseModel):
+    companyId: str
+    role: str
+    attributes: dict[str, object] | None = None
+    isActive: bool = True
+
+
+class CloseAffiliationRequest(BaseModel):
+    companyId: str
+    role: str
+
+
 # ─── Notes ───────────────────────────────────────────────────────────────
 
 

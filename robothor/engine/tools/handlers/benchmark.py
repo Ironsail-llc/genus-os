@@ -363,6 +363,8 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "log_interaction",
         "record_resolution",
         "toggle_conversation_status",
+        # A person's role at a company: a CRM write the sandbox does not sweep.
+        "set_affiliation",
         # Destructive CRM: deletes and merges are irreversible, and "never
         # deletes" is exactly what the hygiene suite grades.
         "delete_company",

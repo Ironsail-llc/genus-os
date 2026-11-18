@@ -868,7 +868,7 @@ Each unit gets ONLY the tools it needs. The engine's `build_for_agent()` method 
 |----------|-------|
 | **File I/O** | `exec`, `read_file`, `write_file`, `list_directory` |
 | **Memory** | `search_memory`, `store_memory`, `get_entity`, `memory_block_read`, `memory_block_write`, `append_to_block`, `memory_block_list` |
-| **CRM** | `create_task`, `update_task`, `get_task`, `list_tasks`, `list_my_tasks`, `resolve_task`, `create_note`, `list_notes`, `update_note`, `create_person`, `list_people`, `get_person`, `update_person`, `create_company`, `list_companies` |
+| **CRM** | `create_task`, `update_task`, `get_task`, `list_tasks`, `list_my_tasks`, `resolve_task`, `create_note`, `list_notes`, `update_note`, `create_person`, `list_people`, `get_person`, `update_person`, `create_company`, `list_companies`, `list_company_children`, `set_affiliation`, `list_affiliations`, `find_company_by_identifier`, `find_person_by_identifier`, `get_contact_360` |
 | **Web** | `web_fetch`, `web_search` |
 | **Communication** | `log_interaction`, `list_conversations`, `get_conversation`, `list_messages`, `create_message` |
 | **Vision** | `look`, `who_is_here`, `enroll_face`, `set_vision_mode` |

@@ -14,9 +14,9 @@ export interface TemplateEntry {
 export const TEMPLATE_CATALOG: TemplateEntry[] = [
   {
     name: "ContactCard",
-    description: "Display a single contact with avatar, name, title, company, email",
+    description: "Display a single contact with avatar, name, title, company, email, and their roles at companies (affiliations from get_contact_360)",
     category: "data",
-    propsInterface: `{ name: { firstName: string; lastName: string }; email?: string; jobTitle?: string; company?: { name: string } | null; phone?: string; avatarUrl?: string }`,
+    propsInterface: `{ name: { firstName: string; lastName: string }; email?: string; jobTitle?: string; company?: { name: string } | null; phone?: string; avatarUrl?: string; affiliations?: Array<{ id: string; companyId: string; companyName?: string; role: string; isActive: boolean; since?: string | null; until?: string | null }> }`,
     example: `<ContactCard name={{ firstName: "John", lastName: "Doe" }} email="john@example.com" jobTitle="CTO" />`,
   },
   {
@@ -28,9 +28,9 @@ export const TEMPLATE_CATALOG: TemplateEntry[] = [
   },
   {
     name: "CompanyCard",
-    description: "Display a company with domain, employees, revenue",
+    description: "Display a company with domain, employees, revenue, its parent company, the companies under it and its people by role (get_contact_360 with companyId)",
     category: "data",
-    propsInterface: `{ name: string; domainName?: string; employees?: number; annualRecurringRevenue?: number; address?: string }`,
+    propsInterface: `{ name: string; domainName?: string; employees?: number; annualRecurringRevenue?: number; address?: string; parent?: { id: string; name: string } | null; subsidiaries?: Array<{ id: string; name: string }>; affiliations?: Array<{ id: string; personId: string; personName?: string; role: string; isActive: boolean }> }`,
     example: `<CompanyCard name="Acme Inc" domainName="acme.com" employees={50} />`,
   },
   {
