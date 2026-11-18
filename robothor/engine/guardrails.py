@@ -950,13 +950,7 @@ class GuardrailEngine:
 
     def rate_limit_full(self, agent_id: str) -> bool:
         """Whether the next call for ``agent_id`` would be rate limited. Counts nothing."""
-        if "rate_limit" not in self.enabled_policies:
-            return False
-        limit = self.rate_limit_per_minute or DEFAULT_RATE_LIMIT
-        cutoff = time.monotonic() - 60
-        return (
-            sum(1 for t in self._rate_counts.get(agent_id or "_default", ()) if t > cutoff) >= limit
-        )
+        return self.rate_limit_wait(agent_id) > 0
 
     def rate_limit_wait(self, agent_id: str) -> float:
         """Seconds until ``agent_id`` may make another call; 0.0 if it may now. Counts nothing."""
