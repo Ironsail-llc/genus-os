@@ -295,6 +295,60 @@ def test_dry_run_without_a_tenant_is_a_dry_run_in_the_own_tenant(env):
     assert result["tenant"] == PARENT
 
 
+# ── A dry run reads only what the caller may read ──────────────────────────
+
+
+MEMBER = IdentityContext(
+    tenant_id=PARENT,
+    channel="webchat",
+    identifier="bob",
+    verified=True,
+    role="member",
+    person_id="22222222-2222-2222-2222-222222222222",
+)
+
+PRIVATE_TITLE = "a plan only its owner may read"
+
+
+@pytest.mark.parametrize(
+    ("name", "getter"), [("update_task", "get_task"), ("update_note", "get_note")]
+)
+def test_a_restricted_members_dry_run_cannot_read_someone_elses_record(
+    env, monkeypatch, name, getter
+):
+    monkeypatch.setenv("ROBOTHOR_DATA_SCOPING", "enforce")
+    scopes: list[Any] = []
+
+    def scoped_get(record_id: str, tenant_id: str = "", scope: Any = None, **_: Any) -> Any:
+        scopes.append(scope)
+        if scope is not None and scope.restricted:
+            return None  # another person's row, filtered as the real getter does
+        return {"id": record_id, "title": PRIVATE_TITLE, "status": "TODO"}
+
+    with patch(f"robothor.crm.dal.{getter}", side_effect=scoped_get):
+        result = _call(
+            name,
+            {"dry_run": True, "id": TASK_ID, "title": "x"},
+            identity=MEMBER,
+            user_id="bob",
+            user_role="member",
+        )
+
+    assert scopes and scopes[0] is not None and scopes[0].restricted
+    assert "changes" not in result
+    assert PRIVATE_TITLE not in str(result)
+    assert "error" in result
+
+
+def test_an_own_tenant_dry_run_is_audited_like_the_real_call(env):
+    with patch("robothor.engine.tools.dispatch._audit_tool_call") as audit:
+        _call("create_task", {"dry_run": True, "title": "x"})
+
+    audit.assert_called_once()
+    assert audit.call_args.args[0] == "create_task"
+    assert audit.call_args.kwargs.get("dry_run") is True
+
+
 # ── dry_run must be a real boolean ─────────────────────────────────────────
 
 
