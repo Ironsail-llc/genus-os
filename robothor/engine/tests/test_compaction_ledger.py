@@ -116,3 +116,39 @@ def test_an_excerpt_cannot_close_the_untrusted_block():
     (ledger,) = _ledgers(folded)
     assert ledger["content"].count("</untrusted_content>") == 1
     assert ledger["content"].rstrip().endswith("</untrusted_content>")
+
+
+class TestTheExcerptBudgetCountsTheLedger:
+    def test_excerpts_already_in_the_ledger_count_as_spent(self):
+        """Otherwise every fold resets the budget, each new stub takes the
+        largest excerpt again, and the ledger grows until its oldest excerpts,
+        the ones a long task started from, are cut."""
+        from robothor.engine.compaction import _excerpt_chars_spent
+
+        folded, _ = fold_stub_exchanges(_conversation(0, 4, "z" * 900), 2, 2, 10**9)
+        assert _excerpt_chars_spent(folded) >= 3 * 900
+
+
+class TestFoldingIsBatched:
+    def test_a_single_new_stub_below_the_trigger_is_not_folded(self):
+        """Each fold rewrites the ledger near the head, which invalidates the
+        prompt cache after it; fold in batches unless at the trigger."""
+        first, _ = fold_stub_exchanges(_conversation(0, 10), 2, 2, 10**9, min_exchanges=8)
+        grown = [*first, *_exchange(10), *_exchange(11)]
+        again, n = fold_stub_exchanges(grown, 3, 2, 10**9, min_exchanges=8)
+        assert n == 0 and again is grown
+
+
+class TestALedgerReloadedWithoutItsKey:
+    def test_a_checkpoint_keeps_the_key(self):
+        from robothor.engine.checkpoint import _at_rest
+
+        folded, _ = fold_stub_exchanges(_conversation(0, 4), 2, 2, 10**9)
+        assert any(is_ledger(m) for m in _at_rest(folded))
+
+    def test_without_the_key_it_is_an_ordinary_user_turn(self):
+        """A history reloaded without engine keys keeps the text as a plain user
+        turn: summarized and shrunk like one, never treated as the ledger."""
+        folded, _ = fold_stub_exchanges(_conversation(0, 4), 2, 2, 10**9)
+        bare = [{k: v for k, v in m.items() if not k.startswith("_")} for m in folded]
+        assert not any(is_ledger(m) for m in bare)

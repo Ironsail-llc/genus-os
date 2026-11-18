@@ -494,13 +494,21 @@ class TestStubsAreNeverSummarizedAway:
     excerpt included (63 -> 5 messages). Stubs are kept; when they alone do
     not fit, they are folded into one deterministic ledger, never dropped."""
 
-    async def test_the_early_fact_survives_thirty_reads_under_a_large_system_prompt(self):
+    @pytest.mark.parametrize(
+        ("system_reps", "result_chars"), [(300, 40_000), (1_500, 40_000), (300, 46_000)]
+    )
+    async def test_the_early_fact_survives_thirty_reads_under_a_large_system_prompt(
+        self, system_reps, result_chars
+    ):
+        """The last case: each new result alone is about the drain target, so
+        every earlier read lives in the ledger, whose excerpts must not grow
+        until the oldest are cut."""
         run = await _scripted_run(
             iterations=31,
-            result_chars=40_000,
+            result_chars=result_chars,
             window=128_000,
             content_for=_file_with_an_early_fact,
-            system_reps=1_500,
+            system_reps=system_reps,
         )
         last = run.sent[-1]
         assert FACT in json.dumps(last), "the early fact left the context"
