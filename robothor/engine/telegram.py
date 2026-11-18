@@ -1409,7 +1409,7 @@ class TelegramBot(
         from robothor.engine.manifest_schema import ManifestSchemaError
 
         try:
-            cfg = load_agent_config("main", self.config.manifest_dir)
+            cfg = load_agent_config("main", self.config.manifest_dir, trigger_type="telegram")
         except ManifestSchemaError as e:
             logger.error("main manifest refused by the schema: %s", e.summary())
             return ""

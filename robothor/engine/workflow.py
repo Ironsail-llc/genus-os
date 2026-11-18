@@ -530,7 +530,7 @@ class WorkflowEngine:
         from robothor.engine.config import load_agent_config
 
         def _chain(agent_id: str) -> list[str]:
-            cfg = load_agent_config(agent_id, self.config.manifest_dir)
+            cfg = load_agent_config(agent_id, self.config.manifest_dir, trigger_type="workflow")
             if cfg is None:
                 return []
             # model_fallbacks already carries the instance's last-resort model
