@@ -18,6 +18,7 @@ import pytest
 
 from robothor.engine.models import TriggerType
 from robothor.engine.tools.dispatch import ToolContext
+from robothor.tenancy.tests.test_watch import _Blocks
 
 PARENT, CHILD_A, CHILD_B = "acme-parent", "acme-child-a", "acme-child-b"
 
@@ -77,24 +78,6 @@ class _Rollup:
             "last_activity_at": "2026-11-18T11:00:00+00:00",
             "status": "attention" if failing else "ok",
         }
-
-
-class _Blocks:
-    def __init__(self) -> None:
-        self.rows: dict[tuple[str, str], str] = {}
-        self.writes: list[tuple[str, str]] = []
-
-    def read_blocks(self, names: list[str], tenant_id: str = "") -> dict[str, Any]:
-        return {
-            n: {"block_name": n, "content": self.rows[(tenant_id, n)]}
-            for n in names
-            if (tenant_id, n) in self.rows
-        }
-
-    def write_block(self, name: str, content: str, tenant_id: str = "") -> dict[str, Any]:
-        self.rows[(tenant_id, name)] = content
-        self.writes.append((tenant_id, name))
-        return {"success": True, "block_name": name}
 
 
 @pytest.fixture
