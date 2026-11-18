@@ -713,10 +713,13 @@ A namespace that enforces Pod Security `baseline` or `restricted` rejects an
 
 **Egress.** The engine pod reaches the Git host (HTTPS, for clone, fetch and
 push, and its API for reviews) and the model provider Claude Code calls, on
-443. As with Google Workspace, `networkPolicy.egress.destinations.https`
-matches CIDRs, so put the hosts in the egress proxy's allowlist and set
-`HTTPS_PROXY` in `engine.env`. Network inside a job's sandbox is separate and
-off unless `ROBOTHOR_CODING_ALLOWED_DOMAINS` names hosts.
+443. Allow them directly: put the address ranges those hosts resolve to in
+`networkPolicy.egress.destinations.https.cidrs`. An egress proxy does not work
+for these jobs. Claude Code and the `git` clone and fetch run with a minimal
+environment that leaves out `HTTPS_PROXY`, so setting it in `engine.env`
+reaches the engine but not them, and a cluster whose only route out is a proxy
+times out on the first fetch or model call. Network inside a job's sandbox is
+separate and off unless `ROBOTHOR_CODING_ALLOWED_DOMAINS` names hosts.
 
 ## Logs
 
