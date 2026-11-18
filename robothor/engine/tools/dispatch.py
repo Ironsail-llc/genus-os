@@ -513,6 +513,7 @@ def _audit_tool_call(
     user_id: str = "",
     status: str = "ok",
     error: str | None = None,
+    dry_run: bool = False,
 ) -> None:
     """Record a tool invocation in the audit log. Never raises.
 
@@ -528,6 +529,8 @@ def _audit_tool_call(
         details: dict[str, Any] = {"tenant_id": tenant_id}
         if user_id:
             details["user_id"] = user_id
+        if dry_run:
+            details["dry_run"] = True
         if error:
             # Redacted, defence in depth. An audit row outlives the run and is
             # exported wholesale into a support bundle, and this `error` is
@@ -551,6 +554,25 @@ def _audit_tool_call(
         )
     except Exception:
         pass
+
+
+def _audit_own_dry_run(
+    name: str, crossing: Any, ctx: ToolContext, result: dict[str, Any]
+) -> dict[str, Any]:
+    """An own-tenant dry run leaves the tool-call row its real call would,
+    marked as a dry run. A cross-tenant one is audited by ``cross_tenant.dry_run``."""
+    if crossing.target is None:
+        error = result.get("error")
+        _audit_tool_call(
+            name,
+            ctx.agent_id,
+            ctx.tenant_id,
+            user_id=ctx.user_id,
+            status="error" if error else "ok",
+            error=str(error) if error else None,
+            dry_run=True,
+        )
+    return result
 
 
 def _rbac_unlock(user_role: str, name: str, denied: str) -> str:
@@ -743,7 +765,9 @@ async def _execute_tool(
         return denial
     if crossing is not None and crossing.dry_run:
         # Admitted exactly as the real call; nothing reserved, nothing run.
-        return await cross_tenant.dry_run(name, crossing, ctx)
+        return _audit_own_dry_run(
+            name, crossing, ctx, await cross_tenant.dry_run(name, crossing, ctx)
+        )
 
     from robothor.engine.runtime.effect_dispatch import invoke
 

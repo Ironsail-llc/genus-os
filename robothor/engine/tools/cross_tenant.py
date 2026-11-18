@@ -244,7 +244,9 @@ async def dry_run(name: str, crossing: Crossing, ctx: ToolContext) -> dict[str, 
     elif name in _UPDATE_RECORDS:
         kind, getter = _UPDATE_RECORDS[name]
         record_id = str(args.get("id") or "")
-        current = await asyncio.to_thread(_current_record, getter, record_id, target)
+        current = await asyncio.to_thread(
+            _current_record, getter, record_id, target, _data_scope(ctx)
+        )
         if current is None:
             result["error"] = f"No {kind} {record_id} in that tenant; nothing would change."
         else:
@@ -273,12 +275,26 @@ async def dry_run(name: str, crossing: Crossing, ctx: ToolContext) -> dict[str, 
     return result
 
 
-def _current_record(getter: str, record_id: str, tenant_id: str) -> dict[str, Any] | None:
-    """The record a dry-run update would change, read in its tenant's scope."""
+def _data_scope(ctx: ToolContext) -> Any:
+    """The row scope the real ``get_task`` / ``get_note`` handlers read with."""
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import scope_for_query
+
+    return scope_for_query(data_scoping_mode(), ctx.identity)
+
+
+def _current_record(
+    getter: str, record_id: str, tenant_id: str, scope: Any
+) -> dict[str, Any] | None:
+    """The record a dry-run update would change, read in its tenant's scope and
+    filtered by the caller's data scope: a row the caller may not read is
+    answered exactly as one that does not exist."""
     from robothor.crm import dal
 
     with _scope(tenant_id):
-        found: dict[str, Any] | None = getattr(dal, getter)(record_id, tenant_id=tenant_id)
+        found: dict[str, Any] | None = getattr(dal, getter)(
+            record_id, tenant_id=tenant_id, scope=scope
+        )
     return found
 
 
