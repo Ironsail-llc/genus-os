@@ -1851,7 +1851,9 @@ def apply(
                 )
                 report.warnings.extend(f"patch for {patch.agent!r}: {w}" for w in kept)
                 if _patch_would_change(target, section):
-                    if patch.agent not in before_patches:
+                    previous_patch = before_patches.get(patch.agent)
+                    if previous_patch is None or previous_patch.get("skipped"):
+                        # First write to this agent (one it was waiting for counts).
                         _backup_once(target, dist, root)
                     _patch_manifest(target, section)
                     report.lines.append(f"patched  docs/agents/{patch.agent}.yaml")
@@ -1861,6 +1863,8 @@ def apply(
                 "install": patch.install,
                 "remove": patch.remove,
             }
+            if not target.is_file():
+                recorded["skipped"] = True
             if patch.install.get("append"):
                 recorded["appended"] = patch.install["append"]
             entry["patches"].append(recorded)
