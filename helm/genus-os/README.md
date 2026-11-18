@@ -404,6 +404,7 @@ With `vault.enabled: false` (local values), create the
 | `workspace.configMap` | none | Never inherited: a bundle holds one tenant's fleet. |
 | `extraVolumes`, `extraVolumeMounts` | none | Never inherited: the root engine's extra volumes name its own resources, and a `ReadWriteOnce` claim mounted by a second pod would leave the cell unschedulable. Same shape as `engine.extraVolumes` (see [Extra volumes](#extra-volumes)). |
 | `googleWorkspace.enabled` | `false` | Never inherited: credentials belong to one mailbox. |
+| `coding` | none | Never inherited: Claude Code jobs run only in an engine whose own entry enables them. Same keys as `engine.coding` (see [Claude Code jobs](#claude-code-jobs)). |
 | `googleWorkspace.secretName` | `<fullname>-engine-<id>-google` | A Secret with a `credentials.json` key, supplied by the deployment. VSO only materializes the root engine's `engine-google`. The mount is optional, as on the root engine. |
 
 **Seeding a cell's workspace.** Same options as the root engine (see
@@ -667,7 +668,11 @@ The chart wires the rest when `engine.coding.enabled` is on:
 | `engine.coding.sandbox.seccompProfile` | `{type: Unconfined}` | The engine container's seccomp profile while `relaxPodSecurity` is on. |
 
 Use a persistent workspace (`workspace.persistence.enabled`) so clones survive
-a restart. Root engine only: tenant cells never inherit `engine.coding`.
+a restart. Tenant cells never inherit `engine.coding`. To run the jobs in a
+cell, for example to keep the reviewer and its credentials apart from the root
+engine, give that cell's `tenants[]` entry its own `coding` block with the same
+keys; the paths land on the cell's own workspace volume, and
+`sandbox.relaxPodSecurity` then applies to that cell's engine alone.
 
 **Credentials.** Both go in the `engine-providers` class, never in `engine.env`:
 `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`; the chart selects token

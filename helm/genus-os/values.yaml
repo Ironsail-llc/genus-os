@@ -465,8 +465,9 @@ engine:
   # ROBOTHOR_CLAUDE_CODE_AUTH=token, so jobs authenticate with
   # CLAUDE_CODE_OAUTH_TOKEN (and push with GITHUB_TOKEN) from the
   # engine-providers class. Needs a writable workspace; use a PVC so clones
-  # survive a restart. engine.env overrides any path. Root engine only: tenant
-  # cells never inherit it. See "Claude Code jobs" in the chart README.
+  # survive a restart. engine.env overrides any path. Tenant cells never
+  # inherit it; a cell that should run these jobs declares its own
+  # tenants[].coding. See "Claude Code jobs" in the chart README.
   coding:
     enabled: false
     # Relative to workspace.mountPath.
@@ -480,8 +481,8 @@ engine:
       # Unmasked, the seccompProfile below, and hostUsers: false on the pod
       # (which Unmasked requires; the nodes must support user namespaces).
       # Everything else (non-root, read-only root, no privilege escalation, no
-      # capabilities) stays. No other workload, init container or tenant cell
-      # is touched.
+      # capabilities) stays. No other workload or init container is touched,
+      # and a tenant cell only when its own coding block asks for it.
       relaxPodSecurity: false
       # The engine container's profile while relaxPodSecurity is on. A
       # Localhost profile that allows unshare/clone of user namespaces is
@@ -587,6 +588,8 @@ tenants: []
 #    googleWorkspace:            # never inherited from engine.googleWorkspace
 #      enabled: false
 #      secretName: ""            # default <fullname>-engine-<id>-google
+#    coding:                     # never inherited from engine.coding; same keys.
+#      enabled: false            # Paths land on this cell's own workspace volume
 
 # ─── Bridge (CRM API + webhooks + multi-tenancy) ─────────────────────────────
 bridge:
