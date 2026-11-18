@@ -1252,6 +1252,41 @@ async def _merge_companies(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 # tenant, a blank role); that comes back as a recoverable {"error": ...}.
 
 
+def _scope_people_rows(
+    rows: list[dict[str, Any]], ctx: ToolContext, *, tool_name: str, id_key: str
+) -> list[dict[str, Any]]:
+    """Apply identity data scoping to rows that each name one person.
+
+    The same rule as ``get_person`` and ``get_contact_360``: under
+    ``ROBOTHOR_DATA_SCOPING=enforce`` a restricted caller (any role outside
+    owner/admin/service) keeps only rows about its own person; in observe
+    mode nothing is filtered and the would-be drop is logged. Companies are
+    not scoped, only the people attached to them.
+    """
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import (
+        log_would_drop,
+        observe_scope,
+        rows_dropped_by_identity_scope,
+        scope_for_query,
+    )
+
+    mode = data_scoping_mode()
+    obs = observe_scope(mode, ctx.identity)
+    if obs:
+        log_would_drop(
+            tool_name=tool_name,
+            user_id=ctx.user_id,
+            scope=obs,
+            dropped=rows_dropped_by_identity_scope(rows, obs, id_key=id_key),
+            table="crm_people",
+        )
+    scope = scope_for_query(mode, ctx.identity)
+    if scope is None:
+        return rows
+    return [r for r in rows if r.get(id_key) == scope.person_id]
+
+
 @_handler("set_affiliation")
 async def _set_affiliation(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import set_affiliation
@@ -1299,6 +1334,7 @@ async def _list_affiliations(args: dict[str, Any], ctx: ToolContext) -> dict[str
         limit=int(args.get("limit") or 200),
         tenant_id=ctx.tenant_id,
     )
+    rows = _scope_people_rows(rows, ctx, tool_name="list_affiliations", id_key="personId")
     return {"affiliations": rows, "count": len(rows)}
 
 
@@ -1333,7 +1369,15 @@ async def _find_company_by_identifier(args: dict[str, Any], ctx: ToolContext) ->
 async def _find_person_by_identifier(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import get_person_by_identifier
 
-    return await _find_by_identifier(args, ctx, get_person_by_identifier, "person")
+    result = await _find_by_identifier(args, ctx, get_person_by_identifier, "person")
+    person = result.get("person")
+    if person and not _scope_people_rows(
+        [person], ctx, tool_name="find_person_by_identifier", id_key="id"
+    ):
+        # Someone else's record: answered exactly like "nothing maps to it",
+        # so a restricted caller cannot even learn that the id exists.
+        return {"found": False, "person": None}
+    return result
 
 
 # ── Contact 360 — agent-facing holistic lookup ───────────────────────────
@@ -1365,7 +1409,13 @@ async def _get_contact_360(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
         from robothor.crm.dal import get_company_view
 
         view = await asyncio.to_thread(get_company_view, company_id, tenant_id=ctx.tenant_id)
-        return view if view is not None else {"error": f"company not found: {company_id}"}
+        if view is None:
+            return {"error": f"company not found: {company_id}"}
+        # The company is unscoped; the people attached to it are not.
+        view["affiliations"] = _scope_people_rows(
+            view.get("affiliations") or [], ctx, tool_name="get_contact_360", id_key="personId"
+        )
+        return view
     if not person_id:
         identifier = (args.get("identifier") or "").strip()
         if not identifier:

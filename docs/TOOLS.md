@@ -1688,7 +1688,10 @@ company. These tools read and write that structure; the data model is in
 
 Viewer and member sessions (read-only) may use the reads, including the two
 `find_*` tools; `set_affiliation` is a write and follows the role's write
-rules. Plugins that sync an organization chart use the DAL upserts directly
+rules. Identity data scoping applies to the people in these results as it does
+to `get_person`: under `ROBOTHOR_DATA_SCOPING=enforce` a restricted caller gets
+only affiliations of its own person, and `find_person_by_identifier` answers
+`found=false` for anyone else. Companies are not scoped. Plugins that sync an organization chart use the DAL upserts directly
 (`upsert_company_by_identifier`, `upsert_person_by_identifier`).
 
 ### Everything else
