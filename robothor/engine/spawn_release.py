@@ -16,7 +16,9 @@ async def load_child_config(
     if not release_id:
         from robothor.engine.config import load_agent_config_or_reason
 
-        return load_agent_config_or_reason(agent_id, engine_config.manifest_dir, "spawn")
+        return load_agent_config_or_reason(
+            agent_id, engine_config.manifest_dir, "spawn", trigger_type="sub_agent"
+        )
 
     from robothor.templates.fleet_release import ReleaseError
     from robothor.templates.fleet_snapshot import load_snapshot

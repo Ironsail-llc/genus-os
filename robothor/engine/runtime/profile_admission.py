@@ -64,10 +64,14 @@ def resolved_profile(resolution: _Resolution | None) -> Iterator[None]:
         _resolution.reset(token)
 
 
-def load_for_run(agent_id: str, directory: Path) -> tuple[Any, ...]:
+def load_for_run(
+    agent_id: str, directory: Path, trigger_type: str | None = None
+) -> tuple[Any, ...]:
+    """The run's config: the one admission resolved, else the manifest merged
+    with the ``when:`` clauses for ``trigger_type``."""
     resolution = _resolution.get()
     if resolution is not None and resolution[:2] == (agent_id, directory):
         return resolution[2:]
     from robothor.engine.runner import load_agent_config_or_reason
 
-    return load_agent_config_or_reason(agent_id, directory)
+    return load_agent_config_or_reason(agent_id, directory, trigger_type=trigger_type)

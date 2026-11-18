@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import timedelta
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -32,12 +33,12 @@ async def lookup(request: RunRequest, directory: str, admitted_at: datetime) -> 
     bounded = replace(
         request, context=constrain_context(replace(request.context, deadline=deadline))
     )
+    # The run's own trigger selects the manifest's `when:` clauses.
+    loader = partial(load_agent_config_or_reason, trigger_type=request.options.get("trigger_type"))
     try:
         return await execute_before_deadline(
             bounded.context,
-            lambda: read_with_progress(
-                request, admitted_at, load_agent_config_or_reason, directory
-            ),
+            lambda: read_with_progress(request, admitted_at, loader, directory),
         )
     except RuntimeDeadlineError:
         await record_timeout(bounded)

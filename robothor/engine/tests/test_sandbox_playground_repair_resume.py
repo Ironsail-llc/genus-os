@@ -61,7 +61,7 @@ async def _resume_kwargs(tmp_path, monkeypatch) -> dict[str, Any]:
         ),
     )
     monkeypatch.setattr(
-        config_module, "load_agent_config", lambda *a: AgentConfig(id="main", name="Main")
+        config_module, "load_agent_config", lambda *a, **k: AgentConfig(id="main", name="Main")
     )
     coroutines: list[Any] = []
     monkeypatch.setattr(
