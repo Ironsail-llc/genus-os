@@ -371,6 +371,25 @@ CROSS_TENANT_READS: frozenset[str] = frozenset(
     }
 )
 
+# Writes a call may point at another tenant with `tenant` (and describe with
+# `dry_run: true`). Each keeps its own approval tier and RBAC check: those key
+# on the tool name, which does not change. Every one is a CRM mutator, so its
+# handler also refuses a benchmark run (handlers/crm.py _CRM_MUTATING_TOOLS).
+# No agent tool enables or disables a schedule, so none is listed.
+CROSS_TENANT_WRITES: frozenset[str] = frozenset(
+    {
+        "create_task",
+        "update_task",
+        "create_note",
+        "update_note",
+        "send_notification",
+    }
+)
+
+# The only cross-tenant writes a run without the verified owner may make:
+# leaving work for a child's team, not changing what it already has.
+UNATTENDED_CROSS_TENANT_WRITES: frozenset[str] = frozenset({"create_task", "send_notification"})
+
 # Read-only tools for plan mode — tools with no side effects.
 READONLY_TOOLS: frozenset[str] = frozenset(
     {

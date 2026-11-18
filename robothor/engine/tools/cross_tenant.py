@@ -8,9 +8,19 @@ tuple into an answer for a tool call.
 
 A call that carries a ``tenant`` argument is admitted (:func:`admit`) only when
 
-1. the tool is on ``CROSS_TENANT_READS`` (``tools/constants.py``),
+1. the tool is on ``CROSS_TENANT_READS`` or ``CROSS_TENANT_WRITES``
+   (``tools/constants.py``),
 2. the run is a live, top-level, non-benchmark run (:func:`is_top_level_run`),
-3. the target is in ``ctx.accessible_tenant_ids``.
+3. the target is in ``ctx.accessible_tenant_ids``,
+4. for a write other than ``UNATTENDED_CROSS_TENANT_WRITES`` (creating a task
+   or a notification), the caller is the verified owner -- judged against the
+   run's OWN context, because ``is_verified_owner`` checks the role in
+   ``ctx.tenant_id`` and would fail against the swapped one.
+
+A write may carry ``dry_run: true``: it is admitted exactly as the real call,
+audited as a dry run, and answered by :func:`dry_run` with what would change;
+the handler never runs. ``dry_run`` on an allowlisted write WITHOUT ``tenant``
+is a dry run in the run's own tenant, never a real write.
 
 Then :func:`run_handler` strips the argument and runs the handler inside
 ``tenant_scope(target)`` with a copy of the context whose ``tenant_id`` is the
@@ -47,6 +57,9 @@ CROSS_TENANT_EVENT = "agent.cross_tenant_call"
 #: The argument a call names its target tenant with.
 TENANT_ARG = "tenant"
 
+#: The argument that turns an allowlisted write into a description of itself.
+DRY_RUN_ARG = "dry_run"
+
 #: One sentence for an unknown tenant AND an unreachable one: no existence oracle.
 UNREACHABLE = "That tenant is not one this run can reach."
 _UNREACHABLE_UNLOCK = (
@@ -62,6 +75,7 @@ class Crossing:
 
     target: str | None
     args: dict[str, Any]
+    dry_run: bool = False
 
 
 def is_top_level_run(ctx: ToolContext) -> bool:
@@ -128,19 +142,26 @@ def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[
     """Decide a call's tenant. ``None``: no ``tenant`` argument, run as always.
 
     A dict is the refusal to return; nothing may run. A :class:`Crossing`
-    carries the handler's arguments with ``tenant`` removed.
+    carries the handler's arguments with ``tenant`` (and, for a write,
+    ``dry_run``) removed.
     """
-    target = args.get(TENANT_ARG)
-    if TENANT_ARG not in args:
+    from robothor.engine.tools.constants import (
+        CROSS_TENANT_READS,
+        CROSS_TENANT_WRITES,
+        UNATTENDED_CROSS_TENANT_WRITES,
+    )
+
+    is_write = name in CROSS_TENANT_WRITES
+    dry = is_write and args.get(DRY_RUN_ARG) is True
+    if TENANT_ARG not in args and not dry:
         return None
-    stripped = {k: v for k, v in args.items() if k != TENANT_ARG}
+    drop = {TENANT_ARG, DRY_RUN_ARG} if is_write else {TENANT_ARG}
+    stripped = {k: v for k, v in args.items() if k not in drop}
+    target = str(args.get(TENANT_ARG) or "").strip()
     if not target:
-        return Crossing(None, stripped)
-    target = str(target).strip()
+        return Crossing(None, stripped, dry)
 
-    from robothor.engine.tools.constants import CROSS_TENANT_READS
-
-    if name not in CROSS_TENANT_READS:
+    if name not in CROSS_TENANT_READS and not is_write:
         return _refuse(
             name,
             target,
@@ -151,7 +172,7 @@ def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[
             unlock="Call it without `tenant`, or use a tool whose schema offers `tenant`.",
         )
     if target == ctx.tenant_id:
-        return Crossing(None, stripped)
+        return Crossing(None, stripped, dry)
     if not is_top_level_run(ctx):
         return _refuse(
             name,
@@ -172,7 +193,85 @@ def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[
             gate_name="cross_tenant_reach",
             unlock=_UNREACHABLE_UNLOCK,
         )
-    return Crossing(target, stripped)
+    if is_write and name not in UNATTENDED_CROSS_TENANT_WRITES:
+        from robothor.engine.owner_gate import is_verified_owner
+
+        # The ORIGINAL context: the owner is the owner of THIS run's tenant.
+        if not is_verified_owner(ctx):
+            return _refuse(
+                name,
+                target,
+                ctx,
+                f"Only the verified owner may use '{name}' in another tenant.",
+                gate="role",
+                gate_name="cross_tenant_owner",
+                unlock=(
+                    "Create a task in that tenant for its team instead (create_task with "
+                    "`tenant`), or ask the owner to make this change."
+                ),
+            )
+    return Crossing(target, stripped, dry)
+
+
+#: The record each update tool changes, and the DAL getter that reads it.
+_UPDATE_RECORDS: dict[str, tuple[str, str]] = {
+    "update_task": ("task", "get_task"),
+    "update_note": ("note", "get_note"),
+}
+
+
+async def dry_run(name: str, crossing: Crossing, ctx: ToolContext) -> dict[str, Any]:
+    """What an admitted write WOULD do, with nothing changed. Audited as a dry run."""
+    import asyncio
+
+    from robothor.crm.tool_ids import id_argument_error
+
+    target = crossing.target or ctx.tenant_id
+    args = crossing.args
+    result: dict[str, Any] = {"dry_run": True, "tenant": target, "tool": name}
+    bad = id_argument_error(name, args)
+    if bad is not None:
+        result.update(bad)
+    elif name in _UPDATE_RECORDS:
+        kind, getter = _UPDATE_RECORDS[name]
+        record_id = str(args.get("id") or "")
+        current = await asyncio.to_thread(_current_record, getter, record_id, target)
+        if current is None:
+            result["error"] = f"No {kind} {record_id} in that tenant; nothing would change."
+        else:
+            result["changes"] = {
+                field: {"from": current.get(field), "to": value}
+                for field, value in args.items()
+                if field != "id" and current.get(field) != value
+            }
+            result["summary"] = (
+                f"Would update {kind} {record_id}: {len(result['changes'])} field(s)."
+            )
+    else:
+        result["would"] = dict(args)
+        result["summary"] = f"Would run {name} in tenant {target}."
+    if crossing.target is not None:
+        audit_cross_tenant(
+            home_tenant=ctx.tenant_id,
+            target_tenant=target,
+            user_id=ctx.user_id,
+            agent_id=ctx.agent_id,
+            tool=name,
+            outcome="error" if "error" in result else "ok",
+            dry_run=True,
+            reason=str(result.get("error") or ""),
+        )
+    return result
+
+
+def _current_record(getter: str, record_id: str, tenant_id: str) -> dict[str, Any] | None:
+    """The record a dry-run update would change, read in its tenant's scope."""
+    from robothor.crm import dal
+    from robothor.db.connection import tenant_scope
+
+    with tenant_scope(tenant_id):
+        found: dict[str, Any] | None = getattr(dal, getter)(record_id, tenant_id=tenant_id)
+    return found
 
 
 async def run_handler(
@@ -281,6 +380,17 @@ TENANT_PROPERTY: dict[str, Any] = {
 }
 
 
+#: The optional argument every allowlisted WRITE's schema advertises.
+DRY_RUN_PROPERTY: dict[str, Any] = {
+    "type": "boolean",
+    "description": (
+        "Optional. true: check and describe this write (what it would create or "
+        "change, in which tenant) without making it. Authorised and audited exactly "
+        "like the real call. Use it before acting in another tenant."
+    ),
+}
+
+
 def stamp_tenant_arguments(schemas: dict[str, Any]) -> None:
     """Add the optional ``tenant`` property to every allowlisted tool's schema.
 
@@ -290,14 +400,17 @@ def stamp_tenant_arguments(schemas: dict[str, Any]) -> None:
     definitions are shared with the operator's own MCP server, which has no
     cross-tenant dispatch and must not advertise it.
     """
-    from robothor.engine.tools.constants import CROSS_TENANT_READS
+    from robothor.engine.tools.constants import CROSS_TENANT_READS, CROSS_TENANT_WRITES
 
-    for name in CROSS_TENANT_READS:
+    for name in CROSS_TENANT_READS | CROSS_TENANT_WRITES:
         fn = schemas.get(name, {}).get("function")
         if not isinstance(fn, dict):
             continue
         params = dict(fn.get("parameters") or {"type": "object"})
-        params["properties"] = {**(params.get("properties") or {}), TENANT_ARG: TENANT_PROPERTY}
+        added = {TENANT_ARG: TENANT_PROPERTY}
+        if name in CROSS_TENANT_WRITES:
+            added[DRY_RUN_ARG] = DRY_RUN_PROPERTY
+        params["properties"] = {**(params.get("properties") or {}), **added}
         fn["parameters"] = params
 
 

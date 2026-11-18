@@ -741,6 +741,9 @@ async def _execute_tool(
     denial = await _runtime_denial(name, args, ctx)
     if denial:
         return denial
+    if crossing is not None and crossing.dry_run:
+        # Admitted exactly as the real call; nothing reserved, nothing run.
+        return await cross_tenant.dry_run(name, crossing, ctx)
 
     from robothor.engine.runtime.effect_dispatch import invoke
 
