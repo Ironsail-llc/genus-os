@@ -91,19 +91,11 @@ def is_top_level_run(ctx: ToolContext) -> bool:
 
     if in_benchmark_run():
         return False
-    from robothor.engine.models import TriggerType
+    from robothor.engine.run_identity import confined_to_own_tenant
     from robothor.engine.session_registry import lookup
 
     session = lookup(ctx.run_id) if ctx.run_id else None
-    if session is None:
-        return False
-    run = session.run
-    return not (
-        getattr(run, "parent_run_id", None)
-        or int(getattr(run, "nesting_depth", 0) or 0) > 0
-        or getattr(run, "trigger_type", None) == TriggerType.SUB_AGENT
-        or getattr(run, "is_benchmark", False)
-    )
+    return session is not None and not confined_to_own_tenant(session.run)
 
 
 def reachable_tenants(ctx: ToolContext) -> tuple[str, ...]:

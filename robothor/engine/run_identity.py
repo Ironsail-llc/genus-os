@@ -123,17 +123,28 @@ async def attach_tenant_access(run: Any, tenant_id: str, identity: Any = None) -
         run.accessible_tenant_ids = own
 
 
-def _accessible_tenants(run: Any, tenant_id: str, identity: Any) -> tuple[str, ...]:
-    from robothor.engine.models import TriggerType
-    from robothor.engine.permissions import resolve_accessible_tenants
+def confined_to_own_tenant(run: Any) -> bool:
+    """A sub-agent or benchmark run: never reaches another tenant, whatever it inherited.
 
-    own = (tenant_id,)
-    if (
+    The sub-agent trigger and the nesting depth count as well as the parent
+    id, because a child of a ``tracking_disabled`` parent records no parent id.
+    Shared with the per-call check in ``tools/cross_tenant.py``.
+    """
+    from robothor.engine.models import TriggerType
+
+    return bool(
         getattr(run, "is_benchmark", False)
         or getattr(run, "parent_run_id", None)
         or int(getattr(run, "nesting_depth", 0) or 0) > 0
         or getattr(run, "trigger_type", None) == TriggerType.SUB_AGENT
-    ):
+    )
+
+
+def _accessible_tenants(run: Any, tenant_id: str, identity: Any) -> tuple[str, ...]:
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    own = (tenant_id,)
+    if confined_to_own_tenant(run):
         return own
     from robothor.engine.runner import _SYSTEM_TRIGGER_TYPES
 
