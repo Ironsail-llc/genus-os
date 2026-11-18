@@ -57,7 +57,9 @@ async def test_native_interactive_loads_simple_profile_once_before_model(
         on_status=status,
     )
     assert run.status == RunStatus.COMPLETED
-    loader.assert_called_once_with(sample_agent_config.id, runner.config.manifest_dir)
+    loader.assert_called_once_with(
+        sample_agent_config.id, runner.config.manifest_dir, trigger_type=TriggerType.WEBCHAT
+    )
     model.assert_awaited_once()
     assert sum(event.get("event") == "accepted" for event in events) == 1
     assert active_context.get() is None

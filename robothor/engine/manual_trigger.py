@@ -46,7 +46,7 @@ async def trigger_agent(
     from robothor.engine.models import TriggerType
 
     try:
-        agent_config = load_agent_config(agent_id, manifest_dir)
+        agent_config = load_agent_config(agent_id, manifest_dir, trigger_type=TriggerType.MANUAL)
     except ManifestSchemaError as e:
         # Broken, not absent, and the caller must be able to tell: the fix
         # for one is editing a manifest, for the other creating an agent.

@@ -1527,6 +1527,7 @@ def load_agent_config_or_broken(
     manifest_dir: Path,
     where: str = "",
     workspace: Path | None = None,
+    trigger_type: str | None = None,
 ) -> AgentConfig | None:
     """``load_agent_config``, with a schema refusal reported instead of raised.
 
@@ -1541,7 +1542,9 @@ def load_agent_config_or_broken(
     owe someone a message of their own (the CLI, the Telegram bot) catch
     :class:`ManifestSchemaError` themselves instead of using this.
     """
-    config, _reason = load_agent_config_or_reason(agent_id, manifest_dir, where, workspace)
+    config, _reason = load_agent_config_or_reason(
+        agent_id, manifest_dir, where, workspace, trigger_type
+    )
     return config
 
 
@@ -1550,6 +1553,7 @@ def load_agent_config_or_reason(
     manifest_dir: Path,
     where: str = "",
     workspace: Path | None = None,
+    trigger_type: str | None = None,
 ) -> tuple[AgentConfig | None, str]:
     """``(config, reason)`` — ``reason`` is "" on success, else why there is none.
 
@@ -1559,9 +1563,14 @@ def load_agent_config_or_reason(
     found". Those are different diagnoses: one sends the reader to a missing
     file, the other to a file that is right there with a typo in it, and a run
     row recorded a week ago is all they have.
+
+    ``trigger_type`` is the trigger of the run the config is loaded FOR: the
+    manifest's matching ``when:`` clauses are applied. A load that is not for a
+    run (a scan, the doctor, an admin page) leaves it None and reads the
+    un-triggered document.
     """
     try:
-        config = load_agent_config(agent_id, manifest_dir, workspace)
+        config = load_agent_config(agent_id, manifest_dir, workspace, trigger_type)
     except ManifestSchemaError as e:
         logger.error(
             "%s: agent %s is broken — manifest refused by the schema (SchemaError): %s",

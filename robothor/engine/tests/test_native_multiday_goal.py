@@ -51,7 +51,9 @@ async def test_native_multiday_parent_child_and_everyday_requests(
         model_fallbacks=[],
         tools_allowed=["create_task", "get_pursuit_goal", "update_pursuit_goal"],
     )
-    monkeypatch.setattr("robothor.engine.config.load_agent_config_or_broken", lambda *a: agent)
+    monkeypatch.setattr(
+        "robothor.engine.config.load_agent_config_or_broken", lambda *a, **_k: agent
+    )
     store.set_enabled(tenant, True, "operator")
     parent = store.create(
         tenant,

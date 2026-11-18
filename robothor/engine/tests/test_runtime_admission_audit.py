@@ -335,7 +335,7 @@ async def test_resolved_simple_profile_expiry_is_recoverable_before_native_execu
             trigger_type="webchat",
             on_status=stalled,
         )
-    loader.assert_called_once_with("main", tmp_path)
+    loader.assert_called_once_with("main", tmp_path, trigger_type="webchat")
     outcome = read_outcome(auth, "web:main", client)
     assert outcome["state"] == "timeout" and outcome["terminal"]
     assert "expired before execution began" in outcome["text"]

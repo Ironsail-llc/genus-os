@@ -65,6 +65,18 @@ KNOWN_DRIFT: dict[str, str] = {
         "registry 1,000,000 vs catalog 1,048,576 — we compact 5% early on a "
         "model the fleet has not used in the last 7 days."
     ),
+    "openai/gpt-6.2-sol": (
+        "registry 272,000 vs catalog 922,000 — DELIBERATE. Above 272,000 input "
+        "tokens the provider bills the whole request at twice the input rate "
+        "and 1.5x the output rate, and the registry has no tiered-price field "
+        "to record that. Sizing to the tier boundary keeps every request on "
+        "the price the row states: compaction fires long before it, and the "
+        "ceiling enforced after compaction sits below it."
+    ),
+    "gpt-6.2-sol": (
+        "the bare id the provider reports back for openai/gpt-6.2-sol; the "
+        "same row, so the same deliberate 272,000 as the entry above."
+    ),
 }
 
 
