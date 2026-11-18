@@ -18,6 +18,8 @@ We follow this pattern.
 
 ```
 crm_people ───┬── contact_identifiers (channel × identifier → person_id)
+              ├── crm_affiliations ── crm_companies ── crm_company_identifiers
+              │        (role)            └─ parent_company_id → crm_companies
               │
               ├── message_participant ── message ── message_thread
               │                             │
@@ -45,7 +47,7 @@ known.
 | Table | Purpose |
 |---|---|
 | `crm_people` | Canonical person record, one UUID per human |
-| `crm_companies` | Organizations |
+| `crm_companies` | Organizations; `parent_company_id` nests them (see Organization structure) |
 | `contact_identifiers` | `(channel, identifier) → person_id` resolver store |
 
 ### Messaging (new, migration 047)
@@ -197,6 +199,76 @@ control off.
 other person edit, and the post-condition checker re-reads the row, so an
 opt-out that reported success without taking is caught rather than believed.
 
+## Organization structure
+
+People and companies are not flat lists: a company can sit under a parent
+company, a company can carry its ids in outside systems, and a person can hold
+a role at a company (migration 169). A plugin that syncs an organization chart
+from another system writes through these, keyed by that system's ids.
+
+| Table / column | Purpose |
+|---|---|
+| `crm_companies.parent_company_id` | The company directly above. Same tenant only; a company can never be placed under itself or a descendant (a trigger refuses it, serialized per tenant so two concurrent re-parents cannot close a loop). Deleting the parent row clears it. |
+| `crm_company_identifiers` | `(tenant, system, identifier) → company`. A company may have several. |
+| `crm_affiliations` | `(tenant, person, company, role)`, unique, with `attributes` (JSON object), `is_active`, `since`, `until`. |
+| `contact_identifiers` | People's outside ids, as before: `channel` is the system name. |
+
+All three are tenant-scoped and carry the forced `tenant_isolation` policy; an
+identifier or affiliation must belong to the tenant of the rows it links.
+
+DAL (`robothor.crm.dal`, every function takes `tenant_id`):
+
+```python
+upsert_company_by_identifier(system, identifier, *, name, parent_company_id=None, fields=None, restore=False)
+upsert_person_by_identifier(system, identifier, *, first_name, last_name=None, email=None, phone=None, fields=None, restore=False)
+get_company_by_identifier(system, identifier)
+get_person_by_identifier(system, identifier)
+set_company_parent(company_id, parent_company_id_or_None)
+list_company_children(company_id)
+get_company_parent_chain(company_id)        # nearest first
+list_company_identifiers(company_id)
+set_affiliation(person_id, company_id, role, *, attributes=None, is_active=True)
+close_affiliation(person_id, company_id, role)
+list_affiliations(*, person_id=None, company_id=None, role=None, active_only=True, limit=500, offset=0)
+list_affiliations_page(...)                 # same filters: {affiliations, total, offset, limit, hasMore}
+count_affiliations(...)                     # same filters: the total alone
+get_company_view(company_id)                # company, parent, chain, children, people by role, ids
+```
+
+How the upserts behave:
+
+- **Matched by outside id only, never by name or email.** A renamed company
+  stays one row; two companies sharing a name stay two.
+- **Idempotent.** A repeat with the same values writes nothing (`updated_at`
+  does not move); a changed value updates the same row. Each upsert returns
+  `{"id", "created", "updated", "deleted"}`.
+- **Safe under concurrent calls.** The unique keys decide the race; the loser
+  re-reads the winner's row.
+- **No silent resurrection.** If the id maps to a soft-deleted row, the upsert
+  leaves it deleted and returns `deleted: true`. Pass `restore=True` to
+  undelete it and apply the values.
+- `parent_company_id=None` on an upsert leaves an existing parent alone;
+  `set_company_parent(id, None)` clears one. `fields` takes only the columns in
+  `COMPANY_UPSERT_FIELDS` / `PERSON_UPSERT_FIELDS`; anything else, a blank key,
+  a row in another tenant or a hierarchy loop raises `ValueError`. A person
+  upsert never changes `do_not_contact`.
+
+Affiliations: roles are stored trimmed and lower-case. `set_affiliation` is
+idempotent and returns the row plus `created` and `changed`; `attributes`
+replaces the stored object when given and is left alone when omitted.
+`close_affiliation` (or `is_active=False`) sets `is_active = false` and
+`until`; nothing is deleted, and setting it active again re-opens it with a
+fresh `since`. `get_contact_360` returns the person's affiliations, each with
+its company's `parentChain`.
+
+Merges carry the new rows: `merge_people` moves the loser's affiliations to
+the keeper and folds a duplicate (same company and role) into the keeper's row
+(active if either was, the earlier `since`, attributes combined with the
+keeper's keys winning). `merge_companies` moves the loser's identifiers and
+affiliations the same way and re-parents its children onto the keeper; a
+keeper that sat under the loser first takes the loser's place, and a keeper
+with no parent takes the loser's unless that would make a loop.
+
 ## Read path — DAL
 
 ```python
@@ -231,7 +303,23 @@ GET /api/people/{id}/notes
 GET /api/people/{id}/runs
 GET /api/people/{id}/memory
 GET /api/people/{id}/contact-360
+GET /api/people/{id}/affiliations?activeOnly=true&limit=100&offset=0
+POST /api/people/{id}/affiliations          {companyId, role, attributes?, isActive?}
+POST /api/people/{id}/affiliations/close    {companyId, role}
+GET /api/people/by-identifier?system=&identifier=
+GET /api/companies/by-identifier?system=&identifier=
+GET /api/companies/{id}/children
+GET /api/companies/{id}/affiliations?role=&activeOnly=true&limit=100&offset=0
+GET /api/companies/{id}/structure           # parent, chain, children, people by role, ids
 ```
+
+The affiliation routes answer 400 with `{"error"}` when the DAL refuses the
+input (a person or company outside the tenant, a blank role), and every route
+is pinned to the request's tenant like the rest of `/api/people` and
+`/api/companies`. The two affiliation lists answer one page,
+`{affiliations, total, offset, limit, hasMore}` (`limit` at most 500), so a
+caller can tell a list was cut; the company view's `affiliations` stops at
+500 and carries `affiliationsTotal`.
 
 ## Agent tools
 
@@ -241,6 +329,14 @@ Delivery agents can call these directly:
 - `get_contact_360(identifier="jane@example.com", channel="email")` —
   resolve first, then fetch
 - `list_contact_messages(id=..., channel=?, limit=?)` — full bodies
+- `get_contact_360(companyId=...)` — a company's parent, chain, children,
+  people by role and outside ids
+- `set_affiliation(personId, companyId, role, attributes?, isActive?)`,
+  `list_affiliations(personId? | companyId?, role?, activeOnly?)`,
+  `list_company_children(companyId)`,
+  `find_company_by_identifier(system, identifier)`,
+  `find_person_by_identifier(system, identifier)` — see
+  [Organization structure](#organization-structure) and `docs/TOOLS.md`
 
 Every id argument is validated at the tool boundary before the query runs:
 person, company, note, task and notification ids must be UUIDs and
@@ -367,6 +463,8 @@ per-test rollback stays intact.
 | `crm/migrations/049_timeline_activity.sql` | timeline_activity + initial backfill |
 | `crm/migrations/113_add_do_not_contact.sql` | `crm_people.do_not_contact` + partial index on the opted-out rows |
 | `crm/migrations/148_calendar_event_provider_identity.sql` | `calendar_event.provider` + `external_event_id` (backfilled), unique on `(tenant, provider, external_event_id)` |
+| `crm/migrations/170_crm_find_tools_read_only.sql` | lets viewer and member roles use the two `find_*_by_identifier` reads |
+| `crm/migrations/169_crm_affiliations.sql` | `crm_companies.parent_company_id`, `crm_company_identifiers`, `crm_affiliations`, with the tenant and hierarchy guards |
 
 ## Open work
 

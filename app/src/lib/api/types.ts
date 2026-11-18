@@ -21,8 +21,33 @@ export interface Company {
   linkedinUrl?: string;
   annualRecurringRevenue?: number;
   idealCustomerProfile?: boolean;
+  parentCompanyId?: string | null;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/** A person's role at a company (bridge: /api/people/{id}/affiliations). */
+export interface Affiliation {
+  id: string;
+  personId: string;
+  personName?: string;
+  companyId: string;
+  companyName?: string;
+  role: string;
+  attributes?: Record<string, unknown>;
+  isActive: boolean;
+  since?: string | null;
+  until?: string | null;
+}
+
+/** A company's place in the hierarchy (bridge: /api/companies/{id}/structure). */
+export interface CompanyStructure {
+  company: Company;
+  parent: Company | null;
+  parentChain: Company[];
+  children: Company[];
+  affiliations: Affiliation[];
+  identifiers: { system: string; identifier: string }[];
 }
 
 export interface Conversation {

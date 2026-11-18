@@ -68,6 +68,31 @@ def company_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         "address": row.get("address") or "",
         "linkedinUrl": row.get("linkedin_url") or "",
         "idealCustomerProfile": row.get("ideal_customer_profile", False),
+        "parentCompanyId": (
+            str(row["parent_company_id"]) if row.get("parent_company_id") else None
+        ),
+        "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
+        "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
+        "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
+    }
+
+
+def affiliation_to_dict(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert a crm_affiliations row (joined with names) to API response shape."""
+    person_name = " ".join(
+        part for part in (row.get("first_name"), row.get("last_name")) if part
+    ).strip()
+    return {
+        "id": str(row["id"]),
+        "personId": str(row["person_id"]),
+        "personName": person_name,
+        "companyId": str(row["company_id"]),
+        "companyName": row.get("company_name") or "",
+        "role": row.get("role") or "",
+        "attributes": row.get("attributes") or {},
+        "isActive": bool(row.get("is_active")),
+        "since": row["since"].isoformat() if row.get("since") else None,
+        "until": row["until"].isoformat() if row.get("until") else None,
         "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
         "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
         "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,

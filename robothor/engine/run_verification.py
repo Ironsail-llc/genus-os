@@ -752,6 +752,7 @@ _CRM_WRITE_TOOLS = frozenset(
         "delete_person",
         "merge_people",
         "merge_contacts",
+        "set_affiliation",
         "create_note",
         "update_note",
         "delete_note",
