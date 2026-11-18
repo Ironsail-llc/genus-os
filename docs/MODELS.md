@@ -107,6 +107,30 @@ Every other route is sent nothing, including a fallback in the same chain, so
 adding the setting to a mixed chain is safe. The dashboard canvas runs outside
 any agent's run and stays on the standard lane.
 
+### A different chain per trigger
+
+A manifest's `when:` clauses override its configuration for one trigger type,
+applied per run. An interactive chat can take a stronger model on the priority
+lane while the same agent's scheduled runs stay on the cheap chain:
+
+```yaml
+when:
+  - trigger_type: webchat
+    overrides:
+      model:
+        primary: openai/gpt-6.2-sol
+        fallbacks: [openai/gpt-6-luna]
+        service_tier: priority
+```
+
+A run of any other trigger type (here a hook, a cron or a manual run) keeps the
+chain from the manifest and the instance's fleet defaults. The trigger types are
+`cron` (scheduled, heartbeat, worker and ambient runs), `hook`, `event`,
+`manual`, `telegram`, `webchat`, `slack`, `workflow`, `sub_agent`,
+`federation`, `webhook`, `ide`, `channel_event` and `channel`. Pages that show an
+agent's configuration outside a run, such as the doctor or the admin pages,
+show it without the clauses.
+
 ## Prompt caching
 
 Providers cache a request's prefix, so whatever changes from one run to the next
