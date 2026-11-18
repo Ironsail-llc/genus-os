@@ -47,6 +47,7 @@ __all__ = [
     "known_value_count",
     "redact",
     "redact_known_value",
+    "redact_personal_data",
     "register_known_value",
     "redact_assistant_turn",
     "redact_message",
@@ -882,3 +883,45 @@ def redact_opaque_runs(text: str) -> str:
         return run if _is_a_reference(run, text[: match.start()]) else PLACEHOLDER
 
     return _OPAQUE_RUN.sub(_replace, text)
+
+
+# ─── Personal data in error text ──────────────────────────────────────────
+#
+# Error text a provider, plugin or remote API wrote routinely names the record
+# it failed on, and that record is often a person. A log reason and a failure
+# report must not carry them. Closed and conservative, like the credential
+# shapes above: an email address, and a phone number that is either written
+# with a leading ``+`` (E.164 and international forms) or in the 3-3-4 grouping.
+# Ids, dates, times, versions, status codes and addresses are left alone.
+
+#: Anchored on the ``@``: the longest local part and domain around it, whatever
+#: touches them, since an address is often joined into a file name, key or slug
+#: (``missing-<address>-<number>``). After the first label, a domain label must
+#: hold a letter, so a dotted number after the address is not taken for part of
+#: the domain, while ``163.com``, ``mail.2u.com`` and many-label domains are
+#: taken whole. The local part starts where its run of address characters
+#: starts, so a long run is scanned once, not once per character.
+_EMAIL = re.compile(
+    r"(?<![\w.%+-])[\w.%+-]+@[A-Za-z0-9][A-Za-z0-9-]*(?:\.\d*[A-Za-z-][A-Za-z0-9-]*)*\.[A-Za-z]{2,}"
+)
+#: A number may touch letters, ``-``, ``_`` or ``.``, but not another digit, and
+#: not a digit one separator away: a 3-3-4 group inside a longer dashed or
+#: dotted number (an account, a serial, a version) is left alone.
+_PHONE = re.compile(
+    r"(?<!\d)(?<!\d[.-])(?:"
+    r"\+\d{1,3}(?:[\s.-]?\(?\d{1,4}\)?){1,5}[\s.-]?\d{3,4}"  # E.164 and international
+    r"|\(\d{3}\)\s?\d{3}[\s.-]\d{4}"  # area code in parentheses
+    r"|\d{3}[.-]\d{3}[.-]\d{4}"  # 3-3-4 with '-' or '.'
+    r")(?!\d)(?![.-]\d)"
+)
+
+
+def redact_personal_data(text: str) -> str:
+    """``text`` with email addresses and phone numbers replaced.
+
+    For text that is logged or printed, never stored: ``<email>`` and
+    ``<phone>`` say what was there without saying who.
+    """
+    if not text:
+        return text
+    return _PHONE.sub("<phone>", _EMAIL.sub("<email>", text))

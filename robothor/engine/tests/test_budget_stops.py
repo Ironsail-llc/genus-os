@@ -9,7 +9,10 @@ early, and nothing that says which limit did it. Two properties are pinned:
   the setting, the limit, the observed value and whether it was enforced -- and
   ONE ``agent.budget_stop`` event on the telemetry stream;
 * a spend budget observes rather than stops. Its limit is a threshold for the
-  record and the alert; there is no setting that turns it into a stop.
+  record and the alert; there is no setting that turns it into a stop. The
+  one exception is the runaway-token hard cap: a run that reaches it is
+  stopped (mode ``enforce``), because a run that carried on past five million
+  tokens is the failure it exists to contain;
 
 The durable operator stop is a control, not a budget: it still stops the run,
 and it is recorded the same way.
@@ -221,7 +224,7 @@ class TestCrossingTheCapByDefault:
         await _a_run_past_the_hourly_cap_completes(runner, published, monkeypatch)
 
 
-# ── The runaway-token hard cap: observes unless set ─────────────────────────
+# ── The runaway-token hard cap: stops the run ──────────────────────────────
 
 
 def _session_over(tokens: int) -> AgentSession:
@@ -232,7 +235,11 @@ def _session_over(tokens: int) -> AgentSession:
 
 
 class TestTheRunawayTokenCap:
-    def test_unset_cap_observes_once_and_still_alerts(self, _no_cap_env, published, monkeypatch):
+    def test_the_default_cap_stops_the_run_and_still_alerts(
+        self, _no_cap_env, published, monkeypatch
+    ):
+        """Measured: a run hit 5,086,365 of 5,000,000, was recorded "observe",
+        and carried on to iteration 50."""
         from robothor.engine import loop_guards
 
         monkeypatch.setattr("robothor.engine.runner.RUNAWAY_TOKEN_HARD_CAP", 1_000)
@@ -246,23 +253,54 @@ class TestTheRunawayTokenCap:
         cfg = _cron_agent()
         state = loop_guards.GuardState()
 
-        assert loop_guards._runaway(session, cfg, state) is False
-        assert loop_guards._runaway(session, cfg, state) is False
+        assert loop_guards._runaway(session, cfg, state) is True
 
         steps = _budget_steps(session.run.steps)
         assert len(steps) == 1
         assert steps[0].tool_input["stop"] == "runaway_token_cap"
-        assert steps[0].tool_input["mode"] == "observe"
+        assert steps[0].tool_input["mode"] == "enforce"
+        assert steps[0].tool_input["setting"] == "ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS"
         assert steps[0].tool_input["limit"] == 1_000
         assert steps[0].tool_input["observed"] == 2_000
         assert alerts == [2_000]
-        assert session.run.budget_exhausted is not True
+        assert session.run.budget_exhausted is True
+        assert "runaway_token_cap" in (session.run.error_message or "")
 
-    def test_an_explicit_cap_records_once_and_the_run_continues(
+    def test_an_explicit_cap_stops_the_run_at_that_number(
         self, _no_cap_env, published, monkeypatch
     ):
         monkeypatch.setenv("ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS", "1000")
-        _a_run_past_the_runaway_cap_continues(monkeypatch)
+        _a_run_past_the_runaway_cap_stops(monkeypatch)
+
+    def test_the_person_who_asked_is_told_plainly_what_to_do(
+        self, _no_cap_env, published, monkeypatch
+    ):
+        """The answer an interactive run delivers is its final assistant text."""
+        from robothor.engine import loop_guards
+
+        monkeypatch.setattr("robothor.engine.runner.RUNAWAY_TOKEN_HARD_CAP", 1_000)
+        monkeypatch.setattr(loop_guards, "_spawn_hard_cap_alert", lambda *_a: None)
+        session = _session_over(2_000)
+        session.messages.append({"role": "tool", "tool_call_id": "c1", "content": "{}"})
+
+        assert loop_guards._runaway(session, _cron_agent(), loop_guards.GuardState()) is True
+
+        answer = (session.get_final_text() or "").lower()
+        assert "too large" in answer
+        assert "narrow" in answer and "split" in answer
+        assert "token" not in answer, "the person asked a question, not for our accounting"
+
+    def test_below_the_cap_the_run_goes_on(self, _no_cap_env, published, monkeypatch):
+        from robothor.engine import loop_guards
+
+        monkeypatch.setattr("robothor.engine.runner.RUNAWAY_TOKEN_HARD_CAP", 1_000)
+        monkeypatch.setattr("robothor.engine.runner.RUNAWAY_TOKEN_ALERT", 500)
+        monkeypatch.setattr("robothor.engine.runner._send_soft_runaway_alert", lambda *a, **k: None)
+        session = _session_over(900)
+
+        assert loop_guards._runaway(session, _cron_agent(), loop_guards.GuardState()) is False
+        assert _budget_steps(session.run.steps) == []
+        assert session.run.budget_exhausted is not True
 
 
 # ── Stops that keep stopping are recorded the same way ──────────────────────
@@ -306,6 +344,40 @@ class TestEnforcedStopsAreRecorded:
         assert steps[0].tool_input["stop"] == "safety_cap"
         assert steps[0].tool_input["mode"] == "enforce"
         assert steps[0].tool_input["limit"] == 2
+
+    @pytest.mark.asyncio
+    async def test_a_run_past_the_runaway_cap_ends_there_with_the_reason(
+        self, runner, published, monkeypatch
+    ):
+        """Through the real loop: each call reports 15 tokens of usage, the cap
+        is 40, so the run must end after its third call, not at the safety cap."""
+        from robothor.engine import loop_guards
+
+        monkeypatch.setattr("robothor.engine.runner.RUNAWAY_TOKEN_HARD_CAP", 40)
+        monkeypatch.setattr("robothor.engine.runner.RUNAWAY_TOKEN_ALERT", 30)
+        monkeypatch.setattr("robothor.engine.runner._send_soft_runaway_alert", lambda *a, **k: None)
+        monkeypatch.setattr(loop_guards, "_spawn_hard_cap_alert", lambda *_a: None)
+        calls = 0
+
+        async def endless(**kw):
+            nonlocal calls
+            calls += 1
+            return _response(tool_calls=[_tool_call(calls)])
+
+        runner.registry.execute = AsyncMock(return_value={"content": "ok"})
+        with _runner_without_infra(endless):
+            run = await asyncio.wait_for(
+                runner.execute("crm-dedup", "loop", agent_config=_cron_agent(safety_cap=50)),
+                timeout=60,
+            )
+
+        assert calls == 3
+        assert run.status is RunStatus.COMPLETED
+        assert run.budget_exhausted is True
+        assert "runaway_token_cap" in (run.error_message or "")
+        assert "too large" in (run.output_text or "").lower()
+        stops = [s.tool_input for s in _budget_steps(run.steps)]
+        assert [(d["stop"], d["mode"]) for d in stops] == [("runaway_token_cap", "enforce")]
 
 
 # ── Telemetry is published off the event loop ───────────────────────────────
@@ -445,9 +517,7 @@ class TestTheHourlyCapIsASetting:
 
 
 class TestTheRunawayAlertSaysWhatHappened:
-    def test_the_hard_cap_page_says_the_run_continues_when_observing(
-        self, _no_cap_env, monkeypatch
-    ):
+    def test_the_hard_cap_page_says_the_run_was_stopped(self, _no_cap_env, monkeypatch):
         from robothor.engine import loop_guards
 
         pages: list[tuple[str, str, str]] = []
@@ -467,7 +537,8 @@ class TestTheRunawayAlertSaysWhatHappened:
 
         assert len(pages) == 1
         text = (pages[0][1] + " " + pages[0][2]).lower()
-        assert "continu" in text
+        assert "stopped" in text
+        assert "continu" not in text
         assert "_mode" not in text
         assert "enforce" not in text
 
@@ -643,7 +714,7 @@ async def _a_run_past_the_hourly_cap_completes(runner: Any, published: Any, monk
     assert [e[2]["mode"] for e in published if e[1] == "agent.budget_stop"] == ["observe"]
 
 
-def _a_run_past_the_runaway_cap_continues(monkeypatch) -> None:
+def _a_run_past_the_runaway_cap_stops(monkeypatch) -> None:
     from robothor.engine import loop_guards
 
     monkeypatch.setattr("robothor.engine.runner.RUNAWAY_TOKEN_HARD_CAP", 1_000)
@@ -655,16 +726,16 @@ def _a_run_past_the_runaway_cap_continues(monkeypatch) -> None:
     session = _session_over(2_000)
     state = loop_guards.GuardState()
 
-    assert loop_guards._runaway(session, _cron_agent(), state) is False
-    assert loop_guards._runaway(session, _cron_agent(), state) is False
+    assert loop_guards._runaway(session, _cron_agent(), state) is True
 
     steps = _budget_steps(session.run.steps)
     assert [(s.tool_input["stop"], s.tool_input["mode"]) for s in steps] == [
-        ("runaway_token_cap", "observe")
+        ("runaway_token_cap", "enforce")
     ]
     assert alerts == [2_000]
-    assert session.run.budget_exhausted is not True
-    assert [s for s in session.run.steps if s.step_type == StepType.ERROR] == []
+    assert session.run.budget_exhausted is True
+    errors = [s for s in session.run.steps if s.step_type == StepType.ERROR]
+    assert len(errors) == 1 and "runaway_token_cap" in (errors[0].error_message or "")
 
 
 @pytest.fixture
@@ -695,10 +766,14 @@ class TestThereIsNoEnforceRung:
     ):
         await _a_run_past_the_hourly_cap_completes(runner, published, monkeypatch)
 
-    def test_the_runaway_cap_records_and_the_run_continues(
+    def test_the_runaway_cap_stops_whatever_the_retired_names_say(
         self, _enforce_asked_for, published, monkeypatch
     ):
-        _a_run_past_the_runaway_cap_continues(monkeypatch)
+        """The stop is the only code path: no retired mode name turns it back
+        into a report. Rolling it back is a revert."""
+        for name in _GONE:
+            monkeypatch.setenv(name, "observe")
+        _a_run_past_the_runaway_cap_stops(monkeypatch)
 
 
 # ── The event lands on a stream the bus knows ───────────────────────────────

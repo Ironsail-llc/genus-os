@@ -534,7 +534,9 @@ def _audit_tool_call(
             # credential arrives from outside and the process is not holding
             # anything to compare it against. The arguments were never here;
             # this closes the one field that could carry a value.
-            details["error"] = redact(error)[:500]
+            # Bounded before redaction: redacting megabytes of text on the
+            # event loop stalls it, and only 500 characters are kept.
+            details["error"] = redact(error[:4096])[:500]
         get_event_writer().submit(
             log_event,
             event_type="agent.tool_call",

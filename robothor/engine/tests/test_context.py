@@ -89,7 +89,9 @@ class TestMaybeCompress:
 
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Summary of conversation."
+        mock_response.choices[
+            0
+        ].message.content = "Summary of conversation. The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do."
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
             result = await maybe_compress(messages, [CHAIN_MODEL])
@@ -111,7 +113,9 @@ class TestMaybeCompress:
 
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Summary."
+        mock_response.choices[
+            0
+        ].message.content = "Summary. The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do."
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
             result = await maybe_compress(messages, [CHAIN_MODEL])
@@ -121,13 +125,18 @@ class TestMaybeCompress:
     @pytest.mark.asyncio
     async def test_recent_messages_preserved(self):
         messages = [{"role": "system", "content": "sys"}]
+        # Prose (spaced words): an unbroken run of one character is priced as
+        # dense content by the estimate compaction shares with its trigger, and
+        # twenty of those would no longer fit the recent window's token budget.
         for i in range(100):
-            messages.append({"role": "user", "content": f"user_{i} " + "x" * 3000})
-            messages.append({"role": "assistant", "content": f"asst_{i} " + "y" * 3000})
+            messages.append({"role": "user", "content": f"user_{i} " + "x " * 1500})
+            messages.append({"role": "assistant", "content": f"asst_{i} " + "y " * 1500})
 
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Summary."
+        mock_response.choices[
+            0
+        ].message.content = "Summary. The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do."
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
             result = await maybe_compress(messages, [CHAIN_MODEL])

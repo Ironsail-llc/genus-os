@@ -63,6 +63,59 @@ client and one shared HTTP client (5 s timeout). Traces that finish while an exp
 is in flight are sent together in the next request. A sink that is down logs one
 warning, then stays quiet at debug level; it never fails or delays the run.
 
+## Structured log lines
+
+Five events are written as one `key=value` line each, so a log pipeline can
+count and group them without parsing prose. Every line starts with
+`event=<name>`; a value with spaces is double-quoted; an empty value is `-`.
+None carries prompt text, tool arguments, result bodies or personal data, and
+every `reason` (and an alert's `subject`) is cut to a bounded length, then has
+credentials, email addresses and phone numbers replaced (`<redacted>`, `<email>`,
+`<phone>`), then is cut to 200 characters. `genus engine failures` scrubs its
+error text the same way when it prints it; the stored rows are unchanged.
+
+| Event | Logger | Level | Fields |
+|---|---|---|---|
+| `tool_call` | `robothor.engine.tool_calls` | INFO when `outcome=ok`, WARNING otherwise | `tool`, `agent` (or `workflow` for a workflow step), `run_id`, `outcome` (`ok`, `error`, `refused`, `denied`, `timeout`, `cancelled`), `error_type`, `duration_ms`, `reason` |
+| `llm_call` | `robothor.engine.llm_calls` | INFO on `outcome=success`, WARNING otherwise | `agent`, `run_id`, `model`, `outcome`, `error_type` (on a failure), `input_tokens`, `output_tokens`, `cached_tokens`, `finish_reason`, `latency_ms`, `streamed`, `attempt` (1-based, within one dispatch), `fallback` (0 for the first model in the chain), and `estimated=true` when the provider reported no usage and the input count is the engine's estimate |
+| `run_end` | `robothor.engine.runs` | INFO when `outcome=completed`, WARNING otherwise | `agent`, `run_id`, `trigger`, `outcome` (`completed`, `error`, `cap`, `timeout`, `cancelled`), `duration_ms`, `iterations`, `input_tokens`, `output_tokens`, `total_tokens` |
+| `workflow_step_failed` | `robothor.engine.workflow` | WARNING | `workflow`, `run_id`, `step`, `step_type`, `tool`, `duration_ms`, `reason` |
+| `alert` | `robothor.engine.alerts` | ERROR (INFO for benchmark traffic) | `kind`, `severity`, `subject`, `alert_id` — see `docs/runbooks/PAGING.md` (repository only) |
+
+```text
+event=tool_call tool=example_tool agent=example-agent run_id=9b1c… outcome=denied error_type=role.rbac duration_ms=4 reason="Your role here is 'viewer', which may not use 'example_tool'"
+event=llm_call agent=example-agent run_id=9b1c… model=openai/gpt-6-luna outcome=error_403 error_type=PermissionDeniedError latency_ms=231 streamed=false attempt=1 fallback=0
+event=run_end agent=example-agent run_id=9b1c… trigger=telegram outcome=completed duration_ms=4321 iterations=3 input_tokens=9000 output_tokens=400 total_tokens=9400
+```
+
+`denied` is a role or allowlist gate; `refused` is any other engine gate, or a
+redirection such as the repeat guard. A tool that failed, or another system
+that refused the call, is `error`; so is a result that carries an HTTP status of
+400 or above (`error_type=http_<code>`, the body never logged). An identical repeat of a call already refused or
+denied in the same run is not made again and logs `outcome=refused
+error_type=repeat_refused reason="repeat of a refused call"`. A `tool_call` wrapper is logged once, under
+the tool it wraps. A call refused at admission, before it reaches the registry,
+is logged too, from a model turn or from an `execute_code` snippet (whose own
+call and approval caps log as `refused`). A workflow tool step's line names the
+workflow run in `run_id`.
+
+### Failures over a window
+
+```bash
+genus engine failures                 # the last 24 hours, this tenant
+genus engine failures --hours 6 --json
+```
+
+Groups failed tool calls (`agent_tool_events`), denied calls (`audit_log`) and
+failed workflow steps (`workflow_run_steps`) by source, tool, agent or workflow
+and normalized error (ids and numbers collapsed, redacted), largest first, with
+each tool's call count over the same window. A denial recorded in both
+`audit_log` and `agent_tool_events` is counted once, as `denied`.
+
+A streamed model call asks the provider for its usage
+(`stream_options.include_usage`), so it records the same input, output and
+cached tokens as an unstreamed one.
+
 ## Failure-mode detectors
 
 `robothor/engine/detectors.py` holds read-only observers the daemon watchdog

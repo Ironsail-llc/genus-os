@@ -557,7 +557,13 @@ def protected_prefix_len(messages: list[dict[str, Any]], protect_first_n: int | 
         except Exception:  # noqa: BLE001 — compaction must never fail on config
             protect_first_n = DEFAULT_PROTECT_FIRST_N
     n = max(1, min(int(protect_first_n or 0), len(messages)))
-    while n > 1 and messages[n - 1].get("tool_calls"):
+    inside = _in_tool_exchange(messages)
+    # Nor inside one: an engine notice can sit between a call and its results,
+    # and a head ending on it keeps the call while the results are dropped.
+    while n > 1 and (
+        messages[n - 1].get("tool_calls")
+        or (n < len(messages) and inside[n] and not messages[n].get("tool_calls"))
+    ):
         n -= 1
     return n
 
@@ -566,28 +572,32 @@ def _find_safe_split_index(messages: list[dict[str, Any]], target_idx: int) -> i
     """Find a split point that never orphans tool_call/tool_result pairs.
 
     Walks backward from *target_idx* until the boundary sits between two
-    independent message groups (not inside an assistant→tool sequence).
+    independent message groups. An exchange is everything from the assistant
+    tool-call message to its last matching result, whatever sits in between:
+    an engine notice recorded mid-batch once made this stop at the notice and
+    keep the results while their call was dropped, and every provider rejects
+    that request.
     """
     if target_idx <= 0 or target_idx >= len(messages):
         return target_idx
 
+    inside = _in_tool_exchange(messages)
     idx = target_idx
-    while idx > 0:
-        msg = messages[idx]
-        # tool result must stay with its preceding assistant message
-        if msg.get("role") == "tool":
-            idx -= 1
-            continue
-        # The boundary BEFORE a call retains both the call and its results.
-        # Walking past it joins consecutive exchanges into one unbounded tail.
-        break
-
+    # The boundary BEFORE a call retains both the call and its results.
+    # Walking past it joins consecutive exchanges into one unbounded tail.
+    while idx > 0 and inside[idx] and not messages[idx].get("tool_calls"):
+        idx -= 1
     return idx
 
 
-def _recent_split(messages: list[dict[str, Any]], budget: int, keep_recent: int) -> int:
+def _recent_split(
+    messages: list[dict[str, Any]], budget: int, keep_recent: int, model: str | None = None
+) -> int:
     """Retain a token-bounded tail, cutting only before complete exchanges."""
-    from robothor.engine.context import estimate_tokens
+    from robothor.engine.context import estimate_context_tokens
+
+    def estimate_tokens(msgs: list[dict[str, Any]]) -> int:
+        return estimate_context_tokens(msgs, model)
 
     start = max(0, len(messages) - keep_recent)
     if start < len(messages) - 1:
@@ -679,7 +689,10 @@ SHRINK_HEAD_CHARS = 2_000
 
 
 def _shrink_largest(
-    messages: list[dict[str, Any]], drain_to: int, keep_intact: int = SHRINK_KEEP_INTACT
+    messages: list[dict[str, Any]],
+    drain_to: int,
+    keep_intact: int = SHRINK_KEEP_INTACT,
+    model: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Truncate the biggest old messages until the conversation fits.
 
@@ -692,13 +705,18 @@ def _shrink_largest(
     handed to a server that allocated a third of the room it needs, and
     truncated there in silence.
     """
-    from robothor.engine.context import estimate_tokens
+    from robothor.engine.context import estimate_context_tokens
+
+    def estimate_tokens(msgs: list[dict[str, Any]]) -> int:
+        return estimate_context_tokens(msgs, model)
 
     out = list(messages)
     tail_start = max(0, len(out) - keep_intact)
     # Biggest first: one 750KB tool result is worth more than twenty small ones.
+    from robothor.engine.compaction_ledger import is_ledger
+
     order = sorted(
-        (i for i in range(1, tail_start)),
+        (i for i in range(1, tail_start) if not is_ledger(out[i])),
         key=lambda i: len(_content_text(out[i].get("content"))),
         reverse=True,
     )
@@ -745,32 +763,170 @@ and unfinished work; drop what the slice supersedes. Return only the updated \
 summary, at most 300 words."""
 
 
-def _elide_large_tool_results(
-    messages: list[dict[str, Any]], protect_tail: int, max_chars: int = TOOL_RESULT_MAX_CHARS
-) -> tuple[list[dict[str, Any]], int]:
-    """Replace old oversized tool results with a one-line summary and a reference.
+#: The marker a stub's excerpt follows. Also how a later pass finds how much
+#: of the excerpt budget earlier stubs already spent.
+STUB_PREFIX = "[tool result elided by compaction"
+EXCERPT_MARKER = "\nExcerpt:\n"
 
-    The reference is the ``tool_call_id`` and the original size, so the agent
-    can tell what it ran and re-run it; the pairing with its call is untouched.
+#: Excerpt length bounds for one stub, in characters. The budget for all of a
+#: conversation's excerpts is a twelfth of the drain target; each new stub takes a
+#: quarter of what is left, so the first ones keep the most and the total stays
+#: bounded however many results are elided. The floor keeps every stub useful.
+EXCERPT_MAX_CHARS = 1_000
+EXCERPT_MIN_CHARS = 120
+_EXCERPT_CUT = "\n[... {n:,} characters removed ...]\n"
+
+
+def _call_details(messages: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
+    """``tool_call_id`` -> (tool name, argument JSON) for every call in *messages*."""
+    details: dict[str, tuple[str, str]] = {}
+    for m in messages:
+        for call in m.get("tool_calls") or []:
+            fn = call.get("function") if isinstance(call, dict) else None
+            if isinstance(fn, dict) and call.get("id"):
+                raw = fn.get("arguments")
+                args = raw if isinstance(raw, str) else json.dumps(raw or {})
+                details[str(call["id"])] = (str(fn.get("name") or "the tool"), args)
+    return details
+
+
+def _excerpt(content: str, chars: int) -> str:
+    """Head and tail of *content* within *chars*: two thirds head, where a
+    result's identifying fields usually are, one third tail."""
+    if len(content) <= chars:
+        return content
+    head = (chars * 2) // 3
+    tail = chars - head
+    return content[:head] + _EXCERPT_CUT.format(n=len(content) - head - tail) + content[-tail:]
+
+
+def _stub(name: str, args: str, call_id: str, content: str, excerpt_chars: int) -> str:
+    """What the model sees in place of a result: that most of it was removed,
+    how to get it back, and a bounded head/tail excerpt. Kept short: a long
+    turn can carry dozens of these."""
+    shown_args = args if len(args) <= 120 else args[:120] + "..."
+    return (
+        f"{STUB_PREFIX}: {name} {shown_args} returned {len(content):,} chars (ref {call_id}); "
+        f"removed to save space. Before relying on a detail not in this excerpt, call "
+        f"{name} again with the same arguments, if it only reads data.]"
+        f"{EXCERPT_MARKER}{_excerpt(content, excerpt_chars)}"
+    )
+
+
+def _excerpt_chars_spent(messages: list[dict[str, Any]]) -> int:
+    """Excerpt characters already in context: in stubs and in the ledger.
+
+    The ledger counts too. Without it every fold reset the budget, each new
+    stub took the largest excerpt again, and the ledger grew until its oldest
+    excerpts, the ones a long task started from, had to be cut.
     """
-    cut = len(messages) - protect_tail
+    from robothor.engine.compaction_ledger import ledger_excerpt_chars
+
+    spent = 0
+    for m in messages:
+        content = m.get("content")
+        if m.get("role") == "tool" and isinstance(content, str) and content.startswith(STUB_PREFIX):
+            _, _, excerpt = content.partition(EXCERPT_MARKER)
+            spent += len(excerpt)
+        else:
+            spent += ledger_excerpt_chars(m)
+    return spent
+
+
+def _elide_large_tool_results(
+    messages: list[dict[str, Any]],
+    protect_tail: int,
+    max_chars: int = TOOL_RESULT_MAX_CHARS,
+    *,
+    over_by: int | None = None,
+    excerpt_budget: int = 6_000,
+    model: str | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Replace old oversized tool results with a stub: what it was, how to get
+    it back, and a bounded head/tail excerpt.
+
+    Largest first, oldest first among equals, and only until the conversation
+    has shed *over_by* tokens (every candidate when it is None). A turn just
+    over its target loses one result, not all of them: measured in a lab run,
+    the result that held the fact the final answer needed went with the rest.
+
+    Content only, so a call stays paired with its result. A stub is shorter
+    than *max_chars* and deterministic, so it is never rewritten by a later
+    pass: the prompt-cache prefix up to it stays byte-identical.
+    """
+    from robothor.engine.context import estimate_context_tokens
+
+    details = _call_details(messages)
+    cut = max(0, len(messages) - protect_tail)
+    candidates = [
+        i
+        for i in range(cut)
+        if messages[i].get("role") == "tool"
+        and isinstance(messages[i].get("content"), str)
+        and len(messages[i]["content"]) > max_chars
+    ]
+    candidates.sort(key=lambda i: (-len(messages[i]["content"]), i))
+    left = max(0, excerpt_budget - _excerpt_chars_spent(messages))
     out = list(messages)
     elided = 0
-    for i in range(max(0, cut)):
+    shed = 0
+    for i in candidates:
+        if over_by is not None and shed >= over_by:
+            break
         m = messages[i]
-        content = m.get("content")
-        if m.get("role") != "tool" or not isinstance(content, str) or len(content) <= max_chars:
-            continue
-        line = extract_tool_summary(content).replace("\n", " ")[:200]
-        out[i] = {
-            **m,
-            "content": (
-                f"[tool result elided by compaction: {len(content):,} chars, "
-                f"ref {m.get('tool_call_id', '?')}] {line}"
-            ),
-        }
+        content = m["content"]
+        call_id = str(m.get("tool_call_id", "?"))
+        name, args = details.get(call_id, ("the tool", "{}"))
+        chars = max(EXCERPT_MIN_CHARS, min(EXCERPT_MAX_CHARS, left // 4))
+        stub = _stub(name, args, call_id, content, chars)
+        if len(stub) >= max_chars:  # never a candidate again, whatever the arguments
+            stub = stub[: max_chars - 1]
+        left = max(0, left - chars)
+        replaced = {**m, "content": stub}
+        if over_by is not None:
+            shed += estimate_context_tokens([m], model) - estimate_context_tokens([replaced], model)
+        out[i] = replaced
         elided += 1
     return out, elided
+
+
+def newest_exchange_start(messages: list[dict[str, Any]]) -> int:
+    """Index of the newest assistant tool call: the results the model has not
+    read yet start after it. ``len - 1`` when there is no call at all."""
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("tool_calls"):
+            return i
+    return max(0, len(messages) - 1)
+
+
+def protected_tail_len(
+    messages: list[dict[str, Any]], budget: int, cap: int, model: str | None = None
+) -> int:
+    """How many trailing messages the pre-pass keeps verbatim.
+
+    Bounded by TOKENS as well as by count. A fixed count of recent messages
+    (twenty) is right when they are small, and wrong for one turn of large tool
+    results: twenty messages there is ten results, the whole turn, and nothing
+    could ever be elided — measured, a single tool-heavy turn grew to 900k
+    tokens through a compaction that fired every iteration and reduced nothing.
+
+    The newest exchange is always kept whole, whatever it costs: the model
+    asked for those results and has not seen them. Older messages join the
+    tail newest-first while they fit in *budget*, up to *cap* messages.
+    """
+    from robothor.engine.context import estimate_context_tokens
+
+    if not messages:
+        return 0
+    start = newest_exchange_start(messages)
+    used = estimate_context_tokens(messages[start:], model)
+    while start > 0 and len(messages) - start < cap:
+        cost = estimate_context_tokens([messages[start - 1]], model)
+        if used + cost > budget:
+            break
+        used += cost
+        start -= 1
+    return len(messages) - start
 
 
 def _truncate_arguments(raw: str, max_chars: int) -> str:
@@ -828,21 +984,43 @@ def _truncate_tool_arguments(
 
 
 def llm_free_pre_pass(
-    messages: list[dict[str, Any]], protect_tail: int
+    messages: list[dict[str, Any]],
+    protect_tail: int,
+    *,
+    target: int | None = None,
+    model: str | None = None,
+    elide_all: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Reclaim tokens with no model call: the pass that runs first.
 
     Never touches the protected head (the task statement) or the recent tail.
-    Dedupe identical tool results, strip historical media, elide oversized old
-    tool results, truncate oversized argument JSON — in that order, so the
-    dedupe compares the originals.
+    Dedupe identical tool results, strip historical media, truncate oversized
+    argument JSON, then elide oversized old tool results — in that order, so
+    the dedupe compares the originals and elision, the lossy step, comes last.
+    With a *target* (tokens), elision stops as soon as the conversation fits it
+    (sizing the excerpt budget from it); without one, or with *elide_all*, every
+    candidate is elided.
     """
+    from robothor.engine.context import estimate_context_tokens
+
     head_len = protected_prefix_len(messages)
     body = messages[head_len:]
     body, deduped = _dedup_tool_results(body, protect_tail)
     body, media = _strip_historical_media(body, protect_tail)
-    body, elided = _elide_large_tool_results(body, protect_tail)
     body, args = _truncate_tool_arguments(body, protect_tail)
+    over_by = None
+    budget = 6_000
+    if target is not None:
+        whole = [*messages[:head_len], *body]
+        over_by = None if elide_all else max(0, estimate_context_tokens(whole, model) - target)
+        budget = max(EXCERPT_MIN_CHARS * 4, target // 12)
+    body, elided = (
+        _elide_large_tool_results(
+            body, protect_tail, over_by=over_by, excerpt_budget=budget, model=model
+        )
+        if over_by != 0
+        else (body, 0)
+    )
     counts = {"deduped": deduped, "media": media, "elided": elided, "arguments": args}
     return [*messages[:head_len], *body], counts
 
@@ -994,6 +1172,57 @@ def _merge_retained_facts(
     return out
 
 
+#: Stub exchanges folded into the ledger at a time while the context is still
+#: under the trigger (a fold rewrites the ledger, and the cache after it).
+FOLD_BATCH = 8
+
+#: A summary shorter than this, standing in for at least
+#: ``DEGENERATE_SOURCE_CHARS`` of conversation, is a failed summary. A real one
+#: is up to 300 words; a summarizer that extracts nothing answers a phrase.
+DEGENERATE_SUMMARY_CHARS = 100
+DEGENERATE_SOURCE_CHARS = 4_000
+
+
+def _degenerate_summary(summary: str, replaced: list[dict[str, Any]]) -> bool:
+    source = sum(len(_content_text(m.get("content"))) for m in replaced)
+    return source >= DEGENERATE_SOURCE_CHARS and len(summary.strip()) < DEGENERATE_SUMMARY_CHARS
+
+
+def _set_aside_stub_exchanges(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(messages to summarize, exchanges kept as they are).
+
+    An exchange whose every result is already an elision stub is kept whole:
+    it is small, it is the run's own evidence, and a summary model that
+    extracts nothing would otherwise take the excerpt with it. Measured in a
+    lab run, that is how the one result holding the fact the answer needed
+    disappeared. Whole exchanges only, so every call keeps its result.
+    """
+    from robothor.engine.compaction_ledger import is_ledger
+
+    summarize: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    i = 0
+    while i < len(messages):
+        m = messages[i]
+        calls = m.get("tool_calls") if m.get("role") == "assistant" else None
+        if not calls:
+            (kept if is_ledger(m) else summarize).append(m)
+            i += 1
+            continue
+        ids = {str(c.get("id")) for c in calls if isinstance(c, dict)}
+        j = i + 1
+        while j < len(messages) and messages[j].get("role") == "tool":
+            j += 1
+        results = messages[i + 1 : j]
+        whole = ids == {str(r.get("tool_call_id")) for r in results}
+        stubs = all(str(r.get("content") or "").startswith(STUB_PREFIX) for r in results)
+        (kept if whole and results and stubs else summarize).extend(messages[i:j])
+        i = j
+    return summarize, kept
+
+
 async def compact(
     messages: list[dict[str, Any]],
     models: list[str] | None = None,
@@ -1008,49 +1237,105 @@ async def compact(
     caller the fleet chain summarises; when every model fails, the messages are
     kept and the result is marked ``degraded``.
     """
-    from robothor.engine.context import KEEP_RECENT, estimate_tokens
+    from robothor.engine.context import KEEP_RECENT, estimate_context_tokens
+    from robothor.engine.context_fit import next_reachable_model
 
-    tokens_before = estimate_tokens(messages)
+    # The model the trigger sized against, so an exact tokenizer, when it is
+    # switched on, counts here exactly as it counted there.
+    sizing = next_reachable_model(list(models or []), broken_models) or None
+
+    # Every count runs in a worker thread: with the exact tokenizer on, each one
+    # is a synchronous, CPU-bound ``litellm.token_counter`` call, and this pass
+    # counts many times. On the loop that stalls every other session.
+    async def measure(msgs: list[dict[str, Any]]) -> int:
+        return await asyncio.to_thread(estimate_context_tokens, msgs, sizing)
+
+    tokens_before = await measure(messages)
     if tokens_before < threshold:
         return CompactionResult(
             messages=messages, tokens_before=tokens_before, tokens_after=tokens_before
         )
 
-    working, counts = llm_free_pre_pass(messages, KEEP_RECENT)
-    est = estimate_tokens(working)
+    recent_budget = max(1024, drain_to // 3)
+    head_len = protected_prefix_len(messages)
+    protect = await asyncio.to_thread(
+        protected_tail_len, messages[head_len:], recent_budget, KEEP_RECENT, sizing
+    )
+    working, counts = await asyncio.to_thread(
+        llm_free_pre_pass, messages, protect, target=drain_to, model=sizing
+    )
+    est = await measure(working)
+    if est >= drain_to:
+        # Targeted elision can stop at, or a token over, the target: every
+        # remaining old result becomes a stub before anything is summarized,
+        # or a summary that extracts nothing takes it whole.
+        working, more = await asyncio.to_thread(
+            llm_free_pre_pass, working, protect, target=drain_to, model=sizing, elide_all=True
+        )
+        counts["elided"] += more["elided"]
+        est = await measure(working)
     logger.info(
         "Compaction pre-pass: ~%d → ~%d tokens (%s)", tokens_before, est, sanitize_log(counts)
     )
 
-    def result(msgs: list[dict[str, Any]], passes: int, **extra: Any) -> CompactionResult:
+    async def result(msgs: list[dict[str, Any]], passes: int, **extra: Any) -> CompactionResult:
         return CompactionResult(
             messages=msgs,
             passes_used=passes,
             tokens_before=tokens_before,
-            tokens_after=estimate_tokens(msgs),
+            tokens_after=await measure(msgs),
             **extra,
         )
 
-    if est < drain_to:
-        return result(working, 1)
+    async def fold(msgs: list[dict[str, Any]], head: int, tail: int) -> list[dict[str, Any]]:
+        """Stubs that alone do not fit are folded into the ledger, never dropped."""
+        from robothor.engine.compaction_ledger import fold_stub_exchanges
+
+        if await measure(msgs) <= drain_to:
+            return msgs
+        # Folding is triggered by the drain target, but excerpts are cut only
+        # while the result is still at the trigger: that is the bound, and the
+        # excerpt is what a summarizer that extracts nothing would lose.
+        # Below the trigger, fold only a batch at a time: each fold rewrites
+        # the ledger near the head, and everything after it leaves the cache.
+        batch = 1 if await measure(msgs) >= threshold else FOLD_BATCH
+        folded, n = await asyncio.to_thread(
+            fold_stub_exchanges,
+            msgs,
+            head,
+            tail,
+            max(1, threshold - 1),
+            sizing,
+            min_exchanges=batch,
+        )
+        if n:
+            logger.info("Compaction: folded %d elided exchange(s) into the ledger", n)
+        return folded
+
+    if est <= drain_to:
+        return await result(working, 1)
 
     if len(working) <= KEEP_RECENT + 1:
-        shrunk, n = _shrink_largest(working, drain_to)
-        if not n and est >= tokens_before:
+        shrunk, n = await asyncio.to_thread(_shrink_largest, working, drain_to, model=sizing)
+        folded = await fold(shrunk, head_len, protect)
+        if not n and folded is shrunk and est >= tokens_before:
             # Nothing reclaimed: a no-op must not read as a pass that worked.
             return CompactionResult(
                 messages=messages, tokens_before=tokens_before, tokens_after=tokens_before
             )
-        return result(shrunk, 1)
+        return await result(folded, 1)
 
     head_msgs, retained_msgs, rest = _split_for_summary(working)
     previous, rest = _take_previous_summary(rest)
     split_idx = (
-        _recent_split(rest, max(1024, drain_to // 3), KEEP_RECENT) if len(rest) > KEEP_RECENT else 0
+        await asyncio.to_thread(_recent_split, rest, recent_budget, KEEP_RECENT, sizing)
+        if len(rest) > KEEP_RECENT
+        else 0
     )
     old_messages, recent_messages = rest[:split_idx], rest[split_idx:]
+    old_messages, kept_stubs = _set_aside_stub_exchanges(old_messages)
     if not old_messages:
-        return result(working, 1)
+        return await result(await fold(working, head_len, protect), 1)
 
     chain = await _summary_chain(models, broken_models, preferred_model)
     try:
@@ -1070,7 +1355,19 @@ async def compact(
             sanitize_log(str(e)[:200]),
             len(working),
         )
-        return result(working, 1, degraded=True)
+        return await result(working, 1, degraded=True)
+
+    if _degenerate_summary(summary, old_messages):
+        # A few characters standing in for thousands is a failed summary, not a
+        # short one. Keep the originals, shrunk; never discard them for it.
+        logger.warning(
+            "Compaction: summary of %d characters for %d messages is degenerate — "
+            "shrinking the originals instead, run marked degraded",
+            len(summary.strip()),
+            len(old_messages),
+        )
+        shrunk, _ = await asyncio.to_thread(_shrink_largest, working, drain_to, model=sizing)
+        return await result(await fold(shrunk, head_len, protect), 1, degraded=True)
 
     # Extraction reads at most FACT_INPUT_MESSAGES messages per call
     # (`build_extraction_input`), so it walks the slice the same way.
@@ -1091,13 +1388,18 @@ async def compact(
             "content": "Understood. I have context from our previous conversation.",
         }
     )
+    result_msgs.extend(kept_stubs)
     result_msgs.extend(recent_messages)
-    if estimate_tokens(result_msgs) > drain_to:
-        result_msgs, _ = _shrink_largest(result_msgs, drain_to)
+    if await measure(result_msgs) > drain_to:
+        result_msgs, _ = await asyncio.to_thread(
+            _shrink_largest, result_msgs, drain_to, model=sizing
+        )
+        result_msgs = await fold(result_msgs, len(head_msgs), len(recent_messages))
+    done = await result(result_msgs, 3, facts_extracted=facts)
     logger.info(
         "Compaction: summary updated on %s, ~%d → ~%d tokens",
         sanitize_log(chain[0]),
         tokens_before,
-        estimate_tokens(result_msgs),
+        done.tokens_after,
     )
-    return result(result_msgs, 3, facts_extracted=facts)
+    return done

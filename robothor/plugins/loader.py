@@ -139,6 +139,10 @@ class PluginSet:
     #: WRITE, which is the safe default and today's behaviour: a plugin
     #: that says nothing must never be assumed harmless.
     read_only: set[str] = field(default_factory=set)
+    #: Tool name -> ``effect_tools.EffectSpec``: what each of a plugin's OWN
+    #: write tools acts on, and its read-back verifier. Absent means the
+    #: engine derives the target and nothing can read the write back.
+    effects: dict[str, Any] = field(default_factory=dict)
     loaded: list[Any] = field(default_factory=list)
     failures: list[PluginFailure] = field(default_factory=list)
 
@@ -594,10 +598,60 @@ def load_plugins(
                 continue
             declared_ro = set(raw)
 
+        declared_effects: dict[str, Any] = {}
+        if group == "genus.tools" and "effects" in payload:
+            parsed = _effect_specs(payload.get("effects"), set(contributions))
+            if isinstance(parsed, str):
+                result.failures.append(PluginFailure(name, group, parsed, distribution))
+                logger.warning("Plugin %r effect declaration refused: %s", name, parsed)
+                continue
+            declared_effects = parsed
+
         # All-or-nothing: validated above, applied here.
         target.update(contributions)
         result.read_only |= declared_ro
+        result.effects.update(declared_effects)
         result.loaded.append(ep)
         logger.info("Plugin %r loaded %d %s", name, len(contributions), _GROUPS[group])
 
     return result
+
+
+_EFFECT_KEYS = frozenset({"target", "fence", "verify"})
+
+
+def _effect_specs(raw: Any, provided: set[str]) -> dict[str, Any] | str:
+    """A plugin's ``effects`` declaration, validated; or why it is refused.
+
+    The same rule as ``read_only``: a plugin speaks only for tools it provides
+    -- declaring how another package's write is fenced or read back would be
+    privilege escalation, not extension.
+    """
+    from robothor.engine.runtime.effect_tools import FENCES, EffectSpec
+
+    if not isinstance(raw, dict):
+        return "effects must map tool names to declarations — refused"
+    foreign = sorted(set(raw) - provided)
+    if foreign:
+        return f"effects names {foreign} are not provided by this plugin — refused"
+    specs: dict[str, Any] = {}
+    for tool, declaration in raw.items():
+        if not isinstance(declaration, dict) or set(declaration) - _EFFECT_KEYS:
+            return f"effects[{tool!r}] takes only {sorted(_EFFECT_KEYS)} — refused"
+        target = declaration.get("target")
+        if target is not None and (
+            not isinstance(target, list | tuple)
+            or not target
+            or not all(isinstance(key, str) and key for key in target)
+        ):
+            return f"effects[{tool!r}].target must be a non-empty list of argument names — refused"
+        fence = declaration.get("fence", "target")
+        if fence not in FENCES:
+            return f"effects[{tool!r}].fence must be one of {sorted(FENCES)} — refused"
+        verify = declaration.get("verify")
+        if verify is not None and not callable(verify):
+            return f"effects[{tool!r}].verify must be callable — refused"
+        specs[tool] = EffectSpec(
+            target=tuple(target) if target is not None else None, fence=fence, verify=verify
+        )
+    return specs

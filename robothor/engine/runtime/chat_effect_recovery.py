@@ -11,7 +11,7 @@ import logging
 from types import SimpleNamespace
 
 from robothor.db.connection import tenant_scope
-from robothor.engine.runtime import effects, note_recovery, task_recovery
+from robothor.engine.runtime import effect_tools, effects
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +23,7 @@ def reconcile_record(effect_id: str, auth: AuthContext) -> None:
         record = effects.read(context, effect_id)
         if not record:
             return
-        recover = {"create_note": note_recovery.recover, "create_task": task_recovery.recover}.get(
-            record["tool_name"]
-        )
-        if recover is None:
+        if not effect_tools.has_verifier(record["tool_name"]):
             return
         if record["state"] in {"prepared", "dispatching"}:
             # A terminal parent does not imply that its delegated worker stopped.
@@ -48,7 +45,7 @@ def reconcile_record(effect_id: str, auth: AuthContext) -> None:
                              AND r.status IN ('completed','failed','timeout','cancelled'))""",
                     (effect_id, context.tenant_id, context.principal_id),
                 )
-        recover(context, effect_id)
+        effect_tools.recover(context, effect_id)
     except Exception as exc:
         # Keep the durable replay fence. A later poll can retry the read.
         logger.warning("Chat CRM recovery deferred (%s)", type(exc).__name__)

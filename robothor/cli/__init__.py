@@ -698,6 +698,9 @@ def _build_parser() -> argparse.ArgumentParser:
     from robothor.cli.pursuit import add_parser as add_pursuit_parser
 
     add_pursuit_parser(subparsers)
+    from robothor.cli.effects import add_parser as add_effects_parser
+
+    add_effects_parser(subparsers)
 
     # goal — long-running session goal (operator objective).
     # Backed by a crm_task with the session_goal tag; see migration 065.
@@ -1464,6 +1467,14 @@ def _build_parser() -> argparse.ArgumentParser:
     eng_history = eng_sub.add_parser("history", help="Show recent agent runs")
     eng_history.add_argument("--agent", help="Filter by agent ID")
     eng_history.add_argument("--limit", type=int, default=20, help="Max results")
+    eng_failures = eng_sub.add_parser(
+        "failures",
+        help="Failed, refused and denied tool calls and failed workflow steps, grouped",
+    )
+    eng_failures.add_argument("--hours", type=int, default=24, help="Window in hours (default 24)")
+    eng_failures.add_argument("--json", action="store_true", help="Print JSON")
+    eng_failures.add_argument("--tenant", default=None, help="Tenant id (default: this one)")
+    eng_failures.add_argument("--limit", type=int, default=50, help="Max groups printed")
 
     # engine workflow subcommands
     eng_wf = eng_sub.add_parser("workflow", help="Manage workflows")
@@ -1552,6 +1563,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.pursuit import cmd_goals
 
         return cmd_goals(args)
+    if args.command == "effects":
+        from robothor.cli.effects import cmd_effects
+
+        return cmd_effects(args)
     if args.command in {"goal", "legacy-goal"}:
         from robothor.cli.goal import cmd_goal
 

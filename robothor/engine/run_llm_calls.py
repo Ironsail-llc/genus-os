@@ -38,6 +38,7 @@ from robothor.engine.llm_client import LLMClient  # noqa: E402
 from robothor.engine.reasoning_replay import (  # noqa: E402
     PRODUCER_MODEL_KEY,
     capture_reasoning_fields,
+    has_thinking_blocks,
 )
 
 # ── Log-injection sanitizer ──
@@ -233,6 +234,7 @@ class LLMCallMixin:
         reasoning = capture_reasoning_fields(assistant_msg)
         if reasoning:
             msg_dict.update(reasoning)
+        if reasoning or has_thinking_blocks(msg_dict):
             msg_dict[PRODUCER_MODEL_KEY] = model_used
         if assistant_msg.tool_calls:
             msg_dict["tool_calls"] = [

@@ -56,7 +56,10 @@ from robothor.engine.last_resort import last_resort_attempt
 from robothor.engine.llm_attempts import (
     REASONING_ONLY_NUDGE,
     CompletionShape,
+    begin_call_log,
     describe_completion,
+    end_call_log,
+    estimate_missing_usage,
     note_outcome,
 )
 
@@ -781,12 +784,14 @@ def rebuild_streamed_response(chunks: list[Any], kwargs: dict[str, Any] | None =
     that, the one the request asked for (:func:`note_requested_tier`).
     """
     rebuilt = litellm.stream_chunk_builder(chunks)
+    # With no usage on any chunk, input is the engine's estimate, marked so.
     tiers = (getattr(chunk, "service_tier", None) for chunk in reversed(chunks))
     tier = next((tier for tier in tiers if tier), None)
     if rebuilt is not None and tier and not getattr(rebuilt, "service_tier", None):
         # One name for the priority lane, whatever the provider calls it today.
         lane = "priority" if tier in _PRIORITY_TIERS else tier
         setattr(rebuilt, "service_tier", lane)  # noqa: B010 - not on litellm's type
+    rebuilt = estimate_missing_usage(rebuilt, chunks, (kwargs or {}).get("messages") or [])
     return note_requested_tier(rebuilt, kwargs or {})
 
 
@@ -1887,6 +1892,11 @@ class LLMClient:
         # Expose the run id to the model breaker so a trip during this call
         # can be recorded as a guardrail event against the run.
         run_token = _current_run_id_var.set(getattr(session.run, "id", None))
+        call_log_token = begin_call_log(
+            agent_id=str(getattr(session.run, "agent_id", "") or ""),
+            run_id=str(getattr(session.run, "id", "") or ""),
+            streamed=bool(on_content or on_stream_event),
+        )
         format_token = _response_format_var.set(
             "json_object"
             if getattr(session, "response_format", "text") == "json_object"
@@ -1931,6 +1941,7 @@ class LLMClient:
                 # steps of the run that ended "All models failed to respond".)
                 return await last_resort_attempt(self, session, models)
         finally:
+            end_call_log(call_log_token)
             _current_run_id_var.reset(run_token)
             _response_format_var.reset(format_token)
 
@@ -2015,9 +2026,8 @@ class LLMClient:
                     if tc_id:
                         valid_ids.add(tc_id)
 
-        if not valid_ids:
-            return messages  # no tool calls at all — nothing to validate
-
+        # No early return when no call is left: that is exactly when every
+        # remaining result is an orphan, and a provider rejects the request.
         cleaned: list[dict[str, Any]] = []
         dropped = 0
         for msg in messages:
@@ -2027,6 +2037,7 @@ class LLMClient:
             cleaned.append(msg)
 
         if dropped:
+            # Always an upstream bug: something split a call from its results.
             logger.warning(
                 "Dropped %d orphaned tool_result message(s) — "
                 "no matching tool_use in assistant messages",
@@ -2342,6 +2353,8 @@ class LLMClient:
             }
         if stream:
             kwargs["stream"] = True
+            if not is_codex_model(model):  # litellm withholds usage from a stream otherwise
+                kwargs["stream_options"] = {"include_usage": True}
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice(tools)
@@ -2439,7 +2452,11 @@ class LLMClient:
             elif is_provider_down:
                 reason = f"provider unavailable: {e}"
             else:
-                reason = str(status)
+                # The provider's own words: "failed (403)" alone hid a pairing
+                # rejection for two weeks. Redacted, then cut short.
+                from robothor.secrets.redaction import redact
+
+                reason = f"{status}: {redact(str(e))[:300]}"
             if is_primary:
                 logger.error(
                     "PRIMARY model %s failed (%s), falling back — primary_model_fallback=True",

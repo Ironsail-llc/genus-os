@@ -474,12 +474,25 @@ async def _alert_delivery(ctx: DoctorContext) -> list[Result]:
         else:
             results.append(fail(f"fallback {name}: cannot deliver ({reason})", sub_id=name))
 
+    from robothor.engine.alerts import alert_webhook_url
+
+    if alert_webhook_url():
+        # Not probed: a POST would be a real page. Configured is what can be told.
+        results.append(
+            Result(
+                status="pass",
+                detail="fallback webhook: ROBOTHOR_ALERT_WEBHOOK_URL is configured (not probed)",
+                sub_id="webhook",
+            )
+        )
+
     if not any(row.status == "pass" for row in results):
         results.append(
             fail(
-                "no alert channel can deliver: Telegram is not configured and no "
-                "ROBOTHOR_ALERT_FALLBACK_CHANNELS entry can send, so critical alerts "
-                "reach no one",
+                "no alert channel can deliver: Telegram is not configured, no "
+                "ROBOTHOR_ALERT_FALLBACK_CHANNELS entry can send and "
+                "ROBOTHOR_ALERT_WEBHOOK_URL is empty, so critical alerts reach no one "
+                "(every alert is still logged as an event=alert ERROR line)",
                 sub_id="any",
             )
         )

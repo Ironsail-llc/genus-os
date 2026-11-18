@@ -181,3 +181,30 @@ def with_gate(
         return verdict
     extra = refusal_fields(gate=gate, name=name, unlock=unlock)
     return replace(verdict, output={**verdict.output, **extra}, gate=gate, unlock=unlock)
+
+
+def logs_refusals(admit: Any) -> Any:
+    """Wrap an admission method so every refusal it returns writes its log line.
+
+    Admission is the one step every model-turn and ``execute_code`` call passes
+    before the registry, so a call refused here is logged once, whichever path
+    asked (``robothor.engine.tool_call_log``).
+    """
+    import functools
+
+    @functools.wraps(admit)
+    async def _admit(self: Any, **kw: Any) -> ToolVerdict:
+        verdict: ToolVerdict = await admit(self, **kw)
+        if not verdict.allowed:
+            from robothor.engine.tool_call_log import log_refused
+
+            refusal = {"error": verdict.message, **verdict.output}
+            log_refused(
+                kw.get("tool_name", ""),
+                refusal,
+                tool_args=verdict.tool_args,
+                session=kw.get("session"),
+            )
+        return verdict
+
+    return _admit

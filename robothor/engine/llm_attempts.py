@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -89,6 +89,10 @@ class CompletionShape:
     input_tokens: int | None = None
     output_tokens: int | None = None
     reasoning_tokens: int | None = None
+    #: Prompt tokens served from the provider's cache, where it reports them.
+    cached_tokens: int | None = None
+    #: The provider reported no usage; the counts are the engine's estimate.
+    estimated: bool = False
 
     @property
     def no_answer(self) -> bool:
@@ -150,7 +154,41 @@ def describe_completion(result: Any) -> CompletionShape:
         input_tokens=_int_or_none(getattr(usage, "prompt_tokens", None)),
         output_tokens=_int_or_none(getattr(usage, "completion_tokens", None)),
         reasoning_tokens=_int_or_none(getattr(details, "reasoning_tokens", None)),
+        cached_tokens=_cached_tokens(usage),
+        estimated=getattr(result, "usage_estimated", False) is True,
     )
+
+
+def estimate_missing_usage(rebuilt: Any, chunks: list[Any], messages: list[dict[str, Any]]) -> Any:
+    """``rebuilt`` with an estimated input count when no chunk carried usage.
+
+    A stream is asked for its usage, but a provider that does not report it
+    leaves the rebuilt response with input 0 (and output counted from the
+    text). The engine's own estimate replaces the zero, and the response is
+    marked so the ``event=llm_call`` line says ``estimated=true``. Never raises.
+    """
+    try:
+        if rebuilt is None or any(getattr(chunk, "usage", None) for chunk in chunks):
+            return rebuilt
+        from robothor.engine.context import estimate_tokens
+
+        usage = getattr(rebuilt, "usage", None)
+        if usage is not None:
+            usage.prompt_tokens = estimate_tokens(messages)
+            usage.total_tokens = usage.prompt_tokens + (usage.completion_tokens or 0)
+            setattr(rebuilt, "usage_estimated", True)  # noqa: B010 - not on litellm's type
+    except Exception:  # noqa: BLE001 - accounting must never fail the call
+        logger.debug("usage estimate failed", exc_info=True)
+    return rebuilt
+
+
+def _cached_tokens(usage: Any) -> int | None:
+    """Cache-read prompt tokens: OpenAI-style details, or Anthropic-style usage."""
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = _int_or_none(getattr(details, "cached_tokens", None))
+    if cached is None:
+        cached = _int_or_none(getattr(usage, "cache_read_input_tokens", None))
+    return cached
 
 
 @dataclass(frozen=True)
@@ -227,6 +265,7 @@ def note_outcome(
     ``reasoning_only``.
     """
     duration_ms = max(0, int((time.monotonic() - started) * 1000))
+    _log_call(model, duration_ms, shape=shape, error=error, self_healed=self_healed)
     if error is not None:
         record_attempt(
             LLMAttempt(
@@ -314,3 +353,73 @@ def record_attempt_steps(session: AgentSession, attempts: list[LLMAttempt]) -> i
         except Exception as e:  # noqa: BLE001 - telemetry must not fail a run
             logger.debug("could not record a failed LLM attempt: %s", e)
     return success_ms
+
+
+# ─── one log line per attempt ──────────────────────────────────────────
+
+#: Who the current dispatch is for, and how far through its chain it is. Set
+#: by ``LLMClient._do_llm_call`` for the length of one dispatch.
+_call_log: ContextVar[dict[str, Any] | None] = ContextVar("llm_call_log", default=None)
+_line_logger = logging.getLogger("robothor.engine.llm_calls")
+
+
+def begin_call_log(*, agent_id: str, run_id: str, streamed: bool) -> Token[dict[str, Any] | None]:
+    """Name the agent and run on every ``event=llm_call`` line until :func:`end_call_log`."""
+    return _call_log.set(
+        {"agent": agent_id, "run_id": run_id, "streamed": streamed, "attempt": 0, "models": []}
+    )
+
+
+def end_call_log(token: Token[dict[str, Any] | None]) -> None:
+    _call_log.reset(token)
+
+
+def _log_call(
+    model: str,
+    duration_ms: int,
+    *,
+    shape: CompletionShape | None,
+    error: BaseException | None,
+    self_healed: bool,
+) -> None:
+    """``event=llm_call`` for the attempt that just finished. Never raises.
+
+    No prompt or reply text: model, tokens, latency, position and outcome only.
+    """
+    try:
+        from robothor.engine.log_fields import kv_line
+
+        scope = _call_log.get()
+        attempt: Any = "-"
+        fallback: Any = "-"
+        if scope is not None:
+            scope["attempt"] += 1
+            if model not in scope["models"]:
+                scope["models"].append(model)
+            attempt = scope["attempt"]
+            fallback = scope["models"].index(model)
+        fields: dict[str, Any] = {
+            "agent": scope["agent"] if scope else "",
+            "run_id": scope["run_id"] if scope else "",
+            "model": model,
+        }
+        if error is not None:
+            fields["outcome"] = classify_error(error)
+            fields["error_type"] = type(error).__name__
+        else:
+            shape = shape if shape is not None else CompletionShape()
+            fields["outcome"] = OUTCOME_REASONING_ONLY_RETRY if self_healed else shape.outcome
+            fields["input_tokens"] = shape.input_tokens or 0
+            fields["output_tokens"] = shape.output_tokens or 0
+            fields["cached_tokens"] = shape.cached_tokens or 0
+            fields["finish_reason"] = shape.finish_reason
+            if shape.estimated:
+                fields["estimated"] = True
+        fields["latency_ms"] = duration_ms
+        fields["streamed"] = bool(scope["streamed"]) if scope else "-"
+        fields["attempt"] = attempt
+        fields["fallback"] = fallback
+        level = logging.INFO if fields["outcome"] == OUTCOME_SUCCESS else logging.WARNING
+        _line_logger.log(level, "%s", kv_line("llm_call", **fields))
+    except Exception:  # noqa: BLE001 — diagnostics never break a call
+        logger.debug("llm_call log line failed", exc_info=True)

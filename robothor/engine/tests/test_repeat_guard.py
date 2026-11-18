@@ -459,11 +459,18 @@ class TestItIsWiredIntoDispatch:
         `tool_turn` with the rest of the tool-call block; it still has to run
         after every result and never between them."""
         import pathlib
+        from types import SimpleNamespace
 
         import robothor.engine.tool_turn as m
+        from robothor.engine.post_execution import drain_engine_notes
 
         body = pathlib.Path(m.__file__).read_text(encoding="utf-8")
-        assert "drain_repeat_notes(req.session)" in body
+        # One drain for every note raised during the batch (the repeat guard's
+        # and the guardrail's), after the last result.
+        assert "drain_engine_notes(req.session)" in body
+        session = SimpleNamespace(repeat_guard=SimpleNamespace(pending_notes=["seen this"]))
+        assert drain_engine_notes(session) == ["seen this"]
+        assert drain_engine_notes(session) == []
 
     def test_a_run_with_no_live_session_is_simply_unguarded(self) -> None:
         from robothor.engine.repeat_guard import guard_for_run
