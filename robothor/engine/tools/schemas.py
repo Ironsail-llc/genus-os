@@ -1731,7 +1731,8 @@ _PR_REVIEW_SCHEMAS: dict[str, dict[str, Any]] = {
                 "time; newest 50), request-to-answer latency (median, p90), failures and "
                 "retries, problems (stuck, out of retries, dropped requests, an old queue) "
                 "and alerts — one line per problem, empty when all is well. pr=<url or "
-                "owner/repo#N> adds that pull request's state and history."
+                "owner/repo#N> adds that pull request's state and history. With paired "
+                "reviewers configured, paired compares verdicts and findings with each peer."
             ),
             "parameters": {
                 "type": "object",

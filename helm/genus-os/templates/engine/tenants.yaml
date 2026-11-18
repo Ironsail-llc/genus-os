@@ -67,6 +67,10 @@ An empty list renders nothing.
 {{- /* Credentials are per mailbox, so the root engine's never carry over. */ -}}
 {{- $gw := $t.googleWorkspace | default dict -}}
 {{- $_ := set $cv "googleWorkspace" $gw -}}
+{{- /* Claude Code jobs, and the pod-security relaxation their sandbox may
+       need, are never inherited from engine.coding: a cell runs them only
+       when its own entry declares a coding block. */ -}}
+{{- $_ := set $cv "coding" ($t.coding | default dict) -}}
 
 {{- /* Workspace: the root's settings, its own volume. */ -}}
 {{- $tw := $t.workspace | default dict -}}

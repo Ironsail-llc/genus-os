@@ -181,7 +181,11 @@ FROM base AS production
 
 # git for coding jobs (clone, worktrees, push); the clone a job branches from
 # lives on a writable volume (ROBOTHOR_CODING_WORKSPACE), never under /app.
-RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client \
+# bubblewrap and socat are Claude Code's Bash sandbox: bwrap builds the
+# namespaces each shell command runs in, socat carries its network proxy.
+# robothor.engine.coding.sandbox.sandbox_problems() checks both.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git openssh-client bubblewrap socat \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r app && useradd -r -g app -u 1000 -d /app -s /usr/sbin/nologin app
