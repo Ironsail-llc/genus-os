@@ -622,9 +622,10 @@ class ProviderSettings(SettingsGroup):
         5_000_000,
         "ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS",
         "Per-run token count (input plus output) at which the runaway guard "
-        "records a budget_stop step (mode observe) and pages critical, once per "
-        "run. The run continues. The engine takes the number from the "
-        "environment variable.",
+        "stops the run: a budget_stop step (mode enforce), budget_exhausted, a "
+        "critical page, and a plain answer telling the person to narrow or "
+        "split the request. The engine takes the number from the environment "
+        "variable.",
     )
     model_breaker_threshold: int = declare(
         3,

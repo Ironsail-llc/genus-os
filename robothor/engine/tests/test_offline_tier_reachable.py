@@ -60,6 +60,14 @@ async def test_fact_extraction_walks_to_the_local_tier():
     assert [f.text for f in facts] == ["a fact"]
 
 
+#: A summary long enough to be a real one: a few characters standing in for
+#: thousands is treated as a failed summary.
+_SUMMARY = (
+    "The agent read forty notes and recorded what each said. Every note was the same "
+    "placeholder text; nothing is pending and no file was written."
+)
+
+
 @pytest.mark.asyncio
 async def test_the_summary_walks_to_the_local_tier():
     """Otherwise the summary fails and the compaction freezes for nothing."""
@@ -96,7 +104,7 @@ async def test_compact_hands_the_whole_chain_down_not_just_the_primary():
 
     with (
         patch.object(compaction, "extract_facts", fake_extract),
-        patch.object(compaction, "update_summary", AsyncMock(return_value="s")),
+        patch.object(compaction, "update_summary", AsyncMock(return_value=_SUMMARY)),
     ):
         await compaction.compact(
             [{"role": "user", "content": "x " * 200} for _ in range(40)],
@@ -259,7 +267,7 @@ async def test_compaction_skips_models_the_client_already_knows_are_dead():
 
     with (
         patch.object(compaction, "extract_facts", fake_extract),
-        patch.object(compaction, "update_summary", AsyncMock(return_value="s")),
+        patch.object(compaction, "update_summary", AsyncMock(return_value=_SUMMARY)),
     ):
         await compaction.compact(
             [{"role": "user", "content": "x " * 200} for _ in range(40)],

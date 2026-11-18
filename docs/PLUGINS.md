@@ -812,6 +812,29 @@ remove:                 # optional: without a detach, remove takes back what ins
 A patch that uses `append:` or `detach:` belongs to a plugin that declares
 contract `2.0` (see [The rules, and why](#the-rules-and-why)).
 
+#### Keeping a plugin's everyday tools loaded
+
+An agent allowed more than `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` tools (40) — any
+agent with no `tools_allowed` — is shown only its core schemas plus
+`tool_search`, `tool_describe` and `tool_call`
+([Tools](TOOLS.md)). Every other tool, a plugin's included, stays
+reachable but costs a search round-trip the first time a run uses it. To keep a
+few general-purpose tools loaded for an agent you patch, append them to its
+`tools_eager` list:
+
+```yaml
+# example_agent/patches/main.patch.yaml
+install:
+  append:
+    tools_eager: [example_catalog_search, example_order_lookup]
+```
+
+`tools_eager` is not an allowlist: `append:` creates it when it is absent, the
+agent keeps every tool it had, and removing the plugin detaches the items again.
+It never widens reach: a name the agent may not use (denied, opt-in and not
+opted in) is ignored. Keep the list short; each pinned schema is sent on every
+call.
+
 Two drop-in locations make the rest composable without a shared file:
 
 * **Instruction fragments:** ship `brain/agents/<agent>/…` or
