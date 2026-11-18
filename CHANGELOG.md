@@ -1,3 +1,9 @@
+## [1.135.1](https://github.com/Ironsail-llc/genus-os/compare/v1.135.0...v1.135.1) (2026-11-18)
+
+### Bug Fixes
+
+* **workflow:** rate-limited runs drain in order without loss (GEN-601) ([#872](https://github.com/Ironsail-llc/genus-os/issues/872)) ([9097a44](https://github.com/Ironsail-llc/genus-os/commit/9097a44f27d903cc932abc0d0cd7ebe5e7cae541))
+
 ## [1.135.0](https://github.com/Ironsail-llc/genus-os/compare/v1.134.0...v1.135.0) (2026-11-18)
 
 ### Features
