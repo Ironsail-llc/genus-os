@@ -1501,16 +1501,19 @@ class WorkflowEngine:
             result.output_text = result.error_message
             return
 
-        tool_result = await self.runner.registry.execute(
-            step.tool_name,
-            rendered_args,
-            agent_id=f"workflow:{run.workflow_id}",
-            tenant_id=run.tenant_id,
-            workspace=str(self.config.workspace),
-            user_id=run.user_id,
-            user_role=run.user_role,
-            timeout=step.tool_timeout_seconds,
-        )
+        from robothor.engine.tool_call_log import run_id_scope
+
+        with run_id_scope(run.id):  # names the run on the tool_call line only
+            tool_result = await self.runner.registry.execute(
+                step.tool_name,
+                rendered_args,
+                agent_id=f"workflow:{run.workflow_id}",
+                tenant_id=run.tenant_id,
+                workspace=str(self.config.workspace),
+                user_id=run.user_id,
+                user_role=run.user_role,
+                timeout=step.tool_timeout_seconds,
+            )
 
         # ── [GUARDRAILS] Post-execution check (secrets in output, etc.) ──
         post = guardrails.check_post_execution(step.tool_name, tool_result)
@@ -2107,6 +2110,8 @@ class WorkflowEngine:
         step, and a resumed run's approval step is finalized by an engine that
         never started it.
         """
+        if result.status == WorkflowStepStatus.FAILED:
+            _log_step_failure(run, result)
         try:
             from robothor.db.connection import get_connection
             from robothor.engine.guardrails import redact_secrets
@@ -2175,3 +2180,23 @@ class WorkflowEngine:
                 conn.commit()
         except Exception as e:
             logger.warning("Failed to persist workflow step: %s", e)
+
+
+def _log_step_failure(run: WorkflowRun, result: WorkflowStepResult) -> None:
+    """One ``event=workflow_step_failed`` line with the step's redacted error."""
+    from robothor.engine.log_fields import kv_line, short_reason
+
+    with contextlib.suppress(Exception):
+        logger.warning(
+            "%s",
+            kv_line(
+                "workflow_step_failed",
+                workflow=run.workflow_id,
+                run_id=run.id,
+                step=result.step_id,
+                step_type=getattr(result.step_type, "value", result.step_type),
+                tool=result.tool_name,
+                duration_ms=result.duration_ms,
+                reason=short_reason(result.error_message),
+            ),
+        )

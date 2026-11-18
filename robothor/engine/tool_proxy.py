@@ -44,6 +44,7 @@ from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any, Protocol
 
 from robothor.engine.proxy_denylist import PROXY_DENIED_TOOLS
+from robothor.engine.tool_call_log import logs_guard_refusals
 from robothor.engine.wrapped_call import inner_call
 
 if TYPE_CHECKING:
@@ -182,6 +183,7 @@ class RunToolProxy:
         #: second copy of two hundred responses in RAM is not a diagnostic.
         self.responses: list[tuple[str, tuple[str, ...]]] = []
 
+    @logs_guard_refusals("execute_code_call_cap", "execute_code_approval_cap")
     async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         """One proxied tool call, through every gate a turn's call passes."""
         async with self._lock:

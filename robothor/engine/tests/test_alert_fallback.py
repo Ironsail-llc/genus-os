@@ -317,10 +317,14 @@ async def test_when_every_channel_fails_one_error_line_names_them_all(
         delivered = await alerts.alert("critical", "t", "b", alert_id="allfail-1")
 
     assert delivered is False
+    # The ``event=alert`` line every alert writes is the alert itself; this
+    # asserts the one line about its delivery.
     errors = [
         rec.getMessage()
         for rec in caplog.records
-        if rec.levelno >= logging.ERROR and "allfail-1" in rec.getMessage()
+        if rec.levelno >= logging.ERROR
+        and "allfail-1" in rec.getMessage()
+        and not rec.getMessage().startswith("event=alert ")
     ]
     assert len(errors) == 1, errors
     assert "telegram" in errors[0] and "email" in errors[0], errors

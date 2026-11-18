@@ -2459,6 +2459,35 @@ async def _watchdog(
 _CURIOSITY_COOLDOWN_SECONDS = 6 * 3600  # 6h minimum between reactive spawns
 _CURIOSITY_CHECK_INTERVAL = 30 * 60  # check density every 30 min
 _curiosity_last_spawn_ts: float = 0.0
+#: Optional off-cycle agents found unconfigured, noted once per process.
+_unconfigured_offcycle_noted: set[str] = set()
+
+
+async def _offcycle_agent_configured(scheduler: Any, agent_id: str) -> bool:
+    """Whether ``agent_id`` has a manifest here; says so once if it has none.
+
+    An off-cycle spawn is optional: an instance that does not run the agent
+    is not misconfigured, so the skip is one INFO line per process, not an
+    ERROR per attempt.
+    """
+    from robothor.engine.config import load_agent_config_or_broken
+
+    manifest_dir = getattr(getattr(scheduler, "config", None), "manifest_dir", None)
+    if manifest_dir is None:
+        return True  # nothing to judge by: spawn as before
+    config = await asyncio.to_thread(
+        load_agent_config_or_broken, agent_id, manifest_dir, "off-cycle spawn"
+    )
+    if config is not None:
+        return True
+    if agent_id not in _unconfigured_offcycle_noted:
+        _unconfigured_offcycle_noted.add(agent_id)
+        logger.info(
+            "Off-cycle agent %s has no config on this instance; its reactive spawns are "
+            "skipped until one is added",
+            agent_id,
+        )
+    return False
 
 
 async def _curiosity_density_loop(scheduler: Any) -> None:
@@ -2490,6 +2519,8 @@ async def _curiosity_density_loop(scheduler: Any) -> None:
             if now - _curiosity_last_spawn_ts < _CURIOSITY_COOLDOWN_SECONDS:
                 continue
             if "curiosity-engine" in running_agents():
+                continue
+            if not await _offcycle_agent_configured(scheduler, "curiosity-engine"):
                 continue
 
             metrics = await get_memory_density_metrics()

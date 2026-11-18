@@ -1740,7 +1740,7 @@ Usage: `genus workspace connect <provider> [--tenant-id TENANT_ID] [--client-id 
 
 Manage the agent engine.
 
-Usage: `genus engine {run,start,stop,status,list,history,workflow}`
+Usage: `genus engine {run,start,stop,status,list,history,failures,workflow}`
 
 ### `genus engine run`
 
@@ -1792,6 +1792,19 @@ Usage: `genus engine history [--agent AGENT] [--limit LIMIT]`
 | --- | --- | --- | --- |
 | `--agent` | `AGENT` | — | Filter by agent ID |
 | `--limit` | `LIMIT` | `20` | Max results |
+
+### `genus engine failures`
+
+Failed, refused and denied tool calls and failed workflow steps, grouped.
+
+Usage: `genus engine failures [--hours HOURS] [--json] [--tenant TENANT] [--limit LIMIT]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--hours` | `HOURS` | `24` | Window in hours (default 24) |
+| `--json` | — | off | Print JSON |
+| `--tenant` | `TENANT` | — | Tenant id (default: this one) |
+| `--limit` | `LIMIT` | `50` | Max groups printed |
 
 ### `genus engine workflow`
 

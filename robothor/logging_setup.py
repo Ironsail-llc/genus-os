@@ -15,6 +15,7 @@ import sys
 from typing import Any
 
 __all__ = [
+    "CosmeticWarningFilter",
     "CredentialRedactingFilter",
     "configure_structured_logging",
     "ensure_logging_configured",
@@ -69,6 +70,44 @@ class CredentialRedactingFilter(logging.Filter):
             record.msg = redacted
             record.args = None
         return True
+
+
+#: Warnings known to be cosmetic, matched on their text: litellm builds its
+#: usage object in a shape pydantic's serializer did not expect, and pydantic
+#: says so on every streamed call. Nothing is wrong with the call.
+_COSMETIC_WARNINGS = (re.compile(r"Pydantic serializer warnings:.*`ResponseAPIUsage`", re.DOTALL),)
+
+
+class CosmeticWarningFilter(logging.Filter):
+    """Lower a known-cosmetic ``py.warnings`` record to DEBUG.
+
+    Installed on the ``py.warnings`` logger, so it runs before any handler
+    level check: at the process's INFO level the record is then not emitted.
+    Every other warning passes through at WARNING.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001 - a broken format string must still log
+            return True
+        if any(pattern.search(message) for pattern in _COSMETIC_WARNINGS):
+            record.levelno = logging.DEBUG
+            record.levelname = "DEBUG"
+            return logging.getLogger().isEnabledFor(logging.DEBUG)
+        return True
+
+
+def _capture_warnings() -> None:
+    """Python warnings become ``py.warnings`` records at WARNING.
+
+    Printed raw to stderr instead, a log pipeline that reads levels from
+    structured lines files each one at ERROR.
+    """
+    logging.captureWarnings(True)
+    warnings_logger = logging.getLogger("py.warnings")
+    if not any(isinstance(f, CosmeticWarningFilter) for f in warnings_logger.filters):
+        warnings_logger.addFilter(CosmeticWarningFilter())
 
 
 def select_log_renderer() -> Any:
@@ -138,6 +177,7 @@ def configure_structured_logging() -> None:
     root.setLevel(logging.INFO)
     for name in _URL_LOGGING_LIBRARIES:
         logging.getLogger(name).setLevel(logging.WARNING)
+    _capture_warnings()
 
 
 def ensure_logging_configured() -> bool:
