@@ -37,6 +37,11 @@ class IdentityContext:
     tenant_user_id: str | None = None  # stable tenant_users.user_id
     person_id: str | None = None
     email: str | None = None
+    #: True when the account's home tenant is not ``tenant_id``: a parent's
+    #: owner or admin switched into a descendant. They keep their name and role
+    #: in the conversation, but are not the instance owner of the tenant they
+    #: act in (``engine.owner_gate.is_verified_owner``).
+    acting: bool = False
 
     def prompt_block(self, enriched: EnrichedIdentity | None = None) -> str:
         """Render the ``--- CURRENT USER ---`` prompt section.

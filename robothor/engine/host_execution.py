@@ -44,6 +44,7 @@ def eligible(ctx: Any) -> bool:
         or not identity.verified
         or identity.role != "owner"
         or identity.tenant_id != ctx.tenant_id
+        or getattr(identity, "acting", False)
     ):
         return False
     session = lookup(ctx.run_id)

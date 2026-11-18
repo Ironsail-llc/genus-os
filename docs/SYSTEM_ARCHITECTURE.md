@@ -960,6 +960,11 @@ identity shape instead of one per channel:
   when a `person_id` is resolvable. An owner or admin acting in a descendant
   tenant (a `switch-tenant` token) still resolves: the webchat resolver checks
   the account against its home tenant, by the rule `switch-tenant` enforces.
+  That identity is marked `acting`: it keeps its name and role in the
+  conversation and the reach that role gives from the tenant it acts in, but
+  it is not that tenant's instance owner, so `config_get` / `config_set`, the
+  masked `.env` read, host execution and owner-only writes in a descendant
+  stay with the tenant's own owner.
 - **The `--- ORGANISATION ---` block** (`robothor/engine/org_context.py`)
   travels with it on every interactive turn, first and follow-up, and is in
   the scheduled-run preamble: this tenant's id and display name, its parent,

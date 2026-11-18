@@ -145,6 +145,7 @@ def _resolve_webchat(identifier: str, tenant_id: str) -> IdentityContext | None:
         user_account_id=str(account["id"]),
         person_id=str(person_id) if person_id else None,
         email=account.get("email"),
+        acting=acting,
     )
 
 
