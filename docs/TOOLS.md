@@ -279,6 +279,45 @@ and report `kind: "own"` — they degrade honestly rather than pretending.
 
 ---
 
+## Writes whose outcome is unknown
+
+Every write a tool makes is recorded before it is sent. When the answer never
+comes back (the connection dropped after the request reached the other
+system), the write is *uncertain*: it may or may not have happened, and it is
+never sent again blind. Until it is settled, the engine refuses a later write
+that could repeat it, **before anything is sent**:
+
+| The later write | Refused while the earlier one is uncertain? |
+|---|---|
+| The identical call (same tool, same arguments), in any request | Yes, until it is settled |
+| Any write in the same request, goal or goal family | Yes: the agent must not route around an action it just lost track of, and a goal's family is reconciled by the goal |
+| The same tool on the **same target** in a later request, however it is worded | Yes, for 24 hours for a tool nothing can read back; until settled for one that can |
+| The same tool on a **different** target, or any other tool, in a later request | No, when the tool declares its target; a tool that declares none waits on any later call of it, as every tool did before |
+
+The *target* is what a write acts on: a thread, a recipient, a record. A plugin
+declares it for its own write tools ([Plugins](PLUGINS.md#a-write-tools-target-and-read-back)).
+Only a declared target narrows the fence: one guessed from the arguments would
+let a retry that adds a blank optional argument look like another target and
+go out twice, so core tools and undeclared plugin tools keep the whole-tool
+fence. A refusal says so plainly: the write was **not sent**, which earlier
+action it waits on (tool, target and time), and how that action is cleared.
+
+An uncertain write is settled by:
+
+- **A read-back.** `create_task`, `create_note`, and any plugin tool that
+  registers a verifier, are read back right after the uncertain call and by
+  the engine's periodic sweep. A read-back that finds the write applied or
+  definitely not applied clears it; one that cannot tell leaves it.
+- **An operator.** `genus effects list` shows a tenant's unresolved writes
+  (tool, target, when). Having checked the other system,
+  `genus effects resolve <effect-id> --outcome applied|not-applied --reason "..."`
+  records what you found, with the reason, against the effect. `applied` keeps
+  the identical call in its own request from being sent again; `not-applied`
+  lets a new attempt go. Neither counts as the provider's evidence. A write
+  owned by a goal is left to the goal.
+- **Time**, for a tool nothing can read back: 24 hours after the call the sweep
+  releases it as expired (an audit entry, not a finding).
+
 ## The catalogue
 
 ### Cases: `list_tasks` with `overdue` and `unowned`
@@ -729,7 +768,7 @@ Five opt-in tools that run the pull-request reviewer without a model
 | `pr_review_prepare` | Fetch the head into a local clone, build the review prompt (repository rules read from the base branch) and start the read-only Claude Code review job itself; returns its `job_id`, bound to the pull request. `skip: true` means nothing to review; `already_started: true` returns the job a previous call started; `resumed: true` returns a finished job whose post failed, to finalize again without a new review. |
 | `pr_review_finalize` | For the `job_id` prepare bound, and no other: read the job's structured output from the job itself, validate and redact it, recompute the verdict, post through the `github_create_review` handler (once — a repeat call returns the posted review), reply on our previous threads, resolve our own threads on approval, announce in the Chat thread and record the state. Returns `review_url`. `dismiss: true` closes an ambiguous re-review request that was not one. |
 | `pr_review_work` | The review worker: take the open `pr-review` tasks oldest first, up to `ROBOTHOR_PR_REVIEW_WORKERS` (3) at once, and run each through `pr_review_prepare`, the job and `pr_review_finalize`, then resolve it with `<VERDICT>: <review_url>` or `<status>: <error>`. Jobs start as `ROBOTHOR_PR_REVIEW_AGENT`, whose manifest names `GITHUB_TOKEN`. Re-reads the queue every 30 s, takes nothing new after 45 min, returns per-task `outcomes`, sends finalize's digest lines to Telegram and rewrites the status file. Run by the `pr-review-run` workflow. |
-| `pr_review_status` | Read-only report, no model: `now` (in flight, the queue in order, free slots), the `window` (`since_hours`, 24 by default: reviews by verdict, request-to-answer latency median and p90, failures, retries, "No changes?" and "Want a re-review?" replies, and `reviews`: each posted review newest first with its pull request, title, verdict and link, up to 50, `reviews_not_listed` counting the rest), `problems` (stuck reviews, failures out of retries, dropped requests, the oldest queued request) and `alerts`, one line each, empty when all is well. `pr=` adds one pull request's state and history. |
+| `pr_review_status` | Read-only report, no model: `now` (in flight, the queue in order, free slots), the `window` (`since_hours`, 24 by default: reviews by verdict, request-to-answer latency median and p90, failures, retries, "No changes?" and "Want a re-review?" replies, and `reviews`: each posted review newest first with its pull request, title, verdict and link, up to 50, `reviews_not_listed` counting the rest), `problems` (stuck reviews, failures out of retries, dropped requests, the oldest queued request) and `alerts`, one line each, empty when all is well. `pr=` adds one pull request's state and history. With paired reviewers configured, `paired` compares this reviewer with each peer on every head it reviewed in the window (up to 10): the peer's verdict at that commit, agreement, and findings only ours, only the peer's, or both, plus a per-peer summary; an approve-versus-request-changes split or a silent peer adds an alert. |
 
 **Choosing.** A pr-reviewer agent never calls `github_create_review` itself:
 `pr_review_finalize` is the only path that applies the policy (any blocker or
@@ -1720,13 +1759,37 @@ exec, `send_file` to another chat, and every GitHub tool without
 | `gate_name` | the control: `plan_mode`, `tools_allowed`, `rbac`, `owner_role`, `GITHUB_TOKEN`, a guardrail's name |
 | `unlock` | what a person changes for the same call to succeed |
 
-Behavioural rule 21 ships with them: **A refusal names its gate; relay it,
-never claim an inability** — when a tool result has `refused: true` and a
-`gate`, tell the person which gate refused it (`gate`, `gate_name`) and what
-unlocks it (`unlock`), then offer the next step you can take now; do not look
-for a way round it. A `refused: true` without a `gate` is a redirection, not a
-block: change the call as its `reason` says. Never say you cannot do something
-no tool refused: if a tool you have can do it, do it.
+Behavioural rule 21 ships with them: **Relay a refusal as stated** — when a
+tool result has `refused: true` and a `gate`, the agent tells the person which
+gate refused it (`gate_name`) and what unlocks it (`unlock`); when the unlock is
+a call the agent can make now (a deferred tool's "call it through `tool_call`",
+say), it makes that call. A `refused: true` without a `gate` is a redirection,
+not a block: change the call as its `reason` says. When a tool fails or another system refuses the call
+and the result names no gate or unlock, the agent reports what the result
+itself says, says that it does not state the cause, and says that the
+administrator of that system can check. It never attributes a refusal to a
+switch, mode, setting or gate the refusal does not name, even one it saw in
+other tool output.
+
+Any other refusal is final for that action for the rest of the run. The agent stops and
+offers who can grant it. It never seeks the same effect through another tool,
+shell or code execution, another credential or connection, or by reading
+source, configuration or the environment to find a way round. A message to an
+end customer carries no error text, tool names, setting names or ids. Never say
+you cannot do something no tool refused: if a tool you have can do it, do it.
+
+The engine backs this up. Within one run, a call identical in tool and
+arguments to one that was refused or denied (an engine gate, or an HTTP 401 or
+403 answer) is not made again: it returns at once with the original refusal
+and an instruction not to retry, and logs `outcome=refused reason="repeat of a
+refused call"`. A plain error, a timeout or a gate-less redirection (the repeat guard's
+"change the call") is never short-circuited, and a call a `tool_call` wrapper
+makes (a deferred tool's unlock) always runs, as does a workflow step, which
+keeps its own declared retries.
+
+The "What you can do here" block says the same: a refusal by one of the gates
+it lists names the gate and the unlock; a refusal that names no gate is
+relayed in its own words; rule 21 says when a refusal is final.
 
 A direct call to a tool the agent is granted but that a deferred turn left out
 of its schemas is refused with gate `policy`, name `deferred`, and the unlock

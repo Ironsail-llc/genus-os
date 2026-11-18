@@ -872,27 +872,38 @@ def _degrade_guardrail_action(row: tuple[Any, ...], action: str) -> None:
         logger.debug("Failed to log degraded guardrail event: %s", e)
 
 
-def get_tool_stats(hours: int = 24) -> list[dict[str, Any]]:
-    """Get aggregated tool stats over the last N hours."""
+def get_tool_stats(hours: int = 24, tenant_id: str | None = None) -> list[dict[str, Any]]:
+    """Get aggregated tool stats over the last N hours.
+
+    ``tenant_id`` limits the stats to that tenant's runs; ``None`` counts every
+    tenant, as before.
+    """
+    tenant_join = "JOIN agent_runs r ON r.id = e.run_id AND r.tenant_id = %s" if tenant_id else ""
+    params: tuple[Any, ...] = (
+        (tenant_id, hours, SANDBOX_DENIED_ERROR_TYPE)
+        if tenant_id
+        else (hours, SANDBOX_DENIED_ERROR_TYPE)
+    )
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """
+            f"""
             SELECT
-                tool_name,
+                e.tool_name,
                 COUNT(*) as total_calls,
-                COUNT(*) FILTER (WHERE success) as successes,
-                COUNT(*) FILTER (WHERE NOT success) as failures,
-                AVG(duration_ms) as avg_duration_ms,
-                MAX(duration_ms) as max_duration_ms,
-                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) as p95_duration_ms
-            FROM agent_tool_events
-            WHERE created_at > NOW() - INTERVAL '%s hours'
-              AND (error_type IS NULL OR error_type <> %s)
-            GROUP BY tool_name
+                COUNT(*) FILTER (WHERE e.success) as successes,
+                COUNT(*) FILTER (WHERE NOT e.success) as failures,
+                AVG(e.duration_ms) as avg_duration_ms,
+                MAX(e.duration_ms) as max_duration_ms,
+                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY e.duration_ms) as p95_duration_ms
+            FROM agent_tool_events e
+            {tenant_join}
+            WHERE e.created_at > NOW() - INTERVAL '%s hours'
+              AND (e.error_type IS NULL OR e.error_type <> %s)
+            GROUP BY e.tool_name
             ORDER BY total_calls DESC
-            """,
-            (hours, SANDBOX_DENIED_ERROR_TYPE),
+            """,  # noqa: S608 — tenant_join is a literal, not user input
+            params,
         )
         return [dict(r) for r in cur.fetchall()]
 

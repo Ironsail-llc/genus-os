@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 
 from robothor.engine.compaction import compact
-from robothor.engine.context import KEEP_RECENT, estimate_tokens
+from robothor.engine.context import KEEP_RECENT, estimate_context_tokens, estimate_tokens
 
 _MODEL = ["openrouter/xiaomi/mimo-v2.5"]
 
@@ -51,7 +51,8 @@ class TestTheCountFloorNoLongerBlocksIt:
     def test_a_conversation_under_the_count_floor_is_still_reduced(self):
         """21 messages, 225k tokens — the exact shape that reduced 0.0%."""
         msgs = _fat(10)
-        before = estimate_tokens(msgs)
+        # Measured the way compaction measures itself: the trigger's estimate.
+        before = estimate_context_tokens(msgs)
         assert len(msgs) <= KEEP_RECENT + 1, "fixture must sit under the count floor"
         assert before > 100_000
 
@@ -94,8 +95,10 @@ class TestItReportsWhatItActuallyDid:
     def test_the_result_carries_honest_before_and_after(self):
         msgs = _fat(10)
         result = _compact(msgs)
-        assert result.tokens_before == estimate_tokens(msgs)
-        assert result.tokens_after == estimate_tokens(result.messages)
+        # The trigger's own estimate: a result that reports in a different unit
+        # from the one it was triggered in is how a no-op read as a reduction.
+        assert result.tokens_before == estimate_context_tokens(msgs)
+        assert result.tokens_after == estimate_context_tokens(result.messages)
 
 
 class TestTheCallerDoesNotReImplementTheFloor:

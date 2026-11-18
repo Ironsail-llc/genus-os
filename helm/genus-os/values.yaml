@@ -458,6 +458,37 @@ engine:
   # becomes an environment variable. See the chart README.
   googleWorkspace:
     enabled: false
+  # Claude Code jobs: the claude_code_* tools and the PR reviewer. OFF by
+  # default. When enabled the chart points the coding workspace, the repo
+  # roots and the PR reviewer's clone root at `<workspace.mountPath>/<dir>`
+  # (repos/, pr-review/, and each job's private home under repos/.home) and sets
+  # ROBOTHOR_CLAUDE_CODE_AUTH=token, so jobs authenticate with
+  # CLAUDE_CODE_OAUTH_TOKEN (and push with GITHUB_TOKEN) from the
+  # engine-providers class. Needs a writable workspace; use a PVC so clones
+  # survive a restart. engine.env overrides any path. Tenant cells never
+  # inherit it; a cell that should run these jobs declares its own
+  # tenants[].coding. See "Claude Code jobs" in the chart README.
+  coding:
+    enabled: false
+    # Relative to workspace.mountPath.
+    dir: coding
+    sandbox:
+      # Every job's Bash runs in Claude Code's sandbox (bubblewrap), which
+      # needs an unprivileged user namespace and a fresh /proc. The runtime's
+      # default seccomp profile refuses the first and its masked /proc the
+      # second, so under the default security context every job fails at its
+      # first shell command. true, on the engine container only: procMount
+      # Unmasked, the seccompProfile below, and hostUsers: false on the pod
+      # (which Unmasked requires; the nodes must support user namespaces).
+      # Everything else (non-root, read-only root, no privilege escalation, no
+      # capabilities) stays. No other workload or init container is touched,
+      # and a tenant cell only when its own coding block asks for it.
+      relaxPodSecurity: false
+      # The engine container's profile while relaxPodSecurity is on. A
+      # Localhost profile that allows unshare/clone of user namespaces is
+      # narrower than Unconfined where the nodes can carry one.
+      seccompProfile:
+        type: Unconfined
   resources:
     requests:
       cpu: 500m
@@ -557,6 +588,8 @@ tenants: []
 #    googleWorkspace:            # never inherited from engine.googleWorkspace
 #      enabled: false
 #      secretName: ""            # default <fullname>-engine-<id>-google
+#    coding:                     # never inherited from engine.coding; same keys.
+#      enabled: false            # Paths land on this cell's own workspace volume
 
 # ─── Bridge (CRM API + webhooks + multi-tenancy) ─────────────────────────────
 bridge:

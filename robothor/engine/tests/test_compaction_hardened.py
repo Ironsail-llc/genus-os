@@ -50,7 +50,13 @@ def _gap_of_three(monkeypatch):
 class FakeCompletion:
     """Records every call; answers JSON for extraction and text for a summary."""
 
-    def __init__(self, *, fail: bool = False, summary: str = "NEW-SUMMARY-TEXT"):
+    def __init__(
+        self,
+        *,
+        fail: bool = False,
+        summary: str = "NEW-SUMMARY-TEXT."
+        + " The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do.",
+    ):
         self.fail = fail
         self.summary = summary
         self.calls: list[dict] = []
@@ -197,7 +203,9 @@ async def test_a_failed_summary_is_not_drained_and_is_recorded_degraded():
 
 
 #: Message size that puts the conversation just over the 64,000-token trigger
-#: the example chain sizes to (chars / 4), and one well past it.
+#: the example chain sizes to, and one well past it. Prose (spaced words), so
+#: the content-aware estimate the trigger and compaction share prices it near
+#: chars / 4; an unbroken run of one character is priced as dense content.
 NEAR_THRESHOLD_CHARS = 4_400
 FAR_PAST_THRESHOLD_CHARS = 9_000
 
@@ -205,7 +213,10 @@ FAR_PAST_THRESHOLD_CHARS = 9_000
 def _big_conversation(tag: int, chars: int = NEAR_THRESHOLD_CHARS) -> list[dict]:
     msgs = _head()
     msgs.extend(
-        {"role": "user" if i % 2 == 0 else "assistant", "content": f"iter-{tag} " + "x" * chars}
+        {
+            "role": "user" if i % 2 == 0 else "assistant",
+            "content": f"iter-{tag} " + "x " * (chars // 2),
+        }
         for i in range(60)
     )
     return msgs
@@ -343,7 +354,9 @@ async def test_the_previous_summary_is_updated_in_one_call():
     messages.append({"role": "user", "content": "[Conversation summary]\nPREVIOUS-SUMMARY-ALPHA"})
     messages.append({"role": "assistant", "content": "Understood."})
     messages.extend(_prose_fixture()[3:])
-    fake = FakeCompletion(summary="UPDATED-SUMMARY-BETA")
+    fake = FakeCompletion(
+        summary="UPDATED-SUMMARY-BETA The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do."
+    )
 
     with patch("robothor.engine.compaction.pooled_acompletion", new=fake):
         result = await compact(messages, models=CHAIN, threshold=1, drain_to=1000)
@@ -380,7 +393,11 @@ async def test_a_slice_over_the_cap_is_summarised_in_full():
     class Chained(FakeCompletion):
         async def __call__(self, model, **kwargs):
             if not kwargs.get("response_format"):
-                self.summary = f"SUMMARY-ROUND-{len(outputs)}"
+                # Long enough to be a real summary (a few characters for
+                # thousands is treated as a failed one).
+                self.summary = f"SUMMARY-ROUND-{len(outputs)}. " + " ".join(
+                    ["Kept the turns' details."] * 5
+                )
                 outputs.append(self.summary)
             return await super().__call__(model, **kwargs)
 

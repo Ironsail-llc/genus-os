@@ -7,7 +7,9 @@ a cap or a stop, with the setting, its default, and what you see.
 **Budget** means a limit on spend: dollars, tokens or calls. **Control** means
 something else: a stop you issued, a timeout, a safety valve. The platform's
 direction is that budgets report and controls act. A spend budget that is
-reached records a step and alerts. It does not stop the run.
+reached records a step and alerts. It does not stop the run. The one exception
+is the runaway-token hard cap, which stops the run that reaches it (see
+[Spend budgets that report](#spend-budgets-that-report)).
 
 ## How a stop is recorded
 
@@ -43,19 +45,27 @@ never a verdict on the instance.
 
 An hourly cap crossing also raises a `warning` alert through the existing
 alert path, which writes a digest row rather than paging. The runaway-token cap
-raises a `critical` alert.
+raises a `critical` alert, which is how the stop of a scheduled run is heard.
 
 ## Spend budgets that report
 
 | Budget | Setting (default) | When it is reached |
 |---|---|---|
 | Fleet hourly cost cap (`hourly_cost_cap`) | `ROBOTHOR_HOURLY_COST_CAP_USD` (5.0; 0 turns the report off) | Scheduled runs are still admitted. The run carries a `budget_stop` step with mode `observe`, and a warning alert is raised (at most once an hour). |
-| Runaway-token hard cap (`runaway_token_cap`) | `ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS` (5,000,000) | The step (mode `observe`) and the critical alert are recorded once per run. The run continues. |
+| Runaway-token hard cap (`runaway_token_cap`) | `ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS` (5,000,000) | The run stops before its next model call. It is recorded with `budget_exhausted`, the reason as its error message, an ERROR step and the `budget_stop` step (mode `enforce`), and the critical alert is raised. No wrap-up call is made. The person who asked gets a plain answer: the request grew too large; narrow it or split it. |
+| Runaway-token alert (`ROBOTHOR_RUNAWAY_ALERT_TOKENS`) | 500,000 | An alert, batched to one page an hour. The run continues. |
 
-The numbers are thresholds for the report. Setting them, in the environment,
-in config.yaml or with `genus config set`, moves the threshold; no setting turns
-either cap into a stop. The runaway cap's token count comes from the
-environment variable only. Its pages say the run was **not** contained.
+The hourly cap's number is a threshold for the report: setting it, in the
+environment, in config.yaml or with `genus config set`, moves the threshold,
+and no setting turns it into a stop. The runaway cap's number is where the run
+stops. It comes from the environment variable only; raise it for an instance
+whose legitimate runs need more. The cap is the only code path, with no
+observe-only mode: rolling it back is a revert. Its pages say the run was
+stopped.
+
+A long scheduled review that reads a lot (around 0.6M to 1.2M input tokens a
+run) crosses the alert, not the cap. Before lowering the cap, check the largest
+runs your instance has: the Runs view sorts by tokens.
 
 The hourly cap is only consulted when fleet admission is on
 (`ROBOTHOR_ADMISSION_ENABLED` with `ROBOTHOR_ADMISSION_MODE`). It never applies
@@ -82,7 +92,7 @@ or workflow run partway through.
 
 | Stop | Where | Setting (default) | Mid-run? | What you see | Kind | `budget_stop` |
 |---|---|---|---|---|---|---|
-| Runaway-token hard cap | `loop_guards.py` `_runaway` | See above | No; never stops | The step and a critical alert | Budget (report) | yes, observe |
+| Runaway-token hard cap | `loop_guards.py` `_runaway` | See above | Yes, at 5,000,000 tokens | "I had to stop: this request grew too large…", `budget_exhausted`, the step and a critical alert | Budget (stop) | yes, `runaway_token_cap`, enforce |
 | Runaway-token soft alert | `loop_guards.py` `_runaway` | `ROBOTHOR_RUNAWAY_ALERT_TOKENS` (500,000) | No; alert only | Alert "Runaway-token alert" | Budget (alert) | no |
 | Per-agent cost cap | `runner.py` `_run_loop` hard-budget check | `v2.hard_budget` (false) and `v2.max_cost_usd` (0) | No; off unless the manifest sets both | A forced final summary, "Hard budget limit reached (explicit cost cap).", `budget_exhausted` | Budget (explicit) | yes, `hard_budget`, enforce |
 | Per-agent cost pre-flight | `runner.py` `_run_loop` | Same as the per-agent cost cap | No; off by default | Tools removed for the next call | Budget (explicit) | no |
@@ -91,7 +101,7 @@ or workflow run partway through.
 | Iteration safety cap | `runner.py` `_run_loop` | Manifest `safety_cap` (200; heartbeat 50, worker 80; 0 = none) | Yes, at 200 iterations | A forced final summary, "Safety limit reached (N iterations).", `budget_exhausted` | Control (safety) | yes, `safety_cap`, enforce |
 | Soft check-in | `run_pacing.py` | `ROBOTHOR_MAX_ITERATIONS` (20) | No; a nudge | An engine note | Control | no |
 | Error escalation abort | `runner.py` | 10 total errors (constant) | Yes | "Too many errors (N total)." | Control (safety) | no |
-| Context compaction and ceiling | `context_budget.py`, `context_fit.py` | `ROBOTHOR_COMPACTION_TRIGGER_TOKENS` (80,000) | Degrades only (history summarised) | An engine note; log "Proactive compaction" | Budget (tokens), degrade | no |
+| Context compaction and ceiling | `context_budget.py`, `compaction.py`, `context_fit.py` | `ROBOTHOR_COMPACTION_TRIGGER_TOKENS` (80,000) | Degrades only (older tool results elided, history summarized) | An engine note; log "Proactive compaction at iter N: a→b messages, ~x→~y tokens", with "nothing reduced: <why>" when it could not shrink | Budget (tokens), degrade | no |
 | Wall-clock run budget, wrap-up and expiry | `run_deadline.py` | `ROBOTHOR_RUN_WRAPUP_FRACTION` (0.9), `ROBOTHOR_RUN_BUDGET_SECONDS` (0), only under `ROBOTHOR_STEP_EFFICIENCY_MODE=enforce` | No by default | "Wall-clock budget exhausted", plus a guardrail event `run_budget` | Control (time) | no; guardrail event |
 | Loop wall-clock self-check, stall watchdog, outer timeout | `loop_guards.py`, `stall_watchdog.py`, `runner.py` | Agent `timeout_seconds` (600; Telegram 86,400); `ROBOTHOR_MAX_WALLCLOCK_SECONDS` | Yes, at the timeout | TIMEOUT, "Circuit-breaker hard timeout" or "No progress for Ns" | Control (time) | no |
 | Durable operator stop (pause or cancel) | `runtime/controls.py`, `runtime/provider_budget.py`, `runtime/failure.py` | `agent_runtime_controls` rows you write | Yes, on your instruction | CANCELLED "Stopped as requested." | Control | yes, `durable_stop`, enforce |
@@ -117,9 +127,8 @@ or workflow run partway through.
 
 ## Open questions for the operator
 
-- **No spend stop.** Neither cap stops a run. A runaway interactive run is
-  bounded only by its timeout (86,400 s on Telegram); the runaway cap pages
-  critical when it is reached. Rolling this back is a revert.
+- **One spend stop.** The runaway-token hard cap stops a run; the hourly cost
+  cap does not. Rolling the stop back is a revert.
 
 - **Iteration safety cap.** `safety_cap` defaults to 200 and stops a run
   partway. It is recorded as a `budget_stop` step and still enforces. It is

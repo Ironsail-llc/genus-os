@@ -622,9 +622,10 @@ class ProviderSettings(SettingsGroup):
         5_000_000,
         "ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS",
         "Per-run token count (input plus output) at which the runaway guard "
-        "records a budget_stop step (mode observe) and pages critical, once per "
-        "run. The run continues. The engine takes the number from the "
-        "environment variable.",
+        "stops the run: a budget_stop step (mode enforce), budget_exhausted, a "
+        "critical page, and a plain answer telling the person to narrow or "
+        "split the request. The engine takes the number from the environment "
+        "variable.",
     )
     model_breaker_threshold: int = declare(
         3,
@@ -3581,6 +3582,16 @@ class PrReviewSettings(SettingsGroup):
         "ROBOTHOR_PR_REVIEW_BOT_LOGIN",
         "GitHub login whose requested reviews are picked up, from any repository the token "
         "can read. Empty skips the requested-review source.",
+        restart_required=False,
+        since="unreleased",
+    )
+    peer_logins: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_PEER_LOGINS",
+        "GitHub logins (comma-separated) of other automated reviewers paired with this one "
+        "on the same pull requests. Nothing a peer wrote reaches the review prompt, so each "
+        "opinion is independent, and a peer's reply on a finding never queues a re-review. "
+        "Empty means no peer.",
         restart_required=False,
         since="unreleased",
     )

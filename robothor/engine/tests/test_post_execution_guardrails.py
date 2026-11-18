@@ -28,6 +28,16 @@ from robothor.engine.loop_guards import GuardState
 from robothor.engine.post_execution import apply_post_execution_guardrails
 
 
+def _notices(session):
+    """The notices waiting for the model, in the order they will be appended.
+
+    Queued, not appended: the guardrail runs before the tool result is
+    recorded, and a notice between a call and its result splits the exchange
+    (``post_execution.drain_engine_notes`` puts them after the batch).
+    """
+    return [{"content": text} for text in getattr(session, "_pending_engine_notices", [])]
+
+
 def _session():
     return SimpleNamespace(messages=[])
 
@@ -61,7 +71,7 @@ def test_a_failed_call_is_not_checked():
     session = _session()
 
     assert _apply(session, engine, error_msg="boom") == "sk-live-abc123"
-    assert session.messages == []
+    assert _notices(session) == []
 
 
 def test_a_clean_result_passes_through():
@@ -103,8 +113,8 @@ def test_the_agent_is_told_a_credential_was_found():
 
     _apply(session, engine)
 
-    assert len(session.messages) == 1
-    content = session.messages[0]["content"]
+    assert len(_notices(session)) == 1
+    content = _notices(session)[0]["content"]
     assert "credential exposure" in content
     assert "config.py" in content
 
@@ -116,7 +126,7 @@ def test_the_notice_never_repeats_the_value():
 
     _apply(session, engine, result="sk-live-abc123def456")
 
-    assert "sk-live-abc123def456" not in session.messages[0]["content"]
+    assert "sk-live-abc123def456" not in _notices(session)[0]["content"]
 
 
 def test_the_notice_fires_once_per_run():
@@ -127,7 +137,7 @@ def test_the_notice_fires_once_per_run():
     for _ in range(4):
         _apply(session, engine, state=state)
 
-    assert len(session.messages) == 1
+    assert len(_notices(session)) == 1
 
 
 def test_a_different_run_is_notified_again():
@@ -137,7 +147,7 @@ def test_a_different_run_is_notified_again():
     _apply(a, engine, state=GuardState())
     _apply(b, engine, state=GuardState())
 
-    assert len(a.messages) == 1 and len(b.messages) == 1
+    assert len(_notices(a)) == 1 and len(_notices(b)) == 1
 
 
 # ── Other guardrails ──────────────────────────────────────────────────
@@ -152,7 +162,7 @@ def test_another_warned_guardrail_does_not_redact_or_notify():
     out = _apply(session, engine, result="sk-live-abc123def456")
 
     assert out == "sk-live-abc123def456"
-    assert session.messages == []
+    assert _notices(session) == []
 
 
 @pytest.mark.parametrize("action", ["allowed", "blocked", "observed"])
@@ -162,7 +172,7 @@ def test_only_a_warning_triggers_the_path(action):
 
     _apply(session, engine)
 
-    assert session.messages == []
+    assert _notices(session) == []
 
 
 def test_the_notice_does_not_instruct_operator_disclosure():
@@ -175,7 +185,7 @@ def test_the_notice_does_not_instruct_operator_disclosure():
 
     _apply(session, engine)
 
-    content = session.messages[0]["content"].lower()
+    content = _notices(session)[0]["content"].lower()
     assert "tell the user" not in content
     assert "do not commit" in content
     assert "redacted" in content
@@ -217,7 +227,7 @@ def test_every_warning_is_persisted_not_just_the_first(monkeypatch):
     _apply(session, engine, state=state)
     _apply(session, engine, state=state)
     assert len(calls) == 2
-    assert len(session.messages) == 1
+    assert len(_notices(session)) == 1
 
 
 def test_a_clean_result_persists_nothing(monkeypatch):
@@ -237,7 +247,7 @@ def test_a_recording_failure_never_breaks_the_turn(monkeypatch):
     engine = _engine(action="warned", name="no_sensitive_data", reason="AWS key in config.py")
     session = _session_with_run()
     _apply(session, engine)
-    assert len(session.messages) == 1, "the agent is still told even when the record fails"
+    assert len(_notices(session)) == 1, "the agent is still told even when the record fails"
 
 
 def test_a_session_without_a_run_row_is_not_recorded_and_not_broken(monkeypatch):

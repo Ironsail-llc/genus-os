@@ -163,6 +163,51 @@ async def _broken(ctx: DoctorContext) -> Result:
     return ok(f"{loaded} manifest(s) loaded, none broken")
 
 
+async def _unrestricted_role(ctx: DoctorContext) -> Result:
+    """Every agent that runs with the unrestricted default role, by id.
+
+    An agent that declares no ``role`` resolves to the default service role,
+    which the shipped permissions seed as allow-all: RBAC evaluates it and
+    permits every tool. Each agent is resolved the way the engine resolves it
+    (fleet defaults and ``ROBOTHOR_DEFAULT_SERVICE_ROLE`` included). A warning,
+    not a defect: the instance works, but its role controls restrict nothing
+    for these agents. Nothing is changed.
+    """
+    directory = _manifest_dir(ctx)
+    if not directory.is_dir():
+        return skip(f"no manifest directory at {directory}")
+
+    def _scan() -> tuple[int, list[str]]:
+        from robothor.engine.config import load_agent_config, load_manifest_dir
+        from robothor.engine.service_roles import ALLOW_ALL_ROLE
+
+        ids = [str(m.get("id")) for m in load_manifest_dir(directory).manifests if m.get("id")]
+        unrestricted = []
+        for agent_id in ids:
+            try:
+                config = load_agent_config(agent_id, directory)
+            except Exception:  # noqa: BLE001, S112 - manifests.schema owns refusals
+                continue
+            if config is not None and config.service_role == ALLOW_ALL_ROLE:
+                unrestricted.append(agent_id)
+        return len(ids), sorted(unrestricted)
+
+    try:
+        total, unrestricted = await ctx.run_blocking(_scan)
+    except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
+        return fail(f"cannot scan the manifest directory: {type(exc).__name__}")
+    if unrestricted:
+        shown = ", ".join(unrestricted[:_MAX_LISTED])
+        if len(unrestricted) > _MAX_LISTED:
+            shown += f", and {len(unrestricted) - _MAX_LISTED} more"
+        return fail(
+            f"{len(unrestricted)} of {total} agent(s) run with the unrestricted default role "
+            f"(every tool allowed): {shown}. Set `role:` in each manifest, or move the "
+            "fleet with ROBOTHOR_DEFAULT_SERVICE_ROLE"
+        )
+    return ok(f"{total} agent(s), none on the unrestricted default role")
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         id="manifests.schema",
@@ -184,5 +229,12 @@ CHECKS: tuple[Check, ...] = (
         category="manifests",
         severity="required",
         run=_broken,
+    ),
+    Check(
+        id="manifests.unrestricted_role",
+        title="No agent runs with the unrestricted default role",
+        category="manifests",
+        severity="recommended",
+        run=_unrestricted_role,
     ),
 )

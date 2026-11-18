@@ -69,8 +69,9 @@ BEHAVIORAL_RULES += "\n20. **An item's own provenance marker is evidence about i
 
 # ─── Refusal-relay rule ───
 # Every gated refusal carries `gate` and `unlock` (robothor.engine.refusal); the
-# rule tells the model to relay them.
-BEHAVIORAL_RULES += "\n21. **A refusal names its gate; relay it, never claim an inability** — when a tool result has `refused: true` and a `gate`, tell the person which gate refused it (`gate`, `gate_name`) and what unlocks it (`unlock`), then offer the next step you can take now; do not look for a way round it. A `refused: true` without a `gate` is a redirection, not a block: change the call as its `reason` says. Never say you cannot do something no tool refused: if a tool you have can do it, do it."
+# rule tells the model to relay them. A refusal from another system names no
+# gate, so the rule says to relay its own words and never borrow a cause.
+BEHAVIORAL_RULES += "\n21. **Relay a refusal as stated** — for `refused: true` and a `gate`, tell the person the gate (`gate_name`) and its `unlock`; if the unlock is a call you can make now, make it. A `refused: true` without a `gate` is a redirection: change the call as its `reason` says. Any other refusal or failure: report what the result itself says; if it does not state the cause, say so; that system's administrator can check. Never attribute a refusal to a switch, mode, setting or gate it does not name, even from other tool output. Otherwise a refusal is final for that action in this run: never seek its effect via another tool, shell or code, another credential or connection, or by reading source, configuration or environment; offer who can grant it. To an end customer: plain words, no error text, tool names, setting names or ids. Never say you cannot do what no tool refused; do it."
 
 # ─── Honest-claims rule (flag-gated on ROBOTHOR_RUN_VERIFICATION_MODE) ───
 # The behavioral half of run verification. The control catches a false claim

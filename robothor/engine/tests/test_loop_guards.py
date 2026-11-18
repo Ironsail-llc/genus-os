@@ -182,8 +182,8 @@ def test_a_flagged_watchdog_stops_the_run():
 # ── Runaway tokens ───────────────────────────────────────────────────
 
 
-def test_the_hard_cap_records_and_does_not_stop_the_run(monkeypatch):
-    """Set explicitly or not, the cap is a threshold for the report."""
+def test_the_hard_cap_records_and_stops_the_run(monkeypatch):
+    """Set explicitly or not, reaching the cap ends the run, with its reason."""
     from robothor.engine import loop_guards
     from robothor.engine.runner import RUNAWAY_TOKEN_HARD_CAP
 
@@ -195,9 +195,10 @@ def test_the_hard_cap_records_and_does_not_stop_the_run(monkeypatch):
     monkeypatch.setattr(loop_guards, "_spawn_hard_cap_alert", lambda *a: None)
     session = _session(input_tokens=RUNAWAY_TOKEN_HARD_CAP, output_tokens=0)
 
-    assert _call(session) is False
-    assert session.run.budget_exhausted is False
-    assert session.errors == []
+    assert _call(session) is True
+    assert session.run.budget_exhausted is True
+    assert len(session.errors) == 1 and "runaway_token_cap" in session.errors[0]
+    assert session.messages[-1]["role"] == "assistant"
     assert hits == [RUNAWAY_TOKEN_HARD_CAP]
 
 
@@ -211,7 +212,7 @@ def test_the_cap_counts_input_and_output_together(monkeypatch):
     )
     monkeypatch.setattr(loop_guards, "_spawn_hard_cap_alert", lambda *a: None)
     half = RUNAWAY_TOKEN_HARD_CAP // 2 + 1
-    assert _call(_session(input_tokens=half, output_tokens=half)) is False
+    assert _call(_session(input_tokens=half, output_tokens=half)) is True
     assert hits == [2 * half]
 
 

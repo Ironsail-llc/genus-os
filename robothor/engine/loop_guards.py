@@ -130,7 +130,7 @@ def _watchdog_aborted(session: Any, watchdog: Any) -> bool:
 
 
 def _runaway(session: Any, agent_config: Any, state: GuardState) -> bool:
-    """Fleet-wide token guard: alert at 500K; 5M records and pages. Neither stops."""
+    """Token guard: alert at 500K; the 5M cap stops the run (budget_stops.stop_at_runaway_cap)."""
     from robothor.engine.runner import (
         RUNAWAY_TOKEN_ALERT,
         RUNAWAY_TOKEN_HARD_CAP,
@@ -142,15 +142,15 @@ def _runaway(session: Any, agent_config: Any, state: GuardState) -> bool:
     if used >= RUNAWAY_TOKEN_HARD_CAP and not state.runaway_cap_observed:
         reason = f"runaway_token_cap_hit ({used}/{RUNAWAY_TOKEN_HARD_CAP})"
         logger.error(
-            "Runaway-token hard cap hit: agent=%s run=%s tokens=%d",
+            "Runaway-token hard cap hit, run stopped: agent=%s run=%s tokens=%d",
             agent_config.id,
             session.run_id,
             used,
         )
         _spawn_hard_cap_alert(session, agent_config, used)
-        budget_stops.runaway_cap_hit(session, RUNAWAY_TOKEN_HARD_CAP, used, reason)
         state.runaway_cap_observed = True
-        return False
+        budget_stops.stop_at_runaway_cap(session, RUNAWAY_TOKEN_HARD_CAP, used, reason)
+        return True
 
     if not state.runaway_alerted and used >= RUNAWAY_TOKEN_ALERT:
         state.runaway_alerted = True

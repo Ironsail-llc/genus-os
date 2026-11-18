@@ -351,6 +351,79 @@ transition writes `operation_audit`.
 [Operations ledger](OPERATIONS.md) has the statuses, the event's payload and a
 complete workflow.
 
+## A write tool's target and read-back
+
+When one of your write tools returns an unknown outcome (`outcome_unknown:
+True`: the request reached the other system, the answer did not come back),
+the engine refuses a later write that could repeat it until it is settled
+([Tools](TOOLS.md#writes-whose-outcome-is-unknown)). Two declarations in your
+`genus.tools` payload make that precise and let it clear on its own:
+
+```python
+# acme_tools/__init__.py
+from robothor.engine.runtime import effects
+
+
+async def acme_post_message(args, ctx=None):
+    record = effects.active_effect.get()       # this write's effect, while it is sent
+    client_id = str(record["id"]) if record else None
+    # Hand the effect id to the provider as the idempotency / client message key,
+    # so the read-back below can find exactly this message.
+    return await post(args["thread_id"], args["text"], client_message_id=client_id)
+
+
+def verify_acme_post_message(record):
+    """Called with the effect record: its ``id`` and its recorded ``target``."""
+    thread = record["target"]["thread_id"]
+    try:
+        found = find_by_client_id(thread, str(record["id"]))
+    except ProviderUnavailable:
+        return effects.Verification("unknown")         # cannot tell: stays fenced
+    if found:
+        return effects.Verification(
+            "applied", True, f"acme:message:{found['id']}", {"id": found["id"]}
+        )
+    if thread_history_is_complete(thread):              # absence that is definitive
+        return effects.Verification("not_applied", True, f"acme:thread:{thread}")
+    return effects.Verification("unknown")
+
+
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "handlers": {"acme_post_message": acme_post_message},
+    "effects": {
+        "acme_post_message": {
+            "target": ["thread_id"],               # what the write acts on
+            "verify": verify_acme_post_message,    # optional read-back
+        },
+    },
+}
+```
+
+- **`target`**: the argument names that say what the write acts on. A lost
+  message to `thread-1` then holds back another message to `thread-1`, however
+  it is worded and whatever else changes, and nothing else. Without it every
+  later call of the tool waits until the lost one is settled. The values are
+  kept exactly as sent (credential-shaped values are redacted), so your
+  verifier can look them up; still key the read-back on `record["id"]` where
+  the provider lets you.
+- **`fence`**: `"target"` (the default), or `"tool"` to keep every later call
+  waiting even though you declared a target (for the verifier's sake).
+- A plugin cannot declare any of this for a built-in tool; such an entry is
+  ignored.
+- **`verify`**: a synchronous function, run off the event loop, returning an
+  `effects.Verification`. `applied` and `not_applied` must be *settled*
+  (`True`) and carry a provider reference; `applied` also carries the result
+  the tool would have returned. Answer `unknown` whenever you cannot be sure:
+  an absence that may still change (an eventually consistent search, a request
+  still in flight) is not `not_applied`. The engine calls it right after an
+  uncertain call and on its periodic sweep; a verifier that raises leaves the
+  write uncertain. A tool with a verifier is never released by time alone,
+  but `genus effects resolve` still works.
+
+As with `read_only`, a plugin declares this only for tools it provides; a
+declaration naming another tool, or a malformed one, refuses the plugin.
+
 ## An operator command
 
 ```python
@@ -738,6 +811,29 @@ remove:                 # optional: without a detach, remove takes back what ins
 
 A patch that uses `append:` or `detach:` belongs to a plugin that declares
 contract `2.0` (see [The rules, and why](#the-rules-and-why)).
+
+#### Keeping a plugin's everyday tools loaded
+
+An agent allowed more than `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` tools (40) — any
+agent with no `tools_allowed` — is shown only its core schemas plus
+`tool_search`, `tool_describe` and `tool_call`
+([Tools](TOOLS.md)). Every other tool, a plugin's included, stays
+reachable but costs a search round-trip the first time a run uses it. To keep a
+few general-purpose tools loaded for an agent you patch, append them to its
+`tools_eager` list:
+
+```yaml
+# example_agent/patches/main.patch.yaml
+install:
+  append:
+    tools_eager: [example_catalog_search, example_order_lookup]
+```
+
+`tools_eager` is not an allowlist: `append:` creates it when it is absent, the
+agent keeps every tool it had, and removing the plugin detaches the items again.
+It never widens reach: a name the agent may not use (denied, opt-in and not
+opted in) is ignored. Keep the list short; each pinned schema is sent on every
+call.
 
 Two drop-in locations make the rest composable without a shared file:
 

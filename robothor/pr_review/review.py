@@ -229,7 +229,7 @@ async def _pr_extras(
     comments = await _optional(github, "list_review_comments", repo, number)
     issue_comments = await _optional(github, "list_issue_comments", repo, number)
     raw_checks = await _optional(github, "list_checks", repo, head)
-    exclude = (cfg.bot_login,) if cfg.bot_login else ()
+    exclude = (*((cfg.bot_login,) if cfg.bot_login else ()), *cfg.peer_logins)
     return {
         "review_comments": comments or [],
         "discussion": discussion_items(
@@ -418,7 +418,9 @@ async def _prepare(
     if kind == "rereview" and row.last_reviewed_sha != head:
         compare_status = await github.compare_status(row.repo, row.last_reviewed_sha, head)
     answered = (
-        kind == "rereview" and row.last_reviewed_sha == head and await replies_pending(github, row)
+        kind == "rereview"
+        and row.last_reviewed_sha == head
+        and await replies_pending(github, row, peer_logins=cfg.peer_logins)
     )
     decision = decide_review(
         kind=kind,
@@ -467,7 +469,7 @@ async def _prepare(
     conflicted = await (conflicts or merge_conflicts)(path, f"origin/{base_ref}", head)
     changed = int(pr.get("additions") or 0) + int(pr.get("deletions") or 0)
     deep = (row.depth or "full") != "light" and changed >= cfg.deep_lines
-    on_thread = thread_replies(extras.get("review_comments") or [])
+    on_thread = thread_replies(extras.get("review_comments") or [], exclude_logins=cfg.peer_logins)
     previous = [
         {
             **{k: i.get(k) for k in ("comment_id", "path", "line", "severity", "title", "body")},

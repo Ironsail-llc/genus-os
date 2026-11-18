@@ -147,6 +147,26 @@ def estimate_tokens(messages: list[dict[str, Any]], model: str | None = None) ->
     return (total_chars // 4) + (tool_call_count * 400)
 
 
+def estimate_context_tokens(messages: list[dict[str, Any]], model: str | None = None) -> int:
+    """The size compaction decides, drains and reports by.
+
+    The SAME number the trigger reads (``context_fit.estimate_for``): the trigger
+    used to price dense JSON at what it costs while everything behind it —
+    ``maybe_compress``, ``compact``, ``drain_history`` — re-measured at a flat
+    four characters a token, 0.28x of the truth on that content. A turn of large
+    tool results crossed the trigger, compaction measured itself under it and
+    returned unchanged, and the in-loop log said "Proactive compaction" on every
+    iteration while the conversation grew to 900k tokens. One estimator, so the
+    trigger and the work it triggers cannot disagree.
+
+    ``estimate_tokens`` is taken too (the larger wins) so a caller that patches
+    the flat heuristic still steers this one.
+    """
+    from robothor.engine.context_fit import estimate_for
+
+    return max(estimate_tokens(messages, model), estimate_for(messages, model))
+
+
 def _min_gap_iterations() -> int:
     """``ROBOTHOR_COMPACTION_MIN_GAP_ITERATIONS``; never fails on config."""
     from robothor.settings import get_settings
@@ -257,14 +277,22 @@ async def maybe_compress(
     from robothor.engine.context_fit import next_reachable_model
 
     model = next_reachable_model(models or [], broken_models)
-    est = await asyncio.to_thread(estimate_tokens, messages, model or None)
-    if est < compress_at:
-        return messages
-
+    est = await asyncio.to_thread(estimate_context_tokens, messages, model or None)
     from robothor.engine.context_control import control, fingerprint
 
     state = control.get()
+    if state is not None:
+        state.last_outcome = ""
+    if est < compress_at:
+        return messages
+
     if state is not None and state.skip(messages, model, compress_at, est):
+        state.last_outcome = (
+            "unchanged since the last compaction"
+            if state.fingerprint == fingerprint(messages)
+            else f"what compaction protects (~{state.stalled_tokens:,} tokens) does not fit "
+            "the trigger; it retries once the context grows by a fifth"
+        )
         return messages
     # The gap damps small growth only: a context far past the trigger is
     # summarised anyway, or the ceiling would drop what a summary could keep.
@@ -277,6 +305,10 @@ async def maybe_compress(
             "Compaction: backing off at iteration %d (last compaction at %s)",
             state.iteration,
             state.last_compaction_iteration,
+        )
+        state.last_outcome = (
+            f"backing off: compacted at iteration {state.last_compaction_iteration}, "
+            f"within {_min_gap_iterations()} iterations"
         )
         return messages
     started = time.monotonic()
@@ -324,14 +356,37 @@ async def maybe_compress(
     # Freeze on failure: a summary that could not be written must not be
     # followed by a drain that drops the middle it was meant to replace. The
     # provider ceiling is still enforced by the caller.
-    if not result.degraded:
+    #
+    # Last resort only: draining drops whole exchanges, stubs and all, oldest
+    # first, and the oldest result is often the one the task started from.
+    # Measured in a lab run, a pass that ended a few dozen tokens over the drain
+    # target dropped the only result holding the fact the answer needed. Below
+    # the trigger the context already fits; the next pass elides again.
+    if not result.degraded and (
+        await asyncio.to_thread(estimate_context_tokens, compressed, model or None) >= compress_at
+    ):
         compressed = await asyncio.to_thread(drain_history, compressed, model, target)
-    after = await asyncio.to_thread(estimate_tokens, compressed, model or None)
+    after = await asyncio.to_thread(estimate_context_tokens, compressed, model or None)
     if state is not None:
+        from robothor.engine.compaction import newest_exchange_start
+
         state.fingerprint = fingerprint(compressed)
         state.model = model
         state.threshold = compress_at
-        state.stalled_tokens = after if after >= compress_at else 0
+        # Stalled means what compaction must KEEP cannot fit. The newest
+        # exchange is kept only until the model has read it, so it does not
+        # count: one oversized result must not hold every later pass off.
+        newest = compressed[newest_exchange_start(compressed) :]
+        unshrinkable = after - await asyncio.to_thread(
+            estimate_context_tokens, newest, model or None
+        )
+        state.stalled_tokens = after if unshrinkable >= compress_at else 0
+        if after >= est:
+            state.last_outcome = (
+                "degraded: no model could summarize"
+                if result.degraded
+                else "nothing older than the newest results could be elided or summarized"
+            )
         state.measurements.append(
             {
                 "duration_ms": int((time.monotonic() - started) * 1000),

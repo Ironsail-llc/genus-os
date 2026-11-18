@@ -42,6 +42,24 @@ def _bypass(name: str, args: dict[str, Any], ctx: ToolContext) -> bool:
     )
 
 
+def _refused(exc: effects.EffectPendingError) -> dict[str, Any]:
+    """A write the fence refused before dispatch. Nothing was sent.
+
+    Only a repeat of the very call whose outcome is unknown carries that
+    unknown outcome (it may already have happened). Any other refused write has
+    a known outcome: it did not go out, and the result says so.
+    """
+    refusal = {
+        "error": str(exc),
+        "not_sent": True,
+        "retryable": False,
+        "blocked_by": exc.blocked_by(),
+    }
+    if exc.same_action:
+        refusal.update(outcome_unknown=True, effect_id=exc.effect_id)
+    return refusal
+
+
 def _unknown(identifier: Any, message: str) -> dict[str, Any]:
     return {
         "error": message,
@@ -78,7 +96,7 @@ async def invoke(
     try:
         record = await _reserve(context, name, args, ctx)
     except effects.EffectPendingError as exc:
-        return _unknown(exc.effect_id, str(exc))
+        return _refused(exc)
     except Exception:
         logger.warning("Effect admission unavailable; dispatch refused", exc_info=True)
         return {
@@ -225,11 +243,13 @@ async def _dispatch_reserved(
             record["id"], "The action was dispatched, but its outcome could not be recorded"
         )
     if uncertain or verify_success:
-        from robothor.engine.runtime import note_recovery, task_recovery
+        from robothor.engine.runtime import effect_tools
 
-        verifiers = {"create_task": task_recovery.recover, "create_note": note_recovery.recover}
-        verifier = verifiers.get(name)
-        recovered = await asyncio.to_thread(verifier, context, record["id"]) if verifier else None
+        recovered = (
+            await asyncio.to_thread(effect_tools.recover, context, record["id"])
+            if effect_tools.has_verifier(name)
+            else None
+        )
         if recovered is not None:
             if verify_success and not uncertain:
                 # First-call acknowledgement plus host readback is verification,

@@ -12,11 +12,12 @@ as ``agent.budget_stop`` on the telemetry stream, so the Runs view and the
 metrics pipeline see the same thing. ``mode`` is ``observe`` when a spend
 budget's limit was reached and the run continued, ``enforce`` when a control
 (the operator's stop, the iteration safety valve, an explicit per-agent cost
-cap) acted.
+cap, the runaway-token hard cap) acted.
 
-Spend budgets always observe. The fleet hourly cost cap and the runaway-token
-hard cap are thresholds for this record and its alert, never a reason to refuse
-or end a run. See ``docs/BUDGETS_AND_STOPS.md``.
+The fleet hourly cost cap observes: a threshold for this record and its alert,
+never a reason to refuse or end a run. The runaway-token hard cap stops the run
+that reaches it -- a run that carried on past it is what it exists to contain.
+See ``docs/BUDGETS_AND_STOPS.md``.
 
 Everything here is best-effort and never raises: a record that crashes the run
 it describes is worse than no record.
@@ -51,7 +52,7 @@ _pending: contextvars.ContextVar[tuple[dict[str, Any], ...]] = contextvars.Conte
 
 def runaway_cap_note() -> str:
     """What the runaway pages may honestly say about containment."""
-    return "Not contained: the hard cap is recorded and the run continues"
+    return "Contained at the hard cap: a run that reaches it is stopped"
 
 
 def _detail(
@@ -222,7 +223,7 @@ def record_durable_stop(session: Any, reason: str) -> Any:
 
 
 def runaway_cap_hit(session: Any, cap: int, used: int, reason: str) -> None:
-    """Record the runaway-token hard cap. The caller pages; the run goes on."""
+    """Record the runaway-token hard cap. The caller pages and stops the run."""
     record(
         session,
         stop=RUNAWAY_TOKEN_CAP,
@@ -230,8 +231,38 @@ def runaway_cap_hit(session: Any, cap: int, used: int, reason: str) -> None:
         setting="ROBOTHOR_RUNAWAY_HARD_CAP_TOKENS",
         limit=cap,
         observed=used,
-        mode="observe",
+        mode="enforce",
     )
+
+
+#: What the person who asked is told. Plain words and something to do: they
+#: asked a question, and the engine's accounting is not the answer.
+RUNAWAY_CAP_ANSWER = (
+    "I had to stop: this request grew too large to finish in one go. "
+    "Please narrow it (fewer items, a shorter period, one part at a time) "
+    "or split it into smaller requests, and ask again."
+)
+
+
+def stop_at_runaway_cap(session: Any, cap: int, used: int, reason: str) -> None:
+    """End a run at the runaway-token hard cap: the record and the bookkeeping.
+    Never raises. The caller pages (the critical alert) and ends the loop.
+
+    The cap used to record and let the run go on: measured, a run crossed it at
+    5,086,365 tokens and carried on to iteration 50. The run now ends where it
+    stands, with ``budget_exhausted``, the reason as its error and an ERROR
+    step. No wrap-up model call: it would re-send the very context that crossed
+    the cap. The answer it delivers is :data:`RUNAWAY_CAP_ANSWER`.
+    """
+    runaway_cap_hit(session, cap, used, reason)
+    try:
+        session.run.budget_exhausted = True
+        if not getattr(session.run, "error_message", None):
+            session.run.error_message = reason
+        session.record_error(reason)
+        session.messages.append({"role": "assistant", "content": RUNAWAY_CAP_ANSWER})
+    except Exception:  # noqa: BLE001 - the stop itself must still happen
+        logger.debug("runaway stop bookkeeping failed", exc_info=True)
 
 
 def safety_cap(cap: int, iteration: int) -> dict[str, Any]:

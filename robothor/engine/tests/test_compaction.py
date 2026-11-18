@@ -228,7 +228,9 @@ class TestCompact:
 
         mock_summary_resp = MagicMock()
         mock_summary_resp.choices = [MagicMock()]
-        mock_summary_resp.choices[0].message.content = "Segment summary text."
+        mock_summary_resp.choices[
+            0
+        ].message.content = "Segment summary text. The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do."
 
         call_count = 0
 
@@ -284,7 +286,9 @@ class TestCompact:
 
         mock_summary_resp = MagicMock()
         mock_summary_resp.choices = [MagicMock()]
-        mock_summary_resp.choices[0].message.content = "Second compaction summary."
+        mock_summary_resp.choices[
+            0
+        ].message.content = "Second compaction summary. The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do."
 
         async def mock_acompletion(**kwargs):
             if "response_format" in kwargs:
@@ -321,7 +325,9 @@ class TestCompact:
 
         mock_summary = MagicMock()
         mock_summary.choices = [MagicMock()]
-        mock_summary.choices[0].message.content = "Summary."
+        mock_summary.choices[
+            0
+        ].message.content = "Summary. The agent read the inputs, recorded the key numbers and file paths, and has the remaining steps still to do."
 
         async def mock_acompletion(**kwargs):
             if "response_format" in kwargs:

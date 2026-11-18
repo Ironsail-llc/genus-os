@@ -898,6 +898,28 @@ real tenants, so it belongs in your deployment's values, not in the chart. See
 [Tenant cells](https://github.com/Ironsail-llc/genus-os/blob/main/helm/genus-os/README.md#tenant-cells) in the chart README for
 what an entry renders and how to seed its workspace.
 
+### Claude Code jobs (PR reviewer)
+
+The released `python` image carries a pinned Claude Code CLI and the
+`bubblewrap` and `socat` its Bash sandbox needs; the release workflow's
+top-level `env` holds the version and checksums. Turn the jobs on with
+`engine.coding.enabled`: the chart puts the coding workspace, the repo roots
+and the PR reviewer's clone root under the engine's workspace volume (keep it
+persistent) and selects token auth. Put `CLAUDE_CODE_OAUTH_TOKEN` and
+`GITHUB_TOKEN` in the `engine-providers` Secret, and allow the engine egress to
+the Git host and the model provider.
+
+Under the chart's default pod security the sandbox cannot start: the runtime's
+default seccomp profile refuses its user namespace and the masked `/proc`
+refuses its `/proc` mount, so every job fails at its first shell command.
+`engine.coding.sandbox.relaxPodSecurity: true` lifts exactly those two on the
+engine container (`procMount: Unmasked`, an `Unconfined` or `Localhost`
+seccomp profile) and sets `hostUsers: false` on the engine pod, which needs
+nodes that support user namespaces. Nothing else in the release changes. See
+[Claude Code jobs](https://github.com/Ironsail-llc/genus-os/blob/main/helm/genus-os/README.md#claude-code-jobs)
+in the chart README for every value, and [PR reviewer](PR_REVIEWER.md#on-a-hosted-deployment)
+for the reviewer's own settings.
+
 ### Webhook receiver (hooks)
 
 The engine runs as one `Recreate` replica, so webhook deliveries to
@@ -982,10 +1004,10 @@ genus doctor --fix --dry-run        # say what --fix would repair
 | `database` | PostgreSQL reachable; migrations applied and undrifted; the `service` RBAC role is seeded |
 | `redis` | Redis answers a PING |
 | `models` | a provider credential resolves; the fleet's default model answers a one-token completion; Ollama is reachable |
-| `channels` | Telegram is configured consistently (and `getMe` answers); a Slack bot token, if set, is shaped like one; `alerts.delivery`: at least one alert channel (Telegram, or an `ROBOTHOR_ALERT_FALLBACK_CHANNELS` entry) can deliver a page, see `docs/runbooks/PAGING.md`, "Fallback channels for a page" (repository only) |
+| `channels` | Telegram is configured consistently (and `getMe` answers); a Slack bot token, if set, is shaped like one; `alerts.delivery`: at least one alert channel (Telegram, an `ROBOTHOR_ALERT_FALLBACK_CHANNELS` entry, or `ROBOTHOR_ALERT_WEBHOOK_URL`) can deliver a page, see `docs/runbooks/PAGING.md`, "Fallback channels for a page" (repository only) |
 | `workspace` | Microsoft 365 only (skips on Google): the app credential works, the assistant's inbox and the owner's calendar are readable, a canary mailbox is **denied**, and the owner's mailbox timezone matches the instance. See [Microsoft 365](workspace/microsoft365.md#6-run-the-doctor) |
 | `services` | engine, bridge, orchestrator and vision answer a health endpoint |
-| `manifests` | every agent manifest satisfies the schema; none is present-but-unreadable |
+| `manifests` | every agent manifest satisfies the schema; none is present-but-unreadable; `manifests.unrestricted_role` (recommended) lists every agent that declares no `role:` and so runs with the allow-all default service role |
 | `identity` | an operator is configured in `owner.yaml`; an owner account exists so somebody can sign in |
 | `secrets` | the secrets backend is usable; the JWT signing key resolves; the bridge SSO secret is set where auth is enforced |
 | `budget_stops` | `budget_stops.recent` (info): how many `budget_stop` steps the last 24 hours recorded, by stop and mode. See `docs/BUDGETS_AND_STOPS.md` (repository only) |

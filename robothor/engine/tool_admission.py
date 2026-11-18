@@ -36,7 +36,7 @@ from robothor.engine.run_deadline import wrapup_refusal
 from robothor.engine.sandbox_policy import guardrail_context
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.tool_verdict import ToolVerdict as ToolVerdict  # re-exported
-from robothor.engine.tool_verdict import with_gate
+from robothor.engine.tool_verdict import logs_refusals, with_gate
 from robothor.engine.wrapped_call import inner_call
 
 if TYPE_CHECKING:
@@ -83,6 +83,7 @@ class ToolAdmissionMixin:
         # below and defeat the point of having the contract at all.
         _active_watchdog: Any
 
+    @logs_refusals
     async def _admit_tool_call(self, **kw: Any) -> ToolVerdict:
         """Every gate in order (``_run_gates``); a refusal carries its gate and unlock."""
         verdict = await self._run_gates(**kw)

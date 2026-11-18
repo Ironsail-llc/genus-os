@@ -24,8 +24,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from robothor.engine.session import ENGINE_CONTEXT_ROLE
-
 logger = logging.getLogger(__name__)
 
 #: The one guardrail whose warning means "there is a credential in this
@@ -111,10 +109,34 @@ def apply_post_execution_guardrails(
     # the value, because this message is persisted with the conversation.
     if not state.secret_notified:
         state.secret_notified = True
-        session.messages.append(
-            {
-                "role": ENGINE_CONTEXT_ROLE,
-                "content": f"[SYSTEM] {verdict.reason} {_NOTICE}",
-            }
-        )
+        # Queued, never appended here: this runs before the result is recorded,
+        # and a notice between a call and its results splits the exchange.
+        _queue_notice(session, f"[SYSTEM] {verdict.reason} {_NOTICE}")
     return result
+
+
+#: Engine notices raised while a tool batch runs, held until its results are in.
+_PENDING_NOTICES = "_pending_engine_notices"
+
+
+def _queue_notice(session: Any, text: str) -> None:
+    pending = getattr(session, _PENDING_NOTICES, None)
+    if pending is None:
+        pending = []
+        setattr(session, _PENDING_NOTICES, pending)
+    pending.append(text)
+
+
+def drain_engine_notes(session: Any) -> list[str]:
+    """Every note raised during the batch, taken once, for after its results.
+
+    The guardrail notice and the repeat guard's notes (``drain_repeat_notes``)
+    land together after the last tool result of the iteration, never between a
+    call and its results.
+    """
+    from robothor.engine.repeat_guard import drain_repeat_notes
+
+    pending = getattr(session, _PENDING_NOTICES, None) or []
+    notes = list(pending)
+    pending.clear()
+    return [*notes, *drain_repeat_notes(session)]

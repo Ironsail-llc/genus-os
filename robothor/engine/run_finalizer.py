@@ -54,6 +54,7 @@ from robothor.engine.models import (
     RunStatus,
 )
 from robothor.engine.reasoning_replay import same_model
+from robothor.engine.run_log import log_run_end
 
 # ── Log-injection sanitizer ──
 # CodeQL py/log-injection: user-controlled values (model names, error
@@ -370,6 +371,7 @@ class RunFinalizationMixin:
 
         # ── [TELEMETRY] Every exit path publishes the run's trace, once ──
         self._publish_run_telemetry(trace, run)
+        log_run_end(run)
 
         capture_pending_items(run, session)
         # ── [GUARDRAIL] Post-run checks (require finished run + config) ──

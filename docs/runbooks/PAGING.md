@@ -618,7 +618,29 @@ says which channel delivered each alert:
 | `Alert <id> delivered via email (fallback: the primary channel telegram is not configured)` | Telegram is not set up; the fallback delivered |
 | `Alert <id> delivered via email (fallback: the primary channel telegram failed to deliver)` | Telegram was tried and failed (its own warning precedes this line) |
 | `would have sent alert <id> via email (...)` | That fallback has no send credentials (its `health()` says it cannot send), so it was not called |
-| `Alert <id> reached no one: every alert channel failed (tried telegram, email)` | ERROR. Nothing delivered; an `alert_fallback` row was written for the next briefing |
+| `Alert <id> delivered via webhook (fallback: ...)` | No fallback channel delivered; `ROBOTHOR_ALERT_WEBHOOK_URL` accepted the POST |
+| `Alert <id> reached no one: every alert channel failed (tried telegram, email, webhook)` | ERROR. Nothing delivered; an `alert_fallback` row was written for the next briefing |
+
+After the fallback channels, a page that is still undelivered is POSTed to
+`ROBOTHOR_ALERT_WEBHOOK_URL` when it is set (the same webhook
+`alert(..., channel="webhook")` uses; JSON `{level, title, body, metadata}`,
+any status below 400 counts as delivered).
+
+### Every alert is a log line
+
+Whatever its level and whatever happens to its delivery, every alert writes one
+ERROR line first, so an instance with no alert channel at all still has the
+alert in its logs:
+
+```text
+event=alert kind=tool_outage severity=critical subject=example_tool alert_id=3f2a9c1b7e44
+```
+
+`kind` is the alert's `kind=` argument, or the part of its title before the
+first colon in `snake_case`; `subject` is the rest of the title, redacted. The
+body is never logged. A repeat suppressed inside its cooldown writes no second
+line, and an alert raised by benchmark traffic is logged at INFO with
+`benchmark=true`.
 
 An email fallback target must be an address, not a CRM person id: a person id
 resolves through the database, and the alert that matters most is the one
@@ -640,8 +662,11 @@ was **not** delivered is a retry, so it is never suppressed. Alerts raised
 without an id are never suppressed.
 
 `genus doctor --only alerts.delivery` reports each configured alert channel on
-its own row and fails with "no alert channel can deliver" when neither Telegram
-nor any fallback can send, including when nothing is configured at all. It
+its own row (a configured webhook passes as "configured (not probed)", since a
+probe would be a real POST) and fails with "no alert channel can deliver",
+naming Telegram, `ROBOTHOR_ALERT_FALLBACK_CHANNELS` and
+`ROBOTHOR_ALERT_WEBHOOK_URL`, when none of them can send, including when
+nothing is configured at all. It
 reads each fallback channel's `health()` and sends nothing. The check is
 `recommended`: in a full run a failure marks the instance degraded on the
 Health view without failing an install gate that asserts no `required`

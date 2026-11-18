@@ -62,6 +62,39 @@ Renders:
 {{- $_ := set $serviceEnv "ORCHESTRATOR_URL" (printf "http://%s-orchestrator:%v" (include "genus-os.fullname" $root) $root.Values.orchestrator.service.port) -}}
 {{- end -}}
 {{- end -}}
+{{- /* Claude Code jobs (engine.coding): clones, per-job homes and the PR
+       reviewer's clones all live under one directory of the writable
+       workspace, which is also the only repo root. engine.env may override
+       any of these. Tenant cells never inherit the block (engine/tenants.yaml). */ -}}
+{{- $coding := dict -}}
+{{- if eq $component "engine" -}}{{- $coding = $cv.coding | default dict -}}{{- end -}}
+{{- $codingOn := and (eq $component "engine") $coding.enabled -}}
+{{- if $codingOn -}}
+{{- if or $ws.readOnly $ws.configMap.name -}}
+{{- fail "engine.coding.enabled needs a writable workspace volume; workspace.readOnly and workspace.configMap.name leave nowhere to clone" -}}
+{{- end -}}
+{{- $codingRel := toString ($coding.dir | default "coding") -}}
+{{- if or (isAbs $codingRel) (eq (clean $codingRel) ".") (eq (clean $codingRel) "..") (hasPrefix "../" (clean $codingRel)) -}}
+{{- fail (printf "engine.coding.dir must be a relative path inside the workspace, got %q" $codingRel) -}}
+{{- end -}}
+{{- $codingDir := printf "%s/%s" (clean ($ws.mountPath | default "/")) (clean $codingRel) | clean -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_CODING_REPO_ROOTS" $codingDir -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_CODING_WORKSPACE" (printf "%s/repos" $codingDir) -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_PR_REVIEW_CLONE_ROOT" (printf "%s/pr-review" $codingDir) -}}
+{{- $_ := set $serviceEnv "ROBOTHOR_CLAUDE_CODE_AUTH" "token" -}}
+{{- end -}}
+{{- /* Claude Code's Bash sandbox is bubblewrap: an unprivileged user
+       namespace plus a fresh /proc. The runtime's default seccomp profile
+       refuses the namespace and its masked /proc refuses the mount, so the
+       engine container alone may opt out of both. procMount Unmasked needs a
+       pod in its own user namespace (hostUsers: false). Never the init
+       containers, never another component. */ -}}
+{{- $relaxSandbox := and $codingOn (($coding.sandbox | default dict).relaxPodSecurity) -}}
+{{- $containerSecurity := deepCopy $root.Values.global.securityContext -}}
+{{- if $relaxSandbox -}}
+{{- $_ := set $containerSecurity "procMount" "Unmasked" -}}
+{{- $_ := set $containerSecurity "seccompProfile" (($coding.sandbox.seccompProfile) | default (dict "type" "Unconfined")) -}}
+{{- end -}}
 {{- if eq $component "bridge" -}}
 {{- $_ := set $serviceEnv "ROBOTHOR_BRIDGE_HOST" "0.0.0.0" -}}
 {{- if $root.Values.orchestrator.enabled -}}
@@ -172,6 +205,10 @@ spec:
       # container. A short-lived projected token is mounted only into the
       # migration watcher init container below.
       automountServiceAccountToken: false
+      {{- if $relaxSandbox }}
+      # Its own user namespace: procMount Unmasked requires it (engine.coding.sandbox).
+      hostUsers: false
+      {{- end }}
       {{- with $root.Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- range . }}
@@ -280,7 +317,7 @@ spec:
           image: {{ include "genus-os.image" (dict "root" $root "component" $component "values" $cv) }}
           imagePullPolicy: {{ include "genus-os.imagePullPolicy" (dict "root" $root "component" $component "values" $cv) }}
           securityContext:
-            {{- toYaml $root.Values.global.securityContext | nindent 12 }}
+            {{- toYaml $containerSecurity | nindent 12 }}
           {{- with $cv.command }}
           command:
             {{- toYaml . | nindent 12 }}

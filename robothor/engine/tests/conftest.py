@@ -409,3 +409,13 @@ def isolated_plan_claims(monkeypatch):
     # PostgreSQL) get a successful fake write; tests that care about the
     # persisted payload or a failed write patch this name themselves.
     monkeypatch.setattr("robothor.engine.chat.save_plan_state_async", AsyncMock(return_value=None))
+
+
+@pytest.fixture(autouse=True)
+def _no_refused_calls_across_tests():
+    """Refused calls are remembered per run id, and tests reuse run ids."""
+    from robothor.engine import tool_call_log
+
+    tool_call_log._refused_calls.clear()
+    yield
+    tool_call_log._refused_calls.clear()

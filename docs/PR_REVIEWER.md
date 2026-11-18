@@ -295,6 +295,7 @@ never left running.
    | `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | `spaces/…` to watch and announce in — comma-separated for several review channels, each watched the same way, every answer going back to the space the PR was posted in; empty for GitHub only |
    | `ROBOTHOR_PR_REVIEW_CHAT_SELF_USERS` | the `users/…` the gws CLI posts as, so its own messages are never requests |
    | `ROBOTHOR_PR_REVIEW_BOT_LOGIN` | GitHub login whose requested reviews it picks up — requests naming that login directly (`user-review-requested:`); a review requested from a team the login belongs to is ignored |
+   | `ROBOTHOR_PR_REVIEW_PEER_LOGINS` | logins of other automated reviewers paired with this one: they are kept out of the prompt and their replies queue nothing (see [Paired reviewers](#paired-reviewers)) |
    | `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` / `_TICKET_PREFIXES` | the optional ticket rule; prefixes as `owner/repo:PREFIX` or bare `PREFIX` |
    | `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` | the team's own review guidelines (see [parity](#parity-with-an-existing-review-bot)) |
    | `ROBOTHOR_PR_REVIEW_MODEL` | `opus` (default): the CLI alias, which each Claude Code update points at the newest Opus. Never pin a dated model id here; the model actually used is named in every review footer |
@@ -316,10 +317,93 @@ never left running.
    its heartbeat can raise the report's `alerts` (see
    [Monitoring](#monitoring)).
 
-**Cutover from another review bot.** Never run the suite on the same
-repositories as another automated reviewer: both would claim the same links
-and post two reviews per head. Stop the other bot first, or start with a
-disjoint `ROBOTHOR_PR_REVIEW_REPOS` and move repositories over one at a time.
+**Cutover from another review bot.** Do not run the suite beside a reviewer
+it has not been told about: both would claim the same Chat links and read each
+other's findings. Stop the other bot first, start with a disjoint
+`ROBOTHOR_PR_REVIEW_REPOS` and move repositories over one at a time, or pair
+the two on purpose (below).
+
+## Paired reviewers
+
+Two automated reviewers can give independent opinions on the same pull
+requests. Each one runs under its own GitHub account and names the other in
+`ROBOTHOR_PR_REVIEW_PEER_LOGINS` (comma-separated logins). With a peer named:
+
+- **The review is blind.** Nothing the peer wrote (its reviews, inline
+  findings, comments, thread replies) reaches the review prompt, so the second
+  opinion is not an echo of the first.
+- **A peer's reply is not an answer.** Only a person's reply on a finding
+  queues a re-review. Two reviewers answering each other's threads would
+  otherwise re-review without end.
+- **Each keeps its own review and threads.** A review is found again by its
+  author and head commit, and threads are resolved by the review that opened
+  them, so neither touches the other's.
+
+Give only one of the pair a Chat space (`ROBOTHOR_PR_REVIEW_CHAT_SPACE`): a
+link is claimed and announced once. The other picks its pull requests up from
+`ROBOTHOR_PR_REVIEW_WATCH_REPOS` or from a review requested of its login.
+
+### Comparing a pair
+
+With a peer named, `pr_review_status` adds a `paired` section, computed in
+code from GitHub with no model, so the operator can see whether each reviewer
+pulls its weight:
+
+```json
+"paired": {
+  "peers": ["peer-bot"],
+  "heads": [
+    {"pr": "acme/widgets#7", "url": "...", "head_sha": "3f2a9c01b7de",
+     "reviewed_at": "2026-11-17T10:02:00+00:00", "verdict": "APPROVED",
+     "peers": {"peer-bot": {"verdict": "CHANGES_REQUESTED", "agree": false,
+                            "only_ours": 1, "only_peer": 2, "both": 1}}}
+  ],
+  "heads_not_compared": 0,
+  "summary": {"peer-bot": {"heads_compared": 1, "agreement_rate": 0.0,
+                           "only_ours": 1, "only_peer": 2, "both": 1}}
+}
+```
+
+- **Which heads.** Every pull request this reviewer posted a review on in the
+  window, at the head commit of its latest review, newest first, up to 10
+  per report (two GitHub calls each); `heads_not_compared` counts the rest.
+- **Verdict.** The peer's latest review at that same commit: `APPROVED`,
+  `CHANGES_REQUESTED` or `COMMENTED`; `DISMISSED` when its review there was
+  dismissed, for example by a later push (it did post, so no alert, but the
+  head is left out of the agreement rate); `null` when it has posted none
+  yet; `"unknown"` when GitHub could not be read (no alert then). `agree` is
+  `null` unless both verdicts are known.
+- **Findings.** Ours are the findings stored with the review that name a
+  file; the peer's are its inline comments on its reviews at that commit
+  (replies left out). Two match on the same file with lines at most 3 apart;
+  each matches once. A finding about the pull request as a whole, with no
+  file, is not counted on either side.
+- **Summary.** Per peer: heads where it posted a verdict, the share where the
+  verdicts agree, and the finding totals.
+- **Alerts.** One reviewer approves while the other requests changes; or the
+  peer has posted nothing on a head reviewed longer ago than
+  `ROBOTHOR_PR_REVIEW_STALE_AFTER_MINUTES` (180 by default).
+
+### On a hosted deployment
+
+On the Helm chart the steps above still apply, with these differences:
+
+- **Claude Code** is in the released image; there is no `genus claude-code
+  login` in a pod. Set `engine.coding.enabled: true` and put
+  `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) and `GITHUB_TOKEN` in
+  the `engine-providers` Secret. The chart selects token auth.
+- **Paths.** The chart sets `ROBOTHOR_CODING_REPO_ROOTS` to
+  `<workspace>/coding` and `ROBOTHOR_PR_REVIEW_CLONE_ROOT` to
+  `<workspace>/coding/pr-review`, so the clone root is inside the repo roots.
+  Override either in `engine.env` only together with the other.
+- **Sandbox.** Under the chart's default pod security every review fails at
+  its first shell command. Set `engine.coding.sandbox.relaxPodSecurity: true`
+  (engine container only) on nodes that support user namespaces, and check
+  with `genus doctor --category claude_code` from the engine pod.
+- **Egress** to the Git host and the model provider, on 443.
+
+The chart README's "Claude Code jobs" section
+([deployment](deployment.md#claude-code-jobs-pr-reviewer)) has every value.
 
 ## Parity with an existing review bot
 
@@ -464,7 +548,10 @@ coding jobs in flight:
   to 20 per call): one that is merged or closed is left out and its row
   closed, so it is never checked again; one that could not be checked is
   listed with `verified: false` and raises no alert;
-- **`pr=`** — one pull request's state, links and review history.
+- **`pr=`** — one pull request's state, links and review history;
+- **paired** — only with [paired reviewers](#paired-reviewers) configured:
+  how this reviewer compares with each peer. See
+  [Comparing a pair](#comparing-a-pair).
 
 Main opts into it: the operator can ask "how are reviews going?", "where is
 #123?" or "give me the week's review report" (`since_hours=168`), and main can

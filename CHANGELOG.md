@@ -1,3 +1,22 @@
+## [1.135.0](https://github.com/Ironsail-llc/genus-os/compare/v1.134.0...v1.135.0) (2026-11-18)
+
+### Features
+
+* **engine:** truthful refusals, bounded context, scoped fence (GEN-590) ([#885](https://github.com/Ironsail-llc/genus-os/issues/885)) ([fb975b3](https://github.com/Ironsail-llc/genus-os/commit/fb975b3850661f60c0bd920df8297a999d1b02ed)), closes [#873](https://github.com/Ironsail-llc/genus-os/issues/873) [#874](https://github.com/Ironsail-llc/genus-os/issues/874) [#872](https://github.com/Ironsail-llc/genus-os/issues/872) [#874](https://github.com/Ironsail-llc/genus-os/issues/874)
+
+## [1.134.0](https://github.com/Ironsail-llc/genus-os/compare/v1.133.0...v1.134.0) (2026-11-18)
+
+### Features
+
+* **helm:** run claude code review jobs on a hosted deployment (GEN-660) ([#882](https://github.com/Ironsail-llc/genus-os/issues/882)) ([4287d1e](https://github.com/Ironsail-llc/genus-os/commit/4287d1e4ec1ebdcd0f0fa249fb1e7c4ce26d132a))
+* **pr-review:** paired comparison in the review status report (GEN-659) ([#881](https://github.com/Ironsail-llc/genus-os/issues/881)) ([235f728](https://github.com/Ironsail-llc/genus-os/commit/235f728f38d3c296283876bbb79085da921a32e7))
+
+## [1.133.0](https://github.com/Ironsail-llc/genus-os/compare/v1.132.0...v1.133.0) (2026-11-18)
+
+### Features
+
+* **pr-review:** paired reviewers stay blind to each other (GEN-658) ([#879](https://github.com/Ironsail-llc/genus-os/issues/879)) ([6d89f65](https://github.com/Ironsail-llc/genus-os/commit/6d89f65080d871c27759c998f2efa49d3a1c09db))
+
 ## [1.132.0](https://github.com/Ironsail-llc/genus-os/compare/v1.131.0...v1.132.0) (2026-11-18)
 
 ### Features

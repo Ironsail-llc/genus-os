@@ -158,7 +158,9 @@ def trigger_is_retry(row: PrReviewRow) -> bool:
     return row.pending_trigger == "retry"
 
 
-async def replies_pending(github: Any, row: PrReviewRow) -> bool:
+async def replies_pending(
+    github: Any, row: PrReviewRow, *, peer_logins: tuple[str, ...] = ()
+) -> bool:
     """Whether someone answered one of the row's findings on GitHub and we
     have not replied yet. False when it cannot tell (no port, an error)."""
     ids = [i.get("comment_id") for i in row.last_review.get("issues") or []]
@@ -170,7 +172,7 @@ async def replies_pending(github: Any, row: PrReviewRow) -> bool:
     except Exception as exc:  # noqa: BLE001 - a missed reply waits for the next look
         logger.info("pr_review: review comments for %s failed: %s", row.key, exc)
         return False
-    return bool(pending_replies(comments or [], ids))
+    return bool(pending_replies(comments or [], ids, exclude_logins=peer_logins))
 
 
 def post_only(row: PrReviewRow) -> bool:
@@ -491,7 +493,9 @@ class Intake:
         Chat message needed. Runs every ~10 minutes: one GitHub call per PR
         with findings open."""
         for row in await self.store.list_with_findings(self.tenant_id):
-            if row.pending_trigger or not await replies_pending(self.github, row):
+            if row.pending_trigger or not await replies_pending(
+                self.github, row, peer_logins=self.cfg.peer_logins
+            ):
                 continue
             if _raise_trigger(row, "rereview", self.now):
                 await self.store.save(row)
@@ -837,7 +841,7 @@ class Intake:
         replies = (
             kind == "rereview"
             and row.last_reviewed_sha == head
-            and await replies_pending(self.github, row)
+            and await replies_pending(self.github, row, peer_logins=self.cfg.peer_logins)
         )
         decision = decide_review(
             kind=kind,

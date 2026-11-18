@@ -159,6 +159,7 @@ def discussion(
 def thread_replies(
     review_comments: Iterable[Mapping[str, Any]],
     *,
+    exclude_logins: Sequence[str] = (),
     item_chars: int = DISCUSSION_ITEM_MAX,
     per_thread: int = 10,
 ) -> dict[int, list[dict[str, str]]]:
@@ -167,9 +168,10 @@ def thread_replies(
     A re-review shows each previous finding with what the author (or anyone)
     answered on its thread — "out of scope", "not needed" — so the reviewer
     can accept a justified answer instead of re-raising the finding (team
-    feedback 2026-10-08). Replies by the root comment's own author (us) and by
-    bots are left out.
+    feedback 2026-10-08). Replies by the root comment's own author (us), by
+    bots and by ``exclude_logins`` (paired reviewers) are left out.
     """
+    excluded = {login.lower() for login in exclude_logins if login}
     comments = list(review_comments)
     root_author = {
         int(c["id"]): str((c.get("user") or {}).get("login") or "").lower()
@@ -182,7 +184,7 @@ def thread_replies(
         if not isinstance(root, int):
             continue
         us = root_author.get(root, "")
-        if not _is_person(c.get("user"), {us} if us else set()):
+        if not _is_person(c.get("user"), excluded | ({us} if us else set())):
             continue
         body = _cap(_redact(c.get("body")).strip(), item_chars)
         if body:
@@ -191,14 +193,20 @@ def thread_replies(
 
 
 def pending_replies(
-    review_comments: Iterable[Mapping[str, Any]], comment_ids: Iterable[int]
+    review_comments: Iterable[Mapping[str, Any]],
+    comment_ids: Iterable[int],
+    *,
+    exclude_logins: Sequence[str] = (),
 ) -> list[int]:
     """Our findings (by root comment id) whose thread ends with a person's reply.
 
     The last word on the thread is someone else's: they answered and we have
     not. Once the re-review posts its "Acknowledged" / "Still open" reply the
-    thread ends with ours again, so this never loops.
+    thread ends with ours again, so this never loops. A reply by one of
+    ``exclude_logins`` (a paired reviewer) is not a person's: two reviewers
+    answering each other would otherwise re-review forever.
     """
+    excluded = {login.lower() for login in exclude_logins if login}
     wanted = {int(i) for i in comment_ids if isinstance(i, int)}
     comments = list(review_comments)
     root_author = {
@@ -214,7 +222,9 @@ def pending_replies(
     return sorted(
         root
         for root, c in last.items()
-        if _is_person(c.get("user"), {root_author[root]} if root_author[root] else set())
+        if _is_person(
+            c.get("user"), excluded | ({root_author[root]} if root_author[root] else set())
+        )
     )
 
 

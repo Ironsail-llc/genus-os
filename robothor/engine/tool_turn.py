@@ -45,8 +45,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.parallel_tools import parallel_limit, plan_batches
-from robothor.engine.post_execution import apply_post_execution_guardrails
-from robothor.engine.repeat_guard import drain_repeat_notes
+from robothor.engine.post_execution import apply_post_execution_guardrails, drain_engine_notes
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE
 from robothor.engine.tool_outcome import error_text, record_tool_outcome
@@ -209,7 +208,7 @@ class ToolTurnMixin:
                     await self._record(call, req, iteration_errors, batch_id=batch_id)
 
         # ── [REPEAT GUARD] After every tool result, never between them ──
-        for note in drain_repeat_notes(req.session):
+        for note in drain_engine_notes(req.session):
             req.session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": note})
 
         await self._emit_tools_done(req)
