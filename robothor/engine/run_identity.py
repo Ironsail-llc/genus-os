@@ -131,12 +131,20 @@ async def attach_tenant_access(run: Any, tenant_id: str, identity: Any = None) -
         run.accessible_tenant_ids = own
 
 
-def confined_to_own_tenant(run: Any) -> bool:
-    """A sub-agent or benchmark run: never reaches another tenant, whatever it inherited.
+#: ``trigger_detail`` prefix of the engine-started repair continuation
+#: (``repair_recovery.py``): a MANUAL run carrying the owner's identity for
+#: attribution, with nobody present.
+REPAIR_RESUME_DETAIL = "repair-resume:"
 
-    The sub-agent trigger and the nesting depth count as well as the parent
-    id, because a child of a ``tracking_disabled`` parent records no parent id.
-    Shared with the per-call check in ``tools/cross_tenant.py``.
+
+def confined_to_own_tenant(run: Any) -> bool:
+    """A run that never reaches another tenant, whatever it inherited.
+
+    A sub-agent, a benchmark run, and the repair continuation. The sub-agent
+    trigger and the nesting depth count as well as the parent id, because a
+    child of a ``tracking_disabled`` parent records no parent id. Shared with
+    the per-call check in ``tools/cross_tenant.py``. Confinement only removes
+    reach; it changes nothing a run may do in its own tenant.
     """
     from robothor.engine.models import TriggerType
 
@@ -145,6 +153,7 @@ def confined_to_own_tenant(run: Any) -> bool:
         or getattr(run, "parent_run_id", None)
         or int(getattr(run, "nesting_depth", 0) or 0) > 0
         or getattr(run, "trigger_type", None) == TriggerType.SUB_AGENT
+        or str(getattr(run, "trigger_detail", None) or "").startswith(REPAIR_RESUME_DETAIL)
     )
 
 

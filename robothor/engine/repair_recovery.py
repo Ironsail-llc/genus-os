@@ -50,6 +50,7 @@ async def recover(runner: Any, config: Any) -> None:
 async def _resume(job_id: str, runner: Any, config: Any) -> dict[str, Any]:
     from robothor.engine.config import load_agent_config
     from robothor.engine.models import DeliveryMode, TriggerType
+    from robothor.engine.run_identity import REPAIR_RESUME_DETAIL
     from robothor.engine.task_registry import get_task_registry
     from robothor.identity import resolve_identity
 
@@ -103,7 +104,8 @@ async def _resume(job_id: str, runner: Any, config: Any) -> dict[str, Any]:
                     message=message,
                     agent_config=replace(agent, delivery_mode=DeliveryMode.NONE),
                     trigger_type=TriggerType.MANUAL,
-                    trigger_detail="repair-resume:" + job_id,
+                    # Confines the run to its own tenant (run_identity).
+                    trigger_detail=REPAIR_RESUME_DETAIL + job_id,
                     correlation_id=job_id,
                     execution_mode=True,
                     tenant_id=identity.tenant_id,
