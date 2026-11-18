@@ -537,3 +537,38 @@ async def test_paired_heads_compared_are_capped_per_report():
     assert github.comment_calls <= MAX_PAIRED_HEADS
     assert len(report["paired"]["heads"]) == MAX_PAIRED_HEADS
     assert report["paired"]["heads_not_compared"] == 2
+
+
+async def test_a_finding_without_a_file_is_not_counted_on_either_side():
+    store = MemoryStore()
+    ours = [
+        {"path": "", "line": None, "title": "no ticket"},
+        {"path": "src/a.py", "line": 10, "title": "off by one"},
+    ]
+    task = await _reviewed(store, 1, "REQUEST_CHANGES", issues=ours)
+    github = FakeGitHub()
+    github.reviews[(REPO, 1)] = [_review(91, PEER, "CHANGES_REQUESTED", _sha(1))]
+    github.thread_comments[(REPO, 1)] = [_comment(1, PEER, 91, "src/a.py", 11)]
+    report = await _report(store, [task], cfg=PAIRED, github=github)
+    [head] = report["paired"]["heads"]
+    entry = head["peers"][PEER]
+    assert (entry["only_ours"], entry["only_peer"], entry["both"]) == (0, 0, 1)
+    assert report["paired"]["summary"][PEER]["only_ours"] == 0
+
+
+async def test_a_dismissed_peer_review_is_not_a_silent_peer():
+    store = MemoryStore()
+    ours = [{"path": "src/a.py", "line": 10, "title": "off by one"}]
+    task = await _reviewed(store, 1, "APPROVE", ago=timedelta(hours=4), issues=ours)
+    github = FakeGitHub()
+    github.reviews[(REPO, 1)] = [_review(91, PEER, "DISMISSED", _sha(1))]
+    github.thread_comments[(REPO, 1)] = [_comment(1, PEER, 91, "src/a.py", 10)]
+    report = await _report(store, [task], cfg=PAIRED, github=github)
+    [head] = report["paired"]["heads"]
+    entry = head["peers"][PEER]
+    assert entry["verdict"] == "DISMISSED"
+    assert entry["agree"] is None
+    assert entry["both"] == 1
+    assert report["alerts"] == []
+    summary = report["paired"]["summary"][PEER]
+    assert summary["heads_compared"] == 0 and summary["agreement_rate"] is None
