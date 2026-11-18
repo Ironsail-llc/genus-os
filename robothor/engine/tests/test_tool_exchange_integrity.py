@@ -190,3 +190,32 @@ class TestProviderErrorsAreLoggedWithTheirText:
         assert "abcdefghijklmnopqrstuvwxyz0123456789" not in " ".join(
             r.getMessage() for r in caplog.records
         )
+
+
+class TestEveryNoteWaitsForTheBatch:
+    """Two other engine notes were appended per call, so a note could land
+    between two results of one assistant message: the same split, and the
+    Anthropic leg rewrites the note as a user turn that the provider rejects."""
+
+    def test_the_repeated_failure_note_is_queued(self):
+        from robothor.engine.post_execution import drain_engine_notes
+        from robothor.engine.tool_outcome import CIRCUIT_BREAKER_THRESHOLD, _count_failure
+
+        session = SimpleNamespace(messages=[])
+        failures: dict[str, int] = {}
+        for _ in range(CIRCUIT_BREAKER_THRESHOLD):
+            _count_failure(session, "web_fetch", "boom", failures)
+        assert session.messages == []
+        notes = drain_engine_notes(session)
+        assert len(notes) == 1 and "web_fetch" in notes[0]
+
+    def test_the_checklist_nudge_is_queued(self):
+        from robothor.engine.post_execution import drain_engine_notes
+        from robothor.engine.tool_turn import ToolTurnMixin
+
+        session = SimpleNamespace(messages=[], todo_list=object())
+        call = SimpleNamespace(tool_name="todo_write")
+        req = SimpleNamespace(session=session)
+        ToolTurnMixin._after_todo_write(call, req, {"verificationNudgeNeeded": True}, None)
+        assert session.messages == []
+        assert any("verify your work" in note for note in drain_engine_notes(session))
