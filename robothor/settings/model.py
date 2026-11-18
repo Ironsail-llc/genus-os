@@ -3585,6 +3585,16 @@ class PrReviewSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    peer_logins: str = declare(
+        "",
+        "ROBOTHOR_PR_REVIEW_PEER_LOGINS",
+        "GitHub logins (comma-separated) of other automated reviewers paired with this one "
+        "on the same pull requests. Nothing a peer wrote reaches the review prompt, so each "
+        "opinion is independent, and a peer's reply on a finding never queues a re-review. "
+        "Empty means no peer.",
+        restart_required=False,
+        since="unreleased",
+    )
     chat_space: str = declare(
         "",
         "ROBOTHOR_PR_REVIEW_CHAT_SPACE",
