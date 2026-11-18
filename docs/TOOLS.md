@@ -1835,10 +1835,12 @@ exec, `send_file` to another chat, and every GitHub tool without
 | `unlock` | what a person changes for the same call to succeed |
 
 Behavioural rule 21 ships with them: **Relay a refusal as stated** — when a
-tool result has `refused: true` and a `gate`, the agent tells the person which
-gate refused it (`gate_name`) and what unlocks it (`unlock`); when the unlock is
-a call the agent can make now (a deferred tool's "call it through `tool_call`",
-say), it makes that call. A `refused: true` without a `gate` is a redirection,
+tool result has `refused: true` and a `gate`, the agent reads the gate and its
+`unlock`; when the unlock is a call the agent can make now (a deferred tool's
+"call it through `tool_call`", say), it makes that call. When a person can
+unlock it (a permission, an approval), the agent tells them in plain words what
+is needed and who can grant it. It never mentions runtime throttles, internal
+gate names or field names (`gate`, `gate_name`, `unlock`) to the person. A `refused: true` without a `gate` is a redirection,
 not a block: change the call as its `reason` says. When a tool fails or another system refuses the call
 and the result names no gate or unlock, the agent reports what the result
 itself says, says that it does not state the cause, and says that the
@@ -1863,8 +1865,17 @@ makes (a deferred tool's unlock) always runs, as does a workflow step, which
 keeps its own declared retries.
 
 The "What you can do here" block says the same: a refusal by one of the gates
-it lists names the gate and the unlock; a refusal that names no gate is
-relayed in its own words; rule 21 says when a refusal is final.
+it lists names the gate and the unlock, and the person is told in plain words
+what is needed and who can grant it; a refusal that names no gate is relayed in
+its own words; rule 21 says when a refusal is final.
+
+Behavioural rule 22 covers an interactive turn: lead with the answer; use the
+agent's own tools before asking a question, and never ask the person for facts
+the platform holds (tenants, companies, agents, links, lists); say once, in one
+sentence, what cannot be seen and then report what can; and say how old a
+record is when that matters, never presenting an old record as current. Rule 13
+keeps asking for intent only: what the person wants, not facts the agent can
+look up.
 
 A direct call to a tool the agent is granted but that a deferred turn left out
 of its schemas is refused with gate `policy`, name `deferred`, and the unlock

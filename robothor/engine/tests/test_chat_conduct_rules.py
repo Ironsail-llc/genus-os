@@ -94,10 +94,12 @@ class TestRule13AsksAboutIntentOnly:
 
 class TestNumbering:
     def test_the_honest_claims_rule_follows_the_new_rule(self, monkeypatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_RUN_VERIFICATION_ENABLED", "true")
         monkeypatch.setenv("ROBOTHOR_RUN_VERIFICATION_MODE", "enforce")
         from robothor.engine.prompts import behavioral_rules
 
         text = behavioral_rules()
+        assert "Never state an action occurred" in text  # the flag really is on
         numbers = [int(m) for m in re.findall(r"^(\d+)\. \*\*", text, re.MULTILINE)]
         assert numbers == list(range(1, 24))
 

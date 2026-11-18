@@ -346,7 +346,7 @@ class TelegramHandlersMixin:
                     1,
                     self._get_tenant_id(chat_id),
                 )
-                for row in fh.get("per_agent", []):
+                for row in fh.get("agents", []):
                     fleet_health[row["agent_id"]] = row
             except Exception as e:
                 logger.debug("/status fleet_health lookup failed: %s", e)
