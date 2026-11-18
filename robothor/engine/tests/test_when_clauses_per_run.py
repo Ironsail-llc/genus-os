@@ -36,32 +36,44 @@ def _chain(config: Any) -> tuple[str, list[str], str]:
     return (config.model_primary, list(config.model_fallbacks), config.service_tier)
 
 
-@pytest.fixture
-def fleet(tmp_path, monkeypatch):
-    """A manifest dir with fleet defaults and one agent with ``when:`` clauses."""
-    import robothor.engine.config as config_mod
-
-    # The instance's last-resort model is appended to every chain; keep it out
-    # so the chain under test is exactly what the manifests say.
-    monkeypatch.setattr(config_mod, "last_resort_model", lambda: "")
-    manifest_dir = tmp_path / "docs" / "agents"
-    manifest_dir.mkdir(parents=True)
-    defaults = {"model": dict(zip(("primary", "fallbacks", "service_tier"), DEFAULT, strict=True))}
-    override = {"model": dict(zip(("primary", "fallbacks", "service_tier"), OVERRIDE, strict=True))}
+def _write_fleet(manifest_dir, default=DEFAULT, override=OVERRIDE, agent=AGENT):
+    """Fleet defaults, and one agent whose ``when:`` clauses carry ``override``."""
+    keys = ("primary", "fallbacks", "service_tier")
+    manifest_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "id": AGENT,
+        "id": agent,
         "name": "Example agent",
         "description": "A generic fixture agent",
         "version": "2026-11-17",
         "department": "operations",
         "schedule": {"cron": "0 7 * * *"},
-        "when": [{"trigger_type": t, "overrides": override} for t in CLAUSE_TRIGGERS],
+        "when": [
+            {"trigger_type": t, "overrides": {"model": dict(zip(keys, override, strict=True))}}
+            for t in CLAUSE_TRIGGERS
+        ],
     }
+    defaults = {"model": dict(zip(keys, default, strict=True))}
     (manifest_dir / "_defaults.yaml").write_text(yaml.dump(defaults))
-    (manifest_dir / f"{AGENT}.yaml").write_text(yaml.dump(manifest))
+    (manifest_dir / f"{agent}.yaml").write_text(yaml.dump(manifest))
     reset_defaults_cache()
-    yield manifest_dir
+    return manifest_dir
+
+
+@pytest.fixture(autouse=True)
+def _no_last_resort(monkeypatch):
+    import robothor.engine.config as config_mod
+
+    # The instance's last-resort model is appended to every chain; keep it out
+    # so the chain under test is exactly what the manifests say.
+    monkeypatch.setattr(config_mod, "last_resort_model", lambda: "")
+    yield
     reset_defaults_cache()
+
+
+@pytest.fixture
+def fleet(tmp_path):
+    """A manifest dir with fleet defaults and one agent with ``when:`` clauses."""
+    return _write_fleet(tmp_path / "docs" / "agents")
 
 
 def _engine_config(manifest_dir) -> EngineConfig:
@@ -210,3 +222,97 @@ def test_a_load_without_a_trigger_is_the_untriggered_document(fleet):
     from robothor.engine.config import load_agent_config
 
     assert _chain(load_agent_config(AGENT, fleet)) == DEFAULT
+
+
+# ─── Reads made on behalf of a run, before it starts ────────────────────────
+
+#: A model the registry says cannot be shown a picture, and one that can.
+BLIND = ("openrouter/xiaomi/mimo-v2.5", [], "default")
+SIGHTED = ("openai/gpt-6.2-sol", [], "default")
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
+
+
+@pytest.mark.parametrize(
+    ("default", "override", "shown"),
+    [(BLIND, SIGHTED, True), (SIGHTED, BLIND, False)],
+    ids=["clause-sees", "clause-blind"],
+)
+async def test_a_webchat_image_follows_the_webchat_clauses_model(
+    tmp_path, default, override, shown
+):
+    """Whether an uploaded image reaches the model is decided before the run,
+    and it has to be decided for the model the webchat run will call."""
+    import base64
+    from types import SimpleNamespace
+
+    from robothor.engine.chat_attachments import prepare_turn
+
+    fleet = _write_fleet(tmp_path / "docs" / "agents", default, override)
+    body = {
+        "attachments": [
+            {"name": "shot.png", "mime": "image/png", "data": base64.b64encode(PNG).decode()}
+        ]
+    }
+    turn = await prepare_turn(
+        body,
+        "look",
+        session=SimpleNamespace(model_override=None),
+        session_key=f"webchat:{AGENT}:alice",
+        config=_engine_config(fleet),
+    )
+    assert bool(turn.images) is shown
+
+
+def test_the_telegram_model_picker_shows_the_telegram_clauses_model(tmp_path):
+    """`/model` names the model a telegram turn of main will run on."""
+    from robothor.engine.telegram import TelegramBot
+
+    fleet = _write_fleet(tmp_path / "docs" / "agents", agent="main")
+    bot = object.__new__(TelegramBot)
+    bot.config = _engine_config(fleet)
+    assert bot._get_manifest_primary() == OVERRIDE[0]
+
+
+def test_a_workflow_budget_check_sizes_the_step_by_the_workflow_clause(tmp_path):
+    """A step runs under the workflow clause, so its budget is checked against
+    that chain rather than the fleet's."""
+    from robothor.engine import workflow_budget
+    from robothor.engine.workflow import WorkflowEngine
+
+    fleet = _write_fleet(tmp_path / "docs" / "agents")
+    chains: list[list[str]] = []
+
+    def report(wf, resolve_chain, **kwargs):
+        chains.append(list(resolve_chain(AGENT)))
+        raise RuntimeError("stop after resolving the chain")
+
+    engine = WorkflowEngine(_engine_config(fleet), MagicMock())
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(workflow_budget, "report_step_budgets", report)
+        engine._warn_budget_inversions(MagicMock(id="wf"))
+    assert chains == [[OVERRIDE[0], *OVERRIDE[1]]]
+
+
+async def test_a_goal_run_recorded_as_cron_is_handed_the_cron_clause(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from robothor.goals.controller import GoalController
+
+    fleet = _write_fleet(tmp_path / "docs" / "agents", agent="main")
+    handed: list[Any] = []
+
+    async def run(request):
+        handed.append(request)
+        return SimpleNamespace(run=None)
+
+    controller = GoalController(None, _engine_config(fleet), runtime=SimpleNamespace(run=run))
+    goal = {"id": "goal-1", "parent_goal_id": None}
+    with (
+        patch.object(GoalController, "run_budget", staticmethod(lambda goal, config: 1000)),
+        patch("robothor.goals.store.get", return_value={"objective": "x"}),
+        patch("robothor.goals.store.finish"),
+    ):
+        await controller.execute(goal, "attempt-1")
+    assert handed[0].options["trigger_type"] == TriggerType.CRON
+    assert _chain(handed[0].options["agent_config"]) == OVERRIDE
