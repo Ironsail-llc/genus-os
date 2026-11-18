@@ -105,11 +105,14 @@ async def attach_tenant_access(run: Any, tenant_id: str, identity: Any = None) -
       inherits its parent's user for attribution, which is not authority;
     * an attended run -- a verified human, on a trigger a human starts: what
       that human's role reaches (owner and admin: the descendants);
-    * an unattended run (no verified human, or a system trigger): its own
-      tenant, plus the descendants only when BOTH the tenant
+    * an unattended run -- a trigger in ``UNATTENDED_GRANT_TRIGGERS`` (cron and
+      heartbeat, hook, event, workflow, channel event): its own tenant, plus
+      the descendants only when BOTH the tenant
       (``crm_tenants.child_data_access``) and the agent's manifest
       (``v2.child_tenant_access``) grant it. Its ``service_role`` is not a
-      person and grants nothing here.
+      person and grants nothing here;
+    * anything else -- a person-started trigger with no verified identity, a
+      federated request: its own tenant only.
 
     The lookups are DB and file reads, so they run in a worker thread.
     """
@@ -140,6 +143,30 @@ def confined_to_own_tenant(run: Any) -> bool:
     )
 
 
+def _grant_triggers() -> frozenset[Any]:
+    from robothor.engine.models import TriggerType
+
+    return frozenset(
+        {
+            TriggerType.CRON,  # heartbeats included
+            TriggerType.HOOK,
+            TriggerType.EVENT,
+            TriggerType.WORKFLOW,
+            TriggerType.CHANNEL_EVENT,
+        }
+    )
+
+
+#: The triggers the unattended grant (both flags) applies to: scheduled and
+#: system work with no person behind it. A subset of the runner's
+#: ``_SYSTEM_TRIGGER_TYPES`` without the sub-agent (always confined) and
+#: federation (a peer instance's request is not this tenant's own work). A
+#: trigger a person starts -- webchat, telegram, slack, a plugin channel,
+#: manual, ide, webhook -- is not here: without a verified human it reaches
+#: only its own tenant, whatever the flags say.
+UNATTENDED_GRANT_TRIGGERS = _grant_triggers()
+
+
 def _accessible_tenants(run: Any, tenant_id: str, identity: Any) -> tuple[str, ...]:
     from robothor.engine.permissions import resolve_accessible_tenants
 
@@ -155,6 +182,9 @@ def _accessible_tenants(run: Any, tenant_id: str, identity: Any) -> tuple[str, .
     )
     if attended:
         return tuple(resolve_accessible_tenants(tenant_id, run.user_role))
+    if getattr(run, "trigger_type", None) not in UNATTENDED_GRANT_TRIGGERS:
+        # A person started this run but nobody vouched for them: no grant.
+        return own
     from robothor.crm.dal import tenant_child_data_access
 
     if tenant_child_data_access(tenant_id) and _agent_opts_in(getattr(run, "agent_id", "")):
