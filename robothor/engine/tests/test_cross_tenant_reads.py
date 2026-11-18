@@ -262,44 +262,47 @@ def test_list_results_gain_as_of_and_an_age_per_row(env):
 def test_the_read_allowlist_is_exactly_the_audited_set():
     from robothor.engine.tools.constants import CROSS_TENANT_READS
 
-    assert frozenset(
-        {
-            # Observability: agent_runs, agent_schedules, agent_reviews and
-            # benchmark_results, each filtered on ctx.tenant_id.
-            "list_agent_runs",
-            "get_agent_run",
-            "list_agent_schedules",
-            "get_agent_stats",
-            "list_agent_reviews",
-            "get_agent_review",
-            "get_agent_performance_summary",
-            # CRM reads through the DAL with tenant_id=ctx.tenant_id.
-            "list_tasks",
-            "get_task",
-            "list_tasks_summary",
-            "list_notes",
-            "get_note",
-            "list_people",
-            "get_person",
-            "list_companies",
-            "get_company",
-            "list_conversations",
-            "get_conversation",
-            "list_messages",
-            "search_records",
-            "get_contact_360",
-            "list_contact_messages",
-            # devops_metrics_snapshots by ctx.tenant_id.
-            "devops_query_metrics",
-        }
-    ) == CROSS_TENANT_READS
+    assert (
+        frozenset(
+            {
+                # Observability: agent_runs, agent_schedules, agent_reviews and
+                # benchmark_results, each filtered on ctx.tenant_id.
+                "list_agent_runs",
+                "get_agent_run",
+                "list_agent_schedules",
+                "get_agent_stats",
+                "list_agent_reviews",
+                "get_agent_review",
+                "get_agent_performance_summary",
+                # CRM reads through the DAL with tenant_id=ctx.tenant_id.
+                "list_tasks",
+                "get_task",
+                "list_tasks_summary",
+                "list_notes",
+                "get_note",
+                "list_people",
+                "get_person",
+                "list_companies",
+                "get_company",
+                "list_conversations",
+                "get_conversation",
+                "list_messages",
+                "search_records",
+                "get_contact_360",
+                "list_contact_messages",
+                # devops_metrics_snapshots by ctx.tenant_id.
+                "devops_query_metrics",
+            }
+        )
+        == CROSS_TENANT_READS
+    )
 
 
 def test_every_allowlisted_read_has_a_handler():
     from robothor.engine.tools.constants import CROSS_TENANT_READS
     from robothor.engine.tools.dispatch import builtin_handlers
 
-    assert CROSS_TENANT_READS <= set(builtin_handlers())
+    assert set(builtin_handlers()) >= CROSS_TENANT_READS
 
 
 def test_allowlisted_tools_advertise_an_optional_tenant_argument():

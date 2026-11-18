@@ -59,6 +59,9 @@ def builtin_schemas() -> dict[str, Any]:
         }
     schemas.update(get_engine_schemas())
     _stamp_hints(schemas)
+    from robothor.engine.tools.cross_tenant import stamp_tenant_arguments
+
+    stamp_tenant_arguments(schemas)
     return schemas
 
 

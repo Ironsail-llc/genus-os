@@ -730,16 +730,29 @@ async def _execute_tool(
         # An explicit tier is a caller's (tool_call's call_kwargs); else the run's.
         capability_tier=capability_tier or current_run_tier(),
     )
+    # ── A `tenant` argument: may this call act in that tenant? ──
+    # Decided against the run's OWN context, before anything is reserved or
+    # run. The swap itself happens around the handler (cross_tenant.run_handler).
+    from robothor.engine.tools import cross_tenant
+
+    crossing = cross_tenant.admit(name, args, ctx)
+    if isinstance(crossing, dict):
+        return crossing
     denial = await _runtime_denial(name, args, ctx)
     if denial:
         return denial
 
     from robothor.engine.runtime.effect_dispatch import invoke
 
-    return await invoke(name, args, ctx, lambda: _dispatch_admitted(name, args, ctx))
+    return await invoke(name, args, ctx, lambda: _dispatch_admitted(name, args, ctx, crossing))
 
 
-async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+async def _dispatch_admitted(
+    name: str,
+    args: dict[str, Any],
+    ctx: ToolContext,
+    crossing: Any = None,
+) -> dict[str, Any]:
     agent_id, run_id, tenant_id = ctx.agent_id, ctx.run_id, ctx.tenant_id
     user_id, workspace, is_benchmark = ctx.user_id, ctx.workspace, ctx.is_benchmark
     from robothor.engine.tools import get_registry
@@ -813,7 +826,12 @@ async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) 
     # 30-min reaper fired. Returning a structured error lets the LLM decide
     # whether to retry, skip, or surface to the operator.
     try:
-        result = cast("dict[str, Any]", await handler(args, ctx))
+        if crossing is None:
+            result = cast("dict[str, Any]", await handler(args, ctx))
+        else:
+            from robothor.engine.tools.cross_tenant import run_handler
+
+            result = await run_handler(name, handler, crossing, ctx)
     except httpx.HTTPStatusError as e:
         # A backing service responded with an error status. Map to a short
         # structured error: the raw exception text embeds the internal
@@ -863,6 +881,12 @@ async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) 
     # handler's output plus optional trusted workflow context, before verification.
     if guard is not None:
         await asyncio.to_thread(guard.after, name, args, result, workspace=workspace)
+
+    # `as_of` and a per-row `ageDays` on the list tools. After the guard, so a
+    # repeat is still recognised although `as_of` moves on every call.
+    from robothor.engine.tools.cross_tenant import annotate_ages
+
+    result = annotate_ages(name, result)
 
     # ── Post-condition verification (grade the environment, not the transcript) ──
     # The single choke point every tool call passes through, AFTER the handler
