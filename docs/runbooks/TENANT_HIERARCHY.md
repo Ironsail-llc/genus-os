@@ -27,7 +27,9 @@ and acting tenant.
 
 Two things are deliberately **not** shared between tenants, even parent and
 child: data (every tenant-scoped row is isolated by row-level security) and
-connectors (each tenant has its own vault rows and its own engine).
+connectors (each tenant has its own vault rows and its own engine). A parent's
+agent can still read and act in a child, one audited call at a time, inside
+that child's scope (see [Agents in a parent tenant](#agents-in-a-parent-tenant)).
 
 ## Order of operations
 
@@ -475,6 +477,53 @@ reconcile prunes it once the manifest is gone. The exception is a source with no
 scheduled job left at all, because the prune refuses to run from an empty set;
 there the row stays, and shows on that tenant's fleet view, until you delete
 it. `genus tenant move-workload` is the way to carry a row over.
+
+## Agents in a parent tenant
+
+The parent's agents can read and act in the children. Each child's data is
+still isolated by row-level security: an agent call that names a child runs with
+its database scope bound to that child, one call at a time, and every such call
+leaves an `agent.cross_tenant_call` row in `audit_log` naming both tenants, the
+user, the tool and the outcome. The tools, and which writes are allowed, are in
+[Tools](../TOOLS.md#child-tenants-org_overview-the-tenant-argument-and-dry_run):
+`org_overview` reports every reachable company at once, and an allowlisted tool
+given `tenant: acme-child-a` runs in that child.
+
+**Who reaches a child.** Decided once, when a run starts:
+
+| Run | Reaches |
+|-----|---------|
+| A person signed in to the parent as `owner` or `admin` (a verified identity, on chat or another channel a person uses) | The parent and its descendants. |
+| A `member` or `viewer` | Their own tenant only. |
+| A person signed in to a child, even its `admin` | That child only: never a sibling, never the parent. |
+| A sub-agent, even one spawned by the owner's chat | Its own tenant only. |
+| A benchmark run | Its own tenant only. |
+| An unattended run (cron, hook, event, workflow) | Its own tenant only, unless both grants below are set. |
+
+**Writes.** Any run that reaches a child may create a task or send a
+notification there, which leaves work for that child's team. Updating a task
+and creating or updating a note in a child take the verified owner of the
+parent, on a top-level run. Each write keeps the approval tier and role check
+it has in the parent. Every write accepts `dry_run: true`, which checks it,
+audits it, and reports what would change without changing anything.
+
+**The unattended grant.** A scheduled agent in the parent reaches the children
+only when the parent tenant allows it AND the agent's manifest asks for it:
+
+```sql
+UPDATE crm_tenants SET child_data_access = TRUE WHERE id = 'acme-parent';
+```
+
+```yaml
+# docs/agents/<agent>.yaml
+v2:
+  child_tenant_access: true
+```
+
+Either one alone grants nothing. With both, the agent's unattended runs can use
+the allowlisted reads in every child, and of the writes only create a task or
+send a notification. Revoke by setting either back to false; the next run picks
+it up.
 
 ## Verification queries
 

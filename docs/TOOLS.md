@@ -1641,6 +1641,80 @@ read; the plugins the loader reports are still listed. The tool is read-only.
 what it does, whatever provides it. [Plugins](PLUGINS.md#seeing-what-a-plugin-shipped)
 covers the same data on the dashboard and the admin API.
 
+### Child tenants: `org_overview`, the `tenant` argument and `dry_run`
+
+In a [tenant hierarchy](runbooks/TENANT_HIERARCHY.md) a parent tenant's agent
+can read and act in its child tenants. Which tenants a run may reach is decided
+once, when the run starts (see the runbook's
+[Agents in a parent tenant](runbooks/TENANT_HIERARCHY.md#agents-in-a-parent-tenant)).
+A sub-agent run and a benchmark run never reach another tenant.
+
+**`org_overview`** takes no arguments. It returns `as_of` and one entry per
+tenant: the run's own tenant first, then every tenant it may reach. Each entry
+has `tenant_id`, `display_name`, `parent_id`, `runs_24h`, `failures_24h`,
+`runs_7d`, `failures_7d`, both success rates, `cost_usd_24h`, `cost_usd_7d`,
+`top_failures`, `agents_with_consecutive_errors`, `overdue_schedules` (enabled
+and more than 15 minutes late), `tasks` (`open`, `overdue`, and the five
+oldest overdue with `overdueDays` and `ageDays`), `last_activity_at`, and a
+`status`:
+
+| `status` | Meaning |
+|---|---|
+| `ok` | Ran in the last 7 days, nothing below needs attention. |
+| `attention` | A failure in 24 hours, an agent with consecutive errors, an overdue schedule, or an overdue task. |
+| `no_activity` | No runs in 7 days. `last_activity_at` says when it last ran. Not healthy, just quiet. |
+| `error` | That tenant could not be read; the others are still answered. |
+
+A run that reaches no other tenant gets its own entry and a `note` saying so.
+Benchmark spend is not broken out per tenant. The tool is read-only, and each
+child it reads leaves an audit row.
+
+**The `tenant` argument.** The tools below take an optional `tenant`: a child
+tenant's id, as `org_overview` lists them. The call then runs in that tenant,
+with the database scope bound to it, exactly as the same call made by that
+tenant's own agent would. Without `tenant` a call is unchanged. Naming a tenant
+the run cannot reach, or one that does not exist, is refused with the same
+sentence, and nothing runs. Naming `tenant` on any other tool is refused too.
+
+- Reads: `list_agent_runs`, `get_agent_run`, `list_agent_schedules`,
+  `get_agent_stats`, `list_agent_reviews`, `get_agent_review`,
+  `get_agent_performance_summary`, `list_tasks`, `get_task`,
+  `list_tasks_summary`, `list_notes`, `get_note`, `list_people`, `get_person`,
+  `list_companies`, `get_company`, `list_conversations`, `get_conversation`,
+  `list_messages`, `search_records`, `get_contact_360`,
+  `list_contact_messages`, `devops_query_metrics`.
+- Writes: `create_task`, `update_task`, `create_note`, `update_note`,
+  `send_notification`. Only the verified owner of the run's own tenant, on a
+  top-level run, may update a task or create or update a note in a child. Any
+  run that reaches the child may create a task or send a notification there.
+
+`search_memory` is not on the list: it adds recall from installed memory
+providers, which are not per tenant. `classify_run_failure` is not either: it
+compares a run with this engine's start time, and a child's runs belong to
+another engine.
+
+The list tools above (`list_tasks`, `list_notes`, `list_people`,
+`list_companies`, `list_conversations`, `list_agent_runs`,
+`list_agent_reviews`) also return `as_of`, and each row an `ageDays` counted
+from when it was created, with or without `tenant`.
+
+**`dry_run: true`** on any of the writes checks the call exactly as the real
+one and changes nothing. The result says what would happen: `would` (the
+fields a create or a notification would send) or `changes` (each field an
+update would change, `from` and `to`, read from the record in that tenant). A
+missing record or a malformed id is an `error`, as it would be for the real
+call. `dry_run` without `tenant` is a dry run in the run's own tenant.
+
+Every call that names another tenant, allowed or refused, dry run or not,
+writes an `agent.cross_tenant_call` audit row naming the home tenant, the
+target tenant, the user, the tool and the outcome.
+
+**Which to use.** Ask `org_overview` first for "how are the companies doing?":
+one call covers every company and shows which one needs attention. Then drill
+into that company by calling the ordinary tool with `tenant`, for example
+`list_tasks` with `tenant` and `overdue: true`. Use `dry_run` before any write
+in another tenant, and show the operator what it would change.
+
 ### Credentials: `vault_get`, `vault_set`, `vault_test`, `vault_list`, `vault_delete`
 
 An agent whose own manifest declares `v2.credentials: operator` holds these
@@ -1726,6 +1800,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |
 | Skills | `list_skills`, `invoke_skill` |
 | Plugins | [`plugins_overview`](#what-plugins-contribute-plugins_overview) |
+| Child tenants | [`org_overview`, and `tenant` / `dry_run` on CRM and run tools](#child-tenants-org_overview-the-tenant-argument-and-dry_run) |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
 | Workflows | [`list_workflows`, `run_workflow`, `workflow_runs`](#workflows-list_workflows-run_workflow-workflow_runs) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
