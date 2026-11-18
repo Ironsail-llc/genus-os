@@ -1,22 +1,21 @@
 """Hook workflow runs deferred by the tool-call rate limit: counted and summarised.
 
-A hook event whose run cannot start at once, because the limit's free slots
-are already spoken for by the events waiting ahead of it, is a deferred run: it
-waits in the workflow's backlog and runs in turn
-(``robothor.engine.workflow_backlog``). A burst can defer thousands of runs, so
-instead of one log line per deferral each one is:
+When the rate limit would block a hook-triggered run's first step, the run is
+deferred and its event requeued (``WorkflowEngine._admit_or_defer`` and
+``EventHooks._run_workflow``). A burst can defer thousands of runs, so instead
+of one log line per deferral each one is:
 
 * counted in Redis, in a hash per minute window keyed by workflow id, so the
   doctor (``deferred_runs.recent``) can read it from its own process; and
 * tallied in memory, so that when a window closes one summary line per
   workflow is logged::
 
-      Workflow runs deferred by the tool-call rate limit: workflow=<id> deferred=<n> window=<start> backlog=<depth> oldest=<age>s
+      Workflow runs deferred by the tool-call rate limit: workflow=<id> deferred=<n> window=<start>
 
 Windows are wall-clock minutes (UTC), the same length as the limiter's own
 per-minute window, so counts from several engines and the doctor agree on which
 window is which. This module changes what is visible, never what is scheduled:
-a counter that cannot be written is logged and the event runs anyway.
+a counter that cannot be written is logged and the event is requeued anyway.
 """
 
 from __future__ import annotations
@@ -96,17 +95,10 @@ def _label(start: int) -> str:
 class DeferredRuns:
     """Counts deferrals per window and logs one summary line per closed window."""
 
-    def __init__(
-        self,
-        tenant_id: str,
-        clock: Callable[[], float] = time.time,
-        backlog: Callable[[str], tuple[int, float]] | None = None,
-    ) -> None:
+    def __init__(self, tenant_id: str, clock: Callable[[], float] = time.time) -> None:
         self.tenant_id = tenant_id
         self._clock = clock
         self._open: dict[int, Counter[str]] = {}
-        # Workflow id -> (backlog depth, oldest entry's age), for the summary line.
-        self._backlog = backlog
 
     async def record(self, workflow_id: str, redis_client: Any) -> None:
         """Count one deferral of ``workflow_id`` in the current window."""
@@ -127,15 +119,12 @@ class DeferredRuns:
     def _summarise_before(self, current: int) -> None:
         for start in sorted(s for s in self._open if s < current):
             for workflow_id, count in sorted(self._open.pop(start).items()):
-                depth, oldest = self._backlog(workflow_id) if self._backlog else (0, 0.0)
                 logger.warning(
                     "Workflow runs deferred by the tool-call rate limit: "
-                    "workflow=%s deferred=%d window=%s backlog=%d oldest=%ds",
+                    "workflow=%s deferred=%d window=%s",
                     workflow_id,
                     count,
                     _label(start),
-                    depth,
-                    int(oldest),
                 )
 
 

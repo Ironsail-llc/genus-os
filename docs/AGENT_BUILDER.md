@@ -169,20 +169,10 @@ it like any other context value; a field the event lacks, such as
 `{{ event.payload.data.message.id }}` when there is no `message`, renders
 empty. The event is stored with the run, as the rest of its context is, for as
 long as workflow runs are kept. Only one run of a workflow is in flight at a time (unless
-its trigger sets `concurrent`, below); by default an event that arrives while it is running is dropped. With `requeue_if_busy: true`
-it waits its turn instead: every event the workflow takes is written to the
-workflow's backlog in Redis before the engine acknowledges it, and the backlog
-runs them one at a time in arrival order, however long the workflow stays busy.
-Nothing is retried on a timer and nothing is dead-lettered for waiting. A
-backlog survives a restart: the next start carries on from the oldest event
-still in it, so a run cut off by the stop runs again (handlers should be
-idempotent, as for any hook). Under HA every replica writes the events it reads
-to the backlog and only the leader runs it; when the lead moves, a run the old
-leader had in flight can run again on the new one, for the same reason. The
-drop for a busy workflow without `requeue_if_busy` is decided by the replica
-that read the event, so under HA such an event read by another replica than the
-one running the workflow is kept rather than dropped. A backlog that reaches 50,000 events sends
-further events to `<stream>:dlq`, with an error in the log.
+its trigger sets `concurrent`, below); by default an event that arrives while it is running is dropped. `requeue_if_busy: true`
+re-adds it for this workflow after a pause that starts at 5 seconds and backs
+off to a minute, for up to about 50 minutes, before parking it in
+`<stream>:dlq`.
 
 ```yaml
 id: order-events
@@ -203,11 +193,11 @@ steps:
 ```
 
 A trigger may instead set `concurrent: true` (default `false`): runs of the
-workflow then overlap, up to 100 at once, started in arrival order from the
-same backlog, and no event is ever skipped as busy. Use it for a workflow that only
+workflow then overlap, each event starting its own run straight away, and no
+event is ever skipped or requeued as busy. Use it for a workflow that only
 hands each event on to something that serialises its own work, such as a
 channel pipeline with its own per-conversation lock; without it, an event that
-lands a moment after another waits for the run before it to finish. Every step must be safe
+lands a moment after another waits at least 5 seconds. Every step must be safe
 to run twice at once, since two events can be in the same step together. A
 concurrent workflow has no `agent` steps, only tool steps and the steps that
 route between them (condition, transform, parallel): an agent step runs one at
@@ -259,8 +249,7 @@ rate_limit_per_minute: 120
 
 A call the limit blocks is only early, so the step waits in place: it asks
 the limiter again after 5 seconds, then 10, 20 and every 30, and runs once it
-is admitted. That is the case for a later step, and for any run a cron,
-manual or agent trigger starts. A run can therefore make more calls than its limit, spread over
+is admitted. A run can therefore make more calls than its limit, spread over
 time, and no step ever runs twice. The wait counts against the workflow's
 `timeout_seconds`; a step still waiting at the deadline ends the run as
 `timeout`, naming that step. Branches of a `parallel` step wait the same way.
@@ -268,43 +257,38 @@ While a run waits it holds the workflow, so an event that arrives meanwhile is
 handled as for any busy run (see `requeue_if_busy` above), whatever the
 limit's window holds.
 
-A hook-triggered run whose first step is a tool step starts only once the
-limit has room for that call: its event waits in the workflow's backlog
-(above), and the backlog starts the next run as soon as the limiter's window
-frees a slot, reserving that slot for the run's first call, so the call never
-waits in place and is counted once. No step, wait or `retry_count` retry
-happens before then, and the run leaves no `workflow_runs` row until it
-starts. That is the usual shape of a burst: N events drain in arrival order at
-the limit, one run row per event, the last starting about N ÷ limit minutes
-after the first. A burst of 3,000 events at the default 30 a minute takes
-about 100 minutes; at `rate_limit_per_minute: 300` about 10. Raise the limit
-for a workflow whose bursts must finish sooner, counting every tool call a run
-makes, not only the first.
+There is one exception. When the limit would block a hook-triggered run's
+first step, which is a tool step, the run does not start: the engine checks
+the limit before it records the run or runs any step, so no step, wait or
+`retry_count` retry happens and the run leaves no `workflow_runs` row. Its
+event is requeued for this workflow on the same budget and backoff as
+`requeue_if_busy`, whether or not the trigger sets that, and goes to
+`<stream>:dlq` only once that budget is spent. That is the usual shape of a
+burst; the workflow is never held by a deferred run, and a burst leaves one
+run row per event.
 
-Deferrals are counted, not logged one by one. An event is a deferred run when
-it arrives while the limit's free slots are already spoken for by the events
-waiting ahead of it. The engine counts each one per workflow and per minute
-window (UTC) in Redis, under its own tenant, and when a window closes it logs
-one warning line per workflow that was deferred in it, with what is still
-waiting in that workflow's backlog:
+Deferrals are counted, not logged one by one. The engine counts each deferred
+run per workflow and per minute window (UTC) in Redis, under its own tenant,
+and when a window closes it logs one warning line per workflow that was
+deferred in it:
 
 ```text
-Workflow runs deferred by the tool-call rate limit: workflow=order-events deferred=15 window=2026-01-01T10:00:00Z backlog=15 oldest=41s
+Workflow runs deferred by the tool-call rate limit: workflow=order-events deferred=15 window=2026-01-01T10:00:00Z
 ```
 
-A window with no deferral logs nothing. Each deferred run counts once, however
-many windows it then waits through. `genus doctor --only deferred_runs.recent` sums the last
+A window with no deferral logs nothing. Each deferred run counts once: its
+requeued event, deferred again while the limit is still full, is not counted
+again, and neither is the run when it finally goes ahead. `genus doctor --only deferred_runs.recent` sums the last
 hour and warns, naming the workflows that deferred most, once the total passes
-`ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD` (default 100), or when a workflow's
-oldest waiting event is more than an hour old; its detail line always gives
-each backlog's depth and oldest age. Past that it sends a
+`ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD` (default 100). Past that it sends a
 `warning` alert, a row in the alert digest that does not page; past
 `ROBOTHOR_DEFERRED_RUNS_PAGE_THRESHOLD` (default 500) it sends a `critical`
 alert. From the doctor's own process that reaches a person only when an alert
 channel can deliver outside the engine daemon; otherwise it is recorded as an
 undelivered alert (an `alert_fallback` notification row) and the failing check
 is the signal. Each at most once an hour, an undelivered page every ten
-minutes; see [Deployment](deployment.md#what-it-checks).
+minutes; see [Deployment](deployment.md#what-it-checks). The per-run line ("deferred:
+tool-call rate limit reached") is still there at debug level.
 A run resumed after an approval step always waits.
 
 #### Asking a human mid-workflow

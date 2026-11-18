@@ -1,8 +1,8 @@
 """A hook workflow whose trigger sets ``concurrent: true`` runs alongside itself.
 
 By default one run of a workflow is in flight at a time: an event that lands
-while it runs is skipped as "already running" (or, when the trigger sets
-``requeue_if_busy``, waits its turn in the workflow's backlog). A dispatcher workflow that only
+while it runs is skipped as "already running" (and requeued after a pause
+when the trigger sets ``requeue_if_busy``). A dispatcher workflow that only
 hands each event on to something with its own locking gains nothing from
 that and loses seconds on every event that arrives close to another, so its
 trigger can opt out of the run lock.
@@ -19,7 +19,6 @@ import pytest
 from robothor.engine import dedup
 from robothor.engine.hooks import STREAM_PREFIX, EventHooks
 from robothor.engine.models import RunStatus
-from robothor.engine.tests.test_workflow_burst_drain import FakeRedis, VirtualTime
 from robothor.engine.workflow import WorkflowEngine, parse_workflow
 
 STREAM = f"{STREAM_PREFIX}platform"
@@ -66,7 +65,7 @@ def _hooks(engine_config: Any, engine: WorkflowEngine) -> tuple[EventHooks, list
     """Hooks wired to the real engine, recording every run ``execute`` returns."""
     hooks = EventHooks(engine_config, MagicMock())
     hooks.workflow_engine = engine
-    hooks.redis = FakeRedis(VirtualTime())  # type: ignore[attr-defined]
+    hooks._delayed_requeue = AsyncMock()  # type: ignore[method-assign]
     runs: list[Any] = []
     real_execute = engine.execute
 
@@ -83,18 +82,8 @@ def _event(event_id: str) -> dict[str, Any]:
 
 
 async def _deliver(hooks: EventHooks, event_id: str) -> None:
-    """The event reaches the workflow as the hook consumer hands it on."""
     wf = hooks.workflow_engine.get_workflow("example-dispatch")
-    redis = hooks.redis  # type: ignore[attr-defined]
-    await hooks._run_workflow(wf, "platform", EVENT, _event(event_id), redis, STREAM)
-
-
-async def _until(predicate: Any) -> None:
-    for _ in range(200):
-        if predicate():
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("timed out")
+    await hooks._run_workflow(wf, "platform", EVENT, _event(event_id), AsyncMock(), STREAM)
 
 
 class TestConcurrentWorkflow:
@@ -116,13 +105,11 @@ class TestConcurrentWorkflow:
         hooks, runs = _hooks(engine_config, engine)
 
         await asyncio.gather(_deliver(hooks, "evt-1"), _deliver(hooks, "evt-2"))
-        await _until(lambda: len(runs) == 2)
-        await hooks.backlog.stop()
 
         assert [r.status for r in runs] == [RunStatus.COMPLETED, RunStatus.COMPLETED]
         assert sorted(inside) == ["evt-1", "evt-2"]
         assert engine._persist_run_start.call_count == 2  # both runs recorded
-        assert hooks.redis.dlq() == 0  # type: ignore[attr-defined]
+        hooks._delayed_requeue.assert_not_awaited()  # neither skipped nor requeued
 
     @pytest.mark.asyncio
     async def test_a_concurrent_run_ignores_a_held_run_lock(self, engine_config):
@@ -142,21 +129,18 @@ class TestConcurrentWorkflow:
         assert dedup.is_running("workflow:example-dispatch")
 
     @pytest.mark.asyncio
-    async def test_the_rate_limit_still_paces_a_concurrent_workflow(self, engine_config):
+    async def test_the_rate_limit_still_defers_a_concurrent_run(self, engine_config):
         data = {**_definition(concurrent=True), "rate_limit_per_minute": 1}
         engine = _engine(engine_config, data, AsyncMock(return_value={"ok": True}))
         hooks, runs = _hooks(engine_config, engine)
 
         await _deliver(hooks, "evt-1")
         await _deliver(hooks, "evt-2")
-        await _until(lambda: len(runs) == 1)
-        await asyncio.sleep(0.05)
 
-        # The second waits in the backlog for the limiter's next slot: not
-        # started, not dropped, not recorded as a run.
-        assert [r.status for r in runs] == [RunStatus.COMPLETED]
-        assert hooks.backlog.stats("example-dispatch")[0] == 1
-        await hooks.backlog.stop()
+        assert runs[0].status == RunStatus.COMPLETED
+        assert runs[1].status == RunStatus.SKIPPED
+        assert runs[1].rate_limited is True
+        hooks._delayed_requeue.assert_awaited_once()
 
 
 class TestNonConcurrentWorkflow:
@@ -173,17 +157,17 @@ class TestNonConcurrentWorkflow:
         engine = _engine(engine_config, _definition(), AsyncMock(side_effect=tool))
         hooks, runs = _hooks(engine_config, engine)
 
-        await _deliver(hooks, "evt-1")
+        first = asyncio.create_task(_deliver(hooks, "evt-1"))
         await asyncio.wait_for(first_inside.wait(), timeout=2)
-        await _deliver(hooks, "evt-2")  # no requeue_if_busy: dropped, as before
+        await _deliver(hooks, "evt-2")
         finish.set()
-        await _until(lambda: len(runs) == 1 and not hooks.backlog.stats("example-dispatch")[0])
-        await hooks.backlog.stop()
+        await first
 
-        (completed,) = runs
+        skipped, completed = runs
+        assert skipped.status == RunStatus.SKIPPED
+        assert "already running" in (skipped.error_message or "")
         assert completed.status == RunStatus.COMPLETED
         assert engine._persist_run_start.call_count == 1
-        assert hooks.redis.dlq() == 0  # type: ignore[attr-defined]
 
 
 class TestConcurrentField:

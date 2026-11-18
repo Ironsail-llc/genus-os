@@ -4,12 +4,8 @@ The engine counts every hook workflow run it defers because the tool-call
 rate limit would block its first step (``robothor.engine.deferrals``), per
 workflow and per minute window, in Redis. This check sums the last hour and
 warns past ``ROBOTHOR_DEFERRED_RUNS_WARN_THRESHOLD``: a deferred run's event
-waits in the workflow's backlog (``robothor.engine.workflow_backlog``) and runs
-in turn, so a high count means work is waiting, not lost. The detail line also
-says what is waiting now, per workflow: the backlog's depth and the age of its
-oldest event. A backlog whose oldest event has waited longer than the look-back
-period fails the check (a ``warning``) whatever the count: that workflow is not
-keeping up with what feeds it.
+is requeued and retried, so a high count means work is waiting, not lost --
+until the requeue budget runs out and events reach the dead-letter stream.
 
 It alerts in two tiers, following :mod:`robothor.engine.alerts`, where only
 ``critical`` pages and ``warning`` becomes an alert-digest row: past the warn
@@ -37,7 +33,6 @@ from robothor.engine.deferrals import (
     process_tenant_id,
     recent_deferrals,
 )
-from robothor.engine.workflow_backlog import backlog_stats
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.doctor.context import DoctorContext
@@ -167,29 +162,15 @@ async def _verdict(
     except Exception as exc:  # noqa: BLE001 - unreachable is a skip, not a verdict
         return skip(f"could not read the deferral counts: {type(exc).__name__}")
 
-    try:
-        waiting: dict[str, tuple[int, float]] | None = await ctx.run_blocking(
-            lambda: backlog_stats(client, tenant_id)
-        )
-    except Exception as exc:  # noqa: BLE001 - the deferral count still stands
-        logger.warning("doctor: could not read the workflow backlogs: %s", exc)
-        waiting = None
-    backlog = _backlog_note(waiting)
-    stale = sorted(
-        name for name, (_, oldest) in (waiting or {}).items() if oldest > LOOKBACK_SECONDS
-    )
-
     total = sum(counts.values())
-    if total <= threshold and not stale:
-        return ok(f"{total} deferred in the last hour (threshold {threshold}); {backlog}")
+    if total <= threshold:
+        return ok(f"{total} deferred in the last hour (threshold {threshold})")
     top = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:TOP_WORKFLOWS]
-    named = ", ".join(f"{name}: {count}" for name, count in top) or "none"
+    named = ", ".join(f"{name}: {count}" for name, count in top)
     detail = (
         f"{total} hook workflow runs deferred by the tool-call rate limit in the last "
-        f"hour (threshold {threshold}) -- {named}; {backlog}"
+        f"hour (threshold {threshold}) -- {named}"
     )
-    if stale:
-        detail += f"; waiting longer than {LOOKBACK_SECONDS // 60} minutes: {', '.join(stale)}"
     level = "critical" if total > page_threshold else "warning"
     if level == "critical":
         detail += f" (past the page threshold {page_threshold})"
@@ -200,19 +181,6 @@ async def _verdict(
         if level == "critical":
             detail += f"; {_page_note(outcome)}"
     return fail(detail)
-
-
-def _backlog_note(waiting: dict[str, tuple[int, float]] | None) -> str:
-    """What waits in the workflow backlogs now, deepest first, for the detail line."""
-    if waiting is None:
-        return "backlog unreadable"
-    if not waiting:
-        return "nothing waiting in the workflow backlogs"
-    deepest = sorted(waiting.items(), key=lambda item: (-item[1][0], item[0]))[:TOP_WORKFLOWS]
-    named = ", ".join(
-        f"{name}: {depth} waiting, oldest {int(oldest)}s" for name, (depth, oldest) in deepest
-    )
-    return f"backlog -- {named}"
 
 
 CHECKS: tuple[Check, ...] = (

@@ -1,19 +1,20 @@
 """Hook workflow runs deferred by the tool-call rate limit are counted and summarised.
 
-A hook event whose run cannot start at once, because the limit's free slots
-are already spoken for by the events waiting ahead of it in the workflow's
-backlog, is a deferred run (``test_workflow_burst_drain.py`` pins the drain).
-Each is counted once, per workflow and per minute window in Redis, where the
-doctor reads it from another process, and one summary line per workflow,
-carrying the backlog still waiting, is logged when the window closes.
+A hook run whose first step the rate limit would block is deferred and its
+event requeued (``test_workflow_rate_limit.py`` pins that). A burst used to log
+one line per deferral and leave nothing an operator could read afterwards. Now
+each deferral is counted per workflow and per minute window in Redis, where the
+doctor reads it from another process, and one summary line per workflow is
+logged when the window closes. The requeue itself is unchanged.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -24,12 +25,8 @@ from robothor.engine.deferrals import (
     window_key,
 )
 from robothor.engine.hooks import STREAM_PREFIX, EventHooks
-from robothor.engine.tests.test_workflow_burst_drain import (
-    START,
-    Burst,
-    VirtualTime,
-    virtual_time,
-)
+from robothor.engine.models import RunStatus
+from robothor.engine.workflow import WorkflowEngine, parse_workflow
 
 STREAM = f"{STREAM_PREFIX}platform"
 EVENT = "platform.order.created"
@@ -81,45 +78,86 @@ class FakeSyncRedis:
 
 
 @pytest.fixture
-def vt():
-    with virtual_time() as clock:
-        yield clock
+def limiter_clock():
+    # Only the limiter's clock: patching time.monotonic itself would freeze
+    # the event loop's clock too, and with it every asyncio timeout.
+    c = _Clock(1000.0)
+    with patch("robothor.engine.guardrails.time", SimpleNamespace(monotonic=c)):
+        yield c
 
 
-def _definition(limit: int) -> dict[str, Any]:
-    return {
-        "id": WORKFLOW,
-        "rate_limit_per_minute": limit,
-        "triggers": [
-            {"type": "hook", "stream": "platform", "event_type": EVENT, "requeue_if_busy": True}
-        ],
-        # A write: create_task changes state wherever it runs.
-        "steps": [
-            {
-                "id": "claim",
-                "type": "tool",
-                "tool_name": "create_task",
-                "tool_args": {"ref": "{{ event.id }}"},
-            }
-        ],
-    }
+@pytest.fixture
+def no_dedup():
+    with (
+        patch("robothor.engine.dedup.try_acquire", new=AsyncMock(return_value=True)),
+        patch("robothor.engine.dedup.release", new=AsyncMock()),
+    ):
+        yield
 
 
-class _Harness(Burst):
-    """A burst through the real hook consumer and backlog, counted on the virtual clock."""
+def _engine(engine_config: Any, limit: int) -> WorkflowEngine:
+    runner = MagicMock()
+    runner.registry.execute = AsyncMock(return_value={"ok": True})
+    engine = WorkflowEngine(engine_config, runner=runner)
+    wf = parse_workflow(
+        {
+            "id": WORKFLOW,
+            "rate_limit_per_minute": limit,
+            "triggers": [{"type": "hook", "stream": "platform", "event_type": EVENT}],
+            # A write: create_task changes state wherever it runs.
+            "steps": [
+                {
+                    "id": "claim",
+                    "type": "tool",
+                    "tool_name": "create_task",
+                    "tool_args": {"ref": "{{ event.id }}"},
+                }
+            ],
+        }
+    )
+    engine._workflows[wf.id] = wf
+    engine._persist_run_start = MagicMock()  # type: ignore[method-assign]
+    engine._persist_run_end = MagicMock()  # type: ignore[method-assign]
+    engine._persist_step = MagicMock()  # type: ignore[method-assign]
+    engine._persist_step_start = MagicMock()  # type: ignore[method-assign]
+    return engine
 
-    def __init__(self, engine_config: Any, vt: VirtualTime, limit: int) -> None:
-        super().__init__(engine_config, vt, _definition(limit))
-        self.hooks.deferred_runs = DeferredRuns(
-            TENANT, clock=vt.time, backlog=self.hooks.backlog.stats
-        )
+
+class _Harness:
+    def __init__(self, engine_config: Any, limit: int) -> None:
+        self.engine = _engine(engine_config, limit)
+        self.wf = self.engine.get_workflow(WORKFLOW)
+        self.clock = _Clock(T0)
+        self.redis = FakeAsyncRedis()
+        self.hooks = EventHooks(engine_config, MagicMock())
+        self.hooks.workflow_engine = self.engine
+        self.hooks.deferred_runs = DeferredRuns(TENANT, clock=self.clock)
+        self.requeued: list[dict[str, Any]] = []
+        self.runs: list[Any] = []
+        real_execute = self.engine.execute
+
+        async def execute(*args: Any, **kwargs: Any) -> Any:
+            run = await real_execute(*args, **kwargs)
+            self.runs.append(run)
+            return run
+
+        self.engine.execute = execute  # type: ignore[method-assign]
+
+        async def requeue(_redis: Any, stream: str, data: dict[str, Any], delay: int = 0) -> None:
+            assert stream == STREAM
+            self.requeued.append(data)
+
+        self.hooks._delayed_requeue = requeue  # type: ignore[method-assign]
+
+    async def fire(self, envelope: dict[str, Any]) -> None:
+        await self.hooks._run_workflow(self.wf, "platform", EVENT, envelope, self.redis, STREAM)
 
     async def trigger(self, n: int, start: int = 0) -> None:
-        await self.publish(n, start)
-        await self.vt.settle()
+        for i in range(start, start + n):
+            await self.fire({"id": f"evt-{i}", "type": EVENT, "payload": "{}"})
 
     def effects(self) -> list[str]:
-        return self.handled()
+        return [c.args[1]["ref"] for c in self.engine.runner.registry.execute.await_args_list]
 
     def counted(self) -> int:
         return sum(sum(bucket.values()) for bucket in self.redis.hashes.values())
@@ -129,31 +167,26 @@ def _summaries(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [r.getMessage() for r in caplog.records if "deferred=" in r.getMessage()]
 
 
-def _line(deferred: int, start: int, backlog: int, oldest: int) -> str:
-    return (
-        f"Workflow runs deferred by the tool-call rate limit: workflow={WORKFLOW} "
-        f"deferred={deferred} window={_label(start)} backlog={backlog} oldest={oldest}s"
-    )
-
-
 class TestCountedPerWindow:
     @pytest.mark.asyncio
     async def test_a_burst_past_the_limit_is_counted_and_summarised_once(
-        self, engine_config, vt, caplog
+        self, engine_config, limiter_clock, no_dedup, caplog
     ):
-        h = _Harness(engine_config, vt, limit=10)
+        h = _Harness(engine_config, limit=10)
         with caplog.at_level(logging.INFO):
             await h.trigger(25)
             # Still inside the window: nothing summarised yet.
             h.hooks.deferred_runs.flush()
             assert _summaries(caplog) == []
 
-            vt.now = WINDOW_START + WINDOW_SECONDS + 1  # the window closes
+            h.clock.now = WINDOW_START + WINDOW_SECONDS + 1  # the window closes
             h.hooks.deferred_runs.flush()
 
         assert h.redis.hashes[window_key(TENANT, WINDOW_START)] == {WORKFLOW: 15}
-        # The line says what is still waiting: 15 events, the oldest since the burst.
-        assert _summaries(caplog) == [_line(15, WINDOW_START, 15, int(vt.now - START))]
+        assert _summaries(caplog) == [
+            f"Workflow runs deferred by the tool-call rate limit: "
+            f"workflow={WORKFLOW} deferred=15 window={_label(WINDOW_START)}"
+        ]
         # One line per window, not one per run: no deferral logs its own line.
         per_run = [
             r
@@ -164,39 +197,48 @@ class TestCountedPerWindow:
         assert per_run == []
 
     @pytest.mark.asyncio
-    async def test_every_deferred_event_runs_once_in_order(self, engine_config, vt):
-        h = _Harness(engine_config, vt, limit=10)
+    async def test_requeueing_is_unchanged(self, engine_config, limiter_clock, no_dedup):
+        h = _Harness(engine_config, limit=10)
         await h.trigger(25)
-        assert h.effects() == [f"evt-{i}" for i in range(10)]
-        await vt.run_until()
-        assert h.effects() == [f"evt-{i}" for i in range(25)]
-        assert h.redis.dlq() == 0
+        assert [r.status for r in h.runs].count(RunStatus.COMPLETED) == 10
+        assert [r.rate_limited for r in h.runs].count(True) == 15
+        assert [e["id"] for e in h.requeued] == [f"evt-{i}" for i in range(10, 25)]
+        assert {e["_busy_requeue_count"] for e in h.requeued} == {"1"}
 
     @pytest.mark.asyncio
-    async def test_a_second_flush_logs_nothing_more(self, engine_config, vt, caplog):
-        h = _Harness(engine_config, vt, limit=1)
+    async def test_a_second_flush_logs_nothing_more(
+        self, engine_config, limiter_clock, no_dedup, caplog
+    ):
+        h = _Harness(engine_config, limit=1)
         await h.trigger(3)
-        vt.now = WINDOW_START + WINDOW_SECONDS
+        h.clock.now = WINDOW_START + WINDOW_SECONDS
         with caplog.at_level(logging.INFO):
             h.hooks.deferred_runs.flush()
             h.hooks.deferred_runs.flush()
         assert len(_summaries(caplog)) == 1
 
     @pytest.mark.asyncio
-    async def test_the_next_deferral_closes_the_previous_window(self, engine_config, vt, caplog):
-        h = _Harness(engine_config, vt, limit=1)
+    async def test_the_next_deferral_closes_the_previous_window(
+        self, engine_config, limiter_clock, no_dedup, caplog
+    ):
+        h = _Harness(engine_config, limit=1)
         with caplog.at_level(logging.INFO):
             await h.trigger(3)  # two deferred in the first window
-            vt.now = WINDOW_START + WINDOW_SECONDS + 5  # the limiter's minute is not over
+            h.clock.now = WINDOW_START + WINDOW_SECONDS + 5
             await h.trigger(1, start=3)  # one more, in the next window
-        assert _summaries(caplog) == [_line(2, WINDOW_START, 3, int(vt.now - START))]
+        assert _summaries(caplog) == [
+            f"Workflow runs deferred by the tool-call rate limit: "
+            f"workflow={WORKFLOW} deferred=2 window={_label(WINDOW_START)}"
+        ]
         assert h.redis.hashes[window_key(TENANT, WINDOW_START + WINDOW_SECONDS)] == {WORKFLOW: 1}
 
     @pytest.mark.asyncio
-    async def test_the_counter_outlives_the_doctors_look_back(self, engine_config, vt):
+    async def test_the_counter_outlives_the_doctors_look_back(
+        self, engine_config, limiter_clock, no_dedup
+    ):
         from robothor.engine.deferrals import LOOKBACK_SECONDS
 
-        h = _Harness(engine_config, vt, limit=1)
+        h = _Harness(engine_config, limit=1)
         await h.trigger(2)
         ttl = h.redis.ttls[window_key(TENANT, WINDOW_START)]
         assert ttl >= LOOKBACK_SECONDS + WINDOW_SECONDS
@@ -204,11 +246,13 @@ class TestCountedPerWindow:
 
 class TestNothingDeferred:
     @pytest.mark.asyncio
-    async def test_a_window_with_no_deferral_logs_nothing(self, engine_config, vt, caplog):
-        h = _Harness(engine_config, vt, limit=10)
+    async def test_a_window_with_no_deferral_logs_nothing(
+        self, engine_config, limiter_clock, no_dedup, caplog
+    ):
+        h = _Harness(engine_config, limit=10)
         with caplog.at_level(logging.INFO):
             await h.trigger(5)
-            vt.now = WINDOW_START + WINDOW_SECONDS + 1
+            h.clock.now = WINDOW_START + WINDOW_SECONDS + 1
             h.hooks.deferred_runs.flush()
         assert _summaries(caplog) == []
         assert h.redis.hashes == {}
@@ -216,48 +260,80 @@ class TestNothingDeferred:
 
 class TestCountedOnce:
     @pytest.mark.asyncio
-    async def test_a_deferred_run_that_later_runs_is_not_counted_again(self, engine_config, vt):
-        h = _Harness(engine_config, vt, limit=10)
+    async def test_a_deferred_run_that_later_runs_is_not_counted_again(
+        self, engine_config, limiter_clock, no_dedup
+    ):
+        h = _Harness(engine_config, limit=10)
         await h.trigger(11)
         assert h.counted() == 1
-        # A minute later the limiter has room and the waiting event runs.
-        await vt.run_until()
-        assert h.effects()[-1] == "evt-10"
+        (requeued,) = h.requeued
+
+        # A minute later the limiter has room and the requeued event runs.
+        limiter_clock.now += 61
+        h.clock.now = WINDOW_START + WINDOW_SECONDS + 1
+        await h.fire(requeued)
+        assert h.runs[-1].status == RunStatus.COMPLETED
         assert h.counted() == 1
 
     @pytest.mark.asyncio
-    async def test_an_event_that_waits_several_windows_is_counted_once(
-        self, engine_config, vt, caplog
+    async def test_a_requeued_event_deferred_again_is_not_counted_again(
+        self, engine_config, limiter_clock, no_dedup, caplog
     ):
-        # Limit 10, 25 events: the last waits through two more windows. Still
-        # one deferred run per event that could not start at once.
-        h = _Harness(engine_config, vt, limit=10)
-        await h.trigger(25)
-        await vt.run_until()
-        assert h.counted() == 15
-        assert h.redis.hashes == {window_key(TENANT, WINDOW_START): {WORKFLOW: 15}}
+        # The requeue comes back after a few seconds, while the limiter's
+        # minute is still full, so each retry is deferred again. It is still
+        # one deferred run.
+        h = _Harness(engine_config, limit=10)
+        with caplog.at_level(logging.INFO):
+            await h.trigger(25)
+            for _ in range(3):
+                retries, h.requeued = h.requeued, []
+                for envelope in retries:
+                    await h.fire(envelope)
+            assert len(h.requeued) == 15  # still waiting, still requeued
+            h.clock.now = WINDOW_START + WINDOW_SECONDS + 1
+            h.hooks.deferred_runs.flush()
+        assert h.redis.hashes[window_key(TENANT, WINDOW_START)] == {WORKFLOW: 15}
+        assert _summaries(caplog) == [
+            f"Workflow runs deferred by the tool-call rate limit: "
+            f"workflow={WORKFLOW} deferred=15 window={_label(WINDOW_START)}"
+        ]
 
     @pytest.mark.asyncio
-    async def test_a_deferred_write_is_counted_and_made_once_later(self, engine_config, vt):
-        h = _Harness(engine_config, vt, limit=2)
+    async def test_a_retry_deferred_in_a_later_window_is_not_counted_again(
+        self, engine_config, limiter_clock, no_dedup
+    ):
+        h = _Harness(engine_config, limit=1)
+        await h.trigger(2)
+        h.clock.now = WINDOW_START + WINDOW_SECONDS + 1  # next window, limiter still full
+        await h.fire(h.requeued[-1])
+        assert h.runs[-1].rate_limited is True
+        assert h.counted() == 1
+
+    @pytest.mark.asyncio
+    async def test_a_deferred_write_is_counted_and_never_made(
+        self, engine_config, limiter_clock, no_dedup
+    ):
+        h = _Harness(engine_config, limit=2)
         await h.trigger(3)
         assert h.counted() == 1
-        # The deferred event ran no step yet, so its write has not happened.
+        # The deferred attempt ran no step, so its write did not happen.
         assert h.effects() == ["evt-0", "evt-1"]
 
-        await vt.run_until()
+        limiter_clock.now += 61
+        await h.fire(h.requeued[0])
         assert h.effects() == ["evt-0", "evt-1", "evt-2"]
         assert h.counted() == 1
 
 
 class TestRedisTrouble:
     @pytest.mark.asyncio
-    async def test_a_counter_that_cannot_be_written_still_runs_every_event(self, engine_config, vt):
-        h = _Harness(engine_config, vt, limit=1)
+    async def test_a_counter_that_cannot_be_written_still_requeues(
+        self, engine_config, limiter_clock, no_dedup
+    ):
+        h = _Harness(engine_config, limit=1)
         h.redis.hincrby = AsyncMock(side_effect=ConnectionError("down"))  # type: ignore[method-assign]
         await h.trigger(2)
-        await vt.run_until()
-        assert h.effects() == ["evt-0", "evt-1"]
+        assert [e["id"] for e in h.requeued] == ["evt-1"]
 
 
 class TestReadBack:
@@ -300,8 +376,10 @@ class TestOneStoreSeveralTenants:
         assert recent_deferrals(shared, "tenant-b", now=T0) == {"orders-sync": 3}
 
     @pytest.mark.asyncio
-    async def test_the_engine_counts_under_its_own_tenant(self, engine_config, vt):
-        h = _Harness(engine_config, vt, limit=1)
+    async def test_the_engine_counts_under_its_own_tenant(
+        self, engine_config, limiter_clock, no_dedup
+    ):
+        h = _Harness(engine_config, limit=1)
         h.hooks.deferred_runs = EventHooks(engine_config, MagicMock()).deferred_runs
         await h.trigger(2)
         (key,) = h.redis.hashes

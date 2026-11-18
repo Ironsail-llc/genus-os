@@ -12,12 +12,13 @@ re-runs every step, so a run that has already acted must never be replayed.
 
 from __future__ import annotations
 
+from collections import deque
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from robothor.engine.hooks import STREAM_PREFIX
+from robothor.engine.hooks import MAX_BUSY_REQUEUES, STREAM_PREFIX, EventHooks
 from robothor.engine.models import RunStatus
 from robothor.engine.workflow import WorkflowEngine, parse_workflow
 
@@ -336,32 +337,123 @@ class TestFirstStepDefers:
 
 
 # ── a burst of hook events ───────────────────────────────────────────────
-# A burst through the hook consumer and the workflow backlog is pinned in
-# test_workflow_burst_drain.py: every event once, in order, at the limit.
+
+
+async def _burst(
+    engine_config: Any, clock: _Clock, data: dict[str, Any], events: int
+) -> tuple[Any, list[Any]]:
+    engine = _engine(engine_config, data)
+    wf = engine.get_workflow("order-flow")
+    hooks = EventHooks(engine_config, MagicMock())
+    hooks.workflow_engine = engine
+
+    runs: list[Any] = []
+    real_execute = engine.execute
+
+    async def execute(*args: Any, **kwargs: Any) -> Any:
+        run = await real_execute(*args, **kwargs)
+        runs.append(run)
+        return run
+
+    engine.execute = execute  # type: ignore[method-assign]
+    queue: deque[dict[str, Any]] = deque(
+        {"id": f"evt-{i}", "type": EVENT, "payload": "{}"} for i in range(events)
+    )
+
+    async def requeue(redis: Any, stream: str, data: dict[str, Any], delay: int = 0) -> None:
+        assert stream == STREAM
+        clock.now += delay
+        queue.append(data)
+
+    hooks._delayed_requeue = requeue  # type: ignore[method-assign]
+    redis = AsyncMock()
+    for _ in range(events * MAX_BUSY_REQUEUES):
+        if not queue:
+            break
+        await hooks._run_workflow(wf, "platform", EVENT, queue.popleft(), redis, STREAM)
+    assert not queue
+    redis.xadd.assert_not_called()  # nothing dead-lettered
+    return engine, runs
+
+
+class TestBurst:
+    @pytest.mark.asyncio
+    async def test_a_burst_slows_down_instead_of_failing(
+        self, engine_config, clock, no_dedup, waits
+    ):
+        engine, runs = await _burst(engine_config, clock, _definition(rate_limit_per_minute=2), 6)
+        assert len([r for r in runs if r.status == RunStatus.COMPLETED]) == 6
+        assert engine._persist_run_start.call_count == 6  # one run row per event
+        assert not [r for r in runs if r.status == RunStatus.FAILED]
+        assert engine.runner.registry.execute.await_count == 6
+        assert clock.now - 1000.0 >= 120  # six calls at two a minute
+
+    @pytest.mark.asyncio
+    async def test_a_burst_of_multi_step_runs_acts_exactly_once(
+        self, engine_config, clock, no_dedup, waits
+    ):
+        from collections import Counter
+
+        engine, runs = await _burst(engine_config, clock, _three_steps(rate_limit_per_minute=2), 5)
+        assert len([r for r in runs if r.status == RunStatus.COMPLETED]) == 5
+        assert engine._persist_run_start.call_count == 5  # one run row per event
+        assert not [r for r in runs if r.status == RunStatus.FAILED]
+        counts = Counter(_effects(engine))
+        expected = {f"evt-{i}:{s}" for i in range(5) for s in ("s1", "s2", "s3")}
+        assert set(counts) == expected
+        assert set(counts.values()) == {1}
+        # A deferred attempt never acted: it ran no step at all.
+        for run in runs:
+            if run.status == RunStatus.SKIPPED:
+                assert run.step_results == []
 
 
 # ── busy comes before the rate limit ─────────────────────────────────────
 
 
 class TestBusyFirst:
-    @pytest.mark.asyncio
-    async def test_a_busy_workflow_is_busy_not_rate_limited(self, engine_config, clock):
-        # Busy is checked before the rate limit: while another run holds the
-        # workflow, execute says busy, not deferred, even with the window full.
+    async def _event_while_busy(self, engine_config: Any, clock: _Clock) -> tuple[Any, Any]:
+        """Fill the window, then deliver an event while another run holds the workflow."""
         engine = _engine(engine_config, _definition(rate_limit_per_minute=1))
         with (
             patch("robothor.engine.dedup.try_acquire", new=AsyncMock(return_value=True)),
             patch("robothor.engine.dedup.release", new=AsyncMock()),
         ):
             await _run(engine, requeue=True)  # the window is now full
+        hooks = EventHooks(engine_config, MagicMock())
+        hooks.workflow_engine = engine
+        hooks._delayed_requeue = AsyncMock()  # type: ignore[method-assign]
+        runs: list[Any] = []
+        real_execute = engine.execute
+
+        async def execute(*args: Any, **kwargs: Any) -> Any:
+            runs.append(await real_execute(*args, **kwargs))
+            return runs[-1]
+
+        engine.execute = execute  # type: ignore[method-assign]
         with (
             patch("robothor.engine.dedup.try_acquire", new=AsyncMock(return_value=False)),
             patch("robothor.engine.dedup.release", new=AsyncMock()),
         ):
-            run = await _run(engine, requeue=True, event="evt-late")
+            await hooks._run_workflow(
+                engine.get_workflow("order-flow"),
+                "platform",
+                EVENT,
+                {"id": "evt-late", "type": EVENT, "payload": "{}"},
+                AsyncMock(),
+                STREAM,
+            )
+        return hooks, runs[0]
+
+    @pytest.mark.asyncio
+    async def test_a_busy_workflow_is_busy_not_rate_limited(self, engine_config, clock):
+        # The trigger does not set requeue_if_busy: the event is dropped as
+        # busy, exactly as before, even though the window is also full.
+        hooks, run = await self._event_while_busy(engine_config, clock)
         assert run.status == RunStatus.SKIPPED
         assert run.rate_limited is False
         assert "already running" in (run.error_message or "")
+        hooks._delayed_requeue.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_deferral_releases_the_workflow(self, engine_config, clock):
