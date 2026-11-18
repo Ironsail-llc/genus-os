@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-512 settings in 18 groups.
+513 settings in 18 groups.
 
 ## autonomy
 
@@ -99,6 +99,7 @@ Host paths for the isolated personal browser service and clients.
 | `ROBOTHOR_PR_REVIEW_MAX_CONCURRENT` | int | `6` | no | no | unreleased | Review tasks the intake keeps open at once; further pull requests wait and are queued on a later poll. Above ROBOTHOR_PR_REVIEW_WORKERS, so the next review is ready the moment a worker frees. |
 | `ROBOTHOR_PR_REVIEW_MAX_TURNS` | int | `80` | no | no | unreleased | Claude Code turns one review round may take (--max-turns). |
 | `ROBOTHOR_PR_REVIEW_MODEL` | str | `opus` | no | no | unreleased | Claude Code model alias for review jobs. The default `opus` is the CLI's alias, which each Claude Code update points at the newest Opus; never pin a dated model id here. Empty uses ROBOTHOR_CLAUDE_CODE_MODEL. The model actually used is named in each review's footer. |
+| `ROBOTHOR_PR_REVIEW_PEER_LOGINS` | str | _(empty)_ | no | no | unreleased | GitHub logins (comma-separated) of other automated reviewers paired with this one on the same pull requests. Nothing a peer wrote reaches the review prompt, so each opinion is independent, and a peer's reply on a finding never queues a re-review. Empty means no peer. |
 | `ROBOTHOR_PR_REVIEW_REPOS` | str | _(empty)_ | no | no | unreleased | Comma-separated owner/repo list the pr-reviewer watches (with ROBOTHOR_PR_REVIEW_WATCH_REPOS) and its ticket prefixes. Not a limit on requests: a pull request requesting the bot login's review, asked for by the operator, or linked in the Chat space is reviewed in any repository the token can read (a Chat link counts for these repositories, other repositories of their owners, and pull requests already tracked). An entry may carry its ticket prefix as owner/repo:PREFIX (another review bot's ALLOWED_REPOS format). |
 | `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` | bool | `false` | no | no | unreleased | A pull request with no ticket key in its title, branch, description or commit messages gets a blocking [no-ticket] finding and is never approved. Applies to the repositories in ROBOTHOR_PR_REVIEW_REPOS and those with their own prefix; one reviewed only on request, with no prefix of its own, is not blocked. |
 | `ROBOTHOR_PR_REVIEW_RETRY_COOLDOWN_MINUTES` | int | `60` | no | no | unreleased | A failed review is retried on the same head after this long, at most 3 attempts per head; a new head is retried at once. |

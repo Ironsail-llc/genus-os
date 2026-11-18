@@ -295,6 +295,7 @@ never left running.
    | `ROBOTHOR_PR_REVIEW_CHAT_SPACE` | `spaces/…` to watch and announce in — comma-separated for several review channels, each watched the same way, every answer going back to the space the PR was posted in; empty for GitHub only |
    | `ROBOTHOR_PR_REVIEW_CHAT_SELF_USERS` | the `users/…` the gws CLI posts as, so its own messages are never requests |
    | `ROBOTHOR_PR_REVIEW_BOT_LOGIN` | GitHub login whose requested reviews it picks up — requests naming that login directly (`user-review-requested:`); a review requested from a team the login belongs to is ignored |
+   | `ROBOTHOR_PR_REVIEW_PEER_LOGINS` | logins of other automated reviewers paired with this one: they are kept out of the prompt and their replies queue nothing (see [Paired reviewers](#paired-reviewers)) |
    | `ROBOTHOR_PR_REVIEW_REQUIRE_TICKET` / `_TICKET_PREFIXES` | the optional ticket rule; prefixes as `owner/repo:PREFIX` or bare `PREFIX` |
    | `ROBOTHOR_PR_REVIEW_GUIDELINES_PATH` | the team's own review guidelines (see [parity](#parity-with-an-existing-review-bot)) |
    | `ROBOTHOR_PR_REVIEW_MODEL` | `opus` (default): the CLI alias, which each Claude Code update points at the newest Opus. Never pin a dated model id here; the model actually used is named in every review footer |
@@ -316,10 +317,31 @@ never left running.
    its heartbeat can raise the report's `alerts` (see
    [Monitoring](#monitoring)).
 
-**Cutover from another review bot.** Never run the suite on the same
-repositories as another automated reviewer: both would claim the same links
-and post two reviews per head. Stop the other bot first, or start with a
-disjoint `ROBOTHOR_PR_REVIEW_REPOS` and move repositories over one at a time.
+**Cutover from another review bot.** Do not run the suite beside a reviewer
+it has not been told about: both would claim the same Chat links and read each
+other's findings. Stop the other bot first, start with a disjoint
+`ROBOTHOR_PR_REVIEW_REPOS` and move repositories over one at a time, or pair
+the two on purpose (below).
+
+## Paired reviewers
+
+Two automated reviewers can give independent opinions on the same pull
+requests. Each one runs under its own GitHub account and names the other in
+`ROBOTHOR_PR_REVIEW_PEER_LOGINS` (comma-separated logins). With a peer named:
+
+- **The review is blind.** Nothing the peer wrote (its reviews, inline
+  findings, comments, thread replies) reaches the review prompt, so the second
+  opinion is not an echo of the first.
+- **A peer's reply is not an answer.** Only a person's reply on a finding
+  queues a re-review. Two reviewers answering each other's threads would
+  otherwise re-review without end.
+- **Each keeps its own review and threads.** A review is found again by its
+  author and head commit, and threads are resolved by the review that opened
+  them, so neither touches the other's.
+
+Give only one of the pair a Chat space (`ROBOTHOR_PR_REVIEW_CHAT_SPACE`): a
+link is claimed and announced once. The other picks its pull requests up from
+`ROBOTHOR_PR_REVIEW_WATCH_REPOS` or from a review requested of its login.
 
 ### On a hosted deployment
 
