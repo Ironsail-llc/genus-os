@@ -81,9 +81,9 @@ class TestUpsertCompanyByIdentifier:
     def test_never_matches_by_name(self, db_cursor, mock_get_connection):
         from robothor.crm.dal import create_company, upsert_company_by_identifier
 
-        existing = create_company("Same Name Clinic")
-        a = upsert_company_by_identifier(SYSTEM, _ext(), name="Same Name Clinic")
-        b = upsert_company_by_identifier(SYSTEM, _ext(), name="Same Name Clinic")
+        existing = create_company("Same Name Co")
+        a = upsert_company_by_identifier(SYSTEM, _ext(), name="Same Name Co")
+        b = upsert_company_by_identifier(SYSTEM, _ext(), name="Same Name Co")
         assert len({existing, a["id"], b["id"]}) == 3
 
     def test_sets_parent_and_fields(self, db_cursor, mock_get_connection):
