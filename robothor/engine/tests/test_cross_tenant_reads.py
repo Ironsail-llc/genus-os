@@ -16,6 +16,7 @@ connection.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -326,3 +327,100 @@ def test_injecting_the_tenant_argument_does_not_mutate_the_shared_definitions():
     for defn in get_tool_definitions():
         if defn["name"] == "list_tasks":
             assert "tenant" not in defn["inputSchema"].get("properties", {})
+
+
+# ── The tenant argument's shape, and crossings answered without the handler ─
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["x" * 100_000, "acme-" + "a" * 124, 123, ["acme-child-a"], {"id": "acme-child-a"}, True],
+    ids=["huge", "129-chars", "int", "list", "dict", "bool"],
+)
+def test_a_malformed_tenant_gets_the_unreachable_refusal(env, value):
+    from robothor.engine.tools.cross_tenant import UNREACHABLE
+
+    result = _call("list_tasks", {"tenant": value})
+
+    assert result.get("refused") is True, result
+    assert result["error"] == UNREACHABLE
+    assert env.seen.calls == []
+    env.audit.assert_called_once()
+    audited = env.audit.call_args.kwargs["target_tenant"]
+    assert isinstance(audited, str) and len(audited) <= 128
+
+
+def test_a_128_character_reachable_tenant_is_still_a_tenant(env):
+    long_child = "c" * 128
+    result = _call("list_tasks", {"tenant": long_child}, accessible_tenant_ids=(PARENT, long_child))
+    assert "error" not in result, result
+
+
+def test_a_repeat_guard_answer_from_a_child_is_audited(env):
+    from robothor.engine.repeat_guard import GuardDecision
+
+    guard = MagicMock()
+    guard.before.return_value = GuardDecision(
+        action="answered", tool_name="list_tasks", note="same call", result={"tasks": []}
+    )
+    with patch("robothor.engine.repeat_guard.guard_for_run", return_value=guard):
+        result = _call("list_tasks", {"tenant": CHILD_A})
+
+    assert result == {"tasks": []}
+    assert env.seen.calls == []
+    env.audit.assert_called_once()
+    kw = env.audit.call_args.kwargs
+    assert (kw["home_tenant"], kw["target_tenant"]) == (PARENT, CHILD_A)
+    assert "repeat" in kw["outcome"]
+
+
+@dataclass
+class _EffectContext:
+    tenant_id: str
+    principal_id: str
+
+
+def test_an_effect_replay_from_a_child_is_audited():
+    from robothor.engine.runtime import effect_dispatch
+
+    ctx = SimpleNamespace(
+        tenant_id=PARENT, run_id="run-1", agent_id="main", user_id="alice", is_benchmark=False
+    )
+    record = {"id": "e-1", "state": "finished", "resolution": {"result": {"id": "t-1"}}}
+    context = _EffectContext(tenant_id=PARENT, principal_id="alice")
+    dispatch = AsyncMock()
+    with (
+        patch.object(effect_dispatch, "active_context", MagicMock(get=lambda: context)),
+        patch.object(effect_dispatch, "_reserve", AsyncMock(return_value=record)),
+        patch("robothor.engine.tools.cross_tenant.audit_cross_tenant") as audit,
+    ):
+        result = asyncio.run(
+            effect_dispatch.invoke(
+                "send_notification", {"tenant": CHILD_A, "subject": "s"}, ctx, dispatch
+            )
+        )
+
+    dispatch.assert_not_awaited()
+    assert result["recovered"] is True
+    audit.assert_called_once()
+    kw = audit.call_args.kwargs
+    assert (kw["home_tenant"], kw["target_tenant"]) == (PARENT, CHILD_A)
+    assert "replay" in kw["outcome"]
+
+
+def test_an_own_tenant_replay_is_not_a_crossing():
+    from robothor.engine.runtime import effect_dispatch
+
+    ctx = SimpleNamespace(
+        tenant_id=PARENT, run_id="run-1", agent_id="main", user_id="alice", is_benchmark=False
+    )
+    record = {"id": "e-1", "state": "finished", "resolution": {"result": {"id": "t-1"}}}
+    context = _EffectContext(tenant_id=PARENT, principal_id="alice")
+    with (
+        patch.object(effect_dispatch, "active_context", MagicMock(get=lambda: context)),
+        patch.object(effect_dispatch, "_reserve", AsyncMock(return_value=record)),
+        patch("robothor.engine.tools.cross_tenant.audit_cross_tenant") as audit,
+    ):
+        asyncio.run(effect_dispatch.invoke("send_notification", {"subject": "s"}, ctx, AsyncMock()))
+
+    audit.assert_not_called()
