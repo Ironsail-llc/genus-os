@@ -20,7 +20,9 @@ A call that carries a ``tenant`` argument is admitted (:func:`admit`) only when
 A write may carry ``dry_run: true``: it is admitted exactly as the real call,
 audited as a dry run, and answered by :func:`dry_run` with what would change;
 the handler never runs. ``dry_run`` on an allowlisted write WITHOUT ``tenant``
-is a dry run in the run's own tenant, never a real write.
+is a dry run in the run's own tenant, never a real write. A ``dry_run`` that
+is present but not a JSON boolean (``"true"``, ``1``, ``null``) is refused and
+runs nothing: neither a real write nor a preview is guessed from it.
 
 Then :func:`run_handler` strips the argument and runs the handler inside
 ``tenant_scope(target)`` with a copy of the context whose ``tenant_id`` is the
@@ -131,6 +133,17 @@ def _refuse(
     return refusal(message, gate=gate, name=gate_name, unlock=unlock)
 
 
+def _bad_dry_run(name: str) -> dict[str, Any]:
+    from robothor.engine.refusal import refusal
+
+    return refusal(
+        f"'{name}' was not run: dry_run must be true or false.",
+        gate="policy",
+        name="dry_run_boolean",
+        unlock="Send dry_run as the boolean true to preview, or false (or leave it out) to run.",
+    )
+
+
 def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[str, Any] | None:
     """Decide a call's tenant. ``None``: no ``tenant`` argument, run as always.
 
@@ -145,6 +158,9 @@ def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[
     )
 
     is_write = name in CROSS_TENANT_WRITES
+    if is_write and DRY_RUN_ARG in args and not isinstance(args[DRY_RUN_ARG], bool):
+        # "true", 1, null: never guessed at, in either direction.
+        return _bad_dry_run(name)
     dry = is_write and args.get(DRY_RUN_ARG) is True
     if TENANT_ARG not in args and not dry:
         return None
