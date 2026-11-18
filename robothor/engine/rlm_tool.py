@@ -150,8 +150,11 @@ def _make_memory_block_read_fn() -> Callable[..., str]:
 
     def memory_block_read(block_name: str) -> str:
         """Read a named memory block. Returns JSON."""
+        from robothor.engine.tools.handlers.memory import HIDDEN_BLOCK_ERROR, is_hidden_block
         from robothor.memory.blocks import read_block
 
+        if is_hidden_block(block_name):
+            return json.dumps({"error": HIDDEN_BLOCK_ERROR})
         result = read_block(block_name)
         return json.dumps(result, indent=2)
 
@@ -201,7 +204,9 @@ def _load_context_source(src: dict[str, Any], workspace: str) -> str | None:
 
     if src_type == "block":
         block_name = src.get("block_name", "")
-        if not block_name:
+        from robothor.engine.tools.handlers.memory import is_hidden_block
+
+        if not block_name or is_hidden_block(block_name):
             return None
         from robothor.memory.blocks import read_block
 

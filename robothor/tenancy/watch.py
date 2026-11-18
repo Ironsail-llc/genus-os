@@ -23,8 +23,13 @@ Rules:
 The snapshot lives in the parent tenant's memory block ``org_watch_snapshot``
 (``robothor.memory.blocks``). Blocks are tenant-scoped, survive restarts, need
 no migration, and are how other engine state is kept between runs (benchmark
-and experiment state). The block is not loaded into any agent's context unless
-a manifest names it in ``warmup.memory_blocks``.
+and experiment state). It is engine state, not agent memory: the agent-facing
+block tools, deep reasoning and the warm-up all refuse it by name
+(``engine/tools/handlers/memory.AGENT_HIDDEN_BLOCKS``), so nobody reaches it
+except through ``org_watch``. What is read back from it is still treated as
+untrusted (:func:`_load`): every sentence that can be built from the current
+rollup is, and any stored text that has to be repeated is cut to one short
+line.
 
 Synchronous and blocking: call it off the event loop. It imports only the
 rollup's shape and the memory-block helpers, never the engine's tool modules.
@@ -116,7 +121,8 @@ def _problems(entry: dict[str, Any]) -> dict[str, dict[str, Any]]:
     for t in (entry.get("tasks") or {}).get("oldest_overdue") or []:
         out[f"overdue_task:{t.get('id')}"] = {
             "problem": "overdue_task",
-            "subject": t.get("title") or "an untitled task",
+            # A child's task title is written by its users: one short line.
+            "subject": _one_line(t.get("title") or "an untitled task"),
             "priority": t.get("priority") or "normal",
             "overdue_days": t.get("overdueDays"),
             "age_days": t.get("ageDays"),
@@ -335,7 +341,57 @@ def _load(home_tenant: str) -> dict[str, Any] | None:
     except ValueError:
         logger.warning("org watch snapshot for %s unreadable; treating as a first run", home_tenant)
         return None
-    return loaded if isinstance(loaded, dict) else None
+    return _clean(loaded) if isinstance(loaded, dict) else None
+
+
+#: Every problem kind the watch records; a stored problem of any other kind is dropped.
+_KINDS = frozenset(
+    {"unreadable", "quiet", "failing_agent", "stuck_agent", "late_schedule", "overdue_task"}
+)
+
+#: The longest stored text the briefing will repeat.
+SUBJECT_LIMIT = 120
+
+
+def _clean(loaded: dict[str, Any]) -> dict[str, Any]:
+    """The stored snapshot, reduced to what the diff needs and nothing it can't trust.
+
+    Only the problem kind and its subject are kept: a CLEARED problem is the
+    one thing the current rollup cannot describe, and it is described by
+    those two. The subject is untrusted text (:func:`_one_line`).
+    """
+    tenants: dict[str, Any] = {}
+    raw = loaded.get("tenants")
+    for tid, entry in (raw if isinstance(raw, dict) else {}).items():
+        if not isinstance(entry, dict):
+            continue
+        problems: dict[str, dict[str, Any]] = {}
+        stored = entry.get("problems")
+        for key, p in (stored if isinstance(stored, dict) else {}).items():
+            if isinstance(p, dict) and p.get("problem") in _KINDS:
+                problems[str(key)] = {"problem": p["problem"]}
+                if p.get("subject") is not None:
+                    problems[str(key)]["subject"] = _one_line(p["subject"])
+        status = entry.get("status")
+        tenants[str(tid)] = {
+            "status": status if status in _STATUS_ORDER else None,
+            "overdue_count": _count(entry.get("overdue_count")),
+            "problems": problems,
+        }
+    return {"as_of": loaded.get("as_of"), "tenants": tenants}
+
+
+def _one_line(value: Any) -> str:
+    """Untrusted text as one short line: whitespace collapsed, unprintables dropped, capped."""
+    text = " ".join("".join(c for c in str(value) if c.isprintable() or c.isspace()).split())
+    return text if len(text) <= SUBJECT_LIMIT else text[: SUBJECT_LIMIT - 1] + "\u2026"
+
+
+def _count(value: Any) -> int:
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 # ── wording helpers ──────────────────────────────────────────────────────

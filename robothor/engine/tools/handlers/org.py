@@ -5,7 +5,8 @@ WHICH tenants it covers (``cross_tenant.reachable_tenants``: the run's own,
 plus its descendants only for a top-level, non-benchmark run that was granted
 them) and audit every other tenant they read. ``org_overview`` is read-only.
 ``org_watch`` (``robothor.tenancy.watch``) reports what changed since its last
-call and stores what it saw in the run's own tenant, unless asked to preview.
+call and stores what it saw in the run's own tenant, unless asked to preview
+or the run reaches only its own tenant.
 """
 
 from __future__ import annotations
@@ -32,7 +33,8 @@ NO_REACH_NOTE = (
 #: to grant the access is in docs/runbooks/TENANT_HIERARCHY.md.
 WATCH_LIMITED_NOTE = (
     "This watch covered only this company: the parent has not granted this run "
-    "access to its child companies, so their changes are not included."
+    "access to its child companies, so their changes are not included. This watch "
+    "was not stored, so the next full watch still reports what changed."
 )
 
 
@@ -65,20 +67,25 @@ async def _org_overview(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 async def _org_watch(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """What changed since the last watch. Writes the snapshot unless ``preview``.
 
+    A run that reaches only its own tenant (``limited``) reports, but never
+    stores: its snapshot would drop every child, and the next full watch would
+    then re-announce, or miss, what changed there.
+
     Not read-only, so it is outside ``READONLY_TOOLS``: plan mode cannot call it
     (it uses ``org_overview``), and benchmark runs never get it.
     """
     from robothor.tenancy.watch import run_watch
 
     tenants, rollup = await _reachable_rollup(ctx, "org_watch")
+    limited = len(tenants) == 1
     result = await asyncio.to_thread(
         run_watch,
         ctx.tenant_id,
         rollup,
         daily=bool(args.get("daily", False)),
-        store=not bool(args.get("preview", False)),
+        store=not limited and not bool(args.get("preview", False)),
     )
-    result["limited"] = len(tenants) == 1
+    result["limited"] = limited
     if result["limited"]:
         result["note"] = WATCH_LIMITED_NOTE
     return result

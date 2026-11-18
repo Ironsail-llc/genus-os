@@ -391,6 +391,10 @@ def _build_memory_blocks_section(block_names: list[str], tenant_id: str = DEFAUL
     accounting is deferred to one batched write (``touch_blocks``), instead of
     one ``UPDATE ... RETURNING`` per block.
     """
+    from robothor.engine.tools.handlers.memory import is_hidden_block
+
+    # Engine state is never warm-up context, whatever a manifest names.
+    block_names = [name for name in block_names if not is_hidden_block(name)]
     if not block_names:
         return ""
 
