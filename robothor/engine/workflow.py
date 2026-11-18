@@ -48,6 +48,7 @@ from robothor.engine.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from pathlib import Path
 
     from robothor.engine.config import EngineConfig
@@ -458,6 +459,13 @@ class WorkflowEngine:
         self.runner: AgentRunner = runner
         self._workflows: dict[str, WorkflowDef] = {}
 
+    @property
+    def _rate_slots(self) -> dict[str, float]:
+        """Run id -> the limiter slot its first tool call was given before the
+        run started (execute(rate_slot=...)), until that call takes it."""
+        slots: dict[str, float] = self.__dict__.setdefault("_rate_slot_map", {})
+        return slots
+
     def load_workflows(self, workflow_dir: Path) -> int:
         """Load all workflow YAML files from a directory."""
         if not workflow_dir.is_dir():
@@ -601,6 +609,8 @@ class WorkflowEngine:
         user_role: str = "",
         run_id: str | None = None,
         requeue_on_rate_limit: bool = False,
+        rate_slot: float | None = None,
+        on_start: Callable[[], Awaitable[bool]] | None = None,
     ) -> WorkflowRun:
         """Execute a workflow by ID under an explicit caller identity.
 
@@ -616,7 +626,19 @@ class WorkflowEngine:
         ``requeue_on_rate_limit`` says the caller will requeue the event when
         the tool-call rate limit would block the first step, so the run is
         deferred (``skipped``, ``rate_limited``) before it is recorded instead
-        of waiting in place. Only the hook consumer passes it.
+        of waiting in place.
+
+        ``rate_slot`` is a limiter slot the caller already reserved for the
+        first step's tool call (:meth:`reserve_first_step`); the call takes
+        it over instead of asking the limiter again. The hook backlog
+        (``robothor.engine.workflow_backlog``) passes it. A run that does not
+        start leaves the slot with the caller, to release.
+
+        ``on_start`` is awaited once the run holds its lane slot, right before
+        its first step. Returning False means the run must not start (another
+        engine already started this event's run): it ends ``skipped`` with no
+        step run. The hook backlog uses it to claim an event at the moment its
+        run starts, so a run that has started is never started again.
         """
         from robothor.engine.dedup import release
 
@@ -667,6 +689,8 @@ class WorkflowEngine:
         )
         if run_id:
             run.id = run_id
+        if rate_slot is not None:
+            self._rate_slots[run.id] = rate_slot
 
         # Record run in DB
         self._persist_run_start(run, wf)
@@ -683,10 +707,14 @@ class WorkflowEngine:
                 # The lane slot before the clock: queue time is not run time. A
                 # concurrent hook workflow's runs overlap by design: their own lane.
                 async with run_slot(Lane.HOOKS if wf.concurrent else Lane.BACKGROUND):
-                    self._mark_run_running(run)
-                    with workflow_budget.workflow_deadline(workflow_id, wf.timeout_seconds):
-                        async with asyncio.timeout(wf.timeout_seconds):
-                            await self._execute_steps(run, wf)
+                    if on_start is not None and not await on_start():
+                        run.status = RunStatus.SKIPPED
+                        run.error_message = "Skipped: this event's run was already started"
+                    else:
+                        self._mark_run_running(run)
+                        with workflow_budget.workflow_deadline(workflow_id, wf.timeout_seconds):
+                            async with asyncio.timeout(wf.timeout_seconds):
+                                await self._execute_steps(run, wf)
             except TimeoutError:
                 run.status = RunStatus.TIMEOUT
                 run.error_message = self._timeout_message(run, wf)
@@ -757,6 +785,9 @@ class WorkflowEngine:
 
             return run
         finally:
+            # A slot the first call never took (the run ended first) stays
+            # counted: the run was admitted on it.
+            self._rate_slots.pop(run.id, None)
             if dedup_key is not None:
                 await release(dedup_key)
 
@@ -844,16 +875,16 @@ class WorkflowEngine:
                 error_message="Skipped: workflow already running",
             )
 
-        # A hook run whose first step the tool-call rate limit would block is
-        # deferred before anything is recorded: the hook consumer requeues the
-        # event, and a deferral is a log line, not a workflow_runs row. Busy
+        # A run whose first step the tool-call rate limit would block is
+        # deferred before anything is recorded when its caller requeues it
+        # (requeue_on_rate_limit): a deferral is a log line, not a
+        # workflow_runs row. The hook backlog does not use this; it waits for
+        # the limiter before it calls execute (robothor.engine.workflow_backlog). Busy
         # is checked first, so a busy workflow keeps its trigger's own busy
         # handling (requeue_if_busy) whatever the window holds.
         if requeue_on_rate_limit and self._first_step_rate_limited(wf):
             if dedup_key is not None:
                 await release(dedup_key)
-            # Debug: the hook consumer counts deferrals and logs one summary
-            # line per workflow per window (robothor.engine.deferrals).
             logger.debug(
                 "Workflow %s deferred: tool-call rate limit reached at first step %s (%s)",
                 _sanitize(wf.id),
@@ -872,6 +903,41 @@ class WorkflowEngine:
                 rate_limited=True,
             )
         return None
+
+    @staticmethod
+    def first_step_is_tool(wf: WorkflowDef) -> bool:
+        """Whether the run's first step is a tool call, so the limiter gates its start."""
+        return bool(wf.steps) and wf.steps[0].type == WorkflowStepType.TOOL
+
+    def first_step_rate_wait(self, wf: WorkflowDef) -> float:
+        """Seconds until the limiter would admit the workflow's first tool call (0: now)."""
+        if not self.first_step_is_tool(wf):
+            return 0.0
+        guardrails = self._workflow_guardrails(wf.rate_limit_per_minute)
+        return float(guardrails.rate_slot_wait(f"workflow:{wf.id}"))
+
+    def first_step_free_slots(self, wf: WorkflowDef) -> int | None:
+        """Runs the limiter would let start right now; None when it does not gate the start."""
+        if not self.first_step_is_tool(wf):
+            return None
+        guardrails = self._workflow_guardrails(wf.rate_limit_per_minute)
+        free = guardrails.rate_slots_free(f"workflow:{wf.id}")
+        return None if free is None else int(free)
+
+    def reserve_first_step(self, wf: WorkflowDef) -> float | None:
+        """Take the limiter slot for a run's first tool call now; pass it as ``rate_slot``."""
+        if not self.first_step_is_tool(wf):
+            return None
+        guardrails = self._workflow_guardrails(wf.rate_limit_per_minute)
+        stamp = guardrails.reserve_rate_slot(f"workflow:{wf.id}")
+        return None if stamp is None else float(stamp)
+
+    def release_first_step(self, wf: WorkflowDef, stamp: float | None) -> None:
+        """Give back a slot :meth:`reserve_first_step` took for a run that did not start."""
+        if stamp is not None:
+            self._workflow_guardrails(wf.rate_limit_per_minute).release_rate_slot(
+                f"workflow:{wf.id}", stamp
+            )
 
     def _first_step_rate_limited(self, wf: WorkflowDef) -> bool:
         """Whether the workflow's first step is a tool call the limiter would block now."""
@@ -1420,6 +1486,12 @@ class WorkflowEngine:
         # earlier step again, so a step waits in place for the limiter (the
         # workflow deadline bounds the wait). A hook run blocked at its first
         # step never gets here: execute() defers it before it is recorded.
+        # A run the hook backlog started already holds its first call's slot
+        # (execute(rate_slot=...)): handing it over here means the call is
+        # admitted at once, counted once, never waits in place.
+        reserved = self._rate_slots.pop(run.id, None)
+        if reserved is not None:
+            guardrails.release_rate_slot(f"workflow:{run.workflow_id}", reserved)
         wait = _RATE_LIMIT_WAIT_SECONDS
         while True:
             gr = guardrails.check_pre_execution(

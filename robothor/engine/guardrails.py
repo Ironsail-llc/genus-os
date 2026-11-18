@@ -947,6 +947,50 @@ class GuardrailEngine:
             sum(1 for t in self._rate_counts.get(agent_id or "_default", ()) if t > cutoff) >= limit
         )
 
+    def rate_slot_wait(self, agent_id: str) -> float:
+        """Seconds until the limiter would admit a call for ``agent_id`` (0: now). Counts nothing.
+
+        The time until enough of the window's calls have aged out, so a
+        caller that waits exactly this long is admitted, rather than polling.
+        """
+        if "rate_limit" not in self.enabled_policies:
+            return 0.0
+        limit = self.rate_limit_per_minute or DEFAULT_RATE_LIMIT
+        now = time.monotonic()
+        live = sorted(t for t in self._rate_counts.get(agent_id or "_default", ()) if t > now - 60)
+        if len(live) < limit:
+            return 0.0
+        return max(live[len(live) - limit] + 60 - now, 0.0) + 0.001
+
+    def rate_slots_free(self, agent_id: str) -> int | None:
+        """Calls the limiter would admit for ``agent_id`` right now; None when it is off."""
+        if "rate_limit" not in self.enabled_policies:
+            return None
+        limit = self.rate_limit_per_minute or DEFAULT_RATE_LIMIT
+        cutoff = time.monotonic() - 60
+        used = sum(1 for t in self._rate_counts.get(agent_id or "_default", ()) if t > cutoff)
+        return max(limit - used, 0)
+
+    def reserve_rate_slot(self, agent_id: str) -> float | None:
+        """Count one call for ``agent_id`` now and return its stamp, to hand on to the call.
+
+        None when the rate limit is off (there is nothing to reserve). The
+        caller checks :meth:`rate_slot_wait` first; the reservation itself
+        always counts, so the slot is held until the call takes it over
+        (:meth:`release_rate_slot`, then the call's own check).
+        """
+        if "rate_limit" not in self.enabled_policies:
+            return None
+        stamp = time.monotonic()
+        self._rate_counts[agent_id or "_default"].append(stamp)
+        return stamp
+
+    def release_rate_slot(self, agent_id: str, stamp: float) -> None:
+        """Give back a slot :meth:`reserve_rate_slot` took (no-op once it has aged out)."""
+        calls = self._rate_counts.get(agent_id or "_default")
+        if calls and stamp in calls:
+            calls.remove(stamp)
+
     def _check_rate_limit(self, agent_id: str) -> GuardrailResult:
         """Rate limit: max N tool calls per minute, per agent."""
         limit = self.rate_limit_per_minute or DEFAULT_RATE_LIMIT
