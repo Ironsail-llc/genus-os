@@ -62,7 +62,10 @@ def prepare_loop(
     if guardrail_engine and guardrail_engine.enabled_policies:
         from robothor.engine.guardrails import guardrail_summary
 
-        gr_text = guardrail_summary(guardrail_engine.enabled_policies)
+        gr_text = guardrail_summary(
+            guardrail_engine.enabled_policies,
+            rate_limit_per_minute=guardrail_engine.rate_limit_per_minute,
+        )
         if gr_text and session.messages and session.messages[0].get("role") == "system":
             session.messages[0]["content"] += f"\n\n---\n\n{gr_text}"
 

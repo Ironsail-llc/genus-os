@@ -279,9 +279,7 @@ def _response(mock_litellm_response, *, calls: list[MagicMock] | None = None, te
 
 def _rate_limit_errors(run) -> list[str]:
     return [
-        s.error_message
-        for s in run.steps
-        if s.error_message and "rate" in s.error_message.lower()
+        s.error_message for s in run.steps if s.error_message and "rate" in s.error_message.lower()
     ]
 
 

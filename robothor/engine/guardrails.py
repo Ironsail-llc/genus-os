@@ -496,19 +496,19 @@ SENSITIVE_SCAN_LIMIT = 2_000_000
 #: Per-minute tool-call ceiling, applied per agent. Override per agent with
 #: `rate_limit_per_minute`.
 #:
-#: MEASURED on this instance 2026-08-24, and left unchanged deliberately:
-#: 127 `rate_limit` blocks in 30 days (most recent that day), against a
-#: legitimate distribution whose mean is 7.2 calls/minute and whose peak is
-#: 36.8 across 900 real runs. So 30 sits just under the top of normal
-#: behaviour and does block real work — it should probably be higher.
+#: MEASURED on this instance 2026-08-24: a legitimate distribution whose mean
+#: is 7.2 calls/minute and whose peak is 36.8 across 900 real runs, against
+#: 127 `rate_limit` blocks in 30 days at the old default of 30 — which sat just
+#: under the top of normal behaviour and blocked real work. 60 is above that
+#: peak.
 #:
-#: It is not raised here because raising it turned three tests in
-#: test_plan_mode into runaway loops: they had been relying on this throttle
-#: to terminate, which means it has been doing duty as a de-facto runaway
-#: guard well beyond its stated job. Changing a fleet-wide default whose
-#: removal destabilises things nobody had connected to it is a soak, not a
-#: side effect of adding a knob. The knob is the part that ships.
-DEFAULT_RATE_LIMIT = 30  # per minute
+#: In an agent run a call over the limit WAITS for room
+#: (`tool_throttle.wait_for_room`), bounded by the run's deadline, so this
+#: paces a burst rather than failing it; workflows wait in place for the same
+#: refusal (`workflow._run_tool_step`). It is not the runaway guard: a model
+#: that calls tools forever is stopped by the iteration `safety_cap`, the
+#: run's deadline and the runaway-token guard.
+DEFAULT_RATE_LIMIT = 60  # per minute
 
 # Default guardrails applied to all agents unless opted out
 DEFAULT_GUARDRAILS = [
@@ -520,11 +520,17 @@ DEFAULT_GUARDRAILS = [
     "no_secret_publication",
 ]
 
+
+def _rate_limit_text(limit: int) -> str:
+    """The prompt line for the per-minute limit an agent is actually held to."""
+    return f"Tool calls are paced at {limit}/minute: a call over the limit waits for room."
+
+
 # Human-readable descriptions for LLM prompt injection
 POLICY_DESCRIPTIONS: dict[str, str] = {
     "no_destructive_writes": "Destructive shell commands (rm -rf, and DROP TABLE, DELETE FROM, TRUNCATE run through a SQL client) are blocked.",
     "no_sensitive_data": "Tool outputs are scanned for exposed API keys and secrets.",
-    "rate_limit": f"Tool calls are rate-limited to {DEFAULT_RATE_LIMIT}/minute.",
+    "rate_limit": _rate_limit_text(DEFAULT_RATE_LIMIT),
     "no_external_http": "Web fetch and web search tools are blocked.",
     "no_main_branch_push": "Git push/commit to main/master branches is blocked.",
     "no_secret_publication": (
@@ -629,17 +635,22 @@ def _days_from_now(start: str) -> float | None:
     return (dt - now).total_seconds() / 86400.0
 
 
-def guardrail_summary(policies: list[str]) -> str:
+def guardrail_summary(policies: list[str], *, rate_limit_per_minute: int = 0) -> str:
     """Return a concise system prompt section describing active guardrails.
 
     Helps the LLM self-regulate and avoid hitting guardrails blindly.
-    Returns empty string if no policies are active.
+    Returns empty string if no policies are active. ``rate_limit_per_minute``
+    is the agent's own limit (0 = the platform default), so the line states
+    the number the agent is held to rather than the default.
     """
     if not policies:
         return ""
     lines = ["## Active Safety Guardrails"]
     for policy in policies:
-        desc = POLICY_DESCRIPTIONS.get(policy, f"{policy} (custom policy)")
+        if policy == "rate_limit":
+            desc = _rate_limit_text(rate_limit_per_minute or DEFAULT_RATE_LIMIT)
+        else:
+            desc = POLICY_DESCRIPTIONS.get(policy, f"{policy} (custom policy)")
         lines.append(f"- {desc}")
     lines.append(
         "\nIf a tool call is blocked by a guardrail, you will receive an error. "
@@ -946,6 +957,20 @@ class GuardrailEngine:
         return (
             sum(1 for t in self._rate_counts.get(agent_id or "_default", ()) if t > cutoff) >= limit
         )
+
+    def rate_limit_wait(self, agent_id: str) -> float:
+        """Seconds until ``agent_id`` may make another call; 0.0 if it may now. Counts nothing."""
+        if "rate_limit" not in self.enabled_policies:
+            return 0.0
+        limit = self.rate_limit_per_minute or DEFAULT_RATE_LIMIT
+        now = time.monotonic()
+        recent = sorted(
+            t for t in self._rate_counts.get(agent_id or "_default", ()) if t > now - 60
+        )
+        if len(recent) < limit:
+            return 0.0
+        # The call that must age out of the window before one more fits in it.
+        return max(0.0, recent[len(recent) - limit] + 60 - now)
 
     def _check_rate_limit(self, agent_id: str) -> GuardrailResult:
         """Rate limit: max N tool calls per minute, per agent."""
