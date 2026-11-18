@@ -301,7 +301,7 @@ GET /api/people/{id}/notes
 GET /api/people/{id}/runs
 GET /api/people/{id}/memory
 GET /api/people/{id}/contact-360
-
+```
 
 ## Agent tools
 
