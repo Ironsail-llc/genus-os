@@ -70,5 +70,11 @@
     "package": "undici",
     "reason": "bundled inside the npm CLI package (node_modules/npm/node_modules/undici, dep of @semantic-release/npm — release tooling, not product runtime, unused by our release config); the lockfile cannot change a bundled copy and the pinned npm 11.21.0 ships 6.28.0 — the two lockfile-resolvable copies (node_modules/undici 7.30.1, @actions/http-client's 6.29.1) are already outside the affected range (<6.29.1) — remove when a published npm ships a patched bundle",
     "added": "2026-10-27"
+  },
+  {
+    "id": "GHSA-fc5q-39xc-vjpf",
+    "package": "picomatch",
+    "reason": "ReDoS through single-branch repeated extglobs; the advisory range is <=4.0.7 and 4.0.7 is the newest published release, so no patched version exists to move to and an override has nothing to point at. Reached only through release tooling (micromatch under @semantic-release/commit-analyzer; tinyglobby under @semantic-release/github and the npm CLI bundle), which matches globs from this repo's own release config, never untrusted input, and is not product runtime — remove when a patched picomatch is published and the lock can take it",
+    "added": "2026-11-17"
   }
 ]
