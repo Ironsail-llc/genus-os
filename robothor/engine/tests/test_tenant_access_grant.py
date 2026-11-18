@@ -232,6 +232,22 @@ def test_a_federated_run_never_gets_the_unattended_grant(grant):
     )
 
 
+def test_a_repair_continuation_reaches_only_its_own_tenant(grant):
+    # Started by the engine after a deployment verifies, with nobody present:
+    # the owner identity it carries is attribution, not someone at the keyboard.
+    grant.tenant_flag = grant.opt_in = True
+    run = _run(trigger_type=TriggerType.MANUAL, trigger_detail="repair-resume:job-1")
+    assert _attach(run, OWNER) == (PARENT,)
+
+
+def test_a_repair_continuation_is_confined_for_every_crossing():
+    from robothor.engine.run_identity import confined_to_own_tenant
+
+    run = _run(trigger_type=TriggerType.MANUAL, trigger_detail="repair-resume:job-1")
+    assert confined_to_own_tenant(run)
+    assert not confined_to_own_tenant(_run(trigger_type=TriggerType.MANUAL, trigger_detail="x"))
+
+
 def test_a_failed_lookup_restricts_to_the_own_tenant():
     from robothor.engine.run_identity import attach_tenant_access
 
