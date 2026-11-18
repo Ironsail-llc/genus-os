@@ -685,11 +685,11 @@ class TelegramBot(
         from robothor.engine.manifest_schema import ManifestSchemaError
 
         try:
-            config = load_agent_config(self.config.default_chat_agent, self.config.manifest_dir)
+            config = load_agent_config(
+                self.config.default_chat_agent, self.config.manifest_dir, trigger_type="telegram"
+            )
         except ManifestSchemaError as e:
-            # The caller renders RuntimeError as a message in the chat. An
-            # unguarded ManifestSchemaError would reach the operator as a
-            # traceback instead, in the one channel they actually read.
+            # Rendered as a chat message, not a traceback in the operator's channel.
             raise RuntimeError(
                 f"Agent manifest refused by the schema (SchemaError): "
                 f"{self.config.default_chat_agent} — {e.summary()}"
@@ -1409,7 +1409,7 @@ class TelegramBot(
         from robothor.engine.manifest_schema import ManifestSchemaError
 
         try:
-            cfg = load_agent_config("main", self.config.manifest_dir)
+            cfg = load_agent_config("main", self.config.manifest_dir, trigger_type="telegram")
         except ManifestSchemaError as e:
             logger.error("main manifest refused by the schema: %s", e.summary())
             return ""

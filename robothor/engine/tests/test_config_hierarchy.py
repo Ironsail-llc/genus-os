@@ -123,6 +123,102 @@ class TestConditionalConfig:
         assert "when" not in result
 
 
+class TestConditionalModelChain:
+    """A ``when:`` clause can give one trigger its own model chain and lane.
+
+    An interactive chat and a scheduled run of the same agent want different
+    things: the chat wants a fast answer on the priority lane, the cron run
+    wants the cheap chain. Everything else (here, a hook) keeps the chain and
+    tier the fleet defaults give it.
+    """
+
+    DEFAULT_CHAIN = ("openai/gpt-6-luna", ["vertex_ai/gemini-3.8-flash"])
+    CHAT_CHAIN = ("openai/gpt-6.2-sol", ["openai/gpt-6-luna"])
+    CRON_CHAIN = ("openai/gpt-6.2-sol", ["vertex_ai/gemini-3.8-flash"])
+
+    def _load(self, tmp_path: Path, monkeypatch, trigger_type: str):
+        import robothor.engine.config as config_mod
+
+        # The instance's last-resort model is appended to every chain; keep it
+        # out so the chain under test is exactly what the manifests say.
+        monkeypatch.setattr(config_mod, "last_resort_model", lambda: "")
+        manifest_dir = tmp_path / "docs" / "agents"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        defaults = {
+            "model": {
+                "primary": self.DEFAULT_CHAIN[0],
+                "fallbacks": self.DEFAULT_CHAIN[1],
+                "service_tier": "default",
+            }
+        }
+        manifest = {
+            "id": "example-agent",
+            "name": "Example agent",
+            "when": [
+                {
+                    "trigger_type": "webchat",
+                    "overrides": {
+                        "model": {
+                            "primary": self.CHAT_CHAIN[0],
+                            "fallbacks": self.CHAT_CHAIN[1],
+                            "service_tier": "priority",
+                        }
+                    },
+                },
+                {
+                    "trigger_type": "cron",
+                    "overrides": {
+                        "model": {
+                            "primary": self.CRON_CHAIN[0],
+                            "fallbacks": self.CRON_CHAIN[1],
+                            "service_tier": "priority",
+                        }
+                    },
+                },
+            ],
+        }
+        (manifest_dir / "_defaults.yaml").write_text(yaml.dump(defaults))
+        (manifest_dir / "example-agent.yaml").write_text(yaml.dump(manifest))
+        config_mod.reset_defaults_cache()
+        config = config_mod.load_agent_config(
+            "example-agent", manifest_dir, trigger_type=trigger_type
+        )
+        assert config is not None
+        return config
+
+    def test_webchat_gets_its_own_chain_and_the_priority_lane(self, tmp_path: Path, monkeypatch):
+        config = self._load(tmp_path, monkeypatch, "webchat")
+        assert (config.model_primary, config.model_fallbacks) == (
+            self.CHAT_CHAIN[0],
+            self.CHAT_CHAIN[1],
+        )
+        assert config.service_tier == "priority"
+
+    def test_cron_gets_its_own_chain_and_the_priority_lane(self, tmp_path: Path, monkeypatch):
+        config = self._load(tmp_path, monkeypatch, "cron")
+        assert (config.model_primary, config.model_fallbacks) == (
+            self.CRON_CHAIN[0],
+            self.CRON_CHAIN[1],
+        )
+        assert config.service_tier == "priority"
+
+    def test_hook_keeps_the_fleet_default_chain_and_tier(self, tmp_path: Path, monkeypatch):
+        config = self._load(tmp_path, monkeypatch, "hook")
+        assert (config.model_primary, config.model_fallbacks) == (
+            self.DEFAULT_CHAIN[0],
+            self.DEFAULT_CHAIN[1],
+        )
+        assert config.service_tier == "default"
+
+    def test_no_model_in_either_chain_is_unregistered(self, tmp_path: Path, monkeypatch):
+        for trigger in ("webchat", "cron", "hook"):
+            config = self._load(tmp_path, monkeypatch, trigger)
+            assert not any("not in the model registry" in w for w in config.validation_warnings), (
+                trigger,
+                config.validation_warnings,
+            )
+
+
 # ─── Lifecycle Hooks Merge ───────────────────────────────────────────
 
 

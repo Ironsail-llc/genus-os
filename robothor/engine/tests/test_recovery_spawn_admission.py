@@ -30,7 +30,7 @@ async def test_recovery_helper_respects_parent_admission(monkeypatch, fault):
     )
     parent = AgentConfig(id="parent", name="Parent", can_spawn_agents=True)
     child = AgentConfig(id="worker", name="Worker", tools_allowed=["web_fetch"])
-    monkeypatch.setattr("robothor.engine.config.load_agent_config", lambda *a: child)
+    monkeypatch.setattr("robothor.engine.config.load_agent_config", lambda *a, **k: child)
     monkeypatch.setattr(
         "robothor.engine.spawn_release.load_child_config", AsyncMock(return_value=(child, ""))
     )

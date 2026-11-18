@@ -68,6 +68,23 @@ genus doctor --category manifests
 `scripts/` ships in the repository, not in the wheel — it is there for a
 checkout, not for the install this guide describes.)
 
+One agent can run differently per trigger. A `when:` clause names a trigger
+type and the manifest fragment a run of that type gets on top of everything
+else; any other run keeps the manifest and the fleet defaults as they are:
+
+```yaml
+when:
+  - trigger_type: webchat
+    overrides:
+      model:
+        primary: openai/gpt-6.2-sol
+        service_tier: priority
+```
+
+The trigger types are `cron` (scheduled, heartbeat, worker and ambient runs),
+`hook`, `event`, `manual`, `telegram`, `webchat`, `slack`, `workflow`,
+`sub_agent`, `federation`, `webhook`, `ide`, `channel_event` and `channel`.
+
 The manifest schema, the instruction-file contract, the model-tiering strategy
 and worked multi-agent examples are in `docs/AGENT_BUILDER.md` in the
 repository. It is not on this site yet: it still quotes one deployment's own

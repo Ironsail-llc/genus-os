@@ -65,6 +65,22 @@ OpenAI accepts at most 128 tools on one request. An agent with broad tool access
 can exceed that; deferred tool loading keeps the
 advertised set small.
 
+The registry carries three models on the OpenAI API, each also under the bare id
+the API reports back on a response:
+
+| Model id | Window the engine sizes to | Output | Price per 1M tokens (input / cached input / cache write / output) |
+|---|---|---|---|
+| `openai/gpt-5.6-luna` | 922,000 | 128,000 | $0.20 / $0.02 / $0.25 / $1.20 |
+| `openai/gpt-6-luna` | 922,000 | 128,000 | $0.10 / $0.01 / $0.125 / $0.50 |
+| `openai/gpt-6.2-sol` | 272,000 | 128,000 | $2.00 / $0.10 / $2.50 / $10.00 |
+
+All three take images and are billed at twice these prices on the priority
+tier. GPT-6.2 Sol accepts up to 922,000 input tokens, but a request above
+272,000 is billed at twice the input rate and 1.5 times the output rate for the
+whole request. The registry has no field for a tiered price, so its entry sizes
+the window to that boundary: compaction fires long before it, and the ceiling
+the engine enforces after compaction keeps every request below it.
+
 ### Service tier
 
 Shared pay-as-you-go capacity is first come, first served, so a standard
@@ -90,6 +106,30 @@ tier is never recorded as priority, whatever model id its response carries.
 Every other route is sent nothing, including a fallback in the same chain, so
 adding the setting to a mixed chain is safe. The dashboard canvas runs outside
 any agent's run and stays on the standard lane.
+
+### A different chain per trigger
+
+A manifest's `when:` clauses override its configuration for one trigger type,
+applied per run. An interactive chat can take a stronger model on the priority
+lane while the same agent's scheduled runs stay on the cheap chain:
+
+```yaml
+when:
+  - trigger_type: webchat
+    overrides:
+      model:
+        primary: openai/gpt-6.2-sol
+        fallbacks: [openai/gpt-6-luna]
+        service_tier: priority
+```
+
+A run of any other trigger type (here a hook, a cron or a manual run) keeps the
+chain from the manifest and the instance's fleet defaults. The trigger types are
+`cron` (scheduled, heartbeat, worker and ambient runs), `hook`, `event`,
+`manual`, `telegram`, `webchat`, `slack`, `workflow`, `sub_agent`,
+`federation`, `webhook`, `ide`, `channel_event` and `channel`. Pages that show an
+agent's configuration outside a run, such as the doctor or the admin pages,
+show it without the clauses.
 
 ## Prompt caching
 
