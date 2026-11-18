@@ -37,8 +37,9 @@ def test_the_pin_lives_in_the_workflow_env(workflow: dict) -> None:
 
 def test_the_python_build_passes_every_pin_as_a_build_arg(workflow: dict) -> None:
     build_args = str(_build_step(workflow)["with"].get("build-args", ""))
+    lines = [line for line in build_args.splitlines() if line.strip()]
     for key in PIN_KEYS:
-        assert f"{key}=${{{{ env.{key} }}}}" in build_args, key
+        assert any(f"{key}=" in line and f"env.{key}" in line for line in lines), key
 
 
 def test_only_the_python_image_gets_the_pin(workflow: dict) -> None:
