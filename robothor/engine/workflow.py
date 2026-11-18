@@ -1319,7 +1319,7 @@ class WorkflowEngine:
         # `_or_reason`: a refused manifest is a FAILED step with a reason the
         # run report can show, not a raise out of the workflow engine.
         agent_config, reason = load_agent_config_or_reason(
-            step.agent_id, self.config.manifest_dir, "workflow step"
+            step.agent_id, self.config.manifest_dir, "workflow step", trigger_type="workflow"
         )
         if not agent_config:
             result.status = WorkflowStepStatus.FAILED

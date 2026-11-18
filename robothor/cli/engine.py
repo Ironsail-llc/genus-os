@@ -7,7 +7,9 @@ import sys
 from typing import Any
 
 
-def _load_agent_config_or_report(agent_id: str, manifest_dir: Any, out: Any = None) -> Any:
+def _load_agent_config_or_report(
+    agent_id: str, manifest_dir: Any, out: Any = None, trigger: Any = "manual"
+) -> Any:
     """``load_agent_config``; on failure, print ONE line and return None.
 
     A CLI command answers "no such agent" with a line and exit 1. A refused
@@ -23,7 +25,9 @@ def _load_agent_config_or_report(agent_id: str, manifest_dir: Any, out: Any = No
     from robothor.engine.config import load_agent_config_or_reason
 
     stream = out if out is not None else sys.stderr
-    config, reason = load_agent_config_or_reason(agent_id, manifest_dir, "cli")
+    config, reason = load_agent_config_or_reason(
+        agent_id, manifest_dir, "cli", trigger_type=trigger
+    )
     if config is None:
         print(f"Error: {reason}", file=stream)
     return config
@@ -240,7 +244,7 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
     if getattr(args, "deep", False):
         return _cmd_engine_run_deep(args, config)
 
-    agent_config = _load_agent_config_or_report(agent_id, config.manifest_dir, sys.stdout)
+    agent_config = _load_agent_config_or_report(agent_id, config.manifest_dir, sys.stdout, trigger)
     if not agent_config:
         return 1
 

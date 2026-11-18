@@ -79,7 +79,7 @@ async def _resume(job_id: str, runner: Any, config: Any) -> dict[str, Any]:
             return {"error": "Original owner identity no longer authorizes execution"}
         if job.get("resume_status") == "scheduled" and job.get("resume_owner_pid") == os.getpid():
             return {"status": "scheduled"}
-        agent = load_agent_config("main", config.manifest_dir)
+        agent = load_agent_config("main", config.manifest_dir, trigger_type=TriggerType.MANUAL)
         if agent is None:
             return {"error": "Main agent configuration unavailable"}
         job["resume_status"] = "scheduled"

@@ -164,7 +164,7 @@ async def test_native_scout_requires_tool_call_before_schema_and_preserves_proof
             id="run-1", status="completed", total_cost_usd=0, output_text=candidate()
         )
 
-    monkeypatch.setattr("robothor.engine.config.load_agent_config", lambda *a: config)
+    monkeypatch.setattr("robothor.engine.config.load_agent_config", lambda *a, **k: config)
     monkeypatch.setattr(
         "robothor.engine.tools.handlers.spawn.get_runner",
         lambda: SimpleNamespace(config=SimpleNamespace(manifest_dir="unused"), execute=execute),
