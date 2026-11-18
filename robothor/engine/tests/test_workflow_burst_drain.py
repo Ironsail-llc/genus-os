@@ -476,3 +476,109 @@ class TestRedisTrouble:
             await vt.run_until(lambda: vt.now - START > 90)
             await b.hooks.backlog.stop()
         assert b.handled() == _expected(5)
+
+
+def _two_steps() -> dict[str, Any]:
+    """Step 1 acts on the world; step 2 takes a while (an agent step, a slow call)."""
+    return {
+        **_definition(),
+        "steps": [
+            {
+                "id": "s1",
+                "type": "tool",
+                "tool_name": "create_task",
+                "tool_args": {"ref": "{{ event.id }}:s1"},
+            },
+            {
+                "id": "s2",
+                "type": "tool",
+                "tool_name": "slow_step",
+                "tool_args": {"ref": "{{ event.id }}:s2"},
+            },
+        ],
+    }
+
+
+def _slow_second_step(b: Burst) -> asyncio.Event:
+    """Step 2 blocks until the returned gate opens."""
+    gate = asyncio.Event()
+    record = b.engine.runner.registry.execute.side_effect
+
+    async def tool(name: str, args: dict[str, Any], **kw: Any) -> Any:
+        result = await record(name, args, **kw)
+        if name == "slow_step":
+            await gate.wait()
+        return result
+
+    b.engine.runner.registry.execute.side_effect = tool
+    return gate
+
+
+class TestAStartedRunIsNeverStartedAgain:
+    """Only a run that never started may be replayed: one cut off mid-run acted already."""
+
+    @pytest.mark.asyncio
+    async def test_a_run_cut_off_by_a_stop_is_not_run_again(self, engine_config, vt, caplog):
+        import logging
+
+        b = Burst(engine_config, vt, _two_steps())
+        gate = _slow_second_step(b)
+        await b.publish(2)
+        await vt.run_until(lambda: "evt-0:s2" in b.handled())
+
+        # The engine stops while evt-0 is in step 2; evt-1 has not started.
+        await b.hooks.backlog.stop(timeout=0)
+        gate.set()
+        b.hooks = b.new_hooks()
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.workflow_backlog"):
+            await b.hooks.resume_workflow_backlog(b.redis)
+            await vt.run_until()
+
+        handled = b.handled()
+        assert handled.count("evt-0:s1") == 1  # its send is never made twice
+        assert handled.count("evt-0:s2") == 1
+        # The run that had not started is not lost: it runs, once, in full.
+        assert handled.count("evt-1:s1") == 1 and handled.count("evt-1:s2") == 1
+        closed = [r.getMessage() for r in caplog.records if "evt-0" in r.getMessage()]
+        assert closed and "order-flow" in closed[0]
+        assert await b.redis.xlen(b.hooks.backlog.key("order-flow")) == 0
+
+    @pytest.mark.asyncio
+    async def test_a_new_leader_does_not_start_a_run_another_replica_holds(
+        self, engine_config, vt, monkeypatch, caplog
+    ):
+        import logging
+
+        monkeypatch.setenv("ROBOTHOR_HA_LEADER_ENABLED", "1")
+        b = Burst(engine_config, vt, _two_steps())
+        gate = _slow_second_step(b)
+        leads = {"a": True}
+        first = b.hooks
+        first.backlog._leader = lambda: leads["a"]
+        await b.publish(1)
+        await vt.run_until(lambda: "evt-0:s2" in b.handled())
+
+        # The lead moves while the first replica's run is in step 2.
+        leads["a"] = False
+        second = b.new_hooks()
+        second.backlog._leader = lambda: True
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.workflow_backlog"):
+            await second.resume_workflow_backlog(b.redis)
+            await vt.run_until(lambda: vt.now - START > 120)
+        assert b.handled().count("evt-0:s1") == 1
+
+        gate.set()  # the first replica's run finishes
+        await vt.run_until(lambda: vt.now - START > 240)
+        await first.backlog.stop(timeout=0)
+        await second.backlog.stop(timeout=0)
+        assert b.handled().count("evt-0:s1") == 1
+        assert b.handled().count("evt-0:s2") == 1
+        assert await b.redis.xlen(first.backlog.key("order-flow")) == 0
+
+
+class TestTheCap:
+    def test_a_backlog_holds_no_more_than_the_bus_it_copies_from(self):
+        from robothor.engine import workflow_backlog
+        from robothor.events.bus import MAXLEN
+
+        assert workflow_backlog.MAX_BACKLOG <= MAXLEN
