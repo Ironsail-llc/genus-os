@@ -537,6 +537,8 @@ class TestGetContact360:
         assert "error" in result
         mock_get_person.assert_not_called()
 
+    # The affiliations section reads the database; this suite has none.
+    @patch("robothor.crm.dal.list_affiliations", new=lambda **_kw: [])
     @patch("robothor.crm.dal.get_person_memory")
     @patch("robothor.crm.dal.get_person_notes")
     @patch("robothor.crm.dal.get_person_tasks")
@@ -566,6 +568,8 @@ class TestGetContact360:
         assert "error" not in result
         mock_get_person.assert_called_once()
 
+    # The affiliations section reads the database; this suite has none.
+    @patch("robothor.crm.dal.list_affiliations", new=lambda **_kw: [])
     @patch("robothor.crm.dal.get_person_memory")
     @patch("robothor.crm.dal.get_person_notes")
     @patch("robothor.crm.dal.get_person_tasks")

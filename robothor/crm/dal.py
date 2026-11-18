@@ -23,6 +23,7 @@ from contextvars import ContextVar, Token
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+import psycopg2.errors
 from psycopg2.extras import RealDictCursor
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ from robothor.constants import BENCHMARK_DIGEST_NOTIFICATION_TYPE, SANDBOX_DENIA
 from robothor.constants import DEFAULT_TENANT as DEFAULT_TENANT
 from robothor.crm import hooks
 from robothor.crm.models import (
+    affiliation_to_dict,
     company_to_dict,
     conversation_to_dict,
     history_to_dict,
@@ -329,7 +331,8 @@ def merge_people(
 
     1. Fill keeper's empty fields from loser
     2. Collect loser's emails/phones into keeper's additional_emails/phones
-    3. Re-point contact_identifiers, conversations, notes, tasks
+    3. Re-point contact_identifiers, conversations, notes, tasks; fold the
+       loser's affiliations into the keeper's (duplicates de-duplicated)
     4. Soft-delete loser
     5. Create merge note on keeper
     """
@@ -420,6 +423,7 @@ def merge_people(
                 "UPDATE crm_conversations SET person_id = %s WHERE person_id = %s",
                 (keeper_id, loser_id),
             )
+            _fold_affiliations(cur, tenant_id, "person_id", keeper_id, loser_id)
             cur.execute(
                 "UPDATE crm_notes SET person_id = %s WHERE person_id = %s AND deleted_at IS NULL",
                 (keeper_id, loser_id),
@@ -470,7 +474,9 @@ def merge_companies(
     """Merge loser company into keeper.
 
     1. Fill keeper's empty fields from loser
-    2. Re-point crm_people.company_id, crm_notes.company_id
+    2. Re-point crm_people.company_id, crm_notes.company_id, the loser's
+       outside-system identifiers and affiliations (duplicates folded), and
+       re-parent its children onto the keeper without making a loop
     3. Soft-delete loser
     """
     with get_connection() as conn:
@@ -530,6 +536,16 @@ def merge_companies(
             cur.execute(
                 "UPDATE crm_notes SET company_id = %s WHERE company_id = %s AND deleted_at IS NULL",
                 (keeper_id, loser_id),
+            )
+            cur.execute(
+                "UPDATE crm_company_identifiers SET company_id = %s, updated_at = NOW() "
+                "WHERE tenant_id = %s AND company_id = %s",
+                (keeper_id, tenant_id, loser_id),
+            )
+            _fold_affiliations(cur, tenant_id, "company_id", keeper_id, loser_id)
+            loser_parent = loser.get("parent_company_id")
+            _merge_company_hierarchy(
+                cur, tenant_id, keeper_id, loser_id, str(loser_parent) if loser_parent else None
             )
             cur.execute(
                 "UPDATE crm_companies SET deleted_at = NOW(), updated_at = NOW() WHERE id = %s",
@@ -946,6 +962,774 @@ def list_companies(
                 (tenant_id, limit),
             )
         return [company_to_dict(r) for r in cur.fetchall()]
+
+
+# ─── Hierarchy, external identifiers, affiliations ──────────────────────
+#
+# A plugin that syncs an organization chart from an outside system keys every
+# row by that system's id (``system`` + ``identifier``), never by name: a
+# renamed company stays one row, two companies that share a name stay two.
+# Companies map through ``crm_company_identifiers``; people reuse
+# ``contact_identifiers`` with ``channel`` = the system name.
+#
+# Upserts are idempotent (a repeat with the same values writes nothing) and
+# safe under concurrent calls: the unique keys decide the race and the loser
+# re-reads the winner's row. A soft-deleted row found by its identifier is
+# never revived silently: the upsert leaves it as it is and reports
+# ``deleted: True``; pass ``restore=True`` to undelete and update it.
+#
+# Invalid input raises ``ValueError`` (unknown field, blank key, a parent or
+# person in another tenant, a hierarchy loop); database errors propagate after
+# the rollback. These are sync primitives: a silent ``None`` would hide a bad
+# record among hundreds.
+
+#: Company columns an upsert may set besides ``name`` and ``parent_company_id``.
+COMPANY_UPSERT_FIELDS = frozenset(
+    {
+        "domain_name",
+        "employees",
+        "address_street1",
+        "address_street2",
+        "address_city",
+        "address_state",
+        "address_postcode",
+        "address_country",
+        "linkedin_url",
+        "ideal_customer_profile",
+    }
+)
+
+#: Person columns an upsert may set besides name, email and phone. Opt-outs
+#: (``do_not_contact``) are deliberately absent: a sync must not clear one.
+PERSON_UPSERT_FIELDS = frozenset({"job_title", "city", "linkedin_url", "avatar_url", "company_id"})
+
+_MAX_HIERARCHY_DEPTH = 100
+
+
+def _required_text(value: Any, what: str) -> str:
+    text = value.strip() if isinstance(value, str) else ""
+    if not text:
+        raise ValueError(f"{what} is required")
+    return text
+
+
+def _normalize_role(role: Any) -> str:
+    return _required_text(role, "role").lower()
+
+
+def _check_fields(
+    fields: dict[str, Any] | None, allowed: frozenset[str], what: str
+) -> dict[str, Any]:
+    fields = dict(fields or {})
+    unknown = sorted(set(fields) - allowed)
+    if unknown:
+        raise ValueError(
+            f"unknown {what} field(s): {', '.join(unknown)}; allowed: {', '.join(sorted(allowed))}"
+        )
+    return fields
+
+
+def _differs(current: Any, wanted: Any) -> bool:
+    if current is None or wanted is None:
+        return (current is None) != (wanted is None)
+    if isinstance(current, bool) or isinstance(wanted, bool):
+        return bool(current) != bool(wanted)
+    return str(current) != str(wanted)
+
+
+def _require_row(cur: Any, table: str, row_id: str, tenant_id: str, what: str) -> None:
+    """Refuse an id that is not a live row of this tenant (``ValueError``)."""
+    try:
+        uuid.UUID(str(row_id))
+    except (TypeError, ValueError):
+        raise ValueError(f"{what} id {row_id!r} is not a valid id") from None
+    cur.execute(
+        f"SELECT 1 FROM {table} WHERE id = %s AND tenant_id = %s AND deleted_at IS NULL",  # noqa: S608 - constant table
+        (str(row_id), tenant_id),
+    )
+    if cur.fetchone() is None:
+        raise ValueError(f"{what} {row_id} not found")
+
+
+def _as_value_error(exc: Exception) -> ValueError:
+    diag = getattr(exc, "diag", None)
+    message = getattr(diag, "message_primary", None) or str(exc).splitlines()[0]
+    return ValueError(message)
+
+
+def _ancestor_ids(cur: Any, company_id: str) -> list[str]:
+    """Ids above ``company_id``, nearest first (deleted ones included)."""
+    cur.execute(
+        """
+        WITH RECURSIVE up(id, parent, depth) AS (
+            SELECT id, parent_company_id, 0 FROM crm_companies WHERE id = %s
+            UNION ALL
+            SELECT c.id, c.parent_company_id, up.depth + 1
+            FROM crm_companies c JOIN up ON c.id = up.parent
+            WHERE up.depth < %s
+        )
+        SELECT id FROM up WHERE depth > 0 ORDER BY depth
+        """,
+        (company_id, _MAX_HIERARCHY_DEPTH),
+    )
+    return [str(r["id"] if isinstance(r, dict) else r[0]) for r in cur.fetchall()]
+
+
+def upsert_company_by_identifier(
+    system: str,
+    identifier: str,
+    *,
+    name: str,
+    parent_company_id: str | None = None,
+    fields: dict[str, Any] | None = None,
+    restore: bool = False,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict[str, Any]:
+    """Create or update the company an outside system knows as ``identifier``.
+
+    Returns ``{"id", "created", "updated", "deleted"}``. ``parent_company_id``
+    of ``None`` leaves an existing parent as it is (``set_company_parent``
+    clears one); ``fields`` takes the columns in ``COMPANY_UPSERT_FIELDS``.
+    """
+    system = _required_text(system, "system")
+    identifier = _required_text(identifier, "identifier")
+    name = _required_text(name, "name")
+    fields = _check_fields(fields, COMPANY_UPSERT_FIELDS, "company")
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        # Checks first, outside the write: a refusal leaves nothing to roll back.
+        if parent_company_id is not None:
+            _require_row(cur, "crm_companies", parent_company_id, tenant_id, "parent company")
+        try:
+            company_id: str | None = None
+            for _attempt in range(3):
+                cur.execute(
+                    "SELECT company_id FROM crm_company_identifiers "
+                    "WHERE tenant_id = %s AND system = %s AND identifier = %s",
+                    (tenant_id, system, identifier),
+                )
+                found = cur.fetchone()
+                if found:
+                    company_id = str(found["company_id"])
+                    break
+                new_id = str(uuid.uuid4())
+                columns = {
+                    "id": new_id,
+                    "name": name,
+                    "tenant_id": tenant_id,
+                    "parent_company_id": parent_company_id,
+                    **fields,
+                }
+                cur.execute("SAVEPOINT crm_upsert_company")
+                cur.execute(
+                    f"INSERT INTO crm_companies ({', '.join(columns)}) "  # noqa: S608 - allowlisted columns
+                    f"VALUES ({', '.join(['%s'] * len(columns))})",
+                    list(columns.values()),
+                )
+                cur.execute(
+                    "INSERT INTO crm_company_identifiers (tenant_id, system, identifier, company_id) "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING company_id",
+                    (tenant_id, system, identifier, new_id),
+                )
+                if cur.fetchone():
+                    cur.execute("RELEASE SAVEPOINT crm_upsert_company")
+                    conn.commit()
+                    _safe_audit(
+                        "create",
+                        "company",
+                        new_id,
+                        details={
+                            "name": name,
+                            "via": "upsert_by_identifier",
+                            "system": system,
+                            "tenant_id": tenant_id,
+                        },
+                    )
+                    return {"id": new_id, "created": True, "updated": False, "deleted": False}
+                # Another writer claimed the identifier first: drop our row, read theirs.
+                cur.execute("ROLLBACK TO SAVEPOINT crm_upsert_company")
+            if company_id is None:
+                raise RuntimeError("could not settle the company identifier after 3 attempts")
+
+            cur.execute(
+                "SELECT * FROM crm_companies WHERE id = %s AND tenant_id = %s FOR UPDATE",
+                (company_id, tenant_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"identifier maps to company {company_id} outside this tenant")
+            deleted = row["deleted_at"] is not None
+            if deleted and not restore:
+                conn.commit()
+                return {"id": company_id, "created": False, "updated": False, "deleted": True}
+
+            wanted: dict[str, Any] = {"name": name, **fields}
+            if parent_company_id is not None:
+                wanted["parent_company_id"] = parent_company_id
+            changes = {k: v for k, v in wanted.items() if _differs(row.get(k), v)}
+            if changes or deleted:
+                sets = [f"{col} = %s" for col in changes]
+                if deleted:
+                    sets.append("deleted_at = NULL")
+                sets.append("updated_at = NOW()")
+                cur.execute(
+                    f"UPDATE crm_companies SET {', '.join(sets)} WHERE id = %s",  # noqa: S608 - allowlisted columns
+                    [*changes.values(), company_id],
+                )
+            conn.commit()
+            if changes or deleted:
+                _safe_audit(
+                    "restore" if deleted else "update",
+                    "company",
+                    company_id,
+                    details={"fields": sorted(changes), "via": "upsert_by_identifier"},
+                )
+            return {
+                "id": company_id,
+                "created": False,
+                "updated": bool(changes or deleted),
+                "deleted": False,
+            }
+        except psycopg2.errors.CheckViolation as exc:
+            conn.rollback()
+            raise _as_value_error(exc) from exc
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def upsert_person_by_identifier(
+    system: str,
+    identifier: str,
+    *,
+    first_name: str,
+    last_name: str | None = None,
+    email: str | None = None,
+    phone: str | None = None,
+    fields: dict[str, Any] | None = None,
+    restore: bool = False,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict[str, Any]:
+    """Create or update the person an outside system knows as ``identifier``.
+
+    The mapping lives in ``contact_identifiers`` with ``channel`` = ``system``.
+    Returns ``{"id", "created", "updated", "deleted"}``. ``None`` for
+    ``last_name``, ``email`` or ``phone`` leaves the stored value as it is.
+    """
+    system = _required_text(system, "system")
+    identifier = _required_text(identifier, "identifier")
+    first_name = scrub_null_string(_required_text(first_name, "first_name")) or ""
+    if last_name is not None:
+        last_name = scrub_null_string(last_name.strip()) or ""
+    if email is not None:
+        email = normalize_email(email)
+    fields = _check_fields(fields, PERSON_UPSERT_FIELDS, "person")
+    valid, reason = validate_person_input(first_name, last_name or "", email)
+    if not valid:
+        raise ValueError(reason)
+    display = f"{first_name} {last_name or ''}".strip()
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        if fields.get("company_id"):
+            _require_row(cur, "crm_companies", fields["company_id"], tenant_id, "company")
+        try:
+            key = (tenant_id, system, identifier)
+            person_id: str | None = None
+            for _attempt in range(3):
+                cur.execute(
+                    "SELECT person_id FROM contact_identifiers "
+                    "WHERE tenant_id = %s AND channel = %s AND identifier = %s",
+                    key,
+                )
+                found = cur.fetchone()
+                if found and found["person_id"]:
+                    person_id = str(found["person_id"])
+                    break
+                new_id = str(uuid.uuid4())
+                columns = {
+                    "id": new_id,
+                    "first_name": first_name,
+                    "last_name": last_name or "",
+                    "email": email,
+                    "phone": phone,
+                    "tenant_id": tenant_id,
+                    **fields,
+                }
+                cur.execute("SAVEPOINT crm_upsert_person")
+                cur.execute(
+                    f"INSERT INTO crm_people ({', '.join(columns)}) "  # noqa: S608 - allowlisted columns
+                    f"VALUES ({', '.join(['%s'] * len(columns))})",
+                    list(columns.values()),
+                )
+                if found:
+                    # A row the resolver made with no person yet: claim it.
+                    cur.execute(
+                        "UPDATE contact_identifiers SET person_id = %s, "
+                        "display_name = COALESCE(display_name, %s), updated_at = NOW() "
+                        "WHERE tenant_id = %s AND channel = %s AND identifier = %s "
+                        "AND person_id IS NULL RETURNING person_id",
+                        (new_id, display, *key),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO contact_identifiers (tenant_id, channel, identifier, "
+                        "display_name, person_id) VALUES (%s, %s, %s, %s, %s) "
+                        "ON CONFLICT DO NOTHING RETURNING person_id",
+                        (*key, display, new_id),
+                    )
+                if cur.fetchone():
+                    cur.execute("RELEASE SAVEPOINT crm_upsert_person")
+                    conn.commit()
+                    _safe_audit(
+                        "create",
+                        "person",
+                        new_id,
+                        details={
+                            "via": "upsert_by_identifier",
+                            "system": system,
+                            "tenant_id": tenant_id,
+                        },
+                    )
+                    return {"id": new_id, "created": True, "updated": False, "deleted": False}
+                cur.execute("ROLLBACK TO SAVEPOINT crm_upsert_person")
+            if person_id is None:
+                raise RuntimeError("could not settle the person identifier after 3 attempts")
+
+            cur.execute(
+                "SELECT * FROM crm_people WHERE id = %s AND tenant_id = %s FOR UPDATE",
+                (person_id, tenant_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"identifier maps to person {person_id} outside this tenant")
+            deleted = row["deleted_at"] is not None
+            if deleted and not restore:
+                conn.commit()
+                return {"id": person_id, "created": False, "updated": False, "deleted": True}
+
+            optional = {"last_name": last_name, "email": email, "phone": phone}
+            wanted: dict[str, Any] = {
+                "first_name": first_name,
+                **fields,
+                **{col: value for col, value in optional.items() if value is not None},
+            }
+            changes = {k: v for k, v in wanted.items() if _differs(row.get(k), v)}
+            if changes or deleted:
+                sets = [f"{col} = %s" for col in changes]
+                if deleted:
+                    sets.append("deleted_at = NULL")
+                sets.append("updated_at = NOW()")
+                cur.execute(
+                    f"UPDATE crm_people SET {', '.join(sets)} WHERE id = %s",  # noqa: S608 - allowlisted columns
+                    [*changes.values(), person_id],
+                )
+            conn.commit()
+            if changes or deleted:
+                _safe_audit(
+                    "restore" if deleted else "update",
+                    "person",
+                    person_id,
+                    details={"fields": sorted(changes), "via": "upsert_by_identifier"},
+                )
+            return {
+                "id": person_id,
+                "created": False,
+                "updated": bool(changes or deleted),
+                "deleted": False,
+            }
+        except psycopg2.errors.CheckViolation as exc:
+            conn.rollback()
+            raise _as_value_error(exc) from exc
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def get_company_by_identifier(
+    system: str, identifier: str, *, tenant_id: str = DEFAULT_TENANT
+) -> dict[str, Any] | None:
+    """The live company an outside system knows as ``identifier``, or ``None``."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT c.* FROM crm_company_identifiers ci
+            JOIN crm_companies c ON c.id = ci.company_id
+            WHERE ci.tenant_id = %s AND ci.system = %s AND ci.identifier = %s
+              AND c.tenant_id = %s AND c.deleted_at IS NULL
+            """,
+            (tenant_id, (system or "").strip(), (identifier or "").strip(), tenant_id),
+        )
+        row = cur.fetchone()
+        return company_to_dict(row) if row else None
+
+
+def get_person_by_identifier(
+    system: str, identifier: str, *, tenant_id: str = DEFAULT_TENANT
+) -> dict[str, Any] | None:
+    """The live person an outside system knows as ``identifier``, or ``None``."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT person_id FROM contact_identifiers "
+            "WHERE tenant_id = %s AND channel = %s AND identifier = %s AND person_id IS NOT NULL",
+            (tenant_id, (system or "").strip(), (identifier or "").strip()),
+        )
+        row = cur.fetchone()
+    return get_person(str(row["person_id"]), tenant_id) if row else None
+
+
+def list_company_identifiers(
+    company_id: str, *, tenant_id: str = DEFAULT_TENANT
+) -> list[dict[str, Any]]:
+    """Every outside-system id recorded for a company."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT system, identifier FROM crm_company_identifiers "
+            "WHERE tenant_id = %s AND company_id = %s ORDER BY system, identifier",
+            (tenant_id, company_id),
+        )
+        return [{"system": r["system"], "identifier": r["identifier"]} for r in cur.fetchall()]
+
+
+def set_company_parent(
+    company_id: str, parent_company_id: str | None, *, tenant_id: str = DEFAULT_TENANT
+) -> bool:
+    """Place a company under ``parent_company_id``, or clear its parent with ``None``.
+
+    Returns False when the company is not a live row of this tenant; raises
+    ``ValueError`` for a parent outside the tenant or a hierarchy loop.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        if parent_company_id is not None:
+            _require_row(cur, "crm_companies", parent_company_id, tenant_id, "parent company")
+            if str(parent_company_id) == str(company_id) or str(company_id) in _ancestor_ids(
+                cur, str(parent_company_id)
+            ):
+                raise ValueError(
+                    f"company {company_id} cannot be placed under itself or its own descendant"
+                )
+        try:
+            cur.execute(
+                "UPDATE crm_companies SET parent_company_id = %s, updated_at = NOW() "
+                "WHERE id = %s AND tenant_id = %s AND deleted_at IS NULL",
+                (parent_company_id, company_id, tenant_id),
+            )
+            ok: bool = cur.rowcount > 0
+            conn.commit()
+        except psycopg2.errors.CheckViolation as exc:
+            conn.rollback()
+            raise _as_value_error(exc) from exc
+        except Exception:
+            conn.rollback()
+            raise
+    if ok:
+        _safe_audit(
+            "update",
+            "company",
+            company_id,
+            details={"fields": ["parent_company_id"], "parent_company_id": parent_company_id},
+        )
+    return ok
+
+
+def list_company_children(
+    company_id: str, *, tenant_id: str = DEFAULT_TENANT
+) -> list[dict[str, Any]]:
+    """The live companies directly under ``company_id``, by name."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT * FROM crm_companies WHERE parent_company_id = %s AND tenant_id = %s "
+            "AND deleted_at IS NULL ORDER BY name, id",
+            (company_id, tenant_id),
+        )
+        return [company_to_dict(r) for r in cur.fetchall()]
+
+
+def get_company_parent_chain(
+    company_id: str, *, tenant_id: str = DEFAULT_TENANT
+) -> list[dict[str, Any]]:
+    """The live companies above ``company_id``, nearest first."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            WITH RECURSIVE up(id, parent, depth) AS (
+                SELECT id, parent_company_id, 0 FROM crm_companies
+                WHERE id = %s AND tenant_id = %s
+                UNION ALL
+                SELECT c.id, c.parent_company_id, up.depth + 1
+                FROM crm_companies c JOIN up ON c.id = up.parent
+                WHERE c.tenant_id = %s AND up.depth < %s
+            )
+            SELECT c.* FROM up JOIN crm_companies c ON c.id = up.id
+            WHERE up.depth > 0 AND c.deleted_at IS NULL
+            ORDER BY up.depth
+            """,
+            (company_id, tenant_id, tenant_id, _MAX_HIERARCHY_DEPTH),
+        )
+        return [company_to_dict(r) for r in cur.fetchall()]
+
+
+_AFFILIATION_SELECT = """
+    SELECT a.*, p.first_name, p.last_name, c.name AS company_name
+    FROM crm_affiliations a
+    JOIN crm_people p ON p.id = a.person_id
+    JOIN crm_companies c ON c.id = a.company_id
+"""
+
+
+def _affiliation_by_key(
+    cur: Any, tenant_id: str, person_id: str, company_id: str, role: str
+) -> dict[str, Any] | None:
+    cur.execute(
+        _AFFILIATION_SELECT
+        + " WHERE a.tenant_id = %s AND a.person_id = %s AND a.company_id = %s AND a.role = %s",
+        (tenant_id, person_id, company_id, role),
+    )
+    row = cur.fetchone()
+    return affiliation_to_dict(row) if row else None
+
+
+def set_affiliation(
+    person_id: str,
+    company_id: str,
+    role: str,
+    *,
+    attributes: dict[str, Any] | None = None,
+    is_active: bool = True,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict[str, Any]:
+    """Record that a person holds ``role`` at a company (one row per triple).
+
+    Idempotent: a repeat with the same values writes nothing. ``attributes``
+    replaces the stored object when given and leaves it as it is when
+    ``None``. ``is_active=False`` closes the affiliation (``until`` = now);
+    setting it active again re-opens it with a fresh ``since``. Roles are
+    stored trimmed and lower-case. Returns the affiliation plus ``created``
+    and ``changed``.
+    """
+    role = _normalize_role(role)
+    if attributes is not None and not isinstance(attributes, dict):
+        raise ValueError("attributes must be an object")
+    attrs_json = json.dumps(attributes) if attributes is not None else None
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        _require_row(cur, "crm_people", person_id, tenant_id, "person")
+        _require_row(cur, "crm_companies", company_id, tenant_id, "company")
+        try:
+            cur.execute(
+                """
+                INSERT INTO crm_affiliations
+                    (tenant_id, person_id, company_id, role, attributes, is_active, until)
+                VALUES (%(t)s, %(p)s, %(c)s, %(r)s, COALESCE(%(a)s::jsonb, '{}'::jsonb),
+                        %(act)s, CASE WHEN %(act)s THEN NULL ELSE now() END)
+                ON CONFLICT ON CONSTRAINT crm_affiliations_key DO UPDATE SET
+                    attributes = COALESCE(%(a)s::jsonb, crm_affiliations.attributes),
+                    is_active = EXCLUDED.is_active,
+                    since = CASE WHEN EXCLUDED.is_active AND NOT crm_affiliations.is_active
+                                 THEN now() ELSE crm_affiliations.since END,
+                    until = CASE WHEN EXCLUDED.is_active THEN NULL
+                                 ELSE COALESCE(crm_affiliations.until, now()) END,
+                    updated_at = now()
+                WHERE crm_affiliations.is_active IS DISTINCT FROM EXCLUDED.is_active
+                   OR (%(a)s::jsonb IS NOT NULL
+                       AND crm_affiliations.attributes IS DISTINCT FROM %(a)s::jsonb)
+                RETURNING (xmax = 0) AS inserted
+                """,
+                {
+                    "t": tenant_id,
+                    "p": str(person_id),
+                    "c": str(company_id),
+                    "r": role,
+                    "a": attrs_json,
+                    "act": bool(is_active),
+                },
+            )
+            written = cur.fetchone()
+            result = _affiliation_by_key(cur, tenant_id, str(person_id), str(company_id), role)
+            conn.commit()
+        except psycopg2.errors.CheckViolation as exc:
+            conn.rollback()
+            raise _as_value_error(exc) from exc
+        except Exception:
+            conn.rollback()
+            raise
+    assert result is not None  # the row was just written or already there
+    created = bool(written and written["inserted"])
+    if written:
+        _safe_audit(
+            "create" if created else "update",
+            "affiliation",
+            result["id"],
+            details={
+                "person_id": str(person_id),
+                "company_id": str(company_id),
+                "role": role,
+                "is_active": bool(is_active),
+                "tenant_id": tenant_id,
+            },
+        )
+    return {**result, "created": created, "changed": written is not None}
+
+
+def close_affiliation(
+    person_id: str, company_id: str, role: str, *, tenant_id: str = DEFAULT_TENANT
+) -> dict[str, Any] | None:
+    """Close an affiliation: ``is_active`` false and ``until`` set. Nothing is deleted.
+
+    Idempotent; returns the affiliation, or ``None`` when there is none.
+    """
+    role = _normalize_role(role)
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cur.execute(
+                "UPDATE crm_affiliations SET is_active = false, until = now(), updated_at = now() "
+                "WHERE tenant_id = %s AND person_id = %s AND company_id = %s AND role = %s "
+                "AND is_active RETURNING id",
+                (tenant_id, str(person_id), str(company_id), role),
+            )
+            closed = cur.fetchone()
+            result = _affiliation_by_key(cur, tenant_id, str(person_id), str(company_id), role)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    if closed and result:
+        _safe_audit("close", "affiliation", result["id"], details={"role": role})
+    return result
+
+
+def list_affiliations(
+    *,
+    person_id: str | None = None,
+    company_id: str | None = None,
+    role: str | None = None,
+    active_only: bool = True,
+    limit: int = 500,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[dict[str, Any]]:
+    """Affiliations of live people at live companies, filtered by any of the arguments."""
+    conditions = [
+        "a.tenant_id = %s",
+        "p.deleted_at IS NULL",
+        "c.deleted_at IS NULL",
+    ]
+    params: list[Any] = [tenant_id]
+    if person_id is not None:
+        conditions.append("a.person_id = %s")
+        params.append(str(person_id))
+    if company_id is not None:
+        conditions.append("a.company_id = %s")
+        params.append(str(company_id))
+    if role is not None:
+        conditions.append("a.role = %s")
+        params.append(_normalize_role(role))
+    if active_only:
+        conditions.append("a.is_active")
+    params.append(max(1, min(int(limit), 5000)))
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            _AFFILIATION_SELECT
+            + f" WHERE {' AND '.join(conditions)}"
+            + " ORDER BY c.name, a.role, p.first_name, p.last_name, a.id LIMIT %s",
+            params,
+        )
+        return [affiliation_to_dict(r) for r in cur.fetchall()]
+
+
+def get_company_view(company_id: str, *, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any] | None:
+    """A company with its parent, parent chain, children, people by role and outside ids."""
+    company = get_company(company_id, tenant_id)
+    if company is None:
+        return None
+    chain = get_company_parent_chain(company_id, tenant_id=tenant_id)
+    return {
+        "company": company,
+        "parent": chain[0] if chain else None,
+        "parentChain": chain,
+        "children": list_company_children(company_id, tenant_id=tenant_id),
+        "affiliations": list_affiliations(company_id=company_id, tenant_id=tenant_id),
+        "identifiers": list_company_identifiers(company_id, tenant_id=tenant_id),
+    }
+
+
+def _fold_affiliations(
+    cur: Any, tenant_id: str, column: str, keeper_id: str, loser_id: str
+) -> None:
+    """Move the loser's affiliations to the keeper inside a merge.
+
+    ``column`` is ``person_id`` (merging people) or ``company_id`` (merging
+    companies). Where the keeper already holds the same role at the same
+    counterpart, the two rows fold into the keeper's: active if either was,
+    the earlier ``since``, attributes combined (the keeper's keys win), and
+    the loser's row is removed.
+    """
+    other = {"person_id": "company_id", "company_id": "person_id"}[column]
+    match = (
+        f"k.tenant_id = %(t)s AND l.tenant_id = %(t)s AND k.{column} = %(keeper)s "
+        f"AND l.{column} = %(loser)s AND k.{other} = l.{other} AND k.role = l.role"
+    )
+    params = {"t": tenant_id, "keeper": keeper_id, "loser": loser_id}
+    cur.execute(
+        f"""
+        UPDATE crm_affiliations k SET
+            attributes = l.attributes || k.attributes,
+            is_active = k.is_active OR l.is_active,
+            since = LEAST(k.since, l.since),
+            until = CASE WHEN k.is_active OR l.is_active THEN NULL
+                         ELSE GREATEST(k.until, l.until) END,
+            updated_at = now()
+        FROM crm_affiliations l WHERE {match}
+        """,  # noqa: S608 - column names from the constant map above
+        params,
+    )
+    cur.execute(f"DELETE FROM crm_affiliations l USING crm_affiliations k WHERE {match}", params)  # noqa: S608
+    cur.execute(
+        f"UPDATE crm_affiliations SET {column} = %(keeper)s, updated_at = now() "  # noqa: S608
+        f"WHERE tenant_id = %(t)s AND {column} = %(loser)s",
+        params,
+    )
+
+
+def _merge_company_hierarchy(
+    cur: Any, tenant_id: str, keeper_id: str, loser_id: str, loser_parent: str | None
+) -> None:
+    """Re-parent the loser's children onto the keeper without making a loop."""
+    # A keeper somewhere under the loser first moves up to the loser's place,
+    # or re-parenting the loser's children onto it would close a loop.
+    if loser_id in _ancestor_ids(cur, keeper_id):
+        cur.execute(
+            "UPDATE crm_companies SET parent_company_id = %s, updated_at = NOW() WHERE id = %s",
+            (loser_parent, keeper_id),
+        )
+    cur.execute(
+        "UPDATE crm_companies SET parent_company_id = %s, updated_at = NOW() "
+        "WHERE parent_company_id = %s AND id <> %s AND tenant_id = %s",
+        (keeper_id, loser_id, keeper_id, tenant_id),
+    )
+    # An orphan keeper takes the loser's parent, unless that parent sits under the keeper.
+    cur.execute("SELECT parent_company_id FROM crm_companies WHERE id = %s", (keeper_id,))
+    row = cur.fetchone()
+    keeper_parent = row["parent_company_id"] if row else None
+    if (
+        keeper_parent is None
+        and loser_parent
+        and loser_parent != keeper_id
+        and keeper_id not in _ancestor_ids(cur, loser_parent)
+    ):
+        cur.execute(
+            "UPDATE crm_companies SET parent_company_id = %s, updated_at = NOW() WHERE id = %s",
+            (loser_parent, keeper_id),
+        )
 
 
 # ─── Notes ───────────────────────────────────────────────────────────────
@@ -4690,7 +5474,8 @@ def get_contact_360(
     scope: DataScope | None = None,
 ) -> dict[str, Any]:
     """One-call holistic view: person + summary + recent timeline + open
-    tasks + recent notes + memory snippets. Agent-facing convenience.
+    tasks + recent notes + memory snippets + affiliations (each with its
+    company's parent chain, nearest first). Agent-facing convenience.
 
     ``scope``: this is a "give me everything about person X" call, not a
     row-filtered listing — there's no org-general carve-out to fall back to.
@@ -4711,4 +5496,13 @@ def get_contact_360(
         ],
         "recent_notes": get_person_notes(person_id, limit=10, tenant_id=tenant_id),
         "memory": get_person_memory(person_id, limit=10, tenant_id=tenant_id),
+        "affiliations": [
+            {
+                **aff,
+                "parentChain": get_company_parent_chain(aff["companyId"], tenant_id=tenant_id),
+            }
+            for aff in list_affiliations(
+                person_id=person_id, active_only=False, tenant_id=tenant_id
+            )
+        ],
     }
