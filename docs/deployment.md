@@ -898,6 +898,28 @@ real tenants, so it belongs in your deployment's values, not in the chart. See
 [Tenant cells](https://github.com/Ironsail-llc/genus-os/blob/main/helm/genus-os/README.md#tenant-cells) in the chart README for
 what an entry renders and how to seed its workspace.
 
+### Claude Code jobs (PR reviewer)
+
+The released `python` image carries a pinned Claude Code CLI and the
+`bubblewrap` and `socat` its Bash sandbox needs; the release workflow's
+top-level `env` holds the version and checksums. Turn the jobs on with
+`engine.coding.enabled`: the chart puts the coding workspace, the repo roots
+and the PR reviewer's clone root under the engine's workspace volume (keep it
+persistent) and selects token auth. Put `CLAUDE_CODE_OAUTH_TOKEN` and
+`GITHUB_TOKEN` in the `engine-providers` Secret, and allow the engine egress to
+the Git host and the model provider.
+
+Under the chart's default pod security the sandbox cannot start: the runtime's
+default seccomp profile refuses its user namespace and the masked `/proc`
+refuses its `/proc` mount, so every job fails at its first shell command.
+`engine.coding.sandbox.relaxPodSecurity: true` lifts exactly those two on the
+engine container (`procMount: Unmasked`, an `Unconfined` or `Localhost`
+seccomp profile) and sets `hostUsers: false` on the engine pod, which needs
+nodes that support user namespaces. Nothing else in the release changes. See
+[Claude Code jobs](https://github.com/Ironsail-llc/genus-os/blob/main/helm/genus-os/README.md#claude-code-jobs)
+in the chart README for every value, and [PR reviewer](PR_REVIEWER.md#on-a-hosted-deployment)
+for the reviewer's own settings.
+
 ### Webhook receiver (hooks)
 
 The engine runs as one `Recreate` replica, so webhook deliveries to
