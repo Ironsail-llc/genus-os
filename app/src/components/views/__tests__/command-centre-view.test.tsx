@@ -1,9 +1,24 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { onlineManager } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CommandCentreView } from "../command-centre-view";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  hide(false);
+});
+
+/** Stand in for the browser hiding or showing the tab. */
+function hide(hidden: boolean) {
+  Object.defineProperty(document, "hidden", { value: hidden, configurable: true });
+  Object.defineProperty(document, "visibilityState", {
+    value: hidden ? "hidden" : "visible",
+    configurable: true,
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
 
 const PARENT = {
   tenant_id: "acme-parent",
@@ -259,5 +274,107 @@ describe("CommandCentreView", () => {
 
     expect((await screen.findByRole("alert")).textContent).toContain("tenant not accessible");
     expect(onSwitched).not.toHaveBeenCalled();
+  });
+
+  describe("loads once when opened, and again only on Refresh", () => {
+    // Every read of the overview writes an audit row in each child company,
+    // so returning to the tab or the network coming back must not re-read it.
+    function overviewCalls(spy: ReturnType<typeof routeFetch>) {
+      return spy.mock.calls.filter(([url]) => String(url).endsWith(OVERVIEW_URL)).length;
+    }
+
+    it("does not read the overview again when the tab regains focus, however old it is", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const spy = routeFetch({ [OVERVIEW_URL]: () => jsonResponse(overview([PARENT, CHILD_A])) });
+
+      render(<CommandCentreView visible />);
+      await screen.findByTestId("company-card-acme-child-a");
+      expect(overviewCalls(spy)).toBe(1);
+
+      // Well past the minute the answer stays fresh for.
+      await act(async () => {
+        vi.advanceTimersByTime(10 * 60_000);
+      });
+      await act(async () => {
+        hide(true);
+        hide(false);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+
+      expect(overviewCalls(spy)).toBe(1);
+    });
+
+    it("does not read the overview again when the network comes back", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const spy = routeFetch({ [OVERVIEW_URL]: () => jsonResponse(overview([PARENT, CHILD_A])) });
+
+      render(<CommandCentreView visible />);
+      await screen.findByTestId("company-card-acme-child-a");
+
+      await act(async () => {
+        vi.advanceTimersByTime(10 * 60_000);
+      });
+      await act(async () => {
+        onlineManager.setOnline(false);
+        onlineManager.setOnline(true);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+
+      expect(overviewCalls(spy)).toBe(1);
+    });
+
+    it("reads it exactly once more when Refresh is clicked", async () => {
+      const spy = routeFetch({ [OVERVIEW_URL]: () => jsonResponse(overview([PARENT, CHILD_A])) });
+
+      render(<CommandCentreView visible />);
+      await screen.findByTestId("company-card-acme-child-a");
+      expect(overviewCalls(spy)).toBe(1);
+
+      const refresh = screen.getByRole("button", { name: "Refresh" });
+      fireEvent.click(refresh);
+
+      await waitFor(() => expect(overviewCalls(spy)).toBe(2));
+      await waitFor(() => expect(refresh.hasAttribute("disabled")).toBe(false));
+      expect(overviewCalls(spy)).toBe(2);
+      // The figures stay on screen while it reads.
+      expect(screen.getByTestId("company-card-acme-child-a")).toBeTruthy();
+    });
+
+    it("disables Refresh and marks it busy while the overview is being read", async () => {
+      let release: (r: Response) => void = () => {};
+      let calls = 0;
+      vi.spyOn(global, "fetch").mockImplementation(async (input) => {
+        if (!String(input).endsWith(OVERVIEW_URL)) return jsonResponse({ error: "unexpected" }, 500);
+        calls += 1;
+        if (calls === 1) return jsonResponse(overview([PARENT, CHILD_A]));
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      });
+
+      render(<CommandCentreView visible />);
+      await screen.findByTestId("company-card-acme-child-a");
+
+      const refresh = screen.getByRole("button", { name: "Refresh" });
+      expect(refresh.hasAttribute("disabled")).toBe(false);
+
+      fireEvent.click(refresh);
+
+      await waitFor(() => expect(refresh.hasAttribute("disabled")).toBe(true));
+      expect(refresh.getAttribute("aria-busy")).toBe("true");
+      // A second click while it reads does not start another read.
+      fireEvent.click(refresh);
+      expect(calls).toBe(2);
+
+      await act(async () => {
+        release(jsonResponse(overview([PARENT, CHILD_A])));
+      });
+      await waitFor(() => expect(refresh.hasAttribute("disabled")).toBe(false));
+      expect(refresh.getAttribute("aria-busy")).toBe("false");
+    });
   });
 });
