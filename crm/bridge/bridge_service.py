@@ -62,6 +62,7 @@ from routers.memory_facts import router as memory_facts_router
 from routers.n8n import router as n8n_router
 from routers.notes_tasks import router as notes_tasks_router
 from routers.notifications import router as notifications_router
+from routers.org import router as org_router
 from routers.people import router as people_router
 from routers.plugins import router as plugins_router
 from routers.providers import router as providers_router
@@ -212,6 +213,7 @@ app.include_router(memory_facts_router)
 app.include_router(routines_router)
 app.include_router(notifications_router)
 app.include_router(tenants_router)
+app.include_router(org_router)
 app.include_router(integration_router)
 app.include_router(installed_agents_router)
 # Agent manifests: the Helm's agent builder. Beside installed_agents because
