@@ -396,22 +396,14 @@ def _age_days(row: dict[str, Any], as_of: datetime) -> int | None:
 #: The optional argument every allowlisted tool's schema advertises.
 TENANT_PROPERTY: dict[str, Any] = {
     "type": "string",
-    "description": (
-        "Optional. Run this call in another tenant (company) this run may reach: a "
-        "child tenant's id, as org_overview lists them. Omit it for your own tenant. "
-        "Refused for a tenant you cannot reach."
-    ),
+    "description": "Optional: a child tenant's id (see org_overview) to run this call there.",
 }
 
 
 #: The optional argument every allowlisted WRITE's schema advertises.
 DRY_RUN_PROPERTY: dict[str, Any] = {
     "type": "boolean",
-    "description": (
-        "Optional. true: check and describe this write (what it would create or "
-        "change, in which tenant) without making it. Authorised and audited exactly "
-        "like the real call. Use it before acting in another tenant."
-    ),
+    "description": "Optional: true describes what this write would change without making it.",
 }
 
 

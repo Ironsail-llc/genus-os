@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 import pytest
 
-from robothor.engine import warmup
+from robothor.engine import org_context, warmup
 from robothor.engine.warmup import _CONTEXT_HOOKS, build_interactive_preamble
 from robothor.identity import enrichment
 from robothor.identity.context import EnrichedIdentity, IdentityContext
@@ -270,6 +270,9 @@ def _build(
 ) -> tuple[str, float]:
     """One warmup of ``main``. ``fan_out`` forces the mode; ``None`` leaves it learned."""
     enrichment.clear_cache()
+    # Each warmup here must read the tenant tree, like the other sections do:
+    # these tests count sections in flight, and a cached block reads nothing.
+    org_context.clear_cache()
     if fan_out is True:
         _remember_slow_sections()
     elif fan_out is False:

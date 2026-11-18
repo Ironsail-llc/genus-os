@@ -28,6 +28,14 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(autouse=True)
+def fresh_organisation_blocks() -> None:
+    """No rendered ORGANISATION block survives from one test into the next."""
+    from robothor.engine import org_context
+
+    org_context.clear_cache()
+
+
+@pytest.fixture(autouse=True)
 def isolated_published_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     """A fresh once-per-run telemetry guard per test, so fixed run ids don't leak."""
     from collections import OrderedDict

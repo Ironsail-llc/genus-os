@@ -20,6 +20,8 @@ block, never the turn.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -29,6 +31,21 @@ logger = logging.getLogger(__name__)
 
 ORGANISATION_HEADER = "--- ORGANISATION ---"
 
+#: How long a rendered block is reused. The tenant tree changes when an
+#: operator creates or renames a tenant, which is rare; a conversation renders
+#: the block on every turn. A rename therefore reaches a running conversation
+#: within this many seconds. Only a successful render is kept.
+CACHE_SECONDS = 60.0
+
+_cache: dict[tuple[str, tuple[str, ...]], tuple[float, str]] = {}
+_cache_lock = threading.Lock()
+
+
+def clear_cache() -> None:
+    """Forget every rendered block (tests, and after a tenant edit)."""
+    with _cache_lock:
+        _cache.clear()
+
 
 def _label(row: dict[str, Any]) -> str:
     return str(row.get("displayName") or row.get("id") or "")
@@ -36,8 +53,18 @@ def _label(row: dict[str, Any]) -> str:
 
 def organisation_block(tenant_id: str, accessible_tenant_ids: Iterable[str] | None = None) -> str:
     """Render the ORGANISATION block for ``tenant_id``, or "" when it cannot."""
+    key = (tenant_id, tuple(sorted(accessible_tenant_ids or ())))
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(key)
+    if hit and now - hit[0] < CACHE_SECONDS:
+        return hit[1]
     try:
-        return _render(tenant_id, tuple(accessible_tenant_ids or ()))
+        block = _render(tenant_id, key[1])
+        if block:
+            with _cache_lock:
+                _cache[key] = (now, block)
+        return block
     except Exception as e:
         logger.warning("Organisation block for tenant %s failed: %s", tenant_id, e)
         return ""

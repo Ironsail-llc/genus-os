@@ -656,16 +656,13 @@ _ORG_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "org_overview",
             "description": (
-                "How every tenant this run may reach is doing, in one call: "
-                "your own tenant first, then each child tenant you are allowed into. Per "
-                "tenant: name, parent, runs and failures over 24 hours and 7 days, success "
-                "rate, cost, agents with consecutive errors, overdue schedules, open and "
-                "overdue tasks with the oldest overdue ones and their age in days, the "
-                "last activity time, and a status (ok, attention, no_activity, error). "
-                "Read-only. Use it FIRST when asked how the organisation's tenants are doing; then drill "
-                "into one tenant by passing `tenant` to list_tasks, list_agent_runs and "
-                "the other tools that accept it. A run with no reach beyond its own tenant "
-                "gets that tenant and a note saying so."
+                "How every tenant this run may reach is doing, in one call: your own tenant, "
+                "then each child tenant you are allowed into. Per tenant: runs, failures "
+                "and cost over 24 hours and 7 days, stuck agents, overdue schedules, "
+                "overdue tasks with their age, last activity and a status. Read-only. "
+                "Use it FIRST when asked how the organisation's tenants are doing; then "
+                "pass `tenant` to list_tasks, list_agent_runs and the other tools that "
+                "accept it to look inside one."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
