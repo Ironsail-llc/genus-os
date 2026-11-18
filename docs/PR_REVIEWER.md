@@ -384,6 +384,27 @@ pulls its weight:
   peer has posted nothing on a head reviewed longer ago than
   `ROBOTHOR_PR_REVIEW_STALE_AFTER_MINUTES` (180 by default).
 
+### On a hosted deployment
+
+On the Helm chart the steps above still apply, with these differences:
+
+- **Claude Code** is in the released image; there is no `genus claude-code
+  login` in a pod. Set `engine.coding.enabled: true` and put
+  `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) and `GITHUB_TOKEN` in
+  the `engine-providers` Secret. The chart selects token auth.
+- **Paths.** The chart sets `ROBOTHOR_CODING_REPO_ROOTS` to
+  `<workspace>/coding` and `ROBOTHOR_PR_REVIEW_CLONE_ROOT` to
+  `<workspace>/coding/pr-review`, so the clone root is inside the repo roots.
+  Override either in `engine.env` only together with the other.
+- **Sandbox.** Under the chart's default pod security every review fails at
+  its first shell command. Set `engine.coding.sandbox.relaxPodSecurity: true`
+  (engine container only) on nodes that support user namespaces, and check
+  with `genus doctor --category claude_code` from the engine pod.
+- **Egress** to the Git host and the model provider, on 443.
+
+The chart README's "Claude Code jobs" section
+([deployment](deployment.md#claude-code-jobs-pr-reviewer)) has every value.
+
 ## Parity with an existing review bot
 
 The suite is built to replace a team's own review bot (Claude Code over the

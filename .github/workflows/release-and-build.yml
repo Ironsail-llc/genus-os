@@ -24,6 +24,16 @@ concurrency:
 permissions:
   contents: read
 
+# The Claude Code CLI baked into the python image (Dockerfile.python, stage
+# claude-cli), for the claude_code_* tools and the PR reviewer. The one place
+# the pin lives: bump all three together. Each sha256 is computed from the
+# binary downloaded from the release location the Dockerfile names, and checked
+# against that release's manifest.json; the build verifies it with sha256sum.
+env:
+  CLAUDE_CODE_VERSION: "2.1.311"
+  CLAUDE_CODE_SHA256_AMD64: 86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada
+  CLAUDE_CODE_SHA256_ARM64: 2e2496c9a8065df93acb0fca2d341f59a6b8777649b2e025ab8c9bcd5eef61f3
+
 jobs:
   verify:
     name: Production release gate
@@ -544,6 +554,11 @@ jobs:
           context: .
           file: ./${{ matrix.image.dockerfile }}
           target: production
+          # Only Dockerfile.python has a claude-cli stage.
+          build-args: |
+            ${{ matrix.image.name == 'python' && format('CLAUDE_CODE_VERSION={0}', env.CLAUDE_CODE_VERSION) || '' }}
+            ${{ matrix.image.name == 'python' && format('CLAUDE_CODE_SHA256_AMD64={0}', env.CLAUDE_CODE_SHA256_AMD64) || '' }}
+            ${{ matrix.image.name == 'python' && format('CLAUDE_CODE_SHA256_ARM64={0}', env.CLAUDE_CODE_SHA256_ARM64) || '' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

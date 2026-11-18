@@ -82,6 +82,7 @@ engine.enabled: true
 bridge.enabled: true
 orchestrator.enabled: true
 hooks.enabled: false          # standalone webhook receiver — opt-in, see "Hooks"
+engine.coding.enabled: false  # Claude Code jobs and the PR reviewer — opt-in, see "Claude Code jobs"
 dashboard.enabled: true
 nats.enabled: false           # federation — opt-in
 postgres.enabled: true        # groundhog2k/postgres subchart — disable to use RDS
@@ -127,7 +128,7 @@ boundary. Keep them limited to these classes:
 | `bridge-sso` | `GENUS_BRIDGE_SSO_SECRET`; Bridge and dashboard BFF only |
 | `bridge-oidc` | `GENUS_OIDC_ISSUERS`; Bridge only |
 | `dashboard-auth` | `AUTH_SECRET`, OIDC issuer/client ID/client secret/name, optional `CF_ACCESS_TEAM_DOMAIN`/`CF_ACCESS_AUD` (sign in via a fronting Cloudflare Access policy instead of a second IdP prompt); dashboard only. `AUTH_URL` is **not** a secret — it is the public origin and belongs in `dashboard.env`, set to `https://<dashboard.ingress.host>`; unset, sign-in redirects fall back to the container's `HOSTNAME=0.0.0.0` bind address. |
-| `engine-providers` | LLM, delivery, and tool-provider tokens required by Engine, and the webhook signing secrets the hooks component reads (see "Hooks") — including `BRAVE_SEARCH_API_KEY`, which `web_search` prefers over scraped engines (from a datacenter IP most of those are blocked, so in-cluster this key is the reliable path) |
+| `engine-providers` | LLM, delivery, and tool-provider tokens required by Engine, and the webhook signing secrets the hooks component reads (see "Hooks") — including `BRAVE_SEARCH_API_KEY`, which `web_search` prefers over scraped engines (from a datacenter IP most of those are blocked, so in-cluster this key is the reliable path), and, where `engine.coding` is on, `CLAUDE_CODE_OAUTH_TOKEN` (Claude Code jobs) and `GITHUB_TOKEN` (clone, push, PR reviews; see "Claude Code jobs") |
 | `bridge-integrations` | Bridge webhook/integration tokens only |
 | `orchestrator-providers` | retrieval/reranking provider tokens required by Orchestrator only |
 | `engine-google` | `credentials.json` only: an authorized-user OAuth file (`type`, `client_id`, `client_secret`, `refresh_token`) for the `gws_*` tools. Engine only, and only as a file mount through `engine.googleWorkspace`: `engine.secretRefs` refuses it, so the refresh token never becomes an environment variable. Declare it only where `engine.googleWorkspace.enabled` is on. |
@@ -403,6 +404,7 @@ With `vault.enabled: false` (local values), create the
 | `workspace.configMap` | none | Never inherited: a bundle holds one tenant's fleet. |
 | `extraVolumes`, `extraVolumeMounts` | none | Never inherited: the root engine's extra volumes name its own resources, and a `ReadWriteOnce` claim mounted by a second pod would leave the cell unschedulable. Same shape as `engine.extraVolumes` (see [Extra volumes](#extra-volumes)). |
 | `googleWorkspace.enabled` | `false` | Never inherited: credentials belong to one mailbox. |
+| `coding` | none | Never inherited: Claude Code jobs run only in an engine whose own entry enables them. Same keys as `engine.coding` (see [Claude Code jobs](#claude-code-jobs)). |
 | `googleWorkspace.secretName` | `<fullname>-engine-<id>-google` | A Secret with a `credentials.json` key, supplied by the deployment. VSO only materializes the root engine's `engine-google`. The mount is optional, as on the root engine. |
 
 **Seeding a cell's workspace.** Same options as the root engine (see
@@ -650,6 +652,79 @@ shows up as the `timeout` hint; a proxy that refuses a host usually answers at
 once and shows up as `auth` (a 403) or `unclassified`. A `Mail service not enabled` error
 instead means the mailbox has no Gmail license in the Workspace admin console;
 the credentials are fine and start working once Gmail is on.
+
+## Claude Code jobs
+
+The `claude_code_*` tools and the PR reviewer run Claude Code (`claude -p`)
+inside the engine pod. The released `python` image carries a pinned,
+checksummed CLI plus `bubblewrap` and `socat`, which its Bash sandbox needs.
+The chart wires the rest when `engine.coding.enabled` is on:
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `engine.coding.enabled` | `false` | Sets `ROBOTHOR_CODING_REPO_ROOTS=<workspace.mountPath>/<dir>`, `ROBOTHOR_CODING_WORKSPACE=<…>/repos` (clones, and each job's private home under `repos/.home`), `ROBOTHOR_PR_REVIEW_CLONE_ROOT=<…>/pr-review` and `ROBOTHOR_CLAUDE_CODE_AUTH=token`. `engine.env` overrides any of them. Refused on a read-only or ConfigMap workspace. |
+| `engine.coding.dir` | `coding` | The directory under `workspace.mountPath`. Must be relative and stay inside it. |
+| `engine.coding.sandbox.relaxPodSecurity` | `false` | See below. Takes effect only with `engine.coding.enabled`. |
+| `engine.coding.sandbox.seccompProfile` | `{type: Unconfined}` | The engine container's seccomp profile while `relaxPodSecurity` is on. |
+
+Use a persistent workspace (`workspace.persistence.enabled`) so clones survive
+a restart. Tenant cells never inherit `engine.coding`. To run the jobs in a
+cell, for example to keep the reviewer and its credentials apart from the root
+engine, give that cell's `tenants[]` entry its own `coding` block with the same
+keys; the paths land on the cell's own workspace volume, and
+`sandbox.relaxPodSecurity` then applies to that cell's engine alone.
+
+**Credentials.** Both go in the `engine-providers` class, never in `engine.env`:
+`CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`; the chart selects token
+auth, because there is no interactive login in a pod) and `GITHUB_TOKEN` for
+the account that clones, pushes and reviews.
+
+**The sandbox and pod security.** Every job's Bash runs in Claude Code's
+sandbox, which is bubblewrap: an unprivileged user namespace plus a fresh
+`/proc`. Under the chart's default security context neither is possible. The
+runtime's default seccomp profile refuses the user namespace, and the
+runtime's masked `/proc` refuses the new mount, so every job fails at its
+first shell command (`genus doctor --category claude_code` in the pod says which).
+`relaxPodSecurity: true` changes three things, on the engine's main container
+and pod only:
+
+- `securityContext.procMount: Unmasked` on the engine container;
+- `securityContext.seccompProfile` from `engine.coding.sandbox.seccompProfile`
+  on the engine container (the pod-level profile stays `RuntimeDefault`);
+- `hostUsers: false` on the engine pod, which `procMount: Unmasked` requires.
+
+Non-root, the read-only root filesystem, no privilege escalation and the
+dropped capabilities all stay. No init container, other component or tenant
+cell is touched. The nodes must run pods in user namespaces (Kubernetes with
+user-namespace support, a container runtime that implements it, and a kernel
+with idmapped mounts for the workspace volume's filesystem). Where the nodes
+can carry a custom profile, a `Localhost` profile that is the runtime default
+plus `unshare`/`clone` of user namespaces is narrower than `Unconfined`:
+
+```yaml
+engine:
+  coding:
+    enabled: true
+    sandbox:
+      relaxPodSecurity: true
+      seccompProfile:
+        type: Localhost
+        localhostProfile: profiles/claude-code-sandbox.json
+```
+
+A namespace that enforces Pod Security `baseline` or `restricted` rejects an
+`Unconfined` profile, so it needs an exception for the engine pod (or a
+`Localhost` profile).
+
+**Egress.** The engine pod reaches the Git host (HTTPS, for clone, fetch and
+push, and its API for reviews) and the model provider Claude Code calls, on
+443. Allow them directly: put the address ranges those hosts resolve to in
+`networkPolicy.egress.destinations.https.cidrs`. An egress proxy does not work
+for these jobs. Claude Code and the `git` clone and fetch run with a minimal
+environment that leaves out `HTTPS_PROXY`, so setting it in `engine.env`
+reaches the engine but not them, and a cluster whose only route out is a proxy
+times out on the first fetch or model call. Network inside a job's sandbox is
+separate and off unless `ROBOTHOR_CODING_ALLOWED_DOMAINS` names hosts.
 
 ## Logs
 

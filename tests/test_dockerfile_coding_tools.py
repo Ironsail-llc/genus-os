@@ -44,3 +44,13 @@ def test_the_claude_cli_is_opt_in_by_default():
 def test_production_and_dev_copy_the_claude_stage():
     assert "COPY --from=claude-cli" in _stage("production")
     assert "COPY --from=claude-cli" in _stage("dev")
+
+
+def test_the_production_image_has_the_claude_code_sandbox_tools():
+    # Claude Code's Bash sandbox: bwrap builds the namespaces, socat carries
+    # its network proxy. sandbox.sandbox_problems() refuses to run without them.
+    production = _stage("production")
+    install = re.search(r"apt-get install(?:[^\n]*\\\n)*[^\n]*", production)
+    assert install, "no apt-get install in the production stage"
+    assert re.search(r"\bbubblewrap\b", install.group(0))
+    assert re.search(r"\bsocat\b", install.group(0))
