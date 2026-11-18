@@ -43,8 +43,17 @@ async def _reachable_rollup(ctx: ToolContext, tool: str) -> tuple[tuple[str, ...
     from robothor.engine.tools.cross_tenant import audit_cross_tenant, reachable_tenants
     from robothor.tenancy.rollup import tenant_rollup
 
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import scope_for_query
+
     tenants = reachable_tenants(ctx)  # in-memory: the session registry
-    rollup: dict[str, Any] = await asyncio.to_thread(tenant_rollup, tenants)
+    rollup: dict[str, Any] = await asyncio.to_thread(
+        tenant_rollup,
+        tenants,
+        # The caller's own tenant's task titles, as list_tasks would show them.
+        own_tenant=ctx.tenant_id,
+        own_scope=scope_for_query(data_scoping_mode(), ctx.identity),
+    )
     for target in tenants[1:]:
         audit_cross_tenant(
             home_tenant=ctx.tenant_id,

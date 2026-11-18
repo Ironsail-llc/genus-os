@@ -50,8 +50,21 @@ OLDEST_OVERDUE_LIMIT = 5
 TOP_FAILURES_LIMIT = 5
 
 
-def tenant_rollup(tenant_ids: Iterable[str], *, now: datetime | None = None) -> dict[str, Any]:
-    """The rollup for each of ``tenant_ids``, in the order given, once each."""
+def tenant_rollup(
+    tenant_ids: Iterable[str],
+    *,
+    now: datetime | None = None,
+    own_tenant: str | None = None,
+    own_scope: Any = None,
+) -> dict[str, Any]:
+    """The rollup for each of ``tenant_ids``, in the order given, once each.
+
+    ``own_scope`` is the caller's data scope (``identity.scope.DataScope``) in
+    its OWN tenant, ``own_tenant``: the overdue tasks that entry names are read
+    through it, as ``list_tasks`` would read them for that caller. Counts stay
+    unscoped, as ``list_tasks_summary`` shows them. A caller that may read a
+    child tenant is an owner, admin or unattended run, which no scope narrows.
+    """
     as_of = now or datetime.now(UTC)
     meta = _tenant_meta()
     entries: list[dict[str, Any]] = []
@@ -68,7 +81,8 @@ def tenant_rollup(tenant_ids: Iterable[str], *, now: datetime | None = None) -> 
         }
         try:
             with tenant_scope(tenant_id):
-                entries.append({**head, **_one_tenant(tenant_id, as_of)})
+                scope = own_scope if tenant_id == own_tenant else None
+                entries.append({**head, **_one_tenant(tenant_id, as_of, scope)})
         except Exception as exc:  # noqa: BLE001 - one company must not sink the rest
             logger.warning("tenant rollup for %s failed: %s", tenant_id, type(exc).__name__)
             entries.append(
@@ -92,7 +106,7 @@ def _tenant_meta() -> dict[str, dict[str, Any]]:
         return {}
 
 
-def _one_tenant(tenant_id: str, as_of: datetime) -> dict[str, Any]:
+def _one_tenant(tenant_id: str, as_of: datetime, scope: Any = None) -> dict[str, Any]:
     """Every figure for one tenant. Runs inside that tenant's scope."""
     from robothor.engine.analytics import get_failure_patterns, get_fleet_health
     from robothor.engine.tracking import list_schedules
@@ -113,7 +127,7 @@ def _one_tenant(tenant_id: str, as_of: datetime) -> dict[str, Any]:
         if int(s.get("consecutive_errors") or 0) > 0
     ]
     overdue_schedules = _overdue_schedules(schedules, as_of)
-    tasks = _tasks(tenant_id, as_of)
+    tasks = _tasks(tenant_id, as_of, scope)
 
     entry: dict[str, Any] = {
         "runs_24h": int(day.get("total_runs") or 0),
@@ -165,11 +179,11 @@ def _overdue_schedules(schedules: list[dict[str, Any]], as_of: datetime) -> list
     return out
 
 
-def _tasks(tenant_id: str, as_of: datetime) -> dict[str, Any]:
+def _tasks(tenant_id: str, as_of: datetime, scope: Any = None) -> dict[str, Any]:
     from robothor.crm.dal import list_tasks
 
     counts = _task_counts(tenant_id)
-    oldest = list_tasks(overdue=True, limit=OLDEST_OVERDUE_LIMIT, tenant_id=tenant_id)
+    oldest = list_tasks(overdue=True, limit=OLDEST_OVERDUE_LIMIT, tenant_id=tenant_id, scope=scope)
     return {
         "open": counts["open"],
         "overdue": counts["overdue"],
