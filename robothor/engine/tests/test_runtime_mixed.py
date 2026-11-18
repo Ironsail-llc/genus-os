@@ -145,7 +145,9 @@ async def test_native_requests_compete_with_background_goals(
             assert (await asyncio.to_thread(store.get, tenant, goal["id"]))["status"] == "waiting"
 
     engine.registry.execute = AsyncMock(side_effect=dispatch)
-    monkeypatch.setattr("robothor.engine.config.load_agent_config_or_broken", lambda *args: config)
+    monkeypatch.setattr(
+        "robothor.engine.config.load_agent_config_or_broken", lambda *args, **_k: config
+    )
     with (
         patch("litellm.acompletion", side_effect=provider),
         patch("robothor.goals.events.capture"),

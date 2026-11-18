@@ -44,7 +44,7 @@ async def test_blocked_lookup_is_interruptible_and_records_original_outcome(
             progress_entered.set()
             await asyncio.Event().wait()
 
-    def blocked(*args):
+    def blocked(*args, trigger_type=None):
         entered.set()
         try:
             assert release.wait(3), "test must release its lookup thread"
@@ -108,7 +108,7 @@ async def test_blocked_lookup_is_interruptible_and_records_original_outcome(
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
     execution.assert_not_called()
-    loader.assert_called_once()
+    loader.assert_called_once_with("main", tmp_path, trigger_type="webchat")
 
 
 async def test_lookup_error_is_not_misreported_as_runtime_expiry(monkeypatch):

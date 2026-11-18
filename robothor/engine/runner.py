@@ -527,7 +527,7 @@ class AgentRunner(
         # the manifest again here would undo the runtime's single-lookup work.
         # A manifest read (file I/O and YAML parsing): off the event loop.
         agent_config, loaded_reason = await asyncio.to_thread(
-            load_for_run, agent_id, self.config.manifest_dir
+            load_for_run, agent_id, self.config.manifest_dir, trigger_type
         )
         if agent_config is not None:
             return agent_config, None

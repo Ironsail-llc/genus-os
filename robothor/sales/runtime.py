@@ -76,7 +76,9 @@ class NativeStageRunner:
             except (ReleaseError, ValueError, OSError):
                 raise Conflict("Selected fleet release is unavailable or has drifted") from None
         else:
-            config = load_agent_config(agent_id, runner.config.manifest_dir)
+            config = load_agent_config(
+                agent_id, runner.config.manifest_dir, trigger_type="workflow"
+            )
         if config is None:
             raise Conflict("Configured sales agent manifest is missing")
         fanout, message = prepare_research(config, snapshot, stage, tenant_id, message)

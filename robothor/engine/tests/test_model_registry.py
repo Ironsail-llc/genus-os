@@ -376,3 +376,63 @@ class TestLitellmReasoningRegistration:
         register_pricing_with_litellm()
 
         assert "thinking" in (litellm.get_supported_openai_params(model=model_id) or [])
+
+
+class TestGpt62Sol:
+    """GPT-6.2 Sol on the OpenAI API.
+
+    Without a curated row an agent naming it was sized from litellm's catalog
+    or the 128K/8K default, priced without its priority lane, warned about by
+    the manifest validator and refused by the dashboard's providers page.
+    """
+
+    MODEL = "openai/gpt-6.2-sol"
+    BARE = "gpt-6.2-sol"  # what the OpenAI API reports back on a response
+
+    def test_the_model_has_a_curated_row(self):
+        assert self.MODEL in _MODEL_REGISTRY
+
+    def test_the_bare_id_resolves_to_the_same_row(self):
+        assert self.BARE in _MODEL_REGISTRY
+        assert get_model_limits(self.BARE) is get_model_limits(self.MODEL)
+
+    def test_limits_and_prices(self):
+        limits = get_model_limits(self.MODEL)
+        assert limits.max_input_tokens == 272_000
+        assert limits.max_output_tokens == 128_000
+        assert limits.default_output_tokens == 16_384
+        assert limits.input_cost_per_token == 2e-06  # $2.00/M
+        assert limits.output_cost_per_token == 1e-05  # $10.00/M
+        assert limits.cache_write_cost_per_token == 2.5e-06  # $2.50/M
+        assert limits.cache_read_cost_per_token == 1e-07  # $0.10/M
+        assert limits.priority_cost_multiplier == 2.0
+
+    def test_capabilities(self):
+        limits = get_model_limits(self.MODEL)
+        assert limits.supports_thinking is True
+        assert limits.accepts_images is True
+        assert limits.ttft_hint_ms == 2000
+        assert limits.status == "current"
+
+    def test_the_window_stays_below_the_long_context_price_tier(self):
+        """Above 272,000 input tokens the whole request is billed at twice the
+        input rate. The registry has no tiered price, so the row's window is
+        the tier boundary: compaction fires long before it, and the ceiling the
+        engine enforces after compaction is under it, answer included."""
+        from robothor.engine.context_fit import fit_for
+
+        fit = fit_for(self.MODEL)
+        assert fit.window == 272_000
+        assert fit.threshold < fit.hard_limit < 272_000
+
+    def test_the_manifest_validator_accepts_it(self):
+        from robothor.engine.config_schema import validate_manifest
+
+        data = {"id": "example-agent", "model": {"primary": self.MODEL}}
+        warnings = validate_manifest(data)
+        assert not any("not in the model registry" in w for w in warnings), warnings
+
+    def test_the_providers_page_offers_it(self):
+        from robothor.engine import admin_providers
+
+        assert self.MODEL in admin_providers._routable_model_ids()
