@@ -368,13 +368,16 @@ pulls its weight:
   window, at the head commit of its latest review, newest first, up to 10
   per report (two GitHub calls each); `heads_not_compared` counts the rest.
 - **Verdict.** The peer's latest review at that same commit: `APPROVED`,
-  `CHANGES_REQUESTED` or `COMMENTED`; `null` when it has posted none yet;
-  `"unknown"` when GitHub could not be read (no alert then). `agree` is
+  `CHANGES_REQUESTED` or `COMMENTED`; `DISMISSED` when its review there was
+  dismissed, for example by a later push (it did post, so no alert, but the
+  head is left out of the agreement rate); `null` when it has posted none
+  yet; `"unknown"` when GitHub could not be read (no alert then). `agree` is
   `null` unless both verdicts are known.
-- **Findings.** Ours are the findings stored with the review; the peer's are
-  its inline comments on its reviews at that commit (replies left out). Two
-  match on the same file with lines at most 3 apart; each matches once. A
-  finding in a review body only, not inline, is not counted.
+- **Findings.** Ours are the findings stored with the review that name a
+  file; the peer's are its inline comments on its reviews at that commit
+  (replies left out). Two match on the same file with lines at most 3 apart;
+  each matches once. A finding about the pull request as a whole, with no
+  file, is not counted on either side.
 - **Summary.** Per peer: heads where it posted a verdict, the share where the
   verdicts agree, and the finding totals.
 - **Alerts.** One reviewer approves while the other requests changes; or the

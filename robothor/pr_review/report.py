@@ -278,6 +278,8 @@ _GITHUB_STATE = {
     "COMMENT": "COMMENTED",
 }
 _VERDICT_STATES = frozenset(_GITHUB_STATE.values())
+#: A review a later push or a maintainer dismissed: posted, but no longer a verdict.
+_DISMISSED = "DISMISSED"
 
 
 def _login(item: dict[str, Any]) -> str:
@@ -318,7 +320,7 @@ def _peer_at_head(
         for r in reviews
         if _login(r) == peer
         and str(r.get("commit_id") or "") == sha
-        and str(r.get("state") or "") in _VERDICT_STATES
+        and str(r.get("state") or "") in _VERDICT_STATES | {_DISMISSED}
     ]
     if not mine:
         return {"verdict": None, "agree": None, "only_ours": None, "only_peer": None, "both": None}
@@ -361,7 +363,11 @@ async def _paired(
     for row in candidates[:MAX_PAIRED_HEADS]:
         sha = str(row.last_review["sha"])
         ours_verdict = _GITHUB_STATE.get(str(row.last_review.get("verdict") or ""), "")
-        ours = [i for i in row.last_review.get("issues") or [] if isinstance(i, dict)]
+        # Inline findings only, as on the peer's side: one without a file can
+        # never match, so counting it would read as ours alone.
+        ours = [
+            i for i in row.last_review.get("issues") or [] if isinstance(i, dict) and i.get("path")
+        ]
         at = reviewed_at[row.key.lower()]
         fetched: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
         if github is not None:
@@ -393,7 +399,7 @@ async def _paired(
                         f"{peer} has posted nothing on {row.key} @{sha[:7]}, "
                         f"reviewed {_minutes(now - at):.0f} min ago"
                     )
-            else:
+            elif entry["verdict"] != _DISMISSED:
                 entry["agree"] = entry["verdict"] == ours_verdict
                 total = totals[peer]
                 total["heads_compared"] += 1
