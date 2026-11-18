@@ -185,3 +185,29 @@ def test_the_registry_reports_a_tools_own_parameters():
 
     assert reg.declared_parameters(PLUGIN_TOOL) == frozenset({"tenant"})
     assert reg.declared_parameters("no_such_tool") == frozenset()
+
+
+def _answered(name: str, args: dict[str, Any], outcome: str) -> None:
+    from robothor.engine.tools.cross_tenant import audit_answered
+
+    ctx = SimpleNamespace(tenant_id=PARENT, user_id="alice", agent_id="main")
+    audit_answered(name, args, ctx, outcome)
+
+
+@pytest.mark.parametrize("tool", [ADAPTER_TOOL, PLUGIN_TOOL])
+@pytest.mark.parametrize("outcome", ["replay", "repeat"])
+def test_a_replayed_call_with_the_tools_own_tenant_is_not_audited_as_a_crossing(env, tool, outcome):
+    """The effect ledger replays any write, an external tool's included. Its
+    ``tenant`` is that tool's own word: no other tenant was entered, so the
+    audit trail must not say one was."""
+    _answered(tool, {"tenant": "their-own-meaning"}, outcome)
+
+    env.audit.assert_not_called()
+
+
+def test_a_replayed_crossing_by_an_allowlisted_tool_is_still_audited(env):
+    _answered("create_task", {"tenant": "acme-child-a", "title": "x"}, "replay")
+
+    assert env.audit.call_count == 1
+    assert env.audit.call_args.kwargs["target_tenant"] == "acme-child-a"
+    assert env.audit.call_args.kwargs["outcome"] == "replay"
