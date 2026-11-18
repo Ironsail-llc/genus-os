@@ -1655,7 +1655,7 @@ has `tenant_id`, `display_name`, `parent_id`, `runs_24h`, `failures_24h`,
 `runs_7d`, `failures_7d`, both success rates, `cost_usd_24h`, `cost_usd_7d`,
 `top_failures`, `agents_with_consecutive_errors`, `overdue_schedules` (enabled
 and more than 15 minutes late), `tasks` (`open`, `overdue`, and the five
-oldest overdue with `overdueDays` and `ageDays`), `last_activity_at`, and a
+oldest overdue with `priority`, `overdueDays` and `ageDays`), `last_activity_at`, and a
 `status`:
 
 | `status` | Meaning |
