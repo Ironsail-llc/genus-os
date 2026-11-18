@@ -216,3 +216,56 @@ class TestFleetRoster:
 
         with patch("robothor.engine.tracking.list_schedules", side_effect=RuntimeError("x")):
             assert _fleet_roster_section(PARENT) == ""
+
+
+class TestTheBlockIsNotReReadOnEveryTurn:
+    """The tenant tree changes rarely; a conversation reads it every turn.
+
+    The block is on every interactive turn, follow-ups included, and each
+    render costs several statements. A short-lived cache keeps a chatty
+    conversation from paying for them on each message.
+    """
+
+    def test_a_second_render_within_the_window_reads_nothing(self, tenant_tree) -> None:
+        from robothor.crm import dal
+        from robothor.engine.org_context import organisation_block
+
+        first = organisation_block(PARENT, [PARENT, CHILD_A, CHILD_B])
+        reads = dal.get_tenant.call_count + dal.list_tenants.call_count
+        second = organisation_block(PARENT, [PARENT, CHILD_A, CHILD_B])
+
+        assert second == first != ""
+        assert dal.get_tenant.call_count + dal.list_tenants.call_count == reads
+
+    def test_a_different_reach_is_rendered_separately(self, tenant_tree) -> None:
+        from robothor.engine.org_context import organisation_block
+
+        owner = organisation_block(PARENT, [PARENT, CHILD_A, CHILD_B])
+        member = organisation_block(PARENT, [PARENT])
+
+        assert "Acme Child A" in owner
+        assert "Acme Child A" not in member
+
+    def test_it_is_read_again_once_the_window_passes(self, tenant_tree, monkeypatch) -> None:
+        from robothor.crm import dal
+        from robothor.engine import org_context
+
+        clock = [1000.0]
+        monkeypatch.setattr(org_context.time, "monotonic", lambda: clock[0])
+        org_context.organisation_block(PARENT, [PARENT, CHILD_A])
+        reads = dal.get_tenant.call_count
+        clock[0] += org_context.CACHE_SECONDS + 1
+        org_context.organisation_block(PARENT, [PARENT, CHILD_A])
+
+        assert dal.get_tenant.call_count > reads
+
+    def test_a_failed_lookup_is_not_remembered(self) -> None:
+        from robothor.engine.org_context import organisation_block
+
+        with patch("robothor.crm.dal.get_tenant", side_effect=RuntimeError("down")):
+            assert organisation_block(PARENT, [PARENT]) == ""
+        with (
+            patch("robothor.crm.dal.get_tenant", side_effect=_get_tenant),
+            patch("robothor.crm.dal.list_tenants", side_effect=_list_tenants),
+        ):
+            assert "Acme Holdings" in organisation_block(PARENT, [PARENT])
