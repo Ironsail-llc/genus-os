@@ -10,7 +10,7 @@ of them, the excerpt holding the fact the final answer needed included.
 
 This module is the alternative to dropping. The stub exchanges outside the
 protected tail are replaced, as whole exchanges so every call keeps its result,
-by one engine-context message: one line per call naming the tool, its
+by one message: one line per call naming the tool, its
 arguments and its call id, with the excerpt, under a single instruction to call
 again before relying on what is not shown. No model call, so a summarizer that
 extracts nothing cannot lose it. When even the ledger does not fit, excerpts are
@@ -18,6 +18,14 @@ cut oldest first; the tool name, the arguments and the instruction stay.
 
 A rewrite of history, so it runs only when the context is still over its drain
 target after every cheaper step; between folds the prefix is stable.
+
+Trust: the excerpts are tool output, which can carry injected instructions. The
+ledger is a ``user`` turn, like the compaction summary, never an engine-context
+turn (those are labeled ``[engine]`` and followed as platform context), and its
+entries sit inside ``<untrusted_content>``, the tag tool output from outside
+sources already carries. It is recognised by an engine-private key that is
+stripped before every provider call, never by its text, so nobody can make a
+message of their own count as the ledger by typing its heading.
 """
 
 from __future__ import annotations
@@ -25,6 +33,11 @@ from __future__ import annotations
 from typing import Any
 
 LEDGER_MARKER = "[Earlier tool results, removed to save space]"
+#: The engine-private key that marks the ledger (``_``-prefixed, so
+#: ``context_control.strip_engine_keys`` removes it from every payload).
+LEDGER_KEY = "_compaction_ledger"
+_UNTRUSTED_OPEN = '<untrusted_content source="earlier tool results">'
+_UNTRUSTED_CLOSE = "</untrusted_content>"
 LEDGER_INSTRUCTION = (
     " Each line names a call and keeps an excerpt of what it returned. Before "
     "relying on a detail not shown, call that tool again with the same arguments, "
@@ -35,8 +48,8 @@ _EXCERPT_SEP = " :: "
 
 
 def is_ledger(message: dict[str, Any]) -> bool:
-    content = message.get("content")
-    return isinstance(content, str) and content.startswith(LEDGER_MARKER)
+    """Only a message the engine made: the private key, never the text."""
+    return message.get(LEDGER_KEY) is True and message.get("role") == "user"
 
 
 def _entries_of(ledger: dict[str, Any]) -> list[str]:
@@ -45,11 +58,11 @@ def _entries_of(ledger: dict[str, Any]) -> list[str]:
 
 
 def _ledger(entries: list[str]) -> dict[str, Any]:
-    from robothor.engine.session import ENGINE_CONTEXT_ROLE
-
+    body = "\n".join([_UNTRUSTED_OPEN, *entries, _UNTRUSTED_CLOSE])
     return {
-        "role": ENGINE_CONTEXT_ROLE,
-        "content": LEDGER_MARKER + LEDGER_INSTRUCTION + "\n" + "\n".join(entries),
+        "role": "user",
+        "content": LEDGER_MARKER + LEDGER_INSTRUCTION + "\n" + body,
+        LEDGER_KEY: True,
     }
 
 
@@ -96,7 +109,9 @@ def _entries_for(exchange: list[dict[str, Any]]) -> list[str]:
         line = f"{_ENTRY_PREFIX}{name} {args} (ref {call_id})"
         if said:
             line += f" [said: {said}]"
-        entries.append(line + _EXCERPT_SEP + excerpt.replace("\n", " "))
+        # The excerpt cannot close the untrusted block it is quoted inside.
+        quoted = excerpt.replace("\n", " ").replace("untrusted_content", "untrusted-content")
+        entries.append(line + _EXCERPT_SEP + quoted)
     return entries
 
 
@@ -121,7 +136,9 @@ def fold_stub_exchanges(
     if not spans:
         return messages, 0
     inside = {k for i, j in spans for k in range(i, j)}
-    old = next((k for k in range(head_len, stop) if is_ledger(messages[k])), None)
+    # From index 1, not the head: a ledger written at the head's edge is
+    # counted into the protected prefix by the next compaction.
+    old = next((k for k in range(1, stop) if is_ledger(messages[k])), None)
     entries = _entries_of(messages[old]) if old is not None else []
     for i, j in spans:
         entries.extend(_entries_for(messages[i:j]))
