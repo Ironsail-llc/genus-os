@@ -109,6 +109,57 @@ async def attach_tenant_access(run: Any, tenant_id: str) -> None:
         run.accessible_tenant_ids = (tenant_id,)
 
 
+async def follow_up_preamble(
+    agent_id: str,
+    identity: Any,
+    tenant_id: str,
+    accessible_tenant_ids: tuple[str, ...],
+) -> str:
+    """The engine turn for an interactive follow-up that skipped warmup.
+
+    The first turn got the CURRENT USER and ORGANISATION blocks from warmup,
+    but neither is re-sent as part of the conversation history, so every turn
+    after it needs its own reminder of who is talking and where. Nothing else:
+    memory blocks, entity context and the rest are already in the transcript.
+
+    Both reads are blocking DB work, so both run off the event loop: the
+    identity enrichment (held for the chat session) on the executor, the
+    organisation lookup in a worker thread. A failure costs its block, never
+    the turn.
+    """
+    parts: list[str] = []
+    if identity is not None:
+        try:
+            from robothor.engine.warmup import enrichment_call_for_turn
+
+            enrich_fn, enrich_args = enrichment_call_for_turn(agent_id, identity)
+            loop = asyncio.get_running_loop()
+            enriched = await loop.run_in_executor(None, enrich_fn, *enrich_args)
+        except Exception as e:
+            logger.debug(
+                "Per-turn identity enrichment failed for %s: %s", _sanitize(agent_id), _sanitize(e)
+            )
+            enriched = None
+        try:
+            parts.append(identity.prompt_block(enriched))
+        except Exception as e:
+            logger.debug(
+                "Per-turn identity block failed for %s: %s", _sanitize(agent_id), _sanitize(e)
+            )
+    try:
+        from robothor.engine import org_context
+
+        block = await asyncio.to_thread(
+            org_context.organisation_block, tenant_id, accessible_tenant_ids
+        )
+    except Exception as e:
+        logger.warning("Per-turn organisation block failed: %s", _sanitize(e))
+        block = ""
+    if block:
+        parts.append(block)
+    return "\n\n".join(parts)
+
+
 async def resolve_run_identity_off_loop(identity: Any, **kwargs: Any) -> Any:
     """:func:`resolve_run_identity` in a worker thread (a webchat miss is a DB query)."""
     return await asyncio.to_thread(resolve_run_identity, identity, **kwargs)

@@ -50,9 +50,7 @@ def _accessible(tenant_id: str, role: str | None = None) -> tuple[str, ...]:
 def _resolve(account: dict | None, acting: str):
     with (
         patch("robothor.identity.resolvers.get_account_by_id", return_value=account),
-        patch(
-            "robothor.identity.resolvers.resolve_accessible_tenants", side_effect=_accessible
-        ),
+        patch("robothor.identity.resolvers.resolve_accessible_tenants", side_effect=_accessible),
     ):
         return resolvers.resolve_identity("webchat", ACCT, acting)
 

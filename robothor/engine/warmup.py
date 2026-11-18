@@ -180,6 +180,8 @@ def build_warmth_preamble(
     config: AgentConfig,
     workspace: Path,
     tenant_id: str = DEFAULT_TENANT,
+    *,
+    accessible_tenant_ids: tuple[str, ...] | None = None,
 ) -> tuple[str, dict[str, float]]:
     """Build a warmth preamble string for an agent run.
 
@@ -187,6 +189,9 @@ def build_warmth_preamble(
     MAX_WARMTH_CHARS of pre-loaded context (empty string if none) and
     section_timings is a dict mapping section name -> elapsed seconds.
     The caller can record per-section warmup_phase steps using this data.
+
+    ``accessible_tenant_ids`` is the run's ``AgentRun.accessible_tenant_ids``;
+    the ORGANISATION section names only the child tenants it holds.
     """
     sections: list[str] = []
     total_start = time.monotonic()
@@ -221,6 +226,7 @@ def build_warmth_preamble(
         return text or None
 
     _run_section("unread_alerts", _unread_alerts)
+    _run_section("organisation", lambda: _organisation_section(tenant_id, accessible_tenant_ids))
     _run_section("history", lambda: _build_history_section(config.id, tenant_id))
     _run_section(
         "memory_blocks",
@@ -330,6 +336,13 @@ def build_warmth_preamble(
     _ack_surfaced_alerts(_surfaced_alert_ids, preamble, tenant_id)
 
     return preamble, _section_timings
+
+
+def _organisation_section(tenant_id: str, accessible_tenant_ids: tuple[str, ...] | None) -> str:
+    """The ORGANISATION block (``robothor.engine.org_context``); "" on failure."""
+    from robothor.engine.org_context import organisation_block
+
+    return organisation_block(tenant_id, accessible_tenant_ids)
 
 
 def _build_history_section(agent_id: str, tenant_id: str = DEFAULT_TENANT) -> str:
@@ -787,6 +800,38 @@ def _recent_fleet_surfaces(
         return ""
 
 
+#: Agents the FLEET ROSTER lists before it summarises the rest.
+MAX_ROSTER_ROWS = 25
+
+
+def _fleet_roster_section(tenant_id: str) -> str:
+    """The tenant's agents and their schedule state, from ``agent_schedules``.
+
+    Lets the operator-facing agent answer "what agents do we have, and are they
+    running?" from context, instead of reading a directory of manifests (which
+    its instructions once told it to do, and which failed on every turn).
+    """
+    try:
+        from robothor.engine.tracking import list_schedules
+
+        rows = list_schedules(tenant_id=tenant_id)
+    except Exception as e:
+        logger.warning("Fleet roster section failed: %s", e)
+        return ""
+    if not rows:
+        return ""
+    lines = ["--- FLEET ROSTER ---"]
+    for row in rows[:MAX_ROSTER_ROWS]:
+        state = "enabled" if row.get("enabled") else "disabled"
+        cron = row.get("cron_expr") or ""
+        cron_part = f', cron "{cron}"' if cron else ", no cron"
+        last = row.get("last_status") or "never run"
+        lines.append(f"- {row.get('agent_id', '?')}: {state}{cron_part}, last run: {last}")
+    if len(rows) > MAX_ROSTER_ROWS:
+        lines.append(f"... and {len(rows) - MAX_ROSTER_ROWS} more (list_agent_schedules)")
+    return "\n".join(lines)
+
+
 def _interactive_supervisor_sections(
     agent_id: str,
     *,
@@ -798,8 +843,9 @@ def _interactive_supervisor_sections(
 ) -> list[tuple[str, Callable[[], list[str]]]]:
     """The panorama an operator-facing agent gets on an interactive turn.
 
-    Three sections that answer "what is going on?" from context alone: live
-    engine state, the open task queue, and what the fleet recently surfaced.
+    Sections that answer "what is going on?" from context alone: live engine
+    state, the open task queue, the fleet roster with each agent's schedule
+    state, and what the fleet recently surfaced.
     They share a condition — this is the agent the operator talks to — so they
     share a function rather than three inline blocks in a builder that the
     function-size ratchet had already flagged.
@@ -854,7 +900,12 @@ def _interactive_supervisor_sections(
 
         return _run
 
+    def _roster() -> list[str]:
+        section = _fleet_roster_section(tenant_id)
+        return [section] if section else []
+
     builders.append(("open_tasks", _panorama("open_tasks")))
+    builders.append(("fleet_roster", _roster))
     builders.append(("fleet_surfaces", _panorama("fleet_surfaces")))
     return builders
 
@@ -865,7 +916,7 @@ def _interactive_supervisor_sections(
 # the text is identical and the wait is the slowest section. Shared by every
 # concurrent warmup in the process and bounded; a section never submits to it,
 # so it cannot deadlock on itself.
-_SECTION_WORKERS = 8
+_SECTION_WORKERS = 12
 _section_pool: ThreadPoolExecutor | None = None
 # Writes the read path does not wait for (memory-block read accounting).
 _deferred_pool: ThreadPoolExecutor | None = None
@@ -1012,6 +1063,7 @@ def _interactive_section_builders(
     enforce_scope: DataScope | None,
     observe_scope_obj: DataScope | None,
     scope_user_id: str | None,
+    accessible_tenant_ids: tuple[str, ...] | None = None,
 ) -> list[tuple[str, Callable[[], list[str]]]]:
     """The interactive preamble's sections, as named builders in output order.
 
@@ -1049,6 +1101,13 @@ def _interactive_section_builders(
             f"Do not confuse them with other people who may share the same name."
         )
         builders.append(("identity", lambda: [legacy]))
+
+    # Which organisation this is, next to who is talking.
+    def _organisation() -> list[str]:
+        section = _organisation_section(tenant_id, accessible_tenant_ids)
+        return [section] if section else []
+
+    builders.append(("organisation", _organisation))
 
     # Core memory blocks — only for new sessions (no prior history)
     if include_blocks:
@@ -1164,6 +1223,7 @@ def build_interactive_preamble(
     identity: IdentityContext | None = None,
     agent_config: AgentConfig | None = None,
     section_timings: dict[str, float] | None = None,
+    accessible_tenant_ids: tuple[str, ...] | None = None,
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -1191,6 +1251,8 @@ def build_interactive_preamble(
             told me", and it used to assert the former.
         section_timings: When given, filled with ``{section name: elapsed
             seconds}`` for each section that ran, for ``record_warmup_steps``.
+        accessible_tenant_ids: The run's ``AgentRun.accessible_tenant_ids``.
+            The ORGANISATION section names only the child tenants it holds.
 
     Returns:
         Warmup preamble string, or empty string if nothing to inject.
@@ -1234,6 +1296,7 @@ def build_interactive_preamble(
         enforce_scope=_enforce_scope,
         observe_scope_obj=_observe_scope,
         scope_user_id=_scope_user_id,
+        accessible_tenant_ids=accessible_tenant_ids,
     )
 
     sections = _run_interactive_sections(

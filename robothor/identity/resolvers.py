@@ -28,6 +28,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.auth.accounts import get_account_by_id
 from robothor.db.connection import get_connection
+from robothor.engine.permissions import resolve_accessible_tenants
 from robothor.engine.users import lookup_user
 from robothor.identity.context import IdentityContext
 
@@ -117,12 +118,23 @@ def _resolve_webchat(identifier: str, tenant_id: str) -> IdentityContext | None:
     account = get_account_by_id(identifier)
     if not account:
         return None
-    if account.get("tenant_id") != tenant_id:
-        return None
     if account.get("status") != "active":
         return None
+    home_tenant = account.get("tenant_id")
+    if not home_tenant:
+        return None
+    acting = home_tenant != tenant_id
+    # An owner or admin switched into a descendant tenant: resolve against the
+    # account's HOME tenant, by the same rule switch-tenant enforces, so the
+    # user's name and role survive the switch. Anyone else, or any tenant the
+    # home role cannot reach, is not this account.
+    if acting and tenant_id not in resolve_accessible_tenants(
+        str(home_tenant), account.get("role")
+    ):
+        return None
 
-    person_id = account.get("person_id")
+    # The person row lives in the home tenant's CRM, not the acting tenant's.
+    person_id = None if acting else account.get("person_id")
     return IdentityContext(
         tenant_id=tenant_id,
         channel="webchat",
