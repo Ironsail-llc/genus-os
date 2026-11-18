@@ -16,6 +16,12 @@ Read-only. It answers from the review rows (``pr_reviews``), the review tasks
   request. ``alerts`` says each in one line and is empty when all is well —
   what a heartbeat reports on.
 * **pr** — one pull request's state and its review history.
+* **paired** (only with ``peer_logins``) — for each head reviewed in the
+  window (newest :data:`MAX_PAIRED_HEADS`), each peer's verdict at that
+  commit, whether it agrees, and the findings only we, only the peer, or both
+  raised (same file, lines within :data:`MATCH_LINES`); a per-peer summary;
+  and alerts for an approve-versus-request-changes split or a peer silent
+  past the stale window.
 
 **Latency** runs from the request — the Chat message's own time, the poll that
 saw a new head, or the operator's ask (the row's ``requested_at``, copied into
@@ -44,7 +50,15 @@ if TYPE_CHECKING:
     #: ``job_id -> (status, started_at)``, or None when the job is gone.
     JobLookup = Callable[[str], Awaitable[tuple[str, datetime | None] | None]]
 
-__all__ = ["DEFAULT_WINDOW", "MAX_STATE_CHECKS", "QUEUE_ALERT", "STUCK_AFTER", "status_report"]
+__all__ = [
+    "DEFAULT_WINDOW",
+    "MATCH_LINES",
+    "MAX_PAIRED_HEADS",
+    "MAX_STATE_CHECKS",
+    "QUEUE_ALERT",
+    "STUCK_AFTER",
+    "status_report",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +266,179 @@ async def _dropped(
     return out
 
 
+#: Pull-request heads compared with paired reviewers per report (two GitHub
+#: calls each); the rest are counted in ``heads_not_compared``.
+MAX_PAIRED_HEADS = 10
+#: Two findings on the same file this many lines apart or closer are the same.
+MATCH_LINES = 3
+#: Our verdict in the words GitHub uses for a review's state.
+_GITHUB_STATE = {
+    "APPROVE": "APPROVED",
+    "REQUEST_CHANGES": "CHANGES_REQUESTED",
+    "COMMENT": "COMMENTED",
+}
+_VERDICT_STATES = frozenset(_GITHUB_STATE.values())
+
+
+def _login(item: dict[str, Any]) -> str:
+    return str((item.get("user") or {}).get("login") or "").lower()
+
+
+def _matches(ours: dict[str, Any], theirs: dict[str, Any]) -> bool:
+    if not ours.get("path") or ours.get("path") != theirs.get("path"):
+        return False
+    a, b = ours.get("line"), theirs.get("line") or theirs.get("original_line")
+    if isinstance(a, int) and isinstance(b, int):
+        return abs(a - b) <= MATCH_LINES
+    return a is None and b is None
+
+
+def _compare_findings(ours: list[dict[str, Any]], theirs: list[dict[str, Any]]) -> dict[str, int]:
+    """One-to-one: each of ours pairs with at most one of theirs."""
+    left = list(theirs)
+    both = 0
+    for issue in ours:
+        hit = next((t for t in left if _matches(issue, t)), None)
+        if hit is not None:
+            left.remove(hit)
+            both += 1
+    return {"only_ours": len(ours) - both, "only_peer": len(left), "both": both}
+
+
+def _peer_at_head(
+    peer: str,
+    sha: str,
+    ours: list[dict[str, Any]],
+    reviews: list[dict[str, Any]],
+    comments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """The peer's latest verdict at ``sha`` and how its inline findings compare."""
+    mine = [
+        r
+        for r in reviews
+        if _login(r) == peer
+        and str(r.get("commit_id") or "") == sha
+        and str(r.get("state") or "") in _VERDICT_STATES
+    ]
+    if not mine:
+        return {"verdict": None, "agree": None, "only_ours": None, "only_peer": None, "both": None}
+    ids = {r.get("id") for r in mine}
+    theirs = [
+        c
+        for c in comments
+        if _login(c) == peer
+        and c.get("pull_request_review_id") in ids
+        and not c.get("in_reply_to_id")
+    ]
+    return {"verdict": str(mine[-1]["state"]), "agree": None, **_compare_findings(ours, theirs)}
+
+
+async def _paired(
+    cfg: ReviewerConfig,
+    rows: list[PrReviewRow],
+    reviewed_at: dict[str, datetime],
+    github: Any | None,
+    now: datetime,
+) -> tuple[dict[str, Any], list[str]]:
+    """This reviewer against each peer on every head it reviewed in the window.
+
+    ``reviewed_at`` maps a pull request (lowercased key) to when its latest
+    review in the window was posted; the row's ``last_review`` is that review.
+    A failed lookup leaves the peer's verdict ``"unknown"`` and raises no alert.
+    """
+    candidates = sorted(
+        (r for r in rows if r.key.lower() in reviewed_at and str(r.last_review.get("sha") or "")),
+        key=lambda r: reviewed_at[r.key.lower()],
+        reverse=True,
+    )
+    stale = timedelta(minutes=cfg.stale_after_minutes)
+    heads: list[dict[str, Any]] = []
+    alerts: list[str] = []
+    totals = {
+        peer: {"heads_compared": 0, "agreed": 0, "only_ours": 0, "only_peer": 0, "both": 0}
+        for peer in cfg.peer_logins
+    }
+    for row in candidates[:MAX_PAIRED_HEADS]:
+        sha = str(row.last_review["sha"])
+        ours_verdict = _GITHUB_STATE.get(str(row.last_review.get("verdict") or ""), "")
+        ours = [i for i in row.last_review.get("issues") or [] if isinstance(i, dict)]
+        at = reviewed_at[row.key.lower()]
+        fetched: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
+        if github is not None:
+            try:
+                reviews = list(await github.list_reviews(row.repo, row.number) or [])
+                comments = (
+                    list(await github.list_review_comments(row.repo, row.number) or [])
+                    if any(_login(r) in cfg.peer_logins for r in reviews)
+                    else []
+                )
+                fetched = (reviews, comments)
+            except Exception as exc:  # noqa: BLE001 - the peer is unknown, never alerted
+                logger.info("pr_review_status: peer reviews of %s unknown: %s", row.key, exc)
+        peers: dict[str, Any] = {}
+        for peer in cfg.peer_logins:
+            if fetched is None:
+                peers[peer] = {
+                    "verdict": "unknown",
+                    "agree": None,
+                    "only_ours": None,
+                    "only_peer": None,
+                    "both": None,
+                }
+                continue
+            entry = _peer_at_head(peer, sha, ours, *fetched)
+            if entry["verdict"] is None:
+                if now - at > stale:
+                    alerts.append(
+                        f"{peer} has posted nothing on {row.key} @{sha[:7]}, "
+                        f"reviewed {_minutes(now - at):.0f} min ago"
+                    )
+            else:
+                entry["agree"] = entry["verdict"] == ours_verdict
+                total = totals[peer]
+                total["heads_compared"] += 1
+                total["agreed"] += int(entry["agree"])
+                for k in ("only_ours", "only_peer", "both"):
+                    total[k] += entry[k]
+                if {entry["verdict"], ours_verdict} == {"APPROVED", "CHANGES_REQUESTED"}:
+                    alerts.append(
+                        f"{row.key} @{sha[:7]}: we {ours_verdict.lower().replace('_', ' ')}, "
+                        f"{peer} {entry['verdict'].lower().replace('_', ' ')}"
+                    )
+            peers[peer] = entry
+        heads.append(
+            {
+                "pr": row.key,
+                "url": row.url,
+                "head_sha": sha[:12],
+                "reviewed_at": at.isoformat(),
+                "verdict": ours_verdict,
+                "peers": peers,
+            }
+        )
+    summary = {
+        peer: {
+            "heads_compared": t["heads_compared"],
+            "agreement_rate": (
+                round(t["agreed"] / t["heads_compared"], 2) if t["heads_compared"] else None
+            ),
+            "only_ours": t["only_ours"],
+            "only_peer": t["only_peer"],
+            "both": t["both"],
+        }
+        for peer, t in totals.items()
+    }
+    return (
+        {
+            "peers": list(cfg.peer_logins),
+            "heads": heads,
+            "heads_not_compared": max(0, len(candidates) - MAX_PAIRED_HEADS),
+            "summary": summary,
+        },
+        alerts,
+    )
+
+
 def _one_pr(rows: list[PrReviewRow], tasks: list[dict[str, Any]], pr: str) -> dict[str, Any]:
     parsed = parse_pr_ref(pr)
     if parsed is None:
@@ -332,6 +519,17 @@ async def status_report(
     if oldest > _minutes(QUEUE_ALERT):
         alerts.append(f"the oldest queued review has waited {oldest:.0f} min")
 
+    window = _window(tasks, messages, since, {r.key.lower(): r.title for r in rows})
+    paired: dict[str, Any] | None = None
+    if cfg.peer_logins:
+        reviewed_at: dict[str, datetime] = {}
+        for rv in window["reviews"]:  # newest first: the first seen is the latest
+            at = _time(rv["at"])
+            if rv["pr"] and at is not None:
+                reviewed_at.setdefault(rv["pr"], at)
+        paired, paired_alerts = await _paired(cfg, rows, reviewed_at, github, now)
+        alerts += paired_alerts
+
     report: dict[str, Any] = {
         "now": {
             "in_flight": in_flight,
@@ -339,7 +537,7 @@ async def status_report(
             "free_slots": max(0, cfg.workers - len(in_flight)),
             "workers": cfg.workers,
         },
-        "window": _window(tasks, messages, since, {r.key.lower(): r.title for r in rows}),
+        "window": window,
         "problems": {
             "stuck": stuck,
             "gave_up": gave_up,
@@ -348,6 +546,8 @@ async def status_report(
         },
         "alerts": alerts,
     }
+    if paired is not None:
+        report["paired"] = paired
     if pr:
         report["pr"] = _one_pr(rows, tasks, pr)
     return report
