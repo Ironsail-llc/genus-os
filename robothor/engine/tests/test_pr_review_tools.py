@@ -88,6 +88,52 @@ async def test_prepare_needs_the_skill():
     assert "skill" in result["error"]
 
 
+async def _queued_row(store: MemoryStore) -> None:
+    from robothor.pr_review.store import PrReviewRow
+
+    await store.save(
+        PrReviewRow(
+            tenant_id=_CTX.tenant_id,
+            repo=REPO,
+            number=7,
+            url=f"https://github.com/{REPO}/pull/7",
+            status="queued",
+            queued_sha="1" * 40,
+        )
+    )
+
+
+async def test_a_missing_skill_fails_the_review_row_visibly():
+    # Left queued while its task was resolved DONE, the review sat silently
+    # until the stale expiry. It fails like any other prepare failure now:
+    # status failed, the reason on the row, and the intake's retry picks it up.
+    store = MemoryStore()
+    await _queued_row(store)
+    with (
+        patch.object(pr_review, "_skill_text", return_value=None),
+        patch.object(pr_review, "_store", return_value=store),
+    ):
+        result = await pr_review._prepare({"repo": REPO, "number": 7}, _CTX)
+    assert "pr-review skill is not installed" in result["error"]
+    row = await store.get(_CTX.tenant_id, REPO, 7)
+    assert row.status == "failed" and row.attempts == 1 and row.failed_at is not None
+    assert "pr-review skill is not installed" in row.error
+
+
+async def test_a_missing_github_token_fails_the_review_row_visibly():
+    store = MemoryStore()
+    await _queued_row(store)
+    with (
+        patch.object(pr_review, "_skill_text", return_value="guide"),
+        patch.object(pr_review, "_github", return_value=None),
+        patch.object(pr_review, "_store", return_value=store),
+    ):
+        result = await pr_review._prepare({"repo": REPO, "number": 7}, _CTX)
+    assert "GITHUB_TOKEN" in result["error"]
+    row = await store.get(_CTX.tenant_id, REPO, 7)
+    assert row.status == "failed" and "GITHUB_TOKEN" in row.error
+
+
 async def test_prepare_starts_the_job_itself_under_the_callers_context():
     seen: dict = {}
 

@@ -87,10 +87,16 @@ class TestResolver:
         from robothor.engine.skills import (
             bundled_skills_dir,
             instance_skills_dir,
+            platform_skills_dir,
             skill_search_paths,
         )
 
-        assert skill_search_paths() == (bundled_skills_dir(), instance_skills_dir())
+        # The copy shipped with the code sits under the workspace's own tree.
+        assert skill_search_paths() == (
+            platform_skills_dir(),
+            bundled_skills_dir(),
+            instance_skills_dir(),
+        )
 
 
 # ── The origin marker ────────────────────────────────────────────────
