@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import functools
 import hashlib
 import json
 import logging
@@ -339,6 +340,22 @@ def instance_skills_dir() -> Path:
 
 
 def platform_skills_dir(package_dir: Path | None = None) -> Path | None:
+    """The bundled skills shipped with the code (see :func:`_find_platform_skills_dir`).
+
+    The installed location cannot change while the process runs, so the
+    answer for this package is computed once.
+    """
+    if package_dir is None:
+        return _installed_platform_skills_dir()
+    return _find_platform_skills_dir(package_dir)
+
+
+@functools.cache
+def _installed_platform_skills_dir() -> Path | None:
+    return _find_platform_skills_dir(Path(__file__).resolve().parents[1])
+
+
+def _find_platform_skills_dir(package: Path) -> Path | None:
     """The bundled skills that ship with the code itself, or None.
 
     A wheel carries them as package data (``robothor/bundled_skills``, built
@@ -346,7 +363,6 @@ def platform_skills_dir(package_dir: Path | None = None) -> Path | None:
     ``/app`` included, has them at ``agents/skills`` beside the package. A
     workspace with no ``agents/skills`` of its own still reads these.
     """
-    package = package_dir if package_dir is not None else Path(__file__).resolve().parents[1]
     packaged = package / "bundled_skills"
     if packaged.is_dir():
         return packaged
