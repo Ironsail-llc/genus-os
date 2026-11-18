@@ -20,10 +20,10 @@ SCANNED = ("robothor/engine/tools", "robothor/tenancy/rollup.py")
 HELPER = "tenant_scope"
 
 EXPECTED_CALLERS: set[str] = {
-    # The one swap for a cross-tenant tool call, after cross_tenant.admit.
-    "robothor/engine/tools/cross_tenant.py::run_handler",
-    # A dry-run update reads the record it would change, after admit.
-    "robothor/engine/tools/cross_tenant.py::_current_record",
+    # The one binding for a cross-tenant tool call -- the handler, its
+    # post-condition readback and a dry run's read of the record it would
+    # change -- each reached only after cross_tenant.admit.
+    "robothor/engine/tools/cross_tenant.py::_scope",
     # The rollup reads each tenant it is GIVEN in that tenant's scope; its
     # engine caller (handlers/org.py) passes cross_tenant.reachable_tenants.
     "robothor/tenancy/rollup.py::tenant_rollup",

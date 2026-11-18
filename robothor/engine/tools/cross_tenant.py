@@ -40,12 +40,13 @@ why the context's ``tenant_id`` is swapped as well.
 from __future__ import annotations
 
 import logging
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterator
 
     from robothor.engine.tools.dispatch import ToolContext
 
@@ -259,11 +260,43 @@ async def dry_run(name: str, crossing: Crossing, ctx: ToolContext) -> dict[str, 
 def _current_record(getter: str, record_id: str, tenant_id: str) -> dict[str, Any] | None:
     """The record a dry-run update would change, read in its tenant's scope."""
     from robothor.crm import dal
+
+    with _scope(tenant_id):
+        found: dict[str, Any] | None = getattr(dal, getter)(record_id, tenant_id=tenant_id)
+    return found
+
+
+@contextmanager
+def _scope(tenant_id: str | None) -> Iterator[None]:
+    """The ONE place this module binds connections to another tenant.
+
+    Every caller is behind :func:`admit` (pinned by
+    ``tests/test_cross_tenant_scope_callers.py``). ``None``: no change.
+    """
+    if tenant_id is None:
+        yield
+        return
     from robothor.db.connection import tenant_scope
 
     with tenant_scope(tenant_id):
-        found: dict[str, Any] | None = getattr(dal, getter)(record_id, tenant_id=tenant_id)
-    return found
+        yield
+
+
+def target_scope(crossing: Crossing | None) -> AbstractContextManager[None]:
+    """The admitted call's target scope, or no change for an ordinary call."""
+    return _scope(crossing.target if crossing is not None else None)
+
+
+def target_context(ctx: ToolContext, crossing: Crossing | None) -> ToolContext:
+    """The context the call runs as: the target tenant's, or ``ctx`` unchanged."""
+    if crossing is None or crossing.target is None:
+        return ctx
+    return replace(ctx, tenant_id=crossing.target, accessible_tenant_ids=(crossing.target,))
+
+
+def handler_args(args: dict[str, Any], crossing: Crossing | None) -> dict[str, Any]:
+    """The arguments the handler sees: ``tenant`` and ``dry_run`` removed."""
+    return args if crossing is None else crossing.args
 
 
 async def run_handler(
@@ -276,11 +309,10 @@ async def run_handler(
     if crossing.target is None:
         return await handler(crossing.args, ctx)
 
-    from robothor.db.connection import tenant_scope
     from robothor.engine.runtime import effects
 
     target = crossing.target
-    scoped = replace(ctx, tenant_id=target, accessible_tenant_ids=(target,))
+    scoped = target_context(ctx, crossing)
     # The durable effect record was reserved in the HOME tenant's ledger, keyed
     # by the arguments as sent (tenant included). A handler that reads it
     # (`task_options`, `note_options`) would refuse a record whose tenant is
@@ -289,7 +321,7 @@ async def run_handler(
     effect_token = effects.active_effect.set(None)
     outcome, reason = "error", ""
     try:
-        with tenant_scope(target):
+        with _scope(target):
             result = await handler(crossing.args, scoped)
         if isinstance(result, dict) and result.get("error"):
             reason = str(result["error"])

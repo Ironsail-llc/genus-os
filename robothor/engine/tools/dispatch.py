@@ -898,9 +898,17 @@ async def _dispatch_admitted(
     # try/except guards the import itself, so even a broken verification module
     # cannot fail an agent's real work.
     try:
-        from robothor.engine.tools import verification
+        from robothor.engine.tools import cross_tenant, verification
 
-        result = await verification.verify_tool_result(name, args, result, ctx)
+        # A cross-tenant write is read back where it landed: as the target,
+        # in its scope, with the arguments the handler saw.
+        with cross_tenant.target_scope(crossing):
+            result = await verification.verify_tool_result(
+                name,
+                cross_tenant.handler_args(args, crossing),
+                result,
+                cross_tenant.target_context(ctx, crossing),
+            )
     except Exception as e:  # noqa: BLE001
         logger.warning("Post-condition verification skipped for %s: %s", name, e)
 
