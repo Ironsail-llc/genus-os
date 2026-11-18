@@ -685,7 +685,7 @@ class TestRequeueIfBusy:
         if workflows:
             hooks.workflow_engine = MagicMock()
             hooks.workflow_engine.get_workflows_for_event.return_value = list(workflows)
-            hooks._run_workflow = MagicMock(return_value=None)
+            hooks._run_workflow = AsyncMock(return_value=None)
         return hooks
 
     @staticmethod
@@ -774,7 +774,8 @@ class TestRequeueIfBusy:
         hooks = self._hooks(engine_config, [self._trigger("audit")], workflows=[wf])
         _redis, registry = await self._fire(hooks, {b"type": b"platform.order.created"})
         hooks.workflow_engine.get_workflows_for_event.assert_called_once()
-        assert registry.spawn.call_count == 1
+        # Handed to the workflow's backlog before the event is acknowledged.
+        hooks._run_workflow.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_busy_budget_exhausted_goes_to_dlq(self, engine_config):
