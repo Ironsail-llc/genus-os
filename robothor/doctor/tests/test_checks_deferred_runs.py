@@ -74,11 +74,17 @@ class FakeRedis:
         self.expires.pop(key, None)
         return 1 if self.strings.pop(key, None) is not None else 0
 
-    def scan_iter(self, match: str = "*"):
+    def scan_iter(self, match: str = "*", _type: str | None = None):
+        # Like the store: every key under the prefix, of any type, unless a
+        # type is asked for.
         prefix = match.rstrip("*")
-        return iter([k.encode() for k in self.streams if k.startswith(prefix)])
+        keys = [] if _type not in (None, "stream") else list(self.streams)
+        keys += [] if _type not in (None, "hash") else list(self.hashes)
+        return iter([k.encode() for k in keys if k.startswith(prefix)])
 
     def xlen(self, key: str) -> int:
+        if key in self.hashes:
+            raise RuntimeError("WRONGTYPE Operation against a key holding the wrong kind of value")
         return len(self.streams.get(key, []))
 
     def xrange(self, key: str, min: str = "-", max: str = "+", count: int | None = None):  # noqa: A002
@@ -492,13 +498,31 @@ def test_a_backlog_older_than_the_look_back_fails_and_warns(monkeypatch):
     assert sent.await_args.args[0] == "warning"
 
 
+def test_a_started_marker_does_not_hide_a_stale_backlog(monkeypatch):
+    # A run in flight keeps a marker hash under the backlog's own key prefix.
+    # The scan must read past it, or the stale warning never fires.
+    from robothor.engine.workflow_backlog import backlog_key
+
+    marker = backlog_key(TENANT, "example-workflow") + ":started"
+    client = FakeRedis(
+        {marker: {"1-0": 1}},
+        streams=_backlog("example-workflow", 3, deferred_runs.LOOKBACK_SECONDS + 60),
+    )
+    sent = _with(monkeypatch, client)
+    result = _run(make_ctx())
+    assert result.status == "fail"
+    assert "backlog unreadable" not in result.detail
+    assert "example-workflow: 3 waiting" in result.detail
+    sent.assert_awaited_once()
+
+
 def test_an_empty_backlog_says_nothing_is_waiting(monkeypatch):
     _with(monkeypatch, FakeRedis())
     assert "nothing waiting" in _run(make_ctx()).detail
 
 
 def test_an_unreadable_backlog_still_gives_the_deferral_verdict(monkeypatch, busy):
-    def broken(match: str = "*"):
+    def broken(match: str = "*", **_kw):
         raise ConnectionError("refused")
 
     busy.scan_iter = broken  # type: ignore[method-assign]

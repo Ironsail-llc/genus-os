@@ -504,7 +504,8 @@ def backlog_stats(
     at = time.time() if now is None else now
     prefix = f"{KEY_PREFIX}{tenant_id}:"
     out: dict[str, tuple[int, float]] = {}
-    for raw_key in client.scan_iter(match=prefix + "*"):
+    # Streams only: each backlog's started-marker hash lives under the same prefix.
+    for raw_key in client.scan_iter(match=prefix + "*", _type="stream"):
         key = _text(raw_key)
         depth = int(client.xlen(key) or 0)
         if not depth:
