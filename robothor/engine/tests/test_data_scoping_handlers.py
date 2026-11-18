@@ -447,3 +447,165 @@ class TestSearchRecordsPerTableObserve:
         assert any("would_drop=1" in m and "table=crm_people" in m for m in msgs)
         assert any("would_drop=1" in m and "table=crm_notes" in m for m in msgs)
         assert not any("table=crm_companies" in m for m in msgs)
+
+
+class TestAffiliationReadsScoping:
+    """The affiliation reads carry people (ids and names). A restricted caller
+    in enforce mode sees only its own person, as with get_person and
+    get_contact_360; observe mode logs what it would drop and filters
+    nothing. Companies themselves are unscoped by design."""
+
+    COMPANY_ID = "33333333-3333-4333-8333-333333333333"
+
+    def _rows(self):
+        return [
+            {"id": "a1", "personId": OWN_PERSON_ID, "role": "owner"},
+            {"id": "a2", "personId": OTHER_PERSON_ID, "role": "provider"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_find_person_hides_someone_else_in_enforce(self):
+        with (
+            _mode_env("enforce"),
+            patch("robothor.crm.dal.get_person_by_identifier") as mock_get,
+        ):
+            mock_get.return_value = {"id": OTHER_PERSON_ID}
+            result = await _call(
+                "find_person_by_identifier",
+                {"system": "email", "identifier": "bob@example.com"},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert result == {"found": False, "person": None}
+
+    @pytest.mark.asyncio
+    async def test_find_person_returns_own_record_in_enforce(self):
+        with (
+            _mode_env("enforce"),
+            patch("robothor.crm.dal.get_person_by_identifier") as mock_get,
+        ):
+            mock_get.return_value = {"id": OWN_PERSON_ID}
+            result = await _call(
+                "find_person_by_identifier",
+                {"system": "email", "identifier": "alice@example.com"},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert result == {"found": True, "person": {"id": OWN_PERSON_ID}}
+
+    @pytest.mark.asyncio
+    async def test_find_person_observe_logs_without_hiding(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        with (
+            _mode_env("observe"),
+            patch("robothor.crm.dal.get_person_by_identifier") as mock_get,
+        ):
+            mock_get.return_value = {"id": OTHER_PERSON_ID}
+            result = await _call(
+                "find_person_by_identifier",
+                {"system": "email", "identifier": "bob@example.com"},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert result == {"found": True, "person": {"id": OTHER_PERSON_ID}}
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("data_scoping" in m and "find_person_by_identifier" in m for m in msgs)
+
+    @pytest.mark.asyncio
+    async def test_find_person_unrestricted_caller_unaffected(self):
+        with (
+            _mode_env("enforce"),
+            patch("robothor.crm.dal.get_person_by_identifier") as mock_get,
+        ):
+            mock_get.return_value = {"id": OTHER_PERSON_ID}
+            result = await _call(
+                "find_person_by_identifier",
+                {"system": "email", "identifier": "bob@example.com"},
+            )
+        assert result["found"] is True
+
+    @pytest.mark.asyncio
+    async def test_list_affiliations_keeps_only_own_rows_in_enforce(self):
+        with (
+            _mode_env("enforce"),
+            patch("robothor.crm.dal.list_affiliations") as mock_list,
+        ):
+            mock_list.return_value = self._rows()
+            result = await _call(
+                "list_affiliations",
+                {"companyId": self.COMPANY_ID},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert [a["id"] for a in result["affiliations"]] == ["a1"]
+        assert result["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_list_affiliations_observe_logs_without_filtering(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        with (
+            _mode_env("observe"),
+            patch("robothor.crm.dal.list_affiliations") as mock_list,
+        ):
+            mock_list.return_value = self._rows()
+            result = await _call(
+                "list_affiliations",
+                {"companyId": self.COMPANY_ID},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert result["count"] == 2
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("data_scoping" in m and "would_drop=1" in m for m in msgs)
+
+    @pytest.mark.asyncio
+    async def test_list_affiliations_owner_sees_all(self):
+        with (
+            _mode_env("enforce"),
+            patch("robothor.crm.dal.list_affiliations") as mock_list,
+        ):
+            mock_list.return_value = self._rows()
+            result = await _call("list_affiliations", {"companyId": self.COMPANY_ID})
+        assert result["count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_company_view_keeps_only_own_affiliations_in_enforce(self):
+        view = {"company": {"id": self.COMPANY_ID}, "children": [], "affiliations": self._rows()}
+        with (
+            _mode_env("enforce"),
+            patch("robothor.crm.dal.get_company_view") as mock_view,
+        ):
+            mock_view.return_value = view
+            result = await _call(
+                "get_contact_360",
+                {"companyId": self.COMPANY_ID},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert result["company"] == {"id": self.COMPANY_ID}
+        assert [a["id"] for a in result["affiliations"]] == ["a1"]
+
+    @pytest.mark.asyncio
+    async def test_company_view_observe_logs_without_filtering(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO, logger="robothor.identity.scope")
+        view = {"company": {"id": self.COMPANY_ID}, "children": [], "affiliations": self._rows()}
+        with (
+            _mode_env("observe"),
+            patch("robothor.crm.dal.get_company_view") as mock_view,
+        ):
+            mock_view.return_value = view
+            result = await _call(
+                "get_contact_360",
+                {"companyId": self.COMPANY_ID},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
+            )
+        assert len(result["affiliations"]) == 2
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("data_scoping" in m and "would_drop=1" in m for m in msgs)
