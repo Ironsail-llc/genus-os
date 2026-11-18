@@ -34,7 +34,7 @@ def _session(**run: Any) -> SimpleNamespace:
     return SimpleNamespace(run=SimpleNamespace(**base))
 
 
-def _person() -> Any:
+def _person(role: str = "member") -> Any:
     from robothor.identity.context import IdentityContext
 
     return IdentityContext(
@@ -43,7 +43,7 @@ def _person() -> Any:
         identifier="alice",
         verified=True,
         display_name="Alice",
-        role="member",
+        role=role,
     )
 
 
@@ -166,6 +166,11 @@ def test_a_run_without_child_reach_is_told_it_is_limited(world):
     assert "not granted" in result["note"].lower()
 
 
+def _assert_not_stored(result: dict[str, Any]) -> None:
+    assert result["stored"] is False
+    assert "not stored" in result["note"].lower()
+
+
 def test_a_person_without_reach_reports_but_never_stores(world):
     """Someone in chat who reaches only their own tenant cannot move the
     snapshot: their watch would otherwise swallow what the owner's next beat
@@ -174,7 +179,11 @@ def test_a_person_without_reach_reports_but_never_stores(world):
     writes = len(world.blocks.writes)
     world.rollup.failing.add(CHILD_A)
 
-    limited = _run({}, _ctx(accessible_tenant_ids=(PARENT,), identity=_person()))
+    limited = _run(
+        {},
+        _ctx(accessible_tenant_ids=(PARENT,), identity=_person()),
+        session=_session(trigger_type=TriggerType.WEBCHAT),
+    )
     full = _run({})
 
     assert limited["stored"] is False
@@ -182,6 +191,64 @@ def test_a_person_without_reach_reports_but_never_stores(world):
     assert "not stored" in limited["note"].lower() or "not saved" in limited["note"].lower()
     # The children's state survived the limited run, so the change is still news.
     assert full["changes"] and "Acme Child A" in full["briefing"]
+
+
+def test_the_owner_in_chat_with_full_reach_reports_but_never_stores(world):
+    """Only scheduled work moves the snapshot. The owner's own look in chat
+    must not swallow what their next heartbeat reports, whatever their reach."""
+    _run({})
+    writes = len(world.blocks.writes)
+    world.rollup.failing.add(CHILD_A)
+
+    chat = _run(
+        {},
+        _ctx(identity=_person("owner")),
+        session=_session(trigger_type=TriggerType.WEBCHAT),
+    )
+    beat = _run({})
+
+    assert chat["limited"] is False
+    assert chat["changes"] and "Acme Child A" in chat["briefing"]
+    _assert_not_stored(chat)
+    assert len(world.blocks.writes) == writes + 1, "only the heartbeat stored"
+    assert beat["changes"] and "Acme Child A" in beat["briefing"]
+
+
+@pytest.mark.parametrize("trigger", [TriggerType.SLACK, TriggerType.CHANNEL])
+def test_an_open_channel_sender_with_no_identity_never_stores(world, trigger):
+    """An open-mode channel runs a person's message with no identity at all.
+    That is still a person, not a scheduled watch."""
+    _run({})
+    writes = len(world.blocks.writes)
+    world.rollup.failing.add(PARENT)
+
+    sender = _run(
+        {},
+        _ctx(accessible_tenant_ids=(PARENT,), identity=None),
+        session=_session(trigger_type=trigger),
+    )
+    beat = _run({})
+
+    _assert_not_stored(sender)
+    assert len(world.blocks.writes) == writes + 1
+    assert beat["changes"] and "Acme Parent" in beat["briefing"]
+
+
+def test_a_watch_outside_a_live_run_never_stores(world):
+    result = _run({}, session=None)
+
+    _assert_not_stored(result)
+    assert world.blocks.writes == []
+
+
+@pytest.mark.parametrize(
+    "trigger", [TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW, TriggerType.EVENT]
+)
+def test_a_scheduled_watch_stores(world, trigger):
+    result = _run({}, session=_session(trigger_type=trigger))
+
+    assert result["stored"] is True
+    assert "note" not in result
 
 
 def test_an_unattended_run_without_the_grant_does_not_repeat_itself(world):
