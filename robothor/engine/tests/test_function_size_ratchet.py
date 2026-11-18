@@ -53,7 +53,12 @@ KNOWN_LARGE: dict[str, int] = {
     # 3220 -> 3208: `mcp_list_tools`'s parameters left for
     # `_mcp_list_tools_properties`, which is what paid for its flag-gated
     # `refresh` argument.
-    "tools/schemas.py::get_engine_schemas": 3208,
+    # 3208 -> 3153: the Contact 360 pair (`get_contact_360`, which gained a
+    # `companyId` mode, and `list_contact_messages`) left for
+    # `_contact_360_schemas`, and the five company-structure tools were added
+    # as `_affiliation_schemas`. They cost this function two lines and paid
+    # down 57.
+    "tools/schemas.py::get_engine_schemas": 3153,
     # -29: every subsystem router mount extracted to _mount_subsystem_routers,
     # which is what made room for the /api/admin registration rather than
     # raising this number for it.
