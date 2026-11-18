@@ -569,8 +569,9 @@ briefing only when it is not empty. On a quiet beat the agent answers "nothing
 to report", which delivery suppresses.
 
 Without both grants the watch covers the parent only and says so (`limited`);
-a limited watch reports but stores nothing, so it never erases what the full
-watch last saw of the children. The first watch reports every problem present
+a limited scheduled watch still remembers what it reported about the parent,
+and keeps what the full watch last saw of the children. A person who reaches
+only their own tenant can run the watch but never moves what it remembers. The first watch reports every problem present
 at that moment, so problems that existed before it was switched on are not
 hidden; after that only changes are reported. What it saw is kept in the
 parent tenant's `org_watch_snapshot` memory block. That block is engine state:

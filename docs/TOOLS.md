@@ -1735,11 +1735,13 @@ when nothing changed. `daily: true` puts every company's current state first,
 problems and persisting problems before healthy companies, with the as-of
 time. The first call (or one after the snapshot was deleted) reports every
 problem present. `limited` is true when the run reaches only its own tenant,
-and a `note` says the parent has not granted child access; a limited watch
-reports but never stores (`stored: false`).
+and a `note` says the parent has not granted child access. A limited
+scheduled run stores its own tenant's state and keeps the children's; a limited
+run started by a person never stores (`stored: false`).
 
 `org_watch` stores what it saw in the run's own tenant's
-`org_watch_snapshot` memory block, unless `preview: true` or `limited`, so it
+`org_watch_snapshot` memory block, unless `preview: true` or a person's
+limited run, so it
 is not read-only. That block is engine state: `memory_block_read`,
 `memory_block_write`, `append_to_block` and `memory_block_list` refuse or omit
 it, and the warm-up never loads it. Any text the briefing repeats from it is cut

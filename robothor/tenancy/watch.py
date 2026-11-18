@@ -73,7 +73,9 @@ _UNCLASSIFIED = "with errors the platform could not classify"
 def snapshot(rollup: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
     """The compact state of each tenant that the next run compares against."""
     before = (previous or {}).get("tenants") or {}
-    tenants: dict[str, Any] = {}
+    # A tenant this rollup did not cover keeps what was last known about it: a
+    # run that sees fewer tenants must not make the next run forget the rest.
+    tenants: dict[str, Any] = dict(before)
     for entry in rollup.get("tenants") or []:
         tid = entry.get("tenant_id")
         if not tid:
@@ -150,8 +152,10 @@ def diff(previous: dict[str, Any] | None, current: dict[str, Any]) -> list[dict[
     now = snapshot(current, previous)
     before = (previous or {}).get("tenants") or {}
     changes: list[dict[str, Any]] = []
+    covered = {e.get("tenant_id") for e in current.get("tenants") or []}
     for tid, cur in now["tenants"].items():
-        changes.extend(_tenant_changes(tid, before.get(tid) or {}, cur))
+        if tid in covered:  # a tenant this rollup did not cover has not changed
+            changes.extend(_tenant_changes(tid, before.get(tid) or {}, cur))
     return changes
 
 

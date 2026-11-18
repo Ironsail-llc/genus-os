@@ -33,9 +33,9 @@ NO_REACH_NOTE = (
 #: to grant the access is in docs/runbooks/TENANT_HIERARCHY.md.
 WATCH_LIMITED_NOTE = (
     "This watch covered only this company: the parent has not granted this run "
-    "access to its child companies, so their changes are not included. This watch "
-    "was not stored, so the next full watch still reports what changed."
+    "access to its child companies, so their changes are not included."
 )
+WATCH_NOT_STORED_NOTE = " This watch was not stored, so the next scheduled watch still reports it."
 
 
 async def _reachable_rollup(ctx: ToolContext, tool: str) -> tuple[tuple[str, ...], dict[str, Any]]:
@@ -72,12 +72,23 @@ async def _org_overview(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     return result
 
 
+def _may_store(ctx: ToolContext, limited: bool) -> bool:
+    """Whether this watch may move the snapshot.
+
+    A run that reaches the children stores. A scheduled run that reaches only
+    its own tenant stores too: the snapshot keeps the tenants it did not see,
+    and without storing it would announce the same problems on every beat. A
+    person who reaches only their own tenant does not: their watch would
+    swallow what the owner's next beat should report.
+    """
+    return not limited or ctx.identity is None
+
+
 async def _org_watch(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """What changed since the last watch. Writes the snapshot unless ``preview``.
 
-    A run that reaches only its own tenant (``limited``) reports, but never
-    stores: its snapshot would drop every child, and the next full watch would
-    then re-announce, or miss, what changed there.
+    A run that reaches only its own tenant is ``limited``; whether it stores is
+    :func:`_may_store`.
 
     Not read-only, so it is outside ``READONLY_TOOLS``: plan mode cannot call it
     (it uses ``org_overview``), and benchmark runs never get it.
@@ -91,11 +102,13 @@ async def _org_watch(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         ctx.tenant_id,
         rollup,
         daily=bool(args.get("daily", False)),
-        store=not limited and not bool(args.get("preview", False)),
+        store=_may_store(ctx, limited) and not bool(args.get("preview", False)),
     )
     result["limited"] = limited
     if result["limited"]:
-        result["note"] = WATCH_LIMITED_NOTE
+        result["note"] = WATCH_LIMITED_NOTE + (
+            "" if _may_store(ctx, limited) else WATCH_NOT_STORED_NOTE
+        )
     return result
 
 
