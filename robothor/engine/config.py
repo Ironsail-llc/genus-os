@@ -572,6 +572,15 @@ def _run_model_settings(model: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _eager_tool_compression(v2: dict[str, Any]) -> Any:
+    """``v2.eager_tool_compression``, else the fleet default from the environment."""
+    return v2.get(
+        "eager_tool_compression",
+        os.environ.get("ROBOTHOR_EAGER_TOOL_COMPRESSION", "").strip().lower()
+        in ("1", "true", "yes", "on"),
+    )
+
+
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     """Convert a YAML manifest dict to an AgentConfig."""
     model = manifest.get("model", {})
@@ -783,11 +792,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         # manifest value — including False as opt-out — always wins. Pairs
         # with tool_offload_threshold: with offloading configured, thinning
         # spills to disk and stays lossless (session.thin_previous_tool_results).
-        eager_tool_compression=v2.get(
-            "eager_tool_compression",
-            os.environ.get("ROBOTHOR_EAGER_TOOL_COMPRESSION", "").strip().lower()
-            in ("1", "true", "yes", "on"),
-        ),
+        eager_tool_compression=_eager_tool_compression(v2),
         # Fleet default via env so staging the offload does not mean editing
         # every manifest; an explicit manifest value (including 0 = opt out)
         # always wins. See session._offload_tool_result for the mechanism and
