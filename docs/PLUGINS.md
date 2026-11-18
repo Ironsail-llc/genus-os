@@ -674,7 +674,7 @@ example_agent = ["genus-plugin.yaml", "agents/**/*", "workflows/*", "patches/*",
 |---|---|---|
 | `agents` | a directory laid out like `templates/agents/core/main`: `manifest.template.yaml`, `instructions.template.md`, optional `setup.yaml` and `SKILL.md` | rendered by the agent-template installer — the same code as `genus agent install` — into `docs/agents/<id>.yaml` and the instruction file under the instance's `brain/`, and recorded in `.robothor/installed.yaml` with `source: plugin:<distribution>`. With no `setup.yaml`, the agent id is the directory name and the version is the plugin's. `.robothor/overrides/<id>.yaml` applies exactly as it does to any template |
 | `workflows` | a file | copied to `docs/workflows/<basename>` |
-| `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — `delete:`, a list of keys, dotted for nested ones, and `append:` / `detach:`, which add or take out single list items (see [Composable patches](#composable-patches-append-and-detach)). The order is `set`, `append`, `delete`, `detach`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning. **A list replaces**: `set: {tools_allowed: [x]}` on an agent with no `tools_allowed` (which means every non-opt-in tool) narrows it to `x`. `append:` does not help there either: it refuses to create or fill an absent or empty `tools_allowed` (or `heartbeat_tools_allowed` / `worker_tools_allowed`), and only adds `x` to an allowlist the agent already has. To give an unrestricted agent a plugin tool that is opt-in, append it to `tools_opt_in` |
+| `patches` | `agent:` an agent id the plugin does **not** ship, `file:` a YAML file with top-level `install:` and `remove:` sections | each section has `set:` — a deep merge for mappings; any other value, lists included, replaces — `delete:`, a list of keys, dotted for nested ones, and `append:` / `detach:`, which add or take out single list items (see [Composable patches](#composable-patches-append-and-detach)). The order is `set`, `append`, `delete`, `detach`. A patch may not touch `id`. A patch whose target agent does not exist is skipped with a warning, and takes effect when that agent is installed. **A list replaces**: `set: {tools_allowed: [x]}` on an agent with no `tools_allowed` (which means every non-opt-in tool) narrows it to `x`. `append:` does not help there either: it refuses to create or fill an absent or empty `tools_allowed` (or `heartbeat_tools_allowed` / `worker_tools_allowed`), and only adds `x` to an allowlist the agent already has. To give an unrestricted agent a plugin tool that is opt-in, append it to `tools_opt_in` |
 | `files` | `src`, `dest`, `mode` (`overwrite`, the default, or `if_missing`) | `dest` must be under `brain/`, `docs/workflows/` or `docs/hooks/`, be exactly `docs/webhooks.yaml`, or be one `<name>.yaml` directly in `docs/webhooks.d/`. `if_missing` never replaces a file that exists. `brain/` has ownership rules, below (all of these are instance paths) |
 
 ### Composable patches: `append` and `detach`
@@ -735,6 +735,17 @@ remove:                 # optional: without a detach, remove takes back what ins
   or `<key>[<value>]`. Two plugins appending different items to the same list
   coexist; two appending the same identity are refused, as is one plugin
   appending to a list another `set`s or `delete`s (and the reverse).
+
+* **Patches survive a re-render.** When a plugin re-renders an agent it ships
+  (an upgrade, a reinstall, or any sync where the file differs from its
+  render), the patches every other installed plugin recorded for that agent
+  are applied again, in distribution-name order. The agent on disk is always
+  the owner's render plus those patches, whichever plugins a sync touched and
+  in whatever order; an agent that already matches is not rewritten, and an
+  agent no other plugin patches is written exactly as rendered.
+* **Checking.** `genus plugin sync --check` writes nothing and exits `1`,
+  naming the agent and the plugin, when an installed plugin's patch is not in
+  effect; `genus plugin sync` puts it back.
 
 A patch that uses `append:` or `detach:` belongs to a plugin that declares
 contract `2.0` (see [The rules, and why](#the-rules-and-why)).

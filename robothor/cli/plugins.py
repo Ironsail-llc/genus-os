@@ -259,8 +259,10 @@ def _set_enabled(name: str, enabled: bool) -> int:
     return 0
 
 
-def cmd_plugin_sync(force: bool = False, strict: bool = False) -> int:
+def cmd_plugin_sync(force: bool = False, strict: bool = False, check: bool = False) -> int:
     """Record every installed plugin distribution in the lockfile."""
+    if check:
+        return cmd_plugin_sync_check()
     from robothor.plugins.lockfile import sync
 
     try:
@@ -328,6 +330,32 @@ def cmd_plugin_sync(force: bool = False, strict: bool = False) -> int:
         )
         return EXIT_WORKSPACE_REFUSED
     return 0
+
+
+def cmd_plugin_sync_check() -> int:
+    """``genus plugin sync --check``: report, write nothing.
+
+    Exit 1 when an installed plugin's patch is not in effect on the agent it
+    targets (the agent is out of sync, and a ``genus plugin sync`` would put it
+    back), 0 when every patch is in place, 2 when the check itself could not
+    run.
+    """
+    from robothor.plugins import assets
+
+    try:
+        missing = assets.missing_patches()
+    except (assets.AssetError, OSError) as exc:
+        print(f"genus plugin sync --check: could not read the workspace ({exc})", file=sys.stderr)
+        return 2
+    if not missing:
+        print("patches: every installed plugin's patches are in effect")
+        return 0
+    for item in missing:
+        print(
+            f"{item.agent}: out of sync — {item.plugin}'s patch is not in effect. "
+            "Run `genus plugin sync` to put it back."
+        )
+    return 1
 
 
 def _print_plan(plan: Any, *, would: bool) -> None:
@@ -526,7 +554,9 @@ def cmd_plugin(args: argparse.Namespace) -> int:
         return cmd_plugin_list()
     if command == "sync":
         return cmd_plugin_sync(
-            bool(getattr(args, "force", False)), strict=bool(getattr(args, "strict", False))
+            bool(getattr(args, "force", False)),
+            strict=bool(getattr(args, "strict", False)),
+            check=bool(getattr(args, "check", False)),
         )
     if command == "doctor":
         return cmd_plugin_doctor(bool(getattr(args, "json", False)))

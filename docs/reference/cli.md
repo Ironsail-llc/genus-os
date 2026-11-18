@@ -76,12 +76,13 @@ Usage: `genus plugin disable <name>`
 
 Record the installed distributions in the lockfile.
 
-Usage: `genus plugin sync [--force] [--strict]`
+Usage: `genus plugin sync [--force] [--strict] [--check]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--force` | — | off | Rebuild even when the existing lockfile cannot be read, accepting the loss of every disable it recorded |
 | `--strict` | — | off | Exit 3 when any plugin's workspace files were refused or failed (the others are still synced) |
+| `--check` | — | off | Write nothing; exit 1 when an installed plugin's patch is not in effect on the agent it targets |
 
 ### `genus plugin install`
 
