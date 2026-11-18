@@ -70,6 +70,13 @@ class TestTheKey:
         assert key.count(":") == 3
         assert key != MAIN
 
+    @pytest.mark.parametrize(
+        ("a", "b"),
+        [("svc:a", "svc-a"), ("svc%3Aa", "svc:a"), ("svc%a", "svc%25a"), ("a:b:c", "a-b-c")],
+    )
+    def test_two_different_service_ids_never_share_a_session(self, mode, a, b):
+        assert _effective_session_key(_service(a), "") != _effective_session_key(_service(b), "")
+
     def test_a_service_that_names_a_key_keeps_it(self, mode):
         assert _effective_session_key(_service(), MAIN) == MAIN
         assert _effective_session_key(_service(), "agent:main:bench-1") == "agent:main:bench-1"
