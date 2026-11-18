@@ -96,7 +96,7 @@ function json(route: Route, body: unknown, status = 200) {
 }
 
 async function setupMocks(page: Page, identity: { home: string; accessible: Tenant[] }) {
-  const state = { acting: identity.home, switches: [] as string[] };
+  const state = { acting: identity.home, switches: [] as string[], overviewReads: 0 };
 
   await page.route("**/api/auth/session", (route) =>
     json(route, {
@@ -132,11 +132,12 @@ async function setupMocks(page: Page, identity: { home: string; accessible: Tena
     json(route, { detail: "this route is not intercepted by the spec" }, 503),
   );
   await page.route("**/api/bridge/api/tenants/accessible", (route) => json(route, identity.accessible));
-  await page.route("**/api/bridge/api/org/overview", (route) =>
-    state.acting === identity.home
+  await page.route("**/api/bridge/api/org/overview", (route) => {
+    state.overviewReads += 1;
+    return state.acting === identity.home
       ? json(route, OVERVIEW)
-      : json(route, { detail: "switch back to your home tenant to see every company" }, 403),
-  );
+      : json(route, { detail: "switch back to your home tenant to see every company" }, 403);
+  });
   await page.route("**/api/session/switch-tenant", (route) => {
     const { tenant } = route.request().postDataJSON() as { tenant: string };
     if (!identity.accessible.some((t) => t.id === tenant)) {
@@ -182,6 +183,22 @@ test.describe("command centre", () => {
     expect(state.switches).toEqual(["acme-child-a"]);
     // While acting, the command centre is not offered.
     await expect(page.getByTestId("nav-org")).toHaveCount(0);
+  });
+
+  // Each read is audited in every child. Not re-reading on tab focus is
+  // covered in the unit test, which can move the clock past the minute.
+  test("the overview is read once on opening, and once more per Refresh", async ({ page }) => {
+    const state = await setupMocks(page, { home: "acme-parent", accessible: [PARENT, CHILD_A, CHILD_B] });
+
+    await page.goto("/?v=org");
+    await expect(page.getByTestId(/^company-card-/)).toHaveCount(3);
+    expect(state.overviewReads).toBe(1);
+
+    const refresh = page.getByRole("button", { name: "Refresh" });
+    await refresh.click();
+    await expect.poll(() => state.overviewReads).toBe(2);
+    await expect(refresh).toBeEnabled();
+    expect(state.overviewReads).toBe(2);
   });
 
   test("a child-tenant admin has no command centre", async ({ page }) => {
