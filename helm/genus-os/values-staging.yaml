@@ -7,11 +7,11 @@
 # released `vX.Y.Z` on PR close / unlabel.
 
 global:
-  imageTag: "v1.130.0"
+  imageTag: "pr-882-sha-0b2dc35"
   environment: staging
   authEnforce: true
-  deployedFromPR: ""
-  deployedAt: ""
+  deployedFromPR: "882"
+  deployedAt: "2026-11-18T11:07:15Z"
 # Cloud env — never run the in-cluster subcharts. RDS supplies Postgres.
 postgres:
   enabled: false

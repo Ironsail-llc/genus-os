@@ -256,7 +256,8 @@ def _model_for(config: Any, session: Any, session_key: str) -> str:
     try:
         from robothor.engine.config import load_agent_config
 
-        agent = load_agent_config(agent_id, config.manifest_dir, config.workspace)
+        # The webchat run gets its `when:` clause; so must the image decision.
+        agent = load_agent_config(agent_id, config.manifest_dir, config.workspace, "webchat")
     except Exception:  # noqa: BLE001 - an unreadable manifest means "unknown"
         return ""
     return agent.model_primary if agent else ""

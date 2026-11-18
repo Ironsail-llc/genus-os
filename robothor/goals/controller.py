@@ -149,7 +149,9 @@ class GoalController:
         from robothor.engine.runtime import ExecutionContext, RunRequest
 
         tenant = self.config.tenant_id
-        config = load_agent_config_or_broken("main", self.config.manifest_dir, "goal pursuit")
+        config = load_agent_config_or_broken(
+            "main", self.config.manifest_dir, "goal pursuit", trigger_type=TriggerType.CRON
+        )
         remaining = self.run_budget(goal, config)
         if goal["parent_goal_id"]:
             parent = await asyncio.to_thread(store.control, tenant, goal["parent_goal_id"])
