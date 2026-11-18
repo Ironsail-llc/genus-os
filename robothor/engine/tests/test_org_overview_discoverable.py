@@ -81,8 +81,11 @@ class TestOrgOverviewIsFoundBySearch:
 
 class TestTheOperatorFacingAgentHoldsIt:
     def test_main_holds_org_overview_without_searching(self) -> None:
-        manifest = yaml.safe_load((_MAIN_TEMPLATE / "manifest.template.yaml").read_text())
-        assert "org_overview" in manifest["tools_eager"]
+        # The template carries `{{ placeholders }}`, so it is not YAML until
+        # rendered: take the one block this test is about.
+        text = (_MAIN_TEMPLATE / "manifest.template.yaml").read_text()
+        block = text.split("\ntools_eager:\n", 1)[1].split("\n\n", 1)[0]
+        assert "org_overview" in yaml.safe_load(block)
 
     def test_mains_instructions_name_it_for_a_company_check_in(self) -> None:
         text = (_MAIN_TEMPLATE / "instructions.template.md").read_text()

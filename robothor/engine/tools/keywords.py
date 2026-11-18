@@ -563,6 +563,31 @@ TOOL_HINTS: dict[str, ToolHint] = {
     "n8n_recent_failures": ToolHint(
         keywords=("n8n", "automation", "workflow", "failure", "failed", "error", "broken", "run")
     ),
+    # ── The organisation ──────────────────────────────────────────────
+    # An owner asks about "my companies", "the businesses", "the portfolio",
+    # "my fleets"; an agent looking for the tool searches "tenant" and
+    # "organization". Every one of those words has to land here, and ahead of
+    # the single-tenant run and task tools that share "fleet" and "health".
+    "org_overview": ToolHint(
+        keywords=(
+            "tenant",
+            "company",
+            "organisation",
+            "organization",
+            "business",
+            "portfolio",
+            "holding",
+            "subsidiary",
+            "child",
+            "fleet",
+            "health",
+            "status",
+            "overview",
+            "rollup",
+            "operation",
+        ),
+        rank_bias=1.0,
+    ),
 }
 
 

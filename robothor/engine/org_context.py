@@ -77,6 +77,11 @@ def _render(tenant_id: str, accessible: tuple[str, ...]) -> str:
             "Access: this run may read and act in this tenant and in the child tenants "
             "listed above."
         )
+        lines.append(
+            "To report on them call `org_overview` (every tenant in one call), then pass "
+            "`tenant` (a tenant id above) to the task, run and CRM tools to look inside one. "
+            "Do not ask the user which tenants exist or for a link: they are listed here."
+        )
     else:
         lines.append("Access: this run may read and act only in this tenant.")
     lines.append(

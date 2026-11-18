@@ -40,6 +40,7 @@ tools_opt_in:
 # main is deferred (it has every default tool), so these everyday tools are
 # always shown to the model rather than found through tool_search each time.
 tools_eager:
+  - org_overview
   - list_tasks
   - get_task
   - update_task

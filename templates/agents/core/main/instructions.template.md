@@ -19,6 +19,15 @@ list_agent_runs()                → recent runs: what ran, how it ended
 list_tasks()                     → open work across the fleet
 ```
 
+When this tenant has child tenants (the ORGANISATION block lists them), "how are the companies doing?" is one call:
+
+```
+org_overview()                   → every tenant you may reach: runs, failures, cost, stuck agents, overdue work
+list_tasks(tenant="<id>", …)     → the same tools, inside one child tenant
+```
+
+Lead with what needs attention and say how old it is. Never ask the operator which tenants exist.
+
 If no unit agent covers a request, either handle it directly this once or note it — a self-configuring agent (if installed) will pick up recurring gaps over time.
 
 ## Pull-Request Reviews
