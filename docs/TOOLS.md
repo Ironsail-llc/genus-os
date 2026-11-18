@@ -1681,7 +1681,7 @@ company. These tools read and write that structure; the data model is in
 | Tool | Use it to | Not |
 |---|---|---|
 | `set_affiliation` | Record a person's role at a company (`personId`, `companyId`, `role`, optional `attributes`, `isActive=false` to close). Repeating the same call changes nothing; closing keeps the row and sets its end date. | `update_person`'s `companyId`, which is the person's single primary company. Use both when that is what you mean. |
-| `list_affiliations` | A person's companies (`personId`) or a company's people (`companyId`), optionally one `role`; `activeOnly=false` includes closed ones. | `list_people`, which cannot filter by role. |
+| `list_affiliations` | A person's companies (`personId`) or a company's people (`companyId`), optionally one `role`; `activeOnly=false` includes closed ones. One page at a time (`limit` up to 500, `offset`); `total` and `hasMore` say whether there is more. | `list_people`, which cannot filter by role. |
 | `list_company_children` | The companies directly under one company. | `list_companies`, which is a flat name search. |
 | `find_company_by_identifier`, `find_person_by_identifier` | Look a record up by its id in an outside system (`system`, `identifier`). Exact match only; `found=false` when there is none. | `list_companies` / `search_people`, which match names and can return the wrong record. |
 | `get_contact_360` | Everything about a person, now including `affiliations` (each with its company's `parentChain`); with `companyId` instead, a company's parent, children, people by role and outside ids. | |

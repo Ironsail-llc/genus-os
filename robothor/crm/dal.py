@@ -1607,16 +1607,15 @@ def close_affiliation(
     return result
 
 
-def list_affiliations(
+def _affiliation_filter(
     *,
-    person_id: str | None = None,
-    company_id: str | None = None,
-    role: str | None = None,
-    active_only: bool = True,
-    limit: int = 500,
-    tenant_id: str = DEFAULT_TENANT,
-) -> list[dict[str, Any]]:
-    """Affiliations of live people at live companies, filtered by any of the arguments."""
+    person_id: str | None,
+    company_id: str | None,
+    role: str | None,
+    active_only: bool,
+    tenant_id: str,
+) -> tuple[str, list[Any]]:
+    """The WHERE clause shared by the affiliation list, its page and its count."""
     conditions = [
         "a.tenant_id = %s",
         "p.deleted_at IS NULL",
@@ -1634,20 +1633,115 @@ def list_affiliations(
         params.append(_normalize_role(role))
     if active_only:
         conditions.append("a.is_active")
-    params.append(max(1, min(int(limit), 5000)))
+    return " WHERE " + " AND ".join(conditions), params
+
+
+def list_affiliations(
+    *,
+    person_id: str | None = None,
+    company_id: str | None = None,
+    role: str | None = None,
+    active_only: bool = True,
+    limit: int = 500,
+    offset: int = 0,
+    tenant_id: str = DEFAULT_TENANT,
+) -> list[dict[str, Any]]:
+    """Affiliations of live people at live companies, filtered by any of the arguments.
+
+    At most ``limit`` rows from ``offset``, in a stable order; use
+    :func:`list_affiliations_page` to learn how many there are in all.
+    """
+    where, params = _affiliation_filter(
+        person_id=person_id,
+        company_id=company_id,
+        role=role,
+        active_only=active_only,
+        tenant_id=tenant_id,
+    )
+    params.extend([max(1, min(int(limit), 5000)), max(0, int(offset))])
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             _AFFILIATION_SELECT
-            + f" WHERE {' AND '.join(conditions)}"
-            + " ORDER BY c.name, a.role, p.first_name, p.last_name, a.id LIMIT %s",
+            + where
+            + " ORDER BY c.name, a.role, p.first_name, p.last_name, a.id LIMIT %s OFFSET %s",
             params,
         )
         return [affiliation_to_dict(r) for r in cur.fetchall()]
 
 
+def count_affiliations(
+    *,
+    person_id: str | None = None,
+    company_id: str | None = None,
+    role: str | None = None,
+    active_only: bool = True,
+    tenant_id: str = DEFAULT_TENANT,
+) -> int:
+    """How many affiliations :func:`list_affiliations` would return without a limit."""
+    where, params = _affiliation_filter(
+        person_id=person_id,
+        company_id=company_id,
+        role=role,
+        active_only=active_only,
+        tenant_id=tenant_id,
+    )
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT count(*) FROM crm_affiliations a "
+            "JOIN crm_people p ON p.id = a.person_id "
+            "JOIN crm_companies c ON c.id = a.company_id" + where,
+            params,
+        )
+        row = cur.fetchone()
+        return int(row[0] if row else 0)
+
+
+def list_affiliations_page(
+    *,
+    person_id: str | None = None,
+    company_id: str | None = None,
+    role: str | None = None,
+    active_only: bool = True,
+    limit: int = 100,
+    offset: int = 0,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict[str, Any]:
+    """One page of affiliations with the total, so a caller can tell a list was cut.
+
+    Returns ``{"affiliations", "total", "offset", "limit", "hasMore"}``.
+    """
+    limit = max(1, min(int(limit), 5000))
+    offset = max(0, int(offset))
+    rows = list_affiliations(
+        person_id=person_id,
+        company_id=company_id,
+        role=role,
+        active_only=active_only,
+        limit=limit,
+        offset=offset,
+        tenant_id=tenant_id,
+    )
+    total = count_affiliations(
+        person_id=person_id,
+        company_id=company_id,
+        role=role,
+        active_only=active_only,
+        tenant_id=tenant_id,
+    )
+    return {
+        "affiliations": rows,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "hasMore": offset + len(rows) < total,
+    }
+
+
 def get_company_view(company_id: str, *, tenant_id: str = DEFAULT_TENANT) -> dict[str, Any] | None:
-    """A company with its parent, parent chain, children, people by role and outside ids."""
+    """A company with its parent, parent chain, children, people by role (first 500,
+    with ``affiliationsTotal``) and outside ids."""
     company = get_company(company_id, tenant_id)
     if company is None:
         return None
@@ -1658,6 +1752,8 @@ def get_company_view(company_id: str, *, tenant_id: str = DEFAULT_TENANT) -> dic
         "parentChain": chain,
         "children": list_company_children(company_id, tenant_id=tenant_id),
         "affiliations": list_affiliations(company_id=company_id, tenant_id=tenant_id),
+        # The list above stops at 500; the total says whether it was cut.
+        "affiliationsTotal": count_affiliations(company_id=company_id, tenant_id=tenant_id),
         "identifiers": list_company_identifiers(company_id, tenant_id=tenant_id),
     }
 

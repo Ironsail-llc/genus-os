@@ -229,7 +229,9 @@ get_company_parent_chain(company_id)        # nearest first
 list_company_identifiers(company_id)
 set_affiliation(person_id, company_id, role, *, attributes=None, is_active=True)
 close_affiliation(person_id, company_id, role)
-list_affiliations(*, person_id=None, company_id=None, role=None, active_only=True)
+list_affiliations(*, person_id=None, company_id=None, role=None, active_only=True, limit=500, offset=0)
+list_affiliations_page(...)                 # same filters: {affiliations, total, offset, limit, hasMore}
+count_affiliations(...)                     # same filters: the total alone
 get_company_view(company_id)                # company, parent, chain, children, people by role, ids
 ```
 
@@ -301,20 +303,23 @@ GET /api/people/{id}/notes
 GET /api/people/{id}/runs
 GET /api/people/{id}/memory
 GET /api/people/{id}/contact-360
-GET /api/people/{id}/affiliations?activeOnly=true
+GET /api/people/{id}/affiliations?activeOnly=true&limit=100&offset=0
 POST /api/people/{id}/affiliations          {companyId, role, attributes?, isActive?}
 POST /api/people/{id}/affiliations/close    {companyId, role}
 GET /api/people/by-identifier?system=&identifier=
 GET /api/companies/by-identifier?system=&identifier=
 GET /api/companies/{id}/children
-GET /api/companies/{id}/affiliations?role=&activeOnly=true
+GET /api/companies/{id}/affiliations?role=&activeOnly=true&limit=100&offset=0
 GET /api/companies/{id}/structure           # parent, chain, children, people by role, ids
 ```
 
 The affiliation routes answer 400 with `{"error"}` when the DAL refuses the
 input (a person or company outside the tenant, a blank role), and every route
 is pinned to the request's tenant like the rest of `/api/people` and
-`/api/companies`.
+`/api/companies`. The two affiliation lists answer one page,
+`{affiliations, total, offset, limit, hasMore}` (`limit` at most 500), so a
+caller can tell a list was cut; the company view's `affiliations` stops at
+500 and carries `affiliationsTotal`.
 
 ## Agent tools
 

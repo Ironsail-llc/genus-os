@@ -1965,8 +1965,13 @@ def _affiliation_schemas() -> dict[str, dict[str, Any]]:
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max results (default 200)",
+                        "description": "Page size (default 200, at most 500)",
                         "default": 200,
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Rows to skip; the result's total and hasMore say what is left",
+                        "default": 0,
                     },
                 },
             },

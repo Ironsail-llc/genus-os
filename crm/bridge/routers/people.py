@@ -39,7 +39,7 @@ from robothor.crm.dal import (
     get_person_summary,
     get_person_tasks,
     get_person_timeline,
-    list_affiliations,
+    list_affiliations_page,
     list_companies,
     list_company_children,
     list_people,
@@ -249,13 +249,18 @@ def api_person_contact_360(
 def api_person_affiliations(
     person_id: str,
     activeOnly: bool = Query(True),  # noqa: N803 - camelCase like the rest of the API
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     tenant_id: str = Depends(get_tenant_id),
 ):
-    return {
-        "affiliations": list_affiliations(
-            person_id=person_id, active_only=activeOnly, tenant_id=tenant_id
-        )
-    }
+    """One page of the person's affiliations, with ``total`` and ``hasMore``."""
+    return list_affiliations_page(
+        person_id=person_id,
+        active_only=activeOnly,
+        limit=limit,
+        offset=offset,
+        tenant_id=tenant_id,
+    )
 
 
 @router.post("/people/{person_id}/affiliations")
@@ -369,13 +374,19 @@ def api_company_affiliations(
     company_id: str,
     role: str | None = Query(None),
     activeOnly: bool = Query(True),  # noqa: N803 - camelCase like the rest of the API
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     tenant_id: str = Depends(get_tenant_id),
 ):
-    return {
-        "affiliations": list_affiliations(
-            company_id=company_id, role=role, active_only=activeOnly, tenant_id=tenant_id
-        )
-    }
+    """One page of the company's people by role, with ``total`` and ``hasMore``."""
+    return list_affiliations_page(
+        company_id=company_id,
+        role=role,
+        active_only=activeOnly,
+        limit=limit,
+        offset=offset,
+        tenant_id=tenant_id,
+    )
 
 
 @router.get("/companies/{company_id}/structure")

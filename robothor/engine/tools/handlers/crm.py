@@ -1318,24 +1318,46 @@ async def _set_affiliation(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 
 @_handler("list_affiliations")
 async def _list_affiliations(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    from robothor.crm.dal import list_affiliations
+    from robothor.crm.dal import list_affiliations_page
+    from robothor.engine.feature_flags import data_scoping_mode
+    from robothor.identity.scope import scope_for_query
 
     person_id = (args.get("personId") or "").strip() or None
     company_id = (args.get("companyId") or "").strip() or None
     if person_id is None and company_id is None:
         return {"error": "personId or companyId is required"}
     role = (args.get("role") or "").strip() or None
-    rows = await asyncio.to_thread(
-        list_affiliations,
+    limit = max(1, min(int(args.get("limit") or 200), 500))
+    offset = max(0, int(args.get("offset") or 0))
+    scope = scope_for_query(data_scoping_mode(), ctx.identity)
+    if scope is not None:
+        # A restricted caller pages through its own person's rows only, so the
+        # total it is told counts nobody else.
+        if person_id is not None and person_id != scope.person_id:
+            empty: dict[str, Any] = {"affiliations": [], "count": 0, "total": 0}
+            return {**empty, "offset": offset, "limit": limit, "hasMore": False}
+        person_id = scope.person_id
+    page = await asyncio.to_thread(
+        list_affiliations_page,
         person_id=person_id,
         company_id=company_id,
         role=role,
         active_only=bool(args.get("activeOnly", True)),
-        limit=int(args.get("limit") or 200),
+        limit=limit,
+        offset=offset,
         tenant_id=ctx.tenant_id,
     )
-    rows = _scope_people_rows(rows, ctx, tool_name="list_affiliations", id_key="personId")
-    return {"affiliations": rows, "count": len(rows)}
+    rows = _scope_people_rows(
+        page["affiliations"], ctx, tool_name="list_affiliations", id_key="personId"
+    )
+    return {
+        "affiliations": rows,
+        "count": len(rows),
+        "total": page["total"],
+        "offset": page["offset"],
+        "limit": page["limit"],
+        "hasMore": page["hasMore"],
+    }
 
 
 @_handler("list_company_children")
