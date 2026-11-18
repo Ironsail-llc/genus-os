@@ -680,8 +680,10 @@ _ORG_SCHEMAS: dict[str, dict[str, Any]] = {
                 "changed), `as_of`, `tenants_seen` and `limited` (true, with a `note`, when "
                 "this run reaches only its own tenant). For a heartbeat: call it, and send "
                 "the briefing to the owner only when it is not empty. It never sends "
-                "anything itself. It stores what it saw, so the next call reports only "
-                "newer changes; `preview: true` does not store. `daily: true` adds every "
+                "anything itself. On a heartbeat or other scheduled run it stores what it "
+                "saw, so the next call reports only newer changes; `preview: true` does "
+                "not store, and a run started by a person in chat never stores (its "
+                "`note` says so). `daily: true` adds every "
                 "tenant's state, persisting problems included. For a question asked in "
                 "chat, use org_overview instead."
             ),

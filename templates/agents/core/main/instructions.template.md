@@ -25,7 +25,7 @@ If no unit agent covers a request, either handle it directly this once or note i
 
 ## Organisation Watch
 
-Heartbeat only (a scheduled beat, nobody chatting), and only with child tenants. Call `org_watch()`, or `org_watch(daily=true)` on the beat in the 08:00 hour. If `briefing` is empty, answer exactly "Nothing to report." Otherwise answer with the `briefing` as it stands; if the result is `limited`, add its `note` to the daily summary. Never call `org_watch` in chat: it records what it saw, so the next beat would stay silent. In chat use `org_overview`.
+Heartbeat only (a scheduled beat, nobody chatting), and only with child tenants. Call `org_watch()`, or `org_watch(daily=true)` on the beat in the 08:00 hour. If `briefing` is empty, answer exactly "Nothing to report." Otherwise answer with the `briefing` as it stands; if the result is `limited`, add its `note` to the daily summary. In chat use `org_overview`, not `org_watch`: the watch is for the heartbeat, and in chat it records nothing.
 
 ## Pull-Request Reviews
 

@@ -1739,13 +1739,15 @@ problems and persisting problems before healthy companies, with the as-of
 time. The first call (or one after the snapshot was deleted) reports every
 problem present. `limited` is true when the run reaches only its own tenant,
 and a `note` says the parent has not granted child access. A limited
-scheduled run stores its own tenant's state and keeps the children's; a limited
-run started by a person never stores (`stored: false`).
+scheduled run stores its own tenant's state and keeps the children's.
 
 `org_watch` stores what it saw in the run's own tenant's
-`org_watch_snapshot` memory block, unless `preview: true` or a person's
-limited run, so it
-is not read-only. That block is engine state: `memory_block_read`,
+`org_watch_snapshot` memory block only on a scheduled or system run (cron and
+heartbeat, hook, event, workflow, channel event) and only without
+`preview: true`, so it is not read-only. A run a person started (chat, Slack,
+Telegram, a plugin channel), with or without a verified identity and whatever
+it reaches, gets the report and never stores: the result has `stored: false`
+and a `note` saying the next scheduled watch still reports it. That block is engine state: `memory_block_read`,
 `memory_block_write`, `append_to_block` and `memory_block_list` refuse or omit
 it, and the warm-up never loads it. Any text the briefing repeats from it is cut
 to one short line. Because it is not read-only, plan mode does not offer it,
@@ -1758,8 +1760,7 @@ one call covers every company and shows which one needs attention. Then drill
 into that company by calling the ordinary tool with `tenant`, for example
 `list_tasks` with `tenant` and `overdue: true`. Use `org_watch` only on a
 heartbeat or schedule, to brief the owner when something changed: called from
-chat, it would record what it showed and the next beat would stay silent about
-it (use `preview: true` to look without recording). Use `dry_run` before any
+chat it records nothing and only repeats what the next beat will report. Use `dry_run` before any
 write in another tenant, and show the operator what it would change.
 
 ### Credentials: `vault_get`, `vault_set`, `vault_test`, `vault_list`, `vault_delete`
