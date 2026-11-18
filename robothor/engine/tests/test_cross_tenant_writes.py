@@ -327,3 +327,34 @@ def test_writes_advertise_tenant_and_dry_run():
         props = schemas[name]["function"]["parameters"]["properties"]
         assert props["tenant"]["type"] == "string", name
         assert props["dry_run"]["type"] == "boolean", name
+
+
+# ── Post-condition verification reads back where the write landed ─────────
+
+
+def test_verification_reads_back_in_the_target_tenant(env):
+    seen: dict[str, Any] = {}
+
+    async def fake_verify(name: str, args: dict[str, Any], result: Any, ctx: Any) -> Any:
+        seen.update(tenant_id=ctx.tenant_id, scope=current_tenant_scope(), args=dict(args))
+        return result
+
+    with patch("robothor.engine.tools.verification.verify_tool_result", side_effect=fake_verify):
+        _call("create_task", {"tenant": CHILD_A, "title": "Renew the lease"})
+
+    assert seen["tenant_id"] == CHILD_A
+    assert seen["scope"] == CHILD_A
+    assert "tenant" not in seen["args"]
+
+
+def test_verification_is_unchanged_without_a_tenant(env):
+    seen: dict[str, Any] = {}
+
+    async def fake_verify(name: str, args: dict[str, Any], result: Any, ctx: Any) -> Any:
+        seen.update(tenant_id=ctx.tenant_id, scope=current_tenant_scope())
+        return result
+
+    with patch("robothor.engine.tools.verification.verify_tool_result", side_effect=fake_verify):
+        _call("create_task", {"title": "Renew the lease"})
+
+    assert seen == {"tenant_id": PARENT, "scope": None}
