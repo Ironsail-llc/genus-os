@@ -1,3 +1,9 @@
+## [1.132.0](https://github.com/Ironsail-llc/genus-os/compare/v1.131.0...v1.132.0) (2026-11-18)
+
+### Features
+
+* **engine:** add GPT-6.2 Sol to the catalog and apply when clauses per run (GEN-630) ([#880](https://github.com/Ironsail-llc/genus-os/issues/880)) ([b376f13](https://github.com/Ironsail-llc/genus-os/commit/b376f132cd1cc9898da7979a5a9fac9b92a9b25e))
+
 ## [1.131.0](https://github.com/Ironsail-llc/genus-os/compare/v1.130.0...v1.131.0) (2026-11-18)
 
 ### Features

@@ -41,7 +41,7 @@ async def test_verified_repair_resumes_original_request_once(tmp_path, monkeypat
         ),
     )
     monkeypatch.setattr(
-        config_module, "load_agent_config", lambda *a: AgentConfig(id="main", name="Main")
+        config_module, "load_agent_config", lambda *a, **k: AgentConfig(id="main", name="Main")
     )
     coroutines = []
     monkeypatch.setattr(

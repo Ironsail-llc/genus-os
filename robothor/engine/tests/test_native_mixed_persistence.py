@@ -44,7 +44,9 @@ async def test_persisted_chat_competes_with_goal_execution(engine_config, monkey
     )
     assert selected is not None and not selected.auto_task
     agent = replace(selected, instruction_file="", bootstrap_files=[])
-    monkeypatch.setattr("robothor.engine.config.load_agent_config_or_broken", lambda *a: agent)
+    monkeypatch.setattr(
+        "robothor.engine.config.load_agent_config_or_broken", lambda *a, **_k: agent
+    )
     monkeypatch.setattr(dal, "get_connection", effects.get_connection)
     monkeypatch.setattr(dal, "_safe_audit", lambda *a, **k: None)
     monkeypatch.setattr("robothor.events.bus.publish", lambda *a, **k: None)

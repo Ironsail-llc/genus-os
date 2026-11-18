@@ -54,8 +54,9 @@ async def test_unpinned_root_spawn_resolves_from_live_manifests(monkeypatch, tmp
     """The end-to-end defect: a root spawn was refused for every agent."""
     loaded = {}
 
-    def fake_load(agent_id, manifest_dir, caller):
+    def fake_load(agent_id, manifest_dir, caller, trigger_type=None):
         loaded["agent_id"] = agent_id
+        loaded["trigger_type"] = trigger_type
         return AgentConfig(id=agent_id, name=agent_id), ""
 
     def refuse(*args, **kwargs):
@@ -73,6 +74,7 @@ async def test_unpinned_root_spawn_resolves_from_live_manifests(monkeypatch, tmp
     assert reason == ""
     assert child is not None
     assert loaded["agent_id"] == "worker"
+    assert loaded["trigger_type"] == "sub_agent"
 
 
 @pytest.mark.parametrize("empty", ["", None])
@@ -84,7 +86,7 @@ async def test_no_falsy_release_reaches_the_snapshot_loader(monkeypatch, tmp_pat
 
     monkeypatch.setattr(
         "robothor.engine.config.load_agent_config_or_reason",
-        lambda agent_id, manifest_dir, caller: (AgentConfig(id=agent_id, name=agent_id), ""),
+        lambda agent_id, manifest_dir, caller, **_: (AgentConfig(id=agent_id, name=agent_id), ""),
     )
     monkeypatch.setattr("robothor.templates.fleet_store.staged_release_path", refuse)
     engine_config = SimpleNamespace(workspace=tmp_path, manifest_dir=tmp_path / "docs/agents")

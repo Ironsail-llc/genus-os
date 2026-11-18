@@ -262,7 +262,7 @@ async def test_native_runner_funds_main_and_helper_requests_and_reports_both(mon
         return SimpleNamespace(total_cost_usd=0.02)
 
     monkeypatch.setattr("robothor.engine.request_budget.OpenRouterQuotes", lambda: quote)
-    monkeypatch.setattr("robothor.engine.config.load_agent_config", lambda *args: config)
+    monkeypatch.setattr("robothor.engine.config.load_agent_config", lambda *args, **kw: config)
     monkeypatch.setattr(
         "robothor.engine.tools.handlers.spawn.get_runner",
         lambda: SimpleNamespace(config=SimpleNamespace(manifest_dir="unused"), execute=execute),
@@ -292,7 +292,7 @@ async def test_status_write_allowlist_requires_active_guardrail(monkeypatch):
         write_path_allowlist=["brain/status/*"],
     )
     execute = AsyncMock()
-    monkeypatch.setattr("robothor.engine.config.load_agent_config", lambda *args: config)
+    monkeypatch.setattr("robothor.engine.config.load_agent_config", lambda *args, **kw: config)
     monkeypatch.setattr(
         "robothor.engine.tools.handlers.spawn.get_runner",
         lambda: SimpleNamespace(config=SimpleNamespace(manifest_dir="unused"), execute=execute),
