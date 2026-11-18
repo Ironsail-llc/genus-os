@@ -140,6 +140,47 @@ def test_a_verified_human_on_a_system_trigger_is_unattended(grant):
     assert _attach(_run(trigger_type=TriggerType.WORKFLOW), OWNER) == (PARENT,)
 
 
+# ── Reach follows the verified identity, not only the run's role ───────────
+
+
+def _verified(role: str, tenant_id: str = PARENT) -> IdentityContext:
+    return IdentityContext(
+        tenant_id=tenant_id, channel="webchat", identifier="bob", verified=True, role=role
+    )
+
+
+def test_a_verified_member_on_a_run_carrying_owner_reaches_only_its_own_tenant(grant):
+    assert _attach(_run(user_role="owner"), _verified("member")) == (PARENT,)
+
+
+def test_a_verified_owner_on_a_run_carrying_member_reaches_only_its_own_tenant(grant):
+    assert _attach(_run(user_role="member"), _verified("owner")) == (PARENT,)
+
+
+def test_a_verified_identity_of_another_tenant_reaches_only_the_runs_tenant(grant):
+    assert _attach(_run(), _verified("owner", tenant_id="acme-elsewhere")) == (PARENT,)
+
+
+def test_a_verified_admin_on_an_owner_run_still_reaches_the_descendants(grant):
+    assert _attach(_run(user_role="owner"), _verified("admin")) == EVERYTHING
+
+
+def test_an_owner_acting_in_a_child_reaches_only_from_that_child_down(grant):
+    from robothor.engine.run_identity import attach_tenant_access
+
+    seen: list[str] = []
+
+    def resolve(tenant_id: str, user_role: str | None = None, **_: Any) -> tuple[str, ...]:
+        seen.append(tenant_id)
+        return (tenant_id,)
+
+    run = _run()
+    with patch("robothor.engine.permissions.resolve_accessible_tenants", side_effect=resolve):
+        asyncio.run(attach_tenant_access(run, CHILD_A, _verified("owner", tenant_id=CHILD_A)))
+    assert seen == [CHILD_A]
+    assert run.accessible_tenant_ids == (CHILD_A,)
+
+
 #: Triggers a person starts. Without a verified human on them, nobody is
 #: vouched for: the unattended grant is for scheduled and system work only.
 HUMAN_TRIGGERS = (
