@@ -488,3 +488,25 @@ def test_the_watch_does_not_import_engine_tool_modules():
         for alias in node.names
     }
     assert not any(m.startswith("robothor.engine") for m in imported)
+
+
+def test_a_newly_overdue_urgent_task_is_called_urgent():
+    after = _rollup(_entry(PARENT), _overdue_task(CHILD_A, days=4), _entry(CHILD_B))
+    after["tenants"][1]["tasks"]["oldest_overdue"][0]["priority"] = "urgent"
+
+    changes = _diff(_snap(_healthy()), after)
+    text = _briefing(changes, after, daily=False)
+
+    task = next(c for c in changes if c["problem"] == "overdue_task")
+    assert task["priority"] == "urgent"
+    assert re.search(r"urgent task", text)
+    _assert_plain(text)
+
+
+def test_an_overdue_task_of_ordinary_priority_is_not_called_urgent():
+    after = _rollup(_entry(PARENT), _overdue_task(CHILD_A, days=4), _entry(CHILD_B))
+    after["tenants"][1]["tasks"]["oldest_overdue"][0]["priority"] = "normal"
+
+    text = _briefing(_diff(_snap(_healthy()), after), after, daily=False)
+
+    assert "urgent" not in text

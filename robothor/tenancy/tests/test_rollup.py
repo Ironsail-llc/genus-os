@@ -320,3 +320,11 @@ class TestFleetHealthWithoutTheBenchmarkBreakout:
         mock_widen.assert_not_called()
         assert cursor.execute.call_count == 1
         assert result["fleet_totals"]["benchmark_runs"] is None
+
+
+def test_an_overdue_task_carries_its_priority(world):
+    from robothor.tenancy.rollup import tenant_rollup
+
+    entry = _by_id(tenant_rollup(["acme-child-a"], now=NOW))["acme-child-a"]
+
+    assert "priority" in entry["tasks"]["oldest_overdue"][0]
