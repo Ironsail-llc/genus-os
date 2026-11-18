@@ -1,3 +1,9 @@
+## [1.135.0](https://github.com/Ironsail-llc/genus-os/compare/v1.134.0...v1.135.0) (2026-11-18)
+
+### Features
+
+* **engine:** truthful refusals, bounded context, scoped fence (GEN-590) ([#885](https://github.com/Ironsail-llc/genus-os/issues/885)) ([fb975b3](https://github.com/Ironsail-llc/genus-os/commit/fb975b3850661f60c0bd920df8297a999d1b02ed)), closes [#873](https://github.com/Ironsail-llc/genus-os/issues/873) [#874](https://github.com/Ironsail-llc/genus-os/issues/874) [#872](https://github.com/Ironsail-llc/genus-os/issues/872) [#874](https://github.com/Ironsail-llc/genus-os/issues/874)
+
 ## [1.134.0](https://github.com/Ironsail-llc/genus-os/compare/v1.133.0...v1.134.0) (2026-11-18)
 
 ### Features
