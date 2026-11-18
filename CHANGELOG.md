@@ -1,3 +1,9 @@
+## [1.131.0](https://github.com/Ironsail-llc/genus-os/compare/v1.130.0...v1.131.0) (2026-11-18)
+
+### Features
+
+* **engine:** fall back to a configured channel for alerts (GEN-522) ([#867](https://github.com/Ironsail-llc/genus-os/issues/867)) ([d825892](https://github.com/Ironsail-llc/genus-os/commit/d825892ef13c76afa41a14b166a4735ff3379264)), closes [#868](https://github.com/Ironsail-llc/genus-os/issues/868)
+
 ## [1.130.0](https://github.com/Ironsail-llc/genus-os/compare/v1.129.1...v1.130.0) (2026-11-14)
 
 ### Features
