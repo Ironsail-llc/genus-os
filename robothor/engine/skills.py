@@ -338,9 +338,41 @@ def instance_skills_dir() -> Path:
     return _skills_dir().parent.parent / "brain" / "skills"
 
 
+def platform_skills_dir(package_dir: Path | None = None) -> Path | None:
+    """The bundled skills that ship with the code itself, or None.
+
+    A wheel carries them as package data (``robothor/bundled_skills``, built
+    from ``agents/skills`` by ``hatch_build.py``); a checkout, the image's
+    ``/app`` included, has them at ``agents/skills`` beside the package. A
+    workspace with no ``agents/skills`` of its own still reads these.
+    """
+    package = package_dir if package_dir is not None else Path(__file__).resolve().parents[1]
+    packaged = package / "bundled_skills"
+    if packaged.is_dir():
+        return packaged
+    root = package.parent
+    checkout = root / "agents" / "skills"
+    if (root / "pyproject.toml").is_file() and checkout.is_dir():
+        return checkout
+    return None
+
+
+def _bundled_layers() -> tuple[Path, ...]:
+    """The bundled trees, lowest precedence first: the code's own, then the workspace's.
+
+    Layered per skill, not per directory: a workspace ``agents/skills``
+    holding one skill (a bundle install writes there) must not hide the rest.
+    """
+    workspace = _skills_dir()
+    shipped = platform_skills_dir()
+    if shipped is None or shipped.resolve() == workspace.resolve():
+        return (workspace,)
+    return (shipped, workspace)
+
+
 def skill_search_paths() -> tuple[Path, ...]:
     """Every directory a skill can be read from, lowest precedence first."""
-    return (_skills_dir(), instance_skills_dir())
+    return (*_bundled_layers(), instance_skills_dir())
 
 
 def skill_origin(meta: dict[str, Any] | None) -> str:
@@ -383,9 +415,10 @@ def _read_file_path(skill_name: str, filename: str, base: Path | None = None) ->
     instance = _contained(instance_skills_dir(), skill_name, filename)
     if instance.exists():
         return instance
-    bundled = _contained(_skills_dir(), skill_name, filename)
-    if bundled.exists():
-        return bundled
+    for layer in reversed(_bundled_layers()):
+        bundled = _contained(layer, skill_name, filename)
+        if bundled.exists():
+            return bundled
     return instance
 
 
@@ -418,7 +451,7 @@ def resolve_skill_dir(skill_name: str, base: Path | None = None) -> Path | None:
 def bundled_skill_exists(name: str) -> bool:
     """True when the platform ships a skill under this name."""
     try:
-        return _contained(_skills_dir(), name, "SKILL.md").is_file()
+        return any(_contained(layer, name, "SKILL.md").is_file() for layer in _bundled_layers())
     except ValueError:
         return False
 
@@ -735,7 +768,8 @@ def migrate_skill_runtime_state(base: Path | None = None) -> dict[str, list[str]
     are the ones this was written for, but a skill written by an engine that
     predates the state sidecar can equally be sitting in the instance tree.
     """
-    roots = (base,) if base is not None else skill_search_paths()
+    # Never the copy shipped with the code: it is read-only package data.
+    roots = (base,) if base is not None else (_skills_dir(), instance_skills_dir())
     result: dict[str, list[str]] = {"migrated": [], "unchanged": [], "errors": []}
     for root in roots:
         _migrate_runtime_state_in(root, result)

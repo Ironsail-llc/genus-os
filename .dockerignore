@@ -35,6 +35,11 @@ memory/
 examples/
 sandbox/
 agents/
+# ...except the platform's bundled skills, which ship in the image; never
+# the sidecars an engine writes next to them at runtime.
+!agents/skills/
+agents/skills/*/state.json
+agents/skills/*/*.json.tmp
 test-results/
 
 # ─── Logs / artifacts ────────────────────────────────────────────────────────
