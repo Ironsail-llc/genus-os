@@ -95,3 +95,20 @@ def test_home_tenant_resolution_is_unchanged() -> None:
     assert ctx is not None
     assert ctx.tenant_id == PARENT
     assert ctx.person_id == "33333333-3333-3333-3333-333333333333"
+
+
+def test_an_owner_acting_in_a_child_is_marked_acting() -> None:
+    ctx = _resolve(_account(), CHILD_A)
+    assert ctx is not None and ctx.acting is True
+
+
+def test_an_owner_at_home_is_not_acting() -> None:
+    ctx = _resolve(_account(), PARENT)
+    assert ctx is not None and ctx.acting is False
+
+
+def test_the_acting_flag_survives_serialisation() -> None:
+    from dataclasses import asdict
+
+    ctx = _resolve(_account(), CHILD_A)
+    assert ctx is not None and asdict(ctx)["acting"] is True
