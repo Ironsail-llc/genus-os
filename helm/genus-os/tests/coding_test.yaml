@@ -1,0 +1,252 @@
+suite: engine coding jobs (Claude Code)
+release:
+  name: gos
+  namespace: genus
+tests:
+  # ─── Off by default: nothing changes ───────────────────────────────────────
+  - it: renders no coding setting and keeps the default security context when off
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_CODING_WORKSPACE, value: /workspace/coding/repos}
+      - notExists:
+          path: spec.template.spec.hostUsers
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.procMount
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.seccompProfile
+
+  # ─── Enabled: paths on the workspace volume, token auth ────────────────────
+  - it: puts the coding workspace, repo roots and review clone root under the workspace volume
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      engine.coding.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_CODING_WORKSPACE, value: /workspace/coding/repos}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_CODING_REPO_ROOTS, value: /workspace/coding}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PR_REVIEW_CLONE_ROOT, value: /workspace/coding/pr-review}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_CLAUDE_CODE_AUTH, value: token}
+
+  - it: follows workspace.mountPath and coding.dir
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      workspace.mountPath: /data
+      engine.coding.enabled: true
+      engine.coding.dir: jobs/claude
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_CODING_WORKSPACE, value: /data/jobs/claude/repos}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_CODING_REPO_ROOTS, value: /data/jobs/claude}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PR_REVIEW_CLONE_ROOT, value: /data/jobs/claude/pr-review}
+
+  - it: lets engine.env override a coding path
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      engine.coding.enabled: true
+      engine.env.ROBOTHOR_PR_REVIEW_CLONE_ROOT: /workspace/coding/reviews
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PR_REVIEW_CLONE_ROOT, value: /workspace/coding/reviews}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PR_REVIEW_CLONE_ROOT, value: /workspace/coding/pr-review}
+
+  - it: enabling coding alone does not relax the security context
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      engine.coding.enabled: true
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostUsers
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.procMount
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.seccompProfile
+
+  # ─── Refusals ──────────────────────────────────────────────────────────────
+  - it: refuses a read-only workspace
+    template: engine/workload.yaml
+    set:
+      engine.coding.enabled: true
+      workspace.readOnly: true
+    asserts:
+      - failedTemplate:
+          errorMessage: engine.coding.enabled needs a writable workspace volume; workspace.readOnly and workspace.configMap.name leave nowhere to clone
+
+  - it: refuses a ConfigMap workspace
+    template: engine/workload.yaml
+    set:
+      engine.coding.enabled: true
+      workspace.configMap.name: fleet-bundle
+    asserts:
+      - failedTemplate:
+          errorMessage: engine.coding.enabled needs a writable workspace volume; workspace.readOnly and workspace.configMap.name leave nowhere to clone
+
+  - it: refuses a coding dir that leaves the workspace
+    template: engine/workload.yaml
+    set:
+      engine.coding.enabled: true
+      engine.coding.dir: ../etc
+    asserts:
+      - failedTemplate:
+          errorMessage: engine.coding.dir must be a relative path inside the workspace, got "../etc"
+
+  - it: refuses an absolute coding dir
+    template: engine/workload.yaml
+    set:
+      engine.coding.enabled: true
+      engine.coding.dir: /srv/coding
+    asserts:
+      - failedTemplate:
+          errorMessage: engine.coding.dir must be a relative path inside the workspace, got "/srv/coding"
+
+  # ─── The sandbox relaxation: engine only, opt-in ───────────────────────────
+  - it: relaxPodSecurity gives the engine what bubblewrap needs and nothing else
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      engine.coding.enabled: true
+      engine.coding.sandbox.relaxPodSecurity: true
+    asserts:
+      - equal:
+          path: spec.template.spec.hostUsers
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.procMount
+          value: Unmasked
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.seccompProfile
+          value: {type: Unconfined}
+      # The rest of the posture is unchanged.
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          value: [ALL]
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile
+          value: {type: RuntimeDefault}
+
+  - it: relaxPodSecurity does not reach the engine's init containers
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      engine.coding.enabled: true
+      engine.coding.sandbox.relaxPodSecurity: true
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers[0].securityContext.seccompProfile
+      - notExists:
+          path: spec.template.spec.initContainers[0].securityContext.procMount
+
+  - it: takes a Localhost seccomp profile in place of Unconfined
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      engine.coding.enabled: true
+      engine.coding.sandbox.relaxPodSecurity: true
+      engine.coding.sandbox.seccompProfile:
+        type: Localhost
+        localhostProfile: profiles/claude-code-sandbox.json
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.seccompProfile
+          value: {type: Localhost, localhostProfile: profiles/claude-code-sandbox.json}
+
+  - it: relaxPodSecurity without coding enabled relaxes nothing
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      engine.coding.sandbox.relaxPodSecurity: true
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostUsers
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.procMount
+
+  - it: the bridge never renders the relaxation
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      engine.coding.enabled: true
+      engine.coding.sandbox.relaxPodSecurity: true
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostUsers
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.procMount
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.seccompProfile
+
+  - it: the orchestrator never renders the relaxation
+    template: orchestrator/workload.yaml
+    documentIndex: 0
+    set:
+      engine.coding.enabled: true
+      engine.coding.sandbox.relaxPodSecurity: true
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostUsers
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.procMount
+
+  - it: the hooks component never renders the relaxation
+    template: hooks/workload.yaml
+    documentIndex: 0
+    set:
+      hooks.enabled: true
+      engine.coding.enabled: true
+      engine.coding.sandbox.relaxPodSecurity: true
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostUsers
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.procMount
+
+  - it: tenant cells inherit neither the coding settings nor the relaxation
+    template: engine/tenants.yaml
+    documentIndex: 0
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+      engine.coding.enabled: true
+      engine.coding.sandbox.relaxPodSecurity: true
+      tenants:
+        - id: acme-child-a
+    asserts:
+      - isKind:
+          of: Deployment
+      - notExists:
+          path: spec.template.spec.hostUsers
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.procMount
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_CLAUDE_CODE_AUTH, value: token}
