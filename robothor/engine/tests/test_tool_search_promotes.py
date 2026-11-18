@@ -214,7 +214,7 @@ class TestARunWithoutSearchesIsUnchanged:
         )
 
         assert len(seen) == 2
-        assert [len(s) for s in seen] == [34, 34]
+        assert [len(s) for s in seen] == [35, 35]
         assert _by_name(seen[0]) == _by_name(seen[1])
 
 

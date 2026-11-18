@@ -656,14 +656,14 @@ _ORG_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "org_overview",
             "description": (
-                "How every tenant (company) this run may reach is doing, in one call: "
+                "How every tenant this run may reach is doing, in one call: "
                 "your own tenant first, then each child tenant you are allowed into. Per "
                 "tenant: name, parent, runs and failures over 24 hours and 7 days, success "
                 "rate, cost, agents with consecutive errors, overdue schedules, open and "
                 "overdue tasks with the oldest overdue ones and their age in days, the "
                 "last activity time, and a status (ok, attention, no_activity, error). "
-                "Read-only. Use it FIRST for 'how are the companies doing?'; then drill "
-                "into one company by passing `tenant` to list_tasks, list_agent_runs and "
+                "Read-only. Use it FIRST when asked how the organisation's tenants are doing; then drill "
+                "into one tenant by passing `tenant` to list_tasks, list_agent_runs and "
                 "the other tools that accept it. A run with no reach beyond its own tenant "
                 "gets that tenant and a note saying so."
             ),
@@ -675,9 +675,9 @@ _ORG_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "org_watch",
             "description": (
-                "What changed across every tenant (company) this run may reach since the "
+                "What changed across every tenant this run may reach since the "
                 "last watch: an agent that started failing, a stuck agent, a late schedule, "
-                "a newly overdue task, a company that went quiet or could not be read, and "
+                "a newly overdue task, a tenant that went quiet or could not be read, and "
                 "each of those clearing. A problem is reported once, not on every call. "
                 "Returns `changes`, a plain-language `briefing` (empty when nothing "
                 "changed), `as_of`, `tenants_seen` and `limited` (true, with a `note`, when "
@@ -685,7 +685,7 @@ _ORG_SCHEMAS: dict[str, dict[str, Any]] = {
                 "the briefing to the owner only when it is not empty. It never sends "
                 "anything itself. It stores what it saw, so the next call reports only "
                 "newer changes; `preview: true` does not store. `daily: true` adds every "
-                "company's state, persisting problems included. For a question asked in "
+                "tenant's state, persisting problems included. For a question asked in "
                 "chat, use org_overview instead."
             ),
             "parameters": {
@@ -694,7 +694,7 @@ _ORG_SCHEMAS: dict[str, dict[str, Any]] = {
                     "daily": {
                         "type": "boolean",
                         "description": (
-                            "Also summarise every company's current state, problems first. "
+                            "Also summarise every tenant's current state, problems first. "
                             "Default false."
                         ),
                     },

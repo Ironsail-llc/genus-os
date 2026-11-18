@@ -64,19 +64,43 @@ class TestOrganisationBlockNamesTheTools:
         assert "`tenant`" not in block
 
 
-class TestOrgOverviewIsFoundBySearch:
-    @pytest.mark.parametrize(
-        "word",
-        ["tenant", "company", "organisation", "organization", "business", "portfolio", "fleet"],
-    )
-    def test_the_words_an_owner_uses_are_in_its_vocabulary(self, word: str) -> None:
-        hint = TOOL_HINTS.get("org_overview")
-        assert hint is not None, "org_overview has no search vocabulary"
-        assert word in hint.keywords
+@pytest.fixture(scope="module")
+def search():
+    from robothor.engine.tools.registry import ToolRegistry
 
-    def test_it_outranks_its_siblings_for_a_company_check_in(self) -> None:
+    registry = ToolRegistry()
+    names = list(registry._schemas)
+    return lambda query, n=3: [h["name"] for h in registry.search_tools(names, query, limit=n)]
+
+
+class TestOrgOverviewIsFoundBySearch:
+    """Found by the words for a tenant tree, without taking the CRM's words.
+
+    "Company", "organisation" and "business" belong to the CRM's company
+    tools: a tool that also claimed them pushed ``get_company`` out of the
+    results for "look up a company by name". An agent with child tenants holds
+    this tool directly and is told about it in its context, so search only has
+    to find it by the vocabulary that is its own.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "tenant list children organization cross-tenant parent fleet monitoring rollup",
+            "organization portfolio list tenants org head rollup cross-tenant",
+            "holdings subsidiaries portfolio overview",
+        ],
+    )
+    def test_a_search_in_tenant_tree_words_finds_it_first(self, search, query: str) -> None:
+        assert search(query, n=1) == ["org_overview"]
+
+    def test_it_does_not_claim_the_crm_company_vocabulary(self) -> None:
         hint = TOOL_HINTS["org_overview"]
-        assert hint.rank_bias > 0
+        assert not {"company", "organisation", "organization", "business"} & set(hint.keywords)
+
+    def test_looking_up_a_company_still_finds_the_crm_getter(self, search) -> None:
+        assert "get_company" in search("look up a company by name")
+        assert "org_overview" not in search("look up a company by name")
 
 
 class TestTheOperatorFacingAgentHoldsIt:
