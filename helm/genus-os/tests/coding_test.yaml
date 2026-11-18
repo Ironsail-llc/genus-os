@@ -250,3 +250,59 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].env
           content: {name: ROBOTHOR_CLAUDE_CODE_AUTH, value: token}
+
+  # ─── A cell that declares its own coding block ─────────────────────────────
+  - it: a cell with its own coding block gets the paths and the relaxation, on its own workspace
+    template: engine/tenants.yaml
+    documentIndex: 0
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+      tenants:
+        - id: acme-child-a
+          coding:
+            enabled: true
+            sandbox:
+              relaxPodSecurity: true
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_CODING_WORKSPACE, value: /workspace/coding/repos}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_PR_REVIEW_CLONE_ROOT, value: /workspace/coding/pr-review}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_CLAUDE_CODE_AUTH, value: token}
+      - equal:
+          path: spec.template.spec.hostUsers
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.procMount
+          value: Unmasked
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.seccompProfile.type
+          value: Unconfined
+
+  - it: a cell's coding block leaves the root engine untouched
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      vaultKey.enabled: true
+      vault.secrets.vault-key.path: genus-os/test/vault-key
+      tenants:
+        - id: acme-child-a
+          coding:
+            enabled: true
+            sandbox:
+              relaxPodSecurity: true
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostUsers
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.procMount
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: ROBOTHOR_CLAUDE_CODE_AUTH, value: token}
