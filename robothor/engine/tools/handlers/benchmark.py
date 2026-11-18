@@ -237,6 +237,8 @@ _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
         "wait_seconds",
         "config_get",
         "plugins_overview",
+        # The REAL organisation: every reachable tenant's runs, costs, tasks.
+        "org_overview",
     }
     # The instance's REAL workflows and their run history.
     | {"list_workflows", "workflow_runs"}

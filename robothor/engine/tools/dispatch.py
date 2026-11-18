@@ -304,6 +304,7 @@ def builtin_handlers() -> dict[str, Any]:
         messaging,
         n8n,
         observability,
+        org,
         pdf,
         plugins,
         pr_review,
@@ -374,6 +375,7 @@ def builtin_handlers() -> dict[str, Any]:
         pr_review,
         workflows,
         plugins,
+        org,
     ]:
         all_handlers.update(mod.HANDLERS)
 

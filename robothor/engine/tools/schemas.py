@@ -648,6 +648,30 @@ _PLUGIN_SCHEMAS: dict[str, dict[str, Any]] = {
     },
 }
 
+#: The organisation rollup (``handlers/org.py``). Its own block, outside
+#: ``get_engine_schemas``, for the size-ratchet reason above.
+_ORG_SCHEMAS: dict[str, dict[str, Any]] = {
+    "org_overview": {
+        "type": "function",
+        "function": {
+            "name": "org_overview",
+            "description": (
+                "How every tenant (company) this run may reach is doing, in one call: "
+                "your own tenant first, then each child tenant you are allowed into. Per "
+                "tenant: name, parent, runs and failures over 24 hours and 7 days, success "
+                "rate, cost, agents with consecutive errors, overdue schedules, open and "
+                "overdue tasks with the oldest overdue ones and their age in days, the "
+                "last activity time, and a status (ok, attention, no_activity, error). "
+                "Read-only. Use it FIRST for 'how are the companies doing?'; then drill "
+                "into one company by passing `tenant` to list_tasks, list_agent_runs and "
+                "the other tools that accept it. A run with no reach beyond its own tenant "
+                "gets that tenant and a note saying so."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+}
+
 #: The secrets vault's four tools, as one cluster.
 #:
 #: Lifted out of ``get_engine_schemas`` when ``vault_test`` was added: the
@@ -2172,7 +2196,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS | _PLUGIN_SCHEMAS)
+    schemas.update(_VAULT_SCHEMAS | _CONFIG_SCHEMAS | _PLUGIN_SCHEMAS | _ORG_SCHEMAS)
 
     # ── Knowledge Vault (verbatim memory store; RIP 12) ──
     # Distinct from the secrets vault above. Stores reference data the agent

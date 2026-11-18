@@ -417,6 +417,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "config_get",
         # What each installed plugin contributes (tools, agents, workflows...).
         "plugins_overview",
+        # Every reachable tenant's health (handlers/org.py); SELECT-only.
+        "org_overview",
         # Vault read-only tools
         "vault_get",
         "vault_list",

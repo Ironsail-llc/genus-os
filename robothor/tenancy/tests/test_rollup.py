@@ -132,9 +132,7 @@ class _World:
 
     def task_counts(self, tenant_id: str) -> dict[str, int]:
         self._seen("task_counts", tenant_id)
-        return {"acme-child-a": {"open": 7, "overdue": 1}}.get(
-            tenant_id, {"open": 0, "overdue": 0}
-        )
+        return {"acme-child-a": {"open": 7, "overdue": 1}}.get(tenant_id, {"open": 0, "overdue": 0})
 
     def last_activity(self, tenant_id: str) -> datetime | None:
         self._seen("last_activity", tenant_id)
