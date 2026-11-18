@@ -100,6 +100,7 @@ class FakeRedis:
         self.streams: dict[str, list[tuple[bytes, dict[bytes, bytes]]]] = {}
         self.hashes: dict[str, dict[str, int]] = {}
         self.ttls: dict[str, int] = {}
+        self.maps: dict[str, dict[bytes, bytes]] = {}
         self.acked: list[bytes] = []
         self._seq = itertools.count()
         self.on_retry: Any = None  # the consumer reading an engine's retry stream
@@ -160,6 +161,22 @@ class FakeRedis:
     async def expire(self, key: str, seconds: int) -> bool:
         self.ttls[key] = seconds
         return True
+
+    # String-valued hash fields (the backlog's started markers).
+    async def hsetnx(self, key: str, field: Any, value: Any) -> int:
+        fields = self.maps.setdefault(key, {})
+        name = self._b(field)
+        if name in fields:
+            return 0
+        fields[name] = self._b(value)
+        return 1
+
+    async def hget(self, key: str, field: Any) -> bytes | None:
+        return self.maps.get(key, {}).get(self._b(field))
+
+    async def hdel(self, key: str, *fields: Any) -> int:
+        held = self.maps.get(key, {})
+        return sum(1 for f in fields if held.pop(self._b(f), None) is not None)
 
     async def scan_iter(self, match: str = "*", **kw: Any) -> Any:
         prefix = match.rstrip("*")

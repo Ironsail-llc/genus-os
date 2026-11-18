@@ -48,6 +48,7 @@ from robothor.engine.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from pathlib import Path
 
     from robothor.engine.config import EngineConfig
@@ -609,6 +610,7 @@ class WorkflowEngine:
         run_id: str | None = None,
         requeue_on_rate_limit: bool = False,
         rate_slot: float | None = None,
+        on_start: Callable[[], Awaitable[bool]] | None = None,
     ) -> WorkflowRun:
         """Execute a workflow by ID under an explicit caller identity.
 
@@ -631,6 +633,12 @@ class WorkflowEngine:
         it over instead of asking the limiter again. The hook backlog
         (``robothor.engine.workflow_backlog``) passes it. A run that does not
         start leaves the slot with the caller, to release.
+
+        ``on_start`` is awaited once the run holds its lane slot, right before
+        its first step. Returning False means the run must not start (another
+        engine already started this event's run): it ends ``skipped`` with no
+        step run. The hook backlog uses it to claim an event at the moment its
+        run starts, so a run that has started is never started again.
         """
         from robothor.engine.dedup import release
 
@@ -699,10 +707,14 @@ class WorkflowEngine:
                 # The lane slot before the clock: queue time is not run time. A
                 # concurrent hook workflow's runs overlap by design: their own lane.
                 async with run_slot(Lane.HOOKS if wf.concurrent else Lane.BACKGROUND):
-                    self._mark_run_running(run)
-                    with workflow_budget.workflow_deadline(workflow_id, wf.timeout_seconds):
-                        async with asyncio.timeout(wf.timeout_seconds):
-                            await self._execute_steps(run, wf)
+                    if on_start is not None and not await on_start():
+                        run.status = RunStatus.SKIPPED
+                        run.error_message = "Skipped: this event's run was already started"
+                    else:
+                        self._mark_run_running(run)
+                        with workflow_budget.workflow_deadline(workflow_id, wf.timeout_seconds):
+                            async with asyncio.timeout(wf.timeout_seconds):
+                                await self._execute_steps(run, wf)
             except TimeoutError:
                 run.status = RunStatus.TIMEOUT
                 run.error_message = self._timeout_message(run, wf)

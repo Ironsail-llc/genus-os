@@ -12,8 +12,10 @@ deletes the entry once the run has finished. So:
 * waiting is not a failure: there is no retry budget to spend, and nothing is
   dead-lettered for being early;
 * an engine that stops keeps its backlog in Redis, and the next start drains
-  it from where it was. A run cut off by the stop is started again (the
-  at-least-once contract every hook handler already has).
+  it from where it was. An event whose run had not started runs then; one whose
+  run had started (and may already have acted: sent a message) is closed with a
+  warning, never started again. The claim is a marker set the moment the run
+  starts, so under HA a new leader cannot start a run another replica holds.
 
 A workflow whose trigger is ``concurrent`` has up to
 :data:`MAX_CONCURRENT_RUNS` runs in flight, started in arrival order; any
@@ -34,10 +36,13 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.models import RunStatus
+from robothor.events.bus import MAXLEN as BUS_MAXLEN
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Callable
@@ -49,9 +54,12 @@ logger = logging.getLogger(__name__)
 #: Redis key prefix; the tenant and the workflow id complete the key.
 KEY_PREFIX = "robothor:workflow:backlog:"
 
-#: Entries one workflow's backlog holds. Past it a new event is dead-lettered,
-#: loudly, so a workflow that can never keep up cannot fill Redis.
-MAX_BACKLOG = 50_000
+#: Entries one workflow's backlog holds: no more than an event stream holds
+#: (``EVENT_BUS_MAXLEN``), the budget Redis's memory is sized for. Each entry
+#: is a full copy of an event, and Redis runs without eviction, so a larger
+#: backlog could fill it and refuse every write on the instance. Past the cap
+#: a new event is dead-lettered, loudly.
+MAX_BACKLOG = BUS_MAXLEN
 
 #: Runs of a ``concurrent`` workflow one drainer has in flight at once.
 MAX_CONCURRENT_RUNS = 100
@@ -169,6 +177,8 @@ class WorkflowBacklog:
         # a drainer that reads from the start again (a lost and regained
         # lead, a Redis error) skips them instead of running them twice.
         self._inflight: dict[str, set[str]] = {}
+        # This engine's claims on the entries it starts: who, and since when.
+        self._owner = f"{os.getpid()}:{uuid.uuid4().hex[:12]}"
         # The backlog as Redis last showed it: depth and the oldest entry id.
         # Every replica may write to a backlog that another one drains, so
         # nothing here is counted locally.
@@ -179,6 +189,28 @@ class WorkflowBacklog:
 
     def key(self, workflow_id: str) -> str:
         return backlog_key(self.tenant_id, workflow_id)
+
+    def started_key(self, workflow_id: str) -> str:
+        """The hash of entries whose run has started: entry id -> who started it, and when."""
+        return self.key(workflow_id) + ":started"
+
+    async def _claim(self, workflow_id: str, msg_id: str) -> bool:
+        """Mark the entry's run as started, unless someone already did. Atomic."""
+        token = json.dumps({"by": self._owner, "at": round(time.time(), 3)})
+        return bool(await self._redis.hsetnx(self.started_key(workflow_id), msg_id, token))
+
+    async def _close(self, workflow_id: str, msg_id: str, fields: dict[str, str], by: str) -> None:
+        """Remove an entry whose run started earlier without starting it again."""
+        logger.warning(
+            "Workflow %s: event %s (backlog entry %s) was already started (%s) and is not "
+            "started again; any step it had not finished did not run",
+            workflow_id,
+            fields.get("id") or "-",
+            msg_id,
+            by,
+        )
+        await self._redis.xdel(self.key(workflow_id), msg_id)
+        await self._redis.hdel(self.started_key(workflow_id), msg_id)
 
     def stats(self, workflow_id: str) -> tuple[int, float]:
         """The workflow's backlog depth and the age (seconds) of its oldest entry.
@@ -320,9 +352,27 @@ class WorkflowBacklog:
                 continue
             raw_id, raw = entries[0]
             msg_id = _text(raw_id)
-            cursor = "(" + msg_id
+            before, cursor = cursor, "(" + msg_id
             if msg_id in inflight:
                 continue  # started here already, still running or not yet removed
+            fields = {_text(k): _text(v) for k, v in raw.items()}
+            try:
+                started = await self._redis.hget(self.started_key(workflow_id), msg_id)
+                if started is not None:
+                    # Its run started before (a stop or crash cut it off, or the
+                    # replica that led then still runs it): never start it again.
+                    await self._close(workflow_id, msg_id, fields, _text(started))
+                    continue
+            except Exception as e:
+                logger.warning(
+                    "Workflow %s backlog unreadable, retrying in %ds: %s",
+                    workflow_id,
+                    int(ERROR_RETRY_SECONDS),
+                    e,
+                )
+                cursor = before  # read this entry again
+                await asyncio.sleep(ERROR_RETRY_SECONDS)
+                continue
             wf = self._engine().get_workflow(workflow_id)
             if wf is None:
                 logger.warning(
@@ -334,7 +384,6 @@ class WorkflowBacklog:
             await slots.acquire()
             stamp = await self._admit(wf)
             inflight.add(msg_id)
-            fields = {_text(k): _text(v) for k, v in raw.items()}
             task = asyncio.create_task(
                 self._run(wf, msg_id, fields, stamp), name=f"workflow-backlog-run:{workflow_id}"
             )
@@ -359,7 +408,10 @@ class WorkflowBacklog:
     async def _run(self, wf: Any, msg_id: str, fields: dict[str, str], stamp: float | None) -> None:
         stream = fields.pop(STREAM_FIELD, "")
         event_type = fields.pop(TYPE_FIELD, fields.get("type", ""))
-        await self._execute(wf, stream, event_type, fields, stamp)
+        if not await self._execute(wf, stream, event_type, fields, stamp, msg_id=msg_id):
+            # Another replica started this event's run; it removes the entry.
+            self._inflight.get(wf.id, set()).discard(msg_id)
+            return
         for attempt in range(DELETE_ATTEMPTS):
             try:
                 await self._redis.xdel(self.key(wf.id), msg_id)
@@ -374,17 +426,45 @@ class WorkflowBacklog:
                 await asyncio.sleep(ERROR_RETRY_SECONDS)
             else:
                 break
+        # The entry first, then its started marker: a marker left without an
+        # entry is harmless; an entry left without its marker would run again.
+        with contextlib.suppress(Exception):
+            await self._redis.hdel(self.started_key(wf.id), msg_id)
         self._inflight.get(wf.id, set()).discard(msg_id)
         with contextlib.suppress(Exception):
             await self._refresh(wf.id)
 
     async def _execute(
-        self, wf: Any, stream: str, event_type: str, fields: dict[str, Any], stamp: float | None
-    ) -> None:
-        """Run the workflow for one event; raises only when cancelled."""
+        self,
+        wf: Any,
+        stream: str,
+        event_type: str,
+        fields: dict[str, Any],
+        stamp: float | None,
+        *,
+        msg_id: str | None = None,
+    ) -> bool:
+        """Run the workflow for one event; raises only when cancelled.
+
+        With ``msg_id`` (a backlog entry) the run claims the entry the moment it
+        starts. False: another engine had already started this event's run.
+        """
         engine = self._engine()
+        claim: dict[str, bool] = {}
+
+        async def on_start() -> bool:
+            try:
+                claim["won"] = await self._claim(wf.id, msg_id or "")
+            except Exception as e:
+                # Unclaimed is unstarted: try again shortly rather than run unclaimed.
+                logger.warning("Workflow %s: could not claim a backlog entry: %s", wf.id, e)
+                claim["error"] = True
+                return False
+            return claim["won"]
+
         try:
             while True:
+                claim.clear()
                 run = await engine.execute(
                     workflow_id=wf.id,
                     trigger_type="hook",
@@ -393,7 +473,11 @@ class WorkflowBacklog:
                     user_id=f"service:workflow:{wf.id}",
                     user_role="service",
                     rate_slot=stamp,
+                    on_start=on_start if msg_id is not None else None,
                 )
+                if claim.get("won") is False and not claim.get("error"):
+                    engine.release_first_step(wf, stamp)
+                    return False
                 if run.status != RunStatus.SKIPPED or getattr(run, "rate_limited", False):
                     break
                 # A cron or manual run holds the workflow: this event waits its
@@ -407,6 +491,7 @@ class WorkflowBacklog:
             logger.error(
                 "Workflow %s failed (hook %s:%s): %s", wf.id, stream, event_type, e, exc_info=True
             )
+        return True
 
 
 def backlog_stats(
