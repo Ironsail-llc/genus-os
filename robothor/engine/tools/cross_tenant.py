@@ -133,6 +133,45 @@ def _refuse(
     return refusal(message, gate=gate, name=gate_name, unlock=unlock)
 
 
+#: The longest tenant id a call may name. Tenant creation enforces no pattern,
+#: so the shape check is a type and a length: anything else is no tenant id.
+MAX_TENANT_ID = 128
+
+
+def _tenant_target(raw: Any) -> str | None:
+    """The ``tenant`` argument as a tenant id: ``""`` for none (absent, null or
+    blank), ``None`` for a value that cannot be one (not a string, too long, or
+    carrying a control character)."""
+    if raw is None:
+        return ""
+    if not isinstance(raw, str):
+        return None
+    target = raw.strip()
+    if len(target) > MAX_TENANT_ID or not target.isprintable():
+        return None
+    return target
+
+
+def audit_answered(name: str, args: dict[str, Any], ctx: ToolContext, outcome: str) -> None:
+    """Audit an admitted crossing answered WITHOUT its handler running.
+
+    The repeat guard (``outcome="repeat"``) and the effect ledger's replay
+    (``outcome="replay"``) hand back a child's data from an earlier call; that
+    is still a crossing. Nothing for a call in the run's own tenant.
+    """
+    target = _tenant_target(args.get(TENANT_ARG))
+    if not target or target == ctx.tenant_id:
+        return
+    audit_cross_tenant(
+        home_tenant=ctx.tenant_id,
+        target_tenant=target,
+        user_id=ctx.user_id,
+        agent_id=ctx.agent_id,
+        tool=name,
+        outcome=outcome,
+    )
+
+
 def _bad_dry_run(name: str) -> dict[str, Any]:
     from robothor.engine.refusal import refusal
 
@@ -157,6 +196,19 @@ def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[
         UNATTENDED_CROSS_TENANT_WRITES,
     )
 
+    target = _tenant_target(args.get(TENANT_ARG))
+    if target is None:
+        # Malformed: answered exactly as an unreachable tenant, the audited
+        # value cut to a tenant id's length.
+        return _refuse(
+            name,
+            str(args.get(TENANT_ARG))[:MAX_TENANT_ID],
+            ctx,
+            UNREACHABLE,
+            gate="role",
+            gate_name="cross_tenant_reach",
+            unlock=_UNREACHABLE_UNLOCK,
+        )
     is_write = name in CROSS_TENANT_WRITES
     if is_write and DRY_RUN_ARG in args and not isinstance(args[DRY_RUN_ARG], bool):
         # "true", 1, null: never guessed at, in either direction.
@@ -166,7 +218,6 @@ def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[
         return None
     drop = {TENANT_ARG, DRY_RUN_ARG} if is_write else {TENANT_ARG}
     stripped = {k: v for k, v in args.items() if k not in drop}
-    target = str(args.get(TENANT_ARG) or "").strip()
     if not target:
         return Crossing(None, stripped, dry)
 

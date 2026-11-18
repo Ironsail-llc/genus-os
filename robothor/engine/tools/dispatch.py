@@ -835,6 +835,10 @@ async def _dispatch_admitted(
                 status="ok" if decision.action == "answered" else "denied",
                 error=decision.note if decision.action == "refused" else None,
             )
+            if decision.action == "answered" and crossing is not None:
+                from robothor.engine.tools.cross_tenant import audit_answered
+
+                audit_answered(name, args, ctx, "repeat")
             return decision.result
 
     # Benchmark sandbox: mirror ctx.is_benchmark into the CRM DAL's
