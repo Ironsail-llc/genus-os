@@ -1,3 +1,10 @@
+## [1.134.0](https://github.com/Ironsail-llc/genus-os/compare/v1.133.0...v1.134.0) (2026-11-18)
+
+### Features
+
+* **helm:** run claude code review jobs on a hosted deployment (GEN-660) ([#882](https://github.com/Ironsail-llc/genus-os/issues/882)) ([4287d1e](https://github.com/Ironsail-llc/genus-os/commit/4287d1e4ec1ebdcd0f0fa249fb1e7c4ce26d132a))
+* **pr-review:** paired comparison in the review status report (GEN-659) ([#881](https://github.com/Ironsail-llc/genus-os/issues/881)) ([235f728](https://github.com/Ironsail-llc/genus-os/commit/235f728f38d3c296283876bbb79085da921a32e7))
+
 ## [1.133.0](https://github.com/Ironsail-llc/genus-os/compare/v1.132.0...v1.133.0) (2026-11-18)
 
 ### Features
