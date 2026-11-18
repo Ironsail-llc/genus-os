@@ -161,8 +161,12 @@ def audit_answered(name: str, args: dict[str, Any], ctx: ToolContext, outcome: s
 
     The repeat guard (``outcome="repeat"``) and the effect ledger's replay
     (``outcome="replay"``) hand back a child's data from an earlier call; that
-    is still a crossing. Nothing for a call in the run's own tenant.
+    is still a crossing. Nothing for a call in the run's own tenant, and nothing
+    when ``tenant`` is the tool's own parameter: the effect ledger replays an
+    external tool's writes too, and no other tenant was entered for those.
     """
+    if _argument_owner(name) == "tool":
+        return
     target = _tenant_target(args.get(TENANT_ARG))
     if not target or target == ctx.tenant_id:
         return
