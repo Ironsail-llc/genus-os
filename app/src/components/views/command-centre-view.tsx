@@ -10,16 +10,21 @@
  *
  * A card opens its company through the same switch the tenant picker uses,
  * and only when the bridge says switching is on; otherwise it is not a link.
+ *
+ * Every read of the overview writes an audit row in each child company, so
+ * the page reads it when opened (if its last answer is over a minute old) and
+ * when Refresh is clicked: never on tab focus, reconnect or a timer. The as-of time says how old it is.
  */
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Building2, ChevronRight } from "lucide-react";
+import { AlertTriangle, Building2, ChevronRight, RefreshCw } from "lucide-react";
 
 import { EmptyState } from "@/components/business/empty-state";
 import { PageHeader } from "@/components/business/page-header";
 import { StatusBadge, type Status } from "@/components/business/status-badge";
 import { useTenantSwitch } from "@/components/layout/tenant-switcher";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAppQueryClient } from "@/lib/query/query-client";
 import { reloadPage } from "@/lib/reload-page";
@@ -37,7 +42,10 @@ import {
 
 const OVERVIEW_URL = "/api/bridge/api/org/overview";
 const OVERVIEW_KEY = ["bridge", "org", "overview"] as const;
-/** The rollup reads every company; a minute-old answer is fresh enough to show. */
+/**
+ * Re-opening the page within a minute shows the answer already read. Nothing
+ * else re-reads it but Refresh, because each read is audited in every company.
+ */
 const OVERVIEW_STALE_MS = 60_000;
 
 class OverviewRefused extends Error {}
@@ -288,6 +296,9 @@ export function CommandCentreView({
       queryFn: ({ signal }) => fetchOverview(signal),
       enabled: visible,
       staleTime: OVERVIEW_STALE_MS,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchInterval: false,
     },
     client,
   );
@@ -331,6 +342,17 @@ export function CommandCentreView({
             </time>
           </span>
         )}
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="org-refresh"
+          disabled={overview.isFetching}
+          aria-busy={overview.isFetching}
+          onClick={() => void overview.refetch({ cancelRefetch: false })}
+        >
+          <RefreshCw aria-hidden className={overview.isFetching ? "animate-spin" : undefined} />
+          Refresh
+        </Button>
       </PageHeader>
 
       {error && (
