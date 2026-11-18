@@ -670,6 +670,45 @@ _ORG_SCHEMAS: dict[str, dict[str, Any]] = {
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    "org_watch": {
+        "type": "function",
+        "function": {
+            "name": "org_watch",
+            "description": (
+                "What changed across every tenant (company) this run may reach since the "
+                "last watch: an agent that started failing, a stuck agent, a late schedule, "
+                "a newly overdue task, a company that went quiet or could not be read, and "
+                "each of those clearing. A problem is reported once, not on every call. "
+                "Returns `changes`, a plain-language `briefing` (empty when nothing "
+                "changed), `as_of`, `tenants_seen` and `limited` (true, with a `note`, when "
+                "this run reaches only its own tenant). For a heartbeat: call it, and send "
+                "the briefing to the owner only when it is not empty. It never sends "
+                "anything itself. It stores what it saw, so the next call reports only "
+                "newer changes; `preview: true` does not store. `daily: true` adds every "
+                "company's state, persisting problems included. For a question asked in "
+                "chat, use org_overview instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "daily": {
+                        "type": "boolean",
+                        "description": (
+                            "Also summarise every company's current state, problems first. "
+                            "Default false."
+                        ),
+                    },
+                    "preview": {
+                        "type": "boolean",
+                        "description": (
+                            "Report the changes without storing them, so the next call "
+                            "reports them again. Default false."
+                        ),
+                    },
+                },
+            },
+        },
+    },
 }
 
 #: The secrets vault's four tools, as one cluster.
