@@ -68,6 +68,7 @@ from robothor.engine.chat_plan_claim import (
 )
 from robothor.engine.chat_plan_helpers import _extract_plan_text, _plan_is_expired, _plan_to_dict
 from robothor.engine.chat_result import result_text
+from robothor.engine.chat_service_session import service_session_key
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
     clear_plan_state_async as clear_plan_state_async,
@@ -162,9 +163,9 @@ def _effective_session_key(auth: Any, requested_key: str) -> str:
     same-tenant caller with no ownership check. This is the fix, gated by
     ``ROBOTHOR_PER_USER_SESSIONS`` (see ``feature_flags.per_user_sessions_mode``):
 
-    - Service-typ tokens (ops tooling, the Telegram bridge writing into
-      main's session) always keep ``requested_key`` verbatim, in every flag
-      mode — there is no human on the other end to isolate.
+    - Service-typ tokens (ops tooling, probes, benchmark turns) keep a
+      ``requested_key`` verbatim, in every flag mode. One that sends NO key
+      gets its own (``chat_service_session``), never the main session.
     - The tenant owner always keeps ``requested_key`` verbatim, in every
       flag mode — the operator's webchat<->Telegram shared-session
       continuity (``telegram.py``'s ``main_session_key``) and existing
@@ -181,15 +182,13 @@ def _effective_session_key(auth: Any, requested_key: str) -> str:
     - ``off`` always returns ``requested_key`` unchanged. It is the escape
       hatch, not the default: ``enforce`` is what a fresh instance runs.
 
-    An EMPTY ``requested_key`` is the main session key. The Helm stopped
-    sending one at all (there is nothing a browser could say here that the
-    server does not already know better), and every rule below then applies to
-    that key exactly as it would to one that arrived over the wire — so
-    omitting the field is no more a way to choose a session than forging it is.
+    For a human, an EMPTY ``requested_key`` is the main session key. The Helm
+    stopped sending one (the server knows better than a browser), and every
+    rule below applies to that key as to one that arrived over the wire.
     """
-    requested_key = requested_key or get_main_session_key()
     if getattr(auth, "is_service", False):
-        return requested_key
+        return requested_key or service_session_key(get_main_session_key(), auth.user_id)
+    requested_key = requested_key or get_main_session_key()
 
     mode = per_user_sessions_mode()
     if mode == "off":

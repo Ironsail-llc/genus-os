@@ -26,6 +26,7 @@ from robothor.engine.models import (
     StepType,
     TriggerType,
 )
+from robothor.engine.session import ENGINE_CONTEXT_ROLE
 from robothor.engine.tools import READONLY_TOOLS, SPAWN_TOOLS
 
 # ─── Model Tests ──────────────────────────────────────────────────────
@@ -862,9 +863,11 @@ class TestPlanModeResearchNudge:
 
     These tests exercise the full runner loop and take >10s due to runner overhead.
 
-    NOTE: these terminate because the tool rate limit fires, not because the
-    plan-mode loop bounds itself. Raising DEFAULT_RATE_LIMIT turns them into
-    runaway loops — see the constant's docstring.
+    Each one ends because its scripted model stops: the second reply carries
+    ``[PLAN_READY]`` (or, in normal mode, the first reply is plain text). None
+    of them makes more than one tool call, so the per-minute tool limit never
+    comes into it. An older note here said they ended because that limit
+    fired; that was true only of ``TestPlanModeIterationCap`` below.
     """
 
     @pytest.mark.slow
@@ -911,7 +914,8 @@ class TestPlanModeResearchNudge:
         nudge_msgs = [
             m
             for m in second_call_messages
-            if m.get("role") == "system" and "without using any tools" in m.get("content", "")
+            if m.get("role") == ENGINE_CONTEXT_ROLE
+            and "without using any tools" in m.get("content", "")
         ]
         assert len(nudge_msgs) == 1
         # Nudge mentions discovery tools
@@ -1039,19 +1043,32 @@ class TestPlanModeResearchNudge:
         nudge_msgs = [
             m
             for m in second_call_messages
-            if m.get("role") == "system" and "without using any tools" in m.get("content", "")
+            if m.get("role") == ENGINE_CONTEXT_ROLE
+            and "without using any tools" in m.get("content", "")
         ]
         assert len(nudge_msgs) == 0
 
 
 class TestPlanModeIterationCap:
-    """Verify plan mode caps max_iterations at 10."""
+    """A plan-mode run whose model never stops calling tools still ends.
+
+    ``readonly_mode`` caps ``max_iterations`` at 10, but ``max_iterations`` is a
+    CHECK-IN INTERVAL, not a stop. What ends a run like this one is the
+    iteration safety cap (``safety_cap``), so that is what this test pins.
+
+    It used to end because the 30/minute tool rate limit refused the 31st call
+    and ten refusals tripped the error escalation — an unrelated throttle doing
+    duty as the runaway guard. The limit now paces calls instead of refusing
+    them, so this run is bounded by its own cap, set low enough that the
+    per-minute limit never comes into it.
+    """
 
     @pytest.mark.usefixtures("_mock_run_persistence")
     @pytest.mark.asyncio
     async def test_plan_mode_caps_at_10(self, runner, sample_agent_config, mock_litellm_response):
-        """readonly_mode=True caps iterations at 10 regardless of agent config."""
+        """readonly_mode=True: a tool-calling loop ends at the safety cap."""
         sample_agent_config.max_iterations = 20
+        sample_agent_config.safety_cap = 25
 
         # Create a tool call that loops so we can count iterations
         tc = MagicMock()
@@ -1069,7 +1086,7 @@ class TestPlanModeIterationCap:
             if "Check whether the proposed plan" in str(kwargs.get("messages", [])):
                 return mock_litellm_response(content="ALIGNED")
             call_count += 1
-            # Always return tool calls — loop runs until max_iterations
+            # Always return tool calls — the loop never ends on its own
             return response_with_tool
 
         runner.registry.execute = AsyncMock(return_value={"tasks": []})
@@ -1081,25 +1098,18 @@ class TestPlanModeIterationCap:
         # Disable routing so it doesn't interfere with the iteration cap
         with patch("litellm.acompletion", side_effect=mock_completion):
             with patch.object(runner, "_apply_routing", return_value=None):
-                await runner.execute(
+                run = await runner.execute(
                     "test-agent",
                     "check tasks",
                     agent_config=sample_agent_config,
                     readonly_mode=True,
                 )
 
-        # What is actually guaranteed: the loop terminates, and it does so via
-        # the safety cap rather than running forever.
-        #
-        # NOT guaranteed, despite this class's name: a bound of 10.
-        # `readonly_mode` caps `max_iterations` at 10, but max_iterations is a
-        # CHECK-IN INTERVAL, not a stop — the loop's real bound is safety_cap
-        # (200). The old assertion here was `<= 50`, and it passed only
-        # because the 30/minute tool rate limit fired first and killed the
-        # run. That is an unrelated throttle, so this test was really
-        # measuring the rate limiter. Raising the limit to a value that does
-        # not punish normal work (see test_tool_rate_limit) took this run to
-        # 131 calls and exposed the dependency.
-        #
-        # Bounded against the safety cap, which is the thing that does stop it.
-        assert 0 < call_count <= sample_agent_config.safety_cap * 2
+        # It ended at the safety cap, and only there: every iteration below
+        # the cap ran its tool call, and none was refused on the way.
+        stops = [s.tool_name for s in run.steps if s.step_type == StepType.BUDGET_STOP]
+        assert stops == ["safety_cap"]
+        assert runner.registry.execute.await_count == sample_agent_config.safety_cap
+        assert not [s for s in run.steps if s.error_message and "rate" in s.error_message.lower()]
+        # One model call per iteration, plus the forced wrap-up at the cap.
+        assert sample_agent_config.safety_cap <= call_count <= sample_agent_config.safety_cap + 1

@@ -1641,6 +1641,128 @@ read; the plugins the loader reports are still listed. The tool is read-only.
 what it does, whatever provides it. [Plugins](PLUGINS.md#seeing-what-a-plugin-shipped)
 covers the same data on the dashboard and the admin API.
 
+### Child tenants: `org_overview`, the `tenant` argument and `dry_run`
+
+In a [tenant hierarchy](runbooks/TENANT_HIERARCHY.md) a parent tenant's agent
+can read and act in its child tenants. Which tenants a run may reach is decided
+once, when the run starts (see the runbook's
+[Agents in a parent tenant](runbooks/TENANT_HIERARCHY.md#agents-in-a-parent-tenant)).
+A sub-agent run and a benchmark run never reach another tenant, and neither
+does a run a person started without a verified identity, whatever grants the
+agent has.
+
+**`org_overview`** takes no arguments. It returns `as_of` and one entry per
+tenant: the run's own tenant first, then every tenant it may reach. Each entry
+has `tenant_id`, `display_name`, `parent_id`, `runs_24h`, `failures_24h`,
+`runs_7d`, `failures_7d`, both success rates, `cost_usd_24h`, `cost_usd_7d`,
+`top_failures`, `agents_with_consecutive_errors`, `overdue_schedules` (enabled
+and more than 15 minutes late), `tasks` (`open`, `overdue`, and the five
+oldest overdue with `priority`, `overdueDays` and `ageDays`), `last_activity_at`, and a
+`status`:
+
+| `status` | Meaning |
+|---|---|
+| `ok` | Ran in the last 7 days, nothing below needs attention. |
+| `attention` | A failure in 24 hours, an agent with consecutive errors, an overdue schedule, or an overdue task. |
+| `no_activity` | No runs in 7 days. `last_activity_at` says when it last ran. Not healthy, just quiet. |
+| `error` | That tenant could not be read; the others are still answered. |
+
+A run that reaches no other tenant gets its own entry and a `note` saying so.
+Benchmark spend is not broken out per tenant. The five oldest overdue tasks of
+the caller's own tenant are those the caller may read under data scoping, as
+`list_tasks` would show them; the counts are the tenant's, as
+`list_tasks_summary` shows them. The tool is read-only, and each child it reads
+leaves an audit row.
+
+**The `tenant` argument.** The tools below take an optional `tenant`: a child
+tenant's id, as `org_overview` lists them. The call then runs in that tenant,
+with the database scope bound to it, exactly as the same call made by that
+tenant's own agent would. Without `tenant` a call is unchanged. Naming a tenant
+the run cannot reach, or one that does not exist, is refused with the same
+sentence, and nothing runs; so is a `tenant` that is not a string or is longer
+than 128 characters. Naming `tenant` on any other built-in tool is refused
+too. An external MCP server's tool or a plugin tool whose own schema declares a
+`tenant` (or `dry_run`) parameter gets it untouched: the engine does not read
+it, refuse it or audit it as a crossing.
+
+- Reads: `list_agent_runs`, `get_agent_run`, `list_agent_schedules`,
+  `get_agent_stats`, `list_agent_reviews`, `get_agent_review`,
+  `get_agent_performance_summary`, `list_tasks`, `get_task`,
+  `list_tasks_summary`, `list_notes`, `get_note`, `list_people`, `get_person`,
+  `list_companies`, `get_company`, `list_conversations`, `get_conversation`,
+  `list_messages`, `search_records`, `get_contact_360`,
+  `list_contact_messages`, `devops_query_metrics`.
+- Writes: `create_task`, `update_task`, `create_note`, `update_note`,
+  `send_notification`. Only the verified owner of the run's own tenant, on a
+  top-level run, may update a task or create or update a note in a child. Any
+  run that reaches the child may create a task or send a notification there.
+
+`search_memory` is not on the list: it adds recall from installed memory
+providers, which are not per tenant. `classify_run_failure` is not either: it
+compares a run with this engine's start time, and a child's runs belong to
+another engine.
+
+The list tools above (`list_tasks`, `list_notes`, `list_people`,
+`list_companies`, `list_conversations`, `list_agent_runs`,
+`list_agent_reviews`) also return `as_of`, and each row an `ageDays` counted
+from when it was created, with or without `tenant`.
+
+**`dry_run: true`** on any of the writes checks the call exactly as the real
+one and changes nothing. The result says what would happen: `would` (the
+fields a create or a notification would send) or `changes` (each field an
+update would change, `from` and `to`, read from the record in that tenant). A
+missing record or a malformed id is an `error`, as it would be for the real
+call, and so is a record the caller may not read under data scoping. `dry_run`
+without `tenant` is a dry run in the run's own tenant, audited like the real
+call. `dry_run` must be the boolean `true` or `false`; any other value
+(`"true"`, `1`, `null`) is refused and nothing runs.
+
+Every call that names another tenant, allowed or refused, dry run or not,
+writes an `agent.cross_tenant_call` audit row naming the home tenant, the
+target tenant, the user, the tool and the outcome, including one answered from
+an earlier identical call (outcome `repeat`) or replayed from the effect
+ledger (outcome `replay`).
+
+**`org_watch`** reports what changed across the same tenants since its last
+call. It takes `daily` (default false) and `preview` (default false) and
+returns `changes`, `briefing`, `as_of`, `tenants_seen`, `stored` and
+`limited`. A change is an agent that started failing (with the most frequent
+failure class), an agent with new consecutive errors, a schedule that became
+overdue, a newly overdue task (with its age), more overdue tasks than the five
+listed, a tenant that went quiet or could not be read, a status moving between
+`ok` and `attention`, and each problem clearing. A problem already seen is not
+reported again; a tenant that could not be read keeps the problems it had
+rather than being reported as recovered. `briefing` is plain text, one
+paragraph per company that changed, naming it by display name, and is empty
+when nothing changed. `daily: true` puts every company's current state first,
+problems and persisting problems before healthy companies, with the as-of
+time. The first call (or one after the snapshot was deleted) reports every
+problem present. `limited` is true when the run reaches only its own tenant,
+and a `note` says the parent has not granted child access. A limited
+scheduled run stores its own tenant's state and keeps the children's.
+
+`org_watch` stores what it saw in the run's own tenant's
+`org_watch_snapshot` memory block only on a scheduled or system run (cron and
+heartbeat, hook, event, workflow, channel event) and only without
+`preview: true`, so it is not read-only. A run a person started (chat, Slack,
+Telegram, a plugin channel), with or without a verified identity and whatever
+it reaches, gets the report and never stores: the result has `stored: false`
+and a `note` saying the next scheduled watch still reports it. That block is engine state: `memory_block_read`,
+`memory_block_write`, `append_to_block` and `memory_block_list` refuse or omit
+it, and the warm-up never loads it. Any text the briefing repeats from it is cut
+to one short line. Because it is not read-only, plan mode does not offer it,
+and a benchmark run never gets it. It never sends anything; the agent that
+called it delivers the briefing. Each child it reads leaves an audit row, as
+for `org_overview`.
+
+**Which to use.** Ask `org_overview` first for "how are the companies doing?":
+one call covers every company and shows which one needs attention. Then drill
+into that company by calling the ordinary tool with `tenant`, for example
+`list_tasks` with `tenant` and `overdue: true`. Use `org_watch` only on a
+heartbeat or schedule, to brief the owner when something changed: called from
+chat it records nothing and only repeats what the next beat will report. Use `dry_run` before any
+write in another tenant, and show the operator what it would change.
+
 ### Credentials: `vault_get`, `vault_set`, `vault_test`, `vault_list`, `vault_delete`
 
 An agent whose own manifest declares `v2.credentials: operator` holds these
@@ -1726,6 +1848,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |
 | Skills | `list_skills`, `invoke_skill` |
 | Plugins | [`plugins_overview`](#what-plugins-contribute-plugins_overview) |
+| Child tenants | [`org_overview`, and `tenant` / `dry_run` on CRM and run tools](#child-tenants-org_overview-the-tenant-argument-and-dry_run) |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
 | Workflows | [`list_workflows`, `run_workflow`, `workflow_runs`](#workflows-list_workflows-run_workflow-workflow_runs) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
@@ -1760,10 +1883,12 @@ exec, `send_file` to another chat, and every GitHub tool without
 | `unlock` | what a person changes for the same call to succeed |
 
 Behavioural rule 21 ships with them: **Relay a refusal as stated** — when a
-tool result has `refused: true` and a `gate`, the agent tells the person which
-gate refused it (`gate_name`) and what unlocks it (`unlock`); when the unlock is
-a call the agent can make now (a deferred tool's "call it through `tool_call`",
-say), it makes that call. A `refused: true` without a `gate` is a redirection,
+tool result has `refused: true` and a `gate`, the agent reads the gate and its
+`unlock`; when the unlock is a call the agent can make now (a deferred tool's
+"call it through `tool_call`", say), it makes that call. When a person can
+unlock it (a permission, an approval), the agent tells them in plain words what
+is needed and who can grant it. It never mentions runtime throttles, internal
+gate names or field names (`gate`, `gate_name`, `unlock`) to the person. A `refused: true` without a `gate` is a redirection,
 not a block: change the call as its `reason` says. When a tool fails or another system refuses the call
 and the result names no gate or unlock, the agent reports what the result
 itself says, says that it does not state the cause, and says that the
@@ -1788,8 +1913,17 @@ makes (a deferred tool's unlock) always runs, as does a workflow step, which
 keeps its own declared retries.
 
 The "What you can do here" block says the same: a refusal by one of the gates
-it lists names the gate and the unlock; a refusal that names no gate is
-relayed in its own words; rule 21 says when a refusal is final.
+it lists names the gate and the unlock, and the person is told in plain words
+what is needed and who can grant it; a refusal that names no gate is relayed in
+its own words; rule 21 says when a refusal is final.
+
+Behavioural rule 22 covers an interactive turn: lead with the answer; use the
+agent's own tools before asking a question, and never ask the person for facts
+the platform holds (tenants, companies, agents, links, lists); say once, in one
+sentence, what cannot be seen and then report what can; and say how old a
+record is when that matters, never presenting an old record as current. Rule 13
+keeps asking for intent only: what the person wants, not facts the agent can
+look up.
 
 A direct call to a tool the agent is granted but that a deferred turn left out
 of its schemas is refused with gate `policy`, name `deferred`, and the unlock
@@ -1844,6 +1978,9 @@ pointer to `view_image`; any other binary file returns its size and guessed MIME
 type instead of a decode error. Telegram attachments in these formats are
 extracted into the agent's first turn by the same code
 (`robothor/engine/file_extract.py`). Secret-path refusals run first, unchanged.
+A directory is not an error: `read_file` returns its entries (as
+`list_directory` does, unfiltered) with `"is_directory": true` and a note to
+read one of them.
 
 ---
 

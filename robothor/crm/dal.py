@@ -3588,6 +3588,19 @@ def get_tenant(tenant_id: str) -> dict[str, Any] | None:
         return tenant_to_dict(row) if row else None
 
 
+def tenant_child_data_access(tenant_id: str) -> bool:
+    """Whether ``tenant_id`` lets its unattended agents into its children's data.
+
+    ``crm_tenants.child_data_access`` (migration 037). Half of the unattended
+    grant ``run_identity.attach_tenant_access`` checks; the agent's manifest
+    (``v2.child_tenant_access``) is the other half. A missing tenant is FALSE.
+    """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT child_data_access FROM crm_tenants WHERE id = %s", (tenant_id,))
+        row = cur.fetchone()
+    return bool(row and row[0] is True)
+
+
 def list_tenants(parent_id: str | None = None, active_only: bool = True) -> list[dict[str, Any]]:
     """List tenants, optionally filtered by parent."""
     with get_connection() as conn:

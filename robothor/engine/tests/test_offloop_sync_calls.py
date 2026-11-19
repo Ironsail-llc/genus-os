@@ -139,6 +139,21 @@ async def test_execute_runs_its_lookups_off_the_loop(
             lambda *a, **k: (sample_agent_config, None),
         )
     monkeypatch.setattr(target, probe)
+    if target == "robothor.engine.permissions.resolve_accessible_tenants":
+        # Descendant reach is resolved for an attended run: a verified human.
+        # Without one the run is unattended and never asks (run_identity.py).
+        from robothor.identity import IdentityContext
+
+        monkeypatch.setattr(
+            "robothor.identity.resolve_identity",
+            lambda *a, **k: IdentityContext(
+                tenant_id="test-tenant",
+                channel="webchat",
+                identifier="alice",
+                verified=True,
+                role="owner",
+            ),
+        )
 
     # Interactive runs resolve their manifest at admission, already off the
     # loop (runtime/profile_lookup.py); a scheduled or manual run reads it here.

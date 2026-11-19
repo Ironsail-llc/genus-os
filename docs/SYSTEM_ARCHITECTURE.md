@@ -957,7 +957,23 @@ identity shape instead of one per channel:
   is injected on the first turn of every interactive run (and re-injected
   on later turns in a lightweight form) so the agent always knows who it's
   talking to, enriched with CRM affiliation and memory-graph relationships
-  when a `person_id` is resolvable.
+  when a `person_id` is resolvable. An owner or admin acting in a descendant
+  tenant (a `switch-tenant` token) still resolves: the webchat resolver checks
+  the account against its home tenant, by the rule `switch-tenant` enforces.
+  That identity is marked `acting`: it keeps its name and role in the
+  conversation and the reach that role gives from the tenant it acts in, but
+  it is not that tenant's instance owner, so `config_get` / `config_set`, the
+  masked `.env` read, host execution and owner-only writes in a descendant
+  stay with the tenant's own owner.
+- **The `--- ORGANISATION ---` block** (`robothor/engine/org_context.py`)
+  travels with it on every interactive turn, first and follow-up, and is in
+  the scheduled-run preamble: this tenant's id and display name, its parent,
+  each child tenant the run may reach (`AgentRun.accessible_tenant_ids`), and
+  one line on what the run may do there. A member sees only their own tenant.
+  The `crm_tenants` read runs off the event loop; a failed lookup drops the
+  block with a warning and never fails the turn. The operator-facing `main`
+  agent's first turn also carries a `--- FLEET ROSTER ---` (each agent in
+  `agent_schedules`: enabled, cron, last status).
 - **"Own data + shared" scoping** — non-privileged identities (role not in
   `{owner, admin, service}`) draw only on rows linked to their own
   `person_id`, plus org-general (`person_id IS NULL`) rows; owner/admin/

@@ -47,9 +47,11 @@ class TestResearchNorms:
         rules with the same number in every enforce-mode system prompt."""
         import re
 
+        monkeypatch.setenv("ROBOTHOR_RUN_VERIFICATION_ENABLED", "true")
         monkeypatch.setenv("ROBOTHOR_RUN_VERIFICATION_MODE", "enforce")
         from robothor.engine.prompts import behavioral_rules
 
         text = behavioral_rules()
+        assert "Never state an action occurred" in text  # the flag really is on
         numbers = [int(m) for m in re.findall(r"^(\d+)\. \*\*", text, re.MULTILINE)]
         assert numbers == list(range(1, len(numbers) + 1)), numbers

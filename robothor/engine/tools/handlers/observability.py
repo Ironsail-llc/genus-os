@@ -78,7 +78,7 @@ async def _get_agent_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     bad = _uuid_error(args.get("run_id"), "run id", "use list_agent_runs to find real run ids")
     if bad:
         return bad
-    run = await asyncio.to_thread(get_run, args["run_id"])
+    run = await asyncio.to_thread(get_run, args["run_id"], ctx.tenant_id)
     if not run:
         return {"error": "Run not found"}
     steps = await asyncio.to_thread(list_steps, args["run_id"])
@@ -138,7 +138,7 @@ async def _classify_run_failure(args: dict[str, Any], ctx: ToolContext) -> dict[
     if bad:
         return bad
 
-    run = await asyncio.to_thread(get_run, run_id)
+    run = await asyncio.to_thread(get_run, run_id, ctx.tenant_id)
     if not run:
         return {"error": f"run not found: {run_id}"}
 

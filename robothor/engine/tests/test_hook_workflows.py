@@ -1,4 +1,4 @@
-"""Hook-triggered workflows: the event reaches the run, and a busy workflow can requeue."""
+"""Hook-triggered workflows: the event reaches the run, and a busy workflow's event waits its turn."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from robothor.engine.hooks import (
     EventHooks,
 )
 from robothor.engine.models import RunStatus, WorkflowTriggerDef
+from robothor.engine.tests.test_workflow_burst_drain import FakeRedis, VirtualTime
 from robothor.engine.workflow import _render_template, parse_workflow
 
 STREAM = f"{STREAM_PREFIX}platform"
@@ -24,6 +25,7 @@ EVENT = "platform.order.created"
 def _wf(requeue: bool = False) -> MagicMock:
     wf = MagicMock()
     wf.id = "order-flow"
+    wf.concurrent = False
     wf.triggers = [
         WorkflowTriggerDef(
             type="hook", stream="platform", event_type=EVENT, requeue_if_busy=requeue
@@ -46,29 +48,48 @@ def _hooks(engine_config, wf, status=RunStatus.COMPLETED, agents=()):
     }
     hooks._prefixed_to_bare = {STREAM: "platform"}
     hooks.runner.execute = AsyncMock(return_value=MagicMock())
-    hooks.workflow_engine = MagicMock()
-    hooks.workflow_engine.get_workflows_for_event.return_value = [wf]
-    hooks.workflow_engine.execute = AsyncMock(return_value=_run(status))
+    _stub_engine(hooks, wf, status)
     return hooks
 
 
-async def _fire(hooks, data, redis=None):
-    """Handle one event, then run every task it spawned (sleeps skipped)."""
-    redis = redis or AsyncMock()
+def _stub_engine(hooks, wf, status=RunStatus.COMPLETED):
+    hooks.workflow_engine = MagicMock()
+    hooks.workflow_engine.get_workflows_for_event.return_value = [wf]
+    hooks.workflow_engine.get_workflow.side_effect = lambda i: wf if i == wf.id else None
+    hooks.workflow_engine.list_workflows.return_value = [wf]
+    hooks.workflow_engine.first_step_rate_wait.return_value = 0.0
+    hooks.workflow_engine.first_step_free_slots.return_value = None
+    hooks.workflow_engine.reserve_first_step.return_value = None
+    hooks.workflow_engine.execute = AsyncMock(return_value=_run(status))
+
+
+async def _settle(hooks) -> None:
+    """Let the backlog run what it holds, then stop it."""
+    import asyncio
+
+    for _ in range(200):
+        if not hooks.backlog.stats("order-flow")[0] and not any(hooks.backlog._inflight.values()):
+            break
+        await asyncio.sleep(0)
+    await hooks.backlog.stop()
+
+
+async def _fire(hooks, data, redis=None, *, busy=False):
+    """Handle one event and let the workflow backlog run it."""
+    redis = redis or FakeRedis(VirtualTime())
     registry = MagicMock()
     with (
         patch("robothor.engine.hooks.try_acquire", return_value=True),
         patch("robothor.engine.hooks.release", new_callable=AsyncMock),
+        patch("robothor.engine.hooks.is_running", return_value=busy),
         patch("robothor.engine.hooks.deliver", new_callable=AsyncMock),
         patch("robothor.engine.config.load_agent_config", return_value=None),
         patch("robothor.engine.hooks.get_task_registry", return_value=registry),
+        patch("robothor.engine.workflow_backlog.LOCK_WAIT_SECONDS", 0),
     ):
         await hooks._handle_event(STREAM, b"1-0", data, redis, "engine")
-        spawned = [c.args[0] for c in registry.spawn.call_args_list]
-        with patch("robothor.engine.hooks.asyncio.sleep", new_callable=AsyncMock) as sleep:
-            for coro in spawned:
-                await coro
-    return redis, registry, sleep
+        await _settle(hooks)
+    return redis, registry
 
 
 class TestEventReachesTheWorkflow:
@@ -114,46 +135,88 @@ class TestEventReachesTheWorkflow:
         assert _render_template("{{ event.payload.data.ticket.id }}", context) == "t-42"
 
 
-class TestBusyWorkflowRequeue:
+def _backlog_key() -> str:
+    from robothor.engine.workflow_backlog import backlog_key
+
+    return backlog_key("test-tenant", "order-flow")
+
+
+class TestBusyWorkflow:
     @pytest.mark.asyncio
     async def test_busy_workflow_dropped_by_default(self, engine_config):
-        hooks = _hooks(engine_config, _wf(), status=RunStatus.SKIPPED)
-        redis, _registry, _sleep = await _fire(hooks, {b"type": EVENT.encode()})
-        redis.xadd.assert_not_called()
+        # No requeue_if_busy, not concurrent: the old contract, dropped.
+        hooks = _hooks(engine_config, _wf())
+        redis, _registry = await _fire(hooks, {b"type": EVENT.encode()}, busy=True)
+        hooks.workflow_engine.execute.assert_not_called()
+        assert redis.streams.get(_backlog_key(), []) == []
+        assert redis.acked == [b"1-0"]
 
     @pytest.mark.asyncio
-    async def test_busy_workflow_requeued_for_that_workflow_only(self, engine_config):
-        hooks = _hooks(engine_config, _wf(requeue=True), status=RunStatus.SKIPPED)
-        redis, _registry, sleep = await _fire(hooks, {b"type": EVENT.encode(), b"payload": b"{}"})
-        sleep.assert_awaited_once_with(BUSY_REQUEUE_DELAY_SECONDS)
-        stream, copy = redis.xadd.call_args.args[:2]
-        assert stream == STREAM
-        assert copy["_retry_workflows"] == "order-flow"
-        assert copy["_busy_requeue_count"] == "1"
-        assert "_retry_agents" not in copy
-        assert copy["type"] == EVENT
+    async def test_busy_requeue_workflow_waits_in_its_backlog(self, engine_config):
+        hooks = _hooks(engine_config, _wf(requeue=True))
+        redis, _registry = await _fire(
+            hooks, {b"type": EVENT.encode(), b"payload": b"{}"}, busy=True
+        )
+        hooks.workflow_engine.execute.assert_awaited_once()
+        # Run, then removed; never a copy on the retry stream or the DLQ.
+        assert redis.streams.get(_backlog_key()) == []
+        assert set(redis.streams) == {_backlog_key()}
 
     @pytest.mark.asyncio
-    async def test_completed_workflow_not_requeued(self, engine_config):
-        hooks = _hooks(engine_config, _wf(requeue=True), status=RunStatus.COMPLETED)
-        redis, _registry, _sleep = await _fire(hooks, {b"type": EVENT.encode()})
-        redis.xadd.assert_not_called()
+    async def test_a_run_that_finds_the_workflow_held_waits_its_turn(self, engine_config):
+        # A cron or manual run holds the workflow: the event is tried again
+        # in place, never dropped, never requeued.
+        hooks = _hooks(engine_config, _wf(requeue=True))
+        hooks.workflow_engine.execute = AsyncMock(
+            side_effect=[_run(RunStatus.SKIPPED), _run(RunStatus.COMPLETED)]
+        )
+        redis, _registry = await _fire(hooks, {b"type": EVENT.encode()})
+        assert hooks.workflow_engine.execute.await_count == 2
+        assert redis.streams.get(_backlog_key()) == []
+        assert redis.dlq() == 0
 
     @pytest.mark.asyncio
-    async def test_budget_exhausted_goes_to_dlq(self, engine_config):
-        hooks = _hooks(engine_config, _wf(requeue=True), status=RunStatus.SKIPPED)
-        data = {b"type": EVENT.encode(), b"_busy_requeue_count": str(MAX_BUSY_REQUEUES).encode()}
-        redis, _registry, sleep = await _fire(hooks, data)
-        sleep.assert_not_awaited()
-        assert redis.xadd.call_args.args[0] == f"{STREAM}:dlq"
+    async def test_the_event_is_kept_before_it_is_acknowledged(self, engine_config):
+        hooks = _hooks(engine_config, _wf(requeue=True))
+        redis = FakeRedis(VirtualTime())
+        order: list[str] = []
+        real_xadd, real_xack = redis.xadd, redis.xack
+
+        async def xadd(key, fields, **kw):
+            order.append("kept")
+            return await real_xadd(key, fields, **kw)
+
+        async def xack(*args):
+            order.append("acked")
+            return await real_xack(*args)
+
+        redis.xadd, redis.xack = xadd, xack  # type: ignore[method-assign]
+        await _fire(hooks, {b"type": EVENT.encode()}, redis)
+        assert order == ["kept", "acked"]
+
+    @pytest.mark.asyncio
+    async def test_a_full_backlog_goes_to_dlq(self, engine_config):
+        hooks = _hooks(engine_config, _wf(requeue=True))
+        with patch("robothor.engine.workflow_backlog.MAX_BACKLOG", 0):
+            redis, _registry = await _fire(hooks, {b"type": EVENT.encode()})
+        hooks.workflow_engine.execute.assert_not_called()
+        assert redis.dlq() == 1
 
     @pytest.mark.asyncio
     async def test_workflow_copy_runs_that_workflow_and_no_agents(self, engine_config):
+        # A copy an older engine requeued: it goes to the backlog, not the agents.
         hooks = _hooks(engine_config, _wf(requeue=True), agents=["audit"])
-        data = {b"type": EVENT.encode(), b"_retry_workflows": b"order-flow"}
+        data = {
+            b"type": EVENT.encode(),
+            b"_retry_workflows": b"order-flow",
+            b"_busy_requeue_count": b"35",
+            b"_rate_deferred": b"1",
+        }
         await _fire(hooks, data)
         hooks.runner.execute.assert_not_called()
         hooks.workflow_engine.execute.assert_awaited_once()
+        event = hooks.workflow_engine.execute.call_args.kwargs["initial_context"]["event"]
+        assert event["type"] == EVENT
 
     @pytest.mark.asyncio
     async def test_workflow_copy_skips_other_workflows(self, engine_config):
@@ -301,12 +364,11 @@ class TestConsumerLoopNotBlocked:
             return _run(RunStatus.COMPLETED)
 
         hooks.runner.execute = AsyncMock(side_effect=execute)
-        hooks.workflow_engine = MagicMock()
-        hooks.workflow_engine.get_workflows_for_event.return_value = [_wf()]
-        hooks.workflow_engine.execute = AsyncMock(return_value=_run(RunStatus.COMPLETED))
+        _stub_engine(hooks, _wf())
+        redis = FakeRedis(VirtualTime())
         p1, p2, p3, p4 = self._patches()
         with p1, p2, p3, p4:
-            await hooks._dispatch(STREAM, b"1-0", {b"type": EVENT.encode()}, AsyncMock(), "g")
+            await hooks._dispatch(STREAM, b"1-0", {b"type": EVENT.encode()}, redis, "g")
             for _ in range(50):
                 if hooks.workflow_engine.execute.await_count:
                     break
@@ -314,10 +376,11 @@ class TestConsumerLoopNotBlocked:
             hooks.workflow_engine.execute.assert_awaited_once()
             gate.set()
             await hooks.drain()
+            await hooks.backlog.stop()
 
 
 class TestBusyRequeueBackoff:
-    """A busy requeue backs off, so an event outlasts a long run instead of an hour's DLQ."""
+    """A busy agent's requeue backs off, so an event outlasts a long run instead of an hour's DLQ."""
 
     def test_delay_starts_at_the_base_and_grows_to_a_cap(self):
         from robothor.engine.hooks import busy_requeue_delay
@@ -332,15 +395,6 @@ class TestBusyRequeueBackoff:
 
         total = sum(busy_requeue_delay(n) for n in range(MAX_BUSY_REQUEUES))
         assert 45 * 60 <= total <= 75 * 60
-
-    @pytest.mark.asyncio
-    async def test_requeue_waits_the_delay_for_its_count(self, engine_config):
-        from robothor.engine.hooks import busy_requeue_delay
-
-        hooks = _hooks(engine_config, _wf(requeue=True), status=RunStatus.SKIPPED)
-        data = {b"type": EVENT.encode(), b"_busy_requeue_count": b"35"}
-        _redis, _registry, sleep = await _fire(hooks, data)
-        sleep.assert_awaited_once_with(busy_requeue_delay(35))
 
 
 class TestDurabilityAndLimits:

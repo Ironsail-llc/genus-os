@@ -323,6 +323,73 @@ UNREGISTERED_DENY_GUARDS: frozenset[str] = frozenset(
     }
 )
 
+# Tools a call may point at another tenant with a `tenant` argument
+# (robothor/engine/tools/cross_tenant.py). Dispatch strips the argument and runs
+# the handler inside `tenant_scope(target)` with `ctx.tenant_id` set to the
+# target, so a tool belongs here only when EVERYTHING its handler reads comes
+# from the database through `ctx.tenant_id` and a connection checked out during
+# the call. Each was read before it was added. Left out on purpose:
+#   classify_run_failure  compares the run with THIS engine's boot time; a
+#                         child's runs belong to another engine process.
+#   search_memory         appends installed memory providers' recall, which
+#                         is not tenant-scoped, and writes a fact-access row.
+#   list_my_tasks, get_inbox, list_agent_tasks
+#                         "this agent's own" queue; the agent's id means
+#                         nothing in another tenant. list_tasks covers it.
+#   get_metadata_objects, get_object_metadata
+#                         schema metadata, the same for every tenant.
+#   buddy_*, get_fleet_achievement_score, get_accretion_ledger
+#                         compute or write; not plain tenant reads.
+CROSS_TENANT_READS: frozenset[str] = frozenset(
+    {
+        # Observability (agent_runs, agent_schedules, agent_reviews, benchmark_results).
+        "list_agent_runs",
+        "get_agent_run",
+        "list_agent_schedules",
+        "get_agent_stats",
+        "list_agent_reviews",
+        "get_agent_review",
+        "get_agent_performance_summary",
+        # CRM, through the DAL with tenant_id=ctx.tenant_id.
+        "list_tasks",
+        "get_task",
+        "list_tasks_summary",
+        "list_notes",
+        "get_note",
+        "list_people",
+        "get_person",
+        "list_companies",
+        "get_company",
+        "list_conversations",
+        "get_conversation",
+        "list_messages",
+        "search_records",
+        "get_contact_360",
+        "list_contact_messages",
+        # devops_metrics_snapshots.
+        "devops_query_metrics",
+    }
+)
+
+# Writes a call may point at another tenant with `tenant` (and describe with
+# `dry_run: true`). Each keeps its own approval tier and RBAC check: those key
+# on the tool name, which does not change. Every one is a CRM mutator, so its
+# handler also refuses a benchmark run (handlers/crm.py _CRM_MUTATING_TOOLS).
+# No agent tool enables or disables a schedule, so none is listed.
+CROSS_TENANT_WRITES: frozenset[str] = frozenset(
+    {
+        "create_task",
+        "update_task",
+        "create_note",
+        "update_note",
+        "send_notification",
+    }
+)
+
+# The only cross-tenant writes a run without the verified owner may make:
+# leaving work for a child's team, not changing what it already has.
+UNATTENDED_CROSS_TENANT_WRITES: frozenset[str] = frozenset({"create_task", "send_notification"})
+
 # Read-only tools for plan mode — tools with no side effects.
 READONLY_TOOLS: frozenset[str] = frozenset(
     {
@@ -417,6 +484,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "config_get",
         # What each installed plugin contributes (tools, agents, workflows...).
         "plugins_overview",
+        # Every reachable tenant's health (handlers/org.py); SELECT-only.
+        "org_overview",
         # Vault read-only tools
         "vault_get",
         "vault_list",

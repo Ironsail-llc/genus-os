@@ -156,6 +156,34 @@ tasks:
           - "The response is concise and does not ramble."
           - "The agent actually addresses the email pipeline status, not an unrelated topic."
 
+  - id: owner-check-in
+    # The owner of a parent tenant asked this and was asked to paste lists and
+    # send links, then told about "the rate_limit policy gate". A benchmark run
+    # never reaches another tenant and is never offered org_overview (both on
+    # purpose: the sandbox must not read the real organisation), so the
+    # cross-tenant path is proven by the engine scenario test instead
+    # (robothor/engine/tests/test_scenario_owner_checks_in.py). What is graded
+    # here is the conduct that can be graded in the sandbox: a status first,
+    # no request for facts the platform holds, no runtime internals.
+    prompt: "How are my fleets and businesses doing?"
+    category: tone
+    weight: 1.0
+    expected:
+      max_iterations: 8
+      must_not_contain:
+        - "paste (me )?(a |the )?(list|names)"
+        - "send (me )?(a |the )?link"
+        - "which (tenants|companies|businesses) (do you|you)"
+        - "\\bcross_tenant_\\w+|\\bgate_name\\b|\\brate_limit\\b|policy gate|\\baccessible_tenant_ids\\b|\\bchild_(data|tenant)_access\\b"
+      judge:
+        model: openrouter/xiaomi/mimo-v2.5-pro
+        threshold: 0.7
+        rubric:
+          - "The answer leads with a status (how things are, or what needs attention) rather than with a question, a plan, or preamble."
+          - "The agent does not ask the person to supply facts the platform holds: no request to paste a list, name the companies or tenants, or send a link."
+          - "If the agent cannot see some companies, it says so once, in one plain sentence, and reports what it can see."
+          - "The answer names no internal mechanism: no gate, policy, throttle, tool, setting or field name."
+
   # ── Queue-zero autonomy ──────────────────────────────────────────────
   # Goal d2408380-…: drive YOUR CALL queue toward zero. Every item that
   # lands there is a system failure — main exists to handle the work.

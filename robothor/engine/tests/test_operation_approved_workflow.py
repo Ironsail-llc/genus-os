@@ -12,6 +12,7 @@ hook consumer the way Redis would deliver it.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,6 +21,7 @@ import pytest
 
 from robothor.engine.hooks import STREAM_PREFIX, EventHooks
 from robothor.engine.models import RunStatus
+from robothor.engine.tests.test_workflow_burst_drain import FakeRedis, VirtualTime
 from robothor.engine.workflow import WorkflowEngine, parse_workflow
 from robothor.events import bus
 from robothor.operations.store import Operations
@@ -119,10 +121,19 @@ async def _deliver(hooks: EventHooks, stream: str, data: dict[bytes, bytes]) -> 
         return run
 
     hooks.workflow_engine.execute = recording_execute  # type: ignore[method-assign]
+    redis = FakeRedis(VirtualTime())
     with patch("robothor.engine.hooks.get_task_registry", return_value=registry):
-        await hooks._handle_event(stream, b"1-0", data, AsyncMock(), "engine")
+        await hooks._handle_event(stream, b"1-0", data, redis, "engine")
     for call in registry.spawn.call_args_list:
         await call.args[0]
+    # The event waits in the workflow's backlog; let it run.
+    for _ in range(200):
+        if not any(depth for depth, _ in hooks.backlog._seen.values()) and not any(
+            hooks.backlog._inflight.values()
+        ):
+            break
+        await asyncio.sleep(0)
+    await hooks.backlog.stop()
     return runs
 
 

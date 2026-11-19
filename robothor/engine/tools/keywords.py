@@ -563,6 +563,29 @@ TOOL_HINTS: dict[str, ToolHint] = {
     "n8n_recent_failures": ToolHint(
         keywords=("n8n", "automation", "workflow", "failure", "failed", "error", "broken", "run")
     ),
+    # ── The tenant tree ───────────────────────────────────────────────
+    # An agent looking for this searches "tenant", "organization", "portfolio",
+    # "holdings", "cross-tenant", "rollup". "Company", "organisation" and
+    # "business" are deliberately absent: they are the CRM company family's
+    # words (see `get_company`), and claiming them here pushed that getter out
+    # of "look up a company by name". An agent with child tenants holds this
+    # tool directly and its context names it, so search needs only these.
+    "org_overview": ToolHint(
+        keywords=(
+            "tenant",
+            "portfolio",
+            "holding",
+            "subsidiary",
+            "child",
+            "parent",
+            "cross",
+            "org",
+            "fleet",
+            "overview",
+            "rollup",
+        ),
+        rank_bias=1.0,
+    ),
 }
 
 

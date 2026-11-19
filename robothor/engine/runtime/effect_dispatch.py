@@ -103,6 +103,10 @@ async def invoke(
             "error": "Could not record action admission; no action was dispatched",
             "retryable": False,
         }
+    if record["state"] in ("confirmed", "finished"):
+        from robothor.engine.tools.cross_tenant import audit_answered
+
+        audit_answered(name, args, ctx, "replay")
     if record["state"] == "confirmed":
         if name == "create_task":
             from robothor.engine.runtime.task_report import publish

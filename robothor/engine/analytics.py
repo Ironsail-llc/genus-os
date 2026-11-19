@@ -641,6 +641,7 @@ def get_agent_stats(
 def get_fleet_health(
     days: int = 1,
     tenant_id: str = DEFAULT_TENANT,
+    include_benchmark: bool = True,
 ) -> dict[str, Any]:
     """Get health summary for all agents in the fleet.
 
@@ -648,6 +649,11 @@ def get_fleet_health(
     Benchmark-harness traffic is reported separately (``benchmark_runs`` /
     ``benchmark_cost_usd``) instead of being billed to the agent.
     Plus fleet-wide totals.
+
+    ``include_benchmark=False`` skips that break-out, which reads EVERY
+    tenant's benchmark rows: a per-company rollup (``robothor.tenancy.rollup``)
+    must not repeat an all-tenant query once per company. The benchmark fields
+    are then ``None`` ("not read"), never zero.
     """
     prod_filter = production_run_filter()
     bench_only = benchmark_run_filter()
@@ -681,37 +687,38 @@ def get_fleet_health(
         # Benchmark spend, per agent, kept OUT of the cost columns above.
         # None, not {}: "could not read" must not arrive downstream looking
         # like "no agent ran a benchmark". See _benchmark_spend.
-        benchmarks: dict[str, dict[str, Any]] | None = {}
-        try:
-            read_every_tenant_in_transaction(conn)
-            cur.execute(
-                f"""
-                SELECT
-                    agent_id,
-                    COUNT(*) as benchmark_runs,
-                    COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
-                FROM agent_runs
-                WHERE created_at > NOW() - make_interval(days := %s)
-                -- Deliberately NOT tenant-scoped: `bench_only` already
-                -- isolates benchmark rows by trigger_detail, and since
-                -- 2026-09-13 every graded task run executes as the
-                -- `benchmark-sandbox` tenant, so binding the owning tenant
-                -- here reported every agent's benchmark spend as zero.
-                  AND {bench_only}
-                GROUP BY agent_id
-                """,  # noqa: S608
-                (days,),
-            )
-            benchmarks = {r["agent_id"]: dict(r) for r in cur.fetchall()}
-        except Exception as e:
-            logger.error(
-                "fleet benchmark break-out unreadable (%s): reporting UNKNOWN "
-                "rather than zero spend for every agent",
-                e,
-            )
-            benchmarks = None
-            with contextlib.suppress(Exception):
-                conn.rollback()
+        benchmarks: dict[str, dict[str, Any]] | None = {} if include_benchmark else None
+        if include_benchmark:
+            try:
+                read_every_tenant_in_transaction(conn)
+                cur.execute(
+                    f"""
+                    SELECT
+                        agent_id,
+                        COUNT(*) as benchmark_runs,
+                        COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
+                    FROM agent_runs
+                    WHERE created_at > NOW() - make_interval(days := %s)
+                    -- Deliberately NOT tenant-scoped: `bench_only` already
+                    -- isolates benchmark rows by trigger_detail, and since
+                    -- 2026-09-13 every graded task run executes as the
+                    -- `benchmark-sandbox` tenant, so binding the owning tenant
+                    -- here reported every agent's benchmark spend as zero.
+                      AND {bench_only}
+                    GROUP BY agent_id
+                    """,  # noqa: S608
+                    (days,),
+                )
+                benchmarks = {r["agent_id"]: dict(r) for r in cur.fetchall()}
+            except Exception as e:
+                logger.error(
+                    "fleet benchmark break-out unreadable (%s): reporting UNKNOWN "
+                    "rather than zero spend for every agent",
+                    e,
+                )
+                benchmarks = None
+                with contextlib.suppress(Exception):
+                    conn.rollback()
 
     agents = []
     fleet_total = 0

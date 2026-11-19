@@ -447,6 +447,8 @@ def _read_any(path: Path) -> dict[str, Any]:
     from robothor.engine import attachments, file_extract
 
     try:
+        if path.is_dir():
+            return _directory_listing(path)
         doc_kind = file_extract.document_kind(path.suffix)
         if doc_kind is not None:
             if not path.is_file():
@@ -483,6 +485,41 @@ def _read_any(path: Path) -> dict[str, Any]:
         return {"content": content[:_READ_FILE_CHARS], "path": str(path), "chars": len(content)}
     except Exception as e:
         return {"error": f"Failed to read file: {e}"}
+
+
+#: Entries ``read_file`` lists when it is handed a directory.
+_READ_DIR_ENTRIES = 200
+
+
+def _directory_listing(path: Path) -> dict[str, Any]:
+    """What ``read_file`` returns for a directory: its entries and a note.
+
+    A directory is a reasonable thing to ask about, and an instruction once
+    told an agent to read one on every turn; "Is a directory" taught it
+    nothing. The entries let it pick the file it meant.
+    """
+    entries = []
+    for p in sorted(path.iterdir()):
+        entries.append(
+            {
+                "name": p.name,
+                "type": "dir" if p.is_dir() else "file",
+                "size": p.stat().st_size if p.is_file() else 0,
+            }
+        )
+        if len(entries) >= _READ_DIR_ENTRIES:
+            break
+    return {
+        "path": str(path),
+        "is_directory": True,
+        "entries": entries,
+        "count": len(entries),
+        "truncated": len(entries) >= _READ_DIR_ENTRIES,
+        "note": (
+            "This path is a directory, not a file. Its entries are listed; call "
+            "read_file on one of them to read it, or list_directory to filter."
+        ),
+    }
 
 
 @_handler("list_directory")

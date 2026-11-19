@@ -95,6 +95,22 @@ The turn is appended to the in-memory session as well as the database:
 `GET /chat/history` reads the database, but falls back to RAM when the database
 cannot answer, and the agent's next turn takes its context from RAM.
 
+## Probes, test turns and other service callers
+
+A caller using a **service** token (monitoring probes, test turns, the
+benchmark harness, ops tooling) should name its own `session_key`, shaped
+`agent:{agent}:{label}`, for example `agent:main:probe-health` or one key per
+benchmark turn. A named key is honoured exactly as sent.
+
+A service caller that sends **no** key does not reach the owner's
+`agent:main:primary`. It lands in a session of its own,
+`agent:{agent}:service:{service id}`, where `{agent}` is the main session's
+agent and `{service id}` is the token's subject. The key is the same on every
+call, so a probe's history stays in one place, apart from the owner's. A
+person who sends no key is unchanged: the owner gets the main session, and a
+member gets the session the rules above give them. A service that must write into the main session on purpose names
+`agent:main:primary` explicitly.
+
 ## Asking a question
 
 `webchat` implements `Channel.ask`, so an agent that calls `ask_user` during a

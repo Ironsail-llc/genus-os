@@ -86,7 +86,7 @@ or workflow run partway through.
 | Fleet concurrency and interactive reservation | `pool.py` `can_start` | `ROBOTHOR_MAX_CONCURRENT_AGENTS` (3), `ROBOTHOR_RESERVED_INTERACTIVE_SLOTS` (1), admission flags (off) | Refuses scheduled fires only | SKIPPED deferral row and a guardrail event | Control (capacity) | no |
 | Capacity governor | `capacity_governor.py` | Mode policy and thermal readings | No; lowers the pool's slot count | Log "Capacity: mode=..." | Control | no |
 | Cron dedup, circuit breaker, safety timeout | `scheduler.py` `_run_scheduled` | 5 consecutive errors (constant); timeout + 120 s | Refuses scheduled fires | Log "Cron skipped"; the breaker opens a CRM task "paused" | Control | no |
-| Workflow already running or rate-limited | `workflow.py` | `rate_limit_per_minute` (0, meaning 30) | Refuses at start | SKIPPED "Skipped: workflow already running" or "Deferred: tool-call rate limit reached" | Control / budget (calls) | no |
+| Workflow already running or rate-limited | `workflow.py` | `rate_limit_per_minute` (0, meaning 60) | Refuses at start | SKIPPED "Skipped: workflow already running" or "Deferred: tool-call rate limit reached" | Control / budget (calls) | no |
 
 ### The run loop
 
@@ -117,7 +117,7 @@ or workflow run partway through.
 | Per-call LLM timeout | `llm_budgets.py`, `llm_client.py` | `ROBOTHOR_LLM_TIMEOUT` (120), `ROBOTHOR_LLM_TIMEOUT_BATCH` (300) | Degrades to the next model; the whole chain failing fails the run | Retry log lines; FAILED | Control (time) | no |
 | Model breaker and spent credentials | `llm_client.py` | `ROBOTHOR_MODEL_BREAKER_THRESHOLD` (3), `ROBOTHOR_MODEL_BREAKER_COOLDOWN` (600) | Degrades (fallback model) | Log line and breaker alert | Control | no |
 | Workflow deadline and outer timeout | `workflow_budget.py`, `workflow.py` | Workflow `timeout_seconds` (900) | Yes | Step or run TIMEOUT naming the step | Control (time) | no |
-| Tool rate limit | `guardrails.py` | `v2.rate_limit_per_minute` (0, meaning 30/min) | Refuses individual tool calls; the run continues | "Rate limit exceeded: N/30 calls/min" | Budget (calls), degrade | no; guardrail event |
+| Tool rate limit | `guardrails.py`, `tool_throttle.py` | `v2.rate_limit_per_minute` (0, meaning 60/min) | No; a call over the limit waits for room, bounded by the run's deadline. A call the deadline reaches first is not run | Nothing on a paced call; at the deadline the call reads "Not run: the run reached its wall-clock budget" | Budget (calls), degrade | no |
 | Per-tool timeout | `tool_turn.py`, `tools/registry.py` | `v2.tool_timeout_seconds` (120) | The tool fails; the run continues | "Tool 'x' timed out" | Control | no |
 | `execute_code` and RLM caps | `tool_turn.py`, `rlm_tool.py` | `ROBOTHOR_EXECUTE_CODE_MAX_CALLS` (200), `ROBOTHOR_RLM_MAX_BUDGET` (2.0) | Refuses the tool call | "RLM budget exceeded" | Budget / control | no |
 | Spawn limits | `tools/handlers/spawn.py`, `spawn_limits.py` | Nesting depth 2, `ROBOTHOR_MAX_SPAWN_BATCH` (10), `ROBOTHOR_MAX_CONCURRENT_SPAWNS` (10) | Refuses the spawn call | "Max nesting depth exceeded" and similar | Control | no |
@@ -134,8 +134,12 @@ or workflow run partway through.
   partway. It is recorded as a `budget_stop` step and still enforces. It is
   infinite-loop protection rather than spend, so making it observe by default
   is your decision.
-- **Tool rate limit.** The default of 30 calls per minute refuses individual
-  tool calls. The run continues, and a guardrail event is written.
+- **Tool rate limit.** The default is 60 calls per minute, above the measured
+  peak of normal runs (about 37). In an agent run a call over it waits until
+  the minute has room, so the model never sees a refusal for a burst; the
+  run's deadline bounds the wait. It is not the runaway guard: `safety_cap`,
+  the run's deadline and the runaway-token cap stop a run that never stops
+  calling tools.
 - **Stops without a `budget_stop` step yet.** The wall-clock, stall, LLM-timeout
   and workflow-deadline stops are controls. They already end the run with a
   TIMEOUT or FAILED status and an ERROR step. They do not record a
