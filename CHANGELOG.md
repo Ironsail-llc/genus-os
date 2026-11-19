@@ -1,3 +1,9 @@
+## [1.136.2](https://github.com/Ironsail-llc/genus-os/compare/v1.136.1...v1.136.2) (2026-11-19)
+
+### Bug Fixes
+
+* **skills:** ship bundled skills in the wheel and image (GEN-685) ([#888](https://github.com/Ironsail-llc/genus-os/issues/888)) ([df59ace](https://github.com/Ironsail-llc/genus-os/commit/df59ace985217a5bb09bdbfb44e2eb5a56c68fe3))
+
 ## [1.136.1](https://github.com/Ironsail-llc/genus-os/compare/v1.136.0...v1.136.1) (2026-11-19)
 
 ### Bug Fixes
