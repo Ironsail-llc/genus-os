@@ -1,3 +1,9 @@
+## [1.137.0](https://github.com/Ironsail-llc/genus-os/compare/v1.136.2...v1.137.0) (2026-11-19)
+
+### Features
+
+* **app:** command centre page for a parent tenant's operator (GEN-669) ([#887](https://github.com/Ironsail-llc/genus-os/issues/887)) ([c6386f3](https://github.com/Ironsail-llc/genus-os/commit/c6386f333a01852c4db9a5805084ceb4c73a0bc6)), closes [#886](https://github.com/Ironsail-llc/genus-os/issues/886)
+
 ## [1.136.2](https://github.com/Ironsail-llc/genus-os/compare/v1.136.1...v1.136.2) (2026-11-19)
 
 ### Bug Fixes
