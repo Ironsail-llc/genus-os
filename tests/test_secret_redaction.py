@@ -559,3 +559,56 @@ class TestRedactCarriesNoProductProse:
         out = redact('/secure profile\n{"legal_name":"private-person-canary"}')
         assert "private-person-canary" not in out
         assert "[" not in out and "]" not in out, out
+
+
+class TestGoogleOAuthCredentials:
+    """An authorized-user OAuth file (the Workspace CLI's ``credentials.json``)
+    printed by a shell, a coding job or an error message. Values are built by
+    concatenation so no scanner mistakes the fixture for a real credential."""
+
+    REFRESH = "1//" + "0gFAKE" + "a1B2c3D4e5F6g7H8i9J0k" * 3
+    CLIENT_SECRET = "GOCSPX" + "-" + "FAKEa1B2c3D4e5F6g7H8i9J0"
+    #: An older client secret has no prefix: only the JSON key says what it is.
+    BARE_SECRET = "Fake" + "Secret0123456789abcd"
+    BARE_REFRESH = "Fake" + "Refresh0123456789abcdef"
+
+    @pytest.mark.parametrize("redactor", ["redact", "redact_result_text"])
+    def test_a_refresh_token_and_a_client_secret_are_taken_on_their_own(self, redactor):
+        from robothor.secrets import redaction
+
+        fn = getattr(redaction, redactor)
+        for text in (
+            f"refresh failed for {self.REFRESH} (invalid_grant)",
+            f"client {self.CLIENT_SECRET} rejected",
+        ):
+            cleaned = fn(text)
+            assert self.REFRESH not in cleaned and self.CLIENT_SECRET not in cleaned, cleaned
+            assert PLACEHOLDER in cleaned
+
+    @pytest.mark.parametrize("redactor", ["redact", "redact_result_text"])
+    def test_the_credentials_file_keeps_its_shape_and_loses_its_secrets(self, redactor):
+        import json
+
+        from robothor.secrets import redaction
+
+        fn = getattr(redaction, redactor)
+        doc = {
+            "type": "authorized_user",
+            "client_id": "1234-example.apps.googleusercontent.com",
+            "client_secret": self.BARE_SECRET,
+            "refresh_token": self.BARE_REFRESH,
+        }
+        for text in (json.dumps(doc), json.dumps(doc, indent=2)):
+            cleaned = fn(text)
+
+            assert self.BARE_SECRET not in cleaned
+            assert self.BARE_REFRESH not in cleaned
+            parsed = json.loads(cleaned)
+            assert parsed["client_secret"] == PLACEHOLDER
+            assert parsed["refresh_token"] == PLACEHOLDER
+            assert parsed["client_id"] == doc["client_id"]
+            assert parsed["type"] == "authorized_user"
+
+    def test_a_double_slash_in_ordinary_text_is_left_alone(self):
+        for text in ("see section 1//2 of the spec", "file:///tmp/a", "step 1// TODO"):
+            assert redact(text) == text

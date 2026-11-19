@@ -296,6 +296,11 @@ _VENDOR_TOKEN = (
     r"\bA(?:KIA|SIA)[A-Z0-9]{16,}",
     r"\bAIza[A-Za-z0-9_-]{30,}",
     r"\bya29\.[A-Za-z0-9_-]{20,}",
+    # Google OAuth: a refresh token (``1//`` then an opaque run) and a client
+    # secret (``GOCSPX-``), both in the authorized-user file the Workspace CLI
+    # reads. The refresh token never expires on its own.
+    r"(?<![\w/:])1//[A-Za-z0-9_-]{20,}",
+    r"\bGOCSPX-[A-Za-z0-9_-]{20,}",
     r"\bSG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}",
     r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
@@ -327,6 +332,20 @@ _SHAPES = (
 )
 
 _CREDENTIAL_SHAPED = re.compile("|".join(_SHAPES), re.IGNORECASE)
+
+#: The JSON members of an OAuth credentials file whose value is a credential
+#: with no shape of its own (an older client secret is a bare opaque run).
+#: The value is replaced inside its quotes, so the document still parses.
+_JSON_CREDENTIAL = re.compile(
+    r'(?P<head>"(?:refresh_token|client_secret)"\s*:\s*")[^"\\\n]{1,4096}(?=")',
+    re.IGNORECASE,
+)
+
+
+def _redact_shapes(text: str) -> str:
+    """The JSON-member pass, then every credential shape."""
+    members = _JSON_CREDENTIAL.sub(lambda m: m.group("head") + PLACEHOLDER, text)
+    return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, members)
 
 
 # ── known values ─────────────────────────────────────────────────────────────
@@ -431,7 +450,7 @@ def redact(text: str) -> str:
         # same injection surface as the payment prose.
         known = _redact_known(text) if _known_snapshot else text
         named = _ASSIGNMENT.sub(_redact_assignment, cut_private_input(known))
-        return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
+        return _redact_shapes(named)
     except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
         # If this ever somehow raises, printing nothing beats printing a token.
         return PLACEHOLDER
@@ -793,7 +812,7 @@ def redact_result_text(text: str) -> str:
     try:
         known = _redact_known(text) if _known_snapshot else text
         named = _ASSIGNMENT.sub(_redact_result_assignment, cut_private_input(known))
-        return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
+        return _redact_shapes(named)
     except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
         return PLACEHOLDER
 

@@ -511,7 +511,17 @@ that acceptable:
   read `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.netrc`,
   `~/.git-credentials`, `~/.pgpass`, `~/.docker`, `~/.kube`, `~/.config`,
   `~/.claude`, `~/.claude.json`, `~/.robothor`, the instance workspace's `brain/`,
-  `.robothor/` and `local/`, `/run/robothor` or `/etc/robothor`. It can write
+  `.robothor/`, `local/`, `.vault-key` and `.fingerprint-salt`, `/run/robothor`,
+  `/etc/robothor`, or `/etc/genus` (where the Helm chart mounts the vault key
+  and the Google Workspace credential). Nor can it read any file a credential
+  setting names, wherever it is: `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` and
+  its directory, `GOOGLE_WORKSPACE_CLI_CONFIG_DIR` (the CLI's token cache),
+  `GENUS_VAULT_KEY_FILE`, `GENUS_FINGERPRINT_SALT_FILE`, `ROBOTHOR_ENV_FILE`,
+  `ROBOTHOR_SECRETS_BACKEND_FILE`, `ROBOTHOR_SECRETS_FILE` and
+  `ROBOTHOR_INSTANCE_ENV`. A credential file's directory is not denied whole
+  when it is top-level (`/etc`, `/tmp`); the file still is. No directory is
+  denied whole when it is `/` or is or holds the home, the workspace, the
+  coding workspace or the job's own worktree and git directory. It can write
   the job's worktree and only what `git commit` in a linked worktree needs
   from the repository's git directory (`objects/`, the job branch's ref and
   reflog directory, the worktree's own admin directory) — never `hooks/` or
@@ -521,7 +531,9 @@ that acceptable:
 - **Read/Edit/Write/Grep/Glob** are not sandboxed (they run in the Claude Code
   process), so permission rules fence them: Edit and Write are allowed only as
   `Edit(//<worktree>/**)`/`Write(//<worktree>/**)`, and Read/Edit/Write are
-  denied on every path above.
+  denied on every path above. Claude Code applies the Read deny to Grep and
+  Glob too: aimed at a denied path they are refused, and over its parent
+  they leave the denied entries out.
 - **review/readonly** jobs run under the same sandbox with nothing writable and
   no network, with the sandbox's auto-allow of Bash turned off so the git
   allowlist stays the gate, and may not carry a `verify_command` (it would run
