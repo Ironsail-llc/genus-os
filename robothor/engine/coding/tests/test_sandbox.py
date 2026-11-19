@@ -326,3 +326,55 @@ def test_the_workspace_vault_key_and_salt_are_denied_by_default(configured):
     found = secret_paths(HOME, WS)
     assert str(WS / ".vault-key") in found
     assert str(WS / ".fingerprint-salt") in found
+
+
+def test_a_credential_file_directly_under_a_top_level_directory_denies_only_the_file(configured):
+    """``/etc/x.json`` must not deny all of ``/etc`` (CA certs, passwd, gitconfig)
+    nor ``/tmp/x.json`` all of ``/tmp``."""
+    configured(
+        GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE="/etc/gws-credentials.json",
+        GOOGLE_WORKSPACE_CLI_CONFIG_DIR="/tmp",
+    )
+    found = secret_paths(HOME, WS)
+
+    assert "/etc/gws-credentials.json" in found
+    assert "/etc" not in found
+    assert "/tmp" not in found
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_credential_directory_holding_the_jobs_own_worktree_is_not_denied_whole(
+    tmp_path, configured, mode
+):
+    """Deny beats the worktree's Edit/Write allow: a credential file beside the
+    coding workspace must not take the job's own worktree away."""
+    paths = _paths(tmp_path)
+    configured(
+        GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=str(tmp_path / "gws.json"),
+        GOOGLE_WORKSPACE_CLI_CONFIG_DIR=str(tmp_path / "wt"),
+    )
+    deny_read = build_sandbox_settings(mode, paths, allowed_domains=())["sandbox"]["filesystem"][
+        "denyRead"
+    ]
+    _, denied = build_permissions(mode, paths)
+
+    for target in (paths.worktree, paths.git_common_dir):
+        assert not _covers(deny_read, target), (mode, target)
+        assert not any(
+            _covers([r[len(t) + 2 : -4]], target)
+            for t in ("Read", "Edit", "Write")
+            for r in denied
+            if r.startswith(f"{t}(/") and r.endswith("/**)")
+        ), (mode, target)
+    assert str(tmp_path / "gws.json") in deny_read
+
+
+def test_a_credential_directory_holding_the_coding_workspace_is_not_denied_whole(
+    tmp_path, configured, monkeypatch
+):
+    monkeypatch.setenv("ROBOTHOR_CODING_WORKSPACE", str(tmp_path / "srv" / "coding"))
+    configured(GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=str(tmp_path / "srv" / "gws.json"))
+    found = secret_paths(HOME, WS)
+
+    assert str(tmp_path / "srv" / "gws.json") in found
+    assert str(tmp_path / "srv") not in found
