@@ -192,27 +192,36 @@ def _configured(group: str, field: str) -> Path | None:
 
 
 def _dir_is_deniable(directory: Path, keep: tuple[Path, ...]) -> bool:
-    """False for ``/``, a top-level directory (``/etc``, ``/tmp``) and any
-    directory that is or holds one of ``keep`` (the home, the workspace, the
-    coding workspace, the job's worktree and git directory): denying one of
-    those would take away the system or the job's own files. The file itself
-    is denied regardless."""
-    if directory.parent == Path(directory.anchor):
+    """False for ``/`` and any directory that is or holds one of ``keep`` (the
+    home, the workspace, the coding workspace, the job's worktree and git
+    directory): denying one of those would take away the job's own files."""
+    if directory == Path(directory.anchor):
         return False
     return not any(directory == k or directory in k.parents for k in keep)
 
 
 def _configured_secret_paths(keep: tuple[Path, ...]) -> list[str]:
-    """The credential files and directories the engine's settings name."""
+    """The credential files and directories the engine's settings name.
+
+    A credential file's directory is incidental, so it is also spared when it
+    is top-level (``/etc``, ``/tmp``) and only the file is denied. A configured
+    credential directory IS the credential and has no file to fall back on, so
+    it is denied even top-level.
+    """
     found: list[str] = []
     for group, field in _CREDENTIAL_FILE_SETTINGS:
         path = _configured(group, field)
         if path is not None:
             found.append(str(path))
     gws_file = _configured("channels", "google_workspace_credentials_file")
-    dirs = [gws_file.parent] if gws_file is not None else []
-    dirs += [p for p in (_configured(g, f) for g, f in _CREDENTIAL_DIR_SETTINGS) if p is not None]
-    found += [str(d) for d in dirs if _dir_is_deniable(d, keep)]
+    if gws_file is not None:
+        parent = gws_file.parent
+        if parent.parent != Path(parent.anchor) and _dir_is_deniable(parent, keep):
+            found.append(str(parent))
+    for group, field in _CREDENTIAL_DIR_SETTINGS:
+        directory = _configured(group, field)
+        if directory is not None and _dir_is_deniable(directory, keep):
+            found.append(str(directory))
     return found
 
 
