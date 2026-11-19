@@ -574,6 +574,7 @@ def finish(
     cost: float = 0,
     error: str = "",
     budget_exhausted: bool = False,
+    budget_bound_by: str | None = None,
     checkpoint: str = "",
     interrupted: bool = False,
 ) -> None:
@@ -620,6 +621,10 @@ def finish(
                     )
             reached = "execution budget exhausted" if budget_exhausted else exceeded(g)
             if reached:
+                if budget_exhausted and budget_bound_by and budget_bound_by != goal_id:
+                    reached = (
+                        f"execution budget exhausted (bound by parent goal {budget_bound_by})"
+                    )
                 g.update(status="blocked", blocker=reached)
         g.update(version=g["version"] + 1, updated_at=now_iso())
         if previous_status != "blocked" and g["status"] == "blocked":
