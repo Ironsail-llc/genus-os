@@ -518,8 +518,10 @@ that acceptable:
   its directory, `GOOGLE_WORKSPACE_CLI_CONFIG_DIR` (the CLI's token cache),
   `GENUS_VAULT_KEY_FILE`, `GENUS_FINGERPRINT_SALT_FILE`, `ROBOTHOR_ENV_FILE`,
   `ROBOTHOR_SECRETS_BACKEND_FILE`, `ROBOTHOR_SECRETS_FILE` and
-  `ROBOTHOR_INSTANCE_ENV`. A directory that is `/`, the home or the workspace
-  (or holds one) is never denied whole; the file in it is. It can write
+  `ROBOTHOR_INSTANCE_ENV`. A setting's directory is never denied whole when it
+  is `/` or a top-level directory (`/etc`, `/tmp`), or is or holds the home,
+  the workspace, the coding workspace or the job's own worktree and git
+  directory; the file in it still is. It can write
   the job's worktree and only what `git commit` in a linked worktree needs
   from the repository's git directory (`objects/`, the job branch's ref and
   reflog directory, the worktree's own admin directory) — never `hooks/` or

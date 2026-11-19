@@ -191,17 +191,18 @@ def _configured(group: str, field: str) -> Path | None:
     return Path(raw).expanduser() if raw else None
 
 
-def _dir_is_deniable(directory: Path, home: Path, workspace: Path | None) -> bool:
-    """False for ``/``, the home, the workspace and any directory holding them:
-    denying one of those would deny a job everything under it, its own worktree
-    included. The file itself is denied regardless."""
-    for keep in (home, workspace):
-        if keep is not None and (directory == keep or directory in keep.parents):
-            return False
-    return directory != Path(directory.anchor)
+def _dir_is_deniable(directory: Path, keep: tuple[Path, ...]) -> bool:
+    """False for ``/``, a top-level directory (``/etc``, ``/tmp``) and any
+    directory that is or holds one of ``keep`` (the home, the workspace, the
+    coding workspace, the job's worktree and git directory): denying one of
+    those would take away the system or the job's own files. The file itself
+    is denied regardless."""
+    if directory.parent == Path(directory.anchor):
+        return False
+    return not any(directory == k or directory in k.parents for k in keep)
 
 
-def _configured_secret_paths(home: Path, workspace: Path | None) -> list[str]:
+def _configured_secret_paths(keep: tuple[Path, ...]) -> list[str]:
     """The credential files and directories the engine's settings name."""
     found: list[str] = []
     for group, field in _CREDENTIAL_FILE_SETTINGS:
@@ -211,12 +212,15 @@ def _configured_secret_paths(home: Path, workspace: Path | None) -> list[str]:
     gws_file = _configured("channels", "google_workspace_credentials_file")
     dirs = [gws_file.parent] if gws_file is not None else []
     dirs += [p for p in (_configured(g, f) for g, f in _CREDENTIAL_DIR_SETTINGS) if p is not None]
-    found += [str(d) for d in dirs if _dir_is_deniable(d, home, workspace)]
+    found += [str(d) for d in dirs if _dir_is_deniable(d, keep)]
     return found
 
 
-def secret_paths(home: Path, workspace: Path | None) -> list[str]:
-    """Every path a job may not read, absolute."""
+def secret_paths(
+    home: Path, workspace: Path | None, *, keep: tuple[Path | None, ...] = ()
+) -> list[str]:
+    """Every path a job may not read, absolute. ``keep``: the job's own paths,
+    which no setting's directory may swallow."""
     found = [str(home / rel) for rel in _HOME_SECRETS]
     if workspace is not None:
         found += [str(workspace / rel) for rel in _WORKSPACE_SECRETS]
@@ -224,8 +228,13 @@ def secret_paths(home: Path, workspace: Path | None) -> list[str]:
     if homes is not None:
         found.append(str(homes))  # every job's private home, its own included
     found += list(_SYSTEM_SECRETS)
-    found += _configured_secret_paths(home, workspace)
+    kept = (home, workspace, homes.parent if homes is not None else None, *keep)
+    found += _configured_secret_paths(tuple(k for k in kept if k is not None))
     return list(dict.fromkeys(found))
+
+
+def _job_secret_paths(paths: JobPaths) -> list[str]:
+    return secret_paths(paths.home, paths.workspace, keep=(paths.worktree, paths.git_common_dir))
 
 
 def allowed_domains() -> tuple[str, ...]:
@@ -260,7 +269,7 @@ def build_sandbox_settings(
     """The ``--settings`` object for one job: the sandbox block."""
     if mode not in MODES:
         raise ValueError(f"unknown mode {mode!r}")
-    deny_read = secret_paths(paths.home, paths.workspace)
+    deny_read = _job_secret_paths(paths)
     if mode == "code":
         git_allow, git_deny = _git_write_paths(paths)
         allow_write = [str(paths.worktree), *git_allow]
@@ -307,7 +316,7 @@ def build_permissions(mode: str, paths: JobPaths) -> tuple[tuple[str, ...], tupl
     if mode not in MODES:
         raise ValueError(f"unknown mode {mode!r}")
     secret_denies: list[str] = []
-    for secret in secret_paths(paths.home, paths.workspace):
+    for secret in _job_secret_paths(paths):
         for tool in ("Read", "Edit", "Write"):
             secret_denies += _file_rules(tool, secret)
     if mode == "code":
