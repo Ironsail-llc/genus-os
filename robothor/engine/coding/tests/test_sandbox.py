@@ -330,16 +330,20 @@ def test_the_workspace_vault_key_and_salt_are_denied_by_default(configured):
 
 def test_a_credential_file_directly_under_a_top_level_directory_denies_only_the_file(configured):
     """``/etc/x.json`` must not deny all of ``/etc`` (CA certs, passwd, gitconfig)
-    nor ``/tmp/x.json`` all of ``/tmp``."""
-    configured(
-        GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE="/etc/gws-credentials.json",
-        GOOGLE_WORKSPACE_CLI_CONFIG_DIR="/tmp",
-    )
+    nor ``/tmp/x.json`` all of ``/tmp``: that directory is incidental."""
+    configured(GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE="/etc/gws-credentials.json")
     found = secret_paths(HOME, WS)
 
     assert "/etc/gws-credentials.json" in found
     assert "/etc" not in found
-    assert "/tmp" not in found
+
+
+@pytest.mark.parametrize("config_dir", ["/gws", "/tmp"])
+def test_a_top_level_token_cache_directory_is_still_denied(configured, config_dir):
+    """The config dir IS the credential (it holds the token cache) and has no file
+    to fall back on: failing closed beats leaving a refresh token readable."""
+    configured(GOOGLE_WORKSPACE_CLI_CONFIG_DIR=config_dir)
+    assert config_dir in secret_paths(HOME, WS)
 
 
 @pytest.mark.parametrize("mode", MODES)
