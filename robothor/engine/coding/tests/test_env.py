@@ -192,3 +192,28 @@ def test_host_login_present_reads_the_credentials_file(tmp_path):
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / ".credentials.json").write_text("{}")
     assert host_login_present({"HOME": str(tmp_path)}) is True
+
+
+_WORKSPACE_CLI_ENV = {
+    "GOOGLE_WORKSPACE_CLI_TOKEN": "ya29." + "f" * 40,
+    "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE": "/opt/gws-auth/credentials.json",
+    "GOOGLE_WORKSPACE_CLI_CONFIG_DIR": "/var/cache/gws-cli",
+}
+
+
+@pytest.mark.parametrize("auth", ["auto", "host"])
+def test_no_workspace_cli_credential_or_its_location_reaches_a_job(tmp_path, auth):
+    """The job never learns the Workspace token, nor where its credential file is."""
+    base = dict(
+        FLEET_ENV,
+        XDG_CONFIG_HOME=str(tmp_path),
+        ROBOTHOR_CLAUDE_CODE_AUTH=auth,
+        **_WORKSPACE_CLI_ENV,
+    )
+    for env in (
+        build_claude_env(job_id="j", oauth_token="t", base=base),
+        build_verify_env(job_id="j", base=base),
+    ):
+        assert not [name for name in env if name.startswith("GOOGLE_")]
+        for value in _WORKSPACE_CLI_ENV.values():
+            assert not any(value in v for v in env.values()), value
