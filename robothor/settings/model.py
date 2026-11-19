@@ -231,8 +231,9 @@ class PathsSettings(SettingsGroup):
         "back from after the bundled ones. Empty means <workspace>/brain/skills "
         "-- instance-land, gitignored, so a skill an agent writes is never "
         "committed into the platform tree and survives a clean checkout. The "
-        "skills the platform ships stay read-only at <workspace>/agents/skills; "
-        "a skill here with the same name wins.",
+        "skills the platform ships stay read-only: they ship with the code, with "
+        "<workspace>/agents/skills layered over them when present; a skill here "
+        "with the same name wins.",
         since="unreleased",
     )
     agents_dir: str = declare(

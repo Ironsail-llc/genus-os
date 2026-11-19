@@ -52,6 +52,7 @@ from either the source tree or the sdist gets the same filtered map.
 from __future__ import annotations
 
 import fnmatch
+import json
 from pathlib import Path
 from typing import Any
 
@@ -99,10 +100,58 @@ def compute_migration_force_include(root: Path) -> dict[str, str]:
     return force_include
 
 
+# The platform's bundled skills ship as package data, so an engine whose
+# workspace has no agents/skills (a hosted image) still has them.
+# robothor.engine.skills.platform_skills_dir() reads this target.
+SKILLS_SOURCE_DIR = "agents/skills"
+SKILLS_TARGET_DIR = "robothor/bundled_skills"
+# Written at runtime next to a skill (.gitignore lists them); never platform.
+SKILL_RUNTIME_FILE_PATTERNS: tuple[str, ...] = ("state.json", "*.json.tmp")
+# meta.json keys that mark a skill an engine wrote, mirroring
+# robothor.engine.skills.skill_origin (this hook cannot import the package).
+_LEGACY_INSTANCE_MARKERS = ("auto_generated", "write_origin", "is_agent_created")
+
+
+def _is_instance_skill(skill_dir: Path) -> bool:
+    try:
+        meta = json.loads((skill_dir / "meta.json").read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(meta, dict):
+        return False
+    declared = meta.get("origin")
+    if declared in ("instance", "platform"):
+        return bool(declared == "instance")
+    return any(meta.get(key) for key in _LEGACY_INSTANCE_MARKERS) or "write_origin" in meta
+
+
+def compute_skill_force_include(root: Path) -> dict[str, str]:
+    """{absolute_source_path: target_path} for the bundled skills, runtime and
+    instance files filtered out (an agent-written skill can sit untracked in
+    agents/skills on a box that predates the instance skills directory)."""
+    force_include: dict[str, str] = {}
+    source_root = root / SKILLS_SOURCE_DIR
+    if not source_root.is_dir():
+        return force_include
+    for skill_file in sorted(source_root.glob("*/SKILL.md")):
+        skill_dir = skill_file.parent
+        if _is_instance_skill(skill_dir):
+            continue
+        for path in sorted(skill_dir.rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            if any(fnmatch.fnmatch(path.name, p) for p in SKILL_RUNTIME_FILE_PATTERNS):
+                continue
+            relative = path.relative_to(source_root).as_posix()
+            force_include[str(path)] = f"{SKILLS_TARGET_DIR}/{relative}"
+    return force_include
+
+
 class CustomBuildHook(BuildHookInterface):
     PLUGIN_NAME = "custom"
 
     def initialize(self, version: str, build_data: dict[str, Any]) -> None:
-        build_data.setdefault("force_include", {}).update(
-            compute_migration_force_include(Path(self.root))
-        )
+        root = Path(self.root)
+        force_include = build_data.setdefault("force_include", {})
+        force_include.update(compute_migration_force_include(root))
+        force_include.update(compute_skill_force_include(root))

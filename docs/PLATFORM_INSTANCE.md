@@ -176,8 +176,13 @@ its own.
 | `agents/skills/`                                 | Platform | Yes     | Humans, in a pull request. The engine only ever reads it.       |
 | `brain/skills/` (`ROBOTHOR_INSTANCE_SKILLS_DIR`) | Instance | No      | `create_skill`, `update_skill`, `skill_archive`, `genus import` |
 
-The engine reads the bundled directory first and the instance directory second,
-so a skill in the instance **shadows** a bundled one of the same name. That makes
+The bundled library also ships with the code: the wheel carries it as package
+data (`bundled_skills` inside the installed package, built by `hatch_build.py`) and the image at `/app/agents/skills`, so an
+engine whose workspace has no `agents/skills/` of its own still has every
+bundled skill. The engine reads per skill, lowest precedence first: the copy
+shipped with the code, then the workspace's `agents/skills/`, then the instance
+directory. A skill in the instance **shadows** a bundled one of the same name,
+and a workspace tree that holds only a few skills hides none of the rest. That makes
 `update_skill` on a bundled skill copy-on-write: the tracked file is never
 rewritten, and the revision lands in the instance tree. Retirement
 (`skill_archive`) moves a skill into the instance's `brain/skills/.archive/`,
