@@ -1,3 +1,9 @@
+## [1.136.0](https://github.com/Ironsail-llc/genus-os/compare/v1.135.1...v1.136.0) (2026-11-19)
+
+### Features
+
+* **engine:** a parent tenant's agent sees and acts in its children (GEN-669) ([#886](https://github.com/Ironsail-llc/genus-os/issues/886)) ([5b3d023](https://github.com/Ironsail-llc/genus-os/commit/5b3d023fe35731434574d568b7e0a7f7f8c79c44))
+
 ## [1.135.1](https://github.com/Ironsail-llc/genus-os/compare/v1.135.0...v1.135.1) (2026-11-18)
 
 ### Bug Fixes
