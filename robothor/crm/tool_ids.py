@@ -223,7 +223,13 @@ def id_argument_error(tool: str, args: dict[str, Any]) -> dict[str, str] | None:
 
         if value is None or (isinstance(value, str) and not value):
             if arg not in required:
-                continue  # an optional filter that was simply not passed
+                # Blank optional id == not passed. Clear it in place so the
+                # empty string never reaches the typed SQL parameter: "" is
+                # not a valid uuid, and the DAL reports the resulting
+                # InvalidTextRepresentation as an unknown-outcome failure,
+                # which fences every later write in the run.
+                args[arg] = None
+                continue
             return {
                 "error": (
                     f"{tool} needs a {subject} id — expected {expected}; "
