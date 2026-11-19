@@ -78,6 +78,7 @@ __all__ = [
     "apply",
     "declaration_from_distribution",
     "declaration_from_wheel",
+    "missing_patches",
     "parse",
     "plan",
     "retire",
@@ -759,6 +760,49 @@ def _patched_keys(ledger: dict[str, Any], agent_id: str, patches: tuple[Any, ...
         if patch.agent == agent_id:
             keys.update(_top_key(k) for k in patch_keys(patch.install) | patch_keys(patch.remove))
     return keys
+
+
+def _foreign_patches(ledger: dict[str, Any], agent_id: str, owner: str) -> list[tuple[str, Any]]:
+    """Every other installed plugin's recorded ``install:`` section for *agent_id*.
+
+    In distribution-name order, so re-applying them after the owner re-renders
+    the agent gives the same manifest whichever plugin a sync happened to
+    touch. A ledger written before the section was recorded still has what the
+    plugin ``appended``, which is the part a re-render can drop.
+    """
+    found: list[tuple[str, Any]] = []
+    for dist in sorted(ledger):
+        entry = ledger[dist]
+        if dist == owner or not isinstance(entry, dict):
+            continue
+        for recorded in entry.get("patches") or []:
+            if not isinstance(recorded, dict) or recorded.get("agent") != agent_id:
+                continue
+            section = recorded.get("install")
+            if section is None and isinstance(recorded.get("appended"), dict):
+                section = {"append": recorded["appended"]}
+            if section is not None:
+                found.append((dist, section))
+    return found
+
+
+def _with_foreign_patches(
+    data: dict[str, Any], foreign: list[tuple[str, Any]], warnings: list[str] | None = None
+) -> dict[str, Any]:
+    """*data* with each foreign section applied in turn; one that cannot apply
+    is left out (and named in *warnings*) rather than stopping the owner."""
+    result = copy.deepcopy(data)
+    for dist, raw in foreign:
+        try:
+            section = _patch_section(raw, f"{dist}'s recorded patch")
+            trial = copy.deepcopy(result)
+            _edit(trial, section)
+        except AssetError as exc:
+            if warnings is not None:
+                warnings.append(f"{dist}'s patch was not re-applied: {exc}")
+            continue
+        result = trial
+    return result
 
 
 def _manifest_edited(path: Path, recorded: Any, ignore: set[str]) -> bool:
@@ -1484,6 +1528,27 @@ def _mark_adopted(agent: AgentDecl, dist: str, version: str, instance: Path) -> 
     config._save_installed(agents)
 
 
+def _manifest_data(path: Path) -> dict[str, Any] | None:
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError, UnicodeDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _reapply_foreign(
+    manifest: Path, agent_id: str, foreign: list[tuple[str, Any]], report: Report
+) -> None:
+    """Put back, in order, every other plugin's patch the owner's render dropped."""
+    for dist, raw in foreign:
+        try:
+            section = _patch_section(raw, f"{dist}'s recorded patch")
+            if _patch_manifest(manifest, section):
+                report.lines.append(f"patched  docs/agents/{agent_id}.yaml (kept {dist}'s patch)")
+        except AssetError as exc:
+            report.warnings.append(f"{dist}'s patch on {agent_id!r} was not re-applied: {exc}")
+
+
 def _install_agent(
     agent: AgentDecl,
     dist: str,
@@ -1495,6 +1560,7 @@ def _install_agent(
     previous: dict[str, Any] | None = None,
     retired: dict[str, Any] | None = None,
     patched: set[str] | None = None,
+    foreign: list[tuple[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Render one agent; return what the ledger records of what it wrote.
 
@@ -1507,6 +1573,12 @@ def _install_agent(
     new release. Manifest keys in *patched* belong to some plugin's patch and
     are not an operator edit. *retired* is :func:`read_retired`, for an agent
     being installed again after a remove.
+
+    *foreign* is every other installed plugin's patch onto this agent
+    (:func:`_foreign_patches`). The agent on disk is the render with those
+    patches applied: a file that already equals it is left alone, and a
+    re-render re-applies them, in order, so the owner never drops what another
+    plugin added.
     """
     from robothor.templates.installer import install
 
@@ -1576,9 +1648,16 @@ def _install_agent(
             "and sync again to take the plugin's version."
         )
 
-    manifest_same = manifest in keep or (
-        manifest.is_file() and _matches(agent, rendered, root, exact=not adopted, only="manifest")
-    )
+    if foreign:
+        expected = _with_foreign_patches(rendered.manifest, foreign)
+        manifest_same = manifest in keep or (
+            manifest.is_file() and _manifest_data(manifest) == expected
+        )
+    else:
+        manifest_same = manifest in keep or (
+            manifest.is_file()
+            and _matches(agent, rendered, root, exact=not adopted, only="manifest")
+        )
     instruction_same = (
         instruction is None
         or rendered.instruction is None
@@ -1619,6 +1698,8 @@ def _install_agent(
             raise AssetError(f"agent {agent.agent_id}: {exc}") from exc
     for path, data in keep.items():
         _write_atomically(path, data)
+    if foreign and manifest not in keep:
+        _reapply_foreign(manifest, agent.agent_id, foreign, report)
     _engine_would_load(manifest, agent.agent_id)
     # Only facts this module owns reach the report: the id and the plugin's
     # version, never values from the install result. That result carries the
@@ -1740,6 +1821,7 @@ def apply(
                 previous=before_agent_files.get(agent.agent_id),
                 retired=retired,
                 patched=_patched_keys(ledger, agent.agent_id, assets.patches),
+                foreign=_foreign_patches(ledger, agent.agent_id, dist),
             )
             entry["agents"].append(agent.agent_id)
             if agent.instruction and _reclaimable(retired, agent.instruction, dist, agent.agent_id):
@@ -1756,24 +1838,33 @@ def apply(
                 label="patched manifest",
             )
             if not target.is_file():
+                # Recorded all the same: the plugin that ships the agent applies
+                # it the moment it renders the agent (see _foreign_patches).
                 report.warnings.append(
                     f"patch for {patch.agent!r} skipped: docs/agents/{patch.agent}.yaml "
                     "does not exist"
                 )
-                continue
-            kept: list[str] = []
-            section = _with_dropped(patch.install, before_patches.get(patch.agent), target, kept)
-            report.warnings.extend(f"patch for {patch.agent!r}: {w}" for w in kept)
-            if _patch_would_change(target, section):
-                if patch.agent not in before_patches:
-                    _backup_once(target, dist, root)
-                _patch_manifest(target, section)
-                report.lines.append(f"patched  docs/agents/{patch.agent}.yaml")
+            else:
+                kept: list[str] = []
+                section = _with_dropped(
+                    patch.install, before_patches.get(patch.agent), target, kept
+                )
+                report.warnings.extend(f"patch for {patch.agent!r}: {w}" for w in kept)
+                if _patch_would_change(target, section):
+                    previous_patch = before_patches.get(patch.agent)
+                    if previous_patch is None or previous_patch.get("skipped"):
+                        # First write to this agent (one it was waiting for counts).
+                        _backup_once(target, dist, root)
+                    _patch_manifest(target, section)
+                    report.lines.append(f"patched  docs/agents/{patch.agent}.yaml")
             recorded = {
                 "agent": patch.agent,
                 "keys": sorted(patch_keys(patch.install) | patch_keys(patch.remove)),
+                "install": patch.install,
                 "remove": patch.remove,
             }
+            if not target.is_file():
+                recorded["skipped"] = True
             if patch.install.get("append"):
                 recorded["appended"] = patch.install["append"]
             entry["patches"].append(recorded)
@@ -2072,6 +2163,54 @@ def retire(dist: str, *, workspace: Path | None = None, instance_dir: Path | Non
 # ---------------------------------------------------------------------------
 # sync
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class MissingPatch:
+    """An installed plugin's patch that is not in effect on its agent."""
+
+    plugin: str
+    agent: str
+
+
+def missing_patches(
+    *, workspace: Path | None = None, instance_dir: Path | None = None
+) -> list[MissingPatch]:
+    """Every recorded patch whose ``install:`` section would still change its
+    agent -- the agent is out of sync. Read-only. A patch whose agent is not
+    installed is not missing: it waits for the agent (and is reported as
+    skipped by sync)."""
+    root = _workspace(workspace)
+    instance = _instance_dir(root, instance_dir)
+    if not instance.is_dir():
+        return []
+    ledger = read_ledger(instance)
+    missing: list[MissingPatch] = []
+    for dist in sorted(ledger):
+        entry = ledger[dist]
+        if not isinstance(entry, dict):
+            continue
+        for recorded in entry.get("patches") or []:
+            if not isinstance(recorded, dict):
+                continue
+            agent = str(recorded.get("agent") or "")
+            section = recorded.get("install")
+            if section is None and isinstance(recorded.get("appended"), dict):
+                section = {"append": recorded["appended"]}
+            try:
+                target = workspace_path(
+                    root,
+                    f"docs/agents/{validate_identifier(agent)}.yaml",
+                    allowed_prefix="docs/agents",
+                    label="patched manifest",
+                )
+                if section is None or not target.is_file():
+                    continue
+                if _patch_would_change(target, _patch_section(section, f"{dist}'s patch")):
+                    missing.append(MissingPatch(dist, agent))
+            except (TemplateSecurityError, AssetError, ValueError):
+                missing.append(MissingPatch(dist, agent))
+    return missing
 
 
 @dataclass

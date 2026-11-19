@@ -235,6 +235,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Exit 3 when any plugin's workspace files were refused or failed "
         "(the others are still synced)",
     )
+    plugin_sync.add_argument(
+        "--check",
+        action="store_true",
+        help="Write nothing; exit 1 when an installed plugin's patch is not in "
+        "effect on the agent it targets",
+    )
     plugin_install = plugin_sub.add_parser(
         "install", help="Install a plugin from a signed index, or an offline wheel"
     )
