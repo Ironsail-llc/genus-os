@@ -856,3 +856,88 @@ class TestAnswerQuestion:
         # The conflict is surfaced before any UPDATE is attempted.
         update_calls = [c for c in mock_cur.execute.call_args_list if "UPDATE crm_tasks" in c[0][0]]
         assert update_calls == []
+
+
+class _FakeDiag:
+    def __init__(self, constraint_name):
+        self.constraint_name = constraint_name
+
+
+class _FakePgError(Exception):
+    """Stands in for a psycopg2 error: pgcode + diag.constraint_name."""
+
+    def __init__(self, pgcode, constraint_name):
+        super().__init__(f"constraint {constraint_name}")
+        self.pgcode = pgcode
+        self.diag = _FakeDiag(constraint_name)
+
+
+def _failing_conn(exc):
+    mock_cur = MagicMock()
+    mock_cur.execute.side_effect = exc
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cur
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    return mock_conn
+
+
+class TestCreateTaskErrorOutcomeIsSettled:
+    """A bad parent_task_id is a known input error, not an unknown outcome.
+
+    Reporting it as ``outcome_unknown`` fences every later create_task for that
+    principal with no sanctioned way to settle the effect (task b81d34e8).
+    """
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_parent_fk_violation_reports_known_outcome(self, mock_get_conn):
+        from robothor.crm.dal import create_task
+
+        parent = "0ae4f0e0-0000-4000-8000-000000000000"
+        mock_get_conn.return_value = _failing_conn(
+            _FakePgError("23503", "crm_tasks_parent_task_id_fkey")
+        )
+
+        result = create_task(title="Orphan task", parent_task_id=parent)
+
+        assert result == {
+            "error": f"parentTaskId does not exist: {parent}",
+            "code": "invalid_parent_task",
+            "outcome_unknown": False,
+            "retryable": False,
+            "applied": False,
+        }
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_fk_on_another_column_is_not_reinterpreted(self, mock_get_conn):
+        from robothor.crm.dal import create_task
+
+        mock_get_conn.return_value = _failing_conn(
+            _FakePgError("23503", "crm_tasks_person_id_fkey")
+        )
+
+        assert create_task(title="x", parent_task_id="abc") is None
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_fk_violation_without_a_parent_is_unchanged(self, mock_get_conn):
+        from robothor.crm.dal import create_task
+
+        mock_get_conn.return_value = _failing_conn(
+            _FakePgError("23503", "crm_tasks_parent_task_id_fkey")
+        )
+
+        assert create_task(title="x") is None
+
+    @patch("robothor.crm.dal.get_connection")
+    def test_unrelated_failure_is_still_unknown(self, mock_get_conn):
+        from robothor.crm.dal import create_task
+
+        mock_get_conn.return_value = _failing_conn(RuntimeError("connection reset"))
+
+        assert create_task(title="x", parent_task_id="abc") is None
+
+    def test_classifier_ignores_errors_without_a_pgcode(self):
+        from robothor.crm.dal import classify_create_task_error
+
+        assert classify_create_task_error(RuntimeError("boom"), "abc") is None
+        assert classify_create_task_error(_FakePgError("23505", "x"), "abc") is None
