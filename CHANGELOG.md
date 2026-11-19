@@ -1,3 +1,9 @@
+## [1.136.1](https://github.com/Ironsail-llc/genus-os/compare/v1.136.0...v1.136.1) (2026-11-19)
+
+### Bug Fixes
+
+* **engine:** deny coding jobs the mounted Google Workspace credential (GEN-686) ([#889](https://github.com/Ironsail-llc/genus-os/issues/889)) ([7d93e25](https://github.com/Ironsail-llc/genus-os/commit/7d93e25c080ea85185e7ff7a9848fc2e6ebf75c5))
+
 ## [1.136.0](https://github.com/Ironsail-llc/genus-os/compare/v1.135.1...v1.136.0) (2026-11-19)
 
 ### Features
