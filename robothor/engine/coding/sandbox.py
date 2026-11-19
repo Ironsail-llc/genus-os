@@ -23,6 +23,16 @@ Claude Code has two kinds of tool:
   under the worktree (``--permission-mode dontAsk`` refuses everything not
   allowed), and ``Read``/``Edit``/``Write`` explicitly denied on the same
   secret paths. Absolute paths in a rule take the ``//abs/path`` form.
+  Claude Code applies a ``Read`` deny rule to Grep and Glob as well: probed
+  against the CLI, a Grep or Glob aimed at a denied directory or file is
+  refused, and one over its parent leaves the denied entries out of the
+  results, so no separate Grep/Glob rule is written.
+
+The secret paths are fixed ones (credentials under the home, the instance's
+own state, ``/run/robothor``, ``/etc/robothor`` and the chart's credential
+mounts under ``/etc/genus``) plus whatever the engine's settings point at: the
+Google Workspace CLI's credential file, its directory and its token-cache
+directory, and the vault key, fingerprint salt and secrets env files.
 
 The sandbox governs only commands Claude Code runs; Claude Code itself (the
 unsandboxed parent) still reads its own login under ``~/.claude``.
@@ -72,11 +82,37 @@ _HOME_SECRETS: tuple[str, ...] = (
     ".local/share/keyrings",
 )
 
-#: Under the live workspace: agent memory and instance config.
-_WORKSPACE_SECRETS: tuple[str, ...] = ("brain", ".robothor", "local")
+#: Under the live workspace: agent memory, instance config, and the vault's
+#: master key and fingerprint salt where no setting moves them.
+_WORKSPACE_SECRETS: tuple[str, ...] = (
+    "brain",
+    ".robothor",
+    "local",
+    ".vault-key",
+    ".fingerprint-salt",
+)
 
-#: System-wide: decrypted secrets (tmpfs) and the instance env file.
-_SYSTEM_SECRETS: tuple[str, ...] = ("/run/robothor", "/etc/robothor")
+#: System-wide: decrypted secrets (tmpfs), the instance env file, and the Helm
+#: chart's read-only credential mounts (``/etc/genus``: the vault master key and
+#: salt, the Google Workspace OAuth file, the database CA).
+_SYSTEM_SECRETS: tuple[str, ...] = ("/run/robothor", "/etc/robothor", "/etc/genus")
+
+#: Settings naming a credential FILE: ``(group, field)``. The file is denied.
+_CREDENTIAL_FILE_SETTINGS: tuple[tuple[str, str], ...] = (
+    ("channels", "google_workspace_credentials_file"),
+    ("secrets", "vault_key_file"),
+    ("secrets", "fingerprint_salt_file"),
+    ("secrets", "env_file"),
+    ("secrets", "backend_file"),
+    ("ops", "secrets_file"),
+    ("ops", "instance_env"),
+)
+
+#: Settings naming a credential DIRECTORY (the Workspace CLI's token cache).
+#: The Workspace credential file's own directory is denied with it.
+_CREDENTIAL_DIR_SETTINGS: tuple[tuple[str, str], ...] = (
+    ("channels", "google_workspace_config_dir"),
+)
 
 #: Read-only git commands, in Claude Code's permission-rule syntax. No
 #: ``git grep`` (``-O``/``--open-files-in-pager`` runs a program; the Grep tool
@@ -148,6 +184,37 @@ def required() -> bool:
     return str(get_settings().coding.sandbox or "").strip().lower() != "off"
 
 
+def _configured(group: str, field: str) -> Path | None:
+    from robothor.settings import get_settings
+
+    raw = str(getattr(getattr(get_settings(), group), field) or "").strip()
+    return Path(raw).expanduser() if raw else None
+
+
+def _dir_is_deniable(directory: Path, home: Path, workspace: Path | None) -> bool:
+    """False for ``/``, the home, the workspace and any directory holding them:
+    denying one of those would deny a job everything under it, its own worktree
+    included. The file itself is denied regardless."""
+    for keep in (home, workspace):
+        if keep is not None and (directory == keep or directory in keep.parents):
+            return False
+    return directory != Path(directory.anchor)
+
+
+def _configured_secret_paths(home: Path, workspace: Path | None) -> list[str]:
+    """The credential files and directories the engine's settings name."""
+    found: list[str] = []
+    for group, field in _CREDENTIAL_FILE_SETTINGS:
+        path = _configured(group, field)
+        if path is not None:
+            found.append(str(path))
+    gws_file = _configured("channels", "google_workspace_credentials_file")
+    dirs = [gws_file.parent] if gws_file is not None else []
+    dirs += [p for p in (_configured(g, f) for g, f in _CREDENTIAL_DIR_SETTINGS) if p is not None]
+    found += [str(d) for d in dirs if _dir_is_deniable(d, home, workspace)]
+    return found
+
+
 def secret_paths(home: Path, workspace: Path | None) -> list[str]:
     """Every path a job may not read, absolute."""
     found = [str(home / rel) for rel in _HOME_SECRETS]
@@ -157,6 +224,7 @@ def secret_paths(home: Path, workspace: Path | None) -> list[str]:
     if homes is not None:
         found.append(str(homes))  # every job's private home, its own included
     found += list(_SYSTEM_SECRETS)
+    found += _configured_secret_paths(home, workspace)
     return list(dict.fromkeys(found))
 
 
