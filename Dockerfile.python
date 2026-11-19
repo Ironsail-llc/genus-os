@@ -148,6 +148,9 @@ COPY robothor /app/robothor
 COPY crm /app/crm
 COPY infra/migrations /app/infra/migrations
 COPY templates /app/templates
+# The platform's bundled skills: read from /app/agents/skills, and packed into
+# the wheel as robothor/bundled_skills by hatch_build.py.
+COPY agents/skills /app/agents/skills
 COPY conftest.py hatch_build.py /app/
 COPY --from=gws /usr/local/bin/gws /usr/local/bin/gws
 COPY --from=claude-cli /opt/claude /opt/claude
@@ -171,6 +174,9 @@ COPY robothor /app/robothor
 COPY crm /app/crm
 COPY infra/migrations /app/infra/migrations
 COPY templates /app/templates
+# The platform's bundled skills: read from /app/agents/skills, and packed into
+# the wheel as robothor/bundled_skills by hatch_build.py.
+COPY agents/skills /app/agents/skills
 COPY conftest.py hatch_build.py /app/
 
 RUN --mount=type=cache,target=/root/.cache/uv \

@@ -126,3 +126,51 @@ def test_the_declared_readme_reaches_the_python_image():
         f"pyproject declares readme = {readme!r} but Dockerfile.python never COPYs it — "
         "the hatchling build inside the image fails"
     )
+
+
+def _docker_context_admits(path: str) -> bool:
+    """Docker's own rule: the LAST .dockerignore pattern matching a path decides,
+    and a ``!`` pattern re-admits a path under an excluded directory."""
+    import fnmatch
+
+    admitted = True
+    for line in (REPO / ".dockerignore").read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        negate = line.startswith("!")
+        pattern = line.lstrip("!").rstrip("/")
+        parts = path.split("/")
+        prefixes = ["/".join(parts[: i + 1]) for i in range(len(parts))]
+        if any(fnmatch.fnmatch(p, pattern) for p in prefixes):
+            admitted = negate
+    return admitted
+
+
+def _stage_copies(stage: str) -> set[str]:
+    """The local sources one Dockerfile.python stage COPYies."""
+    copied: set[str] = set()
+    current = ""
+    for line in (REPO / "Dockerfile.python").read_text().splitlines():
+        if line.startswith("FROM "):
+            current = line.split()[-1]
+        elif current == stage and line.startswith("COPY ") and "--from" not in line:
+            copied.update(part.rstrip("/") for part in line.split()[1:-1])
+    return copied
+
+
+def test_the_bundled_skills_reach_the_python_image():
+    """The platform's skills ship in the image, so a workspace with no
+    agents/skills of its own still has them (and the wheel the image builds
+    carries them as package data)."""
+    skill_files = [
+        str(p.relative_to(REPO)) for p in (REPO / "agents" / "skills").glob("*/SKILL.md")
+    ]
+    assert skill_files
+    blocked = [f for f in skill_files if not _docker_context_admits(f)]
+    assert not blocked, f"bundled skills excluded from the Docker build context: {blocked}"
+    assert not _docker_context_admits("agents/skills/pr-review/state.json")
+    for stage in ("dev", "prod-builder"):
+        assert "agents/skills" in _stage_copies(stage), (
+            f"Dockerfile.python stage {stage!r} never COPYies agents/skills"
+        )

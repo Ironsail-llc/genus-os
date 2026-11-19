@@ -103,9 +103,22 @@ def _export_skills(output_dir: Path) -> int:
     engine reads them: an instance skill shadowing a bundled name is the one
     exported.
     """
-    from robothor.engine.skills import skill_search_paths
+    from robothor.engine.skills import (
+        bundled_skills_dir,
+        platform_skills_dir,
+        skill_search_paths,
+    )
 
-    sources = [d for d in skill_search_paths() if d.is_dir()]
+    # Never the copy shipped with the code (unless it IS the workspace's own
+    # tree, as in a checkout): every instance already has it, and an imported
+    # copy would become an overlay pinning that version.
+    shipped = platform_skills_dir()
+    workspace = bundled_skills_dir()
+    sources = [
+        d
+        for d in skill_search_paths()
+        if d.is_dir() and (d == workspace or shipped is None or d.resolve() != shipped.resolve())
+    ]
     if not sources:
         return 0
 

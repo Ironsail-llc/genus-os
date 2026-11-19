@@ -353,11 +353,11 @@ async def prepare(
         logger.warning("pr_review prepare %s#%s raised: %s", repo, number, exc)
         result = {"error": f"prepare failed: {type(exc).__name__}: {exc}"}
     if result.get("error"):
-        await _fail_unbound(store, tenant_id, repo, number, str(result["error"]))
+        await fail_unbound(store, tenant_id, repo, number, str(result["error"]))
     return result
 
 
-async def _fail_unbound(
+async def fail_unbound(
     store: PrReviewStore, tenant_id: str, repo: str, number: int, reason: str
 ) -> None:
     from datetime import UTC, datetime

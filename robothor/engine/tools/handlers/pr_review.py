@@ -310,12 +310,23 @@ async def _prepare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if isinstance(parsed, dict):
         return parsed
     repo, number = parsed
+
+    async def unprepared(error: str) -> dict[str, Any]:
+        """Fail the row like any prepare failure: never left queued, task DONE."""
+        from robothor.pr_review.review import fail_unbound
+
+        try:
+            await fail_unbound(_store(), ctx.tenant_id, repo, number, error)
+        except Exception as exc:  # noqa: BLE001 - the error below is reported either way
+            logger.warning("pr_review row %s#%s not failed: %s", repo, number, exc)
+        return {"error": error}
+
     skill = _skill_text()
     if not skill:
-        return {"error": f"the {SKILL_NAME} skill is not installed"}
+        return await unprepared(f"the {SKILL_NAME} skill is not installed")
     github = _github(ctx.tenant_id)
     if github is None:
-        return {"error": "GITHUB_TOKEN not configured"}
+        return await unprepared("GITHUB_TOKEN not configured")
 
     async def start_job(start_args: dict[str, Any]) -> dict[str, Any]:
         from robothor.engine.tools.handlers.claude_code import _start
