@@ -165,10 +165,10 @@ def audit_answered(name: str, args: dict[str, Any], ctx: ToolContext, outcome: s
     when ``tenant`` is the tool's own parameter: the effect ledger replays an
     external tool's writes too, and no other tenant was entered for those.
     """
-    if _argument_owner(name) == "tool":
-        return
     target = _tenant_target(args.get(TENANT_ARG))
     if not target or target == ctx.tenant_id:
+        return
+    if _argument_owner(name) == "tool":
         return
     audit_cross_tenant(
         home_tenant=ctx.tenant_id,
