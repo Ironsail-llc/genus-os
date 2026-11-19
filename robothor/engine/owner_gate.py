@@ -10,6 +10,10 @@ registry does not know, is not the owner.
 A sub-agent spawned from the owner's chat inherits the owner's identity for
 attribution (``runner.py``); that is not authority, so a run with a parent is
 refused -- the same rule ``host_execution.eligible`` applies to host exec.
+
+An owner of a parent tenant switched into a child keeps their name and role
+there (``IdentityContext.acting``), but is not the child's instance owner:
+an acting identity never passes.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ def is_verified_owner(ctx: Any) -> bool:
         and identity.verified
         and identity.role == "owner"
         and identity.tenant_id == getattr(ctx, "tenant_id", None)
+        and not getattr(identity, "acting", False)
     ):
         return False
     from robothor.engine.session_registry import lookup

@@ -249,7 +249,10 @@ CAPS = {
     # unwrapping is in wrapped_call.py; one call site lands here).
     # 353 -> 354: the decorator that logs every admission refusal; the
     # logging is in tool_verdict.py and tool_call_log.py.
-    "robothor/engine/tool_admission.py": 354,
+    # 354 -> 357: a call over the per-minute limit waits for room instead of
+    # being refused. One import and a two-line branch at the guardrail gate;
+    # the wait and its deadline bound are in tool_throttle.py.
+    "robothor/engine/tool_admission.py": 357,
     # Capped at the size it was extracted at, like schedule_reconcile.py: a new
     # module with no cap is how the next branch's "just one more case" lands
     # somewhere the ratchet is not looking. One branch, one dependency, and it

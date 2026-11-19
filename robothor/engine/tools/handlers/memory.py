@@ -15,6 +15,29 @@ if TYPE_CHECKING:
 
 HANDLERS: dict[str, Any] = {}
 
+
+def _hidden_blocks() -> frozenset[str]:
+    from robothor.tenancy.watch import SNAPSHOT_BLOCK
+
+    return frozenset({SNAPSHOT_BLOCK})
+
+
+#: Memory blocks that hold ENGINE state, not an agent's memory: no agent-facing
+#: surface reads, writes, appends to or lists them (these handlers, deep
+#: reasoning's block reader in ``rlm_tool.py``, the warm-up's memory-block
+#: section). ``org_watch_snapshot`` names child companies and decides what the
+#: owner is told next, so only ``robothor.tenancy.watch`` touches it.
+AGENT_HIDDEN_BLOCKS = _hidden_blocks()
+
+#: What an agent is told when it names one.
+HIDDEN_BLOCK_ERROR = "That memory block holds engine state; agents cannot read or change it."
+
+
+def is_hidden_block(name: Any) -> bool:
+    """Whether ``name`` is one of :data:`AGENT_HIDDEN_BLOCKS`, however it is spelled."""
+    return str(name or "").strip().lower() in AGENT_HIDDEN_BLOCKS
+
+
 # Memory-mutating tools — refused when ctx.is_benchmark. Mirrors the
 # gws and crm mutating-tool guards: benchmark fixture text stored as memory_facts or
 # agent blocks is read back by later real runs as established fact
@@ -447,6 +470,8 @@ async def _get_stats(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 async def _memory_block_read(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.blocks import read_block
 
+    if is_hidden_block(args.get("block_name")):
+        return {"error": HIDDEN_BLOCK_ERROR}
     return await asyncio.to_thread(read_block, args.get("block_name", ""), tenant_id=ctx.tenant_id)
 
 
@@ -454,6 +479,8 @@ async def _memory_block_read(args: dict[str, Any], ctx: ToolContext) -> dict[str
 async def _memory_block_write(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.blocks import write_block
 
+    if is_hidden_block(args.get("block_name")):
+        return {"error": HIDDEN_BLOCK_ERROR}
     return await asyncio.to_thread(
         write_block,
         args.get("block_name", ""),
@@ -466,7 +493,11 @@ async def _memory_block_write(args: dict[str, Any], ctx: ToolContext) -> dict[st
 async def _memory_block_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.blocks import list_blocks
 
-    return await asyncio.to_thread(list_blocks, tenant_id=ctx.tenant_id)
+    listed: dict[str, Any] = await asyncio.to_thread(list_blocks, tenant_id=ctx.tenant_id)
+    blocks = listed.get("blocks")
+    if isinstance(blocks, list):
+        listed["blocks"] = [b for b in blocks if not is_hidden_block(b.get("name"))]
+    return listed
 
 
 @_handler("get_knowledge_gaps")
@@ -564,6 +595,8 @@ async def _leave_breadcrumb(args: dict[str, Any], ctx: ToolContext) -> dict[str,
 async def _append_to_block(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import append_to_block
 
+    if is_hidden_block(args.get("block_name")):
+        return {"error": HIDDEN_BLOCK_ERROR, "success": False}
     ok = await asyncio.to_thread(
         append_to_block,
         block_name=args.get("block_name", ""),

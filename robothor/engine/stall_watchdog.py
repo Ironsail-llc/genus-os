@@ -399,6 +399,13 @@ class _StallWatchdog:
         return max(0.0, time.monotonic() - self._start_time)
 
     @property
+    def remaining_seconds(self) -> float | None:
+        """Seconds before the hard ceiling cancels the run; None when there is none."""
+        if self._hard_timeout <= 0:
+            return None
+        return self._hard_timeout - self.elapsed_seconds
+
+    @property
     def idle_seconds(self) -> float:
         """Seconds since the last touch() call."""
         return max(0.0, time.monotonic() - self._last_activity)

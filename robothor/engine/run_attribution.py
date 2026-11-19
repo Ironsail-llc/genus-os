@@ -86,5 +86,5 @@ async def attribute_run(
     # it onto a fresh SpawnContext for any children this run spawns.
     session.identity = identity
 
-    await attach_tenant_access(session.run, tenant_id)
+    await attach_tenant_access(session.run, tenant_id, identity)
     return identity, tier

@@ -304,6 +304,7 @@ def builtin_handlers() -> dict[str, Any]:
         messaging,
         n8n,
         observability,
+        org,
         pdf,
         plugins,
         pr_review,
@@ -374,6 +375,7 @@ def builtin_handlers() -> dict[str, Any]:
         pr_review,
         workflows,
         plugins,
+        org,
     ]:
         all_handlers.update(mod.HANDLERS)
 
@@ -511,6 +513,7 @@ def _audit_tool_call(
     user_id: str = "",
     status: str = "ok",
     error: str | None = None,
+    dry_run: bool = False,
 ) -> None:
     """Record a tool invocation in the audit log. Never raises.
 
@@ -526,6 +529,8 @@ def _audit_tool_call(
         details: dict[str, Any] = {"tenant_id": tenant_id}
         if user_id:
             details["user_id"] = user_id
+        if dry_run:
+            details["dry_run"] = True
         if error:
             # Redacted, defence in depth. An audit row outlives the run and is
             # exported wholesale into a support bundle, and this `error` is
@@ -549,6 +554,25 @@ def _audit_tool_call(
         )
     except Exception:
         pass
+
+
+def _audit_own_dry_run(
+    name: str, crossing: Any, ctx: ToolContext, result: dict[str, Any]
+) -> dict[str, Any]:
+    """An own-tenant dry run leaves the tool-call row its real call would,
+    marked as a dry run. A cross-tenant one is audited by ``cross_tenant.dry_run``."""
+    if crossing.target is None:
+        error = result.get("error")
+        _audit_tool_call(
+            name,
+            ctx.agent_id,
+            ctx.tenant_id,
+            user_id=ctx.user_id,
+            status="error" if error else "ok",
+            error=str(error) if error else None,
+            dry_run=True,
+        )
+    return result
 
 
 def _rbac_unlock(user_role: str, name: str, denied: str) -> str:
@@ -728,16 +752,34 @@ async def _execute_tool(
         # An explicit tier is a caller's (tool_call's call_kwargs); else the run's.
         capability_tier=capability_tier or current_run_tier(),
     )
+    # ── A `tenant` argument: may this call act in that tenant? ──
+    # Decided against the run's OWN context, before anything is reserved or
+    # run. The swap itself happens around the handler (cross_tenant.run_handler).
+    from robothor.engine.tools import cross_tenant
+
+    crossing = cross_tenant.admit(name, args, ctx)
+    if isinstance(crossing, dict):
+        return crossing
     denial = await _runtime_denial(name, args, ctx)
     if denial:
         return denial
+    if crossing is not None and crossing.dry_run:
+        # Admitted exactly as the real call; nothing reserved, nothing run.
+        return _audit_own_dry_run(
+            name, crossing, ctx, await cross_tenant.dry_run(name, crossing, ctx)
+        )
 
     from robothor.engine.runtime.effect_dispatch import invoke
 
-    return await invoke(name, args, ctx, lambda: _dispatch_admitted(name, args, ctx))
+    return await invoke(name, args, ctx, lambda: _dispatch_admitted(name, args, ctx, crossing))
 
 
-async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+async def _dispatch_admitted(
+    name: str,
+    args: dict[str, Any],
+    ctx: ToolContext,
+    crossing: Any = None,
+) -> dict[str, Any]:
     agent_id, run_id, tenant_id = ctx.agent_id, ctx.run_id, ctx.tenant_id
     user_id, workspace, is_benchmark = ctx.user_id, ctx.workspace, ctx.is_benchmark
     from robothor.engine.tools import get_registry
@@ -793,6 +835,10 @@ async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) 
                 status="ok" if decision.action == "answered" else "denied",
                 error=decision.note if decision.action == "refused" else None,
             )
+            if decision.action == "answered" and crossing is not None:
+                from robothor.engine.tools.cross_tenant import audit_answered
+
+                audit_answered(name, args, ctx, "repeat")
             return decision.result
 
     # Benchmark sandbox: mirror ctx.is_benchmark into the CRM DAL's
@@ -811,7 +857,12 @@ async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) 
     # 30-min reaper fired. Returning a structured error lets the LLM decide
     # whether to retry, skip, or surface to the operator.
     try:
-        result = cast("dict[str, Any]", await handler(args, ctx))
+        if crossing is None:
+            result = cast("dict[str, Any]", await handler(args, ctx))
+        else:
+            from robothor.engine.tools.cross_tenant import run_handler
+
+            result = await run_handler(name, handler, crossing, ctx)
     except httpx.HTTPStatusError as e:
         # A backing service responded with an error status. Map to a short
         # structured error: the raw exception text embeds the internal
@@ -862,6 +913,12 @@ async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) 
     if guard is not None:
         await asyncio.to_thread(guard.after, name, args, result, workspace=workspace)
 
+    # `as_of` and a per-row `ageDays` on the list tools. After the guard, so a
+    # repeat is still recognised although `as_of` moves on every call.
+    from robothor.engine.tools.cross_tenant import annotate_ages
+
+    result = annotate_ages(name, result)
+
     # ── Post-condition verification (grade the environment, not the transcript) ──
     # The single choke point every tool call passes through, AFTER the handler
     # has returned successfully. Bookkeeping only: verify_tool_result never
@@ -869,9 +926,17 @@ async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) 
     # try/except guards the import itself, so even a broken verification module
     # cannot fail an agent's real work.
     try:
-        from robothor.engine.tools import verification
+        from robothor.engine.tools import cross_tenant, verification
 
-        result = await verification.verify_tool_result(name, args, result, ctx)
+        # A cross-tenant write is read back where it landed: as the target,
+        # in its scope, with the arguments the handler saw.
+        with cross_tenant.target_scope(crossing):
+            result = await verification.verify_tool_result(
+                name,
+                cross_tenant.handler_args(args, crossing),
+                result,
+                cross_tenant.target_context(ctx, crossing),
+            )
     except Exception as e:  # noqa: BLE001
         logger.warning("Post-condition verification skipped for %s: %s", name, e)
 

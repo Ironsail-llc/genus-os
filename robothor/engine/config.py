@@ -572,6 +572,15 @@ def _run_model_settings(model: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _eager_tool_compression(v2: dict[str, Any]) -> Any:
+    """``v2.eager_tool_compression``, else the fleet default from the environment."""
+    return v2.get(
+        "eager_tool_compression",
+        os.environ.get("ROBOTHOR_EAGER_TOOL_COMPRESSION", "").strip().lower()
+        in ("1", "true", "yes", "on"),
+    )
+
+
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     """Convert a YAML manifest dict to an AgentConfig."""
     model = manifest.get("model", {})
@@ -768,6 +777,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         todo_list_enabled=v2.get("todo_list_enabled", False),
         guardrails=v2.get("guardrails", []),
         rate_limit_per_minute=int(v2.get("rate_limit_per_minute", 0)),
+        child_tenant_access=v2.get("child_tenant_access", False) is True,
         guardrails_opt_out=v2.get("guardrails_opt_out", False),
         exec_allowlist=v2.get("exec_allowlist", []),
         write_path_allowlist=v2.get("write_path_allowlist", []),
@@ -782,11 +792,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         # manifest value — including False as opt-out — always wins. Pairs
         # with tool_offload_threshold: with offloading configured, thinning
         # spills to disk and stays lossless (session.thin_previous_tool_results).
-        eager_tool_compression=v2.get(
-            "eager_tool_compression",
-            os.environ.get("ROBOTHOR_EAGER_TOOL_COMPRESSION", "").strip().lower()
-            in ("1", "true", "yes", "on"),
-        ),
+        eager_tool_compression=_eager_tool_compression(v2),
         # Fleet default via env so staging the offload does not mean editing
         # every manifest; an explicit manifest value (including 0 = opt out)
         # always wins. See session._offload_tool_result for the mechanism and
@@ -1598,6 +1604,27 @@ SECURITY_PREAMBLE = (
 #: capability block is part of the stamp: it comes from settings rather than a
 #: file, so a settings change must rebuild the body although no mtime moved.
 _prompt_cache: dict[str, tuple[float, str, str]] = {}
+#: (agent id, manifest path) pairs already warned about as missing, so a stale
+#: path is reported once per process instead of on every prompt rebuild.
+_warned_missing_prompt_files: set[tuple[str, str]] = set()
+
+
+def _warn_missing_prompt_file(agent_id: str, kind: str, rel_path: str) -> None:
+    """Log a missing instruction or bootstrap file once per agent and path.
+
+    The file is still skipped: an agent with a stale path runs. ``genus
+    doctor``'s ``manifests.prompt_files`` check reports the same thing.
+    """
+    key = (agent_id, rel_path)
+    if key in _warned_missing_prompt_files:
+        return
+    _warned_missing_prompt_files.add(key)
+    logger.warning(
+        "%s file not found for agent %s: %s (skipped; the agent runs without it)",
+        kind,
+        _sanitize(agent_id),
+        _sanitize(rel_path),
+    )
 
 
 @dataclass(frozen=True)
@@ -1686,13 +1713,13 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
                 parts.append(content)
                 total_chars += len(content)
             else:
-                logger.warning("Instruction file not found: %s", instruction_path)
+                _warn_missing_prompt_file(config.id, "Instruction", config.instruction_file)
 
         # Load bootstrap files
         for bs_file in config.bootstrap_files:
             bs_path = workspace / bs_file
             if not bs_path.exists():
-                logger.warning("Bootstrap file not found: %s", bs_path)
+                _warn_missing_prompt_file(config.id, "Bootstrap", bs_file)
                 continue
 
             content = bs_path.read_text()

@@ -109,7 +109,11 @@ from robothor.engine.run_deadline import (
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import _is_service_caller as _is_service_caller
-from robothor.engine.run_identity import resolve_run_identity_off_loop, seat_session
+from robothor.engine.run_identity import (
+    follow_up_preamble,
+    resolve_run_identity_off_loop,
+    seat_session,
+)
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
@@ -750,13 +754,19 @@ class AgentRunner(
         )
 
         warmup_future: asyncio.Future[tuple[str, dict[str, float]] | None] | None = None
+        # Which tenants this run may reach (attribute_run set it above); the
+        # ORGANISATION section names only those children.
+        _accessible_tenants = tuple(session.run.accessible_tenant_ids or ())
         if warmup_kind == "cron":
             from robothor.engine.warmup import build_warmth_preamble, set_warmup_kind
 
             def _build_cron_warmup() -> tuple[str, dict[str, float]] | None:
                 with set_warmup_kind("cron"):
                     return build_warmth_preamble(
-                        agent_config, self.config.workspace, self.config.tenant_id
+                        agent_config,
+                        self.config.workspace,
+                        self.config.tenant_id,
+                        accessible_tenant_ids=_accessible_tenants,
                     )
 
             warmup_future = loop.run_in_executor(None, _build_cron_warmup)
@@ -792,6 +802,7 @@ class AgentRunner(
                         # Host state names the configured primary from this.
                         agent_config=agent_config,
                         section_timings=_timings,
+                        accessible_tenant_ids=_accessible_tenants,
                     )
                 return text, _timings
 
@@ -828,38 +839,13 @@ class AgentRunner(
 
         engine_preamble = warmup_preamble or ""  # its own turn; see AgentSession.start
         if not engine_preamble and (
-            conversation_history
-            and effective_identity is not None
-            and trigger_type in (TriggerType.TELEGRAM, TriggerType.WEBCHAT)
+            conversation_history and trigger_type in (TriggerType.TELEGRAM, TriggerType.WEBCHAT)
         ):
-            # Follow-up turn (warmup skipped — see warmup_kind above): the
-            # first turn already got the CURRENT USER block via warmup, but
-            # every turn after that needs its own reminder of who's talking,
-            # since it's not re-sent as part of conversation_history. Identity
-            # only — no other warmup DB work (memory blocks, entity context,
-            # etc. are already in the transcript).
-            try:
-                from robothor.engine.warmup import enrichment_call_for_turn
-
-                # Enrichment does blocking DB work on a cache miss — offload to
-                # the executor so it never blocks the event loop, mirroring the
-                # first-turn warmup path just above. It is held for the chat
-                # session.
-                _enrich_fn, _enrich_args = enrichment_call_for_turn(agent_id, effective_identity)
-                _enriched = await loop.run_in_executor(None, _enrich_fn, *_enrich_args)
-            except Exception as e:
-                logger.debug(
-                    "Per-turn identity enrichment failed for %s: %s",
-                    _sanitize(agent_id),
-                    _sanitize(e),
-                )
-                _enriched = None
-            try:
-                engine_preamble = effective_identity.prompt_block(_enriched)
-            except Exception as e:
-                logger.debug(
-                    "Per-turn identity block failed for %s: %s", _sanitize(agent_id), _sanitize(e)
-                )
+            # Follow-up turn (warmup skipped): who is talking and which
+            # organisation this is, both off the loop (run_identity.py).
+            engine_preamble = await follow_up_preamble(
+                agent_id, effective_identity, resolved_tenant, _accessible_tenants
+            )
         watchdog.touch("warmup_complete")
 
         # ── [INJECTION] Scan the assembled system-run prompt ──

@@ -237,6 +237,8 @@ _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
         "wait_seconds",
         "config_get",
         "plugins_overview",
+        # The REAL organisation: every reachable tenant's runs, costs, tasks.
+        "org_overview",
     }
     # The instance's REAL workflows and their run history.
     | {"list_workflows", "workflow_runs"}
@@ -344,6 +346,10 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "list_pending_approvals",
         # Starts a real workflow run on the instance.
         "run_workflow",
+        # Reads the REAL organisation (as org_overview does) and, unless
+        # previewing, writes the parent's watch snapshot: a graded run would
+        # both see the operator's companies and swallow the next real change.
+        "org_watch",
         # Asking a person mid-run. A graded agent must not be able to page the
         # operator, and a benchmark run has nobody watching it anyway — the
         # handler's own trigger gate would refuse, but a tool the harness never

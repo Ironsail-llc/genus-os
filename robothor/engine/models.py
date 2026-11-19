@@ -489,6 +489,10 @@ class AgentConfig:
     # A tool-heavy agent (batch file reads, many greps) can legitimately
     # burst well past the fleet norm; a narrow one can be held tighter.
     rate_limit_per_minute: int = 0
+    # v2.child_tenant_access: this agent's UNATTENDED runs (cron, hook, event)
+    # may reach its tenant's child tenants -- only when the tenant's own
+    # crm_tenants.child_data_access is TRUE as well (run_identity.py).
+    child_tenant_access: bool = False
     guardrails_opt_out: bool = False  # Skip default guardrails for this agent
     # RBAC service role for system/cron/heartbeat runs (which have no interactive
     # user). Resolves against the role_permissions table. Default "service" maps

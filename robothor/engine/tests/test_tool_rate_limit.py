@@ -1,23 +1,26 @@
 """The per-minute tool cap is a throttle on real work.
 
-`DEFAULT_RATE_LIMIT = 30` was a module constant with no way to change it, and
-it blocks the tool call rather than slowing it: the agent is told "rate limit
-exceeded" and, in a run measured on WildClawBench, gave up and reported that
-it could not continue.
+`DEFAULT_RATE_LIMIT` was 30, a module constant with no way to change it, and
+it blocked the tool call rather than slowing it: the agent was told "rate
+limit exceeded" and, in a run measured on WildClawBench, gave up and reported
+that it could not continue.
 
 Measured on this instance, 2026-08-24:
 
 * 127 `rate_limit` block events in production over 30 days, most recent that
   same day. This is not hypothetical — it fires on the fleet.
 * Across 900 real runs of more than five tool calls, the mean rate is 7.2
-  calls/minute and the peak is 36.8. So the cap sits just under the top of
-  the legitimate distribution, which is the worst possible place for it: too
-  high to catch anything quickly, low enough to punish the tail of normal
-  behaviour.
+  calls/minute and the peak is 36.8. So 30 sat just under the top of the
+  legitimate distribution, which is the worst possible place for it.
 
-Runaway protection has three other owners — `max_iterations`, `safety_cap`,
-and the runaway-token guard — all of which bound a loop that has genuinely
-escaped. This one bounds a burst, and bursts are what reading ten files looks
+The default is now 60, above that peak, and in an agent run a call over it
+waits for room instead of failing (`test_tool_rate_limit_waits.py`). This file
+pins the guardrail engine itself, which still refuses: the workflow engine
+reads that refusal and waits in place.
+
+Runaway protection has other owners — `safety_cap`, the run's deadline and
+the runaway-token guard — all of which bound a loop that has genuinely
+escaped. This one paces a burst, and bursts are what reading ten files looks
 like.
 """
 
@@ -39,9 +42,11 @@ def _burst(engine: GuardrailEngine, n: int, agent_id: str = "a") -> int:
     return allowed
 
 
-class TestTheDefaultIsUnchanged:
-    """Deliberately not raised — see the constant's docstring. The evidence
-    says it should be; the fallout says that is a soak, not a drive-by."""
+class TestTheDefault:
+    """Raised above the measured legitimate peak (36.8 calls/minute)."""
+
+    def test_the_default_is_sixty(self):
+        assert DEFAULT_RATE_LIMIT == 60
 
     def test_the_default_still_applies_when_nothing_is_configured(self):
         assert _burst(_engine(), DEFAULT_RATE_LIMIT + 5) == DEFAULT_RATE_LIMIT
@@ -81,3 +86,25 @@ class TestItStillCatchesARunaway:
         engine = _engine(rate_limit_per_minute=5)
         _burst(engine, 5, agent_id="noisy")
         assert engine.check_pre_execution("read_file", {}, agent_id="quiet").allowed
+
+
+class TestThePromptStatesTheLimitApplied:
+    """The prompt quoted the platform default to every agent, including one
+    whose manifest set its own number."""
+
+    def test_an_agents_own_limit_is_the_one_stated(self):
+        from robothor.engine.guardrails import guardrail_summary
+
+        text = guardrail_summary(["rate_limit"], rate_limit_per_minute=120)
+        assert "120/minute" in text
+        assert f"{DEFAULT_RATE_LIMIT}/minute" not in text
+
+    def test_no_limit_of_its_own_states_the_default(self):
+        from robothor.engine.guardrails import guardrail_summary
+
+        assert f"{DEFAULT_RATE_LIMIT}/minute" in guardrail_summary(["rate_limit"])
+
+    def test_the_prompt_says_a_call_over_it_waits(self):
+        from robothor.engine.guardrails import guardrail_summary
+
+        assert "waits" in guardrail_summary(["rate_limit"])

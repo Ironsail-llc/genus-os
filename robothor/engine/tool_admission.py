@@ -35,6 +35,7 @@ from robothor.constants import GUARDRAIL_BLOCKED_ERROR_TYPE
 from robothor.engine.run_deadline import wrapup_refusal
 from robothor.engine.sandbox_policy import guardrail_context
 from robothor.engine.sanitize import sanitize_log as _sanitize
+from robothor.engine.tool_throttle import wait_for_room
 from robothor.engine.tool_verdict import ToolVerdict as ToolVerdict  # re-exported
 from robothor.engine.tool_verdict import logs_refusals, with_gate
 from robothor.engine.wrapped_call import inner_call
@@ -247,6 +248,8 @@ class ToolAdmissionMixin:
         guardrail_engine: Any,
     ) -> ToolVerdict | None:
         """The guardrail gate, including human approval. None = allowed."""
+        if late := await wait_for_room(guardrail_engine, agent_config.id, session):
+            return late  # over the per-minute limit, the deadline came before room
         gr = guardrail_engine.check_pre_execution(
             tool_name,
             tool_args,

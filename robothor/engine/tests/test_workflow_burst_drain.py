@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from robothor.engine import dedup
+from robothor.engine.guardrails import DEFAULT_RATE_LIMIT
 from robothor.engine.hooks import STREAM_PREFIX, EventHooks, retry_stream_key
 from robothor.engine.models import RunStatus
 from robothor.engine.workflow import WorkflowEngine, parse_workflow
@@ -299,7 +300,7 @@ def _expected(n: int, start: int = 0) -> list[str]:
 
 
 EVENTS = 3000
-LIMIT = 30  # the fleet default
+LIMIT = DEFAULT_RATE_LIMIT  # the fleet default, whatever it is
 
 
 class TestBurstDrains:

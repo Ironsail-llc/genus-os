@@ -111,6 +111,18 @@ nothing. [Observability](../OBSERVABILITY.md) has the full distinction and the
 Helm's Automations view, which shows one card per scheduled agent with its last
 result.
 
+## What an agent knows about where it is
+
+Every interactive turn, and every scheduled run that builds a preamble, carries
+an `--- ORGANISATION ---` block: this tenant's id and display name, its parent,
+each child tenant the conversation may reach, and one line on what it may do
+there. An owner or admin reaches the children; a member sees only their own
+tenant. The display name is the tenant's `displayName`, so give the tenant a
+real one (`genus doctor` warns under `identity.tenant_name` when it is still a
+placeholder). The operator-facing `main` agent also starts a conversation with a
+`--- FLEET ROSTER ---`: each agent with its schedule state (enabled, cron, last
+status).
+
 ## Skills
 
 A skill is a markdown instruction bundle an agent can load on demand: the

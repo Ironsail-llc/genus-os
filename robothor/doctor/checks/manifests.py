@@ -208,6 +208,60 @@ async def _unrestricted_role(ctx: DoctorContext) -> Result:
     return ok(f"{total} agent(s), none on the unrestricted default role")
 
 
+def _missing_prompt_files(directory: Path, workspace: Path, only: str) -> tuple[int, list[str]]:
+    """``(agents, "agent: path" lines)`` for every instruction or bootstrap file absent.
+
+    Paths are judged the way ``build_system_prompt`` reads them: relative to
+    the workspace. Only the agent id and the path the manifest names are
+    reported, never file content.
+    """
+    from robothor.engine.config import load_agent_config, load_manifest_dir
+
+    ids = [str(m.get("id")) for m in load_manifest_dir(directory).manifests if m.get("id")]
+    if only:
+        ids = [i for i in ids if i == only]
+    missing: list[str] = []
+    for agent_id in ids:
+        try:
+            config = load_agent_config(agent_id, directory)
+        except Exception:  # noqa: BLE001, S112 - manifests.schema owns refusals
+            continue
+        if config is None:
+            continue
+        paths = [config.instruction_file] if config.instruction_file else []
+        paths.extend(config.bootstrap_files or [])
+        missing.extend(f"{agent_id}: {rel}" for rel in paths if not (workspace / rel).exists())
+    return len(ids), missing
+
+
+async def _prompt_files(ctx: DoctorContext) -> Result:
+    """Every manifest's ``instruction_file`` and ``bootstrap_files`` exist.
+
+    The engine skips a missing one and keeps going, so the agent runs without
+    the text it was meant to have, and its instructions may tell it to read
+    files that are not there either. Each line names the agent and the path the
+    manifest gives; create the file or correct the path.
+    """
+    directory = _manifest_dir(ctx)
+    if not directory.is_dir():
+        return skip(f"no manifest directory at {directory}")
+    try:
+        total, missing = await ctx.run_blocking(
+            _missing_prompt_files, directory, ctx.workspace, ctx.agent
+        )
+    except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
+        return fail(f"cannot scan the manifest directory: {type(exc).__name__}")
+    if missing:
+        shown = "; ".join(missing[:_MAX_LISTED])
+        if len(missing) > _MAX_LISTED:
+            shown += f"; and {len(missing) - _MAX_LISTED} more"
+        return fail(
+            f"{len(missing)} instruction/bootstrap file(s) missing (paths are relative to "
+            f"the workspace): {shown}"
+        )
+    return ok(f"{total} agent(s), every instruction and bootstrap file present")
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         id="manifests.schema",
@@ -229,6 +283,13 @@ CHECKS: tuple[Check, ...] = (
         category="manifests",
         severity="required",
         run=_broken,
+    ),
+    Check(
+        id="manifests.prompt_files",
+        title="Every instruction and bootstrap file exists",
+        category="manifests",
+        severity="recommended",
+        run=_prompt_files,
     ),
     Check(
         id="manifests.unrestricted_role",

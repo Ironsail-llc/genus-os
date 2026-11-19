@@ -64,6 +64,12 @@ async def test_verified_repair_resumes_original_request_once(tmp_path, monkeypat
     assert "do not duplicate" in kwargs["message"]
     assert kwargs["agent_config"].delivery_mode == DeliveryMode.NONE
     assert kwargs["correlation_id"] == job_id
+    from robothor.engine.run_identity import confined_to_own_tenant
+
+    started = SimpleNamespace(
+        trigger_type=kwargs["trigger_type"], trigger_detail=kwargs["trigger_detail"]
+    )
+    assert confined_to_own_tenant(started), "nobody is present: no other tenant"
     assert json.loads(path.read_text())["resume_run_id"] == "new-run"
 
 

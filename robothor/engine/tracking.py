@@ -222,11 +222,21 @@ def update_run(
     )
 
 
-def get_run(run_id: str) -> dict[str, Any] | None:
-    """Get a single run by ID."""
+def get_run(run_id: str, tenant_id: str | None = None) -> dict[str, Any] | None:
+    """Get a single run by ID; with ``tenant_id``, only a run of that tenant.
+
+    Agent-facing reads pass the run's tenant, so isolation does not rest on
+    row-level security alone. ``None`` keeps the engine's own lookups (resume,
+    attachments) exactly as they were.
+    """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM agent_runs WHERE id = %s", (run_id,))
+        if tenant_id is None:
+            cur.execute("SELECT * FROM agent_runs WHERE id = %s", (run_id,))
+        else:
+            cur.execute(
+                "SELECT * FROM agent_runs WHERE id = %s AND tenant_id = %s", (run_id, tenant_id)
+            )
         row = cur.fetchone()
         return dict(row) if row else None
 

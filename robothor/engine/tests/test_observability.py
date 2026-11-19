@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -443,7 +444,9 @@ class TestClassifyRunFailureAgreesWithTheReaper:
             patch.dict("os.environ", {"ROBOTHOR_DAEMON_START_TS": daemon_ts}),
         ):
             return await HANDLERS["classify_run_failure"](
-                {"run_id": "00000000-0000-4000-8000-000000000001"}, None
+                {"run_id": "00000000-0000-4000-8000-000000000001"},
+                # It reads only its caller's tenant's runs, so it needs a context.
+                SimpleNamespace(tenant_id="test-tenant"),
             )
 
     @pytest.mark.asyncio

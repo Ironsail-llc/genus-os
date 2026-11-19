@@ -228,6 +228,50 @@ async def _owner_account(ctx: DoctorContext) -> Result:
     )
 
 
+#: Display names that mean "nobody named this tenant": the migration seed's
+#: (``crm/migrations/008_multi_tenancy.sql``, ``infra/migrations/001_init.sql``).
+#: ``genus tenant create`` without ``--name`` falls back to the tenant id, which
+#: the check treats the same way.
+SCAFFOLD_TENANT_NAMES = frozenset({"Default Instance"})
+
+
+async def _tenant_name(ctx: DoctorContext) -> Result:
+    """The engine's tenant has a display name of its own.
+
+    Agents tell every conversation which organisation they serve by this name.
+    Empty, the migration seed's ``Default Instance``, or the bare tenant id
+    means the agent introduces the organisation by a placeholder. Nothing
+    breaks, so it is a warning. Set it with the bridge's ``PATCH
+    /api/tenants/{id}`` (``displayName``).
+    """
+    from robothor.constants import DEFAULT_TENANT
+
+    tenant = ctx.settings.database.tenant_id or DEFAULT_TENANT
+
+    def _probe() -> tuple[bool, str]:
+        with ctx.db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT display_name FROM crm_tenants WHERE id = %s", (tenant,))
+            row = cursor.fetchone()
+        if row is None:
+            return False, ""
+        return True, str(row[0] or "").strip()
+
+    try:
+        found, name = await ctx.run_blocking(_probe)
+    except Exception as exc:  # noqa: BLE001 - no table, no database: both are answers
+        return fail(f"cannot read crm_tenants: {type(exc).__name__}")
+    if not found:
+        return fail(f"no crm_tenants row for tenant {tenant}; agents cannot name the organisation")
+    if not name or name in SCAFFOLD_TENANT_NAMES or name == tenant:
+        shown = repr(name) if name else "empty"
+        return fail(
+            f"tenant {tenant} has the placeholder display name {shown}; agents introduce "
+            "the organisation by this name. Set displayName with PATCH /api/tenants/<id>"
+        )
+    return ok(f"tenant {tenant} is named {name!r}")
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         id="identity.owner_config",
@@ -242,5 +286,12 @@ CHECKS: tuple[Check, ...] = (
         category="identity",
         severity="required",
         run=_owner_account,
+    ),
+    Check(
+        id="identity.tenant_name",
+        title="The tenant has a display name",
+        category="identity",
+        severity="recommended",
+        run=_tenant_name,
     ),
 )

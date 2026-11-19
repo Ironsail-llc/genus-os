@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 import pytest
 
-from robothor.engine import warmup
+from robothor.engine import org_context, warmup
 from robothor.engine.warmup import _CONTEXT_HOOKS, build_interactive_preamble
 from robothor.identity import enrichment
 from robothor.identity.context import EnrichedIdentity, IdentityContext
@@ -221,6 +221,14 @@ def db():
         fake.charge("SELECT FROM fleet surfaces")
         return "--- FLEET SURFACES ---\n[@example-agent 09:00] done"
 
+    def _tenant(tenant_id: str) -> dict[str, Any]:
+        fake.charge("SELECT FROM crm_tenants")
+        return {"id": tenant_id, "displayName": "Acme Holdings", "parentTenantId": None}
+
+    def _schedules(**kw: Any) -> list[dict[str, Any]]:
+        fake.charge("SELECT FROM agent_schedules")
+        return [{"agent_id": "example-agent", "enabled": True, "cron_expr": "0 * * * *"}]
+
     def _goal(**kw: Any) -> str:
         fake.charge("SELECT FROM agent goals")
         return "--- AGENT GOAL ---\nKeep the operator informed."
@@ -246,6 +254,9 @@ def db():
             patch("robothor.crm.dal.list_tasks", side_effect=_list_tasks),
             patch("robothor.engine.warmup._recent_fleet_surfaces", side_effect=_fleet),
             patch("robothor.engine.session_goal.build_agent_goal_context", side_effect=_goal),
+            patch("robothor.crm.dal.get_tenant", side_effect=_tenant),
+            patch("robothor.crm.dal.list_tenants", return_value=[]),
+            patch("robothor.engine.tracking.list_schedules", side_effect=_schedules),
         ):
             yield fake
     finally:
@@ -259,6 +270,9 @@ def _build(
 ) -> tuple[str, float]:
     """One warmup of ``main``. ``fan_out`` forces the mode; ``None`` leaves it learned."""
     enrichment.clear_cache()
+    # Each warmup here must read the tenant tree, like the other sections do:
+    # these tests count sections in flight, and a cached block reads nothing.
+    org_context.clear_cache()
     if fan_out is True:
         _remember_slow_sections()
     elif fan_out is False:
@@ -295,6 +309,8 @@ class TestSameText:
             "OPEN TASKS",
             "--- FLEET SURFACES ---",
             "--- AGENT GOAL ---",
+            "--- ORGANISATION ---",
+            "--- FLEET ROSTER ---",
         ):
             assert marker in sequential, marker
 
@@ -384,8 +400,10 @@ class TestOverlapAndTiming:
         _build(fan_out=False)
         assert db.max_in_flight == 1  # in place: strictly one after another
 
-        sections = 8  # identity, blocks, entity, hooks, host, tasks, fleet, goal
-        # Each section's first statement blocks until all eight are waiting, so
+        # identity, organisation, blocks, entity, hooks, host, tasks, roster,
+        # fleet, goal
+        sections = 10
+        # Each section's first statement blocks until all of them are waiting, so
         # this only opens if they run concurrently; run in sequence, the first
         # one would wait alone and the barrier would time out and break.
         db.gate = threading.Barrier(sections, timeout=10)
@@ -404,11 +422,13 @@ class TestOverlapAndTiming:
         _build(timings=timings)
         assert set(timings) == {
             "identity",
+            "organisation",
             "memory_blocks",
             "entity_context",
             "context_hooks",
             "host_state",
             "open_tasks",
+            "fleet_roster",
             "fleet_surfaces",
             "agent_goal",
         }
@@ -420,7 +440,7 @@ class TestOverlapAndTiming:
         fanned: dict[str, float] = {}
         _build(fan_out=True, timings=fanned)
         assert set(in_place) == set(fanned)
-        assert len(in_place) == 8
+        assert len(in_place) == 10
 
 
 class TestContextVars:
@@ -540,7 +560,7 @@ class TestFanOutOnlyWhenItPays:
         assert threads[-1] == caller  # in place, on the calling thread
         assert db.max_in_flight == 1
 
-        sections = 8
+        sections = 10
         db.gate = threading.Barrier(sections, timeout=10)
         db.max_in_flight = 0
         timings: dict[str, float] = {}
@@ -692,7 +712,7 @@ class TestThereIsNoSwitch:
         ]
         assert len(block_reads) == 1, block_reads
         assert db.count("memory_facts") == 1
-        assert len(timings) == 8
+        assert len(timings) == 10
         enrichment._cache.clear()
         warmup.enrich_identity_for_turn("main", IDENTITY)
         assert db.count("crm_people") == 1

@@ -59,6 +59,9 @@ def builtin_schemas() -> dict[str, Any]:
         }
     schemas.update(get_engine_schemas())
     _stamp_hints(schemas)
+    from robothor.engine.tools.cross_tenant import stamp_tenant_arguments
+
+    stamp_tenant_arguments(schemas)
     return schemas
 
 
@@ -823,6 +826,12 @@ class ToolRegistry:
     def get_adapter_route(self, tool_name: str) -> str | None:
         """Return the adapter server name for a tool, or None if not adapter-provided."""
         return self._adapter_routes.get(tool_name)
+
+    def declared_parameters(self, tool_name: str) -> frozenset[str]:
+        """The parameter names the tool's registered schema declares (none if unknown)."""
+        fn = self._schemas.get(tool_name, {}).get("function") or {}
+        props = (fn.get("parameters") or {}).get("properties") or {}
+        return frozenset(props) if isinstance(props, dict) else frozenset()
 
     def registered_tool_names(self) -> set[str]:
         """Every tool name this instance can dispatch, right now.
