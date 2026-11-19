@@ -581,6 +581,31 @@ no agent can read, write, append to or list it, and no manifest can load it
 into an agent's context. Deleting the row (an operator, in the database) makes
 the next watch a first watch again.
 
+## The command centre
+
+The Helm's **Command centre** (`?v=org`, first in the Workspace group) shows one
+card per company: the parent and each of its descendants, with the same
+figures `org_overview` gives the agent, from the same rollup. Companies that
+need attention come first. A card for a company that could not be read says so
+instead of showing zeros.
+
+| Who | Sees |
+|-----|------|
+| The parent's `owner` or `admin`, signed in to the parent | Every company: the parent and its descendants. |
+| The same person while acting in a child | Nothing: the page is refused until they switch back. While acting, the child's own pages are theirs. |
+| A child's `admin` | No nav entry. The endpoint answers with the child alone and `has_children: false`; never a sibling or the parent. |
+| A `member`, `viewer` or `auditor`, and any service token | Refused. |
+
+Clicking a card switches into that company through the usual tenant switch, so
+it works only while `GENUS_TENANT_SWITCH_MODE=enforce`; otherwise the cards
+are not links. The page reads the overview when it is opened and when
+**Refresh** in its header is clicked, never on its own (not on returning to
+the tab, nor on a timer); the as-of time says how old the figures are. Each
+read writes one `org.overview` row to `audit_log` for every child read, filed
+under that child, so the child's admins can see who looked.
+The endpoint is `GET /api/org/overview`
+([configuration](../configuration.md#the-command-centre-over-the-api)).
+
 ## Verification queries
 
 Run these as the non-superuser application role (see

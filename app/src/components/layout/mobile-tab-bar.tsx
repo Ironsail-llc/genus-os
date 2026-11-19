@@ -37,6 +37,11 @@ interface MobileTabBarProps {
   inboxCount: number;
   /** Session role — hides Settings in the sheet. UX gate only; the bridge authorizes. */
   role?: string | null;
+  /**
+   * The parent tenant's owner or admin, at home (`useHasChildTenants`): shows
+   * the command centre. UX gate only; the bridge authorizes.
+   */
+  hasChildTenants?: boolean;
 }
 
 const TAB_CLASS =
@@ -50,6 +55,7 @@ export function MobileTabBar({
   unhealthyCount,
   inboxCount,
   role,
+  hasChildTenants,
 }: MobileTabBarProps) {
   const [moreOpen, setMoreOpen] = useState(false);
   const sheetRef = useRef<HTMLDivElement | null>(null);
@@ -106,7 +112,7 @@ export function MobileTabBar({
   const badgeCounts: Record<string, number> = { inbox: inboxCount, agents: unhealthyCount };
 
   const inTabBar = new Set(TABS.map((t) => t.view));
-  const sheetGroups = visibleNavGroups(role)
+  const sheetGroups = visibleNavGroups(role, { hasChildTenants })
     .map((group) => ({
       ...group,
       items: group.items.filter((item) => !inTabBar.has(item.view) || item.sub),

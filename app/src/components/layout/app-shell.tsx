@@ -14,6 +14,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { isChunkLoadError } from "@/lib/chunk-load-error";
 import { reloadPage } from "@/lib/reload-page";
 import { ActingTenantBanner, TenantSwitcher } from "@/components/layout/tenant-switcher";
+import { useHasChildTenants } from "@/hooks/use-accessible-tenants";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { CommandPalette } from "@/components/business/command-palette";
 import { useTasks } from "@/hooks/use-tasks";
@@ -194,6 +195,13 @@ const LogsView = withSurfaceBoundary(
     { ssr: false, loading: ViewLoading },
   ),
 );
+const CommandCentreView = withSurfaceBoundary(
+  "Command centre",
+  dynamic(
+    () => import("@/components/views/command-centre-view").then((m) => m.CommandCentreView),
+    { ssr: false, loading: ViewLoading },
+  ),
+);
 const HealthView = withSurfaceBoundary(
   "Health",
   dynamic(
@@ -279,6 +287,8 @@ function AppShellBody() {
   const { data: session, status } = useSession();
   const roleLoading = status === "loading";
   const role = session?.role;
+  // Whether to offer the command centre: a parent tenant's owner or admin, at home.
+  const hasChildTenants = useHasChildTenants();
   // The landing greets the owner by first name; none when the session has none.
   const ownerName = session?.user?.name?.trim().split(/\s+/)[0] || undefined;
 
@@ -374,7 +384,7 @@ function AppShellBody() {
         className="flex flex-col md:flex-row flex-1 min-h-0 w-full"
         data-testid="app-shell"
       >
-      <CommandPalette onNavigate={navigate} role={role} />
+      <CommandPalette onNavigate={navigate} role={role} hasChildTenants={hasChildTenants} />
       {/* Desktop sidebar — hidden on mobile */}
       {!isMobile && (
         <Sidebar
@@ -387,6 +397,7 @@ function AppShellBody() {
           unhealthyCount={unhealthyCount}
           inboxCount={inbox.count}
           role={role}
+          hasChildTenants={hasChildTenants}
         />
       )}
 
@@ -501,6 +512,7 @@ function AppShellBody() {
                 />,
               )}
               {mount("marketplace", <MarketplaceView visible={view === "marketplace"} />)}
+              {mount("org", <CommandCentreView visible={view === "org"} />)}
               {mount("fleet", <FleetView visible={view === "fleet"} />)}
               {mount("runs", <RunsView visible={view === "runs"} />)}
               {/*
@@ -651,6 +663,7 @@ function AppShellBody() {
           unhealthyCount={unhealthyCount}
           inboxCount={inbox.count}
           role={role}
+          hasChildTenants={hasChildTenants}
         />
       )}
       </div>

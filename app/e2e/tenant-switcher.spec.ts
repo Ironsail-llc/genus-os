@@ -14,6 +14,13 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 const TASKS_URL = "/?v=tasks";
+/**
+ * A switch reloads the page, and the tasks view is its own chunk: it arrives
+ * after the shell (and the banner) has painted. On a slow runner that gap
+ * exceeds the default 5 s, so the first look after a reload waits as long as a
+ * page load may take.
+ */
+const AFTER_RELOAD = { timeout: 30_000 };
 
 interface Tenant {
   id: string;
@@ -107,15 +114,15 @@ test.describe("tenant switcher", () => {
     await expect(switcher).toBeVisible();
     await switcher.selectOption("acme-child-a");
 
-    await expect(page.getByTestId("acting-tenant-banner")).toContainText("Acting as Acme Child A");
-    await expect(page.getByText("Child onboarding checklist")).toBeVisible();
+    await expect(page.getByTestId("acting-tenant-banner")).toContainText("Acting as Acme Child A", AFTER_RELOAD);
+    await expect(page.getByText("Child onboarding checklist")).toBeVisible(AFTER_RELOAD);
     await expect(page.getByText("Parent quarterly review")).toHaveCount(0);
     await expect(page.getByLabel("Tenant")).toHaveValue("acme-child-a");
 
     await page.getByRole("button", { name: "Switch back" }).click();
 
-    await expect(page.getByTestId("acting-tenant-banner")).toHaveCount(0);
-    await expect(page.getByText("Parent quarterly review")).toBeVisible();
+    await expect(page.getByTestId("acting-tenant-banner")).toHaveCount(0, AFTER_RELOAD);
+    await expect(page.getByText("Parent quarterly review")).toBeVisible(AFTER_RELOAD);
     expect(state.switches).toEqual(["acme-child-a", "acme-parent"]);
   });
 
