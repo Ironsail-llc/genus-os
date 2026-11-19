@@ -200,3 +200,129 @@ def test_without_a_coding_workspace_no_extra_home_path_is_denied(tmp_path, monke
     monkeypatch.delenv("ROBOTHOR_CODING_WORKSPACE", raising=False)
     reset_settings()
     assert not [p for p in secret_paths(HOME, WS) if p.endswith("/.home")]
+
+
+# ── credential files the engine is configured with ───────────────────
+
+#: Settings that name a credential file or directory the engine holds. Set to
+#: generic locations outside every statically denied path, so a pass proves the
+#: deny came from the setting.
+_GWS_FILE = Path("/opt/gws-auth/credentials.json")
+_GWS_CONFIG = Path("/var/cache/gws-cli")
+
+
+@pytest.fixture
+def configured(monkeypatch):
+    """Set credential-file settings for one test; leave the settings clean after."""
+    from robothor.settings import reset_settings
+
+    names = (
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE",
+        "GOOGLE_WORKSPACE_CLI_CONFIG_DIR",
+        "GENUS_VAULT_KEY_FILE",
+        "ROBOTHOR_VAULT_KEY_FILE",
+        "GENUS_FINGERPRINT_SALT_FILE",
+        "ROBOTHOR_FINGERPRINT_SALT_FILE",
+        "ROBOTHOR_ENV_FILE",
+        "ROBOTHOR_SECRETS_BACKEND_FILE",
+        "ROBOTHOR_SECRETS_FILE",
+        "ROBOTHOR_INSTANCE_ENV",
+    )
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+
+    def _set(**env: str) -> None:
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        reset_settings()
+
+    _set()
+    yield _set
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    reset_settings()
+
+
+def _denied_everywhere(tmp_path: Path, mode: str, target: Path) -> None:
+    """``target`` is on the Bash sandbox's denyRead and under a Read/Edit/Write deny rule."""
+    paths = _paths(tmp_path)
+    deny_read = build_sandbox_settings(mode, paths, allowed_domains=())["sandbox"]["filesystem"][
+        "denyRead"
+    ]
+    assert _covers(deny_read, target), (mode, target, deny_read)
+    _, denied = build_permissions(mode, paths)
+    for tool in ("Read", "Edit", "Write"):
+        exact = {r[len(tool) + 2 : -1] for r in denied if r.startswith(f"{tool}(/")}
+        dirs = {e[:-3] for e in exact if e.endswith("/**")}
+        assert str(target) in exact or _covers(sorted(dirs), target), (mode, tool, target)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_chart_credential_mounts_are_denied_with_no_setting_at_all(tmp_path, configured, mode):
+    """The chart mounts every credential an engine pod holds under /etc/genus
+    (the Workspace OAuth file, the vault master key and salt). A job is denied
+    the whole tree whatever the environment says."""
+    for target in (
+        Path("/etc/genus"),
+        Path("/etc/genus/gws/credentials.json"),
+        Path("/etc/genus/vault/.vault-key"),
+    ):
+        _denied_everywhere(tmp_path, mode, target)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_workspace_cli_credential_file_its_directory_and_token_cache_are_denied(
+    tmp_path, configured, mode
+):
+    """A mounted Google Workspace credential was readable by a coding job."""
+    configured(
+        GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=str(_GWS_FILE),
+        GOOGLE_WORKSPACE_CLI_CONFIG_DIR=str(_GWS_CONFIG),
+    )
+    _denied_everywhere(tmp_path, mode, _GWS_FILE)
+    _denied_everywhere(tmp_path, mode, _GWS_FILE.parent)
+    _denied_everywhere(tmp_path, mode, _GWS_FILE.parent / "token-cache.json")
+    _denied_everywhere(tmp_path, mode, _GWS_CONFIG)
+    _denied_everywhere(tmp_path, mode, _GWS_CONFIG / "token_cache.json")
+
+
+def test_a_credential_file_in_the_home_or_workspace_denies_the_file_not_its_parent(configured):
+    """Denying the directory of a file kept loose in the home (or the workspace,
+    or /) would deny the job everything under it, its own worktree included."""
+    configured(
+        GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=str(HOME / "gws-credentials.json"),
+        GENUS_VAULT_KEY_FILE=str(WS / "master.key"),
+        GENUS_FINGERPRINT_SALT_FILE="/salt",
+    )
+    found = secret_paths(HOME, WS)
+
+    assert str(HOME / "gws-credentials.json") in found
+    assert str(WS / "master.key") in found
+    assert "/salt" in found
+    for parent in (str(HOME), str(WS), "/"):
+        assert parent not in found, parent
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_every_credential_file_setting_is_denied(tmp_path, configured, mode):
+    """The vault master key, the fingerprint salt and the secrets env files,
+    wherever the instance puts them."""
+    files = {
+        "GENUS_VAULT_KEY_FILE": "/opt/keys/vault/master.key",
+        "GENUS_FINGERPRINT_SALT_FILE": "/opt/keys/salt/fingerprint",
+        "ROBOTHOR_ENV_FILE": "/opt/instance/conf/robothor.env",
+        "ROBOTHOR_SECRETS_BACKEND_FILE": "/opt/instance/in/secrets.env",
+        "ROBOTHOR_SECRETS_FILE": "/opt/instance/out/secrets.env",
+        "ROBOTHOR_INSTANCE_ENV": "/opt/instance/cron/robothor.env",
+    }
+    configured(**files)
+    for value in files.values():
+        _denied_everywhere(tmp_path, mode, Path(value))
+
+
+def test_the_workspace_vault_key_and_salt_are_denied_by_default(configured):
+    """With no override the vault master key and the fingerprint salt live at
+    the workspace root, not under any directory already denied."""
+    found = secret_paths(HOME, WS)
+    assert str(WS / ".vault-key") in found
+    assert str(WS / ".fingerprint-salt") in found
