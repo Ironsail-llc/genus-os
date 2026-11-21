@@ -171,7 +171,7 @@ describe("period selector", () => {
     );
   });
 
-  it("refuses a future period before any request", async () => {
+  it("refuses a future period (not over either) before any request", async () => {
     await openView();
     pick("day", { anchor: "2026-11-26" });
     expect(await screen.findByTestId("period-error")).toHaveTextContent(/isn.t over/i);
