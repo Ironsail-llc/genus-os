@@ -191,6 +191,69 @@ describe("period selector", () => {
     expect(screen.queryByTestId("period-status")).toBeNull();
   });
 
+  it("shows a stored edition the loaded list leaves out (an old period), fetched by id", async () => {
+    const old = edition({ id: "e-old", seq: 1, grain: "day", title: "Tue 1 Sep", periodStart: "2026-09-01", periodEnd: "2026-09-01" });
+    // The list holds only the newest editions: this one is never in it.
+    bridge.on("POST", `/rooms/${REPORT_ID}/periods`, () => reply(old));
+    bridge.on("GET", `/rooms/${REPORT_ID}/editions/e-old`, () => reply(old));
+    await openView();
+    pick("day", { anchor: "2026-09-01" });
+    await waitFor(() => expect(pinnedTitle()).toBe("Tue 1 Sep"));
+    expect(screen.queryByTestId("period-status")).toBeNull();
+    // A later read of the list (an event, a refresh) does not take it away.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(pinnedTitle()).toBe("Tue 1 Sep");
+  });
+
+  it("shows a built edition by id when it is published after the list loaded and never joins it", async () => {
+    const built = edition({ id: "e-late", seq: 9, grain: "day", title: "Thu 19 Nov", periodStart: "2026-11-19", periodEnd: "2026-11-19" });
+    let status: Edition["status"] = "building";
+    bridge.on("POST", `/rooms/${REPORT_ID}/periods`, () => reply({ ...built, status: "building" }));
+    bridge.on("GET", `/rooms/${REPORT_ID}/editions/e-late`, () => reply({ ...built, status }));
+    await openView();
+    pick("day", { anchor: "2026-11-19" });
+    await screen.findByTestId("period-status");
+    status = "published";
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    await waitFor(() => expect(pinnedTitle()).toBe("Thu 19 Nov"));
+    expect(screen.queryByTestId("period-status")).toBeNull();
+  });
+
+  it("ends the wait with the failure and its reason", async () => {
+    const failing = edition({ id: "e-fail", seq: 9, grain: "day", status: "building", periodStart: "2026-11-19", periodEnd: "2026-11-19" });
+    bridge.on("POST", `/rooms/${REPORT_ID}/periods`, () => reply(failing));
+    bridge.on("GET", `/rooms/${REPORT_ID}/editions/e-fail`, () =>
+      reply({ ...failing, status: "failed", error: "The sales tool timed out" }),
+    );
+    await openView();
+    pick("day", { anchor: "2026-11-19" });
+    expect(await screen.findByTestId("period-error")).toHaveTextContent("The sales tool timed out");
+    expect(screen.queryByTestId("period-status")).toBeNull();
+  });
+
+  it("stops waiting after a bounded time, says it is still building, and leaves the control usable", async () => {
+    const slow = edition({ id: "e-slow", seq: 9, grain: "day", status: "building", periodStart: "2026-11-19", periodEnd: "2026-11-19" });
+    bridge.on("POST", `/rooms/${REPORT_ID}/periods`, () => reply(slow));
+    bridge.on("GET", `/rooms/${REPORT_ID}/editions/e-slow`, () => reply(slow));
+    await openView();
+    pick("day", { anchor: "2026-11-19" });
+    expect(await screen.findByTestId("period-status")).toHaveTextContent(/building/i);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+    });
+    const status = screen.getByTestId("period-status");
+    expect(status).toHaveTextContent(/still building/i);
+    expect(status).toHaveTextContent(/check back/i);
+    expect(status.querySelector(".animate-spin")).toBeNull();
+    expect(screen.getByTestId("period-trigger")).toBeEnabled();
+    fireEvent.click(screen.getByTestId("period-trigger"));
+    expect(screen.getByTestId("period-apply")).toBeEnabled();
+  });
+
   it("is disabled for a user who may not request a period", () => {
     bridge.on("GET", "/noop", {});
     withClient(<PeriodSelector ctx={slotCtx({ access: "viewer" })} />);
