@@ -503,6 +503,59 @@ class TestRoomIdOnEveryRoute:
         assert room.session_key in _sessions
 
 
+class TestTheRoomIsEchoed:
+    """A route resolved through a room says so, so the dashboard can fail closed
+    against an engine that ignored ``room_id``; and it never shows the key."""
+
+    async def test_send_names_the_room_in_its_first_event(self, client, fake, mock_runner):
+        room = fake.add()
+        fake.share(room, BOB)
+
+        res = await _send(client, _auth(BOB), room_id=room.id)
+
+        first = res.text.split("\n\n")[0]
+        assert first == f'event: room\ndata: {{"roomId": "{room.id}"}}'
+        assert room.session_key not in res.text
+
+    async def test_json_routes_echo_the_room(self, client, fake, monkeypatch):
+        room = fake.add()
+        fake.share(room, BOB)
+        monkeypatch.setattr(
+            "robothor.engine.live_control.steer_conversation", MagicMock(return_value=True)
+        )
+        monkeypatch.setattr(
+            "robothor.engine.live_control.interrupt_conversation", MagicMock(return_value=True)
+        )
+        monkeypatch.setattr(
+            "robothor.engine.chat_recovery.read_outcome", lambda *a: {"terminal": False}
+        )
+        rid = str(uuid.uuid4())
+
+        with _as(_auth(BOB)), patch("robothor.engine.runtime.controls.issue_request", MagicMock()):
+            replies = [
+                await client.get(f"/chat/history?room_id={room.id}"),
+                await client.get(f"/chat/outcome?room_id={room.id}&request_id={rid}"),
+                await client.post("/chat/abort", json={"room_id": room.id}),
+                await client.post(
+                    "/chat/steer", json={"room_id": room.id, "text": "go", "request_id": rid}
+                ),
+                await client.post("/chat/interrupt", json={"room_id": room.id, "request_id": rid}),
+            ]
+
+        for reply in replies:
+            assert reply.status_code == 200, reply.request.url
+            assert reply.json()["roomId"] == room.id, reply.request.url
+            assert room.session_key not in reply.text, reply.request.url
+
+    async def test_an_ordinary_conversation_echoes_no_room(self, client, fake, mock_runner):
+        sent = await _send(client, _auth(BOB))
+        with _as(_auth(BOB)):
+            read = await client.get("/chat/history")
+
+        assert "event: room" not in sent.text
+        assert "roomId" not in read.json()
+
+
 # ─── D1 + D2: history, attribution, reload ────────────────────────────
 
 
