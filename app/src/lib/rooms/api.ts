@@ -253,9 +253,13 @@ export function reassignRoom(roomId: string, userId: string): Promise<unknown> {
   return send<unknown>(roomEndpoint(roomId, "/reassign"), "POST", { userId });
 }
 
-/** One row of the admin list: a summary, with the members when the bridge sends them. */
+/**
+ * One row of the admin list: a summary, with the members and/or the assigned
+ * people when the bridge sends them.
+ */
 export interface AdminRoomRow extends RoomSummary {
   members?: RoomMember[];
+  assigned?: Array<{ userId: string; displayName: string }>;
   runsAs?: { userId: string; displayName: string };
 }
 

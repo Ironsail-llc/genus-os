@@ -114,6 +114,17 @@ export function AllRoomsAdmin({
   );
 }
 
+/**
+ * Who is assigned, from the row's `assigned` list or its `members`; null when
+ * the row carries neither, so the list never claims nobody is assigned when
+ * it simply was not told.
+ */
+function assignedPeople(row: AdminRoomRow): Array<{ userId: string; displayName: string }> | null {
+  if (Array.isArray(row.assigned)) return row.assigned;
+  if (Array.isArray(row.members)) return row.members.filter((m) => m.assigned);
+  return null;
+}
+
 function AdminRow({ row, onOpen, onChanged }: { row: AdminRoomRow; onOpen: () => void; onChanged: () => void }) {
   const client = useAppQueryClient();
   const [reassigning, setReassigning] = useState(false);
@@ -125,7 +136,7 @@ function AdminRow({ row, onOpen, onChanged }: { row: AdminRoomRow; onOpen: () =>
     { queryKey: PEOPLE_QUERY_KEY, queryFn: ({ signal }) => fetchPeople(signal), enabled: reassigning, staleTime: 60_000 },
     client,
   );
-  const assigned = (row.members ?? []).filter((m) => m.assigned);
+  const assigned = assignedPeople(row);
 
   const act = async (fn: () => Promise<unknown>, doing: string) => {
     setBusy(true);
@@ -150,7 +161,9 @@ function AdminRow({ row, onOpen, onChanged }: { row: AdminRoomRow; onOpen: () =>
           <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
             <span>{ROOM_KIND_LABELS[row.kind] ?? ROOM_LABEL.title}</span>
             <span aria-hidden>·</span>
-            {assigned.length > 0 ? (
+            {assigned === null ? (
+              <span>Assigned: unknown</span>
+            ) : assigned.length > 0 ? (
               <span>Assigned: {assigned.map((m) => m.displayName).join(", ")}</span>
             ) : (
               <span className="text-warning">Nobody assigned: reassign it</span>

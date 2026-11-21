@@ -83,34 +83,45 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
   const [tab, setTab] = useState<"settings" | "history">("settings");
   const [form, setForm] = useState<Form>(() => formOf(room));
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [conflict, setConflict] = useState(false);
+  // Whose newer revision the form is behind: someone else's, or this
+  // user's own (a save whose answer did not carry the room).
+  const [conflict, setConflict] = useState<"other" | "own" | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // The room the form was read from. Its revision is what a save is checked
   // against, so a form opened on revision 3 can never overwrite revision 4.
   const [readFrom, setReadFrom] = useState<Room>(room);
+  // Revisions this user's saves wrote, so a newer one is never blamed on
+  // someone else.
+  const [ownRevs, setOwnRevs] = useState<number[]>([]);
     const takeRoom = (next: Room) => {
     setReadFrom(next);
     setForm(formOf(next));
     setErrors({});
-    setConflict(false);
+    setConflict(null);
   };
-  // A newer revision arrives (an event after anyone's save, a restore). An
-  // untouched form takes it; a form with unsaved edits keeps them and says
-  // the definition changed. This user's own save and a reload take the
-  // revision they get back directly, so they never race their own typing.
+  // A newer revision arrives (an event after anyone's save, a restore). The
+  // drawer only ever moves forward: a room prop at or behind the revision
+  // it holds (a stale cache while a refetch is pending, or one that never
+  // lands after this user's own save) is ignored. An untouched form takes
+  // the newer one; this user's own revision becomes the base and keeps any
+  // newer typing; anyone else's keeps the edits and says so.
   // Decided at render, not in an effect, so the fields never show a stale
   // revision for a frame.
-  const changedUnder = readFrom.id !== room.id || readFrom.rev !== room.rev || readFrom.paused !== room.paused;
-  if (changedUnder) {
+  const otherRoom = readFrom.id !== room.id;
+  if (otherRoom || room.rev > readFrom.rev) {
     const untouched = JSON.stringify(form) === JSON.stringify(formOf(readFrom));
-    if (untouched || readFrom.id !== room.id) {
+    if (untouched || otherRoom) {
       takeRoom(room);
-    } else if (!conflict) {
-      setConflict(true);
+    } else if (ownRevs.includes(room.rev)) {
+      setReadFrom(room);
+    } else if (conflict !== "other") {
+      setConflict("other");
     }
   }
+  // The newest the drawer knows, for what it shows (paused, next run).
+  const current = room.id === readFrom.id && room.rev >= readFrom.rev ? room : readFrom;
 
   const base = useMemo(() => formOf(readFrom), [readFrom]);
   const changes = useMemo(() => {
@@ -144,12 +155,19 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
     setSaved(false);
     try {
       const savedRoom = await patchRoom(room.id, readFrom.rev, toSend);
-      if (savedRoom && savedRoom.id === room.id && typeof savedRoom.rev === "number") takeRoom(savedRoom);
+      if (savedRoom && savedRoom.id === room.id && typeof savedRoom.rev === "number") {
+        setOwnRevs((revs) => [...revs, savedRoom.rev]);
+        takeRoom(savedRoom);
+      } else {
+        // Taken, but the answer did not carry the room: the next revision
+        // (numbered in sequence) is this user's own.
+        setOwnRevs((revs) => [...revs, readFrom.rev + 1]);
+      }
       setSaved(true);
       onSaved();
     } catch (err) {
       if (err instanceof RoomRequestError && err.status === 409) {
-        setConflict(true);
+        setConflict(err.currentRev !== null && ownRevs.includes(err.currentRev) ? "own" : "other");
       } else if (err instanceof RoomRequestError && err.status === 422) {
         const field = err.field && err.field in form ? err.field : "form";
         setErrors({ [field]: err.serverMessage ?? "The server refused this change." });
@@ -182,10 +200,10 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
     void save(changes);
   };
 
-  const nextRun = room.paused
+  const nextRun = current.paused
     ? "Paused: no scheduled runs. Resuming schedules the next run from now, with no catch-up of missed runs."
-    : room.nextRunAt
-      ? `Next run: ${formatWhen(room.nextRunAt)}`
+    : current.nextRunAt
+      ? `Next run: ${formatWhen(current.nextRunAt)}`
       : form.scheduleText
         ? "The next run time appears once the schedule is saved."
         : "No schedule: it runs only when someone runs it.";
@@ -214,7 +232,7 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
           <div className="p-4" role="tabpanel">
             <RevisionHistory
               roomId={room.id}
-              currentRev={room.rev}
+              currentRev={current.rev}
               canRestore={can("restore_revision")}
               onRestored={onSaved}
             />
@@ -259,10 +277,14 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
                 data-testid="settings-conflict"
               >
                 <p className="font-medium text-foreground">
-                  These settings were changed since you opened them, by someone else. Nothing was saved.
+                  {conflict === "own"
+                    ? "This form is behind your own last save. Nothing was saved."
+                    : "These settings were changed since you opened them, by someone else. Nothing was saved."}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Reload to see their version, then make your change again.
+                  {conflict === "own"
+                    ? "Reload to continue from your saved version, then make this change again."
+                    : "Reload to see their version, then make your change again."}
                 </p>
                 <Button
                   type="button"
@@ -374,7 +396,7 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
 
             {editable && (
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                <Button type="submit" size="sm" disabled={saving || conflict || !dirty} data-testid="settings-save">
+                <Button type="submit" size="sm" disabled={saving || conflict !== null || !dirty} data-testid="settings-save">
                   {saving && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
                   Save
                 </Button>
@@ -383,12 +405,12 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={saving || conflict}
-                    onClick={() => void save({ paused: !room.paused })}
+                    disabled={saving || conflict !== null}
+                    onClick={() => void save({ paused: !current.paused })}
                     data-testid="settings-pause"
                   >
-                    {room.paused ? <PlayCircle className="size-3.5" aria-hidden /> : <PauseCircle className="size-3.5" aria-hidden />}
-                    {room.paused ? "Resume scheduled runs" : "Pause scheduled runs"}
+                    {current.paused ? <PlayCircle className="size-3.5" aria-hidden /> : <PauseCircle className="size-3.5" aria-hidden />}
+                    {current.paused ? "Resume scheduled runs" : "Pause scheduled runs"}
                   </Button>
                 )}
                 {saved && (

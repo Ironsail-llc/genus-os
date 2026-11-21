@@ -17,7 +17,7 @@ vi.mock("next-auth/react", () => ({
 
 import { AllRoomsAdmin, AllRoomsAdminEntry } from "@/components/rooms/all-rooms-admin";
 import { RoomRail } from "@/components/rooms/room-rail";
-import { ARCHIVED_ID, REPORT_ID, SUMMARIES, reply, room } from "@/lib/rooms/__tests__/fixtures";
+import { ARCHIVED_ID, REPORT_ID, SUMMARIES, reply, room, summary } from "@/lib/rooms/__tests__/fixtures";
 import { mockBridge, withClient } from "./controls-harness";
 
 let bridge: ReturnType<typeof mockBridge>;
@@ -48,6 +48,36 @@ describe("all company workspaces", () => {
     const old = screen.getByTestId(`rooms-admin-row-${ARCHIVED_ID}`);
     expect(old).toHaveTextContent(/archived/i);
     expect(old).toHaveTextContent("Carol");
+  });
+
+  it("reads assigned people from an `assigned` list when the row carries no members", async () => {
+    bridge.on("GET", "/rooms?scope=all", {
+      rooms: [{ ...summary(), assigned: [{ userId: "u-bob", displayName: "Bob" }] }],
+    });
+    withClient(<AllRoomsAdmin open onOpenChange={vi.fn()} onOpenRoom={vi.fn()} />);
+    const row = await screen.findByTestId(`rooms-admin-row-${REPORT_ID}`);
+    expect(row).toHaveTextContent("Assigned: Bob");
+    expect(row).not.toHaveTextContent(/nobody/i);
+  });
+
+  it("says who is assigned is unknown, never 'nobody', when the row names no one either way", async () => {
+    bridge.on("GET", "/rooms?scope=all", { rooms: [summary()] });
+    withClient(<AllRoomsAdmin open onOpenChange={vi.fn()} onOpenRoom={vi.fn()} />);
+    const row = await screen.findByTestId(`rooms-admin-row-${REPORT_ID}`);
+    expect(row).toHaveTextContent(/assigned: unknown/i);
+    expect(row).not.toHaveTextContent(/nobody/i);
+  });
+
+  it("warns that nobody is assigned only when the data says so", async () => {
+    bridge.on("GET", "/rooms?scope=all", {
+      rooms: [
+        { ...summary(), members: [{ userId: "u-bob", displayName: "Bob", assigned: false }] },
+        { ...summary({ id: ARCHIVED_ID, title: "Old pipeline" }), assigned: [] },
+      ],
+    });
+    withClient(<AllRoomsAdmin open onOpenChange={vi.fn()} onOpenRoom={vi.fn()} />);
+    expect(await screen.findByTestId(`rooms-admin-row-${REPORT_ID}`)).toHaveTextContent(/nobody assigned/i);
+    expect(screen.getByTestId(`rooms-admin-row-${ARCHIVED_ID}`)).toHaveTextContent(/nobody assigned/i);
   });
 
   it("reassigns a workspace to another person", async () => {
