@@ -50,6 +50,7 @@ from robothor.rooms.errors import (
 )
 from robothor.rooms.keys import canonical_uuid
 from robothor.rooms.models import edition_json, room_link
+from robothor.rooms.notify import parse_notify, stored_notify
 from routers import _manifest_backend
 from routers._audit import audited
 from routers._engine_client import engine_request
@@ -706,12 +707,13 @@ def api_mark_read(room_id: str, request: Request) -> Any:
 _CHANNEL_LABELS = {"telegram": "Telegram", "slack": "Slack", "whatsapp": "WhatsApp"}
 
 
-def _notify_json(notify: dict[str, Any], linked: list[str]) -> dict[str, Any]:
-    channels = notify.get("channels") or {}
+def _notify_json(notify: Any, linked: list[str]) -> dict[str, Any]:
+    """The member's choices exactly as fan-out reads them (``rooms.notify``)."""
+    prefs = parse_notify(notify)
     return {
-        "inApp": bool(notify.get("in_app", True)),
-        "muted": bool(notify.get("muted", False)),
-        "channels": {str(k): bool(v) for k, v in channels.items()},
+        "inApp": prefs.in_app,
+        "muted": prefs.muted,
+        "channels": dict.fromkeys(prefs.channels, True),
         "linkedChannels": [
             {"name": name, "label": _CHANNEL_LABELS.get(name, name.title())} for name in linked
         ],
@@ -741,7 +743,7 @@ def api_set_notify(room_id: str, request: Request, body: NotifyBody) -> Any:
             f"link {', '.join(unlinked)} to your account before turning it on",
             field="channels",
         )
-    notify = {"in_app": body.in_app, "muted": body.muted, "channels": dict(body.channels)}
+    notify = stored_notify(in_app=body.in_app, muted=body.muted, channels=body.channels)
     member = dal.set_notify(actor.tenant_id, room.id, actor.user_id, notify)
     if member is None:
         return _problem(409, "not_a_member", "only a member of this workspace has preferences")
