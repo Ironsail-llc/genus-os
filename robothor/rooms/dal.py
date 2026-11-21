@@ -1726,6 +1726,8 @@ def rooms_linked_to_task(tenant_id: str, task_id: str) -> list[str]:
             (tenant_id, task),
         )
         return [str(r[0]) for r in cur.fetchall()]
+
+
 def room_summary(tenant_id: str, room_id: str, user_id: str) -> RoomSummary | None:
     """One room's summary, archived or not, with ``user_id``'s unread count
     (0 when they are not a member: an admin's view). None when not in the tenant."""

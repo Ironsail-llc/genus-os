@@ -164,8 +164,7 @@ def test_an_engine_that_cannot_list_agents_refuses_clearly(real) -> None:
             "unsafe_instructions",
             "instructions",
         ),
-        ({"scheduleText": "every minute"}, "invalid_schedule", "scheduleText"),
-        ({"scheduleText": "every 5 minutes"}, "invalid_schedule", "scheduleText"),
+        ({"scheduleText": "whenever it feels right"}, "invalid_schedule", "scheduleText"),
         ({"scheduleText": "in 2 hours"}, "invalid_schedule", "scheduleText"),
         ({"scheduleText": _DAILY, "tz": "Mars/Olympus"}, "invalid_request", "tz"),
     ],
@@ -178,6 +177,14 @@ def test_create_refusals_name_their_field_and_write_nothing(real, body, code, fi
     assert detail["message"]
     real.db.cur.execute("SELECT count(*) FROM rooms WHERE tenant_id = %s", (real.db.tenant,))
     assert real.db.cur.fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("schedule", ["every 1 minute", "every 5 minutes", "* * * * *"])
+def test_a_schedule_is_not_capped_beyond_the_platform_parser(real, schedule) -> None:
+    """No workspace-specific floor: as often as any scheduled job, once a minute."""
+    made = _create(real, scheduleText=schedule)
+    assert made.status_code == 201, made.text
+    assert made.json()["nextRunAt"] is not None
 
 
 def test_a_viewer_cannot_create(real) -> None:
@@ -220,7 +227,7 @@ def test_a_bad_schedule_in_patch_saves_nothing(real) -> None:
         f"/api/rooms/{room['id']}",
         json={
             "expectedRev": room["rev"],
-            "changes": {"scheduleText": "every minute", "title": "Changed"},
+            "changes": {"scheduleText": "whenever it feels right", "title": "Changed"},
         },
     )
     assert refused.status_code == 422
@@ -410,7 +417,7 @@ def test_recorded_replies_match_the_dashboard_contract(real) -> None:
     replies["create_agent"] = _record(
         alice.post("/api/rooms", json={"kind": "agent", "title": "Pricing", "agentId": "analyst"})
     )
-    replies["create_invalid_schedule"] = _record(_create(w, scheduleText="every minute"))
+    replies["create_invalid_schedule"] = _record(_create(w, scheduleText="whenever it feels right"))
     replies["create_unknown_agent"] = _record(_create(w, agentId="ghost"))
     replies["create_viewer"] = _record(_create(w, who="vera"))
 
