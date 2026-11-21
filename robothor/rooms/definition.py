@@ -38,6 +38,7 @@ __all__ = [
     "DEFAULT_AGENT",
     "ROOM_MIN_INTERVAL_SECONDS",
     "InvalidSchedule",
+    "ShareOutcome",
     "TenantUser",
     "UnsafeInstructions",
     "agent_exists",
@@ -454,15 +455,65 @@ def archive_room(actor: Actor, room_id: str) -> Room:
 # ─── people in a room ────────────────────────────────────────────────────
 
 
-def share_room(actor: Actor, room_id: str, user: str, *, assigned: bool = False) -> RoomMember:
-    """Add a colleague of the same company, shared or (``assigned``) able to manage it."""
+@dataclass(frozen=True)
+class ShareOutcome:
+    """What ``share_room`` did. ``added`` is False when they were already a
+    member: nobody new is in the room, so no new notice is owed."""
+
+    member: RoomMember
+    added: bool
+
+    @property
+    def user_id(self) -> str:
+        return self.member.user_id
+
+    @property
+    def room_id(self) -> str:
+        return self.member.room_id
+
+    @property
+    def assigned(self) -> bool:
+        return self.member.assigned
+
+
+def _check_losing_assignment(room: Room, members: list[RoomMember], member: RoomMember) -> None:
+    """The guards on taking ``member`` out of the assigned set (unshare or demotion):
+    never the run-as user, never the last assigned member."""
+    if member.user_id == room.run_as_user_id:
+        raise ValueError("they are who this workspace runs as; reassign it first")
+    if member.assigned and sum(m.assigned for m in members) <= 1:
+        raise ValueError("they are the last assigned member; assign someone else first")
+
+
+def share_room(
+    actor: Actor, room_id: str, user: str, *, assigned: bool | None = None
+) -> ShareOutcome:
+    """Share a room with a colleague of the same company.
+
+    A new member is shared, or assigned (able to manage it) with ``assigned``.
+    For someone already a member, an omitted ``assigned`` keeps their role, so
+    re-sharing never demotes; ``assigned=True`` promotes; an explicit
+    ``assigned=False`` demotes under unshare's guards (not the run-as user,
+    not the last assigned member).
+    """
     room = access.require(actor, room_id, "share")
     target = _require_user(actor.tenant_id, user)
-    if assigned and target.role not in _STAFF_ROLES:
+    members = dal.list_members(actor.tenant_id, room.id)
+    existing = next((m for m in members if m.user_id == target.user_id), None)
+    want = existing.assigned if existing is not None and assigned is None else bool(assigned)
+    if want and target.role not in _STAFF_ROLES:
         raise ValueError(f"{target.display_name or user} is a viewer and cannot be assigned")
-    return dal.add_member(
-        actor.tenant_id, room.id, target.user_id, added_by=actor.user_id, assigned=bool(assigned)
-    )
+    if existing is None:
+        member = dal.add_member(
+            actor.tenant_id, room.id, target.user_id, added_by=actor.user_id, assigned=want
+        )
+        return ShareOutcome(member, added=True)
+    if want == existing.assigned:
+        return ShareOutcome(existing, added=False)
+    if not want:
+        _check_losing_assignment(room, members, existing)
+    changed = dal.set_assigned(actor.tenant_id, room.id, target.user_id, want)
+    return ShareOutcome(changed or existing, added=False)
 
 
 def unshare_room(actor: Actor, room_id: str, user: str) -> str:
@@ -477,10 +528,7 @@ def unshare_room(actor: Actor, room_id: str, user: str) -> str:
     member = next((m for m in members if m.user_id == user_id), None)
     if member is None:
         raise ValueError(f"{user!r} is not a member of this workspace")
-    if member.user_id == room.run_as_user_id:
-        raise ValueError("they are who this workspace runs as; reassign it before removing them")
-    if member.assigned and sum(m.assigned for m in members) <= 1:
-        raise ValueError("they are the last assigned member; assign someone else first")
+    _check_losing_assignment(room, members, member)
     dal.remove_member(actor.tenant_id, room.id, member.user_id)
     return member.user_id
 

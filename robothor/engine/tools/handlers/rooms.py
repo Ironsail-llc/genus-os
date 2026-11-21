@@ -307,21 +307,23 @@ async def _room_share(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     actor = _actor(ctx)
     if actor is None:
         return dict(_NO_PERSON)
-    room_id = _room_id(args)
+    room_id, assigned = _room_id(args), args.get("assigned")
+    if assigned is not None and not isinstance(assigned, bool):
+        return {"error": "assigned must be true or false, or left out to keep their role"}
     try:
-        member = await _call(
-            definition.share_room,
-            actor,
-            room_id,
-            str(args.get("user") or ""),
-            assigned=bool(args.get("assigned", False)),
+        outcome = await _call(
+            definition.share_room, actor, room_id, str(args.get("user") or ""), assigned=assigned
         )
     except (RoomForbidden, RoomNotFound, ValueError) as exc:
         return _refusal(exc)
-    return {
-        "member": {"user_id": member.user_id, "assigned": member.assigned},
-        "link": _link(member.room_id),
+    result: dict[str, Any] = {
+        "member": {"user_id": outcome.user_id, "assigned": outcome.assigned},
+        "already_member": not outcome.added,
+        "link": _link(outcome.room_id),
     }
+    if not outcome.added:
+        result["note"] = "They were already a member; no new notice is sent."
+    return result
 
 
 async def _room_unshare(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

@@ -1624,7 +1624,7 @@ same way.
 | `room_update` | `room_id`, `expected_rev`, `changes` (`title`, `instructions`, `schedule_text`, `tz`, `default_grain`, `paused`, `notify_default`, `max_cost_usd`) | assigned, or owner/admin |
 | `room_list` | `scope` `mine` (default) or `all` | `all`: owner/admin |
 | `room_read` | `room_id`, `editions` (3), `messages` (10) | any access |
-| `room_share` / `room_unshare` | `room_id`, `user` (id or email), `assigned` | assigned, or owner/admin |
+| `room_share` / `room_unshare` | `room_id`, `user` (id or email), `assigned`. Re-sharing a member keeps their role unless `assigned` is given; `assigned: false` and unshare never touch the run-as user or the last assigned member | assigned, or owner/admin |
 | `room_archive` | `room_id`; the schedule stops | assigned, or owner/admin |
 | `room_duplicate` | `room_id`; the caller's own copy | shared or more |
 | `room_restore_revision` | `room_id`, `rev`; writes a new revision equal to it | assigned, or owner/admin |
