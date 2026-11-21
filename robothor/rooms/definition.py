@@ -399,6 +399,10 @@ def apply_definition_change(
         raise ValueError("expected_rev must be the revision number you read")
     room = access.require(actor, room_id, "edit_definition")
     _check_setting_values(changes)
+    if "title" in changes:
+        title = changes["title"]
+        if not isinstance(title, str) or not title.strip():
+            raise InvalidField("a workspace needs a title", "title")
     _scan(changes.get("title"), changes.get("instructions"))
     text = (
         changes["schedule_text"]
