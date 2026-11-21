@@ -59,10 +59,13 @@ __all__ = [
     "list_rooms_for_user",
     "mark_read",
     "publish_edition",
+    "recent_messages",
     "remove_member",
     "restore_revision",
     "set_assigned",
     "set_notify",
+    "set_paused",
+    "set_run_as",
     "unarchive_room",
     "update_definition",
 ]
@@ -605,6 +608,84 @@ def archive_room(tenant_id: str, room_id: str) -> Room | None:
 
 def unarchive_room(tenant_id: str, room_id: str) -> Room | None:
     return _set_archived(tenant_id, room_id, False)
+
+
+def _set_room_column(tenant_id: str, room_id: str, assignment: str, value: Any) -> Room:
+    canonical = canonical_uuid(room_id)
+    row = None
+    if canonical is not None:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                # ``assignment`` is one of two constants below, never caller input.
+                f"UPDATE rooms SET {assignment}, updated_at = now() "  # noqa: S608
+                "WHERE tenant_id = %s AND id = %s RETURNING *",
+                (value, tenant_id, canonical),
+            )
+            row = cur.fetchone()
+            conn.commit()
+    if row is None:
+        raise RoomNotFound(room_id)
+    return _room(row)
+
+
+def set_paused(tenant_id: str, room_id: str, paused: bool) -> Room:
+    """Pause or resume a room. Not part of the definition: no revision is written."""
+    return _set_room_column(tenant_id, room_id, "paused = %s", bool(paused))
+
+
+def set_run_as(tenant_id: str, room_id: str, user_id: str) -> Room:
+    """Change whose permissions a room's scheduled runs use (reassignment)."""
+    return _set_room_column(
+        tenant_id, room_id, "run_as_user_id = %s", _required_uuid(user_id, "user_id")
+    )
+
+
+def _text(content: Any) -> str:
+    """A chat message's text: a string, or the text parts of a content list."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
+def recent_messages(tenant_id: str, room_id: str, *, limit: int = 10) -> list[dict[str, Any]]:
+    """The room's last ``limit`` user and assistant messages, oldest first:
+    ``{id, role, content, author_user_id, created_at}``. Tool messages are skipped."""
+    canonical = canonical_uuid(room_id)
+    if canonical is None:
+        return []
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """SELECT cm.id, cm.message, cm.created_at FROM rooms r
+               JOIN chat_sessions s ON s.tenant_id = r.tenant_id AND s.session_key = r.session_key
+               JOIN chat_messages cm ON cm.session_id = s.id
+               WHERE r.tenant_id = %s AND r.id = %s
+                 AND cm.message->>'role' IN ('user', 'assistant')
+               ORDER BY cm.id DESC LIMIT %s""",
+            (tenant_id, canonical, max(1, int(limit))),
+        )
+        rows = cur.fetchall()
+    out = []
+    for row in reversed(rows):
+        message = dict(row["message"] or {})
+        author = message.get("author_user_id") or message.get("authorUserId")
+        out.append(
+            {
+                "id": int(row["id"]),
+                "role": message.get("role"),
+                "content": _text(message.get("content")),
+                "author_user_id": canonical_uuid(author),
+                "created_at": row["created_at"],
+            }
+        )
+    return out
 
 
 # ─── members ─────────────────────────────────────────────────────────────

@@ -521,14 +521,14 @@ def composing_config(agent: AgentConfig) -> AgentConfig:
     The worker decides what is sent; a composing run that could call a send
     tool would go around the tiers.
     """
-    from robothor.engine.tools.constants import GOAL_TOOLS, READONLY_TOOLS
+    from robothor.engine.tools.constants import GOAL_TOOLS, READONLY_TOOLS, ROOM_TOOLS
     from robothor.goals.tools import TOOL_NAMES as PURSUIT_GOAL_TOOLS
 
     base = set(agent.tools_allowed) if agent.tools_allowed else set(READONLY_TOOLS)
     tools = sorted(base & READONLY_TOOLS) or [_INERT_TOOL]
     # The registry appends the goal tools to any explicit list (and the
-    # pursuit-goal tools for main); deny the ones that write.
-    appended = (set(GOAL_TOOLS) | set(PURSUIT_GOAL_TOOLS)) - READONLY_TOOLS
+    # pursuit-goal and workspace tools for main); deny the ones that write.
+    appended = (set(GOAL_TOOLS) | set(PURSUIT_GOAL_TOOLS) | set(ROOM_TOOLS)) - READONLY_TOOLS
     return dataclasses.replace(
         agent,
         delivery_mode=DeliveryMode.NONE,
