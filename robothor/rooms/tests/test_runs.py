@@ -60,6 +60,7 @@ class FakeRunner:
         #: ``(cost_usd, input_tokens, output_tokens)`` the run reports.
         self.cost: tuple[float, int, int] = (0.0, 0, 0)
         self.gate: asyncio.Event | None = None
+        self.nested: list[dict[str, Any]] = []
         self.entered = asyncio.Event()
 
     async def execute(self, **kw: Any) -> AgentRun:
@@ -90,6 +91,38 @@ class FakeRunner:
         if self.mode == "timeout":
             run.status = RunStatus.TIMEOUT
             run.error_message = "hard timeout"
+            return run
+        if self.mode == "nested":
+            # The run's agent tries to start more workspace work as the run-as user.
+            from robothor.engine.tools.dispatch import ToolContext
+            from robothor.engine.tools.handlers.room_periods import HANDLERS as PERIOD_TOOLS
+            from robothor.engine.tools.handlers.room_runs import HANDLERS as RUN_TOOLS
+            from robothor.engine.tools.handlers.rooms import HANDLERS as ROOM_TOOLS
+
+            ctx = ToolContext(
+                tenant_id=kw["tenant_id"],
+                user_id=kw["user_id"],
+                user_role=kw["user_role"],
+                agent_id=kw["agent_id"],
+                run_id=run.id,
+            )
+            room_id = carrier.room_id if carrier else ""
+            self.nested = [
+                await RUN_TOOLS["room_run"]({"room_id": room_id}, ctx),
+                await RUN_TOOLS["room_run"]({"room_id": room_id, "preview": True}, ctx),
+                await PERIOD_TOOLS["room_request_period"](
+                    {"room_id": room_id, "grain": "day", "anchor": "2026-11-02"}, ctx
+                ),
+                await ROOM_TOOLS["room_create"](
+                    {
+                        "kind": "report",
+                        "title": "Spawned",
+                        "instructions": "Again.",
+                        "schedule": "0 * * * *",
+                    },
+                    ctx,
+                ),
+            ]
             return run
         if self.mode == "publish":
             # The real runner records the run; the publish refuses one with no row.
@@ -833,6 +866,163 @@ class TestRunNow:
 
 
 # ─── the period entry point lane 8 calls ──────────────────────────────────
+
+
+# ─── a named period follows the periods rules ─────────────────────────────
+
+
+class TestANamedPeriod:
+    @pytest.mark.parametrize(
+        "period",
+        [
+            "today",
+            "future",
+            {"grain": "week", "start": "2026-11-11", "end": "2026-11-17"},  # Wed to Tue
+            {"grain": "month", "start": "2026-10-02", "end": "2026-10-31"},
+        ],
+    )
+    async def test_a_period_that_is_not_over_or_not_aligned_is_refused(self, env, period):
+        from robothor.rooms.periods import PeriodError
+
+        room = _report(env.db)
+        today = datetime.now(UTC).date()
+        if period == "today":
+            period = {"grain": "day", "start": today.isoformat(), "end": today.isoformat()}
+        elif period == "future":
+            later = (today + timedelta(days=30)).isoformat()
+            period = {"grain": "day", "start": later, "end": later}
+
+        with pytest.raises(PeriodError):
+            await runs.start_room_run(_actor(env.db, "alice"), room.id, period=period)
+        assert env.runner.calls == []
+        assert (
+            dal.list_editions(
+                env.db.tenant, room.id, viewer_id=env.db.alice, include_unpublished=True
+            )
+            == []
+        )
+
+    async def test_a_past_custom_range_runs(self, env):
+        room = _report(env.db)
+        period = {"grain": "custom", "start": "2026-01-01", "end": "2026-10-31"}
+
+        edition, joined = await runs.start_room_run(_actor(env.db, "alice"), room.id, period=period)
+        await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
+
+        assert joined is False
+        assert (edition.grain, edition.period_start, edition.period_end) == (
+            "custom",
+            date(2026, 1, 1),
+            date(2026, 10, 31),
+        )
+
+
+# ─── joining is for the same period only ──────────────────────────────────
+
+
+class TestJoiningIsPerPeriod:
+    async def test_run_now_for_another_period_is_its_own_run(self, env):
+        room = _report(env.db)
+        env.runner.gate = asyncio.Event()
+        older = {"grain": "day", "start": "2026-11-02", "end": "2026-11-02"}
+
+        first, _ = await runs.start_room_run(_actor(env.db, "alice"), room.id, period=older)
+        await asyncio.wait_for(env.runner.entered.wait(), 10)
+        second, joined = await runs.start_room_run(_actor(env.db, "bob"), room.id)
+
+        assert joined is False
+        assert second.id != first.id and second.status == "building"
+        assert (second.period_start, second.period_end) != (first.period_start, first.period_end)
+        env.runner.gate.set()
+        await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
+        assert len(env.runner.calls) == 2  # the second waited for the lock, then ran
+
+    async def test_a_preview_of_another_period_is_not_joined(self, env):
+        room = _report(env.db)
+        env.runner.gate = asyncio.Event()
+        alice = _actor(env.db, "alice")
+        older = {"grain": "day", "start": "2026-11-02", "end": "2026-11-02"}
+
+        first, _ = await runs.start_room_run(alice, room.id, preview=True, period=older)
+        await asyncio.wait_for(env.runner.entered.wait(), 10)
+        second, joined = await runs.start_room_run(alice, room.id, preview=True)
+        same, joined_same = await runs.start_room_run(alice, room.id, preview=True, period=older)
+
+        assert (joined, joined_same) == (False, True)
+        assert second.id != first.id and same.id == first.id
+        env.runner.gate.set()
+        await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
+
+
+# ─── a workspace run cannot start workspace runs ──────────────────────────
+
+
+class TestARunCannotStartRuns:
+    @pytest.mark.parametrize("trigger", ["schedule", "manual", "preview"])
+    async def test_room_run_request_period_and_room_create_refuse_inside_a_run(self, env, trigger):
+        room = _report(env.db)
+        env.runner.mode = "nested"
+
+        await runs.execute_room_run(
+            env.db.tenant,
+            room.id,
+            trigger="manual" if trigger == "preview" else trigger,
+            requested_by=env.db.alice,
+            preview=trigger == "preview",
+        )
+
+        assert len(env.runner.calls) == 1
+        assert env.runner.carriers[0].unattended is True
+        assert len(env.runner.nested) == 4
+        assert all("error" in result for result in env.runner.nested), env.runner.nested
+        assert runs.pending_runs() == set()
+        env.db.cur.execute(
+            "SELECT COUNT(*) FROM rooms WHERE tenant_id = %s AND title = 'Spawned'",
+            (env.db.tenant,),
+        )
+        assert env.db.cur.fetchone()[0] == 0
+
+    async def test_a_period_run_cannot_either(self, env):
+        room = _report(env.db)
+        env.runner.mode = "nested"
+        period = runs.Period(date(2026, 11, 9), date(2026, 11, 15), "week")
+        building, _ = dal.create_edition(
+            env.db.tenant,
+            room.id,
+            grain="week",
+            period_start=period.start,
+            period_end=period.end,
+            requested_by=env.db.bob,
+        )
+
+        await runs.run_room(room, building, period=period, context="")
+
+        assert all("error" in result for result in env.runner.nested)
+        assert len(env.runner.calls) == 1
+
+
+# ─── no cost setting ──────────────────────────────────────────────────────
+
+
+class TestNoCostSetting:
+    def test_max_cost_usd_is_not_a_workspace_setting(self, env):
+        from robothor.rooms.models import SETTINGS_KEYS
+
+        assert "max_cost_usd" not in SETTINGS_KEYS
+        assert "max_cost_usd" not in definition.CHANGE_KEYS
+
+    def test_setting_it_is_refused(self, env):
+        room = _report(env.db)
+
+        with pytest.raises(ValueError, match="max_cost_usd"):
+            definition.apply_definition_change(
+                _actor(env.db, "alice"), room.id, room.rev, {"max_cost_usd": 1}
+            )
+        with pytest.raises(ValueError, match="max_cost_usd"):
+            dal.update_definition(
+                env.db.tenant, room.id, {"settings": {"max_cost_usd": 1}}, env.db.alice, room.rev
+            )
+        assert dal.get_room(env.db.tenant, room.id).rev == room.rev
 
 
 class TestPeriodRun:

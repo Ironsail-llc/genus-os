@@ -278,6 +278,11 @@ class TestTool:
         source = Path(rooms_api.__file__).read_text()
         assert "on_demand_cap" not in source.split("def _run_answer")[1]
 
+    def test_room_update_offers_no_cost_setting(self):
+        from robothor.engine.tools.schemas import get_engine_schemas
+
+        assert "max_cost_usd" not in str(get_engine_schemas()["room_update"])
+
     def test_the_tool_is_a_workspace_tool_with_a_schema(self):
         from robothor.engine.tools.constants import ROOM_TOOLS
         from robothor.engine.tools.handlers.benchmark import _BENCHMARK_EXCLUDED_TOOLS
