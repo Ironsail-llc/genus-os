@@ -40,6 +40,7 @@ import {
   unarchiveRoom,
 } from "../api";
 import type { RoomTask } from "../hub";
+import { readProvenance } from "@/components/rooms/provenance-drawer";
 import type { Edition, EditionHeadline, Room, RoomMember, RoomSummary } from "../types";
 
 type Recorded = { status: number; body: unknown };
@@ -167,6 +168,16 @@ describe("reads", () => {
     expect(e.blocks[0]).toEqual({ component: "render_markdown", props: { content: "Up 4%." } });
     expect(e.suggestions[0]).toMatchObject({ key: "call-lapsed", title: "Call lapsed buyers" });
     expect(e.provenance).toMatchObject({ run_id: "run-1", ran_as: "u-alice" });
+  });
+
+  it("shows the run's cost and tokens as the engine records them", async () => {
+    answer("room_shared", "edition");
+    const room = await fetchRoom("room-report");
+    const e = await fetchEdition("room-report", "ed-published");
+    const shown = readProvenance(e, room.members);
+    expect(shown).toMatchObject({ runId: "run-1", ranAs: "Alice", costUsd: 0.0421 });
+    expect(shown?.tokens).toEqual({ total: 12345, input: 10000, output: 2345 });
+    expect(shown?.toolCalls.map((c) => c.tool)).toEqual(["sample_sales_figures"]);
   });
 
   it("reads revisions newest first with who made them", async () => {

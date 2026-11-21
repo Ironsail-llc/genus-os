@@ -217,9 +217,20 @@
       "periodStart": "2026-11-02",
       "preview": false,
       "provenance": {
+        "cost_usd": 0.0421,
+        "input_tokens": 10000,
+        "output_tokens": 2345,
         "ran_as": "u-alice",
+        "room_rev": 1,
         "run_id": "run-1",
-        "tool_calls": []
+        "started_at": "<time>",
+        "tool_calls": [
+          {
+            "at": null,
+            "ok": true,
+            "tool": "sample_sales_figures"
+          }
+        ]
       },
       "publishedSeq": 1,
       "revision": 1,
@@ -296,9 +307,20 @@
           "periodStart": "2026-11-02",
           "preview": false,
           "provenance": {
+            "cost_usd": 0.0421,
+            "input_tokens": 10000,
+            "output_tokens": 2345,
             "ran_as": "u-alice",
+            "room_rev": 1,
             "run_id": "run-1",
-            "tool_calls": []
+            "started_at": "<time>",
+            "tool_calls": [
+              {
+                "at": null,
+                "ok": true,
+                "tool": "sample_sales_figures"
+              }
+            ]
           },
           "publishedSeq": 1,
           "revision": 1,

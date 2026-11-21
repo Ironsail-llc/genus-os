@@ -401,9 +401,9 @@ def test_recorded_replies_match_the_dashboard_contract(real) -> None:
     ``app/src/lib/rooms/__tests__/contract.test.ts`` feeds this file to the
     dashboard's API client; ``check_golden`` fails here when a reply changes.
     """
-    from datetime import date
+    from datetime import UTC, date, datetime
 
-    from robothor.rooms import dal
+    from robothor.rooms import dal, editions
     from robothor.rooms.tests.contract import Normaliser, check_golden
 
     w = real
@@ -441,7 +441,17 @@ def test_recorded_replies_match_the_dashboard_contract(real) -> None:
         summary="Sales up 4%.",
         blocks=[{"component": "render_markdown", "props": {"content": "Up 4%."}}],
         suggestions=[{"key": "call-lapsed", "title": "Call lapsed buyers", "detail": "Three"}],
-        provenance={"run_id": "run-1", "ran_as": w.ids.alice, "tool_calls": []},
+        # Built by the engine's own function, so the drawer reads what runs write.
+        provenance=editions.build_provenance(
+            run_id="run-1",
+            ran_as=w.ids.alice,
+            started_at=datetime(2026, 11, 9, 7, 0, tzinfo=UTC),
+            steps=[{"tool_name": "sample_sales_figures", "started_at": None}],
+            room_rev=1,
+            cost_usd=0.0421,
+            input_tokens=10000,
+            output_tokens=2345,
+        ),
     )
     failed = edition("Week 46", date(2026, 11, 9), date(2026, 11, 15))
     dal.fail_edition(w.db.tenant, failed.id, "the sales tool timed out")
