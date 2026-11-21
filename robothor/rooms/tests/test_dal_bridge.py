@@ -210,17 +210,18 @@ def test_members_of_many_rooms(rooms_db) -> None:
 # ─── next run ────────────────────────────────────────────────────────────
 
 
-def test_next_run_at_is_the_rooms_earliest_enabled_job(accounts) -> None:
+def test_next_run_at_is_the_rooms_enabled_job(accounts) -> None:
+    """A room keeps one schedule row (migration 170): its time, while enabled."""
     db = accounts
     room = _room(db)
     soon = datetime.now(UTC) + timedelta(hours=1)
-    _cron(db, room, next_run=soon + timedelta(hours=5))
     _cron(db, room, next_run=soon)
-    _cron(db, room, next_run=soon - timedelta(minutes=30), enabled=False)
 
     found = dal.next_run_at(db.tenant, room.id)
 
     assert found is not None and abs((found - soon).total_seconds()) < 1
+    db.cur.execute("UPDATE user_cronjobs SET enabled = FALSE WHERE room_id = %s", (room.id,))
+    assert dal.next_run_at(db.tenant, room.id) is None
 
 
 def test_next_run_at_is_none_without_a_schedule_or_when_paused(accounts) -> None:
