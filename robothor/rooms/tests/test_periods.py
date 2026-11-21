@@ -16,6 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from robothor.rooms.periods import (
+    DEFAULT_MAX_ON_DEMAND_PER_DAY,
     MAX_CUSTOM_DAYS,
     Period,
     PeriodError,
@@ -253,3 +254,67 @@ def test_a_period_is_a_value_that_cannot_run_backwards():
     assert {period: 1}[Period(date(2026, 11, 9), date(2026, 11, 15), "week")] == 1
     with pytest.raises(ValueError, match="before"):
         Period(date(2026, 11, 15), date(2026, 11, 9), "week")
+
+
+def test_a_date_and_time_is_not_a_date():
+    with pytest.raises(PeriodError, match="not a date and time"):
+        resolve_period("day", "UTC", datetime(2026, 11, 1, 9, 0, tzinfo=UTC), now=NOW)
+
+
+def test_last_complete_period_refuses_an_unknown_grain():
+    with pytest.raises(PeriodError, match="grain"):
+        last_complete_period("year", "UTC", NOW)
+
+
+# ─── the daily cap setting and the room runner ──────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("value", "cap"),
+    [
+        (None, DEFAULT_MAX_ON_DEMAND_PER_DAY),
+        (3, 3),
+        ("4", 4),
+        (2.0, 2),
+        (-1, 0),
+        (0, 0),
+        ("many", DEFAULT_MAX_ON_DEMAND_PER_DAY),
+        (True, DEFAULT_MAX_ON_DEMAND_PER_DAY),
+        ([5], DEFAULT_MAX_ON_DEMAND_PER_DAY),
+    ],
+)
+def test_the_cap_setting_falls_back_to_the_documented_default(value, cap):
+    from robothor.rooms.models import Room
+    from robothor.rooms.periods import _cap
+
+    settings = {} if value is None else {"max_on_demand_per_day": value}
+    room = Room("test-tenant", "r", "report", "Daily", "main", "k", "u", settings=settings)
+
+    assert _cap(room) == cap
+
+
+def test_the_room_runner_is_the_room_runs_module(monkeypatch):
+    import sys
+    import types
+
+    from robothor.rooms.periods import resolve_run_room
+
+    async def run_room(room, edition, *, period, context):  # pragma: no cover - never called
+        return None
+
+    module = types.ModuleType("robothor.rooms.runs")
+    module.run_room = run_room  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "robothor.rooms.runs", module)
+
+    assert resolve_run_room() is run_room
+
+
+def test_without_a_room_runs_module_the_runner_is_unavailable(monkeypatch):
+    import sys
+
+    from robothor.rooms.periods import RoomRunUnavailable, resolve_run_room
+
+    monkeypatch.setitem(sys.modules, "robothor.rooms.runs", None)  # import raises ImportError
+
+    with pytest.raises(RoomRunUnavailable, match="not available"):
+        resolve_run_room()

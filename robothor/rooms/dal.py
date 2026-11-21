@@ -34,12 +34,13 @@ from robothor.rooms.models import (
 )
 
 if TYPE_CHECKING:
-    from datetime import date
+    from datetime import date, datetime
 
 __all__ = [
     "accept_task",
     "add_member",
     "archive_room",
+    "count_requested_editions",
     "create_edition",
     "create_room",
     "dismiss_task",
@@ -53,6 +54,7 @@ __all__ = [
     "link_task",
     "list_all_rooms",
     "list_editions",
+    "list_editions_in_period",
     "list_members",
     "list_revisions",
     "list_room_tasks",
@@ -979,6 +981,42 @@ def find_edition_for_period(
         )
         row = cur.fetchone()
         return _edition(row) if row else None
+
+
+def list_editions_in_period(
+    tenant_id: str, room_id: str, *, grain: str, start: date, end: date
+) -> list[Edition]:
+    """The newest published, non-preview ``grain`` edition of each period that
+    lies wholly inside ``start``..``end``, earliest period first."""
+    room = canonical_uuid(room_id)
+    if room is None:
+        return []
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT DISTINCT ON (period_start, period_end) * FROM room_editions "
+            "WHERE tenant_id = %s AND room_id = %s AND grain = %s AND status = 'published' "
+            "AND NOT preview AND period_start >= %s AND period_end <= %s "
+            "ORDER BY period_start, period_end, seq DESC",
+            (tenant_id, room, grain, start, end),
+        )
+        return [_edition(r) for r in cur.fetchall()]
+
+
+def count_requested_editions(tenant_id: str, room_id: str, *, since: datetime) -> int:
+    """Editions a person asked for (``requested_by`` set, previews included)
+    created at or after ``since``: the on-demand runs a daily cap counts."""
+    room = canonical_uuid(room_id)
+    if room is None:
+        return 0
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM room_editions WHERE tenant_id = %s AND room_id = %s "
+            "AND requested_by IS NOT NULL AND created_at >= %s",
+            (tenant_id, room, since),
+        )
+        return int(cur.fetchone()[0])
 
 
 # ─── tasks ───────────────────────────────────────────────────────────────

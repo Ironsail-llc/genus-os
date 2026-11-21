@@ -310,6 +310,12 @@ def _mount_subsystem_routers(
 
     register_admin_tools(app)
 
+    # Workspace routes that start runs (a period's edition). The run lives in
+    # THIS process; the bridge serves the rest of /api/rooms.
+    from robothor.engine.rooms_api import register as register_rooms_api
+
+    register_rooms_api(app)
+
     # The receiving half of an armed plugin channel. `Channel.inbound_router`
     # has been a declared-and-empty slot since the channel protocol landed, and
     # a channel that receives over HTTP cannot mount itself. Only channels the

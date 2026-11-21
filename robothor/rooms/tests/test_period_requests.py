@@ -15,8 +15,12 @@ pass a fake and count its calls.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
+import uuid
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -36,7 +40,104 @@ from robothor.rooms.periods import (
     request_period,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 pytestmark = pytest.mark.integration
+
+
+# ─── a database of this branch's own schema ─────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def _scratch_dsn() -> Iterator[str]:
+    """A throwaway database migrated through this branch's whole chain.
+
+    The shared ``*_test`` database is migrated by whichever branch ran last, so
+    its room tables need not be this branch's. The scratch database is.
+    """
+    import getpass
+    import uuid
+
+    psycopg2 = pytest.importorskip("psycopg2")
+    from robothor.db.migrate import _discover, _strip_outer_transaction
+
+    admin = os.environ.get("ROBOTHOR_TEST_ADMIN_DSN", f"dbname=postgres user={getpass.getuser()}")
+    name = f"scratch_periods_{uuid.uuid4().hex[:8]}"
+    try:
+        root = psycopg2.connect(admin)
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        pytest.skip(f"no admin connection at ROBOTHOR_TEST_ADMIN_DSN: {exc}")
+    root.autocommit = True
+    with root.cursor() as cur:
+        cur.execute(f"CREATE DATABASE {name}")
+    parts = dict(psycopg2.extensions.parse_dsn(admin))
+    parts["dbname"] = name
+    dsn = " ".join(f"{k}={v}" for k, v in parts.items())
+    try:
+        db = psycopg2.connect(dsn)
+        db.autocommit = True
+        with db.cursor() as cur:
+            for ext in ("vector", "pgcrypto", '"uuid-ossp"'):
+                with contextlib.suppress(Exception):
+                    cur.execute(f"CREATE EXTENSION IF NOT EXISTS {ext}")
+            for migration in _discover():
+                cur.execute(_strip_outer_transaction(migration.path.read_text()))
+        db.close()
+        yield dsn
+    finally:
+        with root.cursor() as cur:
+            cur.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+        root.close()
+
+
+@pytest.fixture
+def rooms_db(_scratch_dsn, monkeypatch) -> Iterator[SimpleNamespace]:
+    """The rooms conftest's fixture, on the scratch database."""
+    import psycopg2
+
+    @contextlib.contextmanager
+    def connection(autocommit: bool = False, read_only: bool = False) -> Iterator[Any]:
+        conn = psycopg2.connect(_scratch_dsn)
+        conn.autocommit = autocommit or read_only
+        try:
+            yield conn
+            if not conn.autocommit:
+                conn.commit()
+        except BaseException:
+            if not conn.closed:
+                conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    monkeypatch.setattr(dal, "get_connection", connection)
+    conn = psycopg2.connect(_scratch_dsn)
+    conn.autocommit = True
+    cur = conn.cursor()
+    tenant, other = "test-tenant", "test-tenant-other"
+    for tid in (tenant, other):
+        cur.execute(
+            "INSERT INTO crm_tenants (id, display_name) VALUES (%s, 'Test tenant') "
+            "ON CONFLICT DO NOTHING",
+            (tid,),
+        )
+    try:
+        yield SimpleNamespace(
+            tenant=tenant,
+            other=other,
+            alice=str(uuid.uuid4()),
+            bob=str(uuid.uuid4()),
+            carol=str(uuid.uuid4()),
+            cur=cur,
+        )
+    finally:
+        # The database is this module's alone: clear the rooms between tests.
+        cur.execute(
+            "TRUNCATE room_tasks, room_editions, room_revisions, room_members, rooms CASCADE"
+        )
+        conn.close()
+
 
 BLOCKS = [{"component": "render_markdown", "props": {"content": "All good."}}]
 TODAY = datetime.now(UTC).date()
