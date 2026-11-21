@@ -38,7 +38,7 @@ from robothor.rooms.keys import canonical_uuid
 from robothor.rooms.models import ALLOWED_COMPONENTS, EDITION_KINDS, GRAINS
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
     from datetime import datetime
 
     from robothor.rooms.models import Edition, Room
@@ -359,7 +359,7 @@ def build_provenance(
     run_id: str,
     ran_as: str,
     started_at: datetime | None,
-    steps: list[Mapping[str, Any]],
+    steps: Sequence[Mapping[str, Any]],
     room_rev: int,
 ) -> dict[str, Any]:
     """``{run_id, ran_as, started_at, room_rev, tool_calls: [{tool, at, ok}]}``
