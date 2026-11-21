@@ -395,3 +395,39 @@ def test_a_workspace_email_card_names_its_sender_recipients_and_body(
     assert item["detail"].startswith("Hello,\nShall we renew?")
     for shown in ("erin.client@example.org", "bob@example.com", "reply_to"):
         assert shown in item["detail"]
+
+
+def test_a_workspace_email_row_carries_the_exact_email(_controls_auth_key, stores, member_rule):
+    """The task workspace's card shows the email field by field, exactly as it
+    would be sent: from, reply-to, to, cc, subject and the whole body."""
+    payload = {
+        "version": 1,
+        "sender": "assistant@example.com",
+        "reply_to": "bob@example.com",
+        "recipient": ["carol.client@example.org", "dave.client@example.org"],
+        "cc": ["erin.client@example.org"],
+        "subject": "Renewal follow-up",
+        "body": "Hello,\nShall we renew?\n\n" + "More. " * 400,
+        "on_behalf_of": {"user_id": BOB, "display_name": "Bob"},
+        "room_id": ROOM_ID,
+        "task_id": TASK_ID,
+    }
+    member_rule["state"]["rows"] = [{**_member_row(), "kind": "room.email", "payload": payload}]
+
+    [item] = _client("member", BOB).get("/api/approvals").json()["pending"]
+
+    assert item["email"] == {
+        "from": "assistant@example.com",
+        "replyTo": "bob@example.com",
+        "to": ["carol.client@example.org", "dave.client@example.org"],
+        "cc": ["erin.client@example.org"],
+        "subject": "Renewal follow-up",
+        "body": payload["body"],
+        "onBehalfOf": "Bob",
+    }
+
+
+def test_no_other_kind_carries_an_email_field(_controls_auth_key, stores, member_rule):
+    member_rule["state"]["rows"] = [_member_row()]
+    [item] = _client("member", BOB).get("/api/approvals").json()["pending"]
+    assert "email" not in item
