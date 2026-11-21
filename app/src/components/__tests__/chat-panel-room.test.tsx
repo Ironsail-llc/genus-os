@@ -402,6 +402,43 @@ describe("ChatPanel in a room", () => {
     expect(screen.getByTestId("message-note")).toHaveTextContent(/not sent/i);
   });
 
+  describe("a refused message stays marked as not sent when the same text is stored later (no client id echoed)", () => {
+    async function refuseWhileAway() {
+      history = [];
+      let answer!: (r: Response) => void;
+      sendReplies.push(() => new Promise<Response>((r) => (answer = r)));
+      const first = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+      await screen.findByTestId("room-chat-empty");
+      await type("thanks");
+      await waitFor(() => expect(sends).toHaveLength(1));
+      first.unmount();
+      await act(async () => answer(reply({ error: "refused", request_admitted: false }, 502)));
+      const view = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+      await waitFor(() => expect(screen.getByTestId("message-note")).toHaveTextContent(/not sent/i));
+      return view;
+    }
+
+    it("the reader retypes it: the retry shows once, the refusal stays marked", async () => {
+      const { rerender } = await refuseWhileAway();
+      await type("thanks");
+      await waitFor(() => expect(sends).toHaveLength(2));
+      await screen.findByText("Noted.");
+      history = [{ id: 60, role: "user", content: "thanks", authorName: "Alice" }];
+      await act(async () => rerender(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 1 }} />));
+      await waitFor(() => expect(screen.getAllByTestId("message-author").map((a) => a.textContent)).toContain("Alice"));
+      expect(screen.getAllByText("thanks")).toHaveLength(2);
+      expect(screen.getByTestId("message-note")).toHaveTextContent(/not sent/i);
+    });
+
+    it("another member's later same-text message does not clear it", async () => {
+      const { rerender } = await refuseWhileAway();
+      history = [{ id: 61, role: "user", content: "thanks", authorName: "Bob" }];
+      await act(async () => rerender(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 1 }} />));
+      await waitFor(() => expect(screen.getAllByText("thanks")).toHaveLength(2));
+      expect(screen.getByTestId("message-note")).toHaveTextContent(/not sent/i);
+    });
+  });
+
   it("says a message may not have arrived, not that it was not sent, when its outcome is unknown", async () => {
     history = [];
     let answer!: (r: Response) => void;
