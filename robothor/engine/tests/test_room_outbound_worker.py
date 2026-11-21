@@ -1,13 +1,34 @@
 """The engine side of approved workspace emails: started through the task
-registry, woken by ``operation_action.approved``, with a sweep as the backup."""
+registry, woken by ``operation_action.approved``, with a sweep as the backup.
+
+One engine runs per tenant, all on one Redis (``robothor/engine/hooks.py``).
+So this engine reads with its own consumer group, acts only on its own
+tenant's approvals, and sweeps only its own tenant.
+"""
 
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+
+MINE = "tenant-mine"
+THEIRS = "tenant-theirs"
+
+
+def _config(tenant: str = MINE, group: str = "engine-mine") -> Any:
+    return SimpleNamespace(tenant_id=tenant, event_group=group)
+
+
+def _event(tenant: str = MINE, kind: str = "room.email", envelope: str | None = None) -> dict:
+    return {
+        "type": "operation_action.approved",
+        "tenant_id": tenant if envelope is None else envelope,
+        "payload": {"action_id": "a-1", "kind": kind, "tenant_id": tenant},
+    }
 
 
 def test_starting_spawns_the_listener_and_the_sweep_through_the_registry(monkeypatch):
@@ -17,7 +38,7 @@ def test_starting_spawns_the_listener_and_the_sweep_through_the_registry(monkeyp
     monkeypatch.setattr(room_outbound, "get_task_registry", lambda: registry)
 
     async def go() -> None:
-        room_outbound.start_room_outbound()
+        room_outbound.start_room_outbound(_config())
 
     asyncio.run(go())
 
@@ -27,25 +48,45 @@ def test_starting_spawns_the_listener_and_the_sweep_through_the_registry(monkeyp
         call.args[0].close()
 
 
+def test_each_engine_reads_with_its_own_consumer_group():
+    from robothor.engine import room_outbound
+
+    assert room_outbound.consumer_group(_config(group="engine-a")) == "room-outbound:engine-a"
+    assert room_outbound.consumer_group(_config(group="engine-b")) == "room-outbound:engine-b"
+    assert room_outbound.consumer_group(_config(group="")) == "room-outbound:engine"
+
+
 @pytest.mark.parametrize(
-    ("payload", "delivered"),
+    ("event", "delivered"),
     [
-        ({"action_id": "a-1", "kind": "room.email", "tenant_id": "test-tenant"}, True),
-        ({"action_id": "a-1", "kind": "sales.email", "tenant_id": "test-tenant"}, False),
-        ({"action_id": "a-1", "kind": "room.email", "tenant_id": ""}, False),
-        ({"kind": "room.email", "tenant_id": "test-tenant"}, False),
+        (_event(), True),
+        (_event(kind="sales.email"), False),
+        (_event(tenant=""), False),
+        (_event(tenant=THEIRS), False),
+        (_event(tenant=MINE, envelope=THEIRS), False),
+        ({"payload": {"kind": "room.email", "tenant_id": MINE}}, False),
     ],
+    ids=[
+        "mine",
+        "not-a-workspace-email",
+        "untagged",
+        "another-tenant",
+        "envelope-disagrees",
+        "no-action",
+    ],  # fmt: skip
 )
-def test_an_approval_event_delivers_only_a_workspace_email(monkeypatch, payload, delivered):
+def test_an_approval_event_delivers_only_this_tenants_workspace_email(
+    monkeypatch, event, delivered
+):
     from robothor.engine import room_outbound
     from robothor.rooms import outbound
 
     seen: list[tuple[str, str]] = []
     monkeypatch.setattr(outbound, "deliver", lambda t, a: seen.append((t, a)) or "sent")
 
-    room_outbound.on_approved({"type": "operation_action.approved", "payload": payload})
+    room_outbound.on_approved(event, _config())
 
-    assert (seen == [("test-tenant", "a-1")]) is delivered
+    assert (seen == [(MINE, "a-1")]) is delivered
 
 
 def test_a_failing_delivery_never_kills_the_listener(monkeypatch):
@@ -57,20 +98,18 @@ def test_a_failing_delivery_never_kills_the_listener(monkeypatch):
 
     monkeypatch.setattr(outbound, "deliver", boom)
 
-    room_outbound.on_approved(
-        {"payload": {"action_id": "a-1", "kind": "room.email", "tenant_id": "test-tenant"}}
-    )
+    room_outbound.on_approved(_event(), _config())
 
 
-def test_the_sweep_loop_keeps_going_after_a_failure(monkeypatch):
+def test_the_sweep_works_only_on_this_engines_tenant_and_keeps_going(monkeypatch):
     from robothor.engine import room_outbound
     from robothor.rooms import outbound
 
-    calls = {"n": 0}
+    calls: list[str] = []
 
-    def sweep() -> int:
-        calls["n"] += 1
-        if calls["n"] == 1:
+    def sweep(tenant_id: str) -> int:
+        calls.append(tenant_id)
+        if len(calls) == 1:
             raise RuntimeError("db down")
         raise asyncio.CancelledError
 
@@ -78,13 +117,13 @@ def test_the_sweep_loop_keeps_going_after_a_failure(monkeypatch):
     monkeypatch.setattr(room_outbound, "SWEEP_SECONDS", 0)
 
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(room_outbound.sweep_loop())
-    assert calls["n"] == 2
+        asyncio.run(room_outbound.sweep_loop(_config()))
+    assert calls == [MINE, MINE]
 
 
-def test_the_daemon_starts_it():
+def test_the_daemon_starts_it_with_its_config():
     import inspect
 
     from robothor.engine import daemon
 
-    assert "start_room_outbound()" in inspect.getsource(daemon)
+    assert "start_room_outbound(config)" in inspect.getsource(daemon)
