@@ -79,6 +79,7 @@ __all__ = [
     "AUTO_PAUSE_AFTER_FAILURES",
     "HISTORY_LIMIT",
     "TRIGGERS",
+    "WITHHELD",
     "ActiveRun",
     "Period",
     "RunRefused",
@@ -348,6 +349,26 @@ def _account(room: Room, ok: bool, reason: str, edition_id: str | None) -> None:
         )
 
 
+#: What replaces a piece of room text the injection screen would flag.
+WITHHELD = "[a message was withheld]"
+#: What replaces the whole data part if pieces still combine into a match.
+ALL_WITHHELD = "[the workspace's earlier text was withheld]"
+
+
+def _screen_safe(data: str) -> str:
+    """``data`` with every line the runner's injection screen would flag
+    replaced by :data:`WITHHELD`, checked after cleaning, so nothing a member
+    or an earlier run wrote can fail the run (an unattended run's whole message
+    is screened, in enforce mode a match refuses it). Should lines still
+    combine into a match, the whole data part is withheld; never the run."""
+    from robothor.engine.cron_safety import scan_assembled_cron_prompt as scan
+
+    if not scan(data):
+        return data
+    safe = "\n".join(WITHHELD if scan(line) else line for line in data.split("\n"))
+    return ALL_WITHHELD if scan(safe) else safe
+
+
 def _wrap(source: str, text: str, limit: int) -> str:
     from robothor.rooms.editions import clean_text
 
@@ -528,6 +549,7 @@ async def _turn(
         reason = f"the instructions were refused by the injection scanner ({finding})"
         await asyncio.to_thread(_halt, room, reason, admins=False)
         raise _Halt(reason, returns_edition=True)
+    data = _screen_safe(data)
     prompt = f"{asked}\n\n{data}" if data else asked
     carrier = RoomRun.for_session(
         room.tenant_id,

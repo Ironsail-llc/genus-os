@@ -413,7 +413,8 @@ resets it. An on-demand run (run now, period, preview) never counts: its
 requester sees their own failed edition, and one person's requests cannot pause
 everyone's schedule. A paused room runs on demand only for an assigned member or
 an admin, on every path (`runs.check_not_paused_for`, also called in
-`periods._claim` before any row is inserted; `run_room` re-checks the
+`periods._claim` just before a row would be inserted, after a published or
+building edition for the period is returned as is; `run_room` re-checks the
 requester's current level): 409 `paused` on both routes, an error in both tools. A run-as user who is inactive or cannot post pauses the room
 and tells the tenant's owners and admins. A non-preview run saves its exchange
 in the room (user turn `room_trigger`, reply `author_agent_id`); a preview saves
@@ -474,10 +475,17 @@ re-scanned by the injection scanner at fire time. Everything else members can
 write (the last turns of the conversation, as a `Name: text` transcript; the
 last published edition; a period's day summaries) is given as data inside
 `<untrusted_content>` with tag-shaped text removed (`editions.clean_text`),
-bounded in size, never as conversation turns, and not scanned (scanning it would
-let any member stop the room's runs with a phrase). The run also has no identity
-and a system trigger (above), so whatever a member writes cannot reach beyond
-what the run-as user's role reaches in its own tenant.
+bounded in size, never as conversation turns. Because the runner screens the
+WHOLE message of an unattended run (`injection_screen.screen_run_prompt`, which
+refuses the run in enforce mode), the data part is screened line by line after
+cleaning, before it joins the message (`runs._screen_safe`): a line the screen
+would flag is replaced by the fixed marker `[a message was withheld]`, and if
+lines still combine into a match the whole data part is withheld. A phrase in
+the data therefore never fails a run or pauses the schedule; it only drops that
+line. The instructions are scanned as they are, and a match still refuses the
+run and pauses the room. The run also has no identity and a system trigger
+(above), so whatever a member writes cannot reach beyond what the run-as user's
+role reaches in its own tenant.
 
 Interactive chat binds `chat_rooms.room_scope(target)` in `chat_rooms.start_turn`,
 so every room turn's task (runner and save) carries the room; the interruption
