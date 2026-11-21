@@ -7,6 +7,7 @@
 import { FetchRefused } from "@/lib/query/fetch-refused";
 import type { RoomTask } from "./hub";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
+import { ROOM_LABEL } from "./labels";
 import type { PeriodRange } from "./periods";
 import type { Edition, Room, RoomKind, RoomMember, RoomSummary } from "./types";
 
@@ -411,11 +412,29 @@ export function dismissRoomTask(roomId: string, taskId: string): Promise<TaskDec
   return decideRoomTask(roomId, taskId, "dismiss");
 }
 
-export type RoomOpened = { ok: true; room: Room } | { ok: false; status: number; message: string };
+export type RoomOpened =
+  | { ok: true; room: Room }
+  | { ok: false; status: number; message: string; cannotCreate?: boolean };
+
+export const CANNOT_CREATE_MESSAGE = `Your role can't create ${ROOM_LABEL.plural.toLowerCase()}. Ask a company admin if you need one.`;
+
+/**
+ * The bridge middleware's scope refusal, `{error: "insufficient scope"}` at
+ * the top level: the caller's role (a viewer) cannot write here at all. It
+ * answers before the workspace routes, so it has none of their `detail`.
+ */
+function isScopeRefusal(status: number, body: unknown): boolean {
+  if (status !== 403 || !body || typeof body !== "object") return false;
+  const { error, detail } = body as { error?: unknown; detail?: unknown };
+  return detail === undefined && error === "insufficient scope";
+}
 
 function opened(result: RoomWrite<Room>): RoomOpened {
   if (result.ok && result.value && typeof result.value.id === "string") return { ok: true, room: result.value };
   if (result.ok) return { ok: false, status: 200, message: "The server did not say which workspace it opened." };
+  if (isScopeRefusal(result.status, result.body)) {
+    return { ok: false, status: result.status, message: CANNOT_CREATE_MESSAGE, cannotCreate: true };
+  }
   return { ok: false, status: result.status, message: result.message };
 }
 

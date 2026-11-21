@@ -35,7 +35,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CREATABLE_KINDS",
-    "DEFAULT_AGENT",
     "ROOM_MIN_INTERVAL_SECONDS",
     "InvalidField",
     "InvalidSchedule",
@@ -46,6 +45,7 @@ __all__ = [
     "apply_definition_change",
     "archive_room",
     "create_room_with_schedule",
+    "default_agent",
     "duplicate_room",
     "list_rooms",
     "read_room",
@@ -67,8 +67,6 @@ ROOM_MIN_INTERVAL_SECONDS = 900
 #: Task rooms come from a CRM task (``dal.get_or_create_task_room``), never here.
 CREATABLE_KINDS = frozenset({"report", "agent"})
 
-#: The agent a room talks to when none is named.
-DEFAULT_AGENT = "main"
 
 #: What ``apply_definition_change`` accepts. ``agent_id`` is not one: it is
 #: part of the session key, so a room keeps its agent; duplicate to change it.
@@ -135,6 +133,15 @@ def agent_exists(agent_id: str) -> bool:
         return load_agent_config(agent_id, EngineConfig.from_env().manifest_dir) is not None
     except Exception:
         return False
+
+
+def default_agent() -> str:
+    """The agent a room talks to when none is named: the engine's main agent,
+    the one a chat with no session key reaches (``manifest_store.main_agent_id``),
+    which the bridge's open-a-task route uses too."""
+    from robothor.engine.manifest_store import main_agent_id
+
+    return main_agent_id()
 
 
 def _scan(*texts: str | None) -> None:
@@ -346,7 +353,7 @@ def create_room_with_schedule(
     _check_creator(actor)
     if kind not in CREATABLE_KINDS:
         raise ValueError(f"kind must be one of {sorted(CREATABLE_KINDS)}")
-    agent = DEFAULT_AGENT if agent_id is None else agent_id
+    agent = default_agent() if agent_id is None else agent_id
     known = agent_known or agent_exists
     if not isinstance(agent, str) or not agent or ":" in agent or not known(agent):
         raise InvalidField(f"no agent {agent!r} is available for a workspace", "agent_id")

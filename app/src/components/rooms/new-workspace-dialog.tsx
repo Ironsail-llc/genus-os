@@ -40,6 +40,8 @@ export function NewWorkspaceDialog({
   const [title, setTitle] = useState(initialTitle);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The caller's role cannot create workspaces at all: nothing to retry.
+  const [cannotCreate, setCannotCreate] = useState(false);
   // An agent passed in that the health list does not name is still offered.
   const options =
     agentId && !choices.some((a) => a.agentId === agentId)
@@ -58,6 +60,7 @@ export function NewWorkspaceDialog({
         enter(result);
       } else {
         setError(result.message);
+        setCannotCreate(result.cannotCreate === true);
       }
     } finally {
       setBusy(false);
@@ -114,7 +117,7 @@ export function NewWorkspaceDialog({
             <Button
               type="submit"
               size="sm"
-              disabled={busy || !title.trim() || !agentId}
+              disabled={busy || cannotCreate || !title.trim() || !agentId}
               data-testid="new-workspace-create"
             >
               {busy && <Loader2 className="animate-spin" aria-hidden />}

@@ -96,7 +96,7 @@ async def request_room_period(room_id: str, body: PeriodRequest, request: Reques
     except RoomForbidden as exc:
         return _refusal(403, "forbidden", str(exc))
     except periods.OnDemandCapReached as exc:
-        return _refusal(429, "cap_reached", str(exc), limit=exc.limit, used=exc.used)
+        return _refusal(429, "on_demand_cap", str(exc), limit=exc.limit, used=exc.used)
     except periods.RoomRunUnavailable as exc:
         return _refusal(503, "runs_unavailable", str(exc))
     except ValueError as exc:

@@ -516,10 +516,8 @@ def api_open_task(task_id: str, request: Request) -> Any:
     exists, the task's assignee may join it as shared; anyone else needs to be
     shared into it, so a member who was removed cannot rejoin through here."""
     actor = _human(request, _WORKING_ROLES)
-    from robothor.engine.manifest_store import main_agent_id
-
     room = dal.get_or_create_task_room(
-        actor.tenant_id, task_id, agent_id=main_agent_id(), created_by=actor.user_id
+        actor.tenant_id, task_id, agent_id=definition.default_agent(), created_by=actor.user_id
     )
     if room is None:
         raise RoomNotFound(task_id)

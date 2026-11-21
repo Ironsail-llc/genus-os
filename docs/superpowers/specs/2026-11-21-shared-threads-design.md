@@ -488,15 +488,19 @@ The seams between lanes, each crossed by a test:
 - **Periods.** The picker refuses any period whose last day is today or later in the
   room's zone (the engine's rule), says so while it is picked, offers no date after
   yesterday, and shows the engine's own words for any refusal it still makes. The
-  engine's cap refusal is 429 `cap_reached` with `limit` and `used`; the dashboard keys
-  on the status.
+  engine's cap refusal is 429 `on_demand_cap` with `limit` and `used`, as the bridge
+  passes it through.
 - **Schedules.** The only grammar is `robothor.engine.cron_parse`: `every N
   minutes|hours|days`, a five-field cron expression, or an ISO time (refused for a
   room). The settings drawer's example is checked against it
   (`tests/test_rooms_ui_schedule_examples.py`).
 - **Middleware first.** A viewer's `POST /api/rooms` is refused by the bridge
   middleware's scope check before the router, in the middleware's own
-  `{error: "insufficient scope"}` body.
+  `{error: "insufficient scope"}` body. The dashboard's `createRoom` reads that as
+  `cannotCreate` and says the role cannot create workspaces, with no create offered.
+- **Default agent.** `definition.default_agent()` is `manifest_store.main_agent_id()`,
+  the agent a chat with no key reaches; creating with no agent and opening a task as a
+  workspace both use it (`DEFAULT_AGENT` is gone).
 
 ## Build lanes
 

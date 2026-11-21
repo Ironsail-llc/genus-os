@@ -75,7 +75,7 @@
   },
   "period_cap": {
     "body": {
-      "error": "cap_reached",
+      "error": "on_demand_cap",
       "limit": 0,
       "message": "on-demand cap reached: this workspace runs 0 on-demand edition(s) a day and 1 ran today",
       "used": 1
