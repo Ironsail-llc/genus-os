@@ -139,6 +139,7 @@ class EngineClient {
     joinRunning = false,
     attachments?: AttachmentPayload[],
     roomId?: string,
+    clientId?: string,
   ): Promise<Response> {
     // `join_running`: sent while this session's turn works, so offer it to that
     // turn instead of starting another (robothor/engine/chat_live.py).
@@ -150,6 +151,8 @@ class EngineClient {
         message,
         ...keyed(sessionKey),
         ...roomed(roomId),
+        // A room message's outbox entry, for the stored row to name.
+        ...(roomId && clientId ? { client_id: clientId } : {}),
         ...(requestId ? { request_id: requestId } : {}),
         ...(joinRunning ? { join_running: true } : {}),
         // Files attached to the turn ({name, mime, size, data}), checked by the

@@ -28,6 +28,8 @@ export interface HistoryMessage {
    * a reload.
    */
   editionId?: string;
+  /** In a room: the outbox entry (client id) this stored message was sent from. */
+  clientId?: string;
 }
 
 type Block = { type: string; text?: string };
@@ -40,6 +42,8 @@ type Row = {
   authorName?: unknown;
   editionId?: unknown;
   author_user_id?: unknown;
+  clientId?: unknown;
+  client_id?: unknown;
   author_name?: unknown;
   edition_id?: unknown;
 };
@@ -53,14 +57,16 @@ function field(row: Row, camel: keyof Row, snake: keyof Row): string | undefined
 }
 
 /** The room-only fields, present only when the row carries them. */
-function roomFields(row: Row): Pick<HistoryMessage, "authorUserId" | "authorName" | "editionId"> {
+function roomFields(row: Row): Pick<HistoryMessage, "authorUserId" | "authorName" | "editionId" | "clientId"> {
   const authorUserId = field(row, "authorUserId", "author_user_id");
   const authorName = field(row, "authorName", "author_name");
   const editionId = field(row, "editionId", "edition_id");
+  const clientId = field(row, "clientId", "client_id");
   return {
     ...(authorUserId ? { authorUserId } : {}),
     ...(authorName ? { authorName } : {}),
     ...(editionId ? { editionId } : {}),
+    ...(clientId ? { clientId } : {}),
   };
 }
 

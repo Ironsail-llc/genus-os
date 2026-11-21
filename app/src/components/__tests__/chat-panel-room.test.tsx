@@ -105,7 +105,8 @@ describe("ChatPanel in a room", () => {
     await screen.findByText("How did we do?");
     await type("And margins?");
     await screen.findByText("Noted.");
-    expect(sends[0]).toEqual({ message: "And margins?", request_id: expect.any(String), room: REPORT_ID });
+    // The room by id, and the outbox entry it was sent from (its client id).
+    expect(sends[0]).toEqual({ message: "And margins?", request_id: expect.any(String), room: REPORT_ID, client_id: expect.any(String) });
   });
 
   it("shows each message's author, and the edition a message announced, from history", async () => {

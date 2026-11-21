@@ -1,6 +1,8 @@
 import { getEngineClient } from "@/lib/engine/server-client";
 import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
 import { resolveChatTarget } from "@/lib/chat/chat-target";
+// The room id check is a UUID check; a client id is a UUID too.
+import { isRoomId } from "@/lib/rooms/room-id";
 import { MAX_SEND_BODY_BYTES, checkAttachments, type AttachmentPayload } from "@/lib/chat/attachments";
 import { EngineRefusal, REFUSAL_STATUSES, RoomBusy } from "@/lib/engine/engine-refusal";
 import { ROOM_ANSWER_NOT_CONFIRMED, ROOM_NOT_CONFIRMED, confirmRoom, confirmRoomStream } from "@/lib/chat/room-echo";
@@ -22,6 +24,8 @@ interface SendBody {
   agent?: string;
   /** A room, by id: the engine resolves its session key. */
   room?: string;
+  /** A room message's outbox entry (a UUID), for the stored row to name. */
+  client_id?: string;
   join_running?: boolean;
   attachments?: AttachmentPayload[];
 }
@@ -117,6 +121,10 @@ export async function POST(req: Request) {
   }
   const sessionKey = chosen.key;
   const roomId = chosen.roomId;
+  const clientId = body.client_id;
+  if (clientId !== undefined && !(roomId && isRoomId(clientId))) {
+    return json(400, { error: "client_id must be a UUID, and only with a room", request_admitted: false });
+  }
 
   const client = getEngineClient();
 
@@ -141,7 +149,10 @@ export async function POST(req: Request) {
     // Only a literal `true`: this changes what the request does (offer the text to
     // the running turn; never start one), so nothing merely truthy may turn it on.
     const engineRes = await (roomId
-      ? client.chatSend(message, "", body.request_id, body.join_running === true, hasFiles ? attachments : undefined, roomId)
+      ? client.chatSend(
+          message, "", body.request_id, body.join_running === true, hasFiles ? attachments : undefined, roomId,
+          ...(clientId ? [clientId] : []),
+        )
       : body.join_running === true
       ? client.chatSend(message, sessionKey, body.request_id, true)
       : hasFiles

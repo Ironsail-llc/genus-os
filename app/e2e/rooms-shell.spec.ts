@@ -163,7 +163,7 @@ test.describe("Workspaces — the dashboard shell", () => {
     await view.locator('[data-testid="send-button"]').click();
     await expect(list.getByText("Margins held at 31%.")).toBeVisible();
     expect(sends).toHaveLength(1);
-    expect(sends[0]).toEqual({ message: "And margins?", request_id: expect.any(String), room: ROOM });
+    expect(sends[0]).toEqual({ message: "And margins?", request_id: expect.any(String), room: ROOM, client_id: expect.any(String) });
 
     // And home again: the main conversation, with no room on the request.
     await page.locator('[data-testid="room-rail-main"]').click();
