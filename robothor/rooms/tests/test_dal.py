@@ -188,12 +188,24 @@ def test_settings_merge_and_a_none_removes_a_key(rooms_db) -> None:
     updated = dal.update_definition(
         rooms_db.tenant,
         room.id,
-        {"settings": {"tz": "Europe/London", "default_grain": None, "max_cost_usd": 2}},
+        {"settings": {"tz": "Europe/London", "default_grain": None, "notify_default": False}},
         rooms_db.alice,
         expected_rev=1,
     )
 
-    assert updated.settings == {"tz": "Europe/London", "max_cost_usd": 2}
+    assert updated.settings == {"tz": "Europe/London", "notify_default": False}
+
+
+@pytest.mark.parametrize("key", ["max_cost_usd", "max_on_demand_per_day"])
+def test_no_cap_setting_is_kept(rooms_db, key) -> None:
+    """Nothing in a workspace is capped: a cap setting is an unknown setting."""
+    with pytest.raises(ValueError, match="unknown room settings"):
+        _room(rooms_db, settings={"tz": "UTC", key: 1})
+    room = _room(rooms_db)
+    with pytest.raises(ValueError, match="unknown room settings"):
+        dal.update_definition(
+            rooms_db.tenant, room.id, {"settings": {key: 1}}, rooms_db.alice, expected_rev=1
+        )
 
 
 def test_a_schedule_change_lands_in_settings_and_the_definition(rooms_db) -> None:
