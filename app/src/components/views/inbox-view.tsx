@@ -8,6 +8,7 @@ import { isOperatorRole } from "@/components/layout/nav-config";
 import type { AnswerBody, AnswerOutcome, PendingItem, PendingKind } from "@/lib/inbox/pending";
 
 import { InboxCard } from "./inbox/inbox-card";
+import { InboxNotifications } from "./inbox/inbox-notifications";
 import { ListSkeleton } from "@/components/business/list-skeleton";
 
 /**
@@ -68,6 +69,10 @@ export function InboxView({
   // read-only queue for the half second before their own role arrives.
   const canWrite = roleLoading || isOperatorRole(role);
   const readOnly = !roleLoading && !isOperatorRole(role) && !refusedAsNonOperator;
+  // Rows the route listed as the caller's own (a member's proposal for their
+  // own task) are theirs to decide, operator or not; the bridge still checks.
+  const ownRows = items.some((item) => item.mine === true);
+  const allOwn = items.length > 0 && items.every((item) => item.mine === true);
 
   return (
     <div
@@ -78,7 +83,7 @@ export function InboxView({
       <div className="flex flex-col gap-3 p-4">
         <PageHeader
           title="Inbox"
-          description="Approvals, agent questions and proposed actions, soonest deadline first."
+          description="Approvals, agent questions and proposed actions, soonest deadline first, then your notifications."
         >
           <Button variant="outline" size="sm" data-testid="inbox-refresh" onClick={onRefresh}>
             {/* The loading card is suppressed once there are cards, so the
@@ -88,7 +93,13 @@ export function InboxView({
           </Button>
         </PageHeader>
 
-        {readOnly ? (
+        {readOnly && ownRows ? (
+          <p className="text-xs text-muted-foreground" data-testid="inbox-own">
+            These are waiting on you: actions an agent proposed for tasks assigned to you.
+          </p>
+        ) : null}
+
+        {readOnly && !allOwn ? (
           <p className="text-xs text-muted-foreground" data-testid="inbox-readonly">
             You can see what is waiting, but answering it is the operator&apos;s to do. Ask an
             owner or admin on this instance.
@@ -148,13 +159,15 @@ export function InboxView({
               <InboxCard
                 key={`${item.kind}-${item.id}`}
                 item={item}
-                canWrite={canWrite}
+                canWrite={canWrite || item.mine === true}
                 onAnswer={onAnswer}
                 onOpenRuns={onOpenRuns}
               />
             ))}
           </div>
         ) : null}
+
+        <InboxNotifications visible={visible} />
       </div>
     </div>
   );

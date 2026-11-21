@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import cronstrue from "cronstrue";
@@ -9,6 +10,8 @@ type HealthTier = "healthy" | "degraded" | "failed" | "sleeping" | "unknown";
 
 interface AgentInfo {
   name: string;
+  /** The manifest id, when the health row names one. */
+  agentId?: string;
   schedule: string;
   scheduleHuman?: string;
   lastRun?: string;
@@ -25,6 +28,8 @@ interface AgentInfo {
 interface AgentStatusProps {
   agents: AgentInfo[];
   summary?: { healthy: number; degraded: number; failed: number; sleeping: number; total: number };
+  /** Extra controls at the foot of each card (the Agents view's "New workspace with this agent"). */
+  renderActions?: (agent: AgentInfo) => ReactNode;
 }
 
 const tierConfig: Record<HealthTier, { color: string; bg: string; dotBg: string; border: string; label: string }> = {
@@ -100,7 +105,7 @@ function ScoreBars({ scores }: { scores: AgentRPG["scores"] }) {
   );
 }
 
-export function AgentStatus({ agents, summary }: AgentStatusProps) {
+export function AgentStatus({ agents, summary, renderActions }: AgentStatusProps) {
   return (
     <div data-testid="agent-status">
       {summary && (
@@ -178,6 +183,7 @@ export function AgentStatus({ agents, summary }: AgentStatusProps) {
                     {agent.pendingTasks} pending
                   </Badge>
                 )}
+                {renderActions?.(agent)}
               </CardContent>
             </Card>
           );
