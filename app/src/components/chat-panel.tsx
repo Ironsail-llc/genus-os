@@ -417,9 +417,10 @@ export function ChatPanel({
   useEffect(() => {
     if (!outbox || !roomKit) return;
     if (outboxHistoryReady) {
-      // Drawn from this state, then acknowledged: a failed send is told once, never lost.
       setMessages((prev) => withOutbox(prev, outboxState));
-      outbox.acknowledge(outboxState.unsent.map((item) => item.id));
+      // A failed send is acknowledged only once it is on screen (drawn, or as
+      // its stored copy): told once, never forgotten unseen.
+      outbox.acknowledge(roomKit.unsentShown(outboxState, messages));
     }
     setMessages((prev) => {
       const notes = new Map(outboxState.items.map((item) => [item.id, roomKit.noteFor(item, outboxState)]));
@@ -431,7 +432,7 @@ export function ChatPanel({
       });
       return changed ? next : prev;
     });
-  }, [outbox, roomKit, outboxState, outboxHistoryReady, withOutbox]);
+  }, [outbox, roomKit, outboxState, outboxHistoryReady, withOutbox, messages]);
 
   /** Whether the listing left out the agent it named as the default.
    *
