@@ -32,13 +32,13 @@ async function call(url: string, body: Record<string, unknown>): Promise<boolean
  * Steer the running task. True when a live run took it.
  * `requestId` names the turn: two tabs on one agent are two runs.
  */
-export function steerRun(text: string, agent: string, requestId: string | null): Promise<boolean> {
+export function steerRun(text: string, agent: string, requestId: string | null, room?: string): Promise<boolean> {
   if (!requestId) return Promise.resolve(false);
-  return call("/api/chat/steer", { text, request_id: requestId, ...(agent ? { agent } : {}) });
+  return call("/api/chat/steer", { text, request_id: requestId, ...(room ? { room } : agent ? { agent } : {}) });
 }
 
 /** Halt the running task (this tab's turn only). True when its live run was found. */
-export function interruptRun(agent: string, requestId: string | null): Promise<boolean> {
+export function interruptRun(agent: string, requestId: string | null, room?: string): Promise<boolean> {
   if (!requestId) return Promise.resolve(false);
-  return call("/api/chat/interrupt", { request_id: requestId, ...(agent ? { agent } : {}) });
+  return call("/api/chat/interrupt", { request_id: requestId, ...(room ? { room } : agent ? { agent } : {}) });
 }

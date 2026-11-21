@@ -17,3 +17,15 @@ export class EngineRefusal extends Error {
 
 /** The engine statuses that mean "not this request", not "the engine broke". */
 export const REFUSAL_STATUSES = new Set([400, 413, 422]);
+
+/**
+ * A send to a room whose agent is already answering somebody: the engine's
+ * 409 `{error: "room_busy", answering}`. Nothing was admitted; the browser
+ * queues the message and says whom the agent is answering.
+ */
+export class RoomBusy extends Error {
+  constructor(public readonly answering: string) {
+    super("room_busy");
+    this.name = "RoomBusy";
+  }
+}
