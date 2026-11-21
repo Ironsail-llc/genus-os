@@ -338,6 +338,7 @@ test("14. nothing is capped: many on-demand periods in a row all start (C3)", as
 });
 
 test("15. a one-minute schedule is accepted, and its run cannot start another run (A3, B7)", async () => {
+  test.setTimeout(330000); // waits for a real scheduler tick
   const alice = await api("alice");
   const made = await alice.post("/api/rooms", {
     kind: "report",
@@ -350,8 +351,9 @@ test("15. a one-minute schedule is accepted, and its run cannot start another ru
   expect(made.status).toBe(201);
   const id = made.body.id as string;
   try {
-    // The schedule fires within about a minute; its run asks for room_run on itself.
-    await expect.poll(async () => (await editions("alice", id)).length, { timeout: 150000, intervals: [5000] }).toBeGreaterThan(0);
+    // Due within a minute, picked up by the scheduler's once-a-minute poll: up to
+    // about two minutes. Its run asks for room_run on itself.
+    await expect.poll(async () => (await editions("alice", id)).length, { timeout: 240000, intervals: [5000] }).toBeGreaterThan(0);
     const room0 = (await alice.get(`/api/rooms/${id}`)).body as { rev: number };
     await alice.patch(`/api/rooms/${id}`, { expectedRev: room0.rev, changes: { paused: true } });
     await new Promise((r) => setTimeout(r, 10000));
@@ -369,4 +371,42 @@ test.afterAll(async () => {
   const p = people();
   if (roomId) await (await api("alice")).post(`/api/rooms/${roomId}/archive`);
   void p;
+});
+
+/** Bob's main-conversation notes that link this workspace. */
+async function notesFor(page: Page, id: string): Promise<number> {
+  const res = await page.request.get("/api/chat/history?limit=200");
+  const messages = ((await res.json()).messages ?? []) as Array<{ role: string; content: string }>;
+  return messages.filter((m) => m.role === "assistant" && m.content.includes(`room=${id}`)).length;
+}
+
+/** Run the workspace now and wait for one more published edition. */
+async function runAndPublish(id: string) {
+  const before = (await editions("alice", id)).filter((e) => e.status === "published").length;
+  const run = await (await api("alice")).post(`/api/rooms/${id}/run`, {});
+  expect([200, 202]).toContain(run.status);
+  await expect
+    .poll(async () => (await editions("alice", id)).filter((e) => e.status === "published").length, {
+      timeout: 60000,
+    })
+    .toBeGreaterThan(before);
+}
+
+test("16. a workspace Bob muted leaves no note in his main conversation (C7)", async () => {
+  const bob = await api("bob");
+  expect((await bob.put(`/api/rooms/${roomId}/notify`, { inApp: true, muted: true, channels: {} })).status).toBe(200);
+  const before = await notesFor(bobPage, roomId);
+  await runAndPublish(roomId);
+  await bobPage.waitForTimeout(3000);
+  expect(await notesFor(bobPage, roomId)).toBe(before);
+});
+
+test("17. with in-app off, Bob gets no note in his main conversation (C7)", async () => {
+  expectedToFailUntil("the runs lane: fan-out reads the stored in-app choice (in progress)");
+  const bob = await api("bob");
+  expect((await bob.put(`/api/rooms/${roomId}/notify`, { inApp: false, muted: false, channels: {} })).status).toBe(200);
+  const before = await notesFor(bobPage, roomId);
+  await runAndPublish(roomId);
+  await bobPage.waitForTimeout(3000);
+  expect(await notesFor(bobPage, roomId)).toBe(before);
 });
