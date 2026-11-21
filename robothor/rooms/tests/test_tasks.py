@@ -352,6 +352,22 @@ def test_a_task_workspaces_own_task_cannot_be_taken_from_inside_it(db):
     assert task_row(db, task_id)["assignee_id"] is None
 
 
+def test_another_workspaces_own_task_cannot_be_taken_by_linking_it_elsewhere(db):
+    """Link task workspace T's task into a report workspace and accept it there:
+    refused, so nobody becomes the assignee of a task workspace's task this way."""
+    from robothor.rooms import dal, tasks
+    from robothor.rooms.errors import RoomForbidden
+
+    task_id = crm_task(db)
+    tasks.open_task_room(actor(db, "alice"), task_id)
+    report = report_room(db)
+    dal.link_task(db.tenant, report.id, task_id)
+
+    with pytest.raises(RoomForbidden):
+        tasks.accept_task(actor(db, "bob"), report.id, task_id)
+    assert task_row(db, task_id)["assignee_id"] is None
+
+
 # ─── E5: dismiss ─────────────────────────────────────────────────────────
 
 
