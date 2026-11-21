@@ -649,6 +649,35 @@ def test_a_status_change_is_published_to_every_linked_workspace(db):
         assert event == {"room_id": event["room_id"], "tenant_id": db.tenant, "task_id": task_id}
 
 
+def test_a_rejected_review_is_published_to_its_workspace(db):
+    """The Tasks view's reject moves a task back to in progress: the
+    workspace showing it hears of it, as for every other status change."""
+    from robothor.crm import dal as crm_dal
+
+    room, task_id = _one_suggested(db)
+    db.cur.execute("UPDATE crm_tasks SET status = 'REVIEW' WHERE id = %s", (task_id,))
+    db.events.clear()
+
+    assert crm_dal.reject_task(task_id, "needs a source", "u-reviewer", tenant_id=db.tenant) is True
+
+    assert room_task_events(db) == [
+        {"room_id": room.id, "tenant_id": db.tenant, "task_id": task_id}
+    ]
+
+
+def test_a_deleted_task_is_published_to_its_workspace(db):
+    from robothor.crm import dal as crm_dal
+
+    room, task_id = _one_suggested(db)
+    db.events.clear()
+
+    assert crm_dal.delete_task(task_id, tenant_id=db.tenant) is True
+
+    assert room_task_events(db) == [
+        {"room_id": room.id, "tenant_id": db.tenant, "task_id": task_id}
+    ]
+
+
 def test_an_update_that_keeps_the_status_publishes_nothing(db):
     from robothor.crm import dal as crm_dal
 
