@@ -133,40 +133,53 @@ ALTER TABLE operation_actions ADD COLUMN IF NOT EXISTS room_id UUID;
 CREATE INDEX IF NOT EXISTS idx_operation_actions_room
     ON operation_actions (tenant_id, room_id) WHERE room_id IS NOT NULL;
 
+-- The platform's tenant_isolation shape (081, 164): a connection bound to a
+-- tenant sees only its rows; an unbound one (the migration runner, an RLS-off
+-- install, the operator moves' read_every_tenant_in_transaction) sees all.
 ALTER TABLE rooms ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rooms FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON rooms;
 CREATE POLICY tenant_isolation ON rooms
-    USING (tenant_id = current_setting('app.tenant_id', true))
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+    USING (current_setting('app.tenant_id', true) IS NULL OR current_setting('app.tenant_id', true) = ''
+           OR tenant_id = current_setting('app.tenant_id', true))
+    WITH CHECK (current_setting('app.tenant_id', true) IS NULL OR current_setting('app.tenant_id', true) = ''
+           OR tenant_id = current_setting('app.tenant_id', true));
 
 ALTER TABLE room_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE room_members FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON room_members;
 CREATE POLICY tenant_isolation ON room_members
-    USING (tenant_id = current_setting('app.tenant_id', true))
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+    USING (current_setting('app.tenant_id', true) IS NULL OR current_setting('app.tenant_id', true) = ''
+           OR tenant_id = current_setting('app.tenant_id', true))
+    WITH CHECK (current_setting('app.tenant_id', true) IS NULL OR current_setting('app.tenant_id', true) = ''
+           OR tenant_id = current_setting('app.tenant_id', true));
 
 ALTER TABLE room_revisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE room_revisions FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON room_revisions;
 CREATE POLICY tenant_isolation ON room_revisions
-    USING (tenant_id = current_setting('app.tenant_id', true))
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+    USING (current_setting('app.tenant_id', true) IS NULL OR current_setting('app.tenant_id', true) = ''
+           OR tenant_id = current_setting('app.tenant_id', true))
+    WITH CHECK (current_setting('app.tenant_id', true) IS NULL OR current_setting('app.tenant_id', true) = ''
+           OR tenant_id = current_setting('app.tenant_id', true));
 
 ALTER TABLE room_editions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE room_editions FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON room_editions;
 CREATE POLICY tenant_isolation ON room_editions
-    USING (tenant_id = current_setting('app.tenant_id', true))
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+    USING (current_setting('app.tenant_id', true) IS NULL OR current_setting('app.tenant_id', true) = ''
+           OR tenant_id = current_setting('app.tenant_id', true))
+    WITH CHECK (current_setting('app.tenant_id', true) IS NULL OR current_setting('app.tenant_id', true) = ''
+           OR tenant_id = current_setting('app.tenant_id', true));
 
 ALTER TABLE room_tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE room_tasks FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON room_tasks;
 CREATE POLICY tenant_isolation ON room_tasks
-    USING (tenant_id = current_setting('app.tenant_id', true))
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+    USING (current_setting('app.tenant_id', true) IS NULL OR current_setting('app.tenant_id', true) = ''
+           OR tenant_id = current_setting('app.tenant_id', true))
+    WITH CHECK (current_setting('app.tenant_id', true) IS NULL OR current_setting('app.tenant_id', true) = ''
+           OR tenant_id = current_setting('app.tenant_id', true));
 
 -- Role seed. owner and admin already allow '*'. member is read-only by default
 -- (migration 088) and user allows '*': both get the room tools and are denied
