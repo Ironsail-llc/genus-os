@@ -217,6 +217,48 @@ describe("settings drawer: an assigned user", () => {
     expect(field(/^title/i).value).toBe("Weekly revenue");
   });
 
+  it("keeps its own saved revision when the refetch is stale or never lands, and saves on from it", async () => {
+    let next = 4;
+    bridge.on("PATCH", `/rooms/${REPORT_ID}`, (body: unknown) => {
+      const changes = (body as { changes: { title?: string } }).changes;
+      return reply(room({ ...REPORT, rev: next++, title: changes.title ?? "Weekly revenue" }));
+    });
+    const { rerender, onSaved } = drawer();
+    fireEvent.change(field(/^title/i), { target: { value: "Weekly revenue" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    // The refetch is interrupted: the drawer re-renders on the cached, older room.
+    const props = { can: (a: Parameters<typeof can>[1]) => can("assigned", a), open: true, onOpenChange: vi.fn(), onSaved, onDuplicate: vi.fn() };
+    rerender(<RoomSettingsDrawer room={REPORT} {...props} />);
+    expect(field(/^title/i).value).toBe("Weekly revenue");
+    expect(screen.queryByTestId("settings-conflict")).toBeNull();
+    fireEvent.change(field(/^title/i), { target: { value: "Weekly revenue by region" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(bridge.calls("PATCH", `/rooms/${REPORT_ID}`)).toHaveLength(2));
+    expect(bridge.calls("PATCH", `/rooms/${REPORT_ID}`)[1].body).toEqual({
+      expectedRev: 4,
+      changes: { title: "Weekly revenue by region" },
+    });
+  });
+
+  it("does not blame someone else when the newer revision is this user's own save", async () => {
+    let calls = 0;
+    bridge.on("PATCH", `/rooms/${REPORT_ID}`, () => {
+      calls += 1;
+      // The first save is taken but answers without a room; the second is behind it.
+      return calls === 1 ? reply({ ok: true }) : reply({ detail: { error: "revision_conflict", currentRev: 4 } }, 409);
+    });
+    drawer();
+    fireEvent.change(field(/^title/i), { target: { value: "One" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await screen.findByTestId("settings-saved");
+    fireEvent.change(field(/^title/i), { target: { value: "Two" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+    const conflict = await screen.findByTestId("settings-conflict");
+    expect(conflict).toHaveTextContent(/your own/i);
+    expect(conflict).not.toHaveTextContent(/someone else/i);
+  });
+
   it("gives an agent workspace only a name and instructions (F2)", () => {
     drawer(room({ id: AGENT_ID, kind: "agent", settings: {} }));
     expect(field(/^title/i)).toBeInTheDocument();
