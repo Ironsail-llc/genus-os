@@ -172,6 +172,41 @@ class TestRoute:
         assert response.status_code == status
         assert "error" in response.json()
 
+    async def test_only_the_bridge_may_act_for_a_person(self, fake, accounts):
+        other = AuthContext(
+            user_id="svc-other", tenant_id="test-tenant", role="service", typ="service"
+        )
+        response = await _post(_app(other), {"requested_by": BOB})
+        assert response.status_code == 403
+        assert fake.calls == []
+
+    async def test_the_cap_answer_names_the_limit(self, fake):
+        fake.error = runs.OnDemandCapReached(5, 5)
+        response = await _post(_app(), {})
+        body = response.json()
+        assert (response.status_code, body["error"]) == (429, "on_demand_cap")
+        assert (body["limit"], body["used"]) == (5, 5)
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            RoomForbidden("SECRET-internal detail"),
+            runs.RunRefused("paused", "SECRET-internal detail"),
+            ValueError("SECRET-internal detail"),
+        ],
+    )
+    async def test_a_refusal_never_carries_the_exceptions_text(self, fake, error):
+        fake.error = error
+        response = await _post(_app(), {})
+        assert "SECRET" not in response.text
+
+    async def test_an_unexpected_error_is_a_generic_500(self, fake):
+        fake.error = RuntimeError("SECRET-internal detail")
+        response = await _post(_app(), {})
+        assert response.status_code == 500
+        assert response.json()["error"] == "internal_error"
+        assert "SECRET" not in response.text
+
     async def test_a_non_boolean_preview_is_422(self, fake):
         response = await _post(_app(), {"preview": "yes please"})
         assert response.status_code == 422

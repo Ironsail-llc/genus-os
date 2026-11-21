@@ -33,7 +33,8 @@ from typing import Any
 import pytest
 
 from robothor.engine.models import AgentConfig, AgentRun, RunStatus, TriggerType
-from robothor.rooms import dal, definition, editions, fanout, runs
+from robothor.engine.runtime.activity import current as activity
+from robothor.rooms import dal, definition, editions, fanout, recovery, runs
 from robothor.rooms.access import Actor
 from robothor.rooms.errors import RoomForbidden
 from robothor.rooms.run_context import current_room_run
@@ -53,6 +54,7 @@ class FakeRunner:
         self.config = SimpleNamespace(manifest_dir="/nonexistent", tenant_id="")
         self.calls: list[dict[str, Any]] = []
         self.carriers: list[Any] = []
+        self.live: list[frozenset[str]] = []
         self.mode = "publish"
         self.gate: asyncio.Event | None = None
         self.entered = asyncio.Event()
@@ -61,15 +63,20 @@ class FakeRunner:
         self.calls.append(kw)
         carrier = current_room_run()
         self.carriers.append(carrier)
-        self.entered.set()
-        if self.gate is not None:
-            await self.gate.wait()
+        self.live.append(recovery.live_edition_ids())
         run = AgentRun(
             status=RunStatus.COMPLETED,
             output_text="Sales are up 4%.",
             trigger_type=kw.get("trigger_type", TriggerType.CRON),
             agent_id=kw.get("agent_id", ""),
         )
+        # The real runtime registers the run's session before its first status event.
+        activity.set(SimpleNamespace(sessions={run.id: None}))
+        if kw.get("on_status") is not None:
+            await kw["on_status"]({"event": "iteration_start"})
+        self.entered.set()
+        if self.gate is not None:
+            await self.gate.wait()
         if self.mode == "raise":
             raise RuntimeError("provider down")
         if self.mode == "fail":
@@ -563,6 +570,72 @@ class TestEveryExitEndsTheEdition:
         assert not fanout.room_lock(room.id).locked()
 
 
+class TestRecovery:
+    async def test_a_running_edition_is_held_live_and_names_its_run(self, env):
+        room = _report(env.db)
+        env.runner.gate = asyncio.Event()
+        task = asyncio.create_task(
+            runs.execute_room_run(env.db.tenant, room.id, trigger="schedule")
+        )
+        await asyncio.wait_for(env.runner.entered.wait(), 10)
+        (building,) = _building(env.db, room.id)
+
+        reaped = recovery.reap_stale_editions(
+            env.db.tenant, booted_at=datetime.now(UTC) + timedelta(hours=1)
+        )
+
+        assert building.id in env.runner.live[0]
+        assert reaped == []  # alive: this process holds it, whatever the boot says
+        assert building.run_id  # recorded at the run's first status event
+        env.runner.gate.set()
+        await asyncio.wait_for(task, 10)
+        assert building.id not in recovery.live_edition_ids()
+
+    async def test_a_run_now_is_held_from_the_moment_it_is_scheduled(self, env):
+        room = _report(env.db)
+        env.runner.gate = asyncio.Event()
+
+        edition, _ = await runs.start_room_run(_actor(env.db, "alice"), room.id)
+
+        assert edition.id in recovery.live_edition_ids()  # before the task first ran
+        env.runner.gate.set()
+        await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
+        assert edition.id not in recovery.live_edition_ids()
+
+    async def test_a_dead_building_row_does_not_block_the_next_run(self, env):
+        room = _report(env.db)
+        period = runs.last_complete_period("day", "UTC")
+        dal.create_edition(
+            env.db.tenant,
+            room.id,
+            grain="day",
+            period_start=period.start,
+            period_end=period.end,
+        )
+        env.db.cur.execute(
+            "UPDATE room_editions SET created_at = now() - interval '3 hours' WHERE tenant_id = %s",
+            (env.db.tenant,),
+        )
+
+        edition = await runs.execute_room_run(env.db.tenant, room.id, trigger="schedule")
+
+        assert edition is not None and edition.status == "published"
+
+
+async def test_engine_start_reaps_editions_left_building(monkeypatch):
+    from robothor.engine import daemon
+
+    seen: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        recovery, "reap_stale_editions", lambda tenant, **kw: seen.append((tenant, kw)) or []
+    )
+    monkeypatch.setattr(daemon, "_DAEMON_START_TS", "2026-11-21T06:00:00+00:00")
+
+    await daemon._reap_room_editions(SimpleNamespace(tenant_id="test-tenant"))
+
+    assert seen == [("test-tenant", {"booted_at": datetime(2026, 11, 21, 6, tzinfo=UTC)})]
+
+
 # ─── B5: the cost cap ─────────────────────────────────────────────────────
 
 
@@ -718,7 +791,7 @@ class TestRunNow:
             await runs.start_room_run(_actor(env.db, "alice"), room.id)
         assert refused.value.reason == "archived"
 
-    async def test_the_daily_cap_counts_previews_and_runs(self, env):
+    async def test_the_daily_cap_is_per_person_and_counts_previews(self, env):
         room = _report(env.db)
         dal.update_definition(
             env.db.tenant,
@@ -729,12 +802,17 @@ class TestRunNow:
         )
         await runs.start_room_run(_actor(env.db, "alice"), room.id, preview=True)
         await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
-        await runs.start_room_run(_actor(env.db, "bob"), room.id)
+        period = {"grain": "day", "start": "2026-11-01", "end": "2026-11-01"}
+        await runs.start_room_run(_actor(env.db, "alice"), room.id, period=period)
         await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
 
         with pytest.raises(runs.OnDemandCapReached) as capped:
             await runs.start_room_run(_actor(env.db, "alice"), room.id, preview=True)
         assert (capped.value.limit, capped.value.used) == (2, 2)
+        # Bob has his own allowance.
+        _edition, joined = await runs.start_room_run(_actor(env.db, "bob"), room.id, preview=True)
+        await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
+        assert joined is False
 
     async def test_a_named_period_is_built(self, env):
         room = _report(env.db)
