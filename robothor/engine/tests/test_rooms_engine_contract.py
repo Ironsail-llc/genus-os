@@ -185,15 +185,16 @@ async def _periods(s: Any, replies: dict[str, Any]) -> None:
         replies["period_not_found"] = _record(
             await s.client.post(path, json={"grain": "week", "anchor": "2026-10-21"})
         )
-    dal.update_definition(
-        s.db.tenant, rid, {"settings": {"max_on_demand_per_day": 0}}, s.db.alice, 1
-    )
+    # Nothing is capped: one person asking for many periods in a row starts every run.
+    weeks = ("2026-10-14", "2026-10-07", "2026-09-30", "2026-09-23", "2026-09-16", "2026-09-09")
     with _human(s.db, s.db.bob):
-        replies["period_cap"] = _record(
-            await s.client.post(path, json={"grain": "week", "anchor": "2026-10-14"})
-        )
+        many = [
+            _record(await s.client.post(path, json={"grain": "week", "anchor": week}))
+            for week in weeks
+        ]
+    replies["period_many"] = {"statuses": [r["status"] for r in many]}
     assert [replies[k]["status"] for k in ("period_existing", "period_started")] == [200, 202]
-    assert len(s.started) == 1
+    assert replies["period_many"]["statuses"] == [202] * 6, many
 
 
 async def test_recorded_replies_match_the_dashboard_contract(engine) -> None:

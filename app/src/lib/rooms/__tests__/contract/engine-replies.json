@@ -73,15 +73,6 @@
     },
     "status": 200
   },
-  "period_cap": {
-    "body": {
-      "error": "on_demand_cap",
-      "limit": 0,
-      "message": "each person may start 0 on-demand edition(s) a day in this workspace",
-      "used": 1
-    },
-    "status": 429
-  },
   "period_existing": {
     "body": {
       "blocks": [
@@ -110,6 +101,16 @@
       "title": "Week 45"
     },
     "status": 200
+  },
+  "period_many": {
+    "statuses": [
+      202,
+      202,
+      202,
+      202,
+      202,
+      202
+    ]
   },
   "period_not_found": {
     "body": {

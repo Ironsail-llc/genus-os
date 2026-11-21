@@ -152,7 +152,9 @@ describe("the engine's edition", () => {
   it("refuses with the codes and words the period picker shows", () => {
     expect(engine.period_unfinished).toMatchObject({ status: 422, body: { error: "invalid_period" } });
     expect((engine.period_unfinished.body as { message: string }).message).toMatch(/not over yet/);
-    expect(engine.period_cap).toMatchObject({ status: 429, body: { error: "on_demand_cap", limit: 0 } });
+    // Nothing is capped: six requests in a row by one person each start a run.
+    expect(engine.period_many).toEqual({ statuses: [202, 202, 202, 202, 202, 202] });
+    expect(engine).not.toHaveProperty("period_cap");
     expect(engine.period_viewer.status).toBe(403);
     expect(engine.period_not_found.status).toBe(404);
     expect(engine.period_started).toMatchObject({ status: 202, body: { status: "building" } });
