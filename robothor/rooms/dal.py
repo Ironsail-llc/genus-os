@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from datetime import date
 
 __all__ = [
+    "run_lineage",
     "was_removed",
     "task_history",
     "take_task",
@@ -1588,6 +1589,21 @@ def create_suggested_tasks(
             created.append(task_id)
         conn.commit()
     return created
+
+
+def run_lineage(tenant_id: str, run_id: str) -> dict[str, Any] | None:
+    """``{trigger_type, parent_run_id}`` of an ``agent_runs`` row of the tenant."""
+    run = canonical_uuid(run_id)
+    if run is None:
+        return None
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT trigger_type, parent_run_id FROM agent_runs WHERE tenant_id = %s AND id = %s",
+            (tenant_id, run),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def rooms_linked_to_task(tenant_id: str, task_id: str) -> list[str]:

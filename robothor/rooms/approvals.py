@@ -59,7 +59,6 @@ MEMBER_ROLES = frozenset({"member", "user"})
 #: whoever proposed them: the sales pipeline accepts only an ``operator:``
 #: verdict on what it sends and follows up (``robothor/sales/gmail_sync.py``).
 OPERATOR_ONLY_KIND_PATTERNS = ("sales.%",)
-_LIST_LIMIT = 100
 
 _ELIGIBLE = """
 SELECT a.id, a.kind, a.payload, a.created_at, a.expires_at, a.proposed_by_run_id,
@@ -118,8 +117,7 @@ def _eligible_in(
         params["id"] = action_id
     if pending_only:
         sql += " AND a.status = 'review' AND a.expires_at > now()"
-    sql += " ORDER BY a.expires_at, a.id LIMIT %(limit)s"
-    params["limit"] = _LIST_LIMIT
+    sql += " ORDER BY a.expires_at, a.id"
     cur.execute(sql, params)
     return [
         {
