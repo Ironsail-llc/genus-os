@@ -34,15 +34,22 @@ export async function signedIn(browser: Browser, who: Name, viewport?: { width: 
   const context = await browser.newContext(viewport ? { viewport } : {});
   const page = await context.newPage();
   await page.goto("/signin");
-  await page.locator("#local-email").fill(`${who}@example.com`);
-  await page.locator("#local-password").fill(PASSWORD);
+  await page.locator("#local-email").first().fill(`${who}@example.com`);
+  await page.locator("#local-password").first().fill(PASSWORD);
   await page.locator('form button[type="submit"]').first().click();
   await page.waitForURL((url) => !url.pathname.startsWith("/signin"), { timeout: 30000 });
   return { context, page };
 }
 
-/** The bridge API as `who`, with a token from the bridge's own sign-in. */
-export async function api(who: Name) {
+/**
+ * One sign-in per person per run: the bridge rate-limits sign-in by address,
+ * as it should, so a token is kept rather than asked for on every call.
+ */
+const tokens = new Map<Name, string>();
+
+async function tokenFor(who: Name): Promise<string> {
+  const kept = tokens.get(who);
+  if (kept) return kept;
   const login = await fetch(`${BRIDGE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -50,7 +57,14 @@ export async function api(who: Name) {
   });
   expect(login.status, `sign-in for ${who}`).toBe(200);
   const body = await login.json();
-  let token: string = body.access_token ?? body.accessToken;
+  const token: string = body.access_token ?? body.accessToken;
+  tokens.set(who, token);
+  return token;
+}
+
+/** The bridge API as `who`, with a token from the bridge's own sign-in. */
+export async function api(who: Name) {
+  let token = await tokenFor(who);
   const call = async (method: string, path: string, json?: unknown) => {
     const res = await fetch(`${BRIDGE}${path}`, {
       method,

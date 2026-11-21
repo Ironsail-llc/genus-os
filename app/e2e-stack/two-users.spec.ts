@@ -31,12 +31,18 @@ test.beforeAll(async ({ browser }) => {
 
 test("1. Alice asks the main agent for a daily sales report; it restates, then creates it (A1)", async () => {
   await alicePage.goto("/?v=chat");
+  // Earlier runs' turns load first; count only once the history is in.
+  await settled(alicePage.getByTestId("message-row"));
+  const restated = alicePage.getByText(/I will create a report workspace “Daily sales”/);
+  const restatedBefore = await restated.count();
   await say(alicePage, "Please create a daily sales report", { main: true });
-  await expect(alicePage.getByText(/I will create a report workspace “Daily sales”/).last()).toBeVisible({ timeout: 30000 });
+  await expect(restated).toHaveCount(restatedBefore + 1, { timeout: 30000 });
+  // The main conversation keeps earlier runs' answers: wait for a NEW link.
+  const answers = alicePage.getByText(/Open it: \/\?v=chat&room=/);
+  const before = await answers.count();
   await say(alicePage, "yes, create it. share with bob@example.com", { main: true });
-  const answer = alicePage.getByText(/Open it: \/\?v=chat&room=/).last();
-  await expect(answer).toBeVisible({ timeout: 30000 });
-  roomId = ROOM_ID.exec((await answer.textContent()) ?? "")?.[1] ?? "";
+  await expect(answers).toHaveCount(before + 1, { timeout: 30000 });
+  roomId = ROOM_ID.exec((await answers.last().textContent()) ?? "")?.[1] ?? "";
   expect(roomId).not.toBe("");
   const made = await (await api("alice")).get(`/api/rooms/${roomId}`);
   expect(made.body).toMatchObject({ kind: "report", access: "assigned", settings: { schedule_text: "0 7 * * *", tz: "UTC" } });
@@ -44,8 +50,14 @@ test("1. Alice asks the main agent for a daily sales report; it restates, then c
 });
 
 test("1b. Alice previews it before it runs on schedule; only she sees the preview (A2)", async () => {
+  const done = alicePage.getByText(/Done \(room_run\)/);
+  const before = await done.count();
   await say(alicePage, `preview ${roomId}`, { main: true });
-  await expect(alicePage.getByText(/Done \(room_run\)/).last()).toBeVisible({ timeout: 30000 });
+  await expect(done).toHaveCount(before + 1, { timeout: 30000 });
+  // The preview is built, for Alice only.
+  await expect
+    .poll(async () => (await editions("alice")).filter((e) => e.preview).length, { timeout: 60000 })
+    .toBeGreaterThan(0);
   const bobsEditions = await (await api("bob")).get(`/api/rooms/${roomId}/editions`);
   expect((bobsEditions.body.editions as Array<{ preview: boolean }>).some((e) => e.preview)).toBe(false);
 });
@@ -64,13 +76,52 @@ test("2. the schedule and sharing show in the workspace (A3, G1, G7)", async () 
   await alicePage.keyboard.press("Escape");
 });
 
-test("3. run now builds an edition (B6)", async () => {
+type EditionRow = {
+  id: string;
+  seq: number;
+  status: string;
+  preview: boolean;
+  error?: string | null;
+  suggestions?: Array<{ key: string }>;
+  provenance?: Record<string, unknown>;
+};
+
+async function editions(who: "alice" | "bob", id = roomId): Promise<EditionRow[]> {
+  return ((await (await api(who)).get(`/api/rooms/${id}/editions`)).body.editions ?? []) as EditionRow[];
+}
+
+test("3. run now builds and publishes an edition from the real run, with its provenance (B6, B2, B3)", async () => {
   const run = await (await api("bob")).post(`/api/rooms/${roomId}/run`, {});
   expect([200, 202]).toContain(run.status);
+  await expect
+    .poll(async () => (await editions("bob")).filter((e) => !e.preview && e.status === "published").length, {
+      timeout: 60000,
+    })
+    .toBeGreaterThan(0);
+  const [published] = (await editions("bob")).filter((e) => !e.preview && e.status === "published");
+  const provenance = published.provenance ?? {};
+  // The run id was recorded at the run's first status event, by the real runner.
+  expect(typeof provenance.run_id === "string" && provenance.run_id).toBeTruthy();
+  expect((provenance.tool_calls as Array<{ tool: string }>).map((c) => c.tool)).toContain("sample_sales_figures");
+  expect(typeof provenance.cost_usd).toBe("number");
+});
+
+test("3b. the provenance drawer shows how the edition was made and what it cost (B3, B5)", async () => {
+  await bobPage.goto(roomLink(roomId));
+  await expect(bobPage.getByTestId("room-pinned-edition")).toBeVisible({ timeout: 30000 });
+  await bobPage.getByTestId("room-more").click();
+  await bobPage.getByTestId("room-menu-provenance").click();
+  const drawer = bobPage.getByTestId("provenance-drawer");
+  await expect(drawer.getByTestId("provenance-ran-as")).toContainText("Alice");
+  await expect(drawer.getByTestId("provenance-cost")).toContainText("$");
+  await expect(drawer).toContainText("sample_sales_figures");
+  await bobPage.keyboard.press("Escape");
 });
 
 test("4. Bob sees the workspace in his rail with unread activity (C1, C6)", async () => {
-  // Alice's turn in the workspace is activity Bob has not read.
+  // Alice's turn in the workspace is activity Bob has not read (he is elsewhere:
+  // an open workspace marks what arrives as read).
+  await bobPage.goto("/?v=chat");
   await alicePage.goto(roomLink(roomId));
   await say(alicePage, "Morning, Bob");
   await expect(room(alicePage).getByText("Answering Alice: Morning, Bob")).toBeVisible({ timeout: 30000 });
@@ -85,7 +136,11 @@ test("4. Bob sees the workspace in his rail with unread activity (C1, C6)", asyn
 
 test("4b. a new edition leaves a note in Bob's main conversation (H3)", async () => {
   await bobPage.goto("/?v=chat");
-  await expect(bobPage.getByText(/new edition/i).first()).toBeVisible({ timeout: 15000 });
+  // The note is the edition's headline and summary, and a link to the workspace;
+  // never the edition itself.
+  const note = bobPage.getByTestId("message-row").filter({ hasText: /Sales \d{4}-\d{2}-\d{2}: Revenue/ }).last();
+  await expect(note).toBeVisible({ timeout: 30000 });
+  await expect(note.getByRole("link", { name: "Daily sales" })).toHaveAttribute("href", new RegExp(roomId));
 });
 
 test("5. Bob opens it from a link and reads it; his unread clears (C2, C6)", async () => {
@@ -126,24 +181,40 @@ test("8. Bob picks a past period and its edition is built (C3)", async () => {
   await bobPage.goto(roomLink(roomId));
   await bobPage.getByTestId("period-trigger").click();
   await bobPage.getByTestId("period-grain-day").click();
-  await bobPage.getByTestId("period-anchor").fill(yesterday());
+  await bobPage.getByTestId("period-anchor").fill(daysAgo(3));
   await bobPage.getByTestId("period-apply").click();
   await expect(bobPage.getByTestId("room-pinned-edition").getByTestId("edition-title")).toBeVisible({ timeout: 60000 });
 });
 
-test("9. Bob accepts a suggested task (E2)", async () => {
-  expectedToFailUntil("lane 9: suggestions become linked tasks, and accepting assigns the task");
-  const tasks = await (await api("bob")).get(`/api/rooms/${roomId}/tasks`);
-  const suggested = (tasks.body.tasks as Array<{ taskId: string }>)[0];
-  expect(suggested).toBeTruthy();
-  const accepted = await (await api("bob")).post(`/api/rooms/${roomId}/tasks/${suggested.taskId}/accept`);
-  expect(accepted.body).toMatchObject({ assignee: { displayName: "Bob" } });
+let taskRoomId = "";
+
+test("9. Bob accepts the edition's suggested task and opens it as its own workspace (E1, E2, E6)", async () => {
+  const tasks = (await (await api("bob")).get(`/api/rooms/${roomId}/tasks`)).body.tasks as Array<{
+    taskId: string;
+    origin: string;
+    title: string;
+  }>;
+  const suggested = tasks.find((t) => t.origin === "suggestion");
+  expect(suggested?.title).toBe("Call the lapsed buyers");
+  await bobPage.goto(roomLink(roomId));
+  await bobPage.getByTestId(`room-task-accept-${suggested!.taskId}`).click();
+  await expect(bobPage.getByTestId(`room-task-assignee-${suggested!.taskId}`)).toHaveText("Bob", { timeout: 15000 });
+  await bobPage.getByTestId(`open-as-workspace-${suggested!.taskId}`).click();
+  await expect(bobPage).not.toHaveURL(new RegExp(roomId), { timeout: 15000 });
+  taskRoomId = ROOM_ID.exec(bobPage.url())?.[1] ?? "";
+  expect(taskRoomId).not.toBe(roomId);
+  const taskRoom = await (await api("bob")).get(`/api/rooms/${taskRoomId}`);
+  expect(taskRoom.body).toMatchObject({ kind: "task", access: "assigned" });
 });
 
-test("10. Bob approves the action his own run proposed (E3)", async () => {
-  expectedToFailUntil("lane 9: member approval");
-  const approvals = await (await api("bob")).get("/api/approvals");
-  expect(JSON.stringify(approvals.body)).toContain(roomId);
+test("10. in the task workspace Bob approves the email his own turn proposed; it is sent once (E3, E4)", async () => {
+  expectedToFailUntil("lane 9: room_propose_email, its executor and the receipt turn (still being pushed)");
+  await bobPage.goto(roomLink(taskRoomId));
+  await say(bobPage, "Email the lapsed buyers a check-in");
+  const card = bobPage.getByTestId("room-approvals");
+  await expect(card).toBeVisible({ timeout: 30000 });
+  await card.getByRole("button", { name: /approve/i }).first().click();
+  await expect(room(bobPage).getByText(/sent/i).last()).toBeVisible({ timeout: 30000 });
 });
 
 test("11. a reload keeps the charts (C4, D4)", async () => {
@@ -183,9 +254,62 @@ test("13. Alice changes the title, then restores revision 1 as a new revision (A
     .toMatchObject({ title: "Daily sales", rev: 3 });
 });
 
-function yesterday(): string {
-  return new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+/** Wait until a list has stopped growing (history loads after the page). */
+async function settled(rows: ReturnType<Page["getByTestId"]>) {
+  let last = -1;
+  await expect
+    .poll(
+      async () => {
+        const now = await rows.count();
+        const same = now === last;
+        last = now;
+        return same;
+      },
+      { timeout: 20000, intervals: [1500] },
+    )
+    .toBe(true);
 }
+
+function daysAgo(n: number): string {
+  return new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+}
+
+test("14. nothing is capped: many on-demand periods in a row all start (C3)", async () => {
+  const bob = await api("bob");
+  const statuses: number[] = [];
+  for (const n of [4, 5, 6, 7, 8, 9]) {
+    statuses.push((await bob.post(`/api/rooms/${roomId}/periods`, { grain: "day", anchor: daysAgo(n) })).status);
+  }
+  expect(statuses.every((s) => s === 200 || s === 202)).toBe(true);
+  expect(statuses.filter((s) => s === 202).length).toBeGreaterThanOrEqual(5);
+});
+
+test("15. a one-minute schedule is accepted, and its run cannot start another run (A3, B7)", async () => {
+  const alice = await api("alice");
+  const made = await alice.post("/api/rooms", {
+    kind: "report",
+    title: "Self-starting",
+    instructions: "Summarise the sales figures, then start another run",
+    scheduleText: "every 1 minute",
+    tz: "UTC",
+    defaultGrain: "day",
+  });
+  expect(made.status).toBe(201);
+  const id = made.body.id as string;
+  try {
+    // The schedule fires within about a minute; its run asks for room_run on itself.
+    await expect.poll(async () => (await editions("alice", id)).length, { timeout: 150000, intervals: [5000] }).toBeGreaterThan(0);
+    const room0 = (await alice.get(`/api/rooms/${id}`)).body as { rev: number };
+    await alice.patch(`/api/rooms/${id}`, { expectedRev: room0.rev, changes: { paused: true } });
+    await new Promise((r) => setTimeout(r, 10000));
+    const made1 = await editions("alice", id);
+    // Had the run's room_run worked there would be a second, run-now edition at once.
+    expect(made1.length).toBe(1);
+    expect(made1[0].status).not.toBe("building");
+  } finally {
+    await alice.post(`/api/rooms/${id}/archive`);
+  }
+});
 
 test.afterAll(async () => {
   // Leave the stack tidy for the next run: archive what this flow made.
