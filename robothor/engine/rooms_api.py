@@ -19,6 +19,7 @@ action 403.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Request
@@ -38,6 +39,19 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.auth.deps import AuthContext
 
 __all__ = ["register", "router"]
+
+logger = logging.getLogger(__name__)
+
+#: What a refused period says. Fixed text: an exception's own message can quote
+#: input or internals, so it never reaches a response.
+_PERIOD_MESSAGES = {
+    "invalid_time_zone": "the workspace's time zone is not a valid IANA name",
+    "invalid_grain": "grain must be day, week, month or custom",
+    "invalid_anchor": "anchor must be a date (YYYY-MM-DD), YYYY-MM, start/end, or latest",
+    "too_long": f"a custom period is at most {periods.MAX_CUSTOM_DAYS} days",
+    "not_over": "that period is not over yet",
+    "not_a_report": "only a report workspace has periods",
+}
 
 router = APIRouter(prefix="/api/rooms", tags=["rooms"])
 
@@ -96,6 +110,14 @@ def _refusal(status: int, code: str, message: str, **extra: Any) -> JSONResponse
 async def request_room_period(room_id: str, body: PeriodRequest, request: Request) -> JSONResponse:
     """The period's edition: 200 when it exists, 202 when a run was started."""
     try:
+        return await _answer(room_id, body, request)
+    except Exception:
+        logger.exception("period request failed for a workspace")
+        return _refusal(500, "internal_error", "the period could not be requested")
+
+
+async def _answer(room_id: str, body: PeriodRequest, request: Request) -> JSONResponse:
+    try:
         actor = await asyncio.to_thread(_requester, request_context(request), body.requested_by)
     except NotTheBridge:
         return _refusal(403, "forbidden", "only the bridge may act for a person")
@@ -107,14 +129,22 @@ async def request_room_period(room_id: str, body: PeriodRequest, request: Reques
         edition, started = await periods.request_period(actor, room_id, body.grain, body.anchor)
     except RoomNotFound:
         return _refusal(404, "room_not_found", "no such workspace")
-    except RoomForbidden as exc:
-        return _refusal(403, "forbidden", str(exc))
+    except RoomForbidden:
+        return _refusal(403, "forbidden", "you may not request a period in this workspace")
     except periods.OnDemandCapReached as exc:
-        return _refusal(429, "cap_reached", str(exc), limit=exc.limit, used=exc.used)
-    except periods.RoomRunUnavailable as exc:
-        return _refusal(503, "runs_unavailable", str(exc))
-    except ValueError as exc:
-        return _refusal(422, "invalid_period", str(exc))
+        limit, used = int(exc.limit), int(exc.used)
+        return _refusal(
+            429,
+            "cap_reached",
+            f"each person may start {limit} on-demand edition(s) a day in this workspace",
+            limit=limit,
+            used=used,
+        )
+    except periods.RoomRunUnavailable:
+        return _refusal(503, "runs_unavailable", "workspace runs are not available right now")
+    except periods.PeriodError as exc:
+        reason = exc.reason if exc.reason in _PERIOD_MESSAGES else "invalid_anchor"
+        return _refusal(422, "invalid_period", _PERIOD_MESSAGES[reason], reason=reason)
     return JSONResponse(edition_json(edition), status_code=202 if started else 200)
 
 

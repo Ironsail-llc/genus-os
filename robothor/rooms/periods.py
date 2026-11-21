@@ -50,6 +50,7 @@ __all__ = [
     "DEFAULT_MAX_ON_DEMAND_PER_DAY",
     "DEFAULT_TZ",
     "MAX_CUSTOM_DAYS",
+    "PERIOD_ERROR_REASONS",
     "OnDemandCapReached",
     "Period",
     "PeriodError",
@@ -79,7 +80,21 @@ RunRoom = Callable[..., Awaitable[Any]]
 
 
 class PeriodError(ValueError):
-    """A grain, anchor or time zone that names no period that may be asked for (422)."""
+    """A grain, anchor or time zone that names no period that may be asked for (422).
+
+    ``reason`` is one of ``PERIOD_ERROR_REASONS``: what an HTTP answer may say,
+    where the message (which can quote the caller's input) is for an agent.
+    """
+
+    def __init__(self, message: str, *, reason: str = "invalid_anchor") -> None:
+        self.reason = reason if reason in PERIOD_ERROR_REASONS else "invalid_anchor"
+        super().__init__(message)
+
+
+#: Why a period was refused.
+PERIOD_ERROR_REASONS = frozenset(
+    {"invalid_time_zone", "invalid_grain", "invalid_anchor", "too_long", "not_over", "not_a_report"}
+)
 
 
 class OnDemandCapReached(RoomError):  # noqa: N818 - reads as the result it is
@@ -128,11 +143,15 @@ class Period:
 
 def _zone(tz: Any) -> ZoneInfo:
     if not isinstance(tz, str) or not tz.strip():
-        raise PeriodError("a time zone must be an IANA name such as Europe/London")
+        raise PeriodError(
+            "a time zone must be an IANA name such as Europe/London", reason="invalid_time_zone"
+        )
     try:
         return ZoneInfo(tz)
     except (ZoneInfoNotFoundError, ValueError) as exc:
-        raise PeriodError(f"unknown time zone {tz!r}: use an IANA name") from exc
+        raise PeriodError(
+            f"unknown time zone {tz!r}: use an IANA name", reason="invalid_time_zone"
+        ) from exc
 
 
 def _today(tz: str, now: datetime | None) -> date:
@@ -151,7 +170,7 @@ def _containing(grain: str, day: date) -> Period:
     if grain == "month":
         last = calendar.monthrange(day.year, day.month)[1]
         return Period(day.replace(day=1), day.replace(day=last), grain)
-    raise PeriodError(f"grain must be one of {sorted(GRAINS)}")
+    raise PeriodError(f"grain must be one of {sorted(GRAINS)}", reason="invalid_grain")
 
 
 def last_complete_period(grain: str, tz: str, now: datetime | None = None) -> Period:
@@ -189,7 +208,7 @@ def _custom(anchor: Any) -> Period:
         raise PeriodError("a custom period cannot end before it starts")
     period = Period(start, end, "custom")
     if period.days > MAX_CUSTOM_DAYS:
-        raise PeriodError(f"a custom period is at most {MAX_CUSTOM_DAYS} days")
+        raise PeriodError(f"a custom period is at most {MAX_CUSTOM_DAYS} days", reason="too_long")
     return period
 
 
@@ -207,7 +226,7 @@ def resolve_period(grain: str, tz: str, anchor: Any, *, now: datetime | None = N
     ``{start, end}`` for a custom range). No anchor, or ``latest``: the last
     complete period. Raises ``PeriodError`` for a period that is not over."""
     if grain not in GRAINS:
-        raise PeriodError(f"grain must be one of {sorted(GRAINS)}")
+        raise PeriodError(f"grain must be one of {sorted(GRAINS)}", reason="invalid_grain")
     today = _today(tz, now)
     if anchor is None or (isinstance(anchor, str) and anchor.strip() in ("", "latest")):
         return last_complete_period(grain, tz, now)
@@ -215,7 +234,8 @@ def resolve_period(grain: str, tz: str, anchor: Any, *, now: datetime | None = N
     if period.end >= today:
         raise PeriodError(
             f"that {grain} is not over yet: it ends {period.end.isoformat()} "
-            f"and today is {today.isoformat()} in {tz}"
+            f"and today is {today.isoformat()} in {tz}",
+            reason="not_over",
         )
     return period
 
@@ -304,7 +324,7 @@ def _claim(
     where ``run`` is the one run to start, or None."""
     room = access.require(actor, room_id, "request_period")
     if room.kind != "report":
-        raise PeriodError("only a report workspace has periods")
+        raise PeriodError("only a report workspace has periods", reason="not_a_report")
     tz = str(room.settings.get("tz") or DEFAULT_TZ)
     period = resolve_period(grain, tz, anchor, now=now)
     recovery.reap_stale_editions(room.tenant_id, room_id=room.id)
