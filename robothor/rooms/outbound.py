@@ -40,7 +40,7 @@ from uuid import uuid4
 
 from psycopg2.extras import RealDictCursor
 
-from robothor.db.connection import get_connection, tenant_scope
+from robothor.db.connection import effective_tenant, get_connection, tenant_scope
 from robothor.operations.proposer import Proposer
 from robothor.operations.store import Conflict, NotPermitted, Operations
 from robothor.rooms import approvals, dal
@@ -480,8 +480,20 @@ def _write_note(tenant_id: str, action_id: str, error: str | None) -> None:
             return
         room = dal.get_room(tenant_id, str(receipt["room_id"] or ""))
         if room is None:
-            # Never recorded as written when it was not: the sweep tries again.
+            if effective_tenant() not in ("", tenant_id):
+                # A read not bound to this tenant proves nothing: never
+                # recorded as written, so the next sweep tries again.
+                return
+            # A healthy scoped read: the workspace is really gone (a tenant
+            # move takes rooms and leaves the ledger). Settled once.
             logger.warning("room email %s: its workspace was not found", sanitize_log(action_id))
+            ops.audit(
+                cur,
+                action_id,
+                _NOTED,
+                "system",
+                {"message_id": None, "reason": "workspace not found"},
+            )
             return
         message_id = chat_store.save_message(
             room.session_key,
