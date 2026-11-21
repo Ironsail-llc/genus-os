@@ -126,7 +126,10 @@ Partly covered: A1, A2, A3, A4, B1, C4, C5, C8, E2, E3, E7, F1, F2, G6, H1, I3, 
 Not covered: none.
 
 The real-stack suite (`app/playwright.stack.config.ts`, against `scripts/dev/rooms-stack.sh`)
-ran green on 2026-11-21: 27 tests, with step 10a failing as marked.
+ran green on 2026-11-21: 31 tests, with two steps failing as marked, each an open product
+question for the coordinator: 7c (leaving a workspace mid-answer cancels that turn, so the
+answer is lost for everyone) and 10a (nothing completes a task when its email is sent).
+Steps 16 and 17 prove C7 on the real stack: muting, and in-app off, stop the note.
 
 ## Withdrawn by the no-caps decision
 
