@@ -455,6 +455,8 @@ def test_propose_email_without_a_room_id_uses_the_workspace_the_turn_is_in(monke
 
 def test_propose_email_with_no_room_id_and_no_workspace_is_refused(monkeypatch):
     rooms = _propose_spy(monkeypatch)
-    result = _call("room_propose_email", {"to": ["a@example.org"], "subject": "Hi", "body": "Hello"})
+    result = _call(
+        "room_propose_email", {"to": ["a@example.org"], "subject": "Hi", "body": "Hello"}
+    )
     assert "room_id" in result["error"]
     assert rooms == []
