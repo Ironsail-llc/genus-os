@@ -198,7 +198,8 @@ editions, messages)`, `share_room`, `unshare_room`, `archive_room`,
 - One `user_cronjobs` row per room: a partial unique index on
   `(tenant_id, room_id) WHERE room_id IS NOT NULL` (migration 170), written by a
   single `INSERT ... ON CONFLICT`. The row follows changes of schedule, time zone,
-  pause and instructions (its `prompt`).
+  pause and instructions (its `prompt`). A sync that leaves the schedule payload and
+  the enabled state unchanged keeps `next_run_at`.
 - Pausing is not part of the definition: it writes no revision, but still checks
   `expected_rev`.
 - A duplicate of a scheduled room starts `paused` (A8: unscheduled until its new

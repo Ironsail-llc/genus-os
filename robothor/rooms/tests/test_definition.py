@@ -413,6 +413,58 @@ def test_changing_only_the_instructions_updates_the_schedule_row(staff_db):
     assert [r[0] for r in db.cur.fetchall()] == ["Only EMEA, by country."]
 
 
+def _next_run(db: Any, room: Any) -> Any:
+    return _cron_rows(db, room.id)[0]["next_run_at"]
+
+
+def test_an_instructions_only_edit_keeps_an_interval_schedules_next_run(staff_db):
+    db = staff_db
+    room = _report(db, schedule_text="every 6h")
+    before = _next_run(db, room)
+
+    saved = definition.apply_definition_change(
+        _actor(db, "alice"), room.id, 1, {"instructions": "Only EMEA."}
+    )
+    definition.apply_definition_change(
+        _actor(db, "alice"), room.id, saved.rev, {"instructions": "Only EMEA, by country."}
+    )
+
+    assert _next_run(db, room) == before
+    db.cur.execute(
+        "SELECT prompt FROM user_cronjobs WHERE tenant_id = %s AND room_id = %s",
+        (db.tenant, room.id),
+    )
+    assert db.cur.fetchone()[0] == "Only EMEA, by country."
+
+
+def test_changing_the_interval_recomputes_the_next_run(staff_db):
+    db = staff_db
+    room = _report(db, schedule_text="every 6h")
+    before = _next_run(db, room)
+
+    definition.apply_definition_change(
+        _actor(db, "alice"), room.id, 1, {"schedule_text": "every 1h"}
+    )
+
+    assert _next_run(db, room) < before
+
+
+def test_resuming_recomputes_the_next_run_from_now(staff_db):
+    db = staff_db
+    room = _report(db, schedule_text="every 6h")
+    db.cur.execute(
+        "UPDATE user_cronjobs SET next_run_at = now() - interval '1 day' "
+        "WHERE tenant_id = %s AND room_id = %s",
+        (db.tenant, room.id),
+    )
+    paused = definition.apply_definition_change(_actor(db, "alice"), room.id, 1, {"paused": True})
+    before = datetime.now(UTC)
+
+    definition.apply_definition_change(_actor(db, "alice"), room.id, paused.rev, {"paused": False})
+
+    assert _next_run(db, room) >= before
+
+
 def test_scheduling_an_unscheduled_room_creates_its_row(staff_db):
     db = staff_db
     room = _report(db, schedule_text=None)

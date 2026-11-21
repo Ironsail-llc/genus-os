@@ -274,3 +274,26 @@ def test_the_database_refuses_a_second_row_for_one_room(cron_db):
     db.cur.execute(insert, (f"ucron-{uuid.uuid4().hex[:12]}", db.tenant, room_id))
     with pytest.raises(psycopg2.errors.UniqueViolation):
         db.cur.execute(insert, (f"ucron-{uuid.uuid4().hex[:12]}", db.tenant, room_id))
+
+
+@pytest.mark.integration
+def test_a_sync_that_changes_neither_schedule_nor_state_keeps_the_next_run(cron_db):
+    db = cron_db
+    room_id = str(uuid.uuid4())
+    kwargs = {
+        "tenant_id": db.tenant,
+        "room_id": room_id,
+        "agent_id": "main",
+        "run_as_user_id": db.alice,
+        "enabled": True,
+    }
+    first = user_cron.sync_room_cronjob(prompt="Summarise.", schedule=SCHEDULE, **kwargs)
+    kept = user_cron.sync_room_cronjob(prompt="Summarise better.", schedule=SCHEDULE, **kwargs)
+    moved = user_cron.sync_room_cronjob(
+        prompt="Summarise better.", schedule={"kind": "interval", "every_seconds": 60}, **kwargs
+    )
+
+    assert first is not None and kept is not None and moved is not None
+    assert kept["next_run_at"] == first["next_run_at"]
+    assert user_cron.get_room_cronjob(db.tenant, room_id)["prompt"] == "Summarise better."
+    assert moved["next_run_at"] < first["next_run_at"]
