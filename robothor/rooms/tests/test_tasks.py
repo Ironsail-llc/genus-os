@@ -708,3 +708,39 @@ def test_a_top_level_run_may_act_and_a_sub_agent_may_not(db):
         db.cur.execute("DELETE FROM agent_runs WHERE tenant_id = %s AND parent_run_id IS NOT NULL",
                        (db.tenant,))  # fmt: skip
         db.cur.execute("DELETE FROM agent_runs WHERE tenant_id = %s", (db.tenant,))
+
+
+# ─── a removal is cleared only by an explicit share ──────────────────────
+
+
+def test_adding_a_member_never_clears_their_removal(db):
+    """Only ``definition.share_room`` (someone who may share the workspace)
+    ends a removal; a plain add, a self-join or any other path keeps it."""
+    from robothor.rooms import dal, definition, tasks
+    from robothor.rooms.errors import RoomNotFound
+
+    task_id = crm_task(db)
+    room = tasks.open_task_room(actor(db, "bob"), task_id)
+    db.cur.execute("UPDATE crm_tasks SET assignee_id = %s WHERE id = %s", (db.alice, task_id))
+    tasks.open_task_room(actor(db, "alice"), task_id)
+    dal.remove_member(db.tenant, room.id, db.alice, removed_by=db.bob)
+
+    dal.add_member(db.tenant, room.id, db.alice, added_by=db.alice)
+    assert dal.was_removed(db.tenant, room.id, db.alice)
+    dal.remove_member(db.tenant, room.id, db.alice, removed_by=db.bob)
+    with pytest.raises(RoomNotFound):
+        tasks.open_task_room(actor(db, "alice"), task_id)
+
+    definition.share_room(actor(db, "bob"), room.id, db.alice)
+    assert not dal.was_removed(db.tenant, room.id, db.alice)
+
+
+def test_a_plain_add_keeps_the_removal_record(db):
+    from robothor.rooms import dal
+
+    room = report_room(db, shared=("carol",))
+    dal.remove_member(db.tenant, room.id, db.carol, removed_by=db.alice)
+
+    dal.add_member(db.tenant, room.id, db.carol, added_by=db.carol)
+
+    assert dal.was_removed(db.tenant, room.id, db.carol)
