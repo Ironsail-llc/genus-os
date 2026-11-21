@@ -314,7 +314,8 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
                       {...props}
                       value={form.scheduleText}
                       readOnly={!editable}
-                      placeholder="every Monday at 08:00"
+                      placeholder="every 6 hours or 0 8 * * 1"
+                      data-schedule-example
                       onChange={(e) => update("scheduleText", e.target.value)}
                     />
                   )}

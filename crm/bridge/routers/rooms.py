@@ -47,6 +47,7 @@ from robothor.rooms.errors import (
 )
 from robothor.rooms.keys import canonical_uuid
 from robothor.rooms.models import room_link
+from routers import _manifest_backend
 from routers._audit import audited
 from routers._engine_client import engine_request
 
@@ -124,6 +125,8 @@ def _invalid(exc: ValueError, field: str | None = None) -> JSONResponse:
         return _problem(422, "invalid_schedule", str(exc), field="scheduleText")
     if isinstance(exc, Ineligible):
         return _problem(422, "ineligible_account", str(exc), field=exc.field)
+    if isinstance(exc, definition.RevisionNotFound):
+        return _problem(404, "not_found", str(exc), field="rev")
     named = getattr(exc, "field", None)
     if isinstance(named, str) and named:
         field = _camel(named)
@@ -218,6 +221,30 @@ class Ineligible(ValueError):  # noqa: N818 - reads as the refusal it is
     def __init__(self, message: str, field: str) -> None:
         super().__init__(message)
         self.field = field
+
+
+class AgentsUnavailableError(RuntimeError):
+    """The acting company's engine could not say which agents it has."""
+
+
+def _company_agents(actor: access.Actor) -> frozenset[str]:
+    """The agent ids the acting company's engine loads.
+
+    The engine owns the fleet; this asks it the way the fleet views do
+    (``_manifest_backend``) rather than reading a manifest directory in the
+    bridge process, which may not be the company's or may not be mounted.
+    """
+    try:
+        scan = _manifest_backend.scan_from_worker_thread(actor.tenant_id)
+    except HTTPException as exc:
+        raise AgentsUnavailableError(str(exc.detail)) from exc
+    if getattr(scan, "dir_readable", True) is False:
+        raise AgentsUnavailableError("the agent directory is not readable")
+    return frozenset(
+        str(m.get("id"))
+        for m in getattr(scan, "manifests", ())
+        if isinstance(m, dict) and m.get("id")
+    )
 
 
 def _eligible(
@@ -472,6 +499,15 @@ def api_create_room(request: Request, body: CreateRoomBody) -> Any:
         share_with = [
             _eligible(actor, u, _HUMAN_ROLES, field="shareWith")["id"] for u in body.share_with
         ]
+        try:
+            agents = _company_agents(actor)
+        except AgentsUnavailableError:
+            return _problem(
+                502,
+                "agents_unavailable",
+                "the company's agents could not be checked; try again in a moment",
+                field="agentId",
+            )
         room = definition.create_room_with_schedule(
             actor,
             kind=body.kind,
@@ -482,6 +518,7 @@ def api_create_room(request: Request, body: CreateRoomBody) -> Any:
             tz=body.tz,
             default_grain=body.default_grain,
             share_with=tuple(u for u in share_with if u != actor.user_id),
+            agent_known=agents.__contains__,
         )
     except ValueError as exc:
         return _invalid(exc)
@@ -544,7 +581,7 @@ def api_update_room(room_id: str, request: Request, body: UpdateRoomBody) -> Any
 @router.post("/{room_id}/archive")
 def api_archive_room(room_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "archive")
-    archived = dal.archive_room(actor.tenant_id, room.id) or room
+    archived = definition.archive_room(actor, room.id)
     _audit(request, "room.archive", room.id)
     _announce(actor, room.id)
     return _room_json(actor, archived)
@@ -553,9 +590,7 @@ def api_archive_room(room_id: str, request: Request) -> Any:
 @router.post("/{room_id}/unarchive")
 def api_unarchive_room(room_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "archive")
-    if not _is_admin(actor):
-        raise RoomForbidden("restoring an archived workspace needs a company admin")
-    restored = dal.unarchive_room(actor.tenant_id, room.id) or room
+    restored = definition.unarchive_room(actor, room.id)
     _audit(request, "room.unarchive", room.id)
     _announce(actor, room.id)
     return _room_json(actor, restored)
@@ -564,9 +599,7 @@ def api_unarchive_room(room_id: str, request: Request) -> Any:
 @router.post("/{room_id}/duplicate", status_code=201)
 def api_duplicate_room(room_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "duplicate")
-    if actor.role not in _WORKING_ROLES:
-        raise RoomForbidden(f"the {actor.role} role cannot create a workspace")
-    copy = dal.duplicate_room(actor.tenant_id, room.id, actor.user_id)
+    copy = definition.duplicate_room(actor, room.id)
     _audit(request, "room.duplicate", copy.id, source_room_id=room.id)
     _announce(actor, copy.id)
     return _room_json(actor, copy)
@@ -646,15 +679,11 @@ def api_restore_revision(
 ) -> Any:
     actor, room = _guard(request, room_id, "restore_revision")
     try:
-        saved = dal.restore_revision(
-            actor.tenant_id,
-            room.id,
-            rev,
-            actor.user_id,
-            expected_rev=body.expected_rev if body else None,
+        saved = definition.restore_room_revision(
+            actor, room.id, rev, expected_rev=body.expected_rev if body else None
         )
     except ValueError as exc:
-        return _problem(404, "not_found", str(exc), field="rev")
+        return _invalid(exc)
     _audit(request, "room.restore", room.id, restored_rev=rev, rev=saved.rev)
     _announce(actor, room.id)
     return _room_json(actor, saved)
@@ -681,6 +710,8 @@ def api_share(
     except ValueError as exc:
         return _invalid(exc)
     wanted = body.assigned if body else None
+    if wanted and account.get("role") not in _WORKING_ROLES:
+        return _invalid(Ineligible(f"a {account.get('role')} account cannot be assigned", "userId"))
     existing = dal.get_member(actor.tenant_id, room.id, account["id"])
     if existing is not None and wanted is False and existing.assigned:
         refusal = _keeps_a_manager(actor, room, existing.user_id)

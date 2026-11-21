@@ -17,7 +17,7 @@ plus ``ValueError`` for a request that cannot be applied, of which
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -37,7 +37,9 @@ __all__ = [
     "CREATABLE_KINDS",
     "DEFAULT_AGENT",
     "ROOM_MIN_INTERVAL_SECONDS",
+    "InvalidField",
     "InvalidSchedule",
+    "RevisionNotFound",
     "TenantUser",
     "UnsafeInstructions",
     "agent_exists",
@@ -53,6 +55,7 @@ __all__ = [
     "room_schedule",
     "run_as_actor",
     "share_room",
+    "unarchive_room",
     "unshare_room",
 ]
 
@@ -95,6 +98,18 @@ class UnsafeInstructions(ValueError):  # noqa: N818 - name fixed by the lane con
 
 class InvalidSchedule(ValueError):  # noqa: N818 - name fixed by the lane contract
     """The schedule does not parse, does not repeat, or runs too often."""
+
+
+class InvalidField(ValueError):  # noqa: N818 - reads as the refusal it is
+    """A refused value of one named field (``field`` is the snake_case name)."""
+
+    def __init__(self, message: str, field: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
+class RevisionNotFound(ValueError):  # noqa: N818 - reads as the refusal it is
+    """The room has no revision with that number."""
 
 
 @dataclass(frozen=True)
@@ -180,7 +195,7 @@ def _check_tz(tz: Any) -> None:
     try:
         ZoneInfo(str(tz))
     except (ZoneInfoNotFoundError, ValueError) as exc:
-        raise ValueError(f"unknown time zone {tz!r}") from exc
+        raise InvalidField(f"unknown time zone {tz!r}", "tz") from exc
 
 
 def _check_creator(actor: Actor) -> None:
@@ -311,6 +326,7 @@ def create_room_with_schedule(
     tz: str | None = None,
     default_grain: str | None = None,
     share_with: Iterable[str] = (),
+    agent_known: Callable[[str], bool] | None = None,
 ) -> Room:
     """A new room: the caller assigned and run-as, revision 1, ``share_with``
     added as shared members, and, when scheduled, its schedule row.
@@ -318,13 +334,19 @@ def create_room_with_schedule(
     Everything is checked before anything is written: the caller's role, the
     kind, the agent, the instructions, the time zone, the schedule and every
     person in ``share_with``.
+
+    ``agent_known`` answers whether the company has an agent. The engine's own
+    callers leave it out (``agent_exists`` reads the engine's manifests); the
+    bridge, which does not own the fleet, passes the answer of the acting
+    company's engine.
     """
     _check_creator(actor)
     if kind not in CREATABLE_KINDS:
         raise ValueError(f"kind must be one of {sorted(CREATABLE_KINDS)}")
     agent = DEFAULT_AGENT if agent_id is None else agent_id
-    if not isinstance(agent, str) or not agent or ":" in agent or not agent_exists(agent):
-        raise ValueError(f"no agent {agent!r} is available for a workspace")
+    known = agent_known or agent_exists
+    if not isinstance(agent, str) or not agent or ":" in agent or not known(agent):
+        raise InvalidField(f"no agent {agent!r} is available for a workspace", "agent_id")
     _scan(title, instructions)
     _check_tz(tz)
     text = (schedule_text or "").strip() or None
@@ -411,17 +433,22 @@ def apply_definition_change(
     return saved
 
 
-def restore_room_revision(actor: Actor, room_id: str, rev: int) -> Room:
-    """Write a new revision equal to revision ``rev``, re-checked as a change."""
+def restore_room_revision(
+    actor: Actor, room_id: str, rev: int, *, expected_rev: int | None = None
+) -> Room:
+    """Write a new revision equal to revision ``rev``, re-checked as a change.
+    With ``expected_rev``, a room that moved on is a ``RevisionConflict``."""
     room = access.require(actor, room_id, "restore_revision")
     old = next((r for r in dal.list_revisions(actor.tenant_id, room.id) if r.rev == rev), None)
     if old is None:
-        raise ValueError(f"the workspace has no revision {rev}")
+        raise RevisionNotFound(f"the workspace has no revision {rev}")
     settings = dict(old.definition.get("settings") or {})
     _scan(old.definition.get("title"), old.definition.get("instructions"))
     if settings.get("schedule_text"):
         _parse_schedule(str(settings["schedule_text"]), settings.get("tz"))
-    saved = dal.restore_revision(actor.tenant_id, room.id, rev, actor.user_id)
+    saved = dal.restore_revision(
+        actor.tenant_id, room.id, rev, actor.user_id, expected_rev=expected_rev
+    )
     _sync_schedule(saved)
     return saved
 
@@ -446,6 +473,19 @@ def archive_room(actor: Actor, room_id: str) -> Room:
         raise RoomNotFound(room_id)
     _sync_schedule(archived)
     return archived
+
+
+def unarchive_room(actor: Actor, room_id: str) -> Room:
+    """Bring an archived room back, paused: its schedule stays off until an
+    assigned member resumes it. Only a company owner or admin may."""
+    room = access.require(actor, room_id, "archive")
+    if actor.is_service or actor.role not in _ADMIN_ROLES:
+        raise RoomForbidden("restoring an archived workspace needs a company admin")
+    restored = dal.unarchive_room(actor.tenant_id, room.id)
+    if restored is None:
+        raise RoomNotFound(room_id)
+    _sync_schedule(restored)
+    return restored
 
 
 # ─── people in a room ────────────────────────────────────────────────────
