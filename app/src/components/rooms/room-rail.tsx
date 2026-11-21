@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { BarChart3, Bot, ChevronDown, ListChecks, MessageSquare, PauseCircle } from "lucide-react";
+import { RailAdminEntry } from "@/components/rooms/room-controls-lazy";
 import { ROOM_GROUP_LABELS, ROOM_LABEL } from "@/lib/rooms/labels";
 import type { RoomKind, RoomSummary } from "@/lib/rooms/types";
 
@@ -131,6 +132,7 @@ function RailNav({ rooms, activeRoomId, onSelect, isLoading, error, header }: Ro
           ))}
         </RailGroup>
       )}
+      <RailAdminEntry onOpenRoom={onSelect} />
     </nav>
   );
 }
