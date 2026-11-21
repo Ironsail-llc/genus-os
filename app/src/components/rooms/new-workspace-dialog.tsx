@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,10 +14,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { useAgents } from "@/hooks/use-agents";
-import { createRoom } from "@/lib/rooms/api";
+import { createRoom, fetchWorkspaceAgents } from "@/lib/rooms/api";
+import { useAppQueryClient } from "@/lib/query/query-client";
 import { ROOM_LABEL } from "@/lib/rooms/labels";
 import { useEnterRoom } from "./open-as-workspace";
+
+export const AGENTS_UNAVAILABLE_MESSAGE = "The company's agents could not be listed; try again in a moment.";
 
 export const CANNOT_CREATE_MESSAGE = `Your role can't create ${ROOM_LABEL.plural.toLowerCase()}. Ask a company admin if you need one.`;
 
@@ -44,9 +47,14 @@ export function NewWorkspaceDialog({
   initialTitle: string;
   onClose: () => void;
 }) {
-  const { agents } = useAgents();
+  // The company engine's agents, as create checks them: a member may read
+  // these, where the fleet's health views are for operators.
+  const listed = useQuery(
+    { queryKey: ["rooms", "agents"], queryFn: ({ signal }) => fetchWorkspaceAgents(signal), retry: false },
+    useAppQueryClient(),
+  );
   const enter = useEnterRoom();
-  const choices = agents.filter((a): a is typeof a & { agentId: string } => Boolean(a.agentId));
+  const choices = listed.data ?? [];
   const fallback = choices.find((a) => a.agentId === "main")?.agentId ?? choices[0]?.agentId ?? "";
   const [agentPicked, setAgentPicked] = useState<string | null>(initialAgentId ?? null);
   const agentId = agentPicked ?? fallback;
@@ -120,9 +128,9 @@ export function NewWorkspaceDialog({
               data-testid="new-workspace-title"
             />
           </label>
-          {error && (
+          {(error || listed.isError) && (
             <p className="text-xs text-destructive" role="alert" data-testid="new-workspace-error">
-              {error}
+              {error ?? AGENTS_UNAVAILABLE_MESSAGE}
             </p>
           )}
           <DialogFooter>

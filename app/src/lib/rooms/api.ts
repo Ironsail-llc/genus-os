@@ -286,6 +286,29 @@ export async function fetchPeople(signal?: AbortSignal): Promise<Person[]> {
     });
 }
 
+export const WORKSPACE_AGENTS_ENDPOINT = `${ROOMS_ENDPOINT}/agents`;
+
+export interface WorkspaceAgent {
+  agentId: string;
+  name: string;
+}
+
+/**
+ * The agents a workspace can be started with (`GET /api/rooms/agents` ->
+ * `{agents: [{agentId, name}]}`): the company engine's, which any member may
+ * read. A refusal is thrown, not shown as "no agents".
+ */
+export async function fetchWorkspaceAgents(signal?: AbortSignal): Promise<WorkspaceAgent[]> {
+  const data = await getJson<{ agents?: unknown }>(WORKSPACE_AGENTS_ENDPOINT, signal);
+  const rows = Array.isArray(data?.agents) ? (data.agents as Record<string, unknown>[]) : [];
+  return rows
+    .filter((a) => a && typeof a.agentId === "string" && a.agentId)
+    .map((a) => {
+      const id = a.agentId as string;
+      return { agentId: id, name: typeof a.name === "string" && a.name.trim() ? a.name.trim() : id };
+    });
+}
+
 export interface LinkedChannel {
   name: string;
   label: string;

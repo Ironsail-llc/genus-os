@@ -346,8 +346,8 @@ class AgentsUnavailableError(RuntimeError):
     """The acting company's engine could not say which agents it has."""
 
 
-def _company_agents(actor: access.Actor) -> frozenset[str]:
-    """The agent ids the acting company's engine loads.
+def _company_manifests(actor: access.Actor) -> dict[str, str]:
+    """The agents the acting company's engine loads: id -> display name.
 
     The engine owns the fleet; this asks it the way the fleet views do
     (``_manifest_backend``) rather than reading a manifest directory in the
@@ -359,11 +359,16 @@ def _company_agents(actor: access.Actor) -> frozenset[str]:
         raise AgentsUnavailableError("the manifest scan failed") from exc
     if getattr(scan, "dir_readable", True) is False:
         raise AgentsUnavailableError("the agent directory is not readable")
-    return frozenset(
-        str(m.get("id"))
+    return {
+        str(m["id"]): str(m.get("name") or m["id"])
         for m in getattr(scan, "manifests", ())
         if isinstance(m, dict) and m.get("id")
-    )
+    }
+
+
+def _company_agents(actor: access.Actor) -> frozenset[str]:
+    """The agent ids the acting company's engine loads."""
+    return frozenset(_company_manifests(actor))
 
 
 def _eligible(
@@ -579,6 +584,23 @@ def api_directory(request: Request) -> Any:
     actor = _human(request, _WORKING_ROLES)
     users = dal.list_directory(actor.tenant_id)
     return {"users": [{"userId": u["id"], "displayName": u["display_name"]} for u in users]}
+
+
+@router.get("/agents")
+def api_workspace_agents(request: Request) -> Any:
+    """The agents a workspace can be started with: the acting company's
+    engine's, as create checks them. For the "New workspace" dialog, which a
+    member uses but the fleet views are not for. Ids and names only."""
+    actor = _human(request, _WORKING_ROLES)
+    try:
+        agents = _company_manifests(actor)
+    except AgentsUnavailableError:
+        return _problem(
+            502,
+            "agents_unavailable",
+            "the company's agents could not be listed; try again in a moment",
+        )
+    return {"agents": [{"agentId": agent, "name": name} for agent, name in sorted(agents.items())]}
 
 
 @router.post("", status_code=201)
