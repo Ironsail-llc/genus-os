@@ -34,7 +34,7 @@ from robothor.rooms.models import (
 )
 
 if TYPE_CHECKING:
-    from datetime import date
+    from datetime import date, datetime
 
 __all__ = [
     "accept_task",
