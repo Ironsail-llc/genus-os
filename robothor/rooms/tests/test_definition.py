@@ -76,8 +76,8 @@ def _share(db: Any, room: Any, name: str, *, assigned: bool = False) -> None:
 # ─── A1: create a report in conversation ────────────────────────────────
 
 
-def test_the_minimum_interval_is_fifteen_minutes():
-    assert definition.ROOM_MIN_INTERVAL_SECONDS == 900
+def test_workspaces_add_no_minimum_interval_of_their_own():
+    assert not hasattr(definition, "ROOM_MIN_INTERVAL_SECONDS")
 
 
 def test_a_member_creates_a_scheduled_report_she_is_assigned_to_and_runs_as(staff_db):
@@ -141,16 +141,21 @@ def test_instructions_that_trip_the_injection_scanner_are_refused_and_nothing_is
 
 
 @pytest.mark.parametrize(
-    "schedule", ["every 5m", "every 14 minutes", "*/5 * * * *", "0,10 9 * * *"]
+    "schedule,kind",
+    [
+        ("every 1m", "interval"),
+        ("every 5m", "interval"),
+        ("* * * * *", "cron"),
+        ("*/5 * * * *", "cron"),
+        ("0,10 9 * * *", "cron"),
+    ],
 )
-def test_a_schedule_faster_than_the_minimum_is_refused_naming_it(staff_db, schedule):
+def test_a_schedule_as_frequent_as_the_platform_allows_is_accepted(staff_db, schedule, kind):
+    """No workspace-specific floor: the platform parser's one-minute floor is the only one."""
     db = staff_db
-    with pytest.raises(definition.InvalidSchedule) as caught:
-        _report(db, schedule_text=schedule)
-
-    assert isinstance(caught.value, ValueError)
-    assert "15 minutes" in str(caught.value)
-    assert _room_count(db) == 0
+    room = _report(db, schedule_text=schedule)
+    rows = _cron_rows(db, room.id)
+    assert [(r["schedule_kind"], r["enabled"]) for r in rows] == [(kind, True)]
 
 
 @pytest.mark.parametrize("schedule", ["every 30 seconds", "whenever you like", "in 2 hours"])
@@ -291,11 +296,18 @@ def test_rename_and_new_instructions_write_one_revision(staff_db):
         _actor(db, "alice"),
         room.id,
         1,
-        {"title": "Daily sales (EMEA)", "instructions": "Only EMEA.", "max_cost_usd": 2.5},
+        {"title": "Daily sales (EMEA)", "instructions": "Only EMEA."},
     )
 
     assert (saved.title, saved.instructions, saved.rev) == ("Daily sales (EMEA)", "Only EMEA.", 2)
-    assert saved.settings["max_cost_usd"] == 2.5
+
+
+def test_a_cost_cap_is_not_a_change_a_workspace_takes(staff_db):
+    db = staff_db
+    room = _report(db)
+    with pytest.raises(ValueError, match="max_cost_usd"):
+        definition.apply_definition_change(_actor(db, "alice"), room.id, 1, {"max_cost_usd": 2.5})
+    assert dal.get_room(db.tenant, room.id).rev == 1
 
 
 def test_changed_instructions_are_scanned_again_and_nothing_is_written(staff_db):
@@ -313,13 +325,21 @@ def test_changed_instructions_are_scanned_again_and_nothing_is_written(staff_db)
     assert [r.rev for r in dal.list_revisions(db.tenant, room.id)] == [1]
 
 
-def test_a_faster_schedule_on_update_is_refused_and_nothing_is_written(staff_db):
+def test_an_every_minute_schedule_on_update_is_accepted(staff_db):
     db = staff_db
     room = _report(db)
-    with pytest.raises(definition.InvalidSchedule, match="15 minutes"):
-        definition.apply_definition_change(
-            _actor(db, "alice"), room.id, 1, {"schedule_text": "every 1m"}
-        )
+    saved = definition.apply_definition_change(
+        _actor(db, "alice"), room.id, 1, {"schedule_text": "every 1m"}
+    )
+    assert saved.rev == 2
+    assert _cron_rows(db, room.id)[0]["schedule_kind"] == "interval"
+
+
+def test_an_unusable_schedule_on_update_is_refused_and_nothing_is_written(staff_db):
+    db = staff_db
+    room = _report(db)
+    with pytest.raises(definition.InvalidSchedule, match="repeats"):
+        definition.apply_definition_change(_actor(db, "alice"), room.id, 1, {"schedule_text": "2h"})
     assert dal.get_room(db.tenant, room.id).rev == 1
     assert _cron_rows(db, room.id)[0]["schedule_payload"]["expression"] == "0 8 * * *"
 

@@ -1934,10 +1934,9 @@ _ROOM_SCHEMAS: dict[str, dict[str, Any]] = {
         "conversation with an agent). BEFORE calling, restate the title, the period each "
         "run covers, the schedule and time zone, the data sources the instructions use "
         "and who it will be shared with, and get a yes. The person becomes its assigned "
-        "owner and scheduled runs use their permissions. Schedules repeat at most every "
-        "15 minutes. For a scheduled report a person will read, use this rather than "
-        "register_user_cron, which re-runs you with a prompt and has no workspace, "
-        "sharing or editions. Without a schedule it exists unscheduled; tell them how to "
+        "owner and scheduled runs use their permissions. For a scheduled report a person "
+        "will read, use this rather than register_user_cron, which re-runs you with a "
+        "prompt and has no workspace, sharing or editions. Without a schedule it exists unscheduled; tell them how to "
         "add one." + _ROOM_LINK_RULE,
         {
             "kind": {
@@ -1985,7 +1984,7 @@ _ROOM_SCHEMAS: dict[str, dict[str, Any]] = {
                 "description": (
                     "Any of: title, instructions, schedule_text (null removes the schedule), "
                     "tz, default_grain, paused (true/false; resuming runs next from now), "
-                    "notify_default, max_cost_usd"
+                    "notify_default"
                 ),
             },
         },

@@ -5,7 +5,7 @@ The one place the rules for a room's definition live. The main agent's
 bridge's ``/api/rooms`` routes are thin wrappers over these functions, so a
 room created in conversation and one created in the dashboard are checked the
 same way: access through ``robothor.rooms.access``, instructions through the
-injection scanner, the schedule through ``cron_parse`` and the room minimum,
+injection scanner, the schedule through ``cron_parse`` (which must repeat),
 every definition change as a numbered revision, and the room's one schedule
 row in ``user_cronjobs`` kept in step with the room.
 
@@ -35,7 +35,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CREATABLE_KINDS",
-    "ROOM_MIN_INTERVAL_SECONDS",
     "InvalidField",
     "InvalidSchedule",
     "RevisionNotFound",
@@ -61,11 +60,6 @@ __all__ = [
     "unshare_room",
 ]
 
-#: The shortest gap between two scheduled runs of one room: 15 minutes. A
-#: report that refreshes more often than this is a dashboard, and each run is
-#: a full agent turn with its own cost.
-ROOM_MIN_INTERVAL_SECONDS = 900
-
 #: Task rooms come from a CRM task (``dal.get_or_create_task_room``), never here.
 CREATABLE_KINDS = frozenset({"report", "agent"})
 
@@ -81,18 +75,15 @@ CHANGE_KEYS = frozenset(
         "default_grain",
         "paused",
         "notify_default",
-        "max_cost_usd",
     }
 )
-_SETTING_CHANGES = ("tz", "default_grain", "notify_default", "max_cost_usd")
+_SETTING_CHANGES = ("tz", "default_grain", "notify_default")
 _SCHEDULE_CHANGES = frozenset({"schedule_text", "tz", "paused"})
 #: What the schedule row copies from the room: the schedule, and the
 #: instructions it stores as its prompt.
 _SYNC_CHANGES = _SCHEDULE_CHANGES | {"instructions"}
 _STAFF_ROLES = frozenset({"owner", "admin", "member", "user"})
 _ADMIN_ROLES = frozenset({"owner", "admin"})
-#: How many upcoming fire times of a cron schedule are checked for the minimum.
-_CRON_SAMPLE = 48
 
 
 class UnsafeInstructions(ValueError):  # noqa: N818 - name fixed by the lane contract
@@ -157,14 +148,12 @@ def _scan(*texts: str | None) -> None:
             )
 
 
-def _too_fast() -> InvalidSchedule:
-    return InvalidSchedule(
-        f"a workspace runs at most every {ROOM_MIN_INTERVAL_SECONDS // 60} minutes"
-    )
-
-
 def _parse_schedule(text: str, tz: str | None) -> dict[str, Any]:
-    """The ``parse_schedule`` payload for a room, or ``InvalidSchedule``."""
+    """The ``parse_schedule`` payload for a room, or ``InvalidSchedule``.
+
+    As frequent as the platform parser allows for any user cron; a workspace
+    adds no floor of its own. It must repeat, and a cron expression must run.
+    """
     from robothor.engine.cron_parse import parse_schedule
     from robothor.engine.crontab import cron_trigger
 
@@ -177,25 +166,13 @@ def _parse_schedule(text: str, tz: str | None) -> dict[str, Any]:
             f"{text!r} runs once; a workspace schedule repeats (for one run now, use run now)"
         )
     if schedule["kind"] == "interval":
-        if int(schedule["every_seconds"]) < ROOM_MIN_INTERVAL_SECONDS:
-            raise _too_fast()
         return schedule
     try:
         trigger = cron_trigger(str(schedule["expression"]), timezone=tz or "UTC")
     except ValueError as exc:
         raise InvalidSchedule(f"invalid schedule {text!r}: {exc}") from exc
-    fires: list[datetime] = []
-    previous: datetime | None = None
-    moment = datetime.now(UTC)
-    for _ in range(_CRON_SAMPLE):
-        nxt = trigger.get_next_fire_time(previous, moment)
-        if nxt is None:
-            break
-        fires.append(nxt)
-        previous, moment = nxt, nxt
-    gaps = [(b - a).total_seconds() for a, b in zip(fires, fires[1:], strict=False)]
-    if not fires or (gaps and min(gaps) < ROOM_MIN_INTERVAL_SECONDS):
-        raise _too_fast()
+    if trigger.get_next_fire_time(None, datetime.now(UTC)) is None:
+        raise InvalidSchedule(f"{text!r} never runs")
     return {**schedule, "tz": tz or "UTC"}
 
 
@@ -217,11 +194,6 @@ def _check_creator(actor: Actor) -> None:
 
 
 def _check_setting_values(changes: Mapping[str, Any]) -> None:
-    cost = changes.get("max_cost_usd")
-    if cost is not None and (
-        isinstance(cost, bool) or not isinstance(cost, int | float) or cost < 0
-    ):
-        raise ValueError("max_cost_usd must be a number of dollars, zero or more")
     notify = changes.get("notify_default")
     if notify is not None and not isinstance(notify, bool | str | dict):
         raise ValueError("notify_default must be true/false, a name or an object")
