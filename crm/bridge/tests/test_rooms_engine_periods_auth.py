@@ -119,3 +119,11 @@ async def test_a_requester_without_an_account_here_is_not_served(requests):
 
     assert status == 404
     assert requests == []
+
+
+def test_the_engine_pins_the_bridges_own_service_identity():
+    from routers._engine_client import SERVICE_ID
+
+    from robothor.engine.rooms_api import BRIDGE_SERVICE_ID
+
+    assert SERVICE_ID == BRIDGE_SERVICE_ID

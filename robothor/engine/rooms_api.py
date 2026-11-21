@@ -4,8 +4,10 @@ The bridge owns the rest of ``/api/rooms``. A run lives in THIS process, so
 asking for a period (and, later, running a room now) comes here.
 
 Who is asking: a human token is its own identity (any ``requested_by`` in the
-body is ignored). The bridge calls with its SERVICE token after its own access
-check and names the person in ``requested_by``; the engine then reads that
+body is ignored). The bridge calls with its SERVICE token (its engine
+credential, ``engine:control``, which ``engine/auth.py`` requires of a service
+here) after its own access check and names the person in ``requested_by``. Only
+the bridge's service identity may name a person: any other service gets 403; the engine then reads that
 person's role from their account, never from the body, and checks their
 access again. An account that is missing, inactive, or lives in another tenant
 gets the same 404 as no access (so a parent tenant's admin acting in a child
@@ -39,6 +41,10 @@ __all__ = ["register", "router"]
 
 router = APIRouter(prefix="/api/rooms", tags=["rooms"])
 
+#: The service identity of the bridge's engine credential
+#: (``crm/bridge/routers/_engine_client.SERVICE_ID``).
+BRIDGE_SERVICE_ID = "genus-bridge"
+
 
 class PeriodRequest(BaseModel):
     grain: StrictStr
@@ -53,12 +59,18 @@ class RequesterRequired(Exception):  # noqa: N818 - a refusal, read as one
     """A service call that names no person."""
 
 
+class NotTheBridge(Exception):  # noqa: N818 - a refusal, read as one
+    """A service other than the bridge tried to act for a person."""
+
+
 def _requester(auth: AuthContext, requested_by: str | None) -> Actor | None:
     """The person asking: the token's own identity, or for a service token the
     account ``requested_by`` names, with that account's role. None when that
     account does not stand in the token's tenant. Blocking (one SELECT)."""
     if not auth.is_service:
         return Actor.from_auth(auth)
+    if auth.user_id != BRIDGE_SERVICE_ID:
+        raise NotTheBridge
     if not requested_by:
         raise RequesterRequired
     user_id = canonical_uuid(requested_by)
@@ -85,6 +97,8 @@ async def request_room_period(room_id: str, body: PeriodRequest, request: Reques
     """The period's edition: 200 when it exists, 202 when a run was started."""
     try:
         actor = await asyncio.to_thread(_requester, request_context(request), body.requested_by)
+    except NotTheBridge:
+        return _refusal(403, "forbidden", "only the bridge may act for a person")
     except RequesterRequired:
         return _refusal(400, "requested_by_required", "a service call names the person asking")
     if actor is None:
