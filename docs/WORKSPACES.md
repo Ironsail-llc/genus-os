@@ -73,9 +73,8 @@ A schedule must repeat. It takes one of two forms:
 | A five-field cron expression, read in the workspace's time zone | `0 8 * * 1` (08:00 every Monday) |
 
 A one-off time is refused: a bare duration such as `2h` or an ISO time such as
-`2026-12-01T09:00:00Z`. For a single run, use run now. A workspace runs at most
-every 15 minutes; an interval or cron expression whose runs come closer
-together than that is refused.
+`2026-12-01T09:00:00Z`. For a single run, use run now. A workspace may run as
+often as any scheduled job on the platform: at most once a minute.
 
 ### Pause, archive, restore
 
@@ -110,19 +109,32 @@ edition, not a sum of seven days.
 
 - Periods are whole local days in the workspace's time zone, end included.
   A day is one date, a week runs Monday to Sunday, a month is a calendar month,
-  and a custom range is at most 93 days.
+  and a custom range is any run of past days.
 - Only a period that has ended can be asked for: its last day must be before
   today in the workspace's time zone. The period picker offers nothing after
   yesterday.
 - Asking for a period that already has an edition opens it. Otherwise one run
   builds it; people who ask at the same moment share that run.
-- A workspace runs at most a set number of on-demand editions per local day,
-  5 unless its settings say otherwise (0 allows none). Every edition a person
-  asked for counts, previews included. Past the cap nothing starts.
+- Asking for periods is not rationed: every request for a period with no
+  edition starts its run.
 - Publishing a period again publishes its next revision; earlier ones stay.
-- Each edition says how it was made: the run, who it ran as, when it started
-  and the tools it called. The server records this from the run; the agent
-  cannot set it.
+- Each edition says how it was made: the run, who it ran as, when it started,
+  the tools it called and what the run cost. The server records this from the
+  run; the agent cannot set it. Open "How this was made" on an edition to see it.
+
+## When runs fail
+
+Nothing limits how much a workspace runs; instead, problems are made visible
+and stuck work is cleaned up:
+
+- A run that fails marks its edition failed and says why; the last good
+  edition stays on show.
+- A workspace whose scheduled runs fail several times in a row pauses itself,
+  and its assigned people are told why. Resume it once the cause is fixed.
+- A workspace whose run-as person is deactivated, or loses access, pauses
+  rather than run under stale permissions.
+- A run that dies part-way (an engine restart, a crash) is recovered: its
+  edition does not stay "building" for ever.
 
 ## Preview runs
 

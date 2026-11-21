@@ -92,8 +92,11 @@ user_cronjobs + room_id UUID, run_as_user_id UUID
 operation_actions + proposed_by_run_id TEXT, proposed_for_user_id UUID, room_id UUID
 ```
 
-`settings` keys: `tz` (IANA name), `default_grain`, `schedule_text`, `max_cost_usd`,
-`max_on_demand_per_day`, `notify_default`. The *definition* stored in a revision is
+`settings` keys: `tz` (IANA name), `default_grain`, `schedule_text`, `notify_default`.
+Nothing in a workspace is capped (operator decision, 2026-11-21): no cost cap, no
+on-demand limit, no room-specific schedule floor, no longest custom period. Cost is
+shown on each edition's provenance; repeated failures pause a workspace and say why; a
+run that dies is recovered. The *definition* stored in a revision is
 `{title, instructions, agent_id, settings, schedule}`.
 
 Role seed (`__default__`): `member` and `user` allow `room_*`, deny `room_admin_*`;
@@ -610,8 +613,7 @@ The seams between lanes, each crossed by a test:
 - **Periods.** The picker refuses any period whose last day is today or later in the
   room's zone (the engine's rule), says so while it is picked, offers no date after
   yesterday, and shows the engine's own words for any refusal it still makes. The
-  engine's cap refusal is 429 `on_demand_cap` with `limit` and `used`, as the bridge
-  passes it through.
+  engine's other refusals pass through the bridge unchanged.
 - **Schedules.** The only grammar is `robothor.engine.cron_parse`: `every N
   minutes|hours|days`, a five-field cron expression, or an ISO time (refused for a
   room). The settings drawer's example is checked against it
@@ -644,12 +646,12 @@ Lane 1 is serial. Lanes 2 to 6 run in parallel on it, then 7 to 11, then 12.
 ## Security review points
 
 Run-as exposure to shared users; the member-approval widening; instruction injection at
-save and at fire; edition text re-entering prompts (capped, wrapped as data); mirror text
-limited to summary and link; minimum interval, cost caps, auto-pause; the session key
+save and at fire; edition text re-entering prompts (bounded, wrapped as data); mirror text
+limited to summary and link; run cost visible on each edition, auto-pause after repeated
+failures, recovery of a run that dies; the session key
 never in notification metadata; preview editions never visible to others.
 
 ## Left to the builder
 
-How room tools reach agents other than the main one; where the per-run cost cap is
-enforced; the session cache under more than one engine replica; whether the scheduler
-tick must enumerate tenants.
+How room tools reach agents other than the main one; the session cache under more than
+one engine replica; whether the scheduler tick must enumerate tenants.
