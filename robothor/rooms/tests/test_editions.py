@@ -8,6 +8,7 @@ and the single extension point later lanes register into. Pure: no database.
 
 from __future__ import annotations
 
+import functools
 import html
 import json
 import random
@@ -452,19 +453,116 @@ def test_a_cut_through_an_encoded_reference_keeps_the_limit_and_the_text(tail) -
     assert _live(clean) is None
 
 
-def test_every_cut_through_the_corpus_keeps_the_limit_and_is_idempotent() -> None:
-    """Cut every corpus string at every position (a short field, so the cut
-    falls inside it): the output fits, cleaning it again changes nothing, and
-    nothing live survives."""
-    limit = 40
-    for raw in _corpus()[::5]:
-        for k in range(1, min(len(raw), 60) + 1, 3):
-            text = "y" * (limit - k) + raw
-            for one_line in (False, True):
-                clean = editions.clean_text(text, limit, one_line=one_line)
-                assert len(clean) <= limit, (text, clean)
-                assert editions.clean_text(clean, limit, one_line=one_line) == clean, (text, clean)
-                assert _live(clean) is None, (text, clean)
+def _cut_class(raw: str, k: int) -> str:
+    """What a cut after ``raw[:k]`` lands on."""
+    before, after = raw[k - 1], raw[k : k + 1]
+    head = raw[:k]
+    amp = max(head.rfind("&"), head.rfind("\uff06"))
+    if before in "&\uff06":
+        return "after an ampersand"
+    if amp >= 0 and not re.search(r"[\s;<>\[\]]", head[amp:]):
+        return "inside a reference"
+    if before == ";":
+        return "after a semicolon"
+    folded = unicodedata.normalize("NFKC", before + after)
+    if set(folded) & set("<>[]/|:"):
+        return "at a bracket or a marker"
+    if unicodedata.category(before)[0] in "CZ" or not before.isprintable():
+        return "after a space or a hidden character"
+    if not after:
+        return "at the very end"
+    return "in plain text"
+
+
+#: Every cut case starts with an unrelated ampersand, which must come through.
+_CUT_PREFIX = "R&D "
+_CUT_LIMIT = 40
+
+
+def _cut_text(raw: str, k: int) -> str:
+    """``raw`` placed so that the cut at ``_CUT_LIMIT`` keeps ``raw[:k]``."""
+    return _CUT_PREFIX + "y" * (_CUT_LIMIT - len(_CUT_PREFIX) - k) + raw
+
+
+@functools.cache
+def _cut_cases() -> tuple[tuple[str, str, int], ...]:
+    """Cuts through the corpus, at every kind of position each string has.
+
+    Every variant that carries a reference or a bracket form (case, nesting,
+    entities, look-alikes, padded references, amp chains) is kept; the
+    whitespace and hidden-character insertions and the chained mixes, which
+    repeat those shapes many times over, are taken at a fixed stride. For each
+    string, the first cut of each class (see ``_cut_class``) within the
+    field's span, behind an unrelated ampersand. Deterministic: the corpus is seeded."""
+    span = _CUT_LIMIT - len(_CUT_PREFIX)
+    cases: list[tuple[str, str, int]] = []
+    seen: set[str] = set()
+    for base in _BASES:
+        kinds = [
+            [
+                base,
+                base.upper(),
+                base.lower(),
+                base.swapcase(),
+                base[:-1],
+                base[:3] + base + base[3:],
+            ],
+            _substitutions(base, _ENTITIES),
+            _substitutions(base, _LOOKALIKES),
+            _padded(base),
+            _insertions(base, _SPACES)[::15],
+            _insertions(base, _HIDDEN)[::15],
+        ]
+        for raw in (r for kind in kinds for r in kind):
+            classes: set[str] = set()
+            for k in range(1, min(len(raw), span) + 1):
+                cls = _cut_class(raw, k)
+                text = _cut_text(raw, k)
+                if cls in classes or text in seen:
+                    continue
+                classes.add(cls)
+                seen.add(text)
+                cases.append((text, raw, k))
+    chained = [r for r in _corpus() if r not in set(_BASES)][::80]
+    for raw in chained:
+        for k in range(1, min(len(raw), span) + 1, 13):
+            text = _cut_text(raw, k)
+            if text not in seen:
+                seen.add(text)
+                cases.append((text, raw, k))
+    return tuple(cases)
+
+
+def test_every_kind_of_cut_keeps_the_limit_and_is_idempotent() -> None:
+    """A short field, so the cut falls inside each corpus string at every kind
+    of position: just after an ampersand, inside a reference, after its
+    semicolon, at a bracket or marker character, after a space or hidden
+    character, in plain text and at the very end. The output fits, cleaning
+    it again changes nothing, the unrelated ampersand before it comes through
+    as written, and nothing live survives."""
+    cases = _cut_cases()
+    assert len(cases) > 1000
+    for text, _, _ in cases:
+        for one_line in (False, True):
+            clean = editions.clean_text(text, _CUT_LIMIT, one_line=one_line)
+            assert len(clean) <= _CUT_LIMIT, (text, clean)
+            assert clean.startswith(_CUT_PREFIX), (text, clean)
+            assert editions.clean_text(clean, _CUT_LIMIT, one_line=one_line) == clean, (text, clean)
+            assert _live(clean) is None, (text, clean)
+
+
+def test_the_cut_cases_cover_every_kind_of_position() -> None:
+    """The sample above is only as good as its classes: each one occurs."""
+    classes = {_cut_class(raw, k) for _, raw, k in _cut_cases()}
+    assert classes == {
+        "after an ampersand",
+        "inside a reference",
+        "after a semicolon",
+        "at a bracket or a marker",
+        "after a space or a hidden character",
+        "at the very end",
+        "in plain text",
+    }, classes
 
 
 def test_the_cleaned_text_is_stable() -> None:
