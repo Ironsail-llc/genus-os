@@ -162,7 +162,9 @@ rely on:
   publish out of build order are each unread once. The member column is
   `last_read_published_seq`, set by `mark_read(..., published_seq=)` (renamed from
   `last_read_edition_seq` / `edition_seq`); `RoomSummary.latest_edition` is the
-  highest `published_seq`.
+  highest `published_seq`, shaped `{id, seq, published_seq, title, period_start,
+  period_end}`: pass its `published_seq` to `mark_read` to mark it read (camelCase
+  `publishedSeq` on the bridge).
 - Unread = messages after the member's message mark + editions whose `published_seq`
   is after their edition mark and that carry no `chat_message_id`.
 - Every room table's `tenant_isolation` policy has the platform shape: a connection

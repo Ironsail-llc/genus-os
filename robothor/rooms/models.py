@@ -97,7 +97,7 @@ class RoomSummary:
     archived: bool
     unread: int
     last_activity_at: datetime | None
-    #: ``{id, seq, title, period_start, period_end}`` of the latest published
+    #: ``{id, seq, published_seq, title, period_start, period_end}`` of the latest published
     #: edition that is not a preview, or None.
     latest_edition: dict[str, Any] | None = None
 

@@ -178,6 +178,7 @@ def _summary(row: Mapping[str, Any]) -> RoomSummary:
         latest = {
             "id": str(row["le_id"]),
             "seq": int(row["le_seq"]),
+            "published_seq": int(row["le_published_seq"]),
             "title": row["le_title"],
             "period_start": row["le_start"],
             "period_end": row["le_end"],
@@ -375,11 +376,13 @@ _SUMMARY_SELECT = """
 SELECT r.tenant_id, r.id, r.kind, r.title, r.agent_id, r.paused, r.archived_at,
        r.last_activity_at, r.created_at,
        {unread} AS unread,
-       le.id AS le_id, le.seq AS le_seq, le.title AS le_title,
+       le.id AS le_id, le.seq AS le_seq, le.published_seq AS le_published_seq,
+       le.title AS le_title,
        le.period_start AS le_start, le.period_end AS le_end
 FROM {source}
 LEFT JOIN LATERAL (
-    SELECT e.id, e.seq, e.title, e.period_start, e.period_end FROM room_editions e
+    SELECT e.id, e.seq, e.published_seq, e.title, e.period_start, e.period_end
+    FROM room_editions e
     WHERE e.tenant_id = r.tenant_id AND e.room_id = r.id
       AND e.published_seq IS NOT NULL
     ORDER BY e.published_seq DESC LIMIT 1
