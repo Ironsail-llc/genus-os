@@ -7,10 +7,15 @@ import { MessageActions } from "@/components/chat/message-actions";
 import { MessageAttachments } from "@/components/chat/chat-attachments";
 import type { AttachmentSummary } from "@/lib/chat/attachments";
 import { formatMessageTime, fullMessageTime } from "@/lib/chat/format-timestamp";
+import type { RoomEmailReceipt } from "@/lib/rooms/email";
 
 // Only a room message that announced an edition needs the edition renderer
 // (and through it the component registry), so the main conversation never
 // downloads it.
+// Only a task workspace's receipt turns draw this, so it loads only then.
+const EmailReceipt = lazy(() =>
+  import("@/components/rooms/email-receipt").then((m) => ({ default: m.EmailReceipt })),
+);
 const MessageEdition = lazy(() =>
   import("@/components/rooms/message-edition").then((m) => ({ default: m.MessageEdition })),
 );
@@ -35,6 +40,8 @@ export interface ChatBubbleMessage {
   authorUserId?: string;
   /** In a room: the edition this message announced, drawn under it. */
   editionId?: string;
+  /** In a task workspace: an email's receipt, drawn as one. */
+  receipt?: RoomEmailReceipt;
   /** In a room: what this reply rendered, drawn under it (never on the main canvas). */
   renders?: Array<{ component: string; props: Record<string, unknown> }>;
 }
@@ -116,6 +123,11 @@ export const MessageBubble = memo(function MessageBubble({
             )}
           </div>
         </div>
+        {roomId && msg.receipt && (
+          <Suspense fallback={null}>
+            <EmailReceipt receipt={msg.receipt} />
+          </Suspense>
+        )}
         {renders && (
           <Suspense fallback={null}>
             <MessageRenders blocks={renders} />

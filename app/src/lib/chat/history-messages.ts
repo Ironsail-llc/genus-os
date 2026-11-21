@@ -1,5 +1,6 @@
 import { stripMarkers } from "@/lib/engine/marker-interceptor";
 import { historyAttachments, stripAttachmentNote, type AttachmentSummary } from "@/lib/chat/attachments";
+import { RECEIPT_KIND, readEmailReceipt, type RoomEmailReceipt } from "@/lib/rooms/email";
 
 /**
  * Chat history rows, as the engine answers them, turned into messages for the
@@ -28,6 +29,8 @@ export interface HistoryMessage {
    * a reload.
    */
   editionId?: string;
+  /** In a task workspace: the receipt of an email someone approved or rejected. */
+  receipt?: RoomEmailReceipt;
 }
 
 type Block = { type: string; text?: string };
@@ -42,6 +45,8 @@ type Row = {
   author_user_id?: unknown;
   author_name?: unknown;
   edition_id?: unknown;
+  kind?: unknown;
+  receipt?: unknown;
 };
 
 /** A non-empty string field, in the bridge's camelCase or the engine's snake_case. */
@@ -53,14 +58,17 @@ function field(row: Row, camel: keyof Row, snake: keyof Row): string | undefined
 }
 
 /** The room-only fields, present only when the row carries them. */
-function roomFields(row: Row): Pick<HistoryMessage, "authorUserId" | "authorName" | "editionId"> {
+function roomFields(row: Row): Pick<HistoryMessage, "authorUserId" | "authorName" | "editionId" | "receipt"> {
   const authorUserId = field(row, "authorUserId", "author_user_id");
   const authorName = field(row, "authorName", "author_name");
   const editionId = field(row, "editionId", "edition_id");
+  // Only a receipt turn's receipt: no other row may draw one.
+  const receipt = row.kind === RECEIPT_KIND ? readEmailReceipt(row.receipt) : null;
   return {
     ...(authorUserId ? { authorUserId } : {}),
     ...(authorName ? { authorName } : {}),
     ...(editionId ? { editionId } : {}),
+    ...(receipt ? { receipt } : {}),
   };
 }
 
