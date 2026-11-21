@@ -535,8 +535,10 @@ No access → 404. Access without the action → 403. JSON is camelCase, as the 
   "report", title, agentId?, instructions?, scheduleText?, tz?, defaultGrain?,
   shareWith?}` (user ids, each an active account of the caller's company). `PATCH`
   takes `{expectedRev, changes}`; change keys `title, instructions, scheduleText, tz,
-  defaultGrain, paused, notifyDefault, maxCostUsd` (snake_case too) map to the
-  `apply_definition_change` names.
+  defaultGrain, paused, notifyDefault` (snake_case too) map to the
+  `apply_definition_change` names; any other key is 422 `invalid_request` with
+  `field: "changes"`. Nothing in the bridge caps cost or frequency: there is no cost
+  setting, no run cap and no minimum schedule interval of its own.
 - Every refusal is `{"detail": {"error": <code>, "message", "field": <camelCase or
   null>, ...}}`: `not_found` 404, `forbidden` 403 (names the duplicate on a shared
   user's edit), `revision_conflict` 409 + `currentRev`, `invalid_schedule` /
@@ -548,7 +550,7 @@ No access → 404. Access without the action → 403. JSON is camelCase, as the 
   it. Messages are fixed text per code (or per refusal the router decides); an
   exception's own text never reaches a body, and an unexpected exception is logged
   with its traceback and answered with the generic 500. The engine's answers to `/run` and `/periods`
-  (its 429 `on_demand_cap` with `limit` included) pass through unchanged.
+  pass through unchanged, whatever their status.
 - `GET /api/rooms?scope=all` (admin) includes archived rooms; each row adds `members:
   {userId, displayName, assigned}[]` and `assigned: {userId, displayName}[]`. Bounded
   queries: `scope=mine` one, `scope=all` three.

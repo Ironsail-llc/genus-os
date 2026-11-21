@@ -8,7 +8,7 @@ id cannot be probed), access without the action is 403, a stale revision is
 409 with the current one. Admin-only: ``?scope=all``, reassign and unarchive.
 
 Definition changes go through ``robothor.rooms.definition``, which owns
-validation (injection scan, schedule, minimum interval) and the revision
+validation (injection scan, schedule) and the revision
 write; this router maps its errors and never validates on its own.
 
 Two routes are engine-backed (``/run``, ``/periods``): the bridge checks access
@@ -68,11 +68,20 @@ _ADMIN_ROLES = frozenset({"owner", "admin"})
 _CREATABLE_KINDS = frozenset({"report", "agent"})
 
 #: camelCase spellings of the definition change keys, to the contract's names.
+#: The definition changes a workspace accepts, by either spelling, to the names
+#: ``apply_definition_change`` takes. Nothing here limits cost or frequency.
 _CHANGE_KEYS = {
-    "scheduleText": "schedule_text",
-    "defaultGrain": "default_grain",
-    "notifyDefault": "notify_default",
-    "maxCostUsd": "max_cost_usd",
+    spelling: name
+    for name in (
+        "title",
+        "instructions",
+        "schedule_text",
+        "tz",
+        "default_grain",
+        "paused",
+        "notify_default",
+    )
+    for spelling in (name, "".join([name.split("_")[0], *(p.title() for p in name.split("_")[1:])]))
 }
 
 
@@ -104,8 +113,8 @@ _MESSAGES = {
         "The instructions look like an attempt to override the agent (a prompt injection)."
     ),
     "invalid_schedule": (
-        "The schedule could not be understood, or it runs more often than every "
-        f"{definition.ROOM_MIN_INTERVAL_SECONDS // 60} minutes."
+        "The schedule could not be understood. Describe when it should run, such as "
+        "“every weekday at 8am” or “every Monday at 9:00”."
     ),
     "ineligible_account": "That person has no active account here that can take this on.",
     "invalid_request": "The request is not valid.",
@@ -638,7 +647,15 @@ def api_update_room(room_id: str, request: Request, body: UpdateRoomBody) -> Any
         actor, room = _guard(request, room_id, "edit_definition")
     except RoomForbidden as exc:
         raise Refusal("edit") from exc
-    changes = {_CHANGE_KEYS.get(k, k): v for k, v in body.changes.items()}
+    if not body.changes or any(k not in _CHANGE_KEYS for k in body.changes):
+        return _problem(
+            422,
+            "invalid_request",
+            "Change only the title, instructions, schedule, time zone, default period, "
+            "notifications or pause.",
+            field="changes",
+        )
+    changes = {_CHANGE_KEYS[k]: v for k, v in body.changes.items()}
     try:
         saved = definition.apply_definition_change(actor, room.id, body.expected_rev, changes)
     except ValueError as exc:
