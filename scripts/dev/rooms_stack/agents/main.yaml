@@ -1,0 +1,33 @@
+# Dry-run agent for scripts/dev/rooms-stack.sh. The model is scripted
+# (scripts/dev/rooms_stack/fake_llm.py); "stack-fake" never leaves the box.
+id: main
+name: Main
+description: The main agent of the dry-run company
+version: "2026-11-21"
+department: core
+schedule:
+  cron: ""
+  timezone: UTC
+  timeout_seconds: 0
+  max_iterations: 8
+  session_target: persistent
+delivery:
+  mode: none
+model:
+  primary: openai/stack-fake
+tools_eager:
+  - sample_sales_figures
+  - room_create
+  - room_list
+  - room_read
+  - room_update
+  - room_share
+  - room_unshare
+  - room_run
+  - room_request_period
+  - room_archive
+  - room_duplicate
+  - room_restore_revision
+  - room_admin_reassign
+  - room_publish_edition
+instruction_file: brain/agents/main.md
