@@ -317,7 +317,9 @@ async def acme_execute_action(args, ctx=None):
 - **Kind.** Prefix it with the plugin name (`acme-plugin.note`), and claim by
   that kind, so one plugin never claims another's actions.
 - **Proposer.** `proposed_by=PLUGIN_NAME` is what lets the plugin's own policy
-  decide the draft. Without it, only an operator can.
+  decide the draft. Without it, only an operator can. A plugin's kind is never
+  member-decidable: the member path decides only the platform's own
+  `room.email` (`MEMBER_DECIDABLE_KINDS`), whatever `proposed_by` says.
 - **Policy actor.** `policy:<plugin>:<version>` is accepted only for drafts the
   same plugin proposed; the audit trail records the version.
 - **The Inbox card.** A tenant admin decides your draft from the card, which

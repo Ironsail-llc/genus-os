@@ -48,17 +48,21 @@ newest first and `limit` runs from 1 to 1000.
 
 ## Who may decide
 
-`decide()` accepts two kinds of actor. Anything else is refused with
+`decide()` accepts three kinds of actor. Anything else is refused with
 `Conflict`, before the database is touched.
 
 | Actor | Who | May decide |
 |-------|-----|-----------|
 | `operator:<id>` | A human. The caller authenticates them before calling `decide`. | Any action in review |
 | `policy:<plugin>:<version>` | An automated rule shipped by `<plugin>`, at rule version `<version>` | Only actions whose `proposed_by` is `<plugin>` |
+| `member:<user id>` | A non-operator person, through the Inbox's member path (`robothor/rooms/approvals.py`) | Only a kind on `MEMBER_DECIDABLE_KINDS` (today only `room.email`), with no `proposed_by`, proposed for that person by their own interactive turn in a task workspace whose open task is theirs; re-checked under the row lock (`member_check`, `NotPermitted` otherwise) |
 
 A policy naming a different plugin than the proposer is refused, and so is a
 policy deciding an action that names no proposer — every action proposed
-without `proposed_by`, the sales outreach drafts included, stays operator-only.
+without `proposed_by`, the sales outreach drafts included, stays operator-only,
+except a kind on the member allow-list (only `room.email`, which this platform
+proposes itself), which the person it was proposed for may also decide. A
+plugin's kind is never on that list.
 The proposer check scopes a policy to its own plugin's drafts; it is not
 authentication, since a plugin runs in the engine's process.
 

@@ -1566,10 +1566,11 @@ eligible `action` rows, each carrying `room_id` and `task_id`, and `POST
 holds only when ALL of these do, read from the database at decision time: the
 caller's account is active with role `member` or `user` now (not only per the
 token); the action was proposed for the caller (`proposed_for_user_id`) by a run,
-not a plugin (`proposed_by` is NULL), and is not a `sales.*` kind (the sales
-pipeline accepts only an operator's verdict); its
-`proposed_by_run_id` is an `agent_runs` row of the caller with
-`trigger_type='webchat'` and `trigger_detail` exactly `webchat:<the workspace's
+not a plugin (`proposed_by` is NULL), and is of a kind on the member
+allow-list `MEMBER_DECIDABLE_KINDS` (only `room.email`; every plugin, sales or
+future kind stays operator-only); its
+`proposed_by_run_id` is a top-level (no parent run) `agent_runs` row of the
+caller with `trigger_type='webchat'` and `trigger_detail` exactly `webchat:<the workspace's
 session key>`; the caller can post in that workspace now (`access.require(...,
 "post")`: a current member, the workspace not archived); and the workspace is a
 task workspace whose task (`rooms.task_id`, linked in `room_tasks`, not done,
@@ -1585,9 +1586,25 @@ verdict is `member:<user id>` on the row, in `operation_audit` (with the room,
 task and run) and in the bridge audit; what executes is still bound to the
 approved payload hash. The three attribution columns are written by
 `Operations.propose` from the run it is called in
-(`robothor/operations/proposer.py`, set by the runner for every run): the run
+(`robothor/operations/proposer.py`, bound by the runner around its tool loop): the run
 id always, the person only for an interactive turn of a user account, the
 workspace from the room run carrier or the turn's session key.
+
+**A member's approved email** (`robothor/rooms/outbound.py`) is what the member
+path approves. `room_propose_email`, in the member's own turn in their task
+workspace (`approvals.member_turn`, the same predicate the decision checks),
+writes a `room.email` action holding the exact email and sends nothing. It is
+sent as the company's assistant mailbox (the one the `gws_*` tools send from),
+with Reply-To the member: `outbound.sender_for` is the only place that is
+decided. After approval the engine (`robothor/engine/room_outbound.py`: a
+listener on `operation_action.approved` and a 30-second sweep, both started
+through the task registry) claims it by id under a lease, which re-checks the
+approved hash, re-checks the sender and the do-not-contact list, sends it
+through the workspace mail provider and records the provider's id with
+`finish_action`. A lease that runs out becomes `unknown` and is never sent
+again; a failed send is recorded and not retried. Every outcome (sent, failed,
+uncertain, not sent, rejected, expired) writes one `room_email_receipt` turn into
+the workspace and publishes `room.message`.
 
 #### Claude Code driver (`robothor/engine/coding/`)
 
