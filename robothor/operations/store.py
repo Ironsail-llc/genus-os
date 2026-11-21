@@ -636,6 +636,54 @@ class Operations:
             row = cur.fetchone()
             return self._lease(cur, row, lease_seconds) if row else None
 
+    def refuse_changed_approval(self, action: str, reason: str) -> bool:
+        """Settle an approved action whose payload no longer matches what was
+        approved: ``cancelled``, never claimable again, the reason on its
+        receipt. False when it is not such an action."""
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT payload,approved_hash FROM operation_actions WHERE tenant_id=%s AND id=%s "
+                "AND status='approved' FOR UPDATE",
+                (self.tenant, action),
+            )
+            row = cur.fetchone()
+            if row is None or digest(row["payload"]) == row["approved_hash"]:
+                return False
+            cur.execute(
+                "UPDATE operation_actions SET status='cancelled',receipt=%s "
+                "WHERE tenant_id=%s AND id=%s",
+                (Json({"error": reason}), self.tenant, action),
+            )
+            self.audit(
+                cur,
+                action,
+                "action.cancelled",
+                "system",
+                {"reason": reason[:500], "previous_status": "approved"},
+            )
+            return True
+
+    def cancel_expired_approvals(self, kind: str, reason: str) -> list[str]:
+        """Settle approved actions of ``kind`` that expired before anyone
+        executed them: ``cancelled``, the reason on the receipt."""
+        with self.transaction() as cur:
+            cur.execute(
+                "UPDATE operation_actions SET status='cancelled',receipt=%s "
+                "WHERE tenant_id=%s AND kind=%s AND status='approved' AND expires_at<=now() "
+                "RETURNING id",
+                (Json({"error": reason}), self.tenant, kind),
+            )
+            ids = [str(r["id"]) for r in cur.fetchall()]
+            for action in ids:
+                self.audit(
+                    cur,
+                    action,
+                    "action.cancelled",
+                    "system",
+                    {"reason": reason[:500], "previous_status": "approved"},
+                )
+            return ids
+
     def expire_leases(self) -> None:
         """Move executions whose lease ran out to ``unknown`` (never ready again)."""
         with self.transaction() as cur:

@@ -1588,7 +1588,7 @@ async def main() -> int:
 
     scan = await _recover_scan_and_restore(runner, config, clock)
 
-    _spawn_background_starts()
+    _spawn_background_starts(config)
 
     _init_fleet_capacity(config)
 
@@ -1907,11 +1907,11 @@ async def _stop_coding_jobs() -> None:
         logger.debug("Coding job shutdown failed: %s", e)
 
 
-def _spawn_background_starts() -> None:
+def _spawn_background_starts(config: EngineConfig) -> None:
     """Background work started once at boot, never awaited."""
     _spawn_mcp_prewarm()
-    # Approved workspace emails: listener and sweep (robothor/engine/room_outbound.py).
-    start_room_outbound()
+    # Approved workspace emails of this engine's tenant (robothor/engine/room_outbound.py).
+    start_room_outbound(config)
 
 
 def _spawn_mcp_prewarm() -> None:
