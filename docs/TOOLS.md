@@ -1634,7 +1634,7 @@ same way. What people see and may do in a workspace is
 | `room_task_accept` | `room_id`, `task_id`; the task becomes the caller's (`crm_tasks.assignee_id`). Someone else's is refused, naming who has it; a task workspace's own task is never taken from inside it | shared or more, not archived |
 | `room_task_dismiss` | `room_id`, `task_id`; a suggested task only, which then never returns | shared or more, not archived |
 | `room_open_task` | `task_id`; the task's own workspace, made on first open | a staff role (not viewer) to create one |
-| `room_propose_email` | `room_id`, `to`, `cc`, `subject`, `body` (plain addresses, no attachments); proposes, never sends | the person's own turn in a task workspace whose open task is assigned to them |
+| `room_propose_email` | `to`, `cc`, `subject`, `body` (plain addresses, no attachments), optional `room_id` (default: the workspace the turn is in); proposes, never sends | the person's own turn in a task workspace whose open task is assigned to them |
 
 - **Who is asking.** Always the human on the run, from the tool context
   (`user_id`, `user_role`), never the agent. An unverified identity is refused

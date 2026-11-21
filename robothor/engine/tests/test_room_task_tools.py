@@ -315,7 +315,8 @@ def test_the_email_tool_says_nothing_is_sent_until_the_person_approves():
     fn = get_engine_schemas()["room_propose_email"]["function"]
     text = fn["description"].lower()
     assert "nothing is sent" in text and "approve" in text and "show" in text
-    assert fn["parameters"]["required"] == ["room_id", "to", "subject", "body"]
+    # room_id is optional: in a chat turn it defaults to the workspace the turn is in.
+    assert fn["parameters"]["required"] == ["to", "subject", "body"]
     assert "attachments" not in fn["parameters"]["properties"]
 
 

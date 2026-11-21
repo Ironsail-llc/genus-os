@@ -141,6 +141,18 @@ async def _room_open_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
     return {"room": out, "link": room_link(room.id)}
 
 
+def _bound_room(ctx: ToolContext) -> tuple[str] | None:
+    """The workspace this chat turn is in, when the turn is bound to one of the
+    caller's tenant: what a turn means by "this workspace" (nothing gives the
+    agent the id). Every rule is still checked against it."""
+    from robothor.rooms.run_context import current_room_run
+
+    run = current_room_run()
+    if run is None or run.tenant_id != ctx.tenant_id:
+        return None
+    return (run.room_id,)
+
+
 async def _room_propose_email(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Propose (never send) an email from the person's own task workspace turn."""
     from robothor.operations.store import NotPermitted
@@ -149,7 +161,7 @@ async def _room_propose_email(args: dict[str, Any], ctx: ToolContext) -> dict[st
     actor = _actor(ctx)
     if actor is None:
         return dict(_NO_PERSON)
-    ids = _ids(args, "room_id")
+    ids = _ids(args, "room_id") or _bound_room(ctx)
     if ids is None:
         return {"error": "room_id is required"}
     if not await _own_run(ctx):

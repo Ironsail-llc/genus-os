@@ -2240,7 +2240,10 @@ _ROOM_TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         "draft (to, cc, subject, body) first, then tell them it is waiting for their approval. "
         "No attachments." + _ROOM_LINK_RULE,
         {
-            "room_id": _ROOM_ID,
+            "room_id": {
+                "type": "string",
+                "description": "The workspace id; leave it out in the task workspace you are in",
+            },
             "to": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -2254,7 +2257,7 @@ _ROOM_TASK_SCHEMAS: dict[str, dict[str, Any]] = {
             "subject": {"type": "string", "description": "One line"},
             "body": {"type": "string", "description": "Plain text"},
         },
-        ["room_id", "to", "subject", "body"],
+        ["to", "subject", "body"],
     ),
     "room_open_task": _room_tool(
         "room_open_task",
