@@ -12,13 +12,13 @@ from __future__ import annotations
 import uuid
 
 import pytest
+
 from robothor.operations.proposer import (
     Proposer,
     current_proposer,
     proposer_for_run,
     proposer_scope,
 )
-
 from robothor.operations.tests.test_store import ops  # noqa: F401
 from robothor.rooms.run_context import RoomRun, room_run_scope
 

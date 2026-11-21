@@ -55,7 +55,7 @@ def test_it_applies_twice_cleanly_with_forced_row_security(scratch_db) -> None:
 
 @pytest.mark.integration
 def test_a_suggestion_key_is_unique_per_workspace(scratch_db) -> None:
-    import psycopg2
+    from psycopg2 import errors
 
     db, _ = scratch_db(through=MIGRATION)
     room = str(uuid.uuid4())
@@ -71,5 +71,5 @@ def test_a_suggestion_key_is_unique_per_workspace(scratch_db) -> None:
             "VALUES ('t-172', %s, %s, 'suggestion', 'call-back')"
         )
         cur.execute(insert, (room, str(uuid.uuid4())))
-        with pytest.raises(psycopg2.errors.UniqueViolation):
+        with pytest.raises(errors.UniqueViolation):
             cur.execute(insert, (room, str(uuid.uuid4())))

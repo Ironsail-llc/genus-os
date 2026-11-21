@@ -97,6 +97,8 @@ MOVED_TABLES: dict[str, str] = {
     "room_members": f"room_id IN {_ROOMS}",
     "room_revisions": f"room_id IN {_ROOMS}",
     "room_editions": f"room_id IN {_ROOMS}",
+    # Who was removed from a moved room (migration 172) goes with the room.
+    "room_member_removals": f"room_id IN {_ROOMS}",
 }
 
 #: Untenanted child table -> (the moved table it hangs off, its key column).

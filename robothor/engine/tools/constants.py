@@ -293,6 +293,10 @@ ROOM_TOOLS = frozenset(
         "room_duplicate",
         "room_restore_revision",
         "room_admin_reassign",
+        # Tasks in workspaces (handlers/room_tasks.py).
+        "room_task_accept",
+        "room_task_dismiss",
+        "room_open_task",
     }
 )
 

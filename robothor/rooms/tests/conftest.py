@@ -87,6 +87,9 @@ def rooms_db(monkeypatch) -> Iterator[SimpleNamespace]:
             "DELETE FROM chat_sessions WHERE tenant_id = ANY(%s)",
             (list(tenants),),
         )
+        # A published edition's suggestions become CRM tasks with a history row
+        # (robothor/rooms/tasks.py); the history goes first.
+        cur.execute("DELETE FROM crm_task_history WHERE tenant_id = ANY(%s)", (list(tenants),))
         cur.execute("DELETE FROM crm_tasks WHERE tenant_id = ANY(%s)", (list(tenants),))
         for table in ROOM_TABLES:
             with contextlib.suppress(Exception):

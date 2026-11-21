@@ -1650,6 +1650,8 @@ def update_task(
             conn.commit()
             if ok_bool:
                 _safe_audit("update", "task", task_id, details={"fields": list(fields.keys())})
+                if new_status and current_status and current_status != new_status:
+                    _publish_room_task(tenant_id, task_id)
                 if subtask_warning:
                     return {"success": True, "warning": subtask_warning}
             return ok_bool
@@ -1657,6 +1659,16 @@ def update_task(
             conn.rollback()
             logger.error("Failed to update task %s: %s", sanitize_log(task_id), e)
             return False
+
+
+def _publish_room_task(tenant_id: str, task_id: str) -> None:
+    """Tell every workspace the task is linked to that it changed (ids only)."""
+    try:
+        from robothor.rooms.tasks import publish_task_changed
+
+        publish_task_changed(tenant_id, task_id)
+    except Exception:
+        logger.warning("Failed to publish room.task for %s", sanitize_log(task_id), exc_info=True)
 
 
 def set_next_action(
@@ -2559,6 +2571,7 @@ def resolve_task(
                     )
                 except Exception:
                     logger.warning("Failed to publish task.resolved event", exc_info=True)
+                _publish_room_task(tenant_id, task_id)
             return ok
         except Exception as e:
             conn.rollback()
@@ -2612,6 +2625,7 @@ def approve_task(
             )
             conn.commit()
             _safe_audit("approve", "task", task_id, details={"reviewer": reviewer})
+            _publish_room_task(tenant_id, task_id)
 
             # Send review_approved notification
             send_notification(

@@ -161,6 +161,7 @@ from robothor.engine.tracking import update_run as update_run
 from robothor.engine.warmup_steps import record_warmup_steps
 from robothor.engine.workflow_budget import propagates_to_caller
 from robothor.engine.workflow_completion import finish_after_tools, host_rendered_output
+from robothor.operations.proposer import mark_proposer_run, reset_proposer
 
 # Per-tool wall-clock caps. The tables and the rule live in
 # robothor/engine/tool_timeouts.py; re-exported under their old private names
@@ -670,6 +671,10 @@ class AgentRunner(
         # wrapper at all). Belt to the L1 allow-list suspenders in
         # robothor/engine/tools/handlers/benchmark.py. See run_context.py.
         mark_benchmark_run(session, agent_config, agent_id)
+        # Who an action proposed in this run is for (operations/proposer.py).
+        _proposer = mark_proposer_run(
+            session.run_id, trigger_type, trigger_detail, effective_user_id
+        )
 
         # Spawn inheritance, capability tier, Contact 360 linkage, session
         # identity and tenant access, in that order (run_attribution.py).
@@ -873,6 +878,7 @@ class AgentRunner(
             watchdog.stop()
             with contextlib.suppress(Exception):
                 _active_watchdog_var.reset(_wd_token)
+            reset_proposer(_proposer)
             return self._finish_run(
                 _screen.blocked_run,
                 trace=None,
@@ -1367,6 +1373,7 @@ class AgentRunner(
                     watchdog.stop()
                     with contextlib.suppress(Exception):
                         _active_watchdog_var.reset(_wd_token)
+                    reset_proposer(_proposer)
                     # Sandbox teardown, bounded: runs after watchdog.stop().
                     if sandbox:
                         await _fin.run(sandbox.stop(), "sandbox_stop")

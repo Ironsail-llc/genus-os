@@ -478,7 +478,7 @@ def unshare_room(actor: Actor, room_id: str, user: str) -> str:
         raise ValueError("they are who this workspace runs as; reassign it before removing them")
     if member.assigned and sum(m.assigned for m in members) <= 1:
         raise ValueError("they are the last assigned member; assign someone else first")
-    dal.remove_member(actor.tenant_id, room.id, member.user_id)
+    dal.remove_member(actor.tenant_id, room.id, member.user_id, removed_by=actor.user_id)
     return member.user_id
 
 
