@@ -52,6 +52,9 @@ logger = logging.getLogger(__name__)
 
 #: Room id -> display name of the person whose turn holds the room's lock.
 _answering: dict[str, str] = {}
+#: Room id -> the client id of the turn holding the lock, for a turn the
+#: interruption path saves (``chat_delivery``), which rebuilds its target.
+_turn_client: dict[str, str] = {}
 
 
 @dataclass(frozen=True)
@@ -203,10 +206,13 @@ async def start_turn(
     lock = fanout.room_lock(room.id)
     await lock.acquire()  # free, so this does not yield: no sender slips in between
     _answering[room.id] = name
+    if target.client_id:
+        _turn_client[room.id] = target.client_id
 
     def release(_task: object = None) -> None:
         if _answering.get(room.id) == name:
             _answering.pop(room.id, None)
+        _turn_client.pop(room.id, None)
         lock.release()
 
     try:

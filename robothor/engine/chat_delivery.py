@@ -126,7 +126,7 @@ async def _room_turn(auth: AuthContext, session_key: str) -> tuple[Any, dict[str
         return None, None
     if room is None or room.session_key != session_key:
         return None, None
-    target = chat_rooms.ChatTarget(session_key, room)
+    target = chat_rooms.ChatTarget(session_key, room, chat_rooms._turn_client.get(room.id))
     return target, target.author(auth, chat_rooms._answering.get(room.id, ""), None)
 
 
