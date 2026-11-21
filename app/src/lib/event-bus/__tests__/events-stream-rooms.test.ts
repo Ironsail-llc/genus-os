@@ -58,7 +58,10 @@ beforeEach(() => {
     readSince: vi.fn(() => new Promise((resolve) => setTimeout(() => resolve([]), 5))),
     close: vi.fn(async () => {}),
   }));
-  fetchMock = vi.fn(async () => Response.json({ rooms: [{ id: MINE }] }));
+  // The bridge: the caller's rooms, and 404 for a room they cannot open.
+  fetchMock = vi.fn(async (url: string) =>
+    String(url).endsWith("/api/rooms") ? Response.json({ rooms: [{ id: MINE }] }) : Response.json({ error: "Not found" }, { status: 404 }),
+  );
   vi.stubGlobal("fetch", fetchMock);
 });
 

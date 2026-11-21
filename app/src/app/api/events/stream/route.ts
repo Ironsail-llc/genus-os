@@ -46,6 +46,26 @@ async function callerRoomIds(): Promise<Set<string> | null> {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Whether the caller can open one room outside their list (a tenant admin who
+ * is not a member): the bridge answers `GET /api/rooms/{id}` 200, with the
+ * caller's own token. Anything else, including a failure, is a "no". The gate
+ * passes only well-formed room ids.
+ */
+async function callerCanOpenRoom(roomId: string): Promise<boolean> {
+  try {
+    const bridge = getServiceUrl("bridge") || "http://localhost:9100";
+    const res = await fetch(`${bridge.replace(/\/$/, "")}/api/rooms/${encodeURIComponent(roomId)}`, {
+      headers: await bridgeAuthHeaders(),
+      signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(request: NextRequest) {
   // The streams are shared by every tenant's engine and the bridge; this
   // session sees only the events of the tenant it is acting in.
@@ -55,7 +75,7 @@ export async function GET(request: NextRequest) {
   }
   const tenant = session.tenantId;
   // Then the rooms this caller can access: one gate per connection.
-  const rooms = createRoomGate({ loadRoomIds: callerRoomIds });
+  const rooms = createRoomGate({ loadRoomIds: callerRoomIds, checkRoom: callerCanOpenRoom });
 
   const streamsParam =
     request.nextUrl.searchParams.get("streams") || "email,crm,health,agent";
