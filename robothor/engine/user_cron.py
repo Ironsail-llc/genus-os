@@ -60,7 +60,10 @@ def compute_next_run(schedule: dict[str, Any], after: datetime) -> datetime | No
     if kind == "cron":
         from robothor.engine.crontab import cron_trigger
 
-        trigger = cron_trigger(str(schedule["expression"]))
+        # A room's schedule carries its time zone. A plain user cron carries
+        # none and keeps APScheduler's default (the host's zone), so no
+        # existing job moves.
+        trigger = cron_trigger(str(schedule["expression"]), timezone=schedule.get("tz") or None)
         return cast("datetime | None", trigger.get_next_fire_time(None, after))
     return None
 
@@ -106,7 +109,11 @@ def create_user_cronjob(
 def list_due_cronjobs(
     tenant_id: str = DEFAULT_TENANT, now: datetime | None = None
 ) -> list[dict[str, Any]]:
-    """Enabled jobs whose next_run_at is due (<= now)."""
+    """Enabled jobs whose next_run_at is due (<= now).
+
+    A room's schedule row is not one of them: a room's run is a run in that room
+    as its run-as user, which this generic tick does not know how to start.
+    """
     now = now or datetime.now(UTC)
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -117,6 +124,7 @@ def list_due_cronjobs(
               AND next_run_at IS NOT NULL
               AND next_run_at <= %s
               AND tenant_id = %s
+              AND room_id IS NULL
             ORDER BY next_run_at
             """,
             (now, tenant_id),
@@ -140,3 +148,93 @@ def mark_cronjob_fired(job_id: str, *, next_run_at: datetime | None, disable: bo
             """,
             (next_run_at, disable, job_id),
         )
+
+
+# ── A room's schedule (robothor.rooms.definition) ───────────────────────────
+
+
+def get_room_cronjob(tenant_id: str, room_id: str) -> dict[str, Any] | None:
+    """The schedule row of a room, or None. ``run_as_user_id`` as a string."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT * FROM user_cronjobs WHERE tenant_id = %s AND room_id = %s "
+            "ORDER BY created_at LIMIT 1",
+            (tenant_id, room_id),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    out = dict(row)
+    out["room_id"] = str(out["room_id"])
+    out["run_as_user_id"] = str(out["run_as_user_id"]) if out.get("run_as_user_id") else None
+    return out
+
+
+def sync_room_cronjob(
+    *,
+    tenant_id: str,
+    room_id: str,
+    agent_id: str,
+    prompt: str,
+    schedule: dict[str, Any] | None,
+    run_as_user_id: str | None,
+    enabled: bool,
+) -> dict[str, Any] | None:
+    """Make a room's one schedule row match the room.
+
+    ``schedule`` None (the room has no schedule) disables the row, if there is
+    one, and returns None. Otherwise the row is created or rewritten, and its
+    next run is computed from now when it is enabled (so a resumed room does not
+    fire for the runs it missed) and cleared when it is not. Returns
+    ``{job_id, next_run_at, enabled}``.
+    """
+    now = datetime.now(UTC)
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        if schedule is None:
+            cur.execute(
+                "UPDATE user_cronjobs SET enabled = FALSE, next_run_at = NULL, updated_at = NOW() "
+                "WHERE tenant_id = %s AND room_id = %s",
+                (tenant_id, room_id),
+            )
+            return None
+        next_run = compute_next_run(schedule, now) if enabled else None
+        # One statement against the partial unique index of migration 170, so
+        # concurrent syncs of a room with no row yet still leave exactly one.
+        cur.execute(
+            """
+            INSERT INTO user_cronjobs (
+                job_id, tenant_id, room_id, agent_id, schedule_kind, schedule_payload,
+                prompt, enabled, next_run_at, run_as_user_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (tenant_id, room_id) WHERE room_id IS NOT NULL DO UPDATE SET
+                agent_id = EXCLUDED.agent_id,
+                schedule_kind = EXCLUDED.schedule_kind,
+                schedule_payload = EXCLUDED.schedule_payload,
+                prompt = EXCLUDED.prompt,
+                enabled = EXCLUDED.enabled,
+                next_run_at = EXCLUDED.next_run_at,
+                run_as_user_id = EXCLUDED.run_as_user_id,
+                updated_at = NOW()
+            RETURNING job_id
+            """,
+            (
+                f"ucron-{uuid.uuid4().hex[:12]}",
+                tenant_id,
+                room_id,
+                agent_id,
+                schedule["kind"],
+                json.dumps(_serialize_schedule(schedule)),
+                prompt or "",
+                bool(enabled),
+                next_run,
+                run_as_user_id,
+            ),
+        )
+        job_id = cur.fetchone()["job_id"]
+    return {
+        "job_id": job_id,
+        "next_run_at": next_run.isoformat() if next_run else None,
+        "enabled": bool(enabled),
+    }

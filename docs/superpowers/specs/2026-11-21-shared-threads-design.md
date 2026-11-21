@@ -176,6 +176,48 @@ rely on:
   with `room_tasks` rows refuses the move. An account move does not carry room
   memberships (rooms belong to the tenant); it removes them.
 
+#### As built (lane 3)
+
+`robothor/rooms/definition.py` holds every definition rule; the `room_*` tools
+and the bridge routes are wrappers over it. Besides the two contract functions
+(`create_room_with_schedule`, `apply_definition_change`) it exports `list_rooms(actor, *, scope)`, `read_room(actor, room_id, *,
+editions, messages)`, `share_room`, `unshare_room`, `archive_room`,
+`duplicate_room`, `restore_room_revision`, `reassign_room`, `resolve_user`,
+`run_as_actor(tenant_id, room_id)` and `room_schedule(tenant_id, room_id)`.
+
+- A schedule must repeat: a one-off (`2h`, an ISO time) is refused. There is no
+  workspace minimum interval (operator decision: nothing in workspaces is capped);
+  a schedule may be as frequent as `cron_parse.parse_schedule` allows any user
+  cron. `max_cost_usd` is not a definition change the tools or
+  `apply_definition_change` accept. A room's
+  cron schedule is read in `settings.tz`, UTC when unset; the zone is stored in the
+  row's payload. A plain user cron (no `tz` in its payload) keeps the host's zone.
+- One `user_cronjobs` row per room: a partial unique index on
+  `(tenant_id, room_id) WHERE room_id IS NOT NULL` (migration 170), written by a
+  single `INSERT ... ON CONFLICT`. The row follows changes of schedule, time zone,
+  pause and instructions (its `prompt`).
+- Pausing is not part of the definition: it writes no revision, but still checks
+  `expected_rev`.
+- A duplicate of a scheduled room starts `paused` (A8: unscheduled until its new
+  owner confirms); resuming it creates its schedule row under the new owner.
+- `share_room(..., assigned=None) -> ShareOutcome(member, added)`: for an existing
+  member an omitted `assigned` keeps their role, `True` promotes, and an explicit
+  `False` demotes under unshare's guards; `added` is False for an existing member,
+  so callers send no new notice.
+- `unshare` refuses the run-as user and the last assigned member; `reassign`
+  makes the target assigned and the run-as user. A viewer cannot be assigned or
+  reassigned to.
+- An unverified identity is refused by every room tool. A run with no person
+  behind it may only `room_read`, and only for the room `robothor.rooms.run_context`
+  binds the run to (same tenant), with that room's run-as user's access re-resolved
+  from `user_accounts`. No carrier module, or no bound room, reads nothing.
+- `user_cron.list_due_cronjobs` skips rows with a `room_id`: the generic tick
+  must not run a room's instructions as a plain cron prompt. Lane 7 fires them.
+- `room_read` takes message authors from `message.author_user_id` (or
+  `authorUserId`) on the stored chat message.
+- The tools are an opt-in family always given to the main agent; see
+  `docs/TOOLS.md`.
+
 ### Edition blocks
 
 `blocks` is a list of `{"component": <name>, "props": {...}}`. Allowed components:

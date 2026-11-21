@@ -43,6 +43,7 @@ from robothor.engine.tools.constants import (
     GWS_TOOLS,
     N8N_TOOLS,
     READONLY_TOOLS,
+    ROOM_TOOLS,
 )
 
 if TYPE_CHECKING:
@@ -245,6 +246,9 @@ _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
     # The deferred-loading reads: a graded sub-agent is handed its tools
     # directly, so a search would only describe tools it may not call.
     | {"tool_search", "tool_describe"}
+    # The company's REAL workspaces: their definitions, editions and
+    # conversations. The writes among them are withheld with the reads.
+    | ROOM_TOOLS
 )
 
 
