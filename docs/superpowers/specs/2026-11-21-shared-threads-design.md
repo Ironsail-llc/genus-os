@@ -331,7 +331,13 @@ wrappers. Schema changes are migration 172.
   `room_outbound.py`) claims by id, re-checks hash, sender and do-not-contact,
   sends via the workspace mail provider, and `finish_action`s `completed`
   `{id, thread_id, sent_at}`, `failed` `{error}` (never retried), `cancelled`
-  `{error}` (opted out after approval); a lost lease becomes `unknown`.
+  `{error}` (opted out after approval, changed after approval, or approved
+but expired before delivery); a lost lease becomes `unknown`. One engine per
+tenant: the listener's consumer group is `room-outbound:<event_group>`, it
+drops another tenant's approvals, and `sweep(tenant_id)` takes the engine's
+own tenant; `deliver`, `sweep` and the receipt writer run inside
+`tenant_scope(tenant_id)`. A receipt is recorded as written
+(`room.email.noted`) only after it was posted.
   Receipt: an assistant chat message with `kind: "room_email_receipt"` and
   `receipt: {action_id, status (sent|failed|uncertain|not_sent|rejected|expired),
   from, reply_to, to, cc, subject, approved_by, decided_by, decided_at, sent_at,
