@@ -135,7 +135,7 @@ async def _answer(room_id: str, body: PeriodRequest, request: Request) -> JSONRe
         limit, used = int(exc.limit), int(exc.used)
         return _refusal(
             429,
-            "cap_reached",
+            "on_demand_cap",
             f"each person may start {limit} on-demand edition(s) a day in this workspace",
             limit=limit,
             used=used,
