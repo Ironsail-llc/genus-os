@@ -67,6 +67,7 @@ from routers.people import router as people_router
 from routers.plugins import router as plugins_router
 from routers.providers import router as providers_router
 from routers.pursuit_goals import router as pursuit_goals_router
+from routers.rooms import router as rooms_router
 from routers.routines import router as routines_router
 from routers.runs import router as runs_router
 from routers.secrets import router as secrets_router
@@ -291,6 +292,9 @@ app.include_router(users_router)
 # changes while the process runs and an import-time decision would keep the
 # wizard alive until the next restart.
 app.include_router(setup_router)
+# Workspaces ("rooms"): per-room access, decided in each handler by
+# robothor.rooms.access; the router answers its own refusals in one shape.
+app.include_router(rooms_router)
 
 # A 422 on the provider/vault routes must not reflect the request body:
 # on those routes the body is a credential.

@@ -320,6 +320,81 @@ POST   /api/rooms/from-task/{task_id}  -> Room
 
 No access → 404. Access without the action → 403. JSON is camelCase, as the rest of the bridge.
 
+#### As built (lane 5)
+
+- Top-level fields are camelCase; stored JSON documents (`settings`, `blocks`,
+  `suggestions`, `provenance`, a revision's `definition`) pass through as stored, so
+  `settings` keys stay `tz`, `default_grain`, `schedule_text`, …
+- Bodies accept camelCase or snake_case. `POST /api/rooms` takes `{kind: "agent" |
+  "report", title, agentId?, instructions?, scheduleText?, tz?, defaultGrain?,
+  shareWith?}` (user ids, each an active account of the caller's company). `PATCH`
+  takes `{expectedRev, changes}`; change keys `title, instructions, scheduleText, tz,
+  defaultGrain, paused, notifyDefault, maxCostUsd` (snake_case too) map to the
+  `apply_definition_change` names.
+- Every refusal is `{"detail": {"error": <code>, "message", "field": <camelCase or
+  null>, ...}}`: `not_found` 404, `forbidden` 403 (names the duplicate on a shared
+  user's edit), `revision_conflict` 409 + `currentRev`, `invalid_schedule` /
+  `unsafe_instructions` 422 with `field`, `invalid_request` 422 (malformed bodies
+  included), `ineligible_account` 422, `already_accepted` 409 + `acceptedBy
+  {userId, displayName}`, `already_dismissed` 409, `channel_not_linked` 422,
+  `not_a_member` 409, `room_busy` 409 + `answering`, `unauthenticated` 401. The
+  router's own route class applies it. The engine's answers to `/run` and `/periods`
+  (its 429 `on_demand_cap` with `limit` included) pass through unchanged.
+- `GET /api/rooms?scope=all` (admin) includes archived rooms; each row adds `members:
+  {userId, displayName, assigned}[]` and `assigned: {userId, displayName}[]`. Bounded
+  queries: `scope=mine` one, `scope=all` three.
+- `GET /api/rooms/directory` → `{users: [{userId, displayName}]}`: the active accounts
+  of the acting tenant, by name; no email, no role. Any role that can create a
+  workspace (not a viewer).
+- `GET /api/rooms/{id}` → `Room`; `unread` is the caller's (0 for a non-member
+  admin); `nextRunAt` is the earliest enabled `user_cronjobs.next_run_at` of the
+  room, null when paused or archived. `Edition` and `latestEdition` add
+  `publishedSeq`; `Edition` adds `error`. `GET /editions` lists building and failed
+  editions too (previews still only to their requester).
+- `GET /{id}/notify` → `{inApp, muted, channels: {name: bool}, linkedChannels:
+  [{name, label}]}`; `PUT` with `{inApp, muted, channels}`. Stored in
+  `room_members.notify` as `{in_app, muted, channels}`; `linkedChannels` are the
+  caller's unrevoked `user_channel_identities`, and only those may be turned on.
+  Read access is enough (it touches only the caller's row; `bridge:read` suffices, as
+  for `/read`); a non-member admin gets `not_a_member`.
+- `POST /archive` (assigned/admin) and `/unarchive` (admin only; the room returns
+  paused) → `Room`. `/duplicate` → 201 `Room`. `/read` → `{read}`, marks only the
+  caller and needs only `bridge:read`.
+- `GET /revisions` → `{revisions: {rev, changedBy, changedByName, changedAt,
+  definition}[]}`; `POST /revisions/{rev}/restore` takes no body (an optional
+  `{expected_rev}` is honoured), 404 for a missing revision.
+- `GET /members` → `{members}`; `PUT /members/{user_id}` body `{assigned?}` → the
+  member; the account must be active and in the caller's company. A new member joins
+  shared unless `assigned: true`; for an existing member an omitted `assigned` keeps
+  their role. A new member gets an `info` notification addressed to their user id with
+  metadata `{kind: "room_shared", room_id, link}`. `DELETE` → `{removed}`, 404 for a
+  non-member. Neither may take the run-as user out of the assigned set (422
+  `run_as_user`: reassign first) or leave no assigned member (422 `last_assigned`).
+- `POST /reassign` body `{userId}` (admin): the user (active, not a viewer) becomes
+  the only assigned member and run-as, the room's cron rows included; previously
+  assigned members stay as shared (`dal.reassign_room`).
+- `POST /run` body `{preview?, period?}` and `POST /periods` body `{grain, anchor,
+  end?}` proxy to the engine as `POST /api/rooms/{id}/run|periods` with
+  `{...body, requested_by: <user id>}` under the bridge's service token, after the
+  bridge has checked `run` / `request_period`.
+- `GET /tasks` → `{tasks: [{taskId, title, status, origin, editionId, assignee,
+  acceptedBy, dismissed}]}`: title and status from the CRM task; `assignee` is the
+  task's `assignee_id` (else `assigned_to_agent` when it is a person's account id)
+  when it names an account of the company, else null. Accept and dismiss return the
+  task in that shape. `POST /from-task/{task_id}` → `Room` (200), made on first use
+  under the main agent with the opener assigned. Once it exists, only the task's
+  assignee joins it this way (as shared); anyone else gets 404 until shared in, so a
+  removed member cannot rejoin.
+- Every mutation writes an audit row with the caller as actor (`room.create`,
+  `room.update`, `room.share`, `room.unshare`, `room.restore`, `room.reassign`,
+  `room.archive`, `room.unarchive`, `room.duplicate`, `room.task_accept`,
+  `room.task_dismiss`, `room.open_task`, `room.run`, `room.request_period`,
+  `room.notify`) and, except `notify`, a `room.updated` event with `{room_id,
+  tenant_id}` (plus `task_id`).
+- Data-layer additions: `get_accounts`, `room_summary`, `members_of_rooms`,
+  `reassign_room`, `next_run_at`, `list_directory`, `linked_channels`,
+  `task_details`; `unarchive_room` now returns the room paused.
+
 ```ts
 type Access = "viewer" | "shared" | "assigned" | "admin";
 interface RoomSummary { id; kind: "report"|"agent"|"task"; title; agentId; paused; archived;

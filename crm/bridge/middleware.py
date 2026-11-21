@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -453,13 +454,32 @@ def _bridge_bind_host() -> str:
 _ACCESSIBLE_TENANTS_PATH = "/api/tenants/accessible"
 
 
+#: Two workspace writes touch only the CALLER's own member row -- ``POST
+#: /api/rooms/{id}/read`` (their read marker) and ``PUT /api/rooms/{id}/notify``
+#: (their notification preferences) -- so they are reads for scope purposes: a
+#: viewer (``bridge:read``) must be able to clear their own unread count and
+#: mute a workspace. Exact shapes only; each route still checks the caller may
+#: read the room.
+_ROOM_OWN_ROW = {
+    "POST": re.compile(r"/api/rooms/[0-9A-Fa-f-]{1,64}/read"),
+    "PUT": re.compile(r"/api/rooms/[0-9A-Fa-f-]{1,64}/notify"),
+}
+
+
+def _is_room_read_mark(method: str, path: str) -> bool:
+    pattern = _ROOM_OWN_ROW.get(method.upper())
+    return pattern is not None and pattern.fullmatch(path) is not None
+
+
 def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | None:
     """Return a stable public denial reason for a verified identity."""
     if path.startswith("/api/auth/"):
         return None
 
     required_scope = (
-        "bridge:read" if method.upper() in {"GET", "HEAD", "OPTIONS"} else "bridge:write"
+        "bridge:read"
+        if method.upper() in {"GET", "HEAD", "OPTIONS"} or _is_room_read_mark(method, path)
+        else "bridge:write"
     )
     if not auth.has_scope(required_scope):
         return "insufficient scope"
