@@ -247,6 +247,21 @@ def test_a_bad_time_zone_in_patch_names_its_field(real) -> None:
     assert _detail(refused)["field"] == "tz"
 
 
+@pytest.mark.parametrize("title", ["", "   ", 7])
+def test_a_bad_title_in_patch_names_its_field_and_saves_nothing(real, title) -> None:
+    room = _scheduled(real)
+    before = _revisions(real, room["id"])
+    refused = real.client("alice").patch(
+        f"/api/rooms/{room['id']}",
+        json={"expectedRev": room["rev"], "changes": {"title": title}},
+    )
+    assert refused.status_code == 422, refused.text
+    detail = _detail(refused)
+    assert (detail["error"], detail["field"]) == ("invalid_request", "title")
+    assert detail["message"]
+    assert _revisions(real, room["id"]) == before
+
+
 def test_a_stale_revision_is_a_conflict_with_the_current_one(real) -> None:
     room = _scheduled(real)
     first = real.client("alice").patch(
