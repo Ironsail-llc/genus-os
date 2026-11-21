@@ -179,6 +179,7 @@ def _summary_json(summary: RoomSummary) -> dict[str, Any]:
         body["latestEdition"] = {
             "id": latest["id"],
             "seq": latest["seq"],
+            "publishedSeq": latest.get("published_seq"),
             "title": latest["title"],
             "periodStart": _iso(latest["period_start"]),
             "periodEnd": _iso(latest["period_end"]),

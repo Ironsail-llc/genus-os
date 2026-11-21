@@ -235,7 +235,7 @@ No access → 404. Access without the action → 403. JSON is camelCase, as the 
   `scope=all` three.
 - `GET /api/rooms/{id}` → `Room`; `unread` is the caller's (0 for a non-member
   admin); `nextRunAt` is the earliest enabled `user_cronjobs.next_run_at` of the
-  room, null when paused or archived. `Edition` adds `publishedSeq`.
+  room, null when paused or archived. `Edition` and `latestEdition` add `publishedSeq`.
 - `POST /archive` (assigned/admin) and `/unarchive` (admin only; the room returns
   paused) → `Room`. `/duplicate` → 201 `Room`. `/read` → `{read}`, marks only the
   caller and needs only `bridge:read`.
