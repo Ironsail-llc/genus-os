@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { readBridgeReply } from "@/lib/bridge/read-reply";
+import { postApprovalAnswer } from "@/lib/inbox/answer";
 import {
   fetchMyNotifications,
   markNotificationRead,
@@ -208,32 +209,8 @@ export function useInbox({ active = false }: UseInboxOptions = {}): UseInboxApi 
 
   const answer = useCallback(
     async (id: string, kind: PendingKind, body: AnswerBody): Promise<AnswerOutcome> => {
-      let res: Response;
-      try {
-        res = await fetch(`${BRIDGE}/api/approvals/${kind}/${encodeURIComponent(id)}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-      } catch {
-        return {
-          settled: false,
-          message: "The dashboard could not reach the bridge to send that.",
-        };
-      }
-
-      if (!res.ok) return { settled: false, message: await readBridgeReply(res) };
-
-      const payload = (await res.json()) as { settled?: unknown; message?: unknown };
-      if (payload?.settled !== true) {
-        return {
-          settled: false,
-          message:
-            typeof payload?.message === "string" && payload.message
-              ? payload.message
-              : "The bridge did not settle that.",
-        };
-      }
+      const outcome = await postApprovalAnswer(id, kind, body);
+      if (!outcome.settled) return outcome;
 
       // Dropped locally rather than waited for: the next poll is up to thirty
       // seconds away, and a card that stays put after a successful answer
