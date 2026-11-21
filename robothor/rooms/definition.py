@@ -15,16 +15,13 @@ if TYPE_CHECKING:
     from robothor.rooms.access import Actor
     from robothor.rooms.models import Room
 
-#: The shortest interval a room's schedule may have.
-ROOM_MIN_INTERVAL_SECONDS = 900
-
 
 class UnsafeInstructions(ValueError):  # noqa: N818 - names fixed by the contract
     """The instructions failed the injection scan."""
 
 
 class InvalidSchedule(ValueError):  # noqa: N818 - names fixed by the contract
-    """The schedule does not parse, or fires more often than the minimum."""
+    """The schedule does not parse."""
 
 
 def create_room_with_schedule(
