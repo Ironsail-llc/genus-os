@@ -176,6 +176,30 @@ rely on:
   with `room_tasks` rows refuses the move. An account move does not carry room
   memberships (rooms belong to the tenant); it removes them.
 
+#### As built (lane 8, periods)
+
+- `periods.py` also holds the request: `async request_period(actor, room_id, grain,
+  anchor=None, *, now=None, run_room=None) -> (Edition, started)`. It is async because
+  the winner starts a background run; its data access runs in a thread.
+- Periods are whole local days in the room's `settings.tz` (UTC when unset), end
+  inclusive; weeks run Monday to Sunday; custom ranges are at most 93 days. Only a
+  period whose last day is before today (local) can be requested. `Period.bounds(tz)`
+  gives the UTC instants of its local midnights.
+- `anchor`: a date (`YYYY-MM-DD`; `YYYY-MM` for a month), `start/end` (or a pair or
+  `{start, end}`) for custom, or None/`latest` for `last_complete_period`.
+- The run is `robothor.rooms.runs.run_room(room, edition, *, period, context)`
+  (lane 7), resolved before any row is written; when it is missing the request fails
+  `RoomRunUnavailable` (503). A run that raises fails its edition.
+- Daily cap: `settings.max_on_demand_per_day`, default 5, 0 allows none. It counts
+  every edition with `requested_by` set (previews included) since local midnight.
+  Errors: `PeriodError` (a `ValueError`, 422), `OnDemandCapReached(limit, used)` (429).
+- `context_for_period(tenant_id, room_id, period)`: the newest published summary of
+  each `day` edition inside the period, 500 characters each, 6,000 in all, wrapped
+  as data.
+- Added: `dal.list_editions_in_period`, `dal.count_requested_editions`,
+  `models.edition_json` (the camelCase `Edition`). Engine route module
+  `robothor/engine/rooms_api.py`; tool `room_request_period`.
+
 ### Edition blocks
 
 `blocks` is a list of `{"component": <name>, "props": {...}}`. Allowed components:
