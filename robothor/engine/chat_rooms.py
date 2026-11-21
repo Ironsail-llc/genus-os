@@ -109,12 +109,19 @@ def _refusal(status: int, error: str) -> JSONResponse:
     return JSONResponse({"error": error}, status_code=status)
 
 
+def _service_room(room: Room, action: Action) -> Room:
+    """A service token skips the membership check, never the archived-room rule."""
+    if room.archived and action not in access.ARCHIVED_ACTIONS:
+        raise RoomForbidden(f"an archived room does not allow {action!r}")
+    return room
+
+
 def _by_id(auth: Any, room_id: str, action: Action) -> Room:
     if getattr(auth, "is_service", False):
         room = dal.get_room(str(auth.tenant_id), room_id)
         if room is None:
             raise RoomNotFound(room_id)
-        return room
+        return _service_room(room, action)
     return access.require(access.Actor.from_auth(auth), room_id, action)
 
 
@@ -125,7 +132,9 @@ def _by_key(auth: Any, key: str, action: Action) -> Room | None:
     agent_id, room_id = parsed
     if getattr(auth, "is_service", False):  # verbatim key; the room, when there is one
         room = dal.get_room(str(auth.tenant_id), room_id)
-        return room if room is not None and room.agent_id == agent_id else None
+        if room is None or room.agent_id != agent_id:
+            return None
+        return _service_room(room, action)
     room = access.require(access.Actor.from_auth(auth), room_id, action)
     if room.agent_id != agent_id:
         raise RoomNotFound(room_id)
@@ -219,7 +228,28 @@ def _publish(room: Room, message_id: int) -> None:
 
 
 async def saved(target: ChatTarget, saving: Awaitable[list[int] | None]) -> None:
-    """Await a room exchange's save, then move the room's mark and announce it."""
+    """Await a room exchange's save, then move the room's mark and announce it.
+
+    Not cancellable: ``done`` may already have gone out (early release), and a
+    browser leaving then cancels the turn. The save, the bump and the event
+    still finish, and the turn (which holds the room's lock) waits for them, so
+    the next sender's history reload sees the exchange. A cancel that arrives
+    meanwhile is absorbed: the turn it would stop has already been answered.
+    """
+    job = asyncio.ensure_future(_record(target, saving))
+    while True:
+        try:
+            await asyncio.shield(job)
+            return
+        except asyncio.CancelledError:
+            if job.done():
+                raise
+            current = asyncio.current_task()
+            if current is not None:
+                current.uncancel()
+
+
+async def _record(target: ChatTarget, saving: Awaitable[list[int] | None]) -> None:
     ids = await saving
     room = target.room
     if room is None or not ids:

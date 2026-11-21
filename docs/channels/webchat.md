@@ -129,7 +129,7 @@ the query string of `/chat/history`, `/chat/outcome` and the other GET routes.
   naming both `room_id` and a `session_key` is `400`. Clearing a room or
   injecting a system row needs the right to manage it (`assigned` or a tenant
   admin). A service token skips the membership check for a room of its own
-  tenant.
+  tenant, but not the archived-room rule.
 * **The room is echoed, the key never shown.** `/chat/send` streams
   `event: room` with `{"roomId": ...}` before anything else; `/chat/history`,
   `/chat/outcome`, `/chat/abort`, `/chat/steer` and `/chat/interrupt` add
@@ -140,7 +140,9 @@ the query string of `/chat/history`, `/chat/outcome` and the other GET routes.
   `[Name] text`. Ordinary sessions get none of this.
 * **One turn at a time.** A send while the room is answering someone is
   `409 {"error": "room_busy", "answering": "<display name>"}`. The lock is held
-  until the turn's exchange is saved and released however the turn ends.
+  until the turn's exchange is saved, its activity recorded and its event
+  published, even when the browser leaves after `done`; it is released however
+  the turn ends.
 * **Fresh history.** Each turn reloads the room's last `MAX_HISTORY` messages
   from the database under the room's tenant, so the agent sees turns written
   elsewhere (a published edition, another replica).
