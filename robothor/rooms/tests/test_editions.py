@@ -438,6 +438,35 @@ def test_cleaning_work_is_bounded_by_the_field_not_the_input(monkeypatch) -> Non
     assert calls <= 8 and chars <= 8 * 2800
 
 
+@pytest.mark.parametrize("tail", ["&amp;#600;", "&amp;ltimes;", "&#38;#600;"])
+def test_a_cut_through_an_encoded_reference_keeps_the_limit_and_the_text(tail) -> None:
+    """The cut at the limit can split a doubly encoded reference into one that
+    decodes to a bracket. The fragment is dropped; nothing else changes."""
+    limit = editions.MAX_SUMMARY_CHARS
+    raw = "R&D " * 100 + "x" * (limit - 400 - len(tail) + 2) + tail
+    assert len(raw) == limit + 2
+    clean = editions.clean_summary(raw)
+    assert len(clean) <= limit
+    assert editions.clean_summary(clean) == clean
+    assert clean.count("R&D") == 100 and " and " not in clean
+    assert _live(clean) is None
+
+
+def test_every_cut_through_the_corpus_keeps_the_limit_and_is_idempotent() -> None:
+    """Cut every corpus string at every position (a short field, so the cut
+    falls inside it): the output fits, cleaning it again changes nothing, and
+    nothing live survives."""
+    limit = 40
+    for raw in _corpus()[::5]:
+        for k in range(1, min(len(raw), 60) + 1, 3):
+            text = "y" * (limit - k) + raw
+            for one_line in (False, True):
+                clean = editions.clean_text(text, limit, one_line=one_line)
+                assert len(clean) <= limit, (text, clean)
+                assert editions.clean_text(clean, limit, one_line=one_line) == clean, (text, clean)
+                assert _live(clean) is None, (text, clean)
+
+
 def test_the_cleaned_text_is_stable() -> None:
     """Cleaning again changes nothing, so no later pass can rebuild markup."""
     for raw in _corpus()[::7]:

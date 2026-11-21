@@ -481,8 +481,30 @@ def clean_text(value: str, limit: int, *, one_line: bool = False) -> str:
     fractions, fullwidth punctuation, ligatures, a plain ``&``) are emitted as
     written. Repeated until nothing changes, so cleaning the result again
     changes nothing. Work is linear in ``limit``, whatever the input's length."""
-    head = value[: limit * _INPUT_FACTOR]
-    return _settle(_settle(head, one_line=one_line)[:limit], one_line=one_line)
+    text = _settle(value[: limit * _INPUT_FACTOR], one_line=one_line)
+    # Each round only shortens, unless the guard's fallback replaced an
+    # ampersand; after that none is left, so this ends within a few rounds.
+    for _ in range(8):
+        if len(text) <= limit:
+            return text
+        text = _settle(_cut(text, limit), one_line=one_line)
+    # Not reached in practice: a settled text with no ampersand left.
+    return _settle(_cut(text.replace("&", ""), limit), one_line=one_line)[:limit]
+
+
+#: A reference left unfinished by a cut: an ampersand and reference characters
+#: to the end of the text.
+_TRAILING_REFERENCE = re.compile(r"&[#0-9A-Za-z;]*\Z")
+
+
+def _cut(text: str, limit: int) -> str:
+    """``text`` cut to ``limit``, without the reference fragment the cut split
+    (``&amp;#600;`` cut to ``&amp;#60`` would decode to a bracket), so that
+    re-cleaning the cut text has no reason to fall back."""
+    head = text[:limit]
+    if text[limit : limit + 1] and (fragment := _TRAILING_REFERENCE.search(head)):
+        return head[: fragment.start()]
+    return head
 
 
 def clean_summary(value: Any) -> str:
