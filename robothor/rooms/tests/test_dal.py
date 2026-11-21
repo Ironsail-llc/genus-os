@@ -414,6 +414,16 @@ def test_editions_published_out_of_order_are_each_unread_once(rooms_db) -> None:
     assert _unread(rooms_db, rooms_db.alice) == 1
     (summary,) = dal.list_rooms_for_user(rooms_db.tenant, rooms_db.alice)
     assert summary.latest_edition["id"] == first.id  # the latest to be published
+    # The summary carries the number mark_read takes, so a reader can mark it.
+    assert summary.latest_edition["published_seq"] == 2
+    member = dal.mark_read(
+        rooms_db.tenant,
+        room.id,
+        rooms_db.alice,
+        published_seq=summary.latest_edition["published_seq"],
+    )
+    assert member.last_read_published_seq == 2
+    assert _unread(rooms_db, rooms_db.alice) == 0
 
 
 def test_publishing_numbers_editions_in_publish_order_and_skips_previews(rooms_db) -> None:
@@ -484,6 +494,7 @@ def test_the_summary_carries_the_latest_published_edition(rooms_db) -> None:
     assert summary.latest_edition == {
         "id": first.id,
         "seq": first.seq,
+        "published_seq": 1,
         "title": "Week 45",
         "period_start": date(2026, 11, 2),
         "period_end": date(2026, 11, 8),
