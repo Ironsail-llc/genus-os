@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { getVisualCanvasPrompt } from "../system-prompt";
+import { getVisualCanvasPrompt, getWorkspaceRulesPrompt } from "../system-prompt";
 
 const prompt = getVisualCanvasPrompt({ workspaces: true });
 
@@ -54,5 +54,14 @@ describe("getVisualCanvasPrompt with workspaces", () => {
   it("keeps the user-facing name: workspaces, not rooms", () => {
     const prose = prompt.replace(/room_[a-z_]+/g, "").replace(/[?&]room=/g, "");
     expect(prose).not.toMatch(/\broom\b/i);
+  });
+});
+
+describe("getWorkspaceRulesPrompt", () => {
+  it("is the workspace rules alone, for a session that already has the canvas prompt", () => {
+    const rules = getWorkspaceRulesPrompt();
+    expect(rules).toContain("room_publish_edition");
+    expect(rules).not.toContain("[DASHBOARD:");
+    expect(prompt).toContain(rules);
   });
 });
