@@ -334,28 +334,65 @@ _JOINERS = frozenset({"\u200c", "\u200d"})
 _JOINABLE = ("L", "M", "So", "Sk")
 #: Line breaks a one-line field turns into a space; other whitespace is kept.
 _LINE_BREAKS = re.compile(r"[\n\r\x0b\x0c\x85\u2028\u2029]+")
-#: The longest entity spelling worth looking for, doubled encodings included.
-_ENTITY_WINDOW = 48
+#: html's own character-reference rule (``html._charref``): a numeric
+#: reference of any length (leading zeros do not change its value), a named
+#: one of up to 32 characters, the semicolon optional.
+_CHARREF = re.compile(r"&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)")
+#: How many decode-and-fold rounds a reader is modelled for. A text still
+#: decoding after this many is treated as hostile (see ``_guarded``).
+_FOLD_ROUNDS = 16
+#: Raw input cleaned per field: its limit, this many times over, so the work
+#: is bounded by the field. Any input up to that length is cleaned exactly as
+#: before; beyond it, text that could only be cut off at the limit is not read.
+_INPUT_FACTOR = 4
+#: What every ampersand becomes when a text still decodes to a bracket.
+_AMPERSAND_STANDIN = " and "
 
 
-def _fold(value: str) -> str:
-    """The text as a reader that decodes entities, folds look-alikes and drops
-    hidden characters would see it, to a fixed point. Used to decide what is
-    offending; never emitted."""
-    for _ in range(64):
-        folded = "".join(
-            ch
-            for ch in unicodedata.normalize("NFKC", html.unescape(value))
-            if unicodedata.category(ch) not in _HIDDEN_CATEGORIES
-        )
-        if folded == value:
-            break
-        value = folded
-    return value
+_DECIMAL_REF = re.compile(r"&#0*([0-9]+)")
+_HEX_REF = re.compile(r"&#([xX])0*([0-9a-fA-F]+)")
+#: Longer than this, a numeric reference is past U+10FFFF whatever its digits.
+_MAX_REF_DIGITS = 8
 
 
-def _offending(value: str) -> bool:
-    return any(ch in _BRACKETS for ch in _fold(value))
+def _unescape(text: str) -> str:
+    """``html.unescape`` with numeric references shortened first: leading zeros
+    never change a reference's value, and one still longer than
+    ``_MAX_REF_DIGITS`` is out of range (html decodes it to U+FFFD). Without
+    this, a reference past Python's integer-conversion limit raises."""
+    text = _DECIMAL_REF.sub(
+        lambda m: "&#65533" if len(m.group(1)) > _MAX_REF_DIGITS else "&#" + m.group(1), text
+    )
+    text = _HEX_REF.sub(
+        lambda m: (
+            "&#65533" if len(m.group(2)) > _MAX_REF_DIGITS else "&#" + m.group(1) + m.group(2)
+        ),
+        text,
+    )
+    return html.unescape(text)
+
+
+def _fold_round(text: str) -> str:
+    """One reader pass: entities decoded, NFKC, hidden characters dropped."""
+    return "".join(
+        ch
+        for ch in unicodedata.normalize("NFKC", _unescape(text))
+        if unicodedata.category(ch) not in _HIDDEN_CATEGORIES
+    )
+
+
+def _decodes_to_markup(text: str) -> bool:
+    """Whether a reader that decodes, folds and drops hidden characters, over
+    and over, could ever see a bracket in ``text``. Linear per round, at most
+    ``_FOLD_ROUNDS`` rounds; a text still decoding after that is assumed to."""
+    for _ in range(_FOLD_ROUNDS):
+        folded = _fold_round(text)
+        if any(ch in _BRACKETS for ch in folded):
+            return True
+        if folded == text:
+            return False
+        text = folded
+    return "&" in text
 
 
 def _joinable(ch: str) -> bool:
@@ -383,36 +420,42 @@ def _kept(text: str, i: int) -> bool:
     )
 
 
-def _entity_end(text: str, start: int) -> int | None:
-    """Where an entity starting at ``start`` ends, when it decodes (however
-    deeply encoded) to a bracket; None for any other ampersand."""
-    for end in range(start + 2, min(len(text), start + _ENTITY_WINDOW) + 1):
-        if _offending(text[start:end]):
-            return end
-    return None
+def _bracket_free(ch: str) -> str:
+    folded = unicodedata.normalize("NFKC", ch)
+    return folded.translate(_TRANSLATE) if any(c in _BRACKETS for c in folded) else ch
+
+
+def _reference(match: re.Match[str]) -> str:
+    """A character reference that decodes (one level) to a bracket becomes the
+    stand-in; any other is kept as written."""
+    folded = unicodedata.normalize("NFKC", _unescape(match.group()))
+    if any(c in _BRACKETS for c in folded):
+        return folded.translate(_TRANSLATE)
+    return match.group()
 
 
 def _neutralised(text: str) -> str:
-    """The text with only its offending characters replaced: a character that
-    is or folds to a bracket, and an entity that decodes to one."""
-    out: list[str] = []
-    i = 0
-    while i < len(text):
-        ch = text[i]
-        folded = unicodedata.normalize("NFKC", ch)
-        end = _entity_end(text, i) if "&" in folded else None
-        if end is not None:
-            out.append(_fold(text[i:end]).translate(_TRANSLATE))
-            i = end
-            continue
-        out.append(folded.translate(_TRANSLATE) if _offending(ch) else ch)
-        i += 1
-    return "".join(out)
+    """Only the offending characters replaced: references that decode to a
+    bracket, and characters that are or fold to one. One linear pass."""
+    return "".join(_bracket_free(ch) for ch in _CHARREF.sub(_reference, text))
+
+
+def _guarded(text: str) -> str:
+    """The structural guarantee, checked on the result rather than assumed:
+    if a reader could still decode a bracket out of ``text`` (a deep ``&amp;``
+    chain, say), no ampersand is left to start a reference. Ordinary text
+    never reaches the fallback."""
+    if not _decodes_to_markup(text):
+        return text
+    stripped = "".join(
+        _AMPERSAND_STANDIN if "&" in unicodedata.normalize("NFKC", ch) else ch for ch in text
+    )
+    return _neutralised(stripped)
 
 
 def _settle(value: str, *, one_line: bool) -> str:
     for _ in range(16):
-        text = _neutralised(_visible(value))
+        text = _guarded(_neutralised(_visible(value)))
         if one_line:
             text = _LINE_BREAKS.sub(" ", text)
         text = text.strip()
@@ -428,12 +471,16 @@ def clean_text(value: str, limit: int, *, one_line: bool = False) -> str:
 
     Hidden characters are removed (newlines and tabs kept, and ZWJ/ZWNJ
     between non-ASCII letters, marks or symbols); every character that is or
-    folds (NFKC) to ``<``, ``>``, ``[`` or ``]``, and every entity that decodes
-    to one however deeply encoded, is replaced by a stand-in; a one-line field
-    turns line breaks into spaces. Other characters (superscripts, fractions,
-    fullwidth punctuation, ligatures) are emitted as written. Repeated until
-    nothing changes, so cleaning the result again changes nothing."""
-    return _settle(_settle(value, one_line=one_line)[:limit], one_line=one_line)
+    folds (NFKC) to ``<``, ``>``, ``[`` or ``]``, and every character
+    reference that decodes to one, is replaced by a stand-in; a one-line field
+    turns line breaks into spaces. Then the result is checked as a reader
+    would decode it, and if a bracket could still come out (however deeply
+    encoded), every ampersand is replaced too. Other characters (superscripts,
+    fractions, fullwidth punctuation, ligatures, a plain ``&``) are emitted as
+    written. Repeated until nothing changes, so cleaning the result again
+    changes nothing. Work is linear in ``limit``, whatever the input's length."""
+    head = value[: limit * _INPUT_FACTOR]
+    return _settle(_settle(head, one_line=one_line)[:limit], one_line=one_line)
 
 
 def clean_summary(value: Any) -> str:
