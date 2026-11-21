@@ -244,7 +244,23 @@ async function proposeEmail(page: Page, id: string) {
   return cards.last();
 }
 
-test("10. in the task workspace Bob sees the exact email, approves it, and it is sent once with a receipt (E3)", async () => {
+async function suggestedStatus() {
+  const tasks = (await (await api("bob")).get(`/api/rooms/${roomId}/tasks`)).body.tasks as Array<{ status: string; origin: string }>;
+  return tasks.find((t) => t.origin === "suggestion")?.status;
+}
+
+test("10. in the task workspace Bob rejects the first email: nothing is sent, the receipt says so, and the task stays open (E3)", async () => {
+  const sentBefore = outboxCount();
+  const card = await proposeEmail(bobPage, taskRoomId);
+  await card.getByRole("button", { name: /reject/i }).click();
+  await expect(room(bobPage).getByTestId("room-email-receipt").last()).toContainText(/Not sent: rejected/, {
+    timeout: 30000,
+  });
+  expect(outboxCount()).toBe(sentBefore);
+  expect(await suggestedStatus()).not.toBe("DONE");
+});
+
+test("10a. Bob sees the exact email, approves it, and it is sent once with a receipt (E3)", async () => {
   const sentBefore = outboxCount();
   const card = await proposeEmail(bobPage, taskRoomId);
   await expect(card.getByTestId("room-email-from")).toHaveText("assistant@example.com");
@@ -267,26 +283,8 @@ test("10. in the task workspace Bob sees the exact email, approves it, and it is
   expect(outboxCount()).toBe(sentBefore + 1); // exactly once
 });
 
-test("10a. the task is done once its email is sent (E3)", async () => {
-  expectedToFailUntil(
-    "a product decision: story E3 says the task completes, but nothing completes a task when its email is sent (a task may need more than one email)",
-  );
-  await expect
-    .poll(async () => {
-      const tasks = (await (await api("bob")).get(`/api/rooms/${roomId}/tasks`)).body.tasks as Array<{ status: string; origin: string }>;
-      return tasks.find((t) => t.origin === "suggestion")?.status;
-    }, { timeout: 15000 })
-    .toBe("DONE");
-});
-
-test("10b. Bob rejects a second email: nothing is sent, and the receipt says so (E3)", async () => {
-  const sentBefore = outboxCount();
-  const card = await proposeEmail(bobPage, taskRoomId);
-  await card.getByRole("button", { name: /reject/i }).click();
-  await expect(room(bobPage).getByTestId("room-email-receipt").last()).toContainText(/Not sent: rejected/, {
-    timeout: 30000,
-  });
-  expect(outboxCount()).toBe(sentBefore);
+test("10b. the task is done once its email is sent (E3)", async () => {
+  await expect.poll(suggestedStatus, { timeout: 15000 }).toBe("DONE");
 });
 
 test("10c. the same request in the report workspace proposes nothing (E4)", async () => {

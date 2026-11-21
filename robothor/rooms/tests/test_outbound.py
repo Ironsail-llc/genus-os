@@ -100,6 +100,13 @@ def notes(db, room) -> list[dict[str, Any]]:
     ]
 
 
+def task_status(db, task_id: str) -> tuple[str, bool]:
+    """``(status, the resolution names the sent email)``."""
+    db.cur.execute("SELECT status, resolution FROM crm_tasks WHERE id = %s", (task_id,))
+    status, resolution = db.cur.fetchone()
+    return status, "Renewal follow-up" in (resolution or "")
+
+
 def parsed(raw: str) -> email.message.EmailMessage:
     import base64
 
@@ -205,10 +212,11 @@ def test_a_members_approved_email_is_sent_once_with_a_receipt_in_the_workspace(m
     events = [p for s, t, p in mail.events if t == "room.message"]
     assert {"room_id": room.id, "tenant_id": mail.tenant, "message_id": note["id"]} in events
 
-    assert crm_dal.update_task(room.task_id, status="IN_PROGRESS", tenant_id=mail.tenant)
-    assert crm_dal.update_task(
-        room.task_id, status="DONE", resolution="Emails sent", tenant_id=mail.tenant
-    )
+    # Story E3: the email the task was for is sent, so the task is done.
+    assert task_status(mail, room.task_id) == ("DONE", True)
+    events = [p for s, t, p in mail.events if t == "room.task"]
+    assert {"room_id": room.id, "tenant_id": mail.tenant, "task_id": room.task_id} in events
+    del crm_dal
 
 
 def test_delivering_again_sends_nothing_more(mail):
@@ -664,3 +672,58 @@ def test_alices_proposal_in_her_task_cannot_be_approved_by_bob(mail):
         approvals.decide_member_action(actor(mail, "bob"), proposed.action_id, approved=True)
     assert outbound.deliver(mail.tenant, proposed.action_id) == "skipped"
     assert mail.sent == []
+
+
+# ─── the task the email was for ──────────────────────────────────────────
+
+
+def test_a_sent_email_completes_its_task_once(mail):
+    from robothor.rooms import outbound
+
+    room = bobs_room(mail)
+    proposed = approved(mail, room)
+    assert outbound.deliver(mail.tenant, proposed.action_id) == "sent"
+    outbound.sweep(mail.tenant)
+    outbound.deliver(mail.tenant, proposed.action_id)
+
+    assert task_status(mail, room.task_id) == ("DONE", True)
+    mail.cur.execute(
+        "SELECT count(*) FROM crm_task_history WHERE task_id = %s AND to_status = 'DONE'",
+        (room.task_id,),
+    )
+    assert mail.cur.fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("outcome", ["rejected", "failed", "uncertain", "expired"])
+def test_an_email_that_was_not_sent_leaves_its_task_open(mail, monkeypatch, outcome):
+    from robothor.rooms import approvals, outbound
+
+    room = bobs_room(mail)
+    before = task_status(mail, room.task_id)[0]
+    proposed = propose(mail, room, bobs_turn(mail, room))
+    if outcome == "rejected":
+        approvals.decide_member_action(actor(mail, "bob"), proposed.action_id, approved=False)
+    elif outcome == "expired":
+        mail.cur.execute(
+            "UPDATE operation_actions SET expires_at = now() - interval '1 minute' WHERE id = %s",
+            (proposed.action_id,),
+        )
+    else:
+        approvals.decide_member_action(actor(mail, "bob"), proposed.action_id, approved=True)
+        if outcome == "failed":
+            mail.mail_state["fail"] = RuntimeError("mail provider said no")
+            outbound.deliver(mail.tenant, proposed.action_id)
+        else:  # an executor died mid-send: its lease ran out
+            from robothor.operations.store import Operations
+
+            assert Operations(mail.tenant).claim_action_by_id(proposed.action_id) is not None
+            mail.cur.execute(
+                "UPDATE operation_actions SET lease_until = now() - interval '1 minute' "
+                "WHERE id = %s",
+                (proposed.action_id,),
+            )
+    outbound.sweep(mail.tenant)
+
+    [note] = notes(mail, room)
+    assert note["receipt"]["status"] == outcome
+    assert task_status(mail, room.task_id)[0] == before != "DONE"
