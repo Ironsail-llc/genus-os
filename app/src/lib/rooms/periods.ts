@@ -1,9 +1,10 @@
 /**
  * Report periods, worked out in the browser so a stored edition can be shown
- * the moment its period is picked, and a future period refused before any
- * request. Dates are calendar dates (`2026-11-16`), handled in UTC so a date
- * never shifts with the reader's zone; "today" is read in the workspace's
- * own time zone. The engine resolves periods again on its side and decides.
+ * the moment its period is picked, and a period that is not over yet (by the
+ * engine's rule: its last day is today or later) refused before any request.
+ * A custom range may be any length. Dates are calendar dates (`2026-11-16`),
+ * handled in UTC so a date never shifts with the reader's zone; "today" is
+ * read in the workspace's own time zone. The engine resolves periods again on its side and decides.
  *
  * A week runs Monday to Sunday; a month from its first day to its last.
  */
