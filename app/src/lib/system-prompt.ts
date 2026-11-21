@@ -11,6 +11,11 @@ const WORKSPACE_RULES = `Workspaces (shared conversations below the main one, wi
 - Before room_create, restate what you will set up (kind, title, agent, schedule, who it is shared with) and wait for the user to confirm.
 - Never describe a workspace the tools did not return. To answer "what is new in my workspaces", call room_list (and room_read for detail) and link each one you name.`;
 
+/** The workspace rules alone, for a session that already has the canvas prompt. */
+export function getWorkspaceRulesPrompt(): string {
+  return WORKSPACE_RULES;
+}
+
 /**
  * System prompt injected into the gateway session for visual canvas awareness.
  * The workspace rules are added only where workspaces are served: they name
