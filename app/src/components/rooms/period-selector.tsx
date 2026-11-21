@@ -10,8 +10,10 @@ import { requestPeriod } from "@/lib/rooms/api";
 import { formatPeriod } from "@/lib/rooms/format";
 import {
   customPeriod,
+  dayBefore,
   findStoredEdition,
   isFuturePeriod,
+  isUnfinishedPeriod,
   lastCompletePeriod,
   resolvePeriod,
   todayIn,
@@ -47,8 +49,10 @@ function isFixed(grain: unknown): grain is FixedGrain {
  * request. Otherwise one `POST /api/rooms/{id}/periods` asks for it (the
  * engine joins a request for a period already building) and a "building"
  * line stays until it arrives, by the room's event or, failing that, a poll.
- * A period that has not happened yet is refused here; the daily on-demand
- * cap is said in words.
+ * A period that has not ended yet is refused here, as the engine refuses it
+ * (only a period whose last day is before today in the workspace's zone),
+ * and the button stays off while one is picked; the daily on-demand cap and
+ * any other refusal are said in the server's words.
  */
 export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
   const { room, edition, editions, showEdition, refresh } = ctx;
@@ -96,6 +100,16 @@ export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
     pending && arrival.failed
       ? `The edition for ${formatPeriod(pending.range.start, pending.range.end)} could not be built${editionError(arrival.failed) ? `: ${editionError(arrival.failed)}` : "."}`
       : null;
+  // A new date replaces the last refusal; an unfinished pick is said live.
+  const setDate = (set: (value: string) => void) => (value: string) => {
+    set(value);
+    setError(null);
+  };
+  const today = todayIn(tz);
+  const lastEnded = dayBefore(today);
+  const picked = grain === "custom" ? customPeriod(start, end) : anchor ? resolvePeriod(grain, anchor) : null;
+  const unfinished = open && picked ? unfinishedText(picked, today) : null;
+  const panelError = error ?? unfinished;
   const shownError = error ?? buildFailure;
 
   const apply = async () => {
@@ -105,8 +119,9 @@ export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
       setError("Pick a start and an end, with the end on or after the start.");
       return;
     }
-    if (isFuturePeriod(range, todayIn(tz))) {
-      setError("That period hasn't happened yet, so there is nothing to report on.");
+    const refusal = unfinishedText(range, todayIn(tz));
+    if (refusal) {
+      setError(refusal);
       return;
     }
     const stored = findStoredEdition(editions, range);
@@ -211,28 +226,29 @@ export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
           </div>
           {grain === "custom" ? (
             <div className="grid grid-cols-2 gap-2">
-              <DateField label="From" value={start} onChange={setStart} testId="period-start" errorId={error ? errorId : undefined} />
-              <DateField label="To" value={end} onChange={setEnd} testId="period-end" errorId={error ? errorId : undefined} />
+              <DateField label="From" value={start} onChange={setDate(setStart)} max={lastEnded} testId="period-start" errorId={panelError ? errorId : undefined} />
+              <DateField label="To" value={end} onChange={setDate(setEnd)} max={lastEnded} testId="period-end" errorId={panelError ? errorId : undefined} />
             </div>
           ) : (
             <DateField
               label={grain === "day" ? "Day" : `Any day in the ${grain}`}
               value={anchor}
-              onChange={setAnchor}
+              onChange={setDate(setAnchor)}
+              max={lastEnded}
               testId="period-anchor"
-              errorId={error ? errorId : undefined}
+              errorId={panelError ? errorId : undefined}
             />
           )}
-          {error && (
+          {panelError && (
             <p id={errorId} className="text-xs text-destructive" role="alert" data-testid="period-error">
-              {error}
+              {panelError}
             </p>
           )}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" size="sm" disabled={sending} data-testid="period-apply">
+            <Button type="submit" size="sm" disabled={sending || unfinished !== null} data-testid="period-apply">
               {sending && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
               Show period
             </Button>
@@ -243,16 +259,28 @@ export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
   );
 }
 
+/** Why `range` cannot be asked for yet, in words, or null when it has ended. */
+function unfinishedText(range: PeriodRange, today: string): string | null {
+  if (isFuturePeriod(range, today)) {
+    return "That period hasn't happened yet, so there is nothing to report on.";
+  }
+  if (!isUnfinishedPeriod(range, today)) return null;
+  const what = range.grain === "custom" ? "range" : range.grain;
+  return `That ${what} is not over yet: it ends ${formatPeriod(range.end, range.end)}. Pick one that has ended.`;
+}
+
 function DateField({
   label,
   value,
   onChange,
+  max,
   testId,
   errorId,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  max?: string;
   testId: string;
   errorId?: string;
 }) {
@@ -267,6 +295,7 @@ function DateField({
         type="date"
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        max={max}
         aria-describedby={errorId}
         aria-invalid={errorId ? true : undefined}
         className="h-8 rounded-md border border-input bg-card px-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-1"

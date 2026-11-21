@@ -79,6 +79,21 @@ export function isFuturePeriod(range: PeriodRange, today: string): boolean {
   return range.grain === "custom" && range.end > today;
 }
 
+/**
+ * A period whose last day is today or later: it has not ended, so there is
+ * nothing complete to report on. The engine refuses exactly these
+ * (`robothor/rooms/periods.py`, `resolve_period`), in the workspace's zone.
+ */
+export function isUnfinishedPeriod(range: PeriodRange, today: string): boolean {
+  return range.end >= today;
+}
+
+/** The day before `today` (both `YYYY-MM-DD`): the latest date that has ended. */
+export function dayBefore(today: string): string {
+  const d = parse(today);
+  return d ? iso(addDays(d, -1)) : today;
+}
+
 /** The latest whole day, week or month before the one `today` is in. */
 export function lastCompletePeriod(grain: FixedGrain, today: string): PeriodRange {
   const current = resolvePeriod(grain, today);
