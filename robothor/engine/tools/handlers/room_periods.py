@@ -26,6 +26,10 @@ async def _room_request_period(args: dict[str, Any], ctx: ToolContext) -> dict[s
         return {"error": "room_id and grain are required"}
     if not ctx.user_id:
         return {"error": "asking a workspace for a period needs the person this run is for"}
+    from robothor.engine.tools.handlers.room_runs import nested_refusal
+
+    if refusal := await nested_refusal(ctx):
+        return refusal
     actor = Actor(user_id=ctx.user_id, role=ctx.user_role, tenant_id=ctx.tenant_id)
     try:
         edition, started = await periods.request_period(actor, room_id, grain, args.get("anchor"))

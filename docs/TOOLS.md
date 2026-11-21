@@ -1621,7 +1621,7 @@ same way.
 | Tool | Does | Needs |
 |---|---|---|
 | `room_create` | `kind` report or agent, `title`, `instructions`, optional `agent_id` (default `main`), `schedule`, `tz`, `default_grain`, `share_with` | a staff role (not viewer) |
-| `room_update` | `room_id`, `expected_rev`, `changes` (`title`, `instructions`, `schedule_text`, `tz`, `default_grain`, `paused`, `notify_default`, `max_cost_usd`) | assigned, or owner/admin |
+| `room_update` | `room_id`, `expected_rev`, `changes` (`title`, `instructions`, `schedule_text`, `tz`, `default_grain`, `paused`, `notify_default`) | assigned, or owner/admin |
 | `room_list` | `scope` `mine` (default) or `all` | `all`: owner/admin |
 | `room_read` | `room_id`, `editions` (3), `messages` (10) | any access |
 | `room_share` / `room_unshare` | `room_id`, `user` (id or email), `assigned` | assigned, or owner/admin |
@@ -1929,9 +1929,17 @@ already exist.
   members when it publishes. A **preview** builds it for the person you are
   talking to only: nobody else sees it, nobody is notified, no tasks are created,
   and nothing is written in the shared conversation.
+- A `period` follows the same rules as `room_request_period`: it must be over in
+  the workspace's time zone, and a day, week (Monday to Sunday) or month must be
+  a whole one; anything else is refused before anything runs.
 - It goes on in the background. The result is the edition being built
-  (`started: true`) and the link; a run already in progress is joined
-  (`joined: true`), never started twice.
+  (`started: true`) and the link. A run already in progress for the same period
+  (for a preview, your own preview of it) is joined (`joined: true`), never
+  started twice; a run for another period is not joined: it waits for the
+  workspace and builds its own edition.
+- A workspace run (scheduled, run now, period or preview) and a sub-agent cannot
+  call it, nor `room_request_period`, nor change or create workspaces: a run that
+  starts runs is a loop. Only `room_read` works there. A person's own turn can.
 - Refused for a viewer, for an archived workspace, and for a paused one unless
   the caller is assigned to it (or an owner or admin). Nothing else limits it:
   any number of runs may start in a day, and a run is never stopped for what it

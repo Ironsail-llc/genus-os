@@ -79,10 +79,9 @@ CHANGE_KEYS = frozenset(
         "default_grain",
         "paused",
         "notify_default",
-        "max_cost_usd",
     }
 )
-_SETTING_CHANGES = ("tz", "default_grain", "notify_default", "max_cost_usd")
+_SETTING_CHANGES = ("tz", "default_grain", "notify_default")
 _SCHEDULE_CHANGES = frozenset({"schedule_text", "tz", "paused"})
 _STAFF_ROLES = frozenset({"owner", "admin", "member", "user"})
 _ADMIN_ROLES = frozenset({"owner", "admin"})
@@ -191,11 +190,6 @@ def _check_creator(actor: Actor) -> None:
 
 
 def _check_setting_values(changes: Mapping[str, Any]) -> None:
-    cost = changes.get("max_cost_usd")
-    if cost is not None and (
-        isinstance(cost, bool) or not isinstance(cost, int | float) or cost < 0
-    ):
-        raise ValueError("max_cost_usd must be a number of dollars, zero or more")
     notify = changes.get("notify_default")
     if notify is not None and not isinstance(notify, bool | str | dict):
         raise ValueError("notify_default must be true/false, a name or an object")

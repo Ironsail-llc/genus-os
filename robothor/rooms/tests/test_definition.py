@@ -277,11 +277,11 @@ def test_rename_and_new_instructions_write_one_revision(staff_db):
         _actor(db, "alice"),
         room.id,
         1,
-        {"title": "Daily sales (EMEA)", "instructions": "Only EMEA.", "max_cost_usd": 2.5},
+        {"title": "Daily sales (EMEA)", "instructions": "Only EMEA.", "notify_default": False},
     )
 
     assert (saved.title, saved.instructions, saved.rev) == ("Daily sales (EMEA)", "Only EMEA.", 2)
-    assert saved.settings["max_cost_usd"] == 2.5
+    assert saved.settings["notify_default"] is False
 
 
 def test_changed_instructions_are_scanned_again_and_nothing_is_written(staff_db):

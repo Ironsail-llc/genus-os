@@ -250,9 +250,10 @@ async def stop_room_run(auth: Any, target: ChatTarget) -> JSONResponse | None:
     """Abort the room's own run (scheduled, run now, preview), when one holds
     the room; None when none does, so the caller stops a chat turn as usual.
 
-    The caller already holds ``post``. A SCHEDULED run is the room's, not
-    anyone's turn: only an assigned member or an admin (``edit_definition``)
-    may stop it."""
+    The caller already holds ``post``. A run now, period run or preview may be
+    stopped by the person who started it; anyone else needs to manage the room
+    (assigned, or an admin: ``edit_definition``). A SCHEDULED run is the
+    room's, not anyone's, so only an assigned member or an admin may stop it."""
     room = target.room
     if room is None:
         return None
@@ -261,7 +262,8 @@ async def stop_room_run(auth: Any, target: ChatTarget) -> JSONResponse | None:
     active = runs.active_run(room.id)
     if active is None or active.task is None:
         return None
-    if active.trigger == "schedule" and not getattr(auth, "is_service", False):
+    own = active.trigger != "schedule" and active.requested_by == str(auth.user_id)
+    if not own and not getattr(auth, "is_service", False):
         try:
             await asyncio.to_thread(
                 access.require, access.Actor.from_auth(auth), room.id, "edit_definition"

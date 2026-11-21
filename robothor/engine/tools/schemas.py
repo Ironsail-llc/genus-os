@@ -1985,7 +1985,7 @@ _ROOM_SCHEMAS: dict[str, dict[str, Any]] = {
                 "description": (
                     "Any of: title, instructions, schedule_text (null removes the schedule), "
                     "tz, default_grain, paused (true/false; resuming runs next from now), "
-                    "notify_default, max_cost_usd"
+                    "notify_default"
                 ),
             },
         },

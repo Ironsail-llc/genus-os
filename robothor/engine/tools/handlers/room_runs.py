@@ -21,6 +21,36 @@ if TYPE_CHECKING:
 
 HANDLERS: dict[str, Any] = {}
 
+_IN_A_RUN = (
+    "A workspace run cannot start workspace runs or request periods: a run that starts "
+    "runs is a loop. Say in your result what should run next; a person can start it."
+)
+_IN_A_SUB_AGENT = (
+    "A sub-agent cannot start workspace runs or request periods; return to the run that "
+    "spawned you, which can ask the person."
+)
+
+
+async def nested_refusal(ctx: ToolContext) -> dict[str, Any] | None:
+    """A refusal when the calling run is a workspace run (its room carrier is
+    unattended: scheduled, on demand, period or preview) or a sub-agent run;
+    None for a person's own turn. Structural, not a count: such a run starts
+    no workspace work at all."""
+    import asyncio
+
+    from robothor.rooms import editions
+    from robothor.rooms.run_context import current_room_run
+
+    carrier = current_room_run()
+    if carrier is not None and carrier.unattended:
+        return {"error": _IN_A_RUN, "nested": True}
+    if ctx.run_id:
+        record = await asyncio.to_thread(editions.load_run_record, ctx.tenant_id, ctx.run_id)
+        if record is not None and record.is_child:
+            return {"error": _IN_A_SUB_AGENT, "nested": True}
+    return None
+
+
 _NOT_FOUND = (
     "No workspace with that id is visible to you. Use room_list to find the workspaces "
     "you can open; never guess an id or pass a title."
@@ -33,6 +63,8 @@ async def _room_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     room_id = args.get("room_id")
     if not isinstance(room_id, str) or not room_id:
         return {"error": "room_id is required"}
+    if refusal := await nested_refusal(ctx):
+        return refusal
     actor = _actor(ctx)
     if actor is None:
         return {"error": "running a workspace needs the verified person this run is for"}

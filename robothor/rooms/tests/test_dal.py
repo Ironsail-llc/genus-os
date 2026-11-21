@@ -188,12 +188,12 @@ def test_settings_merge_and_a_none_removes_a_key(rooms_db) -> None:
     updated = dal.update_definition(
         rooms_db.tenant,
         room.id,
-        {"settings": {"tz": "Europe/London", "default_grain": None, "max_cost_usd": 2}},
+        {"settings": {"tz": "Europe/London", "default_grain": None, "notify_default": False}},
         rooms_db.alice,
         expected_rev=1,
     )
 
-    assert updated.settings == {"tz": "Europe/London", "max_cost_usd": 2}
+    assert updated.settings == {"tz": "Europe/London", "notify_default": False}
 
 
 def test_a_schedule_change_lands_in_settings_and_the_definition(rooms_db) -> None:

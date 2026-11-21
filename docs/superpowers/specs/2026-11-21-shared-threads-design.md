@@ -92,7 +92,7 @@ user_cronjobs + room_id UUID, run_as_user_id UUID
 operation_actions + proposed_by_run_id TEXT, proposed_for_user_id UUID, room_id UUID
 ```
 
-`settings` keys: `tz` (IANA name), `default_grain`, `schedule_text`, `max_cost_usd`,
+`settings` keys: `tz` (IANA name), `default_grain`, `schedule_text`,
 `notify_default`. The *definition* stored in a revision is
 `{title, instructions, agent_id, settings, schedule}`.
 
@@ -331,7 +331,11 @@ two, so the periods lane calls the shape it needs):
 - `start_room_run(actor, room_id, *, preview=False, period=None) ->
   tuple[Edition, bool]` (async): "run now" for a person, `(edition, joined)`,
   the run in the background (`pending_runs()`). Needs `run`; a paused room only
-  for assigned or admin; refuses non-report rooms (`ValueError`). Raises
+  for assigned or admin; refuses non-report rooms (`ValueError`). A named
+  period goes through `periods.resolve_period` (over, a whole day/week/month;
+  `PeriodError`). Joins only a run for the same period and preview-ness (for a
+  preview, the same requester); a run for another period waits for the lock and
+  builds its own edition, returned `building` (202). Raises
   `RoomNotFound`, `RoomForbidden`, `RunRefused(reason='paused'|'archived')`.
   No on-demand cap (operator decision, no caps in workspaces): any number of
   runs may start.
@@ -399,6 +403,15 @@ The `room` delivery channel (`channels/room.py`, built in): `delivery.to` is the
 room id; the output is an assistant turn attributed to the agent, then a note to
 members. Failures: `failed:room_unknown_target`, `failed:room_archived`,
 `failed:room_no_session_write`.
+
+No run starts runs: a workspace run's carrier is `RoomRun(..., unattended=True)`
+(added); inside it `room_run` and `room_request_period` refuse
+(`handlers.room_runs.nested_refusal`, also for a sub-agent run, read from its
+`agent_runs` row), and every room tool but `room_read` refuses
+(`handlers.rooms._actor` returns None), so a run cannot create scheduled
+workspaces either. `max_cost_usd` is no longer a room setting (refused as
+unknown). Stopping a run: a run now, period run or preview by its requester or
+an assigned member/admin; a scheduled run by an assigned member/admin.
 
 Interactive chat binds `chat_rooms.room_scope(target)` in `chat_rooms.start_turn`,
 so every room turn's task (runner and save) carries the room; the interruption

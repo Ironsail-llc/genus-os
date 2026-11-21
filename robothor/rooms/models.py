@@ -20,7 +20,6 @@ SETTINGS_KEYS = frozenset(
         "tz",
         "default_grain",
         "schedule_text",
-        "max_cost_usd",
         "notify_default",
     }
 )

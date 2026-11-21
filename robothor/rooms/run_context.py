@@ -56,6 +56,11 @@ class RoomRun:
     grain: str | None = None
     period_start: date | None = None
     period_end: date | None = None
+    #: True for a run nobody is typing in (scheduled, on demand, period,
+    #: preview: ``robothor.rooms.runs``). Such a run may not start workspace
+    #: runs, request periods or change workspaces: a run that starts runs is
+    #: a loop. A person's interactive turn leaves it False.
+    unattended: bool = False
     #: Editions this turn published, for the reply the chat store saves.
     _published: list[str] = field(default_factory=list, compare=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, compare=False, repr=False)
