@@ -72,6 +72,21 @@ def _room() -> Room:
     )
 
 
+@pytest.fixture(autouse=True)
+def top_level_run(monkeypatch):
+    """Every call here is from the person's own run unless a test says otherwise."""
+    from robothor.rooms import tasks
+
+    seen: list[tuple[str, str]] = []
+
+    def check(tenant_id, run_id):
+        seen.append((tenant_id, run_id))
+        return True
+
+    monkeypatch.setattr(tasks, "run_is_top_level", check)
+    return seen
+
+
 # ─── the surface ─────────────────────────────────────────────────────────
 
 
@@ -247,3 +262,37 @@ async def test_every_task_tool_runs_its_database_work_off_the_loop(monkeypatch, 
     assert "error" in result
     await probe.settle()
     probe.assert_loop_free()
+
+
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [
+        ("room_task_accept", {"room_id": ROOM_ID, "task_id": TASK_ID}),
+        ("room_task_dismiss", {"room_id": ROOM_ID, "task_id": TASK_ID}),
+        ("room_open_task", {"task_id": TASK_ID}),
+    ],
+)
+def test_a_sub_agent_run_cannot_use_them(monkeypatch, top_level_run, tool, args):
+    """A sub-agent inherits its parent's person; only the person's own run may
+    take, dismiss or open a task for them."""
+    from robothor.rooms import tasks
+
+    called: list[str] = []
+    monkeypatch.setattr(tasks, "run_is_top_level", lambda tenant_id, run_id: False)
+    for name in ("accept_task", "dismiss_task", "open_task_room"):
+        monkeypatch.setattr(tasks, name, lambda *a, _n=name: called.append(_n))
+
+    result = _call(tool, args)
+
+    assert "error" in result
+    assert called == []
+
+
+def test_the_run_checked_is_the_tools_own(top_level_run, monkeypatch):
+    from robothor.rooms import tasks
+
+    monkeypatch.setattr(tasks, "open_task_room", lambda actor, task_id: _room())
+
+    _call("room_open_task", {"task_id": TASK_ID}, _ctx(run_id="run-7"))
+
+    assert top_level_run == [("test-tenant", "run-7")]
