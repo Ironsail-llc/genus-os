@@ -1890,7 +1890,7 @@ month run reads the summaries of the day editions inside it as data; it fetches
 its own figures and never adds the days up. Use `room_run` for "run it now" and
 `room_read` to read editions that already exist. The engine route
 `POST /api/rooms/{id}/periods` does the same for the dashboard (200 existing,
-202 started, 429 cap reached); the bridge reaches it with its engine credential
+202 started, 429 `on_demand_cap` with the `limit`); the bridge reaches it with its engine credential
 and names the person asking.
 
 ### When a tool call fails
