@@ -29,7 +29,9 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 
 from robothor.crm.dal import send_notification
@@ -39,6 +41,7 @@ from robothor.rooms.errors import (
     InvalidBlocks,
     RevisionConflict,
     RoomBusy,
+    RoomError,
     RoomForbidden,
     RoomNotFound,
 )
@@ -48,13 +51,13 @@ from routers._audit import audited
 from routers._engine_client import engine_request
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
     from datetime import date, datetime
 
     from robothor.rooms.models import Edition, Revision, Room, RoomMember, RoomSummary, RoomTask
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/rooms", tags=["rooms"])
 
 #: Tenant roles that may hold a room at all, and the ones that may do work in
 #: one (create, open a task, be reassigned to). A viewer reads only.
@@ -73,28 +76,92 @@ _CHANGE_KEYS = {
 
 
 # ─── errors ──────────────────────────────────────────────────────────────
+#
+# One body for every refusal: ``{"detail": {"error": <code>, "message": <text>,
+# "field": <camelCase field or null>, ...}}``, with ``currentRev`` on a revision
+# conflict and whatever else a code names. ``_RoomsRoute`` applies it to the
+# rooms errors, malformed bodies and the sign-in refusal raised anywhere in a
+# handler; the engine's own answers pass through unchanged.
+
+
+def _problem(
+    status: int, code: str, message: str, *, field: str | None = None, **extra: Any
+) -> JSONResponse:
+    detail: dict[str, Any] = {"error": code, "message": message, "field": field, **extra}
+    return JSONResponse({"detail": detail}, status_code=status)
 
 
 def room_error_response(_request: Any, exc: Exception) -> JSONResponse:
-    """The one mapping from a rooms error to an HTTP answer (installed on the app)."""
+    """The one mapping from a rooms error to an HTTP answer."""
     if isinstance(exc, RoomNotFound):
-        return JSONResponse({"error": "workspace not found"}, status_code=404)
+        return _problem(404, "not_found", "workspace not found")
     if isinstance(exc, RoomForbidden):
-        return JSONResponse({"error": str(exc)}, status_code=403)
+        return _problem(403, "forbidden", str(exc))
     if isinstance(exc, RevisionConflict):
-        return JSONResponse(
-            {"error": "the workspace changed since you opened it", "currentRev": exc.current_rev},
-            status_code=409,
+        return _problem(
+            409,
+            "revision_conflict",
+            "the workspace changed since you opened it",
+            currentRev=exc.current_rev,
         )
     if isinstance(exc, RoomBusy):
-        return JSONResponse({"error": "room_busy", "answering": exc.answering}, status_code=409)
+        return _problem(409, "room_busy", str(exc), answering=exc.answering)
     if isinstance(exc, InvalidBlocks):
-        return JSONResponse({"error": str(exc)}, status_code=422)
-    return JSONResponse({"error": "workspace error"}, status_code=500)
+        return _problem(422, "invalid_blocks", str(exc), field="blocks")
+    return _problem(500, "workspace_error", "workspace error")
 
 
-def _invalid(exc: ValueError) -> JSONResponse:
-    return JSONResponse({"error": str(exc)}, status_code=422)
+def _camel(name: str) -> str:
+    head, *rest = name.split("_")
+    return head + "".join(part.title() for part in rest)
+
+
+def _invalid(exc: ValueError, field: str | None = None) -> JSONResponse:
+    """A 422 for a refused value: the definition's own codes, else ``invalid_request``."""
+    if isinstance(exc, definition.UnsafeInstructions):
+        return _problem(422, "unsafe_instructions", str(exc), field="instructions")
+    if isinstance(exc, definition.InvalidSchedule):
+        return _problem(422, "invalid_schedule", str(exc), field="scheduleText")
+    if isinstance(exc, Ineligible):
+        return _problem(422, "ineligible_account", str(exc), field=exc.field)
+    named = getattr(exc, "field", None)
+    if isinstance(named, str) and named:
+        field = _camel(named)
+    elif field is None and "title" in str(exc):
+        field = "title"
+    return _problem(422, "invalid_request", str(exc), field=field)
+
+
+def _malformed(exc: RequestValidationError) -> JSONResponse:
+    errors = exc.errors()
+    first = errors[0] if errors else {}
+    loc = [str(part) for part in first.get("loc", ()) if part != "body"]
+    field = _camel(loc[0]) if loc and not loc[0].isdigit() else None
+    message = str(first.get("msg") or "the request body is not valid")
+    return _problem(422, "invalid_request", message, field=field)
+
+
+class _RoomsRoute(APIRoute):
+    """Every rooms route answers refusals in the one error shape."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def answer(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except RoomError as exc:
+                return room_error_response(request, exc)
+            except RequestValidationError as exc:
+                return _malformed(exc)
+            except HTTPException as exc:
+                code = "unauthenticated" if exc.status_code == 401 else "refused"
+                return _problem(exc.status_code, code, str(exc.detail))
+
+        return answer
+
+
+router = APIRouter(prefix="/api/rooms", tags=["rooms"], route_class=_RoomsRoute)
 
 
 # ─── gates ───────────────────────────────────────────────────────────────
@@ -145,14 +212,24 @@ def _announce(actor: access.Actor, room_id: str, *, task_id: str | None = None) 
     )
 
 
-def _eligible(actor: access.Actor, user_id: str, roles: frozenset[str]) -> dict[str, Any]:
-    """The active account of the actor's company ``user_id`` names, else ValueError."""
+class Ineligible(ValueError):  # noqa: N818 - reads as the refusal it is
+    """The account cannot be shared with or handed a workspace."""
+
+    def __init__(self, message: str, field: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
+def _eligible(
+    actor: access.Actor, user_id: str, roles: frozenset[str], *, field: str = "userId"
+) -> dict[str, Any]:
+    """The active account of the actor's company ``user_id`` names, else ``Ineligible``."""
     canonical = canonical_uuid(user_id) or ""
     account = dal.get_accounts(actor.tenant_id, [canonical]).get(canonical) if canonical else None
     if not isinstance(account, dict) or account.get("status") != "active":
-        raise ValueError("no active account in this company has that id")
+        raise Ineligible("no active account in this company has that id", field)
     if account.get("role") not in roles:
-        raise ValueError(f"a {account.get('role')} account cannot take this on")
+        raise Ineligible(f"a {account.get('role')} account cannot take this on", field)
     return dict(account)
 
 
@@ -246,6 +323,7 @@ def _edition_json(edition: Edition) -> dict[str, Any]:
         "blocks": edition.blocks,
         "suggestions": edition.suggestions,
         "provenance": edition.provenance,
+        "error": edition.error,
         "createdAt": _iso(edition.created_at),
     }
 
@@ -260,17 +338,34 @@ def _revision_json(revision: Revision, accounts: dict[str, dict[str, Any]]) -> d
     }
 
 
-def _task_json(task: RoomTask) -> dict[str, Any]:
-    return {
-        "taskId": task.task_id,
-        "editionId": task.edition_id,
-        "origin": task.origin,
-        "suggestionKey": task.suggestion_key,
-        "acceptedBy": task.accepted_by,
-        "dismissedBy": task.dismissed_by,
-        "pending": task.pending,
-        "createdAt": _iso(task.created_at),
-    }
+def _person(accounts: dict[str, dict[str, Any]], user_id: str | None) -> dict[str, str] | None:
+    return {"userId": user_id, "displayName": _name(accounts, user_id)} if user_id else None
+
+
+def _tasks_json(actor: access.Actor, links: list[RoomTask]) -> list[dict[str, Any]]:
+    """Linked tasks with their CRM title, status and assignee, in one read each."""
+    details = dal.task_details(actor.tenant_id, [t.task_id for t in links])
+    people = [t.accepted_by or "" for t in links] + [
+        d["assignee_id"] or "" for d in details.values()
+    ]
+    accounts = dal.get_accounts(actor.tenant_id, people)
+    rows = []
+    for link in links:
+        task = details.get(link.task_id, {})
+        assignee = task.get("assignee_id")
+        rows.append(
+            {
+                "taskId": link.task_id,
+                "title": task.get("title", ""),
+                "status": task.get("status", "TODO"),
+                "origin": link.origin,
+                "editionId": link.edition_id,
+                "assignee": _person(accounts, assignee) if assignee in accounts else None,
+                "acceptedBy": _person(accounts, link.accepted_by),
+                "dismissed": link.dismissed_by is not None,
+            }
+        )
+    return rows
 
 
 # ─── bodies ──────────────────────────────────────────────────────────────
@@ -313,9 +408,16 @@ class RunBody(_Body):
     period: Any = None
 
 
+class NotifyBody(_Body):
+    in_app: bool = Field(True, alias="inApp")
+    muted: bool = False
+    channels: dict[str, bool] = Field(default_factory=dict)
+
+
 class PeriodsBody(_Body):
     grain: str
     anchor: str
+    end: str | None = None
 
 
 # ─── list, create ────────────────────────────────────────────────────────
@@ -330,16 +432,29 @@ def api_list_rooms(request: Request, scope: str = Query("mine", pattern="^(mine|
     if not _is_admin(actor):
         raise RoomForbidden("listing every workspace needs a company admin")
     rooms = dal.list_all_rooms(actor.tenant_id, include_archived=True)
-    assigned = dal.assigned_members(actor.tenant_id, [s.id for s in rooms])
-    accounts = dal.get_accounts(actor.tenant_id, [u for users in assigned.values() for u in users])
+    members = dal.members_of_rooms(actor.tenant_id, [s.id for s in rooms])
+    accounts = dal.get_accounts(
+        actor.tenant_id, [m.user_id for room_members in members.values() for m in room_members]
+    )
     listed = []
     for summary in rooms:
         body = _summary_json(summary)
+        rows = [_member_json(m, accounts) for m in members.get(summary.id, [])]
+        body["members"] = rows
         body["assigned"] = [
-            {"userId": u, "displayName": _name(accounts, u)} for u in assigned.get(summary.id, [])
+            {"userId": m["userId"], "displayName": m["displayName"]} for m in rows if m["assigned"]
         ]
         listed.append(body)
     return {"rooms": listed}
+
+
+@router.get("/directory")
+def api_directory(request: Request) -> Any:
+    """Who the caller can share a workspace with: the active people of their
+    acting company. Names only; no email, no role."""
+    actor = _human(request, _WORKING_ROLES)
+    users = dal.list_directory(actor.tenant_id)
+    return {"users": [{"userId": u["id"], "displayName": u["display_name"]} for u in users]}
 
 
 @router.post("", status_code=201)
@@ -347,8 +462,15 @@ def api_create_room(request: Request, body: CreateRoomBody) -> Any:
     actor = _human(request, _WORKING_ROLES)
     try:
         if body.kind not in _CREATABLE_KINDS:
-            raise ValueError("kind must be report or agent; open a task as a workspace instead")
-        share_with = [_eligible(actor, u, _HUMAN_ROLES)["id"] for u in body.share_with]
+            return _problem(
+                422,
+                "invalid_request",
+                "kind must be report or agent; open a task as a workspace instead",
+                field="kind",
+            )
+        share_with = [
+            _eligible(actor, u, _HUMAN_ROLES, field="shareWith")["id"] for u in body.share_with
+        ]
         room = definition.create_room_with_schedule(
             actor,
             kind=body.kind,
@@ -451,6 +573,55 @@ def api_mark_read(room_id: str, request: Request) -> Any:
     return {"read": member is not None}
 
 
+# ─── notification preferences ───────────────────────────────────────────
+
+#: How a channel name reads in the dashboard; anything else is title-cased.
+_CHANNEL_LABELS = {"telegram": "Telegram", "slack": "Slack", "whatsapp": "WhatsApp"}
+
+
+def _notify_json(notify: dict[str, Any], linked: list[str]) -> dict[str, Any]:
+    channels = notify.get("channels") or {}
+    return {
+        "inApp": bool(notify.get("in_app", True)),
+        "muted": bool(notify.get("muted", False)),
+        "channels": {str(k): bool(v) for k, v in channels.items()},
+        "linkedChannels": [
+            {"name": name, "label": _CHANNEL_LABELS.get(name, name.title())} for name in linked
+        ],
+    }
+
+
+@router.get("/{room_id}/notify")
+def api_get_notify(room_id: str, request: Request) -> Any:
+    """The caller's own notification preferences for this workspace."""
+    actor, room = _guard(request, room_id, "read")
+    member = dal.get_member(actor.tenant_id, room.id, actor.user_id)
+    linked = dal.linked_channels(actor.tenant_id, actor.user_id)
+    return _notify_json(member.notify if member else {}, linked)
+
+
+@router.put("/{room_id}/notify")
+def api_set_notify(room_id: str, request: Request, body: NotifyBody) -> Any:
+    """Set the caller's own preferences. Read access is enough: it touches only
+    their row. A channel can be turned on only once the caller has linked it."""
+    actor, room = _guard(request, room_id, "read")
+    linked = dal.linked_channels(actor.tenant_id, actor.user_id)
+    unlinked = sorted(name for name, on in body.channels.items() if on and name not in linked)
+    if unlinked:
+        return _problem(
+            422,
+            "channel_not_linked",
+            f"link {', '.join(unlinked)} to your account before turning it on",
+            field="channels",
+        )
+    notify = {"in_app": body.in_app, "muted": body.muted, "channels": dict(body.channels)}
+    member = dal.set_notify(actor.tenant_id, room.id, actor.user_id, notify)
+    if member is None:
+        return _problem(409, "not_a_member", "only a member of this workspace has preferences")
+    _audit(request, "room.notify", room.id, muted=body.muted)
+    return _notify_json(member.notify, linked)
+
+
 # ─── revisions ───────────────────────────────────────────────────────────
 
 
@@ -476,7 +647,7 @@ def api_restore_revision(
             expected_rev=body.expected_rev if body else None,
         )
     except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=404)
+        return _problem(404, "not_found", str(exc), field="rev")
     _audit(request, "room.restore", room.id, restored_rev=rev, rev=saved.rev)
     _announce(actor, room.id)
     return _room_json(actor, saved)
@@ -526,7 +697,7 @@ def api_share(
 def api_unshare(room_id: str, user_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "share")
     if not dal.remove_member(actor.tenant_id, room.id, user_id):
-        return JSONResponse({"error": "not a member of this workspace"}, status_code=404)
+        return _problem(404, "not_found", "not a member of this workspace", field="userId")
     removed = canonical_uuid(user_id)
     _audit(request, "room.unshare", room.id, user_id=removed)
     _announce(actor, room.id)
@@ -552,7 +723,9 @@ def api_reassign(room_id: str, request: Request, body: ReassignBody) -> Any:
 @router.get("/{room_id}/editions")
 def api_list_editions(room_id: str, request: Request, limit: int = Query(50, ge=1, le=200)) -> Any:
     actor, room = _guard(request, room_id, "read")
-    editions = dal.list_editions(actor.tenant_id, room.id, viewer_id=actor.user_id, limit=limit)
+    editions = dal.list_editions(
+        actor.tenant_id, room.id, viewer_id=actor.user_id, include_unpublished=True, limit=limit
+    )
     return {"editions": [_edition_json(e) for e in editions]}
 
 
@@ -561,7 +734,7 @@ def api_get_edition(room_id: str, edition_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "read")
     edition = dal.get_edition(actor.tenant_id, edition_id, viewer_id=actor.user_id)
     if edition is None or edition.room_id != room.id:
-        return JSONResponse({"error": "edition not found"}, status_code=404)
+        return _problem(404, "not_found", "edition not found")
     return _edition_json(edition)
 
 
@@ -596,6 +769,8 @@ async def api_request_period(room_id: str, request: Request, body: PeriodsBody) 
     """The edition for another period: found, or built by the engine."""
     actor, room = await asyncio.to_thread(_guard, request, room_id, "request_period")
     payload = {"grain": body.grain, "anchor": body.anchor}
+    if body.end is not None:
+        payload["end"] = body.end
     status, answer = await _engine(actor, room, "periods", payload)
     await asyncio.to_thread(_audit, request, "room.request_period", room.id, grain=body.grain)
     return JSONResponse(answer, status_code=status)
@@ -607,7 +782,7 @@ async def api_request_period(room_id: str, request: Request, body: PeriodsBody) 
 @router.get("/{room_id}/tasks")
 def api_list_tasks(room_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "read")
-    return {"tasks": [_task_json(t) for t in dal.list_room_tasks(actor.tenant_id, room.id)]}
+    return {"tasks": _tasks_json(actor, dal.list_room_tasks(actor.tenant_id, room.id))}
 
 
 def _decide(
@@ -620,9 +795,21 @@ def _decide(
         _announce(actor, room.id, task_id=decided.task_id)
         return decided, None
     task = canonical_uuid(task_id)
-    if any(t.task_id == task for t in dal.list_room_tasks(actor.tenant_id, room.id)):
-        return None, JSONResponse({"error": "this task was already decided"}, status_code=409)
-    return None, JSONResponse({"error": "task not linked to this workspace"}, status_code=404)
+    link = next(
+        (t for t in dal.list_room_tasks(actor.tenant_id, room.id) if t.task_id == task), None
+    )
+    if link is None:
+        return None, _problem(404, "not_found", "task not linked to this workspace")
+    if link.accepted_by:
+        who = link.accepted_by
+        name = _name(dal.get_accounts(actor.tenant_id, [who]), who)
+        return None, _problem(
+            409,
+            "already_accepted",
+            f"{name} already accepted this task",
+            acceptedBy={"userId": who, "displayName": name},
+        )
+    return None, _problem(409, "already_dismissed", "this task was already dismissed")
 
 
 @router.post("/{room_id}/tasks/{task_id}/accept")
@@ -632,7 +819,7 @@ def api_accept_task(room_id: str, task_id: str, request: Request) -> Any:
     if decided is None:
         return refusal
     _audit(request, "room.task_accept", room.id, task_id=decided.task_id)
-    return _task_json(decided)
+    return _tasks_json(actor, [decided])[0]
 
 
 @router.post("/{room_id}/tasks/{task_id}/dismiss")
@@ -642,4 +829,4 @@ def api_dismiss_task(room_id: str, task_id: str, request: Request) -> Any:
     if decided is None:
         return refusal
     _audit(request, "room.task_dismiss", room.id, task_id=decided.task_id)
-    return _task_json(decided)
+    return _tasks_json(actor, [decided])[0]

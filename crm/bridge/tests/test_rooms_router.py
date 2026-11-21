@@ -85,6 +85,8 @@ def _fake_definition(monkeypatch: Any, db: Any) -> None:
         access.require(actor, room_id, "edit_definition")
         if changes.get("schedule_text") == "every minute":
             raise definition.InvalidSchedule("a room runs at most every 15 minutes")
+        if "ignore previous" in str(changes.get("instructions") or ""):
+            raise definition.UnsafeInstructions("the instructions look like an injection")
         dal_changes: dict[str, Any] = {}
         settings: dict[str, Any] = {}
         for key, value in changes.items():
@@ -964,6 +966,7 @@ def test_editions_are_camel_case_and_hide_other_users_previews(world) -> None:
         "blocks",
         "suggestions",
         "provenance",
+        "error",
         "createdAt",
     }
     assert edition["periodStart"] == "2026-11-09"

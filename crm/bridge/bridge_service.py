@@ -26,7 +26,6 @@ import httpx
 from fastapi import Depends, FastAPI
 
 from robothor.logging_setup import ensure_logging_configured
-from robothor.rooms.errors import RoomError
 from robothor.sales.api import router as sales_router
 from robothor.sales.ingestion import router as sales_ingestion_router
 
@@ -68,7 +67,6 @@ from routers.people import router as people_router
 from routers.plugins import router as plugins_router
 from routers.providers import router as providers_router
 from routers.pursuit_goals import router as pursuit_goals_router
-from routers.rooms import room_error_response
 from routers.rooms import router as rooms_router
 from routers.routines import router as routines_router
 from routers.runs import router as runs_router
@@ -295,9 +293,8 @@ app.include_router(users_router)
 # wizard alive until the next restart.
 app.include_router(setup_router)
 # Workspaces ("rooms"): per-room access, decided in each handler by
-# robothor.rooms.access. One mapping from its errors to 404/403/409/422.
+# robothor.rooms.access; the router answers its own refusals in one shape.
 app.include_router(rooms_router)
-app.add_exception_handler(RoomError, room_error_response)
 
 # A 422 on the provider/vault routes must not reflect the request body:
 # on those routes the body is a credential.

@@ -193,15 +193,18 @@ def test_room_summary_includes_an_archived_room(rooms_db) -> None:
 # ─── assigned members of many rooms (G4 admin list) ──────────────────────
 
 
-def test_assigned_members_of_many_rooms(rooms_db) -> None:
+def test_members_of_many_rooms(rooms_db) -> None:
     db = rooms_db
     first, second = _room(db), _room(db, created_by=db.bob)
     dal.add_member(db.tenant, first.id, db.carol, added_by=db.alice)
 
-    assigned = dal.assigned_members(db.tenant, [first.id, second.id, str(uuid.uuid4())])
+    found = dal.members_of_rooms(db.tenant, [first.id, second.id, str(uuid.uuid4())])
 
-    assert assigned == {first.id: [db.alice], second.id: [db.bob]}
-    assert dal.assigned_members(db.other, [first.id]) == {}
+    assert {k: [(m.user_id, m.assigned) for m in v] for k, v in found.items()} == {
+        first.id: [(db.alice, True), (db.carol, False)],
+        second.id: [(db.bob, True)],
+    }
+    assert dal.members_of_rooms(db.other, [first.id]) == {}
 
 
 # ─── next run ────────────────────────────────────────────────────────────

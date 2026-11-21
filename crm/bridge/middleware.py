@@ -454,15 +454,21 @@ def _bridge_bind_host() -> str:
 _ACCESSIBLE_TENANTS_PATH = "/api/tenants/accessible"
 
 
-#: ``POST /api/rooms/{id}/read`` moves the CALLER's own read marker and nothing
-#: else, so it is a read for scope purposes: a viewer (``bridge:read``) must be
-#: able to clear their own unread count. Exact shape only; the route itself
-#: still checks the caller may read the room.
-_ROOM_READ_MARK = re.compile(r"/api/rooms/[0-9A-Fa-f-]{1,64}/read")
+#: Two workspace writes touch only the CALLER's own member row -- ``POST
+#: /api/rooms/{id}/read`` (their read marker) and ``PUT /api/rooms/{id}/notify``
+#: (their notification preferences) -- so they are reads for scope purposes: a
+#: viewer (``bridge:read``) must be able to clear their own unread count and
+#: mute a workspace. Exact shapes only; each route still checks the caller may
+#: read the room.
+_ROOM_OWN_ROW = {
+    "POST": re.compile(r"/api/rooms/[0-9A-Fa-f-]{1,64}/read"),
+    "PUT": re.compile(r"/api/rooms/[0-9A-Fa-f-]{1,64}/notify"),
+}
 
 
 def _is_room_read_mark(method: str, path: str) -> bool:
-    return method.upper() == "POST" and _ROOM_READ_MARK.fullmatch(path) is not None
+    pattern = _ROOM_OWN_ROW.get(method.upper())
+    return pattern is not None and pattern.fullmatch(path) is not None
 
 
 def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | None:
