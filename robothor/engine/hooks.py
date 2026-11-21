@@ -21,7 +21,6 @@ import contextlib
 import json
 import logging
 import os
-import re
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +33,7 @@ from robothor.engine.deferrals import DeferredRuns
 from robothor.engine.delivery import deliver
 from robothor.engine.models import TriggerType
 from robothor.engine.task_registry import get_task_registry
+from robothor.engine.untrusted import neutralise_boundary
 from robothor.engine.workflow_backlog import WorkflowBacklog, workflow_event
 
 MAX_RETRIES = 3
@@ -224,12 +224,7 @@ def build_event_triggers(
     return dict(_LEGACY_EVENT_TRIGGERS)
 
 
-_BOUNDARY_CLOSE = re.compile(r"</\s*(untrusted_content)", re.IGNORECASE)
-
-
-def _neutralise_boundary(text: str) -> str:
-    """Stop external text from closing the untrusted-content boundary early."""
-    return _BOUNDARY_CLOSE.sub(r"<\\/\1", text)
+_neutralise_boundary = neutralise_boundary
 
 
 def _format_event_block(stream: str, event_type: str, envelope: dict[str, Any]) -> str:
