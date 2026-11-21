@@ -13,6 +13,7 @@ from robothor.rooms import periods
 from robothor.rooms.access import Actor
 from robothor.rooms.errors import RoomForbidden, RoomNotFound
 from robothor.rooms.models import edition_json, room_link
+from robothor.rooms.runs import RunRefused
 
 if TYPE_CHECKING:
     from robothor.engine.tools.dispatch import ToolContext
@@ -37,6 +38,8 @@ async def _room_request_period(args: dict[str, Any], ctx: ToolContext) -> dict[s
         return {"error": "workspace not found"}
     except RoomForbidden as exc:
         return {"error": str(exc)}
+    except RunRefused as exc:
+        return {"error": str(exc), "refused": exc.reason}
     except (periods.RoomRunUnavailable, ValueError) as exc:
         return {"error": str(exc)}
     return {

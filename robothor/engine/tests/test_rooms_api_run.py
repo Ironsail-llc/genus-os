@@ -293,3 +293,41 @@ class TestTool:
         schema = get_engine_schemas()["room_run"]["function"]
         assert schema["parameters"]["required"] == ["room_id"]
         assert set(schema["parameters"]["properties"]) == {"room_id", "preview", "period"}
+
+
+# ─── the period path refuses a paused room as run now does ───────────────
+
+
+async def test_the_periods_route_answers_a_paused_room_with_409(monkeypatch):
+    from robothor.rooms import periods
+
+    async def paused(*a: Any, **k: Any) -> Any:
+        raise runs.RunRefused("paused", "SECRET-internal detail")
+
+    monkeypatch.setattr(periods, "request_period", paused)
+    transport = httpx.ASGITransport(app=_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/rooms/{ROOM}/periods", json={"grain": "day", "anchor": "2026-11-02"}
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"] == "paused"
+    assert "SECRET" not in response.text
+
+
+async def test_the_period_tool_relays_a_paused_room_as_an_error(monkeypatch):
+    from robothor.engine.tools.handlers.room_periods import HANDLERS as PERIODS
+    from robothor.rooms import editions, periods
+
+    async def paused(*a: Any, **k: Any) -> Any:
+        raise runs.RunRefused("paused")
+
+    monkeypatch.setattr(periods, "request_period", paused)
+    monkeypatch.setattr(editions, "load_run_record", lambda tenant, run_id: None)
+
+    result = await PERIODS["room_request_period"](
+        {"room_id": ROOM, "grain": "day", "anchor": "2026-11-02"}, _ctx()
+    )
+
+    assert "error" in result and "paused" in result["error"]

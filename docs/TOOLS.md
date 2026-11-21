@@ -1986,7 +1986,8 @@ already exist.
   call it, nor `room_request_period`, nor change or create workspaces: a run that
   starts runs is a loop. Only `room_read` works there. A person's own turn can.
 - Refused for a viewer, for an archived workspace, and for a paused one unless
-  the caller is assigned to it (or an owner or admin). Nothing else limits it:
+  the caller is assigned to it (or an owner or admin); `room_request_period`
+  follows the same paused rule. Nothing else limits it:
   any number of runs may start in a day, and a run is never stopped for what it
   costs. The run's cost and token counts are on its edition's provenance
   (`cost_usd`, `input_tokens`, `output_tokens`) for anyone reading the report.

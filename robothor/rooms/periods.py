@@ -288,6 +288,10 @@ def _claim(
     """The synchronous half: check, find or insert. ``(edition, started, run)``,
     where ``run`` is the one run to start, or None."""
     room = access.require(actor, room_id, "request_period")
+    if room.paused:  # the same rule as run now: managers only, before any row
+        from robothor.rooms.runs import access_level, check_not_paused_for
+
+        check_not_paused_for(room, access_level(actor, room))
     if room.kind != "report":
         raise PeriodError("only a report workspace has periods", reason="not_a_report")
     tz = str(room.settings.get("tz") or DEFAULT_TZ)
