@@ -177,7 +177,8 @@ describe("creating and opening rooms", () => {
 
   it("says why creation was refused (unknown agent)", async () => {
     fetchMock.mockResolvedValueOnce(reply({ detail: "unknown agent" }, 422));
-    expect(await createRoom({ kind: "agent", title: "X", agentId: "nobody" })).toEqual({
+    // The refusal's own body rides along (the dialog reads a scope refusal from it).
+    expect(await createRoom({ kind: "agent", title: "X", agentId: "nobody" })).toMatchObject({
       ok: false,
       status: 422,
       message: "unknown agent",

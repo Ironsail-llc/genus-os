@@ -1,4 +1,3 @@
-import { readEmail, type RoomEmail } from "@/lib/rooms/email";
 /**
  * What is waiting on a person, as the browser sees it.
  *
@@ -62,8 +61,11 @@ export interface PendingItem {
    * row is the caller's to decide; the bridge still checks.
    */
   mine?: boolean;
-  /** Only on a workspace email (`room.email`): the exact email, field by field. */
-  email?: RoomEmail;
+  /**
+   * Only on a workspace email (`room.email`): the exact email, field by field,
+   * as the bridge sends it. Read where the card is drawn (`readEmail`).
+   */
+  email?: unknown;
 }
 
 /** The body of `POST /api/approvals/{kind}/{id}` — see `AnswerRequest`. */
@@ -201,7 +203,7 @@ export function normalizePending(body: unknown): PendingItem[] {
       ...(optionalText(row.room_id) ? { room_id: text(row.room_id) } : {}),
       ...(optionalText(row.task_id) ? { task_id: text(row.task_id) } : {}),
       ...(own ? { mine: true } : {}),
-      ...(kind === "action" && readEmail(row.email) ? { email: readEmail(row.email)! } : {}),
+      ...(kind === "action" && row.email && typeof row.email === "object" ? { email: row.email } : {}),
     });
   }
   return out;

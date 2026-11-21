@@ -20,7 +20,6 @@ import { useMessageWindow } from "@/components/chat/use-message-window";
 import { useHistoryPager } from "@/components/chat/use-history-pager";
 import { useTurnActions } from "@/components/chat/use-turn-actions";
 import { usePrependAnchor } from "@/components/chat/use-prepend-anchor";
-import type { RoomEmailReceipt } from "@/lib/rooms/email";
 import { historyToMessages } from "@/lib/chat/history-messages";
 import { usePinnedScroll } from "@/components/chat/use-pinned-scroll";
 import { useStableCallback } from "@/components/chat/use-stable-callback";
@@ -62,8 +61,8 @@ interface ChatMessage {
   authorName?: string;
   /** In a room: the edition this message announced. */
   editionId?: string;
-  /** In a task workspace: an email's receipt, drawn as one. */
-  receipt?: RoomEmailReceipt;
+  /** In a task workspace: an email's receipt as stored, drawn as one. */
+  receipt?: unknown;
   /** In a room: the components this turn rendered, drawn under the reply. */
   renders?: RenderBlock[];
 }

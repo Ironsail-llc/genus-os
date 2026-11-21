@@ -1,6 +1,5 @@
 import { stripMarkers } from "@/lib/engine/marker-interceptor";
 import { historyAttachments, stripAttachmentNote, type AttachmentSummary } from "@/lib/chat/attachments";
-import { RECEIPT_KIND, readEmailReceipt, type RoomEmailReceipt } from "@/lib/rooms/email";
 
 /**
  * Chat history rows, as the engine answers them, turned into messages for the
@@ -29,8 +28,11 @@ export interface HistoryMessage {
    * a reload.
    */
   editionId?: string;
-  /** In a task workspace: the receipt of an email someone approved or rejected. */
-  receipt?: RoomEmailReceipt;
+  /**
+   * In a task workspace: the receipt of an email someone approved or rejected,
+   * as stored. Read where it is drawn (`readEmailReceipt`), which loads only then.
+   */
+  receipt?: unknown;
 }
 
 type Block = { type: string; text?: string };
@@ -63,7 +65,7 @@ function roomFields(row: Row): Pick<HistoryMessage, "authorUserId" | "authorName
   const authorName = field(row, "authorName", "author_name");
   const editionId = field(row, "editionId", "edition_id");
   // Only a receipt turn's receipt: no other row may draw one.
-  const receipt = row.kind === RECEIPT_KIND ? readEmailReceipt(row.receipt) : null;
+  const receipt = row.kind === "room_email_receipt" && row.receipt && typeof row.receipt === "object" ? row.receipt : null;
   return {
     ...(authorUserId ? { authorUserId } : {}),
     ...(authorName ? { authorName } : {}),

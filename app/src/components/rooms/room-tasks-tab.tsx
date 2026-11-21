@@ -9,6 +9,7 @@ import { useRoomEvents } from "@/hooks/use-rooms";
 import { APPROVALS_ENDPOINT, postApprovalAnswer } from "@/lib/inbox/answer";
 import { OpenAsWorkspace } from "@/components/rooms/open-as-workspace";
 import { RoomEmailApproval } from "@/components/rooms/room-email-approval";
+import { readEmail } from "@/lib/rooms/email";
 import { normalizePending, type AnswerBody, type PendingItem, type PendingKind } from "@/lib/inbox/pending";
 import { acceptRoomTask, dismissRoomTask, fetchRoomTasks } from "@/lib/rooms/api";
 import { splitRoomTasks, TASK_STATUS_LABELS, type RoomTask } from "@/lib/rooms/hub";
@@ -188,8 +189,8 @@ export function RoomTasksTab({ ctx }: { ctx: RoomSlotContext }) {
         <div className="flex flex-col gap-2" data-testid="room-approvals">
           <h4 className="text-xs font-medium text-foreground">Waiting on your decision</h4>
           {proposals.map((item) =>
-            item.email ? (
-              <RoomEmailApproval key={item.id} item={item} email={item.email} onAnswer={answer} />
+            readEmail(item.email) ? (
+              <RoomEmailApproval key={item.id} item={item} email={readEmail(item.email)!} onAnswer={answer} />
             ) : (
               <InboxCard key={item.id} item={item} canWrite onAnswer={answer} onOpenRuns={() => undefined} />
             ),

@@ -18,6 +18,19 @@ import { createRoom } from "@/lib/rooms/api";
 import { ROOM_LABEL } from "@/lib/rooms/labels";
 import { useEnterRoom } from "./open-as-workspace";
 
+export const CANNOT_CREATE_MESSAGE = `Your role can't create ${ROOM_LABEL.plural.toLowerCase()}. Ask a company admin if you need one.`;
+
+/**
+ * The bridge middleware's scope refusal, `{error: "insufficient scope"}` at
+ * the top level: the caller's role (a viewer) cannot write here at all. It
+ * answers before the workspace routes, so it has none of their `detail`.
+ */
+export function isScopeRefusal(status: number, body: unknown): boolean {
+  if (status !== 403 || !body || typeof body !== "object") return false;
+  const { error, detail } = body as { error?: unknown; detail?: unknown };
+  return detail === undefined && error === "insufficient scope";
+}
+
 /**
  * Asks for the agent and a title, then `POST /api/rooms` (kind `agent`). A
  * refusal (unknown or disallowed agent) stays in the dialog in the server's words.
@@ -58,9 +71,11 @@ export function NewWorkspaceDialog({
       if (result.ok) {
         onClose();
         enter(result);
+      } else if (isScopeRefusal(result.status, result.body)) {
+        setError(CANNOT_CREATE_MESSAGE);
+        setCannotCreate(true);
       } else {
         setError(result.message);
-        setCannotCreate(result.cannotCreate === true);
       }
     } finally {
       setBusy(false);

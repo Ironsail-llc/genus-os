@@ -41,6 +41,7 @@ import {
 } from "../api";
 import type { RoomTask } from "../hub";
 import { readProvenance } from "@/components/rooms/provenance-drawer";
+import { isScopeRefusal } from "@/components/rooms/new-workspace-dialog";
 import type { Edition, EditionHeadline, Room, RoomMember, RoomSummary } from "../types";
 
 type Recorded = { status: number; body: unknown };
@@ -240,8 +241,9 @@ describe("writes and refusals", () => {
     expect(replies.create_viewer).toMatchObject({ status: 403, body: { error: "insufficient scope" } });
     answer("create_viewer");
     const made = await createRoom({ kind: "agent", title: "Pricing", agentId: "main" });
-    expect(made).toMatchObject({ ok: false, status: 403, cannotCreate: true });
-    if (!made.ok) expect(made.message).toBe("Your role can't create workspaces. Ask a company admin if you need one.");
+    expect(made).toMatchObject({ ok: false, status: 403 });
+    // The new-workspace dialog reads exactly this refusal as "your role cannot create".
+    if (!made.ok) expect(isScopeRefusal(made.status, made.body)).toBe(true);
   });
 
   it("saves a change and reads the new revision", async () => {

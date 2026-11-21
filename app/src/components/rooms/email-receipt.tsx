@@ -1,7 +1,7 @@
 "use client";
 
 import { CheckCircle2, CircleAlert, CircleHelp, MailX } from "lucide-react";
-import type { ReceiptStatus, RoomEmailReceipt } from "@/lib/rooms/email";
+import { readEmailReceipt, type ReceiptStatus } from "@/lib/rooms/email";
 
 /** What the receipt says first, by outcome. */
 const HEADLINES: Record<ReceiptStatus, string> = {
@@ -34,7 +34,9 @@ function Icon({ status }: { status: ReceiptStatus }) {
  * The receipt of a workspace email (E3): what happened to the email a member
  * approved or rejected, said plainly, with who it went to and the subject.
  */
-export function EmailReceipt({ receipt }: { receipt: RoomEmailReceipt }) {
+export function EmailReceipt({ receipt: stored }: { receipt: unknown }) {
+  const receipt = readEmailReceipt(stored);
+  if (!receipt) return null;
   const to = receipt.to.join(", ");
   return (
     <div

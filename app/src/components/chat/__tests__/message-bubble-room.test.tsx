@@ -15,7 +15,6 @@ vi.mock("@/components/business/markdown-view", () => ({
 
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { EDITION_2, REPORT_ID, edition, reply } from "@/lib/rooms/__tests__/fixtures";
-import { readEmailReceipt } from "@/lib/rooms/email";
 
 const noop = vi.fn();
 
@@ -90,8 +89,8 @@ describe("MessageBubble: a workspace email receipt (E3)", () => {
   };
 
   function receiptMsg(overrides: Record<string, unknown>) {
-    // History parses the stored receipt (readEmailReceipt); the bubble draws that.
-    return { id: "r", role: "assistant" as const, content: "Receipt.", receipt: readEmailReceipt({ ...base, ...overrides })! };
+    // The receipt as stored: the bubble reads it where it draws it.
+    return { id: "r", role: "assistant" as const, content: "Receipt.", receipt: { ...base, ...overrides } };
   }
 
   it("says plainly that it was sent, to whom and with what subject", async () => {
