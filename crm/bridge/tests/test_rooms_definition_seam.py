@@ -49,7 +49,9 @@ def _router_tests() -> Any:
     return module
 
 
-world = _router_tests().world
+_ROUTER_TESTS = _router_tests()
+world = _ROUTER_TESTS.world
+_task = _ROUTER_TESTS._task
 
 pytestmark = pytest.mark.integration
 
@@ -373,3 +375,146 @@ def test_a_viewer_can_be_shared_with_but_never_assigned(real) -> None:
         f"/api/rooms/{room['id']}/members/{real.ids.vera}", json={"assigned": True}
     )
     assert promoted.status_code == 422
+
+
+# ─── the dashboard's contract: record what the bridge really answers ──────
+
+
+def _record(response: Any) -> dict[str, Any]:
+    try:
+        body = response.json()
+    except ValueError:
+        body = response.text
+    return {"status": response.status_code, "body": body}
+
+
+def test_recorded_replies_match_the_dashboard_contract(real) -> None:
+    """Every reply the dashboard parses, recorded from the real routes.
+
+    ``app/src/lib/rooms/__tests__/contract.test.ts`` feeds this file to the
+    dashboard's API client; ``check_golden`` fails here when a reply changes.
+    """
+    from datetime import date
+
+    from robothor.rooms import dal
+    from robothor.rooms.tests.contract import Normaliser, check_golden
+
+    w = real
+    alice, bob, carol, dana = (w.client(n) for n in ("alice", "bob", "carol", "dana"))
+    replies: dict[str, Any] = {}
+
+    made = _create(w, scheduleText=_DAILY, tz="UTC", defaultGrain="week", shareWith=[w.ids.bob])
+    replies["create_report"] = _record(made)
+    room = made.json()
+    rid = room["id"]
+    replies["create_agent"] = _record(
+        alice.post("/api/rooms", json={"kind": "agent", "title": "Pricing", "agentId": "analyst"})
+    )
+    replies["create_invalid_schedule"] = _record(_create(w, scheduleText="every minute"))
+    replies["create_unknown_agent"] = _record(_create(w, agentId="ghost"))
+
+    def edition(seq_title: str, start: date, end: date, *, preview: bool = False) -> Any:
+        row, _ = dal.create_edition(
+            w.db.tenant,
+            rid,
+            grain="week",
+            period_start=start,
+            period_end=end,
+            preview=preview,
+            requested_by=w.ids.alice if preview else None,
+        )
+        return row
+
+    published = edition("Week 45", date(2026, 11, 2), date(2026, 11, 8))
+    dal.publish_edition(
+        w.db.tenant,
+        published.id,
+        title="Week 45",
+        summary="Sales up 4%.",
+        blocks=[{"component": "render_markdown", "props": {"content": "Up 4%."}}],
+        suggestions=[{"key": "call-lapsed", "title": "Call lapsed buyers", "detail": "Three"}],
+        provenance={"run_id": "run-1", "ran_as": w.ids.alice, "tool_calls": []},
+    )
+    failed = edition("Week 46", date(2026, 11, 9), date(2026, 11, 15))
+    dal.fail_edition(w.db.tenant, failed.id, "the sales tool timed out")
+    edition("Week 44", date(2026, 10, 26), date(2026, 11, 1))  # still building
+    edition("Preview", date(2026, 11, 2), date(2026, 11, 8), preview=True)
+
+    task_a = _task(w, "Call lapsed buyers")
+    task_b = _task(w, "Check the returns")
+    dal.link_task(
+        w.db.tenant,
+        rid,
+        task_a,
+        origin="suggestion",
+        edition_id=published.id,
+        suggestion_key="call-lapsed",
+    )
+
+    replies["list_mine"] = _record(bob.get("/api/rooms"))
+    replies["list_all"] = _record(dana.get("/api/rooms?scope=all"))
+    replies["room_shared"] = _record(bob.get(f"/api/rooms/{rid}"))
+    replies["room_admin"] = _record(dana.get(f"/api/rooms/{rid}"))
+    replies["room_not_found"] = _record(carol.get(f"/api/rooms/{rid}"))
+    replies["editions"] = _record(bob.get(f"/api/rooms/{rid}/editions"))
+    replies["edition"] = _record(bob.get(f"/api/rooms/{rid}/editions/{published.id}"))
+    replies["patch_ok"] = _record(
+        alice.patch(f"/api/rooms/{rid}", json={"expectedRev": 1, "changes": {"title": "Sales"}})
+    )
+    replies["patch_conflict"] = _record(
+        alice.patch(f"/api/rooms/{rid}", json={"expectedRev": 1, "changes": {"title": "Late"}})
+    )
+    replies["patch_invalid_schedule"] = _record(
+        alice.patch(
+            f"/api/rooms/{rid}", json={"expectedRev": 2, "changes": {"scheduleText": "in 2 hours"}}
+        )
+    )
+    replies["patch_forbidden"] = _record(
+        bob.patch(f"/api/rooms/{rid}", json={"expectedRev": 2, "changes": {"title": "Mine"}})
+    )
+    replies["revisions"] = _record(bob.get(f"/api/rooms/{rid}/revisions"))
+    replies["members"] = _record(bob.get(f"/api/rooms/{rid}/members"))
+    replies["directory"] = _record(bob.get("/api/rooms/directory"))
+    replies["notify"] = _record(bob.get(f"/api/rooms/{rid}/notify"))
+    replies["notify_put"] = _record(
+        bob.put(f"/api/rooms/{rid}/notify", json={"inApp": False, "muted": True, "channels": {}})
+    )
+    replies["notify_unlinked"] = _record(
+        bob.put(f"/api/rooms/{rid}/notify", json={"inApp": True, "channels": {"telegram": True}})
+    )
+    replies["tasks"] = _record(bob.get(f"/api/rooms/{rid}/tasks"))
+    replies["task_accept"] = _record(bob.post(f"/api/rooms/{rid}/tasks/{task_a}/accept"))
+    replies["task_accept_taken"] = _record(alice.post(f"/api/rooms/{rid}/tasks/{task_a}/accept"))
+    replies["from_task"] = _record(alice.post(f"/api/rooms/from-task/{task_b}"))
+    replies["read"] = _record(bob.post(f"/api/rooms/{rid}/read"))
+    replies["share"] = _record(alice.put(f"/api/rooms/{rid}/members/{w.ids.carol}"))
+    replies["unshare"] = _record(alice.delete(f"/api/rooms/{rid}/members/{w.ids.carol}"))
+    replies["unshare_last_assigned"] = _record(
+        alice.delete(f"/api/rooms/{rid}/members/{w.ids.alice}")
+    )
+    replies["duplicate"] = _record(bob.post(f"/api/rooms/{rid}/duplicate"))
+    replies["restore"] = _record(alice.post(f"/api/rooms/{rid}/revisions/1/restore"))
+    replies["reassign"] = _record(
+        dana.post(f"/api/rooms/{rid}/reassign", json={"userId": w.ids.bob})
+    )
+    replies["archive"] = _record(bob.post(f"/api/rooms/{rid}/archive"))
+    replies["unarchive"] = _record(dana.post(f"/api/rooms/{rid}/unarchive"))
+
+    names = {
+        getattr(w.ids, n): f"u-{n}"
+        for n in ("alice", "bob", "vera", "dana", "carol", "eve", "ivan")
+    }
+    names.update(
+        {
+            rid: "room-report",
+            published.id: "ed-published",
+            failed.id: "ed-failed",
+            task_a: "task-suggested",
+            task_b: "task-opened",
+        }
+    )
+    names[w.db.tenant] = "test-tenant"
+    recorded = Normaliser(names)(replies)
+    check_golden("bridge-replies.json", recorded)
+    # The session key never reaches a browser.
+    assert ":room:" not in str(replies)
