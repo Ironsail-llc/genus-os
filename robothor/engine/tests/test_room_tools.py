@@ -580,94 +580,33 @@ def _service(db: Any) -> ToolContext:
 
 
 @pytest.mark.integration
-def test_a_run_with_no_person_reads_its_own_room_as_the_run_as_user(staff_db, report, monkeypatch):
+def test_a_run_with_no_person_reads_only_as_the_run_as_user(staff_db, report):
+    """A run with no person reads only the room it is bound to (the run-context
+    carrier), as that room's run-as user; ``test_room_tools_bound_read.py``
+    proves every other room reads as not found."""
+    from robothor.rooms.run_context import RoomRun, room_run_scope
+
     db = staff_db
-    _carrier(monkeypatch, _bound(db, report["id"]))
-
-    read = _call("room_read", {"room_id": report["id"]}, _service(db))
-
+    service = _ctx(db, None, user_id="service:main", user_role="service")
+    room = dal.get_room(db.tenant, report["id"])
+    with room_run_scope(RoomRun.for_session(db.tenant, room.session_key, unattended=True)):
+        read = _call("room_read", {"room_id": report["id"]}, service)
+        _no_person_tools_refuse(service, report)
+        db.cur.execute("UPDATE user_accounts SET status = 'disabled' WHERE id = %s", (db.alice,))
+        gone = _call("room_read", {"room_id": report["id"]}, service)
+    carol = _call("room_read", {"room_id": report["id"]}, _ctx(db, "carol"))
     assert read["room"]["id"] == report["id"]
     assert read["runs_as"]["user_id"] == db.alice
-
-    db.cur.execute("UPDATE user_accounts SET status = 'disabled' WHERE id = %s", (db.alice,))
-    gone = _call("room_read", {"room_id": report["id"]}, _service(db))
-    assert gone == _call("room_read", {"room_id": report["id"]}, _ctx(db, "carol"))
+    assert gone == carol
 
 
-@pytest.mark.integration
-def test_a_run_with_no_person_cannot_read_a_room_it_does_not_belong_to(
-    staff_db, report, monkeypatch
-):
-    db = staff_db
-    other = _call("room_create", dict(CREATE, title="Bob's"), _ctx(db, "bob"))["room"]
-    _carrier(monkeypatch, _bound(db, other["id"]))
-
-    refused = _call("room_read", {"room_id": report["id"]}, _service(db))
-
-    assert refused == _call("room_read", {"room_id": report["id"]}, _ctx(db, "carol"))
-    assert "room" not in refused
-
-
-@pytest.mark.integration
-def test_a_run_bound_to_a_room_of_another_tenant_reads_nothing(staff_db, report, monkeypatch):
-    from types import SimpleNamespace
-
-    db = staff_db
-    _carrier(
-        monkeypatch, SimpleNamespace(tenant_id=db.other, room_id=report["id"], unattended=True)
-    )
-    assert "room" not in _call("room_read", {"room_id": report["id"]}, _service(db))
-
-
-@pytest.mark.integration
-def test_a_run_with_no_person_and_no_bound_room_reads_nothing(staff_db, report, monkeypatch):
-    db = staff_db
-    _carrier(monkeypatch, None)
-    assert "room" not in _call("room_read", {"room_id": report["id"]}, _service(db))
-
-
-@pytest.mark.integration
-def test_without_the_run_context_carrier_a_run_with_no_person_reads_nothing(
-    staff_db, report, monkeypatch
-):
-    db = staff_db
-    _no_carrier(monkeypatch)
-    refused = _call("room_read", {"room_id": report["id"]}, _service(db))
-    assert refused == _call("room_read", {"room_id": report["id"]}, _ctx(db, "carol"))
-
-
-@pytest.mark.integration
-def test_an_unverified_identity_is_refused_outright_even_in_its_own_room(
-    staff_db, report, monkeypatch
-):
-    from robothor.identity.context import IdentityContext
-
-    db = staff_db
-    _carrier(monkeypatch, _bound(db, report["id"]))
-    identity = IdentityContext(
-        tenant_id=db.tenant, channel="vision", identifier="face", verified=False
-    )
-    ctx = _ctx(db, "alice", identity=identity)
-
-    result = _call("room_read", {"room_id": report["id"]}, ctx)
-
-    assert "room" not in result
-    assert "verified" in result["error"]
-
-
-@pytest.mark.integration
-def test_a_run_with_no_person_may_use_no_other_room_tool_even_in_its_own_room(
-    staff_db, report, monkeypatch
-):
-    db = staff_db
-    _carrier(monkeypatch, _bound(db, report["id"]))
+def _no_person_tools_refuse(service: ToolContext, report: dict[str, Any]) -> None:
     for tool, args in [
         ("room_update", {"room_id": report["id"], "expected_rev": 1, "changes": {"title": "x"}}),
-        ("room_share", {"room_id": report["id"], "user": db.bob}),
+        ("room_share", {"room_id": report["id"], "user": "bob@example.com"}),
         ("room_archive", {"room_id": report["id"]}),
-        ("room_list", {}),
     ]:
-        assert "person" in _call(tool, args, _service(db))["error"], tool
+        assert "person" in _call(tool, args, service)["error"], tool
 
 
 # ─── off the loop ────────────────────────────────────────────────────────

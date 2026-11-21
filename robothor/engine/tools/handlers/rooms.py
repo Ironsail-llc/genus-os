@@ -255,14 +255,30 @@ async def _room_update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
 
 async def _room_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     actor = _actor(ctx)
-    if actor is None:
-        return dict(_NO_PERSON)
     scope = str(args.get("scope") or "mine")
+    if actor is None:
+        return await _bound_room_list(ctx, scope)
     try:
         rooms = await _call(definition.list_rooms, actor, scope=scope)
     except (RoomForbidden, ValueError) as exc:
         return {"error": str(exc)}
     return {"scope": scope, "rooms": [_summary(r) for r in rooms]}
+
+
+async def _bound_room_list(ctx: ToolContext, scope: str) -> dict[str, Any]:
+    """``room_list`` for a run with no person: only the room the run is bound
+    to, as that room's run-as user sees it. Nothing for a run bound to no room."""
+    bound = _bound_room_id(ctx.tenant_id)
+    if bound is None:
+        return dict(_NO_PERSON)
+    reader = await _call(definition.run_as_actor, ctx.tenant_id, bound)
+    if reader is None:
+        return {"scope": scope, "rooms": []}
+    try:
+        rooms = await _call(definition.list_rooms, reader, scope="mine")
+    except (RoomForbidden, ValueError):
+        rooms = []
+    return {"scope": scope, "rooms": [_summary(r) for r in rooms if r.id == bound]}
 
 
 def _bounded(value: Any, default: int, upper: int) -> int:

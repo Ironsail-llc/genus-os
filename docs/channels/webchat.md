@@ -193,11 +193,14 @@ edition's title, its summary cut to 280 characters, and
 `[<workspace title>](/?v=chat&room=<id>)`, written into their main conversation
 and inbox through this channel. The inbox row is type `info`, addressed to the
 user id, with `room_id` and `edition_id` in its `metadata` and never the session
-key. A member who chose an external channel in their notification settings
-(`notify.channel`, e.g. `telegram`) and has paired it gets the same note there.
-A preview is never announced. Notes are muted by `notify.muted: true` on the
-membership, or for everyone who has not opted in when the workspace's
-`settings.notify_default` is false. Only a notification's recipient (or an owner
+key. Each member's notification settings for the workspace decide where it
+goes (`room_members.notify`, stored as `{in_app, muted, channels}`, read by
+`robothor.rooms.notify`): `muted` is nothing at all; `in_app` off is no note in
+the main conversation and no inbox row; each channel in `channels` turned on
+(e.g. `telegram`) gets the same note when the member has that channel linked.
+Nothing stored means in-app on, not muted, no channel; when the workspace's
+`settings.notify_default` is false, a member who has not set `muted` is muted.
+A preview is never announced. Only a notification's recipient (or an owner
 or admin) may mark it read or acknowledged.
 
 ## Asking a question
