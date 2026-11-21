@@ -129,6 +129,8 @@ describe("a workspace's history", () => {
     expect(page).not.toHaveProperty("sessionKey");
     const [question, answer] = historyToMessages(page.messages);
     expect(question).toMatchObject({ role: "user", content: "how did we do?", authorUserId: "u-alice", authorName: "Alice" });
+    // The outbox id the dashboard sent comes back on its own row, for reconciling.
+    expect(question.clientId).toBe("5d5d5d5d-0000-4000-8000-000000000005");
     expect(answer).toMatchObject({ role: "assistant", content: "Sales were 1,200." });
     expect(answer.authorUserId).toBeUndefined();
   });

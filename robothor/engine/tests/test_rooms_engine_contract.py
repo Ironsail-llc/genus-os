@@ -34,6 +34,9 @@ from robothor.rooms.tests.conftest import committed_connection, rooms_db  # noqa
 
 pytestmark = pytest.mark.integration
 
+#: The dashboard's outbox id for the recorded send (``client_id``).
+CLIENT_ID = "5d5d5d5d-0000-4000-8000-000000000005"
+
 
 def _run(text: str) -> AgentRun:
     return AgentRun(status=RunStatus.COMPLETED, output_text=text, trigger_type=TriggerType.WEBCHAT)
@@ -144,7 +147,10 @@ async def _chat(s: Any, replies: dict[str, Any]) -> None:
     rid = s.room.id
     s.runner.execute = AsyncMock(return_value=_run("Sales were 1,200."))
     with _as(s.db, s.db.alice):
-        sent = await s.client.post("/chat/send", json={"room_id": rid, "message": "how did we do?"})
+        sent = await s.client.post(
+            "/chat/send",
+            json={"room_id": rid, "message": "how did we do?", "client_id": CLIENT_ID},
+        )
     assert sent.status_code == 200
     assert sent.text.startswith("event: room\n")
     replies["send_stream"] = {"status": sent.status_code, "body": sent.text}
@@ -157,6 +163,7 @@ async def _chat(s: Any, replies: dict[str, Any]) -> None:
     page = history.json()
     assert page["roomId"] == rid and "sessionKey" not in page
     assert page["messages"][0]["authorName"] == "Alice"
+    assert page["messages"][0]["clientId"] == CLIENT_ID
     receipt = page["messages"][-1]
     assert receipt["kind"] == "room_email_receipt" and receipt["receipt"]["status"] == "sent"
 
@@ -245,6 +252,7 @@ async def test_recorded_replies_match_the_dashboard_contract(engine) -> None:
     await _periods(s, replies)
     names = {s.db.alice: "u-alice", s.db.bob: "u-bob", s.db.carol: "u-carol", s.db.vera: "u-vera"}
     names[s.room.id] = "room-report"
+    names[CLIENT_ID] = CLIENT_ID  # a fixed value already: kept as the dashboard sent it
     # The refusal of an unfinished period names today's date.
     unfinished = replies["period_unfinished"]["body"]
     unfinished["message"] = unfinished["message"].replace(
