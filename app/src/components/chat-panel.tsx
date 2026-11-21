@@ -103,6 +103,12 @@ export const ROOM_BUSY_RETRY_MS = 4000;
  */
 const parkedRoomQueues = new Map<string, { items: Array<{ text: string; files?: AttachmentPayload[] }>; answering: string }>();
 
+/** Queued messages merged in TYPING order (`seq`), each once: nothing jumps the queue. */
+function mergeBySeq(queue: QueuedFollowup[], items: QueuedFollowup[]): QueuedFollowup[] {
+  const ids = new Set(queue.map((q) => q.id));
+  return [...queue, ...items.filter((i) => !ids.has(i.id))].sort((a, b) => a.seq - b.seq);
+}
+
 /** The chips a queued message's bubble shows: exactly the files it will send. */
 function summarise(files: AttachmentPayload[] | undefined): AttachmentSummary[] | undefined {
   return files?.length ? files.map((f) => ({ name: f.name, size: f.size, kind: attachmentKind(f.mime) })) : undefined;
@@ -1077,8 +1083,9 @@ export function ChatPanel({
           if (scope) forgetRequest(scope, requestIdRef.current!);
           const answering = typeof busy.answering === "string" ? busy.answering : "";
           const items: QueuedFollowup[] = flushing ?? [{ id: userMsg.id, text, seq: followupSeq.current++, ...(files.length ? { files } : {}) }];
-          // Back at the FRONT: it was typed before anything queued after it.
-          busyQueue.current = [...items, ...busyQueue.current];
+          // Back in its place by typing order: ahead of what was typed after
+          // it, never ahead of what was typed before it.
+          busyQueue.current = mergeBySeq(busyQueue.current, items);
           busyBlocked.current = true;
           roomBusyName.current = answering;
           noteMessages(busyQueue.current.map((i) => i.id), roomBusyNote(answering));
@@ -1308,6 +1315,18 @@ export function ChatPanel({
     if (!queuedCount || isStreaming || isPlanning || isPlanExecuting || isDeepReasoning) return;
     if (roomId) {
       if (roomTurnInFlight.current) return;
+      if (busyQueue.current.length) {
+        // Messages already wait behind another member's turn: these follow-ups
+        // (typed while one of them was being offered again) join that queue in
+        // typing order instead of being sent ahead of it.
+        const moved = followupQueue.current;
+        followupQueue.current = [];
+        setQueuedCount(0);
+        busyQueue.current = mergeBySeq(busyQueue.current, moved);
+        noteMessages(moved.map((q) => q.id), roomBusyNote(roomBusyName.current));
+        setRoomBusy((current) => current ?? roomBusyName.current);
+        return;
+      }
       // In a room each waiting message is its own turn, in typing order, so
       // every bubble matches the row the room stores for it.
       const [next, ...rest] = [...followupQueue.current].sort((a, b) => a.seq - b.seq);
@@ -1320,7 +1339,7 @@ export function ChatPanel({
     followupQueue.current = [];
     setQueuedCount(0);
     void sendMessageRef.current(items);
-  }, [queuedCount, isStreaming, isPlanning, isPlanExecuting, isDeepReasoning, roomId, roomTurnsEnded]);
+  }, [queuedCount, isStreaming, isPlanning, isPlanExecuting, isDeepReasoning, roomId, roomTurnsEnded, noteMessages]);
 
   // A message queued behind another member's turn is offered again when the
   // room moves on (the room view bumps `refreshKey` on a live message) or after
