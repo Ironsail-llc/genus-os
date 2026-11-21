@@ -33,6 +33,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from robothor.crm.dal import send_notification
 from robothor.events.bus import publish
@@ -71,7 +72,12 @@ _WORKING_ROLES = _HUMAN_ROLES - {"viewer"}
 _ADMIN_ROLES = frozenset({"owner", "admin"})
 _CREATABLE_KINDS = frozenset({"report", "agent"})
 
-#: camelCase spellings of the definition change keys, to the contract's names.
+
+def _camel(name: str) -> str:
+    head, *rest = name.split("_")
+    return head + "".join(part.title() for part in rest)
+
+
 #: The definition changes a workspace accepts, by either spelling, to the names
 #: ``apply_definition_change`` takes. Nothing here limits cost or frequency.
 _CHANGE_KEYS = {
@@ -85,7 +91,7 @@ _CHANGE_KEYS = {
         "paused",
         "notify_default",
     )
-    for spelling in (name, "".join([name.split("_")[0], *(p.title() for p in name.split("_")[1:])]))
+    for spelling in (name, _camel(name))
 }
 
 
@@ -144,11 +150,6 @@ _FORBIDDEN = {
         "make your own copy."
     ),
 }
-
-
-def _camel(name: str) -> str:
-    head, *rest = name.split("_")
-    return head + "".join(part.title() for part in rest)
 
 
 #: Body fields a refusal may name, by every spelling a client may send. A
@@ -266,9 +267,15 @@ class _RoomsRoute(APIRoute):
                 return room_error_response(request, exc)
             except RequestValidationError as exc:
                 return _malformed(exc)
-            except HTTPException as exc:
+            except StarletteHTTPException as exc:  # FastAPI's HTTPException included
                 if exc.status_code == 401:
                     return _problem(401, "unauthenticated", _MESSAGES["unauthenticated"])
+                if exc.status_code < 500:
+                    # A client error (the framework's 400 for an unreadable body):
+                    # its own status, a fixed message, nothing logged as a failure.
+                    return _problem(
+                        exc.status_code, "invalid_request", _MESSAGES["invalid_request"]
+                    )
                 return _internal(exc)
             except Exception as exc:  # noqa: BLE001 - answered generically, logged in full
                 return _internal(exc)
