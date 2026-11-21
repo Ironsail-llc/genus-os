@@ -69,3 +69,52 @@ describe("MessageBubble in a room", () => {
     expect(screen.queryByTestId("message-edition")).toBeNull();
   });
 });
+
+describe("MessageBubble: a workspace email receipt (E3)", () => {
+  const base = {
+    action_id: "a-1",
+    from: "assistant@example.com",
+    reply_to: "bob@example.com",
+    to: ["carol.client@example.org", "dave.client@example.org"],
+    cc: [],
+    subject: "Checking in",
+    approved_by: { user_id: "u-bob", display_name: "Bob" },
+    decided_by: { user_id: "u-bob", display_name: "Bob" },
+    decided_at: "2026-11-21T10:00:00+00:00",
+    sent_at: "2026-11-21T10:00:02+00:00",
+    message_id: "msg-1",
+    error: null,
+    room_id: REPORT_ID,
+    task_id: "t-1",
+  };
+
+  function receiptMsg(overrides: Record<string, unknown>) {
+    return { id: "r", role: "assistant" as const, content: "Receipt.", receipt: { ...base, ...overrides } };
+  }
+
+  it("says plainly that it was sent, to whom and with what subject", () => {
+    render(<MessageBubble roomId={REPORT_ID} msg={receiptMsg({ status: "sent" })} onRecovered={noop} />);
+    const receipt = screen.getByTestId("room-email-receipt");
+    expect(receipt).toHaveTextContent(/Sent/);
+    expect(receipt).toHaveTextContent("carol.client@example.org, dave.client@example.org");
+    expect(receipt).toHaveTextContent("Checking in");
+    expect(receipt).toHaveTextContent(/Bob/);
+  });
+
+  it("says a failed send failed, with the reason", () => {
+    render(<MessageBubble roomId={REPORT_ID} msg={receiptMsg({ status: "failed", error: "the mailbox refused it", sent_at: null })} onRecovered={noop} />);
+    const receipt = screen.getByTestId("room-email-receipt");
+    expect(receipt).toHaveTextContent(/Not sent: it failed/);
+    expect(receipt).toHaveTextContent("the mailbox refused it");
+  });
+
+  it("says a rejected or unconfirmed email for what it is", () => {
+    render(<MessageBubble roomId={REPORT_ID} msg={receiptMsg({ status: "rejected", sent_at: null })} onRecovered={noop} />);
+    expect(screen.getByTestId("room-email-receipt")).toHaveTextContent(/Not sent: rejected/);
+  });
+
+  it("says an unconfirmed send may have gone out", () => {
+    render(<MessageBubble roomId={REPORT_ID} msg={receiptMsg({ status: "uncertain", sent_at: null })} onRecovered={noop} />);
+    expect(screen.getByTestId("room-email-receipt")).toHaveTextContent(/may have been sent/i);
+  });
+});

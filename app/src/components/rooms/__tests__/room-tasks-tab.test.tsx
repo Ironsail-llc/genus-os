@@ -304,6 +304,53 @@ describe("RoomTasksTab — approving my own action in a task workspace (E3)", ()
   });
 });
 
+describe("RoomTasksTab — a workspace email to approve (E3)", () => {
+  const EMAIL = {
+    from: "assistant@example.com",
+    replyTo: "bob@example.com",
+    to: ["carol.client@example.org", "dave.client@example.org"],
+    cc: ["erin.client@example.org"],
+    subject: "Checking in",
+    body: "Hello,\n\nJust checking in on your last order.\n\nBob",
+    onBehalfOf: "Bob",
+  };
+
+  beforeEach(() => {
+    pending = [{ ...ROOM_PROPOSAL, action_kind: "room.email", question: "room.email: Checking in", email: EMAIL }];
+  });
+
+  it("shows the exact email, field by field, before Approve and Reject", async () => {
+    wrap(<RoomTasksTab ctx={taskContext()} />);
+    const card = await screen.findByTestId(`room-email-${ACTION_ID}`);
+    expect(within(card).getByTestId("room-email-from")).toHaveTextContent("assistant@example.com");
+    expect(within(card).getByTestId("room-email-reply-to")).toHaveTextContent("bob@example.com");
+    expect(within(card).getByTestId("room-email-to")).toHaveTextContent("carol.client@example.org, dave.client@example.org");
+    expect(within(card).getByTestId("room-email-cc")).toHaveTextContent("erin.client@example.org");
+    expect(within(card).getByTestId("room-email-subject")).toHaveTextContent("Checking in");
+    expect(within(card).getByTestId("room-email-body").textContent).toBe(EMAIL.body);
+    expect(within(card).getByRole("button", { name: /approve and send/i })).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /reject/i })).toBeInTheDocument();
+  });
+
+  it("approves exactly that email and says it is on its way", async () => {
+    wrap(<RoomTasksTab ctx={taskContext()} />);
+    const card = await screen.findByTestId(`room-email-${ACTION_ID}`);
+    fireEvent.click(within(card).getByRole("button", { name: /approve and send/i }));
+    expect(await screen.findByTestId(`room-approval-receipt-${ACTION_ID}`)).toHaveTextContent(/Approved/);
+    const [, init] = fetchMock.mock.calls.find(([u]) => String(u).endsWith(`/action/${ACTION_ID}`))!;
+    expect(JSON.parse(String(init.body))).toEqual({ approved: true });
+  });
+
+  it("rejects, and nothing is sent", async () => {
+    wrap(<RoomTasksTab ctx={taskContext()} />);
+    const card = await screen.findByTestId(`room-email-${ACTION_ID}`);
+    fireEvent.click(within(card).getByRole("button", { name: /reject/i }));
+    const receipt = await screen.findByTestId(`room-approval-receipt-${ACTION_ID}`);
+    expect(receipt).toHaveTextContent(/Rejected/);
+    expect(receipt).toHaveTextContent(/nothing was sent/i);
+  });
+});
+
 describe("roomSections", () => {
   it("draws the tasks tab in report and task rooms, and nothing in agent rooms", () => {
     expect(roomSections(context())).not.toBeNull();
