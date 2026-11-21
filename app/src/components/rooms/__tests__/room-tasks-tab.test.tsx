@@ -227,9 +227,37 @@ describe("RoomTasksTab — live progress (E7)", () => {
   });
 });
 
-describe("RoomTasksTab — approving my own action (E3)", () => {
-  it("shows the exact effect of this room's proposal, and none from other rooms", async () => {
+/** A task workspace: the only kind where a member decides an action (E3, E4). */
+function taskContext(access: Access = "assigned"): RoomSlotContext {
+  return context(access, { room: room({ access, kind: "task" }) });
+}
+
+describe("RoomTasksTab — where approvals belong (E3, E4)", () => {
+  it("shows no approvals in a report workspace, and does not ask for them", async () => {
     wrap(<RoomTasksTab ctx={context()} />);
+    await screen.findByTestId(`room-task-${TASK_ACCEPTED}`);
+    expect(screen.queryByTestId("room-approvals")).toBeNull();
+    expect(screen.queryByTestId(`inbox-card-${ACTION_ID}`)).toBeNull();
+    expect(fetchMock.mock.calls.some(([u]) => String(u) === "/api/bridge/api/approvals")).toBe(false);
+  });
+
+  it("leads from an accepted task to its own workspace", async () => {
+    wrap(<RoomTasksTab ctx={context()} />);
+    const open = await screen.findByTestId(`open-as-workspace-${TASK_ACCEPTED}`);
+    expect(open).toHaveTextContent("Open task workspace");
+    expect(screen.queryByTestId(`open-as-workspace-${TASK_SUGGESTED}`)).toBeNull();
+  });
+
+  it("offers no task workspace from inside a task workspace", async () => {
+    wrap(<RoomTasksTab ctx={taskContext()} />);
+    await screen.findByTestId(`inbox-card-${ACTION_ID}`);
+    expect(screen.queryByTestId(`open-as-workspace-${TASK_ACCEPTED}`)).toBeNull();
+  });
+});
+
+describe("RoomTasksTab — approving my own action in a task workspace (E3)", () => {
+  it("shows the exact effect of this room's proposal, and none from other rooms", async () => {
+    wrap(<RoomTasksTab ctx={taskContext()} />);
     const card = await screen.findByTestId(`inbox-card-${ACTION_ID}`);
     expect(card).toHaveTextContent("alice@example.com");
     expect(card).toHaveTextContent("Just checking the order arrived safely.");
@@ -239,7 +267,7 @@ describe("RoomTasksTab — approving my own action (E3)", () => {
   });
 
   it("approves, then shows a receipt in place of the card", async () => {
-    wrap(<RoomTasksTab ctx={context()} />);
+    wrap(<RoomTasksTab ctx={taskContext()} />);
     fireEvent.click(await screen.findByTestId(`inbox-approve-${ACTION_ID}`));
     const receipt = await screen.findByTestId(`room-approval-receipt-${ACTION_ID}`);
     expect(receipt).toHaveTextContent(/Approved/);
@@ -250,7 +278,7 @@ describe("RoomTasksTab — approving my own action (E3)", () => {
   });
 
   it("rejects, and says nothing was sent", async () => {
-    wrap(<RoomTasksTab ctx={context()} />);
+    wrap(<RoomTasksTab ctx={taskContext()} />);
     fireEvent.click(await screen.findByTestId(`inbox-reject-${ACTION_ID}`));
     const receipt = await screen.findByTestId(`room-approval-receipt-${ACTION_ID}`);
     expect(receipt).toHaveTextContent(/Rejected/);
@@ -259,7 +287,7 @@ describe("RoomTasksTab — approving my own action (E3)", () => {
 
   it("says a 403 plainly and keeps the card", async () => {
     answerReply = () => reply({ message: "Only the person this task is assigned to may decide it." }, 403);
-    wrap(<RoomTasksTab ctx={context()} />);
+    wrap(<RoomTasksTab ctx={taskContext()} />);
     fireEvent.click(await screen.findByTestId(`inbox-approve-${ACTION_ID}`));
     expect(await screen.findByTestId(`inbox-message-${ACTION_ID}`)).toHaveTextContent(
       "Only the person this task is assigned to may decide it.",
@@ -269,7 +297,7 @@ describe("RoomTasksTab — approving my own action (E3)", () => {
 
   it("shows no proposals, and no error, when the approvals listing is not this user's", async () => {
     approvalsStatus = 403;
-    wrap(<RoomTasksTab ctx={context()} />);
+    wrap(<RoomTasksTab ctx={taskContext()} />);
     await screen.findByTestId(`room-task-${TASK_ACCEPTED}`);
     expect(screen.queryByTestId(`inbox-card-${ACTION_ID}`)).toBeNull();
     expect(screen.queryByTestId("room-approvals")).toBeNull();
