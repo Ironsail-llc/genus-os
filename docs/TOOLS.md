@@ -1655,7 +1655,9 @@ same way.
   `register_user_cron` job carries no zone and keeps the host's). A unique
   index (migration 170) keeps it to one row per room. It follows every change
   of schedule or instructions, pause, resume (the next run is computed from
-  now), archive, restore and reassignment. A duplicate of a scheduled workspace starts paused. The generic
+  now), archive, restore and reassignment; a change that leaves the schedule
+  and its running state alone (an instructions edit) keeps the next run. A
+  duplicate of a scheduled workspace starts paused. The generic
   user-cron tick skips room rows: a room's run is started by the rooms
   scheduler, in the room, as its run-as user.
 - **Nothing leaks.** Not found and no access give the same answer, which names

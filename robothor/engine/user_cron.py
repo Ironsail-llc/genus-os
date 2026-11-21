@@ -186,7 +186,8 @@ def sync_room_cronjob(
     ``schedule`` None (the room has no schedule) disables the row, if there is
     one, and returns None. Otherwise the row is created or rewritten, and its
     next run is computed from now when it is enabled (so a resumed room does not
-    fire for the runs it missed) and cleared when it is not. Returns
+    fire for the runs it missed) and cleared when it is not. A row that keeps
+    the same schedule and stays enabled keeps its next run. Returns
     ``{job_id, next_run_at, enabled}``.
     """
     now = datetime.now(UTC)
@@ -214,10 +215,18 @@ def sync_room_cronjob(
                 schedule_payload = EXCLUDED.schedule_payload,
                 prompt = EXCLUDED.prompt,
                 enabled = EXCLUDED.enabled,
-                next_run_at = EXCLUDED.next_run_at,
+                -- Same schedule, still running: keep the next run, so editing
+                -- the instructions does not push an interval schedule back.
+                next_run_at = CASE
+                    WHEN user_cronjobs.schedule_payload = EXCLUDED.schedule_payload
+                     AND user_cronjobs.enabled AND EXCLUDED.enabled
+                     AND user_cronjobs.next_run_at IS NOT NULL
+                    THEN user_cronjobs.next_run_at
+                    ELSE EXCLUDED.next_run_at
+                END,
                 run_as_user_id = EXCLUDED.run_as_user_id,
                 updated_at = NOW()
-            RETURNING job_id
+            RETURNING job_id, next_run_at
             """,
             (
                 f"ucron-{uuid.uuid4().hex[:12]}",
@@ -232,7 +241,8 @@ def sync_room_cronjob(
                 run_as_user_id,
             ),
         )
-        job_id = cur.fetchone()["job_id"]
+        row = cur.fetchone()
+        job_id, next_run = row["job_id"], row["next_run_at"]
     return {
         "job_id": job_id,
         "next_run_at": next_run.isoformat() if next_run else None,
