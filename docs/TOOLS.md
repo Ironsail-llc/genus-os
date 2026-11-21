@@ -1969,6 +1969,27 @@ agent's own allow-set is the authoritative answer. The families:
 | Desktop | `desktop_*` (a real screen) |
 | n8n automations | `n8n_list_workflows`, `n8n_recent_failures` (the n8n monitor's snapshot — see above) |
 
+### Workspace periods: `room_request_period`
+
+`room_request_period(room_id, grain, anchor)` gets a report workspace's edition for
+one period: `day`, `week` (Monday to Sunday), `month`, or a `custom` range of at
+most 93 days. The period is whole days in the workspace's time zone
+(`settings.tz`, UTC when unset). `anchor` is a date inside the period
+(`YYYY-MM-DD`; `YYYY-MM` for a month), `start/end` for a custom range, or
+`latest` for the last complete period. Only a period that is over can be
+asked for.
+
+A published edition comes back at once (`started: false`). Otherwise one run
+starts and the building edition comes back (`started: true`); people asking at
+the same moment share that one run. A workspace runs
+`settings.max_on_demand_per_day` on-demand editions a day (5 when unset), and
+past that the tool returns `cap_reached: true` and starts nothing. A week or
+month run reads the summaries of the day editions inside it as data; it fetches
+its own figures and never adds the days up. Use `room_run` for "run it now" and
+`room_read` to read editions that already exist. The engine route
+`POST /api/rooms/{id}/periods` does the same for the dashboard (200 existing,
+202 started, 429 cap reached).
+
 ### When a tool call fails
 
 A tool fails by returning a result with an `error` key. The engine records that

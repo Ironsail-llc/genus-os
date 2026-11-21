@@ -204,6 +204,35 @@ editions, messages)`, `share_room`, `unshare_room`, `archive_room`,
   `authorUserId`) on the stored chat message.
 - The tools are an opt-in family always given to the main agent; see
   `docs/TOOLS.md`.
+#### As built (lane 8, periods)
+
+- `periods.py` also holds the request: `async request_period(actor, room_id, grain,
+  anchor=None, *, now=None, run_room=None) -> (Edition, started)`. It is async because
+  the winner starts a background run; its data access runs in a thread.
+- Periods are whole local days in the room's `settings.tz` (UTC when unset), end
+  inclusive; weeks run Monday to Sunday; custom ranges are at most 93 days. Only a
+  period whose last day is before today (local) can be requested. `Period.bounds(tz)`
+  gives the UTC instants of its local midnights.
+- `anchor`: a date (`YYYY-MM-DD`; `YYYY-MM` for a month), `start/end` (or a pair or
+  `{start, end}`) for custom, or None/`latest` for `last_complete_period`.
+- The run is `robothor.rooms.runs.run_room(room, edition, *, period, context)`
+  (lane 7), resolved before any row is written; when it is missing the request fails
+  `RoomRunUnavailable` (503). A run that raises fails its edition.
+- Daily cap: `settings.max_on_demand_per_day`, default 5, 0 allows none. It counts
+  every edition with `requested_by` set (previews included) since local midnight.
+  Errors: `PeriodError` (a `ValueError`, 422), `OnDemandCapReached(limit, used)` (429).
+- `context_for_period(tenant_id, room_id, period)`: the newest published summary of
+  each `day` edition inside the period, 500 characters each, 6,000 in all, wrapped
+  as data.
+- `POST /api/rooms/{id}/periods` (engine) body `{grain, anchor?, requested_by?}`. A
+  human token is its own identity (`requested_by` ignored). The bridge's service token
+  must name `requested_by`; the engine reads that account's role from `user_accounts`
+  (never the body), requires it active and living in the token's tenant (else 404),
+  and re-checks `request_period`. 200 existing, 202 started, 400 no `requested_by`,
+  403, 404, 422, 429 cap reached, 503 no room runner.
+- Added: `dal.list_editions_in_period`, `dal.count_requested_editions`,
+  `models.edition_json` (the camelCase `Edition`, with `publishedSeq`). Engine route module
+  `robothor/engine/rooms_api.py`; tool `room_request_period`.
 
 ### Edition blocks
 
