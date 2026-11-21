@@ -224,6 +224,15 @@ describe("writes and refusals", () => {
     expect(made).toMatchObject({ ok: false, status: 422, message: "no agent 'ghost' is available for a workspace" });
   });
 
+  it("reads a viewer's refused create as the role not allowing it", async () => {
+    // The bridge middleware's scope check answers before the router, in its own shape.
+    expect(replies.create_viewer).toMatchObject({ status: 403, body: { error: "insufficient scope" } });
+    answer("create_viewer");
+    const made = await createRoom({ kind: "agent", title: "Pricing", agentId: "main" });
+    expect(made).toMatchObject({ ok: false, status: 403, cannotCreate: true });
+    if (!made.ok) expect(made.message).toBe("Your role can't create workspaces. Ask a company admin if you need one.");
+  });
+
   it("saves a change and reads the new revision", async () => {
     answer("patch_ok");
     const saved = await patchRoom("room-report", 1, { title: "Sales" });

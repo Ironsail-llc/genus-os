@@ -412,6 +412,7 @@ def test_recorded_replies_match_the_dashboard_contract(real) -> None:
     )
     replies["create_invalid_schedule"] = _record(_create(w, scheduleText="every minute"))
     replies["create_unknown_agent"] = _record(_create(w, agentId="ghost"))
+    replies["create_viewer"] = _record(_create(w, who="vera"))
 
     def edition(seq_title: str, start: date, end: date, *, preview: bool = False) -> Any:
         row, _ = dal.create_edition(

@@ -235,6 +235,20 @@ def test_the_main_agent_is_the_default(staff_db):
     assert room.agent_id == "main"
 
 
+def test_the_default_agent_is_the_engines_main_agent(staff_db, monkeypatch):
+    """One source of truth: the agent a chat with no key reaches, which the
+    bridge's open-a-task route uses too (``manifest_store.main_agent_id``)."""
+    from robothor.engine.manifest_store import main_agent_id
+
+    monkeypatch.setenv("ROBOTHOR_MAIN_SESSION_KEY", "agent:analyst:primary")
+    assert main_agent_id() == "analyst"
+    assert definition.default_agent() == "analyst"
+    room = definition.create_room_with_schedule(
+        _actor(staff_db, "alice"), kind="agent", title="Scratch", instructions=""
+    )
+    assert room.agent_id == "analyst"
+
+
 @pytest.mark.parametrize("agent_id", ["ghost", "bad:id", ""])
 def test_an_unknown_agent_is_refused_and_nothing_is_saved(staff_db, agent_id):
     db = staff_db

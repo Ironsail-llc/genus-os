@@ -109,6 +109,19 @@ describe("NewWorkspaceButton (F1)", () => {
     expect(screen.getByTestId("new-workspace-create")).toBeDisabled();
   });
 
+  it("says plainly when the caller's role cannot create workspaces, and offers no create", async () => {
+    bridge(() => reply({ error: "insufficient scope" }, 403));
+    render(<NewWorkspaceButton agentId="main" />);
+    fireEvent.click(await screen.findByTestId("new-workspace-button"));
+    fireEvent.change(await screen.findByTestId("new-workspace-title"), { target: { value: "Market scan" } });
+    fireEvent.click(screen.getByTestId("new-workspace-create"));
+    expect(await screen.findByTestId("new-workspace-error")).toHaveTextContent(
+      "Your role can't create workspaces. Ask a company admin if you need one.",
+    );
+    expect(screen.getByTestId("new-workspace-create")).toBeDisabled();
+    expect(screen.queryByText(/insufficient scope/)).toBeNull();
+  });
+
   it("shows the refusal for an unknown or disallowed agent", async () => {
     bridge(() => reply({ detail: "agent not allowed" }, 403));
     render(<NewWorkspaceButton agentId="main" />);

@@ -132,6 +132,12 @@
     },
     "status": 422
   },
+  "create_viewer": {
+    "body": {
+      "error": "insufficient scope"
+    },
+    "status": 403
+  },
   "directory": {
     "body": {
       "users": [
