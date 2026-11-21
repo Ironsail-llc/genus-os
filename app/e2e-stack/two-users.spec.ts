@@ -177,6 +177,25 @@ test("7. both post at once: the second is told who is being answered, and nothin
   await expect(room(bobPage).getByText("Answering Bob: And the returns?")).toBeVisible();
 });
 
+test("7b. the same text sent twice, leaving mid-answer and coming back: each message shows once (D3)", async () => {
+  const text = "Same words again (take your time)";
+  const mine = () => room(bobPage).getByTestId("message-user").filter({ hasText: text });
+  const answers = () => room(bobPage).getByText(`Answering Bob: ${text}`);
+  await bobPage.goto(roomLink(roomId));
+  await say(bobPage, text);
+  await expect(answers()).toHaveCount(1, { timeout: 30000 });
+  await say(bobPage, text);
+  await expect(mine()).toHaveCount(2);
+  // Leave while the agent is still answering the second, then come back.
+  await bobPage.goto("/?v=chat");
+  await bobPage.waitForTimeout(8000);
+  await bobPage.goto(roomLink(roomId));
+  await expect(answers()).toHaveCount(2, { timeout: 30000 });
+  await bobPage.waitForTimeout(2000);
+  await expect(mine()).toHaveCount(2);
+  await expect(answers()).toHaveCount(2);
+});
+
 test("8. Bob picks a past period and its edition is built (C3)", async () => {
   await bobPage.goto(roomLink(roomId));
   await bobPage.getByTestId("period-trigger").click();
