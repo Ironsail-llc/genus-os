@@ -156,6 +156,27 @@ def build_user_extras(
     return extras
 
 
+def _take_room_turn_editions(tenant_id: str, session_key: str) -> list[str]:
+    """Editions the turn on a room session published, to stamp on its reply.
+
+    Empty for any other session. ``robothor.rooms.editions`` notes them when
+    ``room_publish_edition`` publishes; the assistant message saved next
+    carries the last one as ``edition_id`` so history can re-render it."""
+    from robothor.rooms.keys import parse_room_key
+
+    if parse_room_key(session_key) is None:
+        return []
+    from robothor.rooms.editions import take_turn_editions
+
+    return take_turn_editions(tenant_id, session_key)
+
+
+def _stamp_room_editions(cur: Any, tenant_id: str, edition_ids: list[str], message_id: int) -> None:
+    from robothor.rooms.editions import stamp_turn_message
+
+    stamp_turn_message(cur, tenant_id, edition_ids, message_id)
+
+
 def save_exchange(
     session_key: str,
     user_content: str,
@@ -201,6 +222,9 @@ def save_exchange(
     # possible reach.
     user_extras = _redact_captions(user_extras)
     assistant_extras = _redact_captions(assistant_extras)
+    edition_ids = _take_room_turn_editions(tenant_id, session_key)
+    if edition_ids:
+        assistant_extras = {**(assistant_extras or {}), "edition_id": edition_ids[-1]}
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -239,6 +263,8 @@ def save_exchange(
             )
             inserted_ids.append(int(cur.fetchone()["id"]))
 
+        if edition_ids:
+            _stamp_room_editions(cur, tenant_id, edition_ids, inserted_ids[1])
         conn.commit()
         return inserted_ids
 
@@ -260,6 +286,10 @@ def save_message(
     from robothor.secrets.redaction import redact
 
     content = redact(content)
+    payload: dict[str, Any] = {"role": role, "content": content}
+    edition_ids = _take_room_turn_editions(tenant_id, session_key) if role == "assistant" else []
+    if edition_ids:
+        payload["edition_id"] = edition_ids[-1]
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -282,9 +312,11 @@ def save_message(
             VALUES (%s, %s::jsonb)
             RETURNING id
             """,
-            (session_id, json.dumps({"role": role, "content": content})),
+            (session_id, json.dumps(payload)),
         )
         message_id = int(cur.fetchone()["id"])
+        if edition_ids:
+            _stamp_room_editions(cur, tenant_id, edition_ids, message_id)
 
         conn.commit()
         return message_id

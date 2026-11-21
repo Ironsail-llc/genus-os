@@ -2062,6 +2062,84 @@ _ROOM_SCHEMAS: dict[str, dict[str, Any]] = {
         {"room_id": _ROOM_ID, "user": _ROOM_USER},
         ["room_id", "user"],
     ),
+# Rooms (workspaces): publishing an edition. Handler: handlers/room_editions.py.
+_ROOM_EDITION_SCHEMAS: dict[str, dict[str, Any]] = {
+    "room_publish_edition": {
+        "type": "function",
+        "function": {
+            "name": "room_publish_edition",
+            "description": (
+                "Publish what you built in this workspace as a saved visual everyone with "
+                "access can reopen. Works only in a run inside that workspace's own "
+                "conversation. kind 'edition' (report workspaces) covers one period; kind "
+                "'dashboard' is an ad-hoc board in any workspace, with no period. Each block "
+                "is {component, props} for one of render_metric_grid, render_metric_card, "
+                "render_bar_chart, render_line_chart, render_pie_chart, render_data_table, "
+                "render_markdown, render_timeline, with that component's props. Fetch every "
+                "figure with your tools first: the server records which tool calls the run "
+                "made as the edition's provenance."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "room_id": {"type": "string", "description": "The workspace id"},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["edition", "dashboard"],
+                        "description": "Default 'edition'",
+                    },
+                    "period": {
+                        "type": "object",
+                        "description": (
+                            "For an edition: {grain: day|week|month|custom, start, end} as "
+                            "YYYY-MM-DD. Omit to use the period the run was started for."
+                        ),
+                        "properties": {
+                            "grain": {"type": "string", "enum": ["day", "week", "month", "custom"]},
+                            "start": {"type": "string"},
+                            "end": {"type": "string"},
+                        },
+                        "required": ["grain", "start", "end"],
+                    },
+                    "title": {"type": "string", "description": "One line, at most 200 characters"},
+                    "summary": {
+                        "type": "string",
+                        "description": "Plain-text commentary, at most 4000 characters",
+                    },
+                    "blocks": {
+                        "type": "array",
+                        "description": "At most 40 blocks of {component, props}",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "component": {"type": "string"},
+                                "props": {"type": "object"},
+                            },
+                            "required": ["component", "props"],
+                        },
+                    },
+                    "suggestions": {
+                        "type": "array",
+                        "description": "At most 10 suggested tasks people can accept",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "key": {
+                                    "type": "string",
+                                    "description": "Stable slug, a-z 0-9 - _",
+                                },
+                                "title": {"type": "string"},
+                                "detail": {"type": "string"},
+                                "action_hint": {"type": "string"},
+                            },
+                            "required": ["key", "title"],
+                        },
+                    },
+                },
+                "required": ["room_id", "title", "summary", "blocks"],
+            },
+        },
+    },
 }
 
 
@@ -5267,7 +5345,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
     }
 
     schemas.update(_HUMAN_IN_THE_LOOP_SCHEMAS)
-
+    schemas.update(_ROOM_EDITION_SCHEMAS)
     schemas.update(_TEAM_SCRATCHPAD_SCHEMAS)
 
     from robothor.goals.tools import schemas as pursuit_schemas

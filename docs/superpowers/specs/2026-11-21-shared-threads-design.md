@@ -214,6 +214,51 @@ this list a subset of the dashboard's component registry. `suggestions` is a lis
 `{"key", "title", "detail", "action_hint"}`. `provenance` is
 `{"run_id", "ran_as", "started_at", "tool_calls": [{"tool", "at", "ok"}]}`.
 
+#### As built (lane 4)
+
+- `robothor/rooms/editions.py` holds validation (`validate_blocks`,
+  `validate_suggestions`, built on `models.ALLOWED_COMPONENTS`; one shape check per
+  component in `COMPONENT_CHECKS`), plain-text cleaning (`clean_summary`,
+  `clean_title`), provenance and `publish_from_run`, the whole tool, sync.
+  `handlers/room_editions.py` runs it in one worker thread.
+- **Run carrier.** `robothor/rooms/run_context.py`: `RoomRun(tenant_id, room_id,
+  session_key, preview=False, requested_by=None, edition_id=None, grain=None,
+  period_start=None, period_end=None)`, bound with `room_run_scope(run)` around
+  `runner.execute`, read with `current_room_run()`. A `ContextVar`, so task-local.
+  Chat on a room session binds `RoomRun.for_session(tenant_id, session_key)` (None
+  for any other key, which binds nothing). A scheduled or on-demand run binds the
+  same plus `preview`, `requested_by` (the preview's requester), `edition_id` (the
+  `building` row it created) and that row's period, and passes the run-as user as
+  `user_id`/`user_role` to `runner.execute`. Tools never take a room, preview or
+  provenance from arguments. The publish is refused unless the carrier names the
+  same room and tenant, the room's session key matches, `ctx.agent_id` is the
+  room's agent (a sub-agent that inherits the carrier cannot publish), and the
+  caller holds `post`.
+- **Rows.** With a carrier `edition_id`, that `building` row is completed (a
+  different `period` argument is refused). Otherwise `create_edition` either
+  returns the period's existing `building` row or allocates a new seq. A dashboard
+  is always a new row with no period.
+- **`revision`** is the edition's revision within its period, set at publish: 1, or
+  one more than the non-preview editions already published for that grain and
+  period; 1 for an edition with no period. While building, the row carries the
+  room's definition revision, which provenance records as `room_rev`.
+- **`provenance`** = `{run_id, ran_as, started_at, room_rev, tool_calls: [{tool, at,
+  ok}]}` (plus `tool_calls_truncated` past 200 calls), from `agent_runs` and the
+  run's `tool_call` steps in `agent_run_steps` (flushed after every iteration). A
+  `tool_call` wrapper is listed as the tool it ran; the publish call itself is left
+  out.
+- **After a non-preview publish:** `room.edition` on stream `agent` with payload
+  exactly `{room_id, tenant_id, edition_id}`; every hook registered with
+  `editions.register_edition_published(hook)` runs as `hook(room, edition)` (sync,
+  in the worker thread, exceptions logged); and the edition is noted for the turn,
+  so the assistant message `chat_store.save_exchange` / `save_message(role=
+  "assistant")` saves next on that session carries `edition_id` (the last one
+  published in the turn) and every noted edition gets that `chat_message_id`. A
+  preview does none of these.
+- Summary at most 4000 characters, title one line of at most 200; escape sequences,
+  control and format characters, tag-shaped boundaries (`<untrusted_content>`,
+  `<|im_start|>`) and `[RENDER:` / `[DASHBOARD:` openers are removed.
+
 ### Tools
 
 `room_create(kind, title, instructions, agent_id?, schedule?, tz?, default_grain?, share_with?)`,
@@ -285,7 +330,8 @@ A send while the room is busy returns 409 `{error: "room_busy", answering: <name
 ### Events
 
 Stream `agent`, types `room.edition`, `room.message`, `room.updated`, `room.task`, payload
-`{room_id, tenant_id, ...}`. The dashboard filters by acting tenant, then by the rooms the
+`{room_id, tenant_id, ...}` with ids only (`room.edition` is exactly `{room_id, tenant_id,
+edition_id}`); content is fetched through the API. The dashboard filters by acting tenant, then by the rooms the
 user can access.
 
 ## Build lanes
