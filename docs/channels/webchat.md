@@ -111,6 +111,43 @@ person who sends no key is unchanged: the owner gets the main session, and a
 member gets the session the rules above give them. A service that must write into the main session on purpose names
 `agent:main:primary` explicitly.
 
+## Chat in a workspace (a room)
+
+A workspace's conversation is an ordinary session keyed
+`agent:{agent}:room:{room_id}`, served by the same routes. The browser names the
+room, never the key: `room_id` (a UUID) in the JSON body of `/chat/send`,
+`/chat/abort`, `/chat/steer`, `/chat/interrupt` and the other POST routes, and in
+the query string of `/chat/history`, `/chat/outcome` and the other GET routes.
+`robothor/engine/chat_rooms.py` holds the rules:
+
+* **Access first, in every per-user-sessions mode.** The engine checks the
+  caller with `robothor.rooms.access` before the owner and mode rules, then uses
+  the room's stored key. A raw room-shaped `session_key` is checked the same way,
+  and one naming the room under a different agent is refused. No access is
+  `404 {"error": "room_not_found"}`; access without the action (a viewer
+  sending, an archived room) is `403 {"error": "room_forbidden"}`. A request
+  naming both `room_id` and a `session_key` is `400`. Clearing a room or
+  injecting a system row needs the right to manage it (`assigned` or a tenant
+  admin). A service token skips the membership check for a room of its own
+  tenant.
+* **The room is echoed, the key never shown.** `/chat/send` streams
+  `event: room` with `{"roomId": ...}` before anything else; `/chat/history`,
+  `/chat/outcome`, `/chat/abort`, `/chat/steer` and `/chat/interrupt` add
+  `"roomId"` to their JSON. A room's history has no `sessionKey`.
+* **Who said what.** A user turn stores `author_user_id` and
+  `author_display_name`; history items carry `authorUserId`, `authorName` and,
+  on an edition's message, `editionId`. The model reads each user turn as
+  `[Name] text`. Ordinary sessions get none of this.
+* **One turn at a time.** A send while the room is answering someone is
+  `409 {"error": "room_busy", "answering": "<display name>"}`. The lock is held
+  until the turn's exchange is saved and released however the turn ends.
+* **Fresh history.** Each turn reloads the room's last `MAX_HISTORY` messages
+  from the database under the room's tenant, so the agent sees turns written
+  elsewhere (a published edition, another replica).
+* **Activity.** A saved exchange moves `rooms.last_activity_at` and
+  `last_message_id` and publishes `room.message` on the `agent` stream with
+  exactly `{room_id, tenant_id, message_id}`.
+
 ## Asking a question
 
 `webchat` implements `Channel.ask`, so an agent that calls `ask_user` during a

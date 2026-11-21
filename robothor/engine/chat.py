@@ -39,14 +39,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from starlette.responses import StreamingResponse
+from starlette.responses import StreamingResponse  # noqa: TC002 - FastAPI reads route annotations
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine import chat_rooms
 from robothor.engine.chat_attachments import AttachmentRefusal, prepare_turn
 from robothor.engine.chat_delivery import deliver_interruption, deliver_plan_interruption
 from robothor.engine.chat_delivery import final_result as delivery_result
@@ -70,6 +68,7 @@ from robothor.engine.chat_plan_helpers import _extract_plan_text, _plan_is_expir
 from robothor.engine.chat_result import result_text
 from robothor.engine.chat_service_session import service_session_key
 from robothor.engine.chat_session_cache import SessionCache
+from robothor.engine.chat_sse import sse_response
 from robothor.engine.chat_store import (
     clear_plan_state_async as clear_plan_state_async,
 )
@@ -90,6 +89,7 @@ from robothor.engine.live_inbox import LiveInbox, history_text
 from robothor.engine.models import DeepRunState, PlanState, RunStatus, TriggerType
 from robothor.engine.runtime.chat_control import start, stop
 from robothor.engine.sanitize import sanitize_log
+from robothor.rooms.keys import parse_room_key
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
@@ -188,6 +188,8 @@ def _effective_session_key(auth: Any, requested_key: str) -> str:
     """
     if getattr(auth, "is_service", False):
         return requested_key or service_session_key(get_main_session_key(), auth.user_id)
+    if parse_room_key(requested_key) is not None:  # rooms are authorised by chat_rooms.resolve
+        raise HTTPException(status_code=404, detail="room_not_found")
     requested_key = requested_key or get_main_session_key()
 
     mode = per_user_sessions_mode()
@@ -212,6 +214,9 @@ def _effective_session_key(auth: Any, requested_key: str) -> str:
 
     return derived
 
+
+#: Which session (and room) a request reaches: ``chat_rooms.resolve``.
+_target = chat_rooms.resolve
 
 router = APIRouter(prefix="/chat", dependencies=[Depends(_require_chat_auth)])
 
@@ -348,13 +353,14 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 
     body = await request.json()
     received_at = datetime.now(UTC)  # the user row's stored time (chat_store.save_exchange)
-    session_key: str = body.get("session_key", "")
     message: str = body.get("message", "")
 
     if not message and not body.get("attachments"):
         return JSONResponse({"error": "message required"}, status_code=400)
 
-    session_key = _effective_session_key(auth, session_key)
+    if isinstance(target := await _target(auth, body, "post"), JSONResponse):
+        return target
+    session_key, name = target.key, chat_rooms.display_name(identity)
     session = _get_session(session_key)
     try:  # files ride with the turn: kept in the inbox, named in the note
         attached = await prepare_turn(
@@ -370,10 +376,13 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     pending: list[str] = []
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    if target.room is not None:  # first, so the browser can check where it is
+        queue.put_nowait({"event": "room", "data": target.echo({})})
 
     async def run_agent() -> None:
         """Execute agent in background, push events to queue."""
         try:
+            await chat_rooms.refresh(target, session)
             last_sent_len = 0
 
             async def on_interim(text: str) -> None:
@@ -411,14 +420,14 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             early = EarlyRelease(send_done)
             run = await _runner.execute(
                 agent_id=agent_id,
-                message=message,
+                message=target.speaker(name, message),
                 trigger_type=TriggerType.WEBCHAT,
                 trigger_detail=f"webchat:{session_key}",
                 on_content=on_content,
                 on_tool=on_tool,
                 on_status=on_status,
                 model_override=session.model_override,
-                conversation_history=list(session.history),
+                conversation_history=target.for_model(session.history),
                 tenant_id=auth.tenant_id,
                 user_id=auth.user_id,
                 user_role=auth.role,
@@ -439,24 +448,25 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 session,
                 user_message=history_text(message, inbox.taken),
                 assistant_text=final_text or None,
-                user_extras=attached.extras,
+                user_extras=target.author(auth, name, attached.extras),
             )
 
-            # Persist to DB (fire-and-forget)
+            # Persist to DB: fire-and-forget, except a room's turn holds its lock until saved
             if final_text and _config:
-                early.spawn(
-                    save_exchange_async(
-                        session_key,
-                        history_text(message, inbox.taken),
-                        final_text,
-                        channel="webchat",
-                        model_override=session.model_override,
-                        tenant_id=auth.tenant_id,
-                        user_extras=attached.extras,
-                        user_at=received_at,
-                    ),
-                    name=f"chat-save:{session_key}",
+                saving = save_exchange_async(
+                    session_key,
+                    history_text(message, inbox.taken),
+                    final_text,
+                    channel="webchat",
+                    model_override=session.model_override,
+                    tenant_id=auth.tenant_id,
+                    user_extras=target.author(auth, name, attached.extras),
+                    user_at=received_at,
                 )
+                if target.room is None:
+                    early.spawn(saving, name=f"chat-save:{session_key}")
+                else:
+                    await chat_rooms.saved(target, saving)
 
             # Ingest conversation to memory (fire-and-forget)
             if len(session.history) >= 4 and _config:
@@ -506,50 +516,35 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             if session.active_task is asyncio.current_task():
                 session.active_task = None
 
-    # Start agent as background task
-    task = start(session, run_agent, auth, session_key, body.get("request_id"), steerable=True)
+    # Start agent as background task (one at a time in a room)
+    task = await chat_rooms.start_turn(
+        target,
+        name,
+        lambda: start(
+            session, run_agent, auth, session_key, body.get("request_id"), steerable=True
+        ),
+    )
+    if isinstance(task, JSONResponse):
+        return task
     register_live_inbox(session, auth, inbox)  # before any await: see chat_live.py
 
-    async def sse_generator() -> AsyncGenerator[str, None]:
-        """Yield SSE events from the queue, with keepalive comments."""
-        import json
-
-        try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=SSE_KEEPALIVE_INTERVAL)
-                except TimeoutError:
-                    yield ": keepalive\n\n"
-                    continue
-                if item is None:
-                    break
-                event = item["event"]
-                data = json.dumps(item["data"])
-                yield f"event: {event}\ndata: {data}\n\n"
-        except asyncio.CancelledError:
-            # Client disconnected
-            task.cancel()
-        finally:
-            if not task.done():
-                task.cancel()
-
-    return StreamingResponse(
-        sse_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-    )
+    return sse_response(queue, task, SSE_KEEPALIVE_INTERVAL)
 
 
 @router.get("/history")
-async def chat_history(request: Request, session_key: str = "", limit: int = 50) -> JSONResponse:
+async def chat_history(request: Request, limit: int = 50) -> JSONResponse:
     """Return conversation history for a session (a page of it: chat_history_page.py)."""
     auth = _auth_context(request)
-    session_key = _effective_session_key(auth, session_key)
+    if isinstance(target := await _target(auth, request.query_params), JSONResponse):
+        return target
+    session_key = target.key
     session = _get_session(session_key)
     from robothor.engine.chat_history_page import history_response
 
     body = await history_response(session.history, session_key, limit, request.query_params, auth)
-    return JSONResponse(body, headers={"Cache-Control": "no-store"})
+    return JSONResponse(
+        chat_rooms.history_body(target, body), headers={"Cache-Control": "no-store"}
+    )
 
 
 @router.post("/inject")
@@ -557,14 +552,15 @@ async def chat_inject(request: Request) -> JSONResponse:
     """Add a system message to the session history."""
     auth = _auth_context(request)
     body = await request.json()
-    session_key: str = body.get("session_key", "")
     message: str = body.get("message", "")
     label: str = body.get("label", "")
 
     if not message:
         return JSONResponse({"error": "message required"}, status_code=400)
-
-    session_key = _effective_session_key(auth, session_key)
+    # In a room a system row steers everyone's turns: for those who manage it.
+    if isinstance(target := await _target(auth, body, "edit_definition"), JSONResponse):
+        return target
+    session_key = target.key
     session = _get_session(session_key)
     # Operator-supplied text, so it gets the same pass `append_turn` gives a
     # user turn: this row is persisted and replayed for the life of the session.
@@ -594,13 +590,15 @@ async def chat_inject(request: Request) -> JSONResponse:
 
 @router.get("/outcome")
 async def chat_outcome(
-    request: Request, background_tasks: BackgroundTasks, request_id: str, session_key: str = ""
+    request: Request, background_tasks: BackgroundTasks, request_id: str
 ) -> JSONResponse:
     """Read only the authenticated caller's original request record."""
     from robothor.engine.chat_recovery import read_outcome
 
     auth = _auth_context(request)
-    key = _effective_session_key(auth, session_key)
+    if isinstance(target := await _target(auth, request.query_params), JSONResponse):
+        return target
+    key = target.key
     result = await asyncio.to_thread(read_outcome, auth, key, request_id)
     from robothor.engine.chat_plan_recovery import attach_plan
     from robothor.engine.runtime.chat_control import request_key
@@ -610,23 +608,24 @@ async def chat_outcome(
         from robothor.engine.calendar_reconciliation import reconcile_outcome
 
         background_tasks.add_task(reconcile_outcome, auth, key, request_id)
-    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    return JSONResponse(target.echo(result), headers={"Cache-Control": "no-store"})
 
 
 @router.post("/abort")
 async def chat_abort(request: Request) -> JSONResponse:
     """Cancel the running response for a session."""
     body = await request.json()
-    session_key: str = body.get("session_key", "")
 
     auth = _auth_context(request)
-    session_key = _effective_session_key(auth, session_key)
+    if isinstance(target := await _target(auth, body, "post"), JSONResponse):
+        return target
+    session_key = target.key
     session = _get_session(session_key)
     stopped_request = session.active_request_id
     result = await stop(session, auth, session_key, body.get("request_id"))
     if result.get("aborted"):  # only a run that was actually cancelled
         drop_live_inbox(session, stopped_request)
-    return JSONResponse(result)
+    return JSONResponse(target.echo(result))
 
 
 @router.post("/clear")
@@ -634,9 +633,10 @@ async def chat_clear(request: Request) -> JSONResponse:
     """Reset session history."""
     auth = _auth_context(request)
     body = await request.json()
-    session_key: str = body.get("session_key", "")
-
-    session_key = _effective_session_key(auth, session_key)
+    # In a room this wipes everyone's history: for those who manage it.
+    if isinstance(target := await _target(auth, body, "edit_definition"), JSONResponse):
+        return target
+    session_key = target.key
     session = _get_session(session_key)
 
     # Cancel any active task first
@@ -666,12 +666,13 @@ async def chat_clear(request: Request) -> JSONResponse:
 @router.get("/export")
 async def chat_export(request: Request) -> JSONResponse:
     """Export session as markdown or JSON."""
-    session_key = request.query_params.get("session_key", "")
     format_ = request.query_params.get("format", "markdown")
 
     auth = _auth_context(request)
-    session_key = _effective_session_key(auth, session_key)
-    session = _get_session(session_key)
+    if isinstance(target := await _target(auth, request.query_params), JSONResponse):
+        return target
+    session_key = target.label  # a room's export names the room, never its key
+    session = _get_session(target.key)
 
     if format_ == "json":
         return JSONResponse(
@@ -703,7 +704,6 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
-    session_key: str = body.get("session_key", "")
     message: str = body.get("message", "")
     deep_plan: bool = body.get("deep_plan", False)
 
@@ -712,7 +712,9 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
             {"error": "message required", "request_admitted": False}, status_code=400
         )
 
-    session_key = _effective_session_key(auth, session_key)
+    if isinstance(target := await _target(auth, body, "post"), JSONResponse):
+        return target
+    session_key = target.key
     session = _get_session(session_key)
 
     # Expire stale plan if any
@@ -840,34 +842,15 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
             if session.active_task is asyncio.current_task():
                 session.active_task = None
 
-    task = start(session, run_plan_agent, auth, session_key, body.get("request_id"))
-
-    async def sse_generator() -> AsyncGenerator[str, None]:
-        import json as _json
-
-        try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=SSE_KEEPALIVE_INTERVAL)
-                except TimeoutError:
-                    yield ": keepalive\n\n"
-                    continue
-                if item is None:
-                    break
-                event = item["event"]
-                data = _json.dumps(item["data"])
-                yield f"event: {event}\ndata: {data}\n\n"
-        except asyncio.CancelledError:
-            task.cancel()
-        finally:
-            if not task.done():
-                task.cancel()
-
-    return StreamingResponse(
-        sse_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    task = await chat_rooms.start_turn(
+        target,
+        chat_rooms.display_name(identity),
+        lambda: start(session, run_plan_agent, auth, session_key, body.get("request_id")),
     )
+    if isinstance(task, JSONResponse):
+        return task
+
+    return sse_response(queue, task, SSE_KEEPALIVE_INTERVAL)
 
 
 @router.post("/plan/approve", response_model=None)
@@ -879,17 +862,20 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
-    session_key: str = body.get("session_key", "")
     plan_id: str = body.get("plan_id", "")
 
     if not plan_id:
         return JSONResponse({"error": "plan_id required"}, status_code=400)
 
-    session_key = _effective_session_key(auth, session_key)
+    if isinstance(target := await _target(auth, body, "post"), JSONResponse):
+        return target
+    session_key = target.key
     session = _get_session(session_key)
 
     if retry := await approval_retry(auth, session_key, body.get("request_id")):
         return retry
+    if busy := chat_rooms.busy(target):  # before the plan is claimed, not after
+        return busy
     if refusal := approval_refusal(session, plan_id):
         return await approval_retry(auth, session_key, body.get("request_id")) or refusal
 
@@ -1105,34 +1091,15 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
             if session.active_task is asyncio.current_task():
                 session.active_task = None
 
-    task = start(session, run_approved, auth, session_key, client_id)
-
-    async def sse_generator() -> AsyncGenerator[str, None]:
-        import json as _json
-
-        try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=SSE_KEEPALIVE_INTERVAL)
-                except TimeoutError:
-                    yield ": keepalive\n\n"
-                    continue
-                if item is None:
-                    break
-                event = item["event"]
-                data = _json.dumps(item["data"])
-                yield f"event: {event}\ndata: {data}\n\n"
-        except asyncio.CancelledError:
-            task.cancel()
-        finally:
-            if not task.done():
-                task.cancel()
-
-    return StreamingResponse(
-        sse_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    task = await chat_rooms.start_turn(
+        target,
+        chat_rooms.display_name(identity),
+        lambda: start(session, run_approved, auth, session_key, client_id),
     )
+    if isinstance(task, JSONResponse):
+        return task
+
+    return sse_response(queue, task, SSE_KEEPALIVE_INTERVAL)
 
 
 @router.post("/plan/reject")
@@ -1140,14 +1107,15 @@ async def plan_reject(request: Request) -> JSONResponse:
     """Reject a pending plan, optionally with feedback."""
     auth = _auth_context(request)
     body = await request.json()
-    session_key: str = body.get("session_key", "")
     plan_id: str = body.get("plan_id", "")
     feedback: str = body.get("feedback", "")
 
     if not plan_id:
         return JSONResponse({"error": "plan_id required"}, status_code=400)
 
-    session_key = _effective_session_key(auth, session_key)
+    if isinstance(target := await _target(auth, body, "post"), JSONResponse):
+        return target
+    session_key = target.key
     session = _get_session(session_key)
 
     return await reject_plan(session, auth, session_key, plan_id, feedback)
@@ -1162,14 +1130,15 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
     identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
-    session_key: str = body.get("session_key", "")
     plan_id: str = body.get("plan_id", "")
     feedback: str = body.get("feedback", "")
 
     if not plan_id or not feedback:
         return JSONResponse({"error": "plan_id and feedback required"}, status_code=400)
 
-    session_key = _effective_session_key(auth, session_key)
+    if isinstance(target := await _target(auth, body, "post"), JSONResponse):
+        return target
+    session_key = target.key
     session = _get_session(session_key)
 
     if refusal := approval_refusal(session, plan_id):
@@ -1273,41 +1242,24 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
             if session.active_task is asyncio.current_task():
                 session.active_task = None
 
-    task = start(session, run_iteration, auth, session_key, body.get("request_id"))
-
-    async def sse_generator() -> AsyncGenerator[str, None]:
-        import json as _json
-
-        try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=SSE_KEEPALIVE_INTERVAL)
-                except TimeoutError:
-                    yield ": keepalive\n\n"
-                    continue
-                if item is None:
-                    break
-                event = item["event"]
-                data = _json.dumps(item["data"])
-                yield f"event: {event}\ndata: {data}\n\n"
-        except asyncio.CancelledError:
-            task.cancel()
-        finally:
-            if not task.done():
-                task.cancel()
-
-    return StreamingResponse(
-        sse_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    task = await chat_rooms.start_turn(
+        target,
+        chat_rooms.display_name(identity),
+        lambda: start(session, run_iteration, auth, session_key, body.get("request_id")),
     )
+    if isinstance(task, JSONResponse):
+        return task
+
+    return sse_response(queue, task, SSE_KEEPALIVE_INTERVAL)
 
 
 @router.get("/plan/status")
-async def plan_status(request: Request, session_key: str = "") -> JSONResponse:
+async def plan_status(request: Request) -> JSONResponse:
     """Check plan state for a session."""
     auth = _auth_context(request)
-    session_key = _effective_session_key(auth, session_key)
+    if isinstance(target := await _target(auth, request.query_params), JSONResponse):
+        return target
+    session_key = target.key
     session = _get_session(session_key)
 
     # Auto-expire stale plans
@@ -1337,13 +1289,14 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
     identity = await asyncio.to_thread(_resolve_webchat_identity, auth)
 
     body = await request.json()
-    session_key: str = body.get("session_key", "")
     query: str = (body.get("query", "") or body.get("message", "")).strip()
 
     if not query:
         return JSONResponse({"error": "query required"}, status_code=400)
 
-    session_key = _effective_session_key(auth, session_key)
+    if isinstance(target := await _target(auth, body, "post"), JSONResponse):
+        return target
+    session_key = target.key
     session = _get_session(session_key)
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
@@ -1453,41 +1406,24 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
                 session.active_task = None
             session.active_deep = None
 
-    task = start(session, run_deep, auth, session_key, body.get("request_id"))
-
-    async def sse_generator() -> AsyncGenerator[str, None]:
-        import json as _json
-
-        try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=SSE_KEEPALIVE_INTERVAL)
-                except TimeoutError:
-                    yield ": keepalive\n\n"
-                    continue
-                if item is None:
-                    break
-                event = item["event"]
-                data = _json.dumps(item["data"])
-                yield f"event: {event}\ndata: {data}\n\n"
-        except asyncio.CancelledError:
-            task.cancel()
-        finally:
-            if not task.done():
-                task.cancel()
-
-    return StreamingResponse(
-        sse_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    task = await chat_rooms.start_turn(
+        target,
+        chat_rooms.display_name(identity),
+        lambda: start(session, run_deep, auth, session_key, body.get("request_id")),
     )
+    if isinstance(task, JSONResponse):
+        return task
+
+    return sse_response(queue, task, SSE_KEEPALIVE_INTERVAL)
 
 
 @router.get("/deep/status")
-async def deep_status(request: Request, session_key: str = "") -> JSONResponse:
+async def deep_status(request: Request) -> JSONResponse:
     """Check deep reasoning state for a session."""
     auth = _auth_context(request)
-    session_key = _effective_session_key(auth, session_key)
+    if isinstance(target := await _target(auth, request.query_params), JSONResponse):
+        return target
+    session_key = target.key
     session = _get_session(session_key)
 
     if session.active_deep:

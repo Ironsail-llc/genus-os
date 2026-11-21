@@ -44,13 +44,15 @@ def reconcile(auth: AuthContext, session_key: str, body: dict[str, Any]) -> bool
 
 @router.post("/reconcile-effect")
 async def reconcile_effect(request: Request) -> JSONResponse:
-    from robothor.engine.chat import _auth_context, _effective_session_key
+    from robothor.engine.chat import _auth_context, _target
 
     auth = _auth_context(request)
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected an object")
-    session = _effective_session_key(auth, body.get("session_key", ""))
+    if isinstance(target := await _target(auth, body, "post"), JSONResponse):
+        return target
+    session = target.key
     if not await asyncio.to_thread(reconcile, auth, session, body):
         raise HTTPException(
             status_code=409, detail="Action changed or belongs to a goal; refresh it"
