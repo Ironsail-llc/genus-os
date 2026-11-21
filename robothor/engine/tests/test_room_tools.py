@@ -388,6 +388,46 @@ def test_restore_share_unshare_archive_and_reassign_through_the_tools(staff_db, 
     assert archived["room"]["archived"] is True
 
 
+@pytest.mark.integration
+def test_room_share_never_demotes_an_existing_member_by_omission(staff_db, report):
+    db = staff_db
+    alice = _ctx(db, "alice")
+
+    first = _call("room_share", {"room_id": report["id"], "user": db.bob}, alice)
+    again = _call("room_share", {"room_id": report["id"], "user": "alice@example.com"}, alice)
+
+    assert first["already_member"] is False
+    assert again["already_member"] is True
+    assert again["member"] == {"user_id": db.alice, "assigned": True}
+    assert "no new notice" in again["note"]
+
+
+@pytest.mark.integration
+def test_room_share_refuses_demoting_the_run_as_user(staff_db, report):
+    db = staff_db
+    _call(
+        "room_share", {"room_id": report["id"], "user": db.bob, "assigned": True}, _ctx(db, "alice")
+    )
+
+    result = _call(
+        "room_share",
+        {"room_id": report["id"], "user": db.alice, "assigned": False},
+        _ctx(db, "bob"),
+    )
+
+    assert "reassign it first" in result["error"]
+
+
+@pytest.mark.integration
+def test_room_share_refuses_a_non_boolean_assigned(staff_db, report):
+    result = _call(
+        "room_share",
+        {"room_id": report["id"], "user": staff_db.bob, "assigned": "no"},
+        _ctx(staff_db, "alice"),
+    )
+    assert "assigned" in result["error"]
+
+
 # ─── H2 / H4 / H5: read and list ─────────────────────────────────────────
 
 

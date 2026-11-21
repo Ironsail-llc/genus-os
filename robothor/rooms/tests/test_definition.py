@@ -606,6 +606,93 @@ def test_unshare_removes_a_member_but_never_the_run_as_or_the_last_assigned(staf
         definition.unshare_room(alice, room.id, db.alice)
 
 
+def _assigned(db: Any, room: Any) -> dict[str, bool]:
+    return {m.user_id: m.assigned for m in dal.list_members(db.tenant, room.id)}
+
+
+def test_sharing_a_new_member_without_assigned_adds_them_shared(staff_db):
+    db = staff_db
+    room = _report(db)
+
+    outcome = definition.share_room(_actor(db, "alice"), room.id, db.bob)
+
+    assert outcome.added is True
+    assert (outcome.user_id, outcome.assigned) == (db.bob, False)
+    assert _assigned(db, room)[db.bob] is False
+
+
+def test_re_sharing_the_assigned_run_as_user_keeps_them_assigned(staff_db):
+    db = staff_db
+    room = _report(db)
+
+    outcome = definition.share_room(_actor(db, "alice"), room.id, "alice@example.com")
+
+    assert outcome.added is False
+    assert outcome.assigned is True
+    assert _assigned(db, room) == {db.alice: True}
+
+
+def test_re_sharing_an_assigned_colleague_without_assigned_keeps_their_role(staff_db):
+    db = staff_db
+    room = _report(db)
+    _share(db, room, "bob", assigned=True)
+
+    outcome = definition.share_room(_actor(db, "bob"), room.id, db.bob)
+
+    assert (outcome.added, outcome.assigned) == (False, True)
+    assert _assigned(db, room)[db.bob] is True
+
+
+def test_re_sharing_a_shared_member_changes_nothing_and_adds_no_one(staff_db):
+    db = staff_db
+    room = _report(db)
+    _share(db, room, "bob")
+    outcome = definition.share_room(_actor(db, "alice"), room.id, db.bob)
+    assert (outcome.added, outcome.assigned) == (False, False)
+
+
+def test_sharing_with_assigned_promotes_an_existing_shared_member(staff_db):
+    db = staff_db
+    room = _report(db)
+    _share(db, room, "bob")
+    outcome = definition.share_room(_actor(db, "alice"), room.id, db.bob, assigned=True)
+    assert (outcome.added, outcome.assigned) == (False, True)
+
+
+def test_an_explicit_demotion_of_the_run_as_user_is_refused(staff_db):
+    db = staff_db
+    room = _report(db)
+    _share(db, room, "bob", assigned=True)
+
+    with pytest.raises(ValueError, match="reassign it first"):
+        definition.share_room(_actor(db, "bob"), room.id, db.alice, assigned=False)
+
+    assert _assigned(db, room)[db.alice] is True
+
+
+def test_an_explicit_demotion_that_leaves_no_assigned_member_is_refused(staff_db):
+    db = staff_db
+    room = _report(db)
+    # A room whose run-as user is someone else, so only the last-assigned rule applies.
+    dal.set_run_as(db.tenant, room.id, db.carol)
+
+    with pytest.raises(ValueError, match="last assigned"):
+        definition.share_room(_actor(db, "alice"), room.id, db.alice, assigned=False)
+
+    assert _assigned(db, room)[db.alice] is True
+
+
+def test_an_explicit_demotion_of_an_assigned_colleague_is_allowed(staff_db):
+    db = staff_db
+    room = _report(db)
+    _share(db, room, "bob", assigned=True)
+
+    outcome = definition.share_room(_actor(db, "alice"), room.id, db.bob, assigned=False)
+
+    assert (outcome.added, outcome.assigned) == (False, False)
+    assert _assigned(db, room) == {db.alice: True, db.bob: False}
+
+
 def test_unsharing_someone_who_is_not_a_member_says_so(staff_db):
     db = staff_db
     room = _report(db)

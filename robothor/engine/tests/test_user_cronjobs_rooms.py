@@ -44,6 +44,50 @@ def test_a_plain_cron_job_without_a_time_zone_fires_exactly_as_before():
     assert user_cron.compute_next_run(existing, after) == expected
 
 
+@pytest.fixture
+def host_zone(monkeypatch):
+    """Run the test as if the engine host's zone were ``America/Los_Angeles``."""
+    import time
+
+    import tzlocal
+
+    def use(zone: str | None) -> None:
+        if zone is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", zone)
+        time.tzset()
+        tzlocal.reload_localzone()
+
+    use("America/Los_Angeles")
+    yield
+    monkeypatch.undo()
+    time.tzset()
+    tzlocal.reload_localzone()
+
+
+def test_a_plain_cron_job_keeps_the_host_zone_it_had_before(host_zone):
+    """Pinned against the code before this change: ``cron_trigger(expr)`` with no
+    zone, which APScheduler reads in the host's local zone. A plain user cron
+    still fires at 09:00 host time, not 09:00 UTC."""
+    after = datetime(2026, 11, 21, 12, 0, tzinfo=UTC)
+
+    nxt = user_cron.compute_next_run({"kind": "cron", "expression": "0 9 * * *"}, after)
+
+    assert nxt is not None
+    assert nxt.astimezone(UTC) == datetime(2026, 11, 21, 17, 0, tzinfo=UTC)
+    local = nxt.astimezone(ZoneInfo("America/Los_Angeles"))
+    assert (local.hour, local.minute) == (9, 0)
+
+
+def test_a_room_cron_job_ignores_the_host_zone(host_zone):
+    after = datetime(2026, 11, 21, 12, 0, tzinfo=UTC)
+    nxt = user_cron.compute_next_run(
+        {"kind": "cron", "expression": "0 9 * * *", "tz": "UTC"}, after
+    )
+    assert nxt == datetime(2026, 11, 22, 9, 0, tzinfo=UTC)
+
+
 def test_a_room_schedule_row_always_carries_its_time_zone():
     from robothor.rooms import definition
 
