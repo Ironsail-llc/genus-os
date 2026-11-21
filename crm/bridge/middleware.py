@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -453,13 +454,26 @@ def _bridge_bind_host() -> str:
 _ACCESSIBLE_TENANTS_PATH = "/api/tenants/accessible"
 
 
+#: ``POST /api/rooms/{id}/read`` moves the CALLER's own read marker and nothing
+#: else, so it is a read for scope purposes: a viewer (``bridge:read``) must be
+#: able to clear their own unread count. Exact shape only; the route itself
+#: still checks the caller may read the room.
+_ROOM_READ_MARK = re.compile(r"/api/rooms/[0-9A-Fa-f-]{1,64}/read")
+
+
+def _is_room_read_mark(method: str, path: str) -> bool:
+    return method.upper() == "POST" and _ROOM_READ_MARK.fullmatch(path) is not None
+
+
 def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | None:
     """Return a stable public denial reason for a verified identity."""
     if path.startswith("/api/auth/"):
         return None
 
     required_scope = (
-        "bridge:read" if method.upper() in {"GET", "HEAD", "OPTIONS"} else "bridge:write"
+        "bridge:read"
+        if method.upper() in {"GET", "HEAD", "OPTIONS"} or _is_room_read_mark(method, path)
+        else "bridge:write"
     )
     if not auth.has_scope(required_scope):
         return "insufficient scope"

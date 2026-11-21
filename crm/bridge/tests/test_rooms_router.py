@@ -316,7 +316,9 @@ def test_admin_list_names_the_assigned_users_and_includes_archived(world) -> Non
 
     w = world
     room = _room(w)
-    archived = _room(w, title="Old report", created_by=w.ids.bob)
+    archived = dal.create_room(
+        w.db.tenant, kind="report", title="Old report", agent_id="main", created_by=w.ids.bob
+    )
     dal.archive_room(w.db.tenant, archived.id)
     _room(w, title="Elsewhere")  # still the same company
     dal.create_room(
@@ -789,9 +791,28 @@ def test_share_with_a_colleague_notifies_them_and_puts_it_in_their_rail(world) -
     share = _audits(w, "room.share")[0]
     assert share["actor"] == w.ids.alice
     assert share["details"]["user_id"] == w.ids.carol
-    assert ("room.updated", {"room_id": room.id, "tenant_id": w.db.tenant, "change": "share"}) in [
-        (e, {k: p[k] for k in ("room_id", "tenant_id", "change")}) for e, p in w.events
-    ]
+    assert ("room.updated", {"room_id": room.id, "tenant_id": w.db.tenant}) in w.events
+
+
+def test_room_events_carry_ids_only(world) -> None:
+    """Listeners filter by tenant, then by the rooms the user can see."""
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    task = _task(w)
+    dal.link_task(w.db.tenant, room.id, task)
+    alice = w.client("alice")
+    alice.patch(f"/api/rooms/{room.id}", json={"expected_rev": 1, "changes": {"title": "X"}})
+    alice.put(f"/api/rooms/{room.id}/members/{w.ids.carol}", json={})
+    alice.post(f"/api/rooms/{room.id}/tasks/{task}/accept")
+    alice.post(f"/api/rooms/{room.id}/archive")
+
+    assert len(w.events) == 4
+    for event_type, payload in w.events:
+        assert event_type == "room.updated"
+        assert set(payload) <= {"room_id", "tenant_id", "message_id", "edition_id", "task_id"}
+        assert payload["room_id"] == room.id and payload["tenant_id"] == w.db.tenant
 
 
 def test_share_as_assigned(world) -> None:
@@ -934,6 +955,7 @@ def test_editions_are_camel_case_and_hide_other_users_previews(world) -> None:
         "periodEnd",
         "grain",
         "revision",
+        "publishedSeq",
         "title",
         "summary",
         "blocks",
@@ -942,6 +964,8 @@ def test_editions_are_camel_case_and_hide_other_users_previews(world) -> None:
         "createdAt",
     }
     assert edition["periodStart"] == "2026-11-09"
+    assert edition["publishedSeq"] == 1
+    assert alice[0]["publishedSeq"] is None  # a preview never gets one
     assert edition["blocks"] == BLOCKS
     assert w.client("bob").get(f"/api/rooms/{room.id}/editions/{preview.id}").status_code == 404
     one = w.client("alice").get(f"/api/rooms/{room.id}/editions/{preview.id}")
@@ -1179,14 +1203,14 @@ def test_status_code_matrix(world, persona, method, template, body, needs) -> No
         assert response.status_code == 403, (persona, method, path, response.text)
 
 
-@pytest.mark.parametrize(("method", "template", "body", "needs"), ROUTES)
+@pytest.mark.parametrize(
+    ("method", "template", "body", "needs"), [r for r in ROUTES if r[3] != "read"]
+)
 def test_a_viewer_changes_nothing(world, method, template, body, needs) -> None:
     """D5: every mutation by Vera is 403, and nothing was written or proxied."""
     from robothor.rooms import dal
 
     w = world
-    if method == "GET" or needs == "read":
-        pytest.skip("a read")
     room = _room(w)
     task = _task(w)
     dal.link_task(w.db.tenant, room.id, task)
@@ -1217,7 +1241,7 @@ def test_a_service_token_has_no_room_access(world, monkeypatch) -> None:
     w = world
     room = _room(w)
     monkeypatch.setattr("middleware.check_endpoint_access", lambda *a, **k: True)
-    token = tokens.issue_service_token("worker", w.db.tenant, agent_id="worker")
+    token = tokens.issue_service_token("email-classifier", w.db.tenant, agent_id="email-classifier")
     c = TestClient(app_())
     c.headers.update({"Authorization": f"Bearer {token}"})
 

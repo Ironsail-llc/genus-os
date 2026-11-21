@@ -692,6 +692,16 @@ comes only from the tenant role and the membership row
 assigned members manage theirs, shared members read and work in it, and a
 tenant viewer reads only.
 
+The bridge serves rooms at `/api/rooms` (`crm/bridge/routers/rooms.py`). Each
+handler resolves the caller from the verified token and asks
+`robothor.rooms.access`: no access is 404, access without the action is 403,
+a stale revision is 409 with `currentRev`. Definition changes go through
+`robothor.rooms.definition`; `POST /run` and `POST /periods` check access and
+proxy to the engine's `/api/rooms/{id}/run|periods` with the requester's id.
+Every mutation writes an audit row (`room.create`, `room.share`, …) and a
+`room.updated` event carrying ids only. `POST /api/rooms/{id}/read` needs only
+`bridge:read`, so a viewer can clear their own unread count.
+
 ### Agent Goals — unified persistent objective per agent
 
 The system has **one goal per agent**, persistent across runs, editable at runtime. It absorbs three previously-separate concepts: the operator's session objective, the agent's manifest metric targets, and the typed-evidence completion guard. The same goal task drives prompt injection, the buddy → auto-researcher → auto-agent self-improvement loop, the thread pool / forward planner, and Stage 5 todo escalation.

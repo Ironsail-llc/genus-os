@@ -30,7 +30,7 @@ def _all_routes() -> list:
 
 #: The two gates a rooms handler may open with: a room action, or (for routes
 #: that name no room yet) a human caller of the acting tenant.
-ROOM_GATES = ("_guard(request", "_human(request")
+ROOM_GATES = ("_guard(request", "_guard, request", "_human(request")
 
 
 def _rooms_routes() -> list:
@@ -60,7 +60,7 @@ def test_every_rooms_mutation_is_audited() -> None:
         for r in _rooms_routes()
         if r.methods & MUTATION_METHODS
         and not r.path.endswith("/read")
-        and "_audit(" not in inspect.getsource(r.endpoint)
+        and not any(a in inspect.getsource(r.endpoint) for a in ("_audit(", "_audit, request"))
     ]
     assert not unaudited, unaudited
 
