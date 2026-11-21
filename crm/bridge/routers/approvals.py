@@ -182,8 +182,40 @@ def _action_detail(kind: str, payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, indent=2, default=str)
 
 
+def _addresses(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return [str(v) for v in value] if isinstance(value, list) else []
+
+
+def _room_email(payload: Any) -> dict[str, Any] | None:
+    """A workspace email (``room.email``), field by field, exactly as it would be
+    sent: what the task workspace's approval card shows above Approve."""
+    if not isinstance(payload, dict):
+        return None
+    behalf = payload.get("on_behalf_of")
+    return {
+        "from": str(payload.get("sender") or ""),
+        "replyTo": str(payload.get("reply_to") or ""),
+        "to": _addresses(payload.get("recipient")),
+        "cc": _addresses(payload.get("cc")),
+        "subject": str(payload.get("subject") or ""),
+        "body": str(payload.get("body") or ""),
+        "onBehalfOf": str(behalf.get("display_name") or "") if isinstance(behalf, dict) else "",
+    }
+
+
 def _action_item(row: dict) -> dict:
     """One proposed action as the Inbox lists it."""
+    item = _action_row(row)
+    if row["kind"] == "room.email":
+        email = _room_email(row["payload"])
+        if email is not None:
+            item["email"] = email
+    return item
+
+
+def _action_row(row: dict) -> dict:
     return {
         "kind": "action",
         "id": str(row["id"]),
