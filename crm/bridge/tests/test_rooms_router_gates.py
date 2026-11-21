@@ -92,12 +92,22 @@ def test_rooms_errors_map_to_statuses(error, status) -> None:
     response = rooms.room_error_response(None, exc)
 
     assert response.status_code == status
-    body = json.loads(response.body)
-    assert "error" in body
+    detail = json.loads(response.body)["detail"]
+    assert set(detail) >= {"error", "message", "field"}
+    assert (
+        detail["error"]
+        == {
+            "RoomNotFound": "not_found",
+            "RoomForbidden": "forbidden",
+            "RevisionConflict": "revision_conflict",
+            "RoomBusy": "room_busy",
+            "InvalidBlocks": "invalid_blocks",
+        }[error]
+    )
     if error == "RevisionConflict":
-        assert body["currentRev"] == 4
+        assert detail["currentRev"] == 4
     if error == "RoomBusy":
-        assert body == {"error": "room_busy", "answering": "Alice"}
+        assert detail["answering"] == "Alice"
 
 
 def test_a_request_without_a_verified_human_is_refused(controls_client_as_service, monkeypatch):

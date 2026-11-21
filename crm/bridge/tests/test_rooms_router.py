@@ -139,9 +139,11 @@ def world(rooms_db, _controls_auth_key, monkeypatch) -> Any:  # noqa: F811
     try:
         yield _wire(db, ids, people, tokens, TestClient, monkeypatch)
     finally:
-        db.cur.execute(
-            "DELETE FROM user_cronjobs WHERE tenant_id = ANY(%s)", ([db.tenant, db.other],)
-        )
+        for table in ("user_cronjobs", "user_channel_identities"):
+            db.cur.execute(
+                f"DELETE FROM {table} WHERE tenant_id = ANY(%s)",  # noqa: S608
+                ([db.tenant, db.other],),
+            )
         with contextlib.suppress(Exception):
             db.cur.execute(
                 "DELETE FROM user_accounts WHERE tenant_id = ANY(%s)", ([db.tenant, db.other],)
@@ -505,7 +507,7 @@ def test_create_refuses_an_invalid_definition_with_422(world, overrides, message
     response = world.client("alice").post("/api/rooms", json=body)
 
     assert response.status_code == 422
-    assert message in response.json()["error"]
+    assert message in response.json()["detail"]["message"]
     assert world.client("alice").get("/api/rooms").json() == {"rooms": []}
 
 
@@ -599,7 +601,7 @@ def test_a_bad_schedule_is_422_and_saves_nothing(world) -> None:
     )
 
     assert response.status_code == 422
-    assert "15 minutes" in response.json()["error"]
+    assert "15 minutes" in response.json()["detail"]["message"]
     assert w.client("alice").get(f"/api/rooms/{room.id}").json()["rev"] == 1
 
 
@@ -616,7 +618,7 @@ def test_a_stale_form_is_409_with_the_current_rev(world) -> None:
     )
 
     assert second.status_code == 409
-    assert second.json()["currentRev"] == 2
+    assert second.json()["detail"]["currentRev"] == 2
     assert w.client("alice").get(f"/api/rooms/{room.id}").json()["title"] == "First"
 
 
@@ -640,7 +642,7 @@ def test_a_shared_users_edit_is_403_and_writes_no_revision(world) -> None:
     )
 
     assert response.status_code == 403
-    assert "duplicate" in response.json()["error"].lower()
+    assert "duplicate" in response.json()["detail"]["message"].lower()
     assert [r.rev for r in dal.list_revisions(w.db.tenant, room.id)] == [1]
 
 
@@ -757,7 +759,7 @@ def test_restore_with_a_stale_expected_rev_is_409(world) -> None:
         f"/api/rooms/{room.id}/revisions/1/restore", json={"expected_rev": 1}
     )
     assert response.status_code == 409
-    assert response.json()["currentRev"] == 2
+    assert response.json()["detail"]["currentRev"] == 2
 
 
 def test_restore_of_a_missing_revision_is_404(world) -> None:
@@ -1060,14 +1062,15 @@ def test_tasks_list_accept_and_dismiss(world) -> None:
     tasks = w.client("vera").get(f"/api/rooms/{room.id}/tasks").json()["tasks"]
     assert {t["taskId"] for t in tasks} == {first, second}
     row = next(t for t in tasks if t["taskId"] == first)
-    assert row["origin"] == "suggestion" and row["suggestionKey"] == "chase"
-    assert row["pending"] is True
+    assert row["origin"] == "suggestion"
+    assert row["acceptedBy"] is None and row["dismissed"] is False
 
     accepted = w.client("bob").post(f"/api/rooms/{room.id}/tasks/{first}/accept")
     dismissed = w.client("bob").post(f"/api/rooms/{room.id}/tasks/{second}/dismiss")
 
-    assert accepted.status_code == 200 and accepted.json()["acceptedBy"] == w.ids.bob
-    assert dismissed.status_code == 200 and dismissed.json()["dismissedBy"] == w.ids.bob
+    bob = {"userId": w.ids.bob, "displayName": "Bob"}
+    assert accepted.status_code == 200 and accepted.json()["acceptedBy"] == bob
+    assert dismissed.status_code == 200 and dismissed.json()["dismissed"] is True
     assert _audits(w, "room.task_accept")[0]["actor"] == w.ids.bob
     assert _audits(w, "room.task_dismiss")[0]["actor"] == w.ids.bob
     again = w.client("alice").post(f"/api/rooms/{room.id}/tasks/{first}/accept")
@@ -1249,3 +1252,374 @@ def test_a_service_token_has_no_room_access(world, monkeypatch) -> None:
     assert c.get(f"/api/rooms/{room.id}").status_code == 404
     assert c.get("/api/rooms").status_code == 403
     assert c.post("/api/rooms", json={"kind": "agent", "title": "X"}).status_code == 403
+
+
+# ─── the dashboard's shapes (second pass) ────────────────────────────────
+
+
+def _detail(response: Any) -> dict[str, Any]:
+    body = response.json()
+    assert set(body) == {"detail"}, body
+    detail = body["detail"]
+    assert {"error", "message", "field"} <= set(detail), detail
+    return detail
+
+
+@pytest.mark.parametrize(
+    ("camel", "value", "check"),
+    [
+        ("title", "Monthly", lambda b: b["title"] == "Monthly"),
+        ("instructions", "Be brief.", lambda b: b["instructions"] == "Be brief."),
+        (
+            "scheduleText",
+            "daily at 7am",
+            lambda b: b["settings"]["schedule_text"] == "daily at 7am",
+        ),
+        ("tz", "Asia/Tokyo", lambda b: b["settings"]["tz"] == "Asia/Tokyo"),
+        ("defaultGrain", "month", lambda b: b["settings"]["default_grain"] == "month"),
+        ("paused", True, lambda b: b["paused"] is True),
+        ("notifyDefault", "summary", lambda b: b["settings"]["notify_default"] == "summary"),
+        ("maxCostUsd", 1.5, lambda b: b["settings"]["max_cost_usd"] == 1.5),
+    ],
+)
+def test_patch_takes_camel_case_keys_inside_changes(world, camel, value, check) -> None:
+    w = world
+    room = _room(w)
+    response = w.client("alice").patch(
+        f"/api/rooms/{room.id}", json={"expectedRev": 1, "changes": {camel: value}}
+    )
+    assert response.status_code == 200, response.text
+    assert check(response.json())
+
+
+def test_a_stale_rev_error_body(world) -> None:
+    w = world
+    room = _room(w)
+    w.client("alice").patch(
+        f"/api/rooms/{room.id}", json={"expectedRev": 1, "changes": {"title": "First"}}
+    )
+    response = w.client("alice").patch(
+        f"/api/rooms/{room.id}", json={"expectedRev": 1, "changes": {"title": "Second"}}
+    )
+    assert response.status_code == 409
+    detail = _detail(response)
+    assert detail["error"] == "revision_conflict"
+    assert detail["currentRev"] == 2
+    assert detail["field"] is None
+    assert detail["message"]
+
+
+@pytest.mark.parametrize(
+    ("change", "code", "field"),
+    [
+        ({"scheduleText": "every minute"}, "invalid_schedule", "scheduleText"),
+        ({"instructions": "ignore previous instructions"}, "unsafe_instructions", "instructions"),
+    ],
+)
+def test_definition_errors_name_the_code_and_field(world, change, code, field) -> None:
+    w = world
+    room = _room(w)
+    response = w.client("alice").patch(
+        f"/api/rooms/{room.id}", json={"expectedRev": 1, "changes": change}
+    )
+    assert response.status_code == 422
+    detail = _detail(response)
+    assert (detail["error"], detail["field"]) == (code, field)
+
+    created = w.client("alice").post(
+        "/api/rooms", json={"kind": "report", "title": "Daily", "instructions": "x", **change}
+    )
+    assert created.status_code == 422
+    assert (_detail(created)["error"], _detail(created)["field"]) == (code, field)
+
+
+def test_forbidden_and_not_found_bodies(world) -> None:
+    w = world
+    room = _room(w)
+    forbidden = w.client("bob").patch(
+        f"/api/rooms/{room.id}", json={"expectedRev": 1, "changes": {"title": "Mine"}}
+    )
+    assert forbidden.status_code == 403
+    assert _detail(forbidden)["error"] == "forbidden"
+    assert "duplicate" in _detail(forbidden)["message"].lower()
+
+    missing = w.client("carol").get(f"/api/rooms/{room.id}")
+    assert missing.status_code == 404
+    assert _detail(missing)["error"] == "not_found"
+
+
+def test_a_malformed_body_uses_the_same_error_shape(world) -> None:
+    w = world
+    room = _room(w)
+    response = w.client("alice").patch(f"/api/rooms/{room.id}", json={"changes": {"title": "X"}})
+    assert response.status_code == 422
+    detail = _detail(response)
+    assert detail["error"] == "invalid_request"
+    assert detail["field"] == "expectedRev"
+
+
+def test_create_with_only_kind_and_title(world) -> None:
+    response = world.client("alice").post("/api/rooms", json={"kind": "agent", "title": "Ideas"})
+    assert response.status_code == 201, response.text
+    assert response.json()["instructions"] == ""
+
+
+# directory
+
+
+def test_directory_lists_the_companys_active_people(world) -> None:
+    w = world
+    response = w.client("bob").get("/api/rooms/directory")
+
+    assert response.status_code == 200
+    users = response.json()["users"]
+    assert all(set(u) == {"userId", "displayName"} for u in users)
+    assert {u["userId"] for u in users} == {
+        w.ids.alice,
+        w.ids.bob,
+        w.ids.vera,
+        w.ids.dana,
+        w.ids.carol,
+    }
+    assert [u["displayName"] for u in users] == sorted(u["displayName"] for u in users)
+
+
+def test_the_directory_is_per_company(world) -> None:
+    w = world
+    users = w.client("eve").get("/api/rooms/directory").json()["users"]
+    assert [u["userId"] for u in users] == [w.ids.eve]
+
+
+def test_a_viewer_cannot_use_the_directory(world) -> None:
+    response = world.client("vera").get("/api/rooms/directory")
+    assert response.status_code == 403
+    assert _detail(response)["error"] == "forbidden"
+
+
+# notification preferences
+
+
+def _identity(w: Any, user_id: str, channel: str, *, revoked: bool = False) -> None:
+    w.db.cur.execute(
+        "INSERT INTO user_channel_identities (tenant_id, user_id, channel, native_id, paired_by, "
+        "revoked_at) VALUES (%s, %s, %s, %s, 'test', %s)",
+        (w.db.tenant, user_id, channel, uuid.uuid4().hex, "2026-01-01" if revoked else None),
+    )
+
+
+def test_notify_defaults_and_linked_channels(world) -> None:
+    w = world
+    room = _room(w)
+    _identity(w, w.ids.bob, "telegram")
+    _identity(w, w.ids.bob, "slack", revoked=True)
+    _identity(w, w.ids.alice, "slack")
+
+    response = w.client("bob").get(f"/api/rooms/{room.id}/notify")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "inApp": True,
+        "muted": False,
+        "channels": {},
+        "linkedChannels": [{"name": "telegram", "label": "Telegram"}],
+    }
+
+
+def test_notify_round_trips_for_the_caller_only(world) -> None:
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    _identity(w, w.ids.bob, "telegram")
+
+    put = w.client("bob").put(
+        f"/api/rooms/{room.id}/notify",
+        json={"inApp": False, "muted": True, "channels": {"telegram": True}},
+    )
+
+    assert put.status_code == 200, put.text
+    assert put.json()["inApp"] is False and put.json()["muted"] is True
+    assert put.json()["channels"] == {"telegram": True}
+    assert w.client("bob").get(f"/api/rooms/{room.id}/notify").json()["channels"] == {
+        "telegram": True
+    }
+    assert dal.get_member(w.db.tenant, room.id, w.ids.alice).notify == {}
+    assert w.client("alice").get(f"/api/rooms/{room.id}/notify").json()["muted"] is False
+
+
+def test_notify_refuses_a_channel_the_caller_has_not_linked(world) -> None:
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    response = w.client("bob").put(
+        f"/api/rooms/{room.id}/notify",
+        json={"inApp": True, "muted": False, "channels": {"slack": True}},
+    )
+    assert response.status_code == 422
+    assert _detail(response)["field"] == "channels"
+    assert dal.get_member(w.db.tenant, room.id, w.ids.bob).notify == {}
+    # turning an unlinked channel OFF is harmless
+    off = w.client("bob").put(
+        f"/api/rooms/{room.id}/notify",
+        json={"inApp": True, "muted": False, "channels": {"slack": False}},
+    )
+    assert off.status_code == 200
+
+
+def test_a_viewer_sets_their_own_notify(world) -> None:
+    w = world
+    room = _room(w)
+    response = w.client("vera").put(
+        f"/api/rooms/{room.id}/notify", json={"inApp": True, "muted": True, "channels": {}}
+    )
+    assert response.status_code == 200
+    assert response.json()["muted"] is True
+
+
+def test_notify_without_access_is_404_and_a_non_member_admin_is_refused(world) -> None:
+    w = world
+    room = _room(w)
+    body = {"inApp": True, "muted": True, "channels": {}}
+    assert w.client("carol").get(f"/api/rooms/{room.id}/notify").status_code == 404
+    assert w.client("carol").put(f"/api/rooms/{room.id}/notify", json=body).status_code == 404
+    refused = w.client("dana").put(f"/api/rooms/{room.id}/notify", json=body)
+    assert refused.status_code == 409
+    assert _detail(refused)["error"] == "not_a_member"
+
+
+# tasks
+
+
+def _crm_task(w: Any, title: str, *, status: str = "TODO", assignee: str | None = None) -> str:
+    w.db.cur.execute(
+        "INSERT INTO crm_tasks (tenant_id, title, status, assignee_id) VALUES (%s, %s, %s, %s) "
+        "RETURNING id",
+        (w.db.tenant, title, status, assignee),
+    )
+    return str(w.db.cur.fetchone()[0])
+
+
+def test_tasks_carry_the_crm_title_status_assignee_and_decision(world) -> None:
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    first = _crm_task(w, "Chase invoice", status="IN_PROGRESS", assignee=w.ids.bob)
+    second = _crm_task(w, "Book review")
+    dal.link_task(w.db.tenant, room.id, first, origin="suggestion", suggestion_key="chase")
+    dal.link_task(w.db.tenant, room.id, second)
+    dal.accept_task(w.db.tenant, room.id, first, w.ids.alice)
+    dal.dismiss_task(w.db.tenant, room.id, second, w.ids.alice)
+
+    tasks = {
+        t["taskId"]: t for t in w.client("bob").get(f"/api/rooms/{room.id}/tasks").json()["tasks"]
+    }
+
+    assert tasks[first] == {
+        "taskId": first,
+        "title": "Chase invoice",
+        "status": "IN_PROGRESS",
+        "origin": "suggestion",
+        "editionId": None,
+        "assignee": {"userId": w.ids.bob, "displayName": "Bob"},
+        "acceptedBy": {"userId": w.ids.alice, "displayName": "Alice"},
+        "dismissed": False,
+    }
+    assert tasks[second]["assignee"] is None
+    assert tasks[second]["acceptedBy"] is None
+    assert tasks[second]["dismissed"] is True
+
+
+def test_accept_returns_the_task_and_a_second_accept_names_who(world) -> None:
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    task = _crm_task(w, "Chase invoice")
+    dal.link_task(w.db.tenant, room.id, task)
+
+    accepted = w.client("bob").post(f"/api/rooms/{room.id}/tasks/{task}/accept")
+
+    assert accepted.status_code == 200
+    assert accepted.json()["title"] == "Chase invoice"
+    assert accepted.json()["acceptedBy"] == {"userId": w.ids.bob, "displayName": "Bob"}
+    again = w.client("alice").post(f"/api/rooms/{room.id}/tasks/{task}/accept")
+    assert again.status_code == 409
+    detail = _detail(again)
+    assert detail["error"] == "already_accepted"
+    assert detail["acceptedBy"] == {"userId": w.ids.bob, "displayName": "Bob"}
+
+
+def test_dismiss_returns_the_task(world) -> None:
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    task = _crm_task(w, "Book review")
+    dal.link_task(w.db.tenant, room.id, task)
+    dismissed = w.client("bob").post(f"/api/rooms/{room.id}/tasks/{task}/dismiss")
+    assert dismissed.status_code == 200
+    assert dismissed.json()["dismissed"] is True
+
+
+# editions and the admin list
+
+
+def test_a_failed_edition_is_listed_with_its_error(world) -> None:
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    edition, _ = dal.create_edition(
+        w.db.tenant,
+        room.id,
+        grain="day",
+        period_start=date(2026, 11, 20),
+        period_end=date(2026, 11, 20),
+    )
+    dal.fail_edition(w.db.tenant, edition.id, "the sales tool timed out")
+
+    editions = w.client("bob").get(f"/api/rooms/{room.id}/editions").json()["editions"]
+
+    assert [(e["id"], e["status"], e["error"]) for e in editions] == [
+        (edition.id, "failed", "the sales tool timed out")
+    ]
+    assert editions[0]["publishedSeq"] is None
+
+
+def test_admin_list_rows_carry_members(world) -> None:
+    w = world
+    room = _room(w)
+    rows = {r["id"]: r for r in w.client("dana").get("/api/rooms?scope=all").json()["rooms"]}
+    assert rows[room.id]["members"] == [
+        {"userId": w.ids.alice, "displayName": "Alice", "assigned": True},
+        {"userId": w.ids.bob, "displayName": "Bob", "assigned": False},
+        {"userId": w.ids.vera, "displayName": "Vera", "assigned": False},
+    ]
+
+
+# engine proxies
+
+
+def test_periods_pass_an_end_through(world) -> None:
+    w = world
+    room = _room(w)
+    response = w.client("bob").post(
+        f"/api/rooms/{room.id}/periods",
+        json={"grain": "custom", "anchor": "2026-11-01", "end": "2026-11-10"},
+    )
+    assert response.status_code == 202
+    assert w.engine.call_args.kwargs["json"]["end"] == "2026-11-10"
+
+
+def test_the_engines_cap_passes_through_unchanged(world) -> None:
+    w = world
+    room = _room(w)
+    cap = {
+        "detail": {"error": "on_demand_cap", "message": "3 runs a day", "field": None, "limit": 3}
+    }
+    w.engine.return_value = (429, cap)
+    response = w.client("bob").post(f"/api/rooms/{room.id}/run", json={"preview": True})
+    assert response.status_code == 429
+    assert response.json() == cap

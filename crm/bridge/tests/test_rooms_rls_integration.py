@@ -95,3 +95,15 @@ def test_another_companys_admin_gets_nothing_under_rls(seeded, app_role) -> None
     assert eve.post(f"/api/rooms/{seeded['room']}/archive").status_code == 404
     share = eve.put(f"/api/rooms/{seeded['room']}/members/{seeded['eve']}", json={})
     assert share.status_code == 404
+
+
+def test_the_directory_is_per_company_under_rls(seeded, app_role) -> None:  # noqa: F811
+    alice = _client(seeded["alice"], seeded["first"], "member")
+    eve = _client(seeded["eve"], seeded["second"], "admin")
+
+    assert alice.get("/api/rooms/directory").json() == {
+        "users": [{"userId": seeded["alice"], "displayName": "Alice"}]
+    }
+    assert eve.get("/api/rooms/directory").json() == {
+        "users": [{"userId": seeded["eve"], "displayName": "Eve"}]
+    }
