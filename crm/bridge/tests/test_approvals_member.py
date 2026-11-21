@@ -365,3 +365,33 @@ def test_the_member_path_runs_inside_the_acting_tenants_scope(_controls_auth_key
         client.post(f"/api/approvals/action/{ACTION_ID}", json={"approved": True})
 
     assert scopes == [("list", CHILD), ("decide", CHILD)]
+
+
+def test_a_workspace_email_card_names_its_sender_recipients_and_body(
+    _controls_auth_key, stores, member_rule
+):
+    payload = {
+        "version": 1,
+        "sender": "assistant@example.com",
+        "reply_to": "bob@example.com",
+        "recipient": ["carol.client@example.org", "dave.client@example.org"],
+        "cc": ["erin.client@example.org"],
+        "subject": "Renewal follow-up",
+        "body": "Hello,\nShall we renew?",
+        "on_behalf_of": {"user_id": BOB, "display_name": "Bob"},
+        "room_id": ROOM_ID,
+        "task_id": TASK_ID,
+    }
+    member_rule["state"]["rows"] = [{**_member_row(), "kind": "room.email", "payload": payload}]
+
+    [item] = _client("member", BOB).get("/api/approvals").json()["pending"]
+
+    assert item["action_kind"] == "room.email"
+    assert item["envelope"] == {
+        "sender": "assistant@example.com",
+        "recipient": "carol.client@example.org, dave.client@example.org",
+        "subject": "Renewal follow-up",
+    }
+    assert item["detail"].startswith("Hello,\nShall we renew?")
+    for shown in ("erin.client@example.org", "bob@example.com", "reply_to"):
+        assert shown in item["detail"]

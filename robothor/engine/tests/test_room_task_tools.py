@@ -20,7 +20,7 @@ from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers import room_tasks as task_tools
 from robothor.rooms.models import Room
 
-TASK_TOOLS = {"room_task_accept", "room_task_dismiss", "room_open_task"}
+TASK_TOOLS = {"room_task_accept", "room_task_dismiss", "room_open_task", "room_propose_email"}
 USER = str(uuid.uuid4())
 ROOM_ID = str(uuid.uuid4())
 TASK_ID = str(uuid.uuid4())
@@ -296,3 +296,109 @@ def test_the_run_checked_is_the_tools_own(top_level_run, monkeypatch):
     _call("room_open_task", {"task_id": TASK_ID}, _ctx(run_id="run-7"))
 
     assert top_level_run == [("test-tenant", "run-7")]
+
+
+# ─── room_propose_email ──────────────────────────────────────────────────
+
+EMAIL = {
+    "room_id": ROOM_ID,
+    "to": ["carol.client@example.org"],
+    "cc": [],
+    "subject": "Renewal",
+    "body": "Hello",
+}
+
+
+def test_the_email_tool_says_nothing_is_sent_until_the_person_approves():
+    from robothor.engine.tools.schemas import get_engine_schemas
+
+    fn = get_engine_schemas()["room_propose_email"]["function"]
+    text = fn["description"].lower()
+    assert "nothing is sent" in text and "approve" in text and "show" in text
+    assert fn["parameters"]["required"] == ["room_id", "to", "subject", "body"]
+    assert "attachments" not in fn["parameters"]["properties"]
+
+
+def test_the_email_tool_proposes_for_the_person_in_their_own_run(monkeypatch):
+    from robothor.rooms import outbound
+
+    seen: list[Any] = []
+
+    def propose(actor, room_id, run_id, **kw):
+        seen.append((actor.user_id, room_id, run_id, kw))
+        return outbound.ProposedEmail(
+            action_id="a-1", payload={"sender": "assistant@example.com"}, expires_at=None
+        )
+
+    monkeypatch.setattr(outbound, "propose_email", propose)
+
+    result = _call("room_propose_email", EMAIL, _ctx(run_id="run-9"))
+
+    [(user, room_id, run_id, kw)] = seen
+    assert (user, room_id, run_id) == (USER, ROOM_ID, "run-9")
+    assert kw == {"to": ["carol.client@example.org"], "cc": [], "subject": "Renewal",
+                  "body": "Hello", "attachments": None}  # fmt: skip
+    assert result["proposed"] is True and result["action_id"] == "a-1"
+    assert result["sent"] is False
+    assert "approve" in result["note"].lower()
+    assert result["link"] == f"/?v=chat&room={ROOM_ID}"
+
+
+@pytest.mark.parametrize("error", ["refused", "not_permitted"])
+def test_a_refused_email_says_why_and_proposes_nothing(monkeypatch, error):
+    from robothor.operations.store import NotPermitted
+    from robothor.rooms import outbound
+
+    def propose(*a, **kw):
+        if error == "refused":
+            raise outbound.EmailRefused("carol.client@example.org has opted out")
+        raise NotPermitted("not your task")
+
+    monkeypatch.setattr(outbound, "propose_email", propose)
+
+    result = _call("room_propose_email", EMAIL)
+
+    assert "error" in result and result.get("proposed") is not True
+
+
+def test_the_email_tool_refuses_a_sub_agent_run(monkeypatch):
+    from robothor.rooms import outbound, tasks
+
+    called: list[str] = []
+    monkeypatch.setattr(tasks, "run_is_top_level", lambda tenant_id, run_id: False)
+    monkeypatch.setattr(outbound, "propose_email", lambda *a, **k: called.append("x"))
+
+    assert "error" in _call("room_propose_email", EMAIL)
+    assert called == []
+
+
+def test_the_email_tool_refuses_a_run_with_no_person(monkeypatch):
+    from robothor.rooms import outbound
+
+    called: list[str] = []
+    monkeypatch.setattr(outbound, "propose_email", lambda *a, **k: called.append("x"))
+
+    result = _call("room_propose_email", EMAIL, _ctx(user_id="service:main", user_role="service"))
+
+    assert "error" in result and called == []
+
+
+@pytest.mark.asyncio
+async def test_the_email_tool_runs_off_the_loop(monkeypatch):
+    from robothor.engine.tests.test_offloop_sync_calls import SlowProbe, warm_executor
+    from robothor.rooms import outbound
+
+    await warm_executor()
+    probe = SlowProbe(asyncio.get_running_loop())
+
+    def slow(*a: Any, **k: Any) -> Any:
+        probe(*a, **k)
+        raise outbound.EmailRefused("probe")
+
+    monkeypatch.setattr(outbound, "propose_email", slow)
+
+    result = await task_tools.HANDLERS["room_propose_email"](EMAIL, _ctx())
+
+    assert "error" in result
+    await probe.settle()
+    probe.assert_loop_free()
