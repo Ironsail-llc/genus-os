@@ -396,7 +396,8 @@ class RestoreBody(_Body):
 
 
 class MemberBody(_Body):
-    assigned: bool = False
+    #: None keeps an existing member's role (a new member joins shared).
+    assigned: bool | None = None
 
 
 class ReassignBody(_Body):
@@ -491,8 +492,9 @@ def api_create_room(request: Request, body: CreateRoomBody) -> Any:
 
 @router.post("/from-task/{task_id}")
 def api_open_task(task_id: str, request: Request) -> Any:
-    """A CRM task's workspace, made on first use. A colleague who opens the same
-    task joins its workspace as shared: the task is already theirs to see."""
+    """A CRM task's workspace, made on first use (the opener assigned). Once it
+    exists, the task's assignee may join it as shared; anyone else needs to be
+    shared into it, so a member who was removed cannot rejoin through here."""
     actor = _human(request, _WORKING_ROLES)
     from robothor.engine.manifest_store import main_agent_id
 
@@ -503,6 +505,11 @@ def api_open_task(task_id: str, request: Request) -> Any:
         raise RoomNotFound(task_id)
     joined = False
     if not _is_admin(actor) and dal.get_member(actor.tenant_id, room.id, actor.user_id) is None:
+        # Only the task's assignee joins an existing task workspace this way;
+        # anyone else is shared into it (and a removed member stays removed).
+        task = dal.task_details(actor.tenant_id, [room.task_id or ""]).get(room.task_id or "", {})
+        if task.get("assignee_id") != actor.user_id:
+            raise RoomNotFound(room.id)
         dal.add_member(actor.tenant_id, room.id, actor.user_id, added_by=actor.user_id)
         joined = True
     _audit(request, "room.open_task", room.id, task_id=room.task_id, joined=joined)
@@ -673,12 +680,21 @@ def api_share(
         account = _eligible(actor, user_id, _HUMAN_ROLES)
     except ValueError as exc:
         return _invalid(exc)
-    assigned = bool(body and body.assigned)
+    wanted = body.assigned if body else None
     existing = dal.get_member(actor.tenant_id, room.id, account["id"])
-    member = dal.add_member(
-        actor.tenant_id, room.id, account["id"], added_by=actor.user_id, assigned=assigned
-    )
-    _audit(request, "room.share", room.id, user_id=member.user_id, assigned=assigned)
+    if existing is not None and wanted is False and existing.assigned:
+        refusal = _keeps_a_manager(actor, room, existing.user_id)
+        if refusal is not None:
+            return refusal
+    if existing is None:
+        member = dal.add_member(
+            actor.tenant_id, room.id, account["id"], added_by=actor.user_id, assigned=bool(wanted)
+        )
+    elif wanted is None or wanted == existing.assigned:
+        member = existing
+    else:
+        member = dal.set_assigned(actor.tenant_id, room.id, existing.user_id, wanted) or existing
+    _audit(request, "room.share", room.id, user_id=member.user_id, assigned=member.assigned)
     _announce(actor, room.id)
     if existing is None:
         sharer = dal.get_accounts(actor.tenant_id, [actor.user_id])
@@ -693,9 +709,37 @@ def api_share(
     return _member_json(member, {account["id"]: account})
 
 
+def _keeps_a_manager(actor: access.Actor, room: Room, user_id: str) -> JSONResponse | None:
+    """Refuse taking ``user_id`` out of the assigned set when the workspace would
+    run as someone without access, or have nobody left to manage it."""
+    if user_id == room.run_as_user_id:
+        return _problem(
+            422,
+            "run_as_user",
+            "the workspace runs as this person; reassign it to someone else first",
+            field="userId",
+        )
+    others = [
+        m for m in dal.list_members(actor.tenant_id, room.id) if m.assigned and m.user_id != user_id
+    ]
+    if not others:
+        return _problem(
+            422,
+            "last_assigned",
+            "this is the workspace's only assigned member; assign someone else first",
+            field="userId",
+        )
+    return None
+
+
 @router.delete("/{room_id}/members/{user_id}")
 def api_unshare(room_id: str, user_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "share")
+    member = dal.get_member(actor.tenant_id, room.id, user_id)
+    if member is not None and (member.assigned or member.user_id == room.run_as_user_id):
+        refusal = _keeps_a_manager(actor, room, member.user_id)
+        if refusal is not None:
+            return refusal
     if not dal.remove_member(actor.tenant_id, room.id, user_id):
         return _problem(404, "not_found", "not a member of this workspace", field="userId")
     removed = canonical_uuid(user_id)

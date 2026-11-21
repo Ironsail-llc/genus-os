@@ -261,9 +261,12 @@ No access → 404. Access without the action → 403. JSON is camelCase, as the 
   definition}[]}`; `POST /revisions/{rev}/restore` takes no body (an optional
   `{expected_rev}` is honoured), 404 for a missing revision.
 - `GET /members` → `{members}`; `PUT /members/{user_id}` body `{assigned?}` → the
-  member; the account must be active and in the caller's company; a new member gets an
-  `info` notification addressed to their user id with metadata `{kind:
-  "room_shared", room_id, link}`. `DELETE` → `{removed}`, 404 for a non-member.
+  member; the account must be active and in the caller's company. A new member joins
+  shared unless `assigned: true`; for an existing member an omitted `assigned` keeps
+  their role. A new member gets an `info` notification addressed to their user id with
+  metadata `{kind: "room_shared", room_id, link}`. `DELETE` → `{removed}`, 404 for a
+  non-member. Neither may take the run-as user out of the assigned set (422
+  `run_as_user`: reassign first) or leave no assigned member (422 `last_assigned`).
 - `POST /reassign` body `{userId}` (admin): the user (active, not a viewer) becomes
   the only assigned member and run-as, the room's cron rows included; previously
   assigned members stay as shared (`dal.reassign_room`).
@@ -276,7 +279,9 @@ No access → 404. Access without the action → 403. JSON is camelCase, as the 
   task's `assignee_id` (else `assigned_to_agent` when it is a person's account id)
   when it names an account of the company, else null. Accept and dismiss return the
   task in that shape. `POST /from-task/{task_id}` → `Room` (200), made on first use
-  under the main agent.
+  under the main agent with the opener assigned. Once it exists, only the task's
+  assignee joins it this way (as shared); anyone else gets 404 until shared in, so a
+  removed member cannot rejoin.
 - Every mutation writes an audit row with the caller as actor (`room.create`,
   `room.update`, `room.share`, `room.unshare`, `room.restore`, `room.reassign`,
   `room.archive`, `room.unarchive`, `room.duplicate`, `room.task_accept`,
