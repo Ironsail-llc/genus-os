@@ -41,6 +41,16 @@ function emptyStream() {
   return new ReadableStream({ start: (c) => c.close() });
 }
 
+/** A room turn's stream as an engine that honours `room_id` starts it: a `room` event naming the room. */
+function roomStream(roomId = ROOM) {
+  return new ReadableStream({
+    start(c) {
+      c.enqueue(new TextEncoder().encode(`event: room\ndata: ${JSON.stringify({ roomId })}\n\nevent: done\ndata: {"text":"ok"}\n\n`));
+      c.close();
+    },
+  });
+}
+
 function post(body: unknown) {
   return new Request("http://helm.test/x", {
     method: "POST",
@@ -63,12 +73,17 @@ async function routes() {
 describe("the chat routes in a room", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    engine.chatSend.mockResolvedValue({ body: emptyStream() });
-    engine.chatAbort.mockResolvedValue({ ok: true, durable_stopped: true });
-    engine.chatOutcome.mockResolvedValue({ terminal: true, text: "done" });
-    engine.chatHistory.mockResolvedValue({ messages: [], sessionKey: "" });
-    chatSteer.mockResolvedValue({ ok: true, found: true });
-    chatInterrupt.mockResolvedValue({ ok: true, found: true });
+    // An engine that honours `room_id` echoes it back on every room answer.
+    engine.chatSend.mockImplementation(async (...args: unknown[]) => ({ body: args[5] ? roomStream() : emptyStream() }));
+    engine.chatAbort.mockImplementation(async (...args: unknown[]) => ({ ok: true, durable_stopped: true, ...(args[2] ? { roomId: ROOM } : {}) }));
+    engine.chatOutcome.mockImplementation(async (...args: unknown[]) => ({ terminal: true, text: "done", ...(args[2] ? { roomId: ROOM } : {}) }));
+    engine.chatHistory.mockImplementation(async (...args: unknown[]) => ({
+      messages: [],
+      sessionKey: "agent:main:room:x",
+      ...(args[3] ? { roomId: ROOM } : {}),
+    }));
+    chatSteer.mockImplementation(async (...args: unknown[]) => ({ ok: true, found: true, ...(args[3] ? { roomId: ROOM } : {}) }));
+    chatInterrupt.mockImplementation(async (...args: unknown[]) => ({ ok: true, found: true, ...(args[2] ? { roomId: ROOM } : {}) }));
     resolveChatAgent.mockImplementation(async (agent: unknown) =>
       agent ? { ok: true, key: `agent:${String(agent)}:primary` } : { ok: true, key: "" },
     );
@@ -131,9 +146,11 @@ describe("the chat routes in a room", () => {
     expect((await res.json()).request_admitted).toBe(false);
   });
 
-  it("reads a room's history, paging included", async () => {
+  it("reads a room's history, paging included, and never hands the browser a session key", async () => {
     const { history } = await routes();
-    await history(new Request(`http://helm.test/x?room=${ROOM}&limit=20`));
+    const res = await history(new Request(`http://helm.test/x?room=${ROOM}&limit=20`));
+    expect(res.status).toBe(200);
+    expect(await res.json()).not.toHaveProperty("sessionKey");
     expect(engine.chatHistory).toHaveBeenLastCalledWith(20, "", {}, ROOM);
     await history(new Request(`http://helm.test/x?room=${ROOM}&before=40`));
     expect(engine.chatHistory).toHaveBeenLastCalledWith(50, "", { before: 40 }, ROOM);

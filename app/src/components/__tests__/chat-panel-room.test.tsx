@@ -138,6 +138,71 @@ describe("ChatPanel in a room", () => {
     expect(screen.queryByTestId("room-busy-notice")).toBeNull();
   });
 
+  it("keeps typing order behind a busy room: a new message waits behind the queued one", async () => {
+    history = [];
+    sendReplies.push(() => reply({ error: "room_busy", answering: "Alice", request_admitted: false }, 409));
+    const { rerender } = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    await screen.findByTestId("room-chat-empty");
+    await type("first");
+    await screen.findByTestId("room-busy-notice");
+    await type("second");
+    // Not sent ahead of the one already waiting.
+    expect(sends.map((s) => s.message)).toEqual(["first"]);
+    expect(screen.getAllByTestId("message-note").map((n) => n.textContent)).toEqual([
+      "Queued — answering Alice…",
+      "Queued — answering Alice…",
+    ]);
+
+    await act(async () => rerender(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 1 }} />));
+    // One message per turn, in the order they were typed.
+    await waitFor(() => expect(sends.map((s) => s.message)).toEqual(["first", "first", "second"]));
+    await waitFor(() => expect(screen.getAllByText("Noted.")).toHaveLength(2));
+    expect(screen.queryByTestId("room-busy-notice")).toBeNull();
+
+    // Each queued message is its own stored row, so catching up shows no duplicate.
+    history = [
+      { id: 30, role: "user", content: "first", authorName: "Alice" },
+      { id: 31, role: "assistant", content: "Noted.", authorName: "Analyst" },
+      { id: 32, role: "user", content: "second", authorName: "Alice" },
+      { id: 33, role: "assistant", content: "Noted.", authorName: "Analyst" },
+    ];
+    await act(async () => rerender(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 2 }} />));
+    await waitFor(() => expect(screen.getAllByTestId("message-author")[0]).toHaveTextContent("Alice"));
+    expect(screen.getAllByText("first")).toHaveLength(1);
+    expect(screen.getAllByText("second")).toHaveLength(1);
+    expect(screen.getAllByText("Noted.")).toHaveLength(2);
+  });
+
+  it("keeps a queued message when the workspace is left, and sends it on return", async () => {
+    history = [];
+    sendReplies.push(() => reply({ error: "room_busy", answering: "Alice", request_admitted: false }, 409));
+    const first = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    await screen.findByTestId("room-chat-empty");
+    await type("hold this");
+    await screen.findByTestId("room-busy-notice");
+    first.unmount();
+
+    const { rerender } = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    expect(await screen.findByText("hold this")).toBeInTheDocument();
+    expect(screen.getByTestId("message-note")).toHaveTextContent(/Queued/);
+    expect(screen.getByTestId("room-busy-notice")).toBeInTheDocument();
+    await act(async () => rerender(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 1 }} />));
+    await screen.findByText("Noted.");
+    expect(sends.map((s) => s.message)).toEqual(["hold this", "hold this"]);
+    expect(screen.getAllByText("hold this")).toHaveLength(1);
+  });
+
+  it("says the conversation could not be loaded when the room's history is refused", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) =>
+      String(input).startsWith("/api/chat/history")
+        ? reply({ error: "the engine did not confirm the workspace", messages: [] }, 502)
+        : reply({}),
+    );
+    render(<ChatPanel variant="page" room={{ id: REPORT_ID }} />);
+    expect(await screen.findByTestId("room-chat-unavailable")).toBeInTheDocument();
+    expect(screen.queryByTestId("room-chat-empty")).toBeNull();
+  });
+
   it("gives a viewer a disabled composer and says why", async () => {
     render(<ChatPanel variant="page" room={{ id: REPORT_ID, readOnly: true }} />);
     await screen.findByText("How did we do?");

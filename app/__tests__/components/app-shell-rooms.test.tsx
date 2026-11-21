@@ -139,6 +139,17 @@ describe("workspaces in the shell", () => {
     expect(screen.getByTestId("chat-panel")).toHaveAttribute("data-variant", "dock");
   });
 
+  it("shows no rail at all while nothing serves the rooms list", async () => {
+    fetchMock.mockImplementation(async () => reply({ error: "Not found" }, 404));
+    window.history.replaceState(null, "", "/?v=chat");
+    render(<AppShell />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/bridge/api/rooms", expect.anything()));
+    await act(async () => {});
+    expect(screen.queryByTestId("room-rail")).toBeNull();
+    expect(screen.queryByText(/Workspaces unavailable/)).toBeNull();
+    expect(screen.getByTestId("chat-panel")).toBeVisible();
+  });
+
   it("collapses the rail to a button on a phone", async () => {
     mockScreenSize.mockReturnValue("mobile");
     window.history.replaceState(null, "", "/?v=chat");

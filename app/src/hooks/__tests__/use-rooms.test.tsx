@@ -12,11 +12,12 @@ import type { StreamEvent } from "@/lib/event-bus/use-event-stream";
 import { AGENT_ID, REPORT_ID, SUMMARIES, reply } from "@/lib/rooms/__tests__/fixtures";
 
 let streamEvents: StreamEvent[] = [];
+let streamSynced = true;
 const streamOptions: Array<Record<string, unknown>> = [];
 vi.mock("@/lib/event-bus/use-event-stream", () => ({
   useEventStream: (options: Record<string, unknown>) => {
     streamOptions.push(options);
-    return { events: streamEvents, connected: true, synced: true };
+    return { events: streamEvents, connected: true, synced: streamSynced };
   },
 }));
 
@@ -46,6 +47,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   streamEvents = [];
+  streamSynced = true;
   streamOptions.length = 0;
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -99,6 +101,30 @@ describe("useRooms", () => {
     expect(listCalls()).toBe(2);
   });
 
+  it("hides the feature when the rooms list is not served (404), and stops asking", async () => {
+    fetchMock.mockImplementation(async () => reply({ error: "Not found" }, 404));
+    const Wrapper = wrapper();
+    const { result, rerender } = renderHook(() => useRooms({ live: true }), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current.available).toBe(false));
+    expect(result.current.error).toBeNull();
+    expect(listCalls()).toBe(1);
+    // No live subscription for a feature that is not there, and no re-reads.
+    expect(streamOptions.at(-1)).toMatchObject({ enabled: false });
+    streamEvents = [roomEvent("5-0", "room.message", REPORT_ID)];
+    rerender();
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(listCalls()).toBe(1);
+  });
+
+  it("is available, with a visible error, for any other refusal", async () => {
+    fetchMock.mockImplementation(async () => reply({ error: "down" }, 502));
+    const { result } = renderHook(() => useRooms(), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.error).toEqual({ endpoint: "/api/bridge/api/rooms", status: 502 }));
+    expect(result.current.available).toBe(true);
+  });
+
   it("does not subscribe to the stream unless asked to be live", () => {
     renderHook(() => useRooms(), { wrapper: wrapper() });
     expect(streamOptions.at(-1)).toMatchObject({ enabled: false });
@@ -121,6 +147,21 @@ describe("useRoomEvents", () => {
     useRoomEvents(roomId, (event) => seen.push(`${event.type}:${event.id}`));
     return <span data-testid="probe" />;
   }
+
+  it("hands over nothing the connection replayed before it synced", () => {
+    const seen: string[] = [];
+    streamSynced = false;
+    const { rerender } = render(<Probe roomId={REPORT_ID} seen={seen} />);
+    // The replay arrives first, then the sync marker.
+    streamEvents = [roomEvent("2-0", "room.message", REPORT_ID), roomEvent("1-0", "room.edition", REPORT_ID)];
+    rerender(<Probe roomId={REPORT_ID} seen={seen} />);
+    streamSynced = true;
+    rerender(<Probe roomId={REPORT_ID} seen={seen} />);
+    expect(seen).toEqual([]);
+    streamEvents = [roomEvent("3-0", "room.message", REPORT_ID), ...streamEvents];
+    rerender(<Probe roomId={REPORT_ID} seen={seen} />);
+    expect(seen).toEqual(["room.message:3-0"]);
+  });
 
   it("hands over only the open room's room.* events, each once", () => {
     const seen: string[] = [];
