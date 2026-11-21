@@ -430,7 +430,6 @@ test("16. a workspace Bob muted leaves no note in his main conversation (C7)", a
 });
 
 test("17. with in-app off, Bob gets no note in his main conversation (C7)", async () => {
-  expectedToFailUntil("the runs lane: fan-out reads the stored in-app choice (in progress)");
   const bob = await api("bob");
   expect((await bob.put(`/api/rooms/${roomId}/notify`, { inApp: false, muted: false, channels: {} })).status).toBe(200);
   const before = await notesFor(bobPage, roomId);
