@@ -56,6 +56,20 @@ _NO_PERSON = {
 }
 
 
+def _bound_room_id(tenant_id: str) -> str | None:
+    """The room this run belongs to, from the run-context carrier.
+
+    None when the run is bound to no room, or to a room of another tenant: a
+    run with no person behind it then reads nothing. Never taken from arguments.
+    """
+    from robothor.rooms.run_context import current_room_run
+
+    run = current_room_run()
+    if run is None or getattr(run, "tenant_id", None) != tenant_id:
+        return None
+    return canonical_uuid(getattr(run, "room_id", None))
+
+
 def _actor(ctx: ToolContext) -> Actor | None:
     """The human caller, or None when the run has no verified person behind it.
 
@@ -222,14 +236,30 @@ async def _room_update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
 
 async def _room_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     actor = _actor(ctx)
-    if actor is None:
-        return dict(_NO_PERSON)
     scope = str(args.get("scope") or "mine")
+    if actor is None:
+        return await _bound_room_list(ctx, scope)
     try:
         rooms = await _call(definition.list_rooms, actor, scope=scope)
     except (RoomForbidden, ValueError) as exc:
         return {"error": str(exc)}
     return {"scope": scope, "rooms": [_summary(r) for r in rooms]}
+
+
+async def _bound_room_list(ctx: ToolContext, scope: str) -> dict[str, Any]:
+    """``room_list`` for a run with no person: only the room the run is bound
+    to, as that room's run-as user sees it. Nothing for a run bound to no room."""
+    bound = _bound_room_id(ctx.tenant_id)
+    if bound is None:
+        return dict(_NO_PERSON)
+    reader = await _call(definition.run_as_actor, ctx.tenant_id, bound)
+    if reader is None:
+        return {"scope": scope, "rooms": []}
+    try:
+        rooms = await _call(definition.list_rooms, reader, scope="mine")
+    except (RoomForbidden, ValueError):
+        rooms = []
+    return {"scope": scope, "rooms": [_summary(r) for r in rooms if r.id == bound]}
 
 
 def _bounded(value: Any, default: int, upper: int) -> int:
@@ -247,7 +277,11 @@ async def _room_read(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         messages = _bounded(args.get("messages"), 10, 50)
         actor = _actor(ctx)
         if actor is None:
-            actor = await _call(definition.run_as_actor, ctx.tenant_id, room_id)
+            # No person: only the room this run belongs to, as its run-as user.
+            bound = _bound_room_id(ctx.tenant_id)
+            if bound is None or canonical_uuid(room_id) != bound:
+                return dict(_NOT_FOUND)
+            actor = await _call(definition.run_as_actor, ctx.tenant_id, bound)
             if actor is None:
                 return dict(_NOT_FOUND)
         view = await _call(

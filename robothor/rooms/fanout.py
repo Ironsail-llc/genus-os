@@ -11,26 +11,28 @@ Fan-out
 -------
 :func:`fan_out_edition` runs after a non-preview edition is published by a
 room run (``robothor.rooms.runs``). For every member with an active account
-who has not muted the room (or every one named in ``recipients``):
+who has not muted the room (or every one named in ``recipients``), by their
+preferences (``robothor.rooms.notify``, the shape the bridge stores):
 
-- a note in their MAIN conversation and inbox, through the webchat channel:
+- unless they turned in-app notes off, a note in their MAIN conversation and
+  inbox, through the webchat channel:
   the edition's title, a summary cut to :data:`MAX_NOTE_CHARS`, and the
   markdown link ``[room title](/?v=chat&room=<id>)``. Never the edition's
   blocks or full text: people open the workspace for that, through the access
   check. The inbox row is type ``info``, addressed to the user id, and its
   ``metadata`` carries ``room_id`` and ``edition_id``, never the session key;
-- their chosen external channel too (``notify.channel``, e.g. ``telegram``),
-  when they have paired it; unpaired is a failed receipt, not an error;
+- each external channel they turned on (``notify.channels``, e.g.
+  ``telegram``), when they have it linked; unlinked is a failed receipt, not
+  an error;
 
 then one ``room.edition`` event with ids only (unless the publish already sent
 it: ``emit_event=False``). A recipient that fails gets a failed receipt and the
 others are still told. A preview is never fanned out.
 
-Who counts as muted: ``notify.muted`` true (or ``notify.enabled`` false) on
-their membership; when their membership says nothing, the room's
-``settings.notify_default`` false mutes everyone who has not opted in with
-``notify.muted`` false. Tenant admins who are not members are not followers
-and are not told (they can still open every room).
+Muted (``notify.muted`` true) is nothing at all. When a membership says
+nothing about ``muted``, the room's ``settings.notify_default`` false mutes
+it. Tenant admins who are not members are not followers and are not told
+(they can still open every room).
 """
 
 from __future__ import annotations
@@ -46,12 +48,13 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.db.connection import get_connection
 from robothor.rooms import dal
+from robothor.rooms.notify import NotifyPrefs, parse_notify
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
     from robothor.engine.channels.base import SendReceipt
-    from robothor.rooms.models import Edition, Room, RoomMember
+    from robothor.rooms.models import Edition, Room
 
 __all__ = ["MAX_NOTE_CHARS", "fan_out_edition", "fan_out_note", "note_text", "room_lock"]
 
@@ -80,15 +83,6 @@ def room_lock(room_id: str) -> asyncio.Lock:
 # ─── who ─────────────────────────────────────────────────────────────────
 
 
-def _muted(room: Room, member: RoomMember) -> bool:
-    notify: Mapping[str, Any] = member.notify or {}
-    if "muted" in notify:
-        return bool(notify["muted"])
-    if notify.get("enabled") is False:
-        return True
-    return room.settings.get("notify_default") is False
-
-
 def _active_roles(tenant_id: str, user_ids: Iterable[str]) -> dict[str, str]:
     """``user id -> role`` of the active accounts of the tenant among ``user_ids``."""
     ids = sorted(set(user_ids))
@@ -104,23 +98,27 @@ def _active_roles(tenant_id: str, user_ids: Iterable[str]) -> dict[str, str]:
         return {r["id"]: str(r["role"]) for r in cur.fetchall()}
 
 
-def _audience(room: Room, recipients: Iterable[str] | None) -> list[tuple[str, dict[str, Any]]]:
-    """``(user_id, notify)`` of everyone to tell. Blocking."""
+def _audience(room: Room, recipients: Iterable[str] | None) -> list[tuple[str, NotifyPrefs]]:
+    """``(user_id, preferences)`` of everyone to tell, muted members left out.
+    Blocking."""
     from robothor.rooms.keys import canonical_uuid
 
+    default_muted = room.settings.get("notify_default") is False
     members = {m.user_id: m for m in dal.list_members(room.tenant_id, room.id)}
     if recipients is None:
-        wanted = [uid for uid, m in members.items() if not _muted(room, m)]
+        wanted = list(members)
     else:
         wanted = [c for c in (canonical_uuid(r) for r in recipients) if c]
     roles = _active_roles(room.tenant_id, wanted)
-    out: list[tuple[str, dict[str, Any]]] = []
+    out: list[tuple[str, NotifyPrefs]] = []
     for user_id in dict.fromkeys(wanted):
         role = roles.get(user_id)
         member = members.get(user_id)
         if role is None or (member is None and role not in _ADMIN_ROLES):
             continue  # no active account, or no access to this room
-        out.append((user_id, dict(member.notify or {}) if member else {}))
+        prefs = parse_notify(member.notify if member else None, default_muted=default_muted)
+        if not prefs.muted:
+            out.append((user_id, prefs))
     return out
 
 
@@ -188,18 +186,20 @@ async def fan_out_note(
     meta = {k: v for k, v in metadata.items() if k != "session_key"}
     receipts: list[SendReceipt] = []
     webchat = WebchatChannel()
-    for user_id, notify in audience:
-        try:
-            receipts.append(
-                await webchat.send(
-                    user_id, text, config=config, tenant_id=room.tenant_id, metadata=meta
+    for user_id, prefs in audience:
+        if prefs.delivers_in_app:
+            try:
+                receipts.append(
+                    await webchat.send(
+                        user_id, text, config=config, tenant_id=room.tenant_id, metadata=meta
+                    )
                 )
-            )
-        except Exception as exc:  # noqa: BLE001 - one recipient must not stop the rest
-            logger.warning("workspace note not delivered: %s", type(exc).__name__)
-            receipts.append(_failed(user_id, "failed:room_note_error"))
-        channel = notify.get("channel")
-        if isinstance(channel, str) and channel and channel != "webchat":
+            except Exception as exc:  # noqa: BLE001 - one recipient must not stop the rest
+                logger.warning("workspace note not delivered: %s", type(exc).__name__)
+                receipts.append(_failed(user_id, "failed:room_note_error"))
+        for channel in prefs.external_channels:
+            if channel == "webchat":
+                continue
             try:
                 receipts.append(await _external(room, user_id, channel, text))
             except Exception as exc:  # noqa: BLE001

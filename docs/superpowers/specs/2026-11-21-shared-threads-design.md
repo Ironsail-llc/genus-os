@@ -373,12 +373,15 @@ nothing in the shared conversation.
 
 `fanout.fan_out_edition(room, edition, *, recipients=None, emit_event=True) ->
 list[SendReceipt]` (async): never for a preview. Recipients: members with an
-active account who have not muted (`notify.muted`, `notify.enabled: false`, or
-`settings.notify_default: false` without an opt-in), or the named ones who have
-access. Each gets a webchat note in their main conversation (`[title](/?v=chat&room=<id>)`,
+active account (or the named ones who have access), by their preferences
+(`robothor/rooms/notify.py`: `parse_notify` over the stored
+`{in_app, muted, channels}`, `stored_notify` for the writer; the bridge should
+use both). Muted: nothing; `muted` unset and `settings.notify_default: false`:
+muted. `in_app` on gets a webchat note in their main conversation (`[title](/?v=chat&room=<id>)`,
 summary cut to 280 characters; inbox row type `info` to the user id, `metadata`
 `{room_id, edition_id, ...}` without the session key; `WebchatChannel.send` gained
-`tenant_id` and `metadata`), plus their paired `notify.channel`. A run's publish
+`tenant_id` and `metadata`); each channel in `channels` set true and linked
+gets it too. A run's publish
 already emitted `room.edition`, so runs pass `emit_event=False`.
 `fan_out_note(room, text, *, metadata, recipients=None)` is the shared sender.
 
@@ -409,7 +412,9 @@ No run starts runs: a workspace run's carrier is `RoomRun(..., unattended=True)`
 (`handlers.room_runs.nested_refusal`, also for a sub-agent run, read from its
 `agent_runs` row), and every room tool but `room_read` refuses
 (`handlers.rooms._actor` returns None), so a run cannot create scheduled
-workspaces either. `max_cost_usd` is no longer a room setting (refused as
+workspaces either. With no person, `room_read` opens only the carrier's own
+room (same tenant) as that room's run-as user, and `room_list` returns only
+that room; a run bound to no room reads nothing. `max_cost_usd` is no longer a room setting (refused as
 unknown). Stopping a run: a run now, period run or preview by its requester or
 an assigned member/admin; a scheduled run by an assigned member/admin.
 

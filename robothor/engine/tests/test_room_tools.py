@@ -455,25 +455,32 @@ def test_the_owner_lists_all_and_a_member_cannot(staff_db, report):
 
 @pytest.mark.integration
 def test_a_run_with_no_person_reads_only_as_the_run_as_user(staff_db, report):
+    """A run with no person reads only the room it is bound to (the run-context
+    carrier), as that room's run-as user; ``test_room_tools_bound_read.py``
+    proves every other room reads as not found."""
+    from robothor.rooms.run_context import RoomRun, room_run_scope
+
     db = staff_db
     service = _ctx(db, None, user_id="service:main", user_role="service")
-
-    read = _call("room_read", {"room_id": report["id"]}, service)
+    room = dal.get_room(db.tenant, report["id"])
+    with room_run_scope(RoomRun.for_session(db.tenant, room.session_key, unattended=True)):
+        read = _call("room_read", {"room_id": report["id"]}, service)
+        _no_person_tools_refuse(service, report)
+        db.cur.execute("UPDATE user_accounts SET status = 'disabled' WHERE id = %s", (db.alice,))
+        gone = _call("room_read", {"room_id": report["id"]}, service)
+    carol = _call("room_read", {"room_id": report["id"]}, _ctx(db, "carol"))
     assert read["room"]["id"] == report["id"]
     assert read["runs_as"]["user_id"] == db.alice
+    assert gone == carol
 
+
+def _no_person_tools_refuse(service: ToolContext, report: dict[str, Any]) -> None:
     for tool, args in [
         ("room_update", {"room_id": report["id"], "expected_rev": 1, "changes": {"title": "x"}}),
-        ("room_share", {"room_id": report["id"], "user": db.bob}),
+        ("room_share", {"room_id": report["id"], "user": "bob@example.com"}),
         ("room_archive", {"room_id": report["id"]}),
-        ("room_list", {}),
     ]:
         assert "person" in _call(tool, args, service)["error"], tool
-
-    db.cur.execute("UPDATE user_accounts SET status = 'disabled' WHERE id = %s", (db.alice,))
-    gone = _call("room_read", {"room_id": report["id"]}, service)
-    carol = _call("room_read", {"room_id": report["id"]}, _ctx(db, "carol"))
-    assert gone == carol
 
 
 # ─── off the loop ────────────────────────────────────────────────────────
