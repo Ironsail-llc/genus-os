@@ -249,6 +249,7 @@ test.describe("Workspaces — the hub", () => {
       timeout: 15000,
     });
     const rail = page.locator('[data-testid="room-rail"] [data-testid="new-in-workspaces"]');
+    await rail.locator('[data-testid="new-in-workspaces-toggle"]').click();
     await expect(rail.locator(`[data-testid="new-in-workspaces-item-${ROOM}"]`)).toBeVisible();
     await expect(page.locator(`[data-testid="room-unread-${ROOM}"]`)).toHaveText("2");
 

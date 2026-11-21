@@ -5,6 +5,7 @@ import { MetricGrid } from "@/components/business/metric-grid";
 import { TaskBoard } from "@/components/business/task-board";
 import type { Task } from "@/hooks/use-tasks";
 import { ListSkeleton } from "@/components/business/list-skeleton";
+import { OpenAsWorkspace } from "@/components/rooms/open-as-workspace";
 
 interface TasksViewProps {
   visible: boolean;
@@ -51,7 +52,13 @@ export function TasksView({
         {isLoading && tasks.length === 0 ? (
           <ListSkeleton testId="tasks-loading" label="Loading tasks" />
         ) : (
-          <TaskBoard tasks={tasks} onApprove={onApprove} onReject={onReject} onAnswer={onAnswer} />
+          <TaskBoard
+            tasks={tasks}
+            onApprove={onApprove}
+            onReject={onReject}
+            onAnswer={onAnswer}
+            renderActions={(task) => <OpenAsWorkspace taskId={task.id} />}
+          />
         )}
       </div>
     </div>

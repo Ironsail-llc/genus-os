@@ -71,8 +71,28 @@ describe("NewInWorkspaces", () => {
 });
 
 describe("RoomRailHeader", () => {
+  it("folds to one line with the count, since the rail's groups already carry the badges", () => {
+    const onSelect = vi.fn();
+    render(<RoomRailHeader rooms={ROOMS} activeRoomId={null} onSelect={onSelect} />);
+    const toggle = screen.getByTestId("new-in-workspaces-toggle");
+    expect(toggle).toHaveTextContent("2 workspaces updated");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId(`new-in-workspaces-item-${REPORT_ID}`)).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(screen.getByTestId(`new-in-workspaces-item-${REPORT_ID}`));
+    expect(onSelect).toHaveBeenCalledWith(REPORT_ID);
+  });
+
+  it("says nothing is new on the rail too", () => {
+    render(<RoomRailHeader rooms={[ROOMS[2]]} activeRoomId={null} onSelect={vi.fn()} />);
+    expect(screen.getByTestId("new-in-workspaces-empty")).toBeInTheDocument();
+    expect(screen.queryByTestId("new-in-workspaces-toggle")).toBeNull();
+  });
+
   it("shows what is new, without the room that is open", () => {
     render(<RoomRailHeader rooms={ROOMS} activeRoomId={REPORT_ID} onSelect={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("new-in-workspaces-toggle"));
     const list = screen.getByTestId("new-in-workspaces");
     expect(within(list).queryByText("Weekly sales")).toBeNull();
     expect(within(list).getByText("Research desk")).toBeInTheDocument();

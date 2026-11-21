@@ -2,7 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useQuery } from "@tanstack/react-query";
+
 import { readBridgeReply } from "@/lib/bridge/read-reply";
+import {
+  fetchMyNotifications,
+  markNotificationRead,
+  type InboxNotification,
+} from "@/lib/inbox/notifications";
+import { refusalOf } from "@/lib/query/fetch-refused";
+import { useAppQueryClient } from "@/lib/query/query-client";
 import {
   normalizePending,
   routeCount,
@@ -247,5 +256,47 @@ export function useInbox({ active = false }: UseInboxOptions = {}): UseInboxApi 
     refusedAsNonOperator,
     refresh: load,
     answer,
+  };
+}
+
+/** The cache entry for the caller's own notifications. */
+export const MY_NOTIFICATIONS_QUERY_KEY = ["inbox", "notifications", "mine"] as const;
+
+/**
+ * The signed-in person's own notifications (workspace notes among them), for
+ * the Inbox view. Read while the Inbox is on screen; marking one read updates
+ * this user's row and the list at once.
+ */
+export function useMyNotifications({ active = false }: UseInboxOptions = {}) {
+  const client = useAppQueryClient();
+  const query = useQuery(
+    {
+      queryKey: MY_NOTIFICATIONS_QUERY_KEY,
+      queryFn: ({ signal }) => fetchMyNotifications(signal),
+      enabled: active,
+      staleTime: 30_000,
+      refetchInterval: active ? ACTIVE_POLL_MS : false,
+    },
+    client,
+  );
+  const markRead = useCallback(
+    async (id: string) => {
+      const ok = await markNotificationRead(id);
+      if (ok) {
+        const at = new Date().toISOString();
+        client.setQueryData<InboxNotification[]>(MY_NOTIFICATIONS_QUERY_KEY, (prev) =>
+          prev?.map((n) => (n.id === id ? { ...n, readAt: n.readAt ?? at } : n)),
+        );
+      }
+      return ok;
+    },
+    [client],
+  );
+  const refusal = refusalOf(query.error);
+  return {
+    notifications: query.data ?? [],
+    isLoading: active && query.isPending,
+    error: refusal ? { endpoint: refusal.endpoint, status: refusal.status } : null,
+    markRead,
   };
 }

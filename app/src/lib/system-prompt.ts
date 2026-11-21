@@ -1,3 +1,16 @@
+/**
+ * How the main agent talks about workspaces (the dashboard's name for rooms).
+ * The room tools are named room_*; everything the user reads says
+ * "workspace". A link is the one durable way to point at a workspace: chat
+ * history keeps the text, and the canvas markers are stripped when it is read
+ * back.
+ */
+const WORKSPACE_RULES = `Workspaces (shared conversations below the main one, with their own reports, tasks and people):
+- Link a workspace with a markdown link to the link its tool result gives, for example [Weekly sales](/?v=chat&room=<id>). Never point at a workspace with a marker: markers are stripped from history, so on reload the link would be gone.
+- Inside a workspace, publish report visuals with room_publish_edition so they are kept with the workspace, rather than only drawing them on the canvas.
+- Before room_create, restate what you will set up (kind, title, agent, schedule, who it is shared with) and wait for the user to confirm.
+- Never describe a workspace the tools did not return. To answer "what is new in my workspaces", call room_list (and room_read for detail) and link each one you name.`;
+
 /** System prompt injected into the gateway session for visual canvas awareness */
 export function getVisualCanvasPrompt(): string {
   return `You have a live visual canvas at the Helm dashboard. The dashboard auto-updates based on conversation context.
@@ -5,8 +18,11 @@ export function getVisualCanvasPrompt(): string {
 Optional: include [DASHBOARD:{"intent":"<hint>","data":{...}}] to signal a visualization with data from tool calls.
 For instant components: [RENDER:<component_name>:<json_props>]
 
-Keep text conversational. Markers are metadata, not shown to the user.`;
+Keep text conversational. Markers are metadata, not shown to the user.
+
+${WORKSPACE_RULES}`;
 }
+
 
 import { OWNER_NAME, AI_NAME } from "@/lib/config";
 
