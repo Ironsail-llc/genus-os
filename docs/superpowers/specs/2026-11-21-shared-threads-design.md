@@ -727,6 +727,35 @@ The seams between lanes, each crossed by a test:
 - **Default agent.** `definition.default_agent()` is `manifest_store.main_agent_id()`,
   the agent a chat with no key reaches; creating with no agent and opening a task as a
   workspace both use it (`DEFAULT_AGENT` is gone).
+- **Tasks through one module.** The bridge's `/tasks`, accept, dismiss and `/from-task`
+  routes call `robothor.rooms.tasks` (accept writes the CRM task's assignee; only a
+  suggestion is dismissed and a dismissed one leaves the list; the task's assignee joins
+  its workspace assigned). Refusals keep the bridge shape with fixed words
+  (`not_found`, `already_accepted` with `acceptedBy`, `already_dismissed`, `forbidden`).
+  `crm.dal.reject_task` and `delete_task` publish `room.task` like every other change.
+- **Shares through one module.** `PUT /members/{id}` calls `definition.share_room` and
+  notifies only when `ShareOutcome.added`.
+- **Workspace email.** A `room.email` approvals row adds `email` (`from`, `replyTo`, `to`,
+  `cc`, `subject`, `body`, `onBehalfOf`) from the payload it authorizes; the task
+  workspace's card shows it field by field. `room_propose_email`'s `room_id` is optional
+  and defaults to the workspace the chat turn is bound to (`room_run_scope`); nothing else
+  gives the agent the id. A receipt turn (`kind: "room_email_receipt"`, `receipt`)
+  reaches the dashboard through history unchanged and is drawn as a receipt. Approvals
+  appear only in a task workspace; a report workspace's accepted task offers "Open task
+  workspace".
+- **Provenance cost.** The drawer reads `cost_usd` and the `input_tokens` /
+  `output_tokens` the engine writes beside it; the bridge golden carries a provenance
+  built by `editions.build_provenance`.
+- **History paging** reads one session's page by `(session_id, id)` (migration 175,
+  `chat_store.HISTORY_PAGE_SQL`): a quiet workspace's page no longer walks every newer
+  message of every session.
+- **Strict test database.** `ROOMS_TESTS_REQUIRE_DB=1` turns the rooms fixtures' skip
+  into a failure; CI's integration job sets it.
+- **The dry run.** `scripts/dev/rooms-stack.sh` runs the real engine, bridge and
+  dashboard over their own `*_test` database with row-level security enforcing, local
+  sign-in and tenant switching; only the model (a script on litellm's mock path), one
+  fixture data tool and the mail transport (an outbox file) are stand-ins.
+  `app/playwright.stack.config.ts` runs `app/e2e-stack/` against it.
 
 ## Build lanes
 

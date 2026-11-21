@@ -166,12 +166,23 @@ A workspace's tasks tab lists the CRM tasks linked to it: the task it was
 opened from, tasks accepted from an edition's suggestions, and tasks linked by
 hand.
 
-- Anyone shared or more can accept or dismiss a suggested task. A task is
-  decided once: a second person is told who already accepted it.
-- **Approvals.** When an agent proposes an action that needs approval, a
-  member may decide it only when their own interactive run in that workspace
-  proposed it and the linked task is assigned to them. Everything else is
-  decided by those who approve actions for the company.
+- Anyone shared or more can accept or dismiss a suggested task. Accepting
+  makes the task yours (its assignee). A task is decided once: a second person
+  is told who already has it. A dismissed suggestion does not come back.
+- **Work a task in its own workspace.** An accepted task shows "Open task
+  workspace": the task's own workspace, seeded with the task, where you work
+  it with the agent. Its assignee can open it; anyone else is shared in.
+- **Emails you approve.** In a task workspace whose task is yours, ask the
+  agent to email someone. It drafts the email and nothing is sent: the
+  workspace shows the exact email (from, reply-to, to, cc, subject and the
+  whole body) with **Approve and send** and **Reject**. Approved, it is sent
+  once, from the company's assistant mailbox with replies going to you, and a
+  receipt appears in the workspace (sent, or not sent and why). Rejected, nothing
+  is sent and the receipt says so. A report workspace proposes no email, and
+  nobody else can see or decide yours.
+- **Other approvals.** A member decides only an email their own turn in their
+  own task workspace proposed. Everything else is decided by those who approve
+  actions for the company.
 
 ## Notifications
 
