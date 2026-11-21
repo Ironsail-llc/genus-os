@@ -12,6 +12,7 @@ Not alive, from what this engine can know:
 - else (no run row): not alive once the engine has started since the edition
   was created (``booted_at``; the daemon's ``ROBOTHOR_DAEMON_START_TS`` when not
   given), or once it has been building for ``STALE_BUILDING_SECONDS`` (2 hours).
+  The daemon records its boot with ``record_boot`` the moment it sets it.
 
 A dead edition is failed with the reason, which frees its period. Called at
 engine start (``reap_stale_editions(tenant_id, booted_at=boot)``) and lazily for
@@ -84,7 +85,21 @@ def live_edition_ids() -> frozenset[str]:
         return frozenset(_live)
 
 
+#: This process's engine boot instant, recorded by the daemon itself.
+_booted_at: datetime | None = None
+
+
+def record_boot(at: datetime) -> None:
+    """The daemon's boot instant, recorded as it is set. The settings copy is no
+    use in the daemon: settings are cached before the boot time is written."""
+    global _booted_at
+    _booted_at = at if at.tzinfo else at.replace(tzinfo=UTC)
+
+
 def _boot() -> datetime | None:
+    if _booted_at is not None:
+        return _booted_at
+    # Outside the daemon (a child process, a CLI): the value it exported.
     from robothor.settings import get_settings
 
     raw = get_settings().engine.daemon_start_ts

@@ -404,9 +404,14 @@ def _set_daemon_start_ts() -> None:
     global _DAEMON_START_TS
     from datetime import datetime
 
-    ts = datetime.now(UTC).isoformat()
+    now = datetime.now(UTC)
+    ts = now.isoformat()
     _DAEMON_START_TS = ts
     os.environ["ROBOTHOR_DAEMON_START_TS"] = ts
+    # Settings are cached before this runs, so workspace recovery is told directly.
+    from robothor.rooms.recovery import record_boot
+
+    record_boot(now)
 
 
 def classify_reap_reason(
@@ -1428,6 +1433,20 @@ async def _bootstrap_owner_links() -> None:
         logger.exception("bootstrap_owner_person_links failed (non-fatal)")
 
 
+async def _reap_room_editions(config: Any) -> None:
+    """Fail workspace editions the previous process left ``building``: their
+    run died with it, and each holds its period until it is failed."""
+    try:
+        from robothor.rooms.recovery import reap_stale_editions
+
+        booted = datetime.fromisoformat(_DAEMON_START_TS) if _DAEMON_START_TS else None
+        reaped = await asyncio.to_thread(reap_stale_editions, config.tenant_id, booted_at=booted)
+        if reaped:
+            logger.info("Startup: failed %d orphaned workspace editions", len(reaped))
+    except Exception as e:  # noqa: BLE001 - recovery is best effort; the lazy reap remains
+        logger.warning("Startup workspace edition sweep failed: %s", _sanitize(e))
+
+
 async def _recover_interrupted_work(runner: Any, config: Any) -> None:
     """Resume interrupted runs, reap what is left, then recover repairs.
 
@@ -1448,6 +1467,8 @@ async def _recover_interrupted_work(runner: Any, config: Any) -> None:
     cleaned = await asyncio.to_thread(_cleanup_stale_runs, config.tenant_id)
     if cleaned:
         logger.info("Startup: cleaned %d stale agent runs", cleaned)
+
+    await _reap_room_editions(config)
 
     from robothor.engine.repair_recovery import recover as recover_repairs
 
