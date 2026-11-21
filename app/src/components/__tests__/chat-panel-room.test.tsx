@@ -157,7 +157,7 @@ describe("ChatPanel in a room", () => {
     // One message per turn, in the order they were typed.
     await waitFor(() => expect(sends.map((s) => s.message)).toEqual(["first", "first", "second"]));
     await waitFor(() => expect(screen.getAllByText("Noted.")).toHaveLength(2));
-    expect(screen.queryByTestId("room-busy-notice")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("room-busy-notice")).toBeNull());
 
     // Each queued message is its own stored row, so catching up shows no duplicate.
     history = [

@@ -80,6 +80,15 @@ function roomBusyNote(answering: string): string {
 }
 /** How long a message queued behind another member's turn waits before it is offered again. */
 export const ROOM_BUSY_RETRY_MS = 4000;
+
+/**
+ * Messages still queued behind a busy room when its panel was left, by room.
+ * The main panel stays mounted across views, so what it queued is never lost
+ * by navigating; a room's panel is unmounted when the workspace is left, so
+ * its queue is parked here and put back (bubbles, notes and all) on return.
+ * In memory, per tab, like every other pending follow-up.
+ */
+const parkedRoomQueues = new Map<string, { texts: string[]; answering: string }>();
 const READ_ONLY_NOTICE = "You have view-only access to this workspace, so you can read it but not post.";
 
 /** Which room the panel is pointed at, when it is not the main conversation. */
@@ -330,8 +339,44 @@ export function ChatPanel({
     [agent, roomId],
   );
   // Queued behind another member's turn in this room (409 room_busy).
+  // `roomBusy` is who the agent is answering (or "") while anything is queued.
   const [roomBusy, setRoomBusy] = useState<string | null>(null);
+  const roomBusyName = useRef("");
   const busyQueue = useRef<QueuedFollowup[]>([]);
+  // The last offer was refused as busy: wait before the next one.
+  const busyBlocked = useRef(false);
+  // Bumped when a room turn ends, so the queue moves on even when the turn was
+  // so quick that `isStreaming` never rendered as true.
+  const [roomTurnsEnded, setRoomTurnsEnded] = useState(0);
+  // A room turn of ours is on its way: nothing queued is offered meanwhile.
+  const roomTurnInFlight = useRef(false);
+  const [roomHistoryFailed, setRoomHistoryFailed] = useState(false);
+
+  /** Put back what was queued when this room's panel was last left. */
+  const restoreParkedQueue = useCallback(() => {
+    if (!roomId) return;
+    const parked = parkedRoomQueues.get(roomId);
+    if (!parked?.texts.length) return;
+    parkedRoomQueues.delete(roomId);
+    const note = roomBusyNote(parked.answering);
+    const items = parked.texts.map((text, n) => ({ id: `user-parked-${Date.now()}-${n}`, text, seq: followupSeq.current++ }));
+    setMessages((prev) => [
+      ...prev,
+      ...items.map((item): ChatMessage => ({ id: item.id, role: "user", content: item.text, timestamp: new Date(), note })),
+    ]);
+    busyQueue.current = [...busyQueue.current, ...items];
+    busyBlocked.current = true;
+    roomBusyName.current = parked.answering;
+    setRoomBusy(parked.answering);
+  }, [roomId]);
+  useEffect(() => {
+    if (!roomId) return;
+    return () => {
+      if (busyQueue.current.length) {
+        parkedRoomQueues.set(roomId, { texts: busyQueue.current.map((q) => q.text), answering: roomBusyName.current });
+      }
+    };
+  }, [roomId]);
 
   /** Whether the listing left out the agent it named as the default.
    *
@@ -565,17 +610,23 @@ export function ChatPanel({
           setMessages([...loaded, ...restored]);
           settleHistoryPages(data.hasMore === true);
           setHistorySettledFor(agentQuery);
+          setRoomHistoryFailed(false);
+          restoreParkedQueue();
         }
       })
       .catch(() => {
         // Engine not available on mount. The conversation is unknown, not
-        // known to be long, so the landing may show.
-        if (!cancelled) setHistorySettledFor(agentQuery);
+        // known to be long, so the landing may show. In a room it is said:
+        // the route refused (the engine did not confirm the room) or failed.
+        if (cancelled) return;
+        setHistorySettledFor(agentQuery);
+        setRoomHistoryFailed(true);
+        restoreParkedQueue();
       });
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent, settleHistoryPages, recoveryFor]);
+  }, [agentQuery, agent, settleHistoryPages, recoveryFor, restoreParkedQueue]);
 
   // A room is shared: other members' messages, and the agent's answers to
   // them, land while this panel is open. On each live room event (the room
@@ -883,6 +934,15 @@ export function ChatPanel({
     }
 
     const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : (resend ?? input).trim();
+    if (!flushing && resend === undefined && roomId && text && busyQueue.current.length) {
+      // Messages are already waiting behind another member's turn: this one
+      // waits behind them, in the order it was typed, rather than overtaking.
+      const item = { id: `user-${Date.now()}`, text, seq: followupSeq.current++ };
+      setMessages((prev) => [...prev, { id: item.id, role: "user", content: text, timestamp: new Date(), note: roomBusyNote(roomBusyName.current) }]);
+      setInput("");
+      busyQueue.current = [...busyQueue.current, item];
+      return;
+    }
     if (!flushing && !resend && text && isStreaming) return sendFollowup(text);
     // Files go with a fresh turn only: never with a flushed follow-up, and not
     // with a Regenerate (the panel keeps only their summary, not their bytes).
@@ -910,6 +970,7 @@ export function ChatPanel({
     }
     setIsStreaming(true);
     setStreamingText("");
+    if (roomId) roomTurnInFlight.current = true;
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -944,8 +1005,11 @@ export function ChatPanel({
           if (scope) forgetRequest(scope, requestIdRef.current!);
           const answering = typeof busy.answering === "string" ? busy.answering : "";
           const items: QueuedFollowup[] = flushing ?? [{ id: userMsg.id, text, seq: followupSeq.current++ }];
-          busyQueue.current = [...busyQueue.current, ...items];
-          noteMessages(items.map((i) => i.id), roomBusyNote(answering));
+          // Back at the FRONT: it was typed before anything queued after it.
+          busyQueue.current = [...items, ...busyQueue.current];
+          busyBlocked.current = true;
+          roomBusyName.current = answering;
+          noteMessages(busyQueue.current.map((i) => i.id), roomBusyNote(answering));
           setRoomBusy(answering);
           setIsStreaming(false);
           setStreamingText("");
@@ -954,6 +1018,9 @@ export function ChatPanel({
           return;
         }
       }
+      // Not refused as busy: the room took this turn, so what waits behind it
+      // may go as soon as it ends.
+      if (roomId) busyBlocked.current = false;
 
       if (!res.ok || !res.body) {
         const failure = await requestFailure(res);
@@ -1145,6 +1212,10 @@ export function ChatPanel({
       // task took what joined it: say so rather than keep claiming "Added".
       if (!streamSettled) noteMessages(joinedFollowups.current.map((f) => f.id), DROPPED_NOTE);
       joinedFollowups.current = [];
+      if (roomId) {
+        roomTurnInFlight.current = false;
+        setRoomTurnsEnded((n) => n + 1);
+      }
     }
   }, [input, attachments, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent, roomId, target, recoveryFor]);
 
@@ -1160,28 +1231,45 @@ export function ChatPanel({
   sendMessageRef.current = sendMessage;
   useEffect(() => {
     if (!queuedCount || isStreaming || isPlanning || isPlanExecuting || isDeepReasoning) return;
+    if (roomId) {
+      if (roomTurnInFlight.current) return;
+      // In a room each waiting message is its own turn, in typing order, so
+      // every bubble matches the row the room stores for it.
+      const [next, ...rest] = [...followupQueue.current].sort((a, b) => a.seq - b.seq);
+      followupQueue.current = rest;
+      setQueuedCount(rest.length);
+      void sendMessageRef.current([next]);
+      return;
+    }
     const items = followupQueue.current;
     followupQueue.current = [];
     setQueuedCount(0);
     void sendMessageRef.current(items);
-  }, [queuedCount, isStreaming, isPlanning, isPlanExecuting, isDeepReasoning]);
+  }, [queuedCount, isStreaming, isPlanning, isPlanExecuting, isDeepReasoning, roomId, roomTurnsEnded]);
 
   // A message queued behind another member's turn is offered again when the
   // room moves on (the room view bumps `refreshKey` on a live message) or after
   // a short wait, whichever is first. Offered as a flush, so its bubble stays
   // where it was typed and is never shown twice.
+  //
+  // One message per turn, oldest first: a refused one goes back to the front.
+  // After a turn the room took, the next goes straight away; after a refusal,
+  // after a short wait (or the next live message, whichever is first).
   const retryRoomBusy = useCallback(() => {
-    if (!busyQueue.current.length) return;
-    const items = busyQueue.current;
-    busyQueue.current = [];
-    setRoomBusy(null);
-    void sendMessageRef.current(items);
+    const [next, ...rest] = busyQueue.current;
+    if (!next || roomTurnInFlight.current) return;
+    busyQueue.current = rest;
+    void sendMessageRef.current([next]);
   }, []);
   useEffect(() => {
     if (roomBusy === null || isStreaming) return;
-    const timer = setTimeout(retryRoomBusy, ROOM_BUSY_RETRY_MS);
+    if (!busyQueue.current.length) {
+      setRoomBusy(null);
+      return;
+    }
+    const timer = setTimeout(retryRoomBusy, busyBlocked.current ? ROOM_BUSY_RETRY_MS : 0);
     return () => clearTimeout(timer);
-  }, [roomBusy, isStreaming, retryRoomBusy]);
+  }, [roomBusy, isStreaming, retryRoomBusy, roomTurnsEnded]);
   const lastRefreshKey = useRef(roomRefreshKey);
   useEffect(() => {
     if (roomRefreshKey === lastRefreshKey.current) return;
@@ -1509,7 +1597,12 @@ export function ChatPanel({
       {/* Messages */}
       <div ref={scrollRef} onScroll={onListScroll} className="flex-1 overflow-y-auto p-4">
         <div className="space-y-4" data-testid="message-list">
-          {roomId && messages.length === 0 && !isStreaming && historySettledFor === agentQuery && (
+          {roomId && roomHistoryFailed && (
+            <p className="py-6 text-center text-sm text-muted-foreground" data-testid="room-chat-unavailable">
+              This workspace&apos;s conversation could not be loaded. Nothing has been sent.
+            </p>
+          )}
+          {roomId && !roomHistoryFailed && messages.length === 0 && !isStreaming && historySettledFor === agentQuery && (
             <p className="py-6 text-center text-sm text-muted-foreground" data-testid="room-chat-empty">
               No messages yet.{roomReadOnly ? "" : " Ask the agent about this workspace."}
             </p>
