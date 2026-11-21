@@ -337,7 +337,10 @@ tenant: the listener's consumer group is `room-outbound:<event_group>`, it
 drops another tenant's approvals, and `sweep(tenant_id)` takes the engine's
 own tenant; `deliver`, `sweep` and the receipt writer run inside
 `tenant_scope(tenant_id)`. A receipt is recorded as written
-(`room.email.noted`) only after it was posted.
+(`room.email.noted`) only after it was posted, except that a workspace
+missing on a read bound to the action's tenant (after a tenant move) is
+terminal: logged once, settled with `{message_id: null, reason: "workspace not
+found"}`.
   Receipt: an assistant chat message with `kind: "room_email_receipt"` and
   `receipt: {action_id, status (sent|failed|uncertain|not_sent|rejected|expired),
   from, reply_to, to, cc, subject, approved_by, decided_by, decided_at, sent_at,

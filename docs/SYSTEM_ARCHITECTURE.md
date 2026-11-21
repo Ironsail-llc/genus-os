@@ -1608,7 +1608,9 @@ through the workspace mail provider and records the provider's id with
 again; a failed send is recorded and not retried. An email changed after its
 approval, or an approval that expires before delivery, is settled as
 `cancelled` with the reason, so nothing stays `approved` for ever. A receipt
-that could not be posted is not recorded as written and is tried again. Every outcome (sent, failed,
+that could not be posted is not recorded as written and is tried again; a
+workspace that is really gone (missing on a read bound to the action's tenant,
+as after a tenant move) settles its receipt once, with the reason. Every outcome (sent, failed,
 uncertain, not sent, rejected, expired) writes one `room_email_receipt` turn into
 the workspace and publishes `room.message`.
 
