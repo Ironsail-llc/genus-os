@@ -233,6 +233,26 @@ Chat stays on the existing routes. The dashboard and the Next.js routes send `ro
 never a session key; the engine checks access and resolves the key. History items gain `authorUserId`, `authorName`, `editionId`.
 A send while the room is busy returns 409 `{error: "room_busy", answering: <name>}`.
 
+#### As built (lane 2)
+
+`robothor/engine/chat_rooms.py`; the behaviour is in `docs/channels/webchat.md`.
+
+- `chat_rooms.resolve(auth, body_or_query, action) -> ChatTarget | JSONResponse` is
+  every chat route's first step (`chat._target`); `ChatTarget(key, room)`.
+  `chat._effective_session_key` now refuses a room-shaped key from a human (404), so a
+  route that skipped `resolve` fails closed.
+- Errors are plain JSON: 404 `{error: "room_not_found"}`, 403 `{error: "room_forbidden"}`,
+  400 when `room_id` comes with a `session_key` or `agent_id`.
+- Actions: reads `read`; send, abort, steer, interrupt, plan and deep `post`;
+  **clear and inject `edit_definition`** (they change what everyone in the room sees).
+- Echo: `/chat/send` streams `event: room` `{roomId}` first; history, outcome, abort,
+  steer and interrupt add `roomId`; a room's history and export never carry its key.
+- `dal.record_activity(tenant_id, room_id, message_id) -> Room | None` (added) moves
+  `last_activity_at` and, never backwards, `last_message_id`. `room.message` payload is
+  exactly `{room_id, tenant_id, message_id}`.
+- Stored user turns carry `author_user_id`, `author_display_name`; an edition's chat
+  message is read as `edition_id` (surfaced as `editionId`).
+
 ### Events
 
 Stream `agent`, types `room.edition`, `room.message`, `room.updated`, `room.task`, payload

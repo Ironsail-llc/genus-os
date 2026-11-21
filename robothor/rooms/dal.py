@@ -59,6 +59,7 @@ __all__ = [
     "list_rooms_for_user",
     "mark_read",
     "publish_edition",
+    "record_activity",
     "remove_member",
     "restore_revision",
     "set_assigned",
@@ -605,6 +606,27 @@ def archive_room(tenant_id: str, room_id: str) -> Room | None:
 
 def unarchive_room(tenant_id: str, room_id: str) -> Room | None:
     return _set_archived(tenant_id, room_id, False)
+
+
+def record_activity(tenant_id: str, room_id: str, message_id: int) -> Room | None:
+    """Mark a saved message: ``last_activity_at`` now, ``last_message_id`` the newest.
+
+    The message mark only moves forward. None when the room is not in the tenant.
+    """
+    canonical = canonical_uuid(room_id)
+    if canonical is None:
+        return None
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "UPDATE rooms SET last_activity_at = now(), updated_at = now(), "
+            "last_message_id = GREATEST(COALESCE(last_message_id, 0), %s) "
+            "WHERE tenant_id = %s AND id = %s RETURNING *",
+            (int(message_id), tenant_id, canonical),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return _room(row) if row else None
 
 
 # ─── members ─────────────────────────────────────────────────────────────
