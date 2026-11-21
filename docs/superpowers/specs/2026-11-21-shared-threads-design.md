@@ -654,6 +654,10 @@ No access → 404. Access without the action → 403. JSON is camelCase, as the 
 - `GET /api/rooms/directory` → `{users: [{userId, displayName}]}`: the active accounts
   of the acting tenant, by name; no email, no role. Any role that can create a
   workspace (not a viewer).
+- `GET /api/rooms/agents` → `{agents: [{agentId, name}]}`: the acting company engine's
+  agents, the scan create checks against; 502 `agents_unavailable` when the engine cannot
+  answer. Any role that can create a workspace. The "New workspace" dialog reads it (a
+  member cannot read the fleet's health views).
 - `GET /api/rooms/{id}` → `Room`; `unread` is the caller's (0 for a non-member
   admin); `nextRunAt` is the earliest enabled `user_cronjobs.next_run_at` of the
   room, null when paused or archived. `Edition` and `latestEdition` add
