@@ -216,7 +216,9 @@ rely on:
   (`genus-bridge`, else 403). It must name `requested_by`; the engine reads that account's role from `user_accounts`
   (never the body), requires it active and living in the token's tenant (else 404),
   and re-checks `request_period`. 200 existing, 202 started, 400 no `requested_by`,
-  403, 404, 422, 429 cap reached, 503 no room runner.
+  403, 404, 422 (`reason`: one of `PERIOD_ERROR_REASONS`), 429 cap reached, 503 no room
+  runner, 500 `internal_error`. Every response message is the route's own fixed text,
+  never an exception's.
 - Added: `dal.list_editions_in_period`, `dal.count_requested_editions`,
   `dal.list_building_editions`,
   `models.edition_json` (the camelCase `Edition`, with `publishedSeq`). Engine route module
