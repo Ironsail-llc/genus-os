@@ -90,7 +90,17 @@ def _bound_room_id(tenant_id: str) -> str | None:
 
 
 def _actor(ctx: ToolContext) -> Actor | None:
-    """The human caller, or None when the run has no verified person behind it."""
+    """The human caller, or None when the run has no verified person behind it.
+
+    A workspace run (scheduled, on demand, period, preview: its room carrier is
+    ``unattended``) has none either, even though it runs with its run-as
+    user's permissions: it may read workspaces, never change or create them, so
+    a run cannot set up more scheduled runs."""
+    from robothor.rooms.run_context import current_room_run
+
+    carrier = current_room_run()
+    if carrier is not None and carrier.unattended:
+        return None
     identity = getattr(ctx, "identity", None)
     if identity is not None and not getattr(identity, "verified", False):
         return None

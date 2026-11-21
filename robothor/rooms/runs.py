@@ -190,6 +190,8 @@ class ActiveRun:
     task: asyncio.Task[Any] | None = None
     #: True once it holds the room's lock (it is the turn the room is busy with).
     running: bool = False
+    #: ``(grain, start, end)`` of the edition it builds; None for no edition.
+    period: tuple[str, Any, Any] | None = None
 
 
 _active: dict[str, list[ActiveRun]] = {}
@@ -201,11 +203,23 @@ def active_run(room_id: str) -> ActiveRun | None:
     return next((e for e in _active.get(room_id, ()) if e.running), None)
 
 
-def _joinable(room_id: str, preview: bool, requester: str) -> ActiveRun | None:
+def _joinable(room_id: str, preview: bool, requester: str, period: Period) -> ActiveRun | None:
+    """The run in progress that builds the same thing: the same period and
+    preview-ness, and for a preview the same requester. Any other run is not
+    joined; a new one waits for the room's lock and builds its own edition."""
+    wanted = (period.grain, period.start, period.end)
     for entry in _active.get(room_id, ()):
-        if entry.preview == preview and (not preview or entry.requested_by == requester):
+        if entry.period != wanted or entry.preview != preview:
+            continue
+        if not preview or entry.requested_by == requester:
             return entry
     return None
+
+
+def _period_of(edition: Edition | None) -> tuple[str, Any, Any] | None:
+    if edition is None or edition.grain is None:
+        return None
+    return (edition.grain, edition.period_start, edition.period_end)
 
 
 def pending_runs() -> set[asyncio.Task[Any]]:
@@ -496,6 +510,7 @@ async def _turn(
         preview=preview,
         requested_by=requested_by if preview else None,
         edition_id=edition.id if edition else None,
+        unattended=True,
         grain=edition.grain if edition else None,
         period_start=edition.period_start if edition else None,
         period_end=edition.period_end if edition else None,
@@ -588,7 +603,12 @@ async def _execute(
     entry: ActiveRun | None = None,
 ) -> Edition | None:
     entry = entry or ActiveRun(
-        room.id, trigger, preview, requested_by, edition.id if edition else None
+        room.id,
+        trigger,
+        preview,
+        requested_by,
+        edition.id if edition else None,
+        period=_period_of(edition),
     )
     entry.task = entry.task or asyncio.current_task()
     if entry not in _active.get(room.id, ()):
@@ -687,10 +707,29 @@ def _check_run(actor: Actor, room_id: str) -> Room:
     return room
 
 
-def _claim(room: Room, actor: Actor, preview: bool, period: Period | None) -> tuple[Edition, bool]:
-    period = period or _default_period(room)
+def _named_period(room: Room, value: Any) -> Period:
+    """The period a person named (or the last complete one), by the periods
+    route's rules: it must be over in the room's time zone, and a day, week or
+    month must be a whole one. ``PeriodError`` (a ``ValueError``) otherwise."""
+    from robothor.rooms import periods
+
+    named = _period_arg(value)
+    if named is None:
+        default = _default_period(room)
+        assert default is not None  # noqa: S101 - a report room always has one
+        return default
+    tz = str(room.settings.get("tz") or periods.DEFAULT_TZ)
+    anchor = f"{named.start}/{named.end}" if named.grain == "custom" else named.start.isoformat()
+    resolved = periods.resolve_period(named.grain, tz, anchor)
+    if (resolved.start, resolved.end) != (named.start, named.end):
+        raise periods.PeriodError(
+            f"{named.start} to {named.end} is not a whole {named.grain}", reason="invalid_anchor"
+        )
+    return resolved
+
+
+def _claim(room: Room, actor: Actor, preview: bool, period: Period) -> tuple[Edition, bool]:
     recovery.reap_stale_editions(room.tenant_id, room_id=room.id)  # a dead run holds nothing
-    assert period is not None  # noqa: S101 - a report room always has one
     return dal.create_edition(
         room.tenant_id,
         room.id,
@@ -710,12 +749,15 @@ async def start_room_run(
     Needs ``run``: ``RoomNotFound`` without access, ``RoomForbidden`` for a
     viewer, ``RunRefused`` for an archived room or a paused one the caller is
     not assigned to, ``ValueError``
-    for a malformed period. A run already in progress for the same thing (the
-    room's run, or the caller's own preview) is joined. The run itself goes on
-    in the background (:func:`pending_runs`)."""
-    wanted = _period_arg(period)
+    for a malformed period or one the periods route would refuse (not over,
+    or not a whole day, week or month). A run already in progress for the same
+    period and preview-ness (for a preview, the caller's own) is joined; any
+    other run is not, and this one waits for the room's lock and builds its own
+    edition, which comes back ``building`` at once. The run itself goes on in
+    the background (:func:`pending_runs`)."""
     room = await asyncio.to_thread(_check_run, actor, room_id)
-    joined = _joinable(room.id, preview, actor.user_id)
+    wanted = _named_period(room, period)
+    joined = _joinable(room.id, preview, actor.user_id, wanted)
     if joined is not None and joined.edition_id:
         found = await asyncio.to_thread(
             dal.get_edition, room.tenant_id, joined.edition_id, viewer_id=actor.user_id
@@ -725,7 +767,9 @@ async def start_room_run(
     edition, created = await asyncio.to_thread(_claim, room, actor, preview, wanted)
     if not created:
         return edition, True
-    entry = ActiveRun(room.id, "manual", preview, actor.user_id, edition.id)
+    entry = ActiveRun(
+        room.id, "manual", preview, actor.user_id, edition.id, period=_period_of(edition)
+    )
     _track(entry)
     entry.task = spawn(
         _execute(

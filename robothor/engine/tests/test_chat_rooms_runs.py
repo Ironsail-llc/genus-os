@@ -22,9 +22,12 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from robothor.engine.tests.test_chat_rooms import (  # noqa: F401 - fixtures by name
     ALICE,
     BOB,
+    CAROL,
     TENANT,
     _as,
     _auth,
@@ -200,9 +203,13 @@ class TestAnInterruptedTurn:
 
 
 class TestAbortingARun:
-    def _running(self, monkeypatch, room: Any, trigger: str) -> asyncio.Task[Any]:
+    def _running(
+        self, monkeypatch, room: Any, trigger: str, requested_by: str | None = None
+    ) -> asyncio.Task[Any]:
         task = asyncio.create_task(asyncio.Event().wait())
-        active = SimpleNamespace(room_id=room.id, trigger=trigger, task=task)
+        active = SimpleNamespace(
+            room_id=room.id, trigger=trigger, task=task, requested_by=requested_by
+        )
         monkeypatch.setattr(
             runs, "active_run", lambda room_id: active if room_id == room.id else None
         )
@@ -244,12 +251,52 @@ class TestAbortingARun:
 
         assert res.status_code == 200 and task.cancelled()
 
-    async def test_a_shared_member_stops_a_run_now(self, client, fake, monkeypatch):
+    async def test_a_shared_member_stops_their_own_run_now(self, client, fake, monkeypatch):
         room = fake.add()
         fake.share(room, BOB)
-        task = self._running(monkeypatch, room, "manual")
+        task = self._running(monkeypatch, room, "manual", requested_by=BOB)
 
         with _as(_auth(BOB)):
+            res = await client.post("/chat/abort", json={"room_id": room.id})
+        await asyncio.sleep(0)
+
+        assert res.status_code == 200 and task.cancelled()
+
+    @pytest.mark.parametrize("trigger", ["manual", "period", "preview"])
+    async def test_a_shared_member_cannot_stop_someone_elses_run(
+        self, client, fake, monkeypatch, trigger
+    ):
+        room = fake.add()
+        fake.share(room, BOB)
+        task = self._running(monkeypatch, room, trigger, requested_by=CAROL)
+
+        with _as(_auth(BOB)):
+            res = await client.post("/chat/abort", json={"room_id": room.id})
+
+        assert res.status_code == 403
+        assert res.json() == {"error": "room_forbidden"}
+        assert not task.cancelled()
+        task.cancel()
+
+    @pytest.mark.parametrize("trigger", ["manual", "period", "preview"])
+    async def test_an_assigned_member_stops_someone_elses_run(
+        self, client, fake, monkeypatch, trigger
+    ):
+        room = fake.add()
+        fake.share(room, BOB, assigned=True)
+        task = self._running(monkeypatch, room, trigger, requested_by=CAROL)
+
+        with _as(_auth(BOB)):
+            res = await client.post("/chat/abort", json={"room_id": room.id})
+        await asyncio.sleep(0)
+
+        assert res.status_code == 200 and task.cancelled()
+
+    async def test_an_admin_stops_someone_elses_preview(self, client, fake, monkeypatch):
+        room = fake.add()
+        task = self._running(monkeypatch, room, "preview", requested_by=CAROL)
+
+        with _as(_auth(ALICE, role="admin")):
             res = await client.post("/chat/abort", json={"room_id": room.id})
         await asyncio.sleep(0)
 

@@ -156,9 +156,10 @@ the query string of `/chat/history`, `/chat/outcome` and the other GET routes.
   published. A main-conversation turn binds nothing, so the publish refuses it.
 * **The room's own runs.** While a scheduled run, a "run now" or a preview
   holds the room, a send is `409 room_busy` as for a person's turn, and
-  `/chat/abort` stops that run: `post` access stops a run now or a preview; a
-  SCHEDULED run only an assigned member or a tenant admin may stop
-  (`403 room_forbidden` otherwise).
+  `/chat/abort` stops that run: a run now, period run or preview by the person
+  who started it, or by an assigned member or a tenant admin; a SCHEDULED run
+  only by an assigned member or a tenant admin (`403 room_forbidden`
+  otherwise).
 * **Search.** Verbatim chat search (`chat_store.search_chat_turns`) leaves out
   every workspace's conversation unless the caller passes the ids of the
   workspaces they can access.
