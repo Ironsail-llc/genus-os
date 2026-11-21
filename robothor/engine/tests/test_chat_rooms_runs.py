@@ -201,6 +201,43 @@ class TestAnInterruptedTurn:
         (args, _kw) = fake.published[-1]
         assert args[1] == "room.message"
 
+    async def test_it_keeps_its_client_id(self, client, fake, mock_runner, monkeypatch):
+        """The dashboard reconciles a stored message with its bubble by the
+        client id it sent; an interrupted turn's row must carry it too."""
+        from robothor.engine.runtime.current import active_context
+
+        room = fake.add()
+        fake.share(room, BOB)
+        entered = asyncio.Event()
+
+        async def forever(**kw: Any) -> AgentRun:
+            active_context.set(
+                SimpleNamespace(tenant_id=TENANT, principal_id=BOB, request_id="req-1")
+            )
+            entered.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        mock_runner.execute = AsyncMock(side_effect=forever)
+        monkeypatch.setattr(
+            "robothor.engine.chat_delivery._saved_request",
+            lambda request_id, auth: {"run_id": "r-1", "text": "half an answer"},
+        )
+        monkeypatch.setattr("robothor.engine.chat_store.save_exchange_async", fake.save_exchange)
+        cid = "7e7e7e7e-0000-4000-8000-000000000007"
+
+        first = asyncio.create_task(
+            _send(client, _auth(BOB), room_id=room.id, message="hello", client_id=cid)
+        )
+        await asyncio.wait_for(entered.wait(), 2)
+        with _as(_auth(BOB)), patch("robothor.engine.runtime.controls.issue_request", MagicMock()):
+            await client.post("/chat/abort", json={"room_id": room.id})
+        await asyncio.wait_for(first, 2)
+
+        rows = fake.store[(TENANT, room.session_key)]
+        assert rows[0]["content"] == "hello"
+        assert rows[0]["client_id"] == cid
+
 
 class TestAbortingARun:
     def _running(
