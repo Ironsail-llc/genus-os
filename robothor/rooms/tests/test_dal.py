@@ -377,6 +377,91 @@ def test_mark_read_never_moves_backwards(rooms_db) -> None:
     assert member.last_read_message_id == ids[2]
 
 
+def _unread(db: Any, user: str) -> int:
+    (summary,) = dal.list_rooms_for_user(db.tenant, user)
+    return summary.unread
+
+
+def test_a_preview_never_moves_anyones_read_mark(rooms_db) -> None:
+    """A preview (built later, so a higher seq) published before a scheduled
+    build must not let ``mark_read`` skip that build."""
+    room = _room(rooms_db)
+    scheduled, _ = dal.create_edition(rooms_db.tenant, room.id)
+    preview, _ = dal.create_edition(
+        rooms_db.tenant, room.id, preview=True, requested_by=rooms_db.alice
+    )
+    dal.publish_edition(rooms_db.tenant, preview.id, title="p", summary="p", blocks=BLOCKS)
+    assert _unread(rooms_db, rooms_db.alice) == 0
+
+    member = dal.mark_read(rooms_db.tenant, room.id, rooms_db.alice)
+    assert member.last_read_published_seq is None
+    dal.publish_edition(rooms_db.tenant, scheduled.id, title="s", summary="s", blocks=BLOCKS)
+
+    assert _unread(rooms_db, rooms_db.alice) == 1
+
+
+def test_editions_published_out_of_order_are_each_unread_once(rooms_db) -> None:
+    room = _room(rooms_db)
+    first, _ = dal.create_edition(rooms_db.tenant, room.id)
+    second, _ = dal.create_edition(rooms_db.tenant, room.id)
+    dal.publish_edition(rooms_db.tenant, second.id, title="2", summary="s", blocks=BLOCKS)
+    assert _unread(rooms_db, rooms_db.alice) == 1
+    dal.mark_read(rooms_db.tenant, room.id, rooms_db.alice)
+    assert _unread(rooms_db, rooms_db.alice) == 0
+
+    dal.publish_edition(rooms_db.tenant, first.id, title="1", summary="s", blocks=BLOCKS)
+
+    assert _unread(rooms_db, rooms_db.alice) == 1
+    (summary,) = dal.list_rooms_for_user(rooms_db.tenant, rooms_db.alice)
+    assert summary.latest_edition["id"] == first.id  # the latest to be published
+
+
+def test_publishing_numbers_editions_in_publish_order_and_skips_previews(rooms_db) -> None:
+    room = _room(rooms_db)
+    a, _ = dal.create_edition(rooms_db.tenant, room.id)
+    b, _ = dal.create_edition(rooms_db.tenant, room.id)
+    p, _ = dal.create_edition(rooms_db.tenant, room.id, preview=True, requested_by=rooms_db.bob)
+
+    pb = dal.publish_edition(rooms_db.tenant, b.id, title="b", summary="s", blocks=BLOCKS)
+    pp = dal.publish_edition(rooms_db.tenant, p.id, title="p", summary="s", blocks=BLOCKS)
+    pa = dal.publish_edition(rooms_db.tenant, a.id, title="a", summary="s", blocks=BLOCKS)
+
+    assert (pb.published_seq, pa.published_seq, pp.published_seq) == (1, 2, None)
+    assert (pa.seq, pb.seq) == (a.seq, b.seq)  # build seq is stable
+
+
+def test_concurrent_publishes_get_distinct_publish_numbers(rooms_db) -> None:
+    room = _room(rooms_db)
+    made = [dal.create_edition(rooms_db.tenant, room.id)[0] for _ in range(5)]
+    it = iter(made)
+    lock = threading.Lock()
+
+    def publish() -> Any:
+        with lock:
+            e = next(it)
+        return dal.publish_edition(rooms_db.tenant, e.id, title="t", summary="s", blocks=BLOCKS)
+
+    results = _race(5, publish)
+
+    assert not [r for r in results if isinstance(r, Exception)], results
+    assert sorted(r.published_seq for r in results) == [1, 2, 3, 4, 5]
+
+
+def test_an_explicit_mark_uses_the_publish_number(rooms_db) -> None:
+    room = _room(rooms_db)
+    first, _ = dal.create_edition(rooms_db.tenant, room.id)
+    second, _ = dal.create_edition(rooms_db.tenant, room.id)
+    pub2 = dal.publish_edition(rooms_db.tenant, second.id, title="2", summary="s", blocks=BLOCKS)
+    dal.publish_edition(rooms_db.tenant, first.id, title="1", summary="s", blocks=BLOCKS)
+
+    member = dal.mark_read(
+        rooms_db.tenant, room.id, rooms_db.alice, published_seq=pub2.published_seq
+    )
+
+    assert member.last_read_published_seq == 1
+    assert _unread(rooms_db, rooms_db.alice) == 1
+
+
 def test_the_summary_carries_the_latest_published_edition(rooms_db) -> None:
     room = _room(rooms_db)
     first, _ = dal.create_edition(
