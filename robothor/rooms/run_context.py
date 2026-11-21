@@ -15,13 +15,19 @@ room". Whoever starts a run in a room binds it around ``runner.execute``:
 A ``ContextVar``, so it is task-local: tool handlers inside the run see it,
 and a concurrent run in another task never does. Nothing here is ever taken
 from tool arguments; an agent cannot claim a room, a preview or a period.
+
+The carrier also collects the editions its turn published, so the assistant
+message the chat store saves for that turn (inside the same scope) carries
+them, and a turn that never saves leaves nothing behind for a later one. Bind
+the scope around the run AND the save of its reply.
 """
 
 from __future__ import annotations
 
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from robothor.rooms.keys import parse_room_key
@@ -50,6 +56,24 @@ class RoomRun:
     grain: str | None = None
     period_start: date | None = None
     period_end: date | None = None
+    #: Editions this turn published, for the reply the chat store saves.
+    _published: list[str] = field(default_factory=list, compare=False, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, compare=False, repr=False)
+
+    def note_published(self, edition_id: str) -> None:
+        with self._lock:
+            self._published.append(edition_id)
+
+    def take_published(self) -> list[str]:
+        """The editions noted since the last take, oldest first."""
+        with self._lock:
+            taken, self._published[:] = list(self._published), []
+        return taken
+
+    def restore_published(self, edition_ids: list[str]) -> None:
+        """Put back what a failed save took, ahead of anything noted since."""
+        with self._lock:
+            self._published[:0] = edition_ids
 
     def __post_init__(self) -> None:
         parts = (self.grain, self.period_start, self.period_end)

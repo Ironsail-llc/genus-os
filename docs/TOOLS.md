@@ -1927,7 +1927,8 @@ the workspace and listed in its history.
 
 - **Where it works.** Only inside a run whose session is that workspace's own
   conversation (an interactive turn there, or a scheduled or on-demand run), for a
-  caller who may post there. Anywhere else it refuses.
+  caller who may post there. Anywhere else it refuses, including from a sub-agent
+  the workspace's run spawned: return the result to that run and publish there.
 - **Kinds.** `edition` (the default) covers one period and needs a report
   workspace; the period is `{grain, start, end}` with ISO dates and defaults to the
   period the run was started for. `dashboard` is an ad-hoc board in any workspace
@@ -1941,8 +1942,9 @@ the workspace and listed in its history.
 - **Suggestions.** At most 10 `{key, title, detail?, action_hint?}`; `key` is a
   stable lowercase slug. Accepting them is a later step, not this tool.
 - **Text.** The title is one line; the summary is plain text of at most 4000
-  characters, with control sequences and marker syntax removed, because it is read
-  back into later prompts.
+  characters. Because both are read back into later prompts, hidden characters are
+  removed and every `<`, `>`, `[` and `]` (however encoded) becomes `‹`, `›`, `(`,
+  `)`: no tag or `[RENDER:` marker can be written there. Put visuals in blocks.
 - **Provenance** is written by the server from the run's recorded tool calls, its
   run id, run-as user and start time. Nothing in the arguments sets it, and neither
   does anything set the preview flag: a preview run's editions are visible to its
