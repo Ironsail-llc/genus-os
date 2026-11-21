@@ -1629,7 +1629,7 @@ same way.
 | `room_duplicate` | `room_id`; the caller's own copy | shared or more |
 | `room_restore_revision` | `room_id`, `rev`; writes a new revision equal to it | assigned, or owner/admin |
 | `room_admin_reassign` | `room_id`, `user`; assigned and the run-as user | owner/admin |
-| `room_task_accept` | `room_id`, `task_id`; the task becomes the caller's (`crm_tasks.assignee_id`). Someone else's is refused, naming who has it | shared or more, not archived |
+| `room_task_accept` | `room_id`, `task_id`; the task becomes the caller's (`crm_tasks.assignee_id`). Someone else's is refused, naming who has it; a task workspace's own task is never taken from inside it | shared or more, not archived |
 | `room_task_dismiss` | `room_id`, `task_id`; a suggested task only, which then never returns | shared or more, not archived |
 | `room_open_task` | `task_id`; the task's own workspace, made on first open | a staff role (not viewer) to create one |
 

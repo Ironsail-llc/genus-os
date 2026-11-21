@@ -279,6 +279,8 @@ wrappers. Schema changes are migration 172.
   nothing wrote it before, the bridge task view already reads it as
   `assigneeId`) and `room_tasks.accepted_by`. A task whose assignee is someone
   else is refused naming them; the same person accepting again is a no-op.
+  A task workspace's own `subject` task is never accepted from inside it
+  (`RoomForbidden`), so opening a task never makes the opener its assignee.
 - **Dismiss** applies to `origin='suggestion'` only; it also resolves the CRM
   task (`resolution='dismissed'`) so it leaves open task lists. A task is
   decided once: accept after dismiss and dismiss after accept are refused.
@@ -305,7 +307,12 @@ wrappers. Schema changes are migration 172.
   `proposed_for_user_id` only for an interactive trigger with a user-account id,
   `room_id` from the room run carrier, else the room key in an interactive
   turn's `trigger_detail`. An explicit `proposer=` argument overrides it.
-- **Member approval.** The action's task is the task workspace's own task
+- **Member approval.** Beyond the contract's four conditions the rule also
+  requires: the caller's `user_accounts` row active with role `member`/`user`
+  now; `proposed_by` NULL (a plugin's draft is its policy's or an operator's);
+  the kind not `sales.%` (`OPERATOR_ONLY_KIND_PATTERNS`: the sales pipeline
+  accepts only `operator:` verdicts); the task not done, resolved or deleted.
+  The action's task is the task workspace's own task
   (`rooms.task_id`): `operation_actions` has no task column, and a report or agent
   workspace's actions stay with operators. A viewer's `GET /api/approvals` stays
   403 (a viewer can never post, so nothing could be theirs); a `member` or `user`

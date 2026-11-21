@@ -1564,13 +1564,19 @@ change that lets a person approve the email their own agent turn drafted.
 eligible `action` rows, each carrying `room_id` and `task_id`, and `POST
 /api/approvals/action/{id}` decides one. The rule, in `robothor/rooms/approvals.py`,
 holds only when ALL of these do, read from the database at decision time: the
-action was proposed for the caller (`proposed_for_user_id`); its
+caller's account is active with role `member` or `user` now (not only per the
+token); the action was proposed for the caller (`proposed_for_user_id`) by a run,
+not a plugin (`proposed_by` is NULL), and is not a `sales.*` kind (the sales
+pipeline accepts only an operator's verdict); its
 `proposed_by_run_id` is an `agent_runs` row of the caller with
 `trigger_type='webchat'` and `trigger_detail` exactly `webchat:<the workspace's
 session key>`; the caller can post in that workspace now (`access.require(...,
 "post")`: a current member, the workspace not archived); and the workspace is a
-task workspace whose task (`rooms.task_id`, linked in `room_tasks`) has the
-caller as its human assignee (`crm_tasks.assignee_id`). The check runs again
+task workspace whose task (`rooms.task_id`, linked in `room_tasks`, not done,
+resolved or deleted) has the caller as its human assignee
+(`crm_tasks.assignee_id`). Opening a task never makes anyone its assignee: a
+task workspace's own task cannot be accepted from inside it, so a member becomes
+an assignee by accepting a suggestion or by someone assigning them. The check runs again
 inside `Operations.decide(member_check=...)` under the action's row lock, which
 also requires the row's `proposed_for_user_id` to be the deciding member.
 Anything else is a 403 that settles nothing, a check that cannot be made lists
