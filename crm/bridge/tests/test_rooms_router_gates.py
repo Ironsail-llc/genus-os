@@ -107,7 +107,9 @@ def test_rooms_errors_map_to_statuses(error, status) -> None:
     if error == "RevisionConflict":
         assert detail["currentRev"] == 4
     if error == "RoomBusy":
-        assert detail["answering"] == "Alice"
+        # The bridge never runs a turn, so it has no busy room to name; the
+        # engine's chat route answers ``answering`` itself.
+        assert "answering" not in detail
 
 
 def test_a_request_without_a_verified_human_is_refused(controls_client_as_service, monkeypatch):
@@ -121,3 +123,86 @@ def test_a_request_without_a_verified_human_is_refused(controls_client_as_servic
     monkeypatch.setattr(dal, "list_all_rooms", boom)
     response = controls_client_as_service.get("/api/rooms")
     assert response.status_code == 403
+
+
+#: Text no response body may ever carry: it stands for an exception's own words
+#: (a path, a query, a stack frame).
+SECRET = "secret-detail /srv/app/db.py line 42"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        "RoomNotFound",
+        "RoomForbidden",
+        "RoomBusy",
+        "InvalidBlocks",
+        "RevisionConflict",
+    ],
+)
+def test_rooms_errors_never_echo_the_exceptions_text(exc) -> None:
+    from routers import rooms
+
+    from robothor.rooms import errors
+
+    error = (
+        errors.RevisionConflict(3, SECRET)
+        if exc == "RevisionConflict"
+        else errors.RoomBusy("Alice", SECRET)
+        if exc == "RoomBusy"
+        else getattr(errors, exc)(SECRET)
+    )
+    response = rooms.room_error_response(None, error)
+
+    assert "secret-detail" not in response.body.decode()
+    assert json_detail(response)["message"]
+
+
+@pytest.mark.parametrize("kind", ["ValueError", "UnsafeInstructions", "InvalidSchedule"])
+def test_refused_values_never_echo_the_exceptions_text(kind) -> None:
+    from routers import rooms
+
+    from robothor.rooms import definition
+
+    error = ValueError(SECRET) if kind == "ValueError" else getattr(definition, kind)(SECRET)
+    response = rooms._invalid(error)
+
+    assert response.status_code == 422
+    assert "secret-detail" not in response.body.decode()
+    assert json_detail(response)["message"]
+
+
+def test_an_unexpected_error_in_a_route_is_a_generic_500(
+    controls_client_as_user, monkeypatch, caplog
+) -> None:
+    from robothor.rooms import dal
+
+    def boom(*a, **k):
+        raise RuntimeError(SECRET)
+
+    monkeypatch.setattr(dal, "list_rooms_for_user", boom)
+
+    response = controls_client_as_user.get("/api/rooms")
+
+    assert response.status_code == 500
+    assert "secret-detail" not in response.text
+    assert response.json() == {
+        "detail": {"error": "internal_error", "message": "Something went wrong.", "field": None}
+    }
+    assert any("secret-detail" in r.getMessage() or r.exc_info for r in caplog.records)
+
+
+def test_a_malformed_body_never_echoes_the_validators_text(controls_client_as_user) -> None:
+    response = controls_client_as_user.patch(
+        f"/api/rooms/{'0' * 8}-0000-4000-8000-{'0' * 12}",
+        json={"expectedRev": "not-a-number-secret-detail", "changes": {}},
+    )
+    assert response.status_code == 422
+    assert "secret-detail" not in response.text
+    assert response.json()["detail"]["field"] == "expectedRev"
+
+
+def json_detail(response) -> dict:
+    import json
+
+    return json.loads(response.body)["detail"]
