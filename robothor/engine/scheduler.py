@@ -1252,15 +1252,14 @@ class CronScheduler:
         )
 
     async def _tick_user_cronjobs(self) -> None:
-        """Fire any due user-authored cron jobs and advance their schedules.
+        """Fire due user-authored cron jobs and workspace schedules (``room_schedule``).
 
-        Poll-based (not APScheduler-registered) so registering a job never
-        churns the live job registry. Best-effort: a DB hiccup is logged, not
-        fatal to the scheduler loop.
-        """
+        Poll-based (not APScheduler-registered), so registering a job never churns
+        the live registry. Best-effort: a DB hiccup is logged, not fatal to the loop."""
         import json
 
         try:
+            from robothor.engine.room_schedule import tick_room_cronjobs
             from robothor.engine.user_cron import (
                 compute_next_run,
                 list_due_cronjobs,
@@ -1268,6 +1267,7 @@ class CronScheduler:
             )
 
             now = datetime.now(UTC)
+            await tick_room_cronjobs(self.config.tenant_id, self.runner)  # rooms: own path
             due = await asyncio.to_thread(list_due_cronjobs, self.config.tenant_id, now)
             for job in due:
                 job_id = job["job_id"]

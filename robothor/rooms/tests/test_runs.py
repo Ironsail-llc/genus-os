@@ -452,7 +452,7 @@ class TestFailure:
             env.db.tenant, room.id, trigger="manual", requested_by=env.db.alice
         )
 
-        (summary,) = [r for r in dal.list_rooms_for_user(env.db.tenant, env.db.bob)]
+        (summary,) = dal.list_rooms_for_user(env.db.tenant, env.db.bob)
         assert summary.latest_edition["id"] == good.id
 
     async def test_consecutive_failures_pause_the_room_and_say_why(self, env):
@@ -762,7 +762,9 @@ class TestRunNow:
 
         definition.apply_definition_change(alice, room.id, current.rev, {"paused": False})
 
-        nxt = datetime.fromisoformat(definition.room_schedule(env.db.tenant, room.id)["next_run_at"])
+        nxt = datetime.fromisoformat(
+            definition.room_schedule(env.db.tenant, room.id)["next_run_at"]
+        )
         assert nxt > datetime.now(UTC) + timedelta(minutes=50)
 
 

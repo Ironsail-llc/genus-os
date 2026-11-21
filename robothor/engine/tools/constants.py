@@ -293,6 +293,7 @@ ROOM_TOOLS = frozenset(
         "room_duplicate",
         "room_restore_revision",
         "room_admin_reassign",
+        "room_run",
     }
 )
 

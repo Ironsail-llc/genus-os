@@ -208,9 +208,16 @@ class WebchatChannel:
         *,
         config: AgentConfig | None = None,
         run: AgentRun | None = None,
+        tenant_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
         **kw: Any,
     ) -> SendReceipt:
         """Write ``text`` into ``target``'s session and inbox.
+
+        ``tenant_id`` names the tenant to write under (a workspace's own);
+        unset, the engine's. ``metadata`` is added to the notification's, for
+        a caller that names what the note is about (a workspace's
+        ``room_id`` and ``edition_id``); a ``session_key`` in it is dropped.
 
         Guards first, in Slack's order: a manifest defect is a manifest defect
         whether or not the member exists, and saying "unknown user" about an
@@ -231,7 +238,7 @@ class WebchatChannel:
                 acknowledged=0, expected=2, status="failed:webchat_unexpanded_target", target=clean
             )
 
-        tenant_id = _tenant_id()
+        tenant_id = tenant_id or _tenant_id()
         identity = await asyncio.to_thread(_resolve_identity, "webchat", clean, tenant_id)
         if identity is None:
             # Not "no session": the address does not belong to an active
@@ -273,6 +280,7 @@ class WebchatChannel:
                 # session it belongs to. ``chat_message_id`` already points at
                 # the row that knows its session, so carrying the key here would
                 # widen the audience of an identifier for nothing.
+                **{k: v for k, v in (metadata or {}).items() if k != "session_key"},
                 "kind": "webchat_delivery",
                 "run_id": getattr(run, "id", None),
                 "chat_message_id": str(message_id) if message_id is not None else None,

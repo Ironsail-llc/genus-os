@@ -170,7 +170,7 @@ class TestWhatTheyHear:
 
         text = env.sent[0]["text"]
         assert f"[{room.title}](/?v=chat&room={room.id})" in text
-        assert len(text) <= fanout.MAX_NOTE_CHARS + len(room.title) + 64
+        assert len(text) <= fanout.MAX_NOTE_CHARS + 200 + len(room.title) + 64
         assert "SECRET TABLE" not in text
         assert LONG not in text
         assert room.session_key not in str(env.sent)

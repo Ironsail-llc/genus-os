@@ -26,7 +26,7 @@ from robothor.engine.sanitize import sanitize_log
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterable, Iterator
     from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -876,11 +876,21 @@ def search_chat_turns(
     query_embedding: list[float],
     limit: int = 5,
     tenant_id: str = DEFAULT_TENANT,
+    room_ids: Iterable[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Vector search over embedded chat turns scoped to a tenant.
 
+    A session that backs a workspace (``agent:{agent}:room:{id}``) is searched
+    only when its room id is in ``room_ids``, the workspaces the caller can
+    access; with none passed, no workspace is searched. Fails closed: the
+    room is read from the key's shape, so a session whose room is gone is
+    still left out.
+
     Returns list of {id, role, content, similarity, created_at, session_key}.
     """
+    from robothor.rooms.keys import canonical_uuid
+
+    allowed = sorted({c for c in (canonical_uuid(r) for r in room_ids or ()) if c})
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         apply_hnsw_session(cur)
@@ -893,10 +903,12 @@ def search_chat_turns(
             JOIN chat_sessions s ON s.id = m.session_id
             WHERE s.tenant_id = %s
               AND m.embedding IS NOT NULL
+              AND (split_part(s.session_key, ':', 3) <> 'room'
+                   OR split_part(s.session_key, ':', 4) = ANY(%s::text[]))
             ORDER BY m.embedding <=> %s::vector
             LIMIT %s
             """,
-            (query_embedding, tenant_id, query_embedding, limit),
+            (query_embedding, tenant_id, allowed, query_embedding, limit),
         )
         rows = cur.fetchall()
 

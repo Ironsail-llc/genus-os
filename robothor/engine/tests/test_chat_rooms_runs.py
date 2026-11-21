@@ -1,3 +1,4 @@
+# ruff: noqa: F811 - pytest fixtures are imported and requested by name
 """Interactive chat on a workspace, where it meets the workspace's runs.
 
 - An interactive workspace turn runs with the room bound
@@ -18,10 +19,9 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from robothor.engine.models import AgentRun
 from robothor.engine.tests.test_chat_rooms import (  # noqa: F401 - fixtures by name
     ALICE,
     BOB,
@@ -36,6 +36,9 @@ from robothor.engine.tests.test_chat_rooms import (  # noqa: F401 - fixtures by 
 )
 from robothor.rooms import editions, runs
 from robothor.rooms.run_context import current_room_run
+
+if TYPE_CHECKING:
+    from robothor.engine.models import AgentRun
 
 
 class TestTheTurnIsBoundToItsRoom:
@@ -200,7 +203,9 @@ class TestAbortingARun:
     def _running(self, monkeypatch, room: Any, trigger: str) -> asyncio.Task[Any]:
         task = asyncio.create_task(asyncio.Event().wait())
         active = SimpleNamespace(room_id=room.id, trigger=trigger, task=task)
-        monkeypatch.setattr(runs, "active_run", lambda room_id: active if room_id == room.id else None)
+        monkeypatch.setattr(
+            runs, "active_run", lambda room_id: active if room_id == room.id else None
+        )
         return task
 
     async def test_a_shared_member_cannot_stop_a_scheduled_run(self, client, fake, monkeypatch):

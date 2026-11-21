@@ -196,8 +196,14 @@ class TestTheRegistry:
         claim the name would become the surface the ``do_not_contact`` guard
         runs inside, and an opt-out control a package can replace merely by
         being installed is not a control.
+
+        ``room`` joined it with the workspaces: it writes into a workspace's
+        shared conversation and notifies its members.
         """
-        assert frozenset({"telegram", "event_bus", "slack", "webchat", "email"}) == BUILTIN_CHANNELS
+        assert (
+            frozenset({"telegram", "event_bus", "slack", "webchat", "email", "room"})
+            == BUILTIN_CHANNELS
+        )
         for name in BUILTIN_CHANNELS:
             assert get_channel(name) is not None, f"built-in channel {name!r} is missing"
 

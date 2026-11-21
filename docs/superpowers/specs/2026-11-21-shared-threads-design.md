@@ -266,6 +266,91 @@ this list a subset of the dashboard's component registry. `suggestions` is a lis
   repeatedly until the text stops changing, so nesting or a hidden character cannot
   rebuild one.
 
+#### As built (lane 7)
+
+`robothor/rooms/runs.py` is the one path that runs a room's agent outside
+interactive chat. Its entry points (the contract's single `run_room` split in
+two, so the periods lane calls the shape it needs):
+
+- `execute_room_run(tenant_id, room_id, *, trigger: 'schedule'|'manual'|'period',
+  requested_by=None, preview=False, period=None) -> Edition | None` (async):
+  creates the period's `building` edition (`period` a `Period(start, end, grain)`,
+  a `(start, end, grain)` tuple or `{grain, start, end}`; default the last
+  complete period of `default_grain`) and runs. None when nothing ran: no such
+  room in the tenant, archived, paused (schedule), the period already building,
+  or a run-as user who can no longer run it.
+- `run_room(room, edition, *, period, context) -> Edition | None` (async): the
+  periods lane's entry point for the `building` edition it created; runs as the
+  run-as user, tells `edition.requested_by` only, raises `RunRefused` when the
+  room cannot run.
+- `start_room_run(actor, room_id, *, preview=False, period=None) ->
+  tuple[Edition, bool]` (async): "run now" for a person, `(edition, joined)`,
+  the run in the background (`pending_runs()`). Needs `run`; a paused room only
+  for assigned or admin; refuses non-report rooms (`ValueError`). Raises
+  `RoomNotFound`, `RoomForbidden`, `RunRefused(reason='paused'|'archived')`,
+  `OnDemandCapReached(limit, used)` (`check_on_demand_cap`: every edition a
+  person requested since local midnight, previews included, default 5).
+- `last_complete_period` and `Period` are local stand-ins with the periods
+  lane's behaviour (weeks start Monday); swap for `robothor.rooms.periods`.
+
+Run rules: the room's turn lock (`fanout.room_lock`) is awaited, never the
+per-agent dedup lock; the room and the run-as user (`definition.run_as_actor`
+plus `post` access) are re-read inside the lock; the assembled prompt is
+re-scanned; the carrier (`RoomRun.for_session(..., preview, requested_by,
+edition_id, period)`) wraps `runner.execute` and the save of the reply; the run
+goes through the normal runner (run tracking on), `trigger_type` CRON for a
+schedule and MANUAL otherwise, `trigger_detail=f"room:{id}"`. The cost cap is
+the runner's hard budget: `dataclasses.replace(agent_config, hard_budget=True,
+max_cost_usd=min(room settings.max_cost_usd, the agent's own cap))`, default
+`DEFAULT_MAX_COST_USD` $2.00. The edition ends `published` or `failed` on every
+exit (cancel, exception, timeout, cost cap `"stopped at the cost cap"`, no
+publish). A non-preview failure increments `consecutive_failures`
+(`dal.record_run_result`, added), tells assigned members (inbox
+`agent_error`, `metadata.room_id`), and at `AUTO_PAUSE_AFTER_FAILURES` (3) in a
+row pauses the room (`definition.sync_room_schedule`, added) and says why; a
+success resets it. A run-as user who is inactive or cannot post pauses the room
+and tells the tenant's owners and admins. A non-preview run saves its exchange
+in the room (user turn `room_trigger`, reply `author_agent_id`); a preview saves
+nothing in the shared conversation.
+
+`fanout.fan_out_edition(room, edition, *, recipients=None, emit_event=True) ->
+list[SendReceipt]` (async): never for a preview. Recipients: members with an
+active account who have not muted (`notify.muted`, `notify.enabled: false`, or
+`settings.notify_default: false` without an opt-in), or the named ones who have
+access. Each gets a webchat note in their main conversation (`[title](/?v=chat&room=<id>)`,
+summary cut to 280 characters; inbox row type `info` to the user id, `metadata`
+`{room_id, edition_id, ...}` without the session key; `WebchatChannel.send` gained
+`tenant_id` and `metadata`), plus their paired `notify.channel`. A run's publish
+already emitted `room.edition`, so runs pass `emit_event=False`.
+`fan_out_note(room, text, *, metadata, recipients=None)` is the shared sender.
+
+The scheduler's tick (`robothor/engine/room_schedule.py`, called from `_tick_user_cronjobs`) reads `user_cron.list_due_room_cronjobs`
+for `config.tenant_id` (one engine serves one tenant), claims each row with
+`user_cron.claim_room_cronjob(job_id, due_at=, next_run_at=)` (an update that
+holds only if `next_run_at` is unchanged: one winner across ticks and replicas)
+and fires `execute_room_run(..., trigger='schedule')`.
+
+`POST /api/rooms/{id}/run` (engine, `robothor/engine/rooms_api.py`): body
+`{preview?, period?, requested_by?}`; caller rules as the periods route (human
+token is its own identity; the service token names `requested_by`, whose role is
+read from `user_accounts`). 202 started, 200 joined, 400 no requester, 403, 404,
+409 paused/archived, 422 bad period, 429 cap; the body is `edition_json`.
+`room_run(room_id, preview?, period?)` is the same for the main agent (in
+`ROOM_TOOLS`, excluded from benchmarks) and returns `{edition, started, joined, link}`.
+
+The `room` delivery channel (`channels/room.py`, built in): `delivery.to` is the
+room id; the output is an assistant turn attributed to the agent, then a note to
+members. Failures: `failed:room_unknown_target`, `failed:room_archived`,
+`failed:room_no_session_write`.
+
+Interactive chat binds `chat_rooms.room_scope(target)` in `chat_rooms.start_turn`,
+so every room turn's task (runner and save) carries the room; the interruption
+path (`chat_delivery.deliver_interruption`) finds the room from the session key
+and saves the turn with its author and moves its activity mark; `/chat/abort` stops a running room run, a scheduled one only for assigned
+or admin. `chat_store.search_chat_turns(..., room_ids=None)` leaves out every
+room session not in `room_ids`. The bridge's notification read and ack accept
+only the recipient or an operator. No schema change.
+
 ### Tools
 
 `room_create(kind, title, instructions, agent_id?, schedule?, tz?, default_grain?, share_with?)`,

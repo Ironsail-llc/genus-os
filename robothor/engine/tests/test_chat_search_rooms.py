@@ -33,7 +33,9 @@ def searchable(rooms_db, monkeypatch):  # noqa: F811
         "theirs": room_session_key("analyst", theirs),
     }
     for name, key in keys.items():
-        chat_store.save_exchange(key, f"question in {name}", f"answer in {name}", tenant_id=db.tenant)
+        chat_store.save_exchange(
+            key, f"question in {name}", f"answer in {name}", tenant_id=db.tenant
+        )
     db.cur.execute(
         "UPDATE chat_messages SET embedding = %s::vector WHERE session_id IN "
         "(SELECT id FROM chat_sessions WHERE tenant_id = %s)",

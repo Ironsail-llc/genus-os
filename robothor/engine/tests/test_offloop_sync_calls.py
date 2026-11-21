@@ -347,3 +347,57 @@ async def test_finish_run_bookkeeping_runs_off_the_loop(request, monkeypatch, si
     assert returned_after < 0.05, f"_finish_run held its caller {returned_after * 1000:.0f} ms"
     await probe.settle()
     probe.assert_loop_free()
+
+
+# ── workspace runs (robothor/rooms/runs.py) and what they reach ───────────
+
+
+async def test_a_room_run_prepares_its_edition_off_the_loop(monkeypatch):
+    from robothor.rooms import runs
+
+    probe = SlowProbe(asyncio.get_running_loop(), result=None)
+    monkeypatch.setattr(runs, "_prepare", probe)
+
+    assert await runs.execute_room_run("test-tenant", "r", trigger="schedule") is None
+    await probe.settle()
+    probe.assert_loop_free()
+
+
+async def test_the_room_schedule_tick_reads_its_rows_off_the_loop(monkeypatch):
+    from robothor.engine import user_cron
+    from robothor.engine.room_schedule import tick_room_cronjobs
+
+    probe = SlowProbe(asyncio.get_running_loop(), result=[])
+    monkeypatch.setattr(user_cron, "list_due_room_cronjobs", probe)
+
+    await tick_room_cronjobs("test-tenant", MagicMock())
+    await probe.settle()
+    probe.assert_loop_free()
+
+
+async def test_a_fan_out_reads_its_audience_off_the_loop(monkeypatch):
+    from robothor.rooms import fanout
+
+    probe = SlowProbe(asyncio.get_running_loop(), result=[])
+    monkeypatch.setattr(fanout, "_audience", probe)
+    room = MagicMock(tenant_id="test-tenant", id="r")
+
+    assert await fanout.fan_out_note(room, "hello", metadata={}) == []
+    await probe.settle()
+    probe.assert_loop_free()
+
+
+async def test_a_room_delivery_reads_its_room_off_the_loop(monkeypatch):
+    import uuid
+
+    from robothor.engine.channels.room import RoomChannel
+    from robothor.rooms import dal
+
+    probe = SlowProbe(asyncio.get_running_loop(), result=None)
+    monkeypatch.setattr(dal, "get_room", probe)
+    run = MagicMock(tenant_id="test-tenant")
+
+    receipt = await RoomChannel().send(str(uuid.uuid4()), "x", config=MagicMock(), run=run)
+    assert receipt.status == "failed:room_unknown_target"
+    await probe.settle()
+    probe.assert_loop_free()

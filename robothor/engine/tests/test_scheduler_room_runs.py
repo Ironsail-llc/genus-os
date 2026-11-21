@@ -78,7 +78,7 @@ async def test_a_due_room_is_claimed_then_run_through_the_room_path(monkeypatch)
     await s._tick_user_cronjobs()
     await asyncio.sleep(0)
 
-    (job_id, due_at, next_run), = seen["claims"]
+    ((job_id, due_at, next_run),) = seen["claims"]
     assert (job_id, due_at) == ("ucron-room1", DUE)
     assert next_run > DUE
     assert seen["runs"] == [("test-tenant", ROOM, {"trigger": "schedule"})]
@@ -177,9 +177,7 @@ def test_two_claims_of_one_due_row_have_one_winner(cron_db):
     nxt = datetime.now(UTC) + timedelta(hours=1)
 
     first = user_cron.claim_room_cronjob(row["job_id"], due_at=row["next_run_at"], next_run_at=nxt)
-    second = user_cron.claim_room_cronjob(
-        row["job_id"], due_at=row["next_run_at"], next_run_at=nxt
-    )
+    second = user_cron.claim_room_cronjob(row["job_id"], due_at=row["next_run_at"], next_run_at=nxt)
 
     assert (first, second) == (True, False)
     assert user_cron.list_due_room_cronjobs(db.tenant, datetime.now(UTC)) == []

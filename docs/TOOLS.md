@@ -1629,6 +1629,7 @@ same way.
 | `room_duplicate` | `room_id`; the caller's own copy | shared or more |
 | `room_restore_revision` | `room_id`, `rev`; writes a new revision equal to it | assigned, or owner/admin |
 | `room_admin_reassign` | `room_id`, `user`; assigned and the run-as user | owner/admin |
+| `room_run` | `room_id`, `preview`, `period` (`{grain, start, end}`); runs a report workspace now | shared or more (a paused one: assigned, or owner/admin) |
 
 - **Who is asking.** Always the human on the run, from the tool context
   (`user_id`, `user_role`), never the agent. A run with no verified person
@@ -1912,6 +1913,31 @@ a file it reads and writes back comes back byte for byte. A call through
 must read: it reaches the agent unchanged and is still masked wherever it is
 stored. The list is empty; `vault_get` and `vault_test` return a fingerprint,
 never a value.
+
+### Running a workspace: `room_run`
+
+`room_run(room_id, preview?, period?)` runs a report workspace now, the same
+run the schedule makes and the dashboard's "Run now" starts
+(`POST /api/rooms/{id}/run` on the engine). Use it for "refresh it now" or "show
+me before anyone sees it" (`preview: true`); use `room_request_period` for a past
+day, week or month someone wants to read, and `room_read` for editions that
+already exist.
+
+- The run builds the edition for the last complete period of the workspace's
+  `default_grain` (or the `period` named), as the workspace's run-as user (re-read
+  from their account at that moment, with their current role), and notifies its
+  members when it publishes. A **preview** builds it for the person you are
+  talking to only: nobody else sees it, nobody is notified, no tasks are created,
+  and nothing is written in the shared conversation.
+- It goes on in the background. The result is the edition being built
+  (`started: true`) and the link; a run already in progress is joined
+  (`joined: true`), never started twice.
+- Refused for a viewer, for an archived workspace, for a paused one unless the
+  caller is assigned to it (or an owner or admin), and past the workspace's daily
+  on-demand cap (`settings.max_on_demand_per_day`, 5 when unset; previews count):
+  `cap_reached: true`. Every run is capped in cost (see
+  docs/BUDGETS_AND_STOPS.md); a capped run's edition fails "stopped at the cost
+  cap" rather than publishing a partial report.
 
 ### Workspace editions: `room_publish_edition`
 

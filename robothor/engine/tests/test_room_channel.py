@@ -61,9 +61,7 @@ def env(monkeypatch):
         return [SendReceipt(acknowledged=2, expected=2)]
 
     monkeypatch.setattr(fanout, "fan_out_note", fake_note)
-    return SimpleNamespace(
-        rooms=rooms, saved=saved, notes=notes, activity=activity, events=events
-    )
+    return SimpleNamespace(rooms=rooms, saved=saved, notes=notes, activity=activity, events=events)
 
 
 def _config() -> Any:
@@ -98,7 +96,7 @@ async def test_output_lands_as_an_attributed_turn_and_members_are_told(env):
     (note,) = env.notes
     assert note["room"].id == room.id
     assert note["metadata"]["room_id"] == room.id
-    assert room.session_key not in str(note) and room.session_key not in receipt.target
+    assert room.session_key not in note["text"] + str(note["metadata"]) + receipt.target
 
 
 @pytest.mark.parametrize("target", ["", "not-a-uuid", str(uuid.uuid4())])
