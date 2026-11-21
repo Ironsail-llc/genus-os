@@ -3,7 +3,7 @@
  * with something new, or says nothing is new. Choosing one opens it in place
  * (client-side, through the view route), not with a page load.
  */
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AGENT_ID, REPORT_ID, reply, summary } from "@/lib/rooms/__tests__/fixtures";
@@ -15,8 +15,10 @@ vi.mock("@/hooks/use-visual-state", () => ({
 import { ChatLanding } from "../chat-landing";
 
 let roomsBody: unknown;
+let roomsStatus = 200;
 
 beforeEach(() => {
+  roomsStatus = 200;
   roomsBody = {
     rooms: [
       summary({ id: REPORT_ID, title: "Weekly sales", unread: 2 }),
@@ -27,7 +29,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === "/api/bridge/api/rooms") return reply(roomsBody);
+      if (url === "/api/bridge/api/rooms") return reply(roomsBody, roomsStatus);
       return reply({});
     }),
   );
@@ -60,4 +62,15 @@ describe("ChatLanding — new in your workspaces", () => {
     expect(push).toHaveBeenCalledWith(null, "", `/?v=chat&room=${REPORT_ID}`);
     push.mockRestore();
   });
+
+  it("shows nothing about workspaces where they are not served (the list answers 404)", async () => {
+    roomsStatus = 404;
+    roomsBody = { detail: "Not Found" };
+    landing();
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/bridge/api/rooms", expect.anything()));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByTestId("new-in-workspaces")).toBeNull();
+    expect(screen.queryByText(/workspaces/i)).toBeNull();
+  });
 });
+

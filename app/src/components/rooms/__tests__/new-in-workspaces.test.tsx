@@ -7,7 +7,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { NewInWorkspaces, RoomRailHeader } from "@/components/rooms/new-in-workspaces";
-import { AGENT_ID, REPORT_ID, TASK_ID, summary } from "@/lib/rooms/__tests__/fixtures";
+import { AGENT_ID, REPORT_ID, TASK_ID, reply, summary } from "@/lib/rooms/__tests__/fixtures";
 
 vi.mock("@/hooks/use-agents", () => ({
   useAgents: () => ({ agents: [{ name: "Main", agentId: "main", status: "healthy", schedule: "" }] }),
@@ -98,8 +98,10 @@ describe("RoomRailHeader", () => {
     expect(within(list).getByText("Research desk")).toBeInTheDocument();
   });
 
-  it("offers a new workspace", () => {
+  it("offers a new workspace once the rooms list has answered", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => reply({ rooms: ROOMS })));
     render(<RoomRailHeader rooms={ROOMS} activeRoomId={null} onSelect={vi.fn()} />);
-    expect(screen.getByTestId("new-workspace-button")).toHaveTextContent(/New workspace/);
+    expect(await screen.findByTestId("new-workspace-button")).toHaveTextContent(/New workspace/);
+    vi.unstubAllGlobals();
   });
 });

@@ -118,6 +118,27 @@ describe("room tasks API", () => {
     expect(result).toMatchObject({ ok: false, status: 409, takenBy: "Alice" });
   });
 
+  it("reads who took it from the bridge's detail-wrapped 409", async () => {
+    fetchMock.mockResolvedValueOnce(
+      reply(
+        {
+          detail: {
+            error: "already_accepted",
+            message: "Alice already accepted this task.",
+            acceptedBy: { userId: "u-alice", displayName: "Alice" },
+          },
+        },
+        409,
+      ),
+    );
+    expect(await acceptRoomTask(REPORT_ID, TASK_SUGGESTED)).toEqual({
+      ok: false,
+      status: 409,
+      takenBy: "Alice",
+      message: "Alice already accepted this task.",
+    });
+  });
+
   it("dismisses a task", async () => {
     fetchMock.mockResolvedValueOnce(reply(roomTask({ dismissed: true })));
     const result = await dismissRoomTask(REPORT_ID, TASK_SUGGESTED);

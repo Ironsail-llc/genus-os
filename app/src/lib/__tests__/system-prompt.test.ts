@@ -7,9 +7,19 @@ import { describe, expect, it } from "vitest";
 
 import { getVisualCanvasPrompt } from "../system-prompt";
 
-const prompt = getVisualCanvasPrompt();
+const prompt = getVisualCanvasPrompt({ workspaces: true });
 
-describe("getVisualCanvasPrompt", () => {
+describe("getVisualCanvasPrompt without workspaces", () => {
+  it("says nothing about workspaces or room tools where they are not served", () => {
+    for (const bare of [getVisualCanvasPrompt(), getVisualCanvasPrompt({ workspaces: false })]) {
+      expect(bare).toContain("[DASHBOARD:");
+      expect(bare).not.toMatch(/workspace/i);
+      expect(bare).not.toMatch(/room_/);
+    }
+  });
+});
+
+describe("getVisualCanvasPrompt with workspaces", () => {
   it("keeps the canvas markers it has always described", () => {
     expect(prompt).toContain("[DASHBOARD:");
     expect(prompt).toContain("[RENDER:");
