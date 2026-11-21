@@ -11,8 +11,14 @@ vi.mock("@/lib/event-bus/redis-client", async () => {
   const actual = await vi.importActual<typeof import("@/lib/event-bus/redis-client")>("@/lib/event-bus/redis-client");
   return { isValidStream: actual.isValidStream, readRecent: vi.fn(), readSince: vi.fn(), openStreamReader: vi.fn() };
 });
-vi.mock("@/lib/auth", () => ({ auth: vi.fn(async () => ({ bridgeAccess: "tok", tenantId: "test-tenant" })) }));
-vi.mock("@/lib/bridge-auth", () => ({ bridgeAuthHeaders: vi.fn(async () => ({ Authorization: "Bearer caller-token" })) }));
+// The session at connect time. Looking it up again mid-stream would run the
+// jwt callback, which past its skew rotates the single-use refresh token into
+// a cookie nobody can write back any more.
+const session = vi.hoisted(() => ({ current: { bridgeAccess: "caller-token", tenantId: "test-tenant" } as Record<string, unknown> }));
+const authMock = vi.hoisted(() => vi.fn(async () => session.current));
+const bridgeAuthHeaders = vi.hoisted(() => vi.fn(async () => ({ Authorization: "Bearer from-a-later-lookup" })));
+vi.mock("@/lib/auth", () => ({ auth: authMock }));
+vi.mock("@/lib/bridge-auth", () => ({ bridgeAuthHeaders }));
 
 import { GET } from "@/app/api/events/stream/route";
 import * as redis from "@/lib/event-bus/redis-client";
@@ -52,8 +58,32 @@ async function readUntil(res: Response, marker: string) {
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
+/** An unsigned JWT carrying only `exp`: the route reads its expiry, never trusts it. */
+function tokenExpiringIn(seconds: number): string {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  return `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ sub: "u-alice", exp: Math.floor(Date.now() / 1000) + seconds })}.sig`;
+}
+
+/** Read the whole body until the server closes it (or `ms` passes). */
+async function readToEnd(res: Response, ms = 4000) {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const next = await Promise.race([reader.read(), new Promise<null>((r) => setTimeout(() => r(null), Math.max(0, deadline - Date.now())))]);
+    if (next === null) {
+      await reader.cancel();
+      return { text, closed: false };
+    }
+    if (next.done) return { text, closed: true };
+    text += decoder.decode(next.value);
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  session.current = { bridgeAccess: "caller-token", tenantId: "test-tenant" };
   mocked.openStreamReader.mockImplementation(() => ({
     readSince: vi.fn(() => new Promise((resolve) => setTimeout(() => resolve([]), 5))),
     close: vi.fn(async () => {}),
@@ -116,5 +146,52 @@ describe("GET /api/events/stream and room access", () => {
     expect(text).toContain(NOT_MINE);
     const check = fetchMock.mock.calls.find(([url]) => String(url).endsWith(`/api/rooms/${NOT_MINE}`));
     expect(check?.[1].headers).toMatchObject({ Authorization: "Bearer caller-token" });
+  });
+
+  it("uses the token it was opened with, and never looks the session up again", async () => {
+    mocked.readRecent.mockResolvedValue([roomEvent("1-0", MINE), roomEvent("2-0", NOT_MINE)]);
+    const res = await GET(new NextRequest("http://localhost/api/events/stream?streams=agent"));
+    const { reader } = await readUntil(res, "event: sync");
+    await reader.cancel();
+    expect(authMock).toHaveBeenCalledTimes(1);
+    expect(bridgeAuthHeaders).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+    for (const [, init] of fetchMock.mock.calls) expect(init.headers).toEqual({ Authorization: "Bearer caller-token" });
+  });
+
+  it("closes before the token it was opened with expires, so the browser reconnects with a fresh one", async () => {
+    session.current = { bridgeAccess: tokenExpiringIn(20), tenantId: "test-tenant" };
+    mocked.readRecent.mockResolvedValue([]);
+    const res = await GET(new NextRequest("http://localhost/api/events/stream?streams=agent"));
+    // Well inside the ~3 s the idle test reader takes to exhaust the loop on its own.
+    const { closed } = await readToEnd(res, 1500);
+    expect(closed).toBe(true);
+  });
+
+  it("stays open while the token has long to run", async () => {
+    session.current = { bridgeAccess: tokenExpiringIn(900), tenantId: "test-tenant" };
+    mocked.readRecent.mockResolvedValue([]);
+    const res = await GET(new NextRequest("http://localhost/api/events/stream?streams=agent"));
+    const { closed } = await readToEnd(res, 1500);
+    expect(closed).toBe(false);
+  });
+
+  it("closes when the bridge answers 401, and a new connection gets the room's events again", async () => {
+    fetchMock.mockImplementation(async () => Response.json({ error: "expired" }, { status: 401 }));
+    mocked.readRecent.mockResolvedValue([roomEvent("1-0", MINE)]);
+    const first = await readToEnd(await GET(new NextRequest("http://localhost/api/events/stream?streams=agent")), 1500);
+    expect(first.closed).toBe(true);
+    expect(first.text).not.toContain(MINE);
+
+    // The browser reconnects through the proxy with a refreshed session.
+    session.current = { bridgeAccess: "refreshed-token", tenantId: "test-tenant" };
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).endsWith("/api/rooms") ? Response.json({ rooms: [{ id: MINE }] }) : Response.json({}, { status: 404 }),
+    );
+    const res = await GET(new NextRequest("http://localhost/api/events/stream?streams=agent"));
+    const { reader, text } = await readUntil(res, "event: sync");
+    await reader.cancel();
+    expect(text).toContain(MINE);
+    expect(fetchMock.mock.calls.at(-1)?.[1].headers).toEqual({ Authorization: "Bearer refreshed-token" });
   });
 });
