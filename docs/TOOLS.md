@@ -1923,7 +1923,8 @@ the workspace and listed in its history.
 
 - **Where it works.** Only inside a run whose session is that workspace's own
   conversation (an interactive turn there, or a scheduled or on-demand run), for a
-  caller who may post there. Anywhere else it refuses.
+  caller who may post there. Anywhere else it refuses, including from a sub-agent
+  the workspace's run spawned: return the result to that run and publish there.
 - **Kinds.** `edition` (the default) covers one period and needs a report
   workspace; the period is `{grain, start, end}` with ISO dates and defaults to the
   period the run was started for. `dashboard` is an ad-hoc board in any workspace

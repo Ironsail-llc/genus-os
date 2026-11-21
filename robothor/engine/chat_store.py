@@ -12,6 +12,8 @@ at startup via load_all_sessions().
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -24,6 +26,7 @@ from robothor.engine.sanitize import sanitize_log
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -156,19 +159,28 @@ def build_user_extras(
     return extras
 
 
-def _take_room_turn_editions(tenant_id: str, session_key: str) -> list[str]:
-    """Editions the turn on a room session published, to stamp on its reply.
+@contextlib.contextmanager
+def _room_turn_editions(tenant_id: str, session_key: str) -> Iterator[list[str]]:
+    """Editions the running room turn published, to stamp on the reply saved now.
 
-    Empty for any other session. ``robothor.rooms.editions`` notes them when
-    ``room_publish_edition`` publishes; the assistant message saved next
-    carries the last one as ``edition_id`` so history can re-render it."""
-    from robothor.rooms.keys import parse_room_key
+    Taken from the turn's ``RoomRun`` carrier (``robothor.rooms.run_context``)
+    when it names this tenant and session; empty for any other session or
+    outside a room scope, so a turn that never saved leaves nothing for a
+    later one. If the save fails they go back on the carrier for the retry.
+    The assistant message carries the last one as ``edition_id`` so history
+    can re-render it."""
+    from robothor.rooms.run_context import current_room_run
 
-    if parse_room_key(session_key) is None:
-        return []
-    from robothor.rooms.editions import take_turn_editions
-
-    return take_turn_editions(tenant_id, session_key)
+    run = current_room_run()
+    if run is None or run.tenant_id != tenant_id or run.session_key != session_key:
+        yield []
+        return
+    taken = run.take_published()
+    try:
+        yield taken
+    except BaseException:
+        run.restore_published(taken)
+        raise
 
 
 def _stamp_room_editions(cur: Any, tenant_id: str, edition_ids: list[str], message_id: int) -> None:
@@ -222,11 +234,10 @@ def save_exchange(
     # possible reach.
     user_extras = _redact_captions(user_extras)
     assistant_extras = _redact_captions(assistant_extras)
-    edition_ids = _take_room_turn_editions(tenant_id, session_key)
-    if edition_ids:
-        assistant_extras = {**(assistant_extras or {}), "edition_id": edition_ids[-1]}
 
-    with get_connection() as conn:
+    with _room_turn_editions(tenant_id, session_key) as edition_ids, get_connection() as conn:
+        if edition_ids:
+            assistant_extras = {**(assistant_extras or {}), "edition_id": edition_ids[-1]}
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         # Upsert session
@@ -287,10 +298,14 @@ def save_message(
 
     content = redact(content)
     payload: dict[str, Any] = {"role": role, "content": content}
-    edition_ids = _take_room_turn_editions(tenant_id, session_key) if role == "assistant" else []
-    if edition_ids:
-        payload["edition_id"] = edition_ids[-1]
-    with get_connection() as conn:
+    turn: contextlib.AbstractContextManager[list[str]] = (
+        _room_turn_editions(tenant_id, session_key)
+        if role == "assistant"
+        else contextlib.nullcontext([])
+    )
+    with turn as edition_ids, get_connection() as conn:
+        if edition_ids:
+            payload["edition_id"] = edition_ids[-1]
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         cur.execute(
@@ -705,10 +720,13 @@ async def save_exchange_async(
     retrieval via search_chat_turns().
     """
     loop = asyncio.get_running_loop()
+    caller = contextvars.copy_context()
     try:
         inserted_ids = await loop.run_in_executor(
             None,
-            lambda: save_exchange(
+            # The caller's context: a room turn's carrier reaches the save.
+            lambda: caller.run(
+                save_exchange,
                 session_key,
                 user_content,
                 assistant_content,
@@ -970,10 +988,13 @@ async def save_message_async(
 ) -> None:
     """Non-blocking wrapper around save_message."""
     loop = asyncio.get_running_loop()
+    caller = contextvars.copy_context()
     try:
         await loop.run_in_executor(
             None,
-            lambda: save_message(
+            # The caller's context: a room turn's carrier reaches the save.
+            lambda: caller.run(
+                save_message,
                 session_key,
                 role,
                 content,

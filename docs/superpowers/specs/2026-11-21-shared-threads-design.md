@@ -224,7 +224,7 @@ this list a subset of the dashboard's component registry. `suggestions` is a lis
 - **Run carrier.** `robothor/rooms/run_context.py`: `RoomRun(tenant_id, room_id,
   session_key, preview=False, requested_by=None, edition_id=None, grain=None,
   period_start=None, period_end=None)`, bound with `room_run_scope(run)` around
-  `runner.execute`, read with `current_room_run()`. A `ContextVar`, so task-local.
+  `runner.execute` AND the save of the turn's reply, read with `current_room_run()`. A `ContextVar`, so task-local.
   Chat on a room session binds `RoomRun.for_session(tenant_id, session_key)` (None
   for any other key, which binds nothing). A scheduled or on-demand run binds the
   same plus `preview`, `requested_by` (the preview's requester), `edition_id` (the
@@ -232,8 +232,10 @@ this list a subset of the dashboard's component registry. `suggestions` is a lis
   `user_id`/`user_role` to `runner.execute`. Tools never take a room, preview or
   provenance from arguments. The publish is refused unless the carrier names the
   same room and tenant, the room's session key matches, `ctx.agent_id` is the
-  room's agent (a sub-agent that inherits the carrier cannot publish), and the
-  caller holds `post`.
+  room's agent, the caller holds `post`, and the run has an `agent_runs` row that is
+  not a sub-agent run (`parent_run_id` set or `nesting_depth` above 0). A sub-agent
+  runs inline and inherits the carrier, even one with the room's own agent id, so
+  the run record is what refuses it; a run with no row cannot have provenance.
 - **Rows.** With a carrier `edition_id`, that `building` row is completed (a
   different `period` argument is refused). Otherwise `create_edition` either
   returns the period's existing `building` row or allocates a new seq. A dashboard
@@ -250,14 +252,19 @@ this list a subset of the dashboard's component registry. `suggestions` is a lis
 - **After a non-preview publish:** `room.edition` on stream `agent` with payload
   exactly `{room_id, tenant_id, edition_id}`; every hook registered with
   `editions.register_edition_published(hook)` runs as `hook(room, edition)` (sync,
-  in the worker thread, exceptions logged); and the edition is noted for the turn,
-  so the assistant message `chat_store.save_exchange` / `save_message(role=
-  "assistant")` saves next on that session carries `edition_id` (the last one
-  published in the turn) and every noted edition gets that `chat_message_id`. A
-  preview does none of these.
-- Summary at most 4000 characters, title one line of at most 200; escape sequences,
-  control and format characters, tag-shaped boundaries (`<untrusted_content>`,
-  `<|im_start|>`) and `[RENDER:` / `[DASHBOARD:` openers are removed.
+  in the worker thread, exceptions logged); and the edition is noted on the turn's
+  `RoomRun`, so the assistant message `chat_store.save_exchange` /
+  `save_message(role="assistant")` (or their async wrappers, which carry the
+  caller's context into the worker) saves inside that scope for that tenant and
+  session carries `edition_id` (the last one published in the turn) and every
+  noted edition gets that `chat_message_id`. Notes live and die with the carrier:
+  a turn that never saves leaves nothing for a later turn, and a failed save puts
+  them back for the retry. A preview does none of these.
+- Summary at most 4000 characters, title one line of at most 200; escape sequences
+  and control and format characters are removed first, then tag-shaped boundaries
+  (`<untrusted_content>`, `<|im_start|>`) and `[RENDER:` / `[DASHBOARD:` openers,
+  repeatedly until the text stops changing, so nesting or a hidden character cannot
+  rebuild one.
 
 ### Tools
 

@@ -363,17 +363,68 @@ def test_the_event_payload_carries_ids_only(env) -> None:
 
 async def test_a_preview_is_for_its_requester_only_and_sets_nothing_off(env) -> None:
     r = room(env)
-    with room_run_scope(carrier(r, preview=True, requested_by=env.db.bob)):
+    run = carrier(r, preview=True, requested_by=env.db.bob)
+    with room_run_scope(run):
         result = await publish(args(r, period=WEEK), ctx(env))
     e = dal.get_edition(env.db.tenant, result["edition_id"], viewer_id=env.db.bob)
     assert e.preview and e.requested_by == env.db.bob and result["preview"] is True
     assert dal.list_editions(env.db.tenant, r.id, viewer_id=env.db.alice) == []
     assert dal.get_edition(env.db.tenant, e.id, viewer_id=env.db.alice) is None
     assert env.events == [] and env.hooks == []
-    assert editions.take_turn_editions(env.db.tenant, r.session_key) == []
+    assert run.take_published() == []
+
+
+# ─── sub-agents and unrecorded runs ──────────────────────────────────────
+
+
+def child_run(env: Any) -> str:
+    """A sub-agent run of the SAME agent, inline under the room's run."""
+    child = str(uuid.uuid4())
+    env.db.cur.execute(
+        "INSERT INTO agent_runs (id, tenant_id, agent_id, trigger_type, status, started_at, "
+        "user_id, parent_run_id, nesting_depth) "
+        "VALUES (%s, %s, 'main', 'sub_agent', 'running', now(), %s, %s, 1)",
+        (child, env.db.tenant, env.db.alice, env.run_id),
+    )
+    return child
+
+
+async def test_a_same_agent_sub_run_inheriting_the_carrier_cannot_publish(env) -> None:
+    r = room(env)
+    child = child_run(env)
+    try:
+        with room_run_scope(carrier(r)):
+            result = await publish(
+                args(r, period=WEEK),
+                ctx(env).__class__(**{**ctx(env).call_kwargs(), "run_id": child}),
+            )
+    finally:
+        env.db.cur.execute("DELETE FROM agent_runs WHERE id = %s", (child,))
+    assert "sub-agent" in result["error"]
+    assert stored(env, r) == []
+
+
+async def test_a_run_with_no_recorded_row_cannot_publish(env) -> None:
+    r = room(env)
+    unrecorded = ToolContext(
+        agent_id="main",
+        run_id=str(uuid.uuid4()),
+        tenant_id=env.db.tenant,
+        user_id=env.db.alice,
+        user_role="member",
+    )
+    with room_run_scope(carrier(r)):
+        result = await publish(args(r, period=WEEK), unrecorded)
+    assert "recorded" in result["error"]
+    assert stored(env, r) == []
 
 
 # ─── the saved assistant message carries the edition ─────────────────────
+
+
+def payloads(env: Any, ids: list[int]) -> dict[int, dict[str, Any]]:
+    env.db.cur.execute("SELECT id, message FROM chat_messages WHERE id = ANY(%s)", (ids,))
+    return {row[0]: row[1] for row in env.db.cur.fetchall()}
 
 
 async def test_the_assistant_message_saved_for_the_turn_carries_the_edition(env) -> None:
@@ -382,21 +433,39 @@ async def test_the_assistant_message_saved_for_the_turn_carries_the_edition(env)
     r = room(env)
     with room_run_scope(carrier(r)):
         result = await publish(args(r, period=WEEK), ctx(env))
-    ids = chat_store.save_exchange(
-        r.session_key, "How was the week?", "Here it is.", channel="webchat", tenant_id=r.tenant_id
-    )
-    later = chat_store.save_exchange(
-        r.session_key, "Thanks", "You're welcome.", channel="webchat", tenant_id=r.tenant_id
-    )
-    env.db.cur.execute(
-        "SELECT id, message FROM chat_messages WHERE id = ANY(%s) ORDER BY id", (ids + later,)
-    )
-    payloads = {row[0]: row[1] for row in env.db.cur.fetchall()}
-    assert payloads[ids[1]]["edition_id"] == result["edition_id"]
-    assert "edition_id" not in payloads[ids[0]]
-    assert "edition_id" not in payloads[later[1]]
+        ids = chat_store.save_exchange(
+            r.session_key,
+            "How was the week?",
+            "Here it is.",
+            channel="webchat",
+            tenant_id=r.tenant_id,
+        )
+        later = chat_store.save_exchange(
+            r.session_key, "Thanks", "You're welcome.", channel="webchat", tenant_id=r.tenant_id
+        )
+    got = payloads(env, ids + later)
+    assert got[ids[1]]["edition_id"] == result["edition_id"]
+    assert "edition_id" not in got[ids[0]]
+    assert "edition_id" not in got[later[1]]
     e = dal.get_edition(env.db.tenant, result["edition_id"], viewer_id=None)
     assert e.chat_message_id == ids[1]
+
+
+async def test_the_async_save_of_the_turn_carries_the_edition(env) -> None:
+    from robothor.engine import chat_store
+
+    r = room(env)
+    with room_run_scope(carrier(r)):
+        result = await publish(args(r, period=WEEK), ctx(env))
+        ids = await chat_store.save_exchange_async(
+            r.session_key,
+            "How was the week?",
+            "Here it is.",
+            channel="webchat",
+            tenant_id=r.tenant_id,
+        )
+    assert ids is not None
+    assert payloads(env, ids)[ids[1]]["edition_id"] == result["edition_id"]
 
 
 async def test_an_assistant_message_saved_alone_carries_the_edition(env) -> None:
@@ -405,11 +474,62 @@ async def test_an_assistant_message_saved_alone_carries_the_edition(env) -> None
     r = room(env)
     with room_run_scope(carrier(r)):
         result = await publish(args(r, period=WEEK), ctx(env))
-    message_id = chat_store.save_message(
-        r.session_key, "assistant", "This week's numbers.", channel="webchat", tenant_id=r.tenant_id
-    )
+        message_id = chat_store.save_message(
+            r.session_key,
+            "assistant",
+            "This week's numbers.",
+            channel="webchat",
+            tenant_id=r.tenant_id,
+        )
     e = dal.get_edition(env.db.tenant, result["edition_id"], viewer_id=None)
     assert e.chat_message_id == message_id
+
+
+async def test_a_turn_that_never_saved_does_not_stamp_a_later_turn(env) -> None:
+    """A run that errors after publishing saves nothing; the next turn's reply
+    must not pick up its edition."""
+    from robothor.engine import chat_store
+
+    r = room(env)
+    with room_run_scope(carrier(r)):
+        result = await publish(args(r, period=WEEK), ctx(env))
+    with room_run_scope(carrier(r)):
+        ids = chat_store.save_exchange(
+            r.session_key, "Hello?", "Hi.", channel="webchat", tenant_id=r.tenant_id
+        )
+    assert "edition_id" not in payloads(env, ids)[ids[1]]
+    assert (
+        dal.get_edition(env.db.tenant, result["edition_id"], viewer_id=None).chat_message_id is None
+    )
+
+
+async def test_a_save_that_fails_keeps_the_edition_for_the_retry(env, monkeypatch) -> None:
+    from robothor.engine import chat_store
+
+    r = room(env)
+    run = carrier(r)
+
+    def broken(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("database unavailable")
+
+    with room_run_scope(run):
+        result = await publish(args(r, period=WEEK), ctx(env))
+        monkeypatch.setattr(chat_store, "get_connection", broken)
+        with pytest.raises(RuntimeError):
+            chat_store.save_exchange(
+                r.session_key, "Q", "A", channel="webchat", tenant_id=r.tenant_id
+            )
+        assert (
+            await chat_store.save_exchange_async(
+                r.session_key, "Q", "A", channel="webchat", tenant_id=r.tenant_id
+            )
+            is None
+        )
+        monkeypatch.setattr(chat_store, "get_connection", committed_connection)
+        ids = chat_store.save_exchange(
+            r.session_key, "Q", "A", channel="webchat", tenant_id=r.tenant_id
+        )
+    assert payloads(env, ids)[ids[1]]["edition_id"] == result["edition_id"]
 
 
 # ─── off the loop ────────────────────────────────────────────────────────
