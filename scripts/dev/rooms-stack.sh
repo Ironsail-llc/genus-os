@@ -160,10 +160,16 @@ start() {
   fi
   local port="${1:-}"
   shift
-  if lsof -nP -iTCP:"$port" -sTCP:LISTEN > /dev/null 2>&1; then
-    echo "rooms stack: port $port is already in use; run down first, or set ROOMS_STACK_*_PORT" >&2
-    exit 1
-  fi
+  # A server just stopped may still be letting go of its port.
+  local waited=0
+  while lsof -nP -iTCP:"$port" -sTCP:LISTEN > /dev/null 2>&1; do
+    if [ "$waited" -ge 30 ]; then
+      echo "rooms stack: port $port is already in use; run down first, or set ROOMS_STACK_*_PORT" >&2
+      exit 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
   (cd "$dir" && with_env "$file" "$@" > "$STACK_DIR/logs/$name.log" 2>&1 & echo $! > "$STACK_DIR/$name.pid")
 }
 
