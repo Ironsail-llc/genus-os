@@ -32,7 +32,8 @@ conversation, and lists and reads the caller's threads, answering with links.
 
 | Topic | Decision |
 |---|---|
-| Name | Code says `room`; the UI says "Threads". The engine already uses "thread" for planner tasks tagged `thread`. |
+| Name | Code says `room`; the UI says "Workspaces". The engine already uses "thread" for planner tasks tagged `thread`, and `robothor/workspace/` is the mail and calendar layer. |
+| Main conversation | Each user has their own main conversation; workspaces sit below it. |
 | Ownership | A room belongs to the tenant. Its creator is *assigned*. |
 | Access | `assigned` users manage the definition. `shared` users read, chat, pick a period, run now, accept and work tasks. Tenant owner/admin manage every room. Tenant viewers read only. No per-room role. |
 | Roles | Existing roles, seeded in `role_permissions`, tunable per tenant. |
@@ -215,8 +216,8 @@ interface Edition { id; seq; kind; status; preview; periodStart; periodEnd; grai
 
 ### Chat
 
-Chat stays on the existing routes. The dashboard sends `room` (an id), never a session key;
-the server resolves the key. History items gain `authorUserId`, `authorName`, `editionId`.
+Chat stays on the existing routes. The dashboard and the Next.js routes send `room_id`,
+never a session key; the engine checks access and resolves the key. History items gain `authorUserId`, `authorName`, `editionId`.
 A send while the room is busy returns 409 `{error: "room_busy", answering: <name>}`.
 
 ### Events
