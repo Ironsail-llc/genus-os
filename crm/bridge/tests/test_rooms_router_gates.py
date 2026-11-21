@@ -107,7 +107,9 @@ def test_rooms_errors_map_to_statuses(error, status) -> None:
     if error == "RevisionConflict":
         assert detail["currentRev"] == 4
     if error == "RoomBusy":
-        assert detail["answering"] == "Alice"
+        # The bridge never runs a turn, so it has no busy room to name; the
+        # engine's chat route answers ``answering`` itself.
+        assert "answering" not in detail
 
 
 def test_a_request_without_a_verified_human_is_refused(controls_client_as_service, monkeypatch):

@@ -234,8 +234,11 @@ No access → 404. Access without the action → 403. JSON is camelCase, as the 
   `unsafe_instructions` 422 with `field`, `invalid_request` 422 (malformed bodies
   included), `ineligible_account` 422, `already_accepted` 409 + `acceptedBy
   {userId, displayName}`, `already_dismissed` 409, `channel_not_linked` 422,
-  `not_a_member` 409, `room_busy` 409 + `answering`, `unauthenticated` 401. The
-  router's own route class applies it. The engine's answers to `/run` and `/periods`
+  `not_a_member` 409, `room_busy` 409, `run_as_user` / `last_assigned` 422,
+  `unauthenticated` 401, `internal_error` 500. The router's own route class applies
+  it. Messages are fixed text per code (or per refusal the router decides); an
+  exception's own text never reaches a body, and an unexpected exception is logged
+  with its traceback and answered with the generic 500. The engine's answers to `/run` and `/periods`
   (its 429 `on_demand_cap` with `limit` included) pass through unchanged.
 - `GET /api/rooms?scope=all` (admin) includes archived rooms; each row adds `members:
   {userId, displayName, assigned}[]` and `assigned: {userId, displayName}[]`. Bounded

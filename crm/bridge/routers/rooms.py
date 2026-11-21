@@ -91,24 +91,38 @@ def _problem(
     return JSONResponse({"detail": detail}, status_code=status)
 
 
-def room_error_response(_request: Any, exc: Exception) -> JSONResponse:
-    """The one mapping from a rooms error to an HTTP answer."""
-    if isinstance(exc, RoomNotFound):
-        return _problem(404, "not_found", "workspace not found")
-    if isinstance(exc, RoomForbidden):
-        return _problem(403, "forbidden", str(exc))
-    if isinstance(exc, RevisionConflict):
-        return _problem(
-            409,
-            "revision_conflict",
-            "the workspace changed since you opened it",
-            currentRev=exc.current_rev,
-        )
-    if isinstance(exc, RoomBusy):
-        return _problem(409, "room_busy", str(exc), answering=exc.answering)
-    if isinstance(exc, InvalidBlocks):
-        return _problem(422, "invalid_blocks", str(exc), field="blocks")
-    return _problem(500, "workspace_error", "workspace error")
+#: The message each refusal reads. Fixed text only: an exception's own words
+#: (a query, a path, a validator's echo of the input) never reach a response.
+_MESSAGES = {
+    "not_found": "Workspace not found.",
+    "forbidden": "You don't have access to do that in this workspace.",
+    "revision_conflict": "The workspace changed since you opened it.",
+    "room_busy": "The agent is answering someone else in this workspace.",
+    "invalid_blocks": "The edition's content is not in a form the dashboard can show.",
+    "unsafe_instructions": (
+        "The instructions look like an attempt to override the agent (a prompt injection)."
+    ),
+    "invalid_schedule": (
+        "The schedule could not be understood, or it runs more often than every "
+        f"{definition.ROOM_MIN_INTERVAL_SECONDS // 60} minutes."
+    ),
+    "ineligible_account": "That person has no active account here that can take this on.",
+    "invalid_request": "The request is not valid.",
+    "unauthenticated": "Sign in required.",
+    "internal_error": "Something went wrong.",
+}
+
+#: Why a refusal was a 403, when this router decided it (``Refusal.key``).
+_FORBIDDEN = {
+    "person": "Workspaces need a signed-in person.",
+    "role": "Your role cannot do this.",
+    "list_all": "Listing every workspace needs a company admin.",
+    "unarchive": "Restoring an archived workspace needs a company admin.",
+    "edit": (
+        "Only the workspace's assigned people can change it; duplicate the workspace to "
+        "make your own copy."
+    ),
+}
 
 
 def _camel(name: str) -> str:
@@ -116,29 +130,90 @@ def _camel(name: str) -> str:
     return head + "".join(part.title() for part in rest)
 
 
+#: Body fields a refusal may name, by every spelling a client may send. A
+#: field outside this table is never named.
+_BODY_FIELDS = [
+    "kind",
+    "title",
+    "instructions",
+    "agent_id",
+    "schedule_text",
+    "tz",
+    "default_grain",
+    "share_with",
+    "expected_rev",
+    "changes",
+    "assigned",
+    "user_id",
+    "preview",
+    "period",
+    "grain",
+    "anchor",
+    "end",
+    "in_app",
+    "muted",
+    "channels",
+    "rev",
+]
+_FIELDS = {spelling: _camel(name) for name in _BODY_FIELDS for spelling in (name, _camel(name))}
+
+
+class Refusal(RoomForbidden):  # noqa: N818 - reads as the refusal it is
+    """A 403 this router decided, with the reason it names (a ``_FORBIDDEN`` key)."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.key = key
+
+
+def room_error_response(_request: Any, exc: Exception) -> JSONResponse:
+    """The one mapping from a rooms error to an HTTP answer."""
+    if isinstance(exc, RoomNotFound):
+        return _problem(404, "not_found", _MESSAGES["not_found"])
+    if isinstance(exc, RoomForbidden):
+        key = exc.key if isinstance(exc, Refusal) else ""
+        return _problem(403, "forbidden", _FORBIDDEN.get(key, _MESSAGES["forbidden"]))
+    if isinstance(exc, RevisionConflict):
+        return _problem(
+            409,
+            "revision_conflict",
+            _MESSAGES["revision_conflict"],
+            currentRev=int(exc.current_rev),
+        )
+    if isinstance(exc, RoomBusy):
+        return _problem(409, "room_busy", _MESSAGES["room_busy"])
+    if isinstance(exc, InvalidBlocks):
+        return _problem(422, "invalid_blocks", _MESSAGES["invalid_blocks"], field="blocks")
+    return _internal(exc)
+
+
+def _internal(exc: BaseException) -> JSONResponse:
+    """An unexpected failure: logged here with its traceback, a generic 500 out."""
+    logger.error("workspace route failed", exc_info=exc)
+    return _problem(500, "internal_error", _MESSAGES["internal_error"])
+
+
 def _invalid(exc: ValueError, field: str | None = None) -> JSONResponse:
     """A 422 for a refused value: the definition's own codes, else ``invalid_request``."""
     if isinstance(exc, definition.UnsafeInstructions):
-        return _problem(422, "unsafe_instructions", str(exc), field="instructions")
-    if isinstance(exc, definition.InvalidSchedule):
-        return _problem(422, "invalid_schedule", str(exc), field="scheduleText")
-    if isinstance(exc, Ineligible):
-        return _problem(422, "ineligible_account", str(exc), field=exc.field)
-    named = getattr(exc, "field", None)
-    if isinstance(named, str) and named:
-        field = _camel(named)
-    elif field is None and "title" in str(exc):
-        field = "title"
-    return _problem(422, "invalid_request", str(exc), field=field)
+        code, field = "unsafe_instructions", "instructions"
+    elif isinstance(exc, definition.InvalidSchedule):
+        code, field = "invalid_schedule", "scheduleText"
+    elif isinstance(exc, Ineligible):
+        code, field = "ineligible_account", _FIELDS.get(exc.field, field)
+    else:
+        code = "invalid_request"
+        named = getattr(exc, "field", None)
+        field = _FIELDS.get(named, field) if isinstance(named, str) else field
+    return _problem(422, code, _MESSAGES[code], field=field)
 
 
 def _malformed(exc: RequestValidationError) -> JSONResponse:
     errors = exc.errors()
     first = errors[0] if errors else {}
-    loc = [str(part) for part in first.get("loc", ()) if part != "body"]
-    field = _camel(loc[0]) if loc and not loc[0].isdigit() else None
-    message = str(first.get("msg") or "the request body is not valid")
-    return _problem(422, "invalid_request", message, field=field)
+    loc = [part for part in first.get("loc", ()) if part != "body"]
+    field = _FIELDS.get(loc[0]) if loc and isinstance(loc[0], str) else None
+    return _problem(422, "invalid_request", _MESSAGES["invalid_request"], field=field)
 
 
 class _RoomsRoute(APIRoute):
@@ -155,8 +230,11 @@ class _RoomsRoute(APIRoute):
             except RequestValidationError as exc:
                 return _malformed(exc)
             except HTTPException as exc:
-                code = "unauthenticated" if exc.status_code == 401 else "refused"
-                return _problem(exc.status_code, code, str(exc.detail))
+                if exc.status_code == 401:
+                    return _problem(401, "unauthenticated", _MESSAGES["unauthenticated"])
+                return _internal(exc)
+            except Exception as exc:  # noqa: BLE001 - answered generically, logged in full
+                return _internal(exc)
 
         return answer
 
@@ -178,9 +256,9 @@ def _human(request: Request, roles: frozenset[str] = _HUMAN_ROLES) -> access.Act
     """The signed-in person, when their tenant role is one of ``roles``."""
     actor = _actor(request)
     if actor.is_service or actor.role not in _HUMAN_ROLES:
-        raise RoomForbidden("workspaces need a signed-in person")
+        raise Refusal("person")
     if actor.role not in roles:
-        raise RoomForbidden(f"the {actor.role} role cannot do this")
+        raise Refusal("role")
     return actor
 
 
@@ -431,7 +509,7 @@ def api_list_rooms(request: Request, scope: str = Query("mine", pattern="^(mine|
         rooms = dal.list_rooms_for_user(actor.tenant_id, actor.user_id)
         return {"rooms": [_summary_json(s) for s in rooms]}
     if not _is_admin(actor):
-        raise RoomForbidden("listing every workspace needs a company admin")
+        raise Refusal("list_all")
     rooms = dal.list_all_rooms(actor.tenant_id, include_archived=True)
     members = dal.members_of_rooms(actor.tenant_id, [s.id for s in rooms])
     accounts = dal.get_accounts(
@@ -466,9 +544,11 @@ def api_create_room(request: Request, body: CreateRoomBody) -> Any:
             return _problem(
                 422,
                 "invalid_request",
-                "kind must be report or agent; open a task as a workspace instead",
+                "A workspace is a report or an agent; open a task as a workspace instead.",
                 field="kind",
             )
+        if not body.title.strip():
+            return _problem(422, "invalid_request", "A workspace needs a title.", field="title")
         share_with = [
             _eligible(actor, u, _HUMAN_ROLES, field="shareWith")["id"] for u in body.share_with
         ]
@@ -530,7 +610,7 @@ def api_update_room(room_id: str, request: Request, body: UpdateRoomBody) -> Any
     try:
         actor, room = _guard(request, room_id, "edit_definition")
     except RoomForbidden as exc:
-        raise RoomForbidden(f"{exc}; duplicate the workspace to make your own copy") from exc
+        raise Refusal("edit") from exc
     changes = {_CHANGE_KEYS.get(k, k): v for k, v in body.changes.items()}
     try:
         saved = definition.apply_definition_change(actor, room.id, body.expected_rev, changes)
@@ -554,7 +634,7 @@ def api_archive_room(room_id: str, request: Request) -> Any:
 def api_unarchive_room(room_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "archive")
     if not _is_admin(actor):
-        raise RoomForbidden("restoring an archived workspace needs a company admin")
+        raise Refusal("unarchive")
     restored = dal.unarchive_room(actor.tenant_id, room.id) or room
     _audit(request, "room.unarchive", room.id)
     _announce(actor, room.id)
@@ -565,7 +645,7 @@ def api_unarchive_room(room_id: str, request: Request) -> Any:
 def api_duplicate_room(room_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "duplicate")
     if actor.role not in _WORKING_ROLES:
-        raise RoomForbidden(f"the {actor.role} role cannot create a workspace")
+        raise Refusal("role")
     copy = dal.duplicate_room(actor.tenant_id, room.id, actor.user_id)
     _audit(request, "room.duplicate", copy.id, source_room_id=room.id)
     _announce(actor, copy.id)
@@ -653,8 +733,8 @@ def api_restore_revision(
             actor.user_id,
             expected_rev=body.expected_rev if body else None,
         )
-    except ValueError as exc:
-        return _problem(404, "not_found", str(exc), field="rev")
+    except ValueError:
+        return _problem(404, "not_found", "That revision does not exist.", field="rev")
     _audit(request, "room.restore", room.id, restored_rev=rev, rev=saved.rev)
     _announce(actor, room.id)
     return _room_json(actor, saved)
