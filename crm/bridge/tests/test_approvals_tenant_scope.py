@@ -273,11 +273,21 @@ def test_a_proposal_without_a_body_shows_its_whole_payload(child_admin, stores, 
     assert json.loads(action["detail"]) == big
 
 
-@pytest.mark.parametrize("fixture", ["child_member", "child_viewer"])
-def test_members_and_viewers_cannot_list(fixture, request, stores):
-    client = request.getfixturevalue(fixture)
-    assert client.get("/api/approvals").status_code == 403
+def test_viewers_cannot_list(child_viewer, stores):
+    assert child_viewer.get("/api/approvals").status_code == 403
     assert stores == {}
+
+
+def test_members_cannot_list_the_tenants_inbox(child_member, stores, ops):
+    """A member gets only their own eligible actions (``scope: "own"``,
+    ``test_approvals_member.py``); the tenant's workflow approvals, questions
+    and ledger are never read for them. This token names no account (``bob``),
+    so nothing is eligible."""
+    response = child_member.get("/api/approvals")
+    assert response.status_code == 200
+    assert response.json() == {"count": 0, "pending": [], "scope": "own"}
+    assert stores == {}
+    assert ops.instances == []
 
 
 # ─── Deciding ───────────────────────────────────────────────────────
