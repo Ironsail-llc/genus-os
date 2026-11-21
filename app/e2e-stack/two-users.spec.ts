@@ -223,6 +223,16 @@ test("8a. while the workspace is paused, Bob's request for a new period is refus
     expect(res.status, JSON.stringify(res.body)).toBe(200);
   };
   const editions = async () => ((await bob.get(`/api/rooms/${roomId}/editions`)).body.editions as unknown[]).length;
+  // Step 8's period is published before the workspace is paused.
+  await expect
+    .poll(
+      async () =>
+        ((await bob.get(`/api/rooms/${roomId}/editions`)).body.editions as Array<{ periodStart: string; grain: string; status: string }>).find(
+          (e) => e.grain === "day" && e.periodStart === daysAgo(3),
+        )?.status,
+      { timeout: 60000 },
+    )
+    .toBe("published");
   await pause(true);
   try {
     const before = await editions();

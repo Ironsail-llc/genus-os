@@ -194,6 +194,9 @@ def decide(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -
         return {"text": f"Done ({name}).{f' Open it: {link}' if link else ''}"}
 
     name, text = _last_user(messages)
+    # A workspace run's prompt carries the room's text as wrapped data after its
+    # instructions; a model acts on the instructions, never on that data.
+    text = text.split("<untrusted_content", 1)[0]
     lowered = text.lower()
     if "create a daily sales report" in lowered:
         return {
