@@ -59,11 +59,16 @@ _NO_PERSON = {
 def _bound_room_id(tenant_id: str) -> str | None:
     """The room this run belongs to, from the run-context carrier.
 
-    None when the run is bound to no room, or to a room of another tenant: a
-    run with no person behind it then reads nothing. Never taken from arguments.
+    None when the carrier module is absent (nothing binds a run to a room yet),
+    when the run is bound to no room, or to a room of another tenant: a run
+    with no person behind it then reads nothing. Never taken from arguments.
     """
-    from robothor.rooms.run_context import current_room_run
-
+    try:
+        from robothor.rooms.run_context import (  # type: ignore[import-not-found,unused-ignore]
+            current_room_run,
+        )
+    except ImportError:
+        return None
     run = current_room_run()
     if run is None or getattr(run, "tenant_id", None) != tenant_id:
         return None
