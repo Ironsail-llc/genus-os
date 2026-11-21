@@ -28,6 +28,8 @@ import { PanelRight, PanelRightOpen, Zap } from "lucide-react";
 import { readChatDockOpen, subscribeChatDockOpen, writeChatDockOpen } from "@/lib/chat/dock-state";
 import { RoomRail } from "@/components/rooms/room-rail";
 import { DEFAULT_ROOM_SLOTS } from "@/components/rooms/room-slots";
+import { HUB_ROOM_SLOTS } from "@/components/rooms/room-sections";
+import { RoomRailHeader } from "@/components/rooms/new-in-workspaces";
 import { useRooms } from "@/hooks/use-rooms";
 
 // The conversation canvas (agent-pushed components + chat-driven dashboards)
@@ -364,6 +366,7 @@ function AppShellBody() {
   // on the chat view only; every other view docks the main conversation.
   const activeRoom = isChatView ? (routeRoom ?? null) : null;
   const rooms = useRooms({ live: true });
+  const railHeader = <RoomRailHeader rooms={rooms.rooms} activeRoomId={activeRoom} onSelect={openRoom} isLoading={rooms.isLoading} error={rooms.error} />;
   // On mobile chat is full-screen with its own header; on desktop it is the
   // main column, optionally flanked by the canvas rail.
   const mobileInChat = isMobile && isChatView;
@@ -618,6 +621,7 @@ function AppShellBody() {
                     isLoading={rooms.isLoading}
                     error={rooms.error}
                     collapsed={railStacked}
+                    header={railHeader}
                   />
                 )}
                 {/* A collapsed dock stays mounted (the chat keeps its state), so
@@ -653,7 +657,7 @@ function AppShellBody() {
                         roomId={activeRoom}
                         onLeave={() => openRoom(null)}
                         markRead={rooms.markRead}
-                        slots={DEFAULT_ROOM_SLOTS}
+                        slots={{ ...DEFAULT_ROOM_SLOTS, ...HUB_ROOM_SLOTS }}
                       />
                     </SurfaceBoundary>
                   </div>
@@ -691,6 +695,7 @@ function AppShellBody() {
             isLoading={rooms.isLoading}
             error={rooms.error}
             collapsed
+            header={railHeader}
           />
           )}
           {activeRoom && (
@@ -701,7 +706,7 @@ function AppShellBody() {
                   roomId={activeRoom}
                   onLeave={() => openRoom(null)}
                   markRead={rooms.markRead}
-                  slots={DEFAULT_ROOM_SLOTS}
+                  slots={{ ...DEFAULT_ROOM_SLOTS, ...HUB_ROOM_SLOTS }}
                 />
               </SurfaceBoundary>
             </div>

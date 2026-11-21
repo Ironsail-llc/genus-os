@@ -17,13 +17,30 @@
  * (no session, or an anonymous/dev-mode request).
  */
 import { getEngineClient } from "./server-client";
-import { getVisualCanvasPrompt } from "@/lib/system-prompt";
+import { getVisualCanvasPrompt, getWorkspaceRulesPrompt } from "@/lib/system-prompt";
+import { roomsServed } from "@/lib/rooms/served";
 import { auth } from "@/lib/auth";
 
 /** The dedup bucket used when there is no identity to key on. Never sent anywhere. */
 const ANONYMOUS_BUCKET = "anonymous";
 
-const injectedFor = new Set<string>();
+/**
+ * Per dedup key: whether the canvas prompt is in, whether the workspace rules
+ * are, and until when a "not served" answer stands. Only definite answers are
+ * kept: "served" for good, "not served" for NOT_SERVED_TTL_MS (so workspaces
+ * switched on later reach the session without a restart), and an unknown
+ * answer (timeout, error) not at all.
+ */
+interface Injected {
+  canvas: boolean;
+  workspaces: boolean;
+  notServedUntil: number;
+}
+
+/** How long a "workspaces are not served" answer is trusted. */
+export const NOT_SERVED_TTL_MS = 10 * 60_000;
+
+const injectedFor = new Map<string, Injected>();
 
 async function injectionDedupKey(): Promise<string> {
   try {
@@ -35,14 +52,29 @@ async function injectionDedupKey(): Promise<string> {
   return ANONYMOUS_BUCKET;
 }
 
-/** Ensure the visual canvas prompt is injected into the session. No-op after first success for a given user. */
+/**
+ * Ensure the visual canvas prompt is injected into the session, once per user,
+ * with the workspace rules where workspaces are served. A session injected
+ * before workspaces were served gets the rules alone once they are.
+ */
 export async function ensureCanvasPromptInjected(): Promise<void> {
   const key = await injectionDedupKey();
-  if (injectedFor.has(key)) return;
+  const state = injectedFor.get(key) ?? { canvas: false, workspaces: false, notServedUntil: 0 };
+  if (state.canvas && (state.workspaces || Date.now() < state.notServedUntil)) return;
+
+  // The workspace rules name room tools: only where the rooms list is served.
+  const served = await roomsServed();
   const client = getEngineClient();
   try {
-    await client.chatInject(getVisualCanvasPrompt(), "visual-canvas-init");
-    injectedFor.add(key);
+    if (!state.canvas) {
+      await client.chatInject(getVisualCanvasPrompt({ workspaces: served === "served" }), "visual-canvas-init");
+      state.canvas = true;
+    } else if (served === "served") {
+      await client.chatInject(getWorkspaceRulesPrompt(), "workspace-rules-init");
+    }
+    if (served === "served") state.workspaces = true;
+    if (served === "not_served") state.notServedUntil = Date.now() + NOT_SERVED_TTL_MS;
+    injectedFor.set(key, state);
   } catch (err) {
     console.warn("[session-state] Canvas prompt injection failed:", (err as Error).message);
     // Non-critical — will retry on next call

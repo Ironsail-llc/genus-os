@@ -5,6 +5,7 @@ import { SectionError } from "@/components/business/section-error";
 import { computeGreeting, formatToday, useIsClient } from "@/components/business/greeting";
 import { useHomeMetrics } from "@/components/business/use-home-metrics";
 import { useQuickActions } from "@/components/business/quick-actions";
+import { LandingNewInWorkspaces } from "@/components/rooms/new-in-workspaces";
 
 interface ChatLandingProps {
   /** The owner's first name, when the session has one. */
@@ -33,8 +34,8 @@ function MetricTile({ label, testId, children }: { label: string; testId: string
 
 /**
  * What the chat home shows before the first message: a greeting, the
- * Dashboard view's three figures, its quick actions and the suggested
- * prompts. Read-only, no model call; the composer stays below it.
+ * Dashboard view's three figures, what is new in the user's workspaces, its
+ * quick actions and the suggested prompts. Read-only, no model call; the composer stays below it.
  */
 export function ChatLanding({ ownerName, suggestedPrompts, onPrompt, onViewOpened }: ChatLandingProps) {
   const {
@@ -103,6 +104,8 @@ export function ChatLanding({ ownerName, suggestedPrompts, onPrompt, onViewOpene
           )}
         </MetricTile>
       </div>
+
+      <LandingNewInWorkspaces />
 
       <div>
         {actionFailure && (

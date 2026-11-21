@@ -92,4 +92,30 @@ describe("RoomRail", () => {
     rail({ collapsed: true, activeRoomId: AGENT_ID });
     expect(screen.getByTestId("room-rail-toggle")).toHaveTextContent("Research desk");
   });
+
+  it("closes the collapsed list when the open room changes from anywhere (its header, a link)", () => {
+    const { rerender } = render(
+      <RoomRail
+        rooms={SUMMARIES}
+        activeRoomId={null}
+        onSelect={vi.fn()}
+        collapsed
+        header={<button type="button">digest item</button>}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("room-rail-toggle"));
+    expect(screen.getByRole("navigation", { name: "Workspaces" })).toBeInTheDocument();
+    // The header's own buttons navigate without passing through the rail's onSelect.
+    rerender(
+      <RoomRail
+        rooms={SUMMARIES}
+        activeRoomId={REPORT_ID}
+        onSelect={vi.fn()}
+        collapsed
+        header={<button type="button">digest item</button>}
+      />,
+    );
+    expect(screen.queryByRole("navigation", { name: "Workspaces" })).toBeNull();
+  });
 });
+
