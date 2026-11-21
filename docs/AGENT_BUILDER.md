@@ -358,9 +358,14 @@ workflow steps, `ask_user` questions and proposed actions (`operation_actions`
 in review, `kind: "action"`) in one list — and
 `POST /api/approvals/{kind}/{id}` answers one. Both are scoped to the tenant
 the session acts in: an owner or admin of that tenant sees and decides only
-its rows, an id from another tenant is a 404, and members and viewers get a
-403. Each decision records `operator:<user>` on the row and in the audit log
-with the tenant.
+its rows, an id from another tenant is a 404, and viewers get a 403. Each
+decision records `operator:<user>` on the row and in the audit log with the
+tenant. The one exception is a member's own proposed action: a `member` or
+`user` gets `{count, pending, scope: "own"}` holding only the actions their
+own interactive turn proposed in a task workspace they can still post in,
+whose task is assigned to them, and may decide only those (recorded as
+`member:<user>`); everything else stays operator-only (see "Answering from
+the Helm" in [System architecture](SYSTEM_ARCHITECTURE.md)).
 
 A **tool-permission escalation** is the third kind and is deliberately not in
 that list: it lives in the engine's memory with a coroutine blocked on it, so a
