@@ -271,8 +271,8 @@ export function pendingBubbles(
 
 /**
  * The unsent entries that need a bubble: not drawn yet, and not a message
- * history already holds — a stored row naming it by client id or, where the
- * engine names none, a stored row with its text. A send whose answer was lost
+ * history already holds — a stored row naming it by client id or, for an
+ * unknown outcome where the engine names none, a stored row with its text. A send whose answer was lost
  * after it was stored is that stored row, never a second copy.
  */
 export function unsentBubbles(
@@ -285,9 +285,23 @@ export function unsentBubbles(
         (r) =>
           r.id === item.id ||
           r.clientId === item.id ||
-          (r.serverId !== undefined && !r.clientId && r.role === "user" && r.content.trim() === item.text.trim()),
+          // Only an unknown outcome may be its stored copy; a refusal never is.
+          (!item.rejected && r.serverId !== undefined && !r.clientId && r.role === "user" && r.content.trim() === item.text.trim()),
       ),
   );
+}
+
+/**
+ * The unsent entries now on screen: drawn as a bubble, or (an unknown
+ * outcome) as their stored copy. Only these may be acknowledged, so an entry
+ * is never forgotten before the reader has seen it.
+ */
+export function unsentShown(
+  state: OutboxState,
+  shown: ReadonlyArray<Pick<RoomRow, "id" | "clientId" | "serverId" | "role" | "content">>,
+): string[] {
+  const missing = new Set(unsentBubbles(state, shown).map((item) => item.id));
+  return state.unsent.filter((item) => !missing.has(item.id)).map((item) => item.id);
 }
 
 // What a room message's bubble says. Kept here, in the module a room loads on

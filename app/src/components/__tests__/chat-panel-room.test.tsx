@@ -387,6 +387,21 @@ describe("ChatPanel in a room", () => {
     }
   }
 
+  it("still shows a refused message as not sent when an earlier stored message has the same text", async () => {
+    history = [{ id: 30, role: "user", content: "thanks", authorName: "Bob" }];
+    let answer!: (r: Response) => void;
+    sendReplies.push(() => new Promise<Response>((r) => (answer = r)));
+    const first = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    await screen.findByText("thanks");
+    await type("thanks");
+    await waitFor(() => expect(sends).toHaveLength(1));
+    first.unmount();
+    await act(async () => answer(reply({ error: "refused", request_admitted: false }, 502)));
+    render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    await waitFor(() => expect(screen.getAllByText("thanks")).toHaveLength(2));
+    expect(screen.getByTestId("message-note")).toHaveTextContent(/not sent/i);
+  });
+
   it("says a message may not have arrived, not that it was not sent, when its outcome is unknown", async () => {
     history = [];
     let answer!: (r: Response) => void;
