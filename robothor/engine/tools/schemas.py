@@ -2213,6 +2213,37 @@ _ROOM_RUN_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+# Rooms (workspaces): tasks. Handler: handlers/room_tasks.py.
+_ROOM_TASK_ID = {"type": "string", "description": "The CRM task id, never a title"}
+_ROOM_TASK_SCHEMAS: dict[str, dict[str, Any]] = {
+    "room_task_accept": _room_tool(
+        "room_task_accept",
+        "Take a task linked to a workspace for the person you are talking to: it becomes "
+        "theirs (their name on the task). If someone else already has it, say who and do "
+        "not try again. Confirm with the person first." + _ROOM_LINK_RULE,
+        {"room_id": _ROOM_ID, "task_id": _ROOM_TASK_ID},
+        ["room_id", "task_id"],
+    ),
+    "room_task_dismiss": _room_tool(
+        "room_task_dismiss",
+        "Dismiss a suggested task in a workspace that does not apply; the same suggestion "
+        "will not come back in later editions. Only suggestions can be dismissed. Confirm "
+        "with the person first." + _ROOM_LINK_RULE,
+        {"room_id": _ROOM_ID, "task_id": _ROOM_TASK_ID},
+        ["room_id", "task_id"],
+    ),
+    "room_open_task": _room_tool(
+        "room_open_task",
+        "Open a CRM task as a workspace to work it with an agent: the task's workspace is "
+        "created on first open (seeded with the task) or the existing one is returned. "
+        "Someone who is not in an existing task workspace, and is not the task's assignee, "
+        "is told to ask for it to be shared." + _ROOM_LINK_RULE,
+        {"task_id": _ROOM_TASK_ID},
+        ["task_id"],
+    ),
+}
+
+
 def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
     schemas: dict[str, dict[str, Any]] = {}
@@ -5421,4 +5452,4 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
     from robothor.goals.tools import schemas as pursuit_schemas
 
     schemas.update(pursuit_schemas())
-    return schemas | SALES_SCHEMAS | _ROOM_SCHEMAS
+    return schemas | SALES_SCHEMAS | _ROOM_SCHEMAS | _ROOM_TASK_SCHEMAS

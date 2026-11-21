@@ -1631,6 +1631,9 @@ same way. What people see and may do in a workspace is
 | `room_restore_revision` | `room_id`, `rev`; writes a new revision equal to it | assigned, or owner/admin |
 | `room_admin_reassign` | `room_id`, `user`; assigned and the run-as user | owner/admin |
 | `room_run` | `room_id`, `preview`, `period` (`{grain, start, end}`); runs a report workspace now | shared or more (a paused one: assigned, or owner/admin) |
+| `room_task_accept` | `room_id`, `task_id`; the task becomes the caller's (`crm_tasks.assignee_id`). Someone else's is refused, naming who has it; a task workspace's own task is never taken from inside it | shared or more, not archived |
+| `room_task_dismiss` | `room_id`, `task_id`; a suggested task only, which then never returns | shared or more, not archived |
+| `room_open_task` | `task_id`; the task's own workspace, made on first open | a staff role (not viewer) to create one |
 
 - **Who is asking.** Always the human on the run, from the tool context
   (`user_id`, `user_role`), never the agent. An unverified identity is refused
@@ -1668,6 +1671,22 @@ same way. What people see and may do in a workspace is
   `<untrusted_content>` boundary (`EXTERNAL_DATA_TOOLS`), like `web_fetch`.
 - **Every result that names a room carries `link`** (`/?v=chat&room=<id>`), and
   the descriptions tell the agent to give it.
+
+**Tasks in workspaces** (`robothor/rooms/tasks.py`, which the bridge's task
+routes call too). A published edition's suggestions become CRM tasks waiting
+for a person (`requires_human`, no agent, never tagged `thread`), one per
+suggestion key per workspace: a key that was accepted or dismissed is not
+created again, and a preview creates none. `room_task_accept` is how a person
+takes one; `room_task_dismiss` is how they say it does not apply. Use
+`room_open_task` when the person wants to work any CRM task with an agent: the
+first opener creates the task's workspace (run by the task's agent, or the
+default chat agent, seeded with the task as data) and is assigned to it. After
+that only the task's assignee joins by opening it, and never someone who was
+removed; anyone else is told to ask for it to be shared. Opening a planner
+task changes nothing about the task. An action the agent proposes in a task
+workspace during the assignee's own turn can be approved by that person (see
+"Member approval" in [System architecture](SYSTEM_ARCHITECTURE.md)); every
+other proposal waits for an operator.
 
 **How they reach an agent.** `room_*` is an opt-in family (`ROOM_TOOLS` in
 `OPT_IN_TOOLS`): the main agent is always given it, with or without a

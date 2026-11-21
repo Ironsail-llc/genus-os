@@ -80,6 +80,7 @@ ADMIN_ROUTER_MODULES = (
 GATE_NAMES = (
     "require_tenant_admin",
     "require_tenant_operator",
+    "require_tenant_member",
     "require_tenant_audit_reader",
     "require_root_operator",
     "require_root_audit_reader",
@@ -88,6 +89,10 @@ GATE_NAMES = (
 )
 
 T, TA, R, RA, OPEN = "tenant", "tenant_audit", "root", "root_audit", "open"
+#: The Inbox listing: the tenant's operators, plus a member or user, who passes
+#: ``require_tenant_member`` and is then shown only their own eligible actions
+#: (``robothor.rooms.approvals``; ``test_approvals_member.py``).
+TM = "tenant_or_member_own"
 
 ROUTE_CLASSES: dict[tuple[str, str], str] = {
     # ── agent manifests: the acting tenant's fleet, through its own engine ──
@@ -117,7 +122,7 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     ("GET", "/api/channels/{name}/identities"): T,
     ("DELETE", "/api/channels/{name}/identities/{identity_id}"): T,
     # ── operations ──
-    ("GET", "/api/approvals"): T,
+    ("GET", "/api/approvals"): TM,
     ("POST", "/api/approvals/{kind}/{approval_id}"): T,
     ("GET", "/api/automations"): T,
     ("POST", "/api/automations/{agent_id}/reset-breaker"): T,
@@ -192,7 +197,7 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     ("GET", "/ready"): OPEN,
 }
 
-GATED_CLASSES = (T, TA, R, RA)
+GATED_CLASSES = (T, TA, R, RA, TM)
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────
@@ -262,6 +267,7 @@ ALLOWED: dict[str, set[str]] = {
     R: {"parent_at_home"},
     RA: {"parent_at_home", "parent_auditor_at_home"},
 }
+ALLOWED[TM] = ALLOWED[T] | {"child_member_own"}
 
 
 class GatePassed(HTTPException):

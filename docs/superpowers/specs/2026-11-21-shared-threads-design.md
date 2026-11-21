@@ -431,6 +431,67 @@ or admin. `chat_store.search_chat_turns(..., room_ids=None)` leaves out every
 room session not in `room_ids`. The bridge's notification read and ack accept
 only the recipient or an operator. No schema change.
 
+#### As built (lane 9)
+
+`robothor/rooms/tasks.py` holds the task rules and `robothor/rooms/approvals.py`
+the member approval rule; the tools (`handlers/room_tasks.py`) and the bridge are
+wrappers. Schema changes are migration 172.
+
+- **Functions.** `list_tasks(actor, room_id) -> list[RoomTaskView]`,
+  `accept_task(actor, room_id, task_id) -> RoomTaskView`, `dismiss_task(...)`,
+  `open_task_room(actor, task_id) -> Room`, `on_edition_published(room, edition)`
+  (registered on the publish hook when the handler module loads) and
+  `publish_task_changed(tenant_id, task_id)`. `RoomTaskView(task_id, title, status,
+  origin, edition_id, assignee: TaskPerson | None, accepted_by: TaskPerson | None,
+  dismissed)`, `TaskPerson(user_id, display_name)`. Errors carry `code`:
+  `TaskNotFound` and `RoomNotFound` `not_found`, `RoomForbidden` `forbidden`,
+  `TaskAlreadyAccepted` `already_accepted` (with `.by`, who has it),
+  `TaskAlreadyDismissed` `already_dismissed`.
+- **Assignee.** Accept writes `crm_tasks.assignee_id` (a `user_accounts.id`;
+  nothing wrote it before, the bridge task view already reads it as
+  `assigneeId`) and `room_tasks.accepted_by`. A task whose assignee is someone
+  else is refused naming them; the same person accepting again is a no-op.
+  A task workspace's own `subject` task is never accepted from inside it
+  (`RoomForbidden`), so opening a task never makes the opener its assignee.
+- **Dismiss** applies to `origin='suggestion'` only; it also resolves the CRM
+  task (`resolution='dismissed'`) so it leaves open task lists. A task is
+  decided once: accept after dismiss and dismiss after accept are refused.
+  `list_tasks` leaves dismissed suggestions out.
+- **Suggestions** become tasks in one transaction under the room row lock
+  (`dal.create_suggested_tasks`), with a history row; a partial unique index on
+  `(tenant_id, room_id, suggestion_key)` backs the once-per-key rule.
+- **Opening a task.** The first opener creates the room (agent: the task's
+  `assigned_to_agent` when this instance has it, else the default chat agent)
+  and is assigned; the room is seeded with one user-role message labelled as data
+  (title, status, objective, the last 10 history rows, all cleaned as edition
+  text is). After that, anyone with access gets the room; the task's human
+  assignee joins as assigned unless they were removed (`room_member_removals`,
+  written by `dal.remove_member`, cleared by `dal.add_member`) or the room is
+  archived; anyone else gets `RoomNotFound`. A viewer cannot create one.
+- **Status events.** `room.task` (exactly `{room_id, tenant_id, task_id}`) for
+  every linked room on accept, dismiss, suggestion creation, task room
+  creation, and from `robothor.crm.dal.update_task` (a status change),
+  `resolve_task` and `approve_task`. The bridge's own legacy task DAL does not
+  publish them.
+- **Proposer columns.** `Operations.propose` writes them from
+  `robothor.operations.proposer.current_proposer()`, set by the runner for
+  every run (and restored when it ends): `proposed_by_run_id` always,
+  `proposed_for_user_id` only for an interactive trigger with a user-account id,
+  `room_id` from the room run carrier, else the room key in an interactive
+  turn's `trigger_detail`. An explicit `proposer=` argument overrides it.
+- **Member approval.** Beyond the contract's four conditions the rule also
+  requires: the caller's `user_accounts` row active with role `member`/`user`
+  now; `proposed_by` NULL (a plugin's draft is its policy's or an operator's);
+  the kind not `sales.%` (`OPERATOR_ONLY_KIND_PATTERNS`: the sales pipeline
+  accepts only `operator:` verdicts); the task not done, resolved or deleted.
+  The action's task is the task workspace's own task
+  (`rooms.task_id`): `operation_actions` has no task column, and a report or agent
+  workspace's actions stay with operators. A viewer's `GET /api/approvals` stays
+  403 (a viewer can never post, so nothing could be theirs); a `member` or `user`
+  gets `scope: "own"`. `Operations.decide` accepts `member:<id>` only with a
+  `member_check`, re-run under the row lock, and only for a row proposed for that
+  id (`NotPermitted`, a `Conflict` subclass, otherwise).
+
 ### Tools
 
 `room_create(kind, title, instructions, agent_id?, schedule?, tz?, default_grain?, share_with?)`,

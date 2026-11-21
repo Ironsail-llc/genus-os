@@ -584,7 +584,7 @@ def unshare_room(actor: Actor, room_id: str, user: str) -> str:
     if member is None:
         raise ValueError(f"{user!r} is not a member of this workspace")
     _check_losing_assignment(room, members, member)
-    dal.remove_member(actor.tenant_id, room.id, member.user_id)
+    dal.remove_member(actor.tenant_id, room.id, member.user_id, removed_by=actor.user_id)
     return member.user_id
 
 

@@ -74,7 +74,9 @@ The Helm deployment has a different boundary from the systemd appliance:
   `/api/vault/list` stays open to operators because it returns key names only.
 - Bridge mutations under `/api/` either call an operator gate (the root gate
   `require_root_operator`, the per-tenant `require_tenant_admin`, or the Inbox's
-  tenant-local `require_tenant_operator`) or are scope-gated by the middleware;
+  tenant-local `require_tenant_operator`, which for a member's own action is
+  `require_tenant_member` plus the member approval rule) or are scope-gated by
+  the middleware;
   `crm/bridge/tests/test_mutations_are_gated.py`
   enumerates the assembled app and fails on any route that is neither, so a new
   ungated mutation cannot ship unnoticed. There are two gates
@@ -440,7 +442,8 @@ Two databases on the same instance:
 | `room_members` | Who can access a room: `assigned` members manage the definition, the others are shared. Per member: read marks for messages and editions (the unread count) and notification preferences. Tenant RLS |
 | `room_revisions` | Every definition a room has had (`{title, instructions, agent_id, settings, schedule}`), numbered; an edit names the revision it read and is refused if it is stale, and a restore writes a new revision. Tenant RLS |
 | `room_editions` | What a room's run published for a period: blocks (dashboard components), suggestions, provenance, status `building`/`published`/`failed`, `preview` for a run only its requester sees, `seq` (build order, the stable number) and `published_seq` (publish order, never on a preview; read marks and unread counts use it). A partial unique index keeps one non-preview `building` row per period, so concurrent requests share a build. Tenant RLS |
-| `room_tasks` | CRM tasks linked to a room (`subject`, `suggestion` or `linked`), and who accepted or dismissed each, once. Tenant RLS |
+| `room_tasks` | CRM tasks linked to a room (`subject`, `suggestion` or `linked`), and who accepted or dismissed each, once. A suggestion key is unique per room (migration 172). Tenant RLS |
+| `room_member_removals` | Who was removed from a room, by whom (migration 172). Opening a task lets its human assignee join the task's room, never someone removed from it; `add_member` (a person who can share the room) clears the row. Moves with the room. Tenant RLS |
 
 ### Canonical schema lifecycle
 
@@ -1563,6 +1566,39 @@ settles nothing. Audited with `decided_by` and `tenant_id` (identifiers only —
 the answer text is content, not an identifier). `escalation` stays
 platform-only (`require_operator`) and is proxied to the engine, because
 settling it means waking a coroutine in that process.
+
+**Member approval** is the one place this gate widens, and the narrowest
+change that lets a person approve the email their own agent turn drafted.
+`require_tenant_member` admits a `member` or `user` person of the acting tenant
+(never a service token, viewer or auditor) to two things only: `GET
+/api/approvals` returns `{count, pending, scope: "own"}` with only their
+eligible `action` rows, each carrying `room_id` and `task_id`, and `POST
+/api/approvals/action/{id}` decides one. The rule, in `robothor/rooms/approvals.py`,
+holds only when ALL of these do, read from the database at decision time: the
+caller's account is active with role `member` or `user` now (not only per the
+token); the action was proposed for the caller (`proposed_for_user_id`) by a run,
+not a plugin (`proposed_by` is NULL), and is not a `sales.*` kind (the sales
+pipeline accepts only an operator's verdict); its
+`proposed_by_run_id` is an `agent_runs` row of the caller with
+`trigger_type='webchat'` and `trigger_detail` exactly `webchat:<the workspace's
+session key>`; the caller can post in that workspace now (`access.require(...,
+"post")`: a current member, the workspace not archived); and the workspace is a
+task workspace whose task (`rooms.task_id`, linked in `room_tasks`, not done,
+resolved or deleted) has the caller as its human assignee
+(`crm_tasks.assignee_id`). Opening a task never makes anyone its assignee: a
+task workspace's own task cannot be accepted from inside it, so a member becomes
+an assignee by accepting a suggestion or by someone assigning them. The check runs again
+inside `Operations.decide(member_check=...)` under the action's row lock, which
+also requires the row's `proposed_for_user_id` to be the deciding member.
+Anything else is a 403 that settles nothing, a check that cannot be made lists
+nothing (503) or refuses (403), and every other kind stays operator-only. The
+verdict is `member:<user id>` on the row, in `operation_audit` (with the room,
+task and run) and in the bridge audit; what executes is still bound to the
+approved payload hash. The three attribution columns are written by
+`Operations.propose` from the run it is called in
+(`robothor/operations/proposer.py`, set by the runner for every run): the run
+id always, the person only for an interactive turn of a user account, the
+workspace from the room run carrier or the turn's session key.
 
 #### Claude Code driver (`robothor/engine/coding/`)
 

@@ -17,9 +17,10 @@ from psycopg2.extras import Json, RealDictCursor
 
 from robothor.db.connection import get_connection
 from robothor.events import bus
+from robothor.operations.proposer import Proposer, current_proposer
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
 
 
 #: The event-bus stream, and the event an approval publishes on it.
@@ -32,6 +33,10 @@ MAX_LIST_ACTIONS = 1000
 
 class Conflict(ValueError):  # noqa: N818
     """A stale worker, approval, or conflicting idempotency key."""
+
+
+class NotPermitted(Conflict):
+    """The decider may not decide this action (a member outside the member rule)."""
 
 
 class BudgetExceeded(ValueError):  # noqa: N818
@@ -405,6 +410,7 @@ class Operations:
         *,
         expires_seconds: int = 86400,
         proposed_by: str | None = None,
+        proposer: Proposer | None = None,
         cur: Any = None,
     ) -> str:
         """Create an immutable draft. Changed content needs a new key and approval.
@@ -412,6 +418,11 @@ class Operations:
         ``proposed_by`` names the plugin that proposes; only that plugin's
         policy actor may later decide the draft. A key stays bound to its
         proposer as well as its content.
+
+        ``proposer`` (default: the run this is called in,
+        ``robothor.operations.proposer``) records ``proposed_by_run_id``,
+        ``proposed_for_user_id`` and ``room_id``. A replayed key keeps the
+        attribution of its first proposal.
         """
         if proposed_by is not None and not proposed_by.strip():
             raise ValueError("Proposer must be a plugin name or None")
@@ -423,13 +434,16 @@ class Operations:
                     payload,
                     expires_seconds=expires_seconds,
                     proposed_by=proposed_by,
+                    proposer=proposer,
                     cur=cursor,
                 )
+        who = proposer if proposer is not None else current_proposer()
         action = str(uuid4())
         cur.execute(
             "INSERT INTO operation_actions"
-            "(id,tenant_id,kind,dedup_key,payload,payload_hash,expires_at,proposed_by) "
-            "VALUES(%s,%s,%s,%s,%s,%s,now()+%s*interval '1 second',%s) "
+            "(id,tenant_id,kind,dedup_key,payload,payload_hash,expires_at,proposed_by,"
+            "proposed_by_run_id,proposed_for_user_id,room_id) "
+            "VALUES(%s,%s,%s,%s,%s,%s,now()+%s*interval '1 second',%s,%s,%s,%s) "
             "ON CONFLICT DO NOTHING RETURNING id",
             (
                 action,
@@ -440,6 +454,9 @@ class Operations:
                 digest(payload),
                 expires_seconds,
                 proposed_by,
+                who.run_id if who else None,
+                who.user_id if who else None,
+                who.room_id if who else None,
             ),
         )
         row = cur.fetchone()
@@ -481,22 +498,36 @@ class Operations:
             row = cur.fetchone()
             return dict(row) if row else None
 
-    def decide(self, action: str, approved: bool, actor: str) -> None:
-        """Persist a decision by an operator or by the proposing plugin's policy.
+    def decide(
+        self,
+        action: str,
+        approved: bool,
+        actor: str,
+        *,
+        member_check: Callable[[Any, dict[str, Any]], dict[str, Any] | bool | None] | None = None,
+    ) -> None:
+        """Persist a decision by an operator, a member, or the proposing plugin's policy.
 
         ``operator:<id>`` is a human; the caller must authenticate it before
         entry. ``policy:<plugin>:<version>`` is an automated rule and may decide
-        only drafts that ``<plugin>`` proposed. An approval publishes
-        ``operation_action.approved`` on the ``operations`` stream once it has
-        committed.
+        only drafts that ``<plugin>`` proposed. ``member:<user id>`` is a
+        non-operator deciding their own action: it needs ``member_check``,
+        called under the draft's row lock with ``(cursor, row)``, which returns
+        the audit detail (truthy) when the member rule still holds; the draft
+        must also have been proposed for that user. Otherwise ``NotPermitted``.
+        An approval publishes ``operation_action.approved`` on the
+        ``operations`` stream once it has committed.
         """
         policy = _policy(actor)
-        if policy is None and not actor.startswith("operator:"):
+        member = actor.partition(":")[2] if actor.startswith("member:") else None
+        if member is not None and (not member or member_check is None):
+            raise NotPermitted("A member decision needs the member rule")
+        if policy is None and member is None and not actor.startswith("operator:"):
             raise Conflict("Human operator decision required")
         with self.transaction() as cur:
             cur.execute(
-                "SELECT kind,proposed_by FROM operation_actions WHERE tenant_id=%s AND id=%s "
-                "AND status='review' AND expires_at>now() FOR UPDATE",
+                "SELECT id,kind,proposed_by,proposed_for_user_id FROM operation_actions "
+                "WHERE tenant_id=%s AND id=%s AND status='review' AND expires_at>now() FOR UPDATE",
                 (self.tenant, action),
             )
             row = cur.fetchone()
@@ -504,6 +535,14 @@ class Operations:
                 raise Conflict("Draft is missing, expired, or already decided")
             if policy is not None and row["proposed_by"] != policy[0]:
                 raise Conflict("A policy may decide only its own plugin's drafts")
+            detail: dict[str, Any] | None = None
+            if member is not None and member_check is not None:
+                if str(row["proposed_for_user_id"] or "") != member:
+                    raise NotPermitted("A member may decide only an action proposed for them")
+                checked = member_check(cur, dict(row))
+                if not checked:
+                    raise NotPermitted("The member rule does not allow this decision")
+                detail = dict(checked) if isinstance(checked, dict) else None
             cur.execute(
                 "UPDATE operation_actions SET status=%s,approved_hash=payload_hash,decided_by=%s,decided_at=now() "
                 "WHERE tenant_id=%s AND id=%s AND status='review' AND expires_at>now()",
@@ -511,7 +550,8 @@ class Operations:
             )
             if cur.rowcount != 1:
                 raise Conflict("Draft is missing, expired, or already decided")
-            detail = {"policy": policy[0], "version": policy[1]} if policy else None
+            if policy:
+                detail = {"policy": policy[0], "version": policy[1]}
             self.audit(
                 cur, action, "action.approved" if approved else "action.rejected", actor, detail
             )

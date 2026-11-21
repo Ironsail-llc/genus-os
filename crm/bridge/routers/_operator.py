@@ -138,6 +138,45 @@ def require_tenant_operator(request: Request) -> TenantOperator:
     return TenantOperator(actor=f"operator:{auth.actor_id}", tenant_id=tenant_id)
 
 
+#: The tenant roles the Inbox's member path is for (``require_tenant_member``).
+MEMBER_ROLES = frozenset({"member", "user"})
+
+
+class TenantMember(NamedTuple):
+    """A non-operator person of the acting tenant, for the Inbox's member path."""
+
+    user_id: str
+    role: str
+    tenant_id: str
+
+
+def is_tenant_operator(request: Request) -> bool:
+    """Whether ``require_tenant_operator`` would admit this caller. A
+    predicate, not a gate: it only chooses which gate a route asks."""
+    auth = getattr(request.state, "auth", None)
+    tenant_id = (getattr(auth, "tenant_id", None) or "").strip()
+    return bool(
+        auth is not None and not auth.is_service and auth.role in OPERATOR_ROLES and tenant_id
+    )
+
+
+def require_tenant_member(request: Request) -> TenantMember:
+    """Gate for the ONE widening of the Inbox: a ``member`` or ``user`` person
+    of the acting tenant, never a service token, a viewer or an auditor.
+
+    Passing it grants nothing by itself. It is used only by
+    ``routers.approvals``, which then lists and decides only the actions
+    ``robothor.rooms.approvals`` proves are the caller's own (their
+    interactive turn in a task workspace they can post in, whose task is
+    assigned to them). Never use it for any other route.
+    """
+    auth = getattr(request.state, "auth", None)
+    tenant_id = (getattr(auth, "tenant_id", None) or "").strip()
+    if auth is None or auth.is_service or auth.role not in MEMBER_ROLES or not tenant_id:
+        raise HTTPException(status_code=403, detail="operator role required")
+    return TenantMember(user_id=str(auth.user_id), role=str(auth.role), tenant_id=tenant_id)
+
+
 def require_root_audit_reader(request: Request) -> str:
     """Gate for READ-ONLY appliance-wide trails: a root operator or auditor, at home.
 

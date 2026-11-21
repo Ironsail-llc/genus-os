@@ -43,21 +43,27 @@ __all__ = [
     "count_requested_editions",
     "create_edition",
     "create_room",
+    "create_suggested_tasks",
+    "dismiss_suggestion",
     "dismiss_task",
     "duplicate_room",
+    "ensure_task_room",
     "fail_edition",
     "find_edition_for_period",
     "get_accounts",
+    "get_crm_task",
     "get_edition",
     "get_member",
     "get_or_create_task_room",
     "get_room",
+    "get_task_room",
+    "join_task_room",
     "link_task",
     "linked_channels",
     "list_all_rooms",
+    "list_building_editions",
     "list_directory",
     "list_editions",
-    "list_building_editions",
     "list_editions_in_period",
     "list_members",
     "list_revisions",
@@ -74,14 +80,20 @@ __all__ = [
     "remove_member",
     "restore_revision",
     "room_summary",
+    "room_task_view",
+    "room_task_views",
+    "rooms_linked_to_task",
     "set_assigned",
     "set_edition_run",
     "set_notify",
     "set_paused",
     "set_run_as",
+    "take_task",
     "task_details",
+    "task_history",
     "unarchive_room",
     "update_definition",
+    "was_removed",
 ]
 
 #: The keys ``update_definition`` accepts. ``agent_id`` is fixed at creation:
@@ -792,6 +804,11 @@ def add_member(
             (tenant_id, room, user, assigned, adder),
         )
         member = _member(cur.fetchone())
+        # Re-added by someone who can share the room: the removal is over.
+        cur.execute(
+            "DELETE FROM room_member_removals WHERE tenant_id = %s AND room_id = %s AND user_id = %s",
+            (tenant_id, room, user),
+        )
         conn.commit()
         return member
 
@@ -815,7 +832,12 @@ def _update_member(
         return _member(row) if row else None
 
 
-def remove_member(tenant_id: str, room_id: str, user_id: str) -> bool:
+def remove_member(
+    tenant_id: str, room_id: str, user_id: str, *, removed_by: str | None = None
+) -> bool:
+    """Remove a member and remember it (``room_member_removals``), so opening
+    the room's task never re-adds them; only ``add_member`` (someone who can
+    share the room) does."""
     room, user = canonical_uuid(room_id), canonical_uuid(user_id)
     if room is None or user is None:
         return False
@@ -826,8 +848,31 @@ def remove_member(tenant_id: str, room_id: str, user_id: str) -> bool:
             (tenant_id, room, user),
         )
         removed = bool(cur.rowcount)
+        if removed:
+            cur.execute(
+                """INSERT INTO room_member_removals (tenant_id, room_id, user_id, removed_by)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (tenant_id, room_id, user_id) DO UPDATE
+                   SET removed_by = EXCLUDED.removed_by, removed_at = now(), updated_at = now()""",
+                (tenant_id, room, user, canonical_uuid(removed_by)),
+            )
         conn.commit()
         return removed
+
+
+def was_removed(tenant_id: str, room_id: str, user_id: str) -> bool:
+    """Whether ``user_id`` was removed from the room and not re-added since."""
+    room, user = canonical_uuid(room_id), canonical_uuid(user_id)
+    if room is None or user is None:
+        return False
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM room_member_removals "
+            "WHERE tenant_id = %s AND room_id = %s AND user_id = %s",
+            (tenant_id, room, user),
+        )
+        return cur.fetchone() is not None
 
 
 def set_assigned(tenant_id: str, room_id: str, user_id: str, assigned: bool) -> RoomMember | None:
@@ -1336,6 +1381,16 @@ def get_or_create_task_room(
     """The room of a CRM task, made on first use (kind ``task``, titled after
     the task, the task linked as its ``subject``). Racing callers get the same
     room. None when the task is not in the tenant."""
+    made = ensure_task_room(tenant_id, task_id, agent_id=agent_id, created_by=created_by)
+    return made[0] if made else None
+
+
+def ensure_task_room(
+    tenant_id: str, task_id: str, *, agent_id: str, created_by: str
+) -> tuple[Room, bool] | None:
+    """``get_or_create_task_room`` that also says whether this call made it
+    (``created``): only the caller that made the room seeds it. None when the
+    task is not in the tenant."""
     creator = _required_uuid(created_by, "created_by")
     room_session_key(agent_id, str(uuid.uuid4()))  # refuses an agent id that would not parse
     with get_connection() as conn:
@@ -1355,6 +1410,7 @@ def get_or_create_task_room(
             task_id=task["id"],
             run_as_user_id=None,
         )
+        created = room is not None
         if room is None:
             # Another caller made it; ON CONFLICT waited for its commit.
             cur.execute(
@@ -1365,9 +1421,311 @@ def get_or_create_task_room(
         else:
             _insert_task_link(cur, tenant_id, room.id, task, "subject", None, None)
         conn.commit()
-        return room
+        return room, created
 
 
+def get_task_room(tenant_id: str, task_id: str) -> Room | None:
+    """The room opened for a CRM task, if there is one."""
+    task = canonical_uuid(task_id)
+    if task is None:
+        return None
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM rooms WHERE tenant_id = %s AND task_id = %s", (tenant_id, task))
+        row = cur.fetchone()
+        return _room(row) if row else None
+
+
+def join_task_room(tenant_id: str, room_id: str, user_id: str) -> RoomMember | None:
+    """Add ``user_id`` to a task room as assigned, unless they were removed
+    from it. An existing membership is returned unchanged. None when the
+    person was removed (only someone who can share the room re-adds them)."""
+    room, user = canonical_uuid(room_id), canonical_uuid(user_id)
+    if room is None or user is None:
+        return None
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """INSERT INTO room_members (tenant_id, room_id, user_id, assigned, added_by)
+               SELECT %(t)s, %(r)s, %(u)s, TRUE, %(u)s
+               WHERE NOT EXISTS (SELECT 1 FROM room_member_removals
+                                 WHERE tenant_id = %(t)s AND room_id = %(r)s AND user_id = %(u)s)
+               ON CONFLICT (tenant_id, room_id, user_id) DO NOTHING RETURNING *""",
+            {"t": tenant_id, "r": room, "u": user},
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                "SELECT * FROM room_members WHERE tenant_id = %s AND room_id = %s AND user_id = %s",
+                (tenant_id, room, user),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return _member(row) if row else None
+
+
+# ─── tasks as people see them ────────────────────────────────────────────
+
+#: A CRM task's fields the rooms layer reads. Never written by this module
+#: except ``assignee_id`` (accept) and ``resolved_at``/``resolution`` (dismiss).
+_TASK_FIELDS = (
+    "id, title, status, objective, assigned_to_agent, assignee_id, tags, next_action, resolved_at"
+)
+
+
+def get_crm_task(tenant_id: str, task_id: str) -> dict[str, Any] | None:
+    """A CRM task of the tenant (not deleted), or None."""
+    task = canonical_uuid(task_id)
+    if task is None:
+        return None
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            f"SELECT {_TASK_FIELDS} FROM crm_tasks "  # noqa: S608 - a module constant
+            "WHERE tenant_id = %s AND id = %s AND deleted_at IS NULL",
+            (tenant_id, task),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    out = dict(row)
+    out["id"] = str(out["id"])
+    out["assignee_id"] = _s(out["assignee_id"])
+    return out
+
+
+def task_history(tenant_id: str, task_id: str, *, limit: int = 10) -> list[dict[str, Any]]:
+    """The task's most recent transitions, oldest first."""
+    task = canonical_uuid(task_id)
+    if task is None:
+        return []
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT from_status, to_status, changed_by, reason, created_at FROM crm_task_history "
+            "WHERE tenant_id = %s AND task_id = %s ORDER BY created_at DESC LIMIT %s",
+            (tenant_id, task, max(1, int(limit))),
+        )
+        return [dict(r) for r in reversed(cur.fetchall())]
+
+
+_VIEW_SELECT = """
+SELECT rt.task_id, rt.origin, rt.edition_id, rt.suggestion_key, rt.accepted_by,
+       rt.dismissed_by, t.title, t.status, t.assignee_id,
+       ua.display_name AS assignee_name, ub.display_name AS accepted_name
+FROM room_tasks rt
+JOIN crm_tasks t ON t.tenant_id = rt.tenant_id AND t.id = rt.task_id AND t.deleted_at IS NULL
+LEFT JOIN user_accounts ua ON ua.tenant_id = rt.tenant_id AND ua.id = t.assignee_id
+LEFT JOIN user_accounts ub ON ub.tenant_id = rt.tenant_id AND ub.id = rt.accepted_by
+WHERE rt.tenant_id = %(t)s AND rt.room_id = %(r)s"""
+
+
+def _view_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    for key in ("task_id", "edition_id", "accepted_by", "dismissed_by", "assignee_id"):
+        out[key] = _s(out[key])
+    return out
+
+
+def room_task_views(
+    tenant_id: str, room_id: str, *, include_dismissed: bool = False
+) -> list[dict[str, Any]]:
+    """The room's linked tasks with their CRM title, status and human
+    assignee and the display names of the assignee and the accepter."""
+    room = canonical_uuid(room_id)
+    if room is None:
+        return []
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            _VIEW_SELECT
+            + (" " if include_dismissed else " AND rt.dismissed_by IS NULL ")
+            + "ORDER BY rt.created_at, rt.task_id",
+            {"t": tenant_id, "r": room},
+        )
+        return [_view_row(r) for r in cur.fetchall()]
+
+
+def room_task_view(tenant_id: str, room_id: str, task_id: str) -> dict[str, Any] | None:
+    room, task = canonical_uuid(room_id), canonical_uuid(task_id)
+    if room is None or task is None:
+        return None
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            _VIEW_SELECT + " AND rt.task_id = %(k)s", {"t": tenant_id, "r": room, "k": task}
+        )
+        row = cur.fetchone()
+        return _view_row(row) if row else None
+
+
+def _locked_link(cur: Any, tenant_id: str, room: str, task: str) -> dict[str, Any] | None:
+    """The link and its CRM task, both row-locked (link first, as every writer does)."""
+    cur.execute(
+        "SELECT rt.origin, rt.accepted_by, rt.dismissed_by FROM room_tasks rt "
+        "WHERE rt.tenant_id = %s AND rt.room_id = %s AND rt.task_id = %s FOR UPDATE",
+        (tenant_id, room, task),
+    )
+    link = cur.fetchone()
+    if link is None:
+        return None
+    cur.execute(
+        "SELECT assignee_id FROM crm_tasks WHERE tenant_id = %s AND id = %s "
+        "AND deleted_at IS NULL FOR UPDATE",
+        (tenant_id, task),
+    )
+    crm = cur.fetchone()
+    if crm is None:
+        return None
+    return {
+        "origin": link["origin"],
+        "accepted_by": _s(link["accepted_by"]),
+        "dismissed_by": _s(link["dismissed_by"]),
+        "assignee_id": _s(crm["assignee_id"]),
+    }
+
+
+def take_task(tenant_id: str, room_id: str, task_id: str, user_id: str) -> tuple[str, str | None]:
+    """Accept a linked task for ``user_id``: the link's ``accepted_by`` and the
+    CRM task's human assignee (``crm_tasks.assignee_id``), in one transaction.
+
+    ``(outcome, holder)``: ``accepted`` (also when ``user_id`` already had it),
+    ``taken`` with the user who has it, ``dismissed``, ``subject`` (a task
+    room's own task is never taken from inside the room: opening a task must
+    not make anyone its assignee), or ``missing``."""
+    room, task, user = canonical_uuid(room_id), canonical_uuid(task_id), canonical_uuid(user_id)
+    if room is None or task is None or user is None:
+        return "missing", None
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        link = _locked_link(cur, tenant_id, room, task)
+        if link is None:
+            return "missing", None
+        if link["dismissed_by"] is not None:
+            return "dismissed", None
+        if link["origin"] == "subject":
+            return "subject", None
+        holder = link["assignee_id"] or link["accepted_by"]
+        if holder is not None and holder != user:
+            return "taken", holder
+        cur.execute(
+            "UPDATE room_tasks SET accepted_by = %s, updated_at = now() "
+            "WHERE tenant_id = %s AND room_id = %s AND task_id = %s AND accepted_by IS NULL",
+            (user, tenant_id, room, task),
+        )
+        cur.execute(
+            "UPDATE crm_tasks SET assignee_id = %s, updated_at = now() "
+            "WHERE tenant_id = %s AND id = %s AND assignee_id IS NULL",
+            (user, tenant_id, task),
+        )
+        conn.commit()
+        return "accepted", user
+
+
+def dismiss_suggestion(
+    tenant_id: str, room_id: str, task_id: str, user_id: str
+) -> tuple[str, str | None]:
+    """Dismiss a suggested task: the link records who, and the CRM task is
+    resolved as ``dismissed`` so it leaves open task lists.
+
+    ``(outcome, holder)``: ``dismissed``, ``already_dismissed``, ``accepted``
+    with who has it, ``not_suggestion`` or ``missing``."""
+    room, task, user = canonical_uuid(room_id), canonical_uuid(task_id), canonical_uuid(user_id)
+    if room is None or task is None or user is None:
+        return "missing", None
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        link = _locked_link(cur, tenant_id, room, task)
+        if link is None:
+            return "missing", None
+        if link["origin"] != "suggestion":
+            return "not_suggestion", None
+        if link["dismissed_by"] is not None:
+            return "already_dismissed", None
+        holder = link["accepted_by"] or link["assignee_id"]
+        if holder is not None:
+            return "accepted", holder
+        cur.execute(
+            "UPDATE room_tasks SET dismissed_by = %s, updated_at = now() "
+            "WHERE tenant_id = %s AND room_id = %s AND task_id = %s",
+            (user, tenant_id, room, task),
+        )
+        cur.execute(
+            "UPDATE crm_tasks SET resolved_at = now(), resolution = 'dismissed', updated_at = now() "
+            "WHERE tenant_id = %s AND id = %s AND resolved_at IS NULL",
+            (tenant_id, task),
+        )
+        conn.commit()
+        return "dismissed", None
+
+
+def create_suggested_tasks(
+    tenant_id: str,
+    room_id: str,
+    edition_id: str,
+    suggestions: list[dict[str, Any]],
+    *,
+    created_by_agent: str | None = None,
+) -> list[str]:
+    """One CRM task per suggestion key the room has never had, linked with
+    ``origin='suggestion'``, the edition and the key. Returns the new task ids.
+
+    The tasks wait for a person: ``requires_human``, no agent assignee, no
+    tags (never ``thread``, so the planner leaves them alone). The room row
+    lock serialises concurrent publishes; the unique key index backs it."""
+    edition = _required_uuid(edition_id, "edition_id")
+    created: list[str] = []
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        room = _locked_room(cur, tenant_id, room_id)
+        cur.execute(
+            "SELECT suggestion_key FROM room_tasks WHERE tenant_id = %s AND room_id = %s "
+            "AND suggestion_key IS NOT NULL",
+            (tenant_id, room.id),
+        )
+        seen = {r["suggestion_key"] for r in cur.fetchall()}
+        for item in suggestions:
+            key = item.get("key") if isinstance(item, Mapping) else None
+            if not isinstance(key, str) or not key.strip() or key in seen:
+                continue
+            seen.add(key)
+            task_id = str(uuid.uuid4())
+            title = str(item.get("title") or key).strip() or key
+            cur.execute(
+                """INSERT INTO crm_tasks (id, tenant_id, title, body, status, priority, tags,
+                                         requires_human, created_by_agent)
+                   VALUES (%s, %s, %s, %s, 'TODO', 'normal', '{}', TRUE, %s)""",
+                (task_id, tenant_id, title, item.get("detail") or None, created_by_agent),
+            )
+            cur.execute(
+                """INSERT INTO crm_task_history (id, task_id, from_status, to_status, changed_by,
+                                                reason, tenant_id)
+                   VALUES (%s, %s, NULL, 'TODO', %s, 'Suggested in a workspace edition', %s)""",
+                (str(uuid.uuid4()), task_id, created_by_agent or "system", tenant_id),
+            )
+            cur.execute(
+                """INSERT INTO room_tasks (tenant_id, room_id, task_id, edition_id, origin,
+                                          suggestion_key)
+                   VALUES (%s, %s, %s, %s, 'suggestion', %s)""",
+                (tenant_id, room.id, task_id, edition, key),
+            )
+            created.append(task_id)
+        conn.commit()
+    return created
+
+
+def rooms_linked_to_task(tenant_id: str, task_id: str) -> list[str]:
+    """Every room the task is linked to (as subject, suggestion or link)."""
+    task = canonical_uuid(task_id)
+    if task is None:
+        return []
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT room_id FROM room_tasks WHERE tenant_id = %s AND task_id = %s ORDER BY room_id",
+            (tenant_id, task),
+        )
+        return [str(r[0]) for r in cur.fetchall()]
 def room_summary(tenant_id: str, room_id: str, user_id: str) -> RoomSummary | None:
     """One room's summary, archived or not, with ``user_id``'s unread count
     (0 when they are not a member: an admin's view). None when not in the tenant."""
