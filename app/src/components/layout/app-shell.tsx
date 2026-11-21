@@ -371,6 +371,10 @@ function AppShellBody() {
   const showCanvasRail = !isMobile && isChatView && canvasRailOpen && !activeRoom;
   // No rail while nothing serves the rooms list (it answered 404).
   const showRoomRail = isChatView && !showCanvasRail && rooms.available;
+  // Below desktop width the rail is one button with a list that drops down
+  // from it, so it sits ABOVE the chat in a column: in the row it shares on
+  // desktop, its list would open below the viewport and be clipped.
+  const railStacked = showRoomRail && screenSize !== "desktop";
 
   // A visual the agent asks for mid-chat — a [RENDER:…] component or
   // [DASHBOARD:…] data — must be seen where the operator is looking, so it
@@ -598,7 +602,7 @@ function AppShellBody() {
               <div
                 className={
                   isChatView && !showCanvasRail
-                    ? "flex-1 min-w-0 min-h-0 flex"
+                    ? `flex-1 min-w-0 min-h-0 flex ${railStacked ? "flex-col" : ""}`
                     : isChatView
                       ? "w-[420px] shrink-0 min-h-0 border-l border-border"
                       : "shrink-0 border-l border-border transition-[width] duration-200 overflow-hidden"
@@ -613,7 +617,7 @@ function AppShellBody() {
                     onSelect={openRoom}
                     isLoading={rooms.isLoading}
                     error={rooms.error}
-                    collapsed={screenSize !== "desktop"}
+                    collapsed={railStacked}
                   />
                 )}
                 {/* A collapsed dock stays mounted (the chat keeps its state), so
@@ -626,7 +630,7 @@ function AppShellBody() {
                   inert={(!isChatView && !chatOpen) || Boolean(activeRoom)}
                   className={`focus:outline-none ${
                     isChatView && !showCanvasRail
-                      ? "h-full mx-auto w-full max-w-5xl"
+                      ? `${railStacked ? "flex-1 min-h-0" : "h-full"} mx-auto w-full max-w-5xl`
                       : isChatView
                         ? "h-full w-full"
                         : "h-full w-[400px]"
