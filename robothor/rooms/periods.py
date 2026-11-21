@@ -15,10 +15,14 @@ presented as a whole one. The server's own zone never enters the maths.
 
 ``request_period`` returns a period's published edition at once, or starts
 exactly ONE run for it however many people ask at the same moment (the
-``building`` row's unique index makes racing requesters share it). A room runs
-at most ``settings.max_on_demand_per_day`` on-demand editions per local day,
-counting every edition a person asked for, previews included; the default is
-``DEFAULT_MAX_ON_DEMAND_PER_DAY`` (5), and 0 allows none. A week, month or
+``building`` row's unique index makes racing requesters share it). Each person
+may start at most ``settings.max_on_demand_per_day`` on-demand editions in a
+room per local day of the room, counting every edition they asked for there,
+previews and failed ones included; the default is
+``DEFAULT_MAX_ON_DEMAND_PER_DAY`` (5), and 0 allows none. Asking for an edition
+that exists, or one already building, uses none. A ``building`` edition whose
+run is gone is failed first (``robothor.rooms.recovery``), so an interrupted
+run never holds its period. A week, month or
 custom run is handed the summaries of the day editions inside it as data
 (``context_for_period``), never figures summed across days.
 """
@@ -35,7 +39,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from robothor.rooms import access, dal
+from robothor.rooms import access, dal, recovery
 from robothor.rooms.errors import RoomError
 from robothor.rooms.keys import canonical_uuid
 from robothor.rooms.models import GRAINS, Edition, Room
@@ -84,8 +88,8 @@ class OnDemandCapReached(RoomError):  # noqa: N818 - reads as the result it is
     def __init__(self, limit: int, used: int) -> None:
         self.limit, self.used = limit, used
         super().__init__(
-            f"on-demand cap reached: this workspace runs {limit} on-demand edition(s) a day "
-            f"and {used} ran today"
+            f"on-demand cap reached: each person may start {limit} on-demand edition(s) "
+            f"a day in this workspace and you have started {used} today"
         )
 
 
@@ -303,6 +307,7 @@ def _claim(
         raise PeriodError("only a report workspace has periods")
     tz = str(room.settings.get("tz") or DEFAULT_TZ)
     period = resolve_period(grain, tz, anchor, now=now)
+    recovery.reap_stale_editions(room.tenant_id, room_id=room.id)
     found = dal.find_edition_for_period(
         room.tenant_id, room.id, period.grain, period.start, period.end
     )
@@ -310,7 +315,12 @@ def _claim(
         return found, False, None
     limit = _cap(room)
     since = datetime.combine(_today(tz, now), time(), tzinfo=_zone(tz))
-    used = dal.count_requested_editions(room.tenant_id, room.id, since=since)
+    # A requester with no account id (the loopback development operator)
+    # counts against everyone's on-demand runs in the room: stricter, never looser.
+    requester = canonical_uuid(actor.user_id)
+    used = dal.count_requested_editions(
+        room.tenant_id, room.id, since=since, requested_by=requester
+    )
     if used >= limit:
         raise OnDemandCapReached(limit, used)
     runner = run_room or resolve_run_room()
@@ -320,7 +330,7 @@ def _claim(
         period_start=period.start,
         period_end=period.end,
         grain=period.grain,
-        requested_by=canonical_uuid(actor.user_id),
+        requested_by=requester,
     )
     if not created:
         return edition, False, None
@@ -328,14 +338,32 @@ def _claim(
     return edition, True, functools.partial(runner, room, edition, period=period, context=context)
 
 
-async def _run(edition: Edition, run: Callable[[], Awaitable[Any]]) -> None:
+async def _run(
+    edition: Edition, run: Callable[[], Awaitable[Any]], release: Callable[[], None]
+) -> None:
+    """The run; ``release`` ends its live hold. A run that fails or is cancelled
+    fails its edition (a no-op once it published), so its period is free again."""
     try:
         await run()
+    except asyncio.CancelledError:
+        # Shielded: the cancellation must not also cancel the write that
+        # frees the period. Re-raised so the cancel still takes effect.
+        await asyncio.shield(
+            asyncio.to_thread(
+                dal.fail_edition,
+                edition.tenant_id,
+                edition.id,
+                "the run was interrupted before it published",
+            )
+        )
+        raise
     except Exception as exc:
         logger.warning("room period run failed for edition %s", edition.id, exc_info=True)
         await asyncio.to_thread(
             dal.fail_edition, edition.tenant_id, edition.id, f"the run failed: {exc}"
         )
+    finally:
+        release()
 
 
 async def request_period(
@@ -360,7 +388,10 @@ async def request_period(
         _claim, actor, room_id, grain, anchor, run_room, now
     )
     if started and run is not None:
-        task = asyncio.create_task(_run(edition, run), name=f"room-period-{edition.id}")
+        release = recovery.hold(edition.id)
+        task = asyncio.create_task(_run(edition, run, release), name=f"room-period-{edition.id}")
         _runs.add(task)
         task.add_done_callback(_runs.discard)
+        # A task cancelled before it first ran never enters ``_run``.
+        task.add_done_callback(lambda _task: release())
     return edition, started

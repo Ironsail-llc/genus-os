@@ -54,6 +54,7 @@ __all__ = [
     "link_task",
     "list_all_rooms",
     "list_editions",
+    "list_building_editions",
     "list_editions_in_period",
     "list_members",
     "list_revisions",
@@ -1003,20 +1004,51 @@ def list_editions_in_period(
         return [_edition(r) for r in cur.fetchall()]
 
 
-def count_requested_editions(tenant_id: str, room_id: str, *, since: datetime) -> int:
-    """Editions a person asked for (``requested_by`` set, previews included)
-    created at or after ``since``: the on-demand runs a daily cap counts."""
+def count_requested_editions(
+    tenant_id: str, room_id: str, *, since: datetime, requested_by: str | None
+) -> int:
+    """Editions ``requested_by`` asked for in the room (previews included)
+    created at or after ``since``: the on-demand runs a person's daily cap
+    counts. ``requested_by`` None counts every person's."""
     room = canonical_uuid(room_id)
     if room is None:
         return 0
     with get_connection(read_only=True) as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT COUNT(*) FROM room_editions WHERE tenant_id = %s AND room_id = %s "
-            "AND requested_by IS NOT NULL AND created_at >= %s",
-            (tenant_id, room, since),
+            "SELECT COUNT(*) FROM room_editions WHERE tenant_id = %(tenant)s "
+            "AND room_id = %(room)s AND requested_by IS NOT NULL AND created_at >= %(since)s "
+            "AND (%(person)s::uuid IS NULL OR requested_by = %(person)s::uuid)",
+            {
+                "tenant": tenant_id,
+                "room": room,
+                "since": since,
+                "person": canonical_uuid(requested_by),
+            },
         )
         return int(cur.fetchone()[0])
+
+
+def list_building_editions(
+    tenant_id: str, *, room_id: str | None = None
+) -> list[tuple[Edition, str | None]]:
+    """Every ``building`` edition of the tenant (or of one room), each with the
+    status of the ``agent_runs`` row its ``run_id`` names (None when it names
+    none, or none exists), oldest first."""
+    room = canonical_uuid(room_id) if room_id is not None else None
+    if room_id is not None and room is None:
+        return []
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT e.*, ar.status AS run_status FROM room_editions e "
+            "LEFT JOIN agent_runs ar ON ar.id::text = e.run_id AND ar.tenant_id = e.tenant_id "
+            "WHERE e.tenant_id = %(tenant)s AND e.status = 'building' "
+            "AND (%(room)s::uuid IS NULL OR e.room_id = %(room)s::uuid) "
+            "ORDER BY e.created_at, e.id",
+            {"tenant": tenant_id, "room": room},
+        )
+        return [(_edition(r), r["run_status"]) for r in cur.fetchall()]
 
 
 # ─── tasks ───────────────────────────────────────────────────────────────
