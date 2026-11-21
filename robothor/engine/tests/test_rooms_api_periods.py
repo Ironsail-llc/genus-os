@@ -445,3 +445,60 @@ async def test_a_members_own_token_still_reaches_the_route(secure_engine, fake):
 
     assert response.status_code == 202
     assert fake.calls[0][0].user_id == ALICE
+
+
+# ─── no exception text in a response ────────────────────────────────────
+
+SECRET = "connection to 10.0.0.7 failed at /srv/app/dal.py line 99"
+
+
+@pytest.mark.parametrize("error", [RuntimeError(SECRET), ValueError(SECRET), KeyError(SECRET)])
+async def test_an_unexpected_error_answers_a_generic_500(fake, error):
+    fake.error = error
+
+    response = await _post(_app(), {"grain": "day"})
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "internal_error"
+    assert SECRET not in response.text
+    assert "10.0.0.7" not in response.text
+
+
+async def test_an_account_lookup_that_fails_answers_a_generic_500(fake, monkeypatch):
+    def broken(_uid: str) -> Any:
+        raise RuntimeError(SECRET)
+
+    monkeypatch.setattr("robothor.auth.accounts.get_account_by_id", broken)
+
+    response = await _post(_app(SERVICE), {"grain": "day", "requested_by": ALICE})
+
+    assert response.status_code == 500
+    assert SECRET not in response.text
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: PeriodError(SECRET, reason="not_over"),
+        lambda: RoomForbidden(SECRET),
+        lambda: RoomRunUnavailable(SECRET),
+        lambda: OnDemandCapReached(limit=5, used=5),
+    ],
+)
+async def test_a_refusal_message_is_the_routes_own_text(fake, make):
+    fake.error = make()
+
+    response = await _post(_app(), {"grain": "day"})
+
+    assert response.status_code in {403, 422, 429, 503}
+    assert SECRET not in response.text
+    assert response.json()["message"]
+
+
+async def test_an_invalid_period_names_its_reason(fake):
+    fake.error = PeriodError("that day is not over yet", reason="not_over")
+
+    body = (await _post(_app(), {"grain": "day"})).json()
+
+    assert body["reason"] == "not_over"
+    assert "not over" in body["message"]
