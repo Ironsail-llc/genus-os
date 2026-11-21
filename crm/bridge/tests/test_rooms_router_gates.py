@@ -206,3 +206,27 @@ def json_detail(response) -> dict:
     import json
 
     return json.loads(response.body)["detail"]
+
+
+def test_a_client_error_the_framework_raises_keeps_its_status(
+    controls_client_as_user, caplog
+) -> None:
+    """A body FastAPI cannot read is its 400, not a logged server error."""
+    import logging
+
+    caplog.set_level(logging.ERROR)
+    response = controls_client_as_user.patch(
+        f"/api/rooms/{'0' * 8}-0000-4000-8000-{'0' * 12}",
+        content=b"\xff\xfe\xfa not utf-8",
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": {
+            "error": "invalid_request",
+            "message": "The request is not valid.",
+            "field": None,
+        }
+    }
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
