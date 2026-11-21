@@ -187,6 +187,14 @@ TOOL_HINTS: dict[str, ToolHint] = {
         keywords=(*_MAIL, "reply", "respond", "answer", "thread", "follow"),
         when_to_use="Use this instead of gws_gmail_send for every reply to an existing thread.",
     ),
+    # A workspace member's email for approval. Named for "email", so without a
+    # counterweight it out-ranked the mail READ tools for "what did alice say
+    # in her email"; it is the right tool only in a task workspace, where the
+    # words below find it.
+    "room_propose_email": ToolHint(
+        keywords=("workspace", "task", "approve", "approval", "propose"),
+        rank_bias=-20.0,
+    ),
     "gws_gmail_send": ToolHint(
         keywords=(
             *_MAIL,

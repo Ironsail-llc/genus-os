@@ -402,3 +402,18 @@ async def test_the_email_tool_runs_off_the_loop(monkeypatch):
     assert "error" in result
     await probe.settle()
     probe.assert_loop_free()
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "propose an email in my task workspace for approval",
+        "draft an email for approval in this workspace",
+    ],
+)
+def test_tool_search_finds_the_email_tool_for_a_workspace_request(query):
+    from robothor.engine.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    top = [h["name"] for h in registry.search_tools(list(registry._schemas), query, limit=3)]
+    assert "room_propose_email" in top
