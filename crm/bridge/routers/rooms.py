@@ -855,7 +855,7 @@ def api_unshare(room_id: str, user_id: str, request: Request) -> Any:
         refusal = _keeps_a_manager(actor, room, member.user_id)
         if refusal is not None:
             return refusal
-    if not dal.remove_member(actor.tenant_id, room.id, user_id):
+    if not dal.remove_member(actor.tenant_id, room.id, user_id, removed_by=actor.user_id):
         return _problem(404, "not_found", "not a member of this workspace", field="userId")
     removed = canonical_uuid(user_id)
     _audit(request, "room.unshare", room.id, user_id=removed)
