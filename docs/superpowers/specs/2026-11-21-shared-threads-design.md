@@ -231,11 +231,18 @@ this list a subset of the dashboard's component registry. `suggestions` is a lis
   noted edition gets that `chat_message_id`. Notes live and die with the carrier:
   a turn that never saves leaves nothing for a later turn, and a failed save puts
   them back for the retry. A preview does none of these.
-- Summary at most 4000 characters, title one line of at most 200; escape sequences
-  and control and format characters are removed first, then tag-shaped boundaries
-  (`<untrusted_content>`, `<|im_start|>`) and `[RENDER:` / `[DASHBOARD:` openers,
-  repeatedly until the text stops changing, so nesting or a hidden character cannot
-  rebuild one.
+- Summary at most 4000 characters, title one line of at most 200; suggestion text
+  is cleaned the same way. These fields are plain text, so cleaning is structural,
+  not a list of known tags: hidden characters (control, format, surrogate,
+  private-use, escape sequences) are removed, HTML entities decoded and NFKC
+  look-alikes folded, together until nothing changes; then every `<`, `>`, `[` and
+  `]` is replaced (`‹`, `›`, `(`, `)`), so no tag, prompt boundary or dashboard
+  marker can be written in them in any spelling. Cleaning is idempotent. A
+  generated corpus of obfuscations is tested against the downstream detectors.
+- This text is not wrapped as data when it is read back: a tool result that
+  carries it is not in `EXTERNAL_DATA_TOOLS` (`robothor/engine/session.py`), so the
+  structural cleaning is what keeps it inert. Tools that return edition text to a
+  model (`room_read`, `room_list`) should join that set.
 
 ### Tools
 

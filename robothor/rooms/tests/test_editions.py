@@ -348,7 +348,7 @@ def _corpus() -> list[str]:
         ]
         corpus += variants
         # Chained: two to four obfuscations of the same base.
-        for _ in range(150):
+        for _ in range(300):
             text = base
             for _ in range(rng.randint(2, 4)):
                 pick = rng.choice(

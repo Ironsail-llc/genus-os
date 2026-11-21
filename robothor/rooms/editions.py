@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import math
@@ -316,33 +317,53 @@ def validate_suggestions(suggestions: Any) -> list[dict[str, Any]]:
 
 #: CSI / OSC / two-character escape sequences.
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])")
-#: Tag-shaped prompt boundaries: ``<untrusted_content ...>``, ``</system>``, ``<|im_start|>``.
-_TAG = re.compile(r"</?[A-Za-z_|][^<>\n]{0,200}>")
-#: The opener of a dashboard marker, ``[RENDER:`` / ``[DASHBOARD:``; the rest stays as words.
-_MARKER_OPEN = re.compile(r"\[(?=[A-Z][A-Z_]{1,31}:)")
+#: Every bracket a tag or a marker could be built from, and its plain-text
+#: stand-in. A title, a summary and a suggestion are plain text: no markup in
+#: them is legitimate, so instead of recognising tags and markers by name (a
+#: list that can always be dodged) none of the four characters survives. The
+#: stand-ins are not folded back by NFKC and are read by no detector:
+#: ``<``/``>`` become single angle quotation marks, ``[``/``]`` parentheses.
+_BRACKETS = str.maketrans({"<": "\u2039", ">": "\u203a", "[": "(", "]": ")"})
+_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co"})
+
+
+def _visible(value: str) -> str:
+    """Escape sequences, then control, format, surrogate and private-use
+    characters removed; newlines and tabs kept."""
+    return "".join(
+        ch
+        for ch in _ANSI.sub("", value)
+        if ch in "\n\t" or unicodedata.category(ch) not in _HIDDEN_CATEGORIES
+    )
+
+
+def _decoded(value: str) -> str:
+    """Hidden characters removed, entities decoded and compatibility characters
+    folded, together and repeatedly until nothing changes: a hidden character
+    inside an entity (``&\u2060lt;``), a doubly encoded one (``&amp;lt;``) or a
+    fullwidth ``\uff1c`` cannot stand in for ``<`` afterwards."""
+    for _ in range(64):
+        folded = _visible(unicodedata.normalize("NFKC", html.unescape(_visible(value))))
+        if folded == value:
+            return value
+        value = folded
+    # Still decoding after 64 rounds: no ampersand is left to start another.
+    return value.replace("&", " and ")
 
 
 def clean_text(value: str, limit: int, *, one_line: bool = False) -> str:
-    """``value`` as plain text: no escape sequences, no control or format
-    characters (newlines and tabs kept unless ``one_line``), no marker syntax,
-    at most ``limit`` characters.
+    """``value`` as plain text, with no markup able to come back to life.
 
-    Hidden characters go first, so one cannot split a marker the patterns
-    would otherwise see; the patterns then repeat until nothing changes, so
-    removing one match cannot leave another behind (``[[RENDER:``)."""
-    text = "".join(
-        ch
-        for ch in _ANSI.sub("", value)
-        if ch in "\n\t" or unicodedata.category(ch) not in ("Cc", "Cf", "Cs", "Co")
-    )
-    while True:
-        cleaned = _MARKER_OPEN.sub("", _TAG.sub("", text))
-        if cleaned == text:
-            break
-        text = cleaned
+    In order: hidden characters removed, entities decoded and look-alikes
+    folded, to a fixed point (``_decoded``); whitespace collapsed when
+    ``one_line``; and last, every ``<``, ``>``, ``[`` and ``]`` replaced by
+    its stand-in. Nothing is removed after the brackets are replaced, so no
+    later step can rebuild a tag or a marker, and cleaning the result again
+    changes nothing."""
+    text = _decoded(value)
     if one_line:
         text = " ".join(text.split())
-    return text.strip()[:limit]
+    return text.strip().translate(_BRACKETS)[:limit].rstrip()
 
 
 def clean_summary(value: Any) -> str:
