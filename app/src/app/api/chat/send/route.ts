@@ -3,6 +3,7 @@ import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
 import { resolveChatTarget } from "@/lib/chat/chat-target";
 import { MAX_SEND_BODY_BYTES, checkAttachments, type AttachmentPayload } from "@/lib/chat/attachments";
 import { EngineRefusal, REFUSAL_STATUSES, RoomBusy } from "@/lib/engine/engine-refusal";
+import { ROOM_ANSWER_NOT_CONFIRMED, ROOM_NOT_CONFIRMED, confirmRoom, confirmRoomStream } from "@/lib/chat/room-echo";
 
 function json(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -129,6 +130,14 @@ export async function POST(req: Request) {
     // system message its instructions never mention.
     if (!sessionKey && !roomId) ensureCanvasPromptInjected().catch(() => {});
 
+    // A room request carries no session key, which an engine that ignores
+    // `room_id` would read as the caller's MAIN conversation. So the room is
+    // confirmed (the engine echoes it on a history read) before anything is
+    // sent, and the message never reaches an engine that would misfile it.
+    if (roomId && !(await confirmRoom(roomId, () => client.chatHistory(1, "", {}, roomId)))) {
+      return json(502, { error: ROOM_NOT_CONFIRMED, request_admitted: false });
+    }
+
     // Only a literal `true`: this changes what the request does (offer the text to
     // the running turn; never start one), so nothing merely truthy may turn it on.
     const engineRes = await (roomId
@@ -145,8 +154,16 @@ export async function POST(req: Request) {
       return json(502, { error: "No response body from engine" });
     }
 
+    // And the turn itself must open with the room's echo, or none of it is
+    // shown. Not admitted as far as the browser is concerned: it keeps no
+    // recovery for it and sends nothing again.
+    const stream = roomId ? await confirmRoomStream(engineRes.body, roomId) : engineRes.body;
+    if (!stream) {
+      return json(502, { error: ROOM_ANSWER_NOT_CONFIRMED, request_admitted: false });
+    }
+
     // Pipe engine SSE directly to browser — marker interception is client-side
-    return new Response(engineRes.body, {
+    return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",

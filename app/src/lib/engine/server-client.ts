@@ -183,7 +183,7 @@ class EngineClient {
     sessionKey = "",
     page: { before?: number; offset?: number } = {},
     roomId?: string,
-  ): Promise<{ sessionKey: string; messages: ChatMessage[]; recoveryScope?: string; hasMore?: boolean }> {
+  ): Promise<{ sessionKey: string; messages: ChatMessage[]; recoveryScope?: string; hasMore?: boolean; roomId?: string }> {
     const paging =
       (page.before !== undefined ? `&before=${page.before}` : "") +
       (page.offset !== undefined ? `&offset=${page.offset}` : "");

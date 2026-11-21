@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getEngineClient } from "@/lib/engine/server-client";
 import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
 import { resolveChatTarget } from "@/lib/chat/chat-target";
+import { ROOM_ANSWER_NOT_CONFIRMED, echoesRoom } from "@/lib/chat/room-echo";
 
 function wholeNumber(value: string | null): number | undefined {
   return value && /^\d+$/.test(value) && Number(value) > 0 ? Number(value) : undefined;
@@ -45,6 +46,20 @@ export async function GET(req: Request) {
     // for the reason `send/route.ts` gives: it is a write into whichever
     // session the request names.
     if (!sessionKey && !roomId) ensureCanvasPromptInjected().catch(() => {});
+
+    if (roomId) {
+      // An engine that ignored `room_id` answered with the caller's MAIN
+      // conversation: none of it is shown. And a room's session key is the
+      // engine's business, never the browser's.
+      if (!echoesRoom(result, roomId)) {
+        return NextResponse.json({ error: ROOM_ANSWER_NOT_CONFIRMED, messages: [] }, { status: 502 });
+      }
+      return NextResponse.json({
+        messages: result.messages || [],
+        recoveryScope: result.recoveryScope,
+        hasMore: result.hasMore === true,
+      }, { headers: { "Cache-Control": "no-store" } });
+    }
 
     return NextResponse.json({
       messages: result.messages || [],
