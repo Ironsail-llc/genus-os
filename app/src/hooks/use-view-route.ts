@@ -7,6 +7,7 @@ import {
   type SettingsPageId,
   type ViewId,
 } from "@/components/layout/nav-config";
+import { isRoomId } from "@/lib/rooms/room-id";
 
 /**
  * The active view lives in the query string (`?v=<view>&s=<settings page>`) so a
@@ -24,10 +25,17 @@ export const DEFAULT_SETTINGS_PAGE: SettingsPageId = settingsPages[0].id;
 export interface ViewRoute {
   view: ViewId;
   settingsPage: SettingsPageId;
+  /**
+   * A workspace (room) open on the chat view: `?v=chat&room={id}`, the link
+   * every room tool answers with. Absent — the key itself, not just its value —
+   * for the main conversation, so that route reads exactly as it always has.
+   */
+  room?: string;
 }
 
 const VIEW_PARAM = "v";
 const SUB_PARAM = "s";
+const ROOM_PARAM = "room";
 
 const viewIds = new Set<string>(ALL_VIEW_IDS);
 const settingsPageIds = new Set<string>(settingsPages.map((p) => p.id));
@@ -61,6 +69,10 @@ export function parseViewRoute(search: string): ViewRoute {
       ? (rawSub as SettingsPageId)
       : DEFAULT_SETTINGS_PAGE;
 
+  // Only the chat view opens a room, and only an id of a room id's shape.
+  const rawRoom = params.get(ROOM_PARAM);
+  if (view === "chat" && isRoomId(rawRoom)) return { view, settingsPage, room: rawRoom };
+
   return { view, settingsPage };
 }
 
@@ -76,11 +88,20 @@ export function formatViewRoute(route: ViewRoute, currentSearch = ""): string {
   } else {
     params.delete(SUB_PARAM);
   }
+  // Written for the room that is open and dropped otherwise: leaving a room,
+  // or the chat view, is going back to the main conversation.
+  if (route.view === "chat" && route.room && isRoomId(route.room)) {
+    params.set(ROOM_PARAM, route.room);
+  } else {
+    params.delete(ROOM_PARAM);
+  }
   return `?${params.toString()}`;
 }
 
 export interface ViewRouteApi extends ViewRoute {
   navigate: (view: ViewId, settingsPage?: SettingsPageId) => void;
+  /** Open a workspace on the chat view, or (null) go back to the main conversation. */
+  openRoom: (roomId: string | null) => void;
 }
 
 export function useViewRoute(): ViewRouteApi {
@@ -120,13 +141,8 @@ export function useViewRoute(): ViewRouteApi {
     return () => window.removeEventListener("popstate", sync);
   }, [applyRoute]);
 
-  const navigate = useCallback(
-    (view: ViewId, settingsPage?: SettingsPageId) => {
-      const next: ViewRoute = {
-        view,
-        settingsPage: settingsPage ?? routeRef.current.settingsPage,
-      };
-
+  const go = useCallback(
+    (next: ViewRoute) => {
       if (typeof window !== "undefined") {
         const search = formatViewRoute(next, window.location.search);
         // Re-selecting the view you are already on must not stack a history
@@ -141,5 +157,19 @@ export function useViewRoute(): ViewRouteApi {
     [applyRoute]
   );
 
-  return { ...route, navigate };
+  const navigate = useCallback(
+    (view: ViewId, settingsPage?: SettingsPageId) =>
+      go({ view, settingsPage: settingsPage ?? routeRef.current.settingsPage }),
+    [go]
+  );
+
+  const openRoom = useCallback(
+    (roomId: string | null) => {
+      const settingsPage = routeRef.current.settingsPage;
+      go(roomId && isRoomId(roomId) ? { view: "chat", settingsPage, room: roomId } : { view: "chat", settingsPage });
+    },
+    [go]
+  );
+
+  return { ...route, navigate, openRoom };
 }

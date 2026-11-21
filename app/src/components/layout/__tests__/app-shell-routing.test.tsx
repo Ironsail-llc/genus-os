@@ -6,6 +6,11 @@ const mockVisual = vi.hoisted(() => ({
   viewStack: [] as Array<{ toolName: string; props: Record<string, unknown>; title: string }>,
   pendingAgentData: null as Record<string, unknown> | null,
 }));
+// The shell's live readers (tasks, workspaces) share one event stream; jsdom
+// has no EventSource, so it is stood in for here as in app-shell.test.tsx.
+vi.mock("@/lib/event-bus/use-event-stream", () => ({
+  useEventStream: () => ({ events: [], connected: false, synced: false }),
+}));
 vi.mock("@/hooks/use-visual-state", () => ({
   useVisualState: () => ({
     notifyConversationUpdate: vi.fn(),

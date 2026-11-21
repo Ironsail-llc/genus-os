@@ -17,6 +17,8 @@ export interface ChatRecoveryRequest {
   requestId: string;
   agent: string;
   scope?: string;
+  /** In a room: the room's id, named in place of the agent. */
+  room?: string;
 }
 
 /** Reattach delivery by reading the original run; this component never executes work. */
@@ -34,7 +36,8 @@ export function ChatRecovery({ request, messageId, onRecovered }: {
     let attempts = 0;
     async function check() {
       const params = new URLSearchParams({ request_id: request.requestId });
-      if (request.agent) params.set("agent", request.agent);
+      if (request.room) params.set("room", request.room);
+      else if (request.agent) params.set("agent", request.agent);
       try {
         const response = await fetch(`/api/chat/outcome?${params}`, {
           cache: "no-store",

@@ -19,6 +19,15 @@ export interface HistoryMessage {
   serverId?: number;
   /** Files sent with a user turn, by summary (the engine keeps the bytes). */
   attachments?: AttachmentSummary[];
+  /** In a room: who wrote it. Absent in the main conversation. */
+  authorUserId?: string;
+  authorName?: string;
+  /**
+   * In a room: the edition this message announced. Render markers are
+   * stripped below, so this id is what draws the edition's charts again after
+   * a reload.
+   */
+  editionId?: string;
 }
 
 type Block = { type: string; text?: string };
@@ -27,7 +36,33 @@ type Row = {
   content?: string | Block[];
   id?: unknown;
   timestamp?: unknown;
+  authorUserId?: unknown;
+  authorName?: unknown;
+  editionId?: unknown;
+  author_user_id?: unknown;
+  author_name?: unknown;
+  edition_id?: unknown;
 };
+
+/** A non-empty string field, in the bridge's camelCase or the engine's snake_case. */
+function field(row: Row, camel: keyof Row, snake: keyof Row): string | undefined {
+  for (const value of [row[camel], row[snake]]) {
+    if (typeof value === "string" && value) return value;
+  }
+  return undefined;
+}
+
+/** The room-only fields, present only when the row carries them. */
+function roomFields(row: Row): Pick<HistoryMessage, "authorUserId" | "authorName" | "editionId"> {
+  const authorUserId = field(row, "authorUserId", "author_user_id");
+  const authorName = field(row, "authorName", "author_name");
+  const editionId = field(row, "editionId", "edition_id");
+  return {
+    ...(authorUserId ? { authorUserId } : {}),
+    ...(authorName ? { authorName } : {}),
+    ...(editionId ? { editionId } : {}),
+  };
+}
 
 function text(content: Row["content"]): string {
   if (typeof content === "string") return content;
@@ -61,6 +96,7 @@ export function historyToMessages(rows: unknown): HistoryMessage[] {
         timestamp: when(row.timestamp),
         serverId,
         ...(files.length ? { attachments: files } : {}),
+        ...roomFields(row),
       };
     });
 }

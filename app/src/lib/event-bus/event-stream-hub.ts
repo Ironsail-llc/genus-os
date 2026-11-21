@@ -100,7 +100,17 @@ function open(streams: string[]) {
   };
 }
 
+/**
+ * Whether this environment can hold a stream at all. Server rendering, an old
+ * browser and jsdom have no `EventSource`: subscribers then simply get no
+ * events, rather than an error thrown into the page.
+ */
+function canStream(): boolean {
+  return typeof globalThis.EventSource === "function";
+}
+
 function reconcile() {
+  if (!canStream()) return;
   const streams = unionStreams();
   if (streams.length === 0) {
     teardown();
