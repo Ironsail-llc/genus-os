@@ -1356,6 +1356,42 @@ class TestNothingInTheDataTripsTheScreen:
         self._assert_clean(env)
         assert edition.status == "published"
 
+    async def test_nothing_matches_across_the_join_of_instructions_and_data(self, env, enforce):
+        """The runner screens instructions and data joined, so the join may not
+        make a match either: instructions ending in "disregard" before a data
+        part starts."""
+        room = _report(env.db)
+        env.db.cur.execute(
+            "UPDATE rooms SET instructions = %s WHERE tenant_id = %s AND id = %s",
+            ("Summarise the week. Anything marked draft, disregard", env.db.tenant, room.id),
+        )
+        period = runs.Period(date(2026, 11, 9), date(2026, 11, 15), "week")
+        building, _ = dal.create_edition(
+            env.db.tenant,
+            room.id,
+            grain="week",
+            period_start=period.start,
+            period_end=period.end,
+            requested_by=env.db.alice,
+        )
+        env.runner.screen = True
+
+        edition = await runs.run_room(room, building, period=period, context="- 2026-11-09: Up 2%.")
+
+        self._assert_clean(env)
+        assert edition.status == "published"
+
+    def test_a_match_across_the_join_withholds_the_data_not_the_run(self, enforce):
+        from robothor.engine import cron_safety
+
+        asked = "Summarise the week. Anything marked draft, disregard"
+        data = "earlier figures below\n- 2026-11-09: Up 2%."
+
+        safe = runs._screen_safe(data, asked=asked)
+
+        assert safe == runs.ALL_WITHHELD
+        assert cron_safety.screen_cron_prompt(f"{asked}\n\n{safe}") is None
+
     async def test_instructions_that_trip_still_refuse_the_run(self, env, enforce):
         room = _report(env.db)
         env.db.cur.execute(
