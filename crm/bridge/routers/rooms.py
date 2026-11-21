@@ -46,7 +46,7 @@ from robothor.rooms.errors import (
     RoomNotFound,
 )
 from robothor.rooms.keys import canonical_uuid
-from robothor.rooms.models import room_link
+from robothor.rooms.models import edition_json, room_link
 from routers import _manifest_backend
 from routers._audit import audited
 from routers._engine_client import engine_request
@@ -334,25 +334,8 @@ def _room_json(actor: access.Actor, room: Room) -> dict[str, Any]:
 
 
 def _edition_json(edition: Edition) -> dict[str, Any]:
-    return {
-        "id": edition.id,
-        "seq": edition.seq,
-        "kind": edition.kind,
-        "status": edition.status,
-        "preview": edition.preview,
-        "periodStart": _iso(edition.period_start),
-        "periodEnd": _iso(edition.period_end),
-        "grain": edition.grain,
-        "revision": edition.revision,
-        "publishedSeq": edition.published_seq,
-        "title": edition.title,
-        "summary": edition.summary,
-        "blocks": edition.blocks,
-        "suggestions": edition.suggestions,
-        "provenance": edition.provenance,
-        "error": edition.error,
-        "createdAt": _iso(edition.created_at),
-    }
+    """The contract's ``Edition``: the one shape the engine answers too."""
+    return edition_json(edition)
 
 
 def _revision_json(revision: Revision, accounts: dict[str, dict[str, Any]]) -> dict[str, Any]:

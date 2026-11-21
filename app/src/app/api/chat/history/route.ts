@@ -3,6 +3,7 @@ import { getEngineClient } from "@/lib/engine/server-client";
 import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
 import { resolveChatTarget } from "@/lib/chat/chat-target";
 import { ROOM_ANSWER_NOT_CONFIRMED, echoesRoom } from "@/lib/chat/room-echo";
+import { EngineRefusal } from "@/lib/engine/engine-refusal";
 
 function wholeNumber(value: string | null): number | undefined {
   return value && /^\d+$/.test(value) && Number(value) > 0 ? Number(value) : undefined;
@@ -68,6 +69,10 @@ export async function GET(req: Request) {
       hasMore: result.hasMore === true,
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
+    if (roomId && err instanceof EngineRefusal) {
+      // No access to the workspace (404) or not allowed (403): said as such.
+      return NextResponse.json({ error: err.message, messages: [] }, { status: err.status });
+    }
     return NextResponse.json(
       { error: `Engine error: ${String(err)}`, messages: [] },
       { status: 502 }

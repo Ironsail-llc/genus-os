@@ -49,6 +49,7 @@ EDITION_KEYS = {
     "provenance",
     "createdAt",
     "publishedSeq",
+    "error",
 }
 
 

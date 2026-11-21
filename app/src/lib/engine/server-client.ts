@@ -192,6 +192,13 @@ class EngineClient {
       `${engineBase(headers)}/chat/history?limit=${limit}${paging}${keyedQuery(sessionKey)}${roomedQuery(roomId)}`,
       { headers, signal: AbortSignal.timeout(30_000) },
     );
+    // A workspace the caller cannot see (404) or may not read (403) is the
+    // engine's refusal, with its status: the route answers it as such, not as
+    // a broken engine.
+    if (roomId && ROOM_REFUSAL_STATUSES.has(res.status)) {
+      const payload = await Promise.resolve().then(() => res.json()).catch(() => ({}));
+      throw new EngineRefusal(res.status, typeof payload?.error === "string" ? payload.error : `Engine refused the request (${res.status})`);
+    }
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
     }

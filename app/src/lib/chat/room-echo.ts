@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
+import { EngineRefusal } from "@/lib/engine/engine-refusal";
 
 export const ROOM_NOT_CONFIRMED =
   "the engine did not confirm this workspace, so nothing was sent; it may not support workspaces yet";
@@ -49,6 +50,8 @@ async function callerRoomKey(roomId: string): Promise<string> {
 /**
  * Whether the engine serves `roomId` for this caller, by `readHistory`'s echo.
  * Only a confirmation is remembered; a refusal or a failure is asked again.
+ * The engine's own refusal (no access, 404; not allowed, 403) is thrown on,
+ * so the caller answers with it instead of "not confirmed".
  */
 export async function confirmRoom(roomId: string, readHistory: () => Promise<unknown>): Promise<boolean> {
   const key = await callerRoomKey(roomId);
@@ -58,7 +61,8 @@ export async function confirmRoom(roomId: string, readHistory: () => Promise<unk
   let answer: unknown;
   try {
     answer = await readHistory();
-  } catch {
+  } catch (err) {
+    if (err instanceof EngineRefusal) throw err;
     return false;
   }
   if (!echoesRoom(answer, roomId)) return false;
