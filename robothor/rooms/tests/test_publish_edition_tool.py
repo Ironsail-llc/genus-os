@@ -351,13 +351,14 @@ async def test_a_publish_emits_the_event_runs_the_hooks_and_bumps_activity(env) 
     assert dal.get_room(env.db.tenant, r.id).last_activity_at > before
 
 
-def test_the_event_payload_names_the_room_and_never_the_session_key(env) -> None:
+def test_the_event_payload_carries_ids_only(env) -> None:
+    """No title, summary, period or blocks, and never the session key: the
+    dashboard forwards room events to users who can access the room and
+    fetches the content through the API."""
     r = room(env)
-    e, _ = dal.create_edition(env.db.tenant, r.id, kind="dashboard")
+    e, _ = dal.create_edition(env.db.tenant, r.id, kind="dashboard", title="Secret title")
     payload = editions.edition_event_payload(r, e)
-    assert payload["room_id"] == r.id and payload["tenant_id"] == env.db.tenant
-    assert payload["edition_id"] == e.id
-    assert r.session_key not in str(payload)
+    assert payload == {"room_id": r.id, "tenant_id": env.db.tenant, "edition_id": e.id}
 
 
 async def test_a_preview_is_for_its_requester_only_and_sets_nothing_off(env) -> None:
