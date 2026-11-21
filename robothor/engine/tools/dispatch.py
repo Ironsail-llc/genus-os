@@ -310,6 +310,7 @@ def builtin_handlers() -> dict[str, Any]:
         pr_review,
         reasoning,
         reports,
+        room_editions,
         sales,
         skills,
         spawn,
@@ -376,6 +377,7 @@ def builtin_handlers() -> dict[str, Any]:
         workflows,
         plugins,
         org,
+        room_editions,
     ]:
         all_handlers.update(mod.HANDLERS)
 

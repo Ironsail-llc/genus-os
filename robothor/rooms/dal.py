@@ -842,7 +842,13 @@ def publish_edition(
     chat_message_id: int | None = None,
 ) -> Edition | None:
     """Publish a ``building`` edition. Raises ``InvalidBlocks`` for content
-    outside the allowed components; None when there is no such building edition."""
+    outside the allowed components; None when there is no such building edition.
+
+    ``revision`` becomes the edition's revision within its period: 1, or one
+    more than the non-preview editions already published for that grain and
+    period. An edition with no period is revision 1. (While building, the row
+    carries the room's definition revision; the builder records that in
+    provenance as ``room_rev``.)"""
     suggestions = [] if suggestions is None else suggestions
     _blocks(blocks, suggestions)
     canonical = canonical_uuid(edition_id)
@@ -861,14 +867,20 @@ def publish_edition(
         # before the edition row's, as create_edition does).
         _locked_room(cur, tenant_id, str(found["room_id"]))
         cur.execute(
-            """UPDATE room_editions SET status = 'published', title = %s, summary = %s,
+            """UPDATE room_editions e SET status = 'published', title = %s, summary = %s,
                       blocks = %s, suggestions = %s, provenance = %s, chat_message_id = %s,
-                      published_seq = CASE WHEN preview THEN NULL ELSE (
+                      published_seq = CASE WHEN e.preview THEN NULL ELSE (
                           SELECT COALESCE(MAX(p.published_seq), 0) + 1 FROM room_editions p
-                          WHERE p.tenant_id = room_editions.tenant_id
-                            AND p.room_id = room_editions.room_id) END,
+                          WHERE p.tenant_id = e.tenant_id AND p.room_id = e.room_id) END,
+                      revision = CASE WHEN e.period_start IS NULL THEN 1 ELSE 1 + (
+                          SELECT COUNT(*) FROM room_editions p
+                          WHERE p.tenant_id = e.tenant_id AND p.room_id = e.room_id
+                            AND p.status = 'published' AND NOT p.preview
+                            AND p.grain IS NOT DISTINCT FROM e.grain
+                            AND p.period_start = e.period_start AND p.period_end = e.period_end
+                      ) END,
                       updated_at = now()
-               WHERE tenant_id = %s AND id = %s AND status = 'building' RETURNING *""",
+               WHERE e.tenant_id = %s AND e.id = %s AND e.status = 'building' RETURNING *""",
             (
                 title or "",
                 summary or "",
