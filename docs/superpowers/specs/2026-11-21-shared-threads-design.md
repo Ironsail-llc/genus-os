@@ -443,7 +443,8 @@ WHOLE message of an unattended run (`injection_screen.screen_run_prompt`, which
 refuses the run in enforce mode), the data part is screened line by line after
 cleaning, before it joins the message (`runs._screen_safe`): a line the screen
 would flag is replaced by the fixed marker `[a message was withheld]`, and if
-lines still combine into a match the whole data part is withheld. A phrase in
+lines still combine into a match, or the data joined to the instructions exactly
+as the runner joins them makes one, the whole data part is withheld. A phrase in
 the data therefore never fails a run or pauses the schedule; it only drops that
 line. The instructions are scanned as they are, and a match still refuses the
 run and pauses the room. The run also has no identity and a system trigger

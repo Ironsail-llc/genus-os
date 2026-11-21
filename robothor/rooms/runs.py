@@ -355,18 +355,24 @@ WITHHELD = "[a message was withheld]"
 ALL_WITHHELD = "[the workspace's earlier text was withheld]"
 
 
-def _screen_safe(data: str) -> str:
+def _screen_safe(data: str, *, asked: str = "") -> str:
     """``data`` with every line the runner's injection screen would flag
     replaced by :data:`WITHHELD`, checked after cleaning, so nothing a member
     or an earlier run wrote can fail the run (an unattended run's whole message
     is screened, in enforce mode a match refuses it). Should lines still
-    combine into a match, the whole data part is withheld; never the run."""
+    combine into a match, the whole data part is withheld; never the run.
+    ``asked`` is the part before it: the result is also checked joined to it
+    exactly as the runner joins them, so the join cannot make a match."""
     from robothor.engine.cron_safety import scan_assembled_cron_prompt as scan
 
-    if not scan(data):
-        return data
-    safe = "\n".join(WITHHELD if scan(line) else line for line in data.split("\n"))
-    return ALL_WITHHELD if scan(safe) else safe
+    safe = data
+    if scan(safe):
+        safe = "\n".join(WITHHELD if scan(line) else line for line in safe.split("\n"))
+        if scan(safe):
+            safe = ALL_WITHHELD
+    if asked and safe and scan(f"{asked}\n\n{safe}"):
+        safe = ALL_WITHHELD
+    return safe
 
 
 def _wrap(source: str, text: str, limit: int) -> str:
@@ -409,7 +415,8 @@ def _prompt(room: Room, edition: Edition | None, trigger: str, context: str) -> 
         )
     if context:
         data.append(
-            "Earlier editions, as data:\n" + _wrap("workspace:period", context, CONTEXT_CHARS)
+            "Summaries of the days in this period, as data:\n"
+            + _wrap("workspace:period", context, CONTEXT_CHARS)
         )
     return "\n\n".join(lines), "\n\n".join(data)
 
@@ -549,7 +556,7 @@ async def _turn(
         reason = f"the instructions were refused by the injection scanner ({finding})"
         await asyncio.to_thread(_halt, room, reason, admins=False)
         raise _Halt(reason, returns_edition=True)
-    data = _screen_safe(data)
+    data = _screen_safe(data, asked=asked)
     prompt = f"{asked}\n\n{data}" if data else asked
     carrier = RoomRun.for_session(
         room.tenant_id,
