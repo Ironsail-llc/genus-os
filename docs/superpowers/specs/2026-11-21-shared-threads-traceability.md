@@ -151,8 +151,7 @@ Operator decision, 2026-11-21: nothing in workspaces is capped.
 Each of these asserted a cap at the start of this audit, and none of them is cited as proof
 above. The last column gives each test's state after the lanes' cap removals were merged
 (2026-11-21): "replaced" means no test of that name was left, "rewritten" means the
-test is still there but no longer asserts a cap, and "still asserts a cap" means it still
-has to be changed.
+test is still there but no longer asserts a cap. None still asserts one.
 
 Two of the rewritten tests are cited above, for A3 and I3, because their current bodies no
 longer assert a cap.
@@ -180,13 +179,13 @@ longer assert a cap.
 | `robothor/rooms/tests/test_runs.py::TestPreview::test_a_preview_is_capped_too` | the cost cap on previews | replaced |
 | `robothor/rooms/tests/test_runs.py::TestRunNow::test_the_daily_cap_is_per_person_and_counts_previews` | the daily cap on run now | replaced |
 | `robothor/engine/tests/test_room_periods_tool.py::test_cap_reached_is_flagged` | the tool's `cap` refusal | replaced |
-| `robothor/engine/tests/test_room_periods_tool.py::test_a_refusal_is_an_error_result` | has an `OnDemandCapReached` case | still asserts a cap |
+| `robothor/engine/tests/test_room_periods_tool.py::test_a_refusal_is_an_error_result` | has an `OnDemandCapReached` case | rewritten: it now asserts there is no cap |
 | `robothor/engine/tests/test_rooms_api_periods.py::test_cap_reached_says_what_the_cap_is` | 429 `on_demand_cap` | replaced |
-| `robothor/engine/tests/test_rooms_api_periods.py::test_each_refusal_has_its_own_status` | has a 429 `on_demand_cap` case | still asserts a cap |
+| `robothor/engine/tests/test_rooms_api_periods.py::test_each_refusal_has_its_own_status` | has a 429 `on_demand_cap` case | rewritten: it now asserts there is no cap |
 | `robothor/engine/tests/test_rooms_api_run.py::TestRoute::test_the_cap_answer_names_the_limit` | 429 `on_demand_cap` | replaced |
 | `robothor/engine/tests/test_rooms_api_run.py::TestRoute::test_each_refusal_has_its_status` | has a 429 case | rewritten |
 | `robothor/engine/tests/test_rooms_api_run.py::TestTool::test_refusals_are_errors_the_agent_can_relay` | has an `OnDemandCapReached` case | rewritten |
-| `robothor/engine/tests/test_rooms_engine_contract.py::test_recorded_replies_match_the_dashboard_contract` | records a `period_cap` reply (in its setup) | still asserts a cap |
+| `robothor/engine/tests/test_rooms_engine_contract.py::test_recorded_replies_match_the_dashboard_contract` | records a `period_cap` reply (in its setup) | rewritten: it now asserts there is no cap |
 | `robothor/engine/tests/test_room_tools.py::test_room_create_refusals_say_why_and_save_nothing` | has an "every 5m" refused with "15 minutes" case | rewritten |
 | `crm/bridge/tests/test_rooms_router.py::test_a_bad_schedule_is_422_and_saves_nothing` | "every minute" refused with "15 minutes" | rewritten |
 | `crm/bridge/tests/test_rooms_router.py::test_the_engines_cap_passes_through_unchanged` | the engine's 429 cap passes through | replaced |
@@ -195,4 +194,4 @@ longer assert a cap.
 | `app/src/components/rooms/__tests__/period-selector.test.tsx › period selector › says the daily on-demand cap is reached and starts nothing` | the dashboard's cap message | replaced |
 | `app/src/lib/rooms/__tests__/rooms-controls-lib.test.ts › rooms API: the controls › names the daily on-demand cap when the server reports it` | the client's cap error | replaced |
 | `app/src/components/rooms/__tests__/room-controls.test.tsx › run now (B6, A5) › says plainly when the run is refused` | its canned refusal is a 429 `on_demand_cap` | rewritten |
-| `app/src/lib/rooms/__tests__/engine-contract.test.ts › the engine › refuses with the codes and words the period picker shows` | expects a recorded `period_cap` reply | still asserts a cap |
+| `app/src/lib/rooms/__tests__/engine-contract.test.ts › the engine › refuses with the codes and words the period picker shows` | expects a recorded `period_cap` reply | rewritten: it now asserts there is no cap |
