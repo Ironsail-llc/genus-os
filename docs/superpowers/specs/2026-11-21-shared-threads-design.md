@@ -196,8 +196,14 @@ rely on:
 - `context_for_period(tenant_id, room_id, period)`: the newest published summary of
   each `day` edition inside the period, 500 characters each, 6,000 in all, wrapped
   as data.
+- `POST /api/rooms/{id}/periods` (engine) body `{grain, anchor?, requested_by?}`. A
+  human token is its own identity (`requested_by` ignored). The bridge's service token
+  must name `requested_by`; the engine reads that account's role from `user_accounts`
+  (never the body), requires it active and living in the token's tenant (else 404),
+  and re-checks `request_period`. 200 existing, 202 started, 400 no `requested_by`,
+  403, 404, 422, 429 cap reached, 503 no room runner.
 - Added: `dal.list_editions_in_period`, `dal.count_requested_editions`,
-  `models.edition_json` (the camelCase `Edition`). Engine route module
+  `models.edition_json` (the camelCase `Edition`, with `publishedSeq`). Engine route module
   `robothor/engine/rooms_api.py`; tool `room_request_period`.
 
 ### Edition blocks
