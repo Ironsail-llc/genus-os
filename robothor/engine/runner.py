@@ -671,12 +671,6 @@ class AgentRunner(
         # wrapper at all). Belt to the L1 allow-list suspenders in
         # robothor/engine/tools/handlers/benchmark.py. See run_context.py.
         mark_benchmark_run(session, agent_config, agent_id)
-        # Who an action proposed in this run is for (operations/proposer.py);
-        # restored on every way out of the run.
-        _proposer = mark_proposer_run(
-            session.run_id, trigger_type, trigger_detail, effective_user_id
-        )
-
         # Spawn inheritance, capability tier, Contact 360 linkage, session
         # identity and tenant access, in that order (run_attribution.py).
         effective_identity, _tier = await attribute_run(
@@ -879,7 +873,6 @@ class AgentRunner(
             watchdog.stop()
             with contextlib.suppress(Exception):
                 _active_watchdog_var.reset(_wd_token)
-            reset_proposer(_proposer)
             return self._finish_run(
                 _screen.blocked_run,
                 trace=None,
@@ -1278,7 +1271,6 @@ class AgentRunner(
                                     "event could not be recorded: %s",
                                     _sanitize(_audit_exc),
                                 )
-                            reset_proposer(_proposer)
                             return self._finish_run(
                                 session.fail(f"Blocked by sandbox_default: {_sb_reason}"),
                                 trace=trace,
@@ -1301,6 +1293,11 @@ class AgentRunner(
                 )
 
                 verified, verified_output = False, None
+                # Who an action proposed in this run is for (operations/proposer.py):
+                # bound only while tools can run; the finally below restores it.
+                _proposer = mark_proposer_run(
+                    session.run_id, trigger_type, trigger_detail, effective_user_id
+                )
                 try:
                     async with observe_request(session, on_status) as report_status:
                         await self._run_loop(
@@ -1384,7 +1381,6 @@ class AgentRunner(
                         set_current_sandbox(None)
 
         except (TimeoutError, asyncio.CancelledError) as _cancel_exc:
-            reset_proposer(_proposer)
             # Prefer the watchdog's structured abort_reason (names the
             # last progress signal). Fall back to hard-timeout framing
             # only when cancellation came from outside the watchdog.
@@ -1460,7 +1456,6 @@ class AgentRunner(
                 raise
             return finished
         except Exception as e:
-            reset_proposer(_proposer)
             from robothor.engine.runtime.failure import failed_or_stopped
 
             return self._finish_run(

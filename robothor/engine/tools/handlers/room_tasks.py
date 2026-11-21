@@ -141,6 +141,52 @@ async def _room_open_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
     return {"room": out, "link": room_link(room.id)}
 
 
+async def _room_propose_email(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Propose (never send) an email from the person's own task workspace turn."""
+    from robothor.operations.store import NotPermitted
+    from robothor.rooms import outbound
+
+    actor = _actor(ctx)
+    if actor is None:
+        return dict(_NO_PERSON)
+    ids = _ids(args, "room_id")
+    if ids is None:
+        return {"error": "room_id is required"}
+    if not await _own_run(ctx):
+        return dict(_SUB_AGENT)
+    try:
+        proposed = await asyncio.to_thread(
+            outbound.propose_email,
+            actor,
+            ids[0],
+            ctx.run_id,
+            to=args.get("to"),
+            cc=args.get("cc"),
+            subject=args.get("subject"),
+            body=args.get("body"),
+            attachments=args.get("attachments"),
+        )
+    except outbound.EmailRefused as exc:
+        return {"error": str(exc), "proposed": False}
+    except NotPermitted as exc:
+        return {"error": str(exc), "proposed": False}
+    expires = proposed.expires_at
+    return {
+        "proposed": True,
+        "sent": False,
+        "action_id": proposed.action_id,
+        "email": proposed.payload,
+        "expires_at": expires.isoformat() if hasattr(expires, "isoformat") else expires,
+        "note": (
+            "Nothing has been sent. Show the person this exact email (from, reply-to, to, cc, "
+            "subject, body) and ask them to approve or reject it in their approvals; it is "
+            "sent once, only after they approve, and a receipt appears in this workspace."
+        ),
+        "link": room_link(ids[0]),
+    }
+
+
 HANDLERS["room_task_accept"] = _room_task_accept
 HANDLERS["room_task_dismiss"] = _room_task_dismiss
 HANDLERS["room_open_task"] = _room_open_task
+HANDLERS["room_propose_email"] = _room_propose_email

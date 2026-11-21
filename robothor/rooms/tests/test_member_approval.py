@@ -31,6 +31,7 @@ ROLES = ("member", "viewer", "other_tenant", "owner", "admin")
 PROPOSERS = ("mine", "other_user", "scheduled", "non_room")
 ASSIGNEES = ("caller", "someone_else", "nobody")
 ACCESS = ("assigned", "shared", "removed", "archived")
+KINDS = ("allowed", "other")
 
 #: role -> the persona who calls in that role.
 CALLER = {
@@ -109,8 +110,11 @@ def run(db, *, trigger: str, detail: str, user: str = "") -> str:
     return run_id
 
 
-#: A kind no pipeline reserves for operators (unlike ``sales.*``).
-KIND = "email.follow_up"
+#: The one kind a member may decide (``approvals.MEMBER_DECIDABLE_KINDS``).
+KIND = "room.email"
+#: Kinds nobody put on the member allow-list: a plugin's (proposed with or
+#: without ``proposed_by``), a core kind of the future, the sales pipeline's.
+OTHER_KINDS = ("acme-pay.transfer", "email.follow_up", "sales.email")
 
 
 def propose(
@@ -141,11 +145,11 @@ def propose(
     )
 
 
-def action_for(db, *, caller: str, proposer: str, room) -> str:
+def action_for(db, *, caller: str, proposer: str, room, kind: str = KIND) -> str:
     """An action proposed in ``room`` the way ``proposer`` names."""
     if proposer == "mine":
         r = run(db, trigger="webchat", detail=f"webchat:{room.session_key}", user=caller)
-        return propose(db, run_id=r, for_user=caller, room_id=room.id)
+        return propose(db, run_id=r, for_user=caller, room_id=room.id, kind=kind)
     if proposer == "other_user":
         r = run(db, trigger="webchat", detail=f"webchat:{room.session_key}", user=db.bob)
         return propose(db, run_id=r, for_user=db.bob, room_id=room.id)
@@ -171,18 +175,24 @@ def test_member_approval_is_allowed_in_exactly_one_cell_family(db, role):
 
     name = CALLER[role]
     caller_id = db.olga if name == "olga" else getattr(db, name)
-    cells: dict[tuple[str, str, str], str] = {}
+    cells: dict[tuple[str, ...], str] = {}
     for proposer, assignee, access in itertools.product(PROPOSERS, ASSIGNEES, ACCESS):
         assigned_to = {"caller": caller_id, "someone_else": db.carol, "nobody": None}[assignee]
         room = task_room(db, caller=caller_id, assignee=assigned_to, access=access)
-        cells[(proposer, assignee, access)] = action_for(
+        cells[(proposer, assignee, access, "allowed")] = action_for(
             db, caller=caller_id, proposer=proposer, room=room
         )
+        # One kind off the allow-list per cell; every other kind is refused in
+        # the eligible cell by test_only_an_allow_listed_kind_is_member_decidable.
+        cells[(proposer, assignee, access, "other")] = action_for(
+            db, caller=caller_id, proposer=proposer, room=room, kind=OTHER_KINDS[0]
+        )
 
-    def allowed(cell: tuple[str, str, str]) -> bool:
-        proposer, assignee, access = cell
+    def allowed(cell: tuple[str, ...]) -> bool:
+        proposer, assignee, access, kind = cell
         return (
             role == "member"
+            and kind == "allowed"
             and proposer == "mine"
             and assignee == "caller"
             and access in ("assigned", "shared")
@@ -306,12 +316,29 @@ def _mine(db, room, **kw):
 
 @pytest.mark.parametrize(
     "overrides",
-    [{"plugin": "sales"}, {"kind": "sales.email"}, {"kind": "sales.follow_up"}],
-    ids=["plugin-proposed", "sales-email", "sales-other"],
+    [
+        {"plugin": "sales"},
+        {"kind": "sales.email"},
+        {"kind": "sales.follow_up"},
+        {"kind": "acme-pay.transfer"},
+        {"kind": "acme-pay.transfer", "plugin": "acme-pay"},
+        {"kind": "room.email.v2"},
+        {"kind": "ROOM.EMAIL"},
+    ],
+    ids=[
+        "plugin-proposed",
+        "sales-email",
+        "sales-other",
+        "plugin-kind-without-proposer",
+        "plugin-kind-with-proposer",
+        "lookalike-kind",
+        "case-variant",
+    ],
 )
-def test_plugin_and_sales_actions_stay_with_operators(db, bobs_room, overrides):
-    """A plugin's draft is decided by an operator or that plugin's policy, and
-    the sales pipeline accepts only an operator's verdict on what it sends."""
+def test_only_an_allow_listed_kind_is_member_decidable(db, bobs_room, overrides):
+    """A member decides only kinds on the allow-list; a plugin's draft (with or
+    without ``proposed_by``), a sales draft or any other kind stays with
+    operators, in an otherwise eligible cell."""
     from robothor.operations.store import NotPermitted
     from robothor.rooms import approvals
 
@@ -585,3 +612,9 @@ def test_a_check_that_fails_inside_the_decision_settles_nothing(db, bobs_room, m
     with pytest.raises(NotPermitted):
         approvals.decide_member_action(actor(db, "bob"), action, approved=True)
     assert status(db, action) == ("review", None)
+
+
+def test_the_allow_list_is_exactly_the_kinds_this_feature_creates():
+    from robothor.rooms import approvals, outbound
+
+    assert frozenset({outbound.KIND}) == approvals.MEMBER_DECIDABLE_KINDS

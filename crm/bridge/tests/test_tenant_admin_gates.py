@@ -94,6 +94,16 @@ T, TA, R, RA, OPEN = "tenant", "tenant_audit", "root", "root_audit", "open"
 #: (``robothor.rooms.approvals``; ``test_approvals_member.py``).
 TM = "tenant_or_member_own"
 
+#: Path values the matrix sends instead of the schema's sample. The decision
+#: route widens for ``kind=action`` only, so the matrix asks about that kind;
+#: ``test_a_member_is_refused_every_other_decision_kind`` covers the rest.
+PATH_VALUES: dict[tuple[str, str], dict[str, str]] = {
+    ("POST", "/api/approvals/{kind}/{approval_id}"): {
+        "kind": "action",
+        "approval_id": "00000000-0000-4000-8000-000000000001",
+    },
+}
+
 ROUTE_CLASSES: dict[tuple[str, str], str] = {
     # ── agent manifests: the acting tenant's fleet, through its own engine ──
     ("GET", "/api/agent-manifests"): T,
@@ -123,7 +133,7 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     ("DELETE", "/api/channels/{name}/identities/{identity_id}"): T,
     # ── operations ──
     ("GET", "/api/approvals"): TM,
-    ("POST", "/api/approvals/{kind}/{approval_id}"): T,
+    ("POST", "/api/approvals/{kind}/{approval_id}"): TM,
     ("GET", "/api/automations"): T,
     ("POST", "/api/automations/{agent_id}/reset-breaker"): T,
     ("GET", "/api/runs"): T,
@@ -393,6 +403,8 @@ def _call(app, identity: str, method: str, path: str) -> int:
         **(spec.get("headers") or {}),
     }
     url, query, body = _request_for(method, path)
+    if (method, path) in PATH_VALUES:
+        url = path.format(**PATH_VALUES[(method, path)])
     client = TestClient(app, raise_server_exceptions=False)
     response = client.request(method, url, params=query, json=body, headers=headers)
     return response.status_code
@@ -439,6 +451,22 @@ def test_route_gate(gated_app, method: str, path: str, cls: str, identity: str) 
         assert status == 418, f"{identity} should pass the {cls} gate, got {status}"
     else:
         assert status in (401, 403), f"{identity} should be refused by {cls}, got {status}"
+
+
+@pytest.mark.parametrize("kind", ["workflow", "question", "escalation", "xxx"])
+@pytest.mark.parametrize("identity", ["child_member_own", "child_auditor_own"])
+def test_a_member_is_refused_every_other_decision_kind(gated_app, kind, identity) -> None:
+    from fastapi.testclient import TestClient
+
+    spec = IDENTITIES[identity]
+    item = "a1b2c3d4e5f6" if kind == "escalation" else "00000000-0000-4000-8000-000000000001"
+    client = TestClient(gated_app, raise_server_exceptions=False)
+    response = client.post(
+        f"/api/approvals/{kind}/{item}",
+        json={"approved": True, "answer": "x"},
+        headers={"Authorization": "Bearer " + _token(spec["tenant"], spec["role"])},
+    )
+    assert response.status_code in (401, 403)
 
 
 # ─── The gates themselves ─────────────────────────────────────────────

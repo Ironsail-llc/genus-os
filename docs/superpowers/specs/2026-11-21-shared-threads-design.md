@@ -485,23 +485,44 @@ wrappers. Schema changes are migration 172.
   `room_open_task` refuse a run whose `agent_runs` row is a `sub_agent` trigger
   or has a parent run, and a run the database does not know
   (`tasks.run_is_top_level`). Nothing in tasks or member approval is capped
-  (the member list has no row limit).
+  (the member list has no row limit; recipients are not capped).
 - **Status events.** `room.task` (exactly `{room_id, tenant_id, task_id}`) for
   every linked room on accept, dismiss, suggestion creation, task room
   creation, and from `robothor.crm.dal.update_task` (a status change),
   `resolve_task` and `approve_task`. The bridge's own legacy task DAL does not
   publish them.
 - **Proposer columns.** `Operations.propose` writes them from
-  `robothor.operations.proposer.current_proposer()`, set by the runner for
-  every run (and restored when it ends): `proposed_by_run_id` always,
+  `robothor.operations.proposer.current_proposer()`, bound by the runner around
+  its tool loop only (set just before it, restored in its `finally`, so no exit
+  or cancellation leaves it behind): `proposed_by_run_id` always,
   `proposed_for_user_id` only for an interactive trigger with a user-account id,
   `room_id` from the room run carrier, else the room key in an interactive
   turn's `trigger_detail`. An explicit `proposer=` argument overrides it.
 - **Member approval.** Beyond the contract's four conditions the rule also
   requires: the caller's `user_accounts` row active with role `member`/`user`
   now; `proposed_by` NULL (a plugin's draft is its policy's or an operator's);
-  the kind not `sales.%` (`OPERATOR_ONLY_KIND_PATTERNS`: the sales pipeline
-  accepts only `operator:` verdicts); the task not done, resolved or deleted.
+  the kind on the allow-list `MEMBER_DECIDABLE_KINDS` (only `room.email`;
+  every plugin, sales or future kind stays operator-only); the run top level
+  (no parent run); the task not done, resolved or deleted. One predicate
+  (`approvals.member_turn` / `_TURN_FROM` + `_TURN_WHERE`) serves proposing and
+  deciding.
+- **Approved email** (`robothor/rooms/outbound.py`, tool `room_propose_email`).
+  Sender rule: an approved workspace email is sent from the company's assistant
+  mailbox (the one the `gws_*` tools send from) with Reply-To the member who
+  approved it, decided only in `outbound.sender_for(tenant_id, user_id)`.
+  Payload (`kind: "room.email"`): `{version: 1, sender, reply_to, recipient:
+  [..], cc: [..], subject, body, on_behalf_of: {user_id, display_name},
+  room_id, task_id}`. The executor (`deliver`, `sweep`; engine
+  `room_outbound.py`) claims by id, re-checks hash, sender and do-not-contact,
+  sends via the workspace mail provider, and `finish_action`s `completed`
+  `{id, thread_id, sent_at}`, `failed` `{error}` (never retried), `cancelled`
+  `{error}` (opted out after approval); a lost lease becomes `unknown`.
+  Receipt: an assistant chat message with `kind: "room_email_receipt"` and
+  `receipt: {action_id, status (sent|failed|uncertain|not_sent|rejected|expired),
+  from, reply_to, to, cc, subject, approved_by, decided_by, decided_at, sent_at,
+  message_id, error, room_id, task_id}`, written once per action (audit event
+  `room.email.noted`), then `room.message`. Accept never takes a task that has
+  its own task room through a `linked` link either.
   The action's task is the task workspace's own task
   (`rooms.task_id`): `operation_actions` has no task column, and a report or agent
   workspace's actions stay with operators. A viewer's `GET /api/approvals` stays

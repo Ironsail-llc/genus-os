@@ -8,6 +8,7 @@ runner loop and look at what a tool sees while it executes.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import Any
@@ -137,3 +138,42 @@ async def test_a_run_that_ends_early_leaves_no_attribution_behind(
 
     assert run.status == RunStatus.FAILED
     assert current_proposer() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError("setup broke"), asyncio.CancelledError()])
+async def test_a_failure_before_the_run_loop_leaves_no_attribution_behind(
+    runner, sample_agent_config, mock_litellm_response, failure
+):
+    """Raised (or cancelled) between the run's start and its loop: nothing of
+    that run's attribution survives, and the next run in the same task sees its
+    own."""
+    from robothor.operations.proposer import current_proposer
+
+    with (
+        patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.runner.update_run"),
+        patch("robothor.engine.run_finalizer.create_step"),
+        patch("robothor.engine.runner.attribute_run", side_effect=failure),
+    ):
+        with pytest.raises(type(failure)):
+            await runner.execute(
+                "test-agent",
+                "go",
+                trigger_type=TriggerType.WEBCHAT,
+                trigger_detail=f"webchat:agent:test-agent:room:{ROOM}",
+                agent_config=sample_agent_config,
+                user_id=USER,
+                user_role="member",
+            )
+    assert current_proposer() is None
+
+    run, seen = await _run_once(
+        runner,
+        mock_litellm_response,
+        trigger_type=TriggerType.CRON,
+        trigger_detail="cron:daily",
+        agent_config=sample_agent_config,
+    )
+    [(proposer, run_id)] = seen
+    assert proposer is not None and proposer.run_id == run_id and proposer.user_id is None
