@@ -27,7 +27,7 @@ import { QueryProvider } from "@/lib/query/query-client";
 import { PanelRight, PanelRightOpen, Zap } from "lucide-react";
 import { readChatDockOpen, subscribeChatDockOpen, writeChatDockOpen } from "@/lib/chat/dock-state";
 import { RoomRail } from "@/components/rooms/room-rail";
-import { DEFAULT_ROOM_SLOTS } from "@/components/rooms/room-slots";
+import { ROOM_SLOTS_WITH_CONTROLS as DEFAULT_ROOM_SLOTS } from "@/components/rooms/room-controls-lazy";
 import { useRooms } from "@/hooks/use-rooms";
 
 // The conversation canvas (agent-pushed components + chat-driven dashboards)
