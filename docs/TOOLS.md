@@ -1871,8 +1871,11 @@ the workspace and listed in its history.
   stable lowercase slug. Accepting them is a later step, not this tool.
 - **Text.** The title is one line; the summary is plain text of at most 4000
   characters. Because both are read back into later prompts, hidden characters are
-  removed and every `<`, `>`, `[` and `]` (however encoded) becomes `‹`, `›`, `(`,
-  `)`: no tag or `[RENDER:` marker can be written there. Put visuals in blocks.
+  removed and every `<`, `>`, `[` and `]` (written directly, as a look-alike, or as
+  an entity however deeply encoded) becomes `‹`, `›`, `(`, `)`: no tag or
+  `[RENDER:` marker can be written there. Everything else is kept as written:
+  `R²`, `½`, `℃`, fullwidth punctuation, `R&D`, ZWJ emoji and ZWNJ in Persian or
+  Indic text. Put visuals in blocks.
 - **Provenance** is written by the server from the run's recorded tool calls, its
   run id, run-as user and start time. Nothing in the arguments sets it, and neither
   does anything set the preview flag: a preview run's editions are visible to its
