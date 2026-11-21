@@ -1878,3 +1878,32 @@ def test_a_removed_assignee_cannot_reopen_the_task_workspace(world) -> None:
         (w.db.tenant, room_id, w.ids.bob),
     )
     assert w.db.cur.fetchone() == (w.ids.alice,)
+
+
+def test_notify_reads_as_fan_out_reads_it(world) -> None:
+    """One shape (``robothor.rooms.notify``): what the bridge shows a person is
+    what fan-out will do, even for a value stored badly."""
+    import json
+
+    from robothor.rooms import dal
+    from robothor.rooms.notify import parse_notify
+
+    w = world
+    room = _room(w)
+    bad = {"in_app": "no", "muted": 1, "channels": {"telegram": "yes", "slack": True}}
+    w.db.cur.execute(
+        "UPDATE room_members SET notify = %s::jsonb WHERE room_id = %s AND user_id = %s",
+        (json.dumps(bad), room.id, w.ids.bob),
+    )
+    shown = w.client("bob").get(f"/api/rooms/{room.id}/notify").json()
+    prefs = parse_notify(bad)
+    assert (shown["inApp"], shown["muted"]) == (prefs.in_app, prefs.muted)
+    assert sorted(k for k, on in shown["channels"].items() if on) == list(prefs.channels)
+
+    saved = w.client("bob").put(
+        f"/api/rooms/{room.id}/notify", json={"inApp": False, "muted": False, "channels": {}}
+    )
+    assert saved.status_code == 200
+    stored = dal.get_member(w.db.tenant, room.id, w.ids.bob).notify
+    assert stored == {"in_app": False, "muted": False, "channels": {}}
+    assert parse_notify(stored).delivers_in_app is False
