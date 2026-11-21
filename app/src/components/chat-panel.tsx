@@ -101,7 +101,9 @@ function outboxNote(item: OutboxItem, state: OutboxState): string | undefined {
   return state.blocked ? roomBusyNote(state.answering) : QUEUED_NOTE;
 }
 
-const NO_OUTBOX: OutboxState = { items: [], sending: null, blocked: false, answering: "" };
+const NO_OUTBOX: OutboxState = { items: [], sending: null, blocked: false, answering: "", unsent: [] };
+/** A room message whose send failed while the reader was away from the workspace. */
+const NOT_SENT_NOTE = "Not sent — sending failed while you were away. Send it again if you still need it.";
 const noSubscription = () => () => {};
 
 /** The chips a queued message's bubble shows: exactly the files it will send. */
@@ -412,6 +414,23 @@ export function ChatPanel({
   useEffect(() => {
     if (!outbox) return;
     if (outboxHistoryReady) setMessages((prev) => withOutbox(prev));
+    // A send that failed after the panel that offered it had gone: shown here
+    // as not sent, then acknowledged, so it is told once and never lost.
+    const unsent = outboxState.unsent;
+    if (outboxHistoryReady && unsent.length) {
+      setMessages((prev) => {
+        const next = prev.map((m) => (unsent.some((item) => item.id === m.id) ? { ...m, note: NOT_SENT_NOTE } : m));
+        const missing = unsent.filter((item) => !prev.some((m) => m.id === item.id)).map((item): ChatMessage => {
+          const chips = summarise(item.files);
+          return {
+            id: item.id, role: "user", content: item.text, timestamp: new Date(), note: NOT_SENT_NOTE,
+            ...(chips ? { attachments: chips } : {}),
+          };
+        });
+        return [...next, ...missing];
+      });
+      outbox.acknowledge(unsent.map((item) => item.id));
+    }
     setMessages((prev) => {
       const notes = new Map(outboxState.items.map((item) => [item.id, outboxNote(item, outboxState)]));
       let changed = false;

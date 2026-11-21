@@ -6,7 +6,10 @@
  *   the outbox in that order. Nothing reorders it afterwards.
  * - Exactly one send is in flight at a time, and it is always the head.
  * - The head leaves only when its send is settled: admitted (`ok`) or
- *   refused for good (`failed`, which the panel shows). A `busy` refusal
+ *   refused for good (`failed`). A failure is shown by the panel that sent
+ *   it; if that panel has gone (the reader left mid-send), the entry moves to
+ *   `unsent` and stays there until a panel has shown it as not sent and
+ *   acknowledged it. A message is never dropped without the reader being told. A `busy` refusal
  *   (the room's agent is answering somebody else) leaves it at the head. The
  *   outbox then waits `ROOM_BUSY_RETRY_MS`, or less if the room is freed
  *   sooner (`roomFreed`, on a live room message).
@@ -51,6 +54,8 @@ export interface OutboxState {
   blocked: boolean;
   /** Who the room's agent was answering when it refused. */
   answering: string;
+  /** Sends that failed after the panel that offered them had gone: to be shown as not sent. */
+  unsent: readonly OutboxItem[];
 }
 
 export interface RoomOutbox {
@@ -59,6 +64,8 @@ export interface RoomOutbox {
   attach(sender: Sender): () => void;
   /** The room moved on (a live message): retry a refused head now. */
   roomFreed(): void;
+  /** A panel has shown these unsent entries as not sent: forget them. */
+  acknowledge(ids: readonly string[]): void;
   state(): OutboxState;
   subscribe(listener: () => void): () => void;
 }
@@ -68,14 +75,15 @@ function createOutbox(): RoomOutbox & { dispose(): void } {
   let sending: OutboxItem | null = null;
   let blocked = false;
   let answering = "";
+  let unsent: OutboxItem[] = [];
   let seq = 0;
   let sender: Sender | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let snapshot: OutboxState = { items, sending, blocked, answering };
+  let snapshot: OutboxState = { items, sending, blocked, answering, unsent };
   const listeners = new Set<() => void>();
 
   function notify() {
-    snapshot = { items, sending, blocked, answering };
+    snapshot = { items, sending, blocked, answering, unsent };
     for (const listener of [...listeners]) listener();
   }
 
@@ -88,11 +96,12 @@ function createOutbox(): RoomOutbox & { dispose(): void } {
   async function drain() {
     if (!sender || sending || blocked || !items.length) return;
     const head = items[0];
+    const by = sender;
     sending = head;
     notify();
     let result: SendResult;
     try {
-      result = await sender(head);
+      result = await by(head);
     } catch {
       result = { outcome: "failed" };
     }
@@ -107,6 +116,8 @@ function createOutbox(): RoomOutbox & { dispose(): void } {
       }, ROOM_BUSY_RETRY_MS);
     } else {
       items = items.filter((item) => item.id !== head.id);
+      // Failed with nobody left to say so: kept until a panel shows it.
+      if (result.outcome === "failed" && sender !== by) unsent = [...unsent, head];
       unblock();
       answering = "";
     }
@@ -140,6 +151,12 @@ function createOutbox(): RoomOutbox & { dispose(): void } {
       unblock();
       notify();
       void drain();
+    },
+    acknowledge(ids) {
+      const shown = new Set(ids);
+      if (!unsent.some((item) => shown.has(item.id))) return;
+      unsent = unsent.filter((item) => !shown.has(item.id));
+      notify();
     },
     state: () => snapshot,
     subscribe(listener) {
