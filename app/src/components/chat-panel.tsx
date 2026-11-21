@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo, useSyncExternalStore } from "react";
 import { useRuntimeConfig } from "@/components/runtime-config";
+import { reloadPage } from "@/lib/reload-page";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -41,7 +42,7 @@ import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain, PanelR
 import { forgetRequest, journalRequest, pendingRequests } from "@/lib/chat/request-journal";
 // Types only: the outbox module itself is loaded when the panel is in a room
 // (below), so the main conversation's first load never carries it.
-import type { OutboxItem, OutboxState, SendResult } from "@/lib/chat/room-outbox";
+import type { OutboxState, SendResult } from "@/lib/chat/room-outbox";
 type RoomKit = typeof import("@/lib/chat/room-outbox");
 
 import { OUTCOME_UNKNOWN, requestFailure, terminalOutcome } from "@/lib/chat/terminal-outcome";
@@ -95,26 +96,9 @@ const QUEUED_NOTE = "Queued — sends when this reply finishes";
 const STOPPED_NOTE = "Not sent — the task was stopped";
 const DROPPED_NOTE = "May not have reached the task — the connection dropped";
 
-/** A room's agent was answering someone else: what was typed waits, and says for whom. */
-function roomBusyNote(answering: string): string {
-  return answering ? `Queued — answering ${answering}…` : "Queued — the agent is answering someone else…";
-}
-
-/** What a room message's bubble says while it waits in the outbox; nothing while it is sent. */
-function outboxNote(item: OutboxItem, state: OutboxState): string | undefined {
-  if (state.sending?.id === item.id) return undefined;
-  return state.blocked ? roomBusyNote(state.answering) : QUEUED_NOTE;
-}
-
+// A room's bubble notes and texts live in the room-outbox module, loaded on demand.
 const NO_OUTBOX: OutboxState = { items: [], sending: null, blocked: false, answering: "", unsent: [] };
-/** A room message whose send failed while the reader was away from the workspace. */
-const NOT_SENT_NOTE = "Not sent — it failed while you were away";
 const noSubscription = () => () => {};
-
-/** The chips a queued message's bubble shows: exactly the files it will send. */
-function summarise(files: AttachmentPayload[] | undefined): AttachmentSummary[] | undefined {
-  return files?.length ? files.map((f) => ({ name: f.name, size: f.size, kind: attachmentKind(f.mime) })) : undefined;
-}
 const READ_ONLY_NOTICES = {
   viewer: "You have view-only access to this workspace, so you can read it but not post.",
   archived: "This workspace is archived, so it can be read but not posted in.",
@@ -386,12 +370,19 @@ export function ChatPanel({
   // one ordered queue, one sender, head first, one message per turn. It
   // outlives this panel, so what is queued survives leaving the workspace.
   const [roomKit, setRoomKit] = useState<RoomKit | null>(null);
+  const [roomKitFailed, setRoomKitFailed] = useState(false);
   useEffect(() => {
     if (!roomId) return;
     let live = true;
-    void import("@/lib/chat/room-outbox").then((kit) => {
-      if (live) setRoomKit(kit);
-    });
+    // Tried twice (a deploy can replace the chunk, the network can blink);
+    // after that the panel says so instead of going quietly dead.
+    const load = () => import("@/lib/chat/room-outbox");
+    load()
+      .catch(load)
+      .then(
+        (kit) => live && setRoomKit(kit),
+        () => live && setRoomKitFailed(true),
+      );
     return () => {
       live = false;
     };
@@ -413,14 +404,7 @@ export function ChatPanel({
   // Also draws, as not sent, what failed after the panel that offered it had gone.
   const withOutbox = useCallback((list: ChatMessage[], state = outbox?.state()): ChatMessage[] => {
     if (!state || !roomKit) return list;
-    const bubble = (item: OutboxItem, note?: string): ChatMessage => {
-      const chips = summarise(item.files);
-      return { id: item.id, role: "user", content: item.text, timestamp: new Date(), note, ...(chips ? { attachments: chips } : {}) };
-    };
-    const waiting = [
-      ...roomKit.pendingBubbles(state, list, startedHere.current).map((item) => bubble(item, outboxNote(item, state))),
-      ...state.unsent.filter((item) => !list.some((m) => m.id === item.id)).map((item) => bubble(item, NOT_SENT_NOTE)),
-    ];
+    const waiting = roomKit.outboxBubbles(list, state, startedHere.current);
     return waiting.length ? [...list, ...waiting] : list;
   }, [outbox, roomKit]);
   // The history load reads it through a ref: the outbox module arriving must
@@ -433,14 +417,14 @@ export function ChatPanel({
   // (another panel's send, refused after this one opened) gets one.
   const outboxHistoryReady = historySettledFor === agentQuery;
   useEffect(() => {
-    if (!outbox) return;
+    if (!outbox || !roomKit) return;
     if (outboxHistoryReady) {
       // Drawn from this state, then acknowledged: a failed send is told once, never lost.
       setMessages((prev) => withOutbox(prev, outboxState));
       outbox.acknowledge(outboxState.unsent.map((item) => item.id));
     }
     setMessages((prev) => {
-      const notes = new Map(outboxState.items.map((item) => [item.id, outboxNote(item, outboxState)]));
+      const notes = new Map(outboxState.items.map((item) => [item.id, roomKit.noteFor(item, outboxState)]));
       let changed = false;
       const next = prev.map((m) => {
         if (!notes.has(m.id) || m.note === notes.get(m.id)) return m;
@@ -449,7 +433,7 @@ export function ChatPanel({
       });
       return changed ? next : prev;
     });
-  }, [outbox, outboxState, outboxHistoryReady, withOutbox]);
+  }, [outbox, roomKit, outboxState, outboxHistoryReady, withOutbox]);
 
   /** Whether the listing left out the agent it named as the default.
    *
@@ -1005,7 +989,7 @@ export function ChatPanel({
     if (roomId && !flushing) {
       // Never the main conversation's path: until the outbox has loaded (a
       // moment, on first opening a room) what was typed stays in the composer.
-      if (!outbox) return;
+      if (!outbox || !roomKit) return;
       // In a room every message, typed or regenerated, takes its place in the
       // outbox now, in typing order, with its files; the outbox's one sender
       // offers it (back through this function, as a flush) when its turn
@@ -1018,11 +1002,8 @@ export function ChatPanel({
       }
       setActiveAsks([]);
       const item = outbox.enqueue(text, queuedFiles);
-      const chips = summarise(queuedFiles);
-      setMessages((prev) => (prev.some((m) => m.id === item.id) ? prev : [...prev, {
-        id: item.id, role: "user", content: text, timestamp: new Date(), note: outboxNote(item, outbox.state()),
-        ...(chips ? { attachments: chips } : {}),
-      }]));
+      const bubble = roomKit.bubbleFor(item, roomKit.noteFor(item, outbox.state()));
+      setMessages((prev) => (prev.some((m) => m.id === item.id) ? prev : [...prev, bubble]));
       return;
     }
     if (!flushing && !resend && text && isStreaming) return sendFollowup(text);
@@ -1034,7 +1015,7 @@ export function ChatPanel({
     // The outbox sends one room message at a time, so a room flush does not
     // consult `isStreaming`: it can still read true from the turn that just
     // ended, before React rendered its end.
-    if (!text && !files.length) return roomId ? ({ outcome: "failed" } as SendResult) : undefined;
+    if (!text && !files.length) return roomId ? ({ outcome: "failed", rejected: true } as SendResult) : undefined;
     if (isStreaming && !(roomId && flushing)) return;
 
     setActiveAsks([]);
@@ -1067,6 +1048,8 @@ export function ChatPanel({
     setIsStopping(false);
     setRuntimeProgress("Submitting request…");
     let streamSettled = false;
+    // Whether the request may have reached the server: after this, a failure's outcome is unknown.
+    let dispatched = false;
 
     try {
       const requestId = requestIdRef.current!;
@@ -1076,6 +1059,7 @@ export function ChatPanel({
         if (scope) forgetRequest(scope, requestId);
         controller.signal.throwIfAborted();
       }
+      dispatched = true;
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1119,7 +1103,7 @@ export function ChatPanel({
         setActiveToolName(null);
         setCurrentIteration(0);
         setMaxIterations(0);
-        return roomId ? ({ outcome: "failed" } as SendResult) : undefined;
+        return roomId ? ({ outcome: "failed", rejected: failure.rejected } as SendResult) : undefined;
       }
 
       let fullResponse = "";
@@ -1292,7 +1276,7 @@ export function ChatPanel({
         setMessages((prev) => [...prev, errorMsg]);
       }
       // Possibly dispatched (its recovery card says so), or stopped: never resent.
-      return roomId ? ({ outcome: "failed" } as SendResult) : undefined;
+      return roomId ? ({ outcome: "failed", rejected: !dispatched } as SendResult) : undefined;
     } finally {
       setIsStreaming(false);
       setStreamingText("");
@@ -1302,7 +1286,7 @@ export function ChatPanel({
       if (!streamSettled) noteMessages(joinedFollowups.current.map((f) => f.id), DROPPED_NOTE);
       joinedFollowups.current = [];
     }
-  }, [input, attachments, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent, roomId, target, recoveryFor, outbox]);
+  }, [input, attachments, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent, roomId, target, recoveryFor, outbox, roomKit]);
 
   // Another agent is another conversation: what waited for this one is not sent there.
   useEffect(() => {
@@ -1892,16 +1876,20 @@ export function ChatPanel({
         data-testid="chat-composer"
       >
         <PendingAttachments files={attachments.files} refusal={attachments.refusal} onRemove={attachments.remove} />
+        {roomKitFailed && (
+          <p role="alert" className="text-xs text-destructive" data-testid="room-chat-load-failed">
+            Couldn&apos;t load this workspace&apos;s chat.{" "}
+            <button type="button" onClick={reloadPage} className="underline">Reload</button>
+          </p>
+        )}
         {roomReadOnly && (
           <p id="room-readonly-notice" className="text-xs text-muted-foreground" data-testid="room-readonly-notice">
             {READ_ONLY_NOTICES[room?.readOnlyReason === "archived" ? "archived" : "viewer"]}
           </p>
         )}
-        {roomBusy !== null && (
+        {roomBusy !== null && roomKit && (
           <p role="status" className="text-xs text-muted-foreground" data-testid="room-busy-notice">
-            {roomBusy
-              ? `The agent is answering ${roomBusy}… Your message will send when it finishes.`
-              : "The agent is answering someone else… Your message will send when it finishes."}
+            {roomKit.busyNotice(roomBusy)}
           </p>
         )}
         {/* Mode toggles — labeled chips on mobile, icon buttons on desktop */}
@@ -2039,7 +2027,7 @@ export function ChatPanel({
             className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[44px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-primary/30 focus:ring-primary/50" : planMode ? "border-warning/30 focus:ring-warning/50" : "border-border focus:ring-ring"}`}
             rows={1}
             // Open while an ordinary reply streams: what is typed joins it.
-            disabled={roomReadOnly || (isStreaming && (planMode || deepMode)) || isPlanExecuting || isPlanning || isDeepReasoning}
+            disabled={roomReadOnly || roomKitFailed || (isStreaming && (planMode || deepMode)) || isPlanExecuting || isPlanning || isDeepReasoning}
             aria-describedby={roomReadOnly ? "room-readonly-notice" : undefined}
             data-testid="chat-input"
           />
@@ -2071,7 +2059,7 @@ export function ChatPanel({
             <Button
               size="icon"
               onClick={sendMessage}
-              disabled={roomReadOnly || (!input.trim() && !attachments.files.length) || isPlanExecuting}
+              disabled={roomReadOnly || roomKitFailed || (!input.trim() && !attachments.files.length) || isPlanExecuting}
               className="shrink-0"
               data-testid="send-button"
             >

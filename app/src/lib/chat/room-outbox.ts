@@ -22,7 +22,7 @@
  * on from the head. In memory, per tab, like the main conversation's pending
  * follow-ups.
  */
-import type { AttachmentPayload } from "@/lib/chat/attachments";
+import { attachmentKind, type AttachmentPayload, type AttachmentSummary } from "@/lib/chat/attachments";
 
 export const ROOM_BUSY_RETRY_MS = 4000;
 
@@ -40,8 +40,16 @@ export interface OutboxItem {
 
 export type SendResult =
   | { outcome: "ok" }
-  | { outcome: "failed" }
+  /**
+   * `rejected`: refused before it was admitted, so certainly not sent.
+   * Otherwise the outcome is unknown: it may have been admitted and stored
+   * (a gateway timeout, a stream cut mid-answer), and is never resent.
+   */
+  | { outcome: "failed"; rejected?: boolean }
   | { outcome: "busy"; answering?: string };
+
+/** A send that failed with no panel left to say so, and whether it was refused or its outcome is unknown. */
+export type UnsentItem = OutboxItem & { rejected: boolean };
 
 export type Sender = (item: OutboxItem) => Promise<SendResult>;
 
@@ -54,8 +62,8 @@ export interface OutboxState {
   blocked: boolean;
   /** Who the room's agent was answering when it refused. */
   answering: string;
-  /** Sends that failed after the panel that offered them had gone: to be shown as not sent. */
-  unsent: readonly OutboxItem[];
+  /** Sends that failed after the panel that offered them had gone: to be shown, then acknowledged. */
+  unsent: readonly UnsentItem[];
 }
 
 export interface RoomOutbox {
@@ -75,7 +83,7 @@ function createOutbox(): RoomOutbox & { dispose(): void } {
   let sending: OutboxItem | null = null;
   let blocked = false;
   let answering = "";
-  let unsent: OutboxItem[] = [];
+  let unsent: UnsentItem[] = [];
   let seq = 0;
   let sender: Sender | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -117,7 +125,7 @@ function createOutbox(): RoomOutbox & { dispose(): void } {
     } else {
       items = items.filter((item) => item.id !== head.id);
       // Failed with nobody left to say so: kept until a panel shows it.
-      if (result.outcome === "failed" && sender !== by) unsent = [...unsent, head];
+      if (result.outcome === "failed" && sender !== by) unsent = [...unsent, { ...head, rejected: result.rejected === true }];
       unblock();
       answering = "";
     }
@@ -259,4 +267,82 @@ export function pendingBubbles(
   return state.items.filter(
     (item) => !ids.has(item.id) && !named.has(item.id) && !(state.sending?.id === item.id && !startedHere.has(item.id)),
   );
+}
+
+/**
+ * The unsent entries that need a bubble: not drawn yet, and not a message
+ * history already holds — a stored row naming it by client id or, where the
+ * engine names none, a stored row with its text. A send whose answer was lost
+ * after it was stored is that stored row, never a second copy.
+ */
+export function unsentBubbles(
+  state: OutboxState,
+  shown: ReadonlyArray<Pick<RoomRow, "id" | "clientId" | "serverId" | "role" | "content">>,
+): UnsentItem[] {
+  return state.unsent.filter(
+    (item) =>
+      !shown.some(
+        (r) =>
+          r.id === item.id ||
+          r.clientId === item.id ||
+          (r.serverId !== undefined && !r.clientId && r.role === "user" && r.content.trim() === item.text.trim()),
+      ),
+  );
+}
+
+// What a room message's bubble says. Kept here, in the module a room loads on
+// demand, so the main conversation's first load carries none of it.
+const QUEUED_NOTE = "Queued — sends when this reply finishes";
+const NOT_SENT_NOTE = "Not sent — it failed while you were away";
+const UNKNOWN_NOTE = "May not have reached the task — the connection dropped";
+
+/** Where a waiting message stands: queued, queued behind whom, or (while it is sent) nothing. */
+export function noteFor(item: OutboxItem, state: OutboxState): string | undefined {
+  if (state.sending?.id === item.id) return undefined;
+  if (!state.blocked) return QUEUED_NOTE;
+  return state.answering ? `Queued — answering ${state.answering}…` : "Queued — the agent is answering someone else…";
+}
+
+/** The composer's line while the room's agent is answering somebody else. */
+export function busyNotice(answering: string): string {
+  return `The agent is answering ${answering || "someone else"}… Your message will send when it finishes.`;
+}
+
+/** A local bubble for an outbox entry, keyed by its client id, with the files it carries. */
+export interface RoomBubble {
+  id: string;
+  role: "user";
+  content: string;
+  timestamp: Date;
+  note?: string;
+  attachments?: AttachmentSummary[];
+}
+
+export function bubbleFor(item: OutboxItem, note?: string): RoomBubble {
+  const files = item.files ?? [];
+  return {
+    id: item.id,
+    role: "user",
+    content: item.text,
+    timestamp: new Date(),
+    note,
+    ...(files.length ? { attachments: files.map((f) => ({ name: f.name, size: f.size, kind: attachmentKind(f.mime) })) } : {}),
+  };
+}
+
+/**
+ * The bubbles a panel adds to what it has drawn: waiting entries (see
+ * `pendingBubbles`) with their notes, and unsent ones (see `unsentBubbles`):
+ * "not sent" only when refused; an unknown outcome may have arrived, so it is
+ * never called unsent.
+ */
+export function outboxBubbles(
+  list: ReadonlyArray<Pick<RoomRow, "id" | "clientId" | "serverId" | "role" | "content">>,
+  state: OutboxState,
+  startedHere: ReadonlySet<string>,
+): RoomBubble[] {
+  return [
+    ...pendingBubbles(state, list, startedHere).map((item) => bubbleFor(item, noteFor(item, state))),
+    ...unsentBubbles(state, list).map((item) => bubbleFor(item, item.rejected ? NOT_SENT_NOTE : UNKNOWN_NOTE)),
+  ];
 }

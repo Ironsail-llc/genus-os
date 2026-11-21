@@ -350,6 +350,59 @@ describe("ChatPanel in a room", () => {
     });
   }
 
+  const lostAnswers = {
+    "a 504": () => reply({ error: "gateway timeout" }, 504),
+    "a stream cut mid-answer": () =>
+      new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(new TextEncoder().encode(`event: delta\ndata: {"text":"Work"}\n\n`));
+            c.error(new Error("connection reset"));
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      ),
+  };
+  for (const [how, lost] of Object.entries(lostAnswers)) {
+    for (const echo of [true, false]) {
+      it(`shows a stored message once, never as not sent, when its answer was lost to ${how} while away (client id ${echo ? "echoed" : "not echoed"})`, async () => {
+        history = [];
+        let answer!: (r: Response) => void;
+        sendReplies.push(() => new Promise<Response>((r) => (answer = r)));
+        const first = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+        await screen.findByTestId("room-chat-empty");
+        await type("Kept");
+        await waitFor(() => expect(sends).toHaveLength(1));
+        first.unmount();
+        // The engine admitted and stored it; only the answer was lost.
+        await act(async () => answer(lost()));
+        history = [{ id: 50, role: "user", content: "Kept", authorName: "Alice", ...(echo ? { clientId: sends[0].client_id } : {}) }];
+        render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+        expect(await screen.findByText("Kept")).toBeInTheDocument();
+        await act(async () => {});
+        expect(screen.getAllByText("Kept")).toHaveLength(1);
+        expect(screen.queryByText(/not sent/i)).toBeNull();
+        expect(sends).toHaveLength(1);
+      });
+    }
+  }
+
+  it("says a message may not have arrived, not that it was not sent, when its outcome is unknown", async () => {
+    history = [];
+    let answer!: (r: Response) => void;
+    sendReplies.push(() => new Promise<Response>((r) => (answer = r)));
+    const first = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    await screen.findByTestId("room-chat-empty");
+    await type("Unsure");
+    await waitFor(() => expect(sends).toHaveLength(1));
+    first.unmount();
+    await act(async () => answer(reply({ error: "gateway timeout" }, 504)));
+    render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    expect(await screen.findByText("Unsure")).toBeInTheDocument();
+    expect(screen.getByTestId("message-note")).toHaveTextContent(/may not have reached/i);
+    expect(screen.queryByText(/not sent/i)).toBeNull();
+  });
+
   for (const when of ["before", "after"] as const) {
     it(`shows a message as not sent when its send fails while the reader is away (failure ${when} they return)`, async () => {
       history = [];

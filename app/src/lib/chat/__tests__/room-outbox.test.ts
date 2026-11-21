@@ -16,6 +16,7 @@ import {
   mergeRoomRows,
   pendingBubbles,
   roomOutbox,
+  unsentBubbles,
   type OutboxItem,
   type RoomRow,
   type SendResult,
@@ -444,4 +445,137 @@ describe("reconciling a room's transcript with its outbox", () => {
       detach();
     }
   });
+
+  it("keeps whether a failed send was refused or its outcome is unknown", async () => {
+    const answers: Array<(r: SendResult) => void> = [];
+    const box = roomOutbox(ROOM);
+    const detach = box.attach(() => new Promise<SendResult>((r) => answers.push(r)));
+    const a = box.enqueue("A");
+    await settle();
+    detach();
+    answers.shift()!({ outcome: "failed", rejected: false });
+    await settle();
+    expect(box.state().unsent).toEqual([expect.objectContaining({ id: a.id, rejected: false })]);
+  });
+
+  it("draws no unsent bubble for a message history already holds", () => {
+    const box = roomOutbox(ROOM);
+    const item = { id: "c-1", seq: 1, text: "A", rejected: false };
+    const state = { ...box.state(), unsent: [item] };
+    expect(unsentBubbles(state, [stored(5, "A", "c-1")]).map((i) => i.id)).toEqual([]);
+    // No echo: a stored row with the same text and no client id stands for it.
+    expect(unsentBubbles(state, [stored(5, "A")]).map((i) => i.id)).toEqual([]);
+    // A stored row naming ANOTHER client id is another message.
+    expect(unsentBubbles(state, [stored(5, "A", "c-9")]).map((i) => i.id)).toEqual(["c-1"]);
+    expect(unsentBubbles(state, []).map((i) => i.id)).toEqual(["c-1"]);
+  });
+
+  for (const echo of [true, false]) {
+    it(`property: a stored message is never shown as not sent, and none twice (client id ${echo ? "echoed" : "not echoed"})`, async () => {
+      const ACTIONS = ["type", "type", "ok", "busy", "refused", "failStored", "failLost", "navigate", "history", "history", "freed", "elapse"] as const;
+      for (let seed = 1; seed <= 300; seed++) {
+        forgetRoomOutboxes();
+        const rand = prng(seed * 17 + (echo ? 3 : 0));
+        const typed: string[] = [];
+        const storedRows: RoomRow[] = [];
+        const pending: Array<Pending & { by: Set<string> }> = [];
+        const told = new Set<string>(); // shown as not sent, or as possibly not sent
+        let rendered: RoomRow[] = [];
+        let startedHere = new Set<string>();
+        let mounted = true;
+        const store = (item: OutboxItem) =>
+          storedRows.push(stored(storedRows.length + 1, item.text, echo ? item.id : undefined));
+        const makeSender = (mine: Set<string>) => (item: OutboxItem) =>
+          new Promise<SendResult>((resolve) => {
+            mine.add(item.id);
+            pending.push({ item, by: mine, resolve });
+          });
+        let detach = roomOutbox(ROOM).attach(makeSender(startedHere));
+        const draw = () => {
+          const box = roomOutbox(ROOM);
+          const merged = mergeRoomRows(rendered, storedRows);
+          const state = box.state();
+          const extra = [
+            ...pendingBubbles(state, merged, startedHere).map((i) => local(i.id, i.text)),
+            ...unsentBubbles(state, merged).map((i) => ({ ...local(i.id, i.text), note: i.rejected ? "Not sent" : "May not have reached" })),
+          ];
+          rendered = [...merged, ...extra];
+          for (const i of state.unsent) told.add(i.text);
+          if (state.unsent.length) box.acknowledge(state.unsent.map((i) => i.id));
+        };
+        const trace: string[] = [];
+        const steps = 10 + Math.floor(rand() * 40);
+        for (let step = 0; step < steps; step++) {
+          const action = ACTIONS[Math.floor(rand() * ACTIONS.length)];
+          trace.push(action);
+          if (action === "type") {
+            const text = `m${typed.length}`;
+            typed.push(text);
+            const item = roomOutbox(ROOM).enqueue(text);
+            if (mounted) rendered = [...rendered, local(item.id, text)];
+          } else if (action === "ok") {
+            const p = pending.shift();
+            if (p) {
+              store(p.item);
+              p.resolve({ outcome: "ok" });
+            }
+          } else if (action === "busy") {
+            pending.shift()?.resolve({ outcome: "busy", answering: "Bob" });
+          } else if (action === "refused" || action === "failStored" || action === "failLost") {
+            const p = pending.shift();
+            if (p) {
+              // Admitted and stored, then the answer was lost (a 504, a cut stream).
+              if (action === "failStored") store(p.item);
+              if (mounted && p.by === startedHere) told.add(p.item.text);
+              p.resolve({ outcome: "failed", rejected: action === "refused" });
+            }
+          } else if (action === "freed") {
+            roomOutbox(ROOM).roomFreed();
+          } else if (action === "elapse") {
+            await vi.advanceTimersByTimeAsync(ROOM_BUSY_RETRY_MS);
+          } else if (action === "navigate") {
+            detach();
+            rendered = [];
+            startedHere = new Set();
+            mounted = false;
+          } else if (!mounted) {
+            mounted = true;
+            rendered = [];
+            draw();
+            detach = roomOutbox(ROOM).attach(makeSender(startedHere));
+          } else {
+            draw();
+          }
+          await settle();
+          if (mounted) draw();
+          const context = `seed ${seed}: ${trace.join(" ")}`;
+          const contents = rendered.map((r) => r.content);
+          expect(new Set(contents).size, context).toBe(contents.length);
+          const storedTexts = new Set(storedRows.map((r) => r.content));
+          const wrong = rendered.filter((r) => r.note === "Not sent" && storedTexts.has(r.content));
+          expect(wrong, context).toEqual([]);
+        }
+        if (!mounted) {
+          mounted = true;
+          rendered = [];
+          draw();
+          detach = roomOutbox(ROOM).attach(makeSender(startedHere));
+        }
+        for (let guard = 0; guard < typed.length * 3 + 5 && (pending.length || roomOutbox(ROOM).state().items.length); guard++) {
+          roomOutbox(ROOM).roomFreed();
+          await settle();
+          const p = pending.shift();
+          if (p) {
+            store(p.item);
+            p.resolve({ outcome: "ok" });
+          }
+          await settle();
+        }
+        draw();
+        const arrived = new Set(storedRows.map((r) => r.content));
+        expect(typed.filter((t) => !arrived.has(t) && !told.has(t)), `seed ${seed}: ${trace.join(" ")}`).toEqual([]);
+        detach();
+      }
+    });
+  }
 });
