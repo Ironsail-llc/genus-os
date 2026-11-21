@@ -71,9 +71,12 @@ def set_proposer(proposer: Proposer | None) -> Token[Proposer | None]:
     return _CURRENT.set(proposer)
 
 
-def reset_proposer(token: Token[Proposer | None]) -> None:
+def reset_proposer(token: Token[Proposer | None] | None) -> None:
     """Restore what was bound before ``token``'s ``set``. Never raises: a run's
-    teardown must not fail on it (a token from another context is ignored)."""
+    teardown must not fail on it (None, a used token, or one from another
+    context is ignored)."""
+    if not isinstance(token, Token):
+        return
     with suppress(ValueError, RuntimeError):
         _CURRENT.reset(token)
 

@@ -4,7 +4,11 @@ A non-operator (tenant role ``member`` or ``user``, a person, not a service)
 may list and decide a proposed action (``operation_actions``) only when ALL
 of these hold, each read from the database at the moment of the decision:
 
-1. the action was proposed for the caller (``proposed_for_user_id``);
+0. the caller is, in the database now, an active ``member`` or ``user``
+   account of the tenant (not just per their token);
+1. the action was proposed for the caller (``proposed_for_user_id``), by a
+   run rather than a plugin (``proposed_by`` is NULL), and is not of a kind
+   only an operator decides (``OPERATOR_ONLY_KIND_PATTERNS``);
 2. the run that proposed it (``proposed_by_run_id``) is the caller's own
    interactive webchat turn on that workspace's session: its ``agent_runs``
    row has ``trigger_type='webchat'``, ``trigger_detail`` exactly
@@ -12,8 +16,11 @@ of these hold, each read from the database at the moment of the decision:
 3. the caller can post in that workspace now: a current member (shared or
    assigned), the workspace not archived (``access.require(..., "post")``);
 4. the workspace is a task workspace and its task (``rooms.task_id``, linked
-   in ``room_tasks``, not deleted) has the caller as its human assignee
-   (``crm_tasks.assignee_id``).
+   in ``room_tasks``, not deleted, not resolved or done) has the caller as its
+   human assignee (``crm_tasks.assignee_id``). A member cannot give themselves
+   a task workspace's own task (``tasks.accept_task`` refuses a ``subject``
+   link); they become an assignee by accepting a suggestion, or someone
+   assigns them.
 
 Anything else is ``NotPermitted``, and stays with the tenant's operators. The
 check runs once before the decision and again inside it, under the action's
@@ -38,10 +45,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["MEMBER_ROLES", "decide_member_action", "list_member_actions", "member_actor_id"]
+__all__ = [
+    "MEMBER_ROLES",
+    "OPERATOR_ONLY_KIND_PATTERNS",
+    "decide_member_action",
+    "list_member_actions",
+    "member_actor_id",
+]
 
 #: The tenant roles the member path is for. Owners and admins are operators.
 MEMBER_ROLES = frozenset({"member", "user"})
+#: Action kinds (SQL ``LIKE`` patterns) that only an operator may decide,
+#: whoever proposed them: the sales pipeline accepts only an ``operator:``
+#: verdict on what it sends and follows up (``robothor/sales/gmail_sync.py``).
+OPERATOR_ONLY_KIND_PATTERNS = ("sales.%",)
 _LIST_LIMIT = 100
 
 _ELIGIBLE = """
@@ -53,8 +70,15 @@ JOIN agent_runs ar ON ar.tenant_id = a.tenant_id AND ar.id::text = a.proposed_by
 JOIN room_members m ON m.tenant_id = r.tenant_id AND m.room_id = r.id AND m.user_id = %(user)s
 JOIN room_tasks rt ON rt.tenant_id = r.tenant_id AND rt.room_id = r.id AND rt.task_id = r.task_id
 JOIN crm_tasks t ON t.tenant_id = r.tenant_id AND t.id = r.task_id AND t.deleted_at IS NULL
+JOIN user_accounts u ON u.tenant_id = a.tenant_id AND u.id = %(user)s
 WHERE a.tenant_id = %(tenant)s
   AND a.proposed_for_user_id = %(user)s
+  AND a.proposed_by IS NULL
+  AND NOT (a.kind LIKE ANY (%(operator_kinds)s))
+  AND u.status = 'active'
+  AND u.role IN ('member', 'user')
+  AND t.resolved_at IS NULL
+  AND COALESCE(t.status, '') <> 'DONE'
   AND ar.trigger_type = 'webchat'
   AND ar.trigger_detail = 'webchat:' || r.session_key
   AND ar.user_id = %(user)s::text
@@ -84,7 +108,11 @@ def _eligible_in(
     if user is None:
         return []
     sql = _ELIGIBLE
-    params: dict[str, Any] = {"tenant": actor.tenant_id, "user": user}
+    params: dict[str, Any] = {
+        "tenant": actor.tenant_id,
+        "user": user,
+        "operator_kinds": list(OPERATOR_ONLY_KIND_PATTERNS),
+    }
     if action_id is not None:
         sql += " AND a.id = %(id)s"
         params["id"] = action_id

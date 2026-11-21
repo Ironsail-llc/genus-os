@@ -269,7 +269,8 @@ def _list_own(me: Actor) -> Any:
     """A member's own actions, with the workspace and task each belongs to.
     A check that cannot be made lists nothing (503), never someone else's."""
     try:
-        rows = list_member_actions(me)
+        with tenant_scope(me.tenant_id):
+            rows = list_member_actions(me)
     except Exception:
         logger.exception("member approvals could not be listed")
         return JSONResponse({"error": "approvals_unavailable"}, status_code=503)
@@ -439,7 +440,10 @@ async def _member_decides(request: Request, action_id: str, me: Actor) -> Any:
 
     who = TenantOperator(actor=member_actor_id(me), tenant_id=me.tenant_id)
     try:
-        await asyncio.to_thread(decide_member_action, me, action_id, approved=bool(body.approved))
+        with tenant_scope(me.tenant_id):
+            await asyncio.to_thread(
+                decide_member_action, me, action_id, approved=bool(body.approved)
+            )
         settled = True
     except NotPermitted:
         return _refuse(request, "action", action_id, 403, "operator role required")

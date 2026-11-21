@@ -1466,7 +1466,9 @@ def take_task(tenant_id: str, room_id: str, task_id: str, user_id: str) -> tuple
     CRM task's human assignee (``crm_tasks.assignee_id``), in one transaction.
 
     ``(outcome, holder)``: ``accepted`` (also when ``user_id`` already had it),
-    ``taken`` with the user who has it, ``dismissed``, or ``missing``."""
+    ``taken`` with the user who has it, ``dismissed``, ``subject`` (a task
+    room's own task is never taken from inside the room: opening a task must
+    not make anyone its assignee), or ``missing``."""
     room, task, user = canonical_uuid(room_id), canonical_uuid(task_id), canonical_uuid(user_id)
     if room is None or task is None or user is None:
         return "missing", None
@@ -1477,6 +1479,8 @@ def take_task(tenant_id: str, room_id: str, task_id: str, user_id: str) -> tuple
             return "missing", None
         if link["dismissed_by"] is not None:
             return "dismissed", None
+        if link["origin"] == "subject":
+            return "subject", None
         holder = link["assignee_id"] or link["accepted_by"]
         if holder is not None and holder != user:
             return "taken", holder

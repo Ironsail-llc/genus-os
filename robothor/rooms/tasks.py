@@ -11,7 +11,8 @@ routes are wrappers over these functions.
   ``origin='suggestion'``, the edition and the key. A key already linked in
   the workspace (open, accepted or dismissed) is never created again.
 - **Accept** (``accept_task`` access: shared, assigned or admin; not in an
-  archived workspace) writes the task's human assignee
+  archived workspace; never a task workspace's own ``subject`` task, so that
+  opening a task can never make the opener its assignee) writes the task's human assignee
   (``crm_tasks.assignee_id``, a ``user_accounts.id``) and the link's
   ``accepted_by``. Someone else's task is refused with who has it.
 - **Dismiss** (same access) applies to suggestions only: the link records who,
@@ -137,6 +138,8 @@ def accept_task(actor: Actor, room_id: str, task_id: str) -> RoomTaskView:
         raise TaskNotFound(task_id)
     if outcome == "dismissed":
         raise TaskAlreadyDismissed("this suggestion was dismissed")
+    if outcome == "subject":
+        raise RoomForbidden("a task workspace's own task is assigned in the task, not taken here")
     if outcome == "taken":
         raise TaskAlreadyAccepted(_holder(room.tenant_id, holder))
     view = _current_view(room.tenant_id, room.id, task_id)
