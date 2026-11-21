@@ -28,7 +28,7 @@ import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
 import { ToolsPopover } from "@/components/chat/tools-popover";
 import { AttachButton, NOT_IN_PLAN_OR_DEEP, NOT_WHILE_RUNNING, PendingAttachments, useChatAttachments } from "@/components/chat/chat-attachments";
-import { attachmentKind, type AttachmentSummary } from "@/lib/chat/attachments";
+import { attachmentKind, type AttachmentPayload, type AttachmentSummary } from "@/lib/chat/attachments";
 import { steerRun, interruptRun, STEER_PLACEHOLDER, STEERED_NOTE } from "@/components/chat-steer";
 import { repeatsQuickAction } from "@/components/business/quick-action-labels";
 import {
@@ -75,6 +75,11 @@ interface QueuedFollowup {
   id: string;
   text: string;
   seq: number;
+  /**
+   * The files that go with it. Only a message queued behind a busy room
+   * carries any: it is sent later exactly as it was typed, files included.
+   */
+  files?: AttachmentPayload[];
 }
 
 const JOINED_NOTE = "Added to the running task";
@@ -96,7 +101,12 @@ export const ROOM_BUSY_RETRY_MS = 4000;
  * its queue is parked here and put back (bubbles, notes and all) on return.
  * In memory, per tab, like every other pending follow-up.
  */
-const parkedRoomQueues = new Map<string, { texts: string[]; answering: string }>();
+const parkedRoomQueues = new Map<string, { items: Array<{ text: string; files?: AttachmentPayload[] }>; answering: string }>();
+
+/** The chips a queued message's bubble shows: exactly the files it will send. */
+function summarise(files: AttachmentPayload[] | undefined): AttachmentSummary[] | undefined {
+  return files?.length ? files.map((f) => ({ name: f.name, size: f.size, kind: attachmentKind(f.mime) })) : undefined;
+}
 const READ_ONLY_NOTICES = {
   viewer: "You have view-only access to this workspace, so you can read it but not post.",
   archived: "This workspace is archived, so it can be read but not posted in.",
@@ -400,13 +410,18 @@ export function ChatPanel({
   const restoreParkedQueue = useCallback(() => {
     if (!roomId) return;
     const parked = parkedRoomQueues.get(roomId);
-    if (!parked?.texts.length) return;
+    if (!parked?.items.length) return;
     parkedRoomQueues.delete(roomId);
     const note = roomBusyNote(parked.answering);
-    const items = parked.texts.map((text, n) => ({ id: `user-parked-${Date.now()}-${n}`, text, seq: followupSeq.current++ }));
+    const items: QueuedFollowup[] = parked.items.map((item, n) => ({
+      id: `user-parked-${Date.now()}-${n}`, text: item.text, seq: followupSeq.current++, ...(item.files?.length ? { files: item.files } : {}),
+    }));
     setMessages((prev) => [
       ...prev,
-      ...items.map((item): ChatMessage => ({ id: item.id, role: "user", content: item.text, timestamp: new Date(), note })),
+      ...items.map((item): ChatMessage => {
+        const chips = summarise(item.files);
+        return { id: item.id, role: "user", content: item.text, timestamp: new Date(), note, ...(chips ? { attachments: chips } : {}) };
+      }),
     ]);
     busyQueue.current = [...busyQueue.current, ...items];
     busyBlocked.current = true;
@@ -417,7 +432,10 @@ export function ChatPanel({
     if (!roomId) return;
     return () => {
       if (busyQueue.current.length) {
-        parkedRoomQueues.set(roomId, { texts: busyQueue.current.map((q) => q.text), answering: roomBusyName.current });
+        parkedRoomQueues.set(roomId, {
+          items: busyQueue.current.map((q) => ({ text: q.text, ...(q.files?.length ? { files: q.files } : {}) })),
+          answering: roomBusyName.current,
+        });
       }
     };
   }, [roomId]);
@@ -978,19 +996,28 @@ export function ChatPanel({
     }
 
     const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : (resend ?? input).trim();
-    if (!flushing && resend === undefined && roomId && text && busyQueue.current.length) {
+    if (!flushing && resend === undefined && roomId && (text || attachments.files.length) && busyQueue.current.length) {
       // Messages are already waiting behind another member's turn: this one
-      // waits behind them, in the order it was typed, rather than overtaking.
-      const item = { id: `user-${Date.now()}`, text, seq: followupSeq.current++ };
-      setMessages((prev) => [...prev, { id: item.id, role: "user", content: text, timestamp: new Date(), note: roomBusyNote(roomBusyName.current) }]);
+      // waits behind them, in the order it was typed, rather than overtaking —
+      // with its files, which go with it when it is sent.
+      const queuedFiles = attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
+      const item: QueuedFollowup = { id: `user-${Date.now()}`, text, seq: followupSeq.current++, ...(queuedFiles.length ? { files: queuedFiles } : {}) };
+      const chips = summarise(queuedFiles);
+      setMessages((prev) => [...prev, {
+        id: item.id, role: "user", content: text, timestamp: new Date(), note: roomBusyNote(roomBusyName.current),
+        ...(chips ? { attachments: chips } : {}),
+      }]);
       setInput("");
+      attachments.clear();
       busyQueue.current = [...busyQueue.current, item];
       return;
     }
     if (!flushing && !resend && text && isStreaming) return sendFollowup(text);
     // Files go with a fresh turn only: never with a flushed follow-up, and not
     // with a Regenerate (the panel keeps only their summary, not their bytes).
-    const files = flushing || resend !== undefined ? [] : attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
+    // A message queued behind a busy room is the exception: it carries its own.
+    const files = flushing ? flushing.flatMap((q) => q.files ?? [])
+      : resend !== undefined ? [] : attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
     if ((!text && !files.length) || isStreaming) return;
 
     setActiveAsks([]);
@@ -1049,7 +1076,7 @@ export function ChatPanel({
           const scope = requestScopes.current[requestIdRef.current!];
           if (scope) forgetRequest(scope, requestIdRef.current!);
           const answering = typeof busy.answering === "string" ? busy.answering : "";
-          const items: QueuedFollowup[] = flushing ?? [{ id: userMsg.id, text, seq: followupSeq.current++ }];
+          const items: QueuedFollowup[] = flushing ?? [{ id: userMsg.id, text, seq: followupSeq.current++, ...(files.length ? { files } : {}) }];
           // Back at the FRONT: it was typed before anything queued after it.
           busyQueue.current = [...items, ...busyQueue.current];
           busyBlocked.current = true;
