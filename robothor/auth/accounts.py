@@ -561,7 +561,7 @@ def _jit_provision(
                 "in tenant %s",
                 grant["id"],
                 bound["id"],
-                issuer,
+                sanitize_log(issuer),
                 sanitize_log(tenant_id),
             )
             out = dict(bound)

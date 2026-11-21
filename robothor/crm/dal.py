@@ -2785,8 +2785,8 @@ def answer_question(
                         "answer_question: invalid transition %s -> %s on %s (%s)",
                         current_status,
                         advance_to,
-                        task_id,
-                        reason,
+                        sanitize_log(task_id),
+                        sanitize_log(str(reason)),
                     )
                     # The task exists; the requested transition is invalid.
                     # Return an error dict (→ 422) rather than False (→ 404) so
@@ -2866,7 +2866,7 @@ def answer_question(
             return ok
         except Exception as e:
             conn.rollback()
-            logger.error("Failed to answer question on %s: %s", task_id, e)
+            logger.error("Failed to answer question on %s: %s", sanitize_log(task_id), e)
             return False
 
 

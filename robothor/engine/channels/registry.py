@@ -30,6 +30,8 @@ import logging
 import threading
 from typing import TYPE_CHECKING, Any, cast
 
+from robothor.sanitize import sanitize_log
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.engine.channels.base import Channel
 
@@ -285,7 +287,9 @@ def get_channel(name: str) -> Channel | None:
     spec = _plugin_channels().get(clean)
     if spec is None:
         logger.warning(
-            "Channel %r is named in %s but no installed plugin provides it", clean, CHANNELS_ENV
+            "Channel %r is named in %s but no installed plugin provides it",
+            sanitize_log(clean),
+            CHANNELS_ENV,
         )
         _plugin_channels_built.pop(clean, None)
         return None
