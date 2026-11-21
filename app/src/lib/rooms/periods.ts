@@ -71,12 +71,13 @@ export function customPeriod(start: string, end: string): PeriodRange | null {
 }
 
 /**
- * A period that has not started yet, or a custom range that ends after today:
- * there is nothing to report on, so it is refused before any request.
+ * A period that is not over: its last day is today or later in the
+ * workspace's time zone. The engine offers a period only once it is over
+ * (`robothor/rooms/periods.py`), so it is refused here before any request.
+ * Any length of range is fine.
  */
-export function isFuturePeriod(range: PeriodRange, today: string): boolean {
-  if (range.start > today) return true;
-  return range.grain === "custom" && range.end > today;
+export function isPeriodNotOver(range: PeriodRange, today: string): boolean {
+  return range.end >= today;
 }
 
 /** The latest whole day, week or month before the one `today` is in. */

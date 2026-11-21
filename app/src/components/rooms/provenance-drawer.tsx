@@ -11,11 +11,42 @@ interface ToolCall {
   ok: boolean | null;
 }
 
+interface Tokens {
+  total: number;
+  input: number | null;
+  output: number | null;
+}
+
 interface Provenance {
   runId: string | null;
   ranAs: string | null;
   startedAt: string | null;
   toolCalls: ToolCall[];
+  /** What the run cost, when the server recorded it (a flag, never a limit). */
+  costUsd: number | null;
+  tokens: Tokens | null;
+}
+
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null);
+
+/** Tokens as a plain count, or `{input, output}` (also `input_tokens`/`output_tokens`). */
+function readTokens(raw: unknown): Tokens | null {
+  if (num(raw) !== null) return { total: raw as number, input: null, output: null };
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const input = num(o.input) ?? num(o.input_tokens) ?? num(o.inputTokens);
+  const output = num(o.output) ?? num(o.output_tokens) ?? num(o.outputTokens);
+  const total = num(o.total) ?? (input !== null || output !== null ? (input ?? 0) + (output ?? 0) : null);
+  return total === null ? null : { total, input, output };
+}
+
+const USD = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const USD_SMALL = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumSignificantDigits: 2 });
+const COUNT = new Intl.NumberFormat("en-US");
+
+/** Cents for anything a cent or more; a sub-cent run shows its digits rather than "$0.00". */
+function formatUsd(value: number): string {
+  return value === 0 || value >= 0.01 ? USD.format(value) : USD_SMALL.format(value);
 }
 
 const str = (v: unknown) => (typeof v === "string" && v ? v : null);
@@ -38,6 +69,8 @@ export function readProvenance(edition: Edition, members: RoomMember[]): Provena
     runId: str(p.run_id) ?? str(p.runId),
     ranAs,
     startedAt: str(p.started_at) ?? str(p.startedAt),
+    costUsd: num(p.cost_usd) ?? num(p.costUsd),
+    tokens: readTokens(p.tokens),
     toolCalls: Array.isArray(calls)
       ? calls
           .filter((c): c is Record<string, unknown> => !!c && typeof c === "object")
@@ -94,6 +127,28 @@ export function ProvenanceDrawer({
                 <dd className="text-foreground" data-testid="provenance-ran-as">
                   {p.ranAs ?? "not recorded"}
                 </dd>
+                {p.costUsd !== null && (
+                  <>
+                    <dt className="text-muted-foreground">Cost</dt>
+                    <dd className="text-foreground tabular-nums" data-testid="provenance-cost">
+                      {formatUsd(p.costUsd)}
+                    </dd>
+                  </>
+                )}
+                {p.tokens && (
+                  <>
+                    <dt className="text-muted-foreground">Tokens</dt>
+                    <dd className="text-foreground tabular-nums" data-testid="provenance-tokens">
+                      {COUNT.format(p.tokens.total)}
+                      {p.tokens.input !== null && p.tokens.output !== null && (
+                        <span className="text-muted-foreground">
+                          {" "}
+                          ({COUNT.format(p.tokens.input)} in, {COUNT.format(p.tokens.output)} out)
+                        </span>
+                      )}
+                    </dd>
+                  </>
+                )}
               </dl>
               <section aria-labelledby="provenance-tools-label">
                 <h3

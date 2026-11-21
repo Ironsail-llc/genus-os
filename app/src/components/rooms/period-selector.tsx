@@ -12,7 +12,7 @@ import { formatPeriod } from "@/lib/rooms/format";
 import {
   customPeriod,
   findStoredEdition,
-  isFuturePeriod,
+  isPeriodNotOver,
   lastCompletePeriod,
   resolvePeriod,
   todayIn,
@@ -48,8 +48,8 @@ function isFixed(grain: unknown): grain is FixedGrain {
  * request. Otherwise one `POST /api/rooms/{id}/periods` asks for it (the
  * engine joins a request for a period already building) and a "building"
  * line stays until it arrives, by the room's event or, failing that, a poll.
- * A period that has not happened yet is refused here; the daily on-demand
- * cap is said in words.
+ * A period that is not over yet is refused here, by the engine's rule.
+ * Nothing is capped: a refusal shows the server's own message.
  */
 export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
   const { room, edition, editions, showEdition, refresh } = ctx;
@@ -107,8 +107,8 @@ export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
       setError("Pick a start and an end, with the end on or after the start.");
       return;
     }
-    if (isFuturePeriod(range, todayIn(tz))) {
-      setError("That period hasn't happened yet, so there is nothing to report on.");
+    if (isPeriodNotOver(range, todayIn(tz))) {
+      setError("That period isn't over yet. Pick one that has ended.");
       return;
     }
     const stored = findStoredEdition(editions, range);
