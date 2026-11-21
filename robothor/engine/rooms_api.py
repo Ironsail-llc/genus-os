@@ -195,15 +195,6 @@ async def _run_answer(room_id: str, body: RunRequest, request: Request) -> JSONR
     except runs.RunRefused as exc:
         reason = exc.reason if exc.reason in ("paused", "archived") else "paused"
         return _refusal(409, reason, _RUN_MESSAGES[reason])
-    except periods.OnDemandCapReached as exc:
-        limit, used = int(exc.limit), int(exc.used)
-        return _refusal(
-            429,
-            "on_demand_cap",
-            f"each person may start {limit} on-demand edition(s) a day in this workspace",
-            limit=limit,
-            used=used,
-        )
     except ValueError:
         return _refusal(422, "invalid_run", _RUN_MESSAGES["invalid_run"])
     return JSONResponse(edition_json(edition), status_code=200 if joined else 202)

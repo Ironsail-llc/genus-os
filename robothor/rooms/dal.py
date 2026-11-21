@@ -76,6 +76,7 @@ __all__ = [
     "reassign_room",
     "recent_messages",
     "record_activity",
+    "record_edition_cost",
     "record_run_result",
     "remove_member",
     "restore_revision",
@@ -1089,6 +1090,25 @@ def publish_edition(
             )
         conn.commit()
         return edition
+
+
+def record_edition_cost(tenant_id: str, edition_id: str, cost: Mapping[str, Any]) -> bool:
+    """Merge a run's final cost (``cost_usd``, ``input_tokens``,
+    ``output_tokens``) into an edition's provenance. A flag, never a limit.
+    False when there is no such edition or nothing to record."""
+    canonical = canonical_uuid(edition_id)
+    if canonical is None or not cost:
+        return False
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE room_editions SET provenance = COALESCE(provenance, '{}'::jsonb) || %s, "
+            "updated_at = now() WHERE tenant_id = %s AND id = %s",
+            (Json(dict(cost)), tenant_id, canonical),
+        )
+        changed = bool(cur.rowcount)
+        conn.commit()
+        return changed
 
 
 def set_edition_run(tenant_id: str, edition_id: str, run_id: str) -> bool:

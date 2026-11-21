@@ -47,8 +47,6 @@ async def _room_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return {"error": _NOT_FOUND, "not_found": True}
     except RoomForbidden as exc:
         return {"error": str(exc)}
-    except runs.OnDemandCapReached as exc:
-        return {"error": str(exc), "cap_reached": True, "limit": exc.limit, "used": exc.used}
     except (runs.RunRefused, ValueError) as exc:
         return {"error": str(exc)}
     out: dict[str, Any] = {

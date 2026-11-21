@@ -357,10 +357,9 @@ two, so the periods lane calls the shape it needs):
   tuple[Edition, bool]` (async): "run now" for a person, `(edition, joined)`,
   the run in the background (`pending_runs()`). Needs `run`; a paused room only
   for assigned or admin; refuses non-report rooms (`ValueError`). Raises
-  `RoomNotFound`, `RoomForbidden`, `RunRefused(reason='paused'|'archived')`,
-  `periods.OnDemandCapReached(limit, used)` (`check_on_demand_cap(room,
-  requested_by)`: the periods lane's rule, per person per room per local day,
-  previews included).
+  `RoomNotFound`, `RoomForbidden`, `RunRefused(reason='paused'|'archived')`.
+  No on-demand cap (operator decision, no caps in workspaces): any number of
+  runs may start.
 - `Period` and `last_complete_period` are `robothor.rooms.periods`'.
 - Liveness (`robothor.rooms.recovery`): a run holds its edition live
   (`recovery.hold`) from the moment it is scheduled until it ends, records the
@@ -377,12 +376,14 @@ plus `post` access) are re-read inside the lock; the assembled prompt is
 re-scanned; the carrier (`RoomRun.for_session(..., preview, requested_by,
 edition_id, period)`) wraps `runner.execute` and the save of the reply; the run
 goes through the normal runner (run tracking on), `trigger_type` CRON for a
-schedule and MANUAL otherwise, `trigger_detail=f"room:{id}"`. The cost cap is
-the runner's hard budget: `dataclasses.replace(agent_config, hard_budget=True,
-max_cost_usd=min(room settings.max_cost_usd, the agent's own cap))`, default
-`DEFAULT_MAX_COST_USD` $2.00. The edition ends `published` or `failed` on every
-exit (cancel, exception, timeout, cost cap `"stopped at the cost cap"`, no
-publish). A non-preview failure increments `consecutive_failures`
+schedule and MANUAL otherwise, `trigger_detail=f"room:{id}"`, with no
+`agent_config`: the runner loads the agent's own manifest, so a workspace adds
+no budget (no cost cap). What the run cost is a flag: the publish writes the
+run row's `total_cost_usd`, `input_tokens` and `output_tokens` into provenance
+(`cost_usd`, `input_tokens`, `output_tokens`; `editions.run_cost`), and when the
+run ends its final totals are merged in (`dal.record_edition_cost`, added). The
+edition ends `published` or `failed` on every exit (cancel, exception, timeout,
+no publish). A non-preview failure increments `consecutive_failures`
 (`dal.record_run_result`, added), tells assigned members (inbox
 `agent_error`, `metadata.room_id`), and at `AUTO_PAUSE_AFTER_FAILURES` (3) in a
 row pauses the room (`definition.sync_room_schedule`, added) and says why; a
@@ -414,8 +415,7 @@ token is its own identity; the service token names `requested_by`, whose role is
 read from `user_accounts`; only the bridge's service identity may name one, and
 a service needs `engine:control`). 202 started, 200 joined, 400
 `requested_by_required`, 403 `forbidden`, 404 `room_not_found`, 409 `paused` /
-`archived`, 422 `invalid_run`, 429 `on_demand_cap` (`limit`, `used`), 500
-`internal_error`; every message is the route's own fixed text, never an
+`archived`, 422 `invalid_run`, 500 `internal_error` (no 429: nothing is capped); every message is the route's own fixed text, never an
 exception's. The body is `edition_json`.
 `room_run(room_id, preview?, period?)` is the same for the main agent (in
 `ROOM_TOOLS`, excluded from benchmarks) and returns `{edition, started, joined, link}`.

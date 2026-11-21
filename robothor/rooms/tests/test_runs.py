@@ -13,8 +13,9 @@ Stories:
 - B4 failure: the edition is failed with a reason, assigned users only are
   told, the room pauses itself after ``AUTO_PAUSE_AFTER_FAILURES`` in a row,
   and a good run clears the count.
-- B5 cost cap: the room's ``max_cost_usd`` caps the run; a capped run's
-  edition is failed "stopped at the cost cap", never published.
+- No caps (operator decision): a run is never stopped for what it costs, and
+  any number of on-demand runs may start in a day. The run's cost is
+  recorded on its edition's provenance instead, so it is visible.
 - B6 run now: ``run`` access; a viewer is refused; a run in progress is joined.
 - B7 one run: a fire during a live chat turn waits for the room's lock; two
   triggers for the same period make one run; the agent being busy elsewhere
@@ -32,7 +33,7 @@ from typing import Any
 
 import pytest
 
-from robothor.engine.models import AgentConfig, AgentRun, RunStatus, TriggerType
+from robothor.engine.models import AgentRun, RunStatus, TriggerType
 from robothor.engine.runtime.activity import current as activity
 from robothor.rooms import dal, definition, editions, fanout, recovery, runs
 from robothor.rooms.access import Actor
@@ -56,6 +57,8 @@ class FakeRunner:
         self.carriers: list[Any] = []
         self.live: list[frozenset[str]] = []
         self.mode = "publish"
+        #: ``(cost_usd, input_tokens, output_tokens)`` the run reports.
+        self.cost: tuple[float, int, int] = (0.0, 0, 0)
         self.gate: asyncio.Event | None = None
         self.entered = asyncio.Event()
 
@@ -70,6 +73,7 @@ class FakeRunner:
             trigger_type=kw.get("trigger_type", TriggerType.CRON),
             agent_id=kw.get("agent_id", ""),
         )
+        run.total_cost_usd, run.input_tokens, run.output_tokens = self.cost
         # The real runtime registers the run's session before its first status event.
         activity.set(SimpleNamespace(sessions={run.id: None}))
         if kw.get("on_status") is not None:
@@ -86,9 +90,6 @@ class FakeRunner:
         if self.mode == "timeout":
             run.status = RunStatus.TIMEOUT
             run.error_message = "hard timeout"
-            return run
-        if self.mode == "capped":
-            run.budget_exhausted = True
             return run
         if self.mode == "publish":
             # The real runner records the run; the publish refuses one with no row.
@@ -131,7 +132,6 @@ def env(staff_db, monkeypatch):  # noqa: F811
         return []
 
     monkeypatch.setattr(fanout, "fan_out_edition", fake_fan_out)
-    monkeypatch.setattr(runs, "_agent_config", lambda agent_id: AgentConfig(id=agent_id, name="An"))
     monkeypatch.setattr("robothor.events.bus.publish", lambda *a, **k: "1-0")
     runner = FakeRunner(staff_db.cur)
     runs.bind_runner(runner)
@@ -558,10 +558,10 @@ class TestEveryExitEndsTheEdition:
     async def test_an_error_before_the_agent_starts_fails_its_edition(self, env, monkeypatch):
         room = _report(env.db)
 
-        def broken(agent_id: str) -> AgentConfig:
-            raise RuntimeError("manifest unreadable")
+        def broken(*args: Any) -> str:
+            raise RuntimeError("the store is unreadable")
 
-        monkeypatch.setattr(runs, "_agent_config", broken)
+        monkeypatch.setattr(runs, "_prompt", broken)
 
         result = await runs.execute_room_run(env.db.tenant, room.id, trigger="schedule")
 
@@ -636,49 +636,48 @@ async def test_engine_start_reaps_editions_left_building(monkeypatch):
     assert seen == [("test-tenant", {"booted_at": datetime(2026, 11, 21, 6, tzinfo=UTC)})]
 
 
-# ─── B5: the cost cap ─────────────────────────────────────────────────────
+# ─── no caps: cost is shown, never a stop ─────────────────────────────────
 
 
-class TestCostCap:
-    async def test_the_rooms_cap_is_the_runs_hard_budget(self, env):
+class TestNoCostCap:
+    async def test_the_run_uses_the_agents_own_config_untouched(self, env):
         room = _report(env.db)
-        dal.update_definition(
-            env.db.tenant, room.id, {"settings": {"max_cost_usd": 0.5}}, env.db.alice, room.rev
+
+        await runs.execute_room_run(env.db.tenant, room.id, trigger="schedule")
+
+        # The runner loads the agent as for any run; a workspace adds no budget.
+        assert env.runner.calls[0].get("agent_config") is None
+
+    async def test_a_run_that_costs_any_amount_publishes_normally(self, env):
+        room = _report(env.db)
+        env.runner.cost = (987.65, 4_000_000, 250_000)
+
+        edition = await runs.execute_room_run(env.db.tenant, room.id, trigger="schedule")
+
+        assert edition.status == "published"
+        assert env.fanouts and env.fanouts[0][0] == edition.id
+
+    async def test_the_runs_cost_is_on_its_editions_provenance(self, env):
+        room = _report(env.db)
+        env.runner.cost = (1.25, 12_000, 3_400)
+
+        edition = await runs.execute_room_run(env.db.tenant, room.id, trigger="schedule")
+
+        stored = dal.get_edition(env.db.tenant, edition.id, viewer_id=None)
+        assert stored.provenance["cost_usd"] == 1.25
+        assert stored.provenance["input_tokens"] == 12_000
+        assert stored.provenance["output_tokens"] == 3_400
+        assert edition.provenance["cost_usd"] == 1.25
+
+    async def test_a_previews_cost_is_on_its_provenance_too(self, env):
+        room = _report(env.db)
+        env.runner.cost = (0.5, 100, 20)
+
+        edition = await runs.execute_room_run(
+            env.db.tenant, room.id, trigger="manual", requested_by=env.db.alice, preview=True
         )
 
-        await runs.execute_room_run(env.db.tenant, room.id, trigger="schedule")
-
-        config = env.runner.calls[0]["agent_config"]
-        assert config.hard_budget is True and config.max_cost_usd == 0.5
-
-    async def test_a_room_with_no_cap_gets_the_platform_default(self, env):
-        room = _report(env.db)
-        await runs.execute_room_run(env.db.tenant, room.id, trigger="schedule")
-        config = env.runner.calls[0]["agent_config"]
-        assert config.hard_budget is True
-        assert config.max_cost_usd == runs.DEFAULT_MAX_COST_USD
-
-    async def test_the_agents_own_lower_cap_wins(self, env, monkeypatch):
-        monkeypatch.setattr(
-            runs,
-            "_agent_config",
-            lambda agent_id: AgentConfig(
-                id=agent_id, name="An", hard_budget=True, max_cost_usd=0.1
-            ),
-        )
-        room = _report(env.db)
-        await runs.execute_room_run(env.db.tenant, room.id, trigger="schedule")
-        assert env.runner.calls[0]["agent_config"].max_cost_usd == 0.1
-
-    async def test_a_capped_run_is_never_published_as_complete(self, env):
-        room = _report(env.db)
-        env.runner.mode = "capped"
-
-        result = await runs.execute_room_run(env.db.tenant, room.id, trigger="schedule")
-
-        assert result.status == "failed"
-        assert result.error == runs.CAPPED_REASON
-        assert env.fanouts == []
+        assert edition.provenance["cost_usd"] == 0.5
 
 
 # ─── A2: preview ──────────────────────────────────────────────────────────
@@ -715,13 +714,6 @@ class TestPreview:
         assert dal.get_edition(env.db.tenant, edition.id, viewer_id=env.db.alice) is not None
         assert _notes(env.db) == []
         assert dal.get_room(env.db.tenant, room.id).consecutive_failures == 0
-
-    async def test_a_preview_is_capped_too(self, env):
-        room = _report(env.db)
-        await runs.execute_room_run(
-            env.db.tenant, room.id, trigger="manual", requested_by=env.db.alice, preview=True
-        )
-        assert env.runner.calls[0]["agent_config"].hard_budget is True
 
     async def test_a_preview_needs_a_requester(self, env):
         room = _report(env.db)
@@ -791,28 +783,22 @@ class TestRunNow:
             await runs.start_room_run(_actor(env.db, "alice"), room.id)
         assert refused.value.reason == "archived"
 
-    async def test_the_daily_cap_is_per_person_and_counts_previews(self, env):
+    async def test_any_number_of_on_demand_runs_in_a_day_all_start(self, env):
         room = _report(env.db)
-        dal.update_definition(
-            env.db.tenant,
-            room.id,
-            {"settings": {"max_on_demand_per_day": 2}},
-            env.db.alice,
-            room.rev,
-        )
-        await runs.start_room_run(_actor(env.db, "alice"), room.id, preview=True)
-        await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
-        period = {"grain": "day", "start": "2026-11-01", "end": "2026-11-01"}
-        await runs.start_room_run(_actor(env.db, "alice"), room.id, period=period)
-        await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
+        alice = _actor(env.db, "alice")
+        started = []
+        for day in range(1, 9):
+            period = {"grain": "day", "start": f"2026-11-0{day}", "end": f"2026-11-0{day}"}
+            _edition, joined = await runs.start_room_run(alice, room.id, period=period)
+            started.append(not joined)
+            await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
+        for _ in range(8):
+            _edition, joined = await runs.start_room_run(alice, room.id, preview=True)
+            started.append(not joined)
+            await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
 
-        with pytest.raises(runs.OnDemandCapReached) as capped:
-            await runs.start_room_run(_actor(env.db, "alice"), room.id, preview=True)
-        assert (capped.value.limit, capped.value.used) == (2, 2)
-        # Bob has his own allowance.
-        _edition, joined = await runs.start_room_run(_actor(env.db, "bob"), room.id, preview=True)
-        await asyncio.wait_for(asyncio.gather(*runs.pending_runs()), 10)
-        assert joined is False
+        assert all(started) and len(started) == 16
+        assert len(env.runner.calls) == 16
 
     async def test_a_named_period_is_built(self, env):
         room = _report(env.db)

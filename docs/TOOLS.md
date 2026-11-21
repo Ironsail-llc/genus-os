@@ -1960,12 +1960,11 @@ already exist.
 - It goes on in the background. The result is the edition being built
   (`started: true`) and the link; a run already in progress is joined
   (`joined: true`), never started twice.
-- Refused for a viewer, for an archived workspace, for a paused one unless the
-  caller is assigned to it (or an owner or admin), and past the caller's daily
-  on-demand allowance in that workspace (`settings.max_on_demand_per_day` per
-  person, 5 when unset; previews and period requests count): `cap_reached: true`. Every run is capped in cost (see
-  docs/BUDGETS_AND_STOPS.md); a capped run's edition fails "stopped at the cost
-  cap" rather than publishing a partial report.
+- Refused for a viewer, for an archived workspace, and for a paused one unless
+  the caller is assigned to it (or an owner or admin). Nothing else limits it:
+  any number of runs may start in a day, and a run is never stopped for what it
+  costs. The run's cost and token counts are on its edition's provenance
+  (`cost_usd`, `input_tokens`, `output_tokens`) for anyone reading the report.
 
 ### Workspace editions: `room_publish_edition`
 
