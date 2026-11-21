@@ -354,19 +354,29 @@ per-agent dedup lock; the room and the run-as user (`definition.run_as_actor`
 plus `post` access) are re-read inside the lock; the assembled prompt is
 re-scanned; the carrier (`RoomRun.for_session(..., preview, requested_by,
 edition_id, period)`) wraps `runner.execute` and the save of the reply; the run
-goes through the normal runner (run tracking on), `trigger_type` CRON for a
-schedule and MANUAL otherwise, `trigger_detail=f"room:{id}"`, with no
+goes through the normal runner (run tracking on) as an UNATTENDED run whatever
+started it: `trigger_type` CRON and `identity=None` for every trigger, with
+`user_id`/`user_role` the run-as user for permissions, so an owner or admin
+run-as still gets the standard capability tier and its own tenant only, never
+the interactive standing a present, verified person gets;
+`trigger_detail=f"room:{id}"` names the room. It takes no
 `agent_config`: the runner loads the agent's own manifest, so a workspace adds
 no budget (no cost cap). What the run cost is a flag: the publish writes the
 run row's `total_cost_usd`, `input_tokens` and `output_tokens` into provenance
 (`cost_usd`, `input_tokens`, `output_tokens`; `editions.run_cost`), and when the
 run ends its final totals are merged in (`dal.record_edition_cost`, added). The
 edition ends `published` or `failed` on every exit (cancel, exception, timeout,
-no publish). A non-preview failure increments `consecutive_failures`
-(`dal.record_run_result`, added), tells assigned members (inbox
-`agent_error`, `metadata.room_id`), and at `AUTO_PAUSE_AFTER_FAILURES` (3) in a
-row pauses the room (`definition.sync_room_schedule`, added) and says why; a
-success resets it. A run-as user who is inactive or cannot post pauses the room
+no publish). Only the SCHEDULE's own runs count toward auto-pause: a failure
+increments `consecutive_failures` (`dal.record_run_result`, added), tells
+assigned members (inbox `agent_error`, `metadata.room_id`), and at
+`AUTO_PAUSE_AFTER_FAILURES` (3) in a row pauses the room
+(`definition.sync_room_schedule`, added) and says why; a scheduled success
+resets it. An on-demand run (run now, period, preview) never counts: its
+requester sees their own failed edition, and one person's requests cannot pause
+everyone's schedule. A paused room runs on demand only for an assigned member or
+an admin, on every path (`runs.check_not_paused_for`, also called in
+`periods._claim` before any row is inserted; `run_room` re-checks the
+requester's current level): 409 `paused` on both routes, an error in both tools. A run-as user who is inactive or cannot post pauses the room
 and tells the tenant's owners and admins. A non-preview run saves its exchange
 in the room (user turn `room_trigger`, reply `author_agent_id`); a preview saves
 nothing in the shared conversation.
@@ -417,6 +427,20 @@ room (same tenant) as that room's run-as user, and `room_list` returns only
 that room; a run bound to no room reads nothing. `max_cost_usd` is no longer a room setting (refused as
 unknown). Stopping a run: a run now, period run or preview by its requester or
 an assigned member/admin; a scheduled run by an assigned member/admin.
+
+Threat model for room text in an unattended run. The run acts with its run-as
+user's permissions, and the people who can put text in front of it are wider
+than the people who can change what it does: shared members post in the
+conversation and request runs; only assigned members and admins edit the
+instructions. So only the instructions direct the run, and they alone are
+re-scanned by the injection scanner at fire time. Everything else members can
+write (the last turns of the conversation, as a `Name: text` transcript; the
+last published edition; a period's day summaries) is given as data inside
+`<untrusted_content>` with tag-shaped text removed (`editions.clean_text`),
+bounded in size, never as conversation turns, and not scanned (scanning it would
+let any member stop the room's runs with a phrase). The run also has no identity
+and a system trigger (above), so whatever a member writes cannot reach beyond
+what the run-as user's role reaches in its own tenant.
 
 Interactive chat binds `chat_rooms.room_scope(target)` in `chat_rooms.start_turn`,
 so every room turn's task (runner and save) carries the room; the interruption

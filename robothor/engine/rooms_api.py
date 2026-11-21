@@ -147,6 +147,9 @@ async def _answer(room_id: str, body: PeriodRequest, request: Request) -> JSONRe
         return _refusal(404, "room_not_found", "no such workspace")
     except RoomForbidden:
         return _refusal(403, "forbidden", "you may not request a period in this workspace")
+    except runs.RunRefused as exc:
+        reason = exc.reason if exc.reason in ("paused", "archived") else "paused"
+        return _refusal(409, reason, _RUN_MESSAGES[reason])
     except periods.RoomRunUnavailable:
         return _refusal(503, "runs_unavailable", "workspace runs are not available right now")
     except periods.PeriodError as exc:
