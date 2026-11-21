@@ -11,12 +11,9 @@ import { formatMessageTime, fullMessageTime } from "@/lib/chat/format-timestamp"
 // Only a room message that announced an edition needs the edition renderer
 // (and through it the component registry), so the main conversation never
 // downloads it.
-// Only a task workspace's receipt turns draw this, so it loads only then.
-const EmailReceipt = lazy(() =>
-  import("@/components/rooms/email-receipt").then((m) => ({ default: m.EmailReceipt })),
-);
-const MessageEdition = lazy(() =>
-  import("@/components/rooms/message-edition").then((m) => ({ default: m.MessageEdition })),
+// In a room: the edition a message announced, or an email's receipt; loaded only then.
+const RoomMessageExtras = lazy(() =>
+  import("@/components/rooms/message-edition").then((m) => ({ default: m.RoomMessageExtras })),
 );
 const MessageRenders = lazy(() =>
   import("@/components/rooms/message-renders").then((m) => ({ default: m.MessageRenders })),
@@ -122,21 +119,14 @@ export const MessageBubble = memo(function MessageBubble({
             )}
           </div>
         </div>
-        {roomId && msg.receipt != null && (
-          <Suspense fallback={null}>
-            <EmailReceipt receipt={msg.receipt} />
-          </Suspense>
-        )}
         {renders && (
           <Suspense fallback={null}>
             <MessageRenders blocks={renders} />
           </Suspense>
         )}
-        {roomId && editionId && (
+        {roomId && (editionId || msg.receipt != null) && (
           <Suspense fallback={null}>
-            <div className="w-full">
-              <MessageEdition roomId={roomId} editionId={editionId} />
-            </div>
+            <RoomMessageExtras roomId={roomId} editionId={editionId} receipt={msg.receipt} />
           </Suspense>
         )}
         {!msg.recovery && (

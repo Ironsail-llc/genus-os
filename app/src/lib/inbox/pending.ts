@@ -203,7 +203,6 @@ export function normalizePending(body: unknown): PendingItem[] {
       ...(optionalText(row.room_id) ? { room_id: text(row.room_id) } : {}),
       ...(optionalText(row.task_id) ? { task_id: text(row.task_id) } : {}),
       ...(own ? { mine: true } : {}),
-      ...(kind === "action" && row.email && typeof row.email === "object" ? { email: row.email } : {}),
     });
   }
   return out;

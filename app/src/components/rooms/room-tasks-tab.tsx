@@ -33,8 +33,14 @@ const STATUS_CLASSES: Record<RoomTask["status"], string> = {
 async function fetchRoomProposals(roomId: string, signal?: AbortSignal): Promise<PendingItem[]> {
   const res = await fetch(APPROVALS_ENDPOINT, { signal, cache: "no-store" });
   if (!res.ok) return [];
-  const rows = normalizePending(await res.json());
-  return rows.filter((row) => row.kind === "action" && row.room_id === roomId);
+  const body = await res.json();
+  // A workspace email's exact fields ride on its row (`email`); read here, in
+  // the tab that draws them, so the shared inbox reader stays as it was.
+  const raw = Array.isArray(body?.pending) ? (body.pending as Array<Record<string, unknown>>) : [];
+  const emails = new Map(raw.filter((r) => r && r.email).map((r) => [String(r.id), r.email]));
+  return normalizePending(body)
+    .filter((row) => row.kind === "action" && row.room_id === roomId)
+    .map((row) => (emails.has(row.id) ? { ...row, email: emails.get(row.id) } : row));
 }
 
 interface Receipt {

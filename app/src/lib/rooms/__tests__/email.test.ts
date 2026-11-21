@@ -48,13 +48,14 @@ describe("readEmail", () => {
 });
 
 describe("the approvals list", () => {
-  it("keeps a workspace email's exact fields on its row", () => {
+  it("is read by the shared inbox reader as before; the tasks tab adds the email", () => {
+    // The workspace's tasks tab reads `email` off the raw row (room-tasks-tab.test.tsx).
     const [row] = normalizePending({
       count: 1,
       scope: "own",
       pending: [{ kind: "action", id: "a-1", action_kind: "room.email", question: "room.email: Checking in", detail: "", email: EMAIL, room_id: "r-1", task_id: "t-1" }],
     });
-    expect(row.email).toEqual(EMAIL);
+    expect(row).toMatchObject({ kind: "action", id: "a-1", action_kind: "room.email", room_id: "r-1" });
   });
 });
 
