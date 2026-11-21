@@ -77,7 +77,7 @@
     "body": {
       "error": "on_demand_cap",
       "limit": 0,
-      "message": "on-demand cap reached: this workspace runs 0 on-demand edition(s) a day and 1 ran today",
+      "message": "each person may start 0 on-demand edition(s) a day in this workspace",
       "used": 1
     },
     "status": 429
@@ -143,14 +143,15 @@
   "period_unfinished": {
     "body": {
       "error": "invalid_period",
-      "message": "that day is not over yet: it ends 2999-01-01 and today is <today> in UTC"
+      "message": "that period is not over yet",
+      "reason": "not_over"
     },
     "status": 422
   },
   "period_viewer": {
     "body": {
       "error": "forbidden",
-      "message": "viewer access does not allow 'request_period' in this room"
+      "message": "you may not request a period in this workspace"
     },
     "status": 403
   },

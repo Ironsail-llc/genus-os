@@ -221,7 +221,7 @@ describe("writes and refusals", () => {
   it("says why an unknown agent is refused", async () => {
     answer("create_unknown_agent");
     const made = await createRoom({ kind: "agent", title: "Pricing", agentId: "ghost" });
-    expect(made).toMatchObject({ ok: false, status: 422, message: "no agent 'ghost' is available for a workspace" });
+    expect(made).toMatchObject({ ok: false, status: 422, message: "That agent is not available in this company." });
   });
 
   it("reads a viewer's refused create as the role not allowing it", async () => {
@@ -249,7 +249,7 @@ describe("writes and refusals", () => {
     answer("patch_invalid_schedule", "create_invalid_schedule");
     const err = await refusal(patchRoom("room-report", 2, { scheduleText: "in 2 hours" }));
     expect(err).toMatchObject({ status: 422, code: "invalid_schedule", field: "scheduleText" });
-    expect(err.serverMessage).toMatch(/in 2 hours/);
+    expect(err.serverMessage).toMatch(/schedule could not be understood/);
   });
 
   it("refuses a shared user's edit and offers the duplicate", async () => {

@@ -79,7 +79,7 @@
       "detail": {
         "error": "invalid_schedule",
         "field": "scheduleText",
-        "message": "invalid schedule 'every minute': unrecognized schedule: 'every minute'"
+        "message": "The schedule could not be understood, or it runs more often than every 15 minutes."
       }
     },
     "status": 422
@@ -127,7 +127,7 @@
       "detail": {
         "error": "invalid_request",
         "field": "agentId",
-        "message": "no agent 'ghost' is available for a workspace"
+        "message": "That agent is not available in this company."
       }
     },
     "status": 422
@@ -489,7 +489,7 @@
         "currentRev": 2,
         "error": "revision_conflict",
         "field": null,
-        "message": "the workspace changed since you opened it"
+        "message": "The workspace changed since you opened it."
       }
     },
     "status": 409
@@ -499,7 +499,7 @@
       "detail": {
         "error": "forbidden",
         "field": null,
-        "message": "shared access does not allow 'edit_definition' in this room; duplicate the workspace to make your own copy"
+        "message": "Only the workspace's assigned people can change it; duplicate the workspace to make your own copy."
       }
     },
     "status": 403
@@ -509,7 +509,7 @@
       "detail": {
         "error": "invalid_schedule",
         "field": "scheduleText",
-        "message": "invalid schedule 'in 2 hours': unrecognized schedule: 'in 2 hours'"
+        "message": "The schedule could not be understood, or it runs more often than every 15 minutes."
       }
     },
     "status": 422
@@ -750,7 +750,7 @@
       "detail": {
         "error": "not_found",
         "field": null,
-        "message": "workspace not found"
+        "message": "Workspace not found."
       }
     },
     "status": 404
