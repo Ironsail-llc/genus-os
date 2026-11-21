@@ -562,16 +562,17 @@ def _carrier(monkeypatch: pytest.MonkeyPatch, run: Any) -> None:
 
 
 def _no_carrier(monkeypatch: pytest.MonkeyPatch) -> None:
-    import sys
+    from robothor.rooms import run_context
 
-    # None in sys.modules makes the import raise ImportError: the module is absent.
-    monkeypatch.setitem(sys.modules, "robothor.rooms.run_context", None)
+    # The run is bound to no workspace: the carrier reports none.
+    monkeypatch.setattr(run_context, "current_room_run", lambda: None)
 
 
 def _bound(db: Any, room_id: str) -> Any:
     from types import SimpleNamespace
 
-    return SimpleNamespace(tenant_id=db.tenant, room_id=room_id)
+    # A workspace run has no person behind it: the carrier marks it unattended.
+    return SimpleNamespace(tenant_id=db.tenant, room_id=room_id, unattended=True)
 
 
 def _service(db: Any) -> ToolContext:
@@ -612,7 +613,9 @@ def test_a_run_bound_to_a_room_of_another_tenant_reads_nothing(staff_db, report,
     from types import SimpleNamespace
 
     db = staff_db
-    _carrier(monkeypatch, SimpleNamespace(tenant_id=db.other, room_id=report["id"]))
+    _carrier(
+        monkeypatch, SimpleNamespace(tenant_id=db.other, room_id=report["id"], unattended=True)
+    )
     assert "room" not in _call("room_read", {"room_id": report["id"]}, _service(db))
 
 
