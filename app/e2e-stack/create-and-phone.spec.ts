@@ -14,10 +14,9 @@ const ROOM_ID = /room=([0-9a-f-]{36})/;
 test("F1. Carol starts a workspace with an agent from the dashboard; an unknown agent is refused", async ({ browser }) => {
   const { page } = await signedIn(browser, "carol");
   await page.goto("/?v=chat");
-  const rail = page.getByTestId("room-rail");
-  const button = page.getByTestId("new-workspace-button").locator("visible=true").first();
-  if (!(await button.isVisible().catch(() => false))) await rail.getByTestId("room-rail-toggle").click();
-  await button.click({ timeout: 15000 });
+  // Signed in as Carol, and the page has settled, before looking for the control.
+  await expect(page.getByTestId("chat-landing-greeting")).toContainText("Carol", { timeout: 30000 });
+  await page.getByTestId("room-rail").getByTestId("new-workspace-button").click({ timeout: 15000 });
   const dialog = page.getByTestId("new-workspace-dialog");
   await expect(dialog.getByTestId("new-workspace-agent")).not.toHaveValue("", { timeout: 15000 });
   const title = unique("Carol's pricing questions");

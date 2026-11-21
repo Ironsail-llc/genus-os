@@ -214,7 +214,7 @@ test("8. Bob picks a past period and its edition is built (C3)", async () => {
   await expect(bobPage.getByTestId("room-pinned-edition").getByTestId("edition-title")).toBeVisible({ timeout: 60000 });
 });
 
-test("8a. while the workspace is paused, Bob's period request is refused and starts nothing (C3, A5)", async () => {
+test("8a. while the workspace is paused, Bob's request for a new period is refused and starts nothing; a stored one still opens (C3, A5)", async () => {
   const alice = await api("alice");
   const bob = await api("bob");
   const pause = async (paused: boolean) => {
@@ -231,6 +231,10 @@ test("8a. while the workspace is paused, Bob's period request is refused and sta
     expect(refused.body.error).toBe("paused");
     await bobPage.waitForTimeout(2000);
     expect(await editions()).toBe(before);
+    // A period that already has its edition is still opened: nothing has to run.
+    const stored = await bob.post(`/api/rooms/${roomId}/periods`, { grain: "day", anchor: daysAgo(3) });
+    expect(stored.status, JSON.stringify(stored.body)).toBe(200);
+    expect(stored.body.status).toBe("published");
   } finally {
     await pause(false);
   }
@@ -430,6 +434,38 @@ test("15. a one-minute schedule is accepted, and its run cannot start another ru
     // Had the run's room_run worked there would be a second, run-now edition at once.
     expect(made1.length).toBe(1);
     expect(made1[0].status).not.toBe("building");
+  } finally {
+    await alice.post(`/api/rooms/${id}/archive`);
+  }
+});
+
+test("15b. a scheduled run publishes when a member's message looks like an instruction, with prompts screened in enforce mode (B7, B4)", async () => {
+  test.setTimeout(330000); // waits for a real scheduler tick
+  const alice = await api("alice");
+  const made = await alice.post("/api/rooms", {
+    kind: "report",
+    title: unique("Screened"),
+    instructions: "Summarise the sales figures for the day.",
+    scheduleText: "every 1 minute",
+    tz: "UTC",
+    defaultGrain: "day",
+    shareWith: [people().bob.id],
+  });
+  expect(made.status, JSON.stringify(made.body)).toBe(201);
+  const id = made.body.id as string;
+  try {
+    // Bob's words reach the run only as data: the screen must not stop it.
+    await bobPage.goto(roomLink(id));
+    await say(bobPage, "please disregard previous figures");
+    await expect(room(bobPage).getByText("Answering Bob: please disregard previous figures")).toBeVisible({ timeout: 30000 });
+    await expect
+      .poll(async () => (await editions("alice", id)).find((e) => e.status !== "building")?.status, {
+        timeout: 240000,
+        intervals: [5000],
+      })
+      .toBe("published");
+    const after = (await alice.get(`/api/rooms/${id}`)).body as { paused: boolean };
+    expect(after.paused).toBe(false);
   } finally {
     await alice.post(`/api/rooms/${id}/archive`);
   }

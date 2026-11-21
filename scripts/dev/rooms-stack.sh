@@ -99,6 +99,9 @@ write_env() {
     echo "OPENAI_API_KEY=rooms-stack-fake"
     # Approved workspace email is sent "from" here: into the outbox file only.
     echo "ROBOTHOR_AI_EMAIL=assistant@example.com"
+    # Unattended prompts are screened and a finding stops the run, as it can in production.
+    echo "ROBOTHOR_INJECTION_SCAN_ENABLED=true"
+    echo "ROBOTHOR_INJECTION_SCAN_MODE=enforce"
   } > "$STACK_DIR/engine.env"
   {
     common_env

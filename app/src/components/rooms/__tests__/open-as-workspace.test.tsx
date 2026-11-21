@@ -12,14 +12,12 @@ import { NewWorkspaceButton, OpenAsWorkspace } from "@/components/rooms/open-as-
 import { AGENT_ID, TASK_ID, reply, room } from "@/lib/rooms/__tests__/fixtures";
 import { TASK_ACCEPTED } from "@/lib/rooms/__tests__/hub-fixtures";
 
-vi.mock("@/hooks/use-agents", () => ({
-  useAgents: () => ({
-    agents: [
-      { name: "Main", agentId: "main", status: "healthy", schedule: "" },
-      { name: "Researcher", agentId: "researcher", status: "healthy", schedule: "" },
-    ],
-  }),
-}));
+// The fleet's health list is for operators: a member reads nothing there. The
+// dialog's choices come from the workspace agent list instead.
+vi.mock("@/hooks/use-agents", () => ({ useAgents: () => ({ agents: [] }) }));
+
+const AGENTS = { agents: [{ agentId: "main", name: "Main" }, { agentId: "researcher", name: "Researcher" }] };
+let agentsStatus: number;
 
 let fetchMock: ReturnType<typeof vi.fn>;
 let push: ReturnType<typeof vi.spyOn>;
@@ -27,11 +25,14 @@ let roomsStatus: number;
 
 /** The rooms list (which says whether workspaces are served here), then the call under test. */
 function bridge(answer: () => Response) {
-  fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
-    String(input) === "/api/bridge/api/rooms" && (init?.method ?? "GET") === "GET"
-      ? reply(roomsStatus === 200 ? { rooms: [] } : { detail: "Not Found" }, roomsStatus)
-      : answer(),
-  );
+  fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const get = (init?.method ?? "GET") === "GET";
+    if (get && String(input) === "/api/bridge/api/rooms")
+      return reply(roomsStatus === 200 ? { rooms: [] } : { detail: "Not Found" }, roomsStatus);
+    if (get && String(input) === "/api/bridge/api/rooms/agents")
+      return reply(agentsStatus === 200 ? AGENTS : { detail: { error: "agents_unavailable" } }, agentsStatus);
+    return answer();
+  });
 }
 
 /** The writes only: what the buttons sent, without the rooms list read. */
@@ -41,6 +42,7 @@ function posts() {
 
 beforeEach(() => {
   roomsStatus = 200;
+  agentsStatus = 200;
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
   bridge(() => reply({ error: "unexpected" }, 500));
@@ -93,6 +95,23 @@ describe("NewWorkspaceButton (F1)", () => {
     const [url, init] = posts()[0];
     expect(url).toBe("/api/bridge/api/rooms");
     expect(JSON.parse(String(init.body))).toEqual({ kind: "agent", title: "Market scan", agentId: "researcher" });
+  });
+
+  it("offers the company's agents from the workspace agent list, the main one first picked", async () => {
+    render(<NewWorkspaceButton />);
+    fireEvent.click(await screen.findByTestId("new-workspace-button"));
+    const select = await screen.findByTestId("new-workspace-agent");
+    await waitFor(() => expect(select).toHaveValue("main"));
+    expect([...select.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["Main", "Researcher"]);
+    expect(screen.getByTestId("new-workspace-create")).toBeEnabled();
+  });
+
+  it("says when the agents cannot be listed, and creates nothing", async () => {
+    agentsStatus = 502;
+    render(<NewWorkspaceButton />);
+    fireEvent.click(await screen.findByTestId("new-workspace-button"));
+    expect(await screen.findByTestId("new-workspace-error")).toHaveTextContent(/agents could not be listed/i);
+    expect(screen.getByTestId("new-workspace-create")).toBeDisabled();
   });
 
   it("starts with the given agent and a default title", async () => {

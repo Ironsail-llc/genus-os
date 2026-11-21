@@ -156,6 +156,32 @@ def test_an_engine_that_cannot_list_agents_refuses_clearly(real) -> None:
     assert real.db.cur.fetchone()[0] == 0
 
 
+def test_a_member_lists_the_agents_a_workspace_can_be_started_with(real) -> None:
+    """The dialog's choices come from the company's engine, as create checks them:
+    a member, who cannot read the fleet's health views, still gets them."""
+    real.scan.return_value = (
+        200,
+        {"manifests": [{"id": "main", "name": "Main"}, {"id": "analyst"}], "broken": []},
+    )
+    listed = real.client("bob").get("/api/rooms/agents")
+    assert listed.status_code == 200, listed.text
+    assert listed.json() == {
+        "agents": [{"agentId": "analyst", "name": "analyst"}, {"agentId": "main", "name": "Main"}]
+    }
+    assert all(c.kwargs.get("tenant") == real.db.tenant for c in real.scan.await_args_list)
+
+
+def test_the_agent_list_says_when_the_engine_cannot_answer(real) -> None:
+    real.scan.return_value = (503, {"error": "starting"})
+    refused = real.client("bob").get("/api/rooms/agents")
+    assert refused.status_code == 502
+    assert _detail(refused)["error"] == "agents_unavailable"
+
+
+def test_a_viewer_gets_no_agent_list(real) -> None:
+    assert real.client("vera").get("/api/rooms/agents").status_code == 403
+
+
 @pytest.mark.parametrize(
     ("body", "code", "field"),
     [

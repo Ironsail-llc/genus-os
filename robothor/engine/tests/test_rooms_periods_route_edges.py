@@ -12,6 +12,7 @@ stand-in background run) comes from ``test_rooms_engine_contract.py``.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 import pytest
@@ -38,6 +39,28 @@ async def test_a_shared_member_cannot_request_a_period_of_a_paused_workspace(eng
     assert answer.status_code == 409, answer.text
     assert answer.json()["error"] == "paused"
     assert _editions(s) == before
+    assert s.started == []
+
+
+async def test_a_shared_member_still_opens_a_published_period_of_a_paused_workspace(
+    engine,  # noqa: F811
+) -> None:
+    s = engine
+    built, _ = dal.create_edition(
+        s.db.tenant,
+        s.room.id,
+        grain="week",
+        period_start=date(2026, 11, 2),
+        period_end=date(2026, 11, 8),
+    )
+    dal.publish_edition(s.db.tenant, built.id, title="Week 45", summary="Up 4%.", blocks=[])
+    dal.set_paused(s.db.tenant, s.room.id, True)
+    with _human(s.db, s.db.bob):
+        answer = await s.client.post(
+            f"/api/rooms/{s.room.id}/periods", json={"grain": "week", "anchor": "2026-11-04"}
+        )
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["id"] == built.id
     assert s.started == []
 
 
