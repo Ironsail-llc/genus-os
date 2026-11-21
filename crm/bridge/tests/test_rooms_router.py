@@ -1101,9 +1101,9 @@ def test_open_a_task_as_a_room(world) -> None:
     assert _audits(w, "room.open_task")[0]["actor"] == w.ids.alice
 
 
-def test_a_colleague_opening_the_same_task_joins_its_room(world) -> None:
+def test_the_tasks_assignee_opening_it_joins_its_room(world) -> None:
     w = world
-    task = _task(w)
+    task = _crm_task(w, "Call Bob back", assignee=w.ids.carol)
     room_id = w.client("alice").post(f"/api/rooms/from-task/{task}").json()["id"]
 
     response = w.client("carol").post(f"/api/rooms/from-task/{task}")
@@ -1111,6 +1111,33 @@ def test_a_colleague_opening_the_same_task_joins_its_room(world) -> None:
     assert response.status_code == 200
     assert response.json()["id"] == room_id
     assert response.json()["access"] == "shared"
+
+
+def test_an_unrelated_colleague_cannot_join_a_task_room(world) -> None:
+    w = world
+    task = _task(w)
+    w.client("alice").post(f"/api/rooms/from-task/{task}")
+
+    response = w.client("carol").post(f"/api/rooms/from-task/{task}")
+
+    assert response.status_code == 404
+    assert w.client("carol").get("/api/rooms").json() == {"rooms": []}
+
+
+def test_a_member_removed_from_a_task_room_cannot_rejoin_it(world) -> None:
+    """G2 holds for task rooms: from-task is not a way back in."""
+    from robothor.rooms import dal
+
+    w = world
+    task = _task(w)
+    room_id = w.client("alice").post(f"/api/rooms/from-task/{task}").json()["id"]
+    dal.add_member(w.db.tenant, room_id, w.ids.carol, added_by=w.ids.alice)
+    assert (
+        w.client("alice").delete(f"/api/rooms/{room_id}/members/{w.ids.carol}").status_code == 200
+    )
+
+    assert w.client("carol").post(f"/api/rooms/from-task/{task}").status_code == 404
+    assert w.client("carol").get(f"/api/rooms/{room_id}").status_code == 404
 
 
 def test_open_a_task_of_another_company_is_404(world) -> None:
@@ -1626,3 +1653,74 @@ def test_the_engines_cap_passes_through_unchanged(world) -> None:
     response = w.client("bob").post(f"/api/rooms/{room.id}/run", json={"preview": True})
     assert response.status_code == 429
     assert response.json() == cap
+
+
+# ─── membership changes keep the room manageable (review) ───────────────
+
+
+def test_re_sharing_an_assigned_member_without_assigned_keeps_them_assigned(world) -> None:
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    dal.set_assigned(w.db.tenant, room.id, w.ids.bob, True)
+
+    bob = w.client("alice").put(f"/api/rooms/{room.id}/members/{w.ids.bob}", json={})
+    alice = w.client("alice").put(f"/api/rooms/{room.id}/members/{w.ids.alice}", json={})
+
+    assert bob.status_code == 200 and bob.json()["assigned"] is True
+    assert alice.status_code == 200 and alice.json()["assigned"] is True
+    assert dal.get_member(w.db.tenant, room.id, w.ids.bob).assigned is True
+    assert dal.get_member(w.db.tenant, room.id, w.ids.alice).assigned is True
+    assert w.notices == []  # nobody new was shared with
+
+
+def test_an_explicit_assigned_false_demotes_a_member(world) -> None:
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    dal.set_assigned(w.db.tenant, room.id, w.ids.bob, True)
+
+    response = w.client("alice").put(
+        f"/api/rooms/{room.id}/members/{w.ids.bob}", json={"assigned": False}
+    )
+
+    assert response.status_code == 200 and response.json()["assigned"] is False
+
+
+def test_the_run_as_user_cannot_be_demoted_or_removed(world) -> None:
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    dal.set_assigned(w.db.tenant, room.id, w.ids.bob, True)
+    bob = w.client("bob")
+
+    demoted = bob.put(f"/api/rooms/{room.id}/members/{w.ids.alice}", json={"assigned": False})
+    removed = bob.delete(f"/api/rooms/{room.id}/members/{w.ids.alice}")
+    by_admin = w.client("dana").delete(f"/api/rooms/{room.id}/members/{w.ids.alice}")
+
+    for response in (demoted, removed, by_admin):
+        assert response.status_code == 422
+        assert _detail(response)["error"] == "run_as_user"
+        assert "reassign" in _detail(response)["message"].lower()
+    alice = dal.get_member(w.db.tenant, room.id, w.ids.alice)
+    assert alice is not None and alice.assigned is True
+
+
+def test_the_last_assigned_member_cannot_be_demoted_or_removed(world) -> None:
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    w.db.cur.execute("UPDATE rooms SET run_as_user_id = %s WHERE id = %s", (w.ids.bob, room.id))
+    dana = w.client("dana")
+
+    demoted = dana.put(f"/api/rooms/{room.id}/members/{w.ids.alice}", json={"assigned": False})
+    removed = dana.delete(f"/api/rooms/{room.id}/members/{w.ids.alice}")
+
+    for response in (demoted, removed):
+        assert response.status_code == 422
+        assert _detail(response)["error"] == "last_assigned"
+    assert dal.get_member(w.db.tenant, room.id, w.ids.alice).assigned is True
