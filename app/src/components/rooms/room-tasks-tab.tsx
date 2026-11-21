@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { InboxCard } from "@/components/views/inbox/inbox-card";
 import { useRoomEvents } from "@/hooks/use-rooms";
 import { APPROVALS_ENDPOINT, postApprovalAnswer } from "@/lib/inbox/answer";
+import { OpenAsWorkspace } from "@/components/rooms/open-as-workspace";
 import { normalizePending, type AnswerBody, type PendingItem, type PendingKind } from "@/lib/inbox/pending";
 import { acceptRoomTask, dismissRoomTask, fetchRoomTasks } from "@/lib/rooms/api";
 import { splitRoomTasks, TASK_STATUS_LABELS, type RoomTask } from "@/lib/rooms/hub";
@@ -59,8 +60,16 @@ export function RoomTasksTab({ ctx }: { ctx: RoomSlotContext }) {
     { queryKey: tasksKey, queryFn: ({ signal }) => fetchRoomTasks(roomId, signal), staleTime: 15_000 },
     client,
   );
+  // A member decides an action only in a task workspace whose own task is
+  // theirs; a report workspace leads to the task's workspace instead.
+  const isTaskRoom = ctx.room.kind === "task";
   const proposalsQuery = useQuery(
-    { queryKey: proposalsKey, queryFn: ({ signal }) => fetchRoomProposals(roomId, signal), staleTime: 15_000 },
+    {
+      queryKey: proposalsKey,
+      queryFn: ({ signal }) => fetchRoomProposals(roomId, signal),
+      staleTime: 15_000,
+      enabled: isTaskRoom,
+    },
     client,
   );
 
@@ -218,7 +227,11 @@ export function RoomTasksTab({ ctx }: { ctx: RoomSlotContext }) {
       {taken.length > 0 && (
         <TaskGroup label="In hand" testId="room-tasks-taken">
           {taken.map((task) => (
-            <TaskRow key={task.taskId} task={task} ctx={ctx} message={messages[task.taskId]} />
+            <TaskRow key={task.taskId} task={task} ctx={ctx} message={messages[task.taskId]}>
+              {!isTaskRoom && canAct && (
+                <OpenAsWorkspace taskId={task.taskId} label={`Open task ${ROOM_LABEL.singular}`} assumeServed />
+              )}
+            </TaskRow>
           ))}
         </TaskGroup>
       )}

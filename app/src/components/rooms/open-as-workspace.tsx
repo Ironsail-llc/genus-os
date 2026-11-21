@@ -41,8 +41,18 @@ export function useEnterRoom() {
  * the task's workspace or hands back the one that exists, so a second person
  * opening the same task lands in the same place. Then into it, in place.
  */
-export function OpenAsWorkspace({ taskId }: { taskId: string }) {
-  const served = useWorkspacesServed();
+export function OpenAsWorkspace({
+  taskId,
+  label,
+  assumeServed = false,
+}: {
+  taskId: string;
+  /** The button's words; "Open as workspace" by default. */
+  label?: string;
+  /** Inside a workspace, workspaces are served: no need to ask. */
+  assumeServed?: boolean;
+}) {
+  const served = useWorkspacesServed() || assumeServed;
   const enter = useEnterRoom();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +82,7 @@ export function OpenAsWorkspace({ taskId }: { taskId: string }) {
         data-testid={`open-as-workspace-${taskId}`}
       >
         {busy ? <Loader2 className="animate-spin" aria-hidden /> : <SquareArrowOutUpRight aria-hidden />}
-        Open as {ROOM_LABEL.singular}
+        {label ?? `Open as ${ROOM_LABEL.singular}`}
       </Button>
       {error && (
         <p className="mt-1 text-xs text-destructive" role="alert" data-testid={`open-as-workspace-error-${taskId}`}>
