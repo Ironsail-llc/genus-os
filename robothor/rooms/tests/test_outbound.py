@@ -219,7 +219,7 @@ def test_delivering_again_sends_nothing_more(mail):
 
     assert outbound.deliver(mail.tenant, proposed.action_id) == "sent"
     assert outbound.deliver(mail.tenant, proposed.action_id) == "skipped"
-    assert outbound.sweep() >= 0
+    assert outbound.sweep(mail.tenant) >= 0
 
     assert len(mail.sent) == 1
     assert len(notes(mail, room)) == 1
@@ -261,8 +261,8 @@ def test_an_executor_that_died_mid_send_is_never_retried(mail):
         (proposed.action_id,),
     )
 
-    outbound.sweep()
-    outbound.sweep()
+    outbound.sweep(mail.tenant)
+    outbound.sweep(mail.tenant)
 
     assert mail.sent == []
     assert status(mail, proposed.action_id) == "unknown"
@@ -276,7 +276,7 @@ def test_a_sweep_delivers_an_approval_whose_event_was_lost(mail):
     room = bobs_room(mail)
     proposed = approved(mail, room)
 
-    outbound.sweep()
+    outbound.sweep(mail.tenant)
 
     assert len(mail.sent) == 1
     assert status(mail, proposed.action_id) == "completed"
@@ -290,8 +290,8 @@ def test_a_rejected_email_is_never_sent_and_the_workspace_is_told(mail):
     approvals.decide_member_action(actor(mail, "bob"), proposed.action_id, approved=False)
 
     assert outbound.deliver(mail.tenant, proposed.action_id) == "skipped"
-    outbound.sweep()
-    outbound.sweep()
+    outbound.sweep(mail.tenant)
+    outbound.sweep(mail.tenant)
 
     assert mail.sent == []
     [note] = notes(mail, room)
@@ -310,8 +310,8 @@ def test_an_expired_email_is_never_sent_and_the_workspace_is_told(mail):
         (proposed.action_id,),
     )
 
-    outbound.sweep()
-    outbound.sweep()
+    outbound.sweep(mail.tenant)
+    outbound.sweep(mail.tenant)
 
     assert mail.sent == []
     [note] = notes(mail, room)
@@ -330,12 +330,92 @@ def test_a_payload_altered_after_approval_is_refused_at_claim(mail):
     )
 
     assert outbound.deliver(mail.tenant, proposed.action_id) == "refused"
-    outbound.sweep()
+    assert status(mail, proposed.action_id) == "cancelled", "it leaves approved for good"
+    assert outbound.deliver(mail.tenant, proposed.action_id) == "skipped"
+    outbound.sweep(mail.tenant)
 
     assert mail.sent == []
     [note] = notes(mail, room)
     assert note["receipt"]["status"] == "not_sent"
     assert "changed" in note["receipt"]["error"]
+    mail.cur.execute(
+        "SELECT actor FROM operation_audit WHERE entity_id = %s AND event = 'action.cancelled'",
+        (proposed.action_id,),
+    )
+    assert [r[0] for r in mail.cur.fetchall()] == ["system"]
+
+
+def test_an_approval_that_expires_before_delivery_is_settled_with_a_receipt(mail):
+    from robothor.rooms import outbound
+
+    room = bobs_room(mail)
+    proposed = approved(mail, room)
+    mail.cur.execute(
+        "UPDATE operation_actions SET expires_at = now() - interval '1 minute' WHERE id = %s",
+        (proposed.action_id,),
+    )
+
+    outbound.sweep(mail.tenant)
+    outbound.sweep(mail.tenant)
+
+    assert mail.sent == []
+    assert status(mail, proposed.action_id) == "cancelled"
+    [note] = notes(mail, room)
+    assert note["receipt"]["status"] == "not_sent"
+    assert "expired" in note["receipt"]["error"]
+
+
+def test_a_receipt_that_could_not_be_posted_is_not_recorded_as_written(mail, monkeypatch):
+    from robothor.rooms import dal, outbound
+
+    room = bobs_room(mail)
+    proposed = approved(mail, room)
+    real = dal.get_room
+    monkeypatch.setattr(dal, "get_room", lambda tenant_id, room_id: None)
+
+    assert outbound.deliver(mail.tenant, proposed.action_id) == "sent"
+    assert notes(mail, room) == []
+    mail.cur.execute(
+        "SELECT 1 FROM operation_audit WHERE entity_id = %s AND event = 'room.email.noted'",
+        (proposed.action_id,),
+    )
+    assert mail.cur.fetchone() is None
+
+    monkeypatch.setattr(dal, "get_room", real)
+    outbound.sweep(mail.tenant)
+    [note] = notes(mail, room)
+    assert note["receipt"]["status"] == "sent"
+    assert len(mail.sent) == 1
+
+
+def test_another_tenants_engine_leaves_the_email_alone(mail):
+    """One engine per tenant on one Redis: an engine that reads another
+    tenant's approval event, or sweeps, never touches that tenant's email."""
+    from types import SimpleNamespace
+
+    from robothor.engine import room_outbound
+    from robothor.rooms import outbound
+
+    room = bobs_room(mail)
+    proposed = approved(mail, room)
+    theirs = SimpleNamespace(tenant_id=mail.other, event_group="engine-other")
+
+    room_outbound.on_approved(
+        {
+            "tenant_id": mail.tenant,
+            "payload": {
+                "action_id": proposed.action_id,
+                "kind": "room.email",
+                "tenant_id": mail.tenant,
+            },  # fmt: skip
+        },
+        theirs,
+    )
+    outbound.sweep(mail.other)
+
+    assert mail.sent == []
+    assert status(mail, proposed.action_id) == "approved"
+    assert notes(mail, room) == []
 
 
 def test_a_second_approval_changes_nothing(mail):
@@ -361,7 +441,7 @@ def test_a_failed_send_is_recorded_and_not_retried(mail):
 
     assert outbound.deliver(mail.tenant, proposed.action_id) == "failed"
     mail.mail_state["fail"] = None
-    outbound.sweep()
+    outbound.sweep(mail.tenant)
 
     assert mail.sent == []
     action = Operations(mail.tenant).get_action(proposed.action_id)
@@ -565,7 +645,7 @@ def test_a_proposal_can_only_be_approved_by_the_member_rule_or_an_operator(mail)
     proposed = propose(mail, room, bobs_turn(mail, room))
 
     assert outbound.deliver(mail.tenant, proposed.action_id) == "skipped"
-    outbound.sweep()
+    outbound.sweep(mail.tenant)
     assert mail.sent == []
     assert status(mail, proposed.action_id) == "review"
 

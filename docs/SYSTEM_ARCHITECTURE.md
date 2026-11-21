@@ -1609,11 +1609,17 @@ sent as the company's assistant mailbox (the one the `gws_*` tools send from),
 with Reply-To the member: `outbound.sender_for` is the only place that is
 decided. After approval the engine (`robothor/engine/room_outbound.py`: a
 listener on `operation_action.approved` and a 30-second sweep, both started
-through the task registry) claims it by id under a lease, which re-checks the
+through the task registry; like the event hooks, each engine reads with its
+own consumer group, `room-outbound:<event_group>`, acts only on its own
+tenant's approvals and sweeps only its own tenant, with every connection bound
+to that tenant by `tenant_scope`) claims it by id under a lease, which re-checks the
 approved hash, re-checks the sender and the do-not-contact list, sends it
 through the workspace mail provider and records the provider's id with
 `finish_action`. A lease that runs out becomes `unknown` and is never sent
-again; a failed send is recorded and not retried. Every outcome (sent, failed,
+again; a failed send is recorded and not retried. An email changed after its
+approval, or an approval that expires before delivery, is settled as
+`cancelled` with the reason, so nothing stays `approved` for ever. A receipt
+that could not be posted is not recorded as written and is tried again. Every outcome (sent, failed,
 uncertain, not sent, rejected, expired) writes one `room_email_receipt` turn into
 the workspace and publishes `room.message`.
 

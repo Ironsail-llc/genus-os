@@ -40,7 +40,7 @@ from uuid import uuid4
 
 from psycopg2.extras import RealDictCursor
 
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, tenant_scope
 from robothor.operations.proposer import Proposer
 from robothor.operations.store import Conflict, NotPermitted, Operations
 from robothor.rooms import approvals, dal
@@ -69,6 +69,8 @@ KIND = "room.email"
 _VERSION = 1
 _NOTED = "room.email.noted"
 _TOOL = "room_propose_email"
+_CHANGED = "the email was changed after it was approved"
+_EXPIRED = "the approval expired before the email could be sent"
 #: One plain mailbox address: no display name, no whitespace, no header breaks.
 _ADDRESS = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
 
@@ -276,7 +278,13 @@ def _finish(ops: Operations, row: dict[str, Any], status: str, receipt: dict[str
 def deliver(tenant_id: str, action_id: str) -> str:
     """Send one approved workspace email, once. ``sent``, ``failed``,
     ``refused`` (not sent: altered, opted out) or ``skipped`` (not approved,
-    not a workspace email, or another executor has it)."""
+    not a workspace email, or another executor has it). Every connection it
+    takes is bound to ``tenant_id`` (row-level security)."""
+    with tenant_scope(tenant_id):
+        return _deliver(tenant_id, action_id)
+
+
+def _deliver(tenant_id: str, action_id: str) -> str:
     action = canonical_uuid(action_id)
     if action is None:
         return "skipped"
@@ -287,7 +295,8 @@ def deliver(tenant_id: str, action_id: str) -> str:
     try:
         row = ops.claim_action_by_id(action, lease_seconds=300)
     except Conflict:
-        _note(tenant_id, action, error="the email was changed after it was approved")
+        ops.refuse_changed_approval(action, _CHANGED)
+        _note(tenant_id, action)
         return "refused"
     if row is None:
         _note(tenant_id, action)
@@ -335,28 +344,18 @@ def _send_claimed(tenant_id: str, ops: Operations, row: dict[str, Any]) -> str:
     return "sent"
 
 
-def _tenants_with_work() -> list[str]:
-    with get_connection(read_only=True) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT DISTINCT a.tenant_id FROM operation_actions a WHERE a.kind = %s "
-            "AND NOT EXISTS (SELECT 1 FROM operation_audit o WHERE o.tenant_id = a.tenant_id "
-            "AND o.entity_id = a.id::text AND o.event = %s)",
-            (KIND, _NOTED),
-        )
-        return [r[0] for r in cur.fetchall()]
-
-
-def sweep(tenant_id: str | None = None) -> int:
-    """Deliver every approved workspace email the event missed, settle lost
-    leases as ``unknown``, and write every receipt still owed. Returns how
-    many emails were sent."""
-    sent = 0
-    for tenant in [tenant_id] if tenant_id else _tenants_with_work():
-        ops = Operations(tenant)
+def sweep(tenant_id: str) -> int:
+    """For ``tenant_id`` (the engine's own): deliver every approved workspace
+    email the event missed, settle lost leases as ``unknown``, settle
+    approvals that expired undelivered, and write every receipt still owed.
+    Returns how many emails were sent."""
+    with tenant_scope(tenant_id):
+        ops = Operations(tenant_id)
         ops.expire_leases()
+        ops.cancel_expired_approvals(KIND, _EXPIRED)
+        sent = 0
         for row in ops.list_actions(kinds=[KIND], status="approved", limit=1000):
-            sent += deliver(tenant, str(row["id"])) == "sent"
+            sent += _deliver(tenant_id, str(row["id"])) == "sent"
         with ops.transaction() as cur:
             cur.execute(
                 "SELECT a.id FROM operation_actions a WHERE a.tenant_id = %s AND a.kind = %s "
@@ -364,12 +363,12 @@ def sweep(tenant_id: str | None = None) -> int:
                 "OR (a.status = 'review' AND a.expires_at <= now())) "
                 "AND NOT EXISTS (SELECT 1 FROM operation_audit o WHERE o.tenant_id = a.tenant_id "
                 "AND o.entity_id = a.id::text AND o.event = %s)",
-                (tenant, KIND, _NOTED),
+                (tenant_id, KIND, _NOTED),
             )
             owed = [str(r["id"]) for r in cur.fetchall()]
         for action in owed:
-            _note(tenant, action)
-    return sent
+            _note(tenant_id, action)
+        return sent
 
 
 # ─── receipts ────────────────────────────────────────────────────────────
@@ -450,7 +449,8 @@ def _text(r: dict[str, Any]) -> str:
 def _note(tenant_id: str, action_id: str, *, error: str | None = None) -> None:
     """Write the action's receipt into its workspace, once. Never raises."""
     try:
-        _write_note(tenant_id, action_id, error)
+        with tenant_scope(tenant_id):
+            _write_note(tenant_id, action_id, error)
     except Exception:
         logger.exception("could not write the receipt for room email %s", sanitize_log(action_id))
 
@@ -479,18 +479,22 @@ def _write_note(tenant_id: str, action_id: str, error: str | None) -> None:
         if receipt is None:
             return
         room = dal.get_room(tenant_id, str(receipt["room_id"] or ""))
-        message_id = None
-        if room is not None:
-            message_id = chat_store.save_message(
-                room.session_key,
-                "assistant",
-                _text(receipt),
-                channel="webchat",
-                tenant_id=tenant_id,
-                extras={"kind": "room_email_receipt", "receipt": receipt},
-            )
+        if room is None:
+            # Never recorded as written when it was not: the sweep tries again.
+            logger.warning("room email %s: its workspace was not found", sanitize_log(action_id))
+            return
+        message_id = chat_store.save_message(
+            room.session_key,
+            "assistant",
+            _text(receipt),
+            channel="webchat",
+            tenant_id=tenant_id,
+            extras={"kind": "room_email_receipt", "receipt": receipt},
+        )
+        if message_id is None:
+            return
         ops.audit(cur, action_id, _NOTED, "system", {"message_id": message_id})
-    if room is not None and message_id is not None:
+    if message_id is not None:
         dal.record_activity(tenant_id, room.id, message_id)
         try:
             bus.publish(
