@@ -173,6 +173,11 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         # remains is the right shape. Written `def` they would occupy a worker
         # thread for the whole export instead of releasing it.
         ("POST", "/api/installed-agents/{agent_id}/export"),
+        # The two engine-backed workspace routes await the engine (run now,
+        # another period). The access check and the audit write go through
+        # asyncio.to_thread; every other rooms route is `def`.
+        ("POST", "/api/rooms/{room_id}/run"),
+        ("POST", "/api/rooms/{room_id}/periods"),
         ("GET", "/api/installed-agents/{agent_id}/export/plan"),
         # Answering a waiting question. One of its three kinds — a permission
         # escalation — is an asyncio.Event inside the ENGINE process, so the

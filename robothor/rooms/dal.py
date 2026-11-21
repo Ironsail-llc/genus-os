@@ -34,7 +34,7 @@ from robothor.rooms.models import (
 )
 
 if TYPE_CHECKING:
-    from datetime import date
+    from datetime import date, datetime
 
 __all__ = [
     "accept_task",
@@ -46,9 +46,12 @@ __all__ = [
     "duplicate_room",
     "fail_edition",
     "find_edition_for_period",
+    "get_accounts",
     "get_edition",
     "get_member",
     "get_or_create_task_room",
+    "linked_channels",
+    "list_directory",
     "get_room",
     "link_task",
     "list_all_rooms",
@@ -58,11 +61,16 @@ __all__ = [
     "list_room_tasks",
     "list_rooms_for_user",
     "mark_read",
+    "members_of_rooms",
+    "next_run_at",
     "publish_edition",
+    "reassign_room",
     "remove_member",
     "restore_revision",
+    "room_summary",
     "set_assigned",
     "set_notify",
+    "task_details",
     "unarchive_room",
     "update_definition",
 ]
@@ -439,6 +447,48 @@ def list_all_rooms(tenant_id: str, *, include_archived: bool = False) -> list[Ro
         return [_summary(r) for r in cur.fetchall()]
 
 
+def room_summary(tenant_id: str, room_id: str, user_id: str) -> RoomSummary | None:
+    """One room's summary, archived or not, with ``user_id``'s unread count
+    (0 when they are not a member: an admin's view). None when not in the tenant."""
+    room, user = canonical_uuid(room_id), canonical_uuid(user_id)
+    if room is None:
+        return None
+    query = _SUMMARY_SELECT.format(
+        unread="COALESCE(msg.n + ed.n, 0)",
+        source=(
+            "rooms r LEFT JOIN room_members m ON m.tenant_id = r.tenant_id "
+            "AND m.room_id = r.id AND m.user_id = %(user)s"
+        ),
+        extra=_UNREAD_JOINS.replace("ON TRUE", "ON m.user_id IS NOT NULL"),
+        where="AND r.id = %(room)s",
+    )
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(query, {"tenant": tenant_id, "user": user, "room": room, "archived": True})
+        row = cur.fetchone()
+        return _summary(row) if row else None
+
+
+def members_of_rooms(tenant_id: str, room_ids: list[str]) -> dict[str, list[RoomMember]]:
+    """``room_id -> members`` for many rooms in one query, each list ordered as
+    ``list_members``. Rooms with none (or not in the tenant) are absent."""
+    rooms = [c for c in (canonical_uuid(r) for r in room_ids) if c]
+    if not rooms:
+        return {}
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT * FROM room_members WHERE tenant_id = %s AND room_id = ANY(%s::uuid[]) "
+            "ORDER BY room_id, assigned DESC, created_at, user_id",
+            (tenant_id, rooms),
+        )
+        found: dict[str, list[RoomMember]] = {}
+        for row in cur.fetchall():
+            member = _member(row)
+            found.setdefault(member.room_id, []).append(member)
+        return found
+
+
 def _save_definition(
     cur: Any,
     room: Room,
@@ -589,10 +639,13 @@ def _set_archived(tenant_id: str, room_id: str, archived: bool) -> Room | None:
         return None
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        # Unarchiving also pauses: a room comes back without firing until
+        # someone resumes its schedule on purpose.
         cur.execute(
             "UPDATE rooms SET archived_at = CASE WHEN %s THEN COALESCE(archived_at, now()) "
-            "ELSE NULL END, updated_at = now() WHERE tenant_id = %s AND id = %s RETURNING *",
-            (archived, tenant_id, canonical),
+            "ELSE NULL END, paused = paused OR NOT %s, updated_at = now() "
+            "WHERE tenant_id = %s AND id = %s RETURNING *",
+            (archived, archived, tenant_id, canonical),
         )
         row = cur.fetchone()
         conn.commit()
@@ -604,7 +657,134 @@ def archive_room(tenant_id: str, room_id: str) -> Room | None:
 
 
 def unarchive_room(tenant_id: str, room_id: str) -> Room | None:
+    """Unarchive; the room comes back paused."""
     return _set_archived(tenant_id, room_id, False)
+
+
+def reassign_room(tenant_id: str, room_id: str, user_id: str, *, reassigned_by: str) -> Room:
+    """Hand a room to ``user_id``: they become its only assigned member and its
+    run-as user (its scheduled jobs included). Members who were assigned stay,
+    as shared. Raises ``RoomNotFound`` outside the tenant."""
+    user = _required_uuid(user_id, "user_id")
+    by = _required_uuid(reassigned_by, "reassigned_by")
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        room = _locked_room(cur, tenant_id, room_id)
+        cur.execute(
+            "UPDATE room_members SET assigned = FALSE, updated_at = now() "
+            "WHERE tenant_id = %s AND room_id = %s AND assigned AND user_id <> %s",
+            (tenant_id, room.id, user),
+        )
+        cur.execute(
+            """INSERT INTO room_members (tenant_id, room_id, user_id, assigned, added_by)
+               VALUES (%s, %s, %s, TRUE, %s)
+               ON CONFLICT (tenant_id, room_id, user_id)
+               DO UPDATE SET assigned = TRUE, updated_at = now()""",
+            (tenant_id, room.id, user, by),
+        )
+        cur.execute(
+            "UPDATE user_cronjobs SET run_as_user_id = %s, updated_at = now() "
+            "WHERE tenant_id = %s AND room_id = %s",
+            (user, tenant_id, room.id),
+        )
+        cur.execute(
+            "UPDATE rooms SET run_as_user_id = %s, updated_at = now() "
+            "WHERE tenant_id = %s AND id = %s RETURNING *",
+            (user, tenant_id, room.id),
+        )
+        moved = _room(cur.fetchone())
+        conn.commit()
+        return moved
+
+
+def next_run_at(tenant_id: str, room_id: str) -> datetime | None:
+    """When the room's schedule fires next: its earliest enabled job. None
+    when it has none, or the room is paused or archived."""
+    room = canonical_uuid(room_id)
+    if room is None:
+        return None
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT MIN(j.next_run_at) AS next FROM user_cronjobs j JOIN rooms r "
+            "ON r.tenant_id = j.tenant_id AND r.id = j.room_id "
+            "WHERE j.tenant_id = %s AND j.room_id = %s AND j.enabled "
+            "AND NOT r.paused AND r.archived_at IS NULL",
+            (tenant_id, room),
+        )
+        row = cur.fetchone()
+        return row["next"] if row else None
+
+
+# ─── accounts ────────────────────────────────────────────────────────────
+
+
+def get_accounts(tenant_id: str, user_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """``user_id -> {id, display_name, role, status}`` for the accounts of
+    ``tenant_id`` among ``user_ids``. Another tenant's account is absent."""
+    users = sorted({c for c in (canonical_uuid(u) for u in user_ids) if c})
+    if not users:
+        return {}
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT id, display_name, role, status FROM user_accounts "
+            "WHERE tenant_id = %s AND id = ANY(%s::uuid[])",
+            (tenant_id, users),
+        )
+        return {str(r["id"]): {**dict(r), "id": str(r["id"])} for r in cur.fetchall()}
+
+
+def list_directory(tenant_id: str) -> list[dict[str, str]]:
+    """``[{id, display_name}]`` of the tenant's ACTIVE accounts, by name: who a
+    workspace can be shared with. No email, no role."""
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT id, display_name FROM user_accounts WHERE tenant_id = %s "
+            "AND status = 'active' ORDER BY lower(display_name), id",
+            (tenant_id,),
+        )
+        return [{"id": str(r["id"]), "display_name": r["display_name"]} for r in cur.fetchall()]
+
+
+def linked_channels(tenant_id: str, user_id: str) -> list[str]:
+    """The channels ``user_id`` has a live (unrevoked) identity on, sorted."""
+    user = canonical_uuid(user_id)
+    if user is None:
+        return []
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT DISTINCT channel FROM user_channel_identities WHERE tenant_id = %s "
+            "AND user_id = %s AND revoked_at IS NULL ORDER BY channel",
+            (tenant_id, user),
+        )
+        return [str(r["channel"]) for r in cur.fetchall()]
+
+
+def task_details(tenant_id: str, task_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """``task_id -> {title, status, assignee_id}`` for the tenant's live CRM tasks.
+    ``assignee_id`` is the task's ``assignee_id``, else ``assigned_to_agent`` when
+    that is a UUID (a person's account), else None."""
+    tasks = [c for c in (canonical_uuid(t) for t in task_ids) if c]
+    if not tasks:
+        return {}
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT id, title, status, assignee_id, assigned_to_agent FROM crm_tasks "
+            "WHERE tenant_id = %s AND id = ANY(%s::uuid[]) AND deleted_at IS NULL",
+            (tenant_id, tasks),
+        )
+        return {
+            str(r["id"]): {
+                "title": r["title"],
+                "status": r["status"] or "TODO",
+                "assignee_id": _s(r["assignee_id"]) or canonical_uuid(r["assigned_to_agent"]),
+            }
+            for r in cur.fetchall()
+        }
 
 
 # ─── members ─────────────────────────────────────────────────────────────
