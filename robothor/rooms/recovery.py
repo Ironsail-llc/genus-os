@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import threading
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -86,7 +85,9 @@ def live_edition_ids() -> frozenset[str]:
 
 
 def _boot() -> datetime | None:
-    raw = os.environ.get("ROBOTHOR_DAEMON_START_TS")
+    from robothor.settings import get_settings
+
+    raw = get_settings().engine.daemon_start_ts
     if not raw:
         return None
     try:
