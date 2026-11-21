@@ -275,8 +275,13 @@ def save_message(
     content: str,
     channel: str = "telegram",
     tenant_id: str = DEFAULT_TENANT,
+    extras: dict[str, Any] | None = None,
 ) -> int | None:
     """Save a single message (used for system injections). Returns the message id.
+
+    ``extras`` are additive fields merged into the stored message (a workspace
+    email receipt carries ``kind`` and ``receipt``). A message with extras is
+    not the turn's reply, so it never takes the turn's published editions.
 
     Redacted for the reason ``save_exchange`` is: this writes ``chat_messages``,
     which outlives the session, reaches support bundles, and is read by
@@ -286,8 +291,9 @@ def save_message(
     from robothor.secrets.redaction import redact
 
     content = redact(content)
-    payload: dict[str, Any] = {"role": role, "content": content}
-    edition_ids = _take_room_turn_editions(tenant_id, session_key) if role == "assistant" else []
+    payload: dict[str, Any] = {**(extras or {}), "role": role, "content": content}
+    take = role == "assistant" and extras is None
+    edition_ids = _take_room_turn_editions(tenant_id, session_key) if take else []
     if edition_ids:
         payload["edition_id"] = edition_ids[-1]
     with get_connection() as conn:

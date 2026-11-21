@@ -297,6 +297,8 @@ ROOM_TOOLS = frozenset(
         "room_task_accept",
         "room_task_dismiss",
         "room_open_task",
+        # Proposes an email for the person to approve; never sends.
+        "room_propose_email",
     }
 )
 

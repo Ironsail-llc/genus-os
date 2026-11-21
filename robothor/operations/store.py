@@ -636,6 +636,11 @@ class Operations:
             row = cur.fetchone()
             return self._lease(cur, row, lease_seconds) if row else None
 
+    def expire_leases(self) -> None:
+        """Move executions whose lease ran out to ``unknown`` (never ready again)."""
+        with self.transaction() as cur:
+            self._expire_leases(cur)
+
     def _expire_leases(self, cur: Any) -> None:
         cur.execute(
             "UPDATE operation_actions SET status='unknown' WHERE tenant_id=%s "

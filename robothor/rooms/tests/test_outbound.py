@@ -185,7 +185,7 @@ def test_a_members_approved_email_is_sent_once_with_a_receipt_in_the_workspace(m
     assert message["To"] == ", ".join(TO)
     assert message["Cc"] == ", ".join(CC)
     assert message["Subject"] == "Renewal follow-up"
-    assert message.get_content().strip() == "Hello,\nShall we renew?"
+    assert message.get_content().replace("\r\n", "\n").strip() == "Hello,\nShall we renew?"
     action = Operations(mail.tenant).get_action(proposed.action_id)
     assert action["status"] == "completed"
     assert action["receipt"]["id"] == "msg-1"

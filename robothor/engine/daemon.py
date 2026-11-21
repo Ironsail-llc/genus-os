@@ -30,6 +30,7 @@ from robothor.engine.config import EngineConfig
 from robothor.engine.health import serve_health, validate_engine_auth_configuration
 from robothor.engine.hooks import EventHooks
 from robothor.engine.lanes import install_lane_executor
+from robothor.engine.room_outbound import start_room_outbound
 from robothor.engine.runner import AgentRunner
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.scheduler import CronScheduler
@@ -1587,7 +1588,7 @@ async def main() -> int:
 
     scan = await _recover_scan_and_restore(runner, config, clock)
 
-    _spawn_mcp_prewarm()
+    _spawn_background_starts()
 
     _init_fleet_capacity(config)
 
@@ -1904,6 +1905,13 @@ async def _stop_coding_jobs() -> None:
             await manager.shutdown()
     except Exception as e:  # noqa: BLE001 - shutdown continues regardless
         logger.debug("Coding job shutdown failed: %s", e)
+
+
+def _spawn_background_starts() -> None:
+    """Background work started once at boot, never awaited."""
+    _spawn_mcp_prewarm()
+    # Approved workspace emails: listener and sweep (robothor/engine/room_outbound.py).
+    start_room_outbound()
 
 
 def _spawn_mcp_prewarm() -> None:

@@ -2165,6 +2165,31 @@ _ROOM_TASK_SCHEMAS: dict[str, dict[str, Any]] = {
         {"room_id": _ROOM_ID, "task_id": _ROOM_TASK_ID},
         ["room_id", "task_id"],
     ),
+    "room_propose_email": _room_tool(
+        "room_propose_email",
+        "Draft an email for the person to approve, from their own conversation in a task "
+        "workspace whose task is assigned to them. Nothing is sent by this tool: it proposes "
+        "the exact email, and it is sent once, from the company's assistant mailbox with "
+        "replies going to the person, only after they approve it. Show the person the whole "
+        "draft (to, cc, subject, body) first, then tell them it is waiting for their approval. "
+        "No attachments." + _ROOM_LINK_RULE,
+        {
+            "room_id": _ROOM_ID,
+            "to": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Recipient email addresses, plain (name@example.com)",
+            },
+            "cc": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional copy recipients, plain addresses",
+            },
+            "subject": {"type": "string", "description": "One line"},
+            "body": {"type": "string", "description": "Plain text"},
+        },
+        ["room_id", "to", "subject", "body"],
+    ),
     "room_open_task": _room_tool(
         "room_open_task",
         "Open a CRM task as a workspace to work it with an agent: the task's workspace is "
