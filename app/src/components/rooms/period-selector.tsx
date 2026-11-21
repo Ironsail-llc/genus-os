@@ -5,7 +5,8 @@ import { CalendarRange, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { RoomSlotContext } from "@/components/rooms/room-slots";
 import { refusalText } from "@/components/rooms/controls-shared";
-import { editionError, useEditionArrival, type EditionRequest } from "@/components/rooms/use-edition-watch";
+import { editionError, seedEditionWatch, useEditionArrival, type EditionRequest } from "@/components/rooms/use-edition-watch";
+import { useAppQueryClient } from "@/lib/query/query-client";
 import { requestPeriod } from "@/lib/rooms/api";
 import { formatPeriod } from "@/lib/rooms/format";
 import {
@@ -59,6 +60,7 @@ export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
   const tz = settingString(room.settings, "tz") ?? "UTC";
   const defaultGrain = settingString(room.settings, "default_grain", "defaultGrain");
 
+  const client = useAppQueryClient();
   const [open, setOpen] = useState(false);
   const [grain, setGrain] = useState<Grain>("week");
   const [anchor, setAnchor] = useState("");
@@ -143,9 +145,9 @@ export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
         setError(`The edition for ${formatPeriod(range.start, range.end)} could not be built${editionError(edition) ? `: ${editionError(edition)}` : "."}`);
         return;
       }
+      seedEditionWatch(client, room.id, edition);
       setPending({ request: { key: Date.now(), id: edition.id, afterSeq: 0 }, range });
       setOpen(false);
-      if (edition.status === "published") refresh();
     } catch (err) {
       setError(refusalText(err, "ask for that period"));
     } finally {
@@ -158,14 +160,23 @@ export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
 
   return (
     <div className="relative flex flex-wrap items-center justify-end gap-2" ref={root}>
-      {pending && arrival.waiting && (
+      {pending && (arrival.waiting || arrival.timedOut) && (
         <span
           className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
           aria-live="polite"
           data-testid="period-status"
         >
-          <Loader2 className="size-3.5 animate-spin" aria-hidden />
-          Building {formatPeriod(pending.range.start, pending.range.end)}…
+          {arrival.timedOut ? (
+            <>
+              {formatPeriod(pending.range.start, pending.range.end)} is still building. Check back shortly: it will
+              be listed under past editions when it is ready.
+            </>
+          ) : (
+            <>
+              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              Building {formatPeriod(pending.range.start, pending.range.end)}…
+            </>
+          )}
         </span>
       )}
       {shownError && !open && (

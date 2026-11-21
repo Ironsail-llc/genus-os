@@ -160,6 +160,34 @@ describe("run now (B6, A5)", () => {
     expect(screen.getByTestId("room-run-now")).toBeEnabled();
   });
 
+  it("stops waiting for a run after a bounded time and re-enables Run now", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    bridge.on("POST", `/rooms/${REPORT_ID}/run`, () => reply(edition({ id: "e-slow", seq: 3, status: "building" })));
+    bridge.on("GET", `/rooms/${REPORT_ID}/editions/e-slow`, () => reply(edition({ id: "e-slow", seq: 3, status: "building" })));
+    header("shared");
+    fireEvent.click(screen.getByTestId("room-run-now"));
+    expect(await screen.findByTestId("room-run-status")).toHaveTextContent(/running/i);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+    });
+    expect(screen.getByTestId("room-run-status")).toHaveTextContent(/still running.*check back/i);
+    expect(screen.getByTestId("room-run-now")).toBeEnabled();
+  });
+
+  it("shows a run's published edition by id even when the room's list never includes it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const done = edition({ id: "e-done", seq: 3, title: "Week 48" });
+    bridge.on("POST", `/rooms/${REPORT_ID}/run`, () => reply({ ...done, status: "building" }));
+    bridge.on("GET", `/rooms/${REPORT_ID}/editions/e-done`, () => reply(done));
+    const { client } = header("shared");
+    client.setQueryData(["rooms", REPORT_ID, "editions"], []);
+    fireEvent.click(screen.getByTestId("room-run-now"));
+    // The edition goes into the room's editions, where the room view pins from.
+    await waitFor(() =>
+      expect((client.getQueryData(["rooms", REPORT_ID, "editions"]) as Edition[] | undefined)?.map((e) => e.id)).toContain("e-done"),
+    );
+  });
+
   it("still runs a paused report", async () => {
     bridge.on("POST", `/rooms/${REPORT_ID}/run`, () => reply(edition({ id: "e-run", status: "building" })));
     header("assigned", { paused: true });
