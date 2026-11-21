@@ -373,27 +373,63 @@ def test_an_approval_that_expires_before_delivery_is_settled_with_a_receipt(mail
     assert "expired" in note["receipt"]["error"]
 
 
-def test_a_receipt_that_could_not_be_posted_is_not_recorded_as_written(mail, monkeypatch):
+def test_a_receipt_read_under_the_wrong_scope_is_not_recorded_as_written(mail, monkeypatch):
+    """A room read that was not bound to the action's tenant proves nothing:
+    the receipt stays owed and the next sweep posts it."""
     from robothor.rooms import dal, outbound
 
     room = bobs_room(mail)
     proposed = approved(mail, room)
-    real = dal.get_room
+    real, scope = dal.get_room, outbound.effective_tenant
     monkeypatch.setattr(dal, "get_room", lambda tenant_id, room_id: None)
+    monkeypatch.setattr(outbound, "effective_tenant", lambda: "some-other-tenant")
 
     assert outbound.deliver(mail.tenant, proposed.action_id) == "sent"
     assert notes(mail, room) == []
-    mail.cur.execute(
-        "SELECT 1 FROM operation_audit WHERE entity_id = %s AND event = 'room.email.noted'",
-        (proposed.action_id,),
-    )
-    assert mail.cur.fetchone() is None
+    assert _noted(mail, proposed.action_id) == []
 
     monkeypatch.setattr(dal, "get_room", real)
+    monkeypatch.setattr(outbound, "effective_tenant", scope)
     outbound.sweep(mail.tenant)
     [note] = notes(mail, room)
     assert note["receipt"]["status"] == "sent"
     assert len(mail.sent) == 1
+
+
+def _noted(db, action_id: str) -> list[dict[str, Any]]:
+    db.cur.execute(
+        "SELECT detail FROM operation_audit WHERE entity_id = %s AND event = 'room.email.noted'",
+        (action_id,),
+    )
+    return [r[0] for r in db.cur.fetchall()]
+
+
+def test_a_workspace_that_is_really_gone_settles_its_receipt_once(mail, caplog):
+    """After a tenant move the rooms leave and the ledger stays: on a healthy
+    scoped read a missing workspace is terminal, logged once and settled, so
+    the sweep stops owing the receipt."""
+    import logging
+
+    from robothor.rooms import outbound
+
+    room = bobs_room(mail)
+    proposed = propose(mail, room, bobs_turn(mail, room))
+    mail.cur.execute(
+        "UPDATE operation_actions SET expires_at = now() - interval '1 minute' WHERE id = %s",
+        (proposed.action_id,),
+    )
+    mail.cur.execute("DELETE FROM rooms WHERE id = %s", (room.id,))
+
+    with caplog.at_level(logging.WARNING, logger="robothor.rooms.outbound"):
+        outbound.sweep(mail.tenant)
+        outbound.sweep(mail.tenant)
+        outbound.sweep(mail.tenant)
+
+    assert _noted(mail, proposed.action_id) == [
+        {"message_id": None, "reason": "workspace not found"}
+    ]
+    warnings = [r for r in caplog.records if "workspace was not found" in r.getMessage()]
+    assert len(warnings) == 1
 
 
 def test_another_tenants_engine_leaves_the_email_alone(mail):
