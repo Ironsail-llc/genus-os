@@ -239,7 +239,7 @@ def _normalised(text: str) -> str:
 
 def _live(text: str) -> str | None:
     from robothor.engine.chunking import _MARKER_PREFIXES
-    from robothor.engine.hooks import _BOUNDARY_CLOSE
+    from robothor.engine.untrusted import _BOUNDARY_CLOSE
 
     for form in (text, _normalised(text)):
         for prefix in (*_MARKER_PREFIXES, "[PLAN_READY]"):
