@@ -108,15 +108,8 @@ async function setupMocks(page: Page, { access, role = "member" }: Options) {
     }),
   );
   await page.route("**/api/chat/history*", (route) => json(route, { messages: [], hasMore: false }));
-  await page.route("**/api/bridge/api/users", (route) =>
-    json(route, {
-      users: [
-        { id: "u-alice", email: "alice@example.com", display_name: "Alice", status: "active" },
-        { id: "u-bob", email: "bob@example.com", display_name: "Bob", status: "active" },
-        { id: "u-carol", email: "carol@example.com", display_name: "Carol", status: "active" },
-      ],
-    }),
-  );
+
+
   await page.route("**/api/bridge/api/rooms**", (route) => {
     const req = route.request();
     const url = new URL(req.url());
@@ -129,6 +122,9 @@ async function setupMocks(page: Page, { access, role = "member" }: Options) {
       return json(route, { rooms: [{ ...detail("admin", rev), members: detail("admin").members }] });
     }
     if (path === "") return json(route, { rooms: [SUMMARY] });
+    if (path === "/directory") {
+      return json(route, { users: [ { userId: "u-alice", displayName: "Alice" }, { userId: "u-bob", displayName: "Bob" }, { userId: "u-carol", displayName: "Carol" } ] });
+    }
     if (path === `/${ROOM}` && method === "GET") return json(route, detail(access, rev));
     if (path === `/${ROOM}` && method === "PATCH") {
       const changes = (body as { changes: Record<string, unknown> }).changes;

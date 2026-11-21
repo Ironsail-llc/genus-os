@@ -104,6 +104,12 @@ describe("header actions by access (G6)", () => {
     expect(within(menu).queryByTestId("room-menu-unarchive")).toBeNull();
   });
 
+  it("binds the archived rule like the room view does", () => {
+    const ctx = slotCtx({ access: "admin", archived: true });
+    expect(ctx.can("reassign")).toBe(false);
+    expect(ctx.can("duplicate")).toBe(true);
+  });
+
   it("lets an admin restore an archived workspace", async () => {
     bridge.on("POST", `/rooms/${REPORT_ID}/unarchive`, room({ archived: false, paused: true }));
     const { ctx } = header("admin", { archived: true });
@@ -131,6 +137,27 @@ describe("run now (B6, A5)", () => {
     rerender(<RoomHeaderActions ctx={next} />);
     await waitFor(() => expect(next.showEdition).toHaveBeenCalledWith(published));
     expect(screen.queryByTestId("room-run-status")).toBeNull();
+  });
+
+  it("reads the editions again while a run with no named edition is waiting, and finishes on the next one", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    bridge.on("POST", `/rooms/${REPORT_ID}/run`, () => reply({ ok: true }, 202));
+    const { ctx, rerender } = header("shared");
+    fireEvent.click(screen.getByTestId("room-run-now"));
+    expect(await screen.findByTestId("room-run-status")).toBeInTheDocument();
+    expect(ctx.refresh).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    // No event arrived (the stream may be down): the list is read again.
+    expect(ctx.refresh).toHaveBeenCalled();
+
+    const newer = edition({ id: "e-next", seq: 3, title: "Week 48" });
+    const next = { ...ctx, editions: [newer, ...ctx.editions] };
+    rerender(<RoomHeaderActions ctx={next} />);
+    await waitFor(() => expect(next.showEdition).toHaveBeenCalledWith(newer));
+    expect(screen.queryByTestId("room-run-status")).toBeNull();
+    expect(screen.getByTestId("room-run-now")).toBeEnabled();
   });
 
   it("still runs a paused report", async () => {
@@ -228,7 +255,7 @@ describe("drawers open from the header", () => {
   });
 
   it("opens the share dialog", async () => {
-    bridge.on("GET", "/users", { users: [] });
+    bridge.on("GET", "/rooms/directory", { users: [] });
     header("assigned");
     fireEvent.click(screen.getByTestId("room-share-open"));
     expect(await screen.findByTestId("share-dialog")).toBeInTheDocument();

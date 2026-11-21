@@ -34,12 +34,7 @@ beforeEach(() => {
   sessionRole = "admin";
   bridge = mockBridge();
   bridge.on("GET", "/rooms?scope=all", { rooms: ROWS });
-  bridge.on("GET", "/users", {
-    users: [
-      { id: "u-alice", email: "alice@example.com", display_name: "Alice", status: "active" },
-      { id: "u-bob", email: "bob@example.com", display_name: "Bob", status: "active" },
-    ],
-  });
+  bridge.on("GET", "/rooms/directory", { users: [ { userId: "u-alice", displayName: "Alice" }, { userId: "u-bob", displayName: "Bob" }, { userId: "u-carol", displayName: "Carol" } ] });;
 });
 afterEach(() => vi.unstubAllGlobals());
 

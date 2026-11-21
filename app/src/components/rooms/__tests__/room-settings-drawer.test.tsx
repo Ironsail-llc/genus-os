@@ -177,14 +177,43 @@ describe("settings drawer: an assigned user", () => {
     expect(bridge.calls("PATCH", `/rooms/${REPORT_ID}`)).toHaveLength(1);
   });
 
-  it("reloads the form from a newer revision of the room", () => {
+  it("reloads an untouched form from a newer revision of the room", () => {
     const { rerender } = drawer();
-    fireEvent.change(field(/^title/i), { target: { value: "Mine" } });
     const newer = room({ ...REPORT, rev: 4, title: "Changed by Dana" });
     rerender(
       <RoomSettingsDrawer room={newer} can={(a) => can("assigned", a)} open onOpenChange={vi.fn()} onSaved={vi.fn()} onDuplicate={vi.fn()} />,
     );
     expect(field(/^title/i).value).toBe("Changed by Dana");
+  });
+
+  it("keeps unsaved edits when someone else saves, says so, and saves nothing over them", async () => {
+    const { rerender, onSaved } = drawer();
+    fireEvent.change(field(/^title/i), { target: { value: "Mine" } });
+    const newer = room({ ...REPORT, rev: 4, title: "Changed by Dana" });
+    const props = { can: (a: Parameters<typeof can>[1]) => can("assigned", a), open: true, onOpenChange: vi.fn(), onSaved, onDuplicate: vi.fn() };
+    rerender(<RoomSettingsDrawer room={newer} {...props} />);
+    expect(field(/^title/i).value).toBe("Mine");
+    const conflict = screen.getByTestId("settings-conflict");
+    expect(conflict).toHaveTextContent(/changed since you opened/i);
+    expect(screen.getByTestId("settings-save")).toBeDisabled();
+    // Reload takes the newer revision into the form.
+    fireEvent.click(within(conflict).getByRole("button", { name: /reload/i }));
+    expect(field(/^title/i).value).toBe("Changed by Dana");
+    expect(screen.queryByTestId("settings-conflict")).toBeNull();
+    expect(bridge.calls("PATCH", `/rooms/${REPORT_ID}`)).toHaveLength(0);
+  });
+
+  it("takes its own saved revision into the form without a conflict", async () => {
+    bridge.on("PATCH", `/rooms/${REPORT_ID}`, room({ ...REPORT, rev: 4, title: "Weekly revenue" }));
+    const { rerender, onSaved } = drawer();
+    fireEvent.change(field(/^title/i), { target: { value: "Weekly revenue" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    rerender(
+      <RoomSettingsDrawer room={room({ ...REPORT, rev: 4, title: "Weekly revenue" })} can={(a) => can("assigned", a)} open onOpenChange={vi.fn()} onSaved={onSaved} onDuplicate={vi.fn()} />,
+    );
+    expect(screen.queryByTestId("settings-conflict")).toBeNull();
+    expect(field(/^title/i).value).toBe("Weekly revenue");
   });
 
   it("gives an agent workspace only a name and instructions (F2)", () => {

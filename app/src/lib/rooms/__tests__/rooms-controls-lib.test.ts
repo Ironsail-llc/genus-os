@@ -225,20 +225,20 @@ describe("rooms API: the controls' requests", () => {
     expect(lastCall().url).toBe("/api/bridge/api/rooms?scope=all");
   });
 
-  it("lists the company's active people to share with", async () => {
+  it("lists the company's people from the workspace directory, which members may read", async () => {
     answer = () =>
       reply({
         users: [
-          { id: "u-alice", email: "alice@example.com", display_name: "Alice", role: "member", status: "active" },
-          { id: "u-bob", email: "bob@example.com", display_name: "", role: "member", status: "active" },
-          { id: "u-gone", email: "gone@example.com", display_name: "Gone", role: "member", status: "disabled" },
+          { userId: "u-alice", displayName: "Alice" },
+          { userId: "u-bob", displayName: "" },
+          { displayName: "No id" },
         ],
       });
     expect(await fetchPeople()).toEqual([
-      { userId: "u-alice", displayName: "Alice", email: "alice@example.com" },
-      { userId: "u-bob", displayName: "bob@example.com", email: "bob@example.com" },
+      { userId: "u-alice", displayName: "Alice" },
+      { userId: "u-bob", displayName: "u-bob" },
     ]);
-    expect(lastCall().url).toBe("/api/bridge/api/users");
+    expect(lastCall().url).toBe("/api/bridge/api/rooms/directory");
   });
 
   it("reads and saves this user's own notification choices", async () => {

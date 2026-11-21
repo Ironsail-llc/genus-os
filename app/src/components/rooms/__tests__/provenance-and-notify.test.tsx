@@ -85,6 +85,12 @@ describe("notification choices (C7)", () => {
     withClient(<RoomNotifyDialog roomId={REPORT_ID} open onOpenChange={vi.fn()} />);
     expect(await screen.findByTestId("notify-no-channels")).toBeInTheDocument();
     expect(screen.queryByTestId("notify-channel-telegram")).toBeNull();
+    // A choice for a channel that is not linked now is kept, not erased, on save.
+    bridge.on("PUT", `/rooms/${REPORT_ID}/notify`, (body: unknown) => reply(body));
+    fireEvent.click(screen.getByTestId("notify-save"));
+    await waitFor(() =>
+      expect(bridge.calls("PUT", `/rooms/${REPORT_ID}/notify`)[0]?.body).toMatchObject({ channels: { telegram: true } }),
+    );
   });
 
   it("mutes, and says the unread badge still shows", async () => {

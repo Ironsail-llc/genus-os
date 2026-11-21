@@ -14,17 +14,11 @@ import { mockBridge, withClient } from "./controls-harness";
 
 let bridge: ReturnType<typeof mockBridge>;
 
-const PEOPLE = {
-  users: [
-    { id: "u-alice", email: "alice@example.com", display_name: "Alice", role: "member", status: "active" },
-    { id: "u-bob", email: "bob@example.com", display_name: "Bob", role: "member", status: "active" },
-    { id: "u-carol", email: "carol@example.com", display_name: "Carol", role: "member", status: "active" },
-  ],
-};
+const PEOPLE = { users: [ { userId: "u-alice", displayName: "Alice" }, { userId: "u-bob", displayName: "Bob" }, { userId: "u-carol", displayName: "Carol" } ] };
 
 beforeEach(() => {
   bridge = mockBridge();
-  bridge.on("GET", "/users", PEOPLE);
+  bridge.on("GET", "/rooms/directory", PEOPLE);
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -98,7 +92,7 @@ describe("share dialog", () => {
   });
 
   it("says plainly when this role cannot list people, and points at the agent", async () => {
-    bridge.on("GET", "/users", () => reply({ detail: "Forbidden" }, 403));
+    bridge.on("GET", "/rooms/directory", () => reply({ detail: "Forbidden" }, 403));
     dialog();
     expect(await screen.findByTestId("share-no-directory")).toHaveTextContent(/ask the agent/i);
   });

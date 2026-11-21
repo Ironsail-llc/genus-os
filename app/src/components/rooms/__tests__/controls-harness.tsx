@@ -73,7 +73,8 @@ export function slotCtx(overrides: Partial<Room> = {}, extra: Partial<RoomSlotCo
   return {
     room: r,
     access,
-    can: (action) => can(access, action),
+    // Bound to the archived flag exactly as `RoomView` binds it.
+    can: (action) => can(access, action, r.archived),
     edition: EDITIONS[0],
     editions: EDITIONS,
     showEdition: vi.fn(),
