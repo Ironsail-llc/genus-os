@@ -350,6 +350,32 @@ describe("ChatPanel in a room", () => {
     });
   }
 
+  for (const when of ["before", "after"] as const) {
+    it(`shows a message as not sent when its send fails while the reader is away (failure ${when} they return)`, async () => {
+      history = [];
+      let answer!: (r: Response) => void;
+      sendReplies.push(() => new Promise<Response>((r) => (answer = r)));
+      const first = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+      await screen.findByTestId("room-chat-empty");
+      await type("Keep this");
+      await waitFor(() => expect(sends).toHaveLength(1));
+      first.unmount();
+
+      const failure = () => answer(reply({ error: "the engine did not confirm this workspace", request_admitted: false }, 502));
+      if (when === "before") await act(async () => failure());
+      render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+      if (when === "after") {
+        await screen.findByTestId("room-chat-empty");
+        await act(async () => failure());
+      }
+      expect(await screen.findByText("Keep this")).toBeInTheDocument();
+      expect(screen.getByTestId("message-note")).toHaveTextContent(/not sent/i);
+      expect(screen.getAllByText("Keep this")).toHaveLength(1);
+      // Shown once, by this panel: nothing is sent again behind the reader's back.
+      expect(sends).toHaveLength(1);
+    });
+  }
+
   describe("a message typed while a queued one is being offered again", () => {
     /** A queued "A", offered again with its answer held; "B" typed meanwhile. */
     async function typeDuringRetry(retryAnswer: Promise<Response>) {

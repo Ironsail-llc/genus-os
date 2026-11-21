@@ -319,4 +319,129 @@ describe("reconciling a room's transcript with its outbox", () => {
       }
     });
   }
+
+  it("keeps a send that failed after its panel left, until a panel has shown it as not sent", async () => {
+    let fail!: (r: SendResult) => void;
+    const box = roomOutbox(ROOM);
+    const detach = box.attach(() => new Promise<SendResult>((r) => (fail = r)));
+    const a = box.enqueue("A");
+    await settle();
+    detach();
+    fail({ outcome: "failed" });
+    await settle();
+    expect(box.state().items).toEqual([]);
+    expect(box.state().unsent.map((i) => i.id)).toEqual([a.id]);
+    box.acknowledge([a.id]);
+    expect(box.state().unsent).toEqual([]);
+  });
+
+  it("does not keep a failed send whose own panel is still there to show the error", async () => {
+    let fail!: (r: SendResult) => void;
+    const box = roomOutbox(ROOM);
+    box.attach(() => new Promise<SendResult>((r) => (fail = r)));
+    box.enqueue("A");
+    await settle();
+    fail({ outcome: "failed" });
+    await settle();
+    expect(box.state().unsent).toEqual([]);
+  });
+
+  it("property: no message is ever lost silently, whatever fails while the reader is away", async () => {
+    const ACTIONS = ["type", "type", "ok", "busy", "fail", "fail", "freed", "elapse", "navigate", "history", "history"] as const;
+    for (let seed = 1; seed <= 300; seed++) {
+      forgetRoomOutboxes();
+      const rand = prng(seed * 13 + 5);
+      const typed: string[] = [];
+      const storedRows: RoomRow[] = [];
+      const pending: Array<Pending & { by: Set<string> }> = [];
+      // Messages a panel has shown as not sent (its own error, or the outbox's unsent list).
+      const shownNotSent = new Set<string>();
+      let rendered: RoomRow[] = [];
+      let startedHere = new Set<string>();
+      let mounted = true;
+      const makeSender = (mine: Set<string>) => (item: OutboxItem) =>
+        new Promise<SendResult>((resolve) => {
+          mine.add(item.id);
+          pending.push({
+            item,
+            by: mine,
+            resolve: (r) => {
+              if (r.outcome === "ok") storedRows.push(stored(storedRows.length + 1, item.text, item.id));
+              resolve(r);
+            },
+          });
+        });
+      let detach = roomOutbox(ROOM).attach(makeSender(startedHere));
+      const draw = () => {
+        const box = roomOutbox(ROOM);
+        const merged = mergeRoomRows(rendered, storedRows);
+        const extra = pendingBubbles(box.state(), merged, startedHere).map((i) => local(i.id, i.text));
+        rendered = [...merged, ...extra];
+        // The panel draws what failed while no panel of its own could say so, then acknowledges it.
+        const unsent = box.state().unsent;
+        for (const item of unsent) {
+          if (!rendered.some((r) => r.id === item.id)) rendered = [...rendered, { ...local(item.id, item.text), note: "Not sent" }];
+          shownNotSent.add(item.text);
+        }
+        if (unsent.length) box.acknowledge(unsent.map((i) => i.id));
+      };
+      const trace: string[] = [];
+      const steps = 10 + Math.floor(rand() * 40);
+      for (let step = 0; step < steps; step++) {
+        const action = ACTIONS[Math.floor(rand() * ACTIONS.length)];
+        trace.push(action);
+        if (action === "type") {
+          const text = `m${typed.length}`;
+          typed.push(text);
+          const item = roomOutbox(ROOM).enqueue(text);
+          if (mounted) rendered = [...rendered, local(item.id, text)];
+        } else if (action === "ok" || action === "busy") {
+          pending.shift()?.resolve(action === "ok" ? { outcome: "ok" } : { outcome: "busy", answering: "Bob" });
+        } else if (action === "fail") {
+          const p = pending.shift();
+          // Its own panel, still open, shows the error itself.
+          if (p && mounted && p.by === startedHere) shownNotSent.add(p.item.text);
+          p?.resolve({ outcome: "failed" });
+        } else if (action === "freed") {
+          roomOutbox(ROOM).roomFreed();
+        } else if (action === "elapse") {
+          await vi.advanceTimersByTimeAsync(ROOM_BUSY_RETRY_MS);
+        } else if (action === "navigate") {
+          detach();
+          rendered = [];
+          startedHere = new Set();
+          mounted = false;
+        } else if (!mounted) {
+          mounted = true;
+          rendered = [];
+          draw();
+          detach = roomOutbox(ROOM).attach(makeSender(startedHere));
+        } else {
+          draw();
+        }
+        await settle();
+        if (mounted) draw();
+        const contents = rendered.map((r) => r.content);
+        expect(new Set(contents).size, `seed ${seed}: ${trace.join(" ")}`).toBe(contents.length);
+      }
+      if (!mounted) {
+        mounted = true;
+        rendered = [];
+        draw();
+        detach = roomOutbox(ROOM).attach(makeSender(startedHere));
+      }
+      for (let guard = 0; guard < typed.length * 3 + 5 && (pending.length || roomOutbox(ROOM).state().items.length); guard++) {
+        roomOutbox(ROOM).roomFreed();
+        await settle();
+        pending.shift()?.resolve({ outcome: "ok" });
+        await settle();
+      }
+      draw();
+      // Every message arrived, or a panel said it was not sent. None vanished.
+      const arrived = new Set(storedRows.map((r) => r.content));
+      const lost = typed.filter((t) => !arrived.has(t) && !shownNotSent.has(t));
+      expect(lost, `seed ${seed}: ${trace.join(" ")}`).toEqual([]);
+      detach();
+    }
+  });
 });
