@@ -67,6 +67,8 @@ interface ChatMessage {
   editionId?: string;
   /** In a room: the outbox entry a stored message was sent from. */
   clientId?: string;
+  /** In a room: refused before admission, so never matched to a stored row. */
+  rejected?: boolean;
   /** In a room: the components this turn rendered, drawn under the reply. */
   renders?: RenderBlock[];
 }
@@ -1323,9 +1325,12 @@ export function ChatPanel({
     if (!outbox || !historyReady) return;
     return outbox.attach(async (item) => {
       startedHere.current.add(item.id);
-      return (await sendMessageRef.current([item])) ?? { outcome: "failed" };
+      const result = (await sendMessageRef.current([item])) ?? { outcome: "failed" };
+      // Refused here: marked, so no stored row is ever taken for it.
+      setMessages((prev) => roomKit!.markRefused(prev, item.id, result));
+      return result;
     });
-  }, [outbox, historyReady]);
+  }, [outbox, roomKit, historyReady]);
   // A live room message means the room moved on: a refused head is offered again now.
   const lastRefreshKey = useRef(roomRefreshKey);
   useEffect(() => {

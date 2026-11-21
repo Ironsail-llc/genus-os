@@ -430,6 +430,23 @@ describe("ChatPanel in a room", () => {
       expect(screen.getByTestId("message-note")).toHaveTextContent(/not sent/i);
     });
 
+    it("refused in this panel: another member's later same-text message is added beside it, never in its place", async () => {
+      history = [];
+      sendReplies.push(() => reply({ error: "refused", request_admitted: false }, 502));
+      const { rerender } = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+      await screen.findByTestId("room-chat-empty");
+      await type("thanks");
+      await screen.findByText("refused");
+      history = [{ id: 63, role: "user", content: "thanks", authorName: "Bob" }];
+      await act(async () => rerender(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 1 }} />));
+      await waitFor(() => expect(screen.getAllByTestId("message-author").map((a) => a.textContent)).toContain("Bob"));
+      const thanksAuthors = screen
+        .getAllByTestId("message-row")
+        .filter((row) => row.textContent?.includes("thanks"))
+        .map((row) => row.querySelector('[data-testid="message-author"]')?.textContent);
+      expect(thanksAuthors).toEqual(["You", "Bob"]);
+    });
+
     it("another member's later same-text message does not clear it", async () => {
       const { rerender } = await refuseWhileAway();
       history = [{ id: 61, role: "user", content: "thanks", authorName: "Bob" }];
