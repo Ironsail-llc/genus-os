@@ -443,7 +443,7 @@ Two databases on the same instance:
 | `room_revisions` | Every definition a room has had (`{title, instructions, agent_id, settings, schedule}`), numbered; an edit names the revision it read and is refused if it is stale, and a restore writes a new revision. Tenant RLS |
 | `room_editions` | What a room's run published for a period: blocks (dashboard components), suggestions, provenance, status `building`/`published`/`failed`, `preview` for a run only its requester sees, `seq` (build order, the stable number) and `published_seq` (publish order, never on a preview; read marks and unread counts use it). A partial unique index keeps one non-preview `building` row per period, so concurrent requests share a build. Tenant RLS |
 | `room_tasks` | CRM tasks linked to a room (`subject`, `suggestion` or `linked`), and who accepted or dismissed each, once. A suggestion key is unique per room (migration 172). Tenant RLS |
-| `room_member_removals` | Who was removed from a room, by whom (migration 172). Opening a task lets its human assignee join the task's room, never someone removed from it; `add_member` (a person who can share the room) clears the row. Moves with the room. Tenant RLS |
+| `room_member_removals` | Who was removed from a room, by whom (migration 172). Opening a task lets its human assignee join the task's room, never someone removed from it; only an explicit share (`dal.share_member`, from `definition.share_room`) clears the row; a plain `add_member` or a self-join never does. Moves with the room. Tenant RLS |
 
 ### Canonical schema lifecycle
 

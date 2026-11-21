@@ -531,8 +531,9 @@ def share_room(
     if want and target.role not in _STAFF_ROLES:
         raise ValueError(f"{target.display_name or user} is a viewer and cannot be assigned")
     if existing is None:
-        member = dal.add_member(
-            actor.tenant_id, room.id, target.user_id, added_by=actor.user_id, assigned=want
+        # A new member, by an explicit share: this (alone) ends a past removal.
+        member = dal.share_member(
+            actor.tenant_id, room.id, target.user_id, shared_by=actor.user_id, assigned=want
         )
         return ShareOutcome(member, added=True)
     if want == existing.assigned:

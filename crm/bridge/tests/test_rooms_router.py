@@ -1150,6 +1150,72 @@ def test_a_member_removed_from_a_task_room_cannot_rejoin_it(world) -> None:
     assert w.client("carol").get(f"/api/rooms/{room_id}").status_code == 404
 
 
+def test_a_removed_assignee_reopening_the_task_is_not_found_and_stays_removed(world) -> None:
+    """The dashboard's open-task route is not a way back in for the task's own
+    assignee either, and it leaves the record of the removal as it was."""
+    from robothor.rooms import dal
+
+    w = world
+    task = _crm_task(w, "Call Bob back", assignee=w.ids.carol)
+    room_id = w.client("alice").post(f"/api/rooms/from-task/{task}").json()["id"]
+    assert w.client("carol").post(f"/api/rooms/from-task/{task}").status_code == 200
+    assert (
+        w.client("alice").delete(f"/api/rooms/{room_id}/members/{w.ids.carol}").status_code == 200
+    )
+
+    again = w.client("carol").post(f"/api/rooms/from-task/{task}")
+
+    assert again.status_code == 404
+    assert again.json()["detail"]["error"] == "not_found"
+    assert dal.get_member(w.db.tenant, room_id, w.ids.carol) is None
+    w.db.cur.execute(
+        "SELECT removed_by FROM room_member_removals WHERE room_id = %s AND user_id = %s",
+        (room_id, w.ids.carol),
+    )
+    assert [str(r[0]) for r in w.db.cur.fetchall()] == [w.ids.alice]
+    assert w.client("carol").get(f"/api/rooms/{room_id}").status_code == 404
+
+
+def test_task_routes_answer_with_the_task_rules_shapes_and_codes(world) -> None:
+    """List, accept and dismiss go through robothor.rooms.tasks: the CRM task
+    gets its assignee, a dismissal resolves it, and every refusal has its code."""
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    first, second = _task(w, "Chase invoice"), _task(w, "Book review")
+    dal.link_task(w.db.tenant, room.id, first, origin="suggestion", suggestion_key="chase")
+    dal.link_task(w.db.tenant, room.id, second, origin="suggestion", suggestion_key="review")
+    bob = w.client("bob")
+
+    accepted = bob.post(f"/api/rooms/{room.id}/tasks/{first}/accept").json()
+    assert set(accepted) == {
+        "taskId", "title", "status", "origin", "editionId", "assignee", "acceptedBy", "dismissed",
+    }  # fmt: skip
+    w.db.cur.execute("SELECT assignee_id FROM crm_tasks WHERE id = %s", (first,))
+    assert str(w.db.cur.fetchone()[0]) == w.ids.bob
+
+    taken = w.client("alice").post(f"/api/rooms/{room.id}/tasks/{first}/accept")
+    assert taken.status_code == 409
+    assert taken.json()["detail"]["error"] == "already_accepted"
+    assert taken.json()["detail"]["acceptedBy"] == {"userId": w.ids.bob, "displayName": "Bob"}
+    not_dismissable = bob.post(f"/api/rooms/{room.id}/tasks/{first}/dismiss")
+    assert not_dismissable.status_code == 409
+    assert not_dismissable.json()["detail"]["error"] == "already_accepted"
+
+    assert bob.post(f"/api/rooms/{room.id}/tasks/{second}/dismiss").status_code == 200
+    w.db.cur.execute("SELECT resolution FROM crm_tasks WHERE id = %s", (second,))
+    assert w.db.cur.fetchone()[0] == "dismissed"
+    twice = bob.post(f"/api/rooms/{room.id}/tasks/{second}/dismiss")
+    assert twice.status_code == 409 and twice.json()["detail"]["error"] == "already_dismissed"
+    assert [t["taskId"] for t in bob.get(f"/api/rooms/{room.id}/tasks").json()["tasks"]] == [first]
+
+    viewer = w.client("vera").post(f"/api/rooms/{room.id}/tasks/{first}/accept")
+    assert viewer.status_code == 403
+    unlinked = bob.post(f"/api/rooms/{room.id}/tasks/{_task(w)}/accept")
+    assert unlinked.status_code == 404 and unlinked.json()["detail"]["error"] == "not_found"
+
+
 def test_open_a_task_of_another_company_is_404(world) -> None:
     w = world
     w.db.cur.execute(

@@ -46,6 +46,7 @@ from robothor.operations.store import Conflict, NotPermitted, Operations
 from robothor.rooms import approvals, dal
 from robothor.rooms.keys import canonical_uuid
 from robothor.rooms.tasks import TaskPerson
+from robothor.sanitize import sanitize_log
 
 if TYPE_CHECKING:
     from robothor.rooms.access import Actor
@@ -451,7 +452,7 @@ def _note(tenant_id: str, action_id: str, *, error: str | None = None) -> None:
     try:
         _write_note(tenant_id, action_id, error)
     except Exception:
-        logger.exception("could not write the receipt for room email %s", action_id)
+        logger.exception("could not write the receipt for room email %s", sanitize_log(action_id))
 
 
 def _write_note(tenant_id: str, action_id: str, error: str | None) -> None:

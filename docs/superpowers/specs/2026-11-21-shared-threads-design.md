@@ -479,7 +479,7 @@ wrappers. Schema changes are migration 172.
   (title, status, objective, the last 10 history rows, all cleaned as edition
   text is). After that, anyone with access gets the room; the task's human
   assignee joins as assigned unless they were removed (`room_member_removals`,
-  written by `dal.remove_member`, cleared by `dal.add_member`) or the room is
+  written by `dal.remove_member`, cleared only by `dal.share_member` from an explicit share, never by `add_member`) or the room is
   archived; anyone else gets `RoomNotFound`. A viewer cannot create one.
 - **Tools in sub-agents.** `room_task_accept`, `room_task_dismiss` and
   `room_open_task` refuse a run whose `agent_runs` row is a `sub_agent` trigger
