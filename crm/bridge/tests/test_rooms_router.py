@@ -62,7 +62,10 @@ def _fake_definition(monkeypatch: Any, db: Any) -> None:
         tz: str | None = None,
         default_grain: str | None = None,
         share_with: Any = (),
+        agent_known: Any = None,
     ) -> Any:
+        if agent_known is not None and not agent_known(agent_id or "main"):
+            raise definition.InvalidField("no such agent", "agent_id")
         if schedule_text == "every minute":
             raise definition.InvalidSchedule("a room runs at most every 15 minutes")
         if "ignore previous" in (instructions or ""):
@@ -177,6 +180,11 @@ def _wire(db: Any, ids: Any, people: Any, tokens: Any, TestClient: Any, monkeypa
     monkeypatch.setattr("routers.rooms.send_notification", lambda **kw: notices.append(kw) or "n-1")
     engine = AsyncMock(return_value=(202, {"editionId": "e-1", "status": "building"}))
     monkeypatch.setattr("routers.rooms.engine_request", engine)
+    # The acting company's engine answers which agents it has (the create check).
+    fleet = {"manifests": [{"id": "main"}, {"id": "analyst"}], "broken": []}
+    monkeypatch.setattr(
+        "routers._manifest_backend.engine_request", AsyncMock(return_value=(200, fleet))
+    )
     _fake_definition(monkeypatch, db)
 
     return SimpleNamespace(
