@@ -718,3 +718,61 @@ async def test_asking_again_for_an_orphaned_period_starts_a_new_run(rooms_db, mo
     assert edition.id != orphan.id
     assert _status(rooms_db, orphan)[0] == "failed"
     assert len(run.calls) == 1
+
+
+async def test_a_failure_before_the_run_starts_leaves_no_building_row(rooms_db, monkeypatch):
+    room = _report(rooms_db)
+
+    def broken(*_args: Any) -> str:
+        raise RuntimeError("the context read failed")
+
+    monkeypatch.setattr(periods, "context_for_period", broken)
+
+    with pytest.raises(RuntimeError):
+        await request_period(_alice(rooms_db), room.id, "week", None, run_room=FakeRun())
+
+    assert [row[3] for row in _editions(rooms_db, room)] == []
+
+
+async def test_a_caller_cancelled_mid_claim_still_gets_its_run_started(rooms_db, monkeypatch):
+    import time
+
+    room = _report(rooms_db)
+    real_claim = periods._claim
+    run = FakeRun()
+
+    def slow_claim(*args: Any) -> Any:
+        result = real_claim(*args)
+        time.sleep(0.2)  # the row is committed; the caller gives up meanwhile
+        return result
+
+    monkeypatch.setattr(periods, "_claim", slow_claim)
+    caller = asyncio.create_task(
+        request_period(_alice(rooms_db), room.id, "day", _ago(1), run_room=run)
+    )
+    await asyncio.sleep(0.05)
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    await asyncio.sleep(0.3)
+    await _settle()
+
+    assert len(run.calls) == 1
+    assert len(_editions(rooms_db, room)) == 1
+
+
+async def test_a_run_is_tracked_by_the_engines_shutdown_drain(rooms_db):
+    from robothor.engine.task_registry import get_task_registry
+
+    room = _report(rooms_db)
+    gate = asyncio.Event()
+
+    async def blocked(room: Any, edition: Any, *, period: Period, context: str) -> None:
+        await gate.wait()
+
+    await request_period(_alice(rooms_db), room.id, "day", _ago(1), run_room=blocked)
+    tracked = set(get_task_registry()._tasks)
+    gate.set()
+    await _settle()
+
+    assert any(task.get_name().startswith("room-period-") for task in tracked)
