@@ -55,6 +55,11 @@ interface ChatMessage {
   note?: string;
   /** Files that went with a user turn. */
   attachments?: AttachmentSummary[];
+  /** In a room: who wrote it, from history (a message typed here has none). */
+  authorUserId?: string;
+  authorName?: string;
+  /** In a room: the edition this message announced. */
+  editionId?: string;
 }
 
 /** A message typed while a turn ran. `seq` is typing order: queued ones go out in it. */
@@ -68,6 +73,28 @@ const JOINED_NOTE = "Added to the running task";
 const QUEUED_NOTE = "Queued — sends when this reply finishes";
 const STOPPED_NOTE = "Not sent — the task was stopped";
 const DROPPED_NOTE = "May not have reached the task — the connection dropped";
+
+/** A room's agent was answering someone else: what was typed waits, and says for whom. */
+function roomBusyNote(answering: string): string {
+  return answering ? `Queued — answering ${answering}…` : "Queued — the agent is answering someone else…";
+}
+/** How long a message queued behind another member's turn waits before it is offered again. */
+export const ROOM_BUSY_RETRY_MS = 4000;
+const READ_ONLY_NOTICE = "You have view-only access to this workspace, so you can read it but not post.";
+
+/** Which room the panel is pointed at, when it is not the main conversation. */
+export interface ChatRoomTarget {
+  /** The room's id: sent as `room` on every request, never as a session key. */
+  id: string;
+  /** The user may read but not post (a viewer): the composer is shut, and says why. */
+  readOnly?: boolean;
+  /**
+   * Bumped by the room view on each live `room.message` / `room.edition`
+   * event: the panel reads the room's newest messages again (and offers a
+   * queued message again).
+   */
+  refreshKey?: number;
+}
 
 interface ActivePlan {
   plan_id: string;
@@ -107,6 +134,30 @@ function stripResidualMarkers(text: string): string {
   return stripMarkers(text).trim();
 }
 
+/**
+ * The panel's messages with a room's stored page merged in: stored rows not
+ * on screen are added, and a message shown before it was stored (no
+ * `serverId`) takes its stored copy's id and author instead of a second
+ * bubble. Order is the panel's, with new rows after the newest stored one.
+ */
+function mergeStored(prev: ChatMessage[], stored: ChatMessage[]): ChatMessage[] {
+  const shown = new Set(prev.map((m) => m.id));
+  const next = [...prev];
+  const added: ChatMessage[] = [];
+  for (const row of stored) {
+    if (shown.has(row.id)) continue;
+    const local = next.findIndex(
+      (m) => m.serverId === undefined && !m.recovery && m.role === row.role && m.content.trim() === row.content.trim(),
+    );
+    if (local >= 0) {
+      next[local] = { ...next[local], ...row, note: next[local].note, attachments: next[local].attachments ?? row.attachments };
+    } else {
+      added.push(row);
+    }
+  }
+  return added.length || next.some((m, i) => m !== prev[i]) ? [...next, ...added] : prev;
+}
+
 interface ChatPanelProps {
   /** When true, renders in mobile-optimized layout (no duplicate header, labeled controls) */
   mobile?: boolean;
@@ -123,6 +174,13 @@ interface ChatPanelProps {
   onCollapse?: () => void;
   /** A landing quick action opened its view (the shell decides where to show it). */
   onViewOpened?: () => void;
+  /**
+   * Point the panel at a room instead of the main conversation. Absent, the
+   * panel is exactly what it always was. Present, it names the room by id on
+   * every request, offers no agent switcher, plan or deep mode, names each
+   * message's author, and draws the editions messages announced.
+   */
+  room?: ChatRoomTarget;
 }
 
 export function ChatPanel({
@@ -132,7 +190,11 @@ export function ChatPanel({
   docked = false,
   onCollapse,
   onViewOpened,
+  room,
 }: ChatPanelProps) {
+  const roomId = room?.id;
+  const roomReadOnly = Boolean(room?.readOnly);
+  const roomRefreshKey = room?.refreshKey ?? 0;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const recoveryScopes = useRef<Record<string, string>>({});
   const requestScopes = useRef<Record<string, string>>({});
@@ -251,8 +313,25 @@ export function ChatPanel({
   const { notifyConversationUpdate, setRender } = useVisualState();
   const { aiName } = useRuntimeConfig();
 
-  /** `?agent=…`, or nothing at all for the main agent. */
-  const agentQuery = agent ? `?agent=${encodeURIComponent(agent)}` : "";
+  /** `?room=…` in a room, `?agent=…`, or nothing at all for the main agent. */
+  const agentQuery = roomId
+    ? `?room=${encodeURIComponent(roomId)}`
+    : agent ? `?agent=${encodeURIComponent(agent)}` : "";
+  /** The same choice for a request body: `{room}`, `{agent}`, or nothing. */
+  const target = useMemo<{ room?: string; agent?: string }>(
+    () => (roomId ? { room: roomId } : agent ? { agent } : {}),
+    [roomId, agent],
+  );
+  /** What a recovery card needs to find this turn again. */
+  const recoveryFor = useCallback(
+    (requestId: string, scope: string | undefined): ChatRecoveryRequest => ({
+      requestId, agent, scope, ...(roomId ? { room: roomId } : {}),
+    }),
+    [agent, roomId],
+  );
+  // Queued behind another member's turn in this room (409 room_busy).
+  const [roomBusy, setRoomBusy] = useState<string | null>(null);
+  const busyQueue = useRef<QueuedFollowup[]>([]);
 
   /** Whether the listing left out the agent it named as the default.
    *
@@ -375,6 +454,8 @@ export function ChatPanel({
    * — and no switcher is exactly today's behaviour, on the main session, which
    * is the right way for this to degrade. */
   useEffect(() => {
+    // A room's agent is the room's: no switcher, and no remembered agent adopted.
+    if (roomId) return;
     let cancelled = false;
     fetch("/api/bridge/api/agent-manifests")
       .then((res) => {
@@ -425,7 +506,7 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [roomId]);
 
   /** Point the chat at another agent. Its history replaces what is on screen.
    *
@@ -479,7 +560,7 @@ export function ChatPanel({
             .filter((requestId) => requestId !== requestIdRef.current)
             .map((requestId) => ({
               id: `recovery-${requestId}`, role: "assistant", content: OUTCOME_UNKNOWN,
-              timestamp: new Date(), recovery: { requestId, agent, scope },
+              timestamp: new Date(), recovery: recoveryFor(requestId, scope),
             })) : [];
           setMessages([...loaded, ...restored]);
           settleHistoryPages(data.hasMore === true);
@@ -494,7 +575,33 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent, settleHistoryPages]);
+  }, [agentQuery, agent, settleHistoryPages, recoveryFor]);
+
+  // A room is shared: other members' messages, and the agent's answers to
+  // them, land while this panel is open. On each live room event (the room
+  // view bumps `refreshKey`) the newest page is read again and what is not on
+  // screen yet is added. A message typed here is shown before it is stored, so
+  // its stored copy replaces it (matched by role and text) instead of
+  // appearing twice. Deferred while a turn of ours runs; the stream is
+  // authoritative then, and the next bump catches up.
+  const caughtUpTo = useRef(roomRefreshKey);
+  const panelBusy = isStreaming || isPlanning || isPlanExecuting || isDeepReasoning;
+  useEffect(() => {
+    if (!roomId || panelBusy || roomRefreshKey === caughtUpTo.current) return;
+    caughtUpTo.current = roomRefreshKey;
+    let cancelled = false;
+    fetch(`/api/chat/history${agentQuery}`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        const stored = historyToMessages(data.messages).filter((m) => m.serverId !== undefined);
+        setMessages((prev) => mergeStored(prev, stored));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId, roomRefreshKey, panelBusy, agentQuery]);
 
   // Recover pending plan on page refresh
   //
@@ -504,6 +611,8 @@ export function ChatPanel({
   // agent's key — executing a plan against a session that never saw it, which
   // is the thing threading the key through plan/approve exists to prevent.
   useEffect(() => {
+    // Plan and Deep are main-conversation modes; a room offers neither.
+    if (roomId) return;
     let cancelled = false;
     fetch(`/api/chat/plan/status${agentQuery}`)
       .then((res) => res.json())
@@ -525,10 +634,11 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent]);
+  }, [agentQuery, agent, roomId]);
 
   // Keyboard shortcut: Ctrl/Cmd+Shift+P toggles plan mode, Ctrl/Cmd+Shift+D toggles deep+plan
   useEffect(() => {
+    if (roomId) return;
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "P") {
         e.preventDefault();
@@ -555,10 +665,11 @@ export function ChatPanel({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [roomId]);
 
   // Recover active deep reasoning on page refresh
   useEffect(() => {
+    if (roomId) return;
     let cancelled = false;
     fetch(`/api/chat/deep/status${agentQuery}`)
       .then((res) => res.json())
@@ -572,7 +683,7 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent]);
+  }, [agentQuery, agent, roomId]);
 
   const sendPlanMessage = useCallback(async (overrideText?: string) => {
     const text = overrideText || input.trim();
@@ -611,7 +722,7 @@ export function ChatPanel({
     let submitted = false;
     try {
       const requestId = requestIdRef.current!;
-      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal, roomId);
       if (scope) requestScopes.current[requestId] = scope;
       controller.signal.throwIfAborted();
       submitted = true;
@@ -685,7 +796,7 @@ export function ChatPanel({
             id: `asst-${Date.now()}`,
             role: "assistant",
             content: stripResidualMarkers(fullResponse).trim(),
-        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
+        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: recoveryFor(requestIdRef.current!, requestScopes.current[requestIdRef.current!]) } : {}),
             timestamp: new Date(),
           },
         ]);
@@ -705,7 +816,7 @@ export function ChatPanel({
       setActiveToolName(null);
       abortRef.current = null;
     }
-  }, [input, isStreaming, isPlanning, deepPlan, handleSharedStreamEvent, agent]);
+  }, [input, isStreaming, isPlanning, deepPlan, handleSharedStreamEvent, agent, roomId, recoveryFor]);
 
   const noteMessages = useCallback((ids: string[], note: string | undefined) => {
     setMessages((prev) => prev.map((m) => (ids.includes(m.id) ? { ...m, note } : m)));
@@ -725,7 +836,7 @@ export function ChatPanel({
     setMessages((prev) => [...prev, { id: item.id, role: "user", content: text, timestamp: new Date(), note: "Sending…" }]);
     setInput("");
     inFlightFollowups.current = [...inFlightFollowups.current, item];
-    if (await steerRun(text, agent, requestIdRef.current)) {
+    if (await steerRun(text, agent, requestIdRef.current, roomId)) {
       inFlightFollowups.current = inFlightFollowups.current.filter((f) => f.id !== item.id);
       noteMessages([item.id], STEERED_NOTE);
       return;
@@ -736,7 +847,7 @@ export function ChatPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // It names the turn it is for: two tabs are two turns, two inboxes.
-        body: JSON.stringify({ message: text, join_running: true, running_request_id: requestIdRef.current, ...(agent ? { agent } : {}) }),
+        body: JSON.stringify({ message: text, join_running: true, running_request_id: requestIdRef.current, ...target }),
       });
       joined = res.ok && (await res.text()).includes("event: followup_joined");
     } catch {
@@ -750,7 +861,7 @@ export function ChatPanel({
     } else {
       queueFollowups([item]);
     }
-  }, [agent, isStopping, noteMessages, queueFollowups]);
+  }, [agent, roomId, target, isStopping, noteMessages, queueFollowups]);
 
   /** Stop: what was waiting goes with the task, not out as a turn after it. */
   const discardFollowups = useCallback(() => {
@@ -810,7 +921,7 @@ export function ChatPanel({
 
     try {
       const requestId = requestIdRef.current!;
-      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal, roomId);
       if (scope) requestScopes.current[requestId] = scope;
       if (controller.signal.aborted) {
         if (scope) forgetRequest(scope, requestId);
@@ -819,9 +930,30 @@ export function ChatPanel({
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, request_id: requestIdRef.current, ...(agent ? { agent } : {}), ...(files.length ? { attachments: files } : {}) }),
+        body: JSON.stringify({ message: text, request_id: requestIdRef.current, ...target, ...(files.length ? { attachments: files } : {}) }),
         signal: controller.signal,
       });
+
+      if (roomId && res.status === 409) {
+        // Another member's turn holds the room. Nothing was admitted: what was
+        // typed stays where it was typed, marked queued, and is offered again
+        // when the room moves on (a live message) or after a short wait.
+        const busy = await res.clone().json().catch(() => null);
+        if (busy?.error === "room_busy") {
+          const scope = requestScopes.current[requestIdRef.current!];
+          if (scope) forgetRequest(scope, requestIdRef.current!);
+          const answering = typeof busy.answering === "string" ? busy.answering : "";
+          const items: QueuedFollowup[] = flushing ?? [{ id: userMsg.id, text, seq: followupSeq.current++ }];
+          busyQueue.current = [...busyQueue.current, ...items];
+          noteMessages(items.map((i) => i.id), roomBusyNote(answering));
+          setRoomBusy(answering);
+          setIsStreaming(false);
+          setStreamingText("");
+          setRuntimeProgress(null);
+          streamSettled = true;
+          return;
+        }
+      }
 
       if (!res.ok || !res.body) {
         const failure = await requestFailure(res);
@@ -830,7 +962,7 @@ export function ChatPanel({
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}`, role: "assistant",
           content: failure.text, timestamp: new Date(),
-          ...(!failure.rejected ? { recovery: { requestId: requestIdRef.current!, agent, scope } } : {}),
+          ...(!failure.rejected ? { recovery: recoveryFor(requestIdRef.current!, scope) } : {}),
         };
         setMessages((prev) => [...prev, errorMsg]);
         setIsStreaming(false);
@@ -973,7 +1105,7 @@ export function ChatPanel({
         id: `asst-${Date.now()}`,
         role: "assistant",
         content: stripResidualMarkers(fullResponse).trim(),
-        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
+        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: recoveryFor(requestIdRef.current!, requestScopes.current[requestIdRef.current!]) } : {}),
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
@@ -1000,7 +1132,7 @@ export function ChatPanel({
           id: `err-${Date.now()}`,
           role: "assistant",
           content: OUTCOME_UNKNOWN,
-          recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] },
+          recovery: recoveryFor(requestIdRef.current!, requestScopes.current[requestIdRef.current!]),
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMsg]);
@@ -1014,7 +1146,7 @@ export function ChatPanel({
       if (!streamSettled) noteMessages(joinedFollowups.current.map((f) => f.id), DROPPED_NOTE);
       joinedFollowups.current = [];
     }
-  }, [input, attachments, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent]);
+  }, [input, attachments, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent, roomId, target, recoveryFor]);
 
   // Another agent is another conversation: what waited for this one is not sent there.
   useEffect(() => {
@@ -1033,6 +1165,29 @@ export function ChatPanel({
     setQueuedCount(0);
     void sendMessageRef.current(items);
   }, [queuedCount, isStreaming, isPlanning, isPlanExecuting, isDeepReasoning]);
+
+  // A message queued behind another member's turn is offered again when the
+  // room moves on (the room view bumps `refreshKey` on a live message) or after
+  // a short wait, whichever is first. Offered as a flush, so its bubble stays
+  // where it was typed and is never shown twice.
+  const retryRoomBusy = useCallback(() => {
+    if (!busyQueue.current.length) return;
+    const items = busyQueue.current;
+    busyQueue.current = [];
+    setRoomBusy(null);
+    void sendMessageRef.current(items);
+  }, []);
+  useEffect(() => {
+    if (roomBusy === null || isStreaming) return;
+    const timer = setTimeout(retryRoomBusy, ROOM_BUSY_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [roomBusy, isStreaming, retryRoomBusy]);
+  const lastRefreshKey = useRef(roomRefreshKey);
+  useEffect(() => {
+    if (roomRefreshKey === lastRefreshKey.current) return;
+    lastRefreshKey.current = roomRefreshKey;
+    if (!isStreaming) retryRoomBusy();
+  }, [roomRefreshKey, isStreaming, retryRoomBusy]);
 
   const handlePlanApprove = useCallback(async () => {
     if (!activePlan) return;
@@ -1059,7 +1214,7 @@ export function ChatPanel({
 
     try {
       const requestId = requestIdRef.current!;
-      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal, roomId);
       if (scope) requestScopes.current[requestId] = scope;
       if (controller.signal.aborted) {
         if (scope) forgetRequest(scope, requestId);
@@ -1080,7 +1235,7 @@ export function ChatPanel({
         if (failure.rejected && scope) forgetRequest(scope, requestIdRef.current!);
         setMessages((prev) => [...prev, {
           id: `err-${Date.now()}`, role: "assistant", content: failure.text, timestamp: new Date(),
-          ...(!failure.rejected ? { recovery: { requestId: requestIdRef.current!, agent, scope } } : {}),
+          ...(!failure.rejected ? { recovery: recoveryFor(requestIdRef.current!, scope) } : {}),
         }]);
         return;
       }
@@ -1145,7 +1300,7 @@ export function ChatPanel({
             id: `asst-${Date.now()}`,
             role: "assistant",
             content: stripResidualMarkers(fullResponse).trim() + costSuffix,
-            ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
+            ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: recoveryFor(requestIdRef.current!, requestScopes.current[requestIdRef.current!]) } : {}),
             timestamp: new Date(),
           },
         ]);
@@ -1157,7 +1312,7 @@ export function ChatPanel({
           id: `err-${Date.now()}`,
           role: "assistant",
           content: OUTCOME_UNKNOWN,
-          recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] },
+          recovery: recoveryFor(requestIdRef.current!, requestScopes.current[requestIdRef.current!]),
           timestamp: new Date(),
         }]);
       }
@@ -1168,7 +1323,7 @@ export function ChatPanel({
       setDeepElapsed(0);
       setStreamingText("");
     }
-  }, [activePlan, handleSharedStreamEvent, agent]);
+  }, [activePlan, handleSharedStreamEvent, agent, roomId, recoveryFor]);
 
   const handlePlanReject = useCallback(async () => {
     if (!activePlan) return;
@@ -1220,7 +1375,7 @@ export function ChatPanel({
   const handleAbort = async () => {
     if (isStopping) return;
     discardFollowups();
-    if (isStreaming && (await interruptRun(agent, requestIdRef.current))) {
+    if (isStreaming && (await interruptRun(agent, requestIdRef.current, roomId))) {
       setStopNotice("Stopping the run…");
       return;
     }
@@ -1231,7 +1386,7 @@ export function ChatPanel({
     try {
       const response = await fetch("/api/chat/abort", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...(agent ? { agent } : {}), request_id: stoppedRequest }),
+        body: JSON.stringify({ ...target, request_id: stoppedRequest }),
       });
       if (!response.ok) throw new Error("stop unconfirmed");
       const result = await response.json();
@@ -1268,7 +1423,9 @@ export function ChatPanel({
 
   return (
     <div className="h-full w-full flex flex-col bg-background" data-testid="chat-panel">
-      {/* Header — richer on mobile since there's no app header above */}
+      {/* Header — richer on mobile since there's no app header above. A room
+          view draws its own header above the panel. */}
+      {!roomId && (
       <div className={`px-4 border-b border-border flex items-center gap-2 ${mobile ? "py-3.5" : "py-3"}`}>
         <div className="relative">
           <div className="w-2 h-2 rounded-full bg-success" />
@@ -1347,11 +1504,17 @@ export function ChatPanel({
           </button>
         )}
       </div>
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} onScroll={onListScroll} className="flex-1 overflow-y-auto p-4">
         <div className="space-y-4" data-testid="message-list">
-          {messages.length === 0 && !isStreaming && variant === "page" && historySettledFor === agentQuery && (
+          {roomId && messages.length === 0 && !isStreaming && historySettledFor === agentQuery && (
+            <p className="py-6 text-center text-sm text-muted-foreground" data-testid="room-chat-empty">
+              No messages yet.{roomReadOnly ? "" : " Ask the agent about this workspace."}
+            </p>
+          )}
+          {!roomId && messages.length === 0 && !isStreaming && variant === "page" && historySettledFor === agentQuery && (
             <ChatLanding
               ownerName={ownerName}
               suggestedPrompts={landingPrompts}
@@ -1359,7 +1522,7 @@ export function ChatPanel({
               onViewOpened={onViewOpened}
             />
           )}
-          {messages.length === 0 && !isStreaming && variant === "dock" && (
+          {!roomId && messages.length === 0 && !isStreaming && variant === "dock" && (
             <div className="space-y-4" data-testid="empty-state">
               <p className="text-sm text-muted-foreground">
                 Ready when you are.
@@ -1413,8 +1576,9 @@ export function ChatPanel({
               msg={msg}
               onRecovered={onBubbleRecovered}
               busy={busy}
-              onRegenerate={regenerate}
-              onEdit={editMessage}
+              onRegenerate={roomReadOnly ? undefined : regenerate}
+              onEdit={roomReadOnly ? undefined : editMessage}
+              roomId={roomId}
             />
           ))}
 
@@ -1561,8 +1725,20 @@ export function ChatPanel({
         data-testid="chat-composer"
       >
         <PendingAttachments files={attachments.files} refusal={attachments.refusal} onRemove={attachments.remove} />
+        {roomReadOnly && (
+          <p id="room-readonly-notice" className="text-xs text-muted-foreground" data-testid="room-readonly-notice">
+            {READ_ONLY_NOTICE}
+          </p>
+        )}
+        {roomBusy !== null && (
+          <p role="status" className="text-xs text-muted-foreground" data-testid="room-busy-notice">
+            {roomBusy
+              ? `The agent is answering ${roomBusy}… Your message will send when it finishes.`
+              : "The agent is answering someone else… Your message will send when it finishes."}
+          </p>
+        )}
         {/* Mode toggles — labeled chips on mobile, icon buttons on desktop */}
-        {mobile ? (
+        {mobile && !roomId ? (
           <div className="flex gap-2" data-testid="mobile-mode-toggles">
             <button
               onClick={() => {
@@ -1617,8 +1793,8 @@ export function ChatPanel({
         ) : null}
 
         <div className="flex items-end gap-2">
-          {/* Desktop: icon buttons with tooltips */}
-          {!mobile && (
+          {/* Desktop: icon buttons with tooltips. A room offers no Plan or Deep. */}
+          {!mobile && !roomId && (
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1678,12 +1854,12 @@ export function ChatPanel({
               </Tooltip>
             </TooltipProvider>
           )}
-          {!mobile && (
+          {!mobile && !roomId && (
             <ToolsPopover agentId={agent || defaultAgent || null} listingRefused={listingRefused} />
           )}
           <AttachButton
             onFiles={(files) => void attachments.add(files)}
-            disabled={attachBlocked !== null}
+            disabled={attachBlocked !== null || roomReadOnly}
           />
           <textarea
             ref={inputRef}
@@ -1696,7 +1872,8 @@ export function ChatPanel({
             className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[44px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-primary/30 focus:ring-primary/50" : planMode ? "border-warning/30 focus:ring-warning/50" : "border-border focus:ring-ring"}`}
             rows={1}
             // Open while an ordinary reply streams: what is typed joins it.
-            disabled={(isStreaming && (planMode || deepMode)) || isPlanExecuting || isPlanning || isDeepReasoning}
+            disabled={roomReadOnly || (isStreaming && (planMode || deepMode)) || isPlanExecuting || isPlanning || isDeepReasoning}
+            aria-describedby={roomReadOnly ? "room-readonly-notice" : undefined}
             data-testid="chat-input"
           />
           {stopNotice && <p role="status" className="text-xs text-muted-foreground">{stopNotice}</p>}
@@ -1727,7 +1904,7 @@ export function ChatPanel({
             <Button
               size="icon"
               onClick={sendMessage}
-              disabled={(!input.trim() && !attachments.files.length) || isPlanExecuting}
+              disabled={roomReadOnly || (!input.trim() && !attachments.files.length) || isPlanExecuting}
               className="shrink-0"
               data-testid="send-button"
             >

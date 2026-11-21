@@ -105,6 +105,8 @@ describe("ChatPanel in a room", () => {
   it("labels the caller's own new message as theirs", async () => {
     history = [];
     render(<ChatPanel variant="page" room={{ id: REPORT_ID }} />);
+    // The empty room's history has answered: what is typed now is not replaced by it.
+    await screen.findByTestId("room-chat-empty");
     await type("First!");
     await screen.findByText("Noted.");
     const mine = screen.getAllByTestId("message-row")[0];
@@ -156,6 +158,7 @@ describe("ChatPanel in a room", () => {
   it("adopts the stored copy of the caller's own message rather than showing it twice", async () => {
     history = [];
     const { rerender } = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    await screen.findByTestId("room-chat-empty");
     await type("Mine");
     await screen.findByText("Noted.");
     history = [

@@ -1,12 +1,19 @@
 "use client";
 
-import { memo, type ComponentProps } from "react";
+import { lazy, memo, Suspense, type ComponentProps } from "react";
 import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
 import { ChatMarkdown, CHAT_PROSE } from "@/components/chat/chat-markdown";
 import { MessageActions } from "@/components/chat/message-actions";
 import { MessageAttachments } from "@/components/chat/chat-attachments";
 import type { AttachmentSummary } from "@/lib/chat/attachments";
 import { formatMessageTime, fullMessageTime } from "@/lib/chat/format-timestamp";
+
+// Only a room message that announced an edition needs the edition renderer
+// (and through it the component registry), so the main conversation never
+// downloads it.
+const MessageEdition = lazy(() =>
+  import("@/components/rooms/message-edition").then((m) => ({ default: m.MessageEdition })),
+);
 
 /** One message in the chat's scrollback. */
 export interface ChatBubbleMessage {
@@ -20,10 +27,17 @@ export interface ChatBubbleMessage {
   timestamp?: Date;
   /** Files sent with a user turn. */
   attachments?: AttachmentSummary[];
+  /** In a room: who wrote it (a message typed here has none yet: "You"). */
+  authorName?: string;
+  authorUserId?: string;
+  /** In a room: the edition this message announced, drawn under it. */
+  editionId?: string;
 }
 
 interface MessageBubbleProps {
   msg: ChatBubbleMessage;
+  /** Set in a room: the bubble names its author and draws the edition it announced. */
+  roomId?: string;
   /** Must be referentially stable, or every bubble re-renders with the panel. */
   onRecovered: ComponentProps<typeof ChatRecovery>["onRecovered"];
   /** A turn is running. Must be a plain boolean: it re-renders every bubble when it flips. */
@@ -51,8 +65,11 @@ export const MessageBubble = memo(function MessageBubble({
   busy = false,
   onRegenerate,
   onEdit,
+  roomId,
 }: MessageBubbleProps) {
   const isUser = msg.role === "user";
+  const author = roomId ? msg.authorName || (isUser ? "You" : undefined) : undefined;
+  const editionId = roomId && msg.editionId ? msg.editionId : undefined;
   // `message-<role>` marks the bubble itself, so its text is the message's
   // text alone; the time and the action bar sit under it in the same row.
   return (
@@ -60,7 +77,14 @@ export const MessageBubble = memo(function MessageBubble({
       className={`flex ${isUser ? "justify-end" : "justify-start"} [content-visibility:auto] [contain-intrinsic-size:auto_3rem]`}
       data-testid="message-row"
     >
-      <div className={`group flex max-w-[85%] flex-col ${isUser ? "items-end" : "items-start"}`}>
+      <div
+        className={`group flex flex-col ${editionId ? "w-full max-w-full" : "max-w-[85%]"} ${isUser ? "items-end" : "items-start"}`}
+      >
+        {author && (
+          <span className="mb-0.5 px-0.5 text-[11px] font-medium text-muted-foreground" data-testid="message-author">
+            {author}
+          </span>
+        )}
         <div className="flex max-w-full" data-testid={`message-${msg.role}`}>
           <div
             className={`max-w-full rounded-lg px-3 py-2 text-sm ${
@@ -86,6 +110,13 @@ export const MessageBubble = memo(function MessageBubble({
             )}
           </div>
         </div>
+        {roomId && editionId && (
+          <Suspense fallback={null}>
+            <div className="w-full">
+              <MessageEdition roomId={roomId} editionId={editionId} />
+            </div>
+          </Suspense>
+        )}
         {!msg.recovery && (
           <div
             className={`mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground ${isUser ? "flex-row-reverse" : ""}`}
