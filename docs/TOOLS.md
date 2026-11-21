@@ -1674,7 +1674,9 @@ first opener creates the task's workspace (run by the task's agent, or the
 default chat agent, seeded with the task as data) and is assigned to it. After
 that only the task's assignee joins by opening it, and never someone who was
 removed; anyone else is told to ask for it to be shared. Opening a planner
-task changes nothing about the task. An action the agent proposes in a task
+task changes nothing about the task. The three task tools act only in the person's own
+run: a sub-agent's run (which inherits its parent's person) is refused, checked
+on its `agent_runs` row. An action the agent proposes in a task
 workspace during the assignee's own turn can be approved by that person (see
 "Member approval" in [System architecture](SYSTEM_ARCHITECTURE.md)); every
 other proposal waits for an operator.

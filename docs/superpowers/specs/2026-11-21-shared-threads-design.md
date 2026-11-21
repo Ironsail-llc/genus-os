@@ -296,6 +296,11 @@ wrappers. Schema changes are migration 172.
   assignee joins as assigned unless they were removed (`room_member_removals`,
   written by `dal.remove_member`, cleared by `dal.add_member`) or the room is
   archived; anyone else gets `RoomNotFound`. A viewer cannot create one.
+- **Tools in sub-agents.** `room_task_accept`, `room_task_dismiss` and
+  `room_open_task` refuse a run whose `agent_runs` row is a `sub_agent` trigger
+  or has a parent run, and a run the database does not know
+  (`tasks.run_is_top_level`). Nothing in tasks or member approval is capped
+  (the member list has no row limit).
 - **Status events.** `room.task` (exactly `{room_id, tenant_id, task_id}`) for
   every linked room on accept, dismiss, suggestion creation, task room
   creation, and from `robothor.crm.dal.update_task` (a status change),
