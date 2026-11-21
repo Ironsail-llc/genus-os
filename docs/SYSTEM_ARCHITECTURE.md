@@ -682,7 +682,8 @@ create_task ──▶ worker run (todo_write)
 
 The **thread pool** above is the planner's: CRM tasks tagged `thread` that the
 main agent's heartbeat works through. A **shared thread** (code: *room*,
-`robothor/rooms/`; the dashboard says "Threads") is something else: a
+`robothor/rooms/`; the dashboard says "Workspaces", see
+[Workspaces](WORKSPACES.md)) is something else: a
 company-owned conversation people open, with its own chat session, members,
 revisioned definition, published editions and linked tasks. A CRM task can be
 opened as a room (`get_or_create_task_room`, one room per task) without

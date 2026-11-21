@@ -419,7 +419,10 @@ runs, their steps and their approvals. The agents' chat sessions (keys of
 the form `agent:<id>:…`), with their messages, approval receipts and channel
 message map. The agents' shared threads (rooms), with their members,
 revisions and editions; a thread's conversation is one of the agent's
-sessions (`agent:<id>:room:<room id>`). A delivery the channel bus surfaced into another agent's session
+sessions (`agent:<id>:room:<room id>`), and a thread linked to CRM tasks refuses
+the move (see the refusal list). The dashboard calls these threads
+workspaces ([Workspaces](../WORKSPACES.md)); an account move removes the
+account's memberships instead of carrying them. A delivery the channel bus surfaced into another agent's session
 (main's, usually) stays with that session, so a reply in the source still
 finds the message it quotes. The report lists every one of these tables,
 zeros included.

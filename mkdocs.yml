@@ -86,6 +86,7 @@ exclude_docs: |
   !/features/goal-pursuit.md
   !/features/runtime-recovery.md
   !/TOOLS.md
+  !/WORKSPACES.md
   !/PR_REVIEWER.md
   !/DEVOPS_REPORT.md
   !/AUTONOMOUS_EXECUTION.md
@@ -151,6 +152,7 @@ nav:
       - Goals: features/goal-pursuit.md
       - Engine recovery: features/runtime-recovery.md
       - Tools: TOOLS.md
+      - Workspaces: WORKSPACES.md
       - PR reviewer: PR_REVIEWER.md
       - Dev team report: DEVOPS_REPORT.md
       - Personal autonomy: AUTONOMOUS_EXECUTION.md

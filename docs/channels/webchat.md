@@ -113,6 +113,8 @@ member gets the session the rules above give them. A service that must write int
 
 ## Chat in a workspace (a room)
 
+What a workspace is and who may do what in one: [Workspaces](../WORKSPACES.md).
+
 A workspace's conversation is an ordinary session keyed
 `agent:{agent}:room:{room_id}`, served by the same routes. The browser names the
 room, never the key: `room_id` (a UUID) in the JSON body of `/chat/send`,

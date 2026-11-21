@@ -1616,11 +1616,12 @@ conversation with an **agent**. The main agent creates, changes, shares and
 reads workspaces for the person it is talking to. The rules live in
 `robothor/rooms/definition.py`, which the bridge's `/api/rooms` routes call as
 well, so a workspace made in chat and one made in the dashboard are checked the
-same way.
+same way. What people see and may do in a workspace is
+[Workspaces](WORKSPACES.md).
 
 | Tool | Does | Needs |
 |---|---|---|
-| `room_create` | `kind` report or agent, `title`, `instructions`, optional `agent_id` (default `main`), `schedule`, `tz`, `default_grain`, `share_with` | a staff role (not viewer) |
+| `room_create` | `kind` report or agent, `title`, `instructions`, optional `agent_id` (default: the main agent), `schedule`, `tz`, `default_grain`, `share_with` | a staff role (not viewer) |
 | `room_update` | `room_id`, `expected_rev`, `changes` (`title`, `instructions`, `schedule_text`, `tz`, `default_grain`, `paused`, `notify_default`, `max_cost_usd`) | assigned, or owner/admin |
 | `room_list` | `scope` `mine` (default) or `all` | `all`: owner/admin |
 | `room_read` | `room_id`, `editions` (3), `messages` (10) | any access |
@@ -1921,7 +1922,8 @@ never a value.
 
 `room_publish_edition(room_id, period?, kind?, title, summary, blocks, suggestions?)`
 saves what an agent built in a workspace (a room) as a visual everyone with access
-can reopen. Choose it over a `[RENDER:…]` marker whenever the result should
+can reopen. Editions and periods from the reader's side are in
+[Workspaces](WORKSPACES.md#editions-and-periods). Choose it over a `[RENDER:…]` marker whenever the result should
 outlast the chat turn: a marker draws once in the reply, an edition is stored with
 the workspace and listed in its history.
 
