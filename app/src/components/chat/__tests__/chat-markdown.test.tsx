@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { fireEvent, render } from "@testing-library/react";
 import { ChatMarkdown } from "@/components/chat/chat-markdown";
 
 // The real react-markdown and remark-gfm: the point is the rendered structure.
@@ -64,5 +64,48 @@ describe("ChatMarkdown", () => {
       const id = (a.getAttribute("href") ?? "").slice(1);
       expect(container.querySelector(`[id="${id}"]`)).not.toBeNull();
     }
+  });
+
+  describe("workspace links (H1)", () => {
+    const ROOM = "11111111-1111-4111-8111-111111111111";
+
+    it("opens a workspace link in the same tab, client-side, without a page load", () => {
+      const push = vi.spyOn(window.history, "pushState");
+      const heard = vi.fn();
+      window.addEventListener("popstate", heard);
+      const { container } = render(
+        <ChatMarkdown content={`Open [Weekly sales](/?v=chat&room=${ROOM}).`} />,
+      );
+      const link = container.querySelector("a") as HTMLAnchorElement;
+      expect(link.getAttribute("href")).toBe(`/?v=chat&room=${ROOM}`);
+      expect(link.hasAttribute("target")).toBe(false);
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
+      link.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(true);
+      expect(push).toHaveBeenCalledWith(null, "", `/?v=chat&room=${ROOM}`);
+      expect(heard).toHaveBeenCalledTimes(1);
+      window.removeEventListener("popstate", heard);
+      push.mockRestore();
+    });
+
+    it("leaves a modified click to the browser (open in a new tab)", () => {
+      const push = vi.spyOn(window.history, "pushState");
+      const { container } = render(<ChatMarkdown content={`[Weekly sales](/?v=chat&room=${ROOM})`} />);
+      const link = container.querySelector("a") as HTMLAnchorElement;
+      fireEvent.click(link, { metaKey: true });
+      fireEvent.click(link, { ctrlKey: true });
+      expect(push).not.toHaveBeenCalled();
+      push.mockRestore();
+    });
+
+    it("keeps external links exactly as they were", () => {
+      const push = vi.spyOn(window.history, "pushState");
+      const { container } = render(<ChatMarkdown content="[site](https://example.com/?v=chat)" />);
+      const link = container.querySelector("a") as HTMLAnchorElement;
+      expect(link.getAttribute("target")).toBe("_blank");
+      fireEvent.click(link);
+      expect(push).not.toHaveBeenCalled();
+      push.mockRestore();
+    });
   });
 });

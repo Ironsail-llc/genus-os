@@ -18,6 +18,7 @@
  */
 import { getEngineClient } from "./server-client";
 import { getVisualCanvasPrompt } from "@/lib/system-prompt";
+import { roomsServed } from "@/lib/rooms/served";
 import { auth } from "@/lib/auth";
 
 /** The dedup bucket used when there is no identity to key on. Never sent anywhere. */
@@ -41,7 +42,9 @@ export async function ensureCanvasPromptInjected(): Promise<void> {
   if (injectedFor.has(key)) return;
   const client = getEngineClient();
   try {
-    await client.chatInject(getVisualCanvasPrompt(), "visual-canvas-init");
+    // The workspace rules name room tools: only where the rooms list is served.
+    const workspaces = await roomsServed();
+    await client.chatInject(getVisualCanvasPrompt({ workspaces }), "visual-canvas-init");
     injectedFor.add(key);
   } catch (err) {
     console.warn("[session-state] Canvas prompt injection failed:", (err as Error).message);

@@ -1033,6 +1033,27 @@ MOVED_TABLES = (
     "sso_binding_grants",
 )
 
+
+def _room_memberships(cur: Any, source: str, user_id: str, *, remove: bool) -> int:
+    """The account's room memberships in the source tenant: counted, or removed.
+
+    Not in :data:`MOVED_TABLES`: a membership names a room of the source
+    tenant, which does not move with the account. Removing it in the move's
+    transaction means a later move back does not quietly restore access.
+    """
+    if remove:
+        cur.execute(
+            "DELETE FROM room_members WHERE tenant_id = %s AND user_id = %s::uuid",
+            (source, user_id),
+        )
+        return int(cur.rowcount or 0)
+    cur.execute(
+        "SELECT COUNT(*) AS n FROM room_members WHERE tenant_id = %s AND user_id = %s::uuid",
+        (source, user_id),
+    )
+    return int(cur.fetchone()["n"])
+
+
 #: Roles a move may assign. Never ``owner``: a move must not mint a second
 #: owner, and a child tenant has none at all.
 MOVE_ROLES = frozenset({"admin", "member", "viewer"})
@@ -1051,6 +1072,9 @@ class MoveReport:
     dry_run: bool
     counts: dict[str, int] = dataclass_field(default_factory=dict)
     sessions_revoked: int = 0
+    #: Room memberships in the source tenant, removed (not moved): a room
+    #: belongs to its tenant, so the account leaves the rooms behind.
+    room_memberships_removed: int = 0
     audit_id: int | None = None
     #: Set by ``detach_person``: the fresh CRM contact made in the target.
     new_person_id: str | None = None
@@ -1282,7 +1306,8 @@ def move_account(
     either would see half of it). In it: every refusal is checked before the
     first write; the row groups in :data:`MOVED_TABLES` are rewritten; the
     account's live refresh sessions are revoked, so the next token it gets
-    carries the new tenant; and one ``audit_log`` row records the move. Any
+    carries the new tenant; its room memberships in the source are removed
+    (rooms belong to the tenant and stay); and one ``audit_log`` row records the move. Any
     failure rolls all of it back.
 
     ``role`` reassigns the role on the way (one of :data:`MOVE_ROLES`);
@@ -1348,6 +1373,9 @@ def move_account(
                     report.company_unlinked = str(foreign["company_id"])
 
             if dry_run:
+                report.room_memberships_removed = _room_memberships(
+                    cur, source, report.user_id, remove=False
+                )
                 for table, where, params in groups:
                     cur.execute(
                         f"SELECT COUNT(*) AS n FROM {table} WHERE {where}",  # noqa: S608
@@ -1405,6 +1433,9 @@ def move_account(
                 report.counts["crm_people"] = 1
 
             report.sessions_revoked = _revoke_sessions(cur, report.user_id)
+            report.room_memberships_removed = _room_memberships(
+                cur, source, report.user_id, remove=True
+            )
 
             details = {
                 k: v for k, v in report.to_dict().items() if k not in ("audit_id", "dry_run")

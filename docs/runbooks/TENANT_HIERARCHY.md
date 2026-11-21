@@ -307,7 +307,9 @@ its CRM contact and that contact's own addresses and handles
 its face enrolments, its Telegram rows (both the contact's routing row and
 the pairing row keyed by the account, which is what Telegram reads to decide
 who may drive an agent) and any pending SSO binding grant; revokes every refresh session the account holds, so its next token is
-minted for the new tenant; and writes one `auth.account_moved` row to the
+minted for the new tenant; removes the account's memberships of the source
+tenant's shared threads (rooms belong to the tenant and stay; the report
+counts the memberships removed); and writes one `auth.account_moved` row to the
 audit log. If any step fails, none of it happened.
 
 Run it from a root shell: `ROBOTHOR_TENANT_ID` unset or the root's id, and
@@ -415,7 +417,9 @@ with all of the agent's jobs: `<agent>`, and its `:heartbeat`, `:worker` and
 `:ambient` rows). The workflows'
 runs, their steps and their approvals. The agents' chat sessions (keys of
 the form `agent:<id>:…`), with their messages, approval receipts and channel
-message map. A delivery the channel bus surfaced into another agent's session
+message map. The agents' shared threads (rooms), with their members,
+revisions and editions; a thread's conversation is one of the agent's
+sessions (`agent:<id>:room:<room id>`). A delivery the channel bus surfaced into another agent's session
 (main's, usually) stays with that session, so a reply in the source still
 finds the message it quotes. The report lists every one of these tables,
 zeros included.
@@ -452,6 +456,8 @@ A move is refused, with nothing written, when:
   workload's runs (name that workflow with `--workflow` too);
 - the workload has an attempt in a goal pursuit, or an open autonomy
   operation, workflow or handoff;
+- one of the workload's shared threads is linked to CRM tasks (`room_tasks`),
+  which stay in the source tenant's CRM;
 - the target already holds a row with the same unique key as a moved row
   (for example a chat session with the same key); the error names the table
   and the key. `agent_schedules` is keyed by tenant and job, and an engine

@@ -10,17 +10,30 @@
  */
 import type { EventEnvelope } from "@/lib/event-bus/redis-client";
 import { rootTenant } from "@/lib/services/registry";
+import { isRoomEventType } from "@/lib/rooms/events";
 
 /** The tenant an event belongs to; untagged means the root tenant. */
 export function eventTenant(event: Pick<EventEnvelope, "tenant_id">): string {
   return event.tenant_id?.trim() || rootTenant();
 }
 
+/**
+ * A `room.*` event names its tenant twice, on the envelope and in its payload
+ * (`{room_id, tenant_id, ...}`). It is this tenant's only when both say so: a
+ * room event with no payload tenant is dropped rather than read as the root's,
+ * because a room is a company's own and the default here would be a leak.
+ */
+function roomEventVisible(event: Partial<Pick<EventEnvelope, "type" | "payload">>, tenant: string): boolean {
+  if (!isRoomEventType(event.type)) return true;
+  const named = event.payload?.tenant_id;
+  return typeof named === "string" && named.trim() === tenant;
+}
+
 /** The events a session acting in `tenant` may see. No tenant, nothing. */
-export function visibleToTenant<T extends Pick<EventEnvelope, "tenant_id">>(
+export function visibleToTenant<T extends Pick<EventEnvelope, "tenant_id"> & Partial<Pick<EventEnvelope, "type" | "payload">>>(
   events: T[],
   tenant: string | undefined | null,
 ): T[] {
   if (!tenant) return [];
-  return events.filter((event) => eventTenant(event) === tenant);
+  return events.filter((event) => eventTenant(event) === tenant && roomEventVisible(event, tenant));
 }

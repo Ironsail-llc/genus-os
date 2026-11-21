@@ -1902,6 +1902,285 @@ _TEAM_SCRATCHPAD_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+# ── Workspaces (`room_*`, robothor/engine/tools/handlers/rooms.py) ──────────
+# One contiguous block: the workspace tools of every lane go here.
+
+_ROOM_ID = {"type": "string", "description": "The workspace id (from room_list), never a title"}
+_ROOM_USER = {
+    "type": "string",
+    "description": "A colleague in this company: their user id or email address",
+}
+_ROOM_LINK_RULE = " Always give the person the result's link."
+
+
+def _room_tool(
+    name: str, description: str, properties: dict[str, Any], required: list[str]
+) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {"type": "object", "properties": properties, "required": required},
+        },
+    }
+
+
+_ROOM_SCHEMAS: dict[str, dict[str, Any]] = {
+    "room_create": _room_tool(
+        "room_create",
+        "Create a workspace (shown to people as a Workspace) for the person you are talking "
+        "to: kind 'report' (a scheduled report with editions) or 'agent' (another "
+        "conversation with an agent). BEFORE calling, restate the title, the period each "
+        "run covers, the schedule and time zone, the data sources the instructions use "
+        "and who it will be shared with, and get a yes. The person becomes its assigned "
+        "owner and scheduled runs use their permissions. Schedules repeat at most every "
+        "15 minutes. For a scheduled report a person will read, use this rather than "
+        "register_user_cron, which re-runs you with a prompt and has no workspace, "
+        "sharing or editions. Without a schedule it exists unscheduled; tell them how to "
+        "add one." + _ROOM_LINK_RULE,
+        {
+            "kind": {
+                "type": "string",
+                "enum": ["report", "agent"],
+                "description": "report or agent",
+            },
+            "title": {"type": "string", "description": "Short title"},
+            "instructions": {
+                "type": "string",
+                "description": "What each run does: the question, the data sources, the period",
+            },
+            "agent_id": {"type": "string", "description": "The agent it talks to (default main)"},
+            "schedule": {
+                "type": "string",
+                "description": "Optional: 'every 1h', or a 5-field cron like '0 8 * * *'",
+            },
+            "tz": {"type": "string", "description": "IANA time zone the schedule is read in"},
+            "default_grain": {
+                "type": "string",
+                "enum": ["day", "week", "month", "custom"],
+                "description": "The period an edition covers",
+            },
+            "share_with": {
+                "type": "array",
+                "items": _ROOM_USER,
+                "description": "Colleagues to share it with",
+            },
+        },
+        ["kind", "title", "instructions"],
+    ),
+    "room_update": _room_tool(
+        "room_update",
+        "Change a workspace the person is assigned to (or, as owner/admin, any). Call "
+        "room_read first, show the person the change against the current definition and "
+        "get a yes, then pass the rev you read as expected_rev. Every change writes a "
+        "revision. Never edit a workspace they are not assigned to: offer room_duplicate "
+        "instead. If their words match more than one workspace, ask which one. The agent "
+        "cannot be changed; duplicate to use another." + _ROOM_LINK_RULE,
+        {
+            "room_id": _ROOM_ID,
+            "expected_rev": {"type": "integer", "description": "The rev room_read returned"},
+            "changes": {
+                "type": "object",
+                "description": (
+                    "Any of: title, instructions, schedule_text (null removes the schedule), "
+                    "tz, default_grain, paused (true/false; resuming runs next from now), "
+                    "notify_default, max_cost_usd"
+                ),
+            },
+        },
+        ["room_id", "expected_rev", "changes"],
+    ),
+    "room_list": _room_tool(
+        "room_list",
+        "List workspaces with their links: scope 'mine' (default: the ones the person is a "
+        "member of, with unread counts) or 'all' (every workspace of the company; owner "
+        "or admin only). Use it to find a workspace by name, then pass its id.",
+        {"scope": {"type": "string", "enum": ["mine", "all"], "description": "mine or all"}},
+        [],
+    ),
+    "room_read": _room_tool(
+        "room_read",
+        "Read a workspace the person can access: its definition and rev, their access, "
+        "members, who it runs as, its schedule, the latest editions (title, period, "
+        "summary), recent messages with authors, linked tasks and the revision history "
+        "(who changed what, when). Not found and no access look the same." + _ROOM_LINK_RULE,
+        {
+            "room_id": _ROOM_ID,
+            "editions": {"type": "integer", "description": "How many editions (default 3)"},
+            "messages": {"type": "integer", "description": "How many recent messages (default 10)"},
+        },
+        ["room_id"],
+    ),
+    "room_share": _room_tool(
+        "room_share",
+        "Share a workspace with a colleague in the same company. Shared people read, "
+        "chat and run it; assigned=true also lets them change it. Confirm who first."
+        + _ROOM_LINK_RULE,
+        {
+            "room_id": _ROOM_ID,
+            "user": _ROOM_USER,
+            "assigned": {"type": "boolean", "description": "May they change it (default false)"},
+        },
+        ["room_id", "user"],
+    ),
+    "room_unshare": _room_tool(
+        "room_unshare",
+        "Remove a member from a workspace. The person it runs as and its last assigned "
+        "member cannot be removed." + _ROOM_LINK_RULE,
+        {"room_id": _ROOM_ID, "user": _ROOM_USER},
+        ["room_id", "user"],
+    ),
+    "room_archive": _room_tool(
+        "room_archive",
+        "Archive a workspace: it stays readable and its schedule stops. Confirm first."
+        + _ROOM_LINK_RULE,
+        {"room_id": _ROOM_ID},
+        ["room_id"],
+    ),
+    "room_duplicate": _room_tool(
+        "room_duplicate",
+        "Make the person their own copy of a workspace they can see: same definition, "
+        "they are assigned, no editions, conversation or tasks. A scheduled copy starts "
+        "paused until they confirm the schedule (room_update paused=false). Offer this "
+        "when they want to change a workspace they are not assigned to." + _ROOM_LINK_RULE,
+        {"room_id": _ROOM_ID},
+        ["room_id"],
+    ),
+    "room_restore_revision": _room_tool(
+        "room_restore_revision",
+        "Restore an earlier revision of a workspace's definition (from room_read's "
+        "revisions). Writes a new revision equal to it; nothing is lost. Confirm first."
+        + _ROOM_LINK_RULE,
+        {"room_id": _ROOM_ID, "rev": {"type": "integer", "description": "The revision to restore"}},
+        ["room_id", "rev"],
+    ),
+    "room_admin_reassign": _room_tool(
+        "room_admin_reassign",
+        "Owner or admin only: hand a workspace to a colleague, who becomes assigned and the "
+        "person its scheduled runs use. Confirm first." + _ROOM_LINK_RULE,
+        {"room_id": _ROOM_ID, "user": _ROOM_USER},
+        ["room_id", "user"],
+    ),
+}
+
+
+# Rooms (workspaces): publishing an edition. Handler: handlers/room_editions.py.
+_ROOM_EDITION_SCHEMAS: dict[str, dict[str, Any]] = {
+    "room_publish_edition": {
+        "type": "function",
+        "function": {
+            "name": "room_publish_edition",
+            "description": (
+                "Publish what you built in this workspace as a saved visual everyone with "
+                "access can reopen. Works only in a run inside that workspace's own "
+                "conversation. kind 'edition' (report workspaces) covers one period; kind "
+                "'dashboard' is an ad-hoc board in any workspace, with no period. Each block "
+                "is {component, props} for one of render_metric_grid, render_metric_card, "
+                "render_bar_chart, render_line_chart, render_pie_chart, render_data_table, "
+                "render_markdown, render_timeline, with that component's props. Fetch every "
+                "figure with your tools first: the server records which tool calls the run "
+                "made as the edition's provenance."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "room_id": {"type": "string", "description": "The workspace id"},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["edition", "dashboard"],
+                        "description": "Default 'edition'",
+                    },
+                    "period": {
+                        "type": "object",
+                        "description": (
+                            "For an edition: {grain: day|week|month|custom, start, end} as "
+                            "YYYY-MM-DD. Omit to use the period the run was started for."
+                        ),
+                        "properties": {
+                            "grain": {"type": "string", "enum": ["day", "week", "month", "custom"]},
+                            "start": {"type": "string"},
+                            "end": {"type": "string"},
+                        },
+                        "required": ["grain", "start", "end"],
+                    },
+                    "title": {"type": "string", "description": "One line, at most 200 characters"},
+                    "summary": {
+                        "type": "string",
+                        "description": "Plain-text commentary, at most 4000 characters",
+                    },
+                    "blocks": {
+                        "type": "array",
+                        "description": "At most 40 blocks of {component, props}",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "component": {"type": "string"},
+                                "props": {"type": "object"},
+                            },
+                            "required": ["component", "props"],
+                        },
+                    },
+                    "suggestions": {
+                        "type": "array",
+                        "description": "At most 10 suggested tasks people can accept",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "key": {
+                                    "type": "string",
+                                    "description": "Stable slug, a-z 0-9 - _",
+                                },
+                                "title": {"type": "string"},
+                                "detail": {"type": "string"},
+                                "action_hint": {"type": "string"},
+                            },
+                            "required": ["key", "title"],
+                        },
+                    },
+                },
+                "required": ["room_id", "title", "summary", "blocks"],
+            },
+        },
+    },
+}
+
+
+#: Workspace periods (``robothor/rooms/periods.py``). Merged on the return line
+#: so ``get_engine_schemas`` does not grow (the function-size ratchet).
+_ROOM_PERIOD_SCHEMAS: dict[str, dict[str, Any]] = {
+    "room_request_period": {
+        "type": "function",
+        "function": {
+            "name": "room_request_period",
+            "description": (
+                "Get a report workspace's edition for a day, week (Monday to Sunday), month "
+                "or custom range, in the workspace's time zone. Returns the published "
+                "edition at once, or starts one run and returns the edition building "
+                "(started=true). Only periods that are over; on-demand runs are capped per "
+                "day. The result carries the workspace link."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "room_id": {"type": "string", "description": "The workspace id"},
+                    "grain": {"type": "string", "enum": ["day", "week", "month", "custom"]},
+                    "anchor": {
+                        "type": "string",
+                        "description": (
+                            "A date inside the period (YYYY-MM-DD; YYYY-MM for a month), "
+                            "'start/end' dates for custom, or 'latest' for the last "
+                            "complete period"
+                        ),
+                    },
+                },
+                "required": ["room_id", "grain", "anchor"],
+            },
+        },
+    },
+}
+
+
 def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
     schemas: dict[str, dict[str, Any]] = {}
@@ -5104,10 +5383,10 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
     }
 
     schemas.update(_HUMAN_IN_THE_LOOP_SCHEMAS)
-
+    schemas.update(_ROOM_EDITION_SCHEMAS)
     schemas.update(_TEAM_SCRATCHPAD_SCHEMAS)
 
     from robothor.goals.tools import schemas as pursuit_schemas
 
     schemas.update(pursuit_schemas())
-    return schemas | SALES_SCHEMAS
+    return schemas | SALES_SCHEMAS | _ROOM_SCHEMAS | _ROOM_PERIOD_SCHEMAS

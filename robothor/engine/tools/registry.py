@@ -16,6 +16,7 @@ from robothor.engine.tools.constants import (
     CORE_TOOLS,
     GOAL_TOOLS,
     OPT_IN_TOOLS,
+    ROOM_TOOLS,
     SPAWN_TOOLS,
     TODO_TOOLS,
     TOOLSEARCH_TOOLS,
@@ -1154,11 +1155,8 @@ class ToolRegistry:
             from robothor.goals.tools import TOOL_NAMES
 
             names.extend(n for n in sorted(TOOL_NAMES) if n in self._schemas and n not in names)
-
-        if config.id == "main":
-            from robothor.goals.tools import TOOL_NAMES
-
-            names.extend(n for n in sorted(TOOL_NAMES) if n in self._schemas and n not in names)
+            # The workspace tools are the main agent's, for every staff role.
+            names.extend(n for n in sorted(ROOM_TOOLS) if n in self._schemas and n not in names)
 
         if config.tools_denied:
             # Support glob patterns (e.g. "mcp_*", "gws_*") in tools_denied

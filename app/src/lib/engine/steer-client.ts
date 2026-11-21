@@ -34,12 +34,17 @@ function keyed(sessionKey: string): { session_key?: string } {
   return sessionKey ? { session_key: sessionKey } : {};
 }
 
+/** A room, by id, for the engine to resolve; nothing at all when none is named. */
+function roomed(roomId?: string): { room_id?: string } {
+  return roomId ? { room_id: roomId } : {};
+}
+
 /** Add `text` to the live run of the turn `requestId` names, at its next step. */
-export async function chatSteer(sessionKey: string, text: string, requestId: string): Promise<SteerResult> {
-  return post("/chat/steer", { ...keyed(sessionKey), text, request_id: requestId });
+export async function chatSteer(sessionKey: string, text: string, requestId: string, roomId?: string): Promise<SteerResult> {
+  return post("/chat/steer", { ...keyed(sessionKey), text, request_id: requestId, ...roomed(roomId) });
 }
 
 /** Stop the live run of the turn `requestId` names. */
-export async function chatInterrupt(sessionKey: string, requestId: string): Promise<SteerResult> {
-  return post("/chat/interrupt", { ...keyed(sessionKey), request_id: requestId });
+export async function chatInterrupt(sessionKey: string, requestId: string, roomId?: string): Promise<SteerResult> {
+  return post("/chat/interrupt", { ...keyed(sessionKey), request_id: requestId, ...roomed(roomId) });
 }

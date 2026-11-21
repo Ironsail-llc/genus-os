@@ -124,6 +124,14 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
         "Tenant-scoped scheduled work (every DAL call takes tenant_id) — bridge:write "
         "scope + BridgeMiddleware tenant pinning, same as /api/people."
     ),
+    "/api/rooms": (
+        "Workspaces are per-room, not per-tenant, so no tenant-wide operator gate "
+        "fits: bridge:write scope + BridgeMiddleware tenant pinning, and every "
+        "handler opens with _guard(request, ...) or _human(request), which refuse "
+        "service tokens and ask robothor.rooms.access (404 without access, 403 "
+        "without the action). Admin-only routes (reassign, unarchive, scope=all) "
+        "need the tenant owner/admin role there. test_rooms_router_gates.py pins it."
+    ),
     "/api/tasks": (
         "Tenant CRM data under bridge:write; the authority-bearing actions "
         "(approve|reject|answer) are separately scope-gated by _authorization_denial() "
@@ -319,6 +327,9 @@ EXPECTED_ROUTER_MODULES = frozenset(
         # contributing routes, the prefix would keep the count honest while the
         # one gated route under it disappeared.
         "routers.memory_facts",
+        # Workspaces: on the allowlist above, so named here for the same reason
+        # as memory_facts -- the prefix must not outlive the routes it excuses.
+        "routers.rooms",
     }
 )
 

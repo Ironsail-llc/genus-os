@@ -436,6 +436,11 @@ Two databases on the same instance:
 | `n8n_workflows` | The external n8n instance's workflows as of the n8n monitor's latest listing (migration 156): name, active, tag names, n8n's own update time. A workflow deleted in n8n leaves on the next listing. Tenant RLS |
 | `n8n_executions` | Each failed n8n execution the monitor has seen: workflow, mode, start/stop, error message, and `alerted_at` once the main agent was notified, so each failure is notified once. Purged after 30 days. Tenant RLS |
 | `n8n_sync_state` | Per tenant: when the n8n monitor last polled and last succeeded, the last error class, and the workflow totals. The doctor's `n8n.poll_freshness` reads it. Tenant RLS |
+| `rooms` | A shared thread (migration 169): a company-owned sub-conversation of kind `report`, `agent` or `task`, with its agent, its session key (`agent:<agent>:room:<id>`, written and parsed only by `robothor.rooms.access`), instructions, settings, current revision `rev`, run-as user, pause and failure state, and `archived_at`. One room per CRM task (`task_id`). Its chat session is exempt from the idle-session sweep. Tenant RLS |
+| `room_members` | Who can access a room: `assigned` members manage the definition, the others are shared. Per member: read marks for messages and editions (the unread count) and notification preferences. Tenant RLS |
+| `room_revisions` | Every definition a room has had (`{title, instructions, agent_id, settings, schedule}`), numbered; an edit names the revision it read and is refused if it is stale, and a restore writes a new revision. Tenant RLS |
+| `room_editions` | What a room's run published for a period: blocks (dashboard components), suggestions, provenance, status `building`/`published`/`failed`, `preview` for a run only its requester sees, `seq` (build order, the stable number) and `published_seq` (publish order, never on a preview; read marks and unread counts use it). A partial unique index keeps one non-preview `building` row per period, so concurrent requests share a build. Tenant RLS |
+| `room_tasks` | CRM tasks linked to a room (`subject`, `suggestion` or `linked`), and who accepted or dismissed each, once. Tenant RLS |
 
 ### Canonical schema lifecycle
 
@@ -672,6 +677,30 @@ create_task ──▶ worker run (todo_write)
 |---|---|---|
 | `ROBOTHOR_PLANNER_ENABLED` | `0` (off) | The Stage 4 forward planner. Off → stage-3 bare-flag stall2 behavior. |
 | `ROBOTHOR_TODO_ESCALATE_ENABLED` | `1` (on) | Stage 5 escalation at run end. Only fires when both `parent_task_id` is set AND items remain unfinished. |
+
+### Shared threads (rooms) are not the thread pool
+
+The **thread pool** above is the planner's: CRM tasks tagged `thread` that the
+main agent's heartbeat works through. A **shared thread** (code: *room*,
+`robothor/rooms/`; the dashboard says "Threads") is something else: a
+company-owned conversation people open, with its own chat session, members,
+revisioned definition, published editions and linked tasks. A CRM task can be
+opened as a room (`get_or_create_task_room`, one room per task) without
+joining or leaving the thread pool; the two never share rows. Access to a room
+comes only from the tenant role and the membership row
+(`robothor.rooms.access`): tenant owners and admins manage every room,
+assigned members manage theirs, shared members read and work in it, and a
+tenant viewer reads only.
+
+The bridge serves rooms at `/api/rooms` (`crm/bridge/routers/rooms.py`). Each
+handler resolves the caller from the verified token and asks
+`robothor.rooms.access`: no access is 404, access without the action is 403,
+a stale revision is 409 with `currentRev`. Definition changes go through
+`robothor.rooms.definition`; `POST /run` and `POST /periods` check access and
+proxy to the engine's `/api/rooms/{id}/run|periods` with the requester's id.
+Every mutation writes an audit row (`room.create`, `room.share`, …) and a
+`room.updated` event carrying ids only. `POST /api/rooms/{id}/read` needs only
+`bridge:read`, so a viewer can clear their own unread count.
 
 ### Agent Goals — unified persistent objective per agent
 

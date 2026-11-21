@@ -822,7 +822,9 @@ CAPS = {
     # passing the typed text to the run.
     # 1526 -> 1510: re-measured with the credential-intake refold.
     # 1510 -> 1508: re-measured with main merged into the fold.
-    "robothor/engine/chat.py": 1508,
+    # 1508 -> 1443: five copies of the SSE body left for chat_sse.py, which paid
+    # for the room checks on every route (the rules are chat_rooms.py).
+    "robothor/engine/chat.py": 1443,
     # 1600 -> 1607 (2026-08-27): fleet admission finally has a caller here.
     # The 75-line implementation went to admission.py; what remains is five
     # irreducible call sites (admit / register / complete / import). The

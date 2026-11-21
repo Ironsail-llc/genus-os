@@ -6,6 +6,7 @@ import { AgentStatus } from "@/components/business/agent-status";
 import { AgentManifests } from "@/components/views/agents/agent-manifests";
 import type { AgentInfo, AgentSummary } from "@/hooks/use-agents";
 import { ListSkeleton } from "@/components/business/list-skeleton";
+import { NewWorkspaceButton } from "@/components/rooms/open-as-workspace";
 
 type SortMode = "score" | "health" | "name";
 
@@ -104,7 +105,23 @@ export function AgentsView({
         {isLoading && agents.length === 0 ? (
           <ListSkeleton testId="agents-loading" label="Loading agents" />
         ) : (
-          <AgentStatus agents={sortedAgents} summary={summary} />
+          <AgentStatus
+            agents={sortedAgents}
+            summary={summary}
+            renderActions={(agent) =>
+              // Only a row that names its manifest id can start a workspace:
+              // the display name is renamable and is not an agent id.
+              agent.agentId ? (
+                <div className="pt-1.5">
+                  <NewWorkspaceButton
+                    agentId={agent.agentId}
+                    agentName={agent.name}
+                    label="New workspace with this agent"
+                  />
+                </div>
+              ) : null
+            }
+          />
         )}
         {/*
           Health above, manifests below: the top half is how the fleet is
