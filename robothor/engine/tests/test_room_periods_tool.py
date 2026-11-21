@@ -17,7 +17,7 @@ import pytest
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.rooms.errors import RoomForbidden, RoomNotFound
 from robothor.rooms.models import Edition
-from robothor.rooms.periods import OnDemandCapReached, PeriodError, RoomRunUnavailable
+from robothor.rooms.periods import PeriodError, RoomRunUnavailable
 
 ROOM = "7a0c0e8e-63c4-4c5b-9a43-0d6f6f0c2b11"
 ALICE = "5b8e4a8a-0f6e-4e43-8f53-1f9d1d3c2a77"
@@ -118,7 +118,6 @@ async def test_a_run_with_no_human_is_refused(fake):
     [
         (RoomNotFound(ROOM), "not found"),
         (RoomForbidden("viewer access does not allow 'request_period'"), "not allow"),
-        (OnDemandCapReached(limit=5, used=5), "cap"),
         (PeriodError("that day is not over yet"), "not over"),
         (RoomRunUnavailable("room runs are not available"), "not available"),
     ],
@@ -132,13 +131,17 @@ async def test_a_refusal_is_an_error_result(fake, error, needle):
     assert "edition" not in result
 
 
-async def test_cap_reached_is_flagged(fake):
-    fake.error = OnDemandCapReached(limit=3, used=3)
+async def test_a_started_result_carries_no_limit_fields(fake):
+    result = await _call({"room_id": ROOM, "grain": "day", "anchor": "2026-11-20"})
 
-    result = await _call({"room_id": ROOM, "grain": "day"})
+    assert not {"cap_reached", "limit", "used"} & set(result)
 
-    assert result["cap_reached"] is True
-    assert result["limit"] == 3
+
+def test_the_tool_description_promises_no_limit():
+    from robothor.engine.tools.schemas import get_engine_schemas
+
+    description = get_engine_schemas()["room_request_period"]["function"]["description"]
+    assert "cap" not in description.lower()
 
 
 @pytest.mark.parametrize(

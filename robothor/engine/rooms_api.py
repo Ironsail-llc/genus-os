@@ -48,7 +48,6 @@ _PERIOD_MESSAGES = {
     "invalid_time_zone": "the workspace's time zone is not a valid IANA name",
     "invalid_grain": "grain must be day, week, month or custom",
     "invalid_anchor": "anchor must be a date (YYYY-MM-DD), YYYY-MM, start/end, or latest",
-    "too_long": f"a custom period is at most {periods.MAX_CUSTOM_DAYS} days",
     "not_over": "that period is not over yet",
     "not_a_report": "only a report workspace has periods",
 }
@@ -148,15 +147,6 @@ async def _answer(room_id: str, body: PeriodRequest, request: Request) -> JSONRe
         return _refusal(404, "room_not_found", "no such workspace")
     except RoomForbidden:
         return _refusal(403, "forbidden", "you may not request a period in this workspace")
-    except periods.OnDemandCapReached as exc:
-        limit, used = int(exc.limit), int(exc.used)
-        return _refusal(
-            429,
-            "on_demand_cap",
-            f"each person may start {limit} on-demand edition(s) a day in this workspace",
-            limit=limit,
-            used=used,
-        )
     except periods.RoomRunUnavailable:
         return _refusal(503, "runs_unavailable", "workspace runs are not available right now")
     except periods.PeriodError as exc:

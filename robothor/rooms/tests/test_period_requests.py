@@ -2,8 +2,8 @@
 
 A person picks a period. If its edition is published they get it at once. If
 not, exactly one run starts for it, however many people asked at the same
-moment, and everyone who asked gets the same building edition. On-demand runs
-are capped per room per day; a period that is not over yet, a room that is not
+moment, and everyone who asked gets the same building edition. Nobody's
+on-demand requests are limited; a period that is not over yet, a room that is not
 a report, and a person who may only read are all refused without starting
 anything. A week or a month run is handed the summaries of the day editions
 inside it as data: never a sum of their figures.
@@ -30,8 +30,6 @@ from robothor.rooms.errors import RoomForbidden, RoomNotFound
 from robothor.rooms.periods import (
     CONTEXT_MAX_CHARS,
     CONTEXT_SUMMARY_CHARS,
-    DEFAULT_MAX_ON_DEMAND_PER_DAY,
-    OnDemandCapReached,
     Period,
     PeriodError,
     RoomRunUnavailable,
@@ -307,63 +305,44 @@ async def test_no_room_runner_refuses_before_anything_is_written(rooms_db, monke
     assert _editions(rooms_db, room) == []
 
 
-# ─── the daily cap ──────────────────────────────────────────────────────
+# ─── no limit on asking ─────────────────────────────────────────────────
 
 
-async def test_the_daily_cap_stops_new_runs_and_starts_nothing(rooms_db):
-    room = _report(rooms_db, max_on_demand_per_day=2)
+async def test_many_on_demand_requests_in_a_day_all_start(rooms_db):
+    room = _report(rooms_db)
+    dal.add_member(rooms_db.tenant, room.id, rooms_db.bob, added_by=rooms_db.alice)
+    bob = Actor(user_id=rooms_db.bob, role="member", tenant_id=rooms_db.tenant)
     run = FakeRun()
-    for days in (1, 2):
-        _, started = await request_period(
-            _alice(rooms_db), room.id, "day", _ago(days), run_room=run
-        )
-        assert started
 
-    with pytest.raises(OnDemandCapReached) as caught:
-        await request_period(_alice(rooms_db), room.id, "day", _ago(3), run_room=run)
+    results = [
+        await request_period(actor, room.id, "day", _ago(days), run_room=run)
+        for days in range(1, 16)
+        for actor in ([_alice(rooms_db)] if days % 2 else [bob])
+    ]
     await _settle()
 
-    assert (caught.value.limit, caught.value.used) == (2, 2)
-    assert "2" in str(caught.value)
-    assert len(run.calls) == 2
-    assert len(_editions(rooms_db, room)) == 2
+    assert all(started for _, started in results)
+    assert len(run.calls) == 15
+    assert len(_editions(rooms_db, room)) == 15
 
 
-async def test_at_the_cap_an_existing_edition_is_still_returned(rooms_db):
-    room = _report(rooms_db, max_on_demand_per_day=1)
+async def test_a_room_setting_cannot_limit_on_demand_runs(rooms_db):
+    with pytest.raises(ValueError, match="max_on_demand_per_day"):
+        _report(rooms_db, max_on_demand_per_day=0)
+
+
+async def test_a_multi_year_custom_range_starts_a_run(rooms_db):
+    room = _report(rooms_db)
     run = FakeRun()
-    edition, _ = await request_period(_alice(rooms_db), room.id, "day", _ago(1), run_room=run)
-    await _settle()
 
-    again, started = await request_period(_alice(rooms_db), room.id, "day", _ago(1), run_room=run)
-
-    assert (again.id, started) == (edition.id, False)
-
-
-async def test_a_cap_of_zero_allows_no_on_demand_run(rooms_db):
-    room = _report(rooms_db, max_on_demand_per_day=0)
-
-    with pytest.raises(OnDemandCapReached):
-        await request_period(_alice(rooms_db), room.id, "day", _ago(1), run_room=FakeRun())
-
-    assert _editions(rooms_db, room) == []
-
-
-async def test_scheduled_editions_do_not_count_against_the_cap(rooms_db):
-    room = _report(rooms_db, max_on_demand_per_day=1)
-    for days in (5, 6, 7):  # a scheduler's editions: no requester
-        day = TODAY - timedelta(days=days)
-        _published(rooms_db, room, "day", day, day, "Scheduled.")
-
-    _, started = await request_period(_alice(rooms_db), room.id, "day", _ago(1), run_room=FakeRun())
+    edition, started = await request_period(
+        _alice(rooms_db), room.id, "custom", "2019-01-01/2025-12-31", run_room=run
+    )
     await _settle()
 
     assert started
-
-
-def test_the_default_cap_is_documented_and_positive():
-    assert DEFAULT_MAX_ON_DEMAND_PER_DAY > 0
-    assert str(DEFAULT_MAX_ON_DEMAND_PER_DAY) in (periods.__doc__ or "")
+    assert (edition.period_start, edition.period_end) == (date(2019, 1, 1), date(2025, 12, 31))
+    assert run.calls[0]["period"].days > 2000
 
 
 # ─── refusals ───────────────────────────────────────────────────────────
@@ -537,28 +516,6 @@ async def test_a_week_run_is_handed_its_days(rooms_db):
 
     assert started
     assert "Monday was busy." in run.calls[0]["context"]
-
-
-# ─── the cap is per person ──────────────────────────────────────────────
-
-
-async def test_each_person_has_their_own_daily_allowance(rooms_db):
-    room = _report(rooms_db, max_on_demand_per_day=1)
-    dal.add_member(rooms_db.tenant, room.id, rooms_db.bob, added_by=rooms_db.alice)
-    bob = Actor(user_id=rooms_db.bob, role="member", tenant_id=rooms_db.tenant)
-    run = FakeRun()
-
-    _, alice_started = await request_period(_alice(rooms_db), room.id, "day", _ago(1), run_room=run)
-    _, bob_started = await request_period(bob, room.id, "day", _ago(2), run_room=run)
-    with pytest.raises(OnDemandCapReached) as alice_again:
-        await request_period(_alice(rooms_db), room.id, "day", _ago(3), run_room=run)
-    with pytest.raises(OnDemandCapReached):
-        await request_period(bob, room.id, "day", _ago(4), run_room=run)
-    await _settle()
-
-    assert alice_started and bob_started
-    assert (alice_again.value.limit, alice_again.value.used) == (1, 1)
-    assert len(run.calls) == 2
 
 
 # ─── a building edition whose run is gone ───────────────────────────────

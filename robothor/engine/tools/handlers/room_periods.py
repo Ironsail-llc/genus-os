@@ -33,8 +33,6 @@ async def _room_request_period(args: dict[str, Any], ctx: ToolContext) -> dict[s
         return {"error": "workspace not found"}
     except RoomForbidden as exc:
         return {"error": str(exc)}
-    except periods.OnDemandCapReached as exc:
-        return {"error": str(exc), "cap_reached": True, "limit": exc.limit, "used": exc.used}
     except (periods.RoomRunUnavailable, ValueError) as exc:
         return {"error": str(exc)}
     return {

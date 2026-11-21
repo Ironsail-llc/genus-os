@@ -8,7 +8,7 @@ reads that person's role from their account (never from the body) and checks
 their access itself. A human token's own identity wins over any
 ``requested_by``; the answer is the
 contract's camelCase ``Edition``; each refusal has its own status, so the
-dashboard can tell "no such room" from "not allowed" from "cap reached"; and the
+dashboard can tell "no such room" from "not allowed" from "not over yet"; and the
 request never blocks the engine's event loop.
 """
 
@@ -26,7 +26,7 @@ from fastapi import APIRouter, FastAPI
 from robothor.auth.deps import AuthContext
 from robothor.rooms.errors import RoomForbidden, RoomNotFound
 from robothor.rooms.models import Edition
-from robothor.rooms.periods import OnDemandCapReached, PeriodError, RoomRunUnavailable
+from robothor.rooms.periods import PeriodError, RoomRunUnavailable
 
 ROOM = "7a0c0e8e-63c4-4c5b-9a43-0d6f6f0c2b11"
 ALICE = "5b8e4a8a-0f6e-4e43-8f53-1f9d1d3c2a77"
@@ -266,7 +266,6 @@ async def test_the_account_lookup_runs_off_the_event_loop(fake, monkeypatch):
     [
         (RoomNotFound(ROOM), 404, "room_not_found"),
         (RoomForbidden("viewer access does not allow 'request_period'"), 403, "forbidden"),
-        (OnDemandCapReached(limit=5, used=5), 429, "on_demand_cap"),
         (PeriodError("that day is not over yet"), 422, "invalid_period"),
         (RoomRunUnavailable("room runs are not available"), 503, "runs_unavailable"),
     ],
@@ -281,12 +280,10 @@ async def test_each_refusal_has_its_own_status(fake, error, status, code):
     assert response.json()["message"]
 
 
-async def test_cap_reached_says_what_the_cap_is(fake):
-    fake.error = OnDemandCapReached(limit=5, used=5)
+def test_no_refusal_says_a_limit_was_reached():
+    from robothor.rooms import periods
 
-    body = (await _post(_app(), {"grain": "day"})).json()
-
-    assert (body["limit"], body["used"]) == (5, 5)
+    assert not hasattr(periods, "OnDemandCapReached")
 
 
 async def test_no_room_existence_leaks_in_a_404(fake):
@@ -482,7 +479,6 @@ async def test_an_account_lookup_that_fails_answers_a_generic_500(fake, monkeypa
         lambda: PeriodError(SECRET, reason="not_over"),
         lambda: RoomForbidden(SECRET),
         lambda: RoomRunUnavailable(SECRET),
-        lambda: OnDemandCapReached(limit=5, used=5),
     ],
 )
 async def test_a_refusal_message_is_the_routes_own_text(fake, make):
@@ -490,7 +486,7 @@ async def test_a_refusal_message_is_the_routes_own_text(fake, make):
 
     response = await _post(_app(), {"grain": "day"})
 
-    assert response.status_code in {403, 422, 429, 503}
+    assert response.status_code in {403, 422, 503}
     assert SECRET not in response.text
     assert response.json()["message"]
 

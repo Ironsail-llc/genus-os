@@ -2157,8 +2157,8 @@ _ROOM_PERIOD_SCHEMAS: dict[str, dict[str, Any]] = {
                 "Get a report workspace's edition for a day, week (Monday to Sunday), month "
                 "or custom range, in the workspace's time zone. Returns the published "
                 "edition at once, or starts one run and returns the edition building "
-                "(started=true). Only periods that are over; on-demand runs are capped per "
-                "day. The result carries the workspace link."
+                "(started=true). Only periods that are over. The result carries the "
+                "workspace link."
             ),
             "parameters": {
                 "type": "object",

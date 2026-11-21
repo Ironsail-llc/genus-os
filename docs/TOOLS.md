@@ -1998,8 +1998,8 @@ agent's own allow-set is the authoritative answer. The families:
 ### Workspace periods: `room_request_period`
 
 `room_request_period(room_id, grain, anchor)` gets a report workspace's edition for
-one period: `day`, `week` (Monday to Sunday), `month`, or a `custom` range of at
-most 93 days. The period is whole days in the workspace's time zone
+one period: `day`, `week` (Monday to Sunday), `month`, or a `custom` range of
+any length. The period is whole days in the workspace's time zone
 (`settings.tz`, UTC when unset). `anchor` is a date inside the period
 (`YYYY-MM-DD`; `YYYY-MM` for a month), `start/end` for a custom range, or
 `latest` for the last complete period. Only a period that is over can be
@@ -2007,18 +2007,15 @@ asked for.
 
 A published edition comes back at once (`started: false`). Otherwise one run
 starts and the building edition comes back (`started: true`); people asking at
-the same moment share that one run. Each person may start
-`settings.max_on_demand_per_day` on-demand editions in a workspace per day of the
-workspace's time zone (5 when unset; previews and failed runs count, asking for
-an edition that already exists does not). Past that the tool returns
-`cap_reached: true` and starts nothing. A run that was interrupted (cancelled,
+the same moment share that one run. Nothing limits how many periods anyone may
+ask for. A run that was interrupted (cancelled,
 or the engine restarted) fails its edition, so the period can be asked for
 again. A week or
 month run reads the summaries of the day editions inside it as data; it fetches
 its own figures and never adds the days up. Use `room_run` for "run it now" and
 `room_read` to read editions that already exist. The engine route
 `POST /api/rooms/{id}/periods` does the same for the dashboard (200 existing,
-202 started, 429 `on_demand_cap` with the `limit`); the bridge reaches it with its engine credential
+202 started); the bridge reaches it with its engine credential
 and names the person asking.
 
 ### When a tool call fails
