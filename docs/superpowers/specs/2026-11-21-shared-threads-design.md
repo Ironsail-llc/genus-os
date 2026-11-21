@@ -180,14 +180,16 @@ rely on:
 
 `robothor/rooms/definition.py` holds every definition rule; the `room_*` tools
 and the bridge routes are wrappers over it. Besides the two contract functions
-(`create_room_with_schedule`, `apply_definition_change`, `ROOM_MIN_INTERVAL_SECONDS`
-= 900) it exports `list_rooms(actor, *, scope)`, `read_room(actor, room_id, *,
+(`create_room_with_schedule`, `apply_definition_change`) it exports `list_rooms(actor, *, scope)`, `read_room(actor, room_id, *,
 editions, messages)`, `share_room`, `unshare_room`, `archive_room`,
 `duplicate_room`, `restore_room_revision`, `reassign_room`, `resolve_user`,
 `run_as_actor(tenant_id, room_id)` and `room_schedule(tenant_id, room_id)`.
 
-- A schedule must repeat: a one-off (`in 2 hours`, an ISO time) is refused, as is
-  any interval or cron expression whose runs come closer than 15 minutes. A room's
+- A schedule must repeat: a one-off (`2h`, an ISO time) is refused. There is no
+  workspace minimum interval (operator decision: nothing in workspaces is capped);
+  a schedule may be as frequent as `cron_parse.parse_schedule` allows any user
+  cron. `max_cost_usd` is not a definition change the tools or
+  `apply_definition_change` accept. A room's
   cron schedule is read in `settings.tz`, UTC when unset; the zone is stored in the
   row's payload. A plain user cron (no `tz` in its payload) keeps the host's zone.
 - One `user_cronjobs` row per room: a partial unique index on

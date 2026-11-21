@@ -1621,7 +1621,7 @@ same way.
 | Tool | Does | Needs |
 |---|---|---|
 | `room_create` | `kind` report or agent, `title`, `instructions`, optional `agent_id` (default `main`), `schedule`, `tz`, `default_grain`, `share_with` | a staff role (not viewer) |
-| `room_update` | `room_id`, `expected_rev`, `changes` (`title`, `instructions`, `schedule_text`, `tz`, `default_grain`, `paused`, `notify_default`, `max_cost_usd`) | assigned, or owner/admin |
+| `room_update` | `room_id`, `expected_rev`, `changes` (`title`, `instructions`, `schedule_text`, `tz`, `default_grain`, `paused`, `notify_default`) | assigned, or owner/admin |
 | `room_list` | `scope` `mine` (default) or `all` | `all`: owner/admin |
 | `room_read` | `room_id`, `editions` (3), `messages` (10) | any access |
 | `room_share` / `room_unshare` | `room_id`, `user` (id or email), `assigned`. Re-sharing a member keeps their role unless `assigned` is given; `assigned: false` and unshare never touch the run-as user or the last assigned member | assigned, or owner/admin |
@@ -1639,8 +1639,9 @@ same way.
   nothing, whatever id it is given.
 - **Checked before anything is written.** The instructions and title go through
   the injection scanner (`robothor/engine/cron_safety.py`); the schedule through
-  `cron_parse.parse_schedule`, refusing a one-off and anything that runs more
-  often than every 15 minutes (`ROOM_MIN_INTERVAL_SECONDS`); the agent must be
+  `cron_parse.parse_schedule`, refusing a one-off (a schedule repeats) and
+  allowing anything that parser allows any user cron, with no workspace minimum
+  of its own; the agent must be
   one this instance can load; every `share_with` entry must be an active account
   of the same company. A refusal saves nothing.
 - **Definitions cannot be overwritten by accident.** Every change writes a

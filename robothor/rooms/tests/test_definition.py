@@ -325,9 +325,7 @@ def test_an_unusable_schedule_on_update_is_refused_and_nothing_is_written(staff_
     db = staff_db
     room = _report(db)
     with pytest.raises(definition.InvalidSchedule, match="repeats"):
-        definition.apply_definition_change(
-            _actor(db, "alice"), room.id, 1, {"schedule_text": "2h"}
-        )
+        definition.apply_definition_change(_actor(db, "alice"), room.id, 1, {"schedule_text": "2h"})
     assert dal.get_room(db.tenant, room.id).rev == 1
     assert _cron_rows(db, room.id)[0]["schedule_payload"]["expression"] == "0 8 * * *"
 
