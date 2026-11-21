@@ -98,7 +98,11 @@ async function postJson<T>(endpoint: string, body?: unknown): Promise<RoomWrite<
     } catch {
       parsed = null;
     }
-    return { ok: false, status: res.status, message: await readBridgeReply(res), body: parsed };
+    // `{detail: {error, message, ...}}` carries its sentence one level down,
+    // where the shared reader does not look.
+    const wrapped = refusalFields(parsed).message;
+    const message = typeof wrapped === "string" && wrapped.trim() ? wrapped : await readBridgeReply(res);
+    return { ok: false, status: res.status, message, body: parsed };
   }
   try {
     return { ok: true, value: (await res.json()) as T };
@@ -119,8 +123,17 @@ export type TaskDecision =
   | { ok: true; task: RoomTask | null }
   | { ok: false; status: number; message: string; takenBy: string | null };
 
+/** A refusal's own fields: at the top level, or inside FastAPI's `detail` wrapper. */
+function refusalFields(body: unknown): Record<string, unknown> {
+  if (!body || typeof body !== "object") return {};
+  const detail = (body as { detail?: unknown }).detail;
+  return detail && typeof detail === "object" && !Array.isArray(detail)
+    ? (detail as Record<string, unknown>)
+    : (body as Record<string, unknown>);
+}
+
 function takenByOf(body: unknown): string | null {
-  const by = (body as { acceptedBy?: unknown } | null)?.acceptedBy;
+  const by = refusalFields(body).acceptedBy;
   if (typeof by === "string" && by) return by;
   const name = (by as { displayName?: unknown } | null)?.displayName;
   return typeof name === "string" && name ? name : null;

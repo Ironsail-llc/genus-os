@@ -11,16 +11,18 @@ const WORKSPACE_RULES = `Workspaces (shared conversations below the main one, wi
 - Before room_create, restate what you will set up (kind, title, agent, schedule, who it is shared with) and wait for the user to confirm.
 - Never describe a workspace the tools did not return. To answer "what is new in my workspaces", call room_list (and room_read for detail) and link each one you name.`;
 
-/** System prompt injected into the gateway session for visual canvas awareness */
-export function getVisualCanvasPrompt(): string {
+/**
+ * System prompt injected into the gateway session for visual canvas awareness.
+ * The workspace rules are added only where workspaces are served: they name
+ * room tools, which an instance without workspaces does not have.
+ */
+export function getVisualCanvasPrompt({ workspaces = false }: { workspaces?: boolean } = {}): string {
   return `You have a live visual canvas at the Helm dashboard. The dashboard auto-updates based on conversation context.
 
 Optional: include [DASHBOARD:{"intent":"<hint>","data":{...}}] to signal a visualization with data from tool calls.
 For instant components: [RENDER:<component_name>:<json_props>]
 
-Keep text conversational. Markers are metadata, not shown to the user.
-
-${WORKSPACE_RULES}`;
+Keep text conversational. Markers are metadata, not shown to the user.${workspaces ? `\n\n${WORKSPACE_RULES}` : ""}`;
 }
 
 

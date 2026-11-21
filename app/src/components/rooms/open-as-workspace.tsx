@@ -4,7 +4,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import { Loader2, Plus, SquareArrowOutUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ROOMS_QUERY_KEY } from "@/hooks/use-rooms";
+import { ROOMS_QUERY_KEY, useRooms } from "@/hooks/use-rooms";
 import { openTaskRoom, type RoomOpened } from "@/lib/rooms/api";
 import { ROOM_LABEL } from "@/lib/rooms/labels";
 import { navigateTo } from "@/lib/rooms/navigate";
@@ -15,6 +15,16 @@ import { useAppQueryClient } from "@/lib/query/query-client";
 const NewWorkspaceDialog = dynamic(() => import("./new-workspace-dialog").then((m) => m.NewWorkspaceDialog), {
   ssr: false,
 });
+
+/**
+ * Whether to offer workspaces at all: only once the rooms list has answered,
+ * and never where it answers 404 (nothing serves workspaces here, the same
+ * rule that hides the shell's rail). Reads the shared rooms cache.
+ */
+export function useWorkspacesServed(): boolean {
+  const { available, isLoading } = useRooms();
+  return available && !isLoading;
+}
 
 /** After a room was made or found: the rail lists it, and the room opens. */
 export function useEnterRoom() {
@@ -32,6 +42,7 @@ export function useEnterRoom() {
  * opening the same task lands in the same place. Then into it, in place.
  */
 export function OpenAsWorkspace({ taskId }: { taskId: string }) {
+  const served = useWorkspacesServed();
   const enter = useEnterRoom();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +59,7 @@ export function OpenAsWorkspace({ taskId }: { taskId: string }) {
     }
   }
 
+  if (!served) return null;
   return (
     <div className="mt-2">
       <Button
@@ -92,7 +104,9 @@ export function NewWorkspaceButton({
   label = `New ${ROOM_LABEL.singular}`,
   variant = "inline",
 }: NewWorkspaceButtonProps) {
+  const served = useWorkspacesServed();
   const [open, setOpen] = useState(false);
+  if (!served) return null;
   return (
     <>
       {variant === "rail" ? (

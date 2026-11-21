@@ -150,7 +150,10 @@ function FreshRoom({ room, rail, onOpen }: { room: RoomSummary; rail: boolean; o
 
 /** The chat landing's copy, reading the shared rooms cache and opening in place. */
 export function LandingNewInWorkspaces() {
-  const { rooms, isLoading, error } = useRooms();
+  const { rooms, isLoading, error, available } = useRooms();
+  // Where nothing serves workspaces (the list answers 404) the landing says
+  // nothing about them, as the shell shows no rail.
+  if (!available) return null;
   return (
     <NewInWorkspaces
       rooms={rooms}
