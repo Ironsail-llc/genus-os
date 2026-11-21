@@ -13,9 +13,9 @@
   ``robothor.rooms.run_context``, never from arguments.
 - ``register_edition_published``: the one extension point; hooks run after a
   non-preview edition is published (task creation, notifications).
-- ``note_turn_edition`` / ``take_turn_editions`` / ``stamp_turn_message``:
-  the chat store stamps ``edition_id`` on the assistant message saved for the
-  turn that published, so history can re-render it.
+- ``stamp_turn_message``: the chat store stamps ``edition_id`` on the
+  assistant message saved for the turn that published (the editions are
+  collected on the run's ``RoomRun``), so history can re-render it.
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ import logging
 import math
 import re
 import threading
-import time
 import unicodedata
+from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
@@ -54,12 +54,10 @@ __all__ = [
     "edition_event_payload",
     "emit_edition_event",
     "load_run_record",
-    "note_turn_edition",
     "on_edition_published",
     "publish_from_run",
     "register_edition_published",
     "stamp_turn_message",
-    "take_turn_editions",
     "unregister_edition_published",
     "validate_blocks",
     "validate_suggestions",
@@ -327,13 +325,21 @@ _MARKER_OPEN = re.compile(r"\[(?=[A-Z][A-Z_]{1,31}:)")
 def clean_text(value: str, limit: int, *, one_line: bool = False) -> str:
     """``value`` as plain text: no escape sequences, no control or format
     characters (newlines and tabs kept unless ``one_line``), no marker syntax,
-    at most ``limit`` characters."""
-    text = _MARKER_OPEN.sub("", _TAG.sub("", _ANSI.sub("", value)))
+    at most ``limit`` characters.
+
+    Hidden characters go first, so one cannot split a marker the patterns
+    would otherwise see; the patterns then repeat until nothing changes, so
+    removing one match cannot leave another behind (``[[RENDER:``)."""
     text = "".join(
         ch
-        for ch in text
+        for ch in _ANSI.sub("", value)
         if ch in "\n\t" or unicodedata.category(ch) not in ("Cc", "Cf", "Cs", "Co")
     )
+    while True:
+        cleaned = _MARKER_OPEN.sub("", _TAG.sub("", text))
+        if cleaned == text:
+            break
+        text = cleaned
     if one_line:
         text = " ".join(text.split())
     return text.strip()[:limit]
@@ -387,24 +393,35 @@ def build_provenance(
     return prov
 
 
-def load_run_record(tenant_id: str, run_id: str) -> tuple[datetime | None, list[dict[str, Any]]]:
-    """``(started_at, tool-call steps)`` of a run of the tenant, as recorded.
+@dataclass(frozen=True)
+class RunRecord:
+    """What ``agent_runs`` and ``agent_run_steps`` hold for one run."""
+
+    started_at: datetime | None
+    #: A sub-agent run (a parent run, or depth above 0).
+    is_child: bool
+    steps: list[dict[str, Any]]
+
+
+def load_run_record(tenant_id: str, run_id: str) -> RunRecord | None:
+    """The run of the tenant as recorded, or None when it has no row.
 
     The runner flushes steps after every iteration, so every call whose result
     the agent had seen when it called the publish tool is here."""
     run = canonical_uuid(run_id)
     if run is None:
-        return None, []
+        return None
     with get_connection(read_only=True) as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT COALESCE(started_at, created_at) FROM agent_runs "
-            "WHERE id = %s AND tenant_id = %s",
+            "SELECT COALESCE(started_at, created_at), "
+            "parent_run_id IS NOT NULL OR COALESCE(nesting_depth, 0) > 0 "
+            "FROM agent_runs WHERE id = %s AND tenant_id = %s",
             (run, tenant_id),
         )
         row = cur.fetchone()
         if row is None:
-            return None, []
+            return None
         cur.execute(
             "SELECT tool_name, tool_input->>'name', started_at, error_message "
             "FROM agent_run_steps WHERE run_id = %s AND step_type = 'tool_call' "
@@ -415,7 +432,22 @@ def load_run_record(tenant_id: str, run_id: str) -> tuple[datetime | None, list[
             {"tool_name": t, "inner_name": inner, "started_at": at, "error_message": err}
             for t, inner, at, err in cur.fetchall()
         ]
-        return row[0], steps
+        return RunRecord(started_at=row[0], is_child=bool(row[1]), steps=steps)
+
+
+def _recorded_top_level_run(tenant_id: str, run_id: str) -> RunRecord:
+    """The run's record. Refuses a run with no row (no provenance could be
+    built) and a sub-agent run: a child inherits its parent's room carrier,
+    and an edition is published by the room's own run, whose calls it cites."""
+    record = load_run_record(tenant_id, run_id)
+    if record is None:
+        raise ValueError("this run is not recorded, so its edition's provenance cannot be built")
+    if record.is_child:
+        raise ValueError(
+            "a sub-agent run cannot publish into the workspace; return the result to the "
+            "workspace's own run and publish from there"
+        )
+    return record
 
 
 # ─── the published extension point ───────────────────────────────────────
@@ -471,30 +503,6 @@ def emit_edition_event(room: Room, edition: Edition) -> None:
 
 
 # ─── the turn's editions, for the chat store ─────────────────────────────
-
-_TURN_TTL_S = 3600.0
-_TURN_MAX = 1024
-_turns: dict[tuple[str, str], tuple[float, list[str]]] = {}
-_turns_lock = threading.Lock()
-
-
-def note_turn_edition(tenant_id: str, session_key: str, edition_id: str) -> None:
-    """Remember that the current turn on ``session_key`` published ``edition_id``."""
-    now = time.monotonic()
-    with _turns_lock:
-        for key in [k for k, (at, _) in _turns.items() if now - at > _TURN_TTL_S]:
-            del _turns[key]
-        if len(_turns) >= _TURN_MAX:
-            del _turns[min(_turns, key=lambda k: _turns[k][0])]
-        _, ids = _turns.get((tenant_id, session_key), (now, []))
-        _turns[(tenant_id, session_key)] = (now, [*ids, edition_id])
-
-
-def take_turn_editions(tenant_id: str, session_key: str) -> list[str]:
-    """The editions noted for ``session_key`` since the last take, oldest first."""
-    with _turns_lock:
-        _, ids = _turns.pop((tenant_id, session_key), (0.0, []))
-    return ids
 
 
 def stamp_turn_message(cur: Any, tenant_id: str, edition_ids: list[str], message_id: int) -> None:
@@ -609,14 +617,14 @@ def _publish(
     summary = clean_summary(args.get("summary"))
     blocks = validate_blocks(args.get("blocks"))
     suggestions = validate_suggestions(args.get("suggestions"))
+    record = _recorded_top_level_run(room.tenant_id, run_id)
     edition, created = _building_edition(room, run, kind, period, actor, run_id)
     try:
-        started_at, steps = load_run_record(room.tenant_id, run_id)
         provenance = build_provenance(
             run_id=run_id,
             ran_as=actor.user_id,
-            started_at=started_at,
-            steps=steps,
+            started_at=record.started_at,
+            steps=record.steps,
             room_rev=edition.revision,
         )
         published = dal.publish_edition(
@@ -680,7 +688,8 @@ def publish_from_run(
     except (RoomForbidden, InvalidBlocks, ValueError) as exc:
         return {"error": str(exc)}
     if not edition.preview:
-        note_turn_edition(room.tenant_id, room.session_key, edition.id)
+        assert run is not None  # noqa: S101 - _publish refused otherwise
+        run.note_published(edition.id)
         try:
             emit_edition_event(room, edition)
         except Exception:
