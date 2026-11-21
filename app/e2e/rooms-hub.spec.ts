@@ -82,15 +82,25 @@ async function setupMocks(page: Page) {
         id: ACTION,
         run_id: "",
         agent_id: "",
-        action_kind: "email.send",
-        question: "email.send: Following up on your order",
+        action_kind: "room.email",
+        question: "room.email: Following up on your order",
         detail: "Hi Alice,\n\nJust checking the order arrived safely.",
-        envelope: { sender: "agent@example.com", recipient: "alice@example.com" },
+        envelope: { sender: "agent@example.com", recipient: "alice@example.com", subject: "Following up on your order" },
+        email: {
+          from: "agent@example.com",
+          replyTo: "bob@example.com",
+          to: ["alice@example.com"],
+          cc: [],
+          subject: "Following up on your order",
+          body: "Hi Alice,\n\nJust checking the order arrived safely.",
+          onBehalfOf: "Bob",
+        },
         options: [],
         expires_at: "2099-01-01T12:00:00Z",
         created_at: "2026-11-21T09:00:00Z",
-        room_id: ROOM,
-        task_id: TAKEN,
+        // Member approval lives in the task's own workspace.
+        room_id: TASK_ROOM,
+        task_id: CRM_TASK,
       },
     ] as Array<Record<string, unknown>>,
     notes: [
@@ -290,7 +300,7 @@ test.describe("Workspaces — the hub", () => {
     expect(await samePage(page)).toBe(true);
   });
 
-  test("the tasks tab: suggestion, taken, dismiss, and approving my own proposal (E1, E2, E5, E3)", async ({ page }) => {
+  test("the tasks tab: suggestion, taken, dismiss; approving my own email in the task workspace (E1, E2, E5, E3)", async ({ page }) => {
     const state = await setupMocks(page);
     await page.goto(`/?v=chat&room=${ROOM}`, { waitUntil: "networkidle" });
 
@@ -307,11 +317,18 @@ test.describe("Workspaces — the hub", () => {
     await tab.locator(`[data-testid="room-task-dismiss-${OTHER}"]`).click();
     await expect(tab.locator(`[data-testid="room-task-${OTHER}"]`)).toHaveCount(0);
 
-    const card = tab.locator(`[data-testid="inbox-card-${ACTION}"]`);
-    await expect(card).toContainText("alice@example.com");
-    await expect(card).toContainText("Just checking the order arrived safely.");
-    await card.locator(`[data-testid="inbox-approve-${ACTION}"]`).click();
-    await expect(tab.locator(`[data-testid="room-approval-receipt-${ACTION}"]`)).toContainText("Approved");
+    // A report workspace decides nothing: it leads to the task's own workspace.
+    await expect(tab.locator('[data-testid="room-approvals"]')).toHaveCount(0);
+    await expect(tab.locator(`[data-testid="open-as-workspace-${TAKEN}"]`)).toContainText("Open task workspace");
+
+    await page.goto(`/?v=chat&room=${TASK_ROOM}`, { waitUntil: "networkidle" });
+    const card = page.locator(`[data-testid="room-email-${ACTION}"]`);
+    await expect(card).toBeVisible({ timeout: 15000 });
+    await expect(card.locator('[data-testid="room-email-to"]')).toHaveText("alice@example.com");
+    await expect(card.locator('[data-testid="room-email-reply-to"]')).toHaveText("bob@example.com");
+    await expect(card.locator('[data-testid="room-email-body"]')).toContainText("Just checking the order arrived safely.");
+    await card.getByRole("button", { name: /approve and send/i }).click();
+    await expect(page.locator(`[data-testid="room-approval-receipt-${ACTION}"]`)).toContainText("Approved");
     expect(state.answers).toEqual([{ approved: true }]);
   });
 

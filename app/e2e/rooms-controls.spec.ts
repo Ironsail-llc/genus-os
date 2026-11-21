@@ -270,9 +270,10 @@ test.describe("Workspaces — controls", () => {
 
     await page.getByTestId("period-trigger").click();
     await page.getByTestId("period-grain-day").click();
+    // A period not over yet is refused as it is picked: said, and no button.
     await page.getByTestId("period-anchor").fill("2099-01-01");
-    await page.getByTestId("period-apply").click();
     await expect(page.getByTestId("period-error")).toBeVisible();
+    await expect(page.getByTestId("period-apply")).toBeDisabled();
     expect(sent.filter((r) => r.path === `/${ROOM}/periods`)).toHaveLength(0);
 
     await page.getByTestId("period-anchor").fill("2026-11-17");
