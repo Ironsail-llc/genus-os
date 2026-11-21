@@ -109,7 +109,20 @@ def run(db, *, trigger: str, detail: str, user: str = "") -> str:
     return run_id
 
 
-def propose(db, *, run_id: str | None, for_user: str | None, room_id: str | None, **payload):
+#: A kind no pipeline reserves for operators (unlike ``sales.*``).
+KIND = "email.follow_up"
+
+
+def propose(
+    db,
+    *,
+    run_id: str | None,
+    for_user: str | None,
+    room_id: str | None,
+    kind: str = KIND,
+    plugin: str | None = None,
+    **payload,
+):
     from robothor.operations.proposer import Proposer
     from robothor.operations.store import Operations
 
@@ -120,9 +133,10 @@ def propose(db, *, run_id: str | None, for_user: str | None, room_id: str | None
         **payload,
     }
     return Operations(db.tenant).propose(
-        "sales.email",
+        kind,
         f"draft-{uuid.uuid4()}",
         body,
+        proposed_by=plugin,
         proposer=Proposer(run_id=run_id, user_id=for_user, room_id=room_id),
     )
 
@@ -285,6 +299,117 @@ def test_a_service_identity_is_refused(db, bobs_room):
         approvals.decide_member_action(service, action, approved=True)
 
 
+def _mine(db, room, **kw):
+    r = run(db, trigger="webchat", detail=f"webchat:{room.session_key}", user=db.bob)
+    return propose(db, run_id=r, for_user=db.bob, room_id=room.id, **kw)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"plugin": "sales"}, {"kind": "sales.email"}, {"kind": "sales.follow_up"}],
+    ids=["plugin-proposed", "sales-email", "sales-other"],
+)
+def test_plugin_and_sales_actions_stay_with_operators(db, bobs_room, overrides):
+    """A plugin's draft is decided by an operator or that plugin's policy, and
+    the sales pipeline accepts only an operator's verdict on what it sends."""
+    from robothor.operations.store import NotPermitted
+    from robothor.rooms import approvals
+
+    action = _mine(db, bobs_room, **overrides)
+
+    assert approvals.list_member_actions(actor(db, "bob")) == []
+    with pytest.raises(NotPermitted):
+        approvals.decide_member_action(actor(db, "bob"), action, approved=True)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "UPDATE user_accounts SET role = 'viewer' WHERE id = %(bob)s",
+        "UPDATE user_accounts SET status = 'disabled' WHERE id = %(bob)s",
+        "DELETE FROM user_accounts WHERE id = %(bob)s",
+    ],
+    ids=["demoted-to-viewer", "deactivated", "account-gone"],
+)
+def test_the_account_is_read_from_the_database_not_the_token(db, bobs_room, change):
+    from robothor.operations.store import NotPermitted
+    from robothor.rooms import approvals
+
+    action = _mine(db, bobs_room)
+    db.cur.execute(change, {"bob": db.bob})
+
+    assert approvals.list_member_actions(actor(db, "bob")) == []
+    with pytest.raises(NotPermitted):
+        approvals.decide_member_action(actor(db, "bob"), action, approved=True)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "UPDATE crm_tasks SET status = 'DONE' WHERE id = %(task)s",
+        "UPDATE crm_tasks SET resolved_at = now(), resolution = 'done' WHERE id = %(task)s",
+        "UPDATE crm_tasks SET deleted_at = now() WHERE id = %(task)s",
+    ],
+    ids=["done", "resolved", "deleted"],
+)
+def test_a_finished_task_grants_nothing(db, bobs_room, change):
+    from robothor.operations.store import NotPermitted
+    from robothor.rooms import approvals
+
+    action = _mine(db, bobs_room)
+    db.cur.execute(change, {"task": bobs_room.task_id})
+
+    with pytest.raises(NotPermitted):
+        approvals.decide_member_action(actor(db, "bob"), action, approved=True)
+
+
+def test_opening_a_task_never_makes_the_opener_able_to_approve(db):
+    """Open an unassigned task as a workspace, try to take it from inside, then
+    approve an action from your own turn there: refused at every step."""
+    from robothor.operations.store import NotPermitted
+    from robothor.rooms import approvals, tasks
+    from robothor.rooms.errors import RoomForbidden
+
+    task_id = new_task(db, None)
+    room = tasks.open_task_room(actor(db, "bob"), task_id)
+    with pytest.raises(RoomForbidden):
+        tasks.accept_task(actor(db, "bob"), room.id, task_id)
+    action = _mine(db, room)
+
+    with pytest.raises(NotPermitted):
+        approvals.decide_member_action(actor(db, "bob"), action, approved=True)
+    db.cur.execute("SELECT assignee_id FROM crm_tasks WHERE id = %s", (task_id,))
+    assert db.cur.fetchone()[0] is None
+
+
+def test_an_accepted_suggestion_opened_as_a_workspace_is_the_members_to_approve(db):
+    """E3 end to end: Bob accepts a suggested task, opens it, his own turn there
+    proposes, and he may approve it."""
+    from robothor.rooms import approvals, dal, tasks
+
+    report = dal.create_room(
+        db.tenant, kind="report", title="Weekly", agent_id="main", created_by=db.alice
+    )
+    dal.add_member(db.tenant, report.id, db.bob, added_by=db.alice)
+    edition, _ = dal.create_edition(db.tenant, report.id)
+    edition = dal.publish_edition(
+        db.tenant,
+        edition.id,
+        title="W47",
+        summary="",
+        blocks=[],
+        suggestions=[{"key": "acme", "title": "Email Acme", "detail": "", "action_hint": ""}],
+    )
+    tasks.on_edition_published(report, edition)
+    [view] = tasks.list_tasks(actor(db, "bob"), report.id)
+    tasks.accept_task(actor(db, "bob"), report.id, view.task_id)
+    room = tasks.open_task_room(actor(db, "bob"), view.task_id)
+    action = _mine(db, room)
+
+    assert [r["id"] for r in approvals.list_member_actions(actor(db, "bob"))] == [action]
+    assert approvals.decide_member_action(actor(db, "bob"), action, approved=True) is True
+
+
 # ─── E4.5: Bob lists only his own ────────────────────────────────────────
 
 
@@ -308,7 +433,7 @@ def test_the_member_list_holds_only_the_callers_pending_eligible_rows(db, bobs_r
     [row] = rows
     assert row["room_id"] == bobs_room.id
     assert row["task_id"] == bobs_room.task_id
-    assert row["kind"] == "sales.email"
+    assert row["kind"] == KIND
     assert row["payload"]["recipient"] == "bob@example.com"
 
 

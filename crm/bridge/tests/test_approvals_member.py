@@ -340,3 +340,28 @@ def test_a_malformed_member_decision_settles_nothing(
 
     assert response.status_code == code
     assert member_rule["decide"] == []
+
+
+def test_the_member_path_runs_inside_the_acting_tenants_scope(_controls_auth_key, monkeypatch):
+    from routers import approvals
+
+    from robothor.db.connection import current_tenant_scope
+
+    scopes: list = []
+
+    def _list(actor):
+        scopes.append(("list", current_tenant_scope()))
+        return []
+
+    def _decide(actor, action_id, *, approved):
+        scopes.append(("decide", current_tenant_scope()))
+        return True
+
+    monkeypatch.setattr(approvals, "list_member_actions", _list)
+    monkeypatch.setattr(approvals, "decide_member_action", _decide)
+    client = _client("member", BOB)
+    client.get("/api/approvals")
+    with patch("routers._audit.log_event"):
+        client.post(f"/api/approvals/action/{ACTION_ID}", json={"approved": True})
+
+    assert scopes == [("list", CHILD), ("decide", CHILD)]

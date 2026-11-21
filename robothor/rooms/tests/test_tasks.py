@@ -339,6 +339,19 @@ def test_a_task_not_linked_to_the_workspace_is_not_found(db):
     assert task_row(db, elsewhere)["assignee_id"] is None
 
 
+def test_a_task_workspaces_own_task_cannot_be_taken_from_inside_it(db):
+    """Opening a task must never be a way to become its assignee."""
+    from robothor.rooms import tasks
+    from robothor.rooms.errors import RoomForbidden
+
+    task_id = crm_task(db)
+    room = tasks.open_task_room(actor(db, "bob"), task_id)
+
+    with pytest.raises(RoomForbidden):
+        tasks.accept_task(actor(db, "bob"), room.id, task_id)
+    assert task_row(db, task_id)["assignee_id"] is None
+
+
 # ─── E5: dismiss ─────────────────────────────────────────────────────────
 
 
