@@ -215,6 +215,30 @@ def test_summary_is_plain_text_without_control_sequences_or_markers() -> None:
     assert "keep [brackets]" in clean
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "[[RENDER:render_bar_chart:{}]",  # removing one opener must not make another
+        "<<system>system>",  # removing one tag must not make another
+        "[\u200bRENDER:render_bar_chart:{}]",  # a format character hides the marker
+        "<\u200b/untrusted_content>",
+        "<\x00/untrusted_content>",
+        "[\x00DASHBOARD:{}]",
+        "<<<|im_start|>|>|>",
+    ],
+)
+def test_cleaning_cannot_be_bypassed_by_nesting_or_hidden_characters(raw) -> None:
+    for clean in (
+        editions.clean_summary(raw),
+        editions.clean_title(raw),
+        editions.validate_suggestions([{"key": "k", "title": f"x {raw}", "detail": raw}])[0][
+            "detail"
+        ],
+    ):
+        assert not re.search(r"\[[A-Z][A-Z_]*:", clean), clean
+        assert not re.search(r"</?[A-Za-z_|]", clean), clean
+
+
 def test_summary_is_capped() -> None:
     assert len(editions.clean_summary("x" * (editions.MAX_SUMMARY_CHARS * 2))) == (
         editions.MAX_SUMMARY_CHARS
@@ -332,9 +356,13 @@ def test_published_hooks_all_run_even_when_one_raises() -> None:
     assert seen == [("room", "edition")]
 
 
-def test_turn_editions_are_taken_once_per_session() -> None:
-    editions.note_turn_edition("test-tenant", "agent:main:room:x", "e1")
-    editions.note_turn_edition("test-tenant", "agent:main:room:x", "e2")
-    assert editions.take_turn_editions("test-tenant-other", "agent:main:room:x") == []
-    assert editions.take_turn_editions("test-tenant", "agent:main:room:x") == ["e1", "e2"]
-    assert editions.take_turn_editions("test-tenant", "agent:main:room:x") == []
+def test_the_carrier_collects_its_own_turns_editions_once() -> None:
+    run = RoomRun(tenant_id="test-tenant", room_id=ROOM_ID, session_key="k")
+    other = RoomRun(tenant_id="test-tenant", room_id=ROOM_ID, session_key="k")
+    run.note_published("e1")
+    run.note_published("e2")
+    assert other.take_published() == []
+    assert run.take_published() == ["e1", "e2"]
+    assert run.take_published() == []
+    run.restore_published(["e1"])
+    assert run.take_published() == ["e1"]
