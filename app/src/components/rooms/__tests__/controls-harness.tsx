@@ -59,7 +59,12 @@ export function mockBridge() {
 export function withClient(ui: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const utils = render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
-  return { ...utils, client };
+  return {
+    ...utils,
+    client,
+    /** Re-render under the same client, so the tree (and its state) is kept. */
+    rerender: (next: ReactNode) => utils.rerender(<QueryClientProvider client={client}>{next}</QueryClientProvider>),
+  };
 }
 
 export function slotCtx(overrides: Partial<Room> = {}, extra: Partial<RoomSlotContext> = {}): RoomSlotContext {

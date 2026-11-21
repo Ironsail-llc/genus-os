@@ -83,6 +83,7 @@ async function setupMocks(page: Page, { access, role = "member" }: Options) {
   const sent: Array<{ method: string; path: string; body: unknown }> = [];
   let rev = 3;
   let built = false;
+  let builtReads = 0;
   const editions = [
     edition(EDITION, 2, "Week 46", "2026-11-09", "2026-11-15"),
     edition(OLDER, 1, "Week 45", "2026-11-02", "2026-11-08"),
@@ -143,8 +144,10 @@ async function setupMocks(page: Page, { access, role = "member" }: Options) {
     if (path === `/${ROOM}/read`) return json(route, { ok: true });
     if (path === `/${ROOM}/editions`) return json(route, { editions: built ? [edition(BUILT, 3, "Tue 17 Nov", "2026-11-17", "2026-11-17", { grain: "day" }), ...editions] : editions });
     if (path === `/${ROOM}/editions/${BUILT}`) {
-      built = true;
-      return json(route, edition(BUILT, 3, "Tue 17 Nov", "2026-11-17", "2026-11-17", { grain: "day" }));
+      // Still building on the first look; published on the next poll.
+      builtReads += 1;
+      built = builtReads > 1;
+      return json(route, edition(BUILT, 3, "Tue 17 Nov", "2026-11-17", "2026-11-17", { grain: "day", status: built ? "published" : "building" }));
     }
     if (path === `/${ROOM}/editions/${PREVIEW}`) {
       return json(route, edition(PREVIEW, 9, "Preview of week 46", "2026-11-09", "2026-11-15", { preview: true }));

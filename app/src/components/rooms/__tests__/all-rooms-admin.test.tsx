@@ -124,15 +124,17 @@ describe("on the rail", () => {
   it("sits on the rail for an admin and opens the chosen workspace through it", async () => {
     const onSelect = vi.fn();
     withClient(<RoomRail rooms={SUMMARIES} activeRoomId={null} onSelect={onSelect} />);
-    fireEvent.click(screen.getByTestId("rooms-admin-entry"));
+    fireEvent.click(await screen.findByTestId("rooms-admin-entry"));
     const row = await screen.findByTestId(`rooms-admin-row-${REPORT_ID}`);
     fireEvent.click(within(row).getByRole("button", { name: /open/i }));
     expect(onSelect).toHaveBeenCalledWith(REPORT_ID);
   });
 
-  it("is absent from a member's rail", () => {
+  it("is absent from a member's rail", async () => {
     sessionRole = "member";
     withClient(<RoomRail rooms={SUMMARIES} activeRoomId={null} onSelect={vi.fn()} />);
+    await screen.findByTestId("room-rail-main");
+    await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByTestId("rooms-admin-entry")).toBeNull();
   });
 });

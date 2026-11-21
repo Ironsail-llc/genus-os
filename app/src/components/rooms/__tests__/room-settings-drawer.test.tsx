@@ -8,7 +8,6 @@
  * shared user reads the same drawer and is offered "Duplicate as mine".
  */
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RoomSettingsDrawer } from "@/components/rooms/room-settings-drawer";
@@ -179,13 +178,11 @@ describe("settings drawer: an assigned user", () => {
   });
 
   it("reloads the form from a newer revision of the room", () => {
-    const { rerender, client } = drawer();
+    const { rerender } = drawer();
     fireEvent.change(field(/^title/i), { target: { value: "Mine" } });
     const newer = room({ ...REPORT, rev: 4, title: "Changed by Dana" });
     rerender(
-      <QueryClientProvider client={client}>
-        <RoomSettingsDrawer room={newer} can={(a) => can("assigned", a)} open onOpenChange={vi.fn()} onSaved={vi.fn()} onDuplicate={vi.fn()} />
-      </QueryClientProvider>,
+      <RoomSettingsDrawer room={newer} can={(a) => can("assigned", a)} open onOpenChange={vi.fn()} onSaved={vi.fn()} onDuplicate={vi.fn()} />,
     );
     expect(field(/^title/i).value).toBe("Changed by Dana");
   });
@@ -217,6 +214,8 @@ describe("revision history (A7)", () => {
   it("lists who, when and what changed, newest first", async () => {
     drawer();
     fireEvent.click(screen.getByTestId("settings-tab-history"));
+    expect(screen.getByTestId("settings-tab-history")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("settings-tab-settings")).toHaveAttribute("aria-selected", "false");
     const r3 = await screen.findByTestId("revision-3");
     expect(r3).toHaveTextContent("Dana");
     expect(r3).toHaveTextContent(/15 Nov/);

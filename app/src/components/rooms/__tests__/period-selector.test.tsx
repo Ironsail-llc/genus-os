@@ -6,8 +6,6 @@
  * `RoomView` so "shows" means the pinned place.
  */
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
-import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StreamEvent } from "@/lib/event-bus/use-event-stream";
@@ -25,7 +23,7 @@ vi.mock("@/components/business/markdown-view", () => ({
 }));
 
 import { RoomView } from "@/components/rooms/room-view";
-import { ROOM_SLOTS_WITH_CONTROLS } from "@/components/rooms/room-controls";
+import { ROOM_CONTROL_SLOTS } from "@/components/rooms/room-controls";
 import { PeriodSelector } from "@/components/rooms/period-selector";
 import { EDITIONS, REPORT_ID, edition, reply, room } from "@/lib/rooms/__tests__/fixtures";
 import type { Edition } from "@/lib/rooms/types";
@@ -63,7 +61,7 @@ afterEach(() => {
 });
 
 async function openView() {
-  const utils = withClient(<RoomView roomId={REPORT_ID} onLeave={vi.fn()} slots={ROOM_SLOTS_WITH_CONTROLS} />);
+  const utils = withClient(<RoomView roomId={REPORT_ID} onLeave={vi.fn()} slots={ROOM_CONTROL_SLOTS} />);
   await screen.findByTestId("room-pinned-edition");
   return utils;
 }
@@ -73,7 +71,8 @@ function pinnedTitle() {
 }
 
 function pick(grain: "day" | "week" | "month" | "custom", dates: { anchor?: string; start?: string; end?: string }) {
-  fireEvent.click(screen.getByTestId("period-trigger"));
+  // The trigger toggles the picker; a refused pick leaves it open.
+  if (!screen.queryByTestId("period-apply")) fireEvent.click(screen.getByTestId("period-trigger"));
   fireEvent.click(screen.getByTestId(`period-grain-${grain}`));
   if (dates.anchor) fireEvent.change(screen.getByTestId("period-anchor"), { target: { value: dates.anchor } });
   if (dates.start) fireEvent.change(screen.getByTestId("period-start"), { target: { value: dates.start } });
@@ -101,7 +100,7 @@ describe("period selector", () => {
     });
     bridge.on("POST", `/rooms/${REPORT_ID}/periods`, () => reply({ ...built, status: "building" }));
     bridge.on("GET", `/rooms/${REPORT_ID}/editions/e-day`, () => reply({ ...built, status: "building" }));
-    const { rerender, client } = await openView();
+    const { rerender } = await openView();
     pick("day", { anchor: "2026-11-18" });
     await waitFor(() => expect(bridge.calls("POST", `/rooms/${REPORT_ID}/periods`)).toHaveLength(1));
     expect(bridge.calls("POST", `/rooms/${REPORT_ID}/periods`)[0].body).toEqual({ grain: "day", anchor: "2026-11-18" });
@@ -112,18 +111,14 @@ describe("period selector", () => {
     // The engine publishes it; the room's event brings it in.
     editions = [built, ...EDITIONS];
     streamEvents = [roomEvent("ev-1", "room.edition")];
-    rerender(
-      <ClientWrap client={client}>
-        <RoomView roomId={REPORT_ID} onLeave={vi.fn()} slots={ROOM_SLOTS_WITH_CONTROLS} />
-      </ClientWrap>,
-    );
+    rerender(<RoomView roomId={REPORT_ID} onLeave={vi.fn()} slots={ROOM_CONTROL_SLOTS} />);
     await waitFor(() => expect(pinnedTitle()).toBe("Wed 18 Nov"));
     expect(screen.queryByTestId("period-status")).toBeNull();
   });
 
   it("falls back to polling when no event arrives", async () => {
     const built = edition({ id: "e-m", seq: 4, grain: "month", title: "October", periodStart: "2026-10-01", periodEnd: "2026-10-31" });
-    let status = "building";
+    let status: Edition["status"] = "building";
     bridge.on("POST", `/rooms/${REPORT_ID}/periods`, () => reply({ ...built, status: "building" }));
     bridge.on("GET", `/rooms/${REPORT_ID}/editions/e-m`, () => {
       if (status === "published") editions = [built, ...EDITIONS];
@@ -213,7 +208,3 @@ describe("period selector", () => {
     expect(screen.getByTestId("period-trigger")).toHaveTextContent("16 Nov – 22 Nov 2026");
   });
 });
-
-function ClientWrap({ client, children }: { client: QueryClient; children: ReactNode }) {
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-}

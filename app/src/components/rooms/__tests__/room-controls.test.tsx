@@ -20,9 +20,10 @@ vi.mock("@/components/business/markdown-view", () => ({
   MarkdownView: ({ content }: { content: string }) => <div data-testid="markdown-view">{content}</div>,
 }));
 
-import { RoomHeaderActions, ROOM_SLOTS_WITH_CONTROLS } from "@/components/rooms/room-controls";
+import { RoomHeaderActions, ROOM_CONTROL_SLOTS } from "@/components/rooms/room-controls";
+import { ROOM_SLOTS_WITH_CONTROLS } from "@/components/rooms/room-controls-lazy";
 import { AGENT_ID, REPORT_ID, edition, reply, room } from "@/lib/rooms/__tests__/fixtures";
-import type { Access } from "@/lib/rooms/types";
+import type { Access, Edition } from "@/lib/rooms/types";
 import { mockBridge, slotCtx, withClient } from "./controls-harness";
 
 let bridge: ReturnType<typeof mockBridge>;
@@ -97,7 +98,7 @@ describe("header actions by access (G6)", () => {
     header("assigned", { archived: true });
     expect(screen.queryByTestId("room-run-now")).toBeNull();
     expect(screen.queryByTestId("room-share-open")).toBeNull();
-    let menu = openMenu();
+    const menu = openMenu();
     expect(within(menu).getByTestId("room-menu-duplicate")).toBeInTheDocument();
     expect(within(menu).queryByTestId("room-menu-archive")).toBeNull();
     expect(within(menu).queryByTestId("room-menu-unarchive")).toBeNull();
@@ -114,7 +115,7 @@ describe("header actions by access (G6)", () => {
 
 describe("run now (B6, A5)", () => {
   it("starts a run, shows it running, and shows the edition when it is published", async () => {
-    let status = "building";
+    let status: Edition["status"] = "building";
     bridge.on("POST", `/rooms/${REPORT_ID}/run`, () => reply(edition({ id: "e-run", seq: 3, status: "building" }), 202));
     bridge.on("GET", `/rooms/${REPORT_ID}/editions/e-run`, () => reply(edition({ id: "e-run", seq: 3, status })));
     const { ctx, rerender } = header("shared");
@@ -149,7 +150,7 @@ describe("run now (B6, A5)", () => {
 
 describe("preview run (A2)", () => {
   it("is labelled a dry run nobody else sees, and opens the preview for its requester only", async () => {
-    let status = "building";
+    let status: Edition["status"] = "building";
     bridge.on("POST", `/rooms/${REPORT_ID}/run`, () =>
       reply(edition({ id: "e-prev", seq: 9, preview: true, status: "building", title: "Week 47 (preview)" })),
     );
@@ -242,7 +243,19 @@ describe("drawers open from the header", () => {
 
 describe("slots", () => {
   it("fills the header actions and the period selector", () => {
-    expect(typeof ROOM_SLOTS_WITH_CONTROLS.headerActions).toBe("function");
-    expect(typeof ROOM_SLOTS_WITH_CONTROLS.periodSelector).toBe("function");
+    expect(typeof ROOM_CONTROL_SLOTS.headerActions).toBe("function");
+    expect(typeof ROOM_CONTROL_SLOTS.periodSelector).toBe("function");
+  });
+
+  it("the shell's lazily loaded slots draw the same controls", async () => {
+    const ctx = slotCtx({ access: "assigned" });
+    withClient(
+      <>
+        {ROOM_SLOTS_WITH_CONTROLS.headerActions!(ctx)}
+        {ROOM_SLOTS_WITH_CONTROLS.periodSelector!(ctx)}
+      </>,
+    );
+    expect(await screen.findByTestId("room-run-now")).toBeInTheDocument();
+    expect(await screen.findByTestId("period-trigger")).toBeInTheDocument();
   });
 });
