@@ -40,8 +40,16 @@ export interface OutboxItem {
 
 export type SendResult =
   | { outcome: "ok" }
-  | { outcome: "failed" }
+  /**
+   * `rejected`: refused before it was admitted, so certainly not sent.
+   * Otherwise the outcome is unknown: it may have been admitted and stored
+   * (a gateway timeout, a stream cut mid-answer), and is never resent.
+   */
+  | { outcome: "failed"; rejected?: boolean }
   | { outcome: "busy"; answering?: string };
+
+/** A send that failed with no panel left to say so, and whether it was refused or its outcome is unknown. */
+export type UnsentItem = OutboxItem & { rejected: boolean };
 
 export type Sender = (item: OutboxItem) => Promise<SendResult>;
 
@@ -54,8 +62,8 @@ export interface OutboxState {
   blocked: boolean;
   /** Who the room's agent was answering when it refused. */
   answering: string;
-  /** Sends that failed after the panel that offered them had gone: to be shown as not sent. */
-  unsent: readonly OutboxItem[];
+  /** Sends that failed after the panel that offered them had gone: to be shown, then acknowledged. */
+  unsent: readonly UnsentItem[];
 }
 
 export interface RoomOutbox {
@@ -75,7 +83,7 @@ function createOutbox(): RoomOutbox & { dispose(): void } {
   let sending: OutboxItem | null = null;
   let blocked = false;
   let answering = "";
-  let unsent: OutboxItem[] = [];
+  let unsent: UnsentItem[] = [];
   let seq = 0;
   let sender: Sender | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -117,7 +125,7 @@ function createOutbox(): RoomOutbox & { dispose(): void } {
     } else {
       items = items.filter((item) => item.id !== head.id);
       // Failed with nobody left to say so: kept until a panel shows it.
-      if (result.outcome === "failed" && sender !== by) unsent = [...unsent, head];
+      if (result.outcome === "failed" && sender !== by) unsent = [...unsent, { ...head, rejected: result.rejected === true }];
       unblock();
       answering = "";
     }
@@ -258,5 +266,26 @@ export function pendingBubbles(
   const named = new Set(shown.map((r) => r.clientId).filter((id): id is string => Boolean(id)));
   return state.items.filter(
     (item) => !ids.has(item.id) && !named.has(item.id) && !(state.sending?.id === item.id && !startedHere.has(item.id)),
+  );
+}
+
+/**
+ * The unsent entries that need a bubble: not drawn yet, and not a message
+ * history already holds — a stored row naming it by client id or, where the
+ * engine names none, a stored row with its text. A send whose answer was lost
+ * after it was stored is that stored row, never a second copy.
+ */
+export function unsentBubbles(
+  state: OutboxState,
+  shown: ReadonlyArray<Pick<RoomRow, "id" | "clientId" | "serverId" | "role" | "content">>,
+): UnsentItem[] {
+  return state.unsent.filter(
+    (item) =>
+      !shown.some(
+        (r) =>
+          r.id === item.id ||
+          r.clientId === item.id ||
+          (r.serverId !== undefined && !r.clientId && r.role === "user" && r.content.trim() === item.text.trim()),
+      ),
   );
 }

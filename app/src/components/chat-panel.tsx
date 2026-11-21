@@ -417,7 +417,8 @@ export function ChatPanel({
     };
     const waiting = [
       ...roomKit.pendingBubbles(state, list, startedHere.current).map((item) => bubble(item, outboxNote(item, state))),
-      ...state.unsent.filter((item) => !list.some((m) => m.id === item.id)).map((item) => bubble(item, NOT_SENT_NOTE)),
+      // Refused: not sent. Outcome unknown: it may have arrived, so it is never called unsent.
+      ...roomKit.unsentBubbles(state, list).map((item) => bubble(item, item.rejected ? NOT_SENT_NOTE : DROPPED_NOTE)),
     ];
     return waiting.length ? [...list, ...waiting] : list;
   }, [outbox, roomKit]);
@@ -1032,7 +1033,7 @@ export function ChatPanel({
     // The outbox sends one room message at a time, so a room flush does not
     // consult `isStreaming`: it can still read true from the turn that just
     // ended, before React rendered its end.
-    if (!text && !files.length) return roomId ? ({ outcome: "failed" } as SendResult) : undefined;
+    if (!text && !files.length) return roomId ? ({ outcome: "failed", rejected: true } as SendResult) : undefined;
     if (isStreaming && !(roomId && flushing)) return;
 
     setActiveAsks([]);
@@ -1065,6 +1066,8 @@ export function ChatPanel({
     setIsStopping(false);
     setRuntimeProgress("Submitting request…");
     let streamSettled = false;
+    // Whether the request may have reached the server: after this, a failure's outcome is unknown.
+    let dispatched = false;
 
     try {
       const requestId = requestIdRef.current!;
@@ -1074,6 +1077,7 @@ export function ChatPanel({
         if (scope) forgetRequest(scope, requestId);
         controller.signal.throwIfAborted();
       }
+      dispatched = true;
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1117,7 +1121,7 @@ export function ChatPanel({
         setActiveToolName(null);
         setCurrentIteration(0);
         setMaxIterations(0);
-        return roomId ? ({ outcome: "failed" } as SendResult) : undefined;
+        return roomId ? ({ outcome: "failed", rejected: failure.rejected } as SendResult) : undefined;
       }
 
       let fullResponse = "";
@@ -1290,7 +1294,7 @@ export function ChatPanel({
         setMessages((prev) => [...prev, errorMsg]);
       }
       // Possibly dispatched (its recovery card says so), or stopped: never resent.
-      return roomId ? ({ outcome: "failed" } as SendResult) : undefined;
+      return roomId ? ({ outcome: "failed", rejected: !dispatched } as SendResult) : undefined;
     } finally {
       setIsStreaming(false);
       setStreamingText("");
