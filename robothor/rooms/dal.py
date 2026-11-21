@@ -111,7 +111,7 @@ def _member(row: Mapping[str, Any]) -> RoomMember:
         assigned=bool(row["assigned"]),
         added_by=_s(row["added_by"]),
         last_read_message_id=row["last_read_message_id"],
-        last_read_edition_seq=row["last_read_edition_seq"],
+        last_read_published_seq=row["last_read_published_seq"],
         notify=dict(row["notify"] or {}),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -142,6 +142,7 @@ def _edition(row: Mapping[str, Any]) -> Edition:
         period_end=row["period_end"],
         grain=row["grain"],
         revision=int(row["revision"]),
+        published_seq=row["published_seq"],
         title=row["title"],
         summary=row["summary"],
         blocks=list(row["blocks"] or []),
@@ -380,8 +381,8 @@ FROM {source}
 LEFT JOIN LATERAL (
     SELECT e.id, e.seq, e.title, e.period_start, e.period_end FROM room_editions e
     WHERE e.tenant_id = r.tenant_id AND e.room_id = r.id
-      AND e.status = 'published' AND NOT e.preview
-    ORDER BY e.seq DESC LIMIT 1
+      AND e.published_seq IS NOT NULL
+    ORDER BY e.published_seq DESC LIMIT 1
 ) le ON TRUE
 {extra}
 WHERE r.tenant_id = %(tenant)s AND (%(archived)s OR r.archived_at IS NULL) {where}
@@ -389,7 +390,9 @@ ORDER BY r.last_activity_at DESC NULLS LAST, r.created_at DESC
 """
 
 #: Per member: messages after their read mark, plus published editions after
-#: their edition mark that did not arrive as a chat message.
+#: their edition mark that did not arrive as a chat message. Editions count by
+#: publish order (``published_seq``, never set on a preview), so one published
+#: after a later-built one is still unread.
 _UNREAD_JOINS = """
 LEFT JOIN LATERAL (
     SELECT COUNT(*) AS n FROM chat_sessions s JOIN chat_messages cm ON cm.session_id = s.id
@@ -398,9 +401,8 @@ LEFT JOIN LATERAL (
 ) msg ON TRUE
 LEFT JOIN LATERAL (
     SELECT COUNT(*) AS n FROM room_editions e
-    WHERE e.tenant_id = r.tenant_id AND e.room_id = r.id AND e.status = 'published'
-      AND NOT e.preview AND e.chat_message_id IS NULL
-      AND e.seq > COALESCE(m.last_read_edition_seq, 0)
+    WHERE e.tenant_id = r.tenant_id AND e.room_id = r.id AND e.chat_message_id IS NULL
+      AND e.published_seq > COALESCE(m.last_read_published_seq, 0)
 ) ed ON TRUE
 """
 
@@ -715,8 +717,8 @@ _LATEST_MESSAGE = """(SELECT MAX(cm.id) FROM rooms r
     JOIN chat_sessions s ON s.tenant_id = r.tenant_id AND s.session_key = r.session_key
     JOIN chat_messages cm ON cm.session_id = s.id
     WHERE r.tenant_id = m.tenant_id AND r.id = m.room_id)"""
-_LATEST_EDITION = """(SELECT MAX(e.seq) FROM room_editions e
-    WHERE e.tenant_id = m.tenant_id AND e.room_id = m.room_id AND e.status = 'published')"""
+_LATEST_EDITION = """(SELECT MAX(e.published_seq) FROM room_editions e
+    WHERE e.tenant_id = m.tenant_id AND e.room_id = m.room_id)"""
 
 
 def mark_read(
@@ -725,17 +727,19 @@ def mark_read(
     user_id: str,
     *,
     message_id: int | None = None,
-    edition_seq: int | None = None,
+    published_seq: int | None = None,
 ) -> RoomMember | None:
-    """Move the member's read marks forward (never back). With neither mark
-    given, both move to the latest message and edition. None when not a member."""
-    if message_id is None and edition_seq is None:
+    """Move the member's read marks forward (never back). ``published_seq`` is
+    an edition's publish number (``Edition.published_seq``), not its build
+    ``seq``. With neither mark given, both move to the latest message and
+    published edition; previews never move a mark. None when not a member."""
+    if message_id is None and published_seq is None:
         return _update_member(
             tenant_id,
             room_id,
             user_id,
             f"last_read_message_id = GREATEST(m.last_read_message_id, {_LATEST_MESSAGE}), "
-            f"last_read_edition_seq = GREATEST(m.last_read_edition_seq, {_LATEST_EDITION})",
+            f"last_read_published_seq = GREATEST(m.last_read_published_seq, {_LATEST_EDITION})",
             (),
         )
     return _update_member(
@@ -743,8 +747,8 @@ def mark_read(
         room_id,
         user_id,
         "last_read_message_id = GREATEST(m.last_read_message_id, %s), "
-        "last_read_edition_seq = GREATEST(m.last_read_edition_seq, %s)",
-        (message_id, edition_seq),
+        "last_read_published_seq = GREATEST(m.last_read_published_seq, %s)",
+        (message_id, published_seq),
     )
 
 
@@ -844,8 +848,22 @@ def publish_edition(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
+            "SELECT room_id FROM room_editions WHERE tenant_id = %s AND id = %s",
+            (tenant_id, canonical),
+        )
+        found = cur.fetchone()
+        if found is None:
+            return None
+        # The room row lock serialises publish numbers (and orders this lock
+        # before the edition row's, as create_edition does).
+        _locked_room(cur, tenant_id, str(found["room_id"]))
+        cur.execute(
             """UPDATE room_editions SET status = 'published', title = %s, summary = %s,
                       blocks = %s, suggestions = %s, provenance = %s, chat_message_id = %s,
+                      published_seq = CASE WHEN preview THEN NULL ELSE (
+                          SELECT COALESCE(MAX(p.published_seq), 0) + 1 FROM room_editions p
+                          WHERE p.tenant_id = room_editions.tenant_id
+                            AND p.room_id = room_editions.room_id) END,
                       updated_at = now()
                WHERE tenant_id = %s AND id = %s AND status = 'building' RETURNING *""",
             (
@@ -952,7 +970,8 @@ def find_edition_for_period(
             "SELECT * FROM room_editions WHERE tenant_id = %s AND room_id = %s AND grain = %s "
             "AND period_start = %s AND period_end = %s AND NOT preview "
             "AND status IN ('published', 'building') "
-            "ORDER BY (status = 'published') DESC, seq DESC LIMIT 1",
+            "ORDER BY (status = 'published') DESC, published_seq DESC NULLS LAST, seq DESC "
+            "LIMIT 1",
             (tenant_id, room, grain, period_start, period_end),
         )
         row = cur.fetchone()

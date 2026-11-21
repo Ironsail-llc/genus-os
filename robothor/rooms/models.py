@@ -114,7 +114,8 @@ class RoomMember:
     assigned: bool = False
     added_by: str | None = None
     last_read_message_id: int | None = None
-    last_read_edition_seq: int | None = None
+    #: The ``published_seq`` of the last edition this member has seen.
+    last_read_published_seq: int | None = None
     notify: dict[str, Any] = field(default_factory=dict)
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -143,6 +144,9 @@ class Edition:
     period_end: date | None
     grain: str | None
     revision: int
+    #: Publish order within the room, set when a non-preview edition publishes
+    #: (``seq`` is build order). Unread counts and read marks use this.
+    published_seq: int | None = None
     title: str = ""
     summary: str = ""
     blocks: list[dict[str, Any]] = field(default_factory=list)

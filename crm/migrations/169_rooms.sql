@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS room_members (
     assigned              BOOLEAN NOT NULL DEFAULT FALSE,
     added_by              UUID,
     last_read_message_id  BIGINT,
-    last_read_edition_seq INTEGER,
+    last_read_published_seq INTEGER,
     notify                JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS room_editions (
     period_end      DATE,
     grain           TEXT CHECK (grain IN ('day', 'week', 'month', 'custom')),
     revision        INTEGER NOT NULL,
+    published_seq   INTEGER,
     title           TEXT NOT NULL DEFAULT '',
     summary         TEXT NOT NULL DEFAULT '',
     blocks          JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -101,6 +102,11 @@ CREATE TABLE IF NOT EXISTS room_editions (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_room_editions_building_period
     ON room_editions (tenant_id, room_id, grain, period_start, period_end)
     WHERE status = 'building' AND NOT preview;
+-- Publish order: set when a non-preview edition publishes, so read marks and
+-- unread counts follow the order people saw editions arrive in (``seq`` is
+-- build order, and a later-built edition can publish first).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_room_editions_published_seq
+    ON room_editions (tenant_id, room_id, published_seq) WHERE published_seq IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_room_editions_period
     ON room_editions (tenant_id, room_id, grain, period_start, period_end);
 

@@ -57,14 +57,15 @@ def test_the_tables_carry_the_contracts_columns(scratch_db) -> None:
         } <= _columns(cur, "rooms")  # fmt: skip
         assert {
             "tenant_id", "room_id", "user_id", "assigned", "added_by", "last_read_message_id",
-            "last_read_edition_seq", "notify", "created_at", "updated_at",
+            "last_read_published_seq", "notify", "created_at", "updated_at",
         } <= _columns(cur, "room_members")  # fmt: skip
         assert {
             "tenant_id", "room_id", "rev", "changed_by", "changed_at", "definition",
         } <= _columns(cur, "room_revisions")  # fmt: skip
         assert {
             "tenant_id", "id", "room_id", "seq", "kind", "status", "preview", "period_start",
-            "period_end", "grain", "revision", "title", "summary", "blocks", "suggestions",
+            "period_end", "grain", "revision", "published_seq", "title", "summary", "blocks",
+            "suggestions",
             "provenance", "error", "run_id", "chat_message_id", "requested_by",
             "created_at", "updated_at",
         } <= _columns(cur, "room_editions")  # fmt: skip

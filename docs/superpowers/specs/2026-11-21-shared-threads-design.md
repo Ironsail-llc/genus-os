@@ -75,13 +75,13 @@ rooms(tenant_id, id UUID, kind 'report'|'agent'|'task', title, agent_id, session
       last_activity_at, last_message_id BIGINT, archived_at,
       PK(tenant_id,id), UNIQUE(tenant_id,task_id))
 room_members(tenant_id, room_id, user_id UUID, assigned BOOL, added_by UUID,
-      last_read_message_id BIGINT, last_read_edition_seq INT, notify JSONB,
+      last_read_message_id BIGINT, last_read_published_seq INT, notify JSONB,
       PK(tenant_id,room_id,user_id))
 room_revisions(tenant_id, room_id, rev INT, changed_by UUID, changed_at, definition JSONB,
       PK(tenant_id,room_id,rev))
 room_editions(tenant_id, id UUID, room_id, seq INT, kind 'edition'|'dashboard',
       status 'building'|'published'|'failed', preview BOOL, period_start, period_end,
-      grain 'day'|'week'|'month'|'custom'|NULL, revision INT, title, summary,
+      grain 'day'|'week'|'month'|'custom'|NULL, revision INT, published_seq INT NULL, title, summary,
       blocks JSONB, suggestions JSONB, provenance JSONB, error TEXT, run_id TEXT,
       chat_message_id BIGINT, requested_by UUID, PK(tenant_id,id), UNIQUE(tenant_id,room_id,seq))
   + UNIQUE(tenant_id,room_id,grain,period_start,period_end) WHERE status='building' AND NOT preview
@@ -155,8 +155,19 @@ rely on:
   creation (it is part of the session key); duplicate the room to change agent.
 - `get_member(tenant_id, room_id, user_id)` exists for `require`. The session-key
   helpers live in `robothor/rooms/keys.py` and are re-exported from `access`.
-- Unread = messages after the member's message mark + published non-preview editions
-  after their edition mark that carry no `chat_message_id`.
+- `seq` is build order (allocated when the row is created, previews included) and is
+  the stable edition number for links. `published_seq` is publish order: set when a
+  non-preview edition publishes, never on a preview, unique per room. Read marks and
+  unread use `published_seq` only, so a preview never moves a mark and editions that
+  publish out of build order are each unread once. The member column is
+  `last_read_published_seq`, set by `mark_read(..., published_seq=)` (renamed from
+  `last_read_edition_seq` / `edition_seq`); `RoomSummary.latest_edition` is the
+  highest `published_seq`.
+- Unread = messages after the member's message mark + editions whose `published_seq`
+  is after their edition mark and that carry no `chat_message_id`.
+- Every room table's `tenant_isolation` policy has the platform shape: a connection
+  bound to a tenant sees only that tenant's rows, an unbound one (`app.tenant_id`
+  unset or empty) sees all. The operator moves and idle cleanup rely on it.
 - Child tables reference `rooms(id)` by a single-column key (`rooms.id` is also
   unique): `move-workload` re-tenants rows in place and refuses composite keys.
   A workload move carries an agent's rooms, members, revisions and editions; a room
