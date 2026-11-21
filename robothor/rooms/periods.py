@@ -206,6 +206,12 @@ def resolve_period(grain: str, tz: str, anchor: Any, *, now: datetime | None = N
     if anchor is None or (isinstance(anchor, str) and anchor.strip() in ("", "latest")):
         return last_complete_period(grain, tz, now)
     period = _anchored(grain, anchor)
+    try:
+        period.bounds(tz)
+    except OverflowError as exc:  # local midnight falls outside the calendar
+        raise PeriodError(
+            f"that {grain} cannot be placed in time in {tz}", reason="invalid_anchor"
+        ) from exc
     if period.end >= today:
         raise PeriodError(
             f"that {grain} is not over yet: it ends {period.end.isoformat()} "

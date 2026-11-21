@@ -41,7 +41,7 @@ async def test_a_shared_member_cannot_request_a_period_of_a_paused_workspace(eng
     assert s.started == []
 
 
-@pytest.mark.parametrize("tz", ["Pacific/Kiritimati", "Asia/Tokyo"])
+@pytest.mark.parametrize("tz", ["Australia/Sydney", "Asia/Tokyo"])
 @pytest.mark.parametrize(
     ("grain", "anchor"),
     [("custom", "0001-01-01/0001-01-03"), ("day", "0001-01-01"), ("week", "0001-01-01")],

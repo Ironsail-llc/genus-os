@@ -294,7 +294,7 @@ def test_without_a_room_runs_module_the_runner_is_unavailable(monkeypatch):
         resolve_run_room()
 
 
-@pytest.mark.parametrize("tz", ["Asia/Tokyo", "Pacific/Kiritimati"])
+@pytest.mark.parametrize("tz", ["Asia/Tokyo", "Australia/Sydney"])
 @pytest.mark.parametrize(
     ("grain", "anchor"),
     [("custom", "0001-01-01/0001-01-03"), ("day", "0001-01-01"), ("week", "0001-01-01")],
