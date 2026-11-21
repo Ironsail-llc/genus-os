@@ -15,6 +15,8 @@ The script, by the latest turn:
 * "what's new": ``room_list``;
 * a workspace's run prompt (its instructions say "Summarise the sales"):
   ``sample_sales_figures`` then ``room_publish_edition``;
+* a run prompt whose instructions say "then start another run": ``room_run``
+  on its own workspace, which an unattended run must be refused;
 * "(take your time)" anywhere: the answer waits ``SLOW_SECONDS`` first, so a
   second sender meets a busy workspace;
 * anything else: "Answering {name}: {text}", so attribution is visible.
@@ -123,8 +125,8 @@ def _figures_blocks(figures: dict[str, Any]) -> list[dict[str, Any]]:
             "component": "render_metric_grid",
             "props": {
                 "metrics": [
-                    {"label": "Revenue", "value": figures.get("revenue_total", 0)},
-                    {"label": "Orders", "value": figures.get("orders_total", 0)},
+                    {"title": "Revenue", "value": figures.get("revenue_total", 0)},
+                    {"title": "Orders", "value": figures.get("orders_total", 0)},
                 ]
             },
         },
@@ -132,6 +134,8 @@ def _figures_blocks(figures: dict[str, Any]) -> list[dict[str, Any]]:
             "component": "render_bar_chart",
             "props": {
                 "title": "Revenue by day",
+                "dataKey": "value",
+                "nameKey": "name",
                 "data": [{"name": d["date"], "value": d["revenue"]} for d in days],
             },
         },
@@ -153,9 +157,12 @@ def decide(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -
     if after is not None:
         name, data = after
         if name == "sample_sales_figures" and isinstance(data, dict):
+            # The run prompt names the workspace to publish into ("room_id ...").
+            room = re.search(r"room_id ([0-9a-f-]{36})", _last_user(messages)[1])
             return call(
                 "room_publish_edition",
                 {
+                    "room_id": room.group(1) if room else "",
                     "title": f"Sales {data.get('period', '')}".strip(),
                     "summary": data.get("note", ""),
                     "blocks": _figures_blocks(data),
@@ -202,6 +209,10 @@ def decide(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -
         return call("room_run", {"room_id": room.group(0) if room else "", "preview": True})
     if "what's new" in lowered or "whats new" in lowered:
         return call("room_list", {})
+    if "then start another run" in lowered:
+        # A run trying to start more runs: it must be refused (unattended).
+        room = re.search(r"room_id ([0-9a-f-]{36})", text)
+        return call("room_run", {"room_id": room.group(1) if room else ""})
     if "summarise the sales" in lowered:
         return call("sample_sales_figures", {})
     who = name or "you"

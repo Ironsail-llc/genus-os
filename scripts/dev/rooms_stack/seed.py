@@ -61,6 +61,24 @@ def _tenants() -> None:
         conn.commit()
 
 
+def _grant_fixture_tool() -> None:
+    """The company's staff may call the dry run's data tool (a tenant row beside
+    the platform's default permissions, which deny tools not listed)."""
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        for role in ("owner", "admin", "member", "user"):
+            cur.execute(
+                "INSERT INTO role_permissions (tenant_id, role, tool_pattern, access) "
+                "SELECT %s, %s, 'sample_sales_figures', 'allow' WHERE NOT EXISTS ("
+                "SELECT 1 FROM role_permissions WHERE tenant_id = %s AND role = %s "
+                "AND tool_pattern = 'sample_sales_figures')",
+                (COMPANY, role, COMPANY, role),
+            )
+        conn.commit()
+
+
 def _account(tenant_id: str, email: str, role: str, name: str) -> dict[str, str]:
     from robothor.auth import accounts
 
@@ -80,6 +98,7 @@ def main() -> None:
     if len(password) < local_login.MIN_PASSWORD_LENGTH:
         sys.exit("rooms stack: give a password of 12 characters or more")
     _tenants()
+    _grant_fixture_tool()
     people = {}
     for key, (tenant_id, role, name) in PEOPLE.items():
         email = f"{key}@example.com"
