@@ -338,6 +338,20 @@ async def test_provenance_comes_from_the_recorded_run_and_forgery_is_ignored(env
     assert [c["ok"] for c in e.provenance["tool_calls"]] == [True, True, False]
 
 
+async def test_provenance_carries_the_cost_the_run_row_records(env) -> None:
+    env.db.cur.execute(
+        "UPDATE agent_runs SET total_cost_usd = 0.42, input_tokens = 12000, "
+        "output_tokens = 3400 WHERE id = %s",
+        (env.run_id,),
+    )
+    r = room(env)
+    with room_run_scope(carrier(r)):
+        result = await publish(args(r, period=WEEK), ctx(env))
+    e = dal.get_edition(env.db.tenant, result["edition_id"], viewer_id=None)
+    assert e.provenance["cost_usd"] == 0.42
+    assert (e.provenance["input_tokens"], e.provenance["output_tokens"]) == (12000, 3400)
+
+
 # ─── what a publish sets off ─────────────────────────────────────────────
 
 

@@ -286,6 +286,21 @@ def test_provenance_is_built_from_the_recorded_steps() -> None:
     }
 
 
+def test_provenance_carries_the_runs_cost_and_tokens() -> None:
+    """A flag, not a cap: what the run cost is shown where the report is read."""
+    prov = editions.build_provenance(
+        run_id="r",
+        ran_as="u",
+        started_at=None,
+        steps=[],
+        room_rev=1,
+        cost_usd=0.4213,
+        input_tokens=12000,
+        output_tokens=3400,
+    )
+    assert (prov["cost_usd"], prov["input_tokens"], prov["output_tokens"]) == (0.4213, 12000, 3400)
+
+
 def test_provenance_caps_the_tool_call_list() -> None:
     t0 = datetime(2026, 11, 20, tzinfo=UTC)
     steps = [step("crm_search", t0)] * (editions.MAX_PROVENANCE_CALLS + 5)

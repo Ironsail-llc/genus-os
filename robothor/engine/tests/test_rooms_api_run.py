@@ -6,7 +6,7 @@ caller is (the token, or for the bridge's SERVICE token the account named in
 ``requested_by`` with the role read from that account, never the body), and
 each refusal's status: 202 started, 200 joined, 400 a service call naming
 nobody, 403 no ``run`` (a viewer), 404 no access, 409 paused or archived, 422
-a malformed period, 429 the daily on-demand cap.
+a malformed period. Nothing is capped: there is no 429.
 """
 
 from __future__ import annotations
@@ -162,7 +162,6 @@ class TestRoute:
             (RoomForbidden("viewer access does not allow 'run'"), 403),
             (runs.RunRefused("paused", "the workspace is paused"), 409),
             (runs.RunRefused("archived", "the workspace is archived"), 409),
-            (runs.OnDemandCapReached(5, 5), 429),
             (ValueError("period must be {grain, start, end}"), 422),
         ],
     )
@@ -179,13 +178,6 @@ class TestRoute:
         response = await _post(_app(other), {"requested_by": BOB})
         assert response.status_code == 403
         assert fake.calls == []
-
-    async def test_the_cap_answer_names_the_limit(self, fake):
-        fake.error = runs.OnDemandCapReached(5, 5)
-        response = await _post(_app(), {})
-        body = response.json()
-        assert (response.status_code, body["error"]) == (429, "on_demand_cap")
-        assert (body["limit"], body["used"]) == (5, 5)
 
     @pytest.mark.parametrize(
         "error",
@@ -267,7 +259,6 @@ class TestTool:
             RoomNotFound(ROOM),
             RoomForbidden("viewer access does not allow 'run'"),
             runs.RunRefused("paused", "the workspace is paused"),
-            runs.OnDemandCapReached(5, 5),
             ValueError("bad period"),
         ],
     )
@@ -276,6 +267,14 @@ class TestTool:
         result = await self._call({"room_id": ROOM}, _ctx())
         assert "error" in result
         assert ROOM not in result["error"]
+
+    def test_nothing_in_the_run_path_is_capped(self):
+        from robothor.engine import rooms_api
+
+        assert not hasattr(runs, "check_on_demand_cap")
+        assert not hasattr(runs, "OnDemandCapReached")
+        assert not hasattr(runs, "DEFAULT_MAX_COST_USD")
+        assert "on_demand_cap" not in open(rooms_api.__file__).read().split("def _run_answer")[1]
 
     def test_the_tool_is_a_workspace_tool_with_a_schema(self):
         from robothor.engine.tools.constants import ROOM_TOOLS
