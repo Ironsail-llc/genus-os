@@ -13,8 +13,7 @@ import {
   customPeriod,
   dayBefore,
   findStoredEdition,
-  isFuturePeriod,
-  isUnfinishedPeriod,
+  isPeriodNotOver,
   lastCompletePeriod,
   resolvePeriod,
   todayIn,
@@ -50,10 +49,9 @@ function isFixed(grain: unknown): grain is FixedGrain {
  * request. Otherwise one `POST /api/rooms/{id}/periods` asks for it (the
  * engine joins a request for a period already building) and a "building"
  * line stays until it arrives, by the room's event or, failing that, a poll.
- * A period that has not ended yet is refused here, as the engine refuses it
- * (only a period whose last day is before today in the workspace's zone),
- * and the button stays off while one is picked; the daily on-demand cap and
- * any other refusal are said in the server's words.
+ * A period that is not over yet is refused here, by the engine's rule, and
+ * the button stays off while one is picked. Nothing is capped: any refusal
+ * shows the server's own message.
  */
 export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
   const { room, edition, editions, showEdition, refresh } = ctx;
@@ -270,14 +268,9 @@ export function PeriodSelector({ ctx }: { ctx: RoomSlotContext }) {
   );
 }
 
-/** Why `range` cannot be asked for yet, in words, or null when it has ended. */
+/** Why `range` cannot be asked for yet, in words, or null when it is over. */
 function unfinishedText(range: PeriodRange, today: string): string | null {
-  if (isFuturePeriod(range, today)) {
-    return "That period hasn't happened yet, so there is nothing to report on.";
-  }
-  if (!isUnfinishedPeriod(range, today)) return null;
-  const what = range.grain === "custom" ? "range" : range.grain;
-  return `That ${what} is not over yet: it ends ${formatPeriod(range.end, range.end)}. Pick one that has ended.`;
+  return isPeriodNotOver(range, today) ? "That period isn't over yet. Pick one that has ended." : null;
 }
 
 function DateField({

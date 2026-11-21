@@ -89,7 +89,6 @@ export class RoomRequestError extends FetchRefused {
   readonly code: string | null;
   readonly field: string | null;
   readonly currentRev: number | null;
-  readonly limit: number | null;
   readonly serverMessage: string | null;
 
   constructor(endpoint: string, status: number, body: unknown) {
@@ -103,14 +102,8 @@ export class RoomRequestError extends FetchRefused {
     this.code = text(d.error) ?? text(d.code);
     this.serverMessage = typeof detail === "string" ? text(detail) : (text(d.message) ?? text(d.detail));
     this.currentRev = num(d.currentRev) ?? num(d.current_rev);
-    this.limit = num(d.limit);
     this.field = normaliseField(text(d.field)) ?? guessField(this.code, this.serverMessage);
     if (this.serverMessage) this.message = this.serverMessage;
-  }
-
-  /** The workspace's daily on-demand run cap is reached. */
-  get isCap(): boolean {
-    return this.status === 429 || this.code === "on_demand_cap";
   }
 }
 

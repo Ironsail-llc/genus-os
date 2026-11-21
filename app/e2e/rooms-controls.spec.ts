@@ -128,8 +128,8 @@ async function setupMocks(page: Page, { access, role = "member" }: Options) {
     if (path === `/${ROOM}` && method === "GET") return json(route, detail(access, rev));
     if (path === `/${ROOM}` && method === "PATCH") {
       const changes = (body as { changes: Record<string, unknown> }).changes;
-      if (changes.scheduleText === "every minute") {
-        return json(route, { detail: { error: "invalid_schedule", message: "Runs at most every 15 minutes", field: "scheduleText" } }, 422);
+      if (changes.scheduleText === "whenever") {
+        return json(route, { detail: { error: "invalid_schedule", message: "Could not read the schedule 'whenever'", field: "scheduleText" } }, 422);
       }
       if ((body as { expectedRev: number }).expectedRev !== rev) {
         return json(route, { detail: { error: "revision_conflict", currentRev: rev } }, 409);
@@ -207,9 +207,9 @@ test.describe("Workspaces — controls", () => {
     await drawer.getByTestId("settings-conflict").getByRole("button", { name: /reload/i }).click();
     await expect(drawer.getByTestId("settings-conflict")).toHaveCount(0);
 
-    await drawer.getByLabel(/schedule/i).fill("every minute");
+    await drawer.getByLabel(/schedule/i).fill("whenever");
     await drawer.getByTestId("settings-save").click();
-    await expect(drawer.getByTestId("field-error-scheduleText")).toHaveText("Runs at most every 15 minutes");
+    await expect(drawer.getByTestId("field-error-scheduleText")).toHaveText("Could not read the schedule 'whenever'");
 
     await drawer.getByTestId("settings-tab-history").click();
     await expect(drawer.getByTestId("revision-2")).toContainText(/instructions/i);
@@ -255,7 +255,7 @@ test.describe("Workspaces — controls", () => {
     await expect(page.locator('[data-testid="room-view"] h1')).toHaveText("Weekly sales (copy)");
   });
 
-  test("picking periods: a stored one at once, a missing one built, a future one refused", async ({ page }) => {
+  test("picking periods: a stored one at once, a missing one built, one not over yet refused", async ({ page }) => {
     const { sent } = await setupMocks(page, { access: "shared" });
     await openRoom(page);
     const pinnedTitle = page.getByTestId("room-pinned-edition").getByTestId("edition-title");

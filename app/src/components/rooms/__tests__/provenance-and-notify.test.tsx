@@ -51,6 +51,37 @@ describe("provenance drawer", () => {
     expect(screen.getByTestId("provenance-tools-empty")).toBeInTheDocument();
   });
 
+  it("shows the run's cost and tokens when the provenance records them", () => {
+    const e = edition({
+      provenance: {
+        run_id: "run-7",
+        ran_as: "u-alice",
+        started_at: "2026-11-22T08:00:00Z",
+        tool_calls: [],
+        cost_usd: 0.4213,
+        tokens: { input: 10000, output: 2345 },
+      },
+    });
+    withClient(<ProvenanceDrawer edition={e} members={room().members} open onOpenChange={vi.fn()} />);
+    expect(screen.getByTestId("provenance-cost")).toHaveTextContent("$0.42");
+    expect(screen.getByTestId("provenance-tokens")).toHaveTextContent("12,345");
+    expect(screen.getByTestId("provenance-tokens")).toHaveTextContent(/10,000 in.*2,345 out/);
+  });
+
+  it("reads a plain token count too", () => {
+    const e = edition({ provenance: { run_id: "r", ran_as: "u-alice", started_at: null, tool_calls: [], cost_usd: 0, tokens: 900 } });
+    withClient(<ProvenanceDrawer edition={e} members={[]} open onOpenChange={vi.fn()} />);
+    expect(screen.getByTestId("provenance-cost")).toHaveTextContent("$0.00");
+    expect(screen.getByTestId("provenance-tokens")).toHaveTextContent("900");
+  });
+
+  it("shows no cost or tokens when the provenance has none", () => {
+    withClient(<ProvenanceDrawer edition={edition()} members={room().members} open onOpenChange={vi.fn()} />);
+    expect(screen.queryByTestId("provenance-cost")).toBeNull();
+    expect(screen.queryByTestId("provenance-tokens")).toBeNull();
+    expect(screen.getByTestId("provenance-drawer")).not.toHaveTextContent(/cost|tokens/i);
+  });
+
   it("says so when an edition has no recorded provenance", () => {
     withClient(<ProvenanceDrawer edition={edition({ provenance: null })} members={[]} open onOpenChange={vi.fn()} />);
     expect(screen.getByTestId("provenance-missing")).toBeInTheDocument();

@@ -196,10 +196,12 @@ describe("run now (B6, A5)", () => {
   });
 
   it("says plainly when the run is refused", async () => {
-    bridge.on("POST", `/rooms/${REPORT_ID}/run`, () => reply({ detail: { error: "on_demand_cap", limit: 3 } }, 429));
+    bridge.on("POST", `/rooms/${REPORT_ID}/run`, () => reply({ detail: "Too many requests" }, 429));
     header("shared");
     fireEvent.click(screen.getByTestId("room-run-now"));
-    expect(await screen.findByTestId("room-run-error")).toHaveTextContent(/limit/i);
+    const error = await screen.findByTestId("room-run-error");
+    expect(error).toHaveTextContent("Too many requests");
+    expect(error).not.toHaveTextContent(/today's limit|on-demand/i);
   });
 });
 

@@ -1,8 +1,8 @@
 /**
  * Picking a period in a report workspace (C3): a stored edition shows at
  * once with no request; a missing one is asked for once, with a visible
- * "building" state until it arrives; a future period is refused before any
- * request; the daily on-demand cap is said plainly. Drawn inside the real
+ * "building" state until it arrives; a period that is not over is refused before any
+ * request. Nothing is capped. Drawn inside the real
  * `RoomView` so "shows" means the pinned place.
  */
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -150,12 +150,33 @@ describe("period selector", () => {
     );
   });
 
+  it("refuses a period that is not over yet (today, this week) before any request", async () => {
+    await openView();
+    pick("day", { anchor: "2026-11-25" });
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/isn.t over/i);
+    pick("week", { anchor: "2026-11-24" });
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/isn.t over/i);
+    expect(bridge.calls("POST", `/rooms/${REPORT_ID}/periods`)).toHaveLength(0);
+  });
+
+  it("asks for a long custom range without any limit on its length", async () => {
+    bridge.on("POST", `/rooms/${REPORT_ID}/periods`, () =>
+      reply(edition({ id: "e-long", grain: "custom", status: "building", periodStart: "2025-01-01", periodEnd: "2026-10-31" })),
+    );
+    bridge.on("GET", `/rooms/${REPORT_ID}/editions/e-long`, () => reply(edition({ id: "e-long", status: "building" })));
+    await openView();
+    pick("custom", { start: "2025-01-01", end: "2026-10-31" });
+    await waitFor(() =>
+      expect(bridge.calls("POST", `/rooms/${REPORT_ID}/periods`)[0]?.body).toEqual({ grain: "custom", anchor: "2025-01-01", end: "2026-10-31" }),
+    );
+  });
+
   it("refuses a future period before any request", async () => {
     await openView();
     pick("day", { anchor: "2026-11-26" });
-    expect(await screen.findByTestId("period-error")).toHaveTextContent(/hasn.t happened yet|future/i);
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/isn.t over/i);
     pick("custom", { start: "2026-11-20", end: "2026-11-30" });
-    expect(await screen.findByTestId("period-error")).toHaveTextContent(/hasn.t happened yet|future/i);
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/isn.t over/i);
     expect(bridge.calls("POST", `/rooms/${REPORT_ID}/periods`)).toHaveLength(0);
   });
 
@@ -163,14 +184,14 @@ describe("period selector", () => {
     // Today is Wednesday 2026-11-25 in the workspace's zone (UTC).
     await openView();
     pick("week", { anchor: "2026-11-24" });
-    expect(await screen.findByTestId("period-error")).toHaveTextContent(/not over yet/i);
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/isn.t over yet/i);
     expect(screen.getByTestId("period-apply")).toBeDisabled();
     pick("day", { anchor: "2026-11-25" });
-    expect(await screen.findByTestId("period-error")).toHaveTextContent(/not over yet/i);
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/isn.t over yet/i);
     pick("month", { anchor: "2026-11-02" });
-    expect(await screen.findByTestId("period-error")).toHaveTextContent(/not over yet/i);
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/isn.t over yet/i);
     pick("custom", { start: "2026-11-20", end: "2026-11-25" });
-    expect(await screen.findByTestId("period-error")).toHaveTextContent(/not over yet/i);
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/isn.t over yet/i);
     expect(bridge.calls("POST", `/rooms/${REPORT_ID}/periods`)).toHaveLength(0);
     // Yesterday has ended: the button comes back.
     pick("day", { anchor: "2026-11-24" });
@@ -207,17 +228,25 @@ describe("period selector", () => {
     expect(bridge.calls("POST", `/rooms/${REPORT_ID}/periods`)).toHaveLength(0);
   });
 
-  it("says the daily on-demand cap is reached and starts nothing", async () => {
+  it("shows the server's own message when a period request is refused, with no cap wording", async () => {
     bridge.on("POST", `/rooms/${REPORT_ID}/periods`, () =>
-      reply({ detail: { error: "on_demand_cap", message: "3 on-demand runs a day", limit: 3 } }, 429),
+      reply({ detail: { error: "forbidden", message: "Only members can ask for periods" } }, 403),
     );
     await openView();
     pick("day", { anchor: "2026-11-18" });
     const error = await screen.findByTestId("period-error");
-    expect(error).toHaveTextContent(/today's limit/i);
-    expect(error).toHaveTextContent("3");
+    expect(error).toHaveTextContent("Only members can ask for periods");
+    expect(error).not.toHaveTextContent(/limit/i);
     expect(screen.queryByTestId("period-status")).toBeNull();
-    expect(pinnedTitle()).toBe("Week 47");
+  });
+
+  it("does not treat a 429 as a daily limit", async () => {
+    bridge.on("POST", `/rooms/${REPORT_ID}/periods`, () => reply({ detail: "Too many requests" }, 429));
+    await openView();
+    pick("day", { anchor: "2026-11-18" });
+    const error = await screen.findByTestId("period-error");
+    expect(error).not.toHaveTextContent(/today's limit|limit/i);
+    expect(error).toHaveTextContent("Too many requests");
   });
 
   it("shows an edition the server already had (a shared request) at once", async () => {

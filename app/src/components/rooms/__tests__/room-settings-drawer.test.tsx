@@ -117,6 +117,13 @@ describe("settings drawer: an assigned user", () => {
     expect(await screen.findByTestId("settings-saved")).toBeInTheDocument();
   });
 
+  it("has no cost cap or minimum-interval hint (nothing is capped)", () => {
+    drawer();
+    const panel = screen.getByTestId("room-settings");
+    expect(screen.queryByLabelText(/cost/i)).toBeNull();
+    expect(panel).not.toHaveTextContent(/at most|minimum|cap\b|limit/i);
+  });
+
   it("pauses and resumes as a saved change (A5)", async () => {
     bridge.on("PATCH", `/rooms/${REPORT_ID}`, room({ rev: 4, paused: true }));
     drawer();
@@ -142,13 +149,13 @@ describe("settings drawer: an assigned user", () => {
 
   it("shows the server's refusal on the schedule field and keeps the form", async () => {
     bridge.on("PATCH", `/rooms/${REPORT_ID}`, () =>
-      reply({ detail: { error: "invalid_schedule", message: "Runs at most every 15 minutes", field: "scheduleText" } }, 422),
+      reply({ detail: { error: "invalid_schedule", message: "Could not read the schedule 'whenever'", field: "scheduleText" } }, 422),
     );
     const { onSaved } = drawer();
-    fireEvent.change(field(/schedule/i), { target: { value: "every minute" } });
+    fireEvent.change(field(/schedule/i), { target: { value: "whenever" } });
     fireEvent.click(screen.getByTestId("settings-save"));
-    expect(await screen.findByTestId("field-error-scheduleText")).toHaveTextContent("Runs at most every 15 minutes");
-    expect(field(/schedule/i).value).toBe("every minute");
+    expect(await screen.findByTestId("field-error-scheduleText")).toHaveTextContent("Could not read the schedule 'whenever'");
+    expect(field(/schedule/i).value).toBe("whenever");
     expect(onSaved).not.toHaveBeenCalled();
   });
 
