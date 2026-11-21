@@ -242,9 +242,19 @@ editions, messages)`, `share_room`, `unshare_room`, `archive_room`,
   room_id=None, booted_at=None, now=None) -> list[Edition]` fails each `building`
   edition whose run is not alive: not held by this process (`hold(edition_id)` /
   `live(edition_id)`), and either its `run_id`'s `agent_runs` row has ended, or (no
-  run row) it predates `booted_at` (default `ROBOTHOR_DAEMON_START_TS`) or has been
-  building for 2 hours. `request_period` reaps the room first; call it at engine
-  start after `_cleanup_stale_runs`. A cancelled period run fails its edition; runs are
+  run row) it predates `booted_at` or has been building for 2 hours. `booted_at`
+  defaults to the instant the daemon recorded with `recovery.record_boot` (called from
+  `_set_daemon_start_ts`; a cached settings copy would be empty in the daemon), else
+  `ROBOTHOR_DAEMON_START_TS` for other processes. `request_period` reaps the room
+  first, and the daemon sweeps the tenant at start (`_reap_room_editions`, after
+  `_cleanup_stale_runs`).
+- Contract for every run that builds an edition (`run_room`, the scheduler, run now):
+  the reaper fails ANY `building` edition of the room, scheduled ones included, unless
+  it is held. So a run must hold its edition with `recovery.hold(edition.id)` (or
+  `recovery.live`) from before its task first runs until it ends, or record the
+  edition's `run_id` as its live `agent_runs` row before the run starts. A run that
+  does neither is failed once it is 2 hours old, or at once after a restart, and its
+  later publish then finds a failed edition. A cancelled period run fails its edition; runs are
   spawned on the engine's task registry, so the shutdown drain waits for them; the
   context is read before the row is inserted; a caller cancelled mid-claim still gets
   its run started.
