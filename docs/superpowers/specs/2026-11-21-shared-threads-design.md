@@ -198,6 +198,10 @@ editions, messages)`, `share_room`, `unshare_room`, `archive_room`,
   `expected_rev`.
 - A duplicate of a scheduled room starts `paused` (A8: unscheduled until its new
   owner confirms); resuming it creates its schedule row under the new owner.
+- `share_room(..., assigned=None) -> ShareOutcome(member, added)`: for an existing
+  member an omitted `assigned` keeps their role, `True` promotes, and an explicit
+  `False` demotes under unshare's guards; `added` is False for an existing member,
+  so callers send no new notice.
 - `unshare` refuses the run-as user and the last assigned member; `reassign`
   makes the target assigned and the run-as user. A viewer cannot be assigned or
   reassigned to.

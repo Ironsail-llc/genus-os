@@ -24,6 +24,7 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.engine.deliverable_contract import task_text_for_column
 from robothor.engine.models import AgentRun, RunStatus, RunStep, StepType, TriggerType
 from robothor.engine.reasoning_replay import PRODUCER_MODEL_KEY, REASONING_FIELDS
+from robothor.engine.untrusted import neutralise_boundary
 from robothor.engine.wrapped_call import explicit_arguments, inner_call
 
 if TYPE_CHECKING:
@@ -193,6 +194,10 @@ EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
         # the operator's automations and whatever systems they call.
         "n8n_list_workflows",
         "n8n_recent_failures",
+        # Workspaces: messages, edition titles, summaries and suggestions were
+        # written by other people and by earlier agent runs.
+        "room_read",
+        "room_list",
     }
 )
 
@@ -778,7 +783,11 @@ class AgentSession:
 
         # Wrap untrusted external data with tags so the LLM sees a boundary
         if call_name in EXTERNAL_DATA_TOOLS:
-            content = f'<untrusted_content source="{call_name}">\n{content}\n</untrusted_content>'
+            # Neutralised for the closing tag, as hook output is.
+            content = (
+                f'<untrusted_content source="{call_name}">\n'
+                f"{neutralise_boundary(content)}\n</untrusted_content>"
+            )
 
         self.messages.append(
             {

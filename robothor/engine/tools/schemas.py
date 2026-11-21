@@ -2015,12 +2015,16 @@ _ROOM_SCHEMAS: dict[str, dict[str, Any]] = {
     "room_share": _room_tool(
         "room_share",
         "Share a workspace with a colleague in the same company. Shared people read, "
-        "chat and run it; assigned=true also lets them change it. Confirm who first."
-        + _ROOM_LINK_RULE,
+        "chat and run it; assigned=true also lets them change it. Leave assigned out for "
+        "someone already a member to keep their role; assigned=false demotes, never for "
+        "the person it runs as or its last assigned member. Confirm who first." + _ROOM_LINK_RULE,
         {
             "room_id": _ROOM_ID,
             "user": _ROOM_USER,
-            "assigned": {"type": "boolean", "description": "May they change it (default false)"},
+            "assigned": {
+                "type": "boolean",
+                "description": "May they change it (new members default false; omit to keep a member's role)",
+            },
         },
         ["room_id", "user"],
     ),

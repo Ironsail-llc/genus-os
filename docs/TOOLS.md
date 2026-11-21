@@ -1625,7 +1625,7 @@ same way. What people see and may do in a workspace is
 | `room_update` | `room_id`, `expected_rev`, `changes` (`title`, `instructions`, `schedule_text`, `tz`, `default_grain`, `paused`, `notify_default`, `max_cost_usd`) | assigned, or owner/admin |
 | `room_list` | `scope` `mine` (default) or `all` | `all`: owner/admin |
 | `room_read` | `room_id`, `editions` (3), `messages` (10) | any access |
-| `room_share` / `room_unshare` | `room_id`, `user` (id or email), `assigned` | assigned, or owner/admin |
+| `room_share` / `room_unshare` | `room_id`, `user` (id or email), `assigned`. Re-sharing a member keeps their role unless `assigned` is given; `assigned: false` and unshare never touch the run-as user or the last assigned member | assigned, or owner/admin |
 | `room_archive` | `room_id`; the schedule stops | assigned, or owner/admin |
 | `room_duplicate` | `room_id`; the caller's own copy | shared or more |
 | `room_restore_revision` | `room_id`, `rev`; writes a new revision equal to it | assigned, or owner/admin |
@@ -1663,6 +1663,9 @@ same way. What people see and may do in a workspace is
   neither the room nor its id. `room_list` shows only the caller's rooms unless
   an owner or admin asks for `all`. `room_read` shows another person's preview
   edition to nobody.
+- **What comes back is data.** `room_read` and `room_list` return text other
+  people and earlier runs wrote, so their results reach the model inside the
+  `<untrusted_content>` boundary (`EXTERNAL_DATA_TOOLS`), like `web_fetch`.
 - **Every result that names a room carries `link`** (`/?v=chat&room=<id>`), and
   the descriptions tell the agent to give it.
 
