@@ -502,6 +502,8 @@ def test_recorded_replies_match_the_dashboard_contract(real) -> None:
     )
     replies["tasks"] = _record(bob.get(f"/api/rooms/{rid}/tasks"))
     replies["task_accept"] = _record(bob.post(f"/api/rooms/{rid}/tasks/{task_a}/accept"))
+    # Accepting makes the task the acceptor's (E2), through robothor.rooms.tasks.
+    assert replies["task_accept"]["body"]["assignee"] == {"userId": w.ids.bob, "displayName": "Bob"}
     replies["task_accept_taken"] = _record(alice.post(f"/api/rooms/{rid}/tasks/{task_a}/accept"))
     replies["from_task"] = _record(alice.post(f"/api/rooms/from-task/{task_b}"))
     replies["read"] = _record(bob.post(f"/api/rooms/{rid}/read"))
