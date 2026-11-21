@@ -17,6 +17,7 @@ import {
   pendingBubbles,
   roomOutbox,
   unsentBubbles,
+  unsentShown,
   type OutboxItem,
   type RoomRow,
   type SendResult,
@@ -470,21 +471,50 @@ describe("reconciling a room's transcript with its outbox", () => {
     expect(unsentBubbles(state, []).map((i) => i.id)).toEqual(["c-1"]);
   });
 
+  it("still draws a refused entry when an earlier stored message has the same text", () => {
+    const box = roomOutbox(ROOM);
+    const refused = { id: "c-1", seq: 1, text: "thanks", rejected: true };
+    const state = { ...box.state(), unsent: [refused] };
+    // Refused before admission, so no stored row can be its copy: an earlier "thanks" is another message.
+    expect(unsentBubbles(state, [stored(5, "thanks")]).map((i) => i.id)).toEqual(["c-1"]);
+    expect(unsentShown(state, [stored(5, "thanks")])).toEqual([]);
+    expect(unsentShown(state, [stored(5, "thanks"), local("c-1", "thanks")])).toEqual(["c-1"]);
+  });
+
+  it("counts an unknown-outcome entry as shown only when it is drawn or its stored copy is", () => {
+    const box = roomOutbox(ROOM);
+    const unknown = { id: "c-2", seq: 2, text: "run it", rejected: false };
+    const state = { ...box.state(), unsent: [unknown] };
+    expect(unsentShown(state, [])).toEqual([]);
+    expect(unsentShown(state, [stored(7, "run it", "c-2")])).toEqual(["c-2"]);
+    expect(unsentShown(state, [stored(7, "run it")])).toEqual(["c-2"]);
+    expect(unsentShown(state, [local("c-2", "run it")])).toEqual(["c-2"]);
+  });
+
   for (const echo of [true, false]) {
-    it(`property: a stored message is never shown as not sent, and none twice (client id ${echo ? "echoed" : "not echoed"})`, async () => {
+    it(`property: no refusal is hidden, no stored message is called not sent, with repeated texts (client id ${echo ? "echoed" : "not echoed"})`, async () => {
       const ACTIONS = ["type", "type", "ok", "busy", "refused", "failStored", "failLost", "navigate", "history", "history", "freed", "elapse"] as const;
+      const WORDS = ["thanks", "yes", "run it again"];
       for (let seed = 1; seed <= 300; seed++) {
         forgetRoomOutboxes();
         const rand = prng(seed * 17 + (echo ? 3 : 0));
-        const typed: string[] = [];
+        // Every message by its outbox id: texts repeat, identities do not.
+        const typed: Array<{ id: string; text: string }> = [];
         const storedRows: RoomRow[] = [];
+        const storedIds = new Set<string>();
+        const outcome = new Map<string, "refused" | "unknown">();
         const pending: Array<Pending & { by: Set<string> }> = [];
-        const told = new Set<string>(); // shown as not sent, or as possibly not sent
+        // Drawn as not sent (or as possibly not sent), by id: only entries a bubble was drawn for.
+        const told = new Set<string>();
+        // Unknown outcomes taken for a stored row with their text (no echo to tell them apart).
+        const matchedByText = new Set<string>();
         let rendered: RoomRow[] = [];
         let startedHere = new Set<string>();
         let mounted = true;
-        const store = (item: OutboxItem) =>
+        const store = (item: OutboxItem) => {
+          storedIds.add(item.id);
           storedRows.push(stored(storedRows.length + 1, item.text, echo ? item.id : undefined));
+        };
         const makeSender = (mine: Set<string>) => (item: OutboxItem) =>
           new Promise<SendResult>((resolve) => {
             mine.add(item.id);
@@ -495,13 +525,17 @@ describe("reconciling a room's transcript with its outbox", () => {
           const box = roomOutbox(ROOM);
           const merged = mergeRoomRows(rendered, storedRows);
           const state = box.state();
+          const drawnUnsent = unsentBubbles(state, merged);
           const extra = [
             ...pendingBubbles(state, merged, startedHere).map((i) => local(i.id, i.text)),
-            ...unsentBubbles(state, merged).map((i) => ({ ...local(i.id, i.text), note: i.rejected ? "Not sent" : "May not have reached" })),
+            ...drawnUnsent.map((i) => ({ ...local(i.id, i.text), note: i.rejected ? "Not sent" : "May not have reached" })),
           ];
           rendered = [...merged, ...extra];
-          for (const i of state.unsent) told.add(i.text);
-          if (state.unsent.length) box.acknowledge(state.unsent.map((i) => i.id));
+          for (const i of drawnUnsent) told.add(i.id);
+          // Acknowledged: only what is now on screen, drawn or as its stored copy.
+          const shown = unsentShown(state, rendered);
+          for (const id of shown) if (!told.has(id) && !rendered.some((r) => r.id === id || r.clientId === id)) matchedByText.add(id);
+          if (shown.length) box.acknowledge(shown);
         };
         const trace: string[] = [];
         const steps = 10 + Math.floor(rand() * 40);
@@ -509,9 +543,9 @@ describe("reconciling a room's transcript with its outbox", () => {
           const action = ACTIONS[Math.floor(rand() * ACTIONS.length)];
           trace.push(action);
           if (action === "type") {
-            const text = `m${typed.length}`;
-            typed.push(text);
+            const text = WORDS[Math.floor(rand() * WORDS.length)];
             const item = roomOutbox(ROOM).enqueue(text);
+            typed.push({ id: item.id, text });
             if (mounted) rendered = [...rendered, local(item.id, text)];
           } else if (action === "ok") {
             const p = pending.shift();
@@ -526,7 +560,9 @@ describe("reconciling a room's transcript with its outbox", () => {
             if (p) {
               // Admitted and stored, then the answer was lost (a 504, a cut stream).
               if (action === "failStored") store(p.item);
-              if (mounted && p.by === startedHere) told.add(p.item.text);
+              outcome.set(p.item.id, action === "refused" ? "refused" : "unknown");
+              // Its own panel, still open, shows the error itself.
+              if (mounted && p.by === startedHere) told.add(p.item.id);
               p.resolve({ outcome: "failed", rejected: action === "refused" });
             }
           } else if (action === "freed") {
@@ -549,11 +585,14 @@ describe("reconciling a room's transcript with its outbox", () => {
           await settle();
           if (mounted) draw();
           const context = `seed ${seed}: ${trace.join(" ")}`;
-          const contents = rendered.map((r) => r.content);
-          expect(new Set(contents).size, context).toBe(contents.length);
-          const storedTexts = new Set(storedRows.map((r) => r.content));
-          const wrong = rendered.filter((r) => r.note === "Not sent" && storedTexts.has(r.content));
-          expect(wrong, context).toEqual([]);
+          // Never more copies of a text on screen than messages typed with it.
+          for (const word of WORDS) {
+            expect(rendered.filter((r) => r.content === word).length, context).toBeLessThanOrEqual(typed.filter((t) => t.text === word).length);
+          }
+          // A stored message is never called not sent.
+          expect(rendered.filter((r) => r.note === "Not sent" && storedIds.has(r.id)), context).toEqual([]);
+          // Only an unknown outcome is ever taken for a stored row by its text.
+          expect([...matchedByText].filter((id) => outcome.get(id) === "refused"), context).toEqual([]);
         }
         if (!mounted) {
           mounted = true;
@@ -570,10 +609,15 @@ describe("reconciling a room's transcript with its outbox", () => {
             p.resolve({ outcome: "ok" });
           }
           await settle();
+          draw();
         }
         draw();
-        const arrived = new Set(storedRows.map((r) => r.content));
-        expect(typed.filter((t) => !arrived.has(t) && !told.has(t)), `seed ${seed}: ${trace.join(" ")}`).toEqual([]);
+        // Every message arrived, or a bubble said it was not (or may not have been) sent, or,
+        // with no echo, an unknown outcome stands as a stored row with its text. Nothing vanished.
+        const lost = typed.filter((t) => !storedIds.has(t.id) && !told.has(t.id) && !matchedByText.has(t.id));
+        expect(lost, `seed ${seed}: ${trace.join(" ")}`).toEqual([]);
+        if (echo) expect([...matchedByText], `seed ${seed}`).toEqual([]);
+        expect(roomOutbox(ROOM).state().unsent, `seed ${seed}`).toEqual([]);
         detach();
       }
     });
