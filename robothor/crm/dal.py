@@ -2403,6 +2403,7 @@ def delete_task(task_id: str, tenant_id: str = DEFAULT_TENANT) -> bool:
             conn.commit()
             if ok:
                 _safe_audit("delete", "task", task_id)
+                _publish_room_task(tenant_id, task_id)
             return ok
         except Exception as e:
             conn.rollback()
@@ -2709,6 +2710,7 @@ def reject_task(
 
             conn.commit()
             _safe_audit("reject", "task", task_id, details={"reviewer": reviewer, "reason": reason})
+            _publish_room_task(tenant_id, task_id)
 
             # Send review_rejected notification
             send_notification(

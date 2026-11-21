@@ -658,11 +658,14 @@ def test_a_rejected_review_is_published_to_its_workspace(db):
     db.cur.execute("UPDATE crm_tasks SET status = 'REVIEW' WHERE id = %s", (task_id,))
     db.events.clear()
 
-    assert crm_dal.reject_task(task_id, "needs a source", "u-reviewer", tenant_id=db.tenant) is True
-
-    assert room_task_events(db) == [
-        {"room_id": room.id, "tenant_id": db.tenant, "task_id": task_id}
-    ]
+    try:
+        rejected = crm_dal.reject_task(task_id, "needs a source", "u-reviewer", tenant_id=db.tenant)
+        assert rejected is True
+        assert room_task_events(db) == [
+            {"room_id": room.id, "tenant_id": db.tenant, "task_id": task_id}
+        ]
+    finally:  # reject notifies the assignee, and the notice refers to the task
+        db.cur.execute("DELETE FROM crm_agent_notifications WHERE task_id = %s", (task_id,))
 
 
 def test_a_deleted_task_is_published_to_its_workspace(db):
