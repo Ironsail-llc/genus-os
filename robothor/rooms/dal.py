@@ -34,13 +34,12 @@ from robothor.rooms.models import (
 )
 
 if TYPE_CHECKING:
-    from datetime import date, datetime
+    from datetime import date
 
 __all__ = [
     "accept_task",
     "add_member",
     "archive_room",
-    "count_requested_editions",
     "create_edition",
     "create_room",
     "create_suggested_tasks",
@@ -1237,31 +1236,6 @@ def list_editions_in_period(
             (tenant_id, room, grain, start, end),
         )
         return [_edition(r) for r in cur.fetchall()]
-
-
-def count_requested_editions(
-    tenant_id: str, room_id: str, *, since: datetime, requested_by: str | None
-) -> int:
-    """Editions ``requested_by`` asked for in the room (previews included)
-    created at or after ``since``: the on-demand runs a person's daily cap
-    counts. ``requested_by`` None counts every person's."""
-    room = canonical_uuid(room_id)
-    if room is None:
-        return 0
-    with get_connection(read_only=True) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(*) FROM room_editions WHERE tenant_id = %(tenant)s "
-            "AND room_id = %(room)s AND requested_by IS NOT NULL AND created_at >= %(since)s "
-            "AND (%(person)s::uuid IS NULL OR requested_by = %(person)s::uuid)",
-            {
-                "tenant": tenant_id,
-                "room": room,
-                "since": since,
-                "person": canonical_uuid(requested_by),
-            },
-        )
-        return int(cur.fetchone()[0])
 
 
 def list_building_editions(

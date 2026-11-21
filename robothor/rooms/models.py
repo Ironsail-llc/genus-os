@@ -21,7 +21,6 @@ SETTINGS_KEYS = frozenset(
         "default_grain",
         "schedule_text",
         "max_cost_usd",
-        "max_on_demand_per_day",
         "notify_default",
     }
 )

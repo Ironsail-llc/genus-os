@@ -16,8 +16,6 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from robothor.rooms.periods import (
-    DEFAULT_MAX_ON_DEMAND_PER_DAY,
-    MAX_CUSTOM_DAYS,
     Period,
     PeriodError,
     last_complete_period,
@@ -239,13 +237,13 @@ def test_a_malformed_request_is_refused(grain, anchor):
         resolve_period(grain, "UTC", anchor, now=NOW)
 
 
-def test_a_custom_range_has_a_maximum_length():
-    start = date(2026, 1, 1)
-    longest = start + timedelta(days=MAX_CUSTOM_DAYS - 1)
+def test_a_custom_range_may_be_any_length_once_it_has_ended():
+    years = resolve_period("custom", "UTC", "2019-01-01/2025-12-31", now=NOW)
 
-    assert resolve_period("custom", "UTC", (start, longest), now=NOW).days == MAX_CUSTOM_DAYS
-    with pytest.raises(PeriodError, match=str(MAX_CUSTOM_DAYS)):
-        resolve_period("custom", "UTC", (start, longest + timedelta(days=1)), now=NOW)
+    assert years == Period(date(2019, 1, 1), date(2025, 12, 31), "custom")
+    assert years.days == (date(2025, 12, 31) - date(2019, 1, 1)).days + 1
+    with pytest.raises(PeriodError, match="not over"):
+        resolve_period("custom", "UTC", "2019-01-01/2026-11-21", now=NOW)
 
 
 def test_a_period_is_a_value_that_cannot_run_backwards():
@@ -266,31 +264,7 @@ def test_last_complete_period_refuses_an_unknown_grain():
         last_complete_period("year", "UTC", NOW)
 
 
-# ─── the daily cap setting and the room runner ──────────────────────────
-
-
-@pytest.mark.parametrize(
-    ("value", "cap"),
-    [
-        (None, DEFAULT_MAX_ON_DEMAND_PER_DAY),
-        (3, 3),
-        ("4", 4),
-        (2.0, 2),
-        (-1, 0),
-        (0, 0),
-        ("many", DEFAULT_MAX_ON_DEMAND_PER_DAY),
-        (True, DEFAULT_MAX_ON_DEMAND_PER_DAY),
-        ([5], DEFAULT_MAX_ON_DEMAND_PER_DAY),
-    ],
-)
-def test_the_cap_setting_falls_back_to_the_documented_default(value, cap):
-    from robothor.rooms.models import Room
-    from robothor.rooms.periods import _cap
-
-    settings = {} if value is None else {"max_on_demand_per_day": value}
-    room = Room("test-tenant", "r", "report", "Daily", "main", "k", "u", settings=settings)
-
-    assert _cap(room) == cap
+# ─── the room runner ────────────────────────────────────────────────────
 
 
 def test_the_room_runner_is_the_room_runs_module(monkeypatch):
