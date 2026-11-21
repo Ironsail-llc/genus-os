@@ -282,7 +282,9 @@ def run_is_top_level(tenant_id: str, run_id: str) -> bool:
     inherits its parent's person, so it never acts on tasks for them. A run
     the database does not know is refused."""
     row = dal.run_lineage(tenant_id, run_id)
-    return bool(row) and row["trigger_type"] != "sub_agent" and row["parent_run_id"] is None
+    if row is None:
+        return False
+    return row["trigger_type"] != "sub_agent" and row["parent_run_id"] is None
 
 
 # ─── events ──────────────────────────────────────────────────────────────
