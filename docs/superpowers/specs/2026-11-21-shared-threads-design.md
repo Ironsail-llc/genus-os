@@ -201,7 +201,10 @@ rely on:
   `live(edition_id)`), and either its `run_id`'s `agent_runs` row has ended, or (no
   run row) it predates `booted_at` (default `ROBOTHOR_DAEMON_START_TS`) or has been
   building for 2 hours. `request_period` reaps the room first; call it at engine
-  start after `_cleanup_stale_runs`. A cancelled period run fails its edition.
+  start after `_cleanup_stale_runs`. A cancelled period run fails its edition; runs are
+  spawned on the engine's task registry, so the shutdown drain waits for them; the
+  context is read before the row is inserted; a caller cancelled mid-claim still gets
+  its run started.
   Errors: `PeriodError` (a `ValueError`, 422), `OnDemandCapReached(limit, used)` (429).
 - `context_for_period(tenant_id, room_id, period)`: the newest published summary of
   each `day` edition inside the period, 500 characters each, 6,000 in all, wrapped
