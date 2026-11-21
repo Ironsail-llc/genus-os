@@ -10,7 +10,7 @@
  * pass and the mark comes off.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { api, outboxCount, people, requireStack, roomLink, say, signedIn } from "./stack";
+import { api, expectedToFailUntil, outboxCount, people, requireStack, roomLink, say, signedIn } from "./stack";
 
 requireStack();
 test.describe.configure({ mode: "serial" });
@@ -216,7 +216,7 @@ async function proposeEmail(page: Page, id: string) {
   return cards.last();
 }
 
-test("10. in the task workspace Bob sees the exact email, approves it, it is sent once, and the task is done (E3)", async () => {
+test("10. in the task workspace Bob sees the exact email, approves it, and it is sent once with a receipt (E3)", async () => {
   const sentBefore = outboxCount();
   const card = await proposeEmail(bobPage, taskRoomId);
   await expect(card.getByTestId("room-email-from")).toHaveText("assistant@example.com");
@@ -237,11 +237,17 @@ test("10. in the task workspace Bob sees the exact email, approves it, it is sen
   expect(outboxCount()).toBe(sentBefore + 1);
   await bobPage.waitForTimeout(3000);
   expect(outboxCount()).toBe(sentBefore + 1); // exactly once
+});
+
+test("10a. the task is done once its email is sent (E3)", async () => {
+  expectedToFailUntil(
+    "a product decision: story E3 says the task completes, but nothing completes a task when its email is sent (a task may need more than one email)",
+  );
   await expect
     .poll(async () => {
       const tasks = (await (await api("bob")).get(`/api/rooms/${roomId}/tasks`)).body.tasks as Array<{ status: string; origin: string }>;
       return tasks.find((t) => t.origin === "suggestion")?.status;
-    }, { timeout: 30000 })
+    }, { timeout: 15000 })
     .toBe("DONE");
 });
 

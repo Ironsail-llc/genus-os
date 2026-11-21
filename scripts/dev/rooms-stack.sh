@@ -208,6 +208,16 @@ down() {
       echo "stopped $name"
     fi
   done
+  # A server whose pid file is gone (a start that failed half-way) still holds
+  # its port: stop it too, but only if it is this checkout's own process.
+  local port pid
+  for port in "$ENGINE_PORT" "$BRIDGE_PORT" "$APP_PORT"; do
+    for pid in $(lsof -t -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null); do
+      if ps -o command= -p "$pid" | grep -qE "$ROOT|standalone/server.js"; then
+        kill "$pid" 2>/dev/null && echo "stopped the process on port $port"
+      fi
+    done
+  done
 }
 
 status() {
