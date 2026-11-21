@@ -678,6 +678,94 @@ class TestAttribution:
 # ─── D3: one turn at a time ───────────────────────────────────────────
 
 
+def _send_request(body: dict[str, Any]) -> Any:
+    import json
+
+    from starlette.requests import Request
+
+    payload = json.dumps(body).encode()
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    scope = {"type": "http", "method": "POST", "path": "/chat/send", "headers": []}
+    return Request(scope, receive)
+
+
+class TestTheSaveOutlivesADisconnect:
+    """``done`` can go out (early release) before the room's exchange is saved.
+    A browser that leaves then cancels the turn's task; the save, the activity
+    bump and the event must still finish, and the room stays locked until they do."""
+
+    async def test_a_disconnect_after_done_still_saves_bumps_and_announces(
+        self, client, fake, mock_runner
+    ):
+        from robothor.rooms import fanout
+
+        room = fake.add()
+        fake.share(room, BOB)
+        saving, finish = asyncio.Event(), asyncio.Event()
+        save = fake.save_exchange
+
+        async def slow_save(*args: Any, **kwargs: Any) -> list[int]:
+            saving.set()
+            await finish.wait()
+            return await save(*args, **kwargs)
+
+        async def early(**kwargs: Any) -> AgentRun:
+            run = _run("answer")
+            await kwargs["on_complete"](run)  # done goes out before execute returns
+            return run
+
+        mock_runner.execute = AsyncMock(side_effect=early)
+        with (
+            _as(_auth(BOB)),
+            patch("robothor.engine.chat.save_exchange_async", slow_save),
+        ):
+            response = await chat.chat_send(_send_request({"room_id": room.id, "message": "q"}))
+            stream = response.body_iterator
+            async for chunk in stream:
+                if "event: done" in str(chunk):
+                    break
+            await asyncio.wait_for(saving.wait(), 2)
+            await stream.aclose()  # the browser goes away
+            await asyncio.sleep(0.05)
+
+            assert fanout.room_lock(room.id).locked()  # still held: not saved yet
+            fake.activity.assert_not_called()
+            finish.set()
+            for _ in range(100):
+                if not fanout.room_lock(room.id).locked():
+                    break
+                await asyncio.sleep(0.01)
+
+        assert not fanout.room_lock(room.id).locked()
+        fake.activity.assert_called_once_with(TENANT, room.id, 102)
+        assert fake.published[-1][0][:2] == ("agent", "room.message")
+        assert [r["content"] for r in fake.store[(TENANT, room.session_key)]] == ["q", "answer"]
+
+
+class TestServiceTokensKeepTheArchivedRule:
+    """A service token skips the membership check, not the archived-room rule."""
+
+    @pytest.mark.parametrize("by", ["room_id", "session_key"])
+    async def test_a_service_token_cannot_post_into_an_archived_room(
+        self, client, fake, mock_runner, by
+    ):
+        room = fake.add(archived=True)
+        named = {"room_id": room.id} if by == "room_id" else {"session_key": room.session_key}
+
+        sent = await _send(client, _service(), **named)
+        with _as(_service()):
+            cleared = await client.post("/chat/clear", json=named)
+            read = await client.get("/chat/history", params=named)
+
+        assert sent.status_code == 403
+        assert cleared.status_code == 403
+        assert read.status_code == 200
+        mock_runner.execute.assert_not_awaited()
+
+
 class TestOneTurnAtATime:
     async def test_a_second_sender_is_told_who_is_being_answered(self, client, fake, mock_runner):
         room = fake.add()
