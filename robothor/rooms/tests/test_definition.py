@@ -363,6 +363,21 @@ def test_removing_the_schedule_stops_the_row(staff_db):
     assert all(not r["enabled"] for r in _cron_rows(db, room.id))
 
 
+def test_changing_only_the_instructions_updates_the_schedule_row(staff_db):
+    db = staff_db
+    room = _report(db)
+
+    definition.apply_definition_change(
+        _actor(db, "alice"), room.id, 1, {"instructions": "Only EMEA, by country."}
+    )
+
+    db.cur.execute(
+        "SELECT prompt FROM user_cronjobs WHERE tenant_id = %s AND room_id = %s",
+        (db.tenant, room.id),
+    )
+    assert [r[0] for r in db.cur.fetchall()] == ["Only EMEA, by country."]
+
+
 def test_scheduling_an_unscheduled_room_creates_its_row(staff_db):
     db = staff_db
     room = _report(db, schedule_text=None)

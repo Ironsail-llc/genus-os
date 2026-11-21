@@ -187,8 +187,13 @@ editions, messages)`, `share_room`, `unshare_room`, `archive_room`,
 `run_as_actor(tenant_id, room_id)` and `room_schedule(tenant_id, room_id)`.
 
 - A schedule must repeat: a one-off (`in 2 hours`, an ISO time) is refused, as is
-  any interval or cron expression whose runs come closer than 15 minutes. A cron
-  schedule is read in `settings.tz`, UTC when unset.
+  any interval or cron expression whose runs come closer than 15 minutes. A room's
+  cron schedule is read in `settings.tz`, UTC when unset; the zone is stored in the
+  row's payload. A plain user cron (no `tz` in its payload) keeps the host's zone.
+- One `user_cronjobs` row per room: a partial unique index on
+  `(tenant_id, room_id) WHERE room_id IS NOT NULL` (migration 170), written by a
+  single `INSERT ... ON CONFLICT`. The row follows changes of schedule, time zone,
+  pause and instructions (its `prompt`).
 - Pausing is not part of the definition: it writes no revision, but still checks
   `expected_rev`.
 - A duplicate of a scheduled room starts `paused` (A8: unscheduled until its new
@@ -196,8 +201,10 @@ editions, messages)`, `share_room`, `unshare_room`, `archive_room`,
 - `unshare` refuses the run-as user and the last assigned member; `reassign`
   makes the target assigned and the run-as user. A viewer cannot be assigned or
   reassigned to.
-- A caller with no verified person behind it may only `room_read`, with the
-  access of the room's run-as user re-resolved from `user_accounts`.
+- An unverified identity is refused by every room tool. A run with no person
+  behind it may only `room_read`, and only for the room `robothor.rooms.run_context`
+  binds the run to (same tenant), with that room's run-as user's access re-resolved
+  from `user_accounts`. No carrier module, or no bound room, reads nothing.
 - `user_cron.list_due_cronjobs` skips rows with a `room_id`: the generic tick
   must not run a room's instructions as a plain cron prompt. Lane 7 fires them.
 - `room_read` takes message authors from `message.author_user_id` (or
