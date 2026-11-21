@@ -246,6 +246,8 @@ this list a subset of the dashboard's component registry. `suggestions` is a lis
   fullwidth punctuation, ligatures, `R&D`) comes out byte-identical. A one-line
   field turns line breaks into spaces. Only the first four times the field's limit
   of raw input is read, so the work is linear in the field, not the input.
+  The cut at the limit drops a reference fragment it split, so the output never
+  exceeds the limit and a cut never rewrites other ampersands.
   Cleaning is idempotent. A
   generated corpus of obfuscations is tested against the downstream detectors,
   and a table of ordinary report text must come out unchanged.
