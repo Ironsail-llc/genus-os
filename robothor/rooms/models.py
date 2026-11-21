@@ -182,6 +182,7 @@ def edition_json(edition: Edition) -> dict[str, Any]:
         "suggestions": list(edition.suggestions),
         "provenance": dict(edition.provenance),
         "createdAt": _iso(edition.created_at),
+        "publishedSeq": edition.published_seq,
     }
 
 
