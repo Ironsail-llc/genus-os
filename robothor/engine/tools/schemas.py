@@ -2188,8 +2188,8 @@ _ROOM_RUN_SCHEMAS: dict[str, dict[str, Any]] = {
         "Run a report workspace now, or preview it. A run builds the edition for the last "
         "complete period (or the period you name) as the workspace's run-as user and "
         "notifies its members; a preview builds it for the person you are talking to only, "
-        "notifies nobody and creates no tasks. A run already in progress is joined. Runs "
-        "are capped per day and in cost. Needs run access: a viewer is refused." + _ROOM_LINK_RULE,
+        "notifies nobody and creates no tasks. A run already in progress is joined. Its "
+        "cost is shown on the edition. Needs run access: a viewer is refused." + _ROOM_LINK_RULE,
         {
             "room_id": _ROOM_ID,
             "preview": {"type": "boolean", "description": "Only the requester sees it"},

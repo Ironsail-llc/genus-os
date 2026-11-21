@@ -32,14 +32,13 @@ What a run does, in order:
 4. Run the agent with the room bound (``room_run_scope``) around the runner
    AND the save of its reply, as the run-as user, with the room's bounded
    history and the last published edition's summary wrapped as data.
-5. The cost cap is the run's hard budget (``v2.hard_budget`` +
-   ``max_cost_usd``, the runner's own enforcement, docs/BUDGETS_AND_STOPS.md):
-   the lower of the room's ``settings.max_cost_usd`` and the agent's own cap,
-   :data:`DEFAULT_MAX_COST_USD` when neither is set. A run stopped by it
-   fails its edition with :data:`CAPPED_REASON`; a capped run is never
-   published as complete.
+5. Nothing is capped (the operator's decision): a workspace adds no budget
+   to its agent, which runs with its own manifest exactly as any run of it
+   does, and any number of on-demand runs may start. What a run cost is a
+   flag instead: ``cost_usd`` and the token counts land on its edition's
+   provenance (``dal.record_edition_cost``), where the report is read.
 6. Settle: the edition ends ``published`` or ``failed`` on EVERY exit
-   (cancel, exception, timeout, cost cap, shutdown). A non-preview failure
+   (cancel, exception, timeout, shutdown). A non-preview failure
    adds one to ``consecutive_failures`` and tells the ASSIGNED members; at
    :data:`AUTO_PAUSE_AFTER_FAILURES` in a row the room pauses itself and says
    why. A success resets the count and fans the edition out
@@ -48,51 +47,44 @@ What a run does, in order:
 
 A preview builds an edition only its requester sees: nothing is saved in the
 shared conversation, nobody is notified, no event, no tasks, and its failure
-counts nothing. It is capped like any run, and counts toward the daily
-on-demand cap (:func:`check_on_demand_cap`).
+counts nothing. Its cost is on its provenance like any run's.
 """
 
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, time
 from typing import TYPE_CHECKING, Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from psycopg2.extras import RealDictCursor
 
 from robothor.db.connection import get_connection
 from robothor.engine.chat_history import MAX_HISTORY, as_history
-from robothor.rooms import access, dal, fanout, periods, recovery
+from robothor.rooms import access, dal, fanout, recovery
 from robothor.rooms.errors import RoomError, RoomForbidden
 from robothor.rooms.keys import canonical_uuid
-from robothor.rooms.periods import OnDemandCapReached, Period, last_complete_period
+from robothor.rooms.periods import Period, last_complete_period
 from robothor.rooms.run_context import RoomRun, room_run_scope
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
+    from datetime import datetime
 
-    from robothor.engine.models import AgentConfig, AgentRun
+    from robothor.engine.models import AgentRun
     from robothor.rooms.access import Actor
     from robothor.rooms.models import Edition, Room
 
 __all__ = [
     "AUTO_PAUSE_AFTER_FAILURES",
-    "CAPPED_REASON",
-    "DEFAULT_MAX_COST_USD",
     "HISTORY_LIMIT",
     "TRIGGERS",
     "ActiveRun",
-    "OnDemandCapReached",
     "Period",
     "RunRefused",
     "active_run",
     "bind_runner",
     "bound_runner",
-    "check_on_demand_cap",
     "spawn",
     "execute_room_run",
     "last_complete_period",
@@ -106,10 +98,6 @@ logger = logging.getLogger(__name__)
 TRIGGERS = frozenset({"schedule", "manual", "period"})
 #: Failed runs in a row after which a room pauses itself.
 AUTO_PAUSE_AFTER_FAILURES = 3
-#: A run's cost cap when neither the room nor its agent names one, in dollars.
-DEFAULT_MAX_COST_USD = 2.0
-#: The reason a run stopped by its cost cap gives its edition.
-CAPPED_REASON = "stopped at the cost cap"
 #: The most history turns a run is given.
 HISTORY_LIMIT = MAX_HISTORY
 #: The last edition's summary, as data in the prompt, at most.
@@ -121,13 +109,6 @@ _LABELS = {"schedule": "Scheduled run", "manual": "Run now", "period": "Period r
 
 
 # ─── periods (``robothor.rooms.periods``) ──────────────────────────────
-
-
-def _zone(tz: Any) -> ZoneInfo:
-    try:
-        return ZoneInfo(str(tz or "UTC"))
-    except (ZoneInfoNotFoundError, ValueError):
-        return ZoneInfo("UTC")
 
 
 def _period_arg(value: Any) -> Period | None:
@@ -261,45 +242,6 @@ def _untrack(entry: ActiveRun) -> None:
 
 
 # ─── blocking helpers (each runs in a worker thread) ────────────────────
-
-
-def check_on_demand_cap(
-    room: Room, requested_by: str | None, *, now: datetime | None = None
-) -> None:
-    """``OnDemandCapReached`` when ``requested_by`` ran their on-demand editions
-    in this room today: every edition they asked for since local midnight in
-    the room's zone, previews included, against ``settings.max_on_demand_per_day``
-    (``periods.DEFAULT_MAX_ON_DEMAND_PER_DAY`` when unset), the periods lane's
-    rule. A requester with no account id counts everyone's. Blocking."""
-    zone = _zone(room.settings.get("tz"))
-    now = datetime.now(UTC) if now is None else now
-    since = datetime.combine(now.astimezone(zone).date(), time(), tzinfo=zone)
-    limit = periods._cap(room)
-    used = dal.count_requested_editions(
-        room.tenant_id, room.id, since=since, requested_by=canonical_uuid(requested_by)
-    )
-    if used >= limit:
-        raise OnDemandCapReached(limit, used)
-
-
-def _agent_config(agent_id: str) -> AgentConfig:
-    from robothor.engine.config import load_agent_config
-
-    config = load_agent_config(agent_id, _get_runner().config.manifest_dir)
-    if config is None:
-        raise ValueError(f"the workspace's agent {agent_id!r} is not installed")
-    return config
-
-
-def _capped(config: AgentConfig, room: Room) -> AgentConfig:
-    caps: list[float] = []
-    raw = room.settings.get("max_cost_usd")
-    if isinstance(raw, int | float) and not isinstance(raw, bool) and raw > 0:
-        caps.append(float(raw))
-    if config.hard_budget and config.max_cost_usd > 0:
-        caps.append(float(config.max_cost_usd))
-    limit = min(caps) if caps else DEFAULT_MAX_COST_USD
-    return dataclasses.replace(config, hard_budget=True, max_cost_usd=limit)
 
 
 def _run_as(room: Room) -> Actor:
@@ -547,7 +489,6 @@ async def _turn(
         await asyncio.to_thread(_halt, room, reason, admins=False)
         raise _Halt(reason, returns_edition=True)
     history = await asyncio.to_thread(_history, room)
-    config = _capped(await asyncio.to_thread(_agent_config, room.agent_id), room)
     identity = await asyncio.to_thread(_identity, actor)
     carrier = RoomRun.for_session(
         room.tenant_id,
@@ -565,7 +506,6 @@ async def _turn(
             message=prompt,
             trigger_type=TriggerType.CRON if trigger == "schedule" else TriggerType.MANUAL,
             trigger_detail=f"room:{room.id}",
-            agent_config=config,
             conversation_history=history,
             tenant_id=room.tenant_id,
             user_id=actor.user_id,
@@ -603,14 +543,32 @@ def _bind_run(edition: Edition) -> Callable[[dict[str, Any]], Awaitable[None]]:
     return on_status
 
 
+async def _flag_cost(edition: Edition | None, run: AgentRun, viewer: str | None) -> Edition | None:
+    """Put what the finished run cost on its edition's provenance; the edition
+    as it now stands (None when there is none, or nothing to record)."""
+    from robothor.rooms.editions import run_cost
+
+    cost = run_cost(run.total_cost_usd, run.input_tokens, run.output_tokens)
+    if edition is None or not cost:
+        return None
+
+    def flag() -> Edition | None:
+        dal.record_edition_cost(edition.tenant_id, edition.id, cost)
+        return dal.get_edition(edition.tenant_id, edition.id, viewer_id=viewer)
+
+    try:
+        return await asyncio.to_thread(flag)
+    except Exception as exc:  # noqa: BLE001 - a flag, never the run's outcome
+        logger.warning("edition cost not recorded: %s", type(exc).__name__)
+        return None
+
+
 def _outcome(run: AgentRun, current: Edition | None) -> tuple[bool, str]:
     """``(ok, reason)`` of a run that finished, from its edition and status."""
     from robothor.engine.models import RunStatus
 
     if current is not None and current.status == "published":
         return True, ""
-    if run.budget_exhausted:
-        return False, CAPPED_REASON
     if run.status != RunStatus.COMPLETED:
         return False, f"the run did not finish ({run.status.value}): {run.error_message or ''}"
     if current is None:
@@ -657,6 +615,7 @@ async def _execute(
             )
         ok, reason = _outcome(run, current)
         result = current if ok else await _end(edition, reason, viewer)
+        result = await _flag_cost(edition, run, viewer) or result
     except asyncio.CancelledError:
         await _end(edition, "the run was stopped before it finished", viewer)
         raise
@@ -729,7 +688,6 @@ def _check_run(actor: Actor, room_id: str) -> Room:
 
 
 def _claim(room: Room, actor: Actor, preview: bool, period: Period | None) -> tuple[Edition, bool]:
-    check_on_demand_cap(room, actor.user_id)
     period = period or _default_period(room)
     recovery.reap_stale_editions(room.tenant_id, room_id=room.id)  # a dead run holds nothing
     assert period is not None  # noqa: S101 - a report room always has one
@@ -751,7 +709,7 @@ async def start_room_run(
 
     Needs ``run``: ``RoomNotFound`` without access, ``RoomForbidden`` for a
     viewer, ``RunRefused`` for an archived room or a paused one the caller is
-    not assigned to, ``OnDemandCapReached`` past the daily cap, ``ValueError``
+    not assigned to, ``ValueError``
     for a malformed period. A run already in progress for the same thing (the
     room's run, or the caller's own preview) is joined. The run itself goes on
     in the background (:func:`pending_runs`)."""

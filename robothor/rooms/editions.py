@@ -28,6 +28,7 @@ import threading
 import unicodedata
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from robothor.db.connection import get_connection
@@ -54,6 +55,7 @@ __all__ = [
     "edition_event_payload",
     "emit_edition_event",
     "load_run_record",
+    "run_cost",
     "on_edition_published",
     "publish_from_run",
     "register_edition_published",
@@ -367,10 +369,16 @@ def build_provenance(
     started_at: datetime | None,
     steps: Sequence[Mapping[str, Any]],
     room_rev: int,
+    cost_usd: float | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
 ) -> dict[str, Any]:
     """``{run_id, ran_as, started_at, room_rev, tool_calls: [{tool, at, ok}]}``
     from the run's recorded tool-call steps. A ``tool_call`` wrapper is listed
-    as the tool it ran; the publish call itself is not evidence and is left out."""
+    as the tool it ran; the publish call itself is not evidence and is left out.
+
+    What the run cost (``cost_usd``, ``input_tokens``, ``output_tokens``) is
+    added when known: a flag shown where the report is read, never a limit."""
     calls = []
     for s in steps:
         tool = s.get("tool_name") or ""
@@ -390,7 +398,20 @@ def build_provenance(
     }
     if len(calls) > MAX_PROVENANCE_CALLS:
         prov["tool_calls_truncated"] = len(calls) - MAX_PROVENANCE_CALLS
+    prov.update(run_cost(cost_usd, input_tokens, output_tokens))
     return prov
+
+
+def run_cost(
+    cost_usd: Any = None, input_tokens: Any = None, output_tokens: Any = None
+) -> dict[str, Any]:
+    """The cost keys of an edition's provenance, for the values that are known."""
+    out: dict[str, Any] = {}
+    if isinstance(cost_usd, int | float | Decimal) and not isinstance(cost_usd, bool):
+        out["cost_usd"] = round(float(cost_usd), 6)
+    tokens = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+    out.update({k: v for k, v in tokens.items() if isinstance(v, int) and not isinstance(v, bool)})
+    return out
 
 
 @dataclass(frozen=True)
@@ -401,6 +422,10 @@ class RunRecord:
     #: A sub-agent run (a parent run, or depth above 0).
     is_child: bool
     steps: list[dict[str, Any]]
+    #: What the row says the run has cost so far.
+    cost_usd: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 def load_run_record(tenant_id: str, run_id: str) -> RunRecord | None:
@@ -415,7 +440,8 @@ def load_run_record(tenant_id: str, run_id: str) -> RunRecord | None:
         cur = conn.cursor()
         cur.execute(
             "SELECT COALESCE(started_at, created_at), "
-            "parent_run_id IS NOT NULL OR COALESCE(nesting_depth, 0) > 0 "
+            "parent_run_id IS NOT NULL OR COALESCE(nesting_depth, 0) > 0, "
+            "total_cost_usd, input_tokens, output_tokens "
             "FROM agent_runs WHERE id = %s AND tenant_id = %s",
             (run, tenant_id),
         )
@@ -432,7 +458,14 @@ def load_run_record(tenant_id: str, run_id: str) -> RunRecord | None:
             {"tool_name": t, "inner_name": inner, "started_at": at, "error_message": err}
             for t, inner, at, err in cur.fetchall()
         ]
-        return RunRecord(started_at=row[0], is_child=bool(row[1]), steps=steps)
+        return RunRecord(
+            started_at=row[0],
+            is_child=bool(row[1]),
+            steps=steps,
+            cost_usd=float(row[2]) if row[2] is not None else None,
+            input_tokens=row[3],
+            output_tokens=row[4],
+        )
 
 
 def _recorded_top_level_run(tenant_id: str, run_id: str) -> RunRecord:
@@ -626,6 +659,9 @@ def _publish(
             started_at=record.started_at,
             steps=record.steps,
             room_rev=edition.revision,
+            cost_usd=record.cost_usd,
+            input_tokens=record.input_tokens,
+            output_tokens=record.output_tokens,
         )
         published = dal.publish_edition(
             room.tenant_id,

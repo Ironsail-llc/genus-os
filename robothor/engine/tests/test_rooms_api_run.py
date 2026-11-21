@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -274,7 +275,8 @@ class TestTool:
         assert not hasattr(runs, "check_on_demand_cap")
         assert not hasattr(runs, "OnDemandCapReached")
         assert not hasattr(runs, "DEFAULT_MAX_COST_USD")
-        assert "on_demand_cap" not in open(rooms_api.__file__).read().split("def _run_answer")[1]
+        source = Path(rooms_api.__file__).read_text()
+        assert "on_demand_cap" not in source.split("def _run_answer")[1]
 
     def test_the_tool_is_a_workspace_tool_with_a_schema(self):
         from robothor.engine.tools.constants import ROOM_TOOLS
