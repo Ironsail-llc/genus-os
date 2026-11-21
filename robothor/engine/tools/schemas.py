@@ -2062,6 +2062,9 @@ _ROOM_SCHEMAS: dict[str, dict[str, Any]] = {
         {"room_id": _ROOM_ID, "user": _ROOM_USER},
         ["room_id", "user"],
     ),
+}
+
+
 # Rooms (workspaces): publishing an edition. Handler: handlers/room_editions.py.
 _ROOM_EDITION_SCHEMAS: dict[str, dict[str, Any]] = {
     "room_publish_edition": {
