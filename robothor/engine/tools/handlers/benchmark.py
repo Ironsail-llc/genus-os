@@ -424,6 +424,8 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "link_identity",
         # Cron registration.
         "register_user_cron",
+        # Starts a real workspace run that publishes to its members.
+        "room_request_period",
         # Arbitrary MCP invocation is an escape hatch by construction.
         "mcp_call_tool",
         "mcp_read_resource",

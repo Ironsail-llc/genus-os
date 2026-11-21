@@ -160,6 +160,32 @@ class Edition:
     updated_at: datetime | None = None
 
 
+def _iso(value: date | datetime | None) -> str | None:
+    return None if value is None else value.isoformat()
+
+
+def edition_json(edition: Edition) -> dict[str, Any]:
+    """The contract's camelCase ``Edition``, as the engine and the bridge answer it."""
+    return {
+        "id": edition.id,
+        "seq": edition.seq,
+        "kind": edition.kind,
+        "status": edition.status,
+        "preview": edition.preview,
+        "periodStart": _iso(edition.period_start),
+        "periodEnd": _iso(edition.period_end),
+        "grain": edition.grain,
+        "revision": edition.revision,
+        "title": edition.title,
+        "summary": edition.summary,
+        "blocks": list(edition.blocks),
+        "suggestions": list(edition.suggestions),
+        "provenance": dict(edition.provenance),
+        "createdAt": _iso(edition.created_at),
+        "publishedSeq": edition.published_seq,
+    }
+
+
 @dataclass(frozen=True)
 class RoomTask:
     tenant_id: str

@@ -34,12 +34,13 @@ from robothor.rooms.models import (
 )
 
 if TYPE_CHECKING:
-    from datetime import date
+    from datetime import date, datetime
 
 __all__ = [
     "accept_task",
     "add_member",
     "archive_room",
+    "count_requested_editions",
     "create_edition",
     "create_room",
     "dismiss_task",
@@ -53,6 +54,8 @@ __all__ = [
     "link_task",
     "list_all_rooms",
     "list_editions",
+    "list_building_editions",
+    "list_editions_in_period",
     "list_members",
     "list_revisions",
     "list_room_tasks",
@@ -979,6 +982,73 @@ def find_edition_for_period(
         )
         row = cur.fetchone()
         return _edition(row) if row else None
+
+
+def list_editions_in_period(
+    tenant_id: str, room_id: str, *, grain: str, start: date, end: date
+) -> list[Edition]:
+    """The newest published, non-preview ``grain`` edition of each period that
+    lies wholly inside ``start``..``end``, earliest period first."""
+    room = canonical_uuid(room_id)
+    if room is None:
+        return []
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT DISTINCT ON (period_start, period_end) * FROM room_editions "
+            "WHERE tenant_id = %s AND room_id = %s AND grain = %s AND status = 'published' "
+            "AND NOT preview AND period_start >= %s AND period_end <= %s "
+            "ORDER BY period_start, period_end, seq DESC",
+            (tenant_id, room, grain, start, end),
+        )
+        return [_edition(r) for r in cur.fetchall()]
+
+
+def count_requested_editions(
+    tenant_id: str, room_id: str, *, since: datetime, requested_by: str | None
+) -> int:
+    """Editions ``requested_by`` asked for in the room (previews included)
+    created at or after ``since``: the on-demand runs a person's daily cap
+    counts. ``requested_by`` None counts every person's."""
+    room = canonical_uuid(room_id)
+    if room is None:
+        return 0
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM room_editions WHERE tenant_id = %(tenant)s "
+            "AND room_id = %(room)s AND requested_by IS NOT NULL AND created_at >= %(since)s "
+            "AND (%(person)s::uuid IS NULL OR requested_by = %(person)s::uuid)",
+            {
+                "tenant": tenant_id,
+                "room": room,
+                "since": since,
+                "person": canonical_uuid(requested_by),
+            },
+        )
+        return int(cur.fetchone()[0])
+
+
+def list_building_editions(
+    tenant_id: str, *, room_id: str | None = None
+) -> list[tuple[Edition, str | None]]:
+    """Every ``building`` edition of the tenant (or of one room), each with the
+    status of the ``agent_runs`` row its ``run_id`` names (None when it names
+    none, or none exists), oldest first."""
+    room = canonical_uuid(room_id) if room_id is not None else None
+    if room_id is not None and room is None:
+        return []
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT e.*, ar.status AS run_status FROM room_editions e "
+            "LEFT JOIN agent_runs ar ON ar.id::text = e.run_id AND ar.tenant_id = e.tenant_id "
+            "WHERE e.tenant_id = %(tenant)s AND e.status = 'building' "
+            "AND (%(room)s::uuid IS NULL OR e.room_id = %(room)s::uuid) "
+            "ORDER BY e.created_at, e.id",
+            {"tenant": tenant_id, "room": room},
+        )
+        return [(_edition(r), r["run_status"]) for r in cur.fetchall()]
 
 
 # ─── tasks ───────────────────────────────────────────────────────────────
