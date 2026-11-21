@@ -59,6 +59,7 @@ __all__ = [
     "on_edition_published",
     "open_task_room",
     "publish_task_changed",
+    "run_is_top_level",
 ]
 
 #: Tenant roles that may create a task workspace by opening a task.
@@ -273,6 +274,17 @@ def _seed(room: Room, task: dict[str, Any]) -> None:
         )
     except Exception:
         logger.exception("could not seed task workspace %s", room.id)
+
+
+def run_is_top_level(tenant_id: str, run_id: str) -> bool:
+    """Whether ``run_id`` is a person's own run: a run of the tenant that is
+    not a sub-agent's (no ``sub_agent`` trigger, no parent run). A sub-agent
+    inherits its parent's person, so it never acts on tasks for them. A run
+    the database does not know is refused."""
+    row = dal.run_lineage(tenant_id, run_id)
+    if row is None:
+        return False
+    return row["trigger_type"] != "sub_agent" and row["parent_run_id"] is None
 
 
 # ─── events ──────────────────────────────────────────────────────────────

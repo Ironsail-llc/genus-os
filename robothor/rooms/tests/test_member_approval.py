@@ -437,6 +437,19 @@ def test_the_member_list_holds_only_the_callers_pending_eligible_rows(db, bobs_r
     assert row["payload"]["recipient"] == "bob@example.com"
 
 
+def test_the_member_list_has_no_cap(db, bobs_room):
+    """Workspaces cap nothing: every one of a member's pending actions is listed."""
+    from robothor.rooms import approvals
+
+    r = run(db, trigger="webchat", detail=f"webchat:{bobs_room.session_key}", user=db.bob)
+    made = {
+        propose(db, run_id=r, for_user=db.bob, room_id=bobs_room.id, subject=f"n{i}")
+        for i in range(120)
+    }
+
+    assert {row["id"] for row in approvals.list_member_actions(actor(db, "bob"))} == made
+
+
 # ─── E3: approve, reject, expire; the effect is exactly what was approved ─
 
 

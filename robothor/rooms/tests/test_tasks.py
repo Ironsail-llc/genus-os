@@ -657,3 +657,38 @@ def test_an_update_that_keeps_the_status_publishes_nothing(db):
     assert crm_dal.update_task(task_id, title="Renamed", tenant_id=db.tenant)
 
     assert room_task_events(db) == []
+
+
+# ─── only the person's own run acts for them ─────────────────────────────
+
+
+def _run(db, *, trigger: str = "webchat", parent: str | None = None) -> str:
+    run_id = str(uuid.uuid4())
+    db.cur.execute(
+        "INSERT INTO agent_runs (id, tenant_id, agent_id, trigger_type, parent_run_id, status) "
+        "VALUES (%s, %s, 'main', %s, %s, 'running')",
+        (run_id, db.tenant, trigger, parent),
+    )
+    return run_id
+
+
+def test_a_top_level_run_may_act_and_a_sub_agent_may_not(db):
+    from robothor.rooms import tasks
+
+    try:
+        top = _run(db)
+        child = _run(db, trigger="sub_agent", parent=top)
+        orphan_child = _run(db, trigger="sub_agent")
+        nested = _run(db, trigger="webchat", parent=top)
+
+        assert tasks.run_is_top_level(db.tenant, top) is True
+        assert tasks.run_is_top_level(db.tenant, child) is False
+        assert tasks.run_is_top_level(db.tenant, orphan_child) is False
+        assert tasks.run_is_top_level(db.tenant, nested) is False
+        assert tasks.run_is_top_level(db.other, top) is False
+        assert tasks.run_is_top_level(db.tenant, str(uuid.uuid4())) is False
+        assert tasks.run_is_top_level(db.tenant, "run-1") is False
+    finally:
+        db.cur.execute("DELETE FROM agent_runs WHERE tenant_id = %s AND parent_run_id IS NOT NULL",
+                       (db.tenant,))  # fmt: skip
+        db.cur.execute("DELETE FROM agent_runs WHERE tenant_id = %s", (db.tenant,))
