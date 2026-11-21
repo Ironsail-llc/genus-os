@@ -28,6 +28,7 @@ import {
   customPeriod,
   findStoredEdition,
   isFuturePeriod,
+  isUnfinishedPeriod,
   lastCompletePeriod,
   resolvePeriod,
   todayIn,
@@ -75,6 +76,19 @@ describe("periods", () => {
     expect(isFuturePeriod(resolvePeriod("month", "2026-12-01"), "2026-11-21")).toBe(true);
     expect(isFuturePeriod(customPeriod("2026-11-10", "2026-11-25")!, "2026-11-21")).toBe(true);
     expect(isFuturePeriod(customPeriod("2026-11-10", "2026-11-21")!, "2026-11-21")).toBe(false);
+  });
+
+  it("treats a period that has not ended as unfinished, as the engine does", () => {
+    // The engine serves only a period whose last day is before today.
+    expect(isUnfinishedPeriod(resolvePeriod("day", "2026-11-21"), "2026-11-21")).toBe(true);
+    expect(isUnfinishedPeriod(resolvePeriod("day", "2026-11-20"), "2026-11-21")).toBe(false);
+    expect(isUnfinishedPeriod(resolvePeriod("week", "2026-11-18"), "2026-11-21")).toBe(true);
+    expect(isUnfinishedPeriod(resolvePeriod("week", "2026-11-11"), "2026-11-21")).toBe(false);
+    expect(isUnfinishedPeriod(resolvePeriod("month", "2026-11-01"), "2026-11-21")).toBe(true);
+    expect(isUnfinishedPeriod(resolvePeriod("month", "2026-10-31"), "2026-11-21")).toBe(false);
+    expect(isUnfinishedPeriod(customPeriod("2026-11-10", "2026-11-21")!, "2026-11-21")).toBe(true);
+    expect(isUnfinishedPeriod(customPeriod("2026-11-10", "2026-11-20")!, "2026-11-21")).toBe(false);
+    expect(isUnfinishedPeriod(resolvePeriod("day", "2026-11-22"), "2026-11-21")).toBe(true);
   });
 
   it("offers the last complete period by default", () => {

@@ -159,6 +159,47 @@ describe("period selector", () => {
     expect(bridge.calls("POST", `/rooms/${REPORT_ID}/periods`)).toHaveLength(0);
   });
 
+  it("refuses the period still in progress, as the engine would, before any request", async () => {
+    // Today is Wednesday 2026-11-25 in the workspace's zone (UTC).
+    await openView();
+    pick("week", { anchor: "2026-11-24" });
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/not over yet/i);
+    expect(screen.getByTestId("period-apply")).toBeDisabled();
+    pick("day", { anchor: "2026-11-25" });
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/not over yet/i);
+    pick("month", { anchor: "2026-11-02" });
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/not over yet/i);
+    pick("custom", { start: "2026-11-20", end: "2026-11-25" });
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(/not over yet/i);
+    expect(bridge.calls("POST", `/rooms/${REPORT_ID}/periods`)).toHaveLength(0);
+    // Yesterday has ended: the button comes back.
+    pick("day", { anchor: "2026-11-24" });
+    await waitFor(() => expect(bridge.calls("POST", `/rooms/${REPORT_ID}/periods`)).toHaveLength(1));
+  });
+
+  it("does not offer a date that has not ended", async () => {
+    await openView();
+    fireEvent.click(screen.getByTestId("period-trigger"));
+    fireEvent.click(screen.getByTestId("period-grain-day"));
+    expect(screen.getByTestId("period-anchor")).toHaveAttribute("max", "2026-11-24");
+    fireEvent.click(screen.getByTestId("period-grain-custom"));
+    expect(screen.getByTestId("period-end")).toHaveAttribute("max", "2026-11-24");
+  });
+
+  it("shows the engine's own words when it refuses a period", async () => {
+    bridge.on("POST", `/rooms/${REPORT_ID}/periods`, () =>
+      reply(
+        { error: "invalid_period", message: "that day is not over yet: it ends 2026-11-24 and today is 2026-11-24 in Pacific/Kiritimati" },
+        422,
+      ),
+    );
+    await openView();
+    pick("day", { anchor: "2026-11-24" });
+    expect(await screen.findByTestId("period-error")).toHaveTextContent(
+      "that day is not over yet: it ends 2026-11-24 and today is 2026-11-24 in Pacific/Kiritimati",
+    );
+  });
+
   it("refuses a custom range that runs backwards", async () => {
     await openView();
     pick("custom", { start: "2026-11-10", end: "2026-11-01" });
