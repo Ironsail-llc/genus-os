@@ -182,10 +182,11 @@ def test_member_approval_is_allowed_in_exactly_one_cell_family(db, role):
         cells[(proposer, assignee, access, "allowed")] = action_for(
             db, caller=caller_id, proposer=proposer, room=room
         )
-        for other in OTHER_KINDS:
-            cells[(proposer, assignee, access, other)] = action_for(
-                db, caller=caller_id, proposer=proposer, room=room, kind=other
-            )
+        # One kind off the allow-list per cell; every other kind is refused in
+        # the eligible cell by test_only_an_allow_listed_kind_is_member_decidable.
+        cells[(proposer, assignee, access, "other")] = action_for(
+            db, caller=caller_id, proposer=proposer, room=room, kind=OTHER_KINDS[0]
+        )
 
     def allowed(cell: tuple[str, ...]) -> bool:
         proposer, assignee, access, kind = cell

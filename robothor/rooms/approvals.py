@@ -7,8 +7,8 @@ of these hold, each read from the database at the moment of the decision:
 0. the caller is, in the database now, an active ``member`` or ``user``
    account of the tenant (not just per their token);
 1. the action was proposed for the caller (``proposed_for_user_id``), by a
-   run rather than a plugin (``proposed_by`` is NULL), and is not of a kind
-   only an operator decides (``OPERATOR_ONLY_KIND_PATTERNS``);
+   run rather than a plugin (``proposed_by`` is NULL), and is of a kind on the
+   member allow-list (``MEMBER_DECIDABLE_KINDS``: only ``room.email``);
 2. the run that proposed it (``proposed_by_run_id``) is the caller's own
    interactive webchat turn on that workspace's session: its ``agent_runs``
    row has ``trigger_type='webchat'``, ``trigger_detail`` exactly
@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "MEMBER_ROLES",
-    "OPERATOR_ONLY_KIND_PATTERNS",
+    "MEMBER_DECIDABLE_KINDS",
     "PROPOSER_ROLES",
     "decide_member_action",
     "list_member_actions",
@@ -57,10 +57,11 @@ __all__ = [
 
 #: The tenant roles the member path is for. Owners and admins are operators.
 MEMBER_ROLES = frozenset({"member", "user"})
-#: Action kinds (SQL ``LIKE`` patterns) that only an operator may decide,
-#: whoever proposed them: the sales pipeline accepts only an ``operator:``
-#: verdict on what it sends and follows up (``robothor/sales/gmail_sync.py``).
-OPERATOR_ONLY_KIND_PATTERNS = ("sales.%",)
+#: The ONLY action kinds a member may decide: the ones this feature creates,
+#: whose executor and proposal path were built for a member's verdict
+#: (``robothor/rooms/outbound.py``). Every other kind, a plugin's or a future
+#: core kind, with or without ``proposed_by``, stays with operators.
+MEMBER_DECIDABLE_KINDS = frozenset({"room.email"})
 
 #: Who may PROPOSE from their own turn in a task workspace (``member_turn``):
 #: any staff role. Only ``MEMBER_ROLES`` use the member path to decide.
@@ -103,7 +104,7 @@ WHERE """
     + """
   AND a.proposed_for_user_id = %(user)s
   AND a.proposed_by IS NULL
-  AND NOT (a.kind LIKE ANY (%(operator_kinds)s))
+  AND a.kind = ANY(%(member_kinds)s)
 """
 )
 
@@ -170,7 +171,7 @@ def _eligible_in(
         "tenant": actor.tenant_id,
         "user": user,
         "roles": sorted(MEMBER_ROLES),
-        "operator_kinds": list(OPERATOR_ONLY_KIND_PATTERNS),
+        "member_kinds": sorted(MEMBER_DECIDABLE_KINDS),
     }
     if action_id is not None:
         sql += " AND a.id = %(id)s"
