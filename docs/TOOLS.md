@@ -1879,14 +1879,19 @@ asked for.
 
 A published edition comes back at once (`started: false`). Otherwise one run
 starts and the building edition comes back (`started: true`); people asking at
-the same moment share that one run. A workspace runs
-`settings.max_on_demand_per_day` on-demand editions a day (5 when unset), and
-past that the tool returns `cap_reached: true` and starts nothing. A week or
+the same moment share that one run. Each person may start
+`settings.max_on_demand_per_day` on-demand editions in a workspace per day of the
+workspace's time zone (5 when unset; previews and failed runs count, asking for
+an edition that already exists does not). Past that the tool returns
+`cap_reached: true` and starts nothing. A run that was interrupted (cancelled,
+or the engine restarted) fails its edition, so the period can be asked for
+again. A week or
 month run reads the summaries of the day editions inside it as data; it fetches
 its own figures and never adds the days up. Use `room_run` for "run it now" and
 `room_read` to read editions that already exist. The engine route
 `POST /api/rooms/{id}/periods` does the same for the dashboard (200 existing,
-202 started, 429 cap reached).
+202 started, 429 cap reached); the bridge reaches it with its engine credential
+and names the person asking.
 
 ### When a tool call fails
 

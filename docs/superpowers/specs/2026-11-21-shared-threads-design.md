@@ -190,19 +190,32 @@ rely on:
 - The run is `robothor.rooms.runs.run_room(room, edition, *, period, context)`
   (lane 7), resolved before any row is written; when it is missing the request fails
   `RoomRunUnavailable` (503). A run that raises fails its edition.
-- Daily cap: `settings.max_on_demand_per_day`, default 5, 0 allows none. It counts
-  every edition with `requested_by` set (previews included) since local midnight.
+- Daily cap, per person per room per local day: `settings.max_on_demand_per_day`,
+  default 5, 0 allows none. It counts the editions that person asked for in the room
+  (previews and failed ones included) since local midnight in the room's zone. A
+  requester with no account id (the loopback development operator) counts against
+  every person's requests in the room.
+- Recovery (`robothor/rooms/recovery.py`): `reap_stale_editions(tenant_id, *,
+  room_id=None, booted_at=None, now=None) -> list[Edition]` fails each `building`
+  edition whose run is not alive: not held by this process (`hold(edition_id)` /
+  `live(edition_id)`), and either its `run_id`'s `agent_runs` row has ended, or (no
+  run row) it predates `booted_at` (default `ROBOTHOR_DAEMON_START_TS`) or has been
+  building for 2 hours. `request_period` reaps the room first; call it at engine
+  start after `_cleanup_stale_runs`. A cancelled period run fails its edition.
   Errors: `PeriodError` (a `ValueError`, 422), `OnDemandCapReached(limit, used)` (429).
 - `context_for_period(tenant_id, room_id, period)`: the newest published summary of
   each `day` edition inside the period, 500 characters each, 6,000 in all, wrapped
   as data.
 - `POST /api/rooms/{id}/periods` (engine) body `{grain, anchor?, requested_by?}`. A
-  human token is its own identity (`requested_by` ignored). The bridge's service token
-  must name `requested_by`; the engine reads that account's role from `user_accounts`
+  human token (`engine:write`) is its own identity (`requested_by` ignored). A service
+  token needs `engine:control` on this route and `/run` (`engine/auth.py`), which the
+  bridge's engine credential carries, and must be the bridge's own identity
+  (`genus-bridge`, else 403). It must name `requested_by`; the engine reads that account's role from `user_accounts`
   (never the body), requires it active and living in the token's tenant (else 404),
   and re-checks `request_period`. 200 existing, 202 started, 400 no `requested_by`,
   403, 404, 422, 429 cap reached, 503 no room runner.
 - Added: `dal.list_editions_in_period`, `dal.count_requested_editions`,
+  `dal.list_building_editions`,
   `models.edition_json` (the camelCase `Edition`, with `publishedSeq`). Engine route module
   `robothor/engine/rooms_api.py`; tool `room_request_period`.
 
