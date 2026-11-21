@@ -39,6 +39,7 @@ from robothor.rooms.periods import (
     last_complete_period,
     request_period,
 )
+from robothor.rooms.recovery import STALE_BUILDING_SECONDS, reap_stale_editions
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -536,3 +537,184 @@ async def test_a_week_run_is_handed_its_days(rooms_db):
 
     assert started
     assert "Monday was busy." in run.calls[0]["context"]
+
+
+# ─── the cap is per person ──────────────────────────────────────────────
+
+
+async def test_each_person_has_their_own_daily_allowance(rooms_db):
+    room = _report(rooms_db, max_on_demand_per_day=1)
+    dal.add_member(rooms_db.tenant, room.id, rooms_db.bob, added_by=rooms_db.alice)
+    bob = Actor(user_id=rooms_db.bob, role="member", tenant_id=rooms_db.tenant)
+    run = FakeRun()
+
+    _, alice_started = await request_period(_alice(rooms_db), room.id, "day", _ago(1), run_room=run)
+    _, bob_started = await request_period(bob, room.id, "day", _ago(2), run_room=run)
+    with pytest.raises(OnDemandCapReached) as alice_again:
+        await request_period(_alice(rooms_db), room.id, "day", _ago(3), run_room=run)
+    with pytest.raises(OnDemandCapReached):
+        await request_period(bob, room.id, "day", _ago(4), run_room=run)
+    await _settle()
+
+    assert alice_started and bob_started
+    assert (alice_again.value.limit, alice_again.value.used) == (1, 1)
+    assert len(run.calls) == 2
+
+
+# ─── a building edition whose run is gone ───────────────────────────────
+
+
+def _building(db: Any, room: Any, days_ago: int, *, run_id: str | None = None) -> Any:
+    day = TODAY - timedelta(days=days_ago)
+    edition, _ = dal.create_edition(
+        db.tenant,
+        room.id,
+        grain="day",
+        period_start=day,
+        period_end=day,
+        requested_by=db.alice,
+        run_id=run_id,
+    )
+    return edition
+
+
+def _age(db: Any, edition: Any, hours: float) -> None:
+    db.cur.execute(
+        "UPDATE room_editions SET created_at = now() - make_interval(secs => %s), "
+        "updated_at = now() - make_interval(secs => %s) WHERE id = %s",
+        (hours * 3600, hours * 3600, edition.id),
+    )
+
+
+def _run_row(db: Any, status: str) -> str:
+    db.cur.execute(
+        "INSERT INTO agent_runs (tenant_id, agent_id, trigger_type, status, started_at) "
+        "VALUES (%s, 'main', 'manual', %s, now()) RETURNING id",
+        (db.tenant, status),
+    )
+    return str(db.cur.fetchone()[0])
+
+
+def _status(db: Any, edition: Any) -> tuple[str, str | None]:
+    db.cur.execute("SELECT status, error FROM room_editions WHERE id = %s", (edition.id,))
+    return db.cur.fetchone()
+
+
+async def test_a_cancelled_run_fails_its_edition(rooms_db):
+    room = _report(rooms_db)
+    gate = asyncio.Event()
+
+    async def blocked(room: Any, edition: Any, *, period: Period, context: str) -> None:
+        await gate.wait()
+
+    edition, started = await request_period(
+        _alice(rooms_db), room.id, "day", _ago(1), run_room=blocked
+    )
+    await asyncio.sleep(0.05)
+    for task in periods.pending_runs():
+        task.cancel()
+    await _settle()
+
+    status, error = _status(rooms_db, edition)
+    assert started
+    assert status == "failed"
+    assert "interrupted" in error
+
+
+def test_at_engine_start_an_edition_from_before_the_boot_is_failed(rooms_db):
+    room = _report(rooms_db)
+    orphan = _building(rooms_db, room, 1)
+
+    reaped = reap_stale_editions(
+        rooms_db.tenant, booted_at=datetime.now(UTC) + timedelta(seconds=5)
+    )
+
+    assert [e.id for e in reaped] == [orphan.id]
+    status, error = _status(rooms_db, orphan)
+    assert status == "failed"
+    assert "restarted" in error
+
+
+def test_a_recent_edition_after_the_boot_is_left_building(rooms_db):
+    room = _report(rooms_db)
+    edition = _building(rooms_db, room, 1)
+
+    assert (
+        reap_stale_editions(rooms_db.tenant, booted_at=datetime.now(UTC) - timedelta(hours=1)) == []
+    )
+    assert _status(rooms_db, edition)[0] == "building"
+
+
+def test_an_edition_building_past_the_age_bound_is_failed(rooms_db):
+    room = _report(rooms_db)
+    edition = _building(rooms_db, room, 1)
+    _age(rooms_db, edition, STALE_BUILDING_SECONDS / 3600 + 0.1)
+
+    reaped = reap_stale_editions(rooms_db.tenant)
+
+    assert [e.id for e in reaped] == [edition.id]
+    assert "no run" in _status(rooms_db, edition)[1]
+
+
+def test_the_run_rows_state_decides_when_there_is_one(rooms_db):
+    room = _report(rooms_db)
+    running = _building(rooms_db, room, 1, run_id=_run_row(rooms_db, "running"))
+    _age(rooms_db, running, STALE_BUILDING_SECONDS / 3600 + 1)  # old, but its run is alive
+    ended = _building(rooms_db, room, 2, run_id=_run_row(rooms_db, "timeout"))  # recent, but over
+
+    reaped = reap_stale_editions(
+        rooms_db.tenant, booted_at=datetime.now(UTC) + timedelta(seconds=5)
+    )
+
+    assert [e.id for e in reaped] == [ended.id]
+    assert _status(rooms_db, running)[0] == "building"
+    assert "timeout" in _status(rooms_db, ended)[1]
+
+
+async def test_a_run_alive_in_this_process_is_never_reaped(rooms_db):
+    room = _report(rooms_db)
+    gate = asyncio.Event()
+
+    async def blocked(room: Any, edition: Any, *, period: Period, context: str) -> None:
+        await gate.wait()
+
+    edition, _ = await request_period(_alice(rooms_db), room.id, "day", _ago(1), run_room=blocked)
+    _age(rooms_db, edition, STALE_BUILDING_SECONDS / 3600 + 1)
+
+    reaped = reap_stale_editions(
+        rooms_db.tenant, booted_at=datetime.now(UTC) + timedelta(seconds=5)
+    )
+    gate.set()
+    await _settle()
+
+    assert reaped == []
+    assert _status(rooms_db, edition)[0] == "building"
+
+
+def test_reaping_stays_inside_its_tenant_and_room(rooms_db):
+    room, other_room = _report(rooms_db), _report(rooms_db)
+    mine, theirs = _building(rooms_db, room, 1), _building(rooms_db, other_room, 1)
+    boot = datetime.now(UTC) + timedelta(seconds=5)
+
+    assert reap_stale_editions(rooms_db.other, booted_at=boot) == []
+    assert [
+        e.id for e in reap_stale_editions(rooms_db.tenant, room_id=room.id, booted_at=boot)
+    ] == [mine.id]
+    assert _status(rooms_db, theirs)[0] == "building"
+
+
+async def test_asking_again_for_an_orphaned_period_starts_a_new_run(rooms_db, monkeypatch):
+    room = _report(rooms_db)
+    orphan = _building(rooms_db, room, 1)
+    # The engine restarted after the orphan was claimed.
+    boot = (datetime.now(UTC) + timedelta(seconds=5)).isoformat()
+    monkeypatch.setenv("ROBOTHOR_DAEMON_START_TS", boot)
+    run = FakeRun()
+
+    edition, started = await request_period(_alice(rooms_db), room.id, "day", _ago(1), run_room=run)
+    await _settle()
+
+    assert started
+    assert edition.id != orphan.id
+    assert _status(rooms_db, orphan)[0] == "failed"
+    assert len(run.calls) == 1
