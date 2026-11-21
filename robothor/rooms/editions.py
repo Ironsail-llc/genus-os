@@ -319,53 +319,123 @@ def validate_suggestions(suggestions: Any) -> list[dict[str, Any]]:
 
 #: CSI / OSC / two-character escape sequences.
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])")
-#: Every bracket a tag or a marker could be built from, and its plain-text
-#: stand-in. A title, a summary and a suggestion are plain text: no markup in
-#: them is legitimate, so instead of recognising tags and markers by name (a
-#: list that can always be dodged) none of the four characters survives. The
-#: stand-ins are not folded back by NFKC and are read by no detector:
-#: ``<``/``>`` become single angle quotation marks, ``[``/``]`` parentheses.
-_BRACKETS = str.maketrans({"<": "\u2039", ">": "\u203a", "[": "(", "]": ")"})
+#: The characters a tag, a prompt boundary or a dashboard marker is built
+#: from, and their plain-text stand-ins. Titles, summaries and suggestions are
+#: plain text, so no markup in them is legitimate: rather than recognising tags
+#: by name (a list that can always be dodged), none of these survives in any
+#: spelling. The stand-ins are not folded back by NFKC and no detector reads
+#: them: ``<``/``>`` become single angle quotation marks, ``[``/``]``
+#: parentheses. ``&`` is kept unless it starts an entity that decodes to one.
+_BRACKETS = {"<": "\u2039", ">": "\u203a", "[": "(", "]": ")"}
+_TRANSLATE = str.maketrans(_BRACKETS)
 _HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co"})
+#: Format characters ordinary text needs: ZWJ (emoji sequences, Indic
+#: conjuncts) and ZWNJ (Persian, Indic). Kept only between two characters that
+#: are not ASCII even after folding, so neither can split an entity or a name.
+_JOINERS = frozenset({"\u200c", "\u200d"})
+_JOINABLE = ("L", "M", "So", "Sk")
+#: Line breaks a one-line field turns into a space; other whitespace is kept.
+_LINE_BREAKS = re.compile(r"[\n\r\x0b\x0c\x85\u2028\u2029]+")
+#: The longest entity spelling worth looking for, doubled encodings included.
+_ENTITY_WINDOW = 48
+
+
+def _fold(value: str) -> str:
+    """The text as a reader that decodes entities, folds look-alikes and drops
+    hidden characters would see it, to a fixed point. Used to decide what is
+    offending; never emitted."""
+    for _ in range(64):
+        folded = "".join(
+            ch
+            for ch in unicodedata.normalize("NFKC", html.unescape(value))
+            if unicodedata.category(ch) not in _HIDDEN_CATEGORIES
+        )
+        if folded == value:
+            break
+        value = folded
+    return value
+
+
+def _offending(value: str) -> bool:
+    return any(ch in _BRACKETS for ch in _fold(value))
+
+
+def _joinable(ch: str) -> bool:
+    folded = unicodedata.normalize("NFKC", ch)
+    return not folded.isascii() and unicodedata.category(ch).startswith(_JOINABLE)
 
 
 def _visible(value: str) -> str:
-    """Escape sequences, then control, format, surrogate and private-use
-    characters removed; newlines and tabs kept."""
-    return "".join(
-        ch
-        for ch in _ANSI.sub("", value)
-        if ch in "\n\t" or unicodedata.category(ch) not in _HIDDEN_CATEGORIES
+    """Escape sequences and control, format, surrogate and private-use
+    characters removed; newlines, tabs and joiners between non-ASCII letters,
+    marks or symbols kept."""
+    text = _ANSI.sub("", value)
+    return "".join(ch for i, ch in enumerate(text) if _kept(text, i))
+
+
+def _kept(text: str, i: int) -> bool:
+    ch = text[i]
+    if ch in "\n\t" or unicodedata.category(ch) not in _HIDDEN_CATEGORIES:
+        return True
+    return (
+        ch in _JOINERS
+        and 0 < i < len(text) - 1
+        and _joinable(text[i - 1])
+        and _joinable(text[i + 1])
     )
 
 
-def _decoded(value: str) -> str:
-    """Hidden characters removed, entities decoded and compatibility characters
-    folded, together and repeatedly until nothing changes: a hidden character
-    inside an entity (``&\u2060lt;``), a doubly encoded one (``&amp;lt;``) or a
-    fullwidth ``\uff1c`` cannot stand in for ``<`` afterwards."""
-    for _ in range(64):
-        folded = _visible(unicodedata.normalize("NFKC", html.unescape(_visible(value))))
-        if folded == value:
-            return value
-        value = folded
-    # Still decoding after 64 rounds: no ampersand is left to start another.
-    return value.replace("&", " and ")
+def _entity_end(text: str, start: int) -> int | None:
+    """Where an entity starting at ``start`` ends, when it decodes (however
+    deeply encoded) to a bracket; None for any other ampersand."""
+    for end in range(start + 2, min(len(text), start + _ENTITY_WINDOW) + 1):
+        if _offending(text[start:end]):
+            return end
+    return None
+
+
+def _neutralised(text: str) -> str:
+    """The text with only its offending characters replaced: a character that
+    is or folds to a bracket, and an entity that decodes to one."""
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        folded = unicodedata.normalize("NFKC", ch)
+        end = _entity_end(text, i) if "&" in folded else None
+        if end is not None:
+            out.append(_fold(text[i:end]).translate(_TRANSLATE))
+            i = end
+            continue
+        out.append(folded.translate(_TRANSLATE) if _offending(ch) else ch)
+        i += 1
+    return "".join(out)
+
+
+def _settle(value: str, *, one_line: bool) -> str:
+    for _ in range(16):
+        text = _neutralised(_visible(value))
+        if one_line:
+            text = _LINE_BREAKS.sub(" ", text)
+        text = text.strip()
+        if text == value:
+            break
+        value = text
+    return value
 
 
 def clean_text(value: str, limit: int, *, one_line: bool = False) -> str:
-    """``value`` as plain text, with no markup able to come back to life.
+    """``value`` as plain text, with no markup able to come back to life and
+    everything else left exactly as written.
 
-    In order: hidden characters removed, entities decoded and look-alikes
-    folded, to a fixed point (``_decoded``); whitespace collapsed when
-    ``one_line``; and last, every ``<``, ``>``, ``[`` and ``]`` replaced by
-    its stand-in. Nothing is removed after the brackets are replaced, so no
-    later step can rebuild a tag or a marker, and cleaning the result again
-    changes nothing."""
-    text = _decoded(value)
-    if one_line:
-        text = " ".join(text.split())
-    return text.strip().translate(_BRACKETS)[:limit].rstrip()
+    Hidden characters are removed (newlines and tabs kept, and ZWJ/ZWNJ
+    between non-ASCII letters, marks or symbols); every character that is or
+    folds (NFKC) to ``<``, ``>``, ``[`` or ``]``, and every entity that decodes
+    to one however deeply encoded, is replaced by a stand-in; a one-line field
+    turns line breaks into spaces. Other characters (superscripts, fractions,
+    fullwidth punctuation, ligatures) are emitted as written. Repeated until
+    nothing changes, so cleaning the result again changes nothing."""
+    return _settle(_settle(value, one_line=one_line)[:limit], one_line=one_line)
 
 
 def clean_summary(value: Any) -> str:

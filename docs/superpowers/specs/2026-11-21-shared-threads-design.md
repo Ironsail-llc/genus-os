@@ -324,12 +324,17 @@ this list a subset of the dashboard's component registry. `suggestions` is a lis
   them back for the retry. A preview does none of these.
 - Summary at most 4000 characters, title one line of at most 200; suggestion text
   is cleaned the same way. These fields are plain text, so cleaning is structural,
-  not a list of known tags: hidden characters (control, format, surrogate,
-  private-use, escape sequences) are removed, HTML entities decoded and NFKC
-  look-alikes folded, together until nothing changes; then every `<`, `>`, `[` and
-  `]` is replaced (`‹`, `›`, `(`, `)`), so no tag, prompt boundary or dashboard
-  marker can be written in them in any spelling. Cleaning is idempotent. A
-  generated corpus of obfuscations is tested against the downstream detectors.
+  not a list of known tags. Hidden characters (control, format, surrogate,
+  private-use, escape sequences) are removed, except ZWJ/ZWNJ between two
+  characters that are non-ASCII even after folding. What is offending is decided on
+  the folded form (entities decoded, NFKC, hidden characters dropped, to a fixed
+  point), but the original is emitted with only the offending characters replaced:
+  a character that is or folds to `<`, `>`, `[` or `]` becomes `‹`, `›`, `(`, `)`,
+  and an entity that decodes to one is replaced by the stand-in. Other text
+  (`R²`, `½`, fullwidth punctuation, ligatures, `R&D`) comes out byte-identical. A
+  one-line field turns line breaks into spaces. Cleaning is idempotent. A
+  generated corpus of obfuscations is tested against the downstream detectors,
+  and a table of ordinary report text must come out unchanged.
 - This text is not wrapped as data when it is read back: a tool result that
   carries it is not in `EXTERNAL_DATA_TOOLS` (`robothor/engine/session.py`), so the
   structural cleaning is what keeps it inert. Tools that return edition text to a

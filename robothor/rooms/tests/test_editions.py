@@ -386,6 +386,34 @@ def test_the_cleaned_text_is_stable() -> None:
         assert editions.clean_summary(once) == once
 
 
+#: Ordinary report text that cleaning must leave byte-identical: superscripts,
+#: fractions, units, ligatures, ellipses, fullwidth CJK punctuation and
+#: letters, ampersands that start no entity (or decode to no bracket), emoji
+#: joined with ZWJ, ZWNJ in Persian, ZWJ in Devanagari.
+ORDINARY = [
+    "R\u00b2 = 0.93 on 1,204 m\u00b2",
+    "\u00bd of the 25 \u2103 batch, \u2153 returned",
+    "Revenue\u2026 up 4\u2009% \u2014 margin \u2265 12 \u2264 15",
+    "\ufb01nance and \ufb02oor \u2122 \u00a9",
+    "\u4ef7\u683c\uff0c\u6570\u91cf\uff1a\uff08\u5408\u8ba1\uff09\u3002",
+    "\uff26\uff55\uff4c\uff4c\uff57\uff49\uff44\uff54\uff48 name",
+    "R&D, P&L, AT&T, Q3 &amp; Q4, caf\u00e9 & cr\u00e8me",
+    "\U0001f469\u200d\U0001f4bb team, \U0001f468\u200d\U0001f469\u200d\U0001f467 family",
+    "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",
+    "\u0915\u094d\u200d\u0937 and \u0915\u094d\u200c\u0937",
+    "x\u2080 + x\u2081, H\u2082O, \u2460 \u2461",
+    "\u00c5ngstr\u00f6m caf\u0065\u0301",
+]
+
+
+@pytest.mark.parametrize("text", ORDINARY)
+def test_ordinary_report_text_comes_out_byte_identical(text: str) -> None:
+    assert editions.clean_summary(text) == text
+    assert editions.clean_title(text) == text
+    detail = editions.validate_suggestions([{"key": "k", "title": text, "detail": text}])[0]
+    assert (detail["title"], detail["detail"]) == (text, text)
+
+
 def test_summary_is_capped() -> None:
     assert len(editions.clean_summary("x" * (editions.MAX_SUMMARY_CHARS * 2))) == (
         editions.MAX_SUMMARY_CHARS
