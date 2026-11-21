@@ -23,7 +23,13 @@ import { RoomNotifyDialog } from "@/components/rooms/room-notify-dialog";
 import { RoomSettingsDrawer } from "@/components/rooms/room-settings-drawer";
 import type { RoomSlotContext, RoomViewSlots } from "@/components/rooms/room-slots";
 import { ShareDialog } from "@/components/rooms/share-dialog";
-import { editionError, useEditionArrival, useEditionWatch, type EditionRequest } from "@/components/rooms/use-edition-watch";
+import {
+  editionError,
+  seedEditionWatch,
+  useEditionArrival,
+  useEditionWatch,
+  type EditionRequest,
+} from "@/components/rooms/use-edition-watch";
 import { ROOMS_QUERY_KEY } from "@/hooks/use-rooms";
 import { useAppQueryClient } from "@/lib/query/query-client";
 import type { RoomAction } from "@/lib/rooms/access";
@@ -74,6 +80,7 @@ export function RoomHeaderActions({ ctx }: { ctx: RoomSlotContext }) {
     setRunError(null);
     try {
       const edition = await runRoom(room.id);
+      if (edition) seedEditionWatch(client, room.id, edition);
       setRunning({ key: Date.now(), id: edition?.id ?? null, afterSeq: editions[0]?.seq ?? 0 });
     } catch (err) {
       setRunError(refusalText(err, "start the run"));
@@ -157,14 +164,20 @@ export function RoomHeaderActions({ ctx }: { ctx: RoomSlotContext }) {
           {menuError}
         </p>
       )}
-      {run.waiting && (
+      {(run.waiting || run.timedOut) && (
         <span
           className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
           aria-live="polite"
           data-testid="room-run-status"
         >
-          <Loader2 className="size-3.5 animate-spin" aria-hidden />
-          Running…
+          {run.timedOut ? (
+            "Still running. Check back shortly: the edition appears when it is ready."
+          ) : (
+            <>
+              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              Running…
+            </>
+          )}
         </span>
       )}
       {canRun && (
