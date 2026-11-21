@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from robothor.crm.dal import send_notification
 from robothor.events.bus import publish
-from robothor.rooms import access, dal, definition
+from robothor.rooms import access, dal, definition, tasks
 from robothor.rooms.errors import (
     InvalidBlocks,
     RevisionConflict,
@@ -44,6 +44,9 @@ from robothor.rooms.errors import (
     RoomError,
     RoomForbidden,
     RoomNotFound,
+    TaskAlreadyAccepted,
+    TaskAlreadyDismissed,
+    TaskNotFound,
 )
 from robothor.rooms.keys import canonical_uuid
 from robothor.rooms.models import edition_json, room_link
@@ -55,7 +58,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
     from datetime import date, datetime
 
-    from robothor.rooms.models import Edition, Revision, Room, RoomMember, RoomSummary, RoomTask
+    from robothor.rooms.models import Edition, Revision, Room, RoomMember, RoomSummary
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +202,18 @@ def room_error_response(_request: Any, exc: Exception) -> JSONResponse:
         )
     if isinstance(exc, RoomBusy):
         return _problem(409, "room_busy", _MESSAGES["room_busy"])
+    if isinstance(exc, TaskNotFound):
+        return _problem(404, "not_found", "That task is not linked to this workspace.")
+    if isinstance(exc, TaskAlreadyAccepted):
+        by = _task_person(exc.by) or {"userId": "", "displayName": "Someone"}
+        return _problem(
+            409,
+            "already_accepted",
+            "Someone else has already taken this task.",
+            acceptedBy=by,
+        )
+    if isinstance(exc, TaskAlreadyDismissed):
+        return _problem(409, "already_dismissed", "This task was already dismissed.")
     if isinstance(exc, InvalidBlocks):
         return _problem(422, "invalid_blocks", _MESSAGES["invalid_blocks"], field="blocks")
     return _internal(exc)
@@ -448,30 +463,24 @@ def _person(accounts: dict[str, dict[str, Any]], user_id: str | None) -> dict[st
     return {"userId": user_id, "displayName": _name(accounts, user_id)} if user_id else None
 
 
-def _tasks_json(actor: access.Actor, links: list[RoomTask]) -> list[dict[str, Any]]:
-    """Linked tasks with their CRM title, status and assignee, in one read each."""
-    details = dal.task_details(actor.tenant_id, [t.task_id for t in links])
-    people = [t.accepted_by or "" for t in links] + [
-        d["assignee_id"] or "" for d in details.values()
-    ]
-    accounts = dal.get_accounts(actor.tenant_id, people)
-    rows = []
-    for link in links:
-        task = details.get(link.task_id, {})
-        assignee = task.get("assignee_id")
-        rows.append(
-            {
-                "taskId": link.task_id,
-                "title": task.get("title", ""),
-                "status": task.get("status", "TODO"),
-                "origin": link.origin,
-                "editionId": link.edition_id,
-                "assignee": _person(accounts, assignee) if assignee in accounts else None,
-                "acceptedBy": _person(accounts, link.accepted_by),
-                "dismissed": link.dismissed_by is not None,
-            }
-        )
-    return rows
+def _task_person(person: Any) -> dict[str, str] | None:
+    if person is None:
+        return None
+    return {"userId": person.user_id, "displayName": person.display_name or "Unknown user"}
+
+
+def _task_json(view: tasks.RoomTaskView) -> dict[str, Any]:
+    """A linked task as the workspace shows it (``robothor.rooms.tasks``)."""
+    return {
+        "taskId": view.task_id,
+        "title": view.title,
+        "status": view.status or "TODO",
+        "origin": view.origin,
+        "editionId": view.edition_id,
+        "assignee": _task_person(view.assignee),
+        "acceptedBy": _task_person(view.accepted_by),
+        "dismissed": view.dismissed,
+    }
 
 
 # ─── bodies ──────────────────────────────────────────────────────────────
@@ -610,25 +619,12 @@ def api_create_room(request: Request, body: CreateRoomBody) -> Any:
 
 @router.post("/from-task/{task_id}")
 def api_open_task(task_id: str, request: Request) -> Any:
-    """A CRM task's workspace, made on first use (the opener assigned). Once it
-    exists, the task's assignee may join it as shared; anyone else needs to be
-    shared into it, so a member who was removed cannot rejoin through here."""
+    """A CRM task's workspace, made on first open (``robothor.rooms.tasks``):
+    the opener assigned; later, only the task's assignee joins this way, and
+    never after being removed. Anyone else gets not-found until shared in."""
     actor = _human(request, _WORKING_ROLES)
-    room = dal.get_or_create_task_room(
-        actor.tenant_id, task_id, agent_id=definition.default_agent(), created_by=actor.user_id
-    )
-    if room is None:
-        raise RoomNotFound(task_id)
-    joined = False
-    if not _is_admin(actor) and dal.get_member(actor.tenant_id, room.id, actor.user_id) is None:
-        # Only the task's assignee joins an existing task workspace this way;
-        # anyone else is shared into it (and a removed member stays removed).
-        task = dal.task_details(actor.tenant_id, [room.task_id or ""]).get(room.task_id or "", {})
-        if task.get("assignee_id") != actor.user_id:
-            raise RoomNotFound(room.id)
-        dal.add_member(actor.tenant_id, room.id, actor.user_id, added_by=actor.user_id)
-        joined = True
-    _audit(request, "room.open_task", room.id, task_id=room.task_id, joined=joined)
+    room = tasks.open_task_room(actor, task_id)
+    _audit(request, "room.open_task", room.id, task_id=room.task_id)
     return _room_json(actor, access.require(actor, room.id, "read"))
 
 
@@ -945,51 +941,22 @@ async def api_request_period(room_id: str, request: Request, body: PeriodsBody) 
 @router.get("/{room_id}/tasks")
 def api_list_tasks(room_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "read")
-    return {"tasks": _tasks_json(actor, dal.list_room_tasks(actor.tenant_id, room.id))}
-
-
-def _decide(
-    actor: access.Actor, room: Room, task_id: str, *, accept: bool
-) -> tuple[RoomTask | None, JSONResponse | None]:
-    """Accept or dismiss a linked task once: the decision, or the refusal."""
-    decide = dal.accept_task if accept else dal.dismiss_task
-    decided = decide(actor.tenant_id, room.id, task_id, actor.user_id)
-    if decided is not None:
-        _announce(actor, room.id, task_id=decided.task_id)
-        return decided, None
-    task = canonical_uuid(task_id)
-    link = next(
-        (t for t in dal.list_room_tasks(actor.tenant_id, room.id) if t.task_id == task), None
-    )
-    if link is None:
-        return None, _problem(404, "not_found", "task not linked to this workspace")
-    if link.accepted_by:
-        who = link.accepted_by
-        name = _name(dal.get_accounts(actor.tenant_id, [who]), who)
-        return None, _problem(
-            409,
-            "already_accepted",
-            f"{name} already accepted this task",
-            acceptedBy={"userId": who, "displayName": name},
-        )
-    return None, _problem(409, "already_dismissed", "this task was already dismissed")
+    return {"tasks": [_task_json(v) for v in tasks.list_tasks(actor, room.id)]}
 
 
 @router.post("/{room_id}/tasks/{task_id}/accept")
 def api_accept_task(room_id: str, task_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "accept_task")
-    decided, refusal = _decide(actor, room, task_id, accept=True)
-    if decided is None:
-        return refusal
-    _audit(request, "room.task_accept", room.id, task_id=decided.task_id)
-    return _tasks_json(actor, [decided])[0]
+    view = tasks.accept_task(actor, room.id, task_id)
+    _audit(request, "room.task_accept", room.id, task_id=view.task_id)
+    _announce(actor, room.id, task_id=view.task_id)
+    return _task_json(view)
 
 
 @router.post("/{room_id}/tasks/{task_id}/dismiss")
 def api_dismiss_task(room_id: str, task_id: str, request: Request) -> Any:
     actor, room = _guard(request, room_id, "accept_task")
-    decided, refusal = _decide(actor, room, task_id, accept=False)
-    if decided is None:
-        return refusal
-    _audit(request, "room.task_dismiss", room.id, task_id=decided.task_id)
-    return _tasks_json(actor, [decided])[0]
+    view = tasks.dismiss_task(actor, room.id, task_id)
+    _audit(request, "room.task_dismiss", room.id, task_id=view.task_id)
+    _announce(actor, room.id, task_id=view.task_id)
+    return _task_json(view)

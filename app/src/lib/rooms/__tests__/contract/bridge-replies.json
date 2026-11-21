@@ -365,7 +365,7 @@
       },
       "settings": {},
       "title": "Check the returns",
-      "unread": 0
+      "unread": 1
     },
     "status": 200
   },
@@ -837,7 +837,10 @@
         "displayName": "Bob",
         "userId": "u-bob"
       },
-      "assignee": null,
+      "assignee": {
+        "displayName": "Bob",
+        "userId": "u-bob"
+      },
       "dismissed": false,
       "editionId": "ed-published",
       "origin": "suggestion",
@@ -856,7 +859,7 @@
         },
         "error": "already_accepted",
         "field": null,
-        "message": "Bob already accepted this task"
+        "message": "Someone else has already taken this task."
       }
     },
     "status": 409

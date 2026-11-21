@@ -1068,7 +1068,7 @@ def test_tasks_list_accept_and_dismiss(world) -> None:
     room = _room(w)
     first, second = _task(w, "Chase invoice"), _task(w, "Book review")
     dal.link_task(w.db.tenant, room.id, first, origin="suggestion", suggestion_key="chase")
-    dal.link_task(w.db.tenant, room.id, second)
+    dal.link_task(w.db.tenant, room.id, second, origin="suggestion", suggestion_key="review")
 
     tasks = w.client("vera").get(f"/api/rooms/{room.id}/tasks").json()["tasks"]
     assert {t["taskId"] for t in tasks} == {first, second}
@@ -1081,6 +1081,7 @@ def test_tasks_list_accept_and_dismiss(world) -> None:
 
     bob = {"userId": w.ids.bob, "displayName": "Bob"}
     assert accepted.status_code == 200 and accepted.json()["acceptedBy"] == bob
+    assert accepted.json()["assignee"] == bob  # the task is now Bob's
     assert dismissed.status_code == 200 and dismissed.json()["dismissed"] is True
     assert _audits(w, "room.task_accept")[0]["actor"] == w.ids.bob
     assert _audits(w, "room.task_dismiss")[0]["actor"] == w.ids.bob
@@ -1118,7 +1119,8 @@ def test_the_tasks_assignee_opening_it_joins_its_room(world) -> None:
 
     assert response.status_code == 200
     assert response.json()["id"] == room_id
-    assert response.json()["access"] == "shared"
+    # The task's own assignee works it: they join assigned (robothor.rooms.tasks).
+    assert response.json()["access"] == "assigned"
 
 
 def test_an_unrelated_colleague_cannot_join_a_task_room(world) -> None:
@@ -1217,7 +1219,8 @@ def test_status_code_matrix(world, persona, method, template, body, needs) -> No
     room = _room(w)
     edition = _edition(w, room)
     task = _task(w)
-    dal.link_task(w.db.tenant, room.id, task)
+    # A suggestion: only a suggested task can be dismissed (robothor.rooms.tasks).
+    dal.link_task(w.db.tenant, room.id, task, origin="suggestion", suggestion_key="s")
     if template.endswith("/unarchive"):
         dal.archive_room(w.db.tenant, room.id)
     values = {
@@ -1545,7 +1548,7 @@ def test_tasks_carry_the_crm_title_status_assignee_and_decision(world) -> None:
     first = _crm_task(w, "Chase invoice", status="IN_PROGRESS", assignee=w.ids.bob)
     second = _crm_task(w, "Book review")
     dal.link_task(w.db.tenant, room.id, first, origin="suggestion", suggestion_key="chase")
-    dal.link_task(w.db.tenant, room.id, second)
+    dal.link_task(w.db.tenant, room.id, second, origin="suggestion", suggestion_key="review")
     dal.accept_task(w.db.tenant, room.id, first, w.ids.alice)
     dal.dismiss_task(w.db.tenant, room.id, second, w.ids.alice)
 
@@ -1563,9 +1566,8 @@ def test_tasks_carry_the_crm_title_status_assignee_and_decision(world) -> None:
         "acceptedBy": {"userId": w.ids.alice, "displayName": "Alice"},
         "dismissed": False,
     }
-    assert tasks[second]["assignee"] is None
-    assert tasks[second]["acceptedBy"] is None
-    assert tasks[second]["dismissed"] is True
+    # A dismissed suggestion leaves the workspace's list.
+    assert second not in tasks
 
 
 def test_accept_returns_the_task_and_a_second_accept_names_who(world) -> None:
@@ -1594,10 +1596,21 @@ def test_dismiss_returns_the_task(world) -> None:
     w = world
     room = _room(w)
     task = _crm_task(w, "Book review")
-    dal.link_task(w.db.tenant, room.id, task)
+    dal.link_task(w.db.tenant, room.id, task, origin="suggestion", suggestion_key="review")
     dismissed = w.client("bob").post(f"/api/rooms/{room.id}/tasks/{task}/dismiss")
     assert dismissed.status_code == 200
     assert dismissed.json()["dismissed"] is True
+
+
+def test_only_a_suggested_task_can_be_dismissed(world) -> None:
+    from robothor.rooms import dal
+
+    w = world
+    room = _room(w)
+    task = _crm_task(w, "Book review")
+    dal.link_task(w.db.tenant, room.id, task)
+    refused = w.client("bob").post(f"/api/rooms/{room.id}/tasks/{task}/dismiss")
+    assert refused.status_code == 403
 
 
 # editions and the admin list
