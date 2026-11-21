@@ -2,7 +2,11 @@
 
 The route is a thin wrapper over ``robothor.rooms.periods.request_period``,
 which is proven against real Postgres in ``robothor/rooms/tests``. Here: the
-caller is the verified token and nothing the body says; the answer is the
+caller is the verified token and nothing the body says. The bridge calls with
+its SERVICE token and names the person in ``requested_by``; the engine then
+reads that person's role from their account (never from the body) and checks
+their access itself. A human token's own identity wins over any
+``requested_by``; the answer is the
 contract's camelCase ``Edition``; each refusal has its own status, so the
 dashboard can tell "no such room" from "not allowed" from "cap reached"; and the
 request never blocks the engine's event loop.
@@ -44,6 +48,7 @@ EDITION_KEYS = {
     "suggestions",
     "provenance",
     "createdAt",
+    "publishedSeq",
 }
 
 
@@ -66,8 +71,25 @@ def _edition(status: str = "building") -> Edition:
         suggestions=[],
         provenance={},
         requested_by=ALICE,
+        published_seq=2 if status == "published" else None,
         created_at=datetime(2026, 11, 21, 9, 30, tzinfo=UTC),
     )
+
+
+BOB = "9c3f1d2e-4b5a-4c6d-8e7f-0a1b2c3d4e5f"
+SERVICE = AuthContext(
+    user_id="genus-bridge", tenant_id="test-tenant", role="service", typ="service"
+)
+
+
+@pytest.fixture
+def accounts(monkeypatch):
+    """``user_accounts`` rows by id, as ``get_account_by_id`` returns them."""
+    rows: dict[str, dict[str, Any]] = {
+        ALICE: {"id": ALICE, "tenant_id": "test-tenant", "role": "member", "status": "active"},
+    }
+    monkeypatch.setattr("robothor.auth.accounts.get_account_by_id", lambda uid: rows.get(uid))
+    return rows
 
 
 class FakeRequest:
@@ -132,6 +154,7 @@ async def test_an_existing_edition_answers_200(fake):
 
     assert response.status_code == 200
     assert response.json()["status"] == "published"
+    assert response.json()["publishedSeq"] == 2
 
 
 async def test_the_anchor_may_be_left_out(fake):
@@ -153,6 +176,89 @@ async def test_the_caller_is_the_token_not_the_body(fake):
         "test-tenant",
         False,
     )
+
+
+async def test_a_human_tokens_identity_wins_over_requested_by(fake, accounts):
+    await _post(_app(), {"grain": "day", "requested_by": BOB})
+
+    assert fake.calls[0][0].user_id == ALICE
+
+
+async def test_the_bridge_service_token_acts_for_requested_by_with_their_account_role(
+    fake, accounts
+):
+    accounts[ALICE]["role"] = "viewer"
+
+    response = await _post(
+        _app(SERVICE), {"grain": "day", "anchor": "2026-11-20", "requested_by": ALICE}
+    )
+
+    assert response.status_code == 202
+    actor = fake.calls[0][0]
+    assert (actor.user_id, actor.role, actor.tenant_id, actor.is_service) == (
+        ALICE,
+        "viewer",
+        "test-tenant",
+        False,
+    )
+
+
+async def test_a_role_in_the_body_is_never_believed(fake, accounts):
+    await _post(_app(SERVICE), {"grain": "day", "requested_by": ALICE, "role": "owner"})
+
+    assert fake.calls[0][0].role == "member"
+
+
+async def test_a_service_call_without_requested_by_is_refused(fake, accounts):
+    response = await _post(_app(SERVICE), {"grain": "day"})
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "requested_by_required"
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize(
+    "account",
+    [
+        None,  # no such account
+        {"tenant_id": "test-tenant-other", "role": "owner", "status": "active"},
+        {"tenant_id": "test-tenant", "role": "owner", "status": "disabled"},
+    ],
+)
+async def test_a_requester_whose_account_does_not_stand_here_gets_404(fake, accounts, account):
+    if account is None:
+        accounts.pop(ALICE)
+    else:
+        accounts[ALICE] = {"id": ALICE, **account}
+
+    response = await _post(_app(SERVICE), {"grain": "day", "requested_by": ALICE})
+
+    assert response.status_code == 404
+    assert fake.calls == []
+
+
+async def test_a_malformed_requested_by_is_refused(fake, accounts):
+    response = await _post(_app(SERVICE), {"grain": "day", "requested_by": "not-a-uuid"})
+
+    assert response.status_code == 404
+    assert fake.calls == []
+
+
+async def test_the_account_lookup_runs_off_the_event_loop(fake, monkeypatch):
+    from robothor.engine.tests.test_offloop_sync_calls import SlowProbe, warm_executor
+
+    await warm_executor()
+    probe = SlowProbe(
+        asyncio.get_running_loop(),
+        result={"id": ALICE, "tenant_id": "test-tenant", "role": "member", "status": "active"},
+    )
+    monkeypatch.setattr("robothor.auth.accounts.get_account_by_id", probe)
+
+    response = await _post(_app(SERVICE), {"grain": "day", "requested_by": ALICE})
+
+    assert response.status_code == 202
+    await probe.settle()
+    probe.assert_loop_free()
 
 
 @pytest.mark.parametrize(
