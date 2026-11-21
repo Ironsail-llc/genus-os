@@ -1788,3 +1788,27 @@ def test_no_fixed_message_names_a_limit() -> None:
         assert "minute" not in message.lower(), code
         assert "cap" not in message.lower().split(), code
     assert "on_demand_cap" not in rooms._MESSAGES
+
+
+def test_a_removed_assignee_cannot_reopen_the_task_workspace(world) -> None:
+    """Opening a task as a workspace never re-adds someone who was removed from
+    it, and leaves the removal on record: only a share brings them back."""
+    w = world
+    task = _crm_task(w, "Call Bob back", assignee=w.ids.bob)
+    room_id = w.client("alice").post(f"/api/rooms/from-task/{task}").json()["id"]
+    joined = w.client("bob").post(f"/api/rooms/from-task/{task}")
+    assert joined.status_code == 200 and joined.json()["id"] == room_id
+
+    removed = w.client("alice").delete(f"/api/rooms/{room_id}/members/{w.ids.bob}")
+    assert removed.status_code == 200, removed.text
+
+    again = w.client("bob").post(f"/api/rooms/from-task/{task}")
+    assert again.status_code == 404
+    assert again.json()["detail"]["error"] == "not_found"
+    assert w.client("bob").get(f"/api/rooms/{room_id}").status_code == 404
+    w.db.cur.execute(
+        "SELECT removed_by::text FROM room_member_removals "
+        "WHERE tenant_id = %s AND room_id = %s AND user_id = %s",
+        (w.db.tenant, room_id, w.ids.bob),
+    )
+    assert w.db.cur.fetchone() == (w.ids.alice,)
