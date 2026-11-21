@@ -40,6 +40,7 @@ from robothor.engine.chat_history import MAX_HISTORY, as_history
 from robothor.engine.sanitize import sanitize_log
 from robothor.rooms import access, dal, fanout
 from robothor.rooms.errors import RoomForbidden, RoomNotFound
+from robothor.rooms.keys import canonical_uuid
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -59,6 +60,9 @@ class ChatTarget:
 
     key: str
     room: Room | None = None
+    #: A workspace send's outbox id (``client_id``): stored on the user turn and
+    #: echoed in history as ``clientId``; trusted for nothing else.
+    client_id: str | None = None
 
     @property
     def label(self) -> str:
@@ -74,10 +78,14 @@ class ChatTarget:
         return f"[{name}] {message}" if self.room is not None and name else message
 
     def author(self, auth: Any, name: str, extras: dict[str, Any] | None) -> dict[str, Any] | None:
-        """The stored user turn's extras, with its author in a room."""
+        """The stored user turn's extras, with its author in a room (and the
+        dashboard's outbox id, echoed back in history and used for nothing else)."""
         if self.room is None:
             return extras
-        return {**(extras or {}), "author_user_id": str(auth.user_id), "author_display_name": name}
+        out = {**(extras or {}), "author_user_id": str(auth.user_id), "author_display_name": name}
+        if self.client_id:
+            out["client_id"] = self.client_id
+        return out
 
     def for_model(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The history the model gets: each room user turn prefixed with its author."""
@@ -144,7 +152,8 @@ async def resolve(
     try:
         if room_id:
             room = await asyncio.to_thread(_by_id, auth, room_id, action)
-            return ChatTarget(room.session_key, room)
+            cid, refused = _client_id(source)
+            return refused or ChatTarget(room.session_key, room, cid)
         if access.parse_room_key(key) is not None:
             found = await asyncio.to_thread(_by_key, auth, key, action)
             return ChatTarget(found.session_key, found) if found else ChatTarget(key)
@@ -276,6 +285,17 @@ async def stop_room_run(auth: Any, target: ChatTarget) -> JSONResponse | None:
     return JSONResponse(target.echo({"aborted": True}))
 
 
+def _client_id(source: Mapping[str, Any]) -> tuple[str | None, JSONResponse | None]:
+    """A workspace request's ``client_id`` (the dashboard's outbox id), or the
+    refusal of a malformed one: only a UUID. ``resolve`` reads it only for a
+    room, so an ordinary session's is ignored."""
+    if "client_id" not in source:
+        return None, None
+    raw = source.get("client_id")
+    cid = canonical_uuid(raw) if isinstance(raw, str) else None
+    return (cid, None) if cid else (None, _refusal(400, "invalid_client_id"))
+
+
 def history_body(target: ChatTarget, body: dict[str, Any]) -> dict[str, Any]:
     """A ``/chat/history`` body for a room: authors in camelCase, no session key."""
     if target.room is None:
@@ -293,4 +313,6 @@ def _history_item(message: dict[str, Any]) -> dict[str, Any]:
         item["authorName"] = name
     if message.get("edition_id"):
         item["editionId"] = str(message["edition_id"])
+    if isinstance(message.get("client_id"), str) and message.get("role") == "user":
+        item["clientId"] = message["client_id"]
     return item
