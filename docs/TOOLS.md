@@ -120,7 +120,7 @@ nothing and did not stop it asking again.
 
 An agent that declares no `tools_allowed` is offered every tool except the
 opt-in families (`OPT_IN_TOOLS`: `claude_code_*`, `web_render`, the Jira and
-GitHub review writes, `pr_review_*`, `run_workflow`, `sales_*`) unless its
+GitHub review writes, `pr_review_*`, `run_workflow`, `sales_*`, `room_*`) unless its
 manifest names them in `tools_opt_in`. That rule ignores who is asking, so the
 instance's owner — who holds a `*` allow in RBAC — could be told a coding tool
 is "not available to this agent".
@@ -1608,6 +1608,74 @@ declared: a fixed, repeatable pipeline with its own steps, timeout and run
 history. Use `spawn_agent` for open-ended work that one agent should reason
 through.
 
+### Workspaces (`room_*`)
+
+A workspace (code: a *room*) is a company-owned conversation below a person's
+main conversation: a scheduled **report** that publishes editions, or another
+conversation with an **agent**. The main agent creates, changes, shares and
+reads workspaces for the person it is talking to. The rules live in
+`robothor/rooms/definition.py`, which the bridge's `/api/rooms` routes call as
+well, so a workspace made in chat and one made in the dashboard are checked the
+same way.
+
+| Tool | Does | Needs |
+|---|---|---|
+| `room_create` | `kind` report or agent, `title`, `instructions`, optional `agent_id` (default `main`), `schedule`, `tz`, `default_grain`, `share_with` | a staff role (not viewer) |
+| `room_update` | `room_id`, `expected_rev`, `changes` (`title`, `instructions`, `schedule_text`, `tz`, `default_grain`, `paused`, `notify_default`, `max_cost_usd`) | assigned, or owner/admin |
+| `room_list` | `scope` `mine` (default) or `all` | `all`: owner/admin |
+| `room_read` | `room_id`, `editions` (3), `messages` (10) | any access |
+| `room_share` / `room_unshare` | `room_id`, `user` (id or email), `assigned` | assigned, or owner/admin |
+| `room_archive` | `room_id`; the schedule stops | assigned, or owner/admin |
+| `room_duplicate` | `room_id`; the caller's own copy | shared or more |
+| `room_restore_revision` | `room_id`, `rev`; writes a new revision equal to it | assigned, or owner/admin |
+| `room_admin_reassign` | `room_id`, `user`; assigned and the run-as user | owner/admin |
+
+- **Who is asking.** Always the human on the run, from the tool context
+  (`user_id`, `user_role`), never the agent. A run with no verified person
+  behind it (cron, hook, workflow, an unverified identity) may use only
+  `room_read`, with the access the room's run-as user holds at that moment; every
+  other tool refuses it.
+- **Checked before anything is written.** The instructions and title go through
+  the injection scanner (`robothor/engine/cron_safety.py`); the schedule through
+  `cron_parse.parse_schedule`, refusing a one-off and anything that runs more
+  often than every 15 minutes (`ROOM_MIN_INTERVAL_SECONDS`); the agent must be
+  one this instance can load; every `share_with` entry must be an active account
+  of the same company. A refusal saves nothing.
+- **Definitions cannot be overwritten by accident.** Every change writes a
+  numbered revision and needs the `rev` the caller read (`room_read`); a stale
+  one returns `current_rev`. Pausing writes no revision but still checks it.
+  A shared caller is refused with an offer of `room_duplicate`. A room keeps its
+  agent; duplicate it to use another.
+- **The schedule row.** A scheduled workspace has one `user_cronjobs` row with
+  `room_id` and `run_as_user_id` (the creator, until an admin reassigns it),
+  read in the room's `tz` (UTC when none). It follows every schedule change,
+  pause, resume (the next run is computed from now), archive, restore and
+  reassignment. A duplicate of a scheduled workspace starts paused. The generic
+  user-cron tick skips room rows: a room's run is started by the rooms
+  scheduler, in the room, as its run-as user.
+- **Nothing leaks.** Not found and no access give the same answer, which names
+  neither the room nor its id. `room_list` shows only the caller's rooms unless
+  an owner or admin asks for `all`. `room_read` shows another person's preview
+  edition to nobody.
+- **Every result that names a room carries `link`** (`/?v=chat&room=<id>`), and
+  the descriptions tell the agent to give it.
+
+**How they reach an agent.** `room_*` is an opt-in family (`ROOM_TOOLS` in
+`OPT_IN_TOOLS`): the main agent is always given it, with or without a
+`tools_allowed` list, and `tools_denied` still wins; any other agent gets a
+tool only by naming it (`tools_allowed`, or `tools_opt_in`). RBAC is the other
+half, seeded by migration 169: `member` and `user` allow `room_*` and deny
+`room_admin_*`, `viewer` allows `room_list` and `room_read`, `owner` and
+`admin` keep `*`. A tenant tunes it with `role_permissions` rows (for example
+denying `room_create` to `member`) and per person with `user_permissions`.
+
+**Which to use.** For a report or recurring piece of work that people will
+open, read and share, use `room_create` with a schedule. Use
+`register_user_cron` only to re-run yourself later with a prompt: it has no
+workspace, no sharing, no editions and no run-as user. Before `room_create`,
+restate the title, the period, the schedule, the data sources and who it is
+shared with, and get a yes; before `room_update`, show the change.
+
 ### Knowledge base (`kb_*`)
 
 Curated reference documents, grouped in collections named `<plugin>/<topic>`
@@ -1863,6 +1931,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Child tenants | [`org_overview`, and `tenant` / `dry_run` on CRM and run tools](#child-tenants-org_overview-the-tenant-argument-and-dry_run) |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
 | Workflows | [`list_workflows`, `run_workflow`, `workflow_runs`](#workflows-list_workflows-run_workflow-workflow_runs) |
+| Workspaces | [`room_create`, `room_update`, `room_list`, `room_read`, …](#workspaces-room_) (the main agent's) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
 | n8n automations | `n8n_list_workflows`, `n8n_recent_failures` (the n8n monitor's snapshot — see above) |
