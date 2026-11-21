@@ -60,9 +60,10 @@ def compute_next_run(schedule: dict[str, Any], after: datetime) -> datetime | No
     if kind == "cron":
         from robothor.engine.crontab import cron_trigger
 
-        # A room's cron schedule is read in the room's time zone; none is UTC,
-        # whatever zone the engine host happens to run in.
-        trigger = cron_trigger(str(schedule["expression"]), timezone=schedule.get("tz") or "UTC")
+        # A room's schedule carries its time zone. A plain user cron carries
+        # none and keeps APScheduler's default (the host's zone), so no
+        # existing job moves.
+        trigger = cron_trigger(str(schedule["expression"]), timezone=schedule.get("tz") or None)
         return cast("datetime | None", trigger.get_next_fire_time(None, after))
     return None
 
@@ -199,37 +200,39 @@ def sync_room_cronjob(
             )
             return None
         next_run = compute_next_run(schedule, now) if enabled else None
-        params = (
-            agent_id,
-            schedule["kind"],
-            json.dumps(_serialize_schedule(schedule)),
-            prompt or "",
-            bool(enabled),
-            next_run,
-            run_as_user_id,
-        )
+        # One statement against the partial unique index of migration 170, so
+        # concurrent syncs of a room with no row yet still leave exactly one.
         cur.execute(
             """
-            UPDATE user_cronjobs
-            SET agent_id = %s, schedule_kind = %s, schedule_payload = %s, prompt = %s,
-                enabled = %s, next_run_at = %s, run_as_user_id = %s, updated_at = NOW()
-            WHERE tenant_id = %s AND room_id = %s
+            INSERT INTO user_cronjobs (
+                job_id, tenant_id, room_id, agent_id, schedule_kind, schedule_payload,
+                prompt, enabled, next_run_at, run_as_user_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (tenant_id, room_id) WHERE room_id IS NOT NULL DO UPDATE SET
+                agent_id = EXCLUDED.agent_id,
+                schedule_kind = EXCLUDED.schedule_kind,
+                schedule_payload = EXCLUDED.schedule_payload,
+                prompt = EXCLUDED.prompt,
+                enabled = EXCLUDED.enabled,
+                next_run_at = EXCLUDED.next_run_at,
+                run_as_user_id = EXCLUDED.run_as_user_id,
+                updated_at = NOW()
             RETURNING job_id
             """,
-            (*params, tenant_id, room_id),
+            (
+                f"ucron-{uuid.uuid4().hex[:12]}",
+                tenant_id,
+                room_id,
+                agent_id,
+                schedule["kind"],
+                json.dumps(_serialize_schedule(schedule)),
+                prompt or "",
+                bool(enabled),
+                next_run,
+                run_as_user_id,
+            ),
         )
-        row = cur.fetchone()
-        job_id = row["job_id"] if row else f"ucron-{uuid.uuid4().hex[:12]}"
-        if row is None:
-            cur.execute(
-                """
-                INSERT INTO user_cronjobs (
-                    agent_id, schedule_kind, schedule_payload, prompt, enabled,
-                    next_run_at, run_as_user_id, job_id, tenant_id, room_id
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (*params, job_id, tenant_id, room_id),
-            )
+        job_id = cur.fetchone()["job_id"]
     return {
         "job_id": job_id,
         "next_run_at": next_run.isoformat() if next_run else None,

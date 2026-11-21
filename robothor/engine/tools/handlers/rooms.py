@@ -6,9 +6,11 @@ bridge's ``/api/rooms`` routes call the same functions. What this module owns
 is the tool surface:
 
 * **Who is asking.** Always the human on the run (``_actor``), never the agent.
-  A run with no verified person behind it (cron, hook, workflow, an unverified
-  identity) may only ``room_read``, and only with the access the room's run-as
-  user holds right now (``definition.run_as_actor``).
+  An unverified identity is refused outright. A run with no person behind it
+  (cron, hook, workflow) may only ``room_read``, only the room the run-context
+  carrier (``robothor.rooms.run_context``) binds it to, and only with the
+  access that room's run-as user holds right now (``definition.run_as_actor``).
+  No carrier, or no bound room, means it reads nothing.
 * **What a refusal says.** Not found and no access read exactly the same, and
   name neither the room nor its id. A shared caller who tries to change a room
   is offered ``room_duplicate``.
@@ -51,9 +53,40 @@ _NOT_FOUND = {
 _NO_PERSON = {
     "error": (
         "Workspace tools act for a person, and this run has no verified person behind "
-        "it. Only room_read works here, with the access of the room's run-as user."
+        "it. Only room_read works here, for the one workspace this run belongs to, with "
+        "the access of that workspace's run-as user."
     )
 }
+_UNVERIFIED = {
+    "error": (
+        "The person on this run is not verified, so workspace tools are refused. Ask them "
+        "to sign in on a verified channel."
+    )
+}
+
+
+def _unverified(ctx: ToolContext) -> bool:
+    identity = getattr(ctx, "identity", None)
+    return identity is not None and not getattr(identity, "verified", False)
+
+
+def _bound_room_id(tenant_id: str) -> str | None:
+    """The room this run belongs to, from the run-context carrier.
+
+    None when the carrier module is absent (nothing binds a run to a room yet),
+    when the run is bound to no room, or to a room of another tenant: a run
+    with no person behind it then reads nothing. Never taken from arguments.
+    """
+    try:
+        from robothor.rooms.run_context import (  # type: ignore[import-not-found,unused-ignore]
+            current_room_run,
+        )
+    except ImportError:
+        return None
+    run = current_room_run()
+    if run is None or getattr(run, "tenant_id", None) != tenant_id:
+        return None
+    return canonical_uuid(getattr(run, "room_id", None))
 
 
 def _actor(ctx: ToolContext) -> Actor | None:
@@ -235,9 +268,15 @@ async def _room_read(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     try:
         editions = _bounded(args.get("editions"), 3, 20)
         messages = _bounded(args.get("messages"), 10, 50)
+        if _unverified(ctx):
+            return dict(_UNVERIFIED)
         actor = _actor(ctx)
         if actor is None:
-            actor = await _call(definition.run_as_actor, ctx.tenant_id, room_id)
+            # No person: only the room this run belongs to, as its run-as user.
+            bound = _bound_room_id(ctx.tenant_id)
+            if bound is None or canonical_uuid(room_id) != bound:
+                return dict(_NOT_FOUND)
+            actor = await _call(definition.run_as_actor, ctx.tenant_id, bound)
             if actor is None:
                 return dict(_NOT_FOUND)
         view = await _call(

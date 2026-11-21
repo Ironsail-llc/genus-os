@@ -1631,10 +1631,12 @@ same way.
 | `room_admin_reassign` | `room_id`, `user`; assigned and the run-as user | owner/admin |
 
 - **Who is asking.** Always the human on the run, from the tool context
-  (`user_id`, `user_role`), never the agent. A run with no verified person
-  behind it (cron, hook, workflow, an unverified identity) may use only
-  `room_read`, with the access the room's run-as user holds at that moment; every
-  other tool refuses it.
+  (`user_id`, `user_role`), never the agent. An unverified identity is refused
+  by every tool. A run with no person behind it (cron, hook, workflow) may use
+  only `room_read`, only for the room the run-context carrier
+  (`robothor.rooms.run_context`) binds the run to, and only with the access
+  that room's run-as user holds at that moment. A run bound to no room reads
+  nothing, whatever id it is given.
 - **Checked before anything is written.** The instructions and title go through
   the injection scanner (`robothor/engine/cron_safety.py`); the schedule through
   `cron_parse.parse_schedule`, refusing a one-off and anything that runs more
@@ -1648,9 +1650,11 @@ same way.
   agent; duplicate it to use another.
 - **The schedule row.** A scheduled workspace has one `user_cronjobs` row with
   `room_id` and `run_as_user_id` (the creator, until an admin reassigns it),
-  read in the room's `tz` (UTC when none). It follows every schedule change,
-  pause, resume (the next run is computed from now), archive, restore and
-  reassignment. A duplicate of a scheduled workspace starts paused. The generic
+  read in the room's `tz` (UTC when the room has none; a plain
+  `register_user_cron` job carries no zone and keeps the host's). A unique
+  index (migration 170) keeps it to one row per room. It follows every change
+  of schedule or instructions, pause, resume (the next run is computed from
+  now), archive, restore and reassignment. A duplicate of a scheduled workspace starts paused. The generic
   user-cron tick skips room rows: a room's run is started by the rooms
   scheduler, in the room, as its run-as user.
 - **Nothing leaks.** Not found and no access give the same answer, which names

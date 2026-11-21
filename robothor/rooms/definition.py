@@ -83,6 +83,9 @@ CHANGE_KEYS = frozenset(
 )
 _SETTING_CHANGES = ("tz", "default_grain", "notify_default", "max_cost_usd")
 _SCHEDULE_CHANGES = frozenset({"schedule_text", "tz", "paused"})
+#: What the schedule row copies from the room: the schedule, and the
+#: instructions it stores as its prompt.
+_SYNC_CHANGES = _SCHEDULE_CHANGES | {"instructions"}
 _STAFF_ROLES = frozenset({"owner", "admin", "member", "user"})
 _ADMIN_ROLES = frozenset({"owner", "admin"})
 #: How many upcoming fire times of a cron schedule are checked for the minimum.
@@ -406,7 +409,7 @@ def apply_definition_change(
         saved = room
     if "paused" in changes and changes["paused"] != saved.paused:
         saved = dal.set_paused(actor.tenant_id, room.id, changes["paused"])
-    if _SCHEDULE_CHANGES & set(changes):
+    if _SYNC_CHANGES & set(changes):
         _sync_schedule(saved)
     return saved
 
