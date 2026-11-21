@@ -94,7 +94,9 @@ function NotifyForm({
   };
 
   const save = async () => {
-    const prefs: NotifyPrefs = { inApp, muted, channels };
+    // A choice for a channel that is not linked right now is sent back as it
+    // was, so saving here never erases it.
+    const prefs: NotifyPrefs = { inApp, muted, channels: { ...state.channels, ...channels } };
     setSaving(true);
     setError(null);
     try {

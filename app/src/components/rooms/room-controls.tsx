@@ -31,8 +31,6 @@ import { archiveRoom, duplicateRoom, runRoom, unarchiveRoom } from "@/lib/rooms/
 import { goToRoom, refusalText } from "@/components/rooms/controls-shared";
 import type { Edition } from "@/lib/rooms/types";
 
-/** What an archived room still allows (the contract's `can(..., archived=True)`). */
-const ARCHIVED_ACTIONS: ReadonlySet<RoomAction> = new Set(["read", "archive", "duplicate", "list_all"]);
 
 type Panel = "settings" | "share" | "provenance" | "notify" | "archive" | "preview" | null;
 
@@ -46,7 +44,9 @@ type Panel = "settings" | "share" | "provenance" | "notify" | "archive" | "previ
 export function RoomHeaderActions({ ctx }: { ctx: RoomSlotContext }) {
   const { room } = ctx;
   const client = useAppQueryClient();
-  const allowed = (action: RoomAction) => ctx.can(action) && (!room.archived || ARCHIVED_ACTIONS.has(action));
+  // `ctx.can` already applies the archived rule (only read, archive,
+  // duplicate and list_all in an archived room).
+  const allowed = (action: RoomAction) => ctx.can(action);
   const isReport = room.kind === "report";
 
   const [panel, setPanel] = useState<Panel>(null);
@@ -127,7 +127,9 @@ export function RoomHeaderActions({ ctx }: { ctx: RoomSlotContext }) {
   if (allowed("archive") && !room.archived) {
     menuItems.push({ id: "archive", label: "Archive", icon: Archive, onSelect: () => setPanel("archive") });
   }
-  if (room.archived && ctx.can("reassign")) {
+  // Restoring is an admin's, and it is the one thing done TO an archived
+  // room that the archived rule does not list: asked of the access level.
+  if (room.archived && ctx.access === "admin") {
     menuItems.push({
       id: "unarchive",
       label: "Restore",

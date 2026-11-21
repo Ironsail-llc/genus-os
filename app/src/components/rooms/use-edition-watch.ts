@@ -8,6 +8,7 @@ import type { Edition } from "@/lib/rooms/types";
 
 const POLL_MS = 4_000;
 const MAX_FAILED_READS = 5;
+const LIST_POLL_MS = 4_000;
 
 /**
  * One edition being built, read again every few seconds until it is
@@ -76,6 +77,16 @@ export function useEditionArrival(
     shownFor.current = request.key;
     showEdition(arrived);
   }, [request, arrived, showEdition]);
+
+  // No edition named (the run did not say which): nothing to poll by id, so
+  // the room's editions are read again until a newer one arrives. This
+  // covers a stream that is down, where no `room.edition` event will come.
+  const waitingUnnamed = Boolean(request) && !request?.id && !arrived;
+  useEffect(() => {
+    if (!waitingUnnamed) return;
+    const timer = setInterval(refresh, LIST_POLL_MS);
+    return () => clearInterval(timer);
+  }, [waitingUnnamed, refresh]);
 
   const refreshedFor = useRef<number | null>(null);
   useEffect(() => {

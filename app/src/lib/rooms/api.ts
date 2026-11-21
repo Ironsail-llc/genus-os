@@ -266,25 +266,24 @@ export async function fetchAllRooms(signal?: AbortSignal): Promise<AdminRoomRow[
 export interface Person {
   userId: string;
   displayName: string;
-  email: string | null;
 }
 
-export const PEOPLE_ENDPOINT = "/api/bridge/api/users";
+export const PEOPLE_ENDPOINT = `${ROOMS_ENDPOINT}/directory`;
 
 /**
- * The company's active accounts, to share with or reassign to. The bridge
- * lets owners and admins read this list; anyone else gets a refusal, which
- * is thrown, not shown as "nobody".
+ * The company's people, to share with or reassign to: the workspace
+ * directory (`GET /api/rooms/directory` -> `{users: [{userId, displayName}]}`),
+ * which any member may read. A refusal is thrown, not shown as "nobody".
  */
 export async function fetchPeople(signal?: AbortSignal): Promise<Person[]> {
   const data = await getJson<{ users?: unknown }>(PEOPLE_ENDPOINT, signal);
   const rows = Array.isArray(data?.users) ? (data.users as Record<string, unknown>[]) : [];
   return rows
-    .filter((u) => u && typeof u.id === "string" && (u.status === undefined || u.status === "active"))
+    .filter((u) => u && typeof u.userId === "string" && u.userId)
     .map((u) => {
-      const email = typeof u.email === "string" && u.email ? u.email : null;
-      const name = typeof u.display_name === "string" && u.display_name.trim() ? u.display_name.trim() : null;
-      return { userId: u.id as string, displayName: name ?? email ?? (u.id as string), email };
+      const id = u.userId as string;
+      const name = typeof u.displayName === "string" && u.displayName.trim() ? u.displayName.trim() : id;
+      return { userId: id, displayName: name };
     });
 }
 

@@ -196,9 +196,10 @@ describe("settings drawer: an assigned user", () => {
     const conflict = screen.getByTestId("settings-conflict");
     expect(conflict).toHaveTextContent(/changed since you opened/i);
     expect(screen.getByTestId("settings-save")).toBeDisabled();
-    // Reload takes the newer revision into the form.
+    // Reload reads the room afresh and takes that revision into the form.
+    bridge.on("GET", `/rooms/${REPORT_ID}`, newer);
     fireEvent.click(within(conflict).getByRole("button", { name: /reload/i }));
-    expect(field(/^title/i).value).toBe("Changed by Dana");
+    await waitFor(() => expect(field(/^title/i).value).toBe("Changed by Dana"));
     expect(screen.queryByTestId("settings-conflict")).toBeNull();
     expect(bridge.calls("PATCH", `/rooms/${REPORT_ID}`)).toHaveLength(0);
   });

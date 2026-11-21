@@ -8,7 +8,8 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { RevisionHistory } from "@/components/rooms/revision-history";
 import type { RoomAction } from "@/lib/rooms/access";
-import { RoomRequestError, patchRoom, type DefinitionChanges } from "@/lib/rooms/api";
+import { RoomRequestError, fetchRoom, patchRoom, type DefinitionChanges } from "@/lib/rooms/api";
+import { FetchRefused } from "@/lib/query/fetch-refused";
 import { formatWhen } from "@/lib/rooms/format";
 import { ROOM_LABEL } from "@/lib/rooms/labels";
 import type { Room } from "@/lib/rooms/types";
@@ -86,18 +87,32 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  // A newer revision of the room (after a save, a reload, a restore) resets
-  // the form to it. Read at render, not in an effect, so the fields never
-  // show the old revision for a frame.
-  const [readAt, setReadAt] = useState({ id: room.id, rev: room.rev, paused: room.paused });
-  if (readAt.id !== room.id || readAt.rev !== room.rev || readAt.paused !== room.paused) {
-    setReadAt({ id: room.id, rev: room.rev, paused: room.paused });
-    setForm(formOf(room));
+  // The room the form was read from. Its revision is what a save is checked
+  // against, so a form opened on revision 3 can never overwrite revision 4.
+  const [readFrom, setReadFrom] = useState<Room>(room);
+    const takeRoom = (next: Room) => {
+    setReadFrom(next);
+    setForm(formOf(next));
     setErrors({});
     setConflict(false);
+  };
+  // A newer revision arrives (an event after anyone's save, a restore). An
+  // untouched form takes it; a form with unsaved edits keeps them and says
+  // the definition changed. This user's own save and a reload take the
+  // revision they get back directly, so they never race their own typing.
+  // Decided at render, not in an effect, so the fields never show a stale
+  // revision for a frame.
+  const changedUnder = readFrom.id !== room.id || readFrom.rev !== room.rev || readFrom.paused !== room.paused;
+  if (changedUnder) {
+    const untouched = JSON.stringify(form) === JSON.stringify(formOf(readFrom));
+    if (untouched || readFrom.id !== room.id) {
+      takeRoom(room);
+    } else if (!conflict) {
+      setConflict(true);
+    }
   }
 
-  const base = useMemo(() => formOf(room), [room]);
+  const base = useMemo(() => formOf(readFrom), [readFrom]);
   const changes = useMemo(() => {
     const out: DefinitionChanges = {};
     if (form.title !== base.title) out.title = form.title.trim();
@@ -128,7 +143,8 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
     setSaving(true);
     setSaved(false);
     try {
-      await patchRoom(room.id, room.rev, toSend);
+      const savedRoom = await patchRoom(room.id, readFrom.rev, toSend);
+      if (savedRoom && savedRoom.id === room.id && typeof savedRoom.rev === "number") takeRoom(savedRoom);
       setSaved(true);
       onSaved();
     } catch (err) {
@@ -144,6 +160,17 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
     } finally {
       setSaving(false);
     }
+  };
+
+  /** Reads the room afresh and takes that revision into the form. */
+  const reload = async () => {
+    try {
+      takeRoom(await fetchRoom(room.id));
+    } catch (err) {
+      const status = err instanceof FetchRefused ? err.status : 0;
+      setErrors({ form: status ? `Could not reload: the server answered ${status}.` : "Could not reload: no answer from the server." });
+    }
+    onSaved();
   };
 
   const onSubmit = () => {
@@ -237,7 +264,13 @@ export function RoomSettingsDrawer({ room, can, open, onOpenChange, onSaved, onD
                 <p className="mt-1 text-xs text-muted-foreground">
                   Reload to see their version, then make your change again.
                 </p>
-                <Button type="button" variant="outline" size="sm" className="mt-2" onClick={onSaved}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => void reload()}
+                >
                   Reload
                 </Button>
               </div>
