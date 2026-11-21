@@ -133,6 +133,16 @@ describe("a workspace's history", () => {
     expect(answer.authorUserId).toBeUndefined();
   });
 
+  it("draws an email receipt turn as the engine writes it (E3)", async () => {
+    engineAnswers({ history: "history" });
+    const { history } = await routes();
+    const page = await (await history(historyRequest())).json();
+    const messages = historyToMessages(page.messages);
+    const receipt = messages.find((m) => m.receipt);
+    expect(receipt?.receipt).toMatchObject({ status: "sent", subject: "Checking in", to: ["carol.client@example.org"] });
+    expect(receipt?.content).toMatch(/Email sent from assistant@example.com/);
+  });
+
   it("is 404 JSON when the caller cannot see the workspace", async () => {
     engineAnswers({ history: "history_not_found" });
     const { history } = await routes();

@@ -105,6 +105,41 @@ def _record(response: Any) -> dict[str, Any]:
     return {"status": response.status_code, "body": body}
 
 
+def _email_receipt(s: Any) -> None:
+    """A sent email's receipt turn, written as the engine writes one
+    (``robothor.rooms.outbound``: its receipt, its words, as message extras)."""
+    from robothor.engine import chat_store
+    from robothor.rooms import outbound
+
+    row = {
+        "id": "9f9f9f9f-0000-4000-8000-000000000001",
+        "status": "completed",
+        "receipt": {"sent_at": "2026-11-21T10:00:02+00:00", "id": "msg-1"},
+        "expires_at": datetime(2999, 1, 1, tzinfo=UTC),
+        "decided_by": f"user:{s.db.bob}",
+        "decided_at": datetime(2026, 11, 21, 10, 0, tzinfo=UTC),
+        "payload": {
+            "sender": "assistant@example.com",
+            "reply_to": "bob@example.com",
+            "recipient": ["carol.client@example.org"],
+            "cc": [],
+            "subject": "Checking in",
+            "room_id": s.room.id,
+            "task_id": None,
+        },
+    }
+    receipt = outbound._receipt(s.db.tenant, row, None)
+    assert receipt is not None
+    chat_store.save_message(
+        s.room.session_key,
+        "assistant",
+        outbound._text(receipt),
+        channel="webchat",
+        tenant_id=s.db.tenant,
+        extras={"kind": "room_email_receipt", "receipt": receipt},
+    )
+
+
 async def _chat(s: Any, replies: dict[str, Any]) -> None:
     rid = s.room.id
     s.runner.execute = AsyncMock(return_value=_run("Sales were 1,200."))
@@ -114,12 +149,16 @@ async def _chat(s: Any, replies: dict[str, Any]) -> None:
     assert sent.text.startswith("event: room\n")
     replies["send_stream"] = {"status": sent.status_code, "body": sent.text}
 
+    _email_receipt(s)
+
     with _as(s.db, s.db.bob):
         history = await s.client.get(f"/chat/history?room_id={rid}")
     replies["history"] = _record(history)
     page = history.json()
     assert page["roomId"] == rid and "sessionKey" not in page
     assert page["messages"][0]["authorName"] == "Alice"
+    receipt = page["messages"][-1]
+    assert receipt["kind"] == "room_email_receipt" and receipt["receipt"]["status"] == "sent"
 
     entered, release = asyncio.Event(), asyncio.Event()
 

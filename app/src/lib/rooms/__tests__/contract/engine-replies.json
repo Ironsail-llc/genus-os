@@ -18,9 +18,41 @@
           "id": "<n>",
           "role": "assistant",
           "timestamp": "<time>"
+        },
+        {
+          "content": "Email sent from assistant@example.com to carol.client@example.org, subject \"Checking in\", at <time>, approved by someone. Replies go to bob@example.com. Provider message id msg-1.",
+          "id": "<n>",
+          "kind": "room_email_receipt",
+          "receipt": {
+            "action_id": "id-2",
+            "approved_by": {
+              "display_name": "",
+              "user_id": "u-bob"
+            },
+            "cc": [],
+            "decided_at": "<time>",
+            "decided_by": {
+              "display_name": "",
+              "user_id": "u-bob"
+            },
+            "error": null,
+            "from": "assistant@example.com",
+            "message_id": "msg-1",
+            "reply_to": "bob@example.com",
+            "room_id": "room-report",
+            "sent_at": "<time>",
+            "status": "sent",
+            "subject": "Checking in",
+            "task_id": null,
+            "to": [
+              "carol.client@example.org"
+            ]
+          },
+          "role": "assistant",
+          "timestamp": "<time>"
         }
       ],
-      "recoveryScope": "id-2",
+      "recoveryScope": "id-3",
       "roomId": "room-report"
     },
     "status": 200
@@ -52,6 +84,38 @@
           "timestamp": "<time>"
         },
         {
+          "content": "Email sent from assistant@example.com to carol.client@example.org, subject \"Checking in\", at <time>, approved by someone. Replies go to bob@example.com. Provider message id msg-1.",
+          "id": "<n>",
+          "kind": "room_email_receipt",
+          "receipt": {
+            "action_id": "id-2",
+            "approved_by": {
+              "display_name": "",
+              "user_id": "u-bob"
+            },
+            "cc": [],
+            "decided_at": "<time>",
+            "decided_by": {
+              "display_name": "",
+              "user_id": "u-bob"
+            },
+            "error": null,
+            "from": "assistant@example.com",
+            "message_id": "msg-1",
+            "reply_to": "bob@example.com",
+            "room_id": "room-report",
+            "sent_at": "<time>",
+            "status": "sent",
+            "subject": "Checking in",
+            "task_id": null,
+            "to": [
+              "carol.client@example.org"
+            ]
+          },
+          "role": "assistant",
+          "timestamp": "<time>"
+        },
+        {
           "authorName": "Bob",
           "authorUserId": "u-bob",
           "author_display_name": "Bob",
@@ -68,7 +132,7 @@
           "timestamp": "<time>"
         }
       ],
-      "recoveryScope": "id-3",
+      "recoveryScope": "id-4",
       "roomId": "room-report"
     },
     "status": 200
@@ -86,7 +150,7 @@
       "createdAt": "<time>",
       "error": null,
       "grain": "week",
-      "id": "id-4",
+      "id": "id-5",
       "kind": "edition",
       "periodEnd": "2026-11-08",
       "periodStart": "2026-11-02",
@@ -125,7 +189,7 @@
       "createdAt": "<time>",
       "error": null,
       "grain": "week",
-      "id": "id-5",
+      "id": "id-6",
       "kind": "edition",
       "periodEnd": "2026-11-01",
       "periodStart": "2026-10-26",
