@@ -31,6 +31,13 @@ const ALLOWED: Record<Access, ReadonlySet<RoomAction>> = {
   admin: new Set(ADMIN),
 };
 
-export function can(access: Access, action: RoomAction): boolean {
+/**
+ * What an archived room still allows, to whoever holds the action anyway
+ * (`robothor/rooms/access.py` `ARCHIVED_ACTIONS`).
+ */
+const ARCHIVED_ACTIONS: ReadonlySet<RoomAction> = new Set(["read", "archive", "duplicate", "list_all"]);
+
+export function can(access: Access, action: RoomAction, archived = false): boolean {
+  if (archived && !ARCHIVED_ACTIONS.has(action)) return false;
   return Object.hasOwn(ALLOWED, access) ? ALLOWED[access].has(action) : false;
 }

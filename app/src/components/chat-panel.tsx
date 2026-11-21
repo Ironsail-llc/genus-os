@@ -89,14 +89,19 @@ export const ROOM_BUSY_RETRY_MS = 4000;
  * In memory, per tab, like every other pending follow-up.
  */
 const parkedRoomQueues = new Map<string, { texts: string[]; answering: string }>();
-const READ_ONLY_NOTICE = "You have view-only access to this workspace, so you can read it but not post.";
+const READ_ONLY_NOTICES = {
+  viewer: "You have view-only access to this workspace, so you can read it but not post.",
+  archived: "This workspace is archived, so it can be read but not posted in.",
+} as const;
 
 /** Which room the panel is pointed at, when it is not the main conversation. */
 export interface ChatRoomTarget {
   /** The room's id: sent as `room` on every request, never as a session key. */
   id: string;
-  /** The user may read but not post (a viewer): the composer is shut, and says why. */
+  /** The user may read but not post: the composer is shut, and says why. */
   readOnly?: boolean;
+  /** Why it is read-only: view-only access (the default), or an archived room. */
+  readOnlyReason?: "viewer" | "archived";
   /**
    * Bumped by the room view on each live `room.message` / `room.edition`
    * event: the panel reads the room's newest messages again (and offers a
@@ -1820,7 +1825,7 @@ export function ChatPanel({
         <PendingAttachments files={attachments.files} refusal={attachments.refusal} onRemove={attachments.remove} />
         {roomReadOnly && (
           <p id="room-readonly-notice" className="text-xs text-muted-foreground" data-testid="room-readonly-notice">
-            {READ_ONLY_NOTICE}
+            {READ_ONLY_NOTICES[room?.readOnlyReason === "archived" ? "archived" : "viewer"]}
           </p>
         )}
         {roomBusy !== null && (

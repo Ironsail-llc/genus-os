@@ -144,10 +144,13 @@ export function RoomView({ roomId, onLeave, markRead, slots = DEFAULT_ROOM_SLOTS
   // A missing access level is read as the least one: the composer stays shut
   // rather than offering a post the engine would refuse.
   const access: Access = room.access ?? "viewer";
+  const archived = room.archived === true;
+  const canPost = can(access, "post", archived);
   const ctx: RoomSlotContext = {
     room,
     access,
-    can: (action: RoomAction) => can(access, action),
+    // The room's archived flag is bound here: `ctx.can(action)` keeps its shape.
+    can: (action: RoomAction) => can(access, action, archived),
     edition: shown,
     editions: published,
     showEdition: (edition) => setPickedId(edition.id === latest?.id ? null : edition.id),
@@ -210,7 +213,12 @@ export function RoomView({ roomId, onLeave, markRead, slots = DEFAULT_ROOM_SLOTS
           <div className={`h-full ${showPane ? "" : "mx-auto w-full max-w-5xl"}`}>
             <ChatPanel
               variant="dock"
-              room={{ id: room.id, readOnly: !can(access, "post"), refreshKey: chatRefresh }}
+              room={{
+                id: room.id,
+                readOnly: !canPost,
+                ...(!canPost ? { readOnlyReason: archived ? ("archived" as const) : ("viewer" as const) } : {}),
+                refreshKey: chatRefresh,
+              }}
             />
           </div>
         </div>
