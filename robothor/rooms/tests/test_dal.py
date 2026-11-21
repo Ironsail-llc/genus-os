@@ -17,10 +17,10 @@ from typing import Any
 
 import psycopg2
 import pytest
-from robothor.rooms.access import room_session_key
-from robothor.rooms.errors import InvalidBlocks, RevisionConflict, RoomNotFound
 
 from robothor.rooms import dal
+from robothor.rooms.access import room_session_key
+from robothor.rooms.errors import InvalidBlocks, RevisionConflict, RoomNotFound
 from robothor.rooms.tests.conftest import committed_connection
 
 pytestmark = pytest.mark.integration

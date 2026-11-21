@@ -625,13 +625,21 @@ def load_plan_state(
 
 
 def cleanup_stale_sessions(ttl_days: int = 7) -> int:
-    """Delete sessions older than TTL. Returns number of sessions deleted."""
+    """Delete sessions idle longer than the TTL. Returns how many were deleted.
+
+    A session that backs a room (a shared thread, ``robothor.rooms``) is never
+    deleted: the thread is company-owned and people come back to it.
+    """
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
             """
-            DELETE FROM chat_sessions
-            WHERE last_active_at < NOW() - INTERVAL '%s days'
+            DELETE FROM chat_sessions s
+            WHERE s.last_active_at < NOW() - INTERVAL '%s days'
+              AND NOT EXISTS (
+                  SELECT 1 FROM rooms r
+                  WHERE r.tenant_id = s.tenant_id AND r.session_key = s.session_key
+              )
             """,
             (ttl_days,),
         )

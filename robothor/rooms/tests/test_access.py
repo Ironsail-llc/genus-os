@@ -13,6 +13,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+from robothor.rooms import access
 from robothor.rooms.access import (
     ACTIONS,
     Actor,
@@ -32,8 +34,6 @@ from robothor.rooms.errors import (
     RoomNotFound,
 )
 from robothor.rooms.models import Room, RoomMember
-
-from robothor.rooms import access
 
 TENANT = "test-tenant"
 OTHER_TENANT = "test-tenant-other"

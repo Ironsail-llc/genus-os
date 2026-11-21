@@ -53,11 +53,12 @@ __all__ = [
 ]
 
 # The predicates below run inside ``WHERE tenant_id = <source> AND (...)``.
-# They read three temporary tables the move fills first (see ``_select``):
+# They read four temporary tables the move fills first (see ``_select``):
 _RUNS = "(SELECT id FROM _mw_runs)"
 _RUN_TEXT = "(SELECT id::text FROM _mw_runs)"
 _WF_RUNS = "(SELECT id FROM _mw_wf_runs)"
 _SESSION_KEYS = "(SELECT session_key FROM _mw_sessions)"
+_ROOMS = "(SELECT id FROM _mw_rooms)"
 _AGENT = "agent_id = ANY(%(agents)s::text[])"
 # ``agent_schedules.agent_id`` is a JOB id: ``<agent>``, or ``<agent>:<kind>`` for
 # the agent's heartbeat, worker and ambient jobs. Every one of them is the agent's.
@@ -88,6 +89,14 @@ MOVED_TABLES: dict[str, str] = {
     # MAIN's session with the workload's run as author; that row belongs to
     # main's conversation, which stays (``author_run_id`` has no foreign key).
     "channel_message_map": f"session_key IN {_SESSION_KEYS}",
+    # A room's conversation is a session keyed ``agent:{agent}:room:{id}``,
+    # which moves with the agent above; the room, its members, revisions and
+    # editions move with it. Members are user ids with no foreign key: a member
+    # who stays in the source tenant simply has no access in the target.
+    "rooms": f"id IN {_ROOMS}",
+    "room_members": f"room_id IN {_ROOMS}",
+    "room_revisions": f"room_id IN {_ROOMS}",
+    "room_editions": f"room_id IN {_ROOMS}",
 }
 
 #: Untenanted child table -> (the moved table it hangs off, its key column).
@@ -121,6 +130,11 @@ REFUSED_IF_PRESENT: dict[str, tuple[str, str]] = {
         f"{_AGENT} AND state IN ('awaiting_external_action', 'checking')",
         "a pending autonomy handoff is resolved by the source tenant's engine; "
         "resolve or expire it first",
+    ),
+    "room_tasks": (
+        f"room_id IN {_ROOMS}",
+        "a room of the workload is linked to CRM tasks, which stay in the source "
+        "tenant's CRM; unlink them (or archive and duplicate the room) first",
     ),
 }
 
@@ -205,6 +219,8 @@ UNTOUCHED_TABLES: dict[str, str] = {
     "n8n_executions": "the n8n mirror, keyed by the n8n instance's own workflow ids",
     "n8n_sync_state": "the n8n mirror, keyed by the n8n instance's own workflow ids",
     "n8n_workflows": "the n8n mirror, keyed by the n8n instance's own workflow ids",
+    # ``room_id`` / ``proposed_for_user_id`` (migration 169) are attribution on
+    # the tenant's ledger row, not ownership: the row stays with the ledger.
     "operation_actions": _OPERATIONS,
     "operation_audit": _OPERATIONS,
     "operation_budgets": _OPERATIONS,
@@ -385,8 +401,9 @@ def _select(cur: Any, params: dict[str, Any]) -> None:
     and every run descended from either (sub-agent runs travel with their
     parent). Sessions: ``agent:<id>:…`` keys of the named agents, matched by
     segment, never by LIKE (an underscore in an agent id is a wildcard there).
+    Rooms: the named agents' rooms, whose sessions are among those.
     """
-    for name in ("_mw_runs", "_mw_wf_runs", "_mw_sessions"):
+    for name in ("_mw_runs", "_mw_wf_runs", "_mw_sessions", "_mw_rooms"):
         cur.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(name)))
     cur.execute(
         """CREATE TEMP TABLE _mw_wf_runs ON COMMIT DROP AS
@@ -417,6 +434,13 @@ def _select(cur: Any, params: dict[str, Any]) -> None:
            WHERE tenant_id = %(source)s
              AND split_part(session_key, ':', 1) = 'agent'
              AND split_part(session_key, ':', 2) = ANY(%(agents)s::text[])""",
+        params,
+    )
+    # Rooms of the named agents: their session keys are among the sessions above.
+    cur.execute(
+        """CREATE TEMP TABLE _mw_rooms ON COMMIT DROP AS
+           SELECT id FROM rooms
+           WHERE tenant_id = %(source)s AND agent_id = ANY(%(agents)s::text[])""",
         params,
     )
 

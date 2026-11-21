@@ -68,6 +68,10 @@ def rooms_db(monkeypatch) -> Iterator[SimpleNamespace]:
     conn = connect_test_db()
     conn.autocommit = True
     cur = conn.cursor()
+    for tid in (tenant, other):
+        cur.execute(
+            "INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s)", (tid, "Test tenant")
+        )
     try:
         yield SimpleNamespace(
             tenant=tenant,
@@ -90,4 +94,5 @@ def rooms_db(monkeypatch) -> Iterator[SimpleNamespace]:
                     f"DELETE FROM {table} WHERE tenant_id = ANY(%s)",  # noqa: S608
                     (list(tenants),),
                 )
+        cur.execute("DELETE FROM crm_tenants WHERE id = ANY(%s)", (list(tenants),))
         conn.close()

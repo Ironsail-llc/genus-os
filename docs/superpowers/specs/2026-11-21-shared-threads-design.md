@@ -105,9 +105,9 @@ access.py
   Actor(user_id, role, tenant_id, is_service=False)
   Access = 'none' | 'viewer' | 'shared' | 'assigned' | 'admin'
   room_access(actor, room, member_row) -> Access           # pure, table-tested
-  can(access, action) -> bool                               # action in ACTIONS below
+  can(access, action, *, archived=False) -> bool            # archived: read, archive, duplicate, list_all only
   require(actor, room_id, action) -> Room                   # raises RoomNotFound | RoomForbidden
-  resolve_room_key(auth, session_key) -> str | None         # None when not a room key
+  resolve_room_key(auth, session_key, *, action='read') -> str | None   # None when not a room key
 ACTIONS: read, post, run, request_period, accept_task, edit_definition, share,
          archive, restore_revision, duplicate, reassign, list_all
   viewer:   read
@@ -115,6 +115,7 @@ ACTIONS: read, post, run, request_period, accept_task, edit_definition, share,
   assigned: shared + edit_definition, share, archive, restore_revision
   admin:    assigned + reassign, list_all
   A tenant role of viewer caps any membership at 'viewer'.
+  A service identity, another tenant, or any other role gets 'none'.
 dal.py
   create_room(...) -> Room            get_room(tenant_id, room_id) -> Room | None
   list_rooms_for_user(tenant_id, user_id, *, include_archived=False) -> list[RoomSummary]   # with unread
@@ -134,6 +135,32 @@ fanout.py
 ```
 
 Errors: `RoomNotFound`, `RoomForbidden`, `RevisionConflict`, `RoomBusy`, `InvalidBlocks`.
+
+#### As built (lane 1)
+
+Exact signatures are in `robothor/rooms/dal.py` and `access.py`. Points later lanes
+rely on:
+
+- `create_edition(...) -> tuple[Edition, bool]`: `created` is False when a non-preview
+  request named a grain and period that is already building; callers start a run only
+  when it is True. `period_start`/`period_end` are `DATE`.
+- `get_edition` and `list_editions` take a required keyword `viewer_id`: a preview is
+  returned only to its requester; `viewer_id=None` sees no previews.
+- `accept_task` / `dismiss_task` return None when the link is missing or already
+  decided (a task is decided once). `publish_edition` / `fail_edition` return None
+  unless the edition is `building`.
+- `update_definition` accepts `title`, `instructions`, `settings` (merged; `None` removes
+  a key) and `schedule` (stored as `settings.schedule_text`). `agent_id` is fixed at
+  creation (it is part of the session key); duplicate the room to change agent.
+- `get_member(tenant_id, room_id, user_id)` exists for `require`. The session-key
+  helpers live in `robothor/rooms/keys.py` and are re-exported from `access`.
+- Unread = messages after the member's message mark + published non-preview editions
+  after their edition mark that carry no `chat_message_id`.
+- Child tables reference `rooms(id)` by a single-column key (`rooms.id` is also
+  unique): `move-workload` re-tenants rows in place and refuses composite keys.
+  A workload move carries an agent's rooms, members, revisions and editions; a room
+  with `room_tasks` rows refuses the move. An account move does not carry room
+  memberships (rooms belong to the tenant); it removes them.
 
 ### Edition blocks
 

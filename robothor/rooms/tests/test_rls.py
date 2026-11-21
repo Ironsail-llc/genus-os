@@ -13,9 +13,9 @@ from typing import Any
 
 import psycopg2
 import pytest
-from robothor.rooms.access import room_session_key
 
 from robothor.rooms import dal
+from robothor.rooms.access import room_session_key
 from tests.rls_app_role import app_role, rls_tenants  # noqa: F401 - pytest fixtures
 
 pytestmark = pytest.mark.integration
