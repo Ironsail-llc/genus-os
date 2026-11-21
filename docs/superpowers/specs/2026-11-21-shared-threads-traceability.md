@@ -121,11 +121,14 @@ I6 (43).
 Partly covered: A1, A2, A3, A4, B1, C4, C5, E2, E7, F1, F2, G6, H1, I3, I5 (15).
 Not covered: none.
 
-The real-stack suite (`app/playwright.stack.config.ts`, against `scripts/dev/rooms-stack.sh`)
-ran green on 2026-11-21: 31 tests, with two steps failing as marked, each an open product
-question for the coordinator: 7c (leaving a workspace mid-answer cancels that turn, so the
-answer is lost for everyone) and 10a (nothing completes a task when its email is sent).
-Steps 16 and 17 prove C7 on the real stack: muting, and in-app off, stop the note.
+The real-stack suite (`app/playwright.stack.config.ts`, against `scripts/dev/rooms-stack.sh`,
+with unattended prompts screened in enforce mode) ran green on 2026-11-21: 37 tests, 36
+passed and step 7c failing as marked, an open product question for the coordinator
+(leaving a workspace mid-answer cancels that turn, so the answer is lost for everyone).
+Steps 16 and 17 prove C7: muting, and in-app off, stop the note. Step 15b proves that a
+scheduled run publishes, and the workspace stays unpaused, when a member wrote something
+that reads like an instruction. The F1 step found that a member's "New workspace" dialog
+offered no agent (it read the fleet's health list); it now reads `GET /api/rooms/agents`.
 
 ## Withdrawn by the no-limits decision
 
