@@ -1428,6 +1428,23 @@ async def _bootstrap_owner_links() -> None:
         logger.exception("bootstrap_owner_person_links failed (non-fatal)")
 
 
+async def _reap_room_editions(config: Any) -> None:
+    """Fail the workspace editions left ``building`` by runs that are gone, after
+    the stale runs are reaped (their rows decide). Frees the periods they held."""
+    from robothor.rooms import recovery
+
+    boot = datetime.fromisoformat(_DAEMON_START_TS) if _DAEMON_START_TS else None
+    try:
+        reaped = await asyncio.to_thread(
+            recovery.reap_stale_editions, config.tenant_id, booted_at=boot
+        )
+    except Exception as e:  # noqa: BLE001 - startup goes on; the lazy per-room reap remains
+        logger.warning("Startup: workspace edition recovery failed: %s", _sanitize(e))
+        return
+    if reaped:
+        logger.info("Startup: failed %d workspace editions left building", len(reaped))
+
+
 async def _recover_interrupted_work(runner: Any, config: Any) -> None:
     """Resume interrupted runs, reap what is left, then recover repairs.
 
@@ -1448,6 +1465,7 @@ async def _recover_interrupted_work(runner: Any, config: Any) -> None:
     cleaned = await asyncio.to_thread(_cleanup_stale_runs, config.tenant_id)
     if cleaned:
         logger.info("Startup: cleaned %d stale agent runs", cleaned)
+    await _reap_room_editions(config)
 
     from robothor.engine.repair_recovery import recover as recover_repairs
 

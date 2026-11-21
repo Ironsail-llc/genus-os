@@ -56,6 +56,7 @@ __all__ = [
     "run_as_actor",
     "share_room",
     "unarchive_room",
+    "sync_room_schedule",
     "unshare_room",
 ]
 
@@ -305,6 +306,13 @@ def _sync_schedule(room: Room) -> dict[str, Any] | None:
         run_as_user_id=room.run_as_user_id,
         enabled=not room.paused and not room.archived,
     )
+
+
+def sync_room_schedule(room: Room) -> dict[str, Any] | None:
+    """Make the room's schedule row match ``room`` as it now stands (paused,
+    archived or running). For a caller outside the definition rules, such as
+    a run that pauses its room."""
+    return _sync_schedule(room)
 
 
 def room_schedule(tenant_id: str, room_id: str) -> dict[str, Any] | None:

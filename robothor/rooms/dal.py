@@ -57,6 +57,7 @@ __all__ = [
     "list_all_rooms",
     "list_directory",
     "list_editions",
+    "list_building_editions",
     "list_editions_in_period",
     "list_members",
     "list_revisions",
@@ -69,10 +70,12 @@ __all__ = [
     "reassign_room",
     "recent_messages",
     "record_activity",
+    "record_run_result",
     "remove_member",
     "restore_revision",
     "room_summary",
     "set_assigned",
+    "set_edition_run",
     "set_notify",
     "set_paused",
     "set_run_as",
@@ -677,6 +680,27 @@ def set_run_as(tenant_id: str, room_id: str, user_id: str) -> Room:
     )
 
 
+def record_run_result(tenant_id: str, room_id: str, *, ok: bool) -> Room:
+    """Count a run's outcome: a failure adds one to ``consecutive_failures``,
+    a success resets it to 0. Returns the room as it now stands."""
+    canonical = canonical_uuid(room_id)
+    row = None
+    if canonical is not None:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                "UPDATE rooms SET consecutive_failures = CASE WHEN %s THEN 0 "
+                "ELSE consecutive_failures + 1 END, updated_at = now() "
+                "WHERE tenant_id = %s AND id = %s RETURNING *",
+                (bool(ok), tenant_id, canonical),
+            )
+            row = cur.fetchone()
+            conn.commit()
+    if row is None:
+        raise RoomNotFound(room_id)
+    return _room(row)
+
+
 def _text(content: Any) -> str:
     """A chat message's text: a string, or the text parts of a content list."""
     if isinstance(content, str):
@@ -1022,6 +1046,25 @@ def publish_edition(
         return edition
 
 
+def set_edition_run(tenant_id: str, edition_id: str, run_id: str) -> bool:
+    """Record the ``agent_runs`` id building a ``building`` edition, so whether
+    the edition is alive can be read from that run's row
+    (``robothor.rooms.recovery``). False when there is no such building edition."""
+    canonical = canonical_uuid(edition_id)
+    if canonical is None or not run_id:
+        return False
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE room_editions SET run_id = %s, updated_at = now() "
+            "WHERE tenant_id = %s AND id = %s AND status = 'building'",
+            (str(run_id), tenant_id, canonical),
+        )
+        changed = bool(cur.rowcount)
+        conn.commit()
+        return changed
+
+
 def fail_edition(tenant_id: str, edition_id: str, error: str) -> Edition | None:
     """Mark a ``building`` edition failed. None when there is no such edition."""
     canonical = canonical_uuid(edition_id)
@@ -1130,20 +1173,51 @@ def list_editions_in_period(
         return [_edition(r) for r in cur.fetchall()]
 
 
-def count_requested_editions(tenant_id: str, room_id: str, *, since: datetime) -> int:
-    """Editions a person asked for (``requested_by`` set, previews included)
-    created at or after ``since``: the on-demand runs a daily cap counts."""
+def count_requested_editions(
+    tenant_id: str, room_id: str, *, since: datetime, requested_by: str | None
+) -> int:
+    """Editions ``requested_by`` asked for in the room (previews included)
+    created at or after ``since``: the on-demand runs a person's daily cap
+    counts. ``requested_by`` None counts every person's."""
     room = canonical_uuid(room_id)
     if room is None:
         return 0
     with get_connection(read_only=True) as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT COUNT(*) FROM room_editions WHERE tenant_id = %s AND room_id = %s "
-            "AND requested_by IS NOT NULL AND created_at >= %s",
-            (tenant_id, room, since),
+            "SELECT COUNT(*) FROM room_editions WHERE tenant_id = %(tenant)s "
+            "AND room_id = %(room)s AND requested_by IS NOT NULL AND created_at >= %(since)s "
+            "AND (%(person)s::uuid IS NULL OR requested_by = %(person)s::uuid)",
+            {
+                "tenant": tenant_id,
+                "room": room,
+                "since": since,
+                "person": canonical_uuid(requested_by),
+            },
         )
         return int(cur.fetchone()[0])
+
+
+def list_building_editions(
+    tenant_id: str, *, room_id: str | None = None
+) -> list[tuple[Edition, str | None]]:
+    """Every ``building`` edition of the tenant (or of one room), each with the
+    status of the ``agent_runs`` row its ``run_id`` names (None when it names
+    none, or none exists), oldest first."""
+    room = canonical_uuid(room_id) if room_id is not None else None
+    if room_id is not None and room is None:
+        return []
+    with get_connection(read_only=True) as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT e.*, ar.status AS run_status FROM room_editions e "
+            "LEFT JOIN agent_runs ar ON ar.id::text = e.run_id AND ar.tenant_id = e.tenant_id "
+            "WHERE e.tenant_id = %(tenant)s AND e.status = 'building' "
+            "AND (%(room)s::uuid IS NULL OR e.room_id = %(room)s::uuid) "
+            "ORDER BY e.created_at, e.id",
+            {"tenant": tenant_id, "room": room},
+        )
+        return [(_edition(r), r["run_status"]) for r in cur.fetchall()]
 
 
 # ─── tasks ───────────────────────────────────────────────────────────────

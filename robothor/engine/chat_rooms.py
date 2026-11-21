@@ -28,6 +28,7 @@ what they ask first.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -156,6 +157,19 @@ async def resolve(
     return ChatTarget(chat._effective_session_key(auth, key))
 
 
+def room_scope(target: ChatTarget) -> contextlib.AbstractContextManager[Any]:
+    """Bind the room a turn is in (``robothor.rooms.run_context``) for the
+    runner and the save of its reply, so ``room_publish_edition`` works in an
+    interactive workspace turn and the reply carries what it published. An
+    ordinary session binds nothing."""
+    room = target.room
+    if room is None:
+        return contextlib.nullcontext()
+    from robothor.rooms.run_context import RoomRun, room_run_scope
+
+    return room_run_scope(RoomRun.for_session(room.tenant_id, room.session_key))
+
+
 def busy(target: ChatTarget) -> JSONResponse | None:
     """409 ``room_busy`` naming who is being answered, when a turn holds the room."""
     room = target.room
@@ -187,7 +201,8 @@ async def start_turn(
         lock.release()
 
     try:
-        task = launch()
+        with room_scope(target):  # the turn's task copies the bound room
+            task = launch()
     except BaseException:
         release()
         raise
@@ -229,6 +244,34 @@ async def saved(target: ChatTarget, saving: Awaitable[list[int] | None]) -> None
         await asyncio.to_thread(_publish, room, ids[-1])
     except Exception as exc:  # noqa: BLE001 - the exchange is saved; the mark can lag
         logger.warning("room activity not recorded: %s", sanitize_log(str(exc)))
+
+
+async def stop_room_run(auth: Any, target: ChatTarget) -> JSONResponse | None:
+    """Abort the room's own run (scheduled, run now, preview), when one holds
+    the room; None when none does, so the caller stops a chat turn as usual.
+
+    The caller already holds ``post``. A SCHEDULED run is the room's, not
+    anyone's turn: only an assigned member or an admin (``edit_definition``)
+    may stop it."""
+    room = target.room
+    if room is None:
+        return None
+    from robothor.rooms import runs
+
+    active = runs.active_run(room.id)
+    if active is None or active.task is None:
+        return None
+    if active.trigger == "schedule" and not getattr(auth, "is_service", False):
+        try:
+            await asyncio.to_thread(
+                access.require, access.Actor.from_auth(auth), room.id, "edit_definition"
+            )
+        except RoomNotFound:
+            return _refusal(404, "room_not_found")
+        except RoomForbidden:
+            return _refusal(403, "room_forbidden")
+    active.task.cancel()
+    return JSONResponse(target.echo({"aborted": True}))
 
 
 def history_body(target: ChatTarget, body: dict[str, Any]) -> dict[str, Any]:

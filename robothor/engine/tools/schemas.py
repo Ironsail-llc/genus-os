@@ -2181,6 +2181,34 @@ _ROOM_PERIOD_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+# Rooms (workspaces): running one now or previewing it. Handler: handlers/room_runs.py.
+_ROOM_RUN_SCHEMAS: dict[str, dict[str, Any]] = {
+    "room_run": _room_tool(
+        "room_run",
+        "Run a report workspace now, or preview it. A run builds the edition for the last "
+        "complete period (or the period you name) as the workspace's run-as user and "
+        "notifies its members; a preview builds it for the person you are talking to only, "
+        "notifies nobody and creates no tasks. A run already in progress is joined. Runs "
+        "are capped per day and in cost. Needs run access: a viewer is refused." + _ROOM_LINK_RULE,
+        {
+            "room_id": _ROOM_ID,
+            "preview": {"type": "boolean", "description": "Only the requester sees it"},
+            "period": {
+                "type": "object",
+                "description": "{grain: day|week|month|custom, start, end} as YYYY-MM-DD",
+                "properties": {
+                    "grain": {"type": "string", "enum": ["day", "week", "month", "custom"]},
+                    "start": {"type": "string"},
+                    "end": {"type": "string"},
+                },
+                "required": ["grain", "start", "end"],
+            },
+        },
+        ["room_id"],
+    ),
+}
+
+
 def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
     schemas: dict[str, dict[str, Any]] = {}
@@ -5383,10 +5411,10 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
     }
 
     schemas.update(_HUMAN_IN_THE_LOOP_SCHEMAS)
-    schemas.update(_ROOM_EDITION_SCHEMAS)
+    schemas.update(_ROOM_EDITION_SCHEMAS | _ROOM_RUN_SCHEMAS | _ROOM_PERIOD_SCHEMAS)
     schemas.update(_TEAM_SCRATCHPAD_SCHEMAS)
 
     from robothor.goals.tools import schemas as pursuit_schemas
 
     schemas.update(pursuit_schemas())
-    return schemas | SALES_SCHEMAS | _ROOM_SCHEMAS | _ROOM_PERIOD_SCHEMAS
+    return schemas | SALES_SCHEMAS | _ROOM_SCHEMAS

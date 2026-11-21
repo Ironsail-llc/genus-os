@@ -613,16 +613,16 @@ async def chat_outcome(
 
 @router.post("/abort")
 async def chat_abort(request: Request) -> JSONResponse:
-    """Cancel the running response for a session."""
+    """Cancel the running response for a session, or a room's own run."""
     body = await request.json()
-
     auth = _auth_context(request)
     if isinstance(target := await _target(auth, body, "post"), JSONResponse):
         return target
-    session_key = target.key
-    session = _get_session(session_key)
+    if (stopped := await chat_rooms.stop_room_run(auth, target)) is not None:
+        return stopped
+    session = _get_session(target.key)
     stopped_request = session.active_request_id
-    result = await stop(session, auth, session_key, body.get("request_id"))
+    result = await stop(session, auth, target.key, body.get("request_id"))
     if result.get("aborted"):  # only a run that was actually cancelled
         drop_live_inbox(session, stopped_request)
     return JSONResponse(target.echo(result))

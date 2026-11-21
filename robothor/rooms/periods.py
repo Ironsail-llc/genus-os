@@ -15,10 +15,14 @@ presented as a whole one. The server's own zone never enters the maths.
 
 ``request_period`` returns a period's published edition at once, or starts
 exactly ONE run for it however many people ask at the same moment (the
-``building`` row's unique index makes racing requesters share it). A room runs
-at most ``settings.max_on_demand_per_day`` on-demand editions per local day,
-counting every edition a person asked for, previews included; the default is
-``DEFAULT_MAX_ON_DEMAND_PER_DAY`` (5), and 0 allows none. A week, month or
+``building`` row's unique index makes racing requesters share it). Each person
+may start at most ``settings.max_on_demand_per_day`` on-demand editions in a
+room per local day of the room, counting every edition they asked for there,
+previews and failed ones included; the default is
+``DEFAULT_MAX_ON_DEMAND_PER_DAY`` (5), and 0 allows none. Asking for an edition
+that exists, or one already building, uses none. A ``building`` edition whose
+run is gone is failed first (``robothor.rooms.recovery``), so an interrupted
+run never holds its period. A week, month or
 custom run is handed the summaries of the day editions inside it as data
 (``context_for_period``), never figures summed across days.
 """
@@ -35,7 +39,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from robothor.rooms import access, dal
+from robothor.rooms import access, dal, recovery
 from robothor.rooms.errors import RoomError
 from robothor.rooms.keys import canonical_uuid
 from robothor.rooms.models import GRAINS, Edition, Room
@@ -46,6 +50,7 @@ __all__ = [
     "DEFAULT_MAX_ON_DEMAND_PER_DAY",
     "DEFAULT_TZ",
     "MAX_CUSTOM_DAYS",
+    "PERIOD_ERROR_REASONS",
     "OnDemandCapReached",
     "Period",
     "PeriodError",
@@ -75,7 +80,21 @@ RunRoom = Callable[..., Awaitable[Any]]
 
 
 class PeriodError(ValueError):
-    """A grain, anchor or time zone that names no period that may be asked for (422)."""
+    """A grain, anchor or time zone that names no period that may be asked for (422).
+
+    ``reason`` is one of ``PERIOD_ERROR_REASONS``: what an HTTP answer may say,
+    where the message (which can quote the caller's input) is for an agent.
+    """
+
+    def __init__(self, message: str, *, reason: str = "invalid_anchor") -> None:
+        self.reason = reason if reason in PERIOD_ERROR_REASONS else "invalid_anchor"
+        super().__init__(message)
+
+
+#: Why a period was refused.
+PERIOD_ERROR_REASONS = frozenset(
+    {"invalid_time_zone", "invalid_grain", "invalid_anchor", "too_long", "not_over", "not_a_report"}
+)
 
 
 class OnDemandCapReached(RoomError):  # noqa: N818 - reads as the result it is
@@ -84,8 +103,8 @@ class OnDemandCapReached(RoomError):  # noqa: N818 - reads as the result it is
     def __init__(self, limit: int, used: int) -> None:
         self.limit, self.used = limit, used
         super().__init__(
-            f"on-demand cap reached: this workspace runs {limit} on-demand edition(s) a day "
-            f"and {used} ran today"
+            f"on-demand cap reached: each person may start {limit} on-demand edition(s) "
+            f"a day in this workspace and you have started {used} today"
         )
 
 
@@ -124,11 +143,15 @@ class Period:
 
 def _zone(tz: Any) -> ZoneInfo:
     if not isinstance(tz, str) or not tz.strip():
-        raise PeriodError("a time zone must be an IANA name such as Europe/London")
+        raise PeriodError(
+            "a time zone must be an IANA name such as Europe/London", reason="invalid_time_zone"
+        )
     try:
         return ZoneInfo(tz)
     except (ZoneInfoNotFoundError, ValueError) as exc:
-        raise PeriodError(f"unknown time zone {tz!r}: use an IANA name") from exc
+        raise PeriodError(
+            f"unknown time zone {tz!r}: use an IANA name", reason="invalid_time_zone"
+        ) from exc
 
 
 def _today(tz: str, now: datetime | None) -> date:
@@ -147,7 +170,7 @@ def _containing(grain: str, day: date) -> Period:
     if grain == "month":
         last = calendar.monthrange(day.year, day.month)[1]
         return Period(day.replace(day=1), day.replace(day=last), grain)
-    raise PeriodError(f"grain must be one of {sorted(GRAINS)}")
+    raise PeriodError(f"grain must be one of {sorted(GRAINS)}", reason="invalid_grain")
 
 
 def last_complete_period(grain: str, tz: str, now: datetime | None = None) -> Period:
@@ -185,7 +208,7 @@ def _custom(anchor: Any) -> Period:
         raise PeriodError("a custom period cannot end before it starts")
     period = Period(start, end, "custom")
     if period.days > MAX_CUSTOM_DAYS:
-        raise PeriodError(f"a custom period is at most {MAX_CUSTOM_DAYS} days")
+        raise PeriodError(f"a custom period is at most {MAX_CUSTOM_DAYS} days", reason="too_long")
     return period
 
 
@@ -203,7 +226,7 @@ def resolve_period(grain: str, tz: str, anchor: Any, *, now: datetime | None = N
     ``{start, end}`` for a custom range). No anchor, or ``latest``: the last
     complete period. Raises ``PeriodError`` for a period that is not over."""
     if grain not in GRAINS:
-        raise PeriodError(f"grain must be one of {sorted(GRAINS)}")
+        raise PeriodError(f"grain must be one of {sorted(GRAINS)}", reason="invalid_grain")
     today = _today(tz, now)
     if anchor is None or (isinstance(anchor, str) and anchor.strip() in ("", "latest")):
         return last_complete_period(grain, tz, now)
@@ -211,7 +234,8 @@ def resolve_period(grain: str, tz: str, anchor: Any, *, now: datetime | None = N
     if period.end >= today:
         raise PeriodError(
             f"that {grain} is not over yet: it ends {period.end.isoformat()} "
-            f"and today is {today.isoformat()} in {tz}"
+            f"and today is {today.isoformat()} in {tz}",
+            reason="not_over",
         )
     return period
 
@@ -300,9 +324,10 @@ def _claim(
     where ``run`` is the one run to start, or None."""
     room = access.require(actor, room_id, "request_period")
     if room.kind != "report":
-        raise PeriodError("only a report workspace has periods")
+        raise PeriodError("only a report workspace has periods", reason="not_a_report")
     tz = str(room.settings.get("tz") or DEFAULT_TZ)
     period = resolve_period(grain, tz, anchor, now=now)
+    recovery.reap_stale_editions(room.tenant_id, room_id=room.id)
     found = dal.find_edition_for_period(
         room.tenant_id, room.id, period.grain, period.start, period.end
     )
@@ -310,32 +335,57 @@ def _claim(
         return found, False, None
     limit = _cap(room)
     since = datetime.combine(_today(tz, now), time(), tzinfo=_zone(tz))
-    used = dal.count_requested_editions(room.tenant_id, room.id, since=since)
+    # A requester with no account id (the loopback development operator)
+    # counts against everyone's on-demand runs in the room: stricter, never looser.
+    requester = canonical_uuid(actor.user_id)
+    used = dal.count_requested_editions(
+        room.tenant_id, room.id, since=since, requested_by=requester
+    )
     if used >= limit:
         raise OnDemandCapReached(limit, used)
     runner = run_room or resolve_run_room()
+    # Everything that can fail happens BEFORE the insert: a committed
+    # ``building`` row with no run behind it would hold the period.
+    context = context_for_period(room.tenant_id, room.id, period)
     edition, created = dal.create_edition(
         room.tenant_id,
         room.id,
         period_start=period.start,
         period_end=period.end,
         grain=period.grain,
-        requested_by=canonical_uuid(actor.user_id),
+        requested_by=requester,
     )
     if not created:
         return edition, False, None
-    context = context_for_period(room.tenant_id, room.id, period)
     return edition, True, functools.partial(runner, room, edition, period=period, context=context)
 
 
-async def _run(edition: Edition, run: Callable[[], Awaitable[Any]]) -> None:
+async def _run(
+    edition: Edition, run: Callable[[], Awaitable[Any]], release: Callable[[], None]
+) -> None:
+    """The run; ``release`` ends its live hold. A run that fails or is cancelled
+    fails its edition (a no-op once it published), so its period is free again."""
     try:
         await run()
+    except asyncio.CancelledError:
+        # Shielded: the cancellation must not also cancel the write that
+        # frees the period. Re-raised so the cancel still takes effect.
+        await asyncio.shield(
+            asyncio.to_thread(
+                dal.fail_edition,
+                edition.tenant_id,
+                edition.id,
+                "the run was interrupted before it published",
+            )
+        )
+        raise
     except Exception as exc:
         logger.warning("room period run failed for edition %s", edition.id, exc_info=True)
         await asyncio.to_thread(
             dal.fail_edition, edition.tenant_id, edition.id, f"the run failed: {exc}"
         )
+    finally:
+        release()
 
 
 async def request_period(
@@ -356,11 +406,34 @@ async def request_period(
     (``OnDemandCapReached``, nothing started). ``PeriodError`` for a period
     that is malformed or not over, or a room that is not a report.
     """
-    edition, started, run = await asyncio.to_thread(
-        _claim, actor, room_id, grain, anchor, run_room, now
+    claim = asyncio.ensure_future(
+        asyncio.to_thread(_claim, actor, room_id, grain, anchor, run_room, now)
     )
-    if started and run is not None:
-        task = asyncio.create_task(_run(edition, run), name=f"room-period-{edition.id}")
-        _runs.add(task)
-        task.add_done_callback(_runs.discard)
+    try:
+        edition, started, run = await asyncio.shield(claim)
+    except asyncio.CancelledError:
+        # The thread goes on and may commit a ``building`` row: start its run
+        # anyway, or nothing would ever build that period.
+        claim.add_done_callback(_start_when_claimed)
+        raise
+    _start(edition, started, run)
     return edition, started
+
+
+def _start_when_claimed(claim: asyncio.Future[Any]) -> None:
+    if not claim.cancelled() and claim.exception() is None:
+        _start(*claim.result())
+
+
+def _start(edition: Edition, started: bool, run: Callable[[], Awaitable[Any]] | None) -> None:
+    """Start the one run, tracked by the engine's shutdown drain and held live."""
+    if not started or run is None:
+        return
+    from robothor.engine.task_registry import get_task_registry
+
+    release = recovery.hold(edition.id)
+    task = get_task_registry().spawn(_run(edition, run, release), name=f"room-period-{edition.id}")
+    _runs.add(task)
+    task.add_done_callback(_runs.discard)
+    # A task cancelled before it first ran never enters ``_run``.
+    task.add_done_callback(lambda _task: release())

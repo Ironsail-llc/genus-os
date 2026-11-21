@@ -353,3 +353,153 @@ async def test_the_request_runs_off_the_event_loop(monkeypatch):
     assert response.status_code == 200
     await probe.settle()
     probe.assert_loop_free()
+
+
+# ─── through the engine's real authentication ───────────────────────────
+
+
+@pytest.fixture
+def secure_engine(monkeypatch, fake, accounts):
+    """The whole engine app, with authentication on and nothing stubbed above it."""
+    from robothor.auth import tokens
+    from robothor.engine.health import create_health_app
+
+    monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
+    monkeypatch.setenv("ROBOTHOR_ENGINE_HOST", "0.0.0.0")
+    monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "rooms-periods-test-key-that-is-at-least-32-bytes")
+    tokens.reset_signing_key_cache()
+    monkeypatch.setattr("robothor.auth.session_standing.stands", lambda *_: True)
+    config = MagicMock()
+    config.tenant_id = "test-tenant"
+    config.bot_token = ""
+    config.port = 18800
+    with (
+        patch("robothor.engine.dashboards.get_dashboard_router", return_value=APIRouter()),
+        patch("robothor.engine.dashboards.get_public_router", return_value=APIRouter()),
+        patch("robothor.engine.dashboards.get_completion_router", return_value=APIRouter()),
+        patch("robothor.engine.webhooks.get_webhook_router", return_value=APIRouter()),
+        patch("robothor.db.connection.get_connection"),
+    ):
+        app = create_health_app(config, runner=None)
+    yield app
+    tokens.reset_signing_key_cache()
+
+
+async def _post_as(app: FastAPI, token: str, body: Any) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.post(PATH, json=body, headers={"Authorization": f"Bearer {token}"})
+
+
+def test_a_service_caller_needs_the_control_scope_here():
+    from robothor.engine.auth import required_scope
+
+    assert required_scope("POST", PATH, service=True) == "engine:control"
+    assert required_scope("POST", f"/api/rooms/{ROOM}/run", service=True) == "engine:control"
+    assert required_scope("POST", PATH) == "engine:write"
+    # Only these two routes: a service token's scope elsewhere is unchanged.
+    assert required_scope("POST", "/api/agents/x/runs", service=True) == "engine:write"
+
+
+async def test_the_bridges_own_engine_credential_reaches_the_route(secure_engine, fake):
+    from robothor.engine_control import control_token
+
+    token = control_token("genus-bridge", "test-tenant", require_existing_key=False)
+
+    response = await _post_as(secure_engine, token, {"grain": "day", "requested_by": ALICE})
+
+    assert response.status_code == 202
+    assert fake.calls[0][0].user_id == ALICE
+
+
+async def test_another_service_cannot_act_for_a_person(secure_engine, fake):
+    from robothor.engine_control import control_token
+
+    token = control_token("genus-cli", "test-tenant", require_existing_key=False)
+
+    response = await _post_as(secure_engine, token, {"grain": "day", "requested_by": ALICE})
+
+    assert response.status_code == 403
+    assert fake.calls == []
+
+
+async def test_a_service_token_without_the_control_scope_is_refused(secure_engine, fake):
+    from robothor.auth.tokens import issue_service_token
+    from robothor.engine.auth import ENGINE_AUDIENCE
+
+    token = issue_service_token(
+        "genus-bridge", "test-tenant", audience=ENGINE_AUDIENCE, scopes=("engine:write",)
+    )
+
+    response = await _post_as(secure_engine, token, {"grain": "day", "requested_by": ALICE})
+
+    assert response.status_code == 403
+    assert fake.calls == []
+
+
+async def test_a_members_own_token_still_reaches_the_route(secure_engine, fake):
+    from robothor.auth.tokens import issue_access_token
+
+    token = issue_access_token(ALICE, "test-tenant", "member")
+
+    response = await _post_as(secure_engine, token, {"grain": "day", "requested_by": BOB})
+
+    assert response.status_code == 202
+    assert fake.calls[0][0].user_id == ALICE
+
+
+# ─── no exception text in a response ────────────────────────────────────
+
+SECRET = "connection to 10.0.0.7 failed at /srv/app/dal.py line 99"
+
+
+@pytest.mark.parametrize("error", [RuntimeError(SECRET), ValueError(SECRET), KeyError(SECRET)])
+async def test_an_unexpected_error_answers_a_generic_500(fake, error):
+    fake.error = error
+
+    response = await _post(_app(), {"grain": "day"})
+
+    assert response.status_code == 500
+    assert response.json()["error"] == "internal_error"
+    assert SECRET not in response.text
+    assert "10.0.0.7" not in response.text
+
+
+async def test_an_account_lookup_that_fails_answers_a_generic_500(fake, monkeypatch):
+    def broken(_uid: str) -> Any:
+        raise RuntimeError(SECRET)
+
+    monkeypatch.setattr("robothor.auth.accounts.get_account_by_id", broken)
+
+    response = await _post(_app(SERVICE), {"grain": "day", "requested_by": ALICE})
+
+    assert response.status_code == 500
+    assert SECRET not in response.text
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: PeriodError(SECRET, reason="not_over"),
+        lambda: RoomForbidden(SECRET),
+        lambda: RoomRunUnavailable(SECRET),
+        lambda: OnDemandCapReached(limit=5, used=5),
+    ],
+)
+async def test_a_refusal_message_is_the_routes_own_text(fake, make):
+    fake.error = make()
+
+    response = await _post(_app(), {"grain": "day"})
+
+    assert response.status_code in {403, 422, 429, 503}
+    assert SECRET not in response.text
+    assert response.json()["message"]
+
+
+async def test_an_invalid_period_names_its_reason(fake):
+    fake.error = PeriodError("that day is not over yet", reason="not_over")
+
+    body = (await _post(_app(), {"grain": "day"})).json()
+
+    assert body["reason"] == "not_over"
+    assert "not over" in body["message"]

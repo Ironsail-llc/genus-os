@@ -148,7 +148,56 @@ the query string of `/chat/history`, `/chat/outcome` and the other GET routes.
   elsewhere (a published edition, another replica).
 * **Activity.** A saved exchange moves `rooms.last_activity_at` and
   `last_message_id` and publishes `room.message` on the `agent` stream with
-  exactly `{room_id, tenant_id, message_id}`.
+  exactly `{room_id, tenant_id, message_id}`. An interrupted or stopped turn
+  that the interruption path saves keeps its author and moves the mark too.
+* **The turn is in the room.** The runner and the save of its reply run with
+  the room bound (`robothor.rooms.run_context`), so `room_publish_edition`
+  works in an interactive workspace turn and the reply carries the edition it
+  published. A main-conversation turn binds nothing, so the publish refuses it.
+* **The room's own runs.** While a scheduled run, a "run now" or a preview
+  holds the room, a send is `409 room_busy` as for a person's turn, and
+  `/chat/abort` stops that run: `post` access stops a run now or a preview; a
+  SCHEDULED run only an assigned member or a tenant admin may stop
+  (`403 room_forbidden` otherwise).
+* **Search.** Verbatim chat search (`chat_store.search_chat_turns`) leaves out
+  every workspace's conversation unless the caller passes the ids of the
+  workspaces they can access.
+
+## Delivering into a workspace: `delivery.channel: room`
+
+A manifest agent can deliver its output into a workspace instead of a person's
+session:
+
+```yaml
+delivery:
+  mode: announce
+  channel: room
+  to: 2f6c4a10-3b1e-4c7d-9a55-000000000000   # the workspace (room) id
+```
+
+The output is an assistant turn in the workspace's conversation, attributed to
+the agent (its id, display name and run), the workspace's activity moves, and
+each member who has not muted it gets a short note with the link in their main
+conversation and inbox (`robothor/engine/channels/room.py`). The delivery waits
+for a turn in progress in the workspace. A target that is not a workspace of the
+run's tenant is `failed:room_unknown_target`, an archived one
+`failed:room_archived`, and a turn the store did not write
+`failed:room_no_session_write`; nothing is written in those cases.
+
+## Workspace notes
+
+When a workspace's run publishes an edition, each member with an active account
+who has not muted the workspace gets a note (`robothor.rooms.fanout`): the
+edition's title, its summary cut to 280 characters, and
+`[<workspace title>](/?v=chat&room=<id>)`, written into their main conversation
+and inbox through this channel. The inbox row is type `info`, addressed to the
+user id, with `room_id` and `edition_id` in its `metadata` and never the session
+key. A member who chose an external channel in their notification settings
+(`notify.channel`, e.g. `telegram`) and has paired it gets the same note there.
+A preview is never announced. Notes are muted by `notify.muted: true` on the
+membership, or for everyone who has not opted in when the workspace's
+`settings.notify_default` is false. Only a notification's recipient (or an owner
+or admin) may mark it read or acknowledged.
 
 ## Asking a question
 

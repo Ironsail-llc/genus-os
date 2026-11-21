@@ -13,6 +13,8 @@ provides on the other. See :func:`_refuse_foreign_inbox`.
 
 from __future__ import annotations
 
+import uuid
+
 from deps import get_tenant_id
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
@@ -21,6 +23,7 @@ from models import SendNotificationRequest
 from robothor.crm.dal import (
     acknowledge_notification,
     get_agent_inbox,
+    get_notification,
     list_notifications,
     mark_notification_read,
     send_notification,
@@ -114,11 +117,38 @@ def api_get_inbox(
     }
 
 
+def _refuse_foreign_notification(
+    request: Request, notification_id: str, tenant_id: str
+) -> JSONResponse | None:
+    """``None`` when this caller may mark ``notification_id``, else a refusal.
+
+    Only its recipient (``toAgent`` is their own ``actor_id``) may mark a
+    notification read or acknowledged; an operator may mark any, as they may
+    read any inbox (:func:`_refuse_foreign_inbox`). A missing one is 404 and
+    one that belongs to somebody else 403, before any write."""
+    auth = getattr(request.state, "auth", None)
+    if auth is None or auth.role in OPERATOR_ROLES:  # no auth: insecure development mode
+        return None
+    try:
+        row = get_notification(str(uuid.UUID(notification_id)), tenant_id=tenant_id)
+    except ValueError:
+        row = None
+    if row is None:
+        return JSONResponse({"error": "notification not found"}, status_code=404)
+    if row.get("toAgent") == auth.actor_id:
+        return None
+    return JSONResponse({"error": "that notification belongs to somebody else"}, status_code=403)
+
+
 @router.post("/{notification_id}/read")
 def api_mark_read(
     notification_id: str,
+    request: Request,
     tenant_id: str = Depends(get_tenant_id),
 ):
+    refusal = _refuse_foreign_notification(request, notification_id, tenant_id)
+    if refusal is not None:
+        return refusal
     if mark_notification_read(notification_id, tenant_id=tenant_id):
         return {"success": True, "id": notification_id}
     return JSONResponse({"error": "notification not found"}, status_code=404)
@@ -127,8 +157,12 @@ def api_mark_read(
 @router.post("/{notification_id}/ack")
 def api_acknowledge(
     notification_id: str,
+    request: Request,
     tenant_id: str = Depends(get_tenant_id),
 ):
+    refusal = _refuse_foreign_notification(request, notification_id, tenant_id)
+    if refusal is not None:
+        return refusal
     if acknowledge_notification(notification_id, tenant_id=tenant_id):
         return {"success": True, "id": notification_id}
     return JSONResponse({"error": "notification not found"}, status_code=404)

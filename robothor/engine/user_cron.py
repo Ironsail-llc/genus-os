@@ -153,6 +153,52 @@ def mark_cronjob_fired(job_id: str, *, next_run_at: datetime | None, disable: bo
 # ── A room's schedule (robothor.rooms.definition) ───────────────────────────
 
 
+def list_due_room_cronjobs(tenant_id: str, now: datetime | None = None) -> list[dict[str, Any]]:
+    """The tenant's enabled room schedule rows that are due (<= now).
+
+    The scheduler claims each with :func:`claim_room_cronjob` and runs it
+    through ``robothor.rooms.runs``, never as a plain cron prompt.
+    """
+    now = now or datetime.now(UTC)
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT * FROM user_cronjobs
+            WHERE enabled = TRUE
+              AND next_run_at IS NOT NULL
+              AND next_run_at <= %s
+              AND tenant_id = %s
+              AND room_id IS NOT NULL
+            ORDER BY next_run_at
+            """,
+            (now, tenant_id),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+    for row in rows:
+        row["room_id"] = str(row["room_id"])
+    return rows
+
+
+def claim_room_cronjob(job_id: str, *, due_at: datetime, next_run_at: datetime | None) -> bool:
+    """Advance a due room row, only if it still holds the ``next_run_at`` the
+    caller read. True for exactly one of any number of ticks or replicas that
+    read the same due row: the one whose write landed first."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE user_cronjobs
+            SET last_run_at = NOW(), fire_count = fire_count + 1,
+                next_run_at = %s, updated_at = NOW()
+            WHERE job_id = %s AND enabled = TRUE AND next_run_at = %s
+            RETURNING job_id
+            """,
+            (next_run_at, job_id, due_at),
+        )
+        return cur.fetchone() is not None
+
+
 def get_room_cronjob(tenant_id: str, room_id: str) -> dict[str, Any] | None:
     """The schedule row of a room, or None. ``run_as_user_id`` as a string."""
     with get_connection() as conn:

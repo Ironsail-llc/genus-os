@@ -1630,6 +1630,7 @@ same way. What people see and may do in a workspace is
 | `room_duplicate` | `room_id`; the caller's own copy | shared or more |
 | `room_restore_revision` | `room_id`, `rev`; writes a new revision equal to it | assigned, or owner/admin |
 | `room_admin_reassign` | `room_id`, `user`; assigned and the run-as user | owner/admin |
+| `room_run` | `room_id`, `preview`, `period` (`{grain, start, end}`); runs a report workspace now | shared or more (a paused one: assigned, or owner/admin) |
 
 - **Who is asking.** Always the human on the run, from the tool context
   (`user_id`, `user_role`), never the agent. An unverified identity is refused
@@ -1918,6 +1919,31 @@ must read: it reaches the agent unchanged and is still masked wherever it is
 stored. The list is empty; `vault_get` and `vault_test` return a fingerprint,
 never a value.
 
+### Running a workspace: `room_run`
+
+`room_run(room_id, preview?, period?)` runs a report workspace now, the same
+run the schedule makes and the dashboard's "Run now" starts
+(`POST /api/rooms/{id}/run` on the engine). Use it for "refresh it now" or "show
+me before anyone sees it" (`preview: true`); use `room_request_period` for a past
+day, week or month someone wants to read, and `room_read` for editions that
+already exist.
+
+- The run builds the edition for the last complete period of the workspace's
+  `default_grain` (or the `period` named), as the workspace's run-as user (re-read
+  from their account at that moment, with their current role), and notifies its
+  members when it publishes. A **preview** builds it for the person you are
+  talking to only: nobody else sees it, nobody is notified, no tasks are created,
+  and nothing is written in the shared conversation.
+- It goes on in the background. The result is the edition being built
+  (`started: true`) and the link; a run already in progress is joined
+  (`joined: true`), never started twice.
+- Refused for a viewer, for an archived workspace, for a paused one unless the
+  caller is assigned to it (or an owner or admin), and past the caller's daily
+  on-demand allowance in that workspace (`settings.max_on_demand_per_day` per
+  person, 5 when unset; previews and period requests count): `cap_reached: true`. Every run is capped in cost (see
+  docs/BUDGETS_AND_STOPS.md); a capped run's edition fails "stopped at the cost
+  cap" rather than publishing a partial report.
+
 ### Workspace editions: `room_publish_edition`
 
 `room_publish_edition(room_id, period?, kind?, title, summary, blocks, suggestions?)`
@@ -1989,14 +2015,19 @@ asked for.
 
 A published edition comes back at once (`started: false`). Otherwise one run
 starts and the building edition comes back (`started: true`); people asking at
-the same moment share that one run. A workspace runs
-`settings.max_on_demand_per_day` on-demand editions a day (5 when unset), and
-past that the tool returns `cap_reached: true` and starts nothing. A week or
+the same moment share that one run. Each person may start
+`settings.max_on_demand_per_day` on-demand editions in a workspace per day of the
+workspace's time zone (5 when unset; previews and failed runs count, asking for
+an edition that already exists does not). Past that the tool returns
+`cap_reached: true` and starts nothing. A run that was interrupted (cancelled,
+or the engine restarted) fails its edition, so the period can be asked for
+again. A week or
 month run reads the summaries of the day editions inside it as data; it fetches
 its own figures and never adds the days up. Use `room_run` for "run it now" and
 `room_read` to read editions that already exist. The engine route
 `POST /api/rooms/{id}/periods` does the same for the dashboard (200 existing,
-202 started, 429 cap reached).
+202 started, 429 `on_demand_cap` with the `limit`); the bridge reaches it with its engine credential
+and names the person asking.
 
 ### When a tool call fails
 

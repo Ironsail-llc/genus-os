@@ -430,6 +430,8 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "register_user_cron",
         # Publishing into a workspace writes a shared, notified edition.
         "room_publish_edition",
+        # Starts a real workspace run that notifies its members.
+        "room_run",
         # Starts a real workspace run that publishes to its members.
         "room_request_period",
         # Arbitrary MCP invocation is an escape hatch by construction.
