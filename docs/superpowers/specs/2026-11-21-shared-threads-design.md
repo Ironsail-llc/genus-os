@@ -240,9 +240,12 @@ this list a subset of the dashboard's component registry. `suggestions` is a lis
   point), but the original is emitted with only the offending characters replaced:
   a character that is or folds to `<`, `>`, `[` or `]` becomes `‹`, `›`, `(`, `)`,
   and a character reference (found with html's own rule, so of any length) that
-  decodes to one is replaced by the stand-in. The result is then checked as a
-  reader would decode it, round after round; if a bracket could still come out (a
-  deep `&amp;` chain), every ampersand becomes ` and `. Other text (`R²`, `½`,
+  decodes to one is replaced by the stand-in; so is a run of references (`&amp;lt;`,
+  `&#38;#60;`) that decodes to one over several reads, decoded on its own so the
+  rest of the text keeps its ampersands. The result is then checked as a reader
+  would decode it, round after round; only if a bracket could still come out
+  (references that combine across runs) does every ampersand become ` and `.
+  Other text (`R²`, `½`,
   fullwidth punctuation, ligatures, `R&D`) comes out byte-identical. A one-line
   field turns line breaks into spaces. Only the first four times the field's limit
   of raw input is read, so the work is linear in the field, not the input.

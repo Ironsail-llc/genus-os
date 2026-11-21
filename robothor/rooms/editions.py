@@ -434,10 +434,35 @@ def _reference(match: re.Match[str]) -> str:
     return match.group()
 
 
+#: A run of reference characters after an ampersand: one reference, or a
+#: chain of them (``&amp;lt;``, ``&#38;#60;``) that decodes over several reads.
+_REFERENCE_RUN = re.compile(r"&[#0-9A-Za-z;]+")
+
+
+def _run(match: re.Match[str]) -> str:
+    """A reference run decoded on its own, as a reader would, round after
+    round: if a bracket comes out, the run becomes its stand-in; if it is
+    still decoding after ``_FOLD_ROUNDS``, its ampersands go. Any other run is
+    kept as written. Local, so a doubly encoded reference does not cost the
+    rest of the text its ampersands."""
+    run = text = match.group()
+    for _ in range(_FOLD_ROUNDS):
+        folded = _fold_round(text)
+        if any(ch in _BRACKETS for ch in folded):
+            return folded.translate(_TRANSLATE)
+        if folded == text:
+            return run
+        text = folded
+    return run.replace("&", _AMPERSAND_STANDIN) if "&" in text else run
+
+
 def _neutralised(text: str) -> str:
-    """Only the offending characters replaced: references that decode to a
-    bracket, and characters that are or fold to one. One linear pass."""
-    return "".join(_bracket_free(ch) for ch in _CHARREF.sub(_reference, text))
+    """Only the offending characters replaced: reference runs that decode to a
+    bracket, single references that do, and characters that are or fold to
+    one. Linear: each run is decoded on its own, at most ``_FOLD_ROUNDS``
+    times."""
+    text = _CHARREF.sub(_reference, _REFERENCE_RUN.sub(_run, text))
+    return "".join(_bracket_free(ch) for ch in text)
 
 
 def _guarded(text: str) -> str:
