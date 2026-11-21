@@ -30,6 +30,14 @@ describe("EngineClient in a room", () => {
     expect(body).toEqual({ message: "hi", room_id: ROOM, request_id: "r-1" });
   });
 
+  it("sends the outbox entry's client id with a room message", async () => {
+    const fetchMock = stub(new Response("event: done\ndata: {}\n\n", { status: 200 }));
+    await new EngineClient().chatSend("hi", "", "r-1", false, undefined, ROOM, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      message: "hi", room_id: ROOM, request_id: "r-1", client_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    });
+  });
+
   it("raises RoomBusy with the name being answered on a 409 room_busy", async () => {
     stub(Response.json({ error: "room_busy", answering: "Alice" }, { status: 409 }));
     const err = await new EngineClient().chatSend("hi", "", "r-1", false, undefined, ROOM).catch((e) => e);

@@ -33,6 +33,15 @@ describe("historyToMessages in a room", () => {
     expect(message).toMatchObject({ authorUserId: "u-alice", authorName: "Alice", editionId: EDITION });
   });
 
+  it("keeps the client id a room message was sent with", () => {
+    const [a, b] = historyToMessages([
+      { id: 13, role: "user", content: "x", clientId: "c-1" },
+      { id: 14, role: "user", content: "y", client_id: "c-2" },
+    ]);
+    expect(a.clientId).toBe("c-1");
+    expect(b.clientId).toBe("c-2");
+  });
+
   it("adds no fields to a main-conversation row", () => {
     const [message] = historyToMessages([{ id: 1, role: "user", content: "hello" }]);
     expect(message).toEqual({ id: "hist-1", role: "user", content: "hello", timestamp: undefined, serverId: 1 });

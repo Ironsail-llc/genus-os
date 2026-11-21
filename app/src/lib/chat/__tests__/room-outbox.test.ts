@@ -10,7 +10,16 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ROOM_BUSY_RETRY_MS, forgetRoomOutboxes, roomOutbox, type OutboxItem, type SendResult } from "@/lib/chat/room-outbox";
+import {
+  ROOM_BUSY_RETRY_MS,
+  forgetRoomOutboxes,
+  mergeRoomRows,
+  pendingBubbles,
+  roomOutbox,
+  type OutboxItem,
+  type RoomRow,
+  type SendResult,
+} from "@/lib/chat/room-outbox";
 
 const ROOM = "11111111-1111-4111-8111-111111111111";
 
@@ -188,4 +197,126 @@ describe("the room outbox", () => {
       detach();
     }
   });
+
+  it("gives each message a client id, which is the bubble's key", () => {
+    const item = roomOutbox(ROOM).enqueue("A");
+    expect(item.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  });
+});
+
+describe("reconciling a room's transcript with its outbox", () => {
+  const local = (id: string, content: string): RoomRow => ({ id, role: "user", content });
+  const stored = (n: number, content: string, clientId?: string): RoomRow => ({
+    id: `hist-${n}`, role: "user", content, serverId: n, ...(clientId ? { clientId } : {}),
+  });
+
+  it("replaces the local bubble with the stored row that names its client id, in place", () => {
+    const out = mergeRoomRows([local("c-1", "A"), local("c-2", "B")], [stored(10, "A", "c-1")]);
+    expect(out.map((r) => r.id)).toEqual(["hist-10", "c-2"]);
+  });
+
+  it("matches by client id, never by text, when the stored row carries one", () => {
+    const out = mergeRoomRows([local("c-1", "same")], [stored(10, "same", "c-other")]);
+    expect(out.map((r) => r.id)).toEqual(["c-1", "hist-10"]);
+  });
+
+  it("never draws a bubble for a send another panel has in flight", () => {
+    const box = roomOutbox(ROOM);
+    box.attach(() => new Promise<SendResult>(() => {}));
+    const a = box.enqueue("A");
+    const b = box.enqueue("B");
+    expect(box.state().sending?.id).toBe(a.id);
+    expect(pendingBubbles(box.state(), [], new Set()).map((i) => i.id)).toEqual([b.id]);
+    expect(pendingBubbles(box.state(), [], new Set([a.id])).map((i) => i.id)).toEqual([a.id, b.id]);
+    expect(pendingBubbles(box.state(), [stored(1, "A", a.id)], new Set([a.id])).map((i) => i.id)).toEqual([b.id]);
+  });
+
+  for (const echo of [true, false]) {
+    it(`property: leaving during a send and coming back never shows a message twice (engine ${echo ? "echoes" : "does not echo"} the client id)`, async () => {
+      const ACTIONS = ["type", "type", "ok", "ok", "busy", "freed", "elapse", "navigate", "history", "history"] as const;
+      for (let seed = 1; seed <= 300; seed++) {
+        forgetRoomOutboxes();
+        const rand = prng(seed * 7 + (echo ? 1 : 0));
+        const typed: string[] = [];
+        const storedRows: RoomRow[] = [];
+        const pending: Pending[] = [];
+        // One panel at a time: what it has drawn, and which sends it started.
+        let rendered: RoomRow[] = [];
+        let startedHere = new Set<string>();
+        let mounted = true;
+        const makeSender = (mine: Set<string>) => (item: OutboxItem) =>
+          new Promise<SendResult>((resolve) => {
+            mine.add(item.id);
+            pending.push({
+              item,
+              resolve: (r) => {
+                if (r.outcome === "ok") {
+                  const n = storedRows.length + 1;
+                  storedRows.push(stored(n, item.text, echo ? item.id : undefined));
+                }
+                resolve(r);
+              },
+            });
+          });
+        let detach = roomOutbox(ROOM).attach(makeSender(startedHere));
+        const draw = () => {
+          const merged = mergeRoomRows(rendered, storedRows);
+          const extra = pendingBubbles(roomOutbox(ROOM).state(), merged, startedHere).map((i) => local(i.id, i.text));
+          rendered = [...merged, ...extra];
+        };
+        const trace: string[] = [];
+        const steps = 10 + Math.floor(rand() * 40);
+        for (let step = 0; step < steps; step++) {
+          const action = ACTIONS[Math.floor(rand() * ACTIONS.length)];
+          trace.push(action);
+          if (action === "type") {
+            const text = `m${typed.length}`;
+            typed.push(text);
+            const item = roomOutbox(ROOM).enqueue(text);
+            if (mounted) rendered = [...rendered, local(item.id, text)];
+          } else if (action === "ok" || action === "busy") {
+            pending.shift()?.resolve(action === "ok" ? { outcome: "ok" } : { outcome: "busy", answering: "Bob" });
+          } else if (action === "freed") {
+            roomOutbox(ROOM).roomFreed();
+          } else if (action === "elapse") {
+            await vi.advanceTimersByTimeAsync(ROOM_BUSY_RETRY_MS);
+          } else if (action === "navigate") {
+            // Away, with whatever is in flight still in flight, and back: a
+            // new panel that draws nothing until its history arrives.
+            detach();
+            rendered = [];
+            startedHere = new Set();
+            mounted = false;
+          } else if (!mounted) {
+            // The new panel's history arrives, then it becomes the sender.
+            mounted = true;
+            rendered = [];
+            draw();
+            detach = roomOutbox(ROOM).attach(makeSender(startedHere));
+          } else {
+            draw(); // a live room message: catch up
+          }
+          await settle();
+          if (mounted) draw();
+          const contents = rendered.map((r) => r.content);
+          expect(new Set(contents).size, `seed ${seed}: ${trace.join(" ")} → ${contents.join(",")}`).toBe(contents.length);
+        }
+        // Everything delivered, a last catch-up: each message exactly once.
+        if (!mounted) {
+          mounted = true;
+          rendered = [];
+          detach = roomOutbox(ROOM).attach(makeSender(startedHere));
+        }
+        for (let guard = 0; guard < typed.length * 3 + 5 && storedRows.length < typed.length; guard++) {
+          roomOutbox(ROOM).roomFreed();
+          await settle();
+          pending.shift()?.resolve({ outcome: "ok" });
+          await settle();
+        }
+        draw();
+        expect(rendered.map((r) => r.content).sort(), `seed ${seed}: ${trace.join(" ")}`).toEqual([...typed].sort());
+        detach();
+      }
+    });
+  }
 });
