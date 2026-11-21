@@ -16,6 +16,7 @@ import {
   mergeRoomRows,
   pendingBubbles,
   roomOutbox,
+  outboxBubbles,
   unsentBubbles,
   unsentShown,
   type OutboxItem,
@@ -471,6 +472,28 @@ describe("reconciling a room's transcript with its outbox", () => {
     expect(unsentBubbles(state, []).map((i) => i.id)).toEqual(["c-1"]);
   });
 
+  it("never matches a stored row to a refused bubble by text, and pairs it with the latest eligible one", () => {
+    const refused: RoomRow = { ...local("c-1", "thanks"), rejected: true, note: "Not sent" };
+    const retry = local("c-2", "thanks");
+    const out = mergeRoomRows([refused, retry], [stored(9, "thanks")]);
+    // The retry's own bubble becomes its stored copy; the refusal stays as it was.
+    expect(out[0]).toBe(refused);
+    expect(out[1]).toMatchObject({ id: "hist-9", clientId: "c-2" });
+    expect(out).toHaveLength(2);
+    // Another member's later "thanks", with no retry on screen, is added; the refusal stays marked.
+    const other = mergeRoomRows([refused], [stored(10, "thanks")]);
+    expect(other[0]).toBe(refused);
+    expect(other.map((r) => r.id)).toEqual(["c-1", "hist-10"]);
+  });
+
+  it("marks a refused unsent entry's bubble as refused", () => {
+    const box = roomOutbox(ROOM);
+    const state = { ...box.state(), unsent: [{ id: "c-1", seq: 1, text: "thanks", rejected: true }, { id: "c-2", seq: 2, text: "yes", rejected: false }] };
+    const [refused, unknown] = outboxBubbles([], state, new Set());
+    expect(refused).toMatchObject({ id: "c-1", rejected: true });
+    expect(unknown.rejected).toBeFalsy();
+  });
+
   it("still draws a refused entry when an earlier stored message has the same text", () => {
     const box = roomOutbox(ROOM);
     const refused = { id: "c-1", seq: 1, text: "thanks", rejected: true };
@@ -510,6 +533,8 @@ describe("reconciling a room's transcript with its outbox", () => {
         const matchedByText = new Set<string>();
         let rendered: RoomRow[] = [];
         let startedHere = new Set<string>();
+        // Refusals this panel has marked: they must stay marked through every later merge.
+        let markedHere = new Set<string>();
         let mounted = true;
         const store = (item: OutboxItem) => {
           storedIds.add(item.id);
@@ -528,10 +553,11 @@ describe("reconciling a room's transcript with its outbox", () => {
           const drawnUnsent = unsentBubbles(state, merged);
           const extra = [
             ...pendingBubbles(state, merged, startedHere).map((i) => local(i.id, i.text)),
-            ...drawnUnsent.map((i) => ({ ...local(i.id, i.text), note: i.rejected ? "Not sent" : "May not have reached" })),
+            ...drawnUnsent.map((i) => ({ ...local(i.id, i.text), note: i.rejected ? "Not sent" : "May not have reached", ...(i.rejected ? { rejected: true } : {}) })),
           ];
           rendered = [...merged, ...extra];
           for (const i of drawnUnsent) told.add(i.id);
+          for (const i of drawnUnsent) if (i.rejected) markedHere.add(i.id);
           // Acknowledged: only what is now on screen, drawn or as its stored copy.
           const shown = unsentShown(state, rendered);
           for (const id of shown) if (!told.has(id) && !rendered.some((r) => r.id === id || r.clientId === id)) matchedByText.add(id);
@@ -561,8 +587,14 @@ describe("reconciling a room's transcript with its outbox", () => {
               // Admitted and stored, then the answer was lost (a 504, a cut stream).
               if (action === "failStored") store(p.item);
               outcome.set(p.item.id, action === "refused" ? "refused" : "unknown");
-              // Its own panel, still open, shows the error itself.
-              if (mounted && p.by === startedHere) told.add(p.item.id);
+              // Its own panel, still open, shows the error itself and marks a refusal.
+              if (mounted && p.by === startedHere) {
+                told.add(p.item.id);
+                if (action === "refused") {
+                  rendered = rendered.map((r) => (r.id === p.item.id ? { ...r, rejected: true } : r));
+                  if (rendered.some((r) => r.id === p.item.id)) markedHere.add(p.item.id);
+                }
+              }
               p.resolve({ outcome: "failed", rejected: action === "refused" });
             }
           } else if (action === "freed") {
@@ -573,6 +605,7 @@ describe("reconciling a room's transcript with its outbox", () => {
             detach();
             rendered = [];
             startedHere = new Set();
+            markedHere = new Set();
             mounted = false;
           } else if (!mounted) {
             mounted = true;
@@ -585,6 +618,10 @@ describe("reconciling a room's transcript with its outbox", () => {
           await settle();
           if (mounted) draw();
           const context = `seed ${seed}: ${trace.join(" ")}`;
+          // A refusal this panel marked is still on screen, still marked, never replaced by a stored row.
+          for (const id of markedHere) {
+            expect(rendered.find((r) => r.id === id), `${context}: refusal ${id}`).toMatchObject({ rejected: true });
+          }
           // Never more copies of a text on screen than messages typed with it.
           for (const word of WORDS) {
             expect(rendered.filter((r) => r.content === word).length, context).toBeLessThanOrEqual(typed.filter((t) => t.text === word).length);

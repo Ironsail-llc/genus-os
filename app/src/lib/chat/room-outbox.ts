@@ -211,6 +211,8 @@ export interface RoomRow {
   recovery?: unknown;
   note?: string;
   attachments?: unknown[];
+  /** A send refused before admission: never the stored copy of anything. */
+  rejected?: boolean;
 }
 
 function isLocal(row: RoomRow): boolean {
@@ -234,7 +236,9 @@ export function mergeRoomRows<T extends RoomRow>(prev: T[], stored: readonly T[]
     shown.add(row.id);
     const at = row.clientId
       ? next.findIndex((m) => m.id === row.clientId)
-      : next.findIndex((m) => isLocal(m) && m.role === row.role && m.content.trim() === row.content.trim());
+      : // With no client id: the LATEST local bubble with that text (a retry is
+        // its own bubble), and never a refused one, which nothing stored can be.
+        next.findLastIndex((m) => isLocal(m) && !m.rejected && m.role === row.role && m.content.trim() === row.content.trim());
     if (at < 0) {
       added.push(row);
       continue;
@@ -330,6 +334,7 @@ export interface RoomBubble {
   timestamp: Date;
   note?: string;
   attachments?: AttachmentSummary[];
+  rejected?: boolean;
 }
 
 export function bubbleFor(item: OutboxItem, note?: string): RoomBubble {
@@ -357,6 +362,13 @@ export function outboxBubbles(
 ): RoomBubble[] {
   return [
     ...pendingBubbles(state, list, startedHere).map((item) => bubbleFor(item, noteFor(item, state))),
-    ...unsentBubbles(state, list).map((item) => bubbleFor(item, item.rejected ? NOT_SENT_NOTE : UNKNOWN_NOTE)),
+    ...unsentBubbles(state, list).map((item) =>
+      item.rejected ? { ...bubbleFor(item, NOT_SENT_NOTE), rejected: true } : bubbleFor(item, UNKNOWN_NOTE),
+    ),
   ];
+}
+
+/** The panel's own send was refused: mark its bubble, so no stored row is ever taken for it. */
+export function markRefused<T extends RoomRow>(list: T[], id: string, result: SendResult): T[] {
+  return result.outcome === "failed" && result.rejected ? list.map((m) => (m.id === id ? { ...m, rejected: true } : m)) : list;
 }
