@@ -69,6 +69,12 @@ _CONTROL_PATHS = (
 )
 
 
+#: Workspace routes that start a run. The bridge proxies them after its own
+#: access check, with its engine credential (``engine:control``) and the person
+#: in ``requested_by``; a member's own token reaches them with ``engine:write``.
+_ROOM_RUN_PATHS = re.compile(r"^/api/rooms/[^/]+/(?:periods|run)$")
+
+
 def _engine_bind_host() -> str:
     return os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
 
@@ -116,9 +122,16 @@ def verify_engine_token(token: str) -> AuthContext:
         return context
 
 
-def required_scope(method: str, path: str) -> str:
-    """Return the coarse Engine capability required for an HTTP route."""
+def required_scope(method: str, path: str, *, service: bool = False) -> str:
+    """Return the coarse Engine capability required for an HTTP route.
 
+    ``service``: the caller is a service identity. Only the workspace run
+    routes read it, and only to require MORE of a service (``engine:control``)
+    than of a person.
+    """
+
+    if service and _ROOM_RUN_PATHS.fullmatch(path):
+        return "engine:control"
     if any(pattern.fullmatch(path) for pattern in _CONTROL_PATHS):
         return "engine:control"
     if path.startswith("/chat/") or path == "/api/dashboard/completions":
@@ -191,7 +204,7 @@ def authenticate_http_request(request: Request, *, tenant_id: str) -> AuthContex
     if _acting_refused(context):
         raise HTTPException(status_code=403, detail=SWITCHING_DISABLED)
 
-    scope = required_scope(request.method, path)
+    scope = required_scope(request.method, path, service=context.is_service)
     if not context.has_scope(scope):
         raise HTTPException(status_code=403, detail="insufficient scope")
     return context

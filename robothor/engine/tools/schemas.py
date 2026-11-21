@@ -2146,6 +2146,41 @@ _ROOM_EDITION_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+#: Workspace periods (``robothor/rooms/periods.py``). Merged on the return line
+#: so ``get_engine_schemas`` does not grow (the function-size ratchet).
+_ROOM_PERIOD_SCHEMAS: dict[str, dict[str, Any]] = {
+    "room_request_period": {
+        "type": "function",
+        "function": {
+            "name": "room_request_period",
+            "description": (
+                "Get a report workspace's edition for a day, week (Monday to Sunday), month "
+                "or custom range, in the workspace's time zone. Returns the published "
+                "edition at once, or starts one run and returns the edition building "
+                "(started=true). Only periods that are over; on-demand runs are capped per "
+                "day. The result carries the workspace link."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "room_id": {"type": "string", "description": "The workspace id"},
+                    "grain": {"type": "string", "enum": ["day", "week", "month", "custom"]},
+                    "anchor": {
+                        "type": "string",
+                        "description": (
+                            "A date inside the period (YYYY-MM-DD; YYYY-MM for a month), "
+                            "'start/end' dates for custom, or 'latest' for the last "
+                            "complete period"
+                        ),
+                    },
+                },
+                "required": ["room_id", "grain", "anchor"],
+            },
+        },
+    },
+}
+
+
 # Rooms (workspaces): running one now or previewing it. Handler: handlers/room_runs.py.
 _ROOM_RUN_SCHEMAS: dict[str, dict[str, Any]] = {
     "room_run": _room_tool(
@@ -5376,7 +5411,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
     }
 
     schemas.update(_HUMAN_IN_THE_LOOP_SCHEMAS)
-    schemas.update(_ROOM_EDITION_SCHEMAS | _ROOM_RUN_SCHEMAS)
+    schemas.update(_ROOM_EDITION_SCHEMAS | _ROOM_RUN_SCHEMAS | _ROOM_PERIOD_SCHEMAS)
     schemas.update(_TEAM_SCRATCHPAD_SCHEMAS)
 
     from robothor.goals.tools import schemas as pursuit_schemas

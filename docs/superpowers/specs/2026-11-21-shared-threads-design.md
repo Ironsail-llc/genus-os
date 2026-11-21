@@ -204,6 +204,53 @@ editions, messages)`, `share_room`, `unshare_room`, `archive_room`,
   `authorUserId`) on the stored chat message.
 - The tools are an opt-in family always given to the main agent; see
   `docs/TOOLS.md`.
+#### As built (lane 8, periods)
+
+- `periods.py` also holds the request: `async request_period(actor, room_id, grain,
+  anchor=None, *, now=None, run_room=None) -> (Edition, started)`. It is async because
+  the winner starts a background run; its data access runs in a thread.
+- Periods are whole local days in the room's `settings.tz` (UTC when unset), end
+  inclusive; weeks run Monday to Sunday; custom ranges are at most 93 days. Only a
+  period whose last day is before today (local) can be requested. `Period.bounds(tz)`
+  gives the UTC instants of its local midnights.
+- `anchor`: a date (`YYYY-MM-DD`; `YYYY-MM` for a month), `start/end` (or a pair or
+  `{start, end}`) for custom, or None/`latest` for `last_complete_period`.
+- The run is `robothor.rooms.runs.run_room(room, edition, *, period, context)`
+  (lane 7), resolved before any row is written; when it is missing the request fails
+  `RoomRunUnavailable` (503). A run that raises fails its edition.
+- Daily cap, per person per room per local day: `settings.max_on_demand_per_day`,
+  default 5, 0 allows none. It counts the editions that person asked for in the room
+  (previews and failed ones included) since local midnight in the room's zone. A
+  requester with no account id (the loopback development operator) counts against
+  every person's requests in the room.
+- Recovery (`robothor/rooms/recovery.py`): `reap_stale_editions(tenant_id, *,
+  room_id=None, booted_at=None, now=None) -> list[Edition]` fails each `building`
+  edition whose run is not alive: not held by this process (`hold(edition_id)` /
+  `live(edition_id)`), and either its `run_id`'s `agent_runs` row has ended, or (no
+  run row) it predates `booted_at` (default `ROBOTHOR_DAEMON_START_TS`) or has been
+  building for 2 hours. `request_period` reaps the room first; call it at engine
+  start after `_cleanup_stale_runs`. A cancelled period run fails its edition; runs are
+  spawned on the engine's task registry, so the shutdown drain waits for them; the
+  context is read before the row is inserted; a caller cancelled mid-claim still gets
+  its run started.
+  Errors: `PeriodError` (a `ValueError`, 422), `OnDemandCapReached(limit, used)` (429).
+- `context_for_period(tenant_id, room_id, period)`: the newest published summary of
+  each `day` edition inside the period, 500 characters each, 6,000 in all, wrapped
+  as data.
+- `POST /api/rooms/{id}/periods` (engine) body `{grain, anchor?, requested_by?}`. A
+  human token (`engine:write`) is its own identity (`requested_by` ignored). A service
+  token needs `engine:control` on this route and `/run` (`engine/auth.py`), which the
+  bridge's engine credential carries, and must be the bridge's own identity
+  (`genus-bridge`, else 403). It must name `requested_by`; the engine reads that account's role from `user_accounts`
+  (never the body), requires it active and living in the token's tenant (else 404),
+  and re-checks `request_period`. 200 existing, 202 started, 400 no `requested_by`,
+  403, 404, 422 (`reason`: one of `PERIOD_ERROR_REASONS`), 429 `on_demand_cap` (with `limit` and `used`), 503 no room
+  runner, 500 `internal_error`. Every response message is the route's own fixed text,
+  never an exception's.
+- Added: `dal.list_editions_in_period`, `dal.count_requested_editions`,
+  `dal.list_building_editions`,
+  `models.edition_json` (the camelCase `Edition`, with `publishedSeq`). Engine route module
+  `robothor/engine/rooms_api.py`; tool `room_request_period`.
 
 ### Edition blocks
 
@@ -288,10 +335,18 @@ two, so the periods lane calls the shape it needs):
   the run in the background (`pending_runs()`). Needs `run`; a paused room only
   for assigned or admin; refuses non-report rooms (`ValueError`). Raises
   `RoomNotFound`, `RoomForbidden`, `RunRefused(reason='paused'|'archived')`,
-  `OnDemandCapReached(limit, used)` (`check_on_demand_cap`: every edition a
-  person requested since local midnight, previews included, default 5).
-- `last_complete_period` and `Period` are local stand-ins with the periods
-  lane's behaviour (weeks start Monday); swap for `robothor.rooms.periods`.
+  `periods.OnDemandCapReached(limit, used)` (`check_on_demand_cap(room,
+  requested_by)`: the periods lane's rule, per person per room per local day,
+  previews included).
+- `Period` and `last_complete_period` are `robothor.rooms.periods`'.
+- Liveness (`robothor.rooms.recovery`): a run holds its edition live
+  (`recovery.hold`) from the moment it is scheduled until it ends, records the
+  `agent_runs` id on the edition at the run's first status event
+  (`dal.set_edition_run`, added), and reaps the room's dead `building` rows
+  before creating one. The engine reaps every dead one at start, after
+  `_cleanup_stale_runs` (`daemon._reap_room_editions`). Background runs start
+  through the engine's task registry (`runs.spawn`), so the shutdown drain
+  waits for them.
 
 Run rules: the room's turn lock (`fanout.room_lock`) is awaited, never the
 per-agent dedup lock; the room and the run-as user (`definition.run_as_actor`
@@ -333,8 +388,12 @@ and fires `execute_room_run(..., trigger='schedule')`.
 `POST /api/rooms/{id}/run` (engine, `robothor/engine/rooms_api.py`): body
 `{preview?, period?, requested_by?}`; caller rules as the periods route (human
 token is its own identity; the service token names `requested_by`, whose role is
-read from `user_accounts`). 202 started, 200 joined, 400 no requester, 403, 404,
-409 paused/archived, 422 bad period, 429 cap; the body is `edition_json`.
+read from `user_accounts`; only the bridge's service identity may name one, and
+a service needs `engine:control`). 202 started, 200 joined, 400
+`requested_by_required`, 403 `forbidden`, 404 `room_not_found`, 409 `paused` /
+`archived`, 422 `invalid_run`, 429 `on_demand_cap` (`limit`, `used`), 500
+`internal_error`; every message is the route's own fixed text, never an
+exception's. The body is `edition_json`.
 `room_run(room_id, preview?, period?)` is the same for the main agent (in
 `ROOM_TOOLS`, excluded from benchmarks) and returns `{edition, started, joined, link}`.
 
