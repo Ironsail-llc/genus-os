@@ -7,7 +7,10 @@ Everything is the production engine (``robothor.engine.daemon.run``) except:
   from a script, so a run is deterministic and costs nothing;
 * one extra read-only tool, ``sample_sales_figures`` (``fixture_tools``), added
   beside the built-in tools before the registry is first built, so a report's
-  provenance names a real tool call over fixture data.
+  provenance names a real tool call over fixture data;
+* the mail transport: an approved workspace email (``robothor.rooms.outbound``)
+  is appended to ``<workspace>/outbox.jsonl`` instead of being sent, so no
+  email can leave the machine and the dry run can count what was "sent".
 
 Refuses to start unless ``GENUS_ENVIRONMENT`` is ``development`` and the
 database name ends in ``_test``.
@@ -51,10 +54,31 @@ def _add_fixture_tool() -> None:
     dispatch.builtin_handlers = with_fixture_handler
 
 
+def _fake_mail() -> None:
+    import json
+    import threading
+
+    from robothor.engine.config import EngineConfig
+    from robothor.rooms import outbound
+
+    outbox = EngineConfig.from_env().workspace / "outbox.jsonl"
+    lock = threading.Lock()
+
+    def send_raw(tenant_id: str, raw: str) -> dict[str, Any]:
+        with lock:
+            lines = outbox.read_text(encoding="utf-8").count("\n") if outbox.exists() else 0
+            with outbox.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"tenant": tenant_id, "raw": raw}) + "\n")
+        return {"id": f"dry-run-{lines + 1}", "threadId": f"dry-run-thread-{lines + 1}"}
+
+    outbound.send_raw = send_raw
+
+
 def main() -> None:
     _refuse_outside_a_dry_run()
     fake_llm.install()
     _add_fixture_tool()
+    _fake_mail()
     from robothor.engine.daemon import run
 
     run()

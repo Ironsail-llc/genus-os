@@ -10,7 +10,7 @@
  * pass and the mark comes off.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { api, expectedToFailUntil, people, requireStack, roomLink, say, signedIn } from "./stack";
+import { api, outboxCount, people, requireStack, roomLink, say, signedIn } from "./stack";
 
 requireStack();
 test.describe.configure({ mode: "serial" });
@@ -207,14 +207,61 @@ test("9. Bob accepts the edition's suggested task and opens it as its own worksp
   expect(taskRoom.body).toMatchObject({ kind: "task", access: "assigned" });
 });
 
-test("10. in the task workspace Bob approves the email his own turn proposed; it is sent once (E3, E4)", async () => {
-  expectedToFailUntil("lane 9: room_propose_email, its executor and the receipt turn (still being pushed)");
-  await bobPage.goto(roomLink(taskRoomId));
-  await say(bobPage, "Email the lapsed buyers a check-in");
-  const card = bobPage.getByTestId("room-approvals");
-  await expect(card).toBeVisible({ timeout: 30000 });
-  await card.getByRole("button", { name: /approve/i }).first().click();
-  await expect(room(bobPage).getByText(/sent/i).last()).toBeVisible({ timeout: 30000 });
+async function proposeEmail(page: Page, id: string) {
+  await page.goto(roomLink(id));
+  const cards = page.getByTestId("room-approvals").locator('[data-testid^="room-email-"][aria-label]');
+  const before = await cards.count();
+  await say(page, "Please email the lapsed buyers a check-in");
+  await expect(cards).toHaveCount(before + 1, { timeout: 30000 });
+  return cards.last();
+}
+
+test("10. in the task workspace Bob sees the exact email, approves it, it is sent once, and the task is done (E3)", async () => {
+  const sentBefore = outboxCount();
+  const card = await proposeEmail(bobPage, taskRoomId);
+  await expect(card.getByTestId("room-email-from")).toHaveText("assistant@example.com");
+  await expect(card.getByTestId("room-email-reply-to")).toHaveText("bob@example.com");
+  await expect(card.getByTestId("room-email-to")).toHaveText("buyer.one@example.org, buyer.two@example.org");
+  await expect(card.getByTestId("room-email-subject")).toHaveText("Checking in");
+  await expect(card.getByTestId("room-email-body")).toContainText("Is there anything we can help with?");
+
+  // Alice can neither see Bob's action nor reach his task workspace.
+  const alice = await api("alice");
+  expect(JSON.stringify((await alice.get("/api/approvals")).body)).not.toContain(taskRoomId);
+  expect((await alice.get(`/api/rooms/${taskRoomId}`)).status).toBe(404);
+
+  await card.getByRole("button", { name: /approve and send/i }).click();
+  const receipt = room(bobPage).getByTestId("room-email-receipt").last();
+  await expect(receipt).toContainText("Sent", { timeout: 30000 });
+  await expect(receipt).toContainText("buyer.one@example.org, buyer.two@example.org");
+  expect(outboxCount()).toBe(sentBefore + 1);
+  await bobPage.waitForTimeout(3000);
+  expect(outboxCount()).toBe(sentBefore + 1); // exactly once
+  await expect
+    .poll(async () => {
+      const tasks = (await (await api("bob")).get(`/api/rooms/${roomId}/tasks`)).body.tasks as Array<{ status: string; origin: string }>;
+      return tasks.find((t) => t.origin === "suggestion")?.status;
+    }, { timeout: 30000 })
+    .toBe("DONE");
+});
+
+test("10b. Bob rejects a second email: nothing is sent, and the receipt says so (E3)", async () => {
+  const sentBefore = outboxCount();
+  const card = await proposeEmail(bobPage, taskRoomId);
+  await card.getByRole("button", { name: /reject/i }).click();
+  await expect(room(bobPage).getByTestId("room-email-receipt").last()).toContainText(/Not sent: rejected/, {
+    timeout: 30000,
+  });
+  expect(outboxCount()).toBe(sentBefore);
+});
+
+test("10c. the same request in the report workspace proposes nothing (E4)", async () => {
+  const before = (await (await api("bob")).get("/api/approvals")).body;
+  await bobPage.goto(roomLink(roomId));
+  await say(bobPage, "Please email the lapsed buyers a check-in");
+  await expect(room(bobPage).getByText(/room_propose_email was refused/).last()).toBeVisible({ timeout: 30000 });
+  const after = (await (await api("bob")).get("/api/approvals")).body;
+  expect(after.count).toBe(before.count);
 });
 
 test("11. a reload keeps the charts (C4, D4)", async () => {

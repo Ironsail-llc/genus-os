@@ -30,4 +30,8 @@ tools_eager:
   - room_restore_revision
   - room_admin_reassign
   - room_publish_edition
+  - room_task_accept
+  - room_task_dismiss
+  - room_open_task
+  - room_propose_email
 instruction_file: brain/agents/analyst.md

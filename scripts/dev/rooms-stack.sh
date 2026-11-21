@@ -97,6 +97,8 @@ write_env() {
     echo "ROBOTHOR_ENGINE_PORT=$ENGINE_PORT"
     echo "GENUS_EVENT_CONSUMER_GROUP=engine-$COMPANY"
     echo "OPENAI_API_KEY=rooms-stack-fake"
+    # Approved workspace email is sent "from" here: into the outbox file only.
+    echo "ROBOTHOR_AI_EMAIL=assistant@example.com"
   } > "$STACK_DIR/engine.env"
   {
     common_env
@@ -226,6 +228,7 @@ ROOMS_STACK_BRIDGE_URL=http://127.0.0.1:$BRIDGE_PORT
 ROOMS_STACK_ENGINE_URL=http://127.0.0.1:$ENGINE_PORT
 ROOMS_STACK_PEOPLE=$STACK_DIR/people.json
 ROOMS_STACK_PASSWORD=$PASSWORD
+ROOMS_STACK_OUTBOX=$STACK_DIR/workspace/outbox.jsonl
 EOF
 }
 

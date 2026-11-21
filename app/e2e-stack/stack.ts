@@ -95,6 +95,15 @@ export async function api(who: Name) {
   };
 }
 
+/** How many emails the stack's fake mail transport has "sent" (nothing leaves the machine). */
+export function outboxCount(): number {
+  try {
+    return readFileSync(process.env.ROOMS_STACK_OUTBOX ?? "", "utf8").split("\n").filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+}
+
 /** A unique title, so specs never collide with each other's workspaces. */
 export function unique(title: string): string {
   return `${title} ${Date.now().toString(36)}`;

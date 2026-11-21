@@ -15,6 +15,8 @@ The script, by the latest turn:
 * "what's new": ``room_list``;
 * a workspace's run prompt (its instructions say "Summarise the sales"):
   ``sample_sales_figures`` then ``room_publish_edition``;
+* "email the lapsed buyers": ``room_propose_email`` to two fixture contacts,
+  with no workspace id (the turn's own workspace is meant);
 * a run prompt whose instructions say "then start another run": ``room_run``
   on its own workspace, which an unattended run must be refused;
 * "(take your time)" anywhere: the answer waits ``SLOW_SECONDS`` first, so a
@@ -45,6 +47,9 @@ SLOW_SECONDS = 6.0
 #: Who wrote a room turn: the engine prefixes it ``[Name] ``.
 _SPEAKER = re.compile(r"^\[(?P<name>[^\]]{1,80})\]\s*(?P<text>.*)$", re.DOTALL)
 _ROOM_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+#: Who "the lapsed buyers" are, in the dry run's email step.
+LAPSED_BUYERS = ("buyer.one@example.org", "buyer.two@example.org")
 
 #: What the dry run's report is.
 REPORT = {
@@ -209,6 +214,17 @@ def decide(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -
         return call("room_run", {"room_id": room.group(0) if room else "", "preview": True})
     if "what's new" in lowered or "whats new" in lowered:
         return call("room_list", {})
+    if "email the lapsed buyers" in lowered:
+        # Proposes only, for the turn's own workspace (no id: the turn is bound to it).
+        return call(
+            "room_propose_email",
+            {
+                "to": list(LAPSED_BUYERS),
+                "subject": "Checking in",
+                "body": "Hello,\n\nWe have not seen an order from you this month. "
+                "Is there anything we can help with?\n\nBest regards",
+            },
+        )
     if "then start another run" in lowered:
         # A run trying to start more runs: it must be refused (unattended).
         room = re.search(r"room_id ([0-9a-f-]{36})", text)
