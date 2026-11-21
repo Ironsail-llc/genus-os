@@ -18,6 +18,30 @@ import {
   type StreamReader,
 } from "@/lib/event-bus/redis-client";
 import { visibleToTenant } from "@/lib/event-bus/tenant-filter";
+import { createRoomGate } from "@/lib/event-bus/room-gate";
+import { bridgeAuthHeaders } from "@/lib/bridge-auth";
+import { getServiceUrl } from "@/lib/services/registry";
+
+/**
+ * The caller's room ids, from the bridge with the caller's own token; null
+ * when they cannot be read, which the gate treats as "no room events".
+ */
+async function callerRoomIds(): Promise<Set<string> | null> {
+  try {
+    const bridge = getServiceUrl("bridge") || "http://localhost:9100";
+    const res = await fetch(`${bridge.replace(/\/$/, "")}/api/rooms`, {
+      headers: await bridgeAuthHeaders(),
+      signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { rooms?: Array<{ id?: unknown }> };
+    if (!Array.isArray(data?.rooms)) return null;
+    return new Set(data.rooms.map((room) => room?.id).filter((id): id is string => typeof id === "string"));
+  } catch {
+    return null;
+  }
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +54,8 @@ export async function GET(request: NextRequest) {
     return new Response("Unauthorized", { status: 401 });
   }
   const tenant = session.tenantId;
+  // Then the rooms this caller can access: one gate per connection.
+  const rooms = createRoomGate({ loadRoomIds: callerRoomIds });
 
   const streamsParam =
     request.nextUrl.searchParams.get("streams") || "email,crm,health,agent";
@@ -68,7 +94,7 @@ export async function GET(request: NextRequest) {
           lastIds[streamName] = "$";
           try {
             const raw = await readRecent(streamName, 20);
-            const recent = visibleToTenant(raw, tenant);
+            const recent = await rooms.filter(visibleToTenant(raw, tenant));
             // XREVRANGE is newest first; an empty stream starts from the beginning.
             // The cursor is the newest id this read covered, including events
             // filtered out as another tenant's, so the live read resumes after them.
@@ -108,7 +134,7 @@ export async function GET(request: NextRequest) {
                 // Advance past every event, send only this tenant's.
                 lastIds[streamName] = event.id;
               }
-              for (const event of visibleToTenant(events, tenant)) {
+              for (const event of await rooms.filter(visibleToTenant(events, tenant))) {
                 const data = JSON.stringify({
                   stream: streamName,
                   ...event,
