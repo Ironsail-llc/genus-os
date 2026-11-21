@@ -70,7 +70,9 @@ export function readProvenance(edition: Edition, members: RoomMember[]): Provena
     ranAs,
     startedAt: str(p.started_at) ?? str(p.startedAt),
     costUsd: num(p.cost_usd) ?? num(p.costUsd),
-    tokens: readTokens(p.tokens),
+    // The engine writes `input_tokens` / `output_tokens` beside `cost_usd`
+    // (robothor/rooms/editions.py, run_cost); a `tokens` value is read too.
+    tokens: readTokens(p.tokens) ?? readTokens({ input_tokens: p.input_tokens, output_tokens: p.output_tokens }),
     toolCalls: Array.isArray(calls)
       ? calls
           .filter((c): c is Record<string, unknown> => !!c && typeof c === "object")
