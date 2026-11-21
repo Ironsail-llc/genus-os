@@ -324,6 +324,9 @@ def _claim(
     if used >= limit:
         raise OnDemandCapReached(limit, used)
     runner = run_room or resolve_run_room()
+    # Everything that can fail happens BEFORE the insert: a committed
+    # ``building`` row with no run behind it would hold the period.
+    context = context_for_period(room.tenant_id, room.id, period)
     edition, created = dal.create_edition(
         room.tenant_id,
         room.id,
@@ -334,7 +337,6 @@ def _claim(
     )
     if not created:
         return edition, False, None
-    context = context_for_period(room.tenant_id, room.id, period)
     return edition, True, functools.partial(runner, room, edition, period=period, context=context)
 
 
@@ -384,14 +386,34 @@ async def request_period(
     (``OnDemandCapReached``, nothing started). ``PeriodError`` for a period
     that is malformed or not over, or a room that is not a report.
     """
-    edition, started, run = await asyncio.to_thread(
-        _claim, actor, room_id, grain, anchor, run_room, now
+    claim = asyncio.ensure_future(
+        asyncio.to_thread(_claim, actor, room_id, grain, anchor, run_room, now)
     )
-    if started and run is not None:
-        release = recovery.hold(edition.id)
-        task = asyncio.create_task(_run(edition, run, release), name=f"room-period-{edition.id}")
-        _runs.add(task)
-        task.add_done_callback(_runs.discard)
-        # A task cancelled before it first ran never enters ``_run``.
-        task.add_done_callback(lambda _task: release())
+    try:
+        edition, started, run = await asyncio.shield(claim)
+    except asyncio.CancelledError:
+        # The thread goes on and may commit a ``building`` row: start its run
+        # anyway, or nothing would ever build that period.
+        claim.add_done_callback(_start_when_claimed)
+        raise
+    _start(edition, started, run)
     return edition, started
+
+
+def _start_when_claimed(claim: asyncio.Future[Any]) -> None:
+    if not claim.cancelled() and claim.exception() is None:
+        _start(*claim.result())
+
+
+def _start(edition: Edition, started: bool, run: Callable[[], Awaitable[Any]] | None) -> None:
+    """Start the one run, tracked by the engine's shutdown drain and held live."""
+    if not started or run is None:
+        return
+    from robothor.engine.task_registry import get_task_registry
+
+    release = recovery.hold(edition.id)
+    task = get_task_registry().spawn(_run(edition, run, release), name=f"room-period-{edition.id}")
+    _runs.add(task)
+    task.add_done_callback(_runs.discard)
+    # A task cancelled before it first ran never enters ``_run``.
+    task.add_done_callback(lambda _task: release())
