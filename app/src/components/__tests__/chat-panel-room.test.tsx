@@ -105,7 +105,8 @@ describe("ChatPanel in a room", () => {
     await screen.findByText("How did we do?");
     await type("And margins?");
     await screen.findByText("Noted.");
-    expect(sends[0]).toEqual({ message: "And margins?", request_id: expect.any(String), room: REPORT_ID });
+    // The room by id, and the outbox entry it was sent from (its client id).
+    expect(sends[0]).toEqual({ message: "And margins?", request_id: expect.any(String), room: REPORT_ID, client_id: expect.any(String) });
   });
 
   it("shows each message's author, and the edition a message announced, from history", async () => {
@@ -320,6 +321,34 @@ describe("ChatPanel in a room", () => {
     expect(screen.getAllByText("A")).toHaveLength(1);
     expect(screen.getAllByText("B")).toHaveLength(1);
   });
+
+  for (const echo of [true, false]) {
+    it(`shows a message once after leaving while it was answered and coming back (client id ${echo ? "echoed" : "not echoed"})`, async () => {
+      history = [];
+      let answer!: (r: Response) => void;
+      sendReplies.push(() => new Promise<Response>((r) => (answer = r)));
+      const first = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+      await screen.findByTestId("room-chat-empty");
+      await type("A");
+      await waitFor(() => expect(sends).toHaveLength(1));
+      first.unmount();
+
+      // The engine has stored it; the reply is still on its way.
+      history = [{ id: 40, role: "user", content: "A", authorName: "Alice", ...(echo ? { clientId: sends[0].client_id } : {}) }];
+      const { rerender } = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+      await screen.findByText("A");
+      expect(screen.getAllByText("A")).toHaveLength(1);
+
+      await act(async () => answer(sseResponse([{ event: "done", data: { text: "Noted." } }])));
+      history = [...history, { id: 41, role: "assistant", content: "Noted.", authorName: "Analyst" }];
+      await act(async () => rerender(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 1 }} />));
+      await screen.findByText("Noted.");
+      expect(screen.getAllByText("A")).toHaveLength(1);
+      expect(sends).toHaveLength(1);
+      // Every room send names its outbox entry.
+      expect(sends[0].client_id).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+    });
+  }
 
   describe("a message typed while a queued one is being offered again", () => {
     /** A queued "A", offered again with its answer held; "B" typed meanwhile. */

@@ -33,6 +33,8 @@ export interface HistoryMessage {
    * as stored. Read where it is drawn (`readEmailReceipt`), which loads only then.
    */
   receipt?: unknown;
+  /** In a room: the outbox entry (client id) this stored message was sent from. */
+  clientId?: string;
 }
 
 type Block = { type: string; text?: string };
@@ -45,6 +47,8 @@ type Row = {
   authorName?: unknown;
   editionId?: unknown;
   author_user_id?: unknown;
+  clientId?: unknown;
+  client_id?: unknown;
   author_name?: unknown;
   edition_id?: unknown;
   kind?: unknown;
@@ -60,10 +64,11 @@ function field(row: Row, camel: keyof Row, snake: keyof Row): string | undefined
 }
 
 /** The room-only fields, present only when the row carries them. */
-function roomFields(row: Row): Pick<HistoryMessage, "authorUserId" | "authorName" | "editionId" | "receipt"> {
+function roomFields(row: Row): Pick<HistoryMessage, "authorUserId" | "authorName" | "editionId" | "receipt" | "clientId"> {
   const authorUserId = field(row, "authorUserId", "author_user_id");
   const authorName = field(row, "authorName", "author_name");
   const editionId = field(row, "editionId", "edition_id");
+  const clientId = field(row, "clientId", "client_id");
   // Only a receipt turn's receipt: no other row may draw one.
   const receipt = row.kind === "room_email_receipt" && row.receipt && typeof row.receipt === "object" ? row.receipt : null;
   return {
@@ -71,6 +76,7 @@ function roomFields(row: Row): Pick<HistoryMessage, "authorUserId" | "authorName
     ...(authorName ? { authorName } : {}),
     ...(editionId ? { editionId } : {}),
     ...(receipt ? { receipt } : {}),
+    ...(clientId ? { clientId } : {}),
   };
 }
 

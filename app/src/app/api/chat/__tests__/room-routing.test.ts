@@ -101,6 +101,15 @@ describe("the chat routes in a room", () => {
     expect(resolveChatAgent).not.toHaveBeenCalled();
   });
 
+  it("forwards the outbox entry's client id with a room message, and only a well-formed one", async () => {
+    const { send } = await routes();
+    const CLIENT = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    await send(post({ message: "hi", room: ROOM, request_id: "r-1", client_id: CLIENT }));
+    expect(engine.chatSend).toHaveBeenLastCalledWith("hi", "", "r-1", false, undefined, ROOM, CLIENT);
+    const res = await send(post({ message: "hi", room: ROOM, client_id: "agent:main:primary" }));
+    expect(res.status).toBe(400);
+  });
+
   it("never injects the canvas prompt into a room's session", async () => {
     const { send, history } = await routes();
     await send(post({ message: "hi", room: ROOM }));

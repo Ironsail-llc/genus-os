@@ -39,7 +39,7 @@ import {
 import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain, PanelRightClose } from "lucide-react";
 
 import { forgetRequest, journalRequest, pendingRequests } from "@/lib/chat/request-journal";
-import { roomOutbox, type OutboxItem, type OutboxState, type SendResult } from "@/lib/chat/room-outbox";
+import { mergeRoomRows, pendingBubbles, roomOutbox, type OutboxItem, type OutboxState, type SendResult } from "@/lib/chat/room-outbox";
 
 import { OUTCOME_UNKNOWN, requestFailure, terminalOutcome } from "@/lib/chat/terminal-outcome";
 
@@ -63,6 +63,8 @@ interface ChatMessage {
   editionId?: string;
   /** In a task workspace: an email's receipt as stored, drawn as one. */
   receipt?: unknown;
+  /** In a room: the outbox entry a stored message was sent from. */
+  clientId?: string;
   /** In a room: the components this turn rendered, drawn under the reply. */
   renders?: RenderBlock[];
 }
@@ -167,29 +169,6 @@ function stripResidualMarkers(text: string): string {
   return stripMarkers(text).trim();
 }
 
-/**
- * The panel's messages with a room's stored page merged in: stored rows not
- * on screen are added, and a message shown before it was stored (no
- * `serverId`) takes its stored copy's id and author instead of a second
- * bubble. Order is the panel's, with new rows after the newest stored one.
- */
-function mergeStored(prev: ChatMessage[], stored: ChatMessage[]): ChatMessage[] {
-  const shown = new Set(prev.map((m) => m.id));
-  const next = [...prev];
-  const added: ChatMessage[] = [];
-  for (const row of stored) {
-    if (shown.has(row.id)) continue;
-    const local = next.findIndex(
-      (m) => m.serverId === undefined && !m.recovery && m.role === row.role && m.content.trim() === row.content.trim(),
-    );
-    if (local >= 0) {
-      next[local] = { ...next[local], ...row, note: next[local].note, attachments: next[local].attachments ?? row.attachments };
-    } else {
-      added.push(row);
-    }
-  }
-  return added.length || next.some((m, i) => m !== prev[i]) ? [...next, ...added] : prev;
-}
 
 interface ChatPanelProps {
   /** When true, renders in mobile-optimized layout (no duplicate header, labeled controls) */
@@ -393,6 +372,11 @@ export function ChatPanel({
     }),
     [agent, roomId],
   );
+  // Which chat's history has answered (or failed). The landing waits for it:
+  // shown before the transcript arrives, it would flash and fire its requests
+  // on every load of an existing conversation. A room's outbox waits for it too.
+  const [historySettledFor, setHistorySettledFor] = useState<string | null>(null);
+
   // A room's messages leave through its outbox (`lib/chat/room-outbox.ts`):
   // one ordered queue, one sender, head first, one message per turn. It
   // outlives this panel, so what is queued survives leaving the workspace.
@@ -406,12 +390,14 @@ export function ChatPanel({
   const roomBusy = outboxState.blocked ? outboxState.answering : null;
   const [roomHistoryFailed, setRoomHistoryFailed] = useState(false);
 
-  /** Bubbles for what waits in the outbox and is not on screen (after leaving and coming back). */
+  // The outbox entries this panel has itself offered: the only in-flight
+  // send it may draw a bubble for (see `pendingBubbles`).
+  const startedHere = useRef(new Set<string>());
+  /** Bubbles, keyed by client id, for outbox entries not drawn (after leaving and coming back). */
   const withOutbox = useCallback((list: ChatMessage[]): ChatMessage[] => {
     if (!outbox) return list;
     const state = outbox.state();
-    const shown = new Set(list.map((m) => m.id));
-    const waiting = state.items.filter((item) => !shown.has(item.id)).map((item): ChatMessage => {
+    const waiting = pendingBubbles(state, list, startedHere.current).map((item): ChatMessage => {
       const chips = summarise(item.files);
       return {
         id: item.id, role: "user", content: item.text, timestamp: new Date(), note: outboxNote(item, state),
@@ -422,9 +408,12 @@ export function ChatPanel({
   }, [outbox]);
 
   // Each waiting bubble says where it stands: queued, queued behind whom, or
-  // (the head, while it is sent) nothing.
+  // (the head, while it is sent) nothing. And an entry that now needs a bubble
+  // (another panel's send, refused after this one opened) gets one.
+  const outboxHistoryReady = historySettledFor === agentQuery;
   useEffect(() => {
     if (!outbox) return;
+    if (outboxHistoryReady) setMessages((prev) => withOutbox(prev));
     setMessages((prev) => {
       const notes = new Map(outboxState.items.map((item) => [item.id, outboxNote(item, outboxState)]));
       let changed = false;
@@ -435,7 +424,7 @@ export function ChatPanel({
       });
       return changed ? next : prev;
     });
-  }, [outbox, outboxState]);
+  }, [outbox, outboxState, outboxHistoryReady, withOutbox]);
 
   /** Whether the listing left out the agent it named as the default.
    *
@@ -634,11 +623,6 @@ export function ChatPanel({
     [agent, chattable, defaultAgent]
   );
 
-  // Which chat's history has answered (or failed). The landing waits for it:
-  // shown before the transcript arrives, it would flash and fire its requests
-  // on every load of an existing conversation.
-  const [historySettledFor, setHistorySettledFor] = useState<string | null>(null);
-
   // Load history on mount, and again whenever the chat is pointed elsewhere
   //
   // Cancelled on the way out, like the listing above it. Both the abandoned
@@ -704,13 +688,14 @@ export function ChatPanel({
       .then((data) => {
         if (cancelled || !data) return;
         const stored = historyToMessages(data.messages).filter((m) => m.serverId !== undefined);
-        setMessages((prev) => mergeStored(prev, stored));
+        // A stored copy replaces its local bubble (by client id), never joins it.
+        setMessages((prev) => withOutbox(mergeRoomRows(prev, stored)));
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [roomId, roomRefreshKey, panelBusy, agentQuery]);
+  }, [roomId, roomRefreshKey, panelBusy, agentQuery, withOutbox]);
 
   // Recover pending plan on page refresh
   //
@@ -1006,10 +991,10 @@ export function ChatPanel({
       setActiveAsks([]);
       const item = outbox.enqueue(text, queuedFiles);
       const chips = summarise(queuedFiles);
-      setMessages((prev) => [...prev, {
+      setMessages((prev) => (prev.some((m) => m.id === item.id) ? prev : [...prev, {
         id: item.id, role: "user", content: text, timestamp: new Date(), note: outboxNote(item, outbox.state()),
         ...(chips ? { attachments: chips } : {}),
-      }]);
+      }]));
       return;
     }
     if (!flushing && !resend && text && isStreaming) return sendFollowup(text);
@@ -1066,7 +1051,11 @@ export function ChatPanel({
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, request_id: requestIdRef.current, ...target, ...(files.length ? { attachments: files } : {}) }),
+        body: JSON.stringify({
+          message: text, request_id: requestIdRef.current, ...target, ...(files.length ? { attachments: files } : {}),
+          // A room message names its outbox entry, so its stored copy can be matched to its bubble.
+          ...(roomId && flushing?.length === 1 ? { client_id: flushing[0].id } : {}),
+        }),
         signal: controller.signal,
       });
 
@@ -1321,7 +1310,10 @@ export function ChatPanel({
   const historyReady = historySettledFor === agentQuery;
   useEffect(() => {
     if (!outbox || !historyReady) return;
-    return outbox.attach(async (item) => (await sendMessageRef.current([item])) ?? { outcome: "failed" });
+    return outbox.attach(async (item) => {
+      startedHere.current.add(item.id);
+      return (await sendMessageRef.current([item])) ?? { outcome: "failed" };
+    });
   }, [outbox, historyReady]);
   // A live room message means the room moved on: a refused head is offered again now.
   const lastRefreshKey = useRef(roomRefreshKey);
