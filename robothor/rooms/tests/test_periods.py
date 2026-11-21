@@ -292,3 +292,23 @@ def test_without_a_room_runs_module_the_runner_is_unavailable(monkeypatch):
 
     with pytest.raises(RoomRunUnavailable, match="not available"):
         resolve_run_room()
+
+
+@pytest.mark.parametrize("tz", ["Asia/Tokyo", "Pacific/Kiritimati"])
+@pytest.mark.parametrize(
+    ("grain", "anchor"),
+    [("custom", "0001-01-01/0001-01-03"), ("day", "0001-01-01"), ("week", "0001-01-01")],
+)
+def test_a_period_whose_local_midnight_is_before_the_calendar_is_refused(tz, grain, anchor):
+    """East of UTC, local midnight on 1 January of year 1 falls on a UTC day the
+    calendar does not have: the period cannot be placed in time, so it is a
+    PeriodError (422), never an OverflowError later in the run."""
+    with pytest.raises(PeriodError) as refused:
+        resolve_period(grain, tz, anchor, now=NOW)
+    assert refused.value.reason == "invalid_anchor"
+
+
+def test_the_same_period_west_of_utc_is_still_accepted():
+    period = resolve_period("day", "America/New_York", "0001-01-01", now=NOW)
+    assert period.start == date(1, 1, 1)
+    period.bounds("America/New_York")
