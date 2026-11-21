@@ -80,6 +80,8 @@ often as any scheduled job on the platform: at most once a minute.
 
 - **Pause** stops scheduled runs. It is not a change to the definition and
   writes no revision. On resume, the next run is counted from that moment.
+  While it is paused, only its assigned members and admins can run it now or
+  ask it for a period; anyone else is told it is paused.
 - **Archive** (assigned or admin) stops the schedule and leaves the workspace
   readable.
 - **Restore an archived workspace** is for a company owner or admin, from
@@ -177,8 +179,10 @@ hand.
   workspace shows the exact email (from, reply-to, to, cc, subject and the
   whole body) with **Approve and send** and **Reject**. Approved, it is sent
   once, from the company's assistant mailbox with replies going to you, and a
-  receipt appears in the workspace (sent, or not sent and why). Rejected, nothing
-  is sent and the receipt says so. A report workspace proposes no email, and
+  receipt appears in the workspace (sent, or not sent and why). Once it is
+  sent, the task is done: it moves to Done, its resolution naming the email.
+  Rejected, failed, unconfirmed or expired, nothing is sent, the receipt says
+  so, and the task stays open. A report workspace proposes no email, and
   nobody else can see or decide yours.
 - **Other approvals.** A member decides only an email their own turn in their
   own task workspace proposed. Everything else is decided by those who approve

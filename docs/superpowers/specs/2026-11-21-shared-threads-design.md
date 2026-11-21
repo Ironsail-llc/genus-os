@@ -93,8 +93,8 @@ operation_actions + proposed_by_run_id TEXT, proposed_for_user_id UUID, room_id 
 ```
 
 `settings` keys: `tz` (IANA name), `default_grain`, `schedule_text`, `notify_default`.
-Nothing in a workspace is capped (operator decision, 2026-11-21): no cost cap, no
-on-demand limit, no room-specific schedule floor, no longest custom period. Cost is
+Nothing in a workspace is limited (operator decision, 2026-11-21): not what a run
+costs, not how often it runs or is asked for, not how long a period is. Cost is
 shown on each edition's provenance; repeated failures pause a workspace and say why; a
 run that dies is recovered. The *definition* stored in a revision is
 `{title, instructions, agent_id, settings, schedule}`.
@@ -188,11 +188,9 @@ editions, messages)`, `share_room`, `unshare_room`, `archive_room`,
 `duplicate_room`, `restore_room_revision`, `reassign_room`, `resolve_user`,
 `run_as_actor(tenant_id, room_id)` and `room_schedule(tenant_id, room_id)`.
 
-- A schedule must repeat: a one-off (`2h`, an ISO time) is refused. There is no
-  workspace minimum interval (operator decision: nothing in workspaces is capped);
-  a schedule may be as frequent as `cron_parse.parse_schedule` allows any user
-  cron. `max_cost_usd` is not a definition change the tools or
-  `apply_definition_change` accept. A room's
+- A schedule must repeat: a one-off (`2h`, an ISO time) is refused. A schedule may
+  be as frequent as `cron_parse.parse_schedule` allows any user cron (operator
+  decision: nothing in workspaces is limited). A room's
   cron schedule is read in `settings.tz`, UTC when unset; the zone is stored in the
   row's payload. A plain user cron (no `tz` in its payload) keeps the host's zone.
 - One `user_cronjobs` row per room: a partial unique index on
@@ -235,9 +233,10 @@ editions, messages)`, `share_room`, `unshare_room`, `archive_room`,
 - The run is `robothor.rooms.runs.run_room(room, edition, *, period, context)`
   (lane 7), resolved before any row is written; when it is missing the request fails
   `RoomRunUnavailable` (503). A run that raises fails its edition.
-- No limits (operator decision): no on-demand cap, no `max_on_demand_per_day`
-  setting (removed from `SETTINGS_KEYS`), no maximum custom range. A period must
-  still have ended, and one run still serves each period.
+- No limits (operator decision): `SETTINGS_KEYS` holds no limit setting, and a
+  custom range may be any length. A period must still have ended, must be
+  placeable in time in the workspace's zone (``Period.bounds``; else 422), and
+  one run still serves each period.
 - Recovery (`robothor/rooms/recovery.py`): `reap_stale_editions(tenant_id, *,
   room_id=None, booted_at=None, now=None) -> list[Edition]` fails each `building`
   edition whose run is not alive: not held by this process (`hold(edition_id)` /
@@ -400,7 +399,7 @@ run-as still gets the standard capability tier and its own tenant only, never
 the interactive standing a present, verified person gets;
 `trigger_detail=f"room:{id}"` names the room. It takes no
 `agent_config`: the runner loads the agent's own manifest, so a workspace adds
-no budget (no cost cap). What the run cost is a flag: the publish writes the
+no budget of its own. What the run cost is a flag: the publish writes the
 run row's `total_cost_usd`, `input_tokens` and `output_tokens` into provenance
 (`cost_usd`, `input_tokens`, `output_tokens`; `editions.run_cost`), and when the
 run ends its final totals are merged in (`dal.record_edition_cost`, added). The
@@ -463,8 +462,7 @@ No run starts runs: a workspace run's carrier is `RoomRun(..., unattended=True)`
 (`handlers.rooms._actor` returns None), so a run cannot create scheduled
 workspaces either. With no person, `room_read` opens only the carrier's own
 room (same tenant) as that room's run-as user, and `room_list` returns only
-that room; a run bound to no room reads nothing. `max_cost_usd` is no longer a room setting (refused as
-unknown). Stopping a run: a run now, period run or preview by its requester or
+that room; a run bound to no room reads nothing. Stopping a run: a run now, period run or preview by its requester or
 an assigned member/admin; a scheduled run by an assigned member/admin.
 
 Threat model for room text in an unattended run. The run acts with its run-as
@@ -625,8 +623,8 @@ No access → 404. Access without the action → 403. JSON is camelCase, as the 
   takes `{expectedRev, changes}`; change keys `title, instructions, scheduleText, tz,
   defaultGrain, paused, notifyDefault` (snake_case too) map to the
   `apply_definition_change` names; any other key is 422 `invalid_request` with
-  `field: "changes"`. Nothing in the bridge caps cost or frequency: there is no cost
-  setting, no run cap and no minimum schedule interval of its own.
+  `field: "changes"`; a bad title is 422 with `field: "title"`. The bridge limits
+  neither cost nor frequency: a schedule is whatever the platform parser accepts.
 - Every refusal is `{"detail": {"error": <code>, "message", "field": <camelCase or
   null>, ...}}`: `not_found` 404, `forbidden` 403 (names the duplicate on a shared
   user's edit), `revision_conflict` 409 + `currentRev`, `invalid_schedule` /
@@ -793,7 +791,18 @@ The seams between lanes, each crossed by a test:
   gives the agent the id. A receipt turn (`kind: "room_email_receipt"`, `receipt`)
   reaches the dashboard through history unchanged and is drawn as a receipt. Approvals
   appear only in a task workspace; a report workspace's accepted task offers "Open task
-  workspace".
+  workspace". When a sent email's receipt is written, the task it was for moves to
+  `DONE` (through `IN_PROGRESS` from `TODO`), its resolution naming the email, changed
+  by the approver, once (`outbound._complete_task`); any other receipt leaves it open.
+- **Period edges.** A shared member asking a paused workspace for a period is 409
+  `paused` and nothing is inserted (`runs.check_not_paused_for` in `periods._claim`).
+  A period whose local midnight cannot be placed in UTC (1 January of year 1 east of
+  UTC) is `PeriodError` (422 `invalid_period`), not an `OverflowError`.
+- **Titles.** A patch with an empty or non-text title is `InvalidField("title")`: 422
+  with `field: "title"` and no revision, where a non-text title was a 500.
+- **Client ids.** A workspace send's `client_id` (a UUID, else 400 `invalid_client_id`)
+  is stored on its user turn, also when the turn is interrupted, and echoed as
+  `clientId` in history; it is trusted for nothing else.
 - **Provenance cost.** The drawer reads `cost_usd` and the `input_tokens` /
   `output_tokens` the engine writes beside it; the bridge golden carries a provenance
   built by `editions.build_provenance`.
