@@ -1267,7 +1267,7 @@ class CronScheduler:
             )
 
             now = datetime.now(UTC)
-            await tick_room_cronjobs(self.config.tenant_id, self.runner)  # rooms: own path
+            await tick_room_cronjobs(self.config.tenant_id, getattr(self, "runner", None))
             due = await asyncio.to_thread(list_due_cronjobs, self.config.tenant_id, now)
             for job in due:
                 job_id = job["job_id"]

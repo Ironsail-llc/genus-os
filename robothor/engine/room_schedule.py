@@ -28,7 +28,8 @@ async def tick_room_cronjobs(tenant_id: str, runner: Any) -> None:
     from robothor.engine import user_cron
     from robothor.rooms import runs
 
-    runs.bind_runner(runner)
+    if runner is not None:
+        runs.bind_runner(runner)
     now = datetime.now(UTC)
     try:
         due = await asyncio.to_thread(user_cron.list_due_room_cronjobs, tenant_id, now)
