@@ -417,3 +417,43 @@ def test_tool_search_finds_the_email_tool_for_a_workspace_request(query):
     registry = ToolRegistry()
     top = [h["name"] for h in registry.search_tools(list(registry._schemas), query, limit=3)]
     assert "room_propose_email" in top
+
+
+# ─── the workspace a chat turn is in ─────────────────────────────────────
+
+
+def _propose_spy(monkeypatch) -> list[str]:
+    from types import SimpleNamespace
+
+    from robothor.rooms import outbound
+
+    rooms: list[str] = []
+
+    def propose(actor, room_id, run_id, **kw):
+        rooms.append(room_id)
+        return SimpleNamespace(action_id="a-1", payload={"subject": kw["subject"]}, expires_at=None)
+
+    monkeypatch.setattr(outbound, "propose_email", propose)
+    return rooms
+
+
+def test_propose_email_without_a_room_id_uses_the_workspace_the_turn_is_in(monkeypatch):
+    """Nothing tells the agent its workspace's id in a chat turn; the turn is
+    bound to its workspace (``room_run_scope``), so that is the one meant."""
+    from robothor.rooms.run_context import RoomRun, room_run_scope
+
+    rooms = _propose_spy(monkeypatch)
+    args = {"to": ["carol.client@example.org"], "subject": "Hi", "body": "Hello"}
+    with room_run_scope(RoomRun.for_session("test-tenant", f"agent:main:room:{ROOM_ID}")):
+        result = _call("room_propose_email", args)
+
+    assert result["proposed"] is True
+    assert rooms == [ROOM_ID]
+    assert result["link"].endswith(ROOM_ID)
+
+
+def test_propose_email_with_no_room_id_and_no_workspace_is_refused(monkeypatch):
+    rooms = _propose_spy(monkeypatch)
+    result = _call("room_propose_email", {"to": ["a@example.org"], "subject": "Hi", "body": "Hello"})
+    assert "room_id" in result["error"]
+    assert rooms == []
