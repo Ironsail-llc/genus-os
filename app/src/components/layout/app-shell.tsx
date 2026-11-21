@@ -369,7 +369,8 @@ function AppShellBody() {
   const mobileInChat = isMobile && isChatView;
   // The canvas belongs to the main conversation: it is not drawn over a workspace.
   const showCanvasRail = !isMobile && isChatView && canvasRailOpen && !activeRoom;
-  const showRoomRail = isChatView && !showCanvasRail;
+  // No rail while nothing serves the rooms list (it answered 404).
+  const showRoomRail = isChatView && !showCanvasRail && rooms.available;
 
   // A visual the agent asks for mid-chat — a [RENDER:…] component or
   // [DASHBOARD:…] data — must be seen where the operator is looking, so it
@@ -678,6 +679,7 @@ function AppShellBody() {
       {/* Mobile chat — full screen, no duplicate header */}
       {mobileInChat && (
         <div className="flex-1 min-h-0 pb-14 flex flex-col" data-testid="chat-container">
+          {rooms.available && (
           <RoomRail
             rooms={rooms.rooms}
             activeRoomId={activeRoom}
@@ -686,6 +688,7 @@ function AppShellBody() {
             error={rooms.error}
             collapsed
           />
+          )}
           {activeRoom && (
             <div className="flex-1 min-h-0">
               <SurfaceBoundary name="Workspace">

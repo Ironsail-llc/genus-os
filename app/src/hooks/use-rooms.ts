@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAppQueryClient } from "@/lib/query/query-client";
-import { refusalOf } from "@/lib/query/fetch-refused";
+import { FetchRefused, refusalOf } from "@/lib/query/fetch-refused";
 import { useEventStream, type StreamEvent } from "@/lib/event-bus/use-event-stream";
 import { ROOMS_ENDPOINT, fetchRooms, postRoomRead } from "@/lib/rooms/api";
 import { isRoomEventType, roomIdOf } from "@/lib/rooms/events";
@@ -13,6 +13,11 @@ import type { RoomSummary } from "@/lib/rooms/types";
 export const ROOMS_QUERY_KEY = ["rooms", "mine"] as const;
 
 const STALE_MS = 30_000;
+
+/** A 404 for the list itself: nothing serves rooms here (yet). Not an error to show. */
+function notServed(error: unknown): boolean {
+  return error instanceof FetchRefused && error.status === 404;
+}
 
 interface UseRoomsOptions {
   /** Subscribe to the agent stream and read the list again on `room.*` events. */
@@ -36,18 +41,24 @@ export function useRooms(options: UseRoomsOptions = {}) {
       queryKey: ROOMS_QUERY_KEY,
       queryFn: ({ signal }) => fetchRooms(signal),
       staleTime: STALE_MS,
+      // Not served is an answer, not a blip: it is not asked again until reload.
+      refetchOnWindowFocus: (q) => !notServed(q.state.error),
+      refetchOnReconnect: (q) => !notServed(q.state.error),
     },
     client,
   );
   const rooms = useMemo(() => query.data ?? [], [query.data]);
-  const error = refusalOf(query.error);
+  // When the list answers 404 the feature is hidden: no rail, no live
+  // subscription, no re-reads. Any other refusal is shown as one.
+  const available = !notServed(query.error);
+  const error = available ? refusalOf(query.error) : null;
 
   const { refetch } = query;
   const refresh = useCallback(async () => {
     await refetch();
   }, [refetch]);
 
-  useNewRoomEvents(live, () => {
+  useNewRoomEvents(live && available, () => {
     void client.invalidateQueries({ queryKey: ROOMS_QUERY_KEY });
   });
 
@@ -69,6 +80,8 @@ export function useRooms(options: UseRoomsOptions = {}) {
 
   return {
     rooms,
+    /** False when nothing serves the rooms list (404): the shell shows no rail. */
+    available,
     totalUnread,
     isLoading: query.isPending,
     error: error ? { endpoint: ROOMS_ENDPOINT, status: error.status } : null,
@@ -78,13 +91,17 @@ export function useRooms(options: UseRoomsOptions = {}) {
 }
 
 /**
- * Calls `onEvent` once for each `room.*` event that arrives after mount. The
- * replay a new stream connection starts with is what happened BEFORE this
- * reader was looking; it is marked seen, not handed over.
+ * Calls `onEvent` once for each `room.*` event that arrives after the stream
+ * has synced. A new connection first replays recent events and then sends its
+ * sync marker; what arrives before that marker happened BEFORE this reader
+ * was looking, so it is marked seen, not handed over (handing it over read
+ * the room list again and posted a spurious read on every open).
  */
 function useNewRoomEvents(enabled: boolean, onEvent: (event: StreamEvent) => void) {
-  const { events } = useEventStream({ streams: ["agent"], enabled, maxEvents: 50 });
-  const seen = useRef<Set<string> | null>(null);
+  const { events, synced } = useEventStream({ streams: ["agent"], enabled, maxEvents: 50 });
+  const seen = useRef<Set<string>>(new Set());
+  // Set on the first render after the sync marker; until then, all is replay.
+  const armed = useRef(false);
   const handler = useRef(onEvent);
   useEffect(() => {
     handler.current = onEvent;
@@ -92,18 +109,20 @@ function useNewRoomEvents(enabled: boolean, onEvent: (event: StreamEvent) => voi
 
   useEffect(() => {
     if (!enabled) return;
-    if (seen.current === null) {
-      seen.current = new Set(events.map((e) => `${e.stream}:${e.id}`));
+    const key = (e: StreamEvent) => `${e.stream}:${e.id}`;
+    if (!synced || !armed.current) {
+      for (const event of events) seen.current.add(key(event));
+      armed.current = synced;
       return;
     }
     // `events` is newest first; hand them over oldest first.
-    const fresh = events.filter((e) => !seen.current!.has(`${e.stream}:${e.id}`)).reverse();
+    const fresh = events.filter((e) => !seen.current.has(key(e))).reverse();
     for (const event of fresh) {
-      seen.current.add(`${event.stream}:${event.id}`);
+      seen.current.add(key(event));
       if (isRoomEventType(event.type)) handler.current(event);
     }
-    if (seen.current.size > 500) seen.current = new Set(events.map((e) => `${e.stream}:${e.id}`));
-  }, [events, enabled]);
+    if (seen.current.size > 500) seen.current = new Set(events.map(key));
+  }, [events, enabled, synced]);
 }
 
 /** One room's `room.*` events, as they arrive, for the room that is open. */
