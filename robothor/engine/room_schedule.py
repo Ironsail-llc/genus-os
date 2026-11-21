@@ -49,6 +49,6 @@ async def tick_room_cronjobs(tenant_id: str, runner: Any) -> None:
             )
             if claimed:
                 run = runs.execute_room_run(tenant_id, job["room_id"], trigger="schedule")
-                runs.keep(asyncio.create_task(run, name=f"room-schedule-{job['room_id']}"))
+                runs.spawn(run, name=f"room-schedule-{job['room_id']}")
         except Exception as e:  # noqa: BLE001 - one row must not starve the others
             logger.warning("room schedule %s failed to fire: %s", job.get("job_id"), e)

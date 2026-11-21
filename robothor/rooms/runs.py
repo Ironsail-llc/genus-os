@@ -55,11 +55,10 @@ on-demand cap (:func:`check_on_demand_cap`).
 from __future__ import annotations
 
 import asyncio
-import calendar
 import dataclasses
 import logging
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, datetime, time
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -67,13 +66,14 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.db.connection import get_connection
 from robothor.engine.chat_history import MAX_HISTORY, as_history
-from robothor.rooms import access, dal, fanout
+from robothor.rooms import access, dal, fanout, periods, recovery
 from robothor.rooms.errors import RoomError, RoomForbidden
 from robothor.rooms.keys import canonical_uuid
+from robothor.rooms.periods import OnDemandCapReached, Period, last_complete_period
 from robothor.rooms.run_context import RoomRun, room_run_scope
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Awaitable, Callable, Iterable
 
     from robothor.engine.models import AgentConfig, AgentRun
     from robothor.rooms.access import Actor
@@ -83,7 +83,6 @@ __all__ = [
     "AUTO_PAUSE_AFTER_FAILURES",
     "CAPPED_REASON",
     "DEFAULT_MAX_COST_USD",
-    "DEFAULT_MAX_ON_DEMAND_PER_DAY",
     "HISTORY_LIMIT",
     "TRIGGERS",
     "ActiveRun",
@@ -94,7 +93,7 @@ __all__ = [
     "bind_runner",
     "bound_runner",
     "check_on_demand_cap",
-    "keep",
+    "spawn",
     "execute_room_run",
     "last_complete_period",
     "pending_runs",
@@ -109,9 +108,6 @@ TRIGGERS = frozenset({"schedule", "manual", "period"})
 AUTO_PAUSE_AFTER_FAILURES = 3
 #: A run's cost cap when neither the room nor its agent names one, in dollars.
 DEFAULT_MAX_COST_USD = 2.0
-#: On-demand editions a room runs per local day when its settings name no cap.
-#: The same default as ``robothor.rooms.periods``.
-DEFAULT_MAX_ON_DEMAND_PER_DAY = 5
 #: The reason a run stopped by its cost cap gives its edition.
 CAPPED_REASON = "stopped at the cost cap"
 #: The most history turns a run is given.
@@ -124,17 +120,7 @@ _ADMIN_ROLES = ("owner", "admin")
 _LABELS = {"schedule": "Scheduled run", "manual": "Run now", "period": "Period run"}
 
 
-# ─── periods (replace with robothor.rooms.periods at integration) ───────
-
-
-@dataclass(frozen=True)
-class Period:
-    """Whole days ``start``..``end`` (inclusive) at ``grain``. The same fields
-    as ``robothor.rooms.periods.Period``, which replaces it."""
-
-    start: date
-    end: date
-    grain: str
+# ─── periods (``robothor.rooms.periods``) ──────────────────────────────
 
 
 def _zone(tz: Any) -> ZoneInfo:
@@ -142,27 +128,6 @@ def _zone(tz: Any) -> ZoneInfo:
         return ZoneInfo(str(tz or "UTC"))
     except (ZoneInfoNotFoundError, ValueError):
         return ZoneInfo("UTC")
-
-
-def _containing(grain: str, day: date) -> Period:
-    if grain == "week":
-        monday = day - timedelta(days=day.weekday())
-        return Period(monday, monday + timedelta(days=6), grain)
-    if grain == "month":
-        last = calendar.monthrange(day.year, day.month)[1]
-        return Period(day.replace(day=1), day.replace(day=last), grain)
-    return Period(day, day, "day")
-
-
-def last_complete_period(grain: str, tz: str, now: datetime | None = None) -> Period:
-    """The latest day, week (Monday to Sunday) or month that is over in ``tz``.
-
-    Stand-in for ``robothor.rooms.periods.last_complete_period`` (same
-    behaviour); swap the import when that module is on this branch."""
-    now = datetime.now(UTC) if now is None else now
-    today = now.astimezone(_zone(tz)).date()
-    current = _containing(grain, today)
-    return _containing(grain, current.start - timedelta(days=1))
 
 
 def _period_arg(value: Any) -> Period | None:
@@ -189,17 +154,6 @@ def _default_period(room: Room, now: datetime | None = None) -> Period | None:
 
 
 # ─── errors ─────────────────────────────────────────────────────────────
-
-
-class OnDemandCapReached(RoomError):  # noqa: N818 - reads as the result it is
-    """The room ran its on-demand editions for today (429). Nothing was started."""
-
-    def __init__(self, limit: int, used: int) -> None:
-        self.limit, self.used = limit, used
-        super().__init__(
-            f"on-demand cap reached: this workspace runs {limit} on-demand edition(s) a day "
-            f"and {used} ran today"
-        )
 
 
 class RunRefused(RoomError):  # noqa: N818 - reads as the result it is
@@ -278,10 +232,19 @@ def pending_runs() -> set[asyncio.Task[Any]]:
     return set(_pending)
 
 
-def keep(task: asyncio.Task[Any]) -> asyncio.Task[Any]:
-    """Hold a background room run until it finishes (listed by :func:`pending_runs`)."""
+def spawn(coro: Any, *, name: str, edition_id: str | None = None) -> asyncio.Task[Any]:
+    """Start a background room run through the engine's task registry (so the
+    shutdown drain waits for it), listed by :func:`pending_runs`. With
+    ``edition_id`` the edition is held live (``recovery.hold``) from now, before
+    the task first runs, until it ends."""
+    from robothor.engine.task_registry import get_task_registry
+
+    release = recovery.hold(edition_id) if edition_id else None
+    task = get_task_registry().spawn(coro, name=name)
     _pending.add(task)
     task.add_done_callback(_pending.discard)
+    if release is not None:
+        task.add_done_callback(lambda _task: release())
     return task
 
 
@@ -300,27 +263,21 @@ def _untrack(entry: ActiveRun) -> None:
 # ─── blocking helpers (each runs in a worker thread) ────────────────────
 
 
-def _cap(room: Room) -> int:
-    raw = room.settings.get("max_on_demand_per_day")
-    if isinstance(raw, bool) or not isinstance(raw, int | float | str):
-        return DEFAULT_MAX_ON_DEMAND_PER_DAY
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return DEFAULT_MAX_ON_DEMAND_PER_DAY
-
-
-def check_on_demand_cap(room: Room, *, now: datetime | None = None) -> None:
-    """``OnDemandCapReached`` when the room ran its on-demand editions today.
-
-    Counts every edition a person asked for since local midnight in the
-    room's zone, previews included, as ``robothor.rooms.periods`` does (the
-    one function to point at that lane's check at integration). Blocking."""
+def check_on_demand_cap(
+    room: Room, requested_by: str | None, *, now: datetime | None = None
+) -> None:
+    """``OnDemandCapReached`` when ``requested_by`` ran their on-demand editions
+    in this room today: every edition they asked for since local midnight in
+    the room's zone, previews included, against ``settings.max_on_demand_per_day``
+    (``periods.DEFAULT_MAX_ON_DEMAND_PER_DAY`` when unset), the periods lane's
+    rule. A requester with no account id counts everyone's. Blocking."""
     zone = _zone(room.settings.get("tz"))
     now = datetime.now(UTC) if now is None else now
     since = datetime.combine(now.astimezone(zone).date(), time(), tzinfo=zone)
-    limit = _cap(room)
-    used = dal.count_requested_editions(room.tenant_id, room.id, since=since)
+    limit = periods._cap(room)
+    used = dal.count_requested_editions(
+        room.tenant_id, room.id, since=since, requested_by=canonical_uuid(requested_by)
+    )
     if used >= limit:
         raise OnDemandCapReached(limit, used)
 
@@ -504,6 +461,7 @@ def _prepare(
     period = period or _default_period(room)
     if room.kind != "report" or period is None:
         return room, None
+    recovery.reap_stale_editions(room.tenant_id, room_id=room.id)  # a dead run holds nothing
     edition, created = dal.create_edition(
         room.tenant_id,
         room.id,
@@ -613,10 +571,36 @@ async def _turn(
             user_id=actor.user_id,
             user_role=actor.role,
             identity=identity,
+            on_status=_bind_run(edition) if edition is not None else None,
         )
         if not preview:
             await _save(room, trigger, edition, run)
     return run
+
+
+def _bind_run(edition: Edition) -> Callable[[dict[str, Any]], Awaitable[None]]:
+    """An ``on_status`` callback that records the run's ``agent_runs`` id on the
+    edition at its first status event, so a ``building`` edition is alive
+    exactly while its run row says so (``robothor.rooms.recovery``)."""
+    bound = False
+
+    async def on_status(_event: dict[str, Any]) -> None:
+        nonlocal bound
+        if bound:
+            return
+        from robothor.engine.runtime.activity import current
+
+        activity = current.get()
+        run_id = next(iter(activity.sessions), None) if activity is not None else None
+        if run_id is None:
+            return
+        bound = True
+        try:
+            await asyncio.to_thread(dal.set_edition_run, edition.tenant_id, edition.id, run_id)
+        except Exception as exc:  # noqa: BLE001 - liveness falls back to the live hold
+            logger.warning("edition run id not recorded: %s", type(exc).__name__)
+
+    return on_status
 
 
 def _outcome(run: AgentRun, current: Edition | None) -> tuple[bool, str]:
@@ -653,6 +637,7 @@ async def _execute(
         _track(entry)
     viewer = requested_by if preview else None
     ok, reason, result = False, "", edition
+    release = recovery.hold(edition.id) if edition is not None else None
     try:
         from robothor.engine import chat_rooms
 
@@ -685,6 +670,8 @@ async def _execute(
     finally:
         _untrack(entry)
         await _end(edition, "the run ended without publishing an edition", viewer)
+        if release is not None:
+            release()
     if not preview:
         await asyncio.to_thread(_account, room, ok, reason, edition.id if edition else None)
         if ok and result is not None and result.status == "published":
@@ -742,8 +729,9 @@ def _check_run(actor: Actor, room_id: str) -> Room:
 
 
 def _claim(room: Room, actor: Actor, preview: bool, period: Period | None) -> tuple[Edition, bool]:
-    check_on_demand_cap(room)
+    check_on_demand_cap(room, actor.user_id)
     period = period or _default_period(room)
+    recovery.reap_stale_editions(room.tenant_id, room_id=room.id)  # a dead run holds nothing
     assert period is not None  # noqa: S101 - a report room always has one
     return dal.create_edition(
         room.tenant_id,
@@ -752,7 +740,7 @@ def _claim(room: Room, actor: Actor, preview: bool, period: Period | None) -> tu
         grain=period.grain,
         period_start=period.start,
         period_end=period.end,
-        requested_by=actor.user_id,
+        requested_by=canonical_uuid(actor.user_id),
     )
 
 
@@ -781,7 +769,7 @@ async def start_room_run(
         return edition, True
     entry = ActiveRun(room.id, "manual", preview, actor.user_id, edition.id)
     _track(entry)
-    task = asyncio.create_task(
+    entry.task = spawn(
         _execute(
             room,
             edition,
@@ -791,8 +779,8 @@ async def start_room_run(
             entry=entry,
         ),
         name=f"room-run-{room.id}",
+        edition_id=edition.id,
     )
-    entry.task = keep(task)
     return edition, False
 
 

@@ -1933,9 +1933,9 @@ already exist.
   (`started: true`) and the link; a run already in progress is joined
   (`joined: true`), never started twice.
 - Refused for a viewer, for an archived workspace, for a paused one unless the
-  caller is assigned to it (or an owner or admin), and past the workspace's daily
-  on-demand cap (`settings.max_on_demand_per_day`, 5 when unset; previews count):
-  `cap_reached: true`. Every run is capped in cost (see
+  caller is assigned to it (or an owner or admin), and past the caller's daily
+  on-demand allowance in that workspace (`settings.max_on_demand_per_day` per
+  person, 5 when unset; previews and period requests count): `cap_reached: true`. Every run is capped in cost (see
   docs/BUDGETS_AND_STOPS.md); a capped run's edition fails "stopped at the cost
   cap" rather than publishing a partial report.
 

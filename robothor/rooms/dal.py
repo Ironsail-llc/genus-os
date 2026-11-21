@@ -68,6 +68,7 @@ __all__ = [
     "remove_member",
     "restore_revision",
     "set_assigned",
+    "set_edition_run",
     "set_notify",
     "set_paused",
     "set_run_as",
@@ -1031,6 +1032,25 @@ def publish_edition(
             )
         conn.commit()
         return edition
+
+
+def set_edition_run(tenant_id: str, edition_id: str, run_id: str) -> bool:
+    """Record the ``agent_runs`` id building a ``building`` edition, so whether
+    the edition is alive can be read from that run's row
+    (``robothor.rooms.recovery``). False when there is no such building edition."""
+    canonical = canonical_uuid(edition_id)
+    if canonical is None or not run_id:
+        return False
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE room_editions SET run_id = %s, updated_at = now() "
+            "WHERE tenant_id = %s AND id = %s AND status = 'building'",
+            (str(run_id), tenant_id, canonical),
+        )
+        changed = bool(cur.rowcount)
+        conn.commit()
+        return changed
 
 
 def fail_edition(tenant_id: str, edition_id: str, error: str) -> Edition | None:
