@@ -13,7 +13,7 @@ import contextlib
 import os
 import uuid
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import pytest
 
@@ -28,15 +28,23 @@ PG_DSN = os.environ.get(
 ROOM_TABLES = ("room_tasks", "room_editions", "room_revisions", "room_members", "rooms")
 
 
+def _unavailable(reason: str) -> NoReturn:
+    """Skip, or with ``ROOMS_TESTS_REQUIRE_DB=1`` fail: a run that is meant to
+    have a database must not turn green by skipping every test that needs it."""
+    if os.environ.get("ROOMS_TESTS_REQUIRE_DB") == "1":
+        pytest.fail(f"{reason} (ROOMS_TESTS_REQUIRE_DB=1)")
+    pytest.skip(reason)
+
+
 def connect_test_db() -> Any:
     psycopg2 = pytest.importorskip("psycopg2")
     try:
         conn = psycopg2.connect(PG_DSN)
     except Exception as exc:  # pragma: no cover - environment-dependent
-        pytest.skip(f"no test database reachable at ROBOTHOR_TEST_DB_DSN: {exc}")
+        _unavailable(f"no test database reachable at ROBOTHOR_TEST_DB_DSN: {exc}")
     if not conn.get_dsn_parameters().get("dbname", "").endswith("_test"):
         conn.close()
-        pytest.skip("ROBOTHOR_TEST_DB_DSN must name a *_test database")
+        _unavailable("ROBOTHOR_TEST_DB_DSN must name a *_test database")
     return conn
 
 
