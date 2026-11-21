@@ -285,6 +285,7 @@ def test_list_mine_is_camel_case_with_the_latest_edition(world) -> None:
     assert summary["latestEdition"] == {
         "id": edition.id,
         "seq": 1,
+        "publishedSeq": 1,
         "title": "Week 46",
         "periodStart": "2026-11-09",
         "periodEnd": "2026-11-15",
