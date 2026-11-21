@@ -20,16 +20,6 @@ MIGRATION = "175_chat_messages_session_id"
 SQL_FILE = REPO / "crm" / "migrations" / f"{MIGRATION}.sql"
 MANIFEST = REPO / "robothor" / "migrations" / "manifest.txt"
 
-#: The page query, as ``load_history_page`` runs it.
-PAGE = """
-    SELECT m.id, m.message, m.created_at
-    FROM chat_messages m
-    JOIN chat_sessions s ON s.id = m.session_id
-    WHERE s.tenant_id = %s AND s.session_key = %s AND m.id < %s
-    ORDER BY m.id DESC
-    LIMIT 51
-"""
-
 
 def test_the_migration_is_in_the_manifest() -> None:
     entries = [line.strip() for line in MANIFEST.read_text().splitlines()]
@@ -65,31 +55,43 @@ def test_a_quiet_sessions_page_does_not_read_a_busy_ones_rows(scratch_db) -> Non
     db, _ = scratch_db(through=MIGRATION)
     with db.cursor() as cur:
         quiet = _session(cur, "agent:main:room:quiet")
-        busy = _session(cur, "agent:main:room:busy")
+        # Production has many sessions; the planner's estimate depends on it.
+        cur.execute(
+            "INSERT INTO chat_sessions (tenant_id, session_key, channel) "
+            "SELECT 'test-tenant', 'agent:main:room:busy-' || g, 'webchat' "
+            "FROM generate_series(1, 400) g"
+        )
         cur.execute(
             "INSERT INTO chat_messages (session_id, message) "
             "SELECT %s, jsonb_build_object('role', 'user', 'content', 'q' || g) "
             "FROM generate_series(1, 60) g",
             (quiet,),
         )
+        # Everyone else talks after it: 20,000 newer messages over 400 sessions.
         cur.execute(
             "INSERT INTO chat_messages (session_id, message) "
-            "SELECT %s, jsonb_build_object('role', 'user', 'content', 'b' || g) "
-            "FROM generate_series(1, 20000) g",
-            (busy,),
+            "SELECT s.id, jsonb_build_object('role', 'user', 'content', 'b' || g) "
+            "FROM generate_series(1, 50) g CROSS JOIN chat_sessions s "
+            "WHERE s.session_key LIKE 'agent:main:room:busy-%%'"
         )
         cur.execute("ANALYZE chat_messages")
         cur.execute("ANALYZE chat_sessions")
-        cur.execute(
-            "EXPLAIN (ANALYZE, FORMAT JSON) " + PAGE,
-            ("test-tenant", "agent:main:room:quiet", 2**62),
-        )
-        plan = cur.fetchone()[0][0]["Plan"]
+        plans: list[dict[str, Any]] = []
+        from robothor.engine.chat_store import HISTORY_PAGE_SQL
+
+        # The query ``load_history_page`` runs: the newest page, then one back.
+        for before in (None, 2**62):
+            cur.execute(
+                "EXPLAIN (ANALYZE, FORMAT JSON) " + HISTORY_PAGE_SQL,
+                ("test-tenant", "agent:main:room:quiet", before, before, 51, 0),
+            )
+            plans.append(cur.fetchone()[0][0]["Plan"])
 
     def nodes(node: dict[str, Any]) -> list[dict[str, Any]]:
         return [node] + [n for child in node.get("Plans", []) for n in nodes(child)]
 
-    scans = [n for n in nodes(plan) if n.get("Relation Name") == "chat_messages"]
-    assert scans, plan
-    assert all(n.get("Index Name") != "chat_messages_pkey" for n in scans), scans
-    assert sum(int(n.get("Actual Rows", 0)) for n in scans) <= 60, scans
+    for plan in plans:
+        scans = [n for n in nodes(plan) if n.get("Relation Name") == "chat_messages"]
+        assert scans, plan
+        assert all(n.get("Index Name") != "chat_messages_pkey" for n in scans), scans
+        assert sum(int(n.get("Actual Rows", 0)) for n in scans) <= 60, scans

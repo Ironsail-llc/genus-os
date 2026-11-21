@@ -452,6 +452,21 @@ def load_session(
         }
 
 
+#: One page of a session's history, newest first. The session is found first
+#: (a scalar subquery) so the page is read by ``(session_id, id)`` (migration
+#: 175) instead of walking every session's messages by id.
+HISTORY_PAGE_SQL = """
+    SELECT m.id, m.message, m.created_at
+    FROM chat_messages m
+    WHERE m.session_id = (
+        SELECT s.id FROM chat_sessions s WHERE s.tenant_id = %s AND s.session_key = %s
+    )
+      AND (%s::bigint IS NULL OR m.id < %s)
+    ORDER BY m.id DESC
+    LIMIT %s OFFSET %s
+"""
+
+
 def load_history_page(
     session_key: str,
     *,
@@ -473,15 +488,7 @@ def load_history_page(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """
-            SELECT m.id, m.message, m.created_at
-            FROM chat_messages m
-            JOIN chat_sessions s ON s.id = m.session_id
-            WHERE s.tenant_id = %s AND s.session_key = %s
-              AND (%s::bigint IS NULL OR m.id < %s)
-            ORDER BY m.id DESC
-            LIMIT %s OFFSET %s
-            """,
+            HISTORY_PAGE_SQL,
             (tenant_id, session_key, before, before, limit + 1, offset),
         )
         rows = cur.fetchall()
