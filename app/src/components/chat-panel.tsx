@@ -60,6 +60,14 @@ interface ChatMessage {
   authorName?: string;
   /** In a room: the edition this message announced. */
   editionId?: string;
+  /** In a room: the components this turn rendered, drawn under the reply. */
+  renders?: RenderBlock[];
+}
+
+/** One `[RENDER:…]` marker or `render` event. */
+interface RenderBlock {
+  component: string;
+  props: Record<string, unknown>;
 }
 
 /** A message typed while a turn ran. `seq` is typing order: queued ones go out in it. */
@@ -215,7 +223,14 @@ export function ChatPanel({
   // A long turn's stream can close before its `done` event; its reply then
   // arrives here from the recorded outcome. Its canvas markers must reach the
   // canvas exactly as a streamed reply's do, or a slow visual is silently lost.
-  const { notifyConversationUpdate: notifyCanvas, setRender: renderOnCanvas } = useVisualState();
+  //
+  // Not in a room. The visual state is the MAIN conversation's (one provider
+  // wraps the shell): a workspace's charts are drawn in the workspace, under
+  // the reply that rendered them, and nothing of its turns is handed to the
+  // main canvas or its dashboard agent.
+  const visualState = useVisualState();
+  const notifyCanvas = visualState.notifyConversationUpdate;
+  const renderOnCanvas = visualState.setRender;
   const messagesRef = useRef<ChatMessage[]>([]);
   useEffect(() => {
     messagesRef.current = messages;
@@ -232,12 +247,21 @@ export function ChatPanel({
     const first = interceptor.addChunk(text);
     const rest = interceptor.flush();
     const agentData: Record<string, unknown> = {};
+    const roomRenders: RenderBlock[] = [];
     for (const marker of [...first.markers, ...rest.markers]) {
       if (marker.type === "dashboard" && marker.data && typeof marker.data === "object") {
         Object.assign(agentData, marker.data as Record<string, unknown>);
       } else if (marker.type === "render") {
-        renderOnCanvas({ component: marker.component, props: marker.props });
+        const block = { component: marker.component, props: marker.props as Record<string, unknown> };
+        if (roomId) roomRenders.push(block);
+        else renderOnCanvas(block);
       }
+    }
+    if (roomId) {
+      if (roomRenders.length) {
+        setMessages((prev) => prev.map((item) => (item.id === id ? { ...item, renders: roomRenders } : item)));
+      }
+      return;
     }
     const content = stripResidualMarkers(text).trim();
     const hasAgentData = Object.keys(agentData).length > 0;
@@ -253,7 +277,7 @@ export function ChatPanel({
         hasAgentData ? agentData : undefined,
       );
     }
-  }, [notifyCanvas, renderOnCanvas]);
+  }, [notifyCanvas, renderOnCanvas, roomId]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
@@ -324,7 +348,22 @@ export function ChatPanel({
   const claimedFollowups = useRef<Set<string>>(new Set());
   const followupSeq = useRef(0);
   const [queuedCount, setQueuedCount] = useState(0);
-  const { notifyConversationUpdate, setRender } = useVisualState();
+  // In a room, a turn's renders are kept for its reply and nothing is
+  // offered to the main canvas (see `visualState` above).
+  const turnRenders = useRef<RenderBlock[]>([]);
+  const setRender = useCallback(
+    (block: { component: string; props: Record<string, unknown> }) => {
+      if (roomId) turnRenders.current.push({ component: block.component, props: block.props });
+      else visualState.setRender(block);
+    },
+    [roomId, visualState],
+  );
+  const notifyConversationUpdate = useCallback(
+    (...args: Parameters<typeof visualState.notifyConversationUpdate>) => {
+      if (!roomId) visualState.notifyConversationUpdate(...args);
+    },
+    [roomId, visualState],
+  );
   const { aiName } = useRuntimeConfig();
 
   /** `?room=…` in a room, `?agent=…`, or nothing at all for the main agent. */
@@ -976,6 +1015,7 @@ export function ChatPanel({
     setIsStreaming(true);
     setStreamingText("");
     if (roomId) roomTurnInFlight.current = true;
+    turnRenders.current = [];
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -1173,10 +1213,13 @@ export function ChatPanel({
       }
 
       // Finalize the message
+      const renders = roomId && turnRenders.current.length ? turnRenders.current : undefined;
+      turnRenders.current = [];
       const assistantMsg: ChatMessage = {
         id: `asst-${Date.now()}`,
         role: "assistant",
         content: stripResidualMarkers(fullResponse).trim(),
+        ...(renders ? { renders } : {}),
         ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: recoveryFor(requestIdRef.current!, requestScopes.current[requestIdRef.current!]) } : {}),
         timestamp: new Date(),
       };

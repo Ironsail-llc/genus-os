@@ -14,6 +14,9 @@ import { formatMessageTime, fullMessageTime } from "@/lib/chat/format-timestamp"
 const MessageEdition = lazy(() =>
   import("@/components/rooms/message-edition").then((m) => ({ default: m.MessageEdition })),
 );
+const MessageRenders = lazy(() =>
+  import("@/components/rooms/message-renders").then((m) => ({ default: m.MessageRenders })),
+);
 
 /** One message in the chat's scrollback. */
 export interface ChatBubbleMessage {
@@ -32,6 +35,8 @@ export interface ChatBubbleMessage {
   authorUserId?: string;
   /** In a room: the edition this message announced, drawn under it. */
   editionId?: string;
+  /** In a room: what this reply rendered, drawn under it (never on the main canvas). */
+  renders?: Array<{ component: string; props: Record<string, unknown> }>;
 }
 
 interface MessageBubbleProps {
@@ -70,6 +75,7 @@ export const MessageBubble = memo(function MessageBubble({
   const isUser = msg.role === "user";
   const author = roomId ? msg.authorName || (isUser ? "You" : undefined) : undefined;
   const editionId = roomId && msg.editionId ? msg.editionId : undefined;
+  const renders = roomId && msg.renders?.length ? msg.renders : undefined;
   // `message-<role>` marks the bubble itself, so its text is the message's
   // text alone; the time and the action bar sit under it in the same row.
   return (
@@ -78,7 +84,7 @@ export const MessageBubble = memo(function MessageBubble({
       data-testid="message-row"
     >
       <div
-        className={`group flex flex-col ${editionId ? "w-full max-w-full" : "max-w-[85%]"} ${isUser ? "items-end" : "items-start"}`}
+        className={`group flex flex-col ${editionId || renders ? "w-full max-w-full" : "max-w-[85%]"} ${isUser ? "items-end" : "items-start"}`}
       >
         {author && (
           <span className="mb-0.5 px-0.5 text-[11px] font-medium text-muted-foreground" data-testid="message-author">
@@ -110,6 +116,11 @@ export const MessageBubble = memo(function MessageBubble({
             )}
           </div>
         </div>
+        {renders && (
+          <Suspense fallback={null}>
+            <MessageRenders blocks={renders} />
+          </Suspense>
+        )}
         {roomId && editionId && (
           <Suspense fallback={null}>
             <div className="w-full">

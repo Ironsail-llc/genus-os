@@ -53,18 +53,27 @@ export function EditionCard({ edition, compact = false, actions }: EditionCardPr
           {edition.summary}
         </p>
       )}
-      {blocks.length > 0 && (
-        <div className={`flex flex-col ${compact ? "gap-3" : "gap-4"}`} data-testid="edition-blocks">
-          {blocks.map((block, i) =>
-            isRenderableBlock(block) ? (
-              <ComponentRenderer key={i} toolName={block.component} props={block.props} />
-            ) : (
-              <UnsupportedBlock key={i} block={block} />
-            ),
-          )}
-        </div>
-      )}
+      {blocks.length > 0 && <EditionBlocks blocks={blocks} compact={compact} />}
     </article>
+  );
+}
+
+/**
+ * Blocks drawn the way an edition draws them: each allowed component through
+ * the dashboard's renderer, anything else as an "unsupported block"
+ * placeholder. Also what a workspace reply uses for its `[RENDER:…]` markers.
+ */
+export function EditionBlocks({ blocks, compact = false }: { blocks: unknown[]; compact?: boolean }) {
+  return (
+    <div className={`flex flex-col ${compact ? "gap-3" : "gap-4"}`} data-testid="edition-blocks">
+      {blocks.map((block, i) =>
+        isRenderableBlock(block) ? (
+          <ComponentRenderer key={i} toolName={block.component} props={block.props} />
+        ) : (
+          <UnsupportedBlock key={i} block={block} />
+        ),
+      )}
+    </div>
   );
 }
 
