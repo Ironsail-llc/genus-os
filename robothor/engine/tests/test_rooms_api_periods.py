@@ -266,7 +266,7 @@ async def test_the_account_lookup_runs_off_the_event_loop(fake, monkeypatch):
     [
         (RoomNotFound(ROOM), 404, "room_not_found"),
         (RoomForbidden("viewer access does not allow 'request_period'"), 403, "forbidden"),
-        (OnDemandCapReached(limit=5, used=5), 429, "cap_reached"),
+        (OnDemandCapReached(limit=5, used=5), 429, "on_demand_cap"),
         (PeriodError("that day is not over yet"), 422, "invalid_period"),
         (RoomRunUnavailable("room runs are not available"), 503, "runs_unavailable"),
     ],
