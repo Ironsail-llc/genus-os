@@ -39,7 +39,10 @@ import {
 import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain, PanelRightClose } from "lucide-react";
 
 import { forgetRequest, journalRequest, pendingRequests } from "@/lib/chat/request-journal";
-import { mergeRoomRows, pendingBubbles, roomOutbox, type OutboxItem, type OutboxState, type SendResult } from "@/lib/chat/room-outbox";
+// Types only: the outbox module itself is loaded when the panel is in a room
+// (below), so the main conversation's first load never carries it.
+import type { OutboxItem, OutboxState, SendResult } from "@/lib/chat/room-outbox";
+type RoomKit = typeof import("@/lib/chat/room-outbox");
 
 import { OUTCOME_UNKNOWN, requestFailure, terminalOutcome } from "@/lib/chat/terminal-outcome";
 
@@ -103,7 +106,9 @@ function outboxNote(item: OutboxItem, state: OutboxState): string | undefined {
   return state.blocked ? roomBusyNote(state.answering) : QUEUED_NOTE;
 }
 
-const NO_OUTBOX: OutboxState = { items: [], sending: null, blocked: false, answering: "" };
+const NO_OUTBOX: OutboxState = { items: [], sending: null, blocked: false, answering: "", unsent: [] };
+/** A room message whose send failed while the reader was away from the workspace. */
+const NOT_SENT_NOTE = "Not sent — it failed while you were away";
 const noSubscription = () => () => {};
 
 /** The chips a queued message's bubble shows: exactly the files it will send. */
@@ -380,7 +385,18 @@ export function ChatPanel({
   // A room's messages leave through its outbox (`lib/chat/room-outbox.ts`):
   // one ordered queue, one sender, head first, one message per turn. It
   // outlives this panel, so what is queued survives leaving the workspace.
-  const outbox = useMemo(() => (roomId ? roomOutbox(roomId) : null), [roomId]);
+  const [roomKit, setRoomKit] = useState<RoomKit | null>(null);
+  useEffect(() => {
+    if (!roomId) return;
+    let live = true;
+    void import("@/lib/chat/room-outbox").then((kit) => {
+      if (live) setRoomKit(kit);
+    });
+    return () => {
+      live = false;
+    };
+  }, [roomId]);
+  const outbox = useMemo(() => (roomId && roomKit ? roomKit.roomOutbox(roomId) : null), [roomId, roomKit]);
   const outboxState = useSyncExternalStore(
     outbox ? outbox.subscribe : noSubscription,
     outbox ? outbox.state : () => NO_OUTBOX,
@@ -394,18 +410,23 @@ export function ChatPanel({
   // send it may draw a bubble for (see `pendingBubbles`).
   const startedHere = useRef(new Set<string>());
   /** Bubbles, keyed by client id, for outbox entries not drawn (after leaving and coming back). */
-  const withOutbox = useCallback((list: ChatMessage[]): ChatMessage[] => {
-    if (!outbox) return list;
-    const state = outbox.state();
-    const waiting = pendingBubbles(state, list, startedHere.current).map((item): ChatMessage => {
+  // Also draws, as not sent, what failed after the panel that offered it had gone.
+  const withOutbox = useCallback((list: ChatMessage[], state = outbox?.state()): ChatMessage[] => {
+    if (!state || !roomKit) return list;
+    const bubble = (item: OutboxItem, note?: string): ChatMessage => {
       const chips = summarise(item.files);
-      return {
-        id: item.id, role: "user", content: item.text, timestamp: new Date(), note: outboxNote(item, state),
-        ...(chips ? { attachments: chips } : {}),
-      };
-    });
+      return { id: item.id, role: "user", content: item.text, timestamp: new Date(), note, ...(chips ? { attachments: chips } : {}) };
+    };
+    const waiting = [
+      ...roomKit.pendingBubbles(state, list, startedHere.current).map((item) => bubble(item, outboxNote(item, state))),
+      ...state.unsent.filter((item) => !list.some((m) => m.id === item.id)).map((item) => bubble(item, NOT_SENT_NOTE)),
+    ];
     return waiting.length ? [...list, ...waiting] : list;
-  }, [outbox]);
+  }, [outbox, roomKit]);
+  // The history load reads it through a ref: the outbox module arriving must
+  // not re-run that load, which would clear what is already drawn.
+  const withOutboxRef = useRef(withOutbox);
+  withOutboxRef.current = withOutbox;
 
   // Each waiting bubble says where it stands: queued, queued behind whom, or
   // (the head, while it is sent) nothing. And an entry that now needs a bubble
@@ -413,7 +434,11 @@ export function ChatPanel({
   const outboxHistoryReady = historySettledFor === agentQuery;
   useEffect(() => {
     if (!outbox) return;
-    if (outboxHistoryReady) setMessages((prev) => withOutbox(prev));
+    if (outboxHistoryReady) {
+      // Drawn from this state, then acknowledged: a failed send is told once, never lost.
+      setMessages((prev) => withOutbox(prev, outboxState));
+      outbox.acknowledge(outboxState.unsent.map((item) => item.id));
+    }
     setMessages((prev) => {
       const notes = new Map(outboxState.items.map((item) => [item.id, outboxNote(item, outboxState)]));
       let changed = false;
@@ -650,7 +675,7 @@ export function ChatPanel({
               id: `recovery-${requestId}`, role: "assistant", content: OUTCOME_UNKNOWN,
               timestamp: new Date(), recovery: recoveryFor(requestId, scope),
             })) : [];
-          setMessages(withOutbox([...loaded, ...restored]));
+          setMessages(withOutboxRef.current([...loaded, ...restored]));
           settleHistoryPages(data.hasMore === true);
           setHistorySettledFor(agentQuery);
           setRoomHistoryFailed(false);
@@ -663,12 +688,12 @@ export function ChatPanel({
         if (cancelled) return;
         setHistorySettledFor(agentQuery);
         setRoomHistoryFailed(true);
-        setMessages((prev) => withOutbox(prev));
+        setMessages((prev) => withOutboxRef.current(prev));
       });
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent, settleHistoryPages, recoveryFor, withOutbox]);
+  }, [agentQuery, agent, settleHistoryPages, recoveryFor]);
 
   // A room is shared: other members' messages, and the agent's answers to
   // them, land while this panel is open. On each live room event (the room
@@ -680,7 +705,7 @@ export function ChatPanel({
   const caughtUpTo = useRef(roomRefreshKey);
   const panelBusy = isStreaming || isPlanning || isPlanExecuting || isDeepReasoning;
   useEffect(() => {
-    if (!roomId || panelBusy || roomRefreshKey === caughtUpTo.current) return;
+    if (!roomId || !roomKit || panelBusy || roomRefreshKey === caughtUpTo.current) return;
     caughtUpTo.current = roomRefreshKey;
     let cancelled = false;
     fetch(`/api/chat/history${agentQuery}`, { cache: "no-store" })
@@ -689,13 +714,13 @@ export function ChatPanel({
         if (cancelled || !data) return;
         const stored = historyToMessages(data.messages).filter((m) => m.serverId !== undefined);
         // A stored copy replaces its local bubble (by client id), never joins it.
-        setMessages((prev) => withOutbox(mergeRoomRows(prev, stored)));
+        setMessages((prev) => withOutbox(roomKit.mergeRoomRows(prev, stored)));
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [roomId, roomRefreshKey, panelBusy, agentQuery, withOutbox]);
+  }, [roomId, roomKit, roomRefreshKey, panelBusy, agentQuery, withOutbox]);
 
   // Recover pending plan on page refresh
   //
@@ -977,7 +1002,10 @@ export function ChatPanel({
     }
 
     const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : (resend ?? input).trim();
-    if (outbox && !flushing) {
+    if (roomId && !flushing) {
+      // Never the main conversation's path: until the outbox has loaded (a
+      // moment, on first opening a room) what was typed stays in the composer.
+      if (!outbox) return;
       // In a room every message, typed or regenerated, takes its place in the
       // outbox now, in typing order, with its files; the outbox's one sender
       // offers it (back through this function, as a flush) when its turn
