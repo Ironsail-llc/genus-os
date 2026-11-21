@@ -1661,6 +1661,9 @@ same way.
   neither the room nor its id. `room_list` shows only the caller's rooms unless
   an owner or admin asks for `all`. `room_read` shows another person's preview
   edition to nobody.
+- **What comes back is data.** `room_read` and `room_list` return text other
+  people and earlier runs wrote, so their results reach the model inside the
+  `<untrusted_content>` boundary (`EXTERNAL_DATA_TOOLS`), like `web_fetch`.
 - **Every result that names a room carries `link`** (`/?v=chat&room=<id>`), and
   the descriptions tell the agent to give it.
 

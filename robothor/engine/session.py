@@ -193,6 +193,10 @@ EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
         # the operator's automations and whatever systems they call.
         "n8n_list_workflows",
         "n8n_recent_failures",
+        # Workspaces: messages, edition titles, summaries and suggestions were
+        # written by other people and by earlier agent runs.
+        "room_read",
+        "room_list",
     }
 )
 
