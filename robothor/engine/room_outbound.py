@@ -22,6 +22,7 @@ import socket
 from typing import Any
 
 from robothor.engine.task_registry import get_task_registry
+from robothor.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,9 @@ def on_approved(event: dict[str, Any]) -> None:
     try:
         outbound.deliver(str(tenant), str(action))
     except Exception:
-        logger.exception("room email %s: delivery failed; the sweep will look again", action)
+        logger.exception(
+            "room email %s: delivery failed; the sweep will look again", sanitize_log(action)
+        )
 
 
 async def listen_loop() -> None:

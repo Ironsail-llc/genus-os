@@ -43,6 +43,7 @@ from robothor.rooms.errors import (
     TaskNotFound,
 )
 from robothor.rooms.keys import canonical_uuid
+from robothor.sanitize import sanitize_log
 
 if TYPE_CHECKING:
     from robothor.rooms.access import Actor
@@ -302,7 +303,7 @@ def _emit(tenant_id: str, room_id: str, task_id: str) -> None:
             tenant_id=tenant_id,
         )
     except Exception:
-        logger.warning("could not publish room.task for %s", room_id, exc_info=True)
+        logger.warning("could not publish room.task for %s", sanitize_log(room_id), exc_info=True)
 
 
 def publish_task_changed(tenant_id: str, task_id: str) -> None:
@@ -310,7 +311,9 @@ def publish_task_changed(tenant_id: str, task_id: str) -> None:
     try:
         rooms = dal.rooms_linked_to_task(tenant_id, task_id)
     except Exception:
-        logger.warning("could not list the workspaces of task %s", task_id, exc_info=True)
+        logger.warning(
+            "could not list the workspaces of task %s", sanitize_log(task_id), exc_info=True
+        )
         return
     task = canonical_uuid(task_id) or task_id
     for room_id in rooms:

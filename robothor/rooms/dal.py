@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from datetime import date
 
 __all__ = [
+    "share_member",
     "run_lineage",
     "was_removed",
     "task_history",
@@ -767,7 +768,30 @@ def add_member(
             (tenant_id, room, user, assigned, adder),
         )
         member = _member(cur.fetchone())
-        # Re-added by someone who can share the room: the removal is over.
+        conn.commit()
+        return member
+
+
+def share_member(
+    tenant_id: str, room_id: str, user_id: str, *, shared_by: str, assigned: bool = False
+) -> RoomMember:
+    """Share the room with ``user_id`` as someone who may share it: add them
+    and end any removal of them, in one transaction. ``add_member`` never ends
+    a removal; this is the one call that does (``definition.share_room``)."""
+    user = _required_uuid(user_id, "user_id")
+    sharer = _required_uuid(shared_by, "shared_by")
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        room = _room_exists(cur, tenant_id, room_id)
+        cur.execute(
+            """INSERT INTO room_members (tenant_id, room_id, user_id, assigned, added_by)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (tenant_id, room_id, user_id)
+               DO UPDATE SET assigned = EXCLUDED.assigned, updated_at = now()
+               RETURNING *""",
+            (tenant_id, room, user, assigned, sharer),
+        )
+        member = _member(cur.fetchone())
         cur.execute(
             "DELETE FROM room_member_removals WHERE tenant_id = %s AND room_id = %s AND user_id = %s",
             (tenant_id, room, user),
@@ -799,8 +823,8 @@ def remove_member(
     tenant_id: str, room_id: str, user_id: str, *, removed_by: str | None = None
 ) -> bool:
     """Remove a member and remember it (``room_member_removals``), so opening
-    the room's task never re-adds them; only ``add_member`` (someone who can
-    share the room) does."""
+    the room's task never re-adds them; only ``share_member`` (someone who may
+    share the room) ends the removal."""
     room, user = canonical_uuid(room_id), canonical_uuid(user_id)
     if room is None or user is None:
         return False

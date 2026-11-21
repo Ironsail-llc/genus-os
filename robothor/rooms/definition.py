@@ -457,8 +457,8 @@ def share_room(actor: Actor, room_id: str, user: str, *, assigned: bool = False)
     target = _require_user(actor.tenant_id, user)
     if assigned and target.role not in _STAFF_ROLES:
         raise ValueError(f"{target.display_name or user} is a viewer and cannot be assigned")
-    return dal.add_member(
-        actor.tenant_id, room.id, target.user_id, added_by=actor.user_id, assigned=bool(assigned)
+    return dal.share_member(
+        actor.tenant_id, room.id, target.user_id, shared_by=actor.user_id, assigned=bool(assigned)
     )
 
 
