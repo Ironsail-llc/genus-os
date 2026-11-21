@@ -27,7 +27,7 @@ import {
 import {
   customPeriod,
   findStoredEdition,
-  isFuturePeriod,
+  isPeriodNotOver,
   lastCompletePeriod,
   resolvePeriod,
   todayIn,
@@ -67,14 +67,23 @@ describe("periods", () => {
     expect(todayIn("Not/AZone", now)).toBe("2026-11-21");
   });
 
-  it("refuses a period that has not started, and a custom range that ends in the future", () => {
-    expect(isFuturePeriod(resolvePeriod("day", "2026-11-22"), "2026-11-21")).toBe(true);
-    expect(isFuturePeriod(resolvePeriod("day", "2026-11-21"), "2026-11-21")).toBe(false);
-    expect(isFuturePeriod(resolvePeriod("week", "2026-11-23"), "2026-11-21")).toBe(true);
-    expect(isFuturePeriod(resolvePeriod("week", "2026-11-18"), "2026-11-21")).toBe(false);
-    expect(isFuturePeriod(resolvePeriod("month", "2026-12-01"), "2026-11-21")).toBe(true);
-    expect(isFuturePeriod(customPeriod("2026-11-10", "2026-11-25")!, "2026-11-21")).toBe(true);
-    expect(isFuturePeriod(customPeriod("2026-11-10", "2026-11-21")!, "2026-11-21")).toBe(false);
+  it("refuses a period that is not over, as the engine does (its last day is not before today)", () => {
+    // Not over: today, this week, this month, the future, a range ending today.
+    expect(isPeriodNotOver(resolvePeriod("day", "2026-11-21"), "2026-11-21")).toBe(true);
+    expect(isPeriodNotOver(resolvePeriod("day", "2026-11-22"), "2026-11-21")).toBe(true);
+    expect(isPeriodNotOver(resolvePeriod("week", "2026-11-18"), "2026-11-21")).toBe(true);
+    expect(isPeriodNotOver(resolvePeriod("month", "2026-11-02"), "2026-11-21")).toBe(true);
+    expect(isPeriodNotOver(customPeriod("2026-11-10", "2026-11-21")!, "2026-11-21")).toBe(true);
+    // Over: yesterday, last week, last month.
+    expect(isPeriodNotOver(resolvePeriod("day", "2026-11-20"), "2026-11-21")).toBe(false);
+    expect(isPeriodNotOver(resolvePeriod("week", "2026-11-11"), "2026-11-21")).toBe(false);
+    expect(isPeriodNotOver(resolvePeriod("month", "2026-10-15"), "2026-11-21")).toBe(false);
+  });
+
+  it("allows a custom range of any length, as long as it is over", () => {
+    const years = customPeriod("2020-01-01", "2026-11-20")!;
+    expect(years).not.toBeNull();
+    expect(isPeriodNotOver(years, "2026-11-21")).toBe(false);
   });
 
   it("offers the last complete period by default", () => {
@@ -131,10 +140,10 @@ describe("rooms API: the controls' requests", () => {
   });
 
   it("carries a validation refusal's message and field", async () => {
-    answer = () => reply({ detail: { error: "invalid_schedule", message: "Runs at most every 15 minutes", field: "scheduleText" } }, 422);
+    answer = () => reply({ detail: { error: "invalid_schedule", message: "Could not read the schedule 'whenever'", field: "scheduleText" } }, 422);
     const err = await patchRoom(REPORT_ID, 3, { scheduleText: "every minute" }).catch((e) => e);
     expect(err.status).toBe(422);
-    expect(err.message).toBe("Runs at most every 15 minutes");
+    expect(err.message).toBe("Could not read the schedule 'whenever'");
     expect(err.field).toBe("scheduleText");
   });
 
@@ -168,12 +177,13 @@ describe("rooms API: the controls' requests", () => {
     expect(lastCall().body).toEqual({ grain: "custom", anchor: "2026-11-01", end: "2026-11-10" });
   });
 
-  it("names the daily on-demand cap when the server reports it", async () => {
-    answer = () => reply({ detail: { error: "on_demand_cap", message: "3 on-demand runs a day", limit: 3 } }, 429);
+  it("treats any refusal of a period request as the server's own message: there is no cap", async () => {
+    answer = () => reply({ detail: { error: "forbidden", message: "You can't ask for periods here" } }, 403);
     const err = await requestPeriod(REPORT_ID, { grain: "day", start: "2026-11-18", end: "2026-11-18" }).catch((e) => e);
     expect(err).toBeInstanceOf(RoomRequestError);
-    expect(err.isCap).toBe(true);
-    expect(err.limit).toBe(3);
+    expect(err.message).toBe("You can't ask for periods here");
+    expect("isCap" in err).toBe(false);
+    expect("limit" in err).toBe(false);
   });
 
   it("reads revisions newest first, in either envelope", async () => {
