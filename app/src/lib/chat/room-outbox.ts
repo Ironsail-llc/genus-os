@@ -22,7 +22,7 @@
  * on from the head. In memory, per tab, like the main conversation's pending
  * follow-ups.
  */
-import type { AttachmentPayload } from "@/lib/chat/attachments";
+import { attachmentKind, type AttachmentPayload, type AttachmentSummary } from "@/lib/chat/attachments";
 
 export const ROOM_BUSY_RETRY_MS = 4000;
 
@@ -288,4 +288,61 @@ export function unsentBubbles(
           (r.serverId !== undefined && !r.clientId && r.role === "user" && r.content.trim() === item.text.trim()),
       ),
   );
+}
+
+// What a room message's bubble says. Kept here, in the module a room loads on
+// demand, so the main conversation's first load carries none of it.
+const QUEUED_NOTE = "Queued — sends when this reply finishes";
+const NOT_SENT_NOTE = "Not sent — it failed while you were away";
+const UNKNOWN_NOTE = "May not have reached the task — the connection dropped";
+
+/** Where a waiting message stands: queued, queued behind whom, or (while it is sent) nothing. */
+export function noteFor(item: OutboxItem, state: OutboxState): string | undefined {
+  if (state.sending?.id === item.id) return undefined;
+  if (!state.blocked) return QUEUED_NOTE;
+  return state.answering ? `Queued — answering ${state.answering}…` : "Queued — the agent is answering someone else…";
+}
+
+/** The composer's line while the room's agent is answering somebody else. */
+export function busyNotice(answering: string): string {
+  return `The agent is answering ${answering || "someone else"}… Your message will send when it finishes.`;
+}
+
+/** A local bubble for an outbox entry, keyed by its client id, with the files it carries. */
+export interface RoomBubble {
+  id: string;
+  role: "user";
+  content: string;
+  timestamp: Date;
+  note?: string;
+  attachments?: AttachmentSummary[];
+}
+
+export function bubbleFor(item: OutboxItem, note?: string): RoomBubble {
+  const files = item.files ?? [];
+  return {
+    id: item.id,
+    role: "user",
+    content: item.text,
+    timestamp: new Date(),
+    note,
+    ...(files.length ? { attachments: files.map((f) => ({ name: f.name, size: f.size, kind: attachmentKind(f.mime) })) } : {}),
+  };
+}
+
+/**
+ * The bubbles a panel adds to what it has drawn: waiting entries (see
+ * `pendingBubbles`) with their notes, and unsent ones (see `unsentBubbles`):
+ * "not sent" only when refused; an unknown outcome may have arrived, so it is
+ * never called unsent.
+ */
+export function outboxBubbles(
+  list: ReadonlyArray<Pick<RoomRow, "id" | "clientId" | "serverId" | "role" | "content">>,
+  state: OutboxState,
+  startedHere: ReadonlySet<string>,
+): RoomBubble[] {
+  return [
+    ...pendingBubbles(state, list, startedHere).map((item) => bubbleFor(item, noteFor(item, state))),
+    ...unsentBubbles(state, list).map((item) => bubbleFor(item, item.rejected ? NOT_SENT_NOTE : UNKNOWN_NOTE)),
+  ];
 }
