@@ -113,8 +113,8 @@ _MESSAGES = {
         "The instructions look like an attempt to override the agent (a prompt injection)."
     ),
     "invalid_schedule": (
-        "The schedule could not be understood. Describe when it should run, such as "
-        "“every weekday at 8am” or “every Monday at 9:00”."
+        "The schedule could not be understood. Use an interval such as “every 6 hours” "
+        "or a cron expression such as “0 8 * * 1” (08:00 every Monday)."
     ),
     "ineligible_account": "That person has no active account here that can take this on.",
     "invalid_request": "The request is not valid.",

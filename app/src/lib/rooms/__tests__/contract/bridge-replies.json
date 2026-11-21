@@ -79,7 +79,7 @@
       "detail": {
         "error": "invalid_schedule",
         "field": "scheduleText",
-        "message": "The schedule could not be understood. Describe when it should run, such as “every weekday at 8am” or “every Monday at 9:00”."
+        "message": "The schedule could not be understood. Use an interval such as “every 6 hours” or a cron expression such as “0 8 * * 1” (08:00 every Monday)."
       }
     },
     "status": 422
@@ -509,7 +509,7 @@
       "detail": {
         "error": "invalid_schedule",
         "field": "scheduleText",
-        "message": "The schedule could not be understood. Describe when it should run, such as “every weekday at 8am” or “every Monday at 9:00”."
+        "message": "The schedule could not be understood. Use an interval such as “every 6 hours” or a cron expression such as “0 8 * * 1” (08:00 every Monday)."
       }
     },
     "status": 422
