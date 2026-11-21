@@ -23,6 +23,7 @@ vi.mock("@/components/business/markdown-view", () => ({
 }));
 
 import { ChatPanel } from "../chat-panel";
+import { forgetRoomOutboxes } from "@/lib/chat/room-outbox";
 import { EDITION_2, REPORT_ID, edition, reply } from "@/lib/rooms/__tests__/fixtures";
 
 function sseResponse(events: Array<{ event: string; data: unknown }>) {
@@ -41,6 +42,9 @@ let fetchMock: ReturnType<typeof vi.fn>;
 const sends: Array<Record<string, unknown>> = [];
 
 beforeEach(() => {
+  // A room's outbox outlives its panel (that is how a queue survives leaving
+  // the workspace); each test starts with none.
+  forgetRoomOutboxes();
   visual.notifyConversationUpdate.mockClear();
   visual.setRender.mockClear();
   history = [...HISTORY];
@@ -295,6 +299,26 @@ describe("ChatPanel in a room", () => {
     await screen.findByText("How did we do?");
     expect(screen.getByTestId("chat-input")).toBeDisabled();
     expect(screen.getByTestId("room-readonly-notice")).toHaveTextContent(/archived/i);
+  });
+
+  it("a message typed while the FIRST send is in flight stays behind it when that send is refused", async () => {
+    history = [];
+    let answer!: (r: Response) => void;
+    sendReplies.push(() => new Promise<Response>((r) => (answer = r)));
+    const { rerender } = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    await screen.findByTestId("room-chat-empty");
+    await type("A");
+    await waitFor(() => expect(sends).toHaveLength(1));
+    await type("B");
+    await act(async () => answer(reply({ error: "room_busy", answering: "Alice", request_admitted: false }, 409)));
+    await screen.findByTestId("room-busy-notice");
+    await act(async () => rerender(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 1 }} />));
+    await waitFor(() => expect(sends.map((s) => s.message)).toEqual(["A", "A", "B"]));
+    // Nothing else sends a room message: no steering, no joining a turn.
+    expect(sends.every((s) => !s.join_running)).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === "/api/chat/steer")).toBe(false);
+    expect(screen.getAllByText("A")).toHaveLength(1);
+    expect(screen.getAllByText("B")).toHaveLength(1);
   });
 
   describe("a message typed while a queued one is being offered again", () => {
