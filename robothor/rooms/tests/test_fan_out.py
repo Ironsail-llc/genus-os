@@ -26,6 +26,15 @@ from robothor.rooms.tests.staff import staff_db  # noqa: F401
 pytestmark = pytest.mark.integration
 
 REAL_SEND = WebchatChannel.send
+
+
+def _prefs(*, in_app: bool = True, muted: bool = False, **channels: bool) -> dict[str, Any]:
+    """``room_members.notify`` exactly as the bridge's ``PUT /notify`` stores it."""
+    from robothor.rooms.notify import stored_notify
+
+    return stored_notify(in_app=in_app, muted=muted, channels=channels)
+
+
 LONG = "Revenue rose 4% on the day. " * 200
 
 
@@ -103,7 +112,7 @@ class TestWhoHears:
 
     async def test_a_muted_member_gets_no_note(self, env):
         room, edition = _room_and_edition(env.db)
-        dal.set_notify(env.db.tenant, room.id, env.db.carol, {"muted": True})
+        dal.set_notify(env.db.tenant, room.id, env.db.carol, _prefs(muted=True, telegram=True))
 
         await fanout.fan_out_edition(room, edition)
 
@@ -114,7 +123,7 @@ class TestWhoHears:
         room = dal.update_definition(
             env.db.tenant, room.id, {"settings": {"notify_default": False}}, env.db.alice, room.rev
         )
-        dal.set_notify(env.db.tenant, room.id, env.db.bob, {"muted": False})
+        dal.set_notify(env.db.tenant, room.id, env.db.bob, _prefs())
 
         await fanout.fan_out_edition(room, edition)
 
@@ -207,7 +216,7 @@ class TestWhatTheyHear:
 class TestExternalChannel:
     async def test_a_linked_channel_the_member_chose_is_used(self, env, monkeypatch):
         room, edition = _room_and_edition(env.db)
-        dal.set_notify(env.db.tenant, room.id, env.db.bob, {"channel": "telegram"})
+        dal.set_notify(env.db.tenant, room.id, env.db.bob, _prefs(telegram=True))
         env.db.cur.execute(
             "INSERT INTO user_channel_identities (tenant_id, channel, user_id, native_id, "
             "display_name, role, paired_by) VALUES (%s, 'telegram', %s, '424242', 'Bob', "
@@ -234,12 +243,59 @@ class TestExternalChannel:
 
     async def test_an_unlinked_channel_is_a_failed_receipt_not_a_crash(self, env, monkeypatch):
         room, edition = _room_and_edition(env.db)
-        dal.set_notify(env.db.tenant, room.id, env.db.bob, {"channel": "telegram"})
+        dal.set_notify(env.db.tenant, room.id, env.db.bob, _prefs(telegram=True))
 
         receipts = await fanout.fan_out_edition(room, edition)
 
         unlinked = [r for r in receipts if r.status == "failed:room_channel_not_linked"]
         assert len(unlinked) == 1
+
+    async def test_in_app_off_sends_only_on_the_chosen_channel(self, env, monkeypatch):
+        room, edition = _room_and_edition(env.db)
+        dal.set_notify(env.db.tenant, room.id, env.db.bob, _prefs(in_app=False, telegram=True))
+        env.db.cur.execute(
+            "INSERT INTO user_channel_identities (tenant_id, channel, user_id, native_id, "
+            "display_name, role, paired_by) VALUES (%s, 'telegram', %s, '515151', 'Bob', "
+            "'member', 'operator:test')",
+            (env.db.tenant, env.db.bob),
+        )
+        external: list[str] = []
+
+        class Telegram:
+            async def send(self, target: str, text: str, **kw: Any) -> SendReceipt:
+                external.append(target)
+                return SendReceipt(acknowledged=1, expected=1, target=target)
+
+        monkeypatch.setattr(
+            "robothor.engine.channels.registry.get_channel",
+            lambda name: Telegram() if name == "telegram" else None,
+        )
+
+        await fanout.fan_out_edition(room, edition)
+
+        assert env.db.bob not in {s["target"] for s in env.sent}  # no note, no inbox row
+        assert external == ["515151"]
+
+    async def test_in_app_off_and_no_channel_is_nothing_at_all(self, env):
+        room, edition = _room_and_edition(env.db)
+        dal.set_notify(env.db.tenant, room.id, env.db.bob, _prefs(in_app=False))
+
+        receipts = await fanout.fan_out_edition(room, edition)
+
+        assert env.db.bob not in {s["target"] for s in env.sent}
+        assert all(r.target != env.db.bob for r in receipts)
+
+    async def test_a_channel_turned_off_is_not_used(self, env, monkeypatch):
+        room, edition = _room_and_edition(env.db)
+        dal.set_notify(env.db.tenant, room.id, env.db.bob, _prefs(telegram=False))
+        monkeypatch.setattr(
+            "robothor.engine.channels.registry.get_channel",
+            lambda name: (_ for _ in ()).throw(AssertionError("no channel should be asked")),
+        )
+
+        await fanout.fan_out_edition(room, edition)
+
+        assert env.db.bob in {s["target"] for s in env.sent}
 
 
 class TestTheRealInboxRow:
