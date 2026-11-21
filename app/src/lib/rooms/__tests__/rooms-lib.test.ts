@@ -56,6 +56,32 @@ describe("room access", () => {
   });
 });
 
+describe("room access mirrors the engine's matrix (robothor/rooms/access.py)", () => {
+  const ACTIONS = [
+    "read", "post", "run", "request_period", "accept_task", "edit_definition", "share",
+    "archive", "restore_revision", "duplicate", "reassign", "list_all",
+  ] as const;
+  const GRANTS: Record<string, readonly string[]> = {
+    viewer: ["read"],
+    shared: ["read", "post", "run", "request_period", "accept_task", "duplicate"],
+    assigned: ["read", "post", "run", "request_period", "accept_task", "duplicate", "edit_definition", "share", "archive", "restore_revision"],
+    admin: ["read", "post", "run", "request_period", "accept_task", "duplicate", "edit_definition", "share", "archive", "restore_revision", "reassign", "list_all"],
+  };
+  const ARCHIVED = ["read", "archive", "duplicate", "list_all"];
+
+  for (const access of ["viewer", "shared", "assigned", "admin"] as const) {
+    for (const action of ACTIONS) {
+      const live = GRANTS[access].includes(action);
+      const archived = live && ARCHIVED.includes(action);
+      it(`${access} ${action}: ${live} live, ${archived} archived`, () => {
+        expect(can(access, action)).toBe(live);
+        expect(can(access, action, false)).toBe(live);
+        expect(can(access, action, true)).toBe(archived);
+      });
+    }
+  }
+});
+
 describe("edition blocks", () => {
   it("draws only components the dashboard's registry has", () => {
     for (const name of EDITION_COMPONENTS) expect(hasComponent(name)).toBe(true);

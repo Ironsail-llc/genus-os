@@ -101,4 +101,46 @@ describe("createRoomGate", () => {
     c.advance(61_000);
     expect(await gate.filter([ev("2-0", "room.message", { room_id: A, tenant_id: "test-tenant" })])).toHaveLength(0);
   });
+
+  it("admits a room the caller can open though it is not in their list (an admin, not a member)", async () => {
+    const checkRoom = vi.fn(async (id: string) => id === B);
+    const gate = createRoomGate({ loadRoomIds: async () => new Set([A]), checkRoom });
+    const out = await gate.filter([ev("1-0", "room.message", { room_id: B, tenant_id: "test-tenant" })]);
+    expect(out.map((e) => e.id)).toEqual(["1-0"]);
+    // Remembered: the next event for it asks nothing.
+    await gate.filter([ev("2-0", "room.message", { room_id: B, tenant_id: "test-tenant" })]);
+    expect(checkRoom).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a room the caller cannot open, and one whose check fails, and remembers the refusal", async () => {
+    const C = "33333333-3333-4333-8333-333333333333";
+    const checkRoom = vi.fn(async (id: string) => {
+      if (id === C) throw new Error("bridge down");
+      return false;
+    });
+    const gate = createRoomGate({ loadRoomIds: async () => new Set([A]), checkRoom });
+    expect(await gate.filter([ev("1-0", "room.message", { room_id: B, tenant_id: "test-tenant" })])).toEqual([]);
+    expect(await gate.filter([ev("2-0", "room.message", { room_id: C, tenant_id: "test-tenant" })])).toEqual([]);
+    await gate.filter([ev("3-0", "room.message", { room_id: B, tenant_id: "test-tenant" })]);
+    expect(checkRoom.mock.calls.filter(([id]) => id === B)).toHaveLength(1);
+  });
+
+  it("never checks a value that is not a room id", async () => {
+    const checkRoom = vi.fn(async () => true);
+    const gate = createRoomGate({ loadRoomIds: async () => new Set([A]), checkRoom });
+    expect(await gate.filter([ev("1-0", "room.message", { room_id: "../vault/get", tenant_id: "test-tenant" })])).toEqual([]);
+    expect(checkRoom).not.toHaveBeenCalled();
+  });
+
+  it("bounds the single-room checks a stream of unknown ids can cause", async () => {
+    const checkRoom = vi.fn(async () => false);
+    const c = clock();
+    const gate = createRoomGate({ loadRoomIds: async () => new Set([A]), checkRoom, now: c.now, minRefreshMs: 10_000 });
+    for (let i = 0; i < 50; i++) {
+      const id = `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+      await gate.filter([ev(`${i}-0`, "room.message", { room_id: id, tenant_id: "test-tenant" })]);
+      c.advance(100);
+    }
+    expect(checkRoom.mock.calls.length).toBeLessThanOrEqual(5);
+  });
 });

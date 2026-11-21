@@ -170,4 +170,19 @@ test.describe("Workspaces — the dashboard shell", () => {
     await expect(page).toHaveURL(/\?v=chat$/);
     await expect(view).toHaveCount(0);
   });
+
+  test("at tablet width the collapsed rail opens on screen and opens a workspace", async ({ page }) => {
+    await setupMocks(page);
+    await page.setViewportSize({ width: 900, height: 1000 });
+    await page.goto("/?v=chat", { waitUntil: "networkidle" });
+
+    const toggle = page.locator('[data-testid="room-rail-toggle"]');
+    await expect(toggle).toBeVisible({ timeout: 15000 });
+    await toggle.click();
+    const item = page.locator(`[data-testid="room-rail-item-${ROOM}"]`);
+    await expect(item).toBeInViewport();
+    await item.click();
+    await expect(page.locator('[data-testid="room-view"]')).toBeVisible({ timeout: 15000 });
+    await expect(page).toHaveURL(new RegExp(`room=${ROOM}`));
+  });
 });

@@ -101,4 +101,17 @@ describe("GET /api/events/stream and room access", () => {
     await reader.cancel();
     expect(text).not.toContain(MINE);
   });
+
+  it("sends a room's events to an admin who can open it without being a member", async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).endsWith(`/api/rooms/${NOT_MINE}`) ? Response.json({ id: NOT_MINE }) : Response.json({ rooms: [{ id: MINE }] }),
+    );
+    mocked.readRecent.mockResolvedValue([roomEvent("2-0", NOT_MINE)]);
+    const res = await GET(new NextRequest("http://localhost/api/events/stream?streams=agent"));
+    const { reader, text } = await readUntil(res, "event: sync");
+    await reader.cancel();
+    expect(text).toContain(NOT_MINE);
+    const check = fetchMock.mock.calls.find(([url]) => String(url).endsWith(`/api/rooms/${NOT_MINE}`));
+    expect(check?.[1].headers).toMatchObject({ Authorization: "Bearer caller-token" });
+  });
 });

@@ -28,11 +28,12 @@ vi.mock("@/lib/event-bus/use-event-stream", () => ({
 }));
 
 vi.mock("@/components/chat-panel", () => ({
-  ChatPanel: (props: { room?: { id: string; readOnly?: boolean; refreshKey?: number } }) => (
+  ChatPanel: (props: { room?: { id: string; readOnly?: boolean; readOnlyReason?: string; refreshKey?: number } }) => (
     <div
       data-testid="room-chat"
       data-room={props.room?.id}
       data-readonly={String(Boolean(props.room?.readOnly))}
+      data-readonly-reason={props.room?.readOnlyReason ?? ""}
       data-refresh={String(props.room?.refreshKey ?? 0)}
     />
   ),
@@ -198,6 +199,26 @@ describe("RoomView", () => {
     rooms[REPORT_ID] = room({ access: "viewer" });
     view(<RoomView roomId={REPORT_ID} onLeave={vi.fn()} />);
     expect(await screen.findByTestId("room-chat")).toHaveAttribute("data-readonly", "true");
+  });
+
+  it("shuts the conversation of an archived room, and tells the slots what is still allowed", async () => {
+    rooms[REPORT_ID] = room({ access: "shared", archived: true });
+    const headerActions = vi.fn(() => <div data-testid="actions-slot" />);
+    view(<RoomView roomId={REPORT_ID} onLeave={vi.fn()} slots={{ headerActions }} />);
+    const chat = await screen.findByTestId("room-chat");
+    expect(chat).toHaveAttribute("data-readonly", "true");
+    expect(chat).toHaveAttribute("data-readonly-reason", "archived");
+    const ctx = (headerActions.mock.calls.at(-1) as unknown as [{ can: (a: string) => boolean }])[0];
+    expect(ctx.can("run")).toBe(false);
+    expect(ctx.can("post")).toBe(false);
+    expect(ctx.can("read")).toBe(true);
+    expect(ctx.can("duplicate")).toBe(true);
+  });
+
+  it("names view-only access as the reason a viewer cannot post", async () => {
+    rooms[REPORT_ID] = room({ access: "viewer" });
+    view(<RoomView roomId={REPORT_ID} onLeave={vi.fn()} />);
+    expect(await screen.findByTestId("room-chat")).toHaveAttribute("data-readonly-reason", "viewer");
   });
 
   it("marks the room read when it opens", async () => {

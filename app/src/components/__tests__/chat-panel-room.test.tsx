@@ -10,8 +10,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const visual = vi.hoisted(() => ({ notifyConversationUpdate: vi.fn(), setRender: vi.fn() }));
 vi.mock("@/hooks/use-visual-state", () => ({
-  useVisualState: () => ({ notifyConversationUpdate: vi.fn(), setRender: vi.fn() }),
+  useVisualState: () => visual,
 }));
 vi.mock("@/hooks/use-throttle", () => ({ useThrottle: (value: string) => value }));
 vi.mock("@/components/business/bar-chart", () => ({
@@ -40,6 +41,8 @@ let fetchMock: ReturnType<typeof vi.fn>;
 const sends: Array<Record<string, unknown>> = [];
 
 beforeEach(() => {
+  visual.notifyConversationUpdate.mockClear();
+  visual.setRender.mockClear();
   history = [...HISTORY];
   sendReplies = [];
   sends.length = 0;
@@ -65,6 +68,10 @@ afterEach(() => {
 
 function urls() {
   return fetchMock.mock.calls.map(([url]) => String(url));
+}
+
+function attach(...files: File[]) {
+  fireEvent.change(screen.getByTestId("attach-input"), { target: { files } });
 }
 
 async function type(text: string) {
@@ -203,6 +210,90 @@ describe("ChatPanel in a room", () => {
     expect(screen.queryByTestId("room-chat-empty")).toBeNull();
   });
 
+  it("draws a turn's charts in the room and never touches the main conversation's canvas", async () => {
+    history = [];
+    const chart = { component: "render_bar_chart", props: { title: "Margins by week", data: [{ name: "W1", value: 3 }], dataKey: "value" } };
+    const long = "Here is the breakdown. ".repeat(12);
+    sendReplies.push(() =>
+      sseResponse([
+        { event: "room", data: { roomId: REPORT_ID } },
+        { event: "delta", data: { text: `${long}[RENDER:${chart.component}:${JSON.stringify(chart.props)}]` } },
+        { event: "render", data: { component: "render_markdown", props: { content: "Footnote." } } },
+        { event: "dashboard", data: { data: { revenue: 10 } } },
+        { event: "done", data: { text: long } },
+      ]),
+    );
+    render(<ChatPanel variant="page" room={{ id: REPORT_ID }} />);
+    await screen.findByTestId("room-chat-empty");
+    await type("Show margins");
+    expect(await screen.findByTestId("bar-chart")).toHaveTextContent("Margins by week");
+    expect(await screen.findByTestId("markdown-view")).toHaveTextContent("Footnote.");
+    expect(screen.getByTestId("message-renders")).toBeInTheDocument();
+    expect(visual.setRender).not.toHaveBeenCalled();
+    expect(visual.notifyConversationUpdate).not.toHaveBeenCalled();
+  });
+
+  it("sends a queued message's files with it when the room frees up", async () => {
+    history = [];
+    sendReplies.push(() => reply({ error: "room_busy", answering: "Alice", request_admitted: false }, 409));
+    const { rerender } = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    await screen.findByTestId("room-chat-empty");
+    attach(new File(["a,b"], "q4.csv", { type: "text/csv" }));
+    await screen.findByTestId("attachment-chip");
+    await type("See attached");
+    await screen.findByTestId("room-busy-notice");
+    expect(sends[0].attachments).toHaveLength(1);
+    await act(async () => rerender(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 1 }} />));
+    await screen.findByText("Noted.");
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toMatchObject({ message: "See attached", attachments: [expect.objectContaining({ name: "q4.csv" })] });
+    expect(screen.getAllByTestId("message-attachment")).toHaveLength(1);
+  });
+
+  it("queues and later sends a message that is only a file", async () => {
+    history = [];
+    sendReplies.push(() => reply({ error: "room_busy", answering: "Alice", request_admitted: false }, 409));
+    const { rerender } = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    await screen.findByTestId("room-chat-empty");
+    attach(new File(["x"], "only.txt", { type: "text/plain" }));
+    await screen.findByTestId("attachment-chip");
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("send-button"));
+    });
+    await screen.findByTestId("room-busy-notice");
+    await act(async () => rerender(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 1 }} />));
+    await screen.findByText("Noted.");
+    expect(sends[1]).toMatchObject({ message: "", attachments: [expect.objectContaining({ name: "only.txt" })] });
+    await waitFor(() => expect(screen.queryByTestId("room-busy-notice")).toBeNull());
+    expect(screen.queryByText(/Queued/)).toBeNull();
+  });
+
+  it("a file typed while others wait joins the queue with its file, not ahead of them", async () => {
+    history = [];
+    sendReplies.push(() => reply({ error: "room_busy", answering: "Alice", request_admitted: false }, 409));
+    const { rerender } = render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    await screen.findByTestId("room-chat-empty");
+    await type("first");
+    await screen.findByTestId("room-busy-notice");
+    attach(new File(["x"], "later.txt", { type: "text/plain" }));
+    await screen.findByTestId("attachment-chip");
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("send-button"));
+    });
+    expect(sends).toHaveLength(1);
+    await act(async () => rerender(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 1 }} />));
+    await waitFor(() => expect(sends).toHaveLength(3));
+    expect(sends[1].message).toBe("first");
+    expect(sends[2]).toMatchObject({ attachments: [expect.objectContaining({ name: "later.txt" })] });
+  });
+
+  it("says an archived workspace can be read but not posted in", async () => {
+    render(<ChatPanel variant="page" room={{ id: REPORT_ID, readOnly: true, readOnlyReason: "archived" }} />);
+    await screen.findByText("How did we do?");
+    expect(screen.getByTestId("chat-input")).toBeDisabled();
+    expect(screen.getByTestId("room-readonly-notice")).toHaveTextContent(/archived/i);
+  });
+
   it("gives a viewer a disabled composer and says why", async () => {
     render(<ChatPanel variant="page" room={{ id: REPORT_ID, readOnly: true }} />);
     await screen.findByText("How did we do?");
@@ -238,6 +329,24 @@ describe("ChatPanel in a room", () => {
 });
 
 describe("ChatPanel with no room, exactly as before", () => {
+  it("still draws charts on the main canvas and hands long replies to it", async () => {
+    history = [];
+    const chart = { component: "render_bar_chart", props: { title: "Main chart", data: [], dataKey: "value" } };
+    const long = "A long answer. ".repeat(20);
+    sendReplies.push(() =>
+      sseResponse([
+        { event: "delta", data: { text: `${long}[RENDER:${chart.component}:${JSON.stringify(chart.props)}]` } },
+        { event: "done", data: { text: long } },
+      ]),
+    );
+    render(<ChatPanel variant="page" />);
+    await type("main");
+    await screen.findByText(long.trim());
+    expect(visual.setRender).toHaveBeenCalledWith({ component: "render_bar_chart", props: chart.props });
+    expect(visual.notifyConversationUpdate).toHaveBeenCalled();
+    expect(screen.queryByTestId("message-renders")).toBeNull();
+  });
+
   it("reads the main history, asks for the fleet listing, and sends no room", async () => {
     history = [{ id: 1, role: "user", content: "hello", authorName: "Bob" }];
     render(<ChatPanel variant="page" />);
