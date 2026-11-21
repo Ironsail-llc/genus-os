@@ -76,7 +76,7 @@ def app_role(db_conn, monkeypatch):
     monkeypatch.delenv("ROBOTHOR_TENANT_ID", raising=False)
 
     @contextmanager
-    def scoped(autocommit: bool = False):
+    def scoped(autocommit: bool = False, read_only: bool = False):
         conn = AppRoleConn(db_conn)
         try:
             connection._apply_tenant_scope(conn)  # type: ignore[arg-type]
