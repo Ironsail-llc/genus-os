@@ -10,7 +10,7 @@
  * pass and the mark comes off.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { api, expectedToFailUntil, outboxCount, people, requireStack, roomLink, say, signedIn } from "./stack";
+import { api, expectedToFailUntil, outboxCount, people, requireStack, roomLink, say, signedIn, unique } from "./stack";
 
 requireStack();
 test.describe.configure({ mode: "serial" });
@@ -212,6 +212,49 @@ test("8. Bob picks a past period and its edition is built (C3)", async () => {
   await bobPage.getByTestId("period-anchor").fill(daysAgo(3));
   await bobPage.getByTestId("period-apply").click();
   await expect(bobPage.getByTestId("room-pinned-edition").getByTestId("edition-title")).toBeVisible({ timeout: 60000 });
+});
+
+test("8a. while the workspace is paused, Bob's period request is refused and starts nothing (C3, A5)", async () => {
+  const alice = await api("alice");
+  const bob = await api("bob");
+  const pause = async (paused: boolean) => {
+    const rev = (await alice.get(`/api/rooms/${roomId}`)).body.rev;
+    const res = await alice.patch(`/api/rooms/${roomId}`, { expectedRev: rev, changes: { paused } });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  };
+  const editions = async () => ((await bob.get(`/api/rooms/${roomId}/editions`)).body.editions as unknown[]).length;
+  await pause(true);
+  try {
+    const before = await editions();
+    const refused = await bob.post(`/api/rooms/${roomId}/periods`, { grain: "day", anchor: daysAgo(6) });
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body.error).toBe("paused");
+    await bobPage.waitForTimeout(2000);
+    expect(await editions()).toBe(before);
+  } finally {
+    await pause(false);
+  }
+});
+
+test("8b. a period at the start of the calendar, east of UTC, is refused cleanly (C3)", async () => {
+  const alice = await api("alice");
+  const created = await alice.post("/api/rooms", {
+    kind: "report",
+    title: unique("East of UTC"),
+    instructions: "Summarise the sales.",
+    tz: "Asia/Tokyo",
+  });
+  expect(created.status, JSON.stringify(created.body)).toBe(201);
+  const id = created.body.id as string;
+  try {
+    for (const [grain, anchor] of [["custom", "0001-01-01/0001-01-03"], ["day", "0001-01-01"]]) {
+      const refused = await alice.post(`/api/rooms/${id}/periods`, { grain, anchor });
+      expect(refused.status, JSON.stringify(refused.body)).toBe(422);
+      expect(refused.body.error).toBe("invalid_period");
+    }
+  } finally {
+    await alice.post(`/api/rooms/${id}/archive`);
+  }
 });
 
 let taskRoomId = "";
