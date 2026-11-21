@@ -22,21 +22,30 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("roomsServed", () => {
-  it("is true when the rooms list answers, asked with the caller's credentials", async () => {
+  it("is served when the rooms list answers, asked with the caller's credentials", async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ rooms: [] }), { status: 200 }));
-    expect(await roomsServed()).toBe(true);
+    expect(await roomsServed()).toBe("served");
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://bridge.test/api/rooms");
     expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer test-token" });
   });
 
-  it("is false when the rooms list is not served (404)", async () => {
+  it("is not served when the rooms list answers 404", async () => {
     fetchMock.mockResolvedValue(new Response("{}", { status: 404 }));
-    expect(await roomsServed()).toBe(false);
+    expect(await roomsServed()).toBe("not_served");
   });
 
-  it("is false when the bridge cannot be reached", async () => {
+  it("is unknown when the bridge cannot be reached or times out", async () => {
     fetchMock.mockRejectedValue(new TypeError("refused"));
-    expect(await roomsServed()).toBe(false);
+    expect(await roomsServed()).toBe("unknown");
+    fetchMock.mockRejectedValue(new DOMException("timed out", "TimeoutError"));
+    expect(await roomsServed()).toBe("unknown");
+  });
+
+  it("is unknown for any other refusal, which says nothing about workspaces", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 502 }));
+    expect(await roomsServed()).toBe("unknown");
+    fetchMock.mockResolvedValue(new Response("{}", { status: 401 }));
+    expect(await roomsServed()).toBe("unknown");
   });
 });

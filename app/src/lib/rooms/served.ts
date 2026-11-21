@@ -2,14 +2,17 @@
  * Server-side: does this instance serve workspaces, for this caller?
  *
  * Asked the way the browser's shell asks (`GET /api/rooms`), with the
- * caller's own bridge credentials. Only a 200 is "yes". A 404 (nothing serves
- * rooms here), any other refusal, or no answer is "no": the caller is then
- * told nothing about workspaces rather than about tools it may not have.
+ * caller's own bridge credentials. Only two answers are definite: a 200 is
+ * "served" and a 404 (nothing serves rooms here) is "not_served". Anything
+ * else (a timeout, no answer, another refusal) is "unknown": the caller treats
+ * it as not served for that request and never remembers it.
  */
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { getServiceUrl } from "@/lib/services/registry";
 
-export async function roomsServed(): Promise<boolean> {
+export type RoomsServed = "served" | "not_served" | "unknown";
+
+export async function roomsServed(): Promise<RoomsServed> {
   try {
     const url = getServiceUrl("bridge", "/api/rooms") || "http://localhost:9100/api/rooms";
     const res = await fetch(url, {
@@ -17,8 +20,9 @@ export async function roomsServed(): Promise<boolean> {
       cache: "no-store",
       signal: AbortSignal.timeout(3000),
     });
-    return res.ok;
+    if (res.ok) return "served";
+    return res.status === 404 ? "not_served" : "unknown";
   } catch {
-    return false;
+    return "unknown";
   }
 }

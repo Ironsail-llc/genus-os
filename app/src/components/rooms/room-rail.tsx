@@ -34,6 +34,14 @@ export interface RoomRailProps {
 export function RoomRail(props: RoomRailProps) {
   const { collapsed = false } = props;
   const [open, setOpen] = useState(false);
+  // Any change of the open room closes the collapsed list, whoever made it:
+  // the header's own buttons, a chat link or a dialog navigate without going
+  // through the wrapped onSelect below. Adjusted during render, not in an effect.
+  const [shownFor, setShownFor] = useState(props.activeRoomId);
+  if (shownFor !== props.activeRoomId) {
+    setShownFor(props.activeRoomId);
+    if (open) setOpen(false);
+  }
 
   if (!collapsed) {
     return (

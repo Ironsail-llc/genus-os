@@ -348,4 +348,24 @@ test.describe("Workspaces — the hub", () => {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     expect(overflow).toBe(false);
   });
+
+  for (const [width, height, label] of [
+    [390, 844, "phone"],
+    [820, 1180, "tablet"],
+  ] as const) {
+    test(`the collapsed rail closes after opening a workspace from its digest (${label})`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      await setupMocks(page);
+      await page.goto("/?v=chat", { waitUntil: "networkidle" });
+      const rail = page.locator('[data-testid="room-rail"]');
+      await rail.locator('[data-testid="room-rail-toggle"]').click({ timeout: 15000 });
+      const nav = rail.getByRole("navigation", { name: "Workspaces" });
+      await expect(nav).toBeVisible();
+      await nav.locator('[data-testid="new-in-workspaces-toggle"]').click();
+      await nav.locator(`[data-testid="new-in-workspaces-item-${ROOM}"]`).click();
+      await expect(page).toHaveURL(new RegExp(`room=${ROOM}`));
+      await expect(page.locator('[data-testid="room-view"]')).toBeVisible();
+      await expect(nav).toHaveCount(0);
+    });
+  }
 });
