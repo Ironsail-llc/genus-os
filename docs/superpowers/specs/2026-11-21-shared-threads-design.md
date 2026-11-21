@@ -438,6 +438,45 @@ Stream `agent`, types `room.edition`, `room.message`, `room.updated`, `room.task
 edition_id}`); content is fetched through the API. The dashboard filters by acting tenant, then by the rooms the
 user can access.
 
+#### As built (lane 12, integration)
+
+The seams between lanes, each crossed by a test:
+
+- **Golden replies.** The bridge and the engine record their real workspace replies
+  (real routes, Postgres, only the model stood in) into
+  `app/src/lib/rooms/__tests__/contract/{bridge,engine}-replies.json` and fail when a
+  reply changes (`robothor/rooms/tests/contract.py`; regenerate with
+  `ROOMS_CONTRACT_UPDATE=1`). The dashboard's `contract.test.ts` feeds them to its API
+  client, and `engine-contract.test.ts` to the real chat routes and engine client.
+- **Bridge over the real definition module.** Archive, unarchive, duplicate and restore
+  go through `definition` (`archive_room`, the new `unarchive_room`, `duplicate_room`,
+  `restore_room_revision(..., expected_rev=)`), so the schedule row follows them: an
+  archived room stops, a duplicate of a scheduled room starts paused,
+  a restore moves the schedule back. A missing revision is `RevisionNotFound` (404).
+- **Agents.** `create_room_with_schedule(..., agent_known=)` takes the bridge's answer:
+  the acting company's engine manifest scan (`routers._manifest_backend`, as the fleet
+  views use), not a manifest directory in the bridge process. An engine that cannot
+  answer is 502 `agents_unavailable` (field `agentId`). An unknown agent or time zone
+  is `definition.InvalidField`, so the 422 names `agentId` / `tz`.
+- **Viewers** may be shared with, never assigned (422 `ineligible_account`).
+- **One edition shape.** `models.edition_json` adds `error`; the bridge answers editions
+  through it, so the engine's `/periods` and the bridge's `/editions` are the same keys.
+- **Chat refusals.** The dashboard's engine client keeps a room's 404/403 on a history
+  read as `EngineRefusal`; the history route answers it with its status, and a send to a
+  room the caller cannot see is 404 (it was 502 "not confirmed").
+- **Periods.** The picker refuses any period whose last day is today or later in the
+  room's zone (the engine's rule), says so while it is picked, offers no date after
+  yesterday, and shows the engine's own words for any refusal it still makes. The
+  engine's cap refusal is 429 `cap_reached` with `limit` and `used`; the dashboard keys
+  on the status.
+- **Schedules.** The only grammar is `robothor.engine.cron_parse`: `every N
+  minutes|hours|days`, a five-field cron expression, or an ISO time (refused for a
+  room). The settings drawer's example is checked against it
+  (`tests/test_rooms_ui_schedule_examples.py`).
+- **Middleware first.** A viewer's `POST /api/rooms` is refused by the bridge
+  middleware's scope check before the router, in the middleware's own
+  `{error: "insufficient scope"}` body.
+
 ## Build lanes
 
 1. Foundation: schema, data access, access rules, retention.
