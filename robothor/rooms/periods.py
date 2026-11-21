@@ -7,7 +7,7 @@ A period is a run of whole calendar days in the ROOM's time zone (its
 - ``day``: one day.
 - ``week``: Monday to Sunday (ISO weeks; a week always starts on Monday).
 - ``month``: the first to the last day of a calendar month.
-- ``custom``: any range of at most ``MAX_CUSTOM_DAYS`` (93) days.
+- ``custom``: any range of days, of any length.
 
 A period is offered only once it is over: its last day is before today in the
 room's zone. An edition of a period still running would be a partial figure
@@ -15,12 +15,8 @@ presented as a whole one. The server's own zone never enters the maths.
 
 ``request_period`` returns a period's published edition at once, or starts
 exactly ONE run for it however many people ask at the same moment (the
-``building`` row's unique index makes racing requesters share it). Each person
-may start at most ``settings.max_on_demand_per_day`` on-demand editions in a
-room per local day of the room, counting every edition they asked for there,
-previews and failed ones included; the default is
-``DEFAULT_MAX_ON_DEMAND_PER_DAY`` (5), and 0 allows none. Asking for an edition
-that exists, or one already building, uses none. A ``building`` edition whose
+``building`` row's unique index makes racing requesters share it). Nothing
+limits how many periods anyone may ask for. A ``building`` edition whose
 run is gone is failed first (``robothor.rooms.recovery``), so an interrupted
 run never holds its period. A week, month or
 custom run is handed the summaries of the day editions inside it as data
@@ -42,16 +38,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from robothor.rooms import access, dal, recovery
 from robothor.rooms.errors import RoomError
 from robothor.rooms.keys import canonical_uuid
-from robothor.rooms.models import GRAINS, Edition, Room
+from robothor.rooms.models import GRAINS, Edition
 
 __all__ = [
     "CONTEXT_MAX_CHARS",
     "CONTEXT_SUMMARY_CHARS",
-    "DEFAULT_MAX_ON_DEMAND_PER_DAY",
     "DEFAULT_TZ",
-    "MAX_CUSTOM_DAYS",
     "PERIOD_ERROR_REASONS",
-    "OnDemandCapReached",
     "Period",
     "PeriodError",
     "RoomRunUnavailable",
@@ -66,10 +59,6 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 DEFAULT_TZ = "UTC"
-#: The longest custom range, in days: a quarter.
-MAX_CUSTOM_DAYS = 93
-#: On-demand editions a room runs per local day when its settings name no cap.
-DEFAULT_MAX_ON_DEMAND_PER_DAY = 5
 #: The day summaries handed to a longer period's run: per summary, and in all.
 CONTEXT_SUMMARY_CHARS = 500
 CONTEXT_MAX_CHARS = 6000
@@ -93,19 +82,8 @@ class PeriodError(ValueError):
 
 #: Why a period was refused.
 PERIOD_ERROR_REASONS = frozenset(
-    {"invalid_time_zone", "invalid_grain", "invalid_anchor", "too_long", "not_over", "not_a_report"}
+    {"invalid_time_zone", "invalid_grain", "invalid_anchor", "not_over", "not_a_report"}
 )
-
-
-class OnDemandCapReached(RoomError):  # noqa: N818 - reads as the result it is
-    """The room ran its on-demand editions for today (429). Nothing was started."""
-
-    def __init__(self, limit: int, used: int) -> None:
-        self.limit, self.used = limit, used
-        super().__init__(
-            f"on-demand cap reached: each person may start {limit} on-demand edition(s) "
-            f"a day in this workspace and you have started {used} today"
-        )
 
 
 class RoomRunUnavailable(RoomError):  # noqa: N818 - reads as the result it is
@@ -206,10 +184,7 @@ def _custom(anchor: Any) -> Period:
     start, end = _date(pair[0]), _date(pair[1])
     if start > end:
         raise PeriodError("a custom period cannot end before it starts")
-    period = Period(start, end, "custom")
-    if period.days > MAX_CUSTOM_DAYS:
-        raise PeriodError(f"a custom period is at most {MAX_CUSTOM_DAYS} days", reason="too_long")
-    return period
+    return Period(start, end, "custom")
 
 
 def _anchored(grain: str, anchor: Any) -> Period:
@@ -302,16 +277,6 @@ def resolve_run_room() -> RunRoom:
     return run_room  # type: ignore[no-any-return,unused-ignore]
 
 
-def _cap(room: Room) -> int:
-    raw = room.settings.get("max_on_demand_per_day")
-    if isinstance(raw, bool) or not isinstance(raw, int | float | str):
-        return DEFAULT_MAX_ON_DEMAND_PER_DAY
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return DEFAULT_MAX_ON_DEMAND_PER_DAY
-
-
 def _claim(
     actor: access.Actor,
     room_id: str,
@@ -333,16 +298,6 @@ def _claim(
     )
     if found is not None:
         return found, False, None
-    limit = _cap(room)
-    since = datetime.combine(_today(tz, now), time(), tzinfo=_zone(tz))
-    # A requester with no account id (the loopback development operator)
-    # counts against everyone's on-demand runs in the room: stricter, never looser.
-    requester = canonical_uuid(actor.user_id)
-    used = dal.count_requested_editions(
-        room.tenant_id, room.id, since=since, requested_by=requester
-    )
-    if used >= limit:
-        raise OnDemandCapReached(limit, used)
     runner = run_room or resolve_run_room()
     # Everything that can fail happens BEFORE the insert: a committed
     # ``building`` row with no run behind it would hold the period.
@@ -353,7 +308,7 @@ def _claim(
         period_start=period.start,
         period_end=period.end,
         grain=period.grain,
-        requested_by=requester,
+        requested_by=canonical_uuid(actor.user_id),
     )
     if not created:
         return edition, False, None
@@ -402,8 +357,7 @@ async def request_period(
     Needs ``request_period`` access (``RoomNotFound`` / ``RoomForbidden``).
     A published edition, or one already building, comes back with ``started``
     False. Otherwise one ``building`` edition is inserted and one background
-    run started for it, unless the room's daily cap is reached
-    (``OnDemandCapReached``, nothing started). ``PeriodError`` for a period
+    run started for it. ``PeriodError`` for a period
     that is malformed or not over, or a room that is not a report.
     """
     claim = asyncio.ensure_future(
