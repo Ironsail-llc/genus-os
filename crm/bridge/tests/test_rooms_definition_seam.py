@@ -652,3 +652,57 @@ def test_recorded_replies_match_the_dashboard_contract(real) -> None:
     check_golden("bridge-replies.json", recorded)
     # The session key never reaches a browser.
     assert ":room:" not in str(replies)
+
+
+# ─── the platform company: a bridge with no manifest directory ───────────
+
+
+@pytest.fixture
+def platform(real: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """The acting company is the platform's, and this process has no agent directory
+    (a bridge deployed apart from its engine)."""
+    from robothor.engine import manifest_store
+    from robothor.engine.config import ManifestScan
+
+    monkeypatch.setattr("routers._operator.PLATFORM_TENANT", real.db.tenant)
+    local = {"calls": 0, "scan": ManifestScan(dir_readable=False)}
+
+    def scan() -> Any:
+        local["calls"] += 1
+        return local["scan"]
+
+    monkeypatch.setattr(manifest_store, "scan", scan)
+    real.local = local
+    return real
+
+
+def test_the_platform_company_asks_its_engine_when_no_directory_is_here(platform) -> None:
+    listed = platform.client("bob").get("/api/rooms/agents")
+    assert listed.status_code == 200, listed.text
+    assert [a["agentId"] for a in listed.json()["agents"]] == ["analyst", "main"]
+    asked = [c.args[:2] for c in platform.scan.await_args_list]
+    assert asked == [("GET", "/api/admin/manifests")]
+    assert platform.scan.await_args_list[0].kwargs.get("tenant") == platform.db.tenant
+
+
+def test_the_platform_company_creates_with_its_engines_agent(platform) -> None:
+    made = _create(platform, agentId="analyst")
+    assert made.status_code == 201, made.text
+    assert made.json()["agentId"] == "analyst"
+
+
+def test_the_platform_company_is_refused_when_neither_can_answer(platform) -> None:
+    platform.scan.return_value = (503, {"error": "starting"})
+    refused = platform.client("bob").get("/api/rooms/agents")
+    assert refused.status_code == 502
+    assert _detail(refused)["error"] == "agents_unavailable"
+
+
+def test_a_readable_directory_here_is_read_and_no_engine_is_asked(platform) -> None:
+    from robothor.engine.config import ManifestScan
+
+    platform.local["scan"] = ManifestScan(manifests=[{"id": "main"}], dir_readable=True)
+    listed = platform.client("bob").get("/api/rooms/agents")
+    assert listed.status_code == 200, listed.text
+    assert [a["agentId"] for a in listed.json()["agents"]] == ["main"]
+    assert platform.scan.await_count == 0

@@ -350,11 +350,11 @@ def _company_manifests(actor: access.Actor) -> dict[str, str]:
     """The agents the acting company's engine loads: id -> display name.
 
     The engine owns the fleet; this asks it the way the fleet views do
-    (``_manifest_backend``) rather than reading a manifest directory in the
-    bridge process, which may not be the company's or may not be mounted.
+    (``_manifest_backend``); the platform company's directory is read here
+    only when this process has one, and its engine is asked otherwise.
     """
     try:
-        scan = _manifest_backend.scan_from_worker_thread(actor.tenant_id)
+        scan = _manifest_backend.engine_scan_from_worker_thread(actor.tenant_id)
     except HTTPException as exc:
         raise AgentsUnavailableError("the manifest scan failed") from exc
     if getattr(scan, "dir_readable", True) is False:
