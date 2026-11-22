@@ -489,6 +489,38 @@ def test_the_default_chat_agent_runs_a_task_with_no_known_agent(db):
     assert unknown.agent_id == "main"
 
 
+def test_the_one_default_agent_rule_runs_a_task_with_no_known_agent(db, monkeypatch):
+    """The fallback is ``definition.default_agent()``, the one rule create uses
+    too, not a second default of its own."""
+    from robothor.rooms import definition, tasks
+
+    monkeypatch.setattr(definition, "default_agent", lambda: "concierge")
+    room = tasks.open_task_room(actor(db, "bob"), crm_task(db, assigned_to_agent="ghost"))
+    assert room.agent_id == "concierge"
+
+
+def test_the_caller_may_say_which_agents_the_company_has(db):
+    """The bridge does not own the fleet: it answers for the acting company's
+    engine, as it does when creating a workspace."""
+    from robothor.rooms import definition, tasks
+
+    asked: list[str] = []
+
+    def company_has(agent: str) -> bool:
+        asked.append(agent)
+        return agent == "company-only"
+
+    room = tasks.open_task_room(
+        actor(db, "bob"), crm_task(db, assigned_to_agent="company-only"), agent_known=company_has
+    )
+    assert room.agent_id == "company-only"
+    other = tasks.open_task_room(
+        actor(db, "bob"), crm_task(db, assigned_to_agent="analyst"), agent_known=company_has
+    )
+    assert other.agent_id == definition.default_agent()
+    assert asked == ["company-only", "analyst"]
+
+
 def test_someone_else_cannot_join_an_existing_task_workspace_by_opening_it(db):
     from robothor.rooms import dal, tasks
     from robothor.rooms.errors import RoomNotFound

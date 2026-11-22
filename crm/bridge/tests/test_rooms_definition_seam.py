@@ -182,6 +182,79 @@ def test_a_viewer_gets_no_agent_list(real) -> None:
     assert real.client("vera").get("/api/rooms/agents").status_code == 403
 
 
+# ─── a task's workspace: which agent ─────────────────────────────────────
+
+
+def _assigned_task(w: Any, agent: str | None) -> str:
+    w.db.cur.execute(
+        "INSERT INTO crm_tasks (tenant_id, title, assigned_to_agent) VALUES (%s, %s, %s) "
+        "RETURNING id",
+        (w.db.tenant, "Call the lapsed buyers", agent),
+    )
+    return str(w.db.cur.fetchone()[0])
+
+
+@pytest.fixture
+def two_fleets(real: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """The bridge process's own manifests (the platform's) know ``platform-only``;
+    the acting company's engine knows ``main``, ``analyst`` and ``company-only``.
+    The default agent is ``concierge``, so a fallback is visible."""
+    from robothor.rooms import definition as definition_module
+
+    real.scan.return_value = (
+        200,
+        {
+            "manifests": [{"id": "main"}, {"id": "analyst"}, {"id": "company-only"}],
+            "broken": [],
+        },
+    )
+    monkeypatch.setattr(definition_module, "agent_exists", lambda a: a == "platform-only")
+    monkeypatch.setattr(definition_module, "default_agent", lambda: "concierge")
+    return real
+
+
+@pytest.mark.parametrize(
+    ("assigned", "expected"),
+    [
+        ("analyst", "analyst"),  # the company has it
+        ("company-only", "company-only"),  # only the company's engine has it
+        ("platform-only", "concierge"),  # the bridge's manifests have it, the company not
+        (None, "concierge"),  # no agent on the task
+    ],
+)
+def test_a_task_workspace_gets_the_companys_agent_or_the_default(
+    two_fleets, assigned, expected
+) -> None:
+    w = two_fleets
+    task = _assigned_task(w, assigned)
+    opened = w.client("alice").post(f"/api/rooms/from-task/{task}")
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["agentId"] == expected
+    assert all(c.kwargs.get("tenant") == w.db.tenant for c in w.scan.await_args_list)
+
+
+def test_a_task_workspace_is_not_made_when_the_company_engine_cannot_say(two_fleets) -> None:
+    w = two_fleets
+    w.scan.return_value = (503, {"error": "starting"})
+    task = _assigned_task(w, "analyst")
+    refused = w.client("alice").post(f"/api/rooms/from-task/{task}")
+    assert refused.status_code == 502
+    assert _detail(refused)["error"] == "agents_unavailable"
+    w.db.cur.execute("SELECT count(*) FROM rooms WHERE tenant_id = %s", (w.db.tenant,))
+    assert w.db.cur.fetchone()[0] == 0
+
+
+def test_reopening_a_task_workspace_asks_no_engine(two_fleets) -> None:
+    w = two_fleets
+    task = _assigned_task(w, "analyst")
+    assert w.client("alice").post(f"/api/rooms/from-task/{task}").status_code == 200
+    asked = w.scan.await_count
+    w.scan.return_value = (503, {"error": "starting"})
+    again = w.client("alice").post(f"/api/rooms/from-task/{task}")
+    assert again.status_code == 200
+    assert w.scan.await_count == asked
+
+
 @pytest.mark.parametrize(
     ("body", "code", "field"),
     [
