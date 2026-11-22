@@ -350,6 +350,33 @@ describe("ChatPanel in a room", () => {
     });
   }
 
+  it("shows a turn's answer once when its sender left mid-answer and the turn finished without them", async () => {
+    // The turn outlives its sender's stream: by the time they are back its
+    // answer is stored. The request the old page journaled is not drawn again
+    // as a recovered answer beside the stored one.
+    const scope = "3b3b3b3b-0000-4000-8000-000000000003";
+    const request = "3c3c3c3c-0000-4000-8000-000000000004";
+    sessionStorage.setItem(`helm.chat.pending.v1.${scope}`, JSON.stringify([request]));
+    history = [
+      { id: 60, role: "user", content: "Same words", authorName: "Bob" },
+      { id: 61, role: "assistant", content: "Answering Bob: Same words", authorName: "Analyst" },
+    ];
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/chat/history")) return reply({ messages: history, hasMore: false, recoveryScope: scope });
+      if (url.startsWith("/api/chat/outcome")) return reply({ status: "completed", text: "Answering Bob: Same words" });
+      return reply({ messages: [], agents: [] });
+    });
+
+    render(<ChatPanel variant="page" room={{ id: REPORT_ID, refreshKey: 0 }} />);
+    await screen.findByText("Answering Bob: Same words");
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+
+    expect(screen.getAllByText("Answering Bob: Same words")).toHaveLength(1);
+    expect(urls().some((u) => u.startsWith("/api/chat/outcome"))).toBe(false);
+    sessionStorage.clear();
+  });
+
   const lostAnswers = {
     "a 504": () => reply({ error: "gateway timeout" }, 504),
     "a stream cut mid-answer": () =>
