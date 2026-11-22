@@ -949,12 +949,22 @@ def api_get_edition(room_id: str, edition_id: str, request: Request) -> Any:
 # ─── engine-backed: run, periods ─────────────────────────────────────────
 
 
-async def _engine(actor: access.Actor, room: Room, route: str, payload: dict[str, Any]) -> Any:
-    """POST one engine room route on the caller's behalf; ``(status, body)``."""
+async def _engine(
+    request: Request, actor: access.Actor, room: Room, route: str, payload: dict[str, Any]
+) -> Any:
+    """POST one engine room route on the caller's behalf; ``(status, body)``.
+
+    A caller switched in from another company is named with that home company
+    (``acting_from``): the engine checks them against the rule the switch
+    applies rather than believing a role from here."""
+    named: dict[str, Any] = {"requested_by": actor.user_id}
+    home = str(getattr(getattr(request.state, "auth", None), "home_tenant_id", "") or "")
+    if home and home != actor.tenant_id:
+        named["acting_from"] = home
     return await engine_request(
         "POST",
         f"/api/rooms/{room.id}/{route}",
-        json={**payload, "requested_by": actor.user_id},
+        json={**payload, **named},
         tenant=actor.tenant_id,
     )
 
@@ -967,7 +977,7 @@ async def api_run(room_id: str, request: Request, body: RunBody | None = Body(No
     payload: dict[str, Any] = {"preview": run.preview}
     if run.period is not None:
         payload["period"] = run.period
-    status, answer = await _engine(actor, room, "run", payload)
+    status, answer = await _engine(request, actor, room, "run", payload)
     await asyncio.to_thread(_audit, request, "room.run", room.id, preview=run.preview)
     return JSONResponse(answer, status_code=status)
 
@@ -979,7 +989,7 @@ async def api_request_period(room_id: str, request: Request, body: PeriodsBody) 
     payload = {"grain": body.grain, "anchor": body.anchor}
     if body.end is not None:
         payload["end"] = body.end
-    status, answer = await _engine(actor, room, "periods", payload)
+    status, answer = await _engine(request, actor, room, "periods", payload)
     await asyncio.to_thread(_audit, request, "room.request_period", room.id, grain=body.grain)
     return JSONResponse(answer, status_code=status)
 

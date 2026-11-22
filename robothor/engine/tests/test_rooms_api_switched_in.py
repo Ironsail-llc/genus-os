@@ -116,7 +116,8 @@ async def _post(route: str, **body: Any) -> httpx.Response:
 async def test_a_switched_in_parent_admin_is_admitted_as_an_admin_here(world, route) -> None:
     answer = await _post(route, requested_by=HAL, acting_from=PARENT)
 
-    assert answer.status_code == 200, answer.text
+    # A run is started (202); the period's edition already exists (200).
+    assert answer.status_code == {"run": 202, "periods": 200}[route], answer.text
     [(called, actor, _kw)] = world.calls
     assert called == route
     assert (actor.user_id, actor.role, actor.tenant_id, actor.is_service) == (

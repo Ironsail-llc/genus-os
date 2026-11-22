@@ -66,6 +66,9 @@ class PeriodRequest(BaseModel):
     anchor: StrictStr | None = None
     #: The person a SERVICE caller (the bridge) acts for. Ignored for a human token.
     requested_by: StrictStr | None = None
+    #: The company that person is at home in, when they act from another one
+    #: (switched in). A claim the engine checks; ignored for a human token.
+    acting_from: StrictStr | None = None
 
 
 class RunRequest(BaseModel):
@@ -75,6 +78,9 @@ class RunRequest(BaseModel):
     period: dict[str, Any] | None = None
     #: The person a SERVICE caller (the bridge) acts for. Ignored for a human token.
     requested_by: StrictStr | None = None
+    #: The company that person is at home in, when they act from another one
+    #: (switched in). A claim the engine checks; ignored for a human token.
+    acting_from: StrictStr | None = None
 
 
 #: What a refused run says, by reason. Fixed text, as for periods.
@@ -93,10 +99,16 @@ class NotTheBridge(Exception):  # noqa: N818 - a refusal, read as one
     """A service other than the bridge tried to act for a person."""
 
 
-def _requester(auth: AuthContext, requested_by: str | None) -> Actor | None:
+def _requester(
+    auth: AuthContext, requested_by: str | None, acting_from: str | None = None
+) -> Actor | None:
     """The person asking: the token's own identity, or for a service token the
-    account ``requested_by`` names, with that account's role. None when that
-    account does not stand in the token's tenant. Blocking (one SELECT)."""
+    account ``requested_by`` names, with that account's role, in this engine's
+    company. That account stands here when it lives in this company and is
+    active; or when it acts from another (``acting_from``, as the bridge
+    admitted a switched-in caller) and passes the rule the switch applies
+    (:func:`_switched_in`). Otherwise None (answered 404, as for anyone the
+    engine does not know). Nothing in the body sets the role. Blocking."""
     if not auth.is_service:
         return Actor.from_auth(auth)
     if auth.user_id != BRIDGE_SERVICE_ID:
@@ -108,6 +120,8 @@ def _requester(auth: AuthContext, requested_by: str | None) -> Actor | None:
         return None
     from robothor.auth import accounts
 
+    if acting_from and acting_from != auth.tenant_id:
+        return _switched_in(user_id, acting_from, auth.tenant_id)
     account = accounts.get_account_by_id(user_id)
     if (
         not account
@@ -116,6 +130,38 @@ def _requester(auth: AuthContext, requested_by: str | None) -> Actor | None:
     ):
         return None
     return Actor(user_id=user_id, role=str(account.get("role") or ""), tenant_id=auth.tenant_id)
+
+
+#: Who may act in a descendant company (``POST /api/auth/switch-tenant``).
+_SWITCH_ROLES = frozenset({"owner", "admin"})
+
+
+def _switched_in(user_id: str, home: str, here: str) -> Actor | None:
+    """The person acting here from ``home``, by the rule the switch applies:
+    their account is active and lives in ``home``, they are an owner or admin
+    there, and this company is among ``home``'s descendants. All of it read
+    here, under ``home``'s scope; any failure to read refuses. Blocking."""
+    from robothor.auth import accounts
+    from robothor.db.connection import tenant_scope
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    try:
+        with tenant_scope(home):
+            account = accounts.get_account_by_id(user_id)
+            if (
+                not account
+                or str(account.get("tenant_id") or "") != home
+                or account.get("status") != "active"
+                or account.get("role") not in _SWITCH_ROLES
+            ):
+                return None
+            role = str(account["role"])
+            if here not in resolve_accessible_tenants(home, role):
+                return None
+    except Exception:  # noqa: BLE001 - cannot check, so refuse
+        logger.warning("could not check a switched-in requester; refused", exc_info=True)
+        return None
+    return Actor(user_id=user_id, role=role, tenant_id=here)
 
 
 def _refusal(status: int, code: str, message: str, **extra: Any) -> JSONResponse:
@@ -134,7 +180,9 @@ async def request_room_period(room_id: str, body: PeriodRequest, request: Reques
 
 async def _answer(room_id: str, body: PeriodRequest, request: Request) -> JSONResponse:
     try:
-        actor = await asyncio.to_thread(_requester, request_context(request), body.requested_by)
+        actor = await asyncio.to_thread(
+            _requester, request_context(request), body.requested_by, body.acting_from
+        )
     except NotTheBridge:
         return _refusal(403, "forbidden", "only the bridge may act for a person")
     except RequesterRequired:
@@ -170,7 +218,9 @@ async def run_room_now(room_id: str, body: RunRequest, request: Request) -> JSON
 
 async def _run_answer(room_id: str, body: RunRequest, request: Request) -> JSONResponse:
     try:
-        actor = await asyncio.to_thread(_requester, request_context(request), body.requested_by)
+        actor = await asyncio.to_thread(
+            _requester, request_context(request), body.requested_by, body.acting_from
+        )
     except NotTheBridge:
         return _refusal(403, "forbidden", "only the bridge may act for a person")
     except RequesterRequired:
