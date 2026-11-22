@@ -52,8 +52,9 @@ def test_the_tool_description_lists_each_components_props(component: str) -> Non
     assert component in description
     start = description.index("Props")
     section = description[start:]
-    part = section[section.index(component) :]
-    part = part[: part.index("}") + 400]
+    part = section[section.index(component + " {") :]
+    # Cut at the component's own entry: the next one starts at "; render_".
+    part = part.split("; render_")[0]
     for prop in _accepted(component):
         assert re.search(rf"\b{re.escape(prop)}\b", part), (component, prop)
 
@@ -64,3 +65,29 @@ def test_a_missing_required_prop_also_names_what_is_accepted() -> None:
     message = str(refused.value)
     assert "missing props content" in message
     assert "accepts:" in message
+
+
+def test_a_refused_item_inside_a_block_says_which_item() -> None:
+    """The accepted list of a nested item must not read as the block's own props."""
+    with pytest.raises(InvalidBlocks) as grid:
+        validate_blocks(
+            [
+                {
+                    "component": "render_metric_grid",
+                    "props": {"metrics": [{"title": "a", "value": 1}, {"label": "b", "value": 2}]},
+                }
+            ]
+        )
+    assert "metrics[1]: unknown props label; accepts:" in str(grid.value)
+
+    with pytest.raises(InvalidBlocks) as timeline:
+        validate_blocks(
+            [{"component": "render_timeline", "props": {"events": [{"id": "1", "title": "t"}]}}]
+        )
+    assert "events[0]: missing props timestamp; accepts:" in str(timeline.value)
+
+
+def test_a_blocks_own_props_carry_no_item_prefix() -> None:
+    with pytest.raises(InvalidBlocks) as refused:
+        validate_blocks([{"component": "render_metric_card", "props": {"label": "x"}}])
+    assert "(render_metric_card): unknown props label; accepts:" in str(refused.value)
