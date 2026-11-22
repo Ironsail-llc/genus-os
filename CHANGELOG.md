@@ -1,3 +1,9 @@
+## [1.138.1](https://github.com/Ironsail-llc/genus-os/compare/v1.138.0...v1.138.1) (2026-11-22)
+
+### Bug Fixes
+
+* **crm:** ask the platform company's engine for its agents (GEN-856) ([#905](https://github.com/Ironsail-llc/genus-os/issues/905)) ([873f5f7](https://github.com/Ironsail-llc/genus-os/commit/873f5f7ef84e720f5453107c8ec4cb9dc41366b8))
+
 ## [1.138.0](https://github.com/Ironsail-llc/genus-os/compare/v1.137.0...v1.138.0) (2026-11-22)
 
 ### Features
