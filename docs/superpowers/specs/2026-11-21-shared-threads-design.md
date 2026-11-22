@@ -836,6 +836,17 @@ The seams between lanes, each crossed by a test:
   UTC) is `PeriodError` (422 `invalid_period`), not an `OverflowError`.
 - **Titles.** A patch with an empty or non-text title is `InvalidField("title")`: 422
   with `field: "title"` and no revision, where a non-text title was a 500.
+- **A turn outlives its sender's stream** (decision, 2026-11-22). A workspace turn is
+  marked by `chat_rooms.start_turn` with `chat_sse.outlive_stream`: a client disconnect
+  does not cancel it (the SSE body holds it until done), so it finishes, is saved once with
+  its author and client id, is announced, and frees the room's lock. `/chat/abort` still
+  stops it; the personal main conversation still stops on disconnect.
+- **Switched-in admins on the engine routes.** The bridge proxies Run now and period
+  requests naming the person (`requested_by`) and, for a caller switched in from another
+  company, that company (`acting_from`). The engine (`rooms_api._switched_in`) admits them
+  by the rule the switch applies, read under that company's scope: active, at home there,
+  owner or admin there, this company among its descendants; it refuses when it cannot
+  check. The run still runs as the workspace's run-as user.
 - **Client ids.** A workspace send's `client_id` (a UUID, else 400 `invalid_client_id`)
   is stored on its user turn, also when the turn is interrupted, and echoed as
   `clientId` in history; it is trusted for nothing else.

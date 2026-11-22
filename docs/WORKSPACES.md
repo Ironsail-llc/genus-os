@@ -162,6 +162,11 @@ The agent answers one person at a time in a workspace. If you send while it is
 answering someone else, your message waits in a queue and the chat says whom
 it is answering ("Queued — answering Alice…"). It is sent when the turn ends.
 
+Leaving a workspace while the agent is answering you (closing the tab, or
+going back to your main conversation) does not stop the answer: it finishes,
+everyone in the workspace sees it, and it is there when you come back. To
+stop an answer, use the stop button.
+
 ## Tasks
 
 A workspace's tasks tab lists the CRM tasks linked to it: the task it was
