@@ -388,7 +388,9 @@ def _load_manifest_classified(
         # agent's schedules five minutes later. The detail carries paths and
         # codes only — it ends up on an operator page, and platform code must
         # not surface instance values (rules 1 and 2).
-        logger.error("Manifest %s refused by the schema: %s", name, e.summary())
+        logger.error(
+            "Manifest %s refused by the schema: %s", _sanitize(name), _sanitize(e.summary())
+        )
         return None, ManifestFailure(name, "SchemaError", e.summary(), e.agent_id), False
     except Exception as e:
         logger.error("Failed to load manifest %s: %s", _sanitize(manifest_path), _sanitize(e))
