@@ -41,6 +41,22 @@ class NATSManager:
 
     #: Option keys that carry a secret and must never reach a log line.
     _SECRET_OPTIONS = frozenset({"password", "token", "creds", "nkey_seed"})
+    #: The connect options the log line names (never their values). Anything
+    #: else is counted: a name passed in is not echoed into the log.
+    _NAMED_OPTIONS = (
+        "allow_reconnect",
+        "connect_timeout",
+        "creds",
+        "max_reconnect_attempts",
+        "name",
+        "nkey_seed",
+        "password",
+        "reconnect_time_wait",
+        "tls",
+        "token",
+        "user",
+        "user_credentials",
+    )
 
     def __init__(self, nats_url: str = "nats://127.0.0.1:4222", **options: Any) -> None:
         self._nats_url = nats_url
@@ -56,6 +72,13 @@ class NATSManager:
     def __repr__(self) -> str:
         shown = {k: ("***" if k in self._SECRET_OPTIONS else v) for k, v in self._options.items()}
         return f"NATSManager(url={self._nats_url!r}, options={shown})"
+
+    def _presented(self) -> str:
+        """The option names presented on connect, from a fixed vocabulary."""
+        named = [name for name in self._NAMED_OPTIONS if name in self._options]
+        others = len(self._options) - len(named)
+        parts = named + ([f"+{others} other"] if others else [])
+        return ", ".join(parts) or "none"
 
     @property
     def url(self) -> str:
@@ -73,11 +96,7 @@ class NATSManager:
             options = {"connect_timeout": 5, "max_reconnect_attempts": 10, **self._options}
             self._nc = await nats.connect(self._nats_url, **options)
             self._js = self._nc.jetstream()
-            logger.info(
-                "Connected to NATS at %s (auth: %s)",
-                self._nats_url,
-                ", ".join(sorted(self._options)) or "none",
-            )
+            logger.info("Connected to NATS at %s (auth: %s)", self._nats_url, self._presented())
             return True
         except ImportError:
             logger.warning("nats-py not installed — federation transport unavailable")
