@@ -91,3 +91,26 @@ def test_a_manifest_load_failure_logs_a_path_with_no_line_breaks(tmp_path: Path,
         config._load_manifest_classified(odd)
     assert caplog.records and all("\n" not in r.getMessage() for r in caplog.records)
     assert os.sep in caplog.records[-1].getMessage()
+
+
+def test_a_schema_refusal_logs_no_line_break_from_the_manifest(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    """The refusal names the file and the issues' paths, both of which come
+    from the manifest; a line break in either cannot split the log record."""
+    from robothor.engine.manifest_schema import ManifestIssue, ManifestSchemaError
+
+    odd = tmp_path / "split\nhere.yaml"
+    odd.write_text("id: analyst\n")
+
+    def refuse(*a, **k) -> None:
+        raise ManifestSchemaError(
+            "analyst", [ManifestIssue("v2.ke\ny", "unknown_key", "", "error")]
+        )
+
+    monkeypatch.setattr(config, "_enforce_manifest_schema", refuse)
+    with caplog.at_level("ERROR"):
+        config._load_manifest_classified(odd)
+    [record] = [r for r in caplog.records if "refused by the schema" in r.getMessage()]
+    assert "\n" not in record.getMessage()
+    assert "split\\nhere.yaml" in record.getMessage() and "v2.ke\\ny" in record.getMessage()
