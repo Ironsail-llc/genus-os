@@ -391,8 +391,7 @@ def _load_manifest_classified(
         logger.error("Manifest %s refused by the schema: %s", name, e.summary())
         return None, ManifestFailure(name, "SchemaError", e.summary(), e.agent_id), False
     except Exception as e:
-        sanitized_path = str(manifest_path).replace("\n", "\\n").replace("\r", "\\r")
-        logger.error("Failed to load manifest %s: %s", sanitized_path, _sanitize(e))
+        logger.error("Failed to load manifest %s: %s", _sanitize(manifest_path), _sanitize(e))
         error_type = "YAMLError" if isinstance(e, yaml.YAMLError) else type(e).__name__
         return None, ManifestFailure(name, error_type, _scrub_path(_sanitize(e), path)), False
 
@@ -1226,6 +1225,33 @@ def _apply_conditional_config(data: dict[str, Any], trigger_type: str) -> dict[s
     return result
 
 
+#: What an agent id may be: it names ``<id>.yaml`` in the manifest directory.
+_AGENT_ID = re.compile(r"[a-zA-Z0-9_-]+")
+
+
+def _manifest_path(manifest_dir: Path, agent_id: str) -> Path | None:
+    """``manifest_dir / f"{agent_id}.yaml"``, or None when ``agent_id`` is not a
+    plain identifier or the path would leave ``manifest_dir``.
+
+    The path is built by joining and normalising, then confined to the
+    directory by prefix, so a check that can be read (by a reviewer, and by
+    code scanning) stands between an id from a request and ``open``. For an id
+    the pattern admits the result is the same path as before, byte for byte;
+    the confinement is a second line behind the pattern, not a new rule.
+    """
+    if not isinstance(agent_id, str) or not _AGENT_ID.fullmatch(agent_id):
+        return None
+    root = os.path.normpath(str(manifest_dir))
+    prefix = "" if root == os.curdir else root.rstrip(os.sep) + os.sep
+    candidate = os.path.normpath(prefix + f"{agent_id}.yaml")
+    if not candidate.startswith(prefix):
+        return None
+    name = candidate[len(prefix) :]
+    if not name or os.sep in name or (os.altsep and os.altsep in name):
+        return None
+    return manifest_dir / name
+
+
 def explain_config(
     agent_id: str,
     manifest_dir: Path,
@@ -1243,10 +1269,9 @@ def explain_config(
     layers["fleet_defaults"] = _load_defaults(manifest_dir)
 
     # Prevent path traversal — agent_id must be a simple identifier
-    if not re.fullmatch(r"[a-zA-Z0-9_-]+", agent_id):
+    manifest_path = _manifest_path(manifest_dir, agent_id)
+    if manifest_path is None:
         raise ValueError("Invalid agent_id (must be alphanumeric with hyphens/underscores)")
-    safe_id = str(agent_id)  # break taint chain after validation
-    manifest_path = manifest_dir / f"{safe_id}.yaml"
     layers["agent_manifest"] = (
         (load_manifest(manifest_path) or {}) if manifest_path.exists() else {}
     )
@@ -1484,14 +1509,10 @@ def load_agent_config(
         return config, issues
 
     # Prevent path traversal — agent_id must be a simple identifier
-    import re as _re  # noqa: PLC0415
-
-    if not _re.fullmatch(r"[a-zA-Z0-9_-]+", agent_id):
+    manifest_path = _manifest_path(manifest_dir, agent_id)
+    if manifest_path is None:
         logger.error("Invalid agent_id (must be alphanumeric with hyphens/underscores)")
         return None
-    # agent_id is now validated — safe to use in path construction
-    safe_id = str(agent_id)  # break taint chain after validation
-    manifest_path = manifest_dir / f"{safe_id}.yaml"
     cache_path = _inside(manifest_dir, manifest_path)
     identity = file_identity(cache_path) if cache_path is not None else None
     key = (
