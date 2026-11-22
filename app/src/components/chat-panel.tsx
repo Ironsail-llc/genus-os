@@ -656,7 +656,10 @@ export function ChatPanel({
         recoveryScopes.current[agent] = scope ?? "";
         {
           const loaded: ChatMessage[] = historyToMessages(data.messages);
-          const restored: ChatMessage[] = scope ? pendingRequests(scope)
+          // In a room the turn outlives its sender's stream and its answer is
+          // stored: what the old page journaled is settled, not recovered.
+          if (roomId && scope) for (const id of pendingRequests(scope)) forgetRequest(scope, id);
+          const restored: ChatMessage[] = scope && !roomId ? pendingRequests(scope)
             .filter((requestId) => requestId !== requestIdRef.current)
             .map((requestId) => ({
               id: `recovery-${requestId}`, role: "assistant", content: OUTCOME_UNKNOWN,
@@ -680,7 +683,7 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent, settleHistoryPages, recoveryFor]);
+  }, [agentQuery, agent, roomId, settleHistoryPages, recoveryFor]);
 
   // A room is shared: other members' messages, and the agent's answers to
   // them, land while this panel is open. On each live room event (the room
