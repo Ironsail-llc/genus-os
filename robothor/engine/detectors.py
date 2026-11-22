@@ -446,17 +446,41 @@ async def zombie_runner_detector() -> int:
 # ── 5. Stuck workflow runs ──────────────────────────────────────────────
 
 
+def _workflow_timeout_seconds(workflow_id: str, default: int = 900) -> int:
+    """The workflow's own ``timeout_seconds`` from its YAML, or ``default``.
+
+    Per-workflow timeouts live in YAML, not the DB. The daemon registers its
+    ``WorkflowEngine`` in ``workflow_registry``; when no engine is registered
+    (CLI, tests, a worker without workflows) the caller's default stands.
+    """
+    try:
+        from robothor.engine.workflow_registry import get_workflow_engine
+
+        engine = get_workflow_engine()
+        if engine is not None:
+            wf = engine.get_workflow(workflow_id)
+            configured = getattr(wf, "timeout_seconds", None)
+            if configured:
+                return int(configured)
+    except Exception:
+        pass
+    return default
+
+
 def check_stuck_workflow_runs(
     timeout_seconds: int = 900,
     grace_seconds: int = 600,
 ) -> list[dict[str, Any]]:
-    """workflow_runs still 'running' beyond the workflow timeout + grace.
+    """workflow_runs still 'running' beyond their own timeout + grace.
 
-    Per-workflow timeouts live in YAML (not the DB), so the threshold uses
-    the platform's maximum workflow timeout (900s default) plus a grace
-    period. Anything 'running' past that is an orphan — usually an engine
-    restart mid-run whose CancelledError finalizer could not persist.
-    Alert-only: the daemon reaper owns the state transition.
+    Per-workflow timeouts live in YAML (not the DB), so the threshold is the
+    workflow's configured ``timeout_seconds`` — falling back to the platform
+    default when the workflow is unknown — plus a grace period. A pr-review-run
+    declaring ``timeout_seconds: 3600`` legitimately runs ~30 min; the old
+    global 900s default flagged it as stuck. Anything 'running' past its own
+    budget + grace is an orphan — usually an engine restart mid-run whose
+    CancelledError finalizer could not persist. Alert-only: the daemon reaper
+    owns the state transition.
     """
     from robothor.db.connection import get_connection
 
@@ -468,13 +492,21 @@ def check_stuck_workflow_runs(
                    EXTRACT(EPOCH FROM (NOW() - started_at))::int AS age_s
             FROM workflow_runs
             WHERE status = 'running'
-              AND started_at < NOW() - make_interval(secs => %s)
             ORDER BY started_at ASC
-            LIMIT 10
+            LIMIT 50
             """,
-            (timeout_seconds + grace_seconds,),
         )
-        return [dict(r) for r in cur.fetchall()]
+        rows = [dict(r) for r in cur.fetchall()]
+
+    stuck: list[dict[str, Any]] = []
+    for row in rows:
+        age = row.get("age_s")
+        if age is None:
+            continue
+        limit = _workflow_timeout_seconds(row["workflow_id"], timeout_seconds) + grace_seconds
+        if age > limit:
+            stuck.append(row)
+    return stuck[:10]
 
 
 async def stuck_workflow_detector() -> int:

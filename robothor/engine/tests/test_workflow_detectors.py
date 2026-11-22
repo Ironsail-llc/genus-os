@@ -7,6 +7,7 @@ state (the daemon reaper owns the state transition).
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -226,3 +227,52 @@ class TestCheckQueries:
         with patch("robothor.db.connection.get_connection", return_value=_Conn()):
             detectors.check_workflow_failure_streaks()
         assert executed[0][1][0] == 35
+
+    @staticmethod
+    def _conn_returning(rows):
+        class _Cur:
+            def execute(self, sql, params=None):
+                pass
+
+            def fetchall(self):
+                return rows
+
+        class _Conn:
+            def cursor(self, **kw):
+                return _Cur()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        return _Conn()
+
+    def test_check_stuck_workflow_runs_uses_per_workflow_timeout(self) -> None:
+        """A run inside its workflow's own (longer) budget is not stuck."""
+        rows = [
+            {"id": "r1", "workflow_id": "pr-review-run", "started_at": None, "age_s": 1800},
+            {"id": "r2", "workflow_id": "pr-review-run", "started_at": None, "age_s": 5000},
+        ]
+        engine = SimpleNamespace(
+            get_workflow=lambda wid: (
+                SimpleNamespace(timeout_seconds=3600) if wid == "pr-review-run" else None
+            )
+        )
+        with (
+            patch("robothor.db.connection.get_connection", return_value=self._conn_returning(rows)),
+            patch("robothor.engine.workflow_registry.get_workflow_engine", return_value=engine),
+        ):
+            stuck = detectors.check_stuck_workflow_runs()
+        assert [s["id"] for s in stuck] == ["r2"]
+
+    def test_check_stuck_workflow_runs_falls_back_to_default(self) -> None:
+        """An unknown workflow keeps the platform default (900s + 600s grace)."""
+        rows = [{"id": "r1", "workflow_id": "unknown-wf", "started_at": None, "age_s": 1600}]
+        with (
+            patch("robothor.db.connection.get_connection", return_value=self._conn_returning(rows)),
+            patch("robothor.engine.workflow_registry.get_workflow_engine", return_value=None),
+        ):
+            stuck = detectors.check_stuck_workflow_runs()
+        assert [s["id"] for s in stuck] == ["r1"]
