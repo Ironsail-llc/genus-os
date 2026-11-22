@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse
 
 from robothor.engine import chat_store
 from robothor.engine.chat_history import MAX_HISTORY, as_history
+from robothor.engine.chat_sse import outlive_stream
 from robothor.engine.sanitize import sanitize_log
 from robothor.rooms import access, dal, fanout
 from robothor.rooms.errors import RoomForbidden, RoomNotFound
@@ -205,7 +206,10 @@ async def start_turn(
 ) -> asyncio.Task[Any] | JSONResponse:
     """Start the turn ``launch`` starts, holding the room's lock until it ends.
 
-    A busy room is 409 ``room_busy`` with the name of who is being answered.
+    A workspace turn outlives its sender's stream (``chat_sse.outlive_stream``):
+    other members wait on its answer, so a disconnect does not cancel it; it
+    finishes, is saved and announced, and frees the room. ``/chat/abort``
+    still stops it. A busy room is 409 ``room_busy`` with who is being answered.
     """
     room = target.room
     if room is None:
@@ -231,6 +235,7 @@ async def start_turn(
         release()
         raise
     task.add_done_callback(release)
+    outlive_stream(task)
     return task
 
 
