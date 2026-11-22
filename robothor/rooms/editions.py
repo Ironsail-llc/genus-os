@@ -91,9 +91,10 @@ _PUBLISH_TOOL = "room_publish_edition"
 # ─── block shapes ────────────────────────────────────────────────────────
 
 
-def _keys(props: Mapping[str, Any], allowed: set[str], required: set[str]) -> None:
+def _keys(props: Mapping[str, Any], allowed: set[str], required: set[str], where: str = "") -> None:
     """Refuse unknown or missing props, naming the ones accepted: the agent
-    that published often has no way to look them up."""
+    that published often has no way to look them up. ``where`` names the item
+    inside the block (``metrics[2]``), so its list is not read as the block's."""
     unknown = sorted(set(props) - allowed)
     missing = sorted(required - set(props))
     if not unknown and not missing:
@@ -104,7 +105,8 @@ def _keys(props: Mapping[str, Any], allowed: set[str], required: set[str]) -> No
     accepts = ", ".join(
         f"{name} (required)" if name in required else name for name in sorted(allowed)
     )
-    raise ValueError(f"{problem}; accepts: {accepts}")
+    prefix = f"{where}: " if where else ""
+    raise ValueError(f"{prefix}{problem}; accepts: {accepts}")
 
 
 def _text(value: Any, what: str, limit: int = MAX_LABEL_CHARS) -> None:
@@ -152,7 +154,7 @@ _METRIC_KEYS = {"title", "value", "description", "trend", "trendValue"}
 
 
 def _metric(props: Mapping[str, Any], what: str, extra: frozenset[str] = frozenset()) -> None:
-    _keys(props, _METRIC_KEYS | extra, {"title", "value"})
+    _keys(props, _METRIC_KEYS | extra, {"title", "value"}, what.rstrip("."))
     _text(props["title"], f"{what}title")
     _label_or_number(props["value"], f"{what}value")
     _optional_text(props, "description", "trendValue", *extra)
@@ -223,7 +225,10 @@ def _timeline(props: Mapping[str, Any]) -> None:
         if not isinstance(event, dict):
             raise ValueError(f"events[{i}] must be an object")
         _keys(
-            event, {"id", "title", "timestamp", "description", "type"}, {"id", "title", "timestamp"}
+            event,
+            {"id", "title", "timestamp", "description", "type"},
+            {"id", "title", "timestamp"},
+            f"events[{i}]",
         )
         for name in ("id", "title", "timestamp"):
             _text(event[name], f"events[{i}].{name}")
