@@ -132,36 +132,13 @@ def _requester(
     return Actor(user_id=user_id, role=str(account.get("role") or ""), tenant_id=auth.tenant_id)
 
 
-#: Who may act in a descendant company (``POST /api/auth/switch-tenant``).
-_SWITCH_ROLES = frozenset({"owner", "admin"})
-
-
 def _switched_in(user_id: str, home: str, here: str) -> Actor | None:
-    """The person acting here from ``home``, by the rule the switch applies:
-    their account is active and lives in ``home``, they are an owner or admin
-    there, and this company is among ``home``'s descendants. All of it read
-    here, under ``home``'s scope; any failure to read refuses. Blocking."""
-    from robothor.auth import accounts
-    from robothor.db.connection import tenant_scope
-    from robothor.engine.permissions import resolve_accessible_tenants
+    """The person acting here from ``home``, by the rule the switch applies
+    (``robothor.auth.acting``); None when they may not, or it cannot be read."""
+    from robothor.auth.acting import acting_role
 
-    try:
-        with tenant_scope(home):
-            account = accounts.get_account_by_id(user_id)
-            if (
-                not account
-                or str(account.get("tenant_id") or "") != home
-                or account.get("status") != "active"
-                or account.get("role") not in _SWITCH_ROLES
-            ):
-                return None
-            role = str(account["role"])
-            if here not in resolve_accessible_tenants(home, role):
-                return None
-    except Exception:  # noqa: BLE001 - cannot check, so refuse
-        logger.warning("could not check a switched-in requester; refused", exc_info=True)
-        return None
-    return Actor(user_id=user_id, role=role, tenant_id=here)
+    role = acting_role(user_id, home, here)
+    return Actor(user_id=user_id, role=role, tenant_id=here) if role else None
 
 
 def _refusal(status: int, code: str, message: str, **extra: Any) -> JSONResponse:
