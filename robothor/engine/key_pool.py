@@ -30,7 +30,6 @@ which would print real key material.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import threading
@@ -576,7 +575,7 @@ def reload_provider_keys() -> ReloadResult:
     # key was ever out, and "your key is back in rotation" is the sentence the
     # operator ran this for. Through `provider_slots`, so the digest printed
     # here is the SAME one `genus secrets status`, the provider API and the
-    # vault tools print -- `KeyPool.fingerprint` is a different namespace, and
+    # vault tools print (and, since it delegates, `KeyPool.fingerprint` too):
     # two names for one credential answer nothing.
     restored = sorted(
         {
@@ -673,8 +672,12 @@ class KeyPool:
 
         Deliberately not the last four characters. That convention prints
         real key material, and this string is written to logs and alerts.
+        The instance's keyed fingerprint (:func:`key_fingerprint`), the same
+        name every other surface prints; a bare digest could be tested
+        against candidate keys offline. Used in memory only (logs, alerts,
+        :meth:`status`), never stored.
         """
-        return "key-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+        return key_fingerprint(key)
 
     def _available(self, key: str) -> bool:
         entry = self._retired.get(key)
