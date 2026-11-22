@@ -763,3 +763,104 @@ def test_an_email_that_was_not_sent_leaves_its_task_open(mail, monkeypatch, outc
     [note] = notes(mail, room)
     assert note["receipt"]["status"] == outcome
     assert task_status(mail, room.task_id)[0] == before != "DONE"
+
+
+def _done_transitions(db, task_id: str) -> int:
+    db.cur.execute(
+        "SELECT count(*) FROM crm_task_history WHERE task_id = %s AND to_status = 'DONE'",
+        (task_id,),
+    )
+    return int(db.cur.fetchone()[0])
+
+
+def _last_message_id(db, room) -> int | None:
+    db.cur.execute("SELECT last_message_id FROM rooms WHERE id = %s", (room.id,))
+    return db.cur.fetchone()[0]
+
+
+def test_a_completion_that_fails_still_shows_the_receipt_live_and_is_retried(mail, monkeypatch):
+    """An error while completing the task never holds back the receipt's
+    activity mark or its live publish; the next sweep completes the task."""
+    from robothor.crm import dal as crm_dal
+    from robothor.rooms import outbound
+
+    room = bobs_room(mail)
+    proposed = approved(mail, room)
+    real_get_task = crm_dal.get_task
+
+    def unavailable(*a, **k):
+        raise RuntimeError("the task store is down")
+
+    monkeypatch.setattr(crm_dal, "get_task", unavailable)
+    assert outbound.deliver(mail.tenant, proposed.action_id) == "sent"
+
+    [note] = notes(mail, room)
+    assert _last_message_id(mail, room) == note["id"]
+    published = [p for s, t, p in mail.events if t == "room.message"]
+    assert {"room_id": room.id, "tenant_id": mail.tenant, "message_id": note["id"]} in published
+    assert task_status(mail, room.task_id)[0] != "DONE"
+
+    monkeypatch.setattr(crm_dal, "get_task", real_get_task)
+    outbound.sweep(mail.tenant)
+    assert task_status(mail, room.task_id) == ("DONE", True)
+    outbound.sweep(mail.tenant)
+    assert _done_transitions(mail, room.task_id) == 1
+    assert len(notes(mail, room)) == 1
+
+
+class _Crash(BaseException):
+    """The process stopping: nothing in the engine catches it."""
+
+
+def test_a_crash_after_the_receipt_is_finished_by_the_sweep_once(mail, monkeypatch):
+    """The process dies after the receipt is committed and before the task is
+    completed: the sweep completes it, exactly once, however often it runs."""
+    from robothor.crm import dal as crm_dal
+    from robothor.rooms import outbound
+
+    room = bobs_room(mail)
+    proposed = approved(mail, room)
+    real_get_task = crm_dal.get_task
+
+    def crash(*a, **k):
+        raise _Crash()
+
+    monkeypatch.setattr(crm_dal, "get_task", crash)
+    with pytest.raises(_Crash):
+        outbound.deliver(mail.tenant, proposed.action_id)
+    assert len(notes(mail, room)) == 1  # the receipt was committed
+    assert task_status(mail, room.task_id)[0] != "DONE"
+
+    monkeypatch.setattr(crm_dal, "get_task", real_get_task)
+    outbound.sweep(mail.tenant)
+    outbound.sweep(mail.tenant)
+    assert task_status(mail, room.task_id) == ("DONE", True)
+    assert _done_transitions(mail, room.task_id) == 1
+    assert len(mail.sent) == 1
+
+
+def test_a_crash_after_the_task_is_done_does_not_complete_it_twice(mail, monkeypatch):
+    """The task is moved to DONE and the process dies before that is recorded:
+    the sweep finds the task done and records it, with no second transition."""
+    from robothor.crm import dal as crm_dal
+    from robothor.rooms import outbound
+
+    room = bobs_room(mail)
+    proposed = approved(mail, room)
+    real_update = crm_dal.update_task
+
+    def update_then_crash(*a, **k):
+        result = real_update(*a, **k)
+        if k.get("status") == "DONE":
+            raise _Crash()
+        return result
+
+    monkeypatch.setattr(crm_dal, "update_task", update_then_crash)
+    with pytest.raises(_Crash):
+        outbound.deliver(mail.tenant, proposed.action_id)
+    assert task_status(mail, room.task_id)[0] == "DONE"
+
+    monkeypatch.setattr(crm_dal, "update_task", real_update)
+    outbound.sweep(mail.tenant)
+    outbound.sweep(mail.tenant)
+    assert _done_transitions(mail, room.task_id) == 1
