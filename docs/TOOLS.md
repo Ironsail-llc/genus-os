@@ -2001,6 +2001,13 @@ can reopen. Editions and periods from the reader's side are in
 outlast the chat turn: a marker draws once in the reply, an edition is stored with
 the workspace and listed in its history.
 
+- **Always in a workspace run's toolset.** Inside a workspace run the tool is
+  advertised with its schema to whichever agent the workspace uses, including an
+  agent whose toolset is deferred or whose manifest lists its own `tools_allowed`;
+  the run never has to find it with `tool_search`. A manifest's `tools_denied`
+  still removes it, and role permissions still apply: the role a scheduled run
+  acts as needs an allow for `room_publish_edition` (the seeded `room_*` rows
+  give it to `member` and `user`).
 - **Where it works.** Only inside a run whose session is that workspace's own
   conversation (an interactive turn there, or a scheduled or on-demand run), for a
   caller who may post there. Anywhere else it refuses, including from a sub-agent
