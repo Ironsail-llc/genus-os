@@ -2083,7 +2083,20 @@ _ROOM_EDITION_SCHEMAS: dict[str, dict[str, Any]] = {
                 "render_bar_chart, render_line_chart, render_pie_chart, render_data_table, "
                 "render_markdown, render_timeline, with that component's props. Fetch every "
                 "figure with your tools first: the server records which tool calls the run "
-                "made as the edition's provenance."
+                "made as the edition's provenance. Props per component (? = optional): "
+                "render_markdown {content, title?}; "
+                "render_metric_card {title, value, description?, trend? (up|down|neutral), "
+                "trendValue?, accentColor?}; "
+                "render_metric_grid {metrics: [{title, value, description?, trend?, "
+                "trendValue?}]}; "
+                "render_bar_chart {title, data: [row objects], dataKey (the numeric column), "
+                "nameKey?, color?}; "
+                "render_line_chart {title, data, dataKey, nameKey?, color?}; "
+                "render_pie_chart {title, data: [{name, value}], colors?}; "
+                "render_data_table {rows or data: [row objects], title?, columns?}; "
+                "render_timeline {events: [{id, title, timestamp, description?, type?}], "
+                "title?}. A refused block names the props it accepts: correct it and "
+                "publish again."
             ),
             "parameters": {
                 "type": "object",
