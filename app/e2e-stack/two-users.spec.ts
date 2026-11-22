@@ -4,13 +4,11 @@
  * opens it from a link and works in it; both of them post at once; Bob cannot
  * change what Alice defined but can duplicate it; Alice restores a revision.
  *
- * One test per step of the dry-run script, in order (serial). A step that
- * needs work still being built elsewhere says so with `expectedToFailUntil`
- * and runs anyway, so the day that work merges it shows up as an unexpected
- * pass and the mark comes off.
+ * One test per step of the dry-run script, in order (serial). Every step is
+ * expected to pass.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { api, expectedToFailUntil, outboxCount, people, requireStack, roomLink, say, signedIn, unique } from "./stack";
+import { api, outboxCount, people, requireStack, roomLink, say, signedIn, unique } from "./stack";
 
 requireStack();
 test.describe.configure({ mode: "serial" });
@@ -198,11 +196,17 @@ test("7b. the same text sent twice, leaving mid-answer and coming back: each mes
   expect(await answers().count()).toBeLessThanOrEqual(2);
 });
 
-test("7c. the answer someone left in the middle of still arrives (D3)", async () => {
-  expectedToFailUntil(
-    "a product decision: leaving a workspace mid-answer cancels that turn (its stream disconnects), so the answer is lost for everyone in the workspace",
-  );
-  await expect(room(bobPage).getByText(`Answering Bob: ${SAME}`)).toHaveCount(2, { timeout: 15000 });
+test("7c. the answer someone left in the middle of still arrives, once, for everyone (D3)", async () => {
+  // Bob left in step 7b while the agent was answering his second message: the
+  // turn outlives his stream, so the answer is saved and every member sees it.
+  const answers = (page: Page) => room(page).getByText(`Answering Bob: ${SAME}`);
+  await expect(answers(bobPage)).toHaveCount(2, { timeout: 30000 });
+  await expect(room(bobPage).getByTestId("message-user").filter({ hasText: SAME })).toHaveCount(2);
+  await alicePage.goto(roomLink(roomId));
+  await expect(answers(alicePage)).toHaveCount(2, { timeout: 30000 });
+  await alicePage.waitForTimeout(2000);
+  await expect(answers(alicePage)).toHaveCount(2);
+  await expect(answers(bobPage)).toHaveCount(2);
 });
 
 test("8. Bob picks a past period and its edition is built (C3)", async () => {
