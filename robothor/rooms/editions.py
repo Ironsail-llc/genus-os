@@ -92,12 +92,19 @@ _PUBLISH_TOOL = "room_publish_edition"
 
 
 def _keys(props: Mapping[str, Any], allowed: set[str], required: set[str]) -> None:
+    """Refuse unknown or missing props, naming the ones accepted: the agent
+    that published often has no way to look them up."""
     unknown = sorted(set(props) - allowed)
-    if unknown:
-        raise ValueError(f"unknown props {', '.join(unknown)}")
     missing = sorted(required - set(props))
-    if missing:
-        raise ValueError(f"missing props {', '.join(missing)}")
+    if not unknown and not missing:
+        return
+    problem = (
+        f"unknown props {', '.join(unknown)}" if unknown else f"missing props {', '.join(missing)}"
+    )
+    accepts = ", ".join(
+        f"{name} (required)" if name in required else name for name in sorted(allowed)
+    )
+    raise ValueError(f"{problem}; accepts: {accepts}")
 
 
 def _text(value: Any, what: str, limit: int = MAX_LABEL_CHARS) -> None:

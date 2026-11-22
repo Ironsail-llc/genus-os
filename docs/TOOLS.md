@@ -2008,6 +2008,10 @@ the workspace and listed in its history.
   still removes it, and role permissions still apply: the role a scheduled run
   acts as needs an allow for `room_publish_edition` (the seeded `room_*` rows
   give it to `member` and `user`).
+- **Block props.** The tool's description lists the props each component takes,
+  and a refused block names the ones it accepts with the required ones marked
+  (`unknown props text; accepts: content (required), title`), so a run that
+  cannot look anything up can still correct itself.
 - **Where it works.** Only inside a run whose session is that workspace's own
   conversation (an interactive turn there, or a scheduled or on-demand run), for a
   caller who may post there. Anywhere else it refuses, including from a sub-agent
