@@ -21,8 +21,11 @@ The flow, on the operations ledger (``operation_actions``):
    "room_email_receipt"``) says what happened, and ``room.message`` is
    published. Rejection, expiry, refusal and an unconfirmed send get one too.
 5. **The task is done.** A sent email's receipt completes the task it was for
-   (``DONE``, its resolution naming the email), once, with the receipt; any
-   other outcome leaves the task open.
+   (``DONE``, its resolution naming the email); any other outcome leaves the
+   task open. It is its own step after the receipt, recorded by its own audit
+   row (``room.email.task_settled``): a failure there never holds back the
+   receipt, and the sweep finishes a sent receipt whose task was not settled,
+   once.
 
 **Who it is sent as** is decided in exactly one place, ``sender_for``: today
 the company's assistant mailbox (the one the ``gws_*`` tools send from), with
@@ -71,6 +74,8 @@ __all__ = [
 KIND = "room.email"
 _VERSION = 1
 _NOTED = "room.email.noted"
+#: Audit event: the task a sent email was for has been completed (or found done).
+_TASK_SETTLED = "room.email.task_settled"
 _TOOL = "room_propose_email"
 _CHANGED = "the email was changed after it was approved"
 _EXPIRED = "the approval expired before the email could be sent"
@@ -371,6 +376,22 @@ def sweep(tenant_id: str) -> int:
             owed = [str(r["id"]) for r in cur.fetchall()]
         for action in owed:
             _note(tenant_id, action)
+        # A sent email whose receipt is written but whose task was never settled
+        # (the engine stopped, or completing it failed): finish it now.
+        with ops.transaction() as cur:
+            cur.execute(
+                "SELECT a.id FROM operation_actions a WHERE a.tenant_id = %s AND a.kind = %s "
+                "AND a.status = 'completed' AND a.payload ? 'task_id' "
+                "AND EXISTS (SELECT 1 FROM operation_audit o WHERE o.tenant_id = a.tenant_id "
+                "AND o.entity_id = a.id::text AND o.event = %s "
+                "AND o.detail->>'message_id' IS NOT NULL) "
+                "AND NOT EXISTS (SELECT 1 FROM operation_audit o WHERE o.tenant_id = a.tenant_id "
+                "AND o.entity_id = a.id::text AND o.event = %s)",
+                (tenant_id, KIND, _NOTED, _TASK_SETTLED),
+            )
+            unsettled = [str(r["id"]) for r in cur.fetchall()]
+        for action in unsettled:
+            _settle_task_logged(tenant_id, action)
         return sent
 
 
@@ -458,14 +479,22 @@ def _note(tenant_id: str, action_id: str, *, error: str | None = None) -> None:
         logger.exception("could not write the receipt for room email %s", sanitize_log(action_id))
 
 
-def _complete_task(tenant_id: str, task_id: str, receipt: dict[str, Any]) -> None:
-    """Story E3: the email the task was for is sent, so the task is done. Runs
-    once, with the receipt that says so; a task already done is left alone."""
+class _TaskNotSettledError(RuntimeError):
+    """The task store did not take the change: the sweep tries again."""
+
+
+def _complete_task(tenant_id: str, task_id: str, receipt: dict[str, Any]) -> str:
+    """Story E3: the email the task was for is sent, so the task is done.
+    Returns the outcome to record; raises when it should be tried again. A task
+    already done (by hand, or by an earlier attempt that stopped before it was
+    recorded) is left alone, so the task moves to done once."""
     from robothor.crm import dal as crm_dal
 
     task = crm_dal.get_task(task_id, tenant_id=tenant_id)
-    if not task or task.get("status") == "DONE":
-        return
+    if not task:
+        return "task_gone"
+    if task.get("status") == "DONE":
+        return "already_done"
     who = (receipt.get("approved_by") or {}).get("user_id") or "system"
     to = ", ".join(receipt["to"])
     resolution = f'Email "{receipt["subject"]}" sent to {to} at {receipt["sent_at"]}.'
@@ -474,8 +503,53 @@ def _complete_task(tenant_id: str, task_id: str, receipt: dict[str, Any]) -> Non
     done = crm_dal.update_task(
         task_id, changed_by=who, tenant_id=tenant_id, status="DONE", resolution=resolution
     )
-    if done is not True and not (isinstance(done, dict) and done.get("success")):
-        logger.warning("room email: its task %s was not completed", sanitize_log(task_id))
+    if done is True or (isinstance(done, dict) and done.get("success")):
+        return "completed"
+    if isinstance(done, dict):  # the task's state refuses it: settled, and said so
+        logger.warning("room email: its task %s cannot be completed", sanitize_log(task_id))
+        return "refused"
+    raise _TaskNotSettledError(task_id)
+
+
+def _settle_task(tenant_id: str, action_id: str) -> None:
+    """Complete the task of a sent email whose receipt is written, once.
+
+    Under an advisory lock per action, and recorded by its own audit row in the
+    same transaction, so concurrent callers and a sweep after a crash settle it
+    once. Raises on a failure; the sweep tries again."""
+    ops = Operations(tenant_id)
+    with ops.transaction() as cur:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"{_TASK_SETTLED}:{action_id}",),
+        )
+        cur.execute(
+            "SELECT 1 FROM operation_audit WHERE tenant_id = %s AND entity_id = %s AND event = %s",
+            (tenant_id, action_id, _TASK_SETTLED),
+        )
+        if cur.fetchone():
+            return
+        cur.execute(
+            "SELECT * FROM operation_actions WHERE tenant_id = %s AND id = %s AND kind = %s",
+            (tenant_id, action_id, KIND),
+        )
+        row = cur.fetchone()
+        receipt = _receipt(tenant_id, dict(row), None) if row else None
+        if receipt is None or receipt["status"] != "sent" or not receipt.get("task_id"):
+            return
+        task_id = str(receipt["task_id"])
+        outcome = _complete_task(tenant_id, task_id, receipt)
+        ops.audit(cur, action_id, _TASK_SETTLED, "system", {"task_id": task_id, "outcome": outcome})
+
+
+def _settle_task_logged(tenant_id: str, action_id: str) -> None:
+    try:
+        _settle_task(tenant_id, action_id)
+    except Exception:
+        logger.exception(
+            "could not complete the task of room email %s; the sweep tries again",
+            sanitize_log(action_id),
+        )
 
 
 def _write_note(tenant_id: str, action_id: str, error: str | None) -> None:
@@ -530,8 +604,6 @@ def _write_note(tenant_id: str, action_id: str, error: str | None) -> None:
             return
         ops.audit(cur, action_id, _NOTED, "system", {"message_id": message_id})
     if message_id is not None:
-        if receipt["status"] == "sent" and receipt.get("task_id"):
-            _complete_task(tenant_id, str(receipt["task_id"]), receipt)
         dal.record_activity(tenant_id, room.id, message_id)
         try:
             bus.publish(
@@ -543,3 +615,6 @@ def _write_note(tenant_id: str, action_id: str, error: str | None) -> None:
             )
         except Exception:
             logger.warning("could not publish room.message for %s", room.id, exc_info=True)
+        # After the receipt is shown: completing the task never holds it back.
+        if receipt["status"] == "sent" and receipt.get("task_id"):
+            _settle_task_logged(tenant_id, action_id)
