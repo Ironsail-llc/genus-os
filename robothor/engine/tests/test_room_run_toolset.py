@@ -24,8 +24,8 @@ def registry() -> ToolRegistry:
     return ToolRegistry()
 
 
-def _run() -> RoomRun:
-    return RoomRun(tenant_id="test-tenant", room_id="r1", session_key="agent:main:room:r1")
+def _run(agent: str = "main") -> RoomRun:
+    return RoomRun(tenant_id="test-tenant", room_id="r1", session_key=f"agent:{agent}:room:r1")
 
 
 def _advertised(registry: ToolRegistry, config: AgentConfig) -> set[str]:
@@ -46,7 +46,7 @@ def test_an_agent_with_its_own_tool_list_gets_it_in_a_workspace_run(registry) ->
     analyst = AgentConfig(id="analyst", name="Analyst", tools_allowed=["web_fetch"])
     assert PUBLISH not in registry.get_tool_names(analyst)
 
-    with room_run_scope(_run()):
+    with room_run_scope(_run("analyst")):
         assert PUBLISH in registry.get_tool_names(analyst)
         assert PUBLISH in _advertised(registry, analyst)
 
@@ -57,13 +57,21 @@ def test_a_manifest_that_denies_it_still_wins(registry) -> None:
     quiet = AgentConfig(
         id="quiet", name="Quiet", tools_allowed=["web_fetch"], tools_denied=[PUBLISH]
     )
-    with room_run_scope(_run()):
+    with room_run_scope(_run("quiet")):
         assert PUBLISH not in registry.get_tool_names(quiet)
 
 
 def test_nothing_else_is_added(registry) -> None:
     analyst = AgentConfig(id="analyst", name="Analyst", tools_allowed=["web_fetch"])
     outside = set(registry.get_tool_names(analyst))
-    with room_run_scope(_run()):
+    with room_run_scope(_run("analyst")):
         inside = set(registry.get_tool_names(analyst))
     assert inside - outside == {PUBLISH}
+
+
+def test_only_the_workspaces_own_agent_gets_it(registry) -> None:
+    """A sub-agent runs inside its parent's run and can never publish: it is not offered the tool."""
+    helper = AgentConfig(id="helper", name="Helper", tools_allowed=["web_fetch"])
+    with room_run_scope(_run()):  # the workspace's agent is ``main``
+        assert PUBLISH not in registry.get_tool_names(helper)
+        assert PUBLISH not in _advertised(registry, helper)
