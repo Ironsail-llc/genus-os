@@ -1,3 +1,9 @@
+## [1.138.0](https://github.com/Ironsail-llc/genus-os/compare/v1.137.0...v1.138.0) (2026-11-22)
+
+### Features
+
+* **engine:** shared workspaces for reports, agents and tasks (GEN-841) ([#900](https://github.com/Ironsail-llc/genus-os/issues/900)) ([ee9720e](https://github.com/Ironsail-llc/genus-os/commit/ee9720e691dc3ecd377475a60d5f5024b8a1157e))
+
 ## [1.137.0](https://github.com/Ironsail-llc/genus-os/compare/v1.136.2...v1.137.0) (2026-11-19)
 
 ### Features
