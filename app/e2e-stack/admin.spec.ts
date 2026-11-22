@@ -72,3 +72,48 @@ test("Hal, a parent-company admin, sees the company's workspaces only after swit
   expect((inside.body.rooms as Array<{ id: string }>).map((r) => r.id)).toContain(kept);
   expect((await hal.get(`/api/rooms/${kept}`)).body).toMatchObject({ access: "admin" });
 });
+
+test("Hal, switched in, runs a company workspace now and opens another period; it runs as its run-as user (G5, B6, C3)", async () => {
+  test.setTimeout(150000);
+  const p = people();
+  const alice = await api("alice");
+  const report = await alice.post("/api/rooms", {
+    kind: "report",
+    title: unique("Group sales"),
+    instructions: "Summarise the sales figures for the period.",
+    tz: "UTC",
+    defaultGrain: "day",
+  });
+  expect(report.status, JSON.stringify(report.body)).toBe(201);
+  const id = report.body.id as string;
+  const published = async () =>
+    ((await alice.get(`/api/rooms/${id}/editions`)).body.editions as Array<{
+      status: string;
+      periodStart: string;
+      provenance?: { ran_as?: string };
+    }>).filter((e) => e.status === "published");
+  try {
+    const hal = await api("hal");
+    // At home in the parent company the workspace does not exist for him.
+    expect((await hal.post(`/api/rooms/${id}/run`, {})).status).toBe(404);
+
+    await hal.switchTo(p.company);
+    const run = await hal.post(`/api/rooms/${id}/run`, {});
+    expect([200, 202], JSON.stringify(run.body)).toContain(run.status);
+    await expect.poll(async () => (await published()).length, { timeout: 60000 }).toBeGreaterThan(0);
+    // The run runs as the workspace's run-as user (Alice), not as Hal.
+    expect((await published())[0].provenance?.ran_as).toBe(p.alice.id);
+
+    const day = new Date(Date.now() - 4 * 86400000).toISOString().slice(0, 10);
+    const other = await hal.post(`/api/rooms/${id}/periods`, { grain: "day", anchor: day });
+    expect([200, 202], JSON.stringify(other.body)).toContain(other.status);
+    await expect
+      .poll(async () => (await published()).some((e) => e.periodStart === day), { timeout: 60000 })
+      .toBe(true);
+    // Asking again for a period that now exists opens it.
+    const again = await hal.post(`/api/rooms/${id}/periods`, { grain: "day", anchor: day });
+    expect(again.status).toBe(200);
+  } finally {
+    await alice.post(`/api/rooms/${id}/archive`);
+  }
+});

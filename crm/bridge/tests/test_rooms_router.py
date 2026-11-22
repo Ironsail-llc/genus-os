@@ -1031,6 +1031,53 @@ def test_periods_proxies_to_the_engine(world) -> None:
     }
 
 
+def _acting(w: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Eve, an admin at home in another company, switched into this one."""
+    from fastapi.testclient import TestClient
+
+    from robothor.auth import tokens
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("GENUS_TENANT_SWITCH_MODE", "enforce")
+    reset_settings()
+    c = TestClient(app_())
+    token = tokens.issue_access_token(w.ids.eve, w.db.tenant, "admin", home_tenant_id=w.db.other)
+    c.headers.update({"Authorization": f"Bearer {token}"})
+    return c
+
+
+@pytest.mark.parametrize(
+    ("route", "body"),
+    [("run", {}), ("periods", {"grain": "week", "anchor": "2026-11-10"})],
+)
+def test_a_switched_in_admin_is_proxied_with_their_home_company(
+    world, monkeypatch, route, body
+) -> None:
+    """The engine re-checks a person acting from another company against the
+    switch rule, so the bridge names the company they act from."""
+    from robothor.settings import reset_settings
+
+    w = world
+    room = _room(w)
+    try:
+        response = _acting(w, monkeypatch).post(f"/api/rooms/{room.id}/{route}", json=body)
+    finally:
+        reset_settings()
+
+    assert response.status_code == 202, response.text
+    sent = w.engine.call_args.kwargs
+    assert sent["tenant"] == w.db.tenant
+    assert sent["json"]["requested_by"] == w.ids.eve
+    assert sent["json"]["acting_from"] == w.db.other
+
+
+def test_a_person_at_home_is_proxied_without_acting_from(world) -> None:
+    w = world
+    room = _room(w)
+    w.client("bob").post(f"/api/rooms/{room.id}/run", json={})
+    assert "acting_from" not in w.engine.call_args.kwargs["json"]
+
+
 def test_periods_needs_a_grain_and_an_anchor(world) -> None:
     w = world
     room = _room(w)
