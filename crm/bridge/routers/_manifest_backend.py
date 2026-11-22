@@ -80,3 +80,20 @@ def scan_from_worker_thread(tenant: str | None) -> Any:
     import anyio.from_thread
 
     return anyio.from_thread.run(remote_scan, str(tenant))
+
+
+def engine_scan_from_worker_thread(tenant: str | None) -> Any:
+    """What the tenant's ENGINE loads, for a SYNC handler that must know it.
+
+    As ``scan_from_worker_thread``, except that a platform tenant whose agent
+    directory is not readable in this process is asked of its engine too: a
+    bridge deployed apart from its engine has no directory, and "no directory
+    here" says nothing about which agents that engine runs. A directory that
+    is readable here is the engine's own (one host) and is read as before.
+    """
+    scan = scan_from_worker_thread(tenant)
+    if is_platform(tenant) and getattr(scan, "dir_readable", True) is False:
+        import anyio.from_thread
+
+        return anyio.from_thread.run(remote_scan, _operator.PLATFORM_TENANT)
+    return scan
