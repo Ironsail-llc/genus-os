@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,6 +36,8 @@ interface TaskBoardProps {
   // Promise<boolean> result lets the wired handler report POST success so the
   // board can keep the operator's typed answer for retry on failure.
   onAnswer?: (taskId: string, answer: string, advanceTo?: Task["status"]) => void | Promise<boolean>;
+  /** Extra controls at the foot of each card (the Tasks view's "Open as workspace"). */
+  renderActions?: (task: Task) => ReactNode;
 }
 
 const statusColumns = ["TODO", "IN_PROGRESS", "REVIEW", "DONE"] as const;
@@ -77,7 +79,7 @@ function hasBadges(task: Task): boolean {
   );
 }
 
-export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: TaskBoardProps) {
+export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer, renderActions }: TaskBoardProps) {
   const [actionPending, setActionPending] = useState<string | null>(null);
   const [resolvingTaskId, setResolvingTaskId] = useState<string | null>(null);
   const [resolutionText, setResolutionText] = useState("");
@@ -378,6 +380,7 @@ export function TaskBoard({ tasks, onApprove, onReject, onResolve, onAnswer }: T
                         )}
                       </div>
                     )}
+                    {renderActions?.(task)}
                   </CardContent>
                 </Card>
               ))}

@@ -108,6 +108,28 @@ def _saved_request(identifier: str, auth: AuthContext) -> dict[str, Any] | None:
     return _saved_result(str(rows[0][0]), auth) if len(rows) == 1 else None
 
 
+async def _room_turn(auth: AuthContext, session_key: str) -> tuple[Any, dict[str, Any] | None]:
+    """``(ChatTarget, author extras)`` when ``session_key`` is a workspace's, else
+    ``(None, None)``. The author is the caller, by the name the room's turn
+    lock was taken under."""
+    from robothor.engine import chat_rooms
+    from robothor.rooms import dal
+    from robothor.rooms.keys import parse_room_key
+
+    parsed = parse_room_key(session_key)
+    if parsed is None:
+        return None, None
+    try:
+        room = await asyncio.to_thread(dal.get_room, auth.tenant_id, parsed[1])
+    except Exception as exc:  # noqa: BLE001 - attribution costs nothing to lose here
+        logger.warning("Interrupted room turn not attributed: %s", type(exc).__name__)
+        return None, None
+    if room is None or room.session_key != session_key:
+        return None, None
+    target = chat_rooms.ChatTarget(session_key, room, chat_rooms._turn_client.get(room.id))
+    return target, target.author(auth, chat_rooms._answering.get(room.id, ""), None)
+
+
 async def deliver_interruption(
     queue: asyncio.Queue[Any],
     session: ChatSession,
@@ -118,7 +140,11 @@ async def deliver_interruption(
     aborted: bool = False,
     plan: PlanState | None = None,
 ) -> bool:
-    """Recover an exception after the native runner durably recorded interruption."""
+    """Recover an exception after the native runner durably recorded interruption.
+
+    On a workspace's session the user turn keeps its author and the save is
+    awaited, so the room's activity mark moves and its ``room.message`` goes
+    out before the turn's lock is freed, as for a finished turn."""
     from robothor.engine.chat_history import append_turn
     from robothor.engine.chat_store import save_exchange_async
     from robothor.engine.runtime.current import active_context
@@ -139,17 +165,23 @@ async def deliver_interruption(
 
         plan.execution_run_id = saved["run_id"]
         await finish_plan(session, plan, auth.tenant_id, session_key)
-    append_turn(session, user_message=message, assistant_text=saved["text"])
-    asyncio.create_task(
-        save_exchange_async(
-            session_key,
-            message,
-            saved["text"],
-            channel="webchat",
-            model_override=session.model_override,
-            tenant_id=auth.tenant_id,
-        )
+    target, extras = await _room_turn(auth, session_key)
+    append_turn(session, user_message=message, assistant_text=saved["text"], user_extras=extras)
+    saving = save_exchange_async(
+        session_key,
+        message,
+        saved["text"],
+        channel="webchat",
+        model_override=session.model_override,
+        tenant_id=auth.tenant_id,
+        user_extras=extras,
     )
+    if target is None:
+        asyncio.create_task(saving)
+    else:
+        from robothor.engine import chat_rooms
+
+        await chat_rooms.saved(target, saving)
     await queue.put({"event": "done", "data": {**saved, "aborted": aborted}})
     return True
 

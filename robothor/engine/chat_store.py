@@ -12,6 +12,8 @@ at startup via load_all_sessions().
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -24,6 +26,7 @@ from robothor.engine.sanitize import sanitize_log
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
     from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -156,6 +159,36 @@ def build_user_extras(
     return extras
 
 
+@contextlib.contextmanager
+def _room_turn_editions(tenant_id: str, session_key: str) -> Iterator[list[str]]:
+    """Editions the running room turn published, to stamp on the reply saved now.
+
+    Taken from the turn's ``RoomRun`` carrier (``robothor.rooms.run_context``)
+    when it names this tenant and session; empty for any other session or
+    outside a room scope, so a turn that never saved leaves nothing for a
+    later one. If the save fails they go back on the carrier for the retry.
+    The assistant message carries the last one as ``edition_id`` so history
+    can re-render it."""
+    from robothor.rooms.run_context import current_room_run
+
+    run = current_room_run()
+    if run is None or run.tenant_id != tenant_id or run.session_key != session_key:
+        yield []
+        return
+    taken = run.take_published()
+    try:
+        yield taken
+    except BaseException:
+        run.restore_published(taken)
+        raise
+
+
+def _stamp_room_editions(cur: Any, tenant_id: str, edition_ids: list[str], message_id: int) -> None:
+    from robothor.rooms.editions import stamp_turn_message
+
+    stamp_turn_message(cur, tenant_id, edition_ids, message_id)
+
+
 def save_exchange(
     session_key: str,
     user_content: str,
@@ -202,7 +235,9 @@ def save_exchange(
     user_extras = _redact_captions(user_extras)
     assistant_extras = _redact_captions(assistant_extras)
 
-    with get_connection() as conn:
+    with _room_turn_editions(tenant_id, session_key) as edition_ids, get_connection() as conn:
+        if edition_ids:
+            assistant_extras = {**(assistant_extras or {}), "edition_id": edition_ids[-1]}
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         # Upsert session
@@ -239,6 +274,8 @@ def save_exchange(
             )
             inserted_ids.append(int(cur.fetchone()["id"]))
 
+        if edition_ids:
+            _stamp_room_editions(cur, tenant_id, edition_ids, inserted_ids[1])
         conn.commit()
         return inserted_ids
 
@@ -249,8 +286,13 @@ def save_message(
     content: str,
     channel: str = "telegram",
     tenant_id: str = DEFAULT_TENANT,
+    extras: dict[str, Any] | None = None,
 ) -> int | None:
     """Save a single message (used for system injections). Returns the message id.
+
+    ``extras`` are additive fields merged into the stored message (a workspace
+    email receipt carries ``kind`` and ``receipt``). A message with extras is
+    not the turn's reply, so it never takes the turn's published editions.
 
     Redacted for the reason ``save_exchange`` is: this writes ``chat_messages``,
     which outlives the session, reaches support bundles, and is read by
@@ -260,7 +302,16 @@ def save_message(
     from robothor.secrets.redaction import redact
 
     content = redact(content)
-    with get_connection() as conn:
+    payload: dict[str, Any] = {**(extras or {}), "role": role, "content": content}
+    # An assistant turn carries the editions its turn published; a turn with its
+    # own extras (a receipt) is not that turn's answer and takes none.
+    take = role == "assistant" and extras is None
+    turn: contextlib.AbstractContextManager[list[str]] = (
+        _room_turn_editions(tenant_id, session_key) if take else contextlib.nullcontext([])
+    )
+    with turn as edition_ids, get_connection() as conn:
+        if edition_ids:
+            payload["edition_id"] = edition_ids[-1]
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         cur.execute(
@@ -282,9 +333,11 @@ def save_message(
             VALUES (%s, %s::jsonb)
             RETURNING id
             """,
-            (session_id, json.dumps({"role": role, "content": content})),
+            (session_id, json.dumps(payload)),
         )
         message_id = int(cur.fetchone()["id"])
+        if edition_ids:
+            _stamp_room_editions(cur, tenant_id, edition_ids, message_id)
 
         conn.commit()
         return message_id
@@ -405,6 +458,21 @@ def load_session(
         }
 
 
+#: One page of a session's history, newest first. The session is found first
+#: (a scalar subquery) so the page is read by ``(session_id, id)`` (migration
+#: 175) instead of walking every session's messages by id.
+HISTORY_PAGE_SQL = """
+    SELECT m.id, m.message, m.created_at
+    FROM chat_messages m
+    WHERE m.session_id = (
+        SELECT s.id FROM chat_sessions s WHERE s.tenant_id = %s AND s.session_key = %s
+    )
+      AND (%s::bigint IS NULL OR m.id < %s)
+    ORDER BY m.id DESC
+    LIMIT %s OFFSET %s
+"""
+
+
 def load_history_page(
     session_key: str,
     *,
@@ -426,15 +494,7 @@ def load_history_page(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """
-            SELECT m.id, m.message, m.created_at
-            FROM chat_messages m
-            JOIN chat_sessions s ON s.id = m.session_id
-            WHERE s.tenant_id = %s AND s.session_key = %s
-              AND (%s::bigint IS NULL OR m.id < %s)
-            ORDER BY m.id DESC
-            LIMIT %s OFFSET %s
-            """,
+            HISTORY_PAGE_SQL,
             (tenant_id, session_key, before, before, limit + 1, offset),
         )
         rows = cur.fetchall()
@@ -625,13 +685,21 @@ def load_plan_state(
 
 
 def cleanup_stale_sessions(ttl_days: int = 7) -> int:
-    """Delete sessions older than TTL. Returns number of sessions deleted."""
+    """Delete sessions idle longer than the TTL. Returns how many were deleted.
+
+    A session that backs a room (a shared thread, ``robothor.rooms``) is never
+    deleted: the thread is company-owned and people come back to it.
+    """
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
             """
-            DELETE FROM chat_sessions
-            WHERE last_active_at < NOW() - INTERVAL '%s days'
+            DELETE FROM chat_sessions s
+            WHERE s.last_active_at < NOW() - INTERVAL '%s days'
+              AND NOT EXISTS (
+                  SELECT 1 FROM rooms r
+                  WHERE r.tenant_id = s.tenant_id AND r.session_key = s.session_key
+              )
             """,
             (ttl_days,),
         )
@@ -665,10 +733,13 @@ async def save_exchange_async(
     retrieval via search_chat_turns().
     """
     loop = asyncio.get_running_loop()
+    caller = contextvars.copy_context()
     try:
         inserted_ids = await loop.run_in_executor(
             None,
-            lambda: save_exchange(
+            # The caller's context: a room turn's carrier reaches the save.
+            lambda: caller.run(
+                save_exchange,
                 session_key,
                 user_content,
                 assistant_content,
@@ -818,11 +889,21 @@ def search_chat_turns(
     query_embedding: list[float],
     limit: int = 5,
     tenant_id: str = DEFAULT_TENANT,
+    room_ids: Iterable[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Vector search over embedded chat turns scoped to a tenant.
 
+    A session that backs a workspace (``agent:{agent}:room:{id}``) is searched
+    only when its room id is in ``room_ids``, the workspaces the caller can
+    access; with none passed, no workspace is searched. Fails closed: the
+    room is read from the key's shape, so a session whose room is gone is
+    still left out.
+
     Returns list of {id, role, content, similarity, created_at, session_key}.
     """
+    from robothor.rooms.keys import canonical_uuid
+
+    allowed = sorted({c for c in (canonical_uuid(r) for r in room_ids or ()) if c})
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         apply_hnsw_session(cur)
@@ -835,10 +916,12 @@ def search_chat_turns(
             JOIN chat_sessions s ON s.id = m.session_id
             WHERE s.tenant_id = %s
               AND m.embedding IS NOT NULL
+              AND (split_part(s.session_key, ':', 3) <> 'room'
+                   OR split_part(s.session_key, ':', 4) = ANY(%s::text[]))
             ORDER BY m.embedding <=> %s::vector
             LIMIT %s
             """,
-            (query_embedding, tenant_id, query_embedding, limit),
+            (query_embedding, tenant_id, allowed, query_embedding, limit),
         )
         rows = cur.fetchall()
 
@@ -930,10 +1013,13 @@ async def save_message_async(
 ) -> None:
     """Non-blocking wrapper around save_message."""
     loop = asyncio.get_running_loop()
+    caller = contextvars.copy_context()
     try:
         await loop.run_in_executor(
             None,
-            lambda: save_message(
+            # The caller's context: a room turn's carrier reaches the save.
+            lambda: caller.run(
+                save_message,
                 session_key,
                 role,
                 content,

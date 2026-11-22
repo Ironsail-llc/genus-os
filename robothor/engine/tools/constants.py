@@ -279,6 +279,30 @@ REPORT_TOOLS = frozenset(
     }
 )
 
+# Workspace tools (robothor/engine/tools/handlers/rooms.py). Opt-in: listed in
+# OPT_IN_TOOLS, and always given to the main agent (registry._get_filtered_names).
+ROOM_TOOLS = frozenset(
+    {
+        "room_create",
+        "room_update",
+        "room_list",
+        "room_read",
+        "room_share",
+        "room_unshare",
+        "room_archive",
+        "room_duplicate",
+        "room_restore_revision",
+        "room_admin_reassign",
+        "room_run",
+        # Tasks in workspaces (handlers/room_tasks.py).
+        "room_task_accept",
+        "room_task_dismiss",
+        "room_open_task",
+        # Proposes an email for the person to approve; never sends.
+        "room_propose_email",
+    }
+)
+
 # Branches that agents are NEVER allowed to push to or commit on
 PROTECTED_BRANCHES = frozenset({"main", "master"})
 
@@ -558,6 +582,9 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # `run_workflow` is deliberately NOT here — it starts a real run.
         "list_workflows",
         "workflow_runs",
+        # Workspaces: listing and reading one changes nothing.
+        "room_list",
+        "room_read",
     }
 )
 
@@ -606,6 +633,12 @@ WORKFLOW_WRITE_TOOLS: frozenset[str] = frozenset({"run_workflow"})
 # do; the HTTP route it mirrors needs `engine:control`. Same rule again:
 # migration 157 denies it to `user` and `member`. Its two reads stay default.
 #
+# The workspace tools (`room_*`) are the main agent's: it is given them whatever
+# its manifest says (registry._get_filtered_names), and another agent only by
+# naming them. Their RBAC half is the role seed of migration 169 (members and
+# users get `room_*` but not `room_admin_*`, viewers `room_list` and
+# `room_read`), and every handler re-checks the room's own access.
+#
 # Spelled out rather than imported from robothor.sales so this module stays
 # import-light; test_opt_in_tools_are_not_default pins the two together.
 OPT_IN_TOOLS: frozenset[str] = frozenset(
@@ -626,6 +659,7 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
         *CLAUDE_CODE_TOOLS,
         *PR_REVIEW_TOOLS,
         *WORKFLOW_WRITE_TOOLS,
+        *ROOM_TOOLS,
     }
 )
 

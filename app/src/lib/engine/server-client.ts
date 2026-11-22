@@ -6,7 +6,7 @@ import type { ChatMessage } from "./types";
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { engineUrlForAuthorization } from "@/lib/services/registry";
 import type { AttachmentPayload } from "@/lib/chat/attachments";
-import { EngineRefusal, REFUSAL_STATUSES } from "./engine-refusal";
+import { EngineRefusal, REFUSAL_STATUSES, RoomBusy } from "./engine-refusal";
 
 /**
  * The engine for the tenant this caller's bearer acts in. A session switched
@@ -35,6 +35,22 @@ function keyed(sessionKey: string): { session_key?: string } {
 function keyedQuery(sessionKey: string): string {
   return sessionKey ? `&session_key=${encodeURIComponent(sessionKey)}` : "";
 }
+
+/**
+ * A room, named by id: the engine resolves its session key and the caller's
+ * access from it. Never sent alongside a key, and absent when no room is named,
+ * so every other request is byte-identical to before.
+ */
+function roomed(roomId?: string): { room_id?: string } {
+  return roomId ? { room_id: roomId } : {};
+}
+
+function roomedQuery(roomId?: string): string {
+  return roomId ? `&room_id=${encodeURIComponent(roomId)}` : "";
+}
+
+/** The engine's refusals of a room itself: no access is a 404, an action it may not take a 403. */
+const ROOM_REFUSAL_STATUSES = new Set([403, 404]);
 
 /** The same choice, as a whole query string. */
 function keyedOnlyQuery(sessionKey: string): string {
@@ -122,6 +138,8 @@ class EngineClient {
     requestId?: string,
     joinRunning = false,
     attachments?: AttachmentPayload[],
+    roomId?: string,
+    clientId?: string,
   ): Promise<Response> {
     // `join_running`: sent while this session's turn works, so offer it to that
     // turn instead of starting another (robothor/engine/chat_live.py).
@@ -132,6 +150,9 @@ class EngineClient {
       body: JSON.stringify({
         message,
         ...keyed(sessionKey),
+        ...roomed(roomId),
+        // A room message's outbox entry, for the stored row to name.
+        ...(roomId && clientId ? { client_id: clientId } : {}),
         ...(requestId ? { request_id: requestId } : {}),
         ...(joinRunning ? { join_running: true } : {}),
         // Files attached to the turn ({name, mime, size, data}), checked by the
@@ -145,7 +166,10 @@ class EngineClient {
     // not "Engine error", and never a turn to recover.
     // The body is read only on failure, where nothing else will read it.
     const payload = res.ok ? {} : await Promise.resolve().then(() => res.json()).catch(() => ({}));
-    if (REFUSAL_STATUSES.has(res.status) || (!res.ok && payload?.request_admitted === false)) {
+    if (roomId && res.status === 409 && payload?.error === "room_busy") {
+      throw new RoomBusy(typeof payload.answering === "string" ? payload.answering : "");
+    }
+    if (REFUSAL_STATUSES.has(res.status) || (roomId && ROOM_REFUSAL_STATUSES.has(res.status)) || (!res.ok && payload?.request_admitted === false)) {
       const error = typeof payload?.error === "string" ? payload.error
         : typeof payload?.detail === "string" ? payload.detail : `Engine refused the request (${res.status})`;
       throw new EngineRefusal(res.status, error);
@@ -160,16 +184,24 @@ class EngineClient {
   async chatHistory(
     limit = 50,
     sessionKey = "",
-    page: { before?: number; offset?: number } = {}
-  ): Promise<{ sessionKey: string; messages: ChatMessage[]; recoveryScope?: string; hasMore?: boolean }> {
+    page: { before?: number; offset?: number } = {},
+    roomId?: string,
+  ): Promise<{ sessionKey: string; messages: ChatMessage[]; recoveryScope?: string; hasMore?: boolean; roomId?: string }> {
     const paging =
       (page.before !== undefined ? `&before=${page.before}` : "") +
       (page.offset !== undefined ? `&offset=${page.offset}` : "");
     const headers = await engineHeaders();
     const res = await fetch(
-      `${engineBase(headers)}/chat/history?limit=${limit}${paging}${keyedQuery(sessionKey)}`,
+      `${engineBase(headers)}/chat/history?limit=${limit}${paging}${keyedQuery(sessionKey)}${roomedQuery(roomId)}`,
       { headers, signal: AbortSignal.timeout(30_000) },
     );
+    // A workspace the caller cannot see (404) or may not read (403) is the
+    // engine's refusal, with its status: the route answers it as such, not as
+    // a broken engine.
+    if (roomId && ROOM_REFUSAL_STATUSES.has(res.status)) {
+      const payload = await Promise.resolve().then(() => res.json()).catch(() => ({}));
+      throw new EngineRefusal(res.status, typeof payload?.error === "string" ? payload.error : `Engine refused the request (${res.status})`);
+    }
     if (!res.ok) {
       throw new Error(`Engine error: ${res.status} ${res.statusText}`);
     }
@@ -177,10 +209,10 @@ class EngineClient {
   }
 
   /** Read the original run after a delivery failure; never resubmit it. */
-  async chatOutcome(requestId: string, sessionKey = ""): Promise<unknown> {
+  async chatOutcome(requestId: string, sessionKey = "", roomId?: string): Promise<unknown> {
     const headers = await engineHeaders();
     const res = await fetch(
-      `${engineBase(headers)}/chat/outcome?request_id=${encodeURIComponent(requestId)}${keyedQuery(sessionKey)}`,
+      `${engineBase(headers)}/chat/outcome?request_id=${encodeURIComponent(requestId)}${keyedQuery(sessionKey)}${roomedQuery(roomId)}`,
       { headers, signal: AbortSignal.timeout(10_000), cache: "no-store" },
     );
     if (!res.ok) throw new Error("Recorded chat outcome unavailable");
@@ -203,12 +235,12 @@ class EngineClient {
   }
 
   /** Cancel the running response for a session. */
-  async chatAbort(sessionKey = "", requestId?: string): Promise<{ ok: boolean; aborted: boolean; durable_stopped?: boolean }> {
+  async chatAbort(sessionKey = "", requestId?: string, roomId?: string): Promise<{ ok: boolean; aborted: boolean; durable_stopped?: boolean }> {
     const headers = await engineHeaders(true);
     const res = await fetch(`${engineBase(headers)}/chat/abort`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
+      body: JSON.stringify({ ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}), ...roomed(roomId) }),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {

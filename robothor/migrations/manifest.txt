@@ -191,3 +191,7 @@ crm/165_coding_publish_denies.sql
 crm/166_entity_recall_definer.sql
 crm/167_agent_schedules_tenant_key.sql
 crm/168_runtime_effect_targets.sql
+crm/169_rooms.sql
+crm/170_room_cronjob_unique.sql
+crm/172_room_tasks_approval.sql
+crm/175_chat_messages_session_id.sql

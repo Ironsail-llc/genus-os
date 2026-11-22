@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, useSyncExternalStore } from "react";
 import { useRuntimeConfig } from "@/components/runtime-config";
+import { reloadPage } from "@/lib/reload-page";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -28,7 +29,7 @@ import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import { ChatLanding } from "@/components/chat/chat-landing";
 import { ToolsPopover } from "@/components/chat/tools-popover";
 import { AttachButton, NOT_IN_PLAN_OR_DEEP, NOT_WHILE_RUNNING, PendingAttachments, useChatAttachments } from "@/components/chat/chat-attachments";
-import { attachmentKind, type AttachmentSummary } from "@/lib/chat/attachments";
+import { attachmentKind, type AttachmentPayload, type AttachmentSummary } from "@/lib/chat/attachments";
 import { steerRun, interruptRun, STEER_PLACEHOLDER, STEERED_NOTE } from "@/components/chat-steer";
 import { repeatsQuickAction } from "@/components/business/quick-action-labels";
 import {
@@ -39,6 +40,10 @@ import {
 import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain, PanelRightClose } from "lucide-react";
 
 import { forgetRequest, journalRequest, pendingRequests } from "@/lib/chat/request-journal";
+// Types only: the outbox module itself is loaded when the panel is in a room
+// (below), so the main conversation's first load never carries it.
+import type { OutboxState, SendResult } from "@/lib/chat/room-outbox";
+type RoomKit = typeof import("@/lib/chat/room-outbox");
 
 import { OUTCOME_UNKNOWN, requestFailure, terminalOutcome } from "@/lib/chat/terminal-outcome";
 
@@ -55,6 +60,25 @@ interface ChatMessage {
   note?: string;
   /** Files that went with a user turn. */
   attachments?: AttachmentSummary[];
+  /** In a room: who wrote it, from history (a message typed here has none). */
+  authorUserId?: string;
+  authorName?: string;
+  /** In a room: the edition this message announced. */
+  editionId?: string;
+  /** In a task workspace: an email's receipt as stored, drawn as one. */
+  receipt?: unknown;
+  /** In a room: the outbox entry a stored message was sent from. */
+  clientId?: string;
+  /** In a room: refused before admission, so never matched to a stored row. */
+  rejected?: boolean;
+  /** In a room: the components this turn rendered, drawn under the reply. */
+  renders?: RenderBlock[];
+}
+
+/** One `[RENDER:…]` marker or `render` event. */
+interface RenderBlock {
+  component: string;
+  props: Record<string, unknown>;
 }
 
 /** A message typed while a turn ran. `seq` is typing order: queued ones go out in it. */
@@ -62,12 +86,41 @@ interface QueuedFollowup {
   id: string;
   text: string;
   seq: number;
+  /**
+   * The files that go with it. Only a message queued behind a busy room
+   * carries any: it is sent later exactly as it was typed, files included.
+   */
+  files?: AttachmentPayload[];
 }
 
 const JOINED_NOTE = "Added to the running task";
 const QUEUED_NOTE = "Queued — sends when this reply finishes";
 const STOPPED_NOTE = "Not sent — the task was stopped";
 const DROPPED_NOTE = "May not have reached the task — the connection dropped";
+
+// A room's bubble notes and texts live in the room-outbox module, loaded on demand.
+const NO_OUTBOX: OutboxState = { items: [], sending: null, blocked: false, answering: "", unsent: [] };
+const noSubscription = () => () => {};
+const READ_ONLY_NOTICES = {
+  viewer: "You have view-only access to this workspace, so you can read it but not post.",
+  archived: "This workspace is archived, so it can be read but not posted in.",
+} as const;
+
+/** Which room the panel is pointed at, when it is not the main conversation. */
+export interface ChatRoomTarget {
+  /** The room's id: sent as `room` on every request, never as a session key. */
+  id: string;
+  /** The user may read but not post: the composer is shut, and says why. */
+  readOnly?: boolean;
+  /** Why it is read-only: view-only access (the default), or an archived room. */
+  readOnlyReason?: "viewer" | "archived";
+  /**
+   * Bumped by the room view on each live `room.message` / `room.edition`
+   * event: the panel reads the room's newest messages again (and offers a
+   * queued message again).
+   */
+  refreshKey?: number;
+}
 
 interface ActivePlan {
   plan_id: string;
@@ -107,6 +160,7 @@ function stripResidualMarkers(text: string): string {
   return stripMarkers(text).trim();
 }
 
+
 interface ChatPanelProps {
   /** When true, renders in mobile-optimized layout (no duplicate header, labeled controls) */
   mobile?: boolean;
@@ -123,6 +177,13 @@ interface ChatPanelProps {
   onCollapse?: () => void;
   /** A landing quick action opened its view (the shell decides where to show it). */
   onViewOpened?: () => void;
+  /**
+   * Point the panel at a room instead of the main conversation. Absent, the
+   * panel is exactly what it always was. Present, it names the room by id on
+   * every request, offers no agent switcher, plan or deep mode, names each
+   * message's author, and draws the editions messages announced.
+   */
+  room?: ChatRoomTarget;
 }
 
 export function ChatPanel({
@@ -132,14 +193,25 @@ export function ChatPanel({
   docked = false,
   onCollapse,
   onViewOpened,
+  room,
 }: ChatPanelProps) {
+  const roomId = room?.id;
+  const roomReadOnly = Boolean(room?.readOnly);
+  const roomRefreshKey = room?.refreshKey ?? 0;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const recoveryScopes = useRef<Record<string, string>>({});
   const requestScopes = useRef<Record<string, string>>({});
   // A long turn's stream can close before its `done` event; its reply then
   // arrives here from the recorded outcome. Its canvas markers must reach the
   // canvas exactly as a streamed reply's do, or a slow visual is silently lost.
-  const { notifyConversationUpdate: notifyCanvas, setRender: renderOnCanvas } = useVisualState();
+  //
+  // Not in a room. The visual state is the MAIN conversation's (one provider
+  // wraps the shell): a workspace's charts are drawn in the workspace, under
+  // the reply that rendered them, and nothing of its turns is handed to the
+  // main canvas or its dashboard agent.
+  const visualState = useVisualState();
+  const notifyCanvas = visualState.notifyConversationUpdate;
+  const renderOnCanvas = visualState.setRender;
   const messagesRef = useRef<ChatMessage[]>([]);
   useEffect(() => {
     messagesRef.current = messages;
@@ -156,12 +228,21 @@ export function ChatPanel({
     const first = interceptor.addChunk(text);
     const rest = interceptor.flush();
     const agentData: Record<string, unknown> = {};
+    const roomRenders: RenderBlock[] = [];
     for (const marker of [...first.markers, ...rest.markers]) {
       if (marker.type === "dashboard" && marker.data && typeof marker.data === "object") {
         Object.assign(agentData, marker.data as Record<string, unknown>);
       } else if (marker.type === "render") {
-        renderOnCanvas({ component: marker.component, props: marker.props });
+        const block = { component: marker.component, props: marker.props as Record<string, unknown> };
+        if (roomId) roomRenders.push(block);
+        else renderOnCanvas(block);
       }
+    }
+    if (roomId) {
+      if (roomRenders.length) {
+        setMessages((prev) => prev.map((item) => (item.id === id ? { ...item, renders: roomRenders } : item)));
+      }
+      return;
     }
     const content = stripResidualMarkers(text).trim();
     const hasAgentData = Object.keys(agentData).length > 0;
@@ -177,7 +258,7 @@ export function ChatPanel({
         hasAgentData ? agentData : undefined,
       );
     }
-  }, [notifyCanvas, renderOnCanvas]);
+  }, [notifyCanvas, renderOnCanvas, roomId]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
@@ -248,11 +329,114 @@ export function ChatPanel({
   const claimedFollowups = useRef<Set<string>>(new Set());
   const followupSeq = useRef(0);
   const [queuedCount, setQueuedCount] = useState(0);
-  const { notifyConversationUpdate, setRender } = useVisualState();
+  // In a room, a turn's renders are kept for its reply and nothing is
+  // offered to the main canvas (see `visualState` above).
+  const turnRenders = useRef<RenderBlock[]>([]);
+  const setRender = useCallback(
+    (block: { component: string; props: Record<string, unknown> }) => {
+      if (roomId) turnRenders.current.push({ component: block.component, props: block.props });
+      else visualState.setRender(block);
+    },
+    [roomId, visualState],
+  );
+  const notifyConversationUpdate = useCallback(
+    (...args: Parameters<typeof visualState.notifyConversationUpdate>) => {
+      if (!roomId) visualState.notifyConversationUpdate(...args);
+    },
+    [roomId, visualState],
+  );
   const { aiName } = useRuntimeConfig();
 
-  /** `?agent=…`, or nothing at all for the main agent. */
-  const agentQuery = agent ? `?agent=${encodeURIComponent(agent)}` : "";
+  /** `?room=…` in a room, `?agent=…`, or nothing at all for the main agent. */
+  const agentQuery = roomId
+    ? `?room=${encodeURIComponent(roomId)}`
+    : agent ? `?agent=${encodeURIComponent(agent)}` : "";
+  /** The same choice for a request body: `{room}`, `{agent}`, or nothing. */
+  const target = useMemo<{ room?: string; agent?: string }>(
+    () => (roomId ? { room: roomId } : agent ? { agent } : {}),
+    [roomId, agent],
+  );
+  /** What a recovery card needs to find this turn again. */
+  const recoveryFor = useCallback(
+    (requestId: string, scope: string | undefined): ChatRecoveryRequest => ({
+      requestId, agent, scope, ...(roomId ? { room: roomId } : {}),
+    }),
+    [agent, roomId],
+  );
+  // Which chat's history has answered (or failed). The landing waits for it:
+  // shown before the transcript arrives, it would flash and fire its requests
+  // on every load of an existing conversation. A room's outbox waits for it too.
+  const [historySettledFor, setHistorySettledFor] = useState<string | null>(null);
+
+  // A room's messages leave through its outbox (`lib/chat/room-outbox.ts`):
+  // one ordered queue, one sender, head first, one message per turn. It
+  // outlives this panel, so what is queued survives leaving the workspace.
+  const [roomKit, setRoomKit] = useState<RoomKit | null>(null);
+  const [roomKitFailed, setRoomKitFailed] = useState(false);
+  useEffect(() => {
+    if (!roomId) return;
+    let live = true;
+    // Tried twice (a deploy can replace the chunk, the network can blink);
+    // after that the panel says so instead of going quietly dead.
+    const load = () => import("@/lib/chat/room-outbox");
+    load()
+      .catch(load)
+      .then(
+        (kit) => live && setRoomKit(kit),
+        () => live && setRoomKitFailed(true),
+      );
+    return () => {
+      live = false;
+    };
+  }, [roomId]);
+  const outbox = useMemo(() => (roomId && roomKit ? roomKit.roomOutbox(roomId) : null), [roomId, roomKit]);
+  const outboxState = useSyncExternalStore(
+    outbox ? outbox.subscribe : noSubscription,
+    outbox ? outbox.state : () => NO_OUTBOX,
+    () => NO_OUTBOX,
+  );
+  // Whom the room's agent is answering while our head waits (refused as busy).
+  const roomBusy = outboxState.blocked ? outboxState.answering : null;
+  const [roomHistoryFailed, setRoomHistoryFailed] = useState(false);
+
+  // The outbox entries this panel has itself offered: the only in-flight
+  // send it may draw a bubble for (see `pendingBubbles`).
+  const startedHere = useRef(new Set<string>());
+  /** Bubbles, keyed by client id, for outbox entries not drawn (after leaving and coming back). */
+  // Also draws, as not sent, what failed after the panel that offered it had gone.
+  const withOutbox = useCallback((list: ChatMessage[], state = outbox?.state()): ChatMessage[] => {
+    if (!state || !roomKit) return list;
+    const waiting = roomKit.outboxBubbles(list, state, startedHere.current);
+    return waiting.length ? [...list, ...waiting] : list;
+  }, [outbox, roomKit]);
+  // The history load reads it through a ref: the outbox module arriving must
+  // not re-run that load, which would clear what is already drawn.
+  const withOutboxRef = useRef(withOutbox);
+  withOutboxRef.current = withOutbox;
+
+  // Each waiting bubble says where it stands: queued, queued behind whom, or
+  // (the head, while it is sent) nothing. And an entry that now needs a bubble
+  // (another panel's send, refused after this one opened) gets one.
+  const outboxHistoryReady = historySettledFor === agentQuery;
+  useEffect(() => {
+    if (!outbox || !roomKit) return;
+    if (outboxHistoryReady) {
+      setMessages((prev) => withOutbox(prev, outboxState));
+      // A failed send is acknowledged only once it is on screen (drawn, or as
+      // its stored copy): told once, never forgotten unseen.
+      outbox.acknowledge(roomKit.unsentShown(outboxState, messages));
+    }
+    setMessages((prev) => {
+      const notes = new Map(outboxState.items.map((item) => [item.id, roomKit.noteFor(item, outboxState)]));
+      let changed = false;
+      const next = prev.map((m) => {
+        if (!notes.has(m.id) || m.note === notes.get(m.id)) return m;
+        changed = true;
+        return { ...m, note: notes.get(m.id) };
+      });
+      return changed ? next : prev;
+    });
+  }, [outbox, roomKit, outboxState, outboxHistoryReady, withOutbox, messages]);
 
   /** Whether the listing left out the agent it named as the default.
    *
@@ -375,6 +559,8 @@ export function ChatPanel({
    * — and no switcher is exactly today's behaviour, on the main session, which
    * is the right way for this to degrade. */
   useEffect(() => {
+    // A room's agent is the room's: no switcher, and no remembered agent adopted.
+    if (roomId) return;
     let cancelled = false;
     fetch("/api/bridge/api/agent-manifests")
       .then((res) => {
@@ -425,7 +611,7 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [roomId]);
 
   /** Point the chat at another agent. Its history replaces what is on screen.
    *
@@ -449,11 +635,6 @@ export function ChatPanel({
     [agent, chattable, defaultAgent]
   );
 
-  // Which chat's history has answered (or failed). The landing waits for it:
-  // shown before the transcript arrives, it would flash and fire its requests
-  // on every load of an existing conversation.
-  const [historySettledFor, setHistorySettledFor] = useState<string | null>(null);
-
   // Load history on mount, and again whenever the chat is pointed elsewhere
   //
   // Cancelled on the way out, like the listing above it. Both the abandoned
@@ -475,26 +656,61 @@ export function ChatPanel({
         recoveryScopes.current[agent] = scope ?? "";
         {
           const loaded: ChatMessage[] = historyToMessages(data.messages);
-          const restored: ChatMessage[] = scope ? pendingRequests(scope)
+          // In a room the turn outlives its sender's stream and its answer is
+          // stored: what the old page journaled is settled, not recovered.
+          if (roomId && scope) for (const id of pendingRequests(scope)) forgetRequest(scope, id);
+          const restored: ChatMessage[] = scope && !roomId ? pendingRequests(scope)
             .filter((requestId) => requestId !== requestIdRef.current)
             .map((requestId) => ({
               id: `recovery-${requestId}`, role: "assistant", content: OUTCOME_UNKNOWN,
-              timestamp: new Date(), recovery: { requestId, agent, scope },
+              timestamp: new Date(), recovery: recoveryFor(requestId, scope),
             })) : [];
-          setMessages([...loaded, ...restored]);
+          setMessages(withOutboxRef.current([...loaded, ...restored]));
           settleHistoryPages(data.hasMore === true);
           setHistorySettledFor(agentQuery);
+          setRoomHistoryFailed(false);
         }
       })
       .catch(() => {
         // Engine not available on mount. The conversation is unknown, not
-        // known to be long, so the landing may show.
-        if (!cancelled) setHistorySettledFor(agentQuery);
+        // known to be long, so the landing may show. In a room it is said:
+        // the route refused (the engine did not confirm the room) or failed.
+        if (cancelled) return;
+        setHistorySettledFor(agentQuery);
+        setRoomHistoryFailed(true);
+        setMessages((prev) => withOutboxRef.current(prev));
       });
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent, settleHistoryPages]);
+  }, [agentQuery, agent, roomId, settleHistoryPages, recoveryFor]);
+
+  // A room is shared: other members' messages, and the agent's answers to
+  // them, land while this panel is open. On each live room event (the room
+  // view bumps `refreshKey`) the newest page is read again and what is not on
+  // screen yet is added. A message typed here is shown before it is stored, so
+  // its stored copy replaces it (matched by role and text) instead of
+  // appearing twice. Deferred while a turn of ours runs; the stream is
+  // authoritative then, and the next bump catches up.
+  const caughtUpTo = useRef(roomRefreshKey);
+  const panelBusy = isStreaming || isPlanning || isPlanExecuting || isDeepReasoning;
+  useEffect(() => {
+    if (!roomId || !roomKit || panelBusy || roomRefreshKey === caughtUpTo.current) return;
+    caughtUpTo.current = roomRefreshKey;
+    let cancelled = false;
+    fetch(`/api/chat/history${agentQuery}`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        const stored = historyToMessages(data.messages).filter((m) => m.serverId !== undefined);
+        // A stored copy replaces its local bubble (by client id), never joins it.
+        setMessages((prev) => withOutbox(roomKit.mergeRoomRows(prev, stored)));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId, roomKit, roomRefreshKey, panelBusy, agentQuery, withOutbox]);
 
   // Recover pending plan on page refresh
   //
@@ -504,6 +720,8 @@ export function ChatPanel({
   // agent's key — executing a plan against a session that never saw it, which
   // is the thing threading the key through plan/approve exists to prevent.
   useEffect(() => {
+    // Plan and Deep are main-conversation modes; a room offers neither.
+    if (roomId) return;
     let cancelled = false;
     fetch(`/api/chat/plan/status${agentQuery}`)
       .then((res) => res.json())
@@ -525,10 +743,11 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent]);
+  }, [agentQuery, agent, roomId]);
 
   // Keyboard shortcut: Ctrl/Cmd+Shift+P toggles plan mode, Ctrl/Cmd+Shift+D toggles deep+plan
   useEffect(() => {
+    if (roomId) return;
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "P") {
         e.preventDefault();
@@ -555,10 +774,11 @@ export function ChatPanel({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [roomId]);
 
   // Recover active deep reasoning on page refresh
   useEffect(() => {
+    if (roomId) return;
     let cancelled = false;
     fetch(`/api/chat/deep/status${agentQuery}`)
       .then((res) => res.json())
@@ -572,7 +792,7 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [agentQuery, agent]);
+  }, [agentQuery, agent, roomId]);
 
   const sendPlanMessage = useCallback(async (overrideText?: string) => {
     const text = overrideText || input.trim();
@@ -611,7 +831,7 @@ export function ChatPanel({
     let submitted = false;
     try {
       const requestId = requestIdRef.current!;
-      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal, roomId);
       if (scope) requestScopes.current[requestId] = scope;
       controller.signal.throwIfAborted();
       submitted = true;
@@ -685,7 +905,7 @@ export function ChatPanel({
             id: `asst-${Date.now()}`,
             role: "assistant",
             content: stripResidualMarkers(fullResponse).trim(),
-        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
+        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: recoveryFor(requestIdRef.current!, requestScopes.current[requestIdRef.current!]) } : {}),
             timestamp: new Date(),
           },
         ]);
@@ -705,7 +925,7 @@ export function ChatPanel({
       setActiveToolName(null);
       abortRef.current = null;
     }
-  }, [input, isStreaming, isPlanning, deepPlan, handleSharedStreamEvent, agent]);
+  }, [input, isStreaming, isPlanning, deepPlan, handleSharedStreamEvent, agent, roomId, recoveryFor]);
 
   const noteMessages = useCallback((ids: string[], note: string | undefined) => {
     setMessages((prev) => prev.map((m) => (ids.includes(m.id) ? { ...m, note } : m)));
@@ -725,7 +945,7 @@ export function ChatPanel({
     setMessages((prev) => [...prev, { id: item.id, role: "user", content: text, timestamp: new Date(), note: "Sending…" }]);
     setInput("");
     inFlightFollowups.current = [...inFlightFollowups.current, item];
-    if (await steerRun(text, agent, requestIdRef.current)) {
+    if (await steerRun(text, agent, requestIdRef.current, roomId)) {
       inFlightFollowups.current = inFlightFollowups.current.filter((f) => f.id !== item.id);
       noteMessages([item.id], STEERED_NOTE);
       return;
@@ -736,7 +956,7 @@ export function ChatPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // It names the turn it is for: two tabs are two turns, two inboxes.
-        body: JSON.stringify({ message: text, join_running: true, running_request_id: requestIdRef.current, ...(agent ? { agent } : {}) }),
+        body: JSON.stringify({ message: text, join_running: true, running_request_id: requestIdRef.current, ...target }),
       });
       joined = res.ok && (await res.text()).includes("event: followup_joined");
     } catch {
@@ -750,7 +970,7 @@ export function ChatPanel({
     } else {
       queueFollowups([item]);
     }
-  }, [agent, isStopping, noteMessages, queueFollowups]);
+  }, [agent, roomId, target, isStopping, noteMessages, queueFollowups]);
 
   /** Stop: what was waiting goes with the task, not out as a turn after it. */
   const discardFollowups = useCallback(() => {
@@ -772,11 +992,37 @@ export function ChatPanel({
     }
 
     const text = flushing ? [...flushing].sort((a, b) => a.seq - b.seq).map((q) => q.text).join("\n\n") : (resend ?? input).trim();
+    if (roomId && !flushing) {
+      // Never the main conversation's path: until the outbox has loaded (a
+      // moment, on first opening a room) what was typed stays in the composer.
+      if (!outbox || !roomKit) return;
+      // In a room every message, typed or regenerated, takes its place in the
+      // outbox now, in typing order, with its files; the outbox's one sender
+      // offers it (back through this function, as a flush) when its turn
+      // comes. Nothing here sends it, steers with it or joins a turn with it.
+      const queuedFiles = resend !== undefined ? [] : attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
+      if (!text && !queuedFiles.length) return;
+      if (resend === undefined) {
+        setInput("");
+        attachments.clear();
+      }
+      setActiveAsks([]);
+      const item = outbox.enqueue(text, queuedFiles);
+      const bubble = roomKit.bubbleFor(item, roomKit.noteFor(item, outbox.state()));
+      setMessages((prev) => (prev.some((m) => m.id === item.id) ? prev : [...prev, bubble]));
+      return;
+    }
     if (!flushing && !resend && text && isStreaming) return sendFollowup(text);
     // Files go with a fresh turn only: never with a flushed follow-up, and not
     // with a Regenerate (the panel keeps only their summary, not their bytes).
-    const files = flushing || resend !== undefined ? [] : attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
-    if ((!text && !files.length) || isStreaming) return;
+    // A message queued behind a busy room is the exception: it carries its own.
+    const files = flushing ? flushing.flatMap((q) => q.files ?? [])
+      : resend !== undefined ? [] : attachments.files.map(({ name, mime, size, data }) => ({ name, mime, size, data }));
+    // The outbox sends one room message at a time, so a room flush does not
+    // consult `isStreaming`: it can still read true from the turn that just
+    // ended, before React rendered its end.
+    if (!text && !files.length) return roomId ? ({ outcome: "failed", rejected: true } as SendResult) : undefined;
+    if (isStreaming && !(roomId && flushing)) return;
 
     setActiveAsks([]);
 
@@ -799,6 +1045,7 @@ export function ChatPanel({
     }
     setIsStreaming(true);
     setStreamingText("");
+    turnRenders.current = [];
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -807,21 +1054,45 @@ export function ChatPanel({
     setIsStopping(false);
     setRuntimeProgress("Submitting request…");
     let streamSettled = false;
+    // Whether the request may have reached the server: after this, a failure's outcome is unknown.
+    let dispatched = false;
 
     try {
       const requestId = requestIdRef.current!;
-      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal, roomId);
       if (scope) requestScopes.current[requestId] = scope;
       if (controller.signal.aborted) {
         if (scope) forgetRequest(scope, requestId);
         controller.signal.throwIfAborted();
       }
+      dispatched = true;
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, request_id: requestIdRef.current, ...(agent ? { agent } : {}), ...(files.length ? { attachments: files } : {}) }),
+        body: JSON.stringify({
+          message: text, request_id: requestIdRef.current, ...target, ...(files.length ? { attachments: files } : {}),
+          // A room message names its outbox entry, so its stored copy can be matched to its bubble.
+          ...(roomId && flushing?.length === 1 ? { client_id: flushing[0].id } : {}),
+        }),
         signal: controller.signal,
       });
+
+      if (roomId && res.status === 409) {
+        // Another member's turn holds the room. Nothing was admitted: what was
+        // typed stays where it was typed, marked queued, and is offered again
+        // when the room moves on (a live message) or after a short wait.
+        const busy = await res.clone().json().catch(() => null);
+        if (busy?.error === "room_busy") {
+          // The outbox keeps it at the head and offers it again.
+          const scope = requestScopes.current[requestIdRef.current!];
+          if (scope) forgetRequest(scope, requestIdRef.current!);
+          setIsStreaming(false);
+          setStreamingText("");
+          setRuntimeProgress(null);
+          streamSettled = true;
+          return { outcome: "busy", answering: typeof busy.answering === "string" ? busy.answering : "" } as SendResult;
+        }
+      }
 
       if (!res.ok || !res.body) {
         const failure = await requestFailure(res);
@@ -830,7 +1101,7 @@ export function ChatPanel({
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}`, role: "assistant",
           content: failure.text, timestamp: new Date(),
-          ...(!failure.rejected ? { recovery: { requestId: requestIdRef.current!, agent, scope } } : {}),
+          ...(!failure.rejected ? { recovery: recoveryFor(requestIdRef.current!, scope) } : {}),
         };
         setMessages((prev) => [...prev, errorMsg]);
         setIsStreaming(false);
@@ -838,7 +1109,7 @@ export function ChatPanel({
         setActiveToolName(null);
         setCurrentIteration(0);
         setMaxIterations(0);
-        return;
+        return roomId ? ({ outcome: "failed", rejected: failure.rejected } as SendResult) : undefined;
       }
 
       let fullResponse = "";
@@ -969,11 +1240,14 @@ export function ChatPanel({
       }
 
       // Finalize the message
+      const renders = roomId && turnRenders.current.length ? turnRenders.current : undefined;
+      turnRenders.current = [];
       const assistantMsg: ChatMessage = {
         id: `asst-${Date.now()}`,
         role: "assistant",
         content: stripResidualMarkers(fullResponse).trim(),
-        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
+        ...(renders ? { renders } : {}),
+        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: recoveryFor(requestIdRef.current!, requestScopes.current[requestIdRef.current!]) } : {}),
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
@@ -994,17 +1268,21 @@ export function ChatPanel({
           hasAgentData ? collectedAgentData : undefined
         );
       }
+      // Admitted: even a reply lost on the way is not sent again.
+      return roomId ? ({ outcome: "ok" } as SendResult) : undefined;
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}`,
           role: "assistant",
           content: OUTCOME_UNKNOWN,
-          recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] },
+          recovery: recoveryFor(requestIdRef.current!, requestScopes.current[requestIdRef.current!]),
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMsg]);
       }
+      // Possibly dispatched (its recovery card says so), or stopped: never resent.
+      return roomId ? ({ outcome: "failed", rejected: !dispatched } as SendResult) : undefined;
     } finally {
       setIsStreaming(false);
       setStreamingText("");
@@ -1014,7 +1292,7 @@ export function ChatPanel({
       if (!streamSettled) noteMessages(joinedFollowups.current.map((f) => f.id), DROPPED_NOTE);
       joinedFollowups.current = [];
     }
-  }, [input, attachments, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent]);
+  }, [input, attachments, isStreaming, planMode, deepMode, sendPlanMessage, sendFollowup, noteMessages, queueFollowups, notifyConversationUpdate, setRender, handleSharedStreamEvent, agent, roomId, target, recoveryFor, outbox, roomKit]);
 
   // Another agent is another conversation: what waited for this one is not sent there.
   useEffect(() => {
@@ -1031,8 +1309,40 @@ export function ChatPanel({
     const items = followupQueue.current;
     followupQueue.current = [];
     setQueuedCount(0);
+    if (outbox) {
+      // A room never joins or steers a turn, so nothing lands here from this
+      // panel; anything the engine hands back still leaves through the outbox,
+      // in order, its bubble taking the outbox item's id.
+      for (const queued of [...items].sort((a, b) => a.seq - b.seq)) {
+        const item = outbox.enqueue(queued.text, queued.files);
+        setMessages((prev) => prev.map((m) => (m.id === queued.id ? { ...m, id: item.id } : m)));
+      }
+      return;
+    }
     void sendMessageRef.current(items);
-  }, [queuedCount, isStreaming, isPlanning, isPlanExecuting, isDeepReasoning]);
+  }, [queuedCount, isStreaming, isPlanning, isPlanExecuting, isDeepReasoning, outbox]);
+
+  // The panel is the room outbox's sender while it is mounted and its history
+  // has loaded (so a reply never lands before the transcript it follows). It
+  // sends a message as a flush: the bubble is already on screen.
+  const historyReady = historySettledFor === agentQuery;
+  useEffect(() => {
+    if (!outbox || !historyReady) return;
+    return outbox.attach(async (item) => {
+      startedHere.current.add(item.id);
+      const result = (await sendMessageRef.current([item])) ?? { outcome: "failed" };
+      // Refused here: marked, so no stored row is ever taken for it.
+      setMessages((prev) => roomKit!.markRefused(prev, item.id, result));
+      return result;
+    });
+  }, [outbox, roomKit, historyReady]);
+  // A live room message means the room moved on: a refused head is offered again now.
+  const lastRefreshKey = useRef(roomRefreshKey);
+  useEffect(() => {
+    if (roomRefreshKey === lastRefreshKey.current) return;
+    lastRefreshKey.current = roomRefreshKey;
+    outbox?.roomFreed();
+  }, [roomRefreshKey, outbox]);
 
   const handlePlanApprove = useCallback(async () => {
     if (!activePlan) return;
@@ -1059,7 +1369,7 @@ export function ChatPanel({
 
     try {
       const requestId = requestIdRef.current!;
-      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal, roomId);
       if (scope) requestScopes.current[requestId] = scope;
       if (controller.signal.aborted) {
         if (scope) forgetRequest(scope, requestId);
@@ -1080,7 +1390,7 @@ export function ChatPanel({
         if (failure.rejected && scope) forgetRequest(scope, requestIdRef.current!);
         setMessages((prev) => [...prev, {
           id: `err-${Date.now()}`, role: "assistant", content: failure.text, timestamp: new Date(),
-          ...(!failure.rejected ? { recovery: { requestId: requestIdRef.current!, agent, scope } } : {}),
+          ...(!failure.rejected ? { recovery: recoveryFor(requestIdRef.current!, scope) } : {}),
         }]);
         return;
       }
@@ -1145,7 +1455,7 @@ export function ChatPanel({
             id: `asst-${Date.now()}`,
             role: "assistant",
             content: stripResidualMarkers(fullResponse).trim() + costSuffix,
-            ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
+            ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: recoveryFor(requestIdRef.current!, requestScopes.current[requestIdRef.current!]) } : {}),
             timestamp: new Date(),
           },
         ]);
@@ -1157,7 +1467,7 @@ export function ChatPanel({
           id: `err-${Date.now()}`,
           role: "assistant",
           content: OUTCOME_UNKNOWN,
-          recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] },
+          recovery: recoveryFor(requestIdRef.current!, requestScopes.current[requestIdRef.current!]),
           timestamp: new Date(),
         }]);
       }
@@ -1168,7 +1478,7 @@ export function ChatPanel({
       setDeepElapsed(0);
       setStreamingText("");
     }
-  }, [activePlan, handleSharedStreamEvent, agent]);
+  }, [activePlan, handleSharedStreamEvent, agent, roomId, recoveryFor]);
 
   const handlePlanReject = useCallback(async () => {
     if (!activePlan) return;
@@ -1220,7 +1530,7 @@ export function ChatPanel({
   const handleAbort = async () => {
     if (isStopping) return;
     discardFollowups();
-    if (isStreaming && (await interruptRun(agent, requestIdRef.current))) {
+    if (isStreaming && (await interruptRun(agent, requestIdRef.current, roomId))) {
       setStopNotice("Stopping the run…");
       return;
     }
@@ -1231,7 +1541,7 @@ export function ChatPanel({
     try {
       const response = await fetch("/api/chat/abort", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...(agent ? { agent } : {}), request_id: stoppedRequest }),
+        body: JSON.stringify({ ...target, request_id: stoppedRequest }),
       });
       if (!response.ok) throw new Error("stop unconfirmed");
       const result = await response.json();
@@ -1268,7 +1578,9 @@ export function ChatPanel({
 
   return (
     <div className="h-full w-full flex flex-col bg-background" data-testid="chat-panel">
-      {/* Header — richer on mobile since there's no app header above */}
+      {/* Header — richer on mobile since there's no app header above. A room
+          view draws its own header above the panel. */}
+      {!roomId && (
       <div className={`px-4 border-b border-border flex items-center gap-2 ${mobile ? "py-3.5" : "py-3"}`}>
         <div className="relative">
           <div className="w-2 h-2 rounded-full bg-success" />
@@ -1347,11 +1659,22 @@ export function ChatPanel({
           </button>
         )}
       </div>
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} onScroll={onListScroll} className="flex-1 overflow-y-auto p-4">
         <div className="space-y-4" data-testid="message-list">
-          {messages.length === 0 && !isStreaming && variant === "page" && historySettledFor === agentQuery && (
+          {roomId && roomHistoryFailed && (
+            <p className="py-6 text-center text-sm text-muted-foreground" data-testid="room-chat-unavailable">
+              This workspace&apos;s conversation could not be loaded. Nothing has been sent.
+            </p>
+          )}
+          {roomId && !roomHistoryFailed && messages.length === 0 && !isStreaming && historySettledFor === agentQuery && (
+            <p className="py-6 text-center text-sm text-muted-foreground" data-testid="room-chat-empty">
+              No messages yet.{roomReadOnly ? "" : " Ask the agent about this workspace."}
+            </p>
+          )}
+          {!roomId && messages.length === 0 && !isStreaming && variant === "page" && historySettledFor === agentQuery && (
             <ChatLanding
               ownerName={ownerName}
               suggestedPrompts={landingPrompts}
@@ -1359,7 +1682,7 @@ export function ChatPanel({
               onViewOpened={onViewOpened}
             />
           )}
-          {messages.length === 0 && !isStreaming && variant === "dock" && (
+          {!roomId && messages.length === 0 && !isStreaming && variant === "dock" && (
             <div className="space-y-4" data-testid="empty-state">
               <p className="text-sm text-muted-foreground">
                 Ready when you are.
@@ -1413,8 +1736,9 @@ export function ChatPanel({
               msg={msg}
               onRecovered={onBubbleRecovered}
               busy={busy}
-              onRegenerate={regenerate}
-              onEdit={editMessage}
+              onRegenerate={roomReadOnly ? undefined : regenerate}
+              onEdit={roomReadOnly ? undefined : editMessage}
+              roomId={roomId}
             />
           ))}
 
@@ -1561,8 +1885,24 @@ export function ChatPanel({
         data-testid="chat-composer"
       >
         <PendingAttachments files={attachments.files} refusal={attachments.refusal} onRemove={attachments.remove} />
+        {roomKitFailed && (
+          <p role="alert" className="text-xs text-destructive" data-testid="room-chat-load-failed">
+            Couldn&apos;t load this workspace&apos;s chat.{" "}
+            <button type="button" onClick={reloadPage} className="underline">Reload</button>
+          </p>
+        )}
+        {roomReadOnly && (
+          <p id="room-readonly-notice" className="text-xs text-muted-foreground" data-testid="room-readonly-notice">
+            {READ_ONLY_NOTICES[room?.readOnlyReason === "archived" ? "archived" : "viewer"]}
+          </p>
+        )}
+        {roomBusy !== null && roomKit && (
+          <p role="status" className="text-xs text-muted-foreground" data-testid="room-busy-notice">
+            {roomKit.busyNotice(roomBusy)}
+          </p>
+        )}
         {/* Mode toggles — labeled chips on mobile, icon buttons on desktop */}
-        {mobile ? (
+        {mobile && !roomId ? (
           <div className="flex gap-2" data-testid="mobile-mode-toggles">
             <button
               onClick={() => {
@@ -1617,8 +1957,8 @@ export function ChatPanel({
         ) : null}
 
         <div className="flex items-end gap-2">
-          {/* Desktop: icon buttons with tooltips */}
-          {!mobile && (
+          {/* Desktop: icon buttons with tooltips. A room offers no Plan or Deep. */}
+          {!mobile && !roomId && (
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1678,12 +2018,12 @@ export function ChatPanel({
               </Tooltip>
             </TooltipProvider>
           )}
-          {!mobile && (
+          {!mobile && !roomId && (
             <ToolsPopover agentId={agent || defaultAgent || null} listingRefused={listingRefused} />
           )}
           <AttachButton
             onFiles={(files) => void attachments.add(files)}
-            disabled={attachBlocked !== null}
+            disabled={attachBlocked !== null || roomReadOnly}
           />
           <textarea
             ref={inputRef}
@@ -1696,7 +2036,8 @@ export function ChatPanel({
             className={`flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm min-h-[44px] max-h-[120px] focus:outline-none focus:ring-1 ${deepMode ? "border-primary/30 focus:ring-primary/50" : planMode ? "border-warning/30 focus:ring-warning/50" : "border-border focus:ring-ring"}`}
             rows={1}
             // Open while an ordinary reply streams: what is typed joins it.
-            disabled={(isStreaming && (planMode || deepMode)) || isPlanExecuting || isPlanning || isDeepReasoning}
+            disabled={roomReadOnly || roomKitFailed || (isStreaming && (planMode || deepMode)) || isPlanExecuting || isPlanning || isDeepReasoning}
+            aria-describedby={roomReadOnly ? "room-readonly-notice" : undefined}
             data-testid="chat-input"
           />
           {stopNotice && <p role="status" className="text-xs text-muted-foreground">{stopNotice}</p>}
@@ -1727,7 +2068,7 @@ export function ChatPanel({
             <Button
               size="icon"
               onClick={sendMessage}
-              disabled={(!input.trim() && !attachments.files.length) || isPlanExecuting}
+              disabled={roomReadOnly || roomKitFailed || (!input.trim() && !attachments.files.length) || isPlanExecuting}
               className="shrink-0"
               data-testid="send-button"
             >

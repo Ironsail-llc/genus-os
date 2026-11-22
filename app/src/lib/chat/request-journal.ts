@@ -36,10 +36,10 @@ export function forgetRequest(scope: string, requestId: string): void {
 }
 
 /** Resolve server-authenticated scope before dispatch when initial history is still loading. */
-export async function journalRequest(agent: string, requestId: string, scope?: string, signal?: AbortSignal): Promise<string | undefined> {
+export async function journalRequest(agent: string, requestId: string, scope?: string, signal?: AbortSignal, room?: string): Promise<string | undefined> {
   if (scope === undefined) {
     try {
-      const query = agent ? `?agent=${encodeURIComponent(agent)}` : "";
+      const query = room ? `?room=${encodeURIComponent(room)}` : agent ? `?agent=${encodeURIComponent(agent)}` : "";
       const response = await fetch(`/api/chat/history${query}`, {
         cache: "no-store",
         signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(2000)]),

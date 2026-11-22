@@ -1,0 +1,250 @@
+{
+  "history": {
+    "body": {
+      "hasMore": false,
+      "messages": [
+        {
+          "authorName": "Alice",
+          "authorUserId": "u-alice",
+          "author_display_name": "Alice",
+          "author_user_id": "u-alice",
+          "clientId": "5d5d5d5d-0000-4000-8000-000000000005",
+          "client_id": "5d5d5d5d-0000-4000-8000-000000000005",
+          "content": "how did we do?",
+          "id": "<n>",
+          "role": "user",
+          "timestamp": "<time>"
+        },
+        {
+          "content": "Sales were 1,200.",
+          "id": "<n>",
+          "role": "assistant",
+          "timestamp": "<time>"
+        },
+        {
+          "content": "Email sent from assistant@example.com to carol.client@example.org, subject \"Checking in\", at <time>, approved by someone. Replies go to bob@example.com. Provider message id msg-1.",
+          "id": "<n>",
+          "kind": "room_email_receipt",
+          "receipt": {
+            "action_id": "id-2",
+            "approved_by": {
+              "display_name": "",
+              "user_id": "u-bob"
+            },
+            "cc": [],
+            "decided_at": "<time>",
+            "decided_by": {
+              "display_name": "",
+              "user_id": "u-bob"
+            },
+            "error": null,
+            "from": "assistant@example.com",
+            "message_id": "msg-1",
+            "reply_to": "bob@example.com",
+            "room_id": "room-report",
+            "sent_at": "<time>",
+            "status": "sent",
+            "subject": "Checking in",
+            "task_id": null,
+            "to": [
+              "carol.client@example.org"
+            ]
+          },
+          "role": "assistant",
+          "timestamp": "<time>"
+        }
+      ],
+      "recoveryScope": "id-3",
+      "roomId": "room-report"
+    },
+    "status": 200
+  },
+  "history_not_found": {
+    "body": {
+      "error": "room_not_found"
+    },
+    "status": 404
+  },
+  "history_viewer": {
+    "body": {
+      "hasMore": false,
+      "messages": [
+        {
+          "authorName": "Alice",
+          "authorUserId": "u-alice",
+          "author_display_name": "Alice",
+          "author_user_id": "u-alice",
+          "clientId": "5d5d5d5d-0000-4000-8000-000000000005",
+          "client_id": "5d5d5d5d-0000-4000-8000-000000000005",
+          "content": "how did we do?",
+          "id": "<n>",
+          "role": "user",
+          "timestamp": "<time>"
+        },
+        {
+          "content": "Sales were 1,200.",
+          "id": "<n>",
+          "role": "assistant",
+          "timestamp": "<time>"
+        },
+        {
+          "content": "Email sent from assistant@example.com to carol.client@example.org, subject \"Checking in\", at <time>, approved by someone. Replies go to bob@example.com. Provider message id msg-1.",
+          "id": "<n>",
+          "kind": "room_email_receipt",
+          "receipt": {
+            "action_id": "id-2",
+            "approved_by": {
+              "display_name": "",
+              "user_id": "u-bob"
+            },
+            "cc": [],
+            "decided_at": "<time>",
+            "decided_by": {
+              "display_name": "",
+              "user_id": "u-bob"
+            },
+            "error": null,
+            "from": "assistant@example.com",
+            "message_id": "msg-1",
+            "reply_to": "bob@example.com",
+            "room_id": "room-report",
+            "sent_at": "<time>",
+            "status": "sent",
+            "subject": "Checking in",
+            "task_id": null,
+            "to": [
+              "carol.client@example.org"
+            ]
+          },
+          "role": "assistant",
+          "timestamp": "<time>"
+        },
+        {
+          "authorName": "Bob",
+          "authorUserId": "u-bob",
+          "author_display_name": "Bob",
+          "author_user_id": "u-bob",
+          "content": "and the week?",
+          "id": "<n>",
+          "role": "user",
+          "timestamp": "<time>"
+        },
+        {
+          "content": "answer for Bob",
+          "id": "<n>",
+          "role": "assistant",
+          "timestamp": "<time>"
+        }
+      ],
+      "recoveryScope": "id-4",
+      "roomId": "room-report"
+    },
+    "status": 200
+  },
+  "period_existing": {
+    "body": {
+      "blocks": [
+        {
+          "component": "render_markdown",
+          "props": {
+            "content": "Up 4%."
+          }
+        }
+      ],
+      "createdAt": "<time>",
+      "error": null,
+      "grain": "week",
+      "id": "id-5",
+      "kind": "edition",
+      "periodEnd": "2026-11-08",
+      "periodStart": "2026-11-02",
+      "preview": false,
+      "provenance": {},
+      "publishedSeq": 1,
+      "revision": 1,
+      "seq": 1,
+      "status": "published",
+      "suggestions": [],
+      "summary": "Up 4%.",
+      "title": "Week 45"
+    },
+    "status": 200
+  },
+  "period_many": {
+    "statuses": [
+      202,
+      202,
+      202,
+      202,
+      202,
+      202
+    ]
+  },
+  "period_not_found": {
+    "body": {
+      "error": "room_not_found",
+      "message": "no such workspace"
+    },
+    "status": 404
+  },
+  "period_started": {
+    "body": {
+      "blocks": [],
+      "createdAt": "<time>",
+      "error": null,
+      "grain": "week",
+      "id": "id-6",
+      "kind": "edition",
+      "periodEnd": "2026-11-01",
+      "periodStart": "2026-10-26",
+      "preview": false,
+      "provenance": {},
+      "publishedSeq": null,
+      "revision": 1,
+      "seq": 2,
+      "status": "building",
+      "suggestions": [],
+      "summary": "",
+      "title": ""
+    },
+    "status": 202
+  },
+  "period_unfinished": {
+    "body": {
+      "error": "invalid_period",
+      "message": "that period is not over yet",
+      "reason": "not_over"
+    },
+    "status": 422
+  },
+  "period_viewer": {
+    "body": {
+      "error": "forbidden",
+      "message": "you may not request a period in this workspace"
+    },
+    "status": 403
+  },
+  "send_busy": {
+    "body": {
+      "answering": "Bob",
+      "error": "room_busy"
+    },
+    "status": 409
+  },
+  "send_not_found": {
+    "body": {
+      "error": "room_not_found"
+    },
+    "status": 404
+  },
+  "send_stream": {
+    "body": "event: room\ndata: {\"roomId\": \"room-report\"}\n\nevent: done\ndata: {\"text\": \"Sales were 1,200.\", \"status\": \"completed\", \"model\": null, \"input_tokens\": 0, \"output_tokens\": 0, \"duration_ms\": null, \"total_cost_usd\": 0.0, \"run_id\": \"id-1\"}\n\n",
+    "status": 200
+  },
+  "send_viewer": {
+    "body": {
+      "error": "room_forbidden"
+    },
+    "status": 403
+  }
+}

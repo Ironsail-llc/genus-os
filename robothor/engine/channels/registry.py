@@ -30,6 +30,8 @@ import logging
 import threading
 from typing import TYPE_CHECKING, Any, cast
 
+from robothor.sanitize import sanitize_log
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.engine.channels.base import Channel
 
@@ -69,7 +71,7 @@ __all__ = [
 #: would become the surface the ``crm_people.do_not_contact`` guard runs inside,
 #: and an opt-out control a package can replace merely by being installed is not
 #: a control.
-BUILTIN_CHANNELS = frozenset({"telegram", "event_bus", "slack", "webchat", "email"})
+BUILTIN_CHANNELS = frozenset({"telegram", "event_bus", "slack", "webchat", "email", "room"})
 
 #: How long plugin discovery may take before the daemon stops waiting for it.
 #: ``warm_channels`` sits between "all subsystems started" and ``READY=1``, and
@@ -155,6 +157,7 @@ def _ensure_builtins() -> None:
         try:
             from robothor.engine.channels.email import EmailChannel
             from robothor.engine.channels.event_bus import EventBusChannel
+            from robothor.engine.channels.room import RoomChannel
             from robothor.engine.channels.slack import SlackChannel
             from robothor.engine.channels.telegram import TelegramChannel
             from robothor.engine.channels.webchat import WebchatChannel
@@ -175,6 +178,8 @@ def _ensure_builtins() -> None:
             # the missing piece, rather than `failed:no_channel:email` — which
             # reads as "this platform cannot send email at all".
             register_channel("email", EmailChannel(), builtin=True)
+            # A workspace: `delivery.to` is the room id (channels/room.py).
+            register_channel("room", RoomChannel(), builtin=True)
 
             # Sender shims too: a registration happens once, at bot start, so
             # a registry that forgot them would never get them back.
@@ -282,7 +287,9 @@ def get_channel(name: str) -> Channel | None:
     spec = _plugin_channels().get(clean)
     if spec is None:
         logger.warning(
-            "Channel %r is named in %s but no installed plugin provides it", clean, CHANNELS_ENV
+            "Channel %r is named in %s but no installed plugin provides it",
+            sanitize_log(clean),
+            CHANNELS_ENV,
         )
         _plugin_channels_built.pop(clean, None)
         return None

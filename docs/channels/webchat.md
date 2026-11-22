@@ -111,6 +111,100 @@ person who sends no key is unchanged: the owner gets the main session, and a
 member gets the session the rules above give them. A service that must write into the main session on purpose names
 `agent:main:primary` explicitly.
 
+## Chat in a workspace (a room)
+
+What a workspace is and who may do what in one: [Workspaces](../WORKSPACES.md).
+
+A workspace's conversation is an ordinary session keyed
+`agent:{agent}:room:{room_id}`, served by the same routes. The browser names the
+room, never the key: `room_id` (a UUID) in the JSON body of `/chat/send`,
+`/chat/abort`, `/chat/steer`, `/chat/interrupt` and the other POST routes, and in
+the query string of `/chat/history`, `/chat/outcome` and the other GET routes.
+`robothor/engine/chat_rooms.py` holds the rules:
+
+* **Access first, in every per-user-sessions mode.** The engine checks the
+  caller with `robothor.rooms.access` before the owner and mode rules, then uses
+  the room's stored key. A raw room-shaped `session_key` is checked the same way,
+  and one naming the room under a different agent is refused. No access is
+  `404 {"error": "room_not_found"}`; access without the action (a viewer
+  sending, an archived room) is `403 {"error": "room_forbidden"}`. A request
+  naming both `room_id` and a `session_key` is `400`. Clearing a room or
+  injecting a system row needs the right to manage it (`assigned` or a tenant
+  admin). A service token skips the membership check for a room of its own
+  tenant, but not the archived-room rule.
+* **The room is echoed, the key never shown.** `/chat/send` streams
+  `event: room` with `{"roomId": ...}` before anything else; `/chat/history`,
+  `/chat/outcome`, `/chat/abort`, `/chat/steer` and `/chat/interrupt` add
+  `"roomId"` to their JSON. A room's history has no `sessionKey`.
+* **Who said what.** A user turn stores `author_user_id` and
+  `author_display_name`; history items carry `authorUserId`, `authorName` and,
+  on an edition's message, `editionId`. The model reads each user turn as
+  `[Name] text`. Ordinary sessions get none of this.
+* **One turn at a time.** A send while the room is answering someone is
+  `409 {"error": "room_busy", "answering": "<display name>"}`. The lock is held
+  until the turn's exchange is saved, its activity recorded and its event
+  published, even when the browser leaves after `done`; it is released however
+  the turn ends.
+* **Fresh history.** Each turn reloads the room's last `MAX_HISTORY` messages
+  from the database under the room's tenant, so the agent sees turns written
+  elsewhere (a published edition, another replica).
+* **Activity.** A saved exchange moves `rooms.last_activity_at` and
+  `last_message_id` and publishes `room.message` on the `agent` stream with
+  exactly `{room_id, tenant_id, message_id}`. An interrupted or stopped turn
+  that the interruption path saves keeps its author and moves the mark too.
+* **The turn is in the room.** The runner and the save of its reply run with
+  the room bound (`robothor.rooms.run_context`), so `room_publish_edition`
+  works in an interactive workspace turn and the reply carries the edition it
+  published. A main-conversation turn binds nothing, so the publish refuses it.
+* **The room's own runs.** While a scheduled run, a "run now" or a preview
+  holds the room, a send is `409 room_busy` as for a person's turn, and
+  `/chat/abort` stops that run: a run now, period run or preview by the person
+  who started it, or by an assigned member or a tenant admin; a SCHEDULED run
+  only by an assigned member or a tenant admin (`403 room_forbidden`
+  otherwise).
+* **Search.** Verbatim chat search (`chat_store.search_chat_turns`) leaves out
+  every workspace's conversation unless the caller passes the ids of the
+  workspaces they can access.
+
+## Delivering into a workspace: `delivery.channel: room`
+
+A manifest agent can deliver its output into a workspace instead of a person's
+session:
+
+```yaml
+delivery:
+  mode: announce
+  channel: room
+  to: 2f6c4a10-3b1e-4c7d-9a55-000000000000   # the workspace (room) id
+```
+
+The output is an assistant turn in the workspace's conversation, attributed to
+the agent (its id, display name and run), the workspace's activity moves, and
+each member who has not muted it gets a short note with the link in their main
+conversation and inbox (`robothor/engine/channels/room.py`). The delivery waits
+for a turn in progress in the workspace. A target that is not a workspace of the
+run's tenant is `failed:room_unknown_target`, an archived one
+`failed:room_archived`, and a turn the store did not write
+`failed:room_no_session_write`; nothing is written in those cases.
+
+## Workspace notes
+
+When a workspace's run publishes an edition, each member with an active account
+who has not muted the workspace gets a note (`robothor.rooms.fanout`): the
+edition's title, its summary cut to 280 characters, and
+`[<workspace title>](/?v=chat&room=<id>)`, written into their main conversation
+and inbox through this channel. The inbox row is type `info`, addressed to the
+user id, with `room_id` and `edition_id` in its `metadata` and never the session
+key. Each member's notification settings for the workspace decide where it
+goes (`room_members.notify`, stored as `{in_app, muted, channels}`, read by
+`robothor.rooms.notify`): `muted` is nothing at all; `in_app` off is no note in
+the main conversation and no inbox row; each channel in `channels` turned on
+(e.g. `telegram`) gets the same note when the member has that channel linked.
+Nothing stored means in-app on, not muted, no channel; when the workspace's
+`settings.notify_default` is false, a member who has not set `muted` is muted.
+A preview is never announced. Only a notification's recipient (or an owner
+or admin) may mark it read or acknowledged.
+
 ## Asking a question
 
 `webchat` implements `Channel.ask`, so an agent that calls `ask_user` during a

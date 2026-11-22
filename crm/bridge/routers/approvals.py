@@ -23,6 +23,14 @@ that are stuck on me" — while the mechanics underneath are genuinely different
     written here instead would leave the agent waiting until its own timeout
     denied it, while the Helm showed a green tick.
 
+The member path is the one exception to the operator gate, and the narrowest
+one: a ``member`` or ``user`` of the acting tenant lists only the ``action``
+rows ``robothor.rooms.approvals`` says are theirs (``scope: "own"``) and decides
+only those, recorded as ``member:<user id>``. The rule (their own interactive
+turn in a task workspace they can still post in, whose task is assigned to
+them) is in that module. Every other kind, and every other caller, stays
+operator-only.
+
 The three durable kinds are tenant-local. Every route asks
 ``require_tenant_operator`` first, which admits an owner or admin of the tenant
 the session acts in and returns that tenant; every store call then filters on it
@@ -42,6 +50,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import uuid
 from typing import Any
@@ -58,10 +67,19 @@ from robothor.engine.approvals import (
     get_approval_by_id,
     list_pending_approvals,
 )
-from robothor.operations.store import Conflict, Operations
+from robothor.operations.store import Conflict, NotPermitted, Operations
+from robothor.rooms.access import Actor
+from robothor.rooms.approvals import decide_member_action, list_member_actions, member_actor_id
 from routers._audit import audited
 from routers._engine_client import engine_request
-from routers._operator import TenantOperator, require_tenant_operator
+from routers._operator import (
+    TenantOperator,
+    is_tenant_operator,
+    require_tenant_member,
+    require_tenant_operator,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
@@ -164,6 +182,55 @@ def _action_detail(kind: str, payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, indent=2, default=str)
 
 
+def _addresses(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return [str(v) for v in value] if isinstance(value, list) else []
+
+
+def _room_email(payload: Any) -> dict[str, Any] | None:
+    """A workspace email (``room.email``), field by field, exactly as it would be
+    sent: what the task workspace's approval card shows above Approve."""
+    if not isinstance(payload, dict):
+        return None
+    behalf = payload.get("on_behalf_of")
+    return {
+        "from": str(payload.get("sender") or ""),
+        "replyTo": str(payload.get("reply_to") or ""),
+        "to": _addresses(payload.get("recipient")),
+        "cc": _addresses(payload.get("cc")),
+        "subject": str(payload.get("subject") or ""),
+        "body": str(payload.get("body") or ""),
+        "onBehalfOf": str(behalf.get("display_name") or "") if isinstance(behalf, dict) else "",
+    }
+
+
+def _action_item(row: dict) -> dict:
+    """One proposed action as the Inbox lists it."""
+    item = _action_row(row)
+    if row["kind"] == "room.email":
+        email = _room_email(row["payload"])
+        if email is not None:
+            item["email"] = email
+    return item
+
+
+def _action_row(row: dict) -> dict:
+    return {
+        "kind": "action",
+        "id": str(row["id"]),
+        "run_id": "",
+        "agent_id": "",
+        "action_kind": row["kind"],
+        "question": _action_summary(row["kind"], row["payload"]),
+        "detail": _action_detail(str(row["kind"]), row["payload"]),
+        "envelope": _action_envelope(row["payload"]),
+        "options": [],
+        "expires_at": _iso(row["expires_at"]),
+        "created_at": _iso(row["created_at"]),
+    }
+
+
 def _pending(tenant_id: str) -> list[dict]:
     """Everything waiting on a person in ``tenant_id``, newest deadline last.
 
@@ -201,28 +268,13 @@ def _pending(tenant_id: str) -> list[dict]:
         }
         for q in list_pending_questions(tenant_id=tenant_id)
     )
-    out.extend(
-        {
-            "kind": "action",
-            "id": str(row["id"]),
-            "run_id": "",
-            "agent_id": "",
-            "action_kind": row["kind"],
-            "question": _action_summary(row["kind"], row["payload"]),
-            "detail": _action_detail(str(row["kind"]), row["payload"]),
-            "envelope": _action_envelope(row["payload"]),
-            "options": [],
-            "expires_at": _iso(row["expires_at"]),
-            "created_at": _iso(row["created_at"]),
-        }
-        for row in Operations(tenant_id).list_review()
-    )
+    out.extend(_action_item(row) for row in Operations(tenant_id).list_review())
     out.sort(key=lambda item: str(item["expires_at"] or ""))
     return out
 
 
 @router.get("")
-def list_approvals(request: Request) -> dict:
+def list_approvals(request: Request) -> Any:
     """Everything waiting on a human decision, of either durable kind.
 
     In-RAM escalations are deliberately absent: they live in the engine and are
@@ -231,15 +283,41 @@ def list_approvals(request: Request) -> dict:
     over the run's own status stream (``approval_required``), which is where a
     prompt with a sub-minute life belongs.
     """
+    if not is_tenant_operator(request):
+        return _list_own(_member(request))
     who = require_tenant_operator(request)
     with tenant_scope(who.tenant_id):
         pending = _pending(who.tenant_id)
     return {"count": len(pending), "pending": pending}
 
 
+def _member(request: Request) -> Actor:
+    """The caller on the member path (``require_tenant_member`` refuses anyone else)."""
+    member = require_tenant_member(request)
+    return Actor(user_id=member.user_id, role=member.role, tenant_id=member.tenant_id)
+
+
+def _list_own(me: Actor) -> Any:
+    """A member's own actions, with the workspace and task each belongs to.
+    A check that cannot be made lists nothing (503), never someone else's."""
+    try:
+        with tenant_scope(me.tenant_id):
+            rows = list_member_actions(me)
+    except Exception:
+        logger.exception("member approvals could not be listed")
+        return JSONResponse({"error": "approvals_unavailable"}, status_code=503)
+    pending = [
+        {**_action_item(row), "room_id": str(row["room_id"]), "task_id": str(row["task_id"])}
+        for row in rows
+    ]
+    return {"count": len(pending), "pending": pending, "scope": "own"}
+
+
 @router.post("/{kind}/{approval_id}")
 async def answer_approval(kind: str, approval_id: str, request: Request) -> Any:
     """Answer one waiting question. ``kind`` decides where the answer goes."""
+    if kind == "action" and not is_tenant_operator(request):
+        return await _member_decides(request, approval_id, _member(request))
     who = require_tenant_operator(request)
 
     if kind not in KINDS:
@@ -371,6 +449,43 @@ async def _decide_action(
         settled,
         decision=decision,
     )
+    if not settled:
+        return {"settled": False, "message": "Already decided or expired — nothing changed."}
+    return {"settled": True, "kind": "action", "id": action_id, "decision": decision}
+
+
+async def _member_decides(request: Request, action_id: str, me: Actor) -> Any:
+    """A member's verdict on their own action (``robothor.rooms.approvals``).
+
+    Validated as the operator path validates; then the member rule decides,
+    and anything it refuses, or cannot check, is a 403 that settles nothing."""
+    if not _SAFE_ID.fullmatch(action_id):
+        return _refuse(request, "action", action_id, 400, "malformed id")
+    if not _is_uuid(action_id):
+        return _refuse(request, "action", action_id, 422, "action ids are UUIDs", status="refused")
+    try:
+        body = AnswerRequest(**(await request.json()))
+    except Exception:  # noqa: BLE001 — a malformed body is the caller's error
+        return _refuse(request, "action", action_id, 400, "invalid request body")
+    if body.approved is None:
+        return _refuse(request, "action", action_id, 400, "approved is required")
+
+    who = TenantOperator(actor=member_actor_id(me), tenant_id=me.tenant_id)
+    try:
+        with tenant_scope(me.tenant_id):
+            await asyncio.to_thread(
+                decide_member_action, me, action_id, approved=bool(body.approved)
+            )
+        settled = True
+    except NotPermitted:
+        return _refuse(request, "action", action_id, 403, "operator role required")
+    except Conflict:
+        settled = False
+    except Exception:
+        logger.exception("member approval could not be checked")
+        return _refuse(request, "action", action_id, 403, "operator role required")
+    decision = "approved" if body.approved else "rejected"
+    _audit_decision(request, who, "action", action_id, settled, decision=decision)
     if not settled:
         return {"settled": False, "message": "Already decided or expired — nothing changed."}
     return {"settled": True, "kind": "action", "id": action_id, "decision": decision}

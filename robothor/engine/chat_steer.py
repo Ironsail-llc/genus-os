@@ -64,13 +64,14 @@ async def chat_steer(request: Request) -> JSONResponse:
         return JSONResponse({"error": "text required"}, status_code=400)
     if not body.get("request_id"):
         return JSONResponse({"error": "request_id required"}, status_code=400)
-    session_key = chat._effective_session_key(auth, body.get("session_key", ""))
-    key = webchat_run_key(auth, session_key, body["request_id"])
+    if isinstance(target := await chat._target(auth, body, "post"), JSONResponse):
+        return target
+    key = webchat_run_key(auth, target.key, body["request_id"])
     # Off the loop: the steer is recorded as an operator signal in the database.
     found = await asyncio.to_thread(
         live_control.steer_conversation, key, text, tenant_id=auth.tenant_id
     )
-    return JSONResponse({"ok": found, "found": found})
+    return JSONResponse(target.echo({"ok": found, "found": found}))
 
 
 @router.post("/interrupt")
@@ -88,8 +89,9 @@ async def chat_interrupt(request: Request) -> JSONResponse:
     body = await request.json()
     if not body.get("request_id"):
         return JSONResponse({"error": "request_id required"}, status_code=400)
-    session_key = chat._effective_session_key(auth, body.get("session_key", ""))
-    key = webchat_run_key(auth, session_key, body["request_id"])
+    if isinstance(target := await chat._target(auth, body, "post"), JSONResponse):
+        return target
+    key = webchat_run_key(auth, target.key, body["request_id"])
     message = body.get("message")
     try:
         # Off the loop: the durable stop is written to the database.
@@ -102,4 +104,4 @@ async def chat_interrupt(request: Request) -> JSONResponse:
     except Exception:
         logger.exception("Chat interrupt could not be recorded")
         return JSONResponse({"error": "interrupt could not be recorded"}, status_code=502)
-    return JSONResponse({"ok": found, "found": found})
+    return JSONResponse(target.echo({"ok": found, "found": found}))

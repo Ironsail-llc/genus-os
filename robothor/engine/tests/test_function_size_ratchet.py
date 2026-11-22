@@ -144,7 +144,9 @@ KNOWN_LARGE: dict[str, int] = {
     # as zero spend, which is a different claim about the fleet.
     "analytics.py::get_agent_stats": 326,
     # 286 -> 261: re-measured after the catch-up fold (flag paths removed).
-    "chat.py::plan_approve": 261,
+    # 261 -> 246: its SSE body left for chat_sse.py, which paid for the room
+    # busy check and turn lock.
+    "chat.py::plan_approve": 246,
     # -7: rate-limit wait and the malformed-tool-call verdict extracted;
     # +4: review-requested comments on the malformed-tool-call branch (why the
     # re-roll spends `attempt`, and what skipping `_handle_model_error` costs)

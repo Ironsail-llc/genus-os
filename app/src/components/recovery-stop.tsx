@@ -21,7 +21,7 @@ export function RecoveryStop({ request, recorded }: { request: ChatRecoveryReque
     try {
       const response = await fetch("/api/chat/abort", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ request_id: request.requestId, ...(request.agent ? { agent: request.agent } : {}) }),
+        body: JSON.stringify({ request_id: request.requestId, ...(request.room ? { room: request.room } : request.agent ? { agent: request.agent } : {}) }),
         signal: AbortSignal.any([lifecycle, AbortSignal.timeout(10_000)]),
       });
       if (!response.ok) throw new Error("Stop unconfirmed");

@@ -51,6 +51,21 @@ export interface PendingItem {
   options: string[];
   expires_at: string | null;
   created_at: string | null;
+  /** The workspace a proposal was made in, when it was made in one. */
+  room_id?: string;
+  /** The task a proposal is for, when it is for one. */
+  task_id?: string;
+  /**
+   * The route listed only the caller's own (`scope: "own"`, what it answers a
+   * member whose run proposed an action for a task assigned to them). Such a
+   * row is the caller's to decide; the bridge still checks.
+   */
+  mine?: boolean;
+  /**
+   * Only on a workspace email (`room.email`): the exact email, field by field,
+   * as the bridge sends it. Read where the card is drawn (`readEmail`).
+   */
+  email?: unknown;
 }
 
 /** The body of `POST /api/approvals/{kind}/{id}` — see `AnswerRequest`. */
@@ -156,6 +171,7 @@ function optionalText(value: unknown): string | null {
 export function normalizePending(body: unknown): PendingItem[] {
   const rows = (body as { pending?: unknown } | null)?.pending;
   if (!Array.isArray(rows)) return [];
+  const own = (body as { scope?: unknown }).scope === "own";
 
   const out: PendingItem[] = [];
   for (const raw of rows) {
@@ -184,6 +200,9 @@ export function normalizePending(body: unknown): PendingItem[] {
         : [],
       expires_at: optionalText(row.expires_at),
       created_at: optionalText(row.created_at),
+      ...(optionalText(row.room_id) ? { room_id: text(row.room_id) } : {}),
+      ...(optionalText(row.task_id) ? { task_id: text(row.task_id) } : {}),
+      ...(own ? { mine: true } : {}),
     });
   }
   return out;

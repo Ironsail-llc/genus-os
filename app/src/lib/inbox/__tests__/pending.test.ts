@@ -233,4 +233,30 @@ describe("normalizePending", () => {
     expect(full.agent_id).toBe("");
     expect(full.expires_at).toBeNull();
   });
+
+  it("keeps the workspace and task a proposal belongs to", () => {
+    const [row] = normalizePending({
+      pending: [
+        {
+          kind: "action",
+          id: "77777777-7777-4777-8777-777777777777",
+          action_kind: "email.send",
+          room_id: "11111111-1111-4111-8111-111111111111",
+          task_id: "bbbbbbbb-0000-4000-8000-000000000002",
+        },
+      ],
+    });
+    expect(row.room_id).toBe("11111111-1111-4111-8111-111111111111");
+    expect(row.task_id).toBe("bbbbbbbb-0000-4000-8000-000000000002");
+  });
+
+  it("marks every row the caller's own when the route says it listed only theirs", () => {
+    const body = {
+      scope: "own",
+      pending: [{ kind: "action", id: "77777777-7777-4777-8777-777777777777", action_kind: "email.send" }],
+    };
+    expect(normalizePending(body)[0].mine).toBe(true);
+    expect(normalizePending({ pending: body.pending })[0].mine).toBeUndefined();
+  });
 });
+

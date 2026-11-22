@@ -43,6 +43,7 @@ from robothor.engine.tools.constants import (
     GWS_TOOLS,
     N8N_TOOLS,
     READONLY_TOOLS,
+    ROOM_TOOLS,
 )
 
 if TYPE_CHECKING:
@@ -245,6 +246,9 @@ _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
     # The deferred-loading reads: a graded sub-agent is handed its tools
     # directly, so a search would only describe tools it may not call.
     | {"tool_search", "tool_describe"}
+    # The company's REAL workspaces: their definitions, editions and
+    # conversations. The writes among them are withheld with the reads.
+    | ROOM_TOOLS
 )
 
 
@@ -424,6 +428,12 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "link_identity",
         # Cron registration.
         "register_user_cron",
+        # Publishing into a workspace writes a shared, notified edition.
+        "room_publish_edition",
+        # Starts a real workspace run that notifies its members.
+        "room_run",
+        # Starts a real workspace run that publishes to its members.
+        "room_request_period",
         # Arbitrary MCP invocation is an escape hatch by construction.
         "mcp_call_tool",
         "mcp_read_resource",

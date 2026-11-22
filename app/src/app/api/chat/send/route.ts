@@ -1,8 +1,11 @@
 import { getEngineClient } from "@/lib/engine/server-client";
 import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
-import { resolveChatAgent } from "@/lib/chat/agent-guard";
+import { resolveChatTarget } from "@/lib/chat/chat-target";
+// The room id check is a UUID check; a client id is a UUID too.
+import { isRoomId } from "@/lib/rooms/room-id";
 import { MAX_SEND_BODY_BYTES, checkAttachments, type AttachmentPayload } from "@/lib/chat/attachments";
-import { EngineRefusal, REFUSAL_STATUSES } from "@/lib/engine/engine-refusal";
+import { EngineRefusal, REFUSAL_STATUSES, RoomBusy } from "@/lib/engine/engine-refusal";
+import { ROOM_ANSWER_NOT_CONFIRMED, ROOM_NOT_CONFIRMED, confirmRoom, confirmRoomStream } from "@/lib/chat/room-echo";
 
 function json(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -19,6 +22,10 @@ interface SendBody {
   message?: string;
   request_id?: string;
   agent?: string;
+  /** A room, by id: the engine resolves its session key. */
+  room?: string;
+  /** A room message's outbox entry (a UUID), for the stored row to name. */
+  client_id?: string;
   join_running?: boolean;
   attachments?: AttachmentPayload[];
 }
@@ -105,11 +112,19 @@ export async function POST(req: Request) {
   // listing and refused outright if they may not address it; what must never
   // happen is a dropped key falling through to "no key", because "no key" is
   // the operator's shared conversation.
-  const chosen = await resolveChatAgent(body.agent);
+  //
+  // A ROOM is named by id and forwarded as one; the engine resolves its key
+  // and the caller's access. Only its shape is checked here.
+  const chosen = await resolveChatTarget(body.agent, body.room);
   if (!chosen.ok) {
     return json(chosen.status, { error: chosen.error, request_admitted: false });
   }
   const sessionKey = chosen.key;
+  const roomId = chosen.roomId;
+  const clientId = body.client_id;
+  if (clientId !== undefined && !(roomId && isRoomId(clientId))) {
+    return json(400, { error: "client_id must be a UUID, and only with a room", request_admitted: false });
+  }
 
   const client = getEngineClient();
 
@@ -121,11 +136,24 @@ export async function POST(req: Request) {
     // whichever session the request names. Pushed into another agent's session
     // it would hand a worker a capability its manifest never granted and a
     // system message its instructions never mention.
-    if (!sessionKey) ensureCanvasPromptInjected().catch(() => {});
+    if (!sessionKey && !roomId) ensureCanvasPromptInjected().catch(() => {});
+
+    // A room request carries no session key, which an engine that ignores
+    // `room_id` would read as the caller's MAIN conversation. So the room is
+    // confirmed (the engine echoes it on a history read) before anything is
+    // sent, and the message never reaches an engine that would misfile it.
+    if (roomId && !(await confirmRoom(roomId, () => client.chatHistory(1, "", {}, roomId)))) {
+      return json(502, { error: ROOM_NOT_CONFIRMED, request_admitted: false });
+    }
 
     // Only a literal `true`: this changes what the request does (offer the text to
     // the running turn; never start one), so nothing merely truthy may turn it on.
-    const engineRes = await (body.join_running === true
+    const engineRes = await (roomId
+      ? client.chatSend(
+          message, "", body.request_id, body.join_running === true, hasFiles ? attachments : undefined, roomId,
+          ...(clientId ? [clientId] : []),
+        )
+      : body.join_running === true
       ? client.chatSend(message, sessionKey, body.request_id, true)
       : hasFiles
         ? client.chatSend(message, sessionKey, body.request_id, false, attachments)
@@ -137,8 +165,16 @@ export async function POST(req: Request) {
       return json(502, { error: "No response body from engine" });
     }
 
+    // And the turn itself must open with the room's echo, or none of it is
+    // shown. Not admitted as far as the browser is concerned: it keeps no
+    // recovery for it and sends nothing again.
+    const stream = roomId ? await confirmRoomStream(engineRes.body, roomId) : engineRes.body;
+    if (!stream) {
+      return json(502, { error: ROOM_ANSWER_NOT_CONFIRMED, request_admitted: false });
+    }
+
     // Pipe engine SSE directly to browser — marker interception is client-side
-    return new Response(engineRes.body, {
+    return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -146,10 +182,15 @@ export async function POST(req: Request) {
       },
     });
   } catch (err) {
+    if (err instanceof RoomBusy) {
+      // The room's agent is answering somebody else. Nothing was admitted; the
+      // browser queues the message and says whom it is answering.
+      return json(409, { error: "room_busy", answering: err.answering, request_admitted: false });
+    }
     if (err instanceof EngineRefusal) {
       // A refusal keeps its status; an engine failure before admission is
       // still this route's 502, but with the engine's words and no turn.
-      const status = REFUSAL_STATUSES.has(err.status) ? err.status : 502;
+      const status = REFUSAL_STATUSES.has(err.status) || (roomId && (err.status === 403 || err.status === 404)) ? err.status : 502;
       return json(status, { error: err.message, request_admitted: false });
     }
     return json(502, { error: `Engine error: ${String(err)}` });

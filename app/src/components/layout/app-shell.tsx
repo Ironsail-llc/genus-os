@@ -26,6 +26,11 @@ import { useVisualState } from "@/hooks/use-visual-state";
 import { QueryProvider } from "@/lib/query/query-client";
 import { PanelRight, PanelRightOpen, Zap } from "lucide-react";
 import { readChatDockOpen, subscribeChatDockOpen, writeChatDockOpen } from "@/lib/chat/dock-state";
+import { RoomRail } from "@/components/rooms/room-rail";
+import { ROOM_SLOTS_WITH_CONTROLS as DEFAULT_ROOM_SLOTS } from "@/components/rooms/room-controls-lazy";
+import { HUB_ROOM_SLOTS } from "@/components/rooms/room-sections";
+import { RoomRailHeader } from "@/components/rooms/new-in-workspaces";
+import { useRooms } from "@/hooks/use-rooms";
 
 // The conversation canvas (agent-pushed components + chat-driven dashboards)
 // loads only when the rail first opens, keeping it out of the chat bundle.
@@ -216,6 +221,12 @@ const SettingsView = withSurfaceBoundary(
     { ssr: false, loading: ViewLoading },
   ),
 );
+// A workspace (room) opens in the chat view's place; its chunk (the edition
+// renderer, the room header) is fetched the first time one is opened.
+const RoomView = dynamic(
+  () => import("@/components/rooms/room-view").then((m) => m.RoomView),
+  { ssr: false, loading: ViewLoading },
+);
 const ComingSoonView = dynamic(
   () => import("@/components/views/coming-soon-view").then((m) => m.ComingSoonView),
   { ssr: false, loading: ViewLoading },
@@ -260,7 +271,7 @@ function AppShellBody() {
   const isMobile = screenSize === "mobile";
 
   // Chat-first on both desktop and mobile; the view round-trips through ?v=.
-  const { view, settingsPage, navigate } = useViewRoute();
+  const { view, settingsPage, room: routeRoom, navigate, openRoom } = useViewRoute();
 
   // A view mounts the first time it is shown and then stays mounted, hidden by
   // its own `visible` prop, so its state survives switching away. A view never
@@ -351,17 +362,29 @@ function AppShellBody() {
   const allHealthy = agentSummary.failed === 0 && agentSummary.degraded === 0;
 
   const isChatView = view === "chat";
+  // The workspaces rail and a workspace in the main conversation's place live
+  // on the chat view only; every other view docks the main conversation.
+  const activeRoom = isChatView ? (routeRoom ?? null) : null;
+  const rooms = useRooms({ live: true });
+  const railHeader = <RoomRailHeader rooms={rooms.rooms} activeRoomId={activeRoom} onSelect={openRoom} isLoading={rooms.isLoading} error={rooms.error} />;
   // On mobile chat is full-screen with its own header; on desktop it is the
   // main column, optionally flanked by the canvas rail.
   const mobileInChat = isMobile && isChatView;
-  const showCanvasRail = !isMobile && isChatView && canvasRailOpen;
+  // The canvas belongs to the main conversation: it is not drawn over a workspace.
+  const showCanvasRail = !isMobile && isChatView && canvasRailOpen && !activeRoom;
+  // No rail while nothing serves the rooms list (it answered 404).
+  const showRoomRail = isChatView && !showCanvasRail && rooms.available;
+  // Below desktop width the rail is one button with a list that drops down
+  // from it, so it sits ABOVE the chat in a column: in the row it shares on
+  // desktop, its list would open below the viewport and be clipped.
+  const railStacked = showRoomRail && screenSize !== "desktop";
 
   // A visual the agent asks for mid-chat — a [RENDER:…] component or
   // [DASHBOARD:…] data — must be seen where the operator is looking, so it
   // opens the rail (mounting the canvas, whose dashboard agent then renders
   // the data). Adjusted during render rather than in an effect; closing the
   // rail afterwards sticks until the next visual.
-  const canAutoOpen = isChatView && !isMobile;
+  const canAutoOpen = isChatView && !isMobile && !activeRoom;
   if (viewStack.length !== seenVisualCount) {
     setSeenVisualCount(viewStack.length);
     if (viewStack.length > seenVisualCount && canAutoOpen) setCanvasRailOpen(true);
@@ -430,7 +453,7 @@ function AppShellBody() {
 
             <div className="ml-auto flex items-center gap-3">
               <TenantSwitcher />
-              {!isMobile && isChatView && (
+              {!isMobile && isChatView && !activeRoom && (
                 <button
                   onClick={() => setCanvasRailOpen((prev) => !prev)}
                   aria-pressed={canvasRailOpen}
@@ -582,7 +605,7 @@ function AppShellBody() {
               <div
                 className={
                   isChatView && !showCanvasRail
-                    ? "flex-1 min-w-0 min-h-0"
+                    ? `flex-1 min-w-0 min-h-0 flex ${railStacked ? "flex-col" : ""}`
                     : isChatView
                       ? "w-[420px] shrink-0 min-h-0 border-l border-border"
                       : "shrink-0 border-l border-border transition-[width] duration-200 overflow-hidden"
@@ -590,15 +613,28 @@ function AppShellBody() {
                 style={isChatView ? undefined : { width: chatOpen ? 400 : 0 }}
                 data-testid="chat-container"
               >
+                {showRoomRail && (
+                  <RoomRail
+                    rooms={rooms.rooms}
+                    activeRoomId={activeRoom}
+                    onSelect={openRoom}
+                    isLoading={rooms.isLoading}
+                    error={rooms.error}
+                    collapsed={railStacked}
+                    header={railHeader}
+                  />
+                )}
                 {/* A collapsed dock stays mounted (the chat keeps its state), so
-                    it is made inert: nothing hidden stays in the tab order. */}
+                    it is made inert: nothing hidden stays in the tab order. The
+                    main conversation stays mounted under an open workspace too. */}
                 <div
                   ref={dockRef}
                   tabIndex={-1}
-                  inert={!isChatView && !chatOpen}
+                  hidden={Boolean(activeRoom)}
+                  inert={(!isChatView && !chatOpen) || Boolean(activeRoom)}
                   className={`focus:outline-none ${
                     isChatView && !showCanvasRail
-                      ? "h-full mx-auto w-full max-w-5xl"
+                      ? `${railStacked ? "flex-1 min-h-0" : "h-full"} mx-auto w-full max-w-5xl`
                       : isChatView
                         ? "h-full w-full"
                         : "h-full w-[400px]"
@@ -613,6 +649,19 @@ function AppShellBody() {
                     />
                   </SurfaceBoundary>
                 </div>
+                {activeRoom && (
+                  <div className="flex-1 min-w-0 min-h-0">
+                    <SurfaceBoundary name="Workspace">
+                      <RoomView
+                        key={activeRoom}
+                        roomId={activeRoom}
+                        onLeave={() => openRoom(null)}
+                        markRead={rooms.markRead}
+                        slots={{ ...DEFAULT_ROOM_SLOTS, ...HUB_ROOM_SLOTS }}
+                      />
+                    </SurfaceBoundary>
+                  </div>
+                )}
               </div>
             )}
 
@@ -637,8 +686,32 @@ function AppShellBody() {
 
       {/* Mobile chat — full screen, no duplicate header */}
       {mobileInChat && (
-        <div className="flex-1 min-h-0 pb-14" data-testid="chat-container">
-          <div className="h-full">
+        <div className="flex-1 min-h-0 pb-14 flex flex-col" data-testid="chat-container">
+          {rooms.available && (
+          <RoomRail
+            rooms={rooms.rooms}
+            activeRoomId={activeRoom}
+            onSelect={openRoom}
+            isLoading={rooms.isLoading}
+            error={rooms.error}
+            collapsed
+            header={railHeader}
+          />
+          )}
+          {activeRoom && (
+            <div className="flex-1 min-h-0">
+              <SurfaceBoundary name="Workspace">
+                <RoomView
+                  key={activeRoom}
+                  roomId={activeRoom}
+                  onLeave={() => openRoom(null)}
+                  markRead={rooms.markRead}
+                  slots={{ ...DEFAULT_ROOM_SLOTS, ...HUB_ROOM_SLOTS }}
+                />
+              </SurfaceBoundary>
+            </div>
+          )}
+          <div className="flex-1 min-h-0" hidden={Boolean(activeRoom)}>
             <SurfaceBoundary name="Chat">
               <ChatPanel
                 mobile

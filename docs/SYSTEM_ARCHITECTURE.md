@@ -74,7 +74,9 @@ The Helm deployment has a different boundary from the systemd appliance:
   `/api/vault/list` stays open to operators because it returns key names only.
 - Bridge mutations under `/api/` either call an operator gate (the root gate
   `require_root_operator`, the per-tenant `require_tenant_admin`, or the Inbox's
-  tenant-local `require_tenant_operator`) or are scope-gated by the middleware;
+  tenant-local `require_tenant_operator`, which for a member's own action is
+  `require_tenant_member` plus the member approval rule) or are scope-gated by
+  the middleware;
   `crm/bridge/tests/test_mutations_are_gated.py`
   enumerates the assembled app and fails on any route that is neither, so a new
   ungated mutation cannot ship unnoticed. There are two gates
@@ -436,6 +438,12 @@ Two databases on the same instance:
 | `n8n_workflows` | The external n8n instance's workflows as of the n8n monitor's latest listing (migration 156): name, active, tag names, n8n's own update time. A workflow deleted in n8n leaves on the next listing. Tenant RLS |
 | `n8n_executions` | Each failed n8n execution the monitor has seen: workflow, mode, start/stop, error message, and `alerted_at` once the main agent was notified, so each failure is notified once. Purged after 30 days. Tenant RLS |
 | `n8n_sync_state` | Per tenant: when the n8n monitor last polled and last succeeded, the last error class, and the workflow totals. The doctor's `n8n.poll_freshness` reads it. Tenant RLS |
+| `rooms` | A shared thread (migration 169): a company-owned sub-conversation of kind `report`, `agent` or `task`, with its agent, its session key (`agent:<agent>:room:<id>`, written and parsed only by `robothor.rooms.access`), instructions, settings, current revision `rev`, run-as user, pause and failure state, and `archived_at`. One room per CRM task (`task_id`). Its chat session is exempt from the idle-session sweep. Tenant RLS |
+| `room_members` | Who can access a room: `assigned` members manage the definition, the others are shared. Per member: read marks for messages and editions (the unread count) and notification preferences. Tenant RLS |
+| `room_revisions` | Every definition a room has had (`{title, instructions, agent_id, settings, schedule}`), numbered; an edit names the revision it read and is refused if it is stale, and a restore writes a new revision. Tenant RLS |
+| `room_editions` | What a room's run published for a period: blocks (dashboard components), suggestions, provenance, status `building`/`published`/`failed`, `preview` for a run only its requester sees, `seq` (build order, the stable number) and `published_seq` (publish order, never on a preview; read marks and unread counts use it). A partial unique index keeps one non-preview `building` row per period, so concurrent requests share a build. Tenant RLS |
+| `room_tasks` | CRM tasks linked to a room (`subject`, `suggestion` or `linked`), and who accepted or dismissed each, once. A suggestion key is unique per room (migration 172). Tenant RLS |
+| `room_member_removals` | Who was removed from a room, by whom (migration 172). Opening a task lets its human assignee join the task's room, never someone removed from it; only an explicit share (`dal.share_member`, from `definition.share_room`) clears the row; a plain `add_member` or a self-join never does. Moves with the room. Tenant RLS |
 
 ### Canonical schema lifecycle
 
@@ -672,6 +680,31 @@ create_task ──▶ worker run (todo_write)
 |---|---|---|
 | `ROBOTHOR_PLANNER_ENABLED` | `0` (off) | The Stage 4 forward planner. Off → stage-3 bare-flag stall2 behavior. |
 | `ROBOTHOR_TODO_ESCALATE_ENABLED` | `1` (on) | Stage 5 escalation at run end. Only fires when both `parent_task_id` is set AND items remain unfinished. |
+
+### Shared threads (rooms) are not the thread pool
+
+The **thread pool** above is the planner's: CRM tasks tagged `thread` that the
+main agent's heartbeat works through. A **shared thread** (code: *room*,
+`robothor/rooms/`; the dashboard says "Workspaces", see
+[Workspaces](WORKSPACES.md)) is something else: a
+company-owned conversation people open, with its own chat session, members,
+revisioned definition, published editions and linked tasks. A CRM task can be
+opened as a room (`get_or_create_task_room`, one room per task) without
+joining or leaving the thread pool; the two never share rows. Access to a room
+comes only from the tenant role and the membership row
+(`robothor.rooms.access`): tenant owners and admins manage every room,
+assigned members manage theirs, shared members read and work in it, and a
+tenant viewer reads only.
+
+The bridge serves rooms at `/api/rooms` (`crm/bridge/routers/rooms.py`). Each
+handler resolves the caller from the verified token and asks
+`robothor.rooms.access`: no access is 404, access without the action is 403,
+a stale revision is 409 with `currentRev`. Definition changes go through
+`robothor.rooms.definition`; `POST /run` and `POST /periods` check access and
+proxy to the engine's `/api/rooms/{id}/run|periods` with the requester's id.
+Every mutation writes an audit row (`room.create`, `room.share`, …) and a
+`room.updated` event carrying ids only. `POST /api/rooms/{id}/read` needs only
+`bridge:read`, so a viewer can clear their own unread count.
 
 ### Agent Goals — unified persistent objective per agent
 
@@ -1533,6 +1566,64 @@ settles nothing. Audited with `decided_by` and `tenant_id` (identifiers only —
 the answer text is content, not an identifier). `escalation` stays
 platform-only (`require_operator`) and is proxied to the engine, because
 settling it means waking a coroutine in that process.
+
+**Member approval** is the one place this gate widens, and the narrowest
+change that lets a person approve the email their own agent turn drafted.
+`require_tenant_member` admits a `member` or `user` person of the acting tenant
+(never a service token, viewer or auditor) to two things only: `GET
+/api/approvals` returns `{count, pending, scope: "own"}` with only their
+eligible `action` rows, each carrying `room_id` and `task_id`, and `POST
+/api/approvals/action/{id}` decides one. The rule, in `robothor/rooms/approvals.py`,
+holds only when ALL of these do, read from the database at decision time: the
+caller's account is active with role `member` or `user` now (not only per the
+token); the action was proposed for the caller (`proposed_for_user_id`) by a run,
+not a plugin (`proposed_by` is NULL), and is of a kind on the member
+allow-list `MEMBER_DECIDABLE_KINDS` (only `room.email`; every plugin, sales or
+future kind stays operator-only); its
+`proposed_by_run_id` is a top-level (no parent run) `agent_runs` row of the
+caller with `trigger_type='webchat'` and `trigger_detail` exactly `webchat:<the workspace's
+session key>`; the caller can post in that workspace now (`access.require(...,
+"post")`: a current member, the workspace not archived); and the workspace is a
+task workspace whose task (`rooms.task_id`, linked in `room_tasks`, not done,
+resolved or deleted) has the caller as its human assignee
+(`crm_tasks.assignee_id`). Opening a task never makes anyone its assignee: a
+task workspace's own task cannot be accepted from inside it, so a member becomes
+an assignee by accepting a suggestion or by someone assigning them. The check runs again
+inside `Operations.decide(member_check=...)` under the action's row lock, which
+also requires the row's `proposed_for_user_id` to be the deciding member.
+Anything else is a 403 that settles nothing, a check that cannot be made lists
+nothing (503) or refuses (403), and every other kind stays operator-only. The
+verdict is `member:<user id>` on the row, in `operation_audit` (with the room,
+task and run) and in the bridge audit; what executes is still bound to the
+approved payload hash. The three attribution columns are written by
+`Operations.propose` from the run it is called in
+(`robothor/operations/proposer.py`, bound by the runner around its tool loop): the run
+id always, the person only for an interactive turn of a user account, the
+workspace from the room run carrier or the turn's session key.
+
+**A member's approved email** (`robothor/rooms/outbound.py`) is what the member
+path approves. `room_propose_email`, in the member's own turn in their task
+workspace (`approvals.member_turn`, the same predicate the decision checks),
+writes a `room.email` action holding the exact email and sends nothing. It is
+sent as the company's assistant mailbox (the one the `gws_*` tools send from),
+with Reply-To the member: `outbound.sender_for` is the only place that is
+decided. After approval the engine (`robothor/engine/room_outbound.py`: a
+listener on `operation_action.approved` and a 30-second sweep, both started
+through the task registry; like the event hooks, each engine reads with its
+own consumer group, `room-outbound:<event_group>`, acts only on its own
+tenant's approvals and sweeps only its own tenant, with every connection bound
+to that tenant by `tenant_scope`) claims it by id under a lease, which re-checks the
+approved hash, re-checks the sender and the do-not-contact list, sends it
+through the workspace mail provider and records the provider's id with
+`finish_action`. A lease that runs out becomes `unknown` and is never sent
+again; a failed send is recorded and not retried. An email changed after its
+approval, or an approval that expires before delivery, is settled as
+`cancelled` with the reason, so nothing stays `approved` for ever. A receipt
+that could not be posted is not recorded as written and is tried again; a
+workspace that is really gone (missing on a read bound to the action's tenant,
+as after a tenant move) settles its receipt once, with the reason. Every outcome (sent, failed,
+uncertain, not sent, rejected, expired) writes one `room_email_receipt` turn into
+the workspace and publishes `room.message`.
 
 #### Claude Code driver (`robothor/engine/coding/`)
 

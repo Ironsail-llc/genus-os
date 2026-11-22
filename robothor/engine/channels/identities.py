@@ -65,6 +65,7 @@ __all__ = [
     "list_pending",
     "lookup",
     "mint_code",
+    "native_id_for_user",
     "reset_code_memo",
     "revoke",
 ]
@@ -387,6 +388,24 @@ def lookup(
         )
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def native_id_for_user(
+    channel: str, user_id: str, *, tenant_id: str = DEFAULT_TENANT
+) -> str | None:
+    """The live native id ``user_id`` has paired on ``channel``, or None.
+
+    The newest live binding when there is more than one."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT native_id FROM user_channel_identities "
+            "WHERE tenant_id = %s AND channel = %s AND user_id = %s AND revoked_at IS NULL "
+            "ORDER BY paired_at DESC LIMIT 1",
+            (tenant_id, channel, user_id),
+        )
+        row = cur.fetchone()
+        return str(row[0]) if row else None
 
 
 def _insert_identity(

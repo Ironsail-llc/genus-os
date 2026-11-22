@@ -1,0 +1,946 @@
+{
+  "archive": {
+    "body": {
+      "access": "assigned",
+      "agentId": "main",
+      "archived": true,
+      "id": "room-report",
+      "instructions": "Summarise sales.",
+      "kind": "report",
+      "lastActivityAt": "<time>",
+      "latestEdition": {
+        "id": "ed-published",
+        "periodEnd": "2026-11-08",
+        "periodStart": "2026-11-02",
+        "publishedSeq": 1,
+        "seq": 1,
+        "title": "Week 45"
+      },
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Bob",
+          "userId": "u-bob"
+        },
+        {
+          "assigned": false,
+          "displayName": "Alice",
+          "userId": "u-alice"
+        }
+      ],
+      "nextRunAt": null,
+      "paused": false,
+      "rev": 3,
+      "runsAs": {
+        "displayName": "Bob",
+        "userId": "u-bob"
+      },
+      "settings": {
+        "default_grain": "week",
+        "schedule_text": "0 7 * * *",
+        "tz": "UTC"
+      },
+      "title": "Daily sales",
+      "unread": 0
+    },
+    "status": 200
+  },
+  "create_agent": {
+    "body": {
+      "access": "assigned",
+      "agentId": "analyst",
+      "archived": false,
+      "id": "id-1",
+      "instructions": "",
+      "kind": "agent",
+      "lastActivityAt": "<time>",
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Alice",
+          "userId": "u-alice"
+        }
+      ],
+      "nextRunAt": null,
+      "paused": false,
+      "rev": 1,
+      "runsAs": {
+        "displayName": "Alice",
+        "userId": "u-alice"
+      },
+      "settings": {},
+      "title": "Pricing",
+      "unread": 0
+    },
+    "status": 201
+  },
+  "create_invalid_schedule": {
+    "body": {
+      "detail": {
+        "error": "invalid_schedule",
+        "field": "scheduleText",
+        "message": "The schedule could not be understood. Use an interval such as “every 6 hours” or a cron expression such as “0 8 * * 1” (08:00 every Monday)."
+      }
+    },
+    "status": 422
+  },
+  "create_report": {
+    "body": {
+      "access": "assigned",
+      "agentId": "main",
+      "archived": false,
+      "id": "room-report",
+      "instructions": "Summarise sales.",
+      "kind": "report",
+      "lastActivityAt": "<time>",
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Alice",
+          "userId": "u-alice"
+        },
+        {
+          "assigned": false,
+          "displayName": "Bob",
+          "userId": "u-bob"
+        }
+      ],
+      "nextRunAt": "<time>",
+      "paused": false,
+      "rev": 1,
+      "runsAs": {
+        "displayName": "Alice",
+        "userId": "u-alice"
+      },
+      "settings": {
+        "default_grain": "week",
+        "schedule_text": "0 7 * * *",
+        "tz": "UTC"
+      },
+      "title": "Daily sales",
+      "unread": 0
+    },
+    "status": 201
+  },
+  "create_unknown_agent": {
+    "body": {
+      "detail": {
+        "error": "invalid_request",
+        "field": "agentId",
+        "message": "That agent is not available in this company."
+      }
+    },
+    "status": 422
+  },
+  "create_viewer": {
+    "body": {
+      "error": "insufficient scope"
+    },
+    "status": 403
+  },
+  "directory": {
+    "body": {
+      "users": [
+        {
+          "displayName": "Alice",
+          "userId": "u-alice"
+        },
+        {
+          "displayName": "Bob",
+          "userId": "u-bob"
+        },
+        {
+          "displayName": "Carol",
+          "userId": "u-carol"
+        },
+        {
+          "displayName": "Dana",
+          "userId": "u-dana"
+        },
+        {
+          "displayName": "Vera",
+          "userId": "u-vera"
+        }
+      ]
+    },
+    "status": 200
+  },
+  "duplicate": {
+    "body": {
+      "access": "assigned",
+      "agentId": "main",
+      "archived": false,
+      "id": "id-4",
+      "instructions": "Summarise sales.",
+      "kind": "report",
+      "lastActivityAt": "<time>",
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Bob",
+          "userId": "u-bob"
+        }
+      ],
+      "nextRunAt": null,
+      "paused": true,
+      "rev": 1,
+      "runsAs": {
+        "displayName": "Bob",
+        "userId": "u-bob"
+      },
+      "settings": {
+        "default_grain": "week",
+        "schedule_text": "0 7 * * *",
+        "tz": "UTC"
+      },
+      "title": "Sales (copy)",
+      "unread": 0
+    },
+    "status": 201
+  },
+  "edition": {
+    "body": {
+      "blocks": [
+        {
+          "component": "render_markdown",
+          "props": {
+            "content": "Up 4%."
+          }
+        }
+      ],
+      "createdAt": "<time>",
+      "error": null,
+      "grain": "week",
+      "id": "ed-published",
+      "kind": "edition",
+      "periodEnd": "2026-11-08",
+      "periodStart": "2026-11-02",
+      "preview": false,
+      "provenance": {
+        "cost_usd": 0.0421,
+        "input_tokens": 10000,
+        "output_tokens": 2345,
+        "ran_as": "u-alice",
+        "room_rev": 1,
+        "run_id": "run-1",
+        "started_at": "<time>",
+        "tool_calls": [
+          {
+            "at": null,
+            "ok": true,
+            "tool": "sample_sales_figures"
+          }
+        ]
+      },
+      "publishedSeq": 1,
+      "revision": 1,
+      "seq": 1,
+      "status": "published",
+      "suggestions": [
+        {
+          "detail": "Three",
+          "key": "call-lapsed",
+          "title": "Call lapsed buyers"
+        }
+      ],
+      "summary": "Sales up 4%.",
+      "title": "Week 45"
+    },
+    "status": 200
+  },
+  "editions": {
+    "body": {
+      "editions": [
+        {
+          "blocks": [],
+          "createdAt": "<time>",
+          "error": null,
+          "grain": "week",
+          "id": "id-2",
+          "kind": "edition",
+          "periodEnd": "2026-11-01",
+          "periodStart": "2026-10-26",
+          "preview": false,
+          "provenance": {},
+          "publishedSeq": null,
+          "revision": 1,
+          "seq": 3,
+          "status": "building",
+          "suggestions": [],
+          "summary": "",
+          "title": ""
+        },
+        {
+          "blocks": [],
+          "createdAt": "<time>",
+          "error": "the sales tool timed out",
+          "grain": "week",
+          "id": "ed-failed",
+          "kind": "edition",
+          "periodEnd": "2026-11-15",
+          "periodStart": "2026-11-09",
+          "preview": false,
+          "provenance": {},
+          "publishedSeq": null,
+          "revision": 1,
+          "seq": 2,
+          "status": "failed",
+          "suggestions": [],
+          "summary": "",
+          "title": ""
+        },
+        {
+          "blocks": [
+            {
+              "component": "render_markdown",
+              "props": {
+                "content": "Up 4%."
+              }
+            }
+          ],
+          "createdAt": "<time>",
+          "error": null,
+          "grain": "week",
+          "id": "ed-published",
+          "kind": "edition",
+          "periodEnd": "2026-11-08",
+          "periodStart": "2026-11-02",
+          "preview": false,
+          "provenance": {
+            "cost_usd": 0.0421,
+            "input_tokens": 10000,
+            "output_tokens": 2345,
+            "ran_as": "u-alice",
+            "room_rev": 1,
+            "run_id": "run-1",
+            "started_at": "<time>",
+            "tool_calls": [
+              {
+                "at": null,
+                "ok": true,
+                "tool": "sample_sales_figures"
+              }
+            ]
+          },
+          "publishedSeq": 1,
+          "revision": 1,
+          "seq": 1,
+          "status": "published",
+          "suggestions": [
+            {
+              "detail": "Three",
+              "key": "call-lapsed",
+              "title": "Call lapsed buyers"
+            }
+          ],
+          "summary": "Sales up 4%.",
+          "title": "Week 45"
+        }
+      ]
+    },
+    "status": 200
+  },
+  "from_task": {
+    "body": {
+      "access": "assigned",
+      "agentId": "main",
+      "archived": false,
+      "id": "id-3",
+      "instructions": "",
+      "kind": "task",
+      "lastActivityAt": "<time>",
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Alice",
+          "userId": "u-alice"
+        }
+      ],
+      "nextRunAt": null,
+      "paused": false,
+      "rev": 1,
+      "runsAs": {
+        "displayName": "Alice",
+        "userId": "u-alice"
+      },
+      "settings": {},
+      "title": "Check the returns",
+      "unread": 1
+    },
+    "status": 200
+  },
+  "list_all": {
+    "body": {
+      "rooms": [
+        {
+          "agentId": "main",
+          "archived": false,
+          "assigned": [
+            {
+              "displayName": "Alice",
+              "userId": "u-alice"
+            }
+          ],
+          "id": "room-report",
+          "kind": "report",
+          "lastActivityAt": "<time>",
+          "latestEdition": {
+            "id": "ed-published",
+            "periodEnd": "2026-11-08",
+            "periodStart": "2026-11-02",
+            "publishedSeq": 1,
+            "seq": 1,
+            "title": "Week 45"
+          },
+          "members": [
+            {
+              "assigned": true,
+              "displayName": "Alice",
+              "userId": "u-alice"
+            },
+            {
+              "assigned": false,
+              "displayName": "Bob",
+              "userId": "u-bob"
+            }
+          ],
+          "paused": false,
+          "title": "Daily sales",
+          "unread": 0
+        },
+        {
+          "agentId": "analyst",
+          "archived": false,
+          "assigned": [
+            {
+              "displayName": "Alice",
+              "userId": "u-alice"
+            }
+          ],
+          "id": "id-1",
+          "kind": "agent",
+          "lastActivityAt": "<time>",
+          "members": [
+            {
+              "assigned": true,
+              "displayName": "Alice",
+              "userId": "u-alice"
+            }
+          ],
+          "paused": false,
+          "title": "Pricing",
+          "unread": 0
+        }
+      ]
+    },
+    "status": 200
+  },
+  "list_mine": {
+    "body": {
+      "rooms": [
+        {
+          "agentId": "main",
+          "archived": false,
+          "id": "room-report",
+          "kind": "report",
+          "lastActivityAt": "<time>",
+          "latestEdition": {
+            "id": "ed-published",
+            "periodEnd": "2026-11-08",
+            "periodStart": "2026-11-02",
+            "publishedSeq": 1,
+            "seq": 1,
+            "title": "Week 45"
+          },
+          "paused": false,
+          "title": "Daily sales",
+          "unread": 1
+        }
+      ]
+    },
+    "status": 200
+  },
+  "members": {
+    "body": {
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Alice",
+          "userId": "u-alice"
+        },
+        {
+          "assigned": false,
+          "displayName": "Bob",
+          "userId": "u-bob"
+        }
+      ]
+    },
+    "status": 200
+  },
+  "notify": {
+    "body": {
+      "channels": {},
+      "inApp": true,
+      "linkedChannels": [],
+      "muted": false
+    },
+    "status": 200
+  },
+  "notify_put": {
+    "body": {
+      "channels": {},
+      "inApp": false,
+      "linkedChannels": [],
+      "muted": true
+    },
+    "status": 200
+  },
+  "notify_unlinked": {
+    "body": {
+      "detail": {
+        "error": "channel_not_linked",
+        "field": "channels",
+        "message": "link telegram to your account before turning it on"
+      }
+    },
+    "status": 422
+  },
+  "patch_conflict": {
+    "body": {
+      "detail": {
+        "currentRev": 2,
+        "error": "revision_conflict",
+        "field": null,
+        "message": "The workspace changed since you opened it."
+      }
+    },
+    "status": 409
+  },
+  "patch_forbidden": {
+    "body": {
+      "detail": {
+        "error": "forbidden",
+        "field": null,
+        "message": "Only the workspace's assigned people can change it; duplicate the workspace to make your own copy."
+      }
+    },
+    "status": 403
+  },
+  "patch_invalid_schedule": {
+    "body": {
+      "detail": {
+        "error": "invalid_schedule",
+        "field": "scheduleText",
+        "message": "The schedule could not be understood. Use an interval such as “every 6 hours” or a cron expression such as “0 8 * * 1” (08:00 every Monday)."
+      }
+    },
+    "status": 422
+  },
+  "patch_ok": {
+    "body": {
+      "access": "assigned",
+      "agentId": "main",
+      "archived": false,
+      "id": "room-report",
+      "instructions": "Summarise sales.",
+      "kind": "report",
+      "lastActivityAt": "<time>",
+      "latestEdition": {
+        "id": "ed-published",
+        "periodEnd": "2026-11-08",
+        "periodStart": "2026-11-02",
+        "publishedSeq": 1,
+        "seq": 1,
+        "title": "Week 45"
+      },
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Alice",
+          "userId": "u-alice"
+        },
+        {
+          "assigned": false,
+          "displayName": "Bob",
+          "userId": "u-bob"
+        }
+      ],
+      "nextRunAt": "<time>",
+      "paused": false,
+      "rev": 2,
+      "runsAs": {
+        "displayName": "Alice",
+        "userId": "u-alice"
+      },
+      "settings": {
+        "default_grain": "week",
+        "schedule_text": "0 7 * * *",
+        "tz": "UTC"
+      },
+      "title": "Sales",
+      "unread": 1
+    },
+    "status": 200
+  },
+  "read": {
+    "body": {
+      "read": true
+    },
+    "status": 200
+  },
+  "reassign": {
+    "body": {
+      "access": "admin",
+      "agentId": "main",
+      "archived": false,
+      "id": "room-report",
+      "instructions": "Summarise sales.",
+      "kind": "report",
+      "lastActivityAt": "<time>",
+      "latestEdition": {
+        "id": "ed-published",
+        "periodEnd": "2026-11-08",
+        "periodStart": "2026-11-02",
+        "publishedSeq": 1,
+        "seq": 1,
+        "title": "Week 45"
+      },
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Bob",
+          "userId": "u-bob"
+        },
+        {
+          "assigned": false,
+          "displayName": "Alice",
+          "userId": "u-alice"
+        }
+      ],
+      "nextRunAt": "<time>",
+      "paused": false,
+      "rev": 3,
+      "runsAs": {
+        "displayName": "Bob",
+        "userId": "u-bob"
+      },
+      "settings": {
+        "default_grain": "week",
+        "schedule_text": "0 7 * * *",
+        "tz": "UTC"
+      },
+      "title": "Daily sales",
+      "unread": 0
+    },
+    "status": 200
+  },
+  "restore": {
+    "body": {
+      "access": "assigned",
+      "agentId": "main",
+      "archived": false,
+      "id": "room-report",
+      "instructions": "Summarise sales.",
+      "kind": "report",
+      "lastActivityAt": "<time>",
+      "latestEdition": {
+        "id": "ed-published",
+        "periodEnd": "2026-11-08",
+        "periodStart": "2026-11-02",
+        "publishedSeq": 1,
+        "seq": 1,
+        "title": "Week 45"
+      },
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Alice",
+          "userId": "u-alice"
+        },
+        {
+          "assigned": false,
+          "displayName": "Bob",
+          "userId": "u-bob"
+        }
+      ],
+      "nextRunAt": "<time>",
+      "paused": false,
+      "rev": 3,
+      "runsAs": {
+        "displayName": "Alice",
+        "userId": "u-alice"
+      },
+      "settings": {
+        "default_grain": "week",
+        "schedule_text": "0 7 * * *",
+        "tz": "UTC"
+      },
+      "title": "Daily sales",
+      "unread": 1
+    },
+    "status": 200
+  },
+  "revisions": {
+    "body": {
+      "revisions": [
+        {
+          "changedAt": "<time>",
+          "changedBy": "u-alice",
+          "changedByName": "Alice",
+          "definition": {
+            "agent_id": "main",
+            "instructions": "Summarise sales.",
+            "schedule": "0 7 * * *",
+            "settings": {
+              "default_grain": "week",
+              "schedule_text": "0 7 * * *",
+              "tz": "UTC"
+            },
+            "title": "Sales"
+          },
+          "rev": 2
+        },
+        {
+          "changedAt": "<time>",
+          "changedBy": "u-alice",
+          "changedByName": "Alice",
+          "definition": {
+            "agent_id": "main",
+            "instructions": "Summarise sales.",
+            "schedule": "0 7 * * *",
+            "settings": {
+              "default_grain": "week",
+              "schedule_text": "0 7 * * *",
+              "tz": "UTC"
+            },
+            "title": "Daily sales"
+          },
+          "rev": 1
+        }
+      ]
+    },
+    "status": 200
+  },
+  "room_admin": {
+    "body": {
+      "access": "admin",
+      "agentId": "main",
+      "archived": false,
+      "id": "room-report",
+      "instructions": "Summarise sales.",
+      "kind": "report",
+      "lastActivityAt": "<time>",
+      "latestEdition": {
+        "id": "ed-published",
+        "periodEnd": "2026-11-08",
+        "periodStart": "2026-11-02",
+        "publishedSeq": 1,
+        "seq": 1,
+        "title": "Week 45"
+      },
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Alice",
+          "userId": "u-alice"
+        },
+        {
+          "assigned": false,
+          "displayName": "Bob",
+          "userId": "u-bob"
+        }
+      ],
+      "nextRunAt": "<time>",
+      "paused": false,
+      "rev": 1,
+      "runsAs": {
+        "displayName": "Alice",
+        "userId": "u-alice"
+      },
+      "settings": {
+        "default_grain": "week",
+        "schedule_text": "0 7 * * *",
+        "tz": "UTC"
+      },
+      "title": "Daily sales",
+      "unread": 0
+    },
+    "status": 200
+  },
+  "room_not_found": {
+    "body": {
+      "detail": {
+        "error": "not_found",
+        "field": null,
+        "message": "Workspace not found."
+      }
+    },
+    "status": 404
+  },
+  "room_shared": {
+    "body": {
+      "access": "shared",
+      "agentId": "main",
+      "archived": false,
+      "id": "room-report",
+      "instructions": "Summarise sales.",
+      "kind": "report",
+      "lastActivityAt": "<time>",
+      "latestEdition": {
+        "id": "ed-published",
+        "periodEnd": "2026-11-08",
+        "periodStart": "2026-11-02",
+        "publishedSeq": 1,
+        "seq": 1,
+        "title": "Week 45"
+      },
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Alice",
+          "userId": "u-alice"
+        },
+        {
+          "assigned": false,
+          "displayName": "Bob",
+          "userId": "u-bob"
+        }
+      ],
+      "nextRunAt": "<time>",
+      "paused": false,
+      "rev": 1,
+      "runsAs": {
+        "displayName": "Alice",
+        "userId": "u-alice"
+      },
+      "settings": {
+        "default_grain": "week",
+        "schedule_text": "0 7 * * *",
+        "tz": "UTC"
+      },
+      "title": "Daily sales",
+      "unread": 1
+    },
+    "status": 200
+  },
+  "share": {
+    "body": {
+      "assigned": false,
+      "displayName": "Carol",
+      "userId": "u-carol"
+    },
+    "status": 200
+  },
+  "task_accept": {
+    "body": {
+      "acceptedBy": {
+        "displayName": "Bob",
+        "userId": "u-bob"
+      },
+      "assignee": {
+        "displayName": "Bob",
+        "userId": "u-bob"
+      },
+      "dismissed": false,
+      "editionId": "ed-published",
+      "origin": "suggestion",
+      "status": "TODO",
+      "taskId": "task-suggested",
+      "title": "Call lapsed buyers"
+    },
+    "status": 200
+  },
+  "task_accept_taken": {
+    "body": {
+      "detail": {
+        "acceptedBy": {
+          "displayName": "Bob",
+          "userId": "u-bob"
+        },
+        "error": "already_accepted",
+        "field": null,
+        "message": "Someone else has already taken this task."
+      }
+    },
+    "status": 409
+  },
+  "tasks": {
+    "body": {
+      "tasks": [
+        {
+          "acceptedBy": null,
+          "assignee": null,
+          "dismissed": false,
+          "editionId": "ed-published",
+          "origin": "suggestion",
+          "status": "TODO",
+          "taskId": "task-suggested",
+          "title": "Call lapsed buyers"
+        }
+      ]
+    },
+    "status": 200
+  },
+  "unarchive": {
+    "body": {
+      "access": "admin",
+      "agentId": "main",
+      "archived": false,
+      "id": "room-report",
+      "instructions": "Summarise sales.",
+      "kind": "report",
+      "lastActivityAt": "<time>",
+      "latestEdition": {
+        "id": "ed-published",
+        "periodEnd": "2026-11-08",
+        "periodStart": "2026-11-02",
+        "publishedSeq": 1,
+        "seq": 1,
+        "title": "Week 45"
+      },
+      "members": [
+        {
+          "assigned": true,
+          "displayName": "Bob",
+          "userId": "u-bob"
+        },
+        {
+          "assigned": false,
+          "displayName": "Alice",
+          "userId": "u-alice"
+        }
+      ],
+      "nextRunAt": null,
+      "paused": true,
+      "rev": 3,
+      "runsAs": {
+        "displayName": "Bob",
+        "userId": "u-bob"
+      },
+      "settings": {
+        "default_grain": "week",
+        "schedule_text": "0 7 * * *",
+        "tz": "UTC"
+      },
+      "title": "Daily sales",
+      "unread": 0
+    },
+    "status": 200
+  },
+  "unshare": {
+    "body": {
+      "removed": "u-carol"
+    },
+    "status": 200
+  },
+  "unshare_last_assigned": {
+    "body": {
+      "detail": {
+        "error": "run_as_user",
+        "field": "userId",
+        "message": "the workspace runs as this person; reassign it to someone else first"
+      }
+    },
+    "status": 422
+  }
+}

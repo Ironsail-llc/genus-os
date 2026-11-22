@@ -120,7 +120,7 @@ nothing and did not stop it asking again.
 
 An agent that declares no `tools_allowed` is offered every tool except the
 opt-in families (`OPT_IN_TOOLS`: `claude_code_*`, `web_render`, the Jira and
-GitHub review writes, `pr_review_*`, `run_workflow`, `sales_*`) unless its
+GitHub review writes, `pr_review_*`, `run_workflow`, `sales_*`, `room_*`) unless its
 manifest names them in `tools_opt_in`. That rule ignores who is asking, so the
 instance's owner — who holds a `*` allow in RBAC — could be told a coding tool
 is "not available to this agent".
@@ -1608,6 +1608,120 @@ declared: a fixed, repeatable pipeline with its own steps, timeout and run
 history. Use `spawn_agent` for open-ended work that one agent should reason
 through.
 
+### Workspaces (`room_*`)
+
+A workspace (code: a *room*) is a company-owned conversation below a person's
+main conversation: a scheduled **report** that publishes editions, or another
+conversation with an **agent**. The main agent creates, changes, shares and
+reads workspaces for the person it is talking to. The rules live in
+`robothor/rooms/definition.py`, which the bridge's `/api/rooms` routes call as
+well, so a workspace made in chat and one made in the dashboard are checked the
+same way. What people see and may do in a workspace is
+[Workspaces](WORKSPACES.md).
+
+| Tool | Does | Needs |
+|---|---|---|
+| `room_create` | `kind` report or agent, `title`, `instructions`, optional `agent_id` (default: the main agent), `schedule`, `tz`, `default_grain`, `share_with` | a staff role (not viewer) |
+| `room_update` | `room_id`, `expected_rev`, `changes` (`title`, `instructions`, `schedule_text`, `tz`, `default_grain`, `paused`, `notify_default`) | assigned, or owner/admin |
+| `room_list` | `scope` `mine` (default) or `all` | `all`: owner/admin |
+| `room_read` | `room_id`, `editions` (3), `messages` (10) | any access |
+| `room_share` / `room_unshare` | `room_id`, `user` (id or email), `assigned`. Re-sharing a member keeps their role unless `assigned` is given; `assigned: false` and unshare never touch the run-as user or the last assigned member | assigned, or owner/admin |
+| `room_archive` | `room_id`; the schedule stops | assigned, or owner/admin |
+| `room_duplicate` | `room_id`; the caller's own copy | shared or more |
+| `room_restore_revision` | `room_id`, `rev`; writes a new revision equal to it | assigned, or owner/admin |
+| `room_admin_reassign` | `room_id`, `user`; assigned and the run-as user | owner/admin |
+| `room_run` | `room_id`, `preview`, `period` (`{grain, start, end}`); runs a report workspace now | shared or more (a paused one: assigned, or owner/admin) |
+| `room_task_accept` | `room_id`, `task_id`; the task becomes the caller's (`crm_tasks.assignee_id`). Someone else's is refused, naming who has it; a task workspace's own task is never taken from inside it | shared or more, not archived |
+| `room_task_dismiss` | `room_id`, `task_id`; a suggested task only, which then never returns | shared or more, not archived |
+| `room_open_task` | `task_id`; the task's own workspace, made on first open | a staff role (not viewer) to create one |
+| `room_propose_email` | `to`, `cc`, `subject`, `body` (plain addresses, no attachments), optional `room_id` (default: the workspace the turn is in); proposes, never sends | the person's own turn in a task workspace whose open task is assigned to them |
+
+- **Who is asking.** Always the human on the run, from the tool context
+  (`user_id`, `user_role`), never the agent. An unverified identity is refused
+  by every tool. A run with no person behind it (cron, hook, workflow) may use
+  only `room_read`, only for the room the run-context carrier
+  (`robothor.rooms.run_context`) binds the run to, and only with the access
+  that room's run-as user holds at that moment. A run bound to no room reads
+  nothing, whatever id it is given.
+- **Checked before anything is written.** The instructions and title go through
+  the injection scanner (`robothor/engine/cron_safety.py`); the schedule through
+  `cron_parse.parse_schedule`, refusing a one-off (a schedule repeats) and
+  allowing anything that parser allows any user cron, with no workspace minimum
+  of its own; the agent must be
+  one this instance can load; every `share_with` entry must be an active account
+  of the same company. A refusal saves nothing.
+- **Definitions cannot be overwritten by accident.** Every change writes a
+  numbered revision and needs the `rev` the caller read (`room_read`); a stale
+  one returns `current_rev`. Pausing writes no revision but still checks it.
+  A shared caller is refused with an offer of `room_duplicate`. A room keeps its
+  agent; duplicate it to use another.
+- **The schedule row.** A scheduled workspace has one `user_cronjobs` row with
+  `room_id` and `run_as_user_id` (the creator, until an admin reassigns it),
+  read in the room's `tz` (UTC when the room has none; a plain
+  `register_user_cron` job carries no zone and keeps the host's). A unique
+  index (migration 170) keeps it to one row per room. It follows every change
+  of schedule or instructions, pause, resume (the next run is computed from
+  now), archive, restore and reassignment; a change that leaves the schedule
+  and its running state alone (an instructions edit) keeps the next run. A
+  duplicate of a scheduled workspace starts paused. The generic
+  user-cron tick skips room rows: a room's run is started by the rooms
+  scheduler, in the room, as its run-as user.
+- **Nothing leaks.** Not found and no access give the same answer, which names
+  neither the room nor its id. `room_list` shows only the caller's rooms unless
+  an owner or admin asks for `all`. `room_read` shows another person's preview
+  edition to nobody.
+- **What comes back is data.** `room_read` and `room_list` return text other
+  people and earlier runs wrote, so their results reach the model inside the
+  `<untrusted_content>` boundary (`EXTERNAL_DATA_TOOLS`), like `web_fetch`.
+- **Every result that names a room carries `link`** (`/?v=chat&room=<id>`), and
+  the descriptions tell the agent to give it.
+
+**Tasks in workspaces** (`robothor/rooms/tasks.py`, which the bridge's task
+routes call too). A published edition's suggestions become CRM tasks waiting
+for a person (`requires_human`, no agent, never tagged `thread`), one per
+suggestion key per workspace: a key that was accepted or dismissed is not
+created again, and a preview creates none. `room_task_accept` is how a person
+takes one; `room_task_dismiss` is how they say it does not apply. Use
+`room_open_task` when the person wants to work any CRM task with an agent: the
+first opener creates the task's workspace (run by the task's agent, or the
+default chat agent, seeded with the task as data) and is assigned to it. After
+that only the task's assignee joins by opening it, and never someone who was
+removed; anyone else is told to ask for it to be shared. Opening a planner
+task changes nothing about the task. The three task tools act only in the person's own
+run: a sub-agent's run (which inherits its parent's person) is refused, checked
+on its `agent_runs` row. An action the agent proposes in a task
+workspace during the assignee's own turn can be approved by that person (see
+"Member approval" in [System architecture](SYSTEM_ARCHITECTURE.md)); every
+other proposal waits for an operator.
+
+**Emailing from a task workspace.** Use `room_propose_email` when the person
+asks the agent to send an email about their task: it proposes the exact email
+and sends nothing. Show the person the whole draft, then say it waits for their
+approval in their approvals; once they approve, it is sent once and a receipt
+appears in the workspace. The email is sent from the company's assistant
+mailbox, with replies going to the person. It works only in the person's own
+conversation in a task workspace whose open task is assigned to them (never in
+a report or agent workspace, a scheduled run or a sub-agent), refuses anyone
+who opted out of contact (checked again when it is sent), and takes no
+attachments. A `member` cannot call `gws_gmail_send` at all; this is their
+only way to send.
+
+**How they reach an agent.** `room_*` is an opt-in family (`ROOM_TOOLS` in
+`OPT_IN_TOOLS`): the main agent is always given it, with or without a
+`tools_allowed` list, and `tools_denied` still wins; any other agent gets a
+tool only by naming it (`tools_allowed`, or `tools_opt_in`). RBAC is the other
+half, seeded by migration 169: `member` and `user` allow `room_*` and deny
+`room_admin_*`, `viewer` allows `room_list` and `room_read`, `owner` and
+`admin` keep `*`. A tenant tunes it with `role_permissions` rows (for example
+denying `room_create` to `member`) and per person with `user_permissions`.
+
+**Which to use.** For a report or recurring piece of work that people will
+open, read and share, use `room_create` with a schedule. Use
+`register_user_cron` only to re-run yourself later with a prompt: it has no
+workspace, no sharing, no editions and no run-as user. Before `room_create`,
+restate the title, the period, the schedule, the data sources and who it is
+shared with, and get a yes; before `room_update`, show the change.
+
 ### Knowledge base (`kb_*`)
 
 Curated reference documents, grouped in collections named `<plugin>/<topic>`
@@ -1845,6 +1959,78 @@ must read: it reaches the agent unchanged and is still masked wherever it is
 stored. The list is empty; `vault_get` and `vault_test` return a fingerprint,
 never a value.
 
+### Running a workspace: `room_run`
+
+`room_run(room_id, preview?, period?)` runs a report workspace now, the same
+run the schedule makes and the dashboard's "Run now" starts
+(`POST /api/rooms/{id}/run` on the engine). Use it for "refresh it now" or "show
+me before anyone sees it" (`preview: true`); use `room_request_period` for a past
+day, week or month someone wants to read, and `room_read` for editions that
+already exist.
+
+- The run builds the edition for the last complete period of the workspace's
+  `default_grain` (or the `period` named), as the workspace's run-as user (re-read
+  from their account at that moment, with their current role), and notifies its
+  members when it publishes. A **preview** builds it for the person you are
+  talking to only: nobody else sees it, nobody is notified, no tasks are created,
+  and nothing is written in the shared conversation.
+- A `period` follows the same rules as `room_request_period`: it must be over in
+  the workspace's time zone, and a day, week (Monday to Sunday) or month must be
+  a whole one; anything else is refused before anything runs.
+- It goes on in the background. The result is the edition being built
+  (`started: true`) and the link. A run already in progress for the same period
+  (for a preview, your own preview of it) is joined (`joined: true`), never
+  started twice; a run for another period is not joined: it waits for the
+  workspace and builds its own edition.
+- A workspace run (scheduled, run now, period or preview) and a sub-agent cannot
+  call it, nor `room_request_period`, nor change or create workspaces: a run that
+  starts runs is a loop. Only `room_read` works there. A person's own turn can.
+- Refused for a viewer, for an archived workspace, and for a paused one unless
+  the caller is assigned to it (or an owner or admin); `room_request_period`
+  follows the same paused rule. Nothing else limits it:
+  any number of runs may start in a day, and a run is never stopped for what it
+  costs. The run's cost and token counts are on its edition's provenance
+  (`cost_usd`, `input_tokens`, `output_tokens`) for anyone reading the report.
+
+### Workspace editions: `room_publish_edition`
+
+`room_publish_edition(room_id, period?, kind?, title, summary, blocks, suggestions?)`
+saves what an agent built in a workspace (a room) as a visual everyone with access
+can reopen. Editions and periods from the reader's side are in
+[Workspaces](WORKSPACES.md#editions-and-periods). Choose it over a `[RENDER:…]` marker whenever the result should
+outlast the chat turn: a marker draws once in the reply, an edition is stored with
+the workspace and listed in its history.
+
+- **Where it works.** Only inside a run whose session is that workspace's own
+  conversation (an interactive turn there, or a scheduled or on-demand run), for a
+  caller who may post there. Anywhere else it refuses, including from a sub-agent
+  the workspace's run spawned: return the result to that run and publish there.
+- **Kinds.** `edition` (the default) covers one period and needs a report
+  workspace; the period is `{grain, start, end}` with ISO dates and defaults to the
+  period the run was started for. `dashboard` is an ad-hoc board in any workspace
+  and takes no period.
+- **Blocks.** At most 40 `{component, props}` blocks, 256 KiB in all, each one of
+  `render_metric_grid`, `render_metric_card`, `render_bar_chart`,
+  `render_line_chart`, `render_pie_chart`, `render_data_table`, `render_markdown`,
+  `render_timeline`, with the props that component renders (a chart's `data` rows
+  need a finite number at `dataKey`; tables at most 500 rows and 30 columns). A
+  refusal names the block index and the prop.
+- **Suggestions.** At most 10 `{key, title, detail?, action_hint?}`; `key` is a
+  stable lowercase slug. Accepting them is a later step, not this tool.
+- **Text.** The title is one line; the summary is plain text of at most 4000
+  characters. Because both are read back into later prompts, hidden characters are
+  removed and every `<`, `>`, `[` and `]` (written directly, as a look-alike, or as
+  an entity however deeply encoded) becomes `‹`, `›`, `(`, `)`: no tag or
+  `[RENDER:` marker can be written there. Everything else is kept as written:
+  `R²`, `½`, `℃`, fullwidth punctuation, `R&D`, ZWJ emoji and ZWNJ in Persian or
+  Indic text. Put visuals in blocks.
+- **Provenance** is written by the server from the run's recorded tool calls, its
+  run id, run-as user and start time. Nothing in the arguments sets it, and neither
+  does anything set the preview flag: a preview run's editions are visible to its
+  requester only and notify nobody.
+- **Revisions.** Publishing a period that already has an edition publishes the
+  next revision of it; earlier revisions stay.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -1863,9 +2049,33 @@ agent's own allow-set is the authoritative answer. The families:
 | Child tenants | [`org_overview`, and `tenant` / `dry_run` on CRM and run tools](#child-tenants-org_overview-the-tenant-argument-and-dry_run) |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
 | Workflows | [`list_workflows`, `run_workflow`, `workflow_runs`](#workflows-list_workflows-run_workflow-workflow_runs) |
+| Workspaces | [`room_create`, `room_update`, `room_list`, `room_read`, …](#workspaces-room_) (the main agent's) |
 | Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
 | n8n automations | `n8n_list_workflows`, `n8n_recent_failures` (the n8n monitor's snapshot — see above) |
+
+### Workspace periods: `room_request_period`
+
+`room_request_period(room_id, grain, anchor)` gets a report workspace's edition for
+one period: `day`, `week` (Monday to Sunday), `month`, or a `custom` range of
+any length. The period is whole days in the workspace's time zone
+(`settings.tz`, UTC when unset). `anchor` is a date inside the period
+(`YYYY-MM-DD`; `YYYY-MM` for a month), `start/end` for a custom range, or
+`latest` for the last complete period. Only a period that is over can be
+asked for.
+
+A published edition comes back at once (`started: false`). Otherwise one run
+starts and the building edition comes back (`started: true`); people asking at
+the same moment share that one run. Nothing limits how many periods anyone may
+ask for. A run that was interrupted (cancelled,
+or the engine restarted) fails its edition, so the period can be asked for
+again. A week or
+month run reads the summaries of the day editions inside it as data; it fetches
+its own figures and never adds the days up. Use `room_run` for "run it now" and
+`room_read` to read editions that already exist. The engine route
+`POST /api/rooms/{id}/periods` does the same for the dashboard (200 existing,
+202 started); the bridge reaches it with its engine credential
+and names the person asking.
 
 ### When a tool call fails
 

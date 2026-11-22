@@ -18,9 +18,95 @@ import {
   type StreamReader,
 } from "@/lib/event-bus/redis-client";
 import { visibleToTenant } from "@/lib/event-bus/tenant-filter";
+import { createRoomGate } from "@/lib/event-bus/room-gate";
+import { getServiceUrl } from "@/lib/services/registry";
+import { decodeJwt } from "jose";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/**
+ * Credentials for the bridge, fixed when the stream is OPENED.
+ *
+ * A stream lives far longer than its request (up to ~50 minutes). Looking the
+ * session up again from inside it (`auth()`, `bridgeAuthHeaders()`) would run
+ * the jwt callback against the cookie from connect time, and past its skew
+ * that callback spends the single-use bridge refresh token on a rotation that
+ * can never be written back: the stream's headers are long sent. So the bearer
+ * is taken once, in `GET`, and the stream closes before it expires (or on a
+ * bridge 401). `EventSource` then reconnects through the proxy, which
+ * refreshes the cookie the ordinary way.
+ */
+type BridgeCaller = {
+  headers: Record<string, string>;
+  /** The bridge refused the token: end the stream so the browser reconnects. */
+  onUnauthorized: () => void;
+};
+
+/** Close this long before the access token's `exp`. */
+const EXPIRY_MARGIN_MS = 30_000;
+/**
+ * When the token carries no readable `exp`: the proxy refreshes any token
+ * past its 14-minute skew before the request reaches here, so at least this
+ * much of its 15-minute life is left.
+ */
+const UNKNOWN_EXPIRY_LIFETIME_MS = 60_000;
+
+/** When the stream must close, from the bearer it was opened with. */
+function closeAt(bearer: string, now = Date.now()): number {
+  try {
+    const exp = decodeJwt(bearer).exp;
+    if (typeof exp === "number") return exp * 1000 - EXPIRY_MARGIN_MS;
+  } catch {
+    // Not a JWT we can read: the conservative bound below.
+  }
+  return now + UNKNOWN_EXPIRY_LIFETIME_MS;
+}
+
+function bridgeBase(): string {
+  return (getServiceUrl("bridge") || "http://localhost:9100").replace(/\/$/, "");
+}
+
+/**
+ * The caller's room ids, from the bridge with the caller's own token; null
+ * when they cannot be read, which the gate treats as "no room events".
+ */
+async function callerRoomIds(caller: BridgeCaller): Promise<Set<string> | null> {
+  try {
+    const res = await fetch(`${bridgeBase()}/api/rooms`, {
+      headers: caller.headers,
+      signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
+    });
+    if (res.status === 401) caller.onUnauthorized();
+    if (!res.ok) return null;
+    const data = (await res.json()) as { rooms?: Array<{ id?: unknown }> };
+    if (!Array.isArray(data?.rooms)) return null;
+    return new Set(data.rooms.map((room) => room?.id).filter((id): id is string => typeof id === "string"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the caller can open one room outside their list (a tenant admin who
+ * is not a member): the bridge answers `GET /api/rooms/{id}` 200, with the
+ * caller's own token. Anything else, including a failure, is a "no". The gate
+ * passes only well-formed room ids.
+ */
+async function callerCanOpenRoom(caller: BridgeCaller, roomId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${bridgeBase()}/api/rooms/${encodeURIComponent(roomId)}`, {
+      headers: caller.headers,
+      signal: AbortSignal.timeout(10_000),
+      cache: "no-store",
+    });
+    if (res.status === 401) caller.onUnauthorized();
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 export async function GET(request: NextRequest) {
   // The streams are shared by every tenant's engine and the bridge; this
@@ -30,6 +116,7 @@ export async function GET(request: NextRequest) {
     return new Response("Unauthorized", { status: 401 });
   }
   const tenant = session.tenantId;
+  const bearer = session.bridgeAccess;
 
   const streamsParam =
     request.nextUrl.searchParams.get("streams") || "email,crm,health,agent";
@@ -53,6 +140,16 @@ export async function GET(request: NextRequest) {
   };
   request.signal?.addEventListener("abort", stop);
 
+  // Then the rooms this caller can access: one gate per connection, asking
+  // the bridge with the token this request arrived with and nothing later.
+  const caller: BridgeCaller = { headers: { Authorization: `Bearer ${bearer}` }, onUnauthorized: stop };
+  const rooms = createRoomGate({
+    loadRoomIds: () => callerRoomIds(caller),
+    checkRoom: (roomId) => callerCanOpenRoom(caller, roomId),
+  });
+  // And no longer than that token lives.
+  const expiryTimer = setTimeout(stop, Math.max(0, closeAt(bearer) - Date.now()));
+
   const stream = new ReadableStream({
     async start(controller) {
       // Where each stream's live read starts: the newest event replayed below,
@@ -68,7 +165,7 @@ export async function GET(request: NextRequest) {
           lastIds[streamName] = "$";
           try {
             const raw = await readRecent(streamName, 20);
-            const recent = visibleToTenant(raw, tenant);
+            const recent = await rooms.filter(visibleToTenant(raw, tenant));
             // XREVRANGE is newest first; an empty stream starts from the beginning.
             // The cursor is the newest id this read covered, including events
             // filtered out as another tenant's, so the live read resumes after them.
@@ -108,7 +205,7 @@ export async function GET(request: NextRequest) {
                 // Advance past every event, send only this tenant's.
                 lastIds[streamName] = event.id;
               }
-              for (const event of visibleToTenant(events, tenant)) {
+              for (const event of await rooms.filter(visibleToTenant(events, tenant))) {
                 const data = JSON.stringify({
                   stream: streamName,
                   ...event,
@@ -140,6 +237,7 @@ export async function GET(request: NextRequest) {
         // Stream setup error
       } finally {
         request.signal?.removeEventListener("abort", stop);
+        clearTimeout(expiryTimer);
         stop();
         try {
           controller.close();
@@ -149,6 +247,7 @@ export async function GET(request: NextRequest) {
       }
     },
     cancel() {
+      clearTimeout(expiryTimer);
       stop();
     },
   });
