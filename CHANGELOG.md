@@ -1,3 +1,9 @@
+## [1.138.2](https://github.com/Ironsail-llc/genus-os/compare/v1.138.1...v1.138.2) (2026-11-22)
+
+### Bug Fixes
+
+* **engine:** hand a workspace run its publish tool (GEN-857) ([#906](https://github.com/Ironsail-llc/genus-os/issues/906)) ([0720f64](https://github.com/Ironsail-llc/genus-os/commit/0720f6449f2c5f1ec2cd1365c67211fb7c2d4eb4))
+
 ## [1.138.1](https://github.com/Ironsail-llc/genus-os/compare/v1.138.0...v1.138.1) (2026-11-22)
 
 ### Bug Fixes
