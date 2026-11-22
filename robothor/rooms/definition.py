@@ -129,9 +129,11 @@ def agent_exists(agent_id: str) -> bool:
 
 
 def default_agent() -> str:
-    """The agent a room talks to when none is named: the engine's main agent,
-    the one a chat with no session key reaches (``manifest_store.main_agent_id``),
-    which the bridge's open-a-task route uses too."""
+    """The one default agent: the engine's main agent, the one a chat with no
+    session key reaches (``manifest_store.main_agent_id``). A workspace created
+    with no agent gets it, and so does a task workspace whose task names no
+    agent the company has (``tasks.open_task_room``, from the engine's tool and
+    the bridge's open-a-task route alike)."""
     from robothor.engine.manifest_store import main_agent_id
 
     return main_agent_id()

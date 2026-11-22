@@ -651,9 +651,27 @@ def api_create_room(request: Request, body: CreateRoomBody) -> Any:
 def api_open_task(task_id: str, request: Request) -> Any:
     """A CRM task's workspace, made on first open (``robothor.rooms.tasks``):
     the opener assigned; later, only the task's assignee joins this way, and
-    never after being removed. Anyone else gets not-found until shared in."""
+    never after being removed. Anyone else gets not-found until shared in.
+    Its agent is the task's when the acting company's engine has it, else the
+    default agent; 502 ``agents_unavailable`` when that engine cannot say."""
     actor = _human(request, _WORKING_ROLES)
-    room = tasks.open_task_room(actor, task_id)
+    fleet: list[frozenset[str]] = []
+
+    def company_has(agent: str) -> bool:
+        # Asked only when the workspace is made; the acting company's engine
+        # answers, as for create, not this process's manifests.
+        if not fleet:
+            fleet.append(_company_agents(actor))
+        return agent in fleet[0]
+
+    try:
+        room = tasks.open_task_room(actor, task_id, agent_known=company_has)
+    except AgentsUnavailableError:
+        return _problem(
+            502,
+            "agents_unavailable",
+            "the company's agents could not be checked; try again in a moment",
+        )
     _audit(request, "room.open_task", room.id, task_id=room.task_id)
     return _room_json(actor, access.require(actor, room.id, "read"))
 

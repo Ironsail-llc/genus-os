@@ -46,6 +46,8 @@ from robothor.rooms.keys import canonical_uuid
 from robothor.sanitize import sanitize_log
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from robothor.rooms.access import Actor
     from robothor.rooms.models import Edition, Room
 
@@ -191,15 +193,17 @@ def on_edition_published(room: Room, edition: Edition) -> None:
 # ─── open a task as a workspace ──────────────────────────────────────────
 
 
-def _task_agent(task: dict[str, Any]) -> str:
-    """The task's assigned agent when this instance has it, else the default chat agent."""
-    from robothor.engine.config import EngineConfig
-    from robothor.rooms.definition import agent_exists
+def _task_agent(task: dict[str, Any], agent_known: Callable[[str], bool] | None) -> str:
+    """The task's assigned agent when the company has it, else the one default
+    (``definition.default_agent``). ``agent_known`` answers for the company;
+    left out, the engine's own manifests do (``definition.agent_exists``)."""
+    from robothor.rooms import definition
 
     agent = task.get("assigned_to_agent")
-    if isinstance(agent, str) and agent and ":" not in agent and agent_exists(agent):
+    known = agent_known or definition.agent_exists
+    if isinstance(agent, str) and agent and ":" not in agent and known(agent):
         return agent
-    return EngineConfig.from_env().default_chat_agent or "main"
+    return definition.default_agent()
 
 
 def _existing(actor: Actor, room: Room, task: dict[str, Any]) -> Room:
@@ -221,8 +225,16 @@ def _existing(actor: Actor, room: Room, task: dict[str, Any]) -> Room:
     raise RoomNotFound(room.id)
 
 
-def open_task_room(actor: Actor, task_id: str) -> Room:
-    """The workspace of a CRM task of the caller's company, made on first open."""
+def open_task_room(
+    actor: Actor, task_id: str, *, agent_known: Callable[[str], bool] | None = None
+) -> Room:
+    """The workspace of a CRM task of the caller's company, made on first open,
+    run by the task's agent when the company has it, else the default agent.
+
+    ``agent_known`` answers whether the company has an agent, asked only when
+    the workspace is made. The engine's callers leave it out (its manifests are
+    the company's); the bridge, which does not own the fleet, passes the answer
+    of the acting company's engine, as it does for create."""
     if actor.is_service or canonical_uuid(actor.user_id) is None:
         raise RoomForbidden("a task workspace is opened by a person")
     task = dal.get_crm_task(actor.tenant_id, task_id)
@@ -234,7 +246,10 @@ def open_task_room(actor: Actor, task_id: str) -> Room:
     if actor.role not in _OPENER_ROLES:
         raise RoomForbidden(f"a {actor.role or 'caller'} cannot open a task as a workspace")
     made = dal.ensure_task_room(
-        actor.tenant_id, task["id"], agent_id=_task_agent(task), created_by=actor.user_id
+        actor.tenant_id,
+        task["id"],
+        agent_id=_task_agent(task, agent_known),
+        created_by=actor.user_id,
     )
     if made is None:
         raise TaskNotFound(task_id)
