@@ -589,6 +589,21 @@ def _score_tool(
     return total, covered
 
 
+#: What a workspace run is always handed, advertised with its schema: the tool
+#: the run exists to call. Reaching it through ``tool_search`` is not enough,
+#: because a scheduled run's service role may not be allowed to search.
+_ROOM_RUN_TOOLS = frozenset({"room_publish_edition"})
+
+
+def _room_run_tools() -> frozenset[str]:
+    """``_ROOM_RUN_TOOLS`` inside a workspace run, else nothing."""
+    try:
+        from robothor.rooms.run_context import current_room_run
+    except ImportError:  # the rooms package is optional to the tool registry
+        return frozenset()
+    return _ROOM_RUN_TOOLS if current_room_run() is not None else frozenset()
+
+
 class ToolRegistry:
     """Registry of available tools with schema filtering per agent."""
 
@@ -887,7 +902,7 @@ class ToolRegistry:
         if self.should_defer(config, tier=tier):
             seen: set[str] = set()
             advertised: list[str] = []
-            eager = set(getattr(config, "tools_eager", None) or ())
+            eager = set(getattr(config, "tools_eager", None) or ()) | _room_run_tools()
             for n in [*names, *sorted(TOOLSEARCH_TOOLS)]:
                 in_core = n in CORE_TOOLS or n in TOOLSEARCH_TOOLS or n in recent or n in eager
                 if in_core and n in self._schemas and n not in seen:
@@ -1157,6 +1172,10 @@ class ToolRegistry:
             names.extend(n for n in sorted(TOOL_NAMES) if n in self._schemas and n not in names)
             # The workspace tools are the main agent's, for every staff role.
             names.extend(n for n in sorted(ROOM_TOOLS) if n in self._schemas and n not in names)
+
+        # A workspace run exists to publish: its tool is part of the toolset
+        # for whichever agent the workspace uses (a manifest deny still wins).
+        names.extend(n for n in _room_run_tools() if n in self._schemas and n not in names)
 
         if config.tools_denied:
             # Support glob patterns (e.g. "mcp_*", "gws_*") in tools_denied

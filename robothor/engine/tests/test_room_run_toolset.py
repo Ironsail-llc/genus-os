@@ -54,7 +54,9 @@ def test_an_agent_with_its_own_tool_list_gets_it_in_a_workspace_run(registry) ->
 
 
 def test_a_manifest_that_denies_it_still_wins(registry) -> None:
-    quiet = AgentConfig(id="quiet", name="Quiet", tools_allowed=["web_fetch"], tools_denied=[PUBLISH])
+    quiet = AgentConfig(
+        id="quiet", name="Quiet", tools_allowed=["web_fetch"], tools_denied=[PUBLISH]
+    )
     with room_run_scope(_run()):
         assert PUBLISH not in registry.get_tool_names(quiet)
 
