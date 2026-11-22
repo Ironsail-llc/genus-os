@@ -819,7 +819,17 @@ The seams between lanes, each crossed by a test:
   appear only in a task workspace; a report workspace's accepted task offers "Open task
   workspace". When a sent email's receipt is written, the task it was for moves to
   `DONE` (through `IN_PROGRESS` from `TODO`), its resolution naming the email, changed
-  by the approver, once (`outbound._complete_task`); any other receipt leaves it open.
+  by the approver; any other receipt leaves it open. It is its own step after the receipt
+  is marked and published, recorded by its own audit row (`room.email.task_settled`)
+  under a per-action lock; the sweep finishes a sent receipt that lacks one, and a task
+  already done is recorded, not moved again (`outbound._settle_task`).
+- **A task workspace's agent.** `tasks.open_task_room(..., agent_known=)` takes the
+  company's answer, as create does: the bridge's open-a-task route asks the acting
+  company's engine (`_company_agents`, 502 `agents_unavailable` when it cannot say); the
+  engine's tool reads its own manifests. The fallback is `definition.default_agent()`.
+  A workspace whose agent the engine cannot load fails each turn and run cleanly: the
+  runner refuses with a failed run ("Agent config not found", `runner.py`), and a run
+  that did not finish fails its edition (`runs._outcome`).
 - **Period edges.** A shared member asking a paused workspace for a period is 409
   `paused` and nothing is inserted (`runs.check_not_paused_for` in `periods._claim`).
   A period whose local midnight cannot be placed in UTC (1 January of year 1 east of
