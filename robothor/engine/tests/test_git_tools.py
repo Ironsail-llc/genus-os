@@ -310,9 +310,7 @@ class TestGitPushExecutor:
         branch_result = MagicMock(stdout="nightwatch/fix", returncode=0)
         push_result = MagicMock(returncode=0, stdout="pushed", stderr="")
         head_result = MagicMock(stdout="abc1234567890", returncode=0)
-        lsremote_result = MagicMock(
-            stdout="abc1234567890 refs/heads/nightwatch/fix", returncode=0
-        )
+        lsremote_result = MagicMock(stdout="abc1234567890 refs/heads/nightwatch/fix", returncode=0)
 
         call_count = 0
 
@@ -335,9 +333,7 @@ class TestGitPushExecutor:
         branch_result = MagicMock(stdout="nightwatch/fix", returncode=0)
         push_result = MagicMock(returncode=0, stdout="pushed", stderr="")
         head_result = MagicMock(stdout="abc1234567890", returncode=0)
-        lsremote_result = MagicMock(
-            stdout="deadbeef0000 refs/heads/nightwatch/fix", returncode=0
-        )
+        lsremote_result = MagicMock(stdout="deadbeef0000 refs/heads/nightwatch/fix", returncode=0)
 
         call_count = 0
 
