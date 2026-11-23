@@ -1,3 +1,9 @@
+## [1.138.3](https://github.com/Ironsail-llc/genus-os/compare/v1.138.2...v1.138.3) (2026-11-23)
+
+### Bug Fixes
+
+* **engine:** name each block's props in the publish tool (GEN-858) ([#907](https://github.com/Ironsail-llc/genus-os/issues/907)) ([080aea4](https://github.com/Ironsail-llc/genus-os/commit/080aea43dd251344ae3d6ef2b68ae41ceef3b6cd))
+
 ## [1.138.2](https://github.com/Ironsail-llc/genus-os/compare/v1.138.1...v1.138.2) (2026-11-22)
 
 ### Bug Fixes
