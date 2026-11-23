@@ -182,7 +182,7 @@ async def _git_push(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     set_upstream = args.get("set_upstream", True)
 
     def _run() -> dict[str, Any]:
-        # Check current branch — reject push on protected branches
+        # Check current branch - reject push on protected branches
         try:
             branch_proc = subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
@@ -205,14 +205,62 @@ async def _git_push(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=120,
                 cwd=repo_path,
             )
             if proc.returncode != 0:
                 return {"error": f"git push failed: {proc.stderr.strip()}"}
-            return {"pushed": True, "branch": current_branch, "output": proc.stdout.strip()[:1000]}
         except Exception as e:
             return {"error": f"git push failed: {e}"}
+
+        # A zero exit code is not proof the push landed (the effect layer can
+        # replay a cached result, and a timeout can kill the push after the
+        # process was reaped). Verify against the remote before reporting
+        # success: local HEAD must equal the remote branch head.
+        try:
+            local_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=repo_path,
+            ).stdout.strip()
+            remote_out = subprocess.run(
+                ["git", "ls-remote", "origin", f"refs/heads/{current_branch}"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=repo_path,
+            ).stdout.strip()
+            remote_head = remote_out.split()[0] if remote_out else ""
+        except Exception as e:
+            return {
+                "pushed": False,
+                "verified": False,
+                "branch": current_branch,
+                "error": f"push reported success but verification failed: {e}",
+            }
+
+        if not remote_head or remote_head != local_head:
+            return {
+                "pushed": False,
+                "verified": False,
+                "branch": current_branch,
+                "local_head": local_head[:12],
+                "remote_head": remote_head[:12] or None,
+                "error": (
+                    "push reported success but the remote branch head does not "
+                    "match local HEAD - the push did not land"
+                ),
+            }
+
+        return {
+            "pushed": True,
+            "verified": True,
+            "branch": current_branch,
+            "sha": local_head[:12],
+            "output": proc.stdout.strip()[:1000],
+        }
 
     return await asyncio.to_thread(_run)
 
