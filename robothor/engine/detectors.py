@@ -24,6 +24,7 @@ Disable them all via env: ROBOTHOR_DETECTORS_ENABLED=0
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -453,7 +454,7 @@ def _workflow_timeout_seconds(workflow_id: str, default: int = 900) -> int:
     ``WorkflowEngine`` in ``workflow_registry``; when no engine is registered
     (CLI, tests, a worker without workflows) the caller's default stands.
     """
-    try:
+    with contextlib.suppress(Exception):
         from robothor.engine.workflow_registry import get_workflow_engine
 
         engine = get_workflow_engine()
@@ -462,8 +463,6 @@ def _workflow_timeout_seconds(workflow_id: str, default: int = 900) -> int:
             configured = getattr(wf, "timeout_seconds", None)
             if configured:
                 return int(configured)
-    except Exception:
-        pass
     return default
 
 
