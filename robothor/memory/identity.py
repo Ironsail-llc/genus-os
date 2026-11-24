@@ -466,8 +466,10 @@ def decide(
     pool = [c for c in compat if _norm_type(c.entity_type) == PERSON]
     reason = "single_token" if len(tokens) == 1 else "partial_name"
     if conv:
-        in_conv = [c for c in pool if c.in_conversation and not c.is_operator]
-        if len(in_conv) == 1:
+        # Count every evidenced candidate first, then refuse the operator: dropping
+        # the operator before counting would hand their first name to a namesake.
+        in_conv = [c for c in pool if c.in_conversation]
+        if len(in_conv) == 1 and not in_conv[0].is_operator:
             c = in_conv[0]
             ids = _ids(pool)
             return Outcome(
