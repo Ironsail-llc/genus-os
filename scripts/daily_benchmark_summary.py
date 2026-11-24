@@ -42,7 +42,7 @@ WORKSPACE = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
 def _conn():
     return psycopg2.connect(
         host=os.environ.get("PG_HOST", "localhost"),
-        user=os.environ.get("PG_USER") or os.environ.get("ROBOTHOR_DB_USER") or getpass.getuser(),
+        user=os.environ.get("PG_USER") or getpass.getuser(),
         password=os.environ.get("PG_PASSWORD"),
         dbname=os.environ.get("ROBOTHOR_DB_NAME", "robothor_memory"),
     )

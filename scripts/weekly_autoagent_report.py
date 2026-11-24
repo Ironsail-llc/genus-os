@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 DB_CONFIG = {
     "dbname": "robothor_memory",
-    "user": os.environ.get("ROBOTHOR_DB_USER") or getpass.getuser(),
+    "user": getpass.getuser(),
     "host": "/var/run/postgresql",
 }
 TENANT_ID = "robothor-primary"
