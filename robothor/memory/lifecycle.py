@@ -407,8 +407,13 @@ async def prune_low_quality_facts(*, tenant_id: str = "") -> dict[str, Any]:
     """Deactivate one tenant's facts that are low-quality garbage.
 
     Targets:
-        - decay_score < 0.1 AND importance_score < 0.3 AND access_count = 0
+        - decay_score < 0.1 AND importance_score < 0.3 AND never recalled
         - fact_text < 15 characters (garbage that got in before quality gate)
+
+    "Never recalled" reads the live ``access_count`` (raised whenever the
+    search tool or warm-up returns the fact) and migration 094's
+    ``access_count_shadow`` (history recovered from fact_access_log), so a fact
+    agents use is not retired on age alone.
 
     Never prunes: decisions, preferences, resolutions (category-protected), or
     an operator-confirmed fact.
@@ -435,7 +440,7 @@ async def prune_low_quality_facts(*, tenant_id: str = "") -> dict[str, Any]:
         )
         short_pruned = cur.fetchall()
 
-        # Prune decayed, unimportant, never-accessed facts
+        # Prune decayed, unimportant, never-recalled facts
         cur.execute(
             f"""
             UPDATE memory_facts SET is_active = false, updated_at = NOW()
@@ -443,7 +448,7 @@ async def prune_low_quality_facts(*, tenant_id: str = "") -> dict[str, Any]:
               AND tenant_id = %s
               AND decay_score < 0.1
               AND importance_score < 0.3
-              AND access_count = 0
+              AND {_USE_COUNT_SQL} = 0
               AND category NOT IN ('decision', 'preference', 'resolution')
               AND {NOT_OPERATOR_CONFIRMED_SQL}
             RETURNING id, fact_text
@@ -1028,6 +1033,73 @@ def _release_lifecycle_lock() -> None:
 # loses the in-flight chunk instead of the entire run.
 _DECAY_CHUNK_SIZE = 500
 
+# Use signals for decay and prune. The live columns are written by recall
+# (outcomes.record_fact_access); migration 094's shadow columns hold the
+# history scripts/memory_decay_backfill.py recovered from fact_access_log
+# before anything wrote the live ones. GREATEST, not a sum: the backfill
+# counts log rows, and every search_memory hit both logs a row and bumps the
+# live count, so adding them would count one use twice. GREATEST ignores the
+# NULL an unbackfilled shadow timestamp holds.
+_USE_COUNT_SQL = "GREATEST(COALESCE(access_count, 0), COALESCE(access_count_shadow, 0))"
+_LAST_USED_SQL = "GREATEST(last_accessed, last_accessed_shadow)"
+
+# Importance scoring marks what the judge scored in metadata instead of
+# inferring "unscored" from importance_score = 0.5: one reinforcement
+# (conflicts._reinforce_fact, +0.05) moves a fact off 0.5 and the judge never
+# saw it. Rows scored before the marker existed carry none, so a fact is a
+# candidate when unmarked AND either still at the 0.5 default or reinforced
+# (a reinforced, previously judged fact is judged once more, then marked).
+# A verdict of exactly 0.5 is not marked — judge_importance also returns 0.5
+# on a timeout or error, so that row stays a candidate, as it always was.
+_IMPORTANCE_MARKER = "importance_scored_at"
+_UNSCORED_IMPORTANCE_SQL = (
+    f"NOT (COALESCE(metadata, '{{}}'::jsonb) ? '{_IMPORTANCE_MARKER}') "
+    "AND (importance_score = 0.5 OR COALESCE(reinforcement_count, 0) > 0)"
+)
+_MARK_IMPORTANCE_SQL = (
+    "metadata = COALESCE(metadata, '{}'::jsonb) "
+    f"|| jsonb_build_object('{_IMPORTANCE_MARKER}', NOW())"
+)
+
+
+def _auto_score_old_events(cur: Any, tenant_id: str) -> int:
+    """Score one tenant's unjudged events older than 30 days 0.3 without the judge."""
+    cur.execute(
+        f"""
+        UPDATE memory_facts SET importance_score = 0.3, {_MARK_IMPORTANCE_SQL}
+        WHERE is_active = TRUE AND {_UNSCORED_IMPORTANCE_SQL}
+          AND category = 'event'
+          AND created_at < NOW() - INTERVAL '30 days'
+          AND tenant_id = %s
+        """,
+        (tenant_id,),
+    )
+    return int(cur.rowcount or 0)
+
+
+def _select_unscored_facts(cur: Any, tenant_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    """One tenant's newest active facts the importance judge has not scored."""
+    cur.execute(
+        f"""
+        SELECT id, fact_text FROM memory_facts
+        WHERE is_active = TRUE AND {_UNSCORED_IMPORTANCE_SQL} AND tenant_id = %s
+        ORDER BY created_at DESC
+        LIMIT %s
+        """,
+        (tenant_id, limit),
+    )
+    return list(cur.fetchall())
+
+
+def _record_importance(cur: Any, fact_id: int, score: float) -> None:
+    """Store the judge's score, marking the fact scored unless it is neutral."""
+    mark = f", {_MARK_IMPORTANCE_SQL}" if score != 0.5 else ""
+    cur.execute(
+        f"UPDATE memory_facts SET importance_score = %s{mark} WHERE id = %s",
+        (score, fact_id),
+    )
+
+
 # Wall-clock budget for Step 2 (decay). asyncio.to_thread already keeps this
 # work off the event loop (see _run_decay_step), but the budget still bounds
 # total row-lock time and lets a slow pass yield to Steps 3+ instead of
@@ -1083,8 +1155,9 @@ def _run_decay_pass_sync(budget_s: float = _DECAY_BUDGET_S, tenant_id: str = "")
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """
-            SELECT id, last_accessed, access_count, reinforcement_count,
+            f"""
+            SELECT id, {_LAST_USED_SQL} AS last_accessed,
+                   {_USE_COUNT_SQL} AS access_count, reinforcement_count,
                    importance_score, outcome_failures
             FROM memory_facts
             WHERE is_active = TRUE AND tenant_id = %s
@@ -1198,28 +1271,8 @@ async def _run_tenant_core_steps(
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         # Fast-path: events older than 30 days auto-score 0.3 (skip LLM call)
-        cur.execute(
-            """
-            UPDATE memory_facts SET importance_score = 0.3
-            WHERE is_active = TRUE AND importance_score = 0.5
-              AND category = 'event'
-              AND created_at < NOW() - INTERVAL '30 days'
-              AND tenant_id = %s
-            """,
-            (tenant_id,),
-        )
-        auto_scored = cur.rowcount
-
-        cur.execute(
-            """
-            SELECT id, fact_text FROM memory_facts
-            WHERE is_active = TRUE AND importance_score = 0.5 AND tenant_id = %s
-            ORDER BY created_at DESC
-            LIMIT 200
-            """,
-            (tenant_id,),
-        )
-        unscored = cur.fetchall()
+        auto_scored = _auto_score_old_events(cur, tenant_id)
+        unscored = _select_unscored_facts(cur, tenant_id, limit=200)
         facts_scored = 0
         facts_skipped_budget = 0
 
@@ -1237,10 +1290,7 @@ async def _run_tenant_core_steps(
                 break
             try:
                 score = await judge_importance(fact["fact_text"])
-                cur.execute(
-                    "UPDATE memory_facts SET importance_score = %s WHERE id = %s",
-                    (score, fact["id"]),
-                )
+                _record_importance(cur, fact["id"], score)
                 facts_scored += 1
             except Exception as e:
                 logger.warning("Failed to score fact %d: %s", fact["id"], e)

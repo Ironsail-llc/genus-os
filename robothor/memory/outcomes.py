@@ -78,6 +78,54 @@ def log_fact_access(
         logger.debug("log_fact_access failed (non-fatal): %s", e)
 
 
+def record_fact_access(
+    tenant_id: str,
+    fact_ids: list[int] | None = None,
+    content_hashes: list[str] | None = None,
+) -> None:
+    """Count one use of each fact recall just returned to an agent. Never raises.
+
+    Raises ``access_count`` and sets ``last_accessed`` — the decay formula's
+    use signals, which had no writer until now. Rows are found by id (the
+    search tool) or by the active ``(tenant_id, content_hash)`` pair, unique
+    per migration 078 (warm-up recall returns text, not ids).
+
+    Synchronous and blocking: callers schedule it off the request path (the
+    search handler through the task registry, warm-up through its deferred
+    writer). ``search_facts`` never calls it, so a read-only caller such as the
+    eval harness searches without side effects.
+    """
+    ids = [int(i) for i in (fact_ids or []) if i]
+    hashes = [h for h in (content_hashes or []) if h]
+    if not ids and not hashes:
+        return
+    tid = tenant_id or DEFAULT_TENANT
+
+    # Same rule as log_fact_access: a benchmark child reads under a real
+    # tenant, and its reads must not count as use of real facts.
+    from robothor.engine.run_context import benchmark_write_refused
+
+    if benchmark_write_refused(tid, what="record_fact_access"):
+        return
+
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE memory_facts
+                SET access_count = COALESCE(access_count, 0) + 1,
+                    last_accessed = NOW()
+                WHERE tenant_id = %s
+                  AND is_active = TRUE
+                  AND (id = ANY(%s::int[]) OR content_hash = ANY(%s::text[]))
+                """,
+                (tid, ids, hashes),
+            )
+    except Exception as e:
+        logger.warning("record_fact_access failed (non-fatal): %s", e)
+
+
 def compute_outcome_penalty(outcome_failures: int) -> float:
     """Return the decay penalty for N failures, capped at _MAX_PENALTY."""
     if outcome_failures <= 0:
