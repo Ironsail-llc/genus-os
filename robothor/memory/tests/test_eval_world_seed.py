@@ -258,3 +258,24 @@ class TestSeedAndCleanup:
         after = seed.world_row_counts(eval_tenants)
         assert after == before
         assert sum(deleted.values()) > 0
+
+
+class TestRunWorldTimings:
+    @pytest.mark.asyncio
+    async def test_report_splits_time_between_seeding_and_querying(self, monkeypatch):
+        async def fake_seed(*_a, **_k):
+            return seed.SeededWorld(tenant_ids=())
+
+        async def fake_search(query, limit, tenant_id):
+            return [{"fact_text": "nothing"}]
+
+        monkeypatch.setattr(seed, "seed_world", fake_seed)
+        monkeypatch.setattr(seed, "cleanup_world", lambda _t: {})
+        monkeypatch.setattr("robothor.memory.facts.search_facts", fake_search)
+
+        report = await seed.run_world(1, "small", "dev", tenant_id=EVAL_TENANT)
+        timings = report["timings"]
+        assert set(timings) == {"seed_s", "query_s", "total_s"}
+        assert all(isinstance(v, float) and v >= 0 for v in timings.values())
+        assert timings["total_s"] >= timings["seed_s"] + timings["query_s"] - 1e-6
+        assert "seed" in seed.format_world_report(report)
