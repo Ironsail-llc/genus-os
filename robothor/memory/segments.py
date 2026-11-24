@@ -79,6 +79,10 @@ SEGMENT_TOPIC_MAX_CHARS = 80
 #: Segments live no longer than the chat turns they copy (chat_store's
 #: CHAT_TURN_TTL_DAYS, pruned by the same nightly step).
 SEGMENT_RETENTION_DAYS = 90
+#: Most turns past those already covered that one indexing run reads, so the
+#: first index of a long history proceeds in bounded runs (each later
+#: exchange continues it). At least two full segments.
+SEGMENT_INDEX_MAX_TURNS = 200
 #: Candidates fetched per search leg before fusion (at least 3x the limit).
 SEARCH_CANDIDATES = 30
 #: Characters of a segment the cross-encoder reads: an excerpt around the best
@@ -390,24 +394,79 @@ class _Conversation:
     resume_from: int | None
     covered_through: int | None
     turns: list[Turn] = field(default_factory=list)
-    scope_kind: str = "shared"
+    scope_kind: str = "user"
     scope_id: str | None = None
 
 
-def conversation_scope(session_key: str, person_id: str | None) -> tuple[str, str | None]:
+#: The session key of the operator's main conversation when no engine config
+#: names another (``EngineConfig.main_session_key``).
+DEFAULT_MAIN_SESSION_KEY = "agent:main:primary"
+
+
+def conversation_scope(
+    session_key: str,
+    person_id: str | None,
+    *,
+    owner_person_id: str | None = None,
+    main_session_key: str = DEFAULT_MAIN_SESSION_KEY,
+) -> tuple[str, str | None]:
     """Who may read a conversation's segments: ``(scope_kind, scope_id)``.
 
-    A session that belongs to one person is private to that person
-    (``("user", person_id)``). One with no single person — a workspace, a
-    group channel, a system session — is ``("shared", None)``; a workspace's
-    segments are further gated by room membership at read time. A workspace
-    session stays shared even when it records a person.
+    Fails closed: a conversation is ``shared`` only when it is known to be
+    multi-party, and today that is a workspace (``agent:{agent}:room:{id}``,
+    gated by room membership at read time, even when it records a person).
+    Every other conversation is ``user``, owned by the first of:
+
+    1. the session's recorded person — ``person:{person_id}``;
+    2. the member a webchat session key names (``agent:{agent}:user:{uid}``,
+       the key ``chat.derive_user_session_key`` writes) — ``user:{uid}``;
+    3. for the operator's main session, the operator's person
+       (``owner_person_id``) — ``person:{id}``.
+
+    With no owner (an unrecognised direct message, a TUI or service session,
+    the main session of an instance whose operator is not linked to a person)
+    the scope is ``("user", None)``: readable by no one until an owner is known.
     """
     from robothor.rooms.keys import parse_room_key
 
-    if person_id and parse_room_key(session_key) is None:
-        return "user", str(person_id)
-    return "shared", None
+    if parse_room_key(session_key) is not None:
+        return "shared", None
+    if person_id:
+        return "user", f"person:{person_id}"
+    parts = session_key.split(":")
+    if len(parts) == 4 and parts[0] == "agent" and parts[2] == "user" and parts[3]:
+        return "user", f"user:{parts[3]}"
+    if session_key == main_session_key and owner_person_id:
+        return "user", f"person:{owner_person_id}"
+    return "user", None
+
+
+def reader_principals(person_id: str | None, user_id: str | None) -> list[str]:
+    """The ``scope_id`` values a reader owns: their person and their user id."""
+    out = []
+    if person_id:
+        out.append(f"person:{person_id}")
+    if user_id:
+        out.append(f"user:{user_id}")
+    return out
+
+
+def _main_session_key() -> str:
+    """The engine's configured main session key, or the default one."""
+    try:
+        from robothor.engine.chat import get_main_session_key
+
+        return get_main_session_key()
+    except ImportError:
+        return DEFAULT_MAIN_SESSION_KEY
+
+
+def _owner_person_id(tenant_id: str) -> str | None:
+    """The operator's person (root CLAUDE.md rule 12: ``get_owner_person``)."""
+    from robothor.crm.dal import get_owner_person
+
+    owner = get_owner_person(tenant_id).get("id")
+    return str(owner) if owner else None
 
 
 def _parse_vector(value: Any) -> list[float] | None:
@@ -420,9 +479,14 @@ def _parse_vector(value: Any) -> list[float] | None:
 
 
 def _load_conversation(
-    session_key: str, tenant_id: str, retention_days: int
+    session_key: str, tenant_id: str, retention_days: int, max_turns: int
 ) -> _Conversation | None:
-    """Read one session's uncovered turns (sync; run in a worker thread)."""
+    """Read one session's uncovered turns (sync; run in a worker thread).
+
+    The turns of the last stored segment (it may grow), then at most
+    ``max_turns`` turns past everything already covered, so a long history is
+    indexed over several runs instead of in one batch.
+    """
     from robothor.secrets.redaction import redact
 
     with get_connection() as conn:
@@ -444,18 +508,30 @@ def _load_conversation(
         )
         mark = cur.fetchone() or {}
         resume_from = mark.get("resume_from")
+        covered = mark.get("covered_through")
+        query = """
+            SELECT id, message, created_at, embedding::text AS embedding
+            FROM chat_messages
+            WHERE session_id = %s AND id >= %s AND id <= %s
+              AND created_at >= NOW() - make_interval(days => %s)
+            ORDER BY id
+            """
+        reopened: list[Any] = []
+        if resume_from is not None and covered is not None:
+            cur.execute(query, (session["id"], resume_from, covered, retention_days))
+            reopened = list(cur.fetchall())
         cur.execute(
             """
             SELECT id, message, created_at, embedding::text AS embedding
             FROM chat_messages
-            WHERE session_id = %s
-              AND id >= %s
+            WHERE session_id = %s AND id > %s
               AND created_at >= NOW() - make_interval(days => %s)
             ORDER BY id
+            LIMIT %s
             """,
-            (session["id"], resume_from or 0, retention_days),
+            (session["id"], covered or 0, retention_days, max_turns),
         )
-        rows = cur.fetchall()
+        rows = reopened + list(cur.fetchall())
 
     turns: list[Turn] = []
     for row in rows:
@@ -474,7 +550,11 @@ def _load_conversation(
             )
         )
     person_id = str(session["person_id"]) if session["person_id"] else None
-    scope_kind, scope_id = conversation_scope(session_key, person_id)
+    main_key = _main_session_key()
+    owner = _owner_person_id(tenant_id) if session_key == main_key and not person_id else None
+    scope_kind, scope_id = conversation_scope(
+        session_key, person_id, owner_person_id=owner, main_session_key=main_key
+    )
     return _Conversation(
         session_id=int(session["id"]),
         person_id=person_id,
@@ -532,7 +612,23 @@ def _write_segments(
                     [s.part for s in segs],
                 ),
             )
-        written = 0
+        # Scope belongs to the conversation, not to the run that wrote a row:
+        # a session whose owner became known (or changed) re-scopes every
+        # segment it already has, not only the tail rewritten below.
+        cur.execute(
+            "UPDATE memory_segments SET scope_kind = %s, scope_id = %s, updated_at = NOW() "
+            "WHERE tenant_id = %s AND source_kind = 'conversation' AND source_ref = %s "
+            "AND (scope_kind, scope_id) IS DISTINCT FROM (%s::text, %s::text)",
+            (
+                conversation.scope_kind,
+                conversation.scope_id,
+                tenant_id,
+                session_key,
+                conversation.scope_kind,
+                conversation.scope_id,
+            ),
+        )
+        written = int(cur.rowcount or 0)
         for seg, vec in zip(segs, vectors, strict=True):
             cur.execute(
                 """
@@ -612,8 +708,33 @@ async def index_conversation(
     """
     if not tenant_id:
         raise ValueError("index_conversation needs a tenant_id")
+    key = (tenant_id, session_key)
+    if key in _IN_FLIGHT:
+        # A run for this conversation is already loading or embedding; this
+        # exchange's turns are picked up by it or by the next exchange.
+        return 0
+    _IN_FLIGHT.add(key)
+    try:
+        return await _index_conversation(session_key, tenant_id, embed_batch)
+    finally:
+        _IN_FLIGHT.discard(key)
+
+
+#: Conversations with an indexing run in progress in this process.
+_IN_FLIGHT: set[tuple[str, str]] = set()
+
+
+async def _index_conversation(
+    session_key: str,
+    tenant_id: str,
+    embed_batch: Callable[[list[str]], Awaitable[list[list[float] | None]]] | None,
+) -> int:
     conversation = await asyncio.to_thread(
-        _load_conversation, session_key, tenant_id, SEGMENT_RETENTION_DAYS
+        _load_conversation,
+        session_key,
+        tenant_id,
+        SEGMENT_RETENTION_DAYS,
+        SEGMENT_INDEX_MAX_TURNS,
     )
     if conversation is None or not conversation.turns:
         return 0
@@ -683,6 +804,7 @@ _OR_TSQUERY = "NULLIF(replace(plainto_tsquery('english', %s)::text, ' & ', ' | '
 def _filters(
     *,
     reader_person_id: str | None,
+    reader_user_id: str | None = None,
     since: datetime | None,
     until: datetime | None,
     room_ids: Iterable[str] | None,
@@ -692,8 +814,9 @@ def _filters(
     Visibility — applied on every search, whatever the data-scoping rollout
     says, because verbatim conversation is more sensitive than an extracted
     fact: a reader sees ``shared`` segments, and ``user`` segments whose
-    ``scope_id`` is the reader's own person. With no reader person, shared
-    only. A shared segment of a workspace conversation
+    ``scope_id`` is one of the reader's own principals (``person:{id}``,
+    ``user:{id}``; :func:`reader_principals`). With no reader, shared only. A
+    ``user`` segment with no owner (``scope_id`` NULL) matches no reader. A shared segment of a workspace conversation
     (``agent:{agent}:room:{id}``) is seen only for the rooms in ``room_ids``,
     as ``search_chat_turns`` does; with none passed, no workspace is searched.
     """
@@ -704,10 +827,9 @@ def _filters(
         "((scope_kind = 'shared' AND (source_kind <> 'conversation' "
         "OR split_part(source_ref, ':', 3) <> 'room' "
         "OR split_part(source_ref, ':', 4) = ANY(%s::text[]))) "
-        "OR (scope_kind = 'user' AND %s::text IS NOT NULL AND scope_id = %s::text))"
+        "OR (scope_kind = 'user' AND scope_id = ANY(%s::text[])))"
     ]
-    reader = str(reader_person_id) if reader_person_id else None
-    params: list[Any] = [allowed, reader, reader]
+    params: list[Any] = [allowed, reader_principals(reader_person_id, reader_user_id)]
     if since is not None:
         clauses.append("ended_at >= %s")
         params.append(since)
@@ -846,12 +968,14 @@ async def search_segments(
     query_embedding: Sequence[float] | None = None,
     room_ids: Iterable[str] | None = None,
     embed_missing: bool = True,
+    reader_user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Search one tenant's conversation segments: dense + keyword, fused by RRF.
 
-    ``tenant_id`` is required and never defaulted. ``reader_person_id`` is the
-    reader's own person: their private segments are returned with the shared
-    ones; without it, shared segments only (see :func:`_filters`).
+    ``tenant_id`` is required and never defaulted. ``reader_person_id`` and
+    ``reader_user_id`` are the reader's own person and user: segments they own
+    are returned with the shared ones; without either, shared segments only
+    (see :func:`_filters`).
     ``room_ids`` are the workspaces the reader can access; without them no
     workspace conversation is searched. ``since`` / ``until`` bound event time
     (a segment overlapping the window matches). ``query_embedding`` skips the
@@ -880,7 +1004,11 @@ async def search_segments(
             )
             embedding = None
     where, params = _filters(
-        reader_person_id=reader_person_id, since=since, until=until, room_ids=room_ids
+        reader_person_id=reader_person_id,
+        reader_user_id=reader_user_id,
+        since=since,
+        until=until,
+        room_ids=room_ids,
     )
     dense, keyword = await asyncio.to_thread(
         _query_segments,

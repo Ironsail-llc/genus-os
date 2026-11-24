@@ -164,13 +164,20 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     _query_scope = scope_for_query(_scoping_mode, identity)
     # Conversation segments are scoped on EVERY call, whatever the rollout mode:
     # verbatim conversation is more sensitive than an extracted fact. The reader
-    # sees shared segments, their own private ones, and their workspaces'.
+    # (their person and their user id) sees the conversations they own and the
+    # workspaces they belong to; nothing else.
     reader_person_id: str | None = getattr(identity, "person_id", None) or None
+    reader_user_id: str | None = getattr(ctx, "user_id", "") or None
     room_ids = await _reader_room_ids(ctx)
 
     recall_path = _recall_routed if is_rip_enabled(15) else _recall_fallback
     results, query_class = await recall_path(
-        args, ctx, scope=_query_scope, reader_person_id=reader_person_id, room_ids=room_ids
+        args,
+        ctx,
+        scope=_query_scope,
+        reader_person_id=reader_person_id,
+        reader_user_id=reader_user_id,
+        room_ids=room_ids,
     )
 
     # Observe runs against the raw rows, which still carry person_id — the
@@ -263,6 +270,7 @@ async def _recall_fallback(
     scope: Any = None,
     reader_person_id: str | None = None,
     room_ids: list[str] | None = None,
+    reader_user_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """Direct search_facts path — returns raw rows plus a query-class label."""
     from robothor.engine.feature_flags import narrow_memory_search_enabled
@@ -284,6 +292,7 @@ async def _recall_fallback(
         include_episodes=bool(args.get("include_episodes", fan_out)),
         scope=scope,
         reader_person_id=reader_person_id,
+        reader_user_id=reader_user_id,
         room_ids=room_ids,
     )
     # classify_query is a pure regex with no I/O, so the label is available on
@@ -357,6 +366,7 @@ async def _recall_routed(
     scope: Any = None,
     reader_person_id: str | None = None,
     room_ids: list[str] | None = None,
+    reader_user_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """RIP 15 path — query-classed routing via robothor.memory.router."""
     from robothor.memory.router import recall
@@ -367,6 +377,7 @@ async def _recall_routed(
         tenant_id=ctx.tenant_id,
         scope=scope,
         reader_person_id=reader_person_id,
+        reader_user_id=reader_user_id,
         room_ids=room_ids,
     )
     return out["results"], out["query_class"]

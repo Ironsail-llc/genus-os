@@ -22,11 +22,14 @@
 --   session, or the stale-session sweep, removes its segments with its
 --   messages. The nightly chat TTL prunes segments past the same 90 days.
 -- person_id: the session's person (chat_sessions.person_id).
--- scope_kind / scope_id: who may read the segment. A session that belongs to
---   one person is private to that person: 'user' and scope_id = that person's
---   id. A session with no single person (a workspace, a group channel, a
---   system session) is 'shared', and a workspace's segments reach only its
---   members. Applied on every read, whatever the data-scoping rollout says.
+-- scope_kind / scope_id: who may read the segment. Fails closed. Only a
+--   workspace conversation is 'shared' (and reaches only the workspace's
+--   members). Every other conversation is 'user', owned by scope_id:
+--   'person:<id>' (the session's person, or the operator for the main
+--   session) or 'user:<id>' (the member a webchat session key names). With
+--   no owner known, scope_id is NULL and no reader matches. The default is
+--   'user' so a row written without a scope is readable by no one. Applied on
+--   every read, whatever the data-scoping rollout says.
 --
 -- Idempotent: every statement can run twice.
 
@@ -45,7 +48,7 @@ CREATE TABLE IF NOT EXISTS memory_segments (
     text TEXT NOT NULL,
     embedding vector(1024),
     tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', text)) STORED,
-    scope_kind TEXT NOT NULL DEFAULT 'shared'
+    scope_kind TEXT NOT NULL DEFAULT 'user'
         CHECK (scope_kind IN ('shared', 'user', 'agent')),
     scope_id TEXT,
     person_id UUID REFERENCES crm_people(id) ON DELETE SET NULL,

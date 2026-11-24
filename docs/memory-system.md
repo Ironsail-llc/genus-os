@@ -60,7 +60,9 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      row's `fact_text` is the whole verbatim text; the reranker reads only a
      `SEGMENT_RERANK_CHARS` (1,200) excerpt around the best keyword match
      (`rerank_excerpt`). Which segments come back depends on the reader:
-     `reader_person_id` and `room_ids`, applied on every call.
+     `reader_person_id`, `reader_user_id` and `room_ids`, applied on every
+     call. A caller that names no reader gets no private conversation at all.
+     A keyword-only segment row has no `similarity` key (there is no cosine).
    - `insight`, `episode`, `chat_turn` (`include_insights`,
      `include_episodes`, `include_chat_turns`). These stores cannot filter by
      person, so a restricted data scope leaves them out. The dense-only
@@ -107,8 +109,13 @@ decides the `include_*` arguments.
 
 The `search_memory` tool passes the reader on both paths (direct and RIP 15):
 `reader_person_id` is the run identity's `person_id`, whatever
-`ROBOTHOR_DATA_SCOPING` is set to, and `room_ids` are the room of the current
-room run plus every room the calling user is a member of. A segment row in the
+`ROBOTHOR_DATA_SCOPING` is set to, `reader_user_id` is the run's user id (the
+one a member's webchat session key carries), and `room_ids` are the room of
+the current room run plus every room the calling user is a member of. Callers
+that name no reader — the bridge's `/api/memory/search`, MCP `search_memory`,
+deep reasoning, cron and system runs — receive no private conversation. The
+Memory page's fact search (`GET /api/memory/facts?q=`) asks for no segments
+and keeps only `kind == "fact"` rows, because it edits and forgets facts by id. A segment row in the
 tool's output adds `kind`, `topic`, `source_kind`, `source_ref`, `start_ref`,
 `end_ref`, `part`, `started_at` and `ended_at` to the usual fields; a fact row
 keeps its shape. Segment rows carry `source: "segment"`, so fact-access logging
@@ -173,16 +180,30 @@ session key), `start_ref` and `end_ref` (the first and last `chat_messages.id`
 it covers), `part`, and `started_at` / `ended_at` (event time). `person_id` is
 the session's person.
 
-**Who may read a segment** (`scope_kind`, `scope_id`). A session that belongs
-to one person (`chat_sessions.person_id` set) is private to that person:
-`user` and that person's id. A session with no single person — a workspace
-(`agent:{agent}:room:{id}`, even when it records a person), a group channel,
-a system session — is `shared`. A reader sees shared segments plus user
-segments whose `scope_id` is their own person; a reader with no known person
-sees shared ones only; a workspace's shared segments reach only readers who
-pass that workspace in `room_ids`. This rule is applied on every search,
-independent of the `ROBOTHOR_DATA_SCOPING` rollout, because verbatim
-conversation is more sensitive than an extracted fact.
+**Who may read a segment** (`scope_kind`, `scope_id`, `conversation_scope`).
+The rule fails closed: a conversation is `shared` only when it is known to be
+multi-party, and today that is a workspace (`agent:{agent}:room:{id}`, even
+when it records a person), whose segments reach only readers who pass that
+workspace in `room_ids`. Every other conversation is `user`, owned by the
+first of:
+
+1. the session's recorded person (`chat_sessions.person_id`) — `person:{id}`;
+2. the member a webchat session key names (`agent:{agent}:user:{uid}`, the key
+   `chat.derive_user_session_key` writes; the session row itself carries no
+   person) — `user:{uid}`;
+3. for the operator's main session (`EngineConfig.main_session_key`), the
+   operator's person from `get_owner_person` — `person:{id}`.
+
+A conversation with no owner — a direct message from an unrecognised sender, a
+TUI or service session, the main session of an instance whose operator is not
+linked to a person, and for now group chats — is `user` with no `scope_id`:
+readable by no one. A reader sees shared segments plus the user segments whose
+`scope_id` is one of theirs (`person:` their person, `user:` their user id).
+Scope belongs to the conversation: every indexing run re-scopes all of a
+session's stored segments, so a session whose person becomes known later is
+re-scoped in full. This rule is applied on every search, independent of the
+`ROBOTHOR_DATA_SCOPING` rollout, because verbatim conversation is more
+sensitive than an extracted fact.
 
 **Indexing** (`index_conversation(session_key, tenant_id=…)`) runs in the
 background after every saved exchange: `chat_store.save_exchange_async`
@@ -192,7 +213,11 @@ last segment, so an open segment grows as the conversation continues, and
 upserts on `(tenant_id, source_kind, source_ref, start_ref, part)`: running it twice
 writes nothing the second time. Database work runs in a worker thread. A
 failure (embedder down, database error) is logged and never reaches the turn;
-the next exchange retries the same turns.
+the next exchange retries the same turns. One run reads the last segment's
+turns plus at most `SEGMENT_INDEX_MAX_TURNS` (200) new ones, so the first
+index of a long history proceeds over several exchanges rather than in one
+batch, and a run for a conversation that already has one in progress in the
+process is skipped.
 
 **Searching** (`search_segments(query, tenant_id=…, limit=…)`) fuses a dense
 leg (HNSW cosine) and a keyword leg (`ts_rank_cd` over the generated
@@ -200,8 +225,8 @@ leg (HNSW cosine) and a keyword leg (`ts_rank_cd` over the generated
 long natural question still matches on the words that matter. The tenant is a
 required argument with no default. The dense leg uses `apply_hnsw_session`,
 whose iterative scan (on wherever pgvector supports it) lets a small tenant
-beside a large one still get `limit` rows. The reader is `reader_person_id`
-and `room_ids` (the rule above); `since` / `until` bound event time. When the
+beside a large one still get `limit` rows. The reader is `reader_person_id`,
+`reader_user_id` and `room_ids` (the rule above); `since` / `until` bound event time. When the
 embedder is down the keyword leg answers alone (`embed_missing=False` skips
 the embedding call for a caller whose own already failed). Each hit carries
 `id`, `kind: "segment"`, `source: "segment"`, `text`, `topic`,

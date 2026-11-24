@@ -127,6 +127,7 @@ async def recall(
     scope: Any = None,
     reader_person_id: str | None = None,
     room_ids: Any = None,
+    reader_user_id: str | None = None,
 ) -> dict[str, Any]:
     """Route a recall query to the relevant stores, fuse, and budget-cap.
 
@@ -137,7 +138,7 @@ async def recall(
     person-linked rows; a store that cannot express person scoping is excluded
     for restricted callers rather than returned unfiltered.
 
-    ``reader_person_id`` / ``room_ids`` decide which conversation segments the
+    ``reader_person_id`` / ``reader_user_id`` / ``room_ids`` decide which conversation segments the
     reader may see, on every call (``robothor.memory.segments``).
     """
     resolved_tenant = tenant_id or DEFAULT_TENANT
@@ -156,6 +157,7 @@ async def recall(
         include_episodes=(cls == "temporal"),
         scope=scope,
         reader_person_id=reader_person_id,
+        reader_user_id=reader_user_id,
         room_ids=room_ids,
     )
     ranked_lists.append([_normalize_fact(r) for r in fact_rows])

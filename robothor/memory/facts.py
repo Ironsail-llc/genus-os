@@ -1108,8 +1108,11 @@ def _segment_candidates(hits: list[dict[str, Any]], query: str) -> list[Candidat
     out: list[Candidate] = []
     for h in hits:
         ended = h.get("ended_at")
+        # A keyword-only hit has no cosine. Leave the key out rather than send
+        # None: callers format rows with round(r.get("similarity", 0), 4).
+        hit = {k: v for k, v in h.items() if not (k == "similarity" and v is None)}
         payload = {
-            **h,
+            **hit,
             "fact_text": h["text"],
             "category": "segment",
             "confidence": 0.5,
@@ -1141,6 +1144,7 @@ async def _auxiliary_legs(
     limit: int = 10,
     reader_person_id: str | None = None,
     room_ids: Iterable[str] | None = None,
+    reader_user_id: str | None = None,
 ) -> dict[str, list[Candidate]]:
     """Insights, episode summaries, conversation segments and chat turns, as legs.
 
@@ -1165,6 +1169,7 @@ async def _auxiliary_legs(
                 tenant_id=_tenant,
                 limit=max(SEGMENT_LEG_MIN, limit),
                 reader_person_id=reader_person_id,
+                reader_user_id=reader_user_id,
                 room_ids=room_ids,
                 query_embedding=embedding,
                 embed_missing=False,
@@ -1256,6 +1261,7 @@ async def search_facts(
     include_segments: bool = True,
     reader_person_id: str | None = None,
     room_ids: Iterable[str] | None = None,
+    reader_user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid recall: named legs fused by RRF, graded rerank, one relevance scale.
 
@@ -1301,6 +1307,9 @@ async def search_facts(
             ``scope`` it is replaced by the scope's person.
         room_ids: Workspaces the reader can access; a workspace conversation's
             segments are returned only for these.
+        reader_user_id: The reader's own user id; a member's webchat
+            conversation (``agent:{agent}:user:{uid}``) is theirs. Without a
+            reader person or user, no private segment is returned at all.
 
     Returns:
         Rows ordered best first. Each carries its payload (``fact_text``,
@@ -1364,6 +1373,7 @@ async def search_facts(
             include_segments=include_segments,
             limit=limit,
             reader_person_id=segment_reader,
+            reader_user_id=reader_user_id,
             room_ids=room_ids,
         )
     )
