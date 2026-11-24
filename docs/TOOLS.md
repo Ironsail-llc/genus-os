@@ -2088,6 +2088,27 @@ with no token may send it only to name the tenant the rule above already gives
 it. A request that names any other tenant this way gets a 401, because acting as
 a named tenant takes a token.
 
+The orchestrator applies the bridge's checks to a token:
+
+- Reading (`/stats`, `/query`, `/v1/chat/completions`) needs `bridge:read`, and
+  `/ingest` needs `bridge:write`. A token without the scope gets a 403, so a
+  viewer can query memory but cannot write to it.
+- A token whose session no longer stands is refused. That covers an account
+  that has been moved or disabled (401), and an acting token once tenant
+  switching is turned off (403).
+- Each request's database connections are bound to the token's tenant, so
+  row-level security lets it see and write only that tenant's rows.
+
+An OpenAI-compatible client (Open WebUI, LiteLLM, the `openai` SDK) always sends
+its API key as a bearer. A key that is not a JWT, such as a placeholder, counts
+as no token. On a single-tenant install such a client works as it did before. On
+a deployment with more than one tenant, give the client a token for its tenant
+as its API key.
+
+Some callers send no token, so on a deployment with more than one tenant the
+orchestrator now refuses them. `scripts/thermal-shed.sh` is one of them: its
+best-effort thermal events no longer reach memory on such a deployment.
+
 ### Workspace periods: `room_request_period`
 
 `room_request_period(room_id, grain, anchor)` gets a report workspace's edition for
