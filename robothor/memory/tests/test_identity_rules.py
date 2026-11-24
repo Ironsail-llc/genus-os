@@ -279,6 +279,18 @@ def test_the_operator_is_never_guessed_from_a_first_name() -> None:
     assert out.entity_id is None
 
 
+def test_the_operator_and_a_namesake_both_in_the_conversation_stay_unresolved() -> None:
+    """Dropping the operator first would leave one candidate: the namesake."""
+    out = decide(
+        MentionInput("Casey", "person", context={"conversation_ref": "s-1"}),
+        [
+            _person(1, "Casey Quinn", "first_name", in_conversation=True, is_operator=True),
+            _person(2, "Casey Lin", "first_name", in_conversation=True),
+        ],
+    )
+    assert out.entity_id is None
+
+
 def test_the_operator_still_resolves_by_strong_key() -> None:
     out = decide(
         MentionInput("Alex", "person", strong_keys={"crm_person_id": "x"}),
