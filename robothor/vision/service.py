@@ -314,17 +314,40 @@ class VisionService:
             except Exception as e:
                 logger.warning("Snapshot retention pass failed: %r", e)
 
-    async def ingest_event(self, event_text: str, metadata: dict[str, Any]) -> None:
-        """Post a vision event to the orchestrator for ingestion, as this process's tenant.
-
-        The tenant travels in ``X-Tenant-Id``, the service-to-service convention.
-        A process bound to no tenant sends none, and the orchestrator applies its
-        single-tenant rule (``robothor.tenancy.acting``).
-        """
+    async def _orchestrator_headers(self) -> dict[str, str]:
+        """A bearer service token for this process's tenant, or no headers at all."""
         from robothor.db.connection import process_tenant
 
         tenant = process_tenant()
-        headers = {"X-Tenant-Id": tenant} if tenant else {}
+        if not tenant:
+            return {}
+        from robothor.engine.tools.service_client import bridge_headers
+
+        try:
+            # Off the loop: the first mint may read the signing key from the vault.
+            return await asyncio.to_thread(
+                bridge_headers, "vision", tenant, scopes=("bridge:write",)
+            )
+        except Exception as e:  # noqa: BLE001 - the event still goes, tokenless
+            logger.warning(
+                "Could not mint a service token for ingestion (%s); posting without "
+                "one, which only a single-tenant deployment accepts",
+                type(e).__name__,
+            )
+            return {}
+
+    async def ingest_event(self, event_text: str, metadata: dict[str, Any]) -> None:
+        """Post a vision event to the orchestrator for ingestion, as this process's tenant.
+
+        The orchestrator takes a tenant only from a verified token, so the event
+        carries a service token for this process's tenant, minted the way the
+        engine mints its bridge tokens (``bridge_headers``). A process bound to no
+        tenant, or one that cannot mint (no signing key reachable), posts with no
+        token, and the orchestrator applies its single-tenant rule
+        (``robothor.tenancy.acting``): accepted on a single-tenant deployment,
+        refused on any other.
+        """
+        headers = await self._orchestrator_headers()
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(

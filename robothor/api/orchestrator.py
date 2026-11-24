@@ -189,13 +189,17 @@ async def acting_tenant(request: Request) -> str:
     """The tenant a memory endpoint acts as, from the caller.
 
     1. A bearer token is verified (bridge audience: the dashboard forwards the
-       session's bridge token) and its tenant is the tenant. An invalid token is
-       a 401; an ``X-Tenant-Id`` that contradicts it is a 403, as on the bridge.
-    2. Without a token, ``X-Tenant-Id`` -- the service-to-service convention the
-       bridge and engine already use -- names the tenant.
-    3. Without either, :func:`robothor.tenancy.acting.resolve_acting_tenant`
+       session's bridge token, and services send a minted service token) and its
+       tenant is the tenant. An invalid token is a 401; an ``X-Tenant-Id`` that
+       contradicts it is a 403, as on the bridge.
+    2. Without a token, :func:`robothor.tenancy.acting.resolve_acting_tenant`
        decides: the default tenant on a single-tenant deployment, otherwise a
        400 refusal rather than another tenant's memory.
+
+    A bare ``X-Tenant-Id`` never selects a tenant. Without a token it may only
+    restate what step 2 resolves to; naming any other tenant is a 401. An
+    unauthenticated caller of this port could only ever reach the default
+    tenant, and honouring the header would hand it every tenant by name.
     """
     from robothor.auth.deps import bearer_from_header, verify_token
     from robothor.auth.tokens import TokenError
@@ -214,16 +218,25 @@ async def acting_tenant(request: Request) -> str:
         if header and header != auth.tenant_id:
             raise HTTPException(status_code=403, detail="tenant not authorized")
         return auth.tenant_id
-    if header:
-        return header
+
+    token_required = HTTPException(
+        status_code=401,
+        detail="a bearer token is required to act as a named tenant; "
+        "X-Tenant-Id alone does not select one",
+    )
     try:
-        return await asyncio.to_thread(
+        resolved = await asyncio.to_thread(
             resolve_acting_tenant, "", surface=f"orchestrator {request.url.path}"
         )
     except TenantRequiredError as refused:
+        if header:
+            raise token_required from refused
         raise HTTPException(
-            status_code=400, detail=f"{refused} Send X-Tenant-Id or a bearer token."
+            status_code=400, detail=f"{refused} Send a bearer token for the tenant."
         ) from refused
+    if header and header != resolved:
+        raise token_required
+    return resolved
 
 
 # ─── Core Endpoints ──────────────────────────────────────────────────
