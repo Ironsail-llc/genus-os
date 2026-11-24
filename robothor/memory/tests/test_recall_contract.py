@@ -133,6 +133,58 @@ class TestReservedPlaces:
     def test_fewer_candidates_than_reserved_takes_what_exists(self) -> None:
         pool = self._pool()
         ranked = [r for r in pool if r["id"] <= 10]
-        out = apply_reserved(ranked, pool, limit=5, reserved={"graph": 10})
-        assert len(out) == 5
+        # limit 9 leaves room for four reserved places; only three candidates exist.
+        out = apply_reserved(ranked, pool, limit=9, reserved={"graph": 10})
+        assert len(out) == 9
         assert {r["id"] for r in out if "graph" in r["leg_ranks"]} == {101, 102, 103}
+
+
+class TestReservedPlacesNeverTakeTheHead:
+    """Reserved places are a minority of a result, never its top.
+
+    At a small ``limit`` a reserved pick used to evict every ranked row — with
+    ``limit=1`` the single best answer was replaced by a graph neighbour chosen
+    by importance alone. Reserved picks now take at most ``(limit - 1) // 2``
+    places in total, so the ranked head always keeps the majority.
+    """
+
+    def _pool_and_ranked(self) -> tuple[list[dict], list[dict]]:
+        pool = TestReservedPlaces()._pool()
+        return pool, [r for r in pool if r["id"] <= 10]
+
+    def test_limit_one_returns_the_best_ranked_row(self) -> None:
+        pool, ranked = self._pool_and_ranked()
+        out = apply_reserved(ranked, pool, limit=1, reserved={"graph": 2, "entity": 1})
+        assert [r["id"] for r in out] == [ranked[0]["id"]]
+
+    def test_limit_two_keeps_both_ranked_rows(self) -> None:
+        pool, ranked = self._pool_and_ranked()
+        out = apply_reserved(ranked, pool, limit=2, reserved={"graph": 2})
+        assert [r["id"] for r in out] == [r["id"] for r in ranked[:2]]
+
+    def test_two_reserved_legs_never_evict_rank_zero(self) -> None:
+        """With graph rows protected by their own quota, the next leg's pick
+        found rank 0 as the only unprotected row. The victim search now never
+        reaches index 0."""
+        legs = {
+            "vector": _leg("vector", [1]),
+            "graph": [
+                Candidate(id=201, kind="fact", text="g1", leg_scores={"graph": 0.9}),
+                Candidate(id=202, kind="fact", text="g2", leg_scores={"graph": 0.8}),
+            ],
+            "entity": [Candidate(id=301, kind="fact", text="e1", leg_scores={"entity": 0.7})],
+        }
+        pool = _rows(fuse(legs))
+        by_id = {r["id"]: r for r in pool}
+        ranked = [by_id[1], by_id[201], by_id[202]]
+        out = apply_reserved(ranked, pool, limit=3, reserved={"graph": 2, "entity": 1})
+        assert out[0]["id"] == 1
+        assert len(out) == 3
+
+    def test_reserved_total_is_capped_below_half(self) -> None:
+        pool, ranked = self._pool_and_ranked()
+        for limit in range(1, 11):
+            out = apply_reserved(ranked, pool, limit=limit, reserved={"graph": 10})
+            reserved_rows = [r for r in out if "graph" in r["leg_ranks"]]
+            assert len(reserved_rows) <= (limit - 1) // 2, limit
+            assert out[0]["id"] == ranked[0]["id"], limit

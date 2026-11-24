@@ -27,15 +27,17 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 
 All embedding columns are `vector(1024)` with HNSW indexes (m=16, ef_construction=200).
 Active-row **partial** HNSW indexes (`idx_*_active`, migrations 073/074) keep
-superseded vectors out of the candidate budget. Every vector search applies
-shared session tuning via `robothor/memory/vector_tuning.py`
-`apply_hnsw_session(cur)`: `hnsw.ef_search=100`, plus an **iterative index
-scan** (`hnsw.iterative_scan=strict_order`, `hnsw.max_scan_tuples=20000`)
-whenever the installed pgvector is 0.8 or later. The version is read once per
-process from `pg_extension`; an older pgvector is never sent the setting, and
-`MEMORY_HNSW_ITERATIVE=0` turns it off. Without it, a search under a narrow
-tenant or person filter spends the candidate budget on other rows and comes
-back with fewer rows than exist.
+superseded vectors out of the candidate budget. Every pooled connection gets
+an **iterative index scan** at checkout (`hnsw.iterative_scan=relaxed_order`,
+`ANN_ITERATIVE_SCAN_MODE` in `robothor/db/connection.py`, which records why
+relaxed rather than strict order). Without it, a search under a narrow tenant
+or person filter spends the candidate budget on other rows and comes back
+with fewer rows than exist. Relaxed order may return rows slightly out of
+distance order, so the fact vector leg re-sorts by similarity before ranking.
+Every vector search also applies `robothor/memory/vector_tuning.py`
+`apply_hnsw_session(cur)`: `hnsw.ef_search=100`, and with
+`MEMORY_HNSW_ITERATIVE=1` the same scan mode again inside the transaction
+plus `hnsw.max_scan_tuples` (20000).
 
 ## Retrieval
 
@@ -51,21 +53,26 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      `tsv`), scored by `ts_rank_cd` with length normalisation into 0..1. It
      requires every term first and falls back to any term when that matches
      nothing, so a natural-language question still finds the fact that shares
-     most of its words.
+     most of its words. The first pass reads the query in web-search syntax:
+     `"quoted words"` match as a phrase, `-word` excludes, and `or` is an
+     operator.
    - `graph` (on unless `include_graph=False`) — graph activation from the
      entities the query names and the entities the top hits mention (see
      [Associative recall](#associative-recall)). It replaced the one-hop
      `entity_expansion` leg; `expand_entities=True` is still accepted and
      means "graph leg on".
    - `insight`, `episode`, `chat_turn` (`include_insights`,
-     `include_episodes`, `include_chat_turns`).
+     `include_episodes`, `include_chat_turns`). These stores cannot filter by
+     person, so a restricted data scope leaves them out.
 2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
    records its rank in every leg that found it (`leg_ranks`).
 3. **Reranker** (Qwen3-Reranker-0.6B, local) — on by default, off with
    `MEMORY_RERANK_ENABLED=0`. It scores the first 16 fused candidates
    (`MEMORY_RERANK_MAX_CANDIDATES`) with a graded relevance in 0..1: the
-   probability of "yes" against "no", read from the logprobs Ollama returns
-   (an Ollama without logprobs gives 1 or 0). Candidates are ordered by that
+   probability of "yes" against "no", read from the top 20 logprobs Ollama
+   returns. When one of the two is not listed, its logprob is bounded by the
+   lowest one listed, so a confident answer still gets a graded score. (An
+   Ollama without logprobs gives 1 or 0.) Candidates are ordered by that
    score alone, whichever leg found them. On any reranker error the fused
    order stands.
 4. **Blend** — `relevance` (the rerank score, or `10 / (10 + fused rank)` when
@@ -76,7 +83,9 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    least that many places in the top `limit` whenever it returned anything,
    chosen by its own score: `graph` keeps 2.
    A related-but-not-similar fact is exactly what a query-document reranker
-   discards.
+   discards. Reserved picks take at most `(limit - 1) // 2` places in total
+   (none at a `limit` of 1 or 2), never the top result, and never a
+   near-duplicate of a row already returned.
 
 Every leg shares `limit`. Returned rows keep their fields and add `kind`,
 `leg_ranks`, `leg_scores`, `rrf_score`, `fused_rank`, `rerank_score` and

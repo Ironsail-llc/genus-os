@@ -987,8 +987,8 @@ def _fact_legs(
     """The vector and keyword legs over memory_facts, in one transaction."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        # ef_search, plus iterative scan where pgvector supports it, so a
-        # narrow tenant/person filter still fills the LIMIT.
+        # ef_search. The iterative scan that lets a narrow tenant/person
+        # filter fill its LIMIT is set on the connection at checkout.
         apply_hnsw_session(cur)
         vector_rows: list[dict[str, Any]] = []
         if embedding is not None:
@@ -1003,7 +1003,12 @@ def _fact_legs(
                 """,
                 (embedding, tenant, *filter_params, embedding, fetch_limit),
             )
-            vector_rows = [dict(r) for r in cur.fetchall()]
+            # relaxed_order iterative scan may return rows slightly out of
+            # distance order; the leg's RRF rank must be its similarity order.
+            vector_rows = sorted(
+                (dict(r) for r in cur.fetchall()),
+                key=lambda r: -float(r.get("similarity") or 0.0),
+            )
         keyword_rows = _keyword_rows(cur, query, tenant, filters, filter_params, fetch_limit)
     return {
         "vector": _fact_candidates(vector_rows, "vector", "similarity"),
@@ -1230,8 +1235,9 @@ async def search_facts(
             the graph walk, both its edges' evidence and the facts it returns
             (it reads the same ``memory_facts`` table and must not pull in
             another person's facts through the fan-out). The insight, episode and chat-turn
-            legs are unaffected — see robothor/identity/scope.py and the Task
-            5 report for the documented rationale.
+            legs cannot filter by person, so a restricted scope leaves them
+            out (the router's rule for unscopable stores) — see
+            robothor/identity/scope.py.
 
     Returns:
         Rows ordered best first. Each carries its payload (``fact_text``,
@@ -1277,22 +1283,35 @@ async def search_facts(
         )
         if graph:
             legs["graph"] = graph
+    # Insights, episodes and chat turns carry no person_id: a restricted caller
+    # would read summaries built from other people's facts. As in the router,
+    # a store that cannot express person scoping is left out, not unfiltered.
+    unscopable_ok = scope_clause == ""
     legs.update(
         await _auxiliary_legs(
             query=query,
             embedding=embedding,
             tenant_id=tenant_id,
             _tenant=_tenant,
-            include_insights=include_insights,
-            include_episodes=include_episodes,
-            include_chat_turns=include_chat_turns,
+            include_insights=include_insights and unscopable_ok,
+            include_episodes=include_episodes and unscopable_ok,
+            include_chat_turns=include_chat_turns and unscopable_ok,
         )
     )
 
     pool = [c.to_row() for c in fuse(legs, weights=LEG_WEIGHTS)]
     _label_graph_rows(pool, graph)
     ranked = await _rank_pool(query, pool, limit, use_reranker)
-    result = apply_reserved(ranked, pool, limit, RESERVED_PLACES)
+    # Deduped here, not assumed: with MEMORY_RANK_BLEND=0 the head never went
+    # through the blend's dedupe and may hold a near-duplicate pair itself.
+    unique_head = _dedupe(ranked[:limit])
+
+    def _duplicates_head(row: dict[str, Any]) -> bool:
+        # A reserved pick must not bring back a near-duplicate. _dedupe keeps
+        # earlier rows, so a row it drops from the end duplicates the head.
+        return _dedup_enabled() and len(_dedupe([*unique_head, row])) == len(unique_head)
+
+    result = apply_reserved(ranked, pool, limit, RESERVED_PLACES, exclude=_duplicates_head)
     for r in result:
         if "relevance" not in r:  # a reserved pick the blend never saw
             _assign_relevance([r])

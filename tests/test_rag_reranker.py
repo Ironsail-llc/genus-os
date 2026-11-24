@@ -249,6 +249,69 @@ class TestGradedScore:
         assert yes == 1.0
         assert no == 0.0
 
+    @pytest.mark.asyncio
+    async def test_missing_opposite_token_is_bounded_not_zero(self):
+        """Measured on the local Qwen3-Reranker-0.6B: in 15 of 40 pairs only one
+        of "yes"/"no" appears in the top logprobs, which scored a flat 1.0 or 0.0
+        and erased the grade exactly where it separates candidates. The absent
+        token is bounded by the lowest listed logprob instead."""
+        confident_yes = {
+            "response": "yes",
+            "logprobs": [
+                {
+                    "token": "yes",
+                    "top_logprobs": [
+                        {"token": "yes", "logprob": -0.1},
+                        {"token": "Yes", "logprob": -2.4},
+                        {"token": "true", "logprob": -6.0},
+                    ],
+                }
+            ],
+        }
+        confident_no = {
+            "response": "no",
+            "logprobs": [
+                {
+                    "token": "no",
+                    "top_logprobs": [
+                        {"token": "no", "logprob": -0.05},
+                        {"token": "No", "logprob": -3.0},
+                        {"token": "false", "logprob": -8.0},
+                    ],
+                }
+            ],
+        }
+        hi = await reranker.rerank_pair(_FakePostClient(confident_yes), "q", "d")
+        lo = await reranker.rerank_pair(_FakePostClient(confident_no), "q", "d")
+        assert 0.99 < hi < 1.0
+        assert 0.0 < lo < 0.01
+
+    @pytest.mark.asyncio
+    async def test_a_more_certain_no_scores_lower(self):
+        def body(no_lp: float, floor: float) -> dict:
+            return {
+                "response": "no",
+                "logprobs": [
+                    {
+                        "token": "no",
+                        "top_logprobs": [
+                            {"token": "no", "logprob": no_lp},
+                            {"token": "other", "logprob": floor},
+                        ],
+                    }
+                ],
+            }
+
+        certain = await reranker.rerank_pair(_FakePostClient(body(-0.01, -12.0)), "q", "d")
+        unsure = await reranker.rerank_pair(_FakePostClient(body(-0.3, -5.0)), "q", "d")
+        assert certain < unsure
+
+    @pytest.mark.asyncio
+    async def test_request_asks_for_the_widest_top_logprobs(self):
+        client = _FakePostClient(_generate_body(yes=-0.2, no=-1.8))
+        await reranker.rerank_pair(client, "q", "d")
+        assert client.payloads[0]["top_logprobs"] == 20
+
     def test_default_instruction_is_about_memory_not_web_search(self):
         prompt = build_reranker_prompt("q", "d")
         assert "web search" not in prompt.lower()

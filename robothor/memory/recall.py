@@ -26,8 +26,10 @@ Ranking after fusion, in ``search_facts``:
    there is one, else :func:`relevance_from_rank` of the fused rank.
 4. :func:`apply_reserved` — a leg named in ``reserved`` keeps at least that
    many places in the final top-k whenever it returned anything, chosen by its
-   own ``leg_scores``. A multi-hop fact is by definition not similar to the
-   query, so a query-document reranker would otherwise always discard it. To
+   own ``leg_scores``, capped at :func:`max_reserved_picks` (``(limit-1)//2``)
+   in total so the reranked head is never displaced. A multi-hop fact is by
+   definition not similar to the query, so a query-document reranker would
+   otherwise always discard it. To
    request places for a new leg, add it to ``RESERVED_PLACES`` in
    ``robothor/memory/facts.py`` (or pass ``reserved=`` when calling
    :func:`apply_reserved` directly).
@@ -154,11 +156,21 @@ def _leg_order(leg: str) -> Callable[[Mapping[str, Any]], tuple[float, int]]:
     return key
 
 
+def max_reserved_picks(limit: int) -> int:
+    """Most places reserved picks may take in a result of ``limit``: (limit-1)//2.
+
+    Strictly fewer than half, so the reranked head — rank 0 included — is never
+    displaced by rows chosen on another leg's own score.
+    """
+    return max(0, (int(limit) - 1) // 2)
+
+
 def apply_reserved(
     ranked: Sequence[dict[str, Any]],
     pool: Sequence[dict[str, Any]],
     limit: int,
     reserved: Mapping[str, int],
+    exclude: Callable[[dict[str, Any]], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Cut ``ranked`` to ``limit`` while honouring each leg's reserved places.
 
@@ -170,22 +182,33 @@ def apply_reserved(
     rank), and they replace the lowest-ranked rows that do not themselves hold
     a reserved place. Reserved picks go at the end of the list — they are
     guaranteed a place, not a position. A leg with no candidates reserves
-    nothing.
+    nothing, and a pool row for which ``exclude(row)`` is true is never picked
+    (``search_facts`` uses it to keep out near-duplicates of ranked rows).
+
+    Picks take at most :func:`max_reserved_picks` places in total, so the
+    ranked head always keeps the majority: no picks at ``limit`` 1 or 2.
     """
     out = list(ranked[:limit])
     protected: set[tuple[Any, Any]] = set()
     picks: list[dict[str, Any]] = []
+    budget = max_reserved_picks(limit)
     for leg, want in reserved.items():
         if want <= 0:
             continue
         have = [r for r in out if leg in (r.get("leg_ranks") or {})][:want]
         protected.update(_row_key(r) for r in have)
-        need = want - len(have)
+        need = min(want - len(have), budget - len(picks))
         if need <= 0:
             continue
         taken = {_row_key(r) for r in out} | {_row_key(r) for r in picks}
         extra = sorted(
-            (r for r in pool if leg in (r.get("leg_ranks") or {}) and _row_key(r) not in taken),
+            (
+                r
+                for r in pool
+                if leg in (r.get("leg_ranks") or {})
+                and _row_key(r) not in taken
+                and not (exclude is not None and exclude(r))
+            ),
             key=_leg_order(leg),
         )[:need]
         for r in extra:
@@ -196,7 +219,9 @@ def apply_reserved(
     for pick in picks:
         while len(out) + 1 > limit:
             victim = next(
-                (i for i in range(len(out) - 1, -1, -1) if _row_key(out[i]) not in protected),
+                # Stops at index 1: the top ranked row is never a victim, by
+                # construction rather than by the budget arithmetic.
+                (i for i in range(len(out) - 1, 0, -1) if _row_key(out[i]) not in protected),
                 None,
             )
             if victim is None:
