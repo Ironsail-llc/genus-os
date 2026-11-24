@@ -383,7 +383,12 @@ async def stats() -> dict[str, Any]:
 
 @app.post("/ingest")
 async def ingest_endpoint(req: IngestRequest) -> Any:
-    """Ingest content from any channel."""
+    """Ingest content from any channel.
+
+    The route is not authenticated, so the channel it is told is a claim: what
+    it stores is never trusted above external content.
+    """
+    from robothor.memory.graph_schema import Origin
     from robothor.memory.ingestion import ingest_content
 
     try:
@@ -392,6 +397,7 @@ async def ingest_endpoint(req: IngestRequest) -> Any:
             source_channel=req.source_channel,
             content_type=req.content_type,
             metadata=req.metadata,
+            origin_cap=Origin.EXTERNAL,
         )
         return result
     except ValueError as e:

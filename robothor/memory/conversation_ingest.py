@@ -210,8 +210,19 @@ async def ingest_conversation_session(
                 tenant_id=tenant_id,
                 role=role,
                 read_only_context=turns[other] or None,
+                # A transcript nobody asked to keep is not stored as one blob
+                # when extraction fails; the watermark stays put and the turns
+                # are extracted again on the next run.
+                fallback_on_failure=False,
             )
             result = _merge(result, part)
+        if result.get("extraction_failed"):
+            logger.warning(
+                "Conversation extraction failed for %s (%s); will retry",
+                sanitize_log(session_key),
+                result.get("extraction_error"),
+            )
+            return None
 
         if incremental:
             record_ingested(

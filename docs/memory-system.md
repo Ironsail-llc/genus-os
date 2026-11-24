@@ -591,20 +591,31 @@ known shared entities its text contains. `memory_facts.entities` is still
 filled with the mention names.
 
 **Extraction failure.** When extraction fails (a timeout, an answer that is not
-the JSON asked for, a model error), the raw content is stored as one fact
-(`metadata.extraction = "fallback_raw"`, with `extraction_error`) and the
-result reports `extraction_failed`. When the model answers and finds nothing,
+the JSON asked for, a model error), the result reports `extraction_failed` and,
+for content someone submitted to be kept (`store_memory`, the write jobs, the
+ingest routes), the raw content is stored as one fact
+(`metadata.extraction = "fallback_raw"`, with `extraction_error`). Conversation
+ingest stores no raw transcript: the turns are left for the next run to extract
+again (the watermark does not move). When the model answers and finds nothing,
 nothing is stored, except by `store_memory` and the write jobs, which keep the
 raw content as they always did.
 
+**Storage failure.** A fact the quality gate declines is `facts_refused`. A fact
+that could not be stored because something broke (the embedding service, the
+database) is `facts_failed`, with the reason in `errors`, and no caller records
+the write as done: `ingest_content` raises `MemoryWriteError` (conversation
+ingest then leaves its watermark, so the turns are retried), a write job is
+marked `failed` with the error, a breadcrumb is kept for the next promotion, and
+`store_memory` answers with an `error` when nothing was kept. A stored fact
+whose mentions or relations could not be written is counted in `graph_errors`,
+which `ingest_content` and `store_memory` return.
+
 **Origin**, from the source, by `origin_for(source_channel, content_type,
-role=, metadata=)`; a conversation is extracted once per role so each fact's
-origin is its speaker's (the other role is shown to the model as read-only
-context):
+role=)`; a conversation is extracted once per role so each fact's origin is its
+speaker's (the other role is shown to the model as read-only context):
 
 | Source | Origin |
 |---|---|
-| Metadata marks it operator-confirmed | `operator_confirmed` |
 | A person's turn (`role="user"`) | `user_stated` |
 | The assistant's turn, or what an agent writes (`role="assistant"`, `store_memory`, `record_resolution`, breadcrumbs) | `agent_generated` |
 | A tool result (`role="tool"`) | `tool` |
@@ -616,6 +627,13 @@ context):
 When two rows apply, the less trusted wins, so relaying never raises trust. A
 derived row takes the least trusted origin of its inputs: a consolidated fact
 built from a user-stated and an external fact is external.
+
+Trust is never taken from the caller. No write is `operator_confirmed`: that is
+the operator's own edit of a stored fact (the bridge's memory-fact edit route),
+and an `operator_confirmed` key in a writer's metadata is dropped, so ingest
+cannot mark a fact confirmed either. The orchestrator's `/ingest` route is not
+authenticated, so the channel it is told is only a claim: what it stores is at
+most `external` (`origin_cap` on `ingest_content`).
 
 **Edge origin.** An edge's `origin` is the most trusted origin among the facts
 supporting it (active ones first), recomputed whenever evidence is added: a
@@ -633,15 +651,20 @@ conversation segments do (`person:{id}`, `user:{uid}`). What the mechanism
 guarantees, tested:
 
 - *Hash.* The content hash (`drift.compute_fact_hash`, unique among active
-  facts per tenant) covers a non-shared fact's scope: a `user` fact fills the
-  person slot with its owner (for `person:{id}`, the person id, which is also
-  the row's `person_id`, so older code recomputes the same digest), an `agent`
-  fact with `agent:{id}`. A shared fact hashes as it always did. So the same
-  text stored shared and private, or private to two people, is two facts.
+  facts per tenant) covers a non-shared fact's scope: its person slot holds
+  `scope:{kind}:{scope_id}`, which no `person_id` can equal, so a private fact
+  never shares a digest with any shared row, even one whose `person_id` names
+  the same person. A shared fact hashes as it always did. `update_fact` and the
+  bridge's edit route hash with the row's scope, so an edited private fact stays
+  private. An older release editing a private fact recomputes without the scope
+  and records drift (refusing the edit in enforce mode), which fails safe. So the
+  same text stored shared and private, or private to two people, is two facts.
 - *Conflicts.* The similarity search behind reinforcement, deduplication and
   supersession only sees facts of the same scope.
 - *Consolidation.* A consolidation group never mixes tenants or scopes; the
-  consolidated fact takes the group's scope.
+  consolidated fact takes the group's scope. When the consolidated text is one
+  of the members' own (consolidation falls back to the first member's text if
+  the model fails), nothing is derived and no member is retired.
 - *The graph.* No reader yet filters edges by the scope of their evidence, so a
   private fact creates no node from its own text (its mentions resolve to
   existing nodes or stay unresolved) and no edge; the relations it stated are

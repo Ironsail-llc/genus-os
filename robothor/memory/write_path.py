@@ -61,7 +61,6 @@ from typing import Any
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection, tenant_scope
 from robothor.memory import facts as _facts
-from robothor.memory.confirmed import is_operator_confirmed
 from robothor.memory.conflicts import resolve_and_store
 from robothor.memory.graph_schema import (
     AUTHORITY_ORDER,
@@ -72,6 +71,26 @@ from robothor.memory.graph_schema import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class MemoryWriteError(RuntimeError):
+    """A fact could not be stored for a reason other than being refused.
+
+    Raised by callers that must not record a write as done when it was not
+    (ingest, write jobs, breadcrumb promotion); ``write_facts`` itself counts it
+    in ``facts_failed`` with the reason in ``errors``.
+    """
+
+
+#: Metadata keys a writer may never pass through: confirming a fact is the
+#: operator's edit (the bridge's memory-fact edit route), not something an
+#: ingest caller can claim.
+_UNTRUSTED_METADATA_KEYS: frozenset[str] = frozenset({"operator_confirmed"})
+
+
+def _caller_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    return {k: v for k, v in dict(metadata or {}).items() if k not in _UNTRUSTED_METADATA_KEYS}
+
 
 # ═══ origin ══════════════════════════════════════════════════════════════
 
@@ -116,10 +135,10 @@ def origin_for(
 ) -> str:
     """The origin of content from this source. The one mapping every writer uses.
 
-    In order:
+    Nothing a caller passes can make content ``operator_confirmed``: that is the
+    operator's own edit of a stored fact, never an ingest (``metadata`` is
+    accepted for the call shape and not consulted). In order:
 
-    * a fact marked operator-confirmed (``metadata.operator_confirmed``) is
-      ``operator_confirmed``;
     * a named speaker decides: a person's turn (``user``) is ``user_stated``,
       the assistant's (``assistant``) ``agent_generated``, a tool result
       (``tool``) ``tool``; an unknown role counts as no role;
@@ -133,8 +152,7 @@ def origin_for(
 
     Nothing here ever returns a more trusted origin than the evidence supports.
     """
-    if metadata and is_operator_confirmed({"metadata": dict(metadata)}):
-        return Origin.OPERATOR_CONFIRMED
+    del metadata  # never a source of trust (see above)
     channel = (source_channel or "").strip().lower()
     ctype = (content_type or "").strip().lower()
     r = (role or "").strip().lower()
@@ -275,16 +293,26 @@ class WriteContext:
         metadata: Mapping[str, Any] | None = None,
         session_key: str | None = None,
         scope: tuple[str, str | None] | None = None,
+        origin_cap: str | None = None,
     ) -> WriteContext:
-        """The context of content from a source. Shared unless ``scope`` says otherwise."""
-        meta = dict(metadata or {})
+        """The context of content from a source. Shared unless ``scope`` says otherwise.
+
+        ``origin_cap`` bounds the origin from above, for a source whose caller is
+        not authenticated (its channel is a claim, not a fact). A claimed
+        operator confirmation is dropped from the metadata.
+        """
+        meta = _caller_metadata(metadata)
         conv = session_key or (str(meta["session_key"]) if meta.get("session_key") else None)
         kind, sid = _checked_scope(scope)
         return cls(
             tenant_id=tenant_id or DEFAULT_TENANT,
             source_channel=source_channel or "",
             content_type=content_type or "",
-            origin=origin_for(source_channel, content_type, role=role, metadata=meta),
+            origin=(
+                least_trusted(origin_for(source_channel, content_type, role=role), origin_cap)
+                if origin_cap
+                else origin_for(source_channel, content_type, role=role)
+            ),
             scope_kind=kind,
             scope_id=sid,
             conversation_ref=conv,
@@ -336,7 +364,7 @@ class WriteContext:
             scope_kind=kind,
             scope_id=sid,
             conversation_ref=data.get("conversation_ref"),
-            metadata=dict(data.get("metadata") or {}),
+            metadata=_caller_metadata(data.get("metadata")),
         )
 
 
@@ -354,6 +382,8 @@ def _empty_result() -> dict[str, Any]:
         "facts_skipped": 0,
         "facts_kept_confirmed": 0,
         "facts_refused": 0,
+        "facts_failed": 0,
+        "errors": [],
         "conflict_checks_timed_out": 0,
         "mentions_written": 0,
         "relations_stored": 0,
@@ -400,7 +430,12 @@ async def write_facts(
     ``conflict_checks_timed_out``.
 
     Returns counts and ``fact_ids`` (the facts now live from this write),
-    ``existing_ids`` (facts it reinforced or duplicated).
+    ``existing_ids`` (facts it reinforced or duplicated). A fact the quality
+    gate (or a benchmark guard) declined is ``facts_refused``; a fact that could
+    not be stored because something broke (the embedding service, the database)
+    is ``facts_failed``, with the reason in ``errors``, and the caller must not
+    treat the write as done (:class:`MemoryWriteError`). A stored fact whose
+    graph could not be written is ``graph_errors``.
     """
     result = _empty_result()
     items = [dict(f) for f in facts if str(f.get("fact_text") or "").strip()]
@@ -408,7 +443,7 @@ async def write_facts(
         return result
     vectors = await _embed([f["fact_text"] for f in items])
     for fact, vector in zip(items, vectors, strict=True):
-        meta = {**dict(context.metadata), **dict(fact.get("metadata") or {})}
+        meta = {**_caller_metadata(context.metadata), **_caller_metadata(fact.get("metadata"))}
         store_kw: dict[str, Any] = {
             "tenant_id": context.tenant_id,
             "origin": context.origin,
@@ -441,9 +476,10 @@ async def write_facts(
                     fact, source_content, context.content_type, meta or None, **store_kw
                 )
                 outcome = {"action": "stored", "new_id": stored}
-        except Exception:
+        except Exception as exc:
             logger.warning("write path: storing a fact failed", exc_info=True)
-            result["facts_refused"] += 1
+            result["facts_failed"] += 1
+            result["errors"].append(f"{type(exc).__name__}: {exc}"[:300])
             continue
 
         action = outcome.get("action")
@@ -489,20 +525,28 @@ async def ingest_text(
     extract_timeout: float = 180.0,
     read_only_context: str | None = None,
     fallback_on_empty: bool = False,
+    fallback_on_failure: bool = True,
     conflict_check: bool = True,
     deadline: float | None = None,
 ) -> dict[str, Any]:
     """Extract facts from ``content`` (one model call) and write them.
 
-    When extraction FAILS (timeout, unparseable answer, model error) the raw
-    content is stored as one fact tagged ``metadata.extraction =
-    "fallback_raw"`` and the result says ``extraction_failed`` with the reason.
-    When the model answered and found nothing, nothing is stored — unless
-    ``fallback_on_empty`` (``store_memory``: the caller asked for it to be kept).
+    When extraction FAILS (timeout, unparseable answer, model error) the result
+    says ``extraction_failed`` with the reason, and the raw content is stored as
+    one fact tagged ``metadata.extraction = "fallback_raw"`` — unless
+    ``fallback_on_failure`` is off (background transcript ingest, which retries
+    the turns instead of storing them as one blob). When the model answered and
+    found nothing, nothing is stored — unless ``fallback_on_empty``
+    (``store_memory``: the caller asked for it to be kept).
     """
     extraction = await _facts.extract_facts_detailed(
         content, timeout=extract_timeout, context=read_only_context
     )
+    if extraction.error is not None and not fallback_on_failure:
+        logger.warning("extraction failed (%s); nothing stored, to retry", extraction.error)
+        result = _empty_result()
+        result.update(facts_extracted=0, extraction_failed=True, extraction_error=extraction.error)
+        return result
     facts: list[dict[str, Any]] = list(extraction.facts)
     if extraction.error is not None or (not facts and fallback_on_empty):
         tag: dict[str, Any] = {"extraction": "fallback_raw"}
@@ -800,6 +844,13 @@ async def write_derived_fact(
     )
     if not new_id:
         return 0, []
+    if int(new_id) in {int(s["id"]) for s in sources}:
+        # The derived text deduplicated into one of its own sources (a failed
+        # consolidation falls back to a member's text). Nothing was derived: do
+        # not copy the group's graph onto that member, and let the caller retire
+        # nothing.
+        logger.info("write path: derived fact %s is one of its sources; not derived", new_id)
+        return 0, []
     edges = await asyncio.to_thread(
         _copy_graph, tenant, int(new_id), [int(s["id"]) for s in sources]
     )
@@ -815,6 +866,7 @@ async def recompute_derived_edges(tenant_id: str, relation_ids: Sequence[int]) -
 __all__ = [
     "EXTERNAL_CONTENT_TYPES",
     "INBOUND_CHANNELS",
+    "MemoryWriteError",
     "WriteContext",
     "ingest_text",
     "normalize_predicate",

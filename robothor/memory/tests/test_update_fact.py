@@ -47,7 +47,9 @@ class TestUpdateFactRip7Off:
 
         # Stored row with a stale hash that would normally trip drift,
         # but Rip 7 off means we never look.
-        cm, cur = _mock_conn_yielding([("old text", "t1", "preference", None, "stale_hash")])
+        cm, cur = _mock_conn_yielding(
+            [("old text", "t1", "preference", None, "stale_hash", "shared", None)]
+        )
         mock_get_conn.return_value = cm
 
         with patch.dict(os.environ, {}, clear=True):  # rip 7 off
@@ -85,7 +87,7 @@ class TestUpdateFactObserveMode:
         # Order: SELECT, then audit INSERT (RETURNING id=7), then UPDATE
         cm, cur = _mock_conn_yielding(
             [
-                ("stored text", "t", "preference", None, wrong_stored),  # SELECT
+                ("stored text", "t", "preference", None, wrong_stored, "shared", None),  # SELECT
                 (7,),  # audit RETURNING snapshot_id
                 None,  # UPDATE has no RETURNING
             ]
@@ -112,7 +114,7 @@ class TestUpdateFactEnforceMode:
         wrong_stored = "0" * 64
         cm, cur = _mock_conn_yielding(
             [
-                ("stored text", "t", "preference", None, wrong_stored),  # SELECT
+                ("stored text", "t", "preference", None, wrong_stored, "shared", None),  # SELECT
                 (99,),  # audit RETURNING snapshot_id
             ]
         )
@@ -145,7 +147,7 @@ class TestUpdateFactCleanWrite:
         good_hash = compute_fact_hash("stored text", tenant_id="t", category="preference")
         cm, cur = _mock_conn_yielding(
             [
-                ("stored text", "t", "preference", None, good_hash),  # SELECT
+                ("stored text", "t", "preference", None, good_hash, "shared", None),  # SELECT
                 None,  # UPDATE
             ]
         )
@@ -176,7 +178,15 @@ class TestUpdateFactNullStoredHashIsFirstTouch:
 
         cm, cur = _mock_conn_yielding(
             [
-                ("stored text", "t", "preference", None, None),  # SELECT, stored_hash=None
+                (
+                    "stored text",
+                    "t",
+                    "preference",
+                    None,
+                    None,
+                    "shared",
+                    None,
+                ),  # SELECT, stored_hash=None
                 None,  # UPDATE
             ]
         )
@@ -222,7 +232,9 @@ class TestUpdateFactEmbedding:
     ) -> None:
         from robothor.memory.facts import update_fact
 
-        cm, cur = _mock_conn_yielding([("old text", "t", "preference", None, None), None])
+        cm, cur = _mock_conn_yielding(
+            [("old text", "t", "preference", None, None, "shared", None), None]
+        )
         mock_get_conn.return_value = cm
         with patch.dict(os.environ, {}, clear=True):
             result = await update_fact(42, fact_text="new text", tenant_id="t")
@@ -243,7 +255,9 @@ class TestUpdateFactEmbedding:
     ) -> None:
         from robothor.memory.facts import update_fact
 
-        cm, cur = _mock_conn_yielding([("same text", "t", "preference", None, None), None])
+        cm, cur = _mock_conn_yielding(
+            [("same text", "t", "preference", None, None, "shared", None), None]
+        )
         mock_get_conn.return_value = cm
         with patch.dict(os.environ, {}, clear=True):
             result = await update_fact(
@@ -264,7 +278,9 @@ class TestUpdateFactEmbedding:
         from robothor.memory.facts import update_fact
 
         _embedding.side_effect = RuntimeError("provider down")
-        cm, cur = _mock_conn_yielding([("old text", "t", "preference", None, None), None])
+        cm, cur = _mock_conn_yielding(
+            [("old text", "t", "preference", None, None, "shared", None), None]
+        )
         mock_get_conn.return_value = cm
         with patch.dict(os.environ, {}, clear=True):
             result = await update_fact(42, fact_text="new text", tenant_id="t")
@@ -284,7 +300,9 @@ class TestUpdateFactMetadataMerge:
     ) -> None:
         from robothor.memory.facts import update_fact
 
-        cm, cur = _mock_conn_yielding([("same text", "t", "preference", None, None), None])
+        cm, cur = _mock_conn_yielding(
+            [("same text", "t", "preference", None, None, "shared", None), None]
+        )
         mock_get_conn.return_value = cm
         with patch.dict(os.environ, {}, clear=True):
             await update_fact(42, fact_text="same text", tenant_id="t", metadata={"note": "x"})

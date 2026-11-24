@@ -2060,9 +2060,12 @@ the CRM said. Facts are shared within the tenant, as before.
 The result has `id` (the first fact now in memory, a new one or one it
 reinforced) and `facts_stored` (new facts), plus, when they apply,
 `facts_skipped`, `facts_kept_confirmed` (facts the operator's word overruled),
-`already_known_ids`, `relations_stored` and `conflict_checks_timed_out`. If
-extraction fails, or finds nothing, the content is stored as written and the
-result says `extraction_failed` with the reason. Conflict classification is one
+`already_known_ids`, `relations_stored`, `graph_errors` and
+`conflict_checks_timed_out`. If extraction fails, or finds nothing, the content
+is stored as written and the result says `extraction_failed` with the reason. If
+the store itself fails (the embedding service or database is down) the result
+has an `error` naming the reason and nothing was kept; a partial failure is
+`facts_failed` with a `warning`. Conflict classification is one
 short model call made only when a similar fact already exists; past the call's
 time budget the fact is stored as new rather than lost.
 

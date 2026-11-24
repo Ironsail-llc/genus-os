@@ -463,6 +463,8 @@ async def store_memory_content(
         "conflict_checks_timed_out",
         "relations_stored",
         "relations_private_deferred",
+        "facts_failed",
+        "graph_errors",
     ):
         if result.get(key):
             out[key] = result[key]
@@ -471,6 +473,13 @@ async def store_memory_content(
     if result.get("extraction_failed"):
         out["extraction_failed"] = True
         out["extraction_error"] = result.get("extraction_error")
+    if result.get("facts_failed"):
+        reasons = "; ".join(result.get("errors") or []) or "unknown error"
+        if not stored and not existing:
+            # Nothing was kept: the call failed, and the agent must be told so.
+            out["error"] = f"memory not stored: {reasons}"
+        else:
+            out["warning"] = f"{result['facts_failed']} fact(s) not stored: {reasons}"
     return out
 
 

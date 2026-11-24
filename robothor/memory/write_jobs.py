@@ -145,6 +145,13 @@ async def process_write_job(job_id: int) -> bool:
         )
         # Off the request path: no deadline, so conflict classification runs in full.
         result = await write_path.ingest_text(content, ctx, fallback_on_empty=True)
+        if result.get("facts_failed"):
+            # Something broke (the store, not the quality gate): the promise was
+            # not kept, and the job says so rather than finishing "done".
+            raise write_path.MemoryWriteError(
+                f"{result['facts_failed']} fact(s) not stored: "
+                + "; ".join(result.get("errors") or [])
+            )
         fact_ids = list(result.get("fact_ids") or []) + list(result.get("existing_ids") or [])
     except Exception as e:
         logger.warning("memory write job %s failed: %s", job_id, e)

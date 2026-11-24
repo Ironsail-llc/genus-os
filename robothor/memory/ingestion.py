@@ -47,6 +47,8 @@ async def ingest_content(
     role: str | None = None,
     read_only_context: str | None = None,
     scope: tuple[str, str | None] | None = None,
+    origin_cap: str | None = None,
+    fallback_on_failure: bool = True,
 ) -> dict[str, Any]:
     """Ingest content from any channel, extracting and storing facts.
 
@@ -66,6 +68,11 @@ async def ingest_content(
         scope: ``(scope_kind, scope_id)`` for a caller that explicitly wants
             the facts private (``write_path.conversation_scope`` gives a
             conversation's owner). Absent, they are shared, as they always were.
+        origin_cap: The most trusted origin this content may get, for a caller
+            that is not authenticated (its channel is only a claim).
+        fallback_on_failure: Store the raw content when extraction fails (the
+            default, for content someone submitted to be kept). Background
+            transcript ingest turns it off and retries instead.
 
     Returns:
         Dict with ingestion results including facts processed, the graph
@@ -73,6 +80,8 @@ async def ingest_content(
 
     Raises:
         ValueError: If content is empty.
+        MemoryWriteError: If a fact could not be stored (the facts that could
+            be are kept; re-ingesting is safe, the write path deduplicates).
     """
     if not content or not content.strip():
         raise ValueError("Content cannot be empty")
@@ -84,6 +93,7 @@ async def ingest_content(
         role=role,
         metadata=metadata,
         scope=scope,
+        origin_cap=origin_cap,
     )
     logger.info(
         "Ingesting %s content (%d chars) via %s as %s",
@@ -92,7 +102,16 @@ async def ingest_content(
         sanitize_log(source_channel),
         context.origin,
     )
-    result = await write_path.ingest_text(content, context, read_only_context=read_only_context)
+    result = await write_path.ingest_text(
+        content,
+        context,
+        read_only_context=read_only_context,
+        fallback_on_failure=fallback_on_failure,
+    )
+    if result.get("facts_failed"):
+        raise write_path.MemoryWriteError(
+            f"{result['facts_failed']} fact(s) not stored: " + "; ".join(result.get("errors") or [])
+        )
 
     # Route verbatim reference values (account ids, phone numbers) to the
     # Knowledge Vault so they survive byte-for-byte. Gated, best-effort (WS-6).
@@ -127,6 +146,7 @@ async def ingest_content(
         "relations_stored": int(result.get("relations_stored", 0)),
         "relations_unresolved": int(result.get("relations_unresolved", 0)),
         "relations_private_deferred": int(result.get("relations_private_deferred", 0)),
+        "graph_errors": int(result.get("graph_errors", 0)),
         "extraction_failed": bool(result.get("extraction_failed", False)),
         "extraction_error": result.get("extraction_error"),
         "vault_stored": vault_stored,

@@ -776,7 +776,8 @@ async def update_fact(
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT fact_text, tenant_id, category, person_id, content_hash
+            SELECT fact_text, tenant_id, category, person_id, content_hash,
+                   scope_kind, scope_id
               FROM memory_facts
              WHERE id = %s AND tenant_id = %s
             """,
@@ -786,7 +787,15 @@ async def update_fact(
         if row is None:
             return {"error": "not_found", "fact_id": fact_id}
 
-        current_text, current_tenant, current_category, current_person, stored_hash = row
+        (
+            current_text,
+            current_tenant,
+            current_category,
+            current_person,
+            stored_hash,
+            scope_kind,
+            scope_id,
+        ) = row
 
         decision = evaluate_drift(
             stored_hash,
@@ -794,6 +803,8 @@ async def update_fact(
             tenant_id=current_tenant or resolved_tenant,
             category=current_category or "",
             person_id=str(current_person) if current_person else None,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
         )
 
         if decision.drift_detected:
@@ -802,6 +813,8 @@ async def update_fact(
                 tenant_id=current_tenant or resolved_tenant,
                 category=current_category or "",
                 person_id=str(current_person) if current_person else None,
+                scope_kind=scope_kind,
+                scope_id=scope_id,
             )
             snap_id = audit_snapshot(
                 cur,
@@ -834,6 +847,8 @@ async def update_fact(
         tenant_id=current_tenant or resolved_tenant,
         category=new_category or "",
         person_id=new_person,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
     )
 
     # A changed text gets a fresh vector, the way store_fact embeds a new

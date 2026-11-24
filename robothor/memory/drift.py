@@ -57,20 +57,17 @@ def compute_fact_hash(
     Scope. The active-row unique index (migration 078) is on
     ``(tenant_id, content_hash)``, so the hash decides what deduplicates into
     what. A private fact must never collapse into a shared one or into another
-    reader's, so a NON-shared scope is part of the hash: ``user`` scope fills
-    the person slot with its owner — for a ``person:{id}`` owner the bare person
-    id, which is also the row's ``person_id``, so an older release recomputing
-    from ``person_id`` gets the same digest; for any other owner (``user:{uid}``)
-    the owner string — and ``agent`` scope fills it with ``agent:<id>``. A shared
-    fact (or no scope given) hashes exactly as before, so every existing hash
-    stays valid.
+    reader's, so a NON-shared scope fills the person slot with
+    ``scope:<kind>:<scope_id>``. A ``person_id`` is a bare id and never starts
+    with ``scope:``, so a private fact's digest can never equal any shared row's,
+    whatever that row's ``person_id`` (the edit paths hash shared rows with it).
+    A shared fact (or no scope given) hashes exactly as before, so every
+    existing hash stays valid. Every recompute (``update_fact``, the bridge's
+    edit route) passes the row's scope.
     """
     person = person_id or ""
-    if scope_kind == "user" and scope_id:
-        sid = str(scope_id)
-        person = sid.split(":", 1)[1] if sid.startswith("person:") else sid
-    elif scope_kind == "agent" and scope_id:
-        person = f"agent:{scope_id}"
+    if scope_kind in ("user", "agent") and scope_id:
+        person = f"scope:{scope_kind}:{scope_id}"
     canonical = f"{fact_text or ''}|{tenant_id or ''}|{category or ''}|{person}"
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
