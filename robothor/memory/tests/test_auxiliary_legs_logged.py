@@ -1,9 +1,10 @@
 """A memory search leg that fails says so.
 
-search_facts appends three best-effort legs (insights, episodes, verbatim chat
+search_facts fuses three best-effort legs (insights, episodes, verbatim chat
 turns). Each one used to be `except Exception: pass`, so a broken episode store
-returned fewer results and the log said nothing. The search still succeeds;
-the failure is now a WARNING naming the leg.
+returned fewer results and the log said nothing. The search still succeeds
+(the last test drives it end to end); the failed leg is absent from the fusion
+and the failure is a WARNING naming the leg.
 """
 
 from __future__ import annotations
@@ -46,9 +47,9 @@ def _warned(caplog: pytest.LogCaptureFixture, *needles: str) -> bool:
     )
 
 
-async def _aux(**include: bool) -> list[dict[str, Any]]:
-    return await facts._append_auxiliary(
-        [dict(_ROW)],
+async def _aux(**include: bool) -> dict[str, Any]:
+    """The auxiliary legs are fusion legs now; a failed one is simply absent."""
+    return await facts._auxiliary_legs(
         query="tea",
         embedding=[0.1] * 8,
         tenant_id="test-tenant",
@@ -68,7 +69,7 @@ async def test_a_failed_insight_leg_is_logged(caplog: pytest.LogCaptureFixture) 
         caplog.at_level(logging.DEBUG, logger=_LOGGER),
     ):
         out = await _aux(insights=True)
-    assert [r["fact_text"] for r in out] == ["Alice prefers tea"]
+    assert "insight" not in out
     assert _warned(caplog, "insight", "insights down")
 
 
@@ -82,7 +83,7 @@ async def test_a_failed_episode_leg_is_logged(caplog: pytest.LogCaptureFixture) 
         caplog.at_level(logging.DEBUG, logger=_LOGGER),
     ):
         out = await _aux(episodes=True)
-    assert len(out) == 1
+    assert "episode" not in out
     assert _warned(caplog, "episode", "episodes down")
 
 
@@ -96,7 +97,7 @@ async def test_a_failed_chat_turn_leg_is_logged(caplog: pytest.LogCaptureFixture
         caplog.at_level(logging.DEBUG, logger=_LOGGER),
     ):
         out = await _aux(chat_turns=True)
-    assert len(out) == 1
+    assert "chat_turn" not in out
     assert _warned(caplog, "chat", "chat store down")
 
 
