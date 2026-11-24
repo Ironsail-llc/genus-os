@@ -12,7 +12,7 @@ from robothor.memory.utility import compute_utility, utility_decay_term
 
 def _failure_penalty(failures: int) -> float:
     """The decay penalty for failures alone, as compute_decay_score applies it."""
-    return -utility_decay_term(compute_utility(0, 0, failures))
+    return -utility_decay_term(compute_utility(citations=0, failures=failures))
 
 
 class TestOutcomePenalty:

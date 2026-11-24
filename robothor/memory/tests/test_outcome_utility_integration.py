@@ -134,13 +134,15 @@ class TestUtilityFromOutcomes:
         from robothor.memory.lifecycle import _run_decay_pass_sync
 
         conn, tenant = facts_db
-        helped = _seed(conn, tenant, "Alice approves vendor contracts above the threshold.")
+        helped = _seed(conn, tenant, "Alice approves vendor contract VC-3307 above the threshold.")
         other = _seed(conn, tenant, "Bob reviews vendor contracts below the threshold.")
 
-        _succeed(tenant, [helped], n=3)
+        # "Used": the answer carries the fact's distinctive value.
+        _succeed(tenant, [helped], output="Approved under VC-3307.", n=3)
         _run_decay_pass_sync(tenant_id=tenant)
 
         assert _get(conn, helped)["outcome_successes"] == 3
+        assert _get(conn, helped)["outcome_citations"] == 3
         assert _utility(conn, helped) > 0.0
         assert _utility(conn, other) == 0.0
         # `other` has the higher id, so the newest-wins tie-break favours it.
@@ -158,7 +160,8 @@ class TestUtilityFromOutcomes:
 
         assert _get(conn, cited)["outcome_citations"] == 2
         assert (_get(conn, returned)["outcome_citations"] or 0) == 0
-        assert _utility(conn, cited) > _utility(conn, returned) > 0.0
+        assert _utility(conn, cited) > 0.0
+        assert _utility(conn, returned) == 0.0
 
     def test_ii_a_fact_in_failed_runs_loses_utility(self, facts_db) -> None:
         from robothor.memory.lifecycle import _run_decay_pass_sync
@@ -194,6 +197,25 @@ class TestUtilityFromOutcomes:
         # never-returned fact (which wins the newest-wins tie-break).
         assert _ranked(conn, [popular, never]) == [never, popular]
 
+    def test_iii_returned_in_many_successful_runs_but_never_used_does_not_rise(
+        self, facts_db
+    ) -> None:
+        """Criterion 3 in the ordinary case: an off-topic fact that keeps
+        matching broad queries rides along in successful runs it never used."""
+        from robothor.memory.lifecycle import _run_decay_pass_sync
+
+        conn, tenant = facts_db
+        ridealong = _seed(conn, tenant, "The office plants are watered on Mondays.")
+        never = _seed(conn, tenant, "The office printer is on the second floor.")
+        before = _ranked(conn, [ridealong, never])
+
+        _succeed(tenant, [ridealong], output="All 3 reports were sent.", n=50)
+        _run_decay_pass_sync(tenant_id=tenant)
+
+        assert _get(conn, ridealong)["outcome_successes"] == 50
+        assert _utility(conn, ridealong) == _utility(conn, never) == 0.0
+        assert _ranked(conn, [ridealong, never]) == before == [never, ridealong]
+
     def test_iii_returned_200_times_in_failed_runs_falls_no_further_than_the_cap(
         self, facts_db
     ) -> None:
@@ -223,6 +245,29 @@ class TestUtilityFromOutcomes:
         assert -1.0 <= u < -0.95
         drop = float(_get(conn, clean)["decay_score"]) - float(_get(conn, blamed)["decay_score"])
         assert 0.0 < drop <= MAX_FAILURE_PENALTY + 1e-6
+
+
+class TestDecayPassWrites:
+    def test_a_row_without_last_use_is_not_rewritten_when_nothing_changed(self, facts_db) -> None:
+        """Rows with a NULL last_accessed get no decay score; their utility is
+        written only when it changes, not every night."""
+        from robothor.memory.lifecycle import _run_decay_pass_sync
+
+        conn, tenant = facts_db
+        fact = _seed(conn, tenant, "Bob keeps the spare keys in the top drawer.", used="NULL")
+
+        def _xmin() -> str:
+            with conn.cursor() as cur:
+                cur.execute("SELECT xmin::text FROM memory_facts WHERE id = %s", (fact,))
+                value = str(cur.fetchone()[0])
+            conn.commit()
+            return value
+
+        _run_decay_pass_sync(tenant_id=tenant)
+        first = _xmin()
+        _run_decay_pass_sync(tenant_id=tenant)
+        assert _xmin() == first
+        assert _get(conn, fact)["utility"] == 0.0
 
 
 class TestPruneWithFadingUse:

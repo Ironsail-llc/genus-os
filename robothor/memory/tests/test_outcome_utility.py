@@ -27,68 +27,78 @@ class TestUtilityFunction:
     def test_no_evidence_is_the_neutral_prior(self) -> None:
         from robothor.memory.utility import UTILITY_PRIOR, compute_utility
 
-        assert compute_utility(0, 0, 0) == pytest.approx(UTILITY_PRIOR)
+        assert compute_utility(citations=0, failures=0) == pytest.approx(UTILITY_PRIOR)
         assert UTILITY_PRIOR == 0.0
 
     def test_bounded_for_any_evidence(self) -> None:
         from robothor.memory.utility import UTILITY_MAX, UTILITY_MIN, compute_utility
 
         grid = [0, 1, 2, 5, 50, 10_000]
-        for s, c, f in itertools.product(grid, grid, grid):
-            u = compute_utility(s, c, f)
-            assert UTILITY_MIN <= u <= UTILITY_MAX, (s, c, f, u)
+        for c, f in itertools.product(grid, grid):
+            u = compute_utility(citations=c, failures=f)
+            assert UTILITY_MIN <= u <= UTILITY_MAX, (c, f, u)
         assert UTILITY_MIN == -1.0
         assert UTILITY_MAX == 1.0
 
-    def test_monotone_in_successes_and_citations(self) -> None:
+    def test_strictly_monotone_in_citations(self) -> None:
         from robothor.memory.utility import compute_utility
 
         for f in (0, 1, 5):
-            for c in (0, 2):
-                seq = [compute_utility(s, c, f) for s in range(0, 30)]
-                assert all(b >= a for a, b in itertools.pairwise(seq)), (c, f)
-            seq = [compute_utility(0, c, f) for c in range(0, 30)]
+            seq = [compute_utility(citations=c, failures=f) for c in range(0, 30)]
             assert all(b > a for a, b in itertools.pairwise(seq)), f
 
-    def test_anti_monotone_in_failures(self) -> None:
+    def test_strictly_anti_monotone_in_failures(self) -> None:
         from robothor.memory.utility import compute_utility
 
-        for s, c in ((0, 0), (5, 0), (5, 3)):
-            seq = [compute_utility(s, c, f) for f in range(0, 30)]
-            assert all(b < a for a, b in itertools.pairwise(seq)), (s, c)
+        for c in (0, 3):
+            seq = [compute_utility(citations=c, failures=f) for f in range(0, 30)]
+            assert all(b < a for a, b in itertools.pairwise(seq)), c
 
-    def test_a_success_raises_and_a_failure_lowers_from_neutral(self) -> None:
+    def test_a_citation_raises_and_a_failure_lowers_from_neutral(self) -> None:
         from robothor.memory.utility import compute_utility
 
-        assert compute_utility(1, 0, 0) > 0.0
-        assert compute_utility(0, 0, 1) < 0.0
+        assert compute_utility(citations=1, failures=0) > 0.0
+        assert compute_utility(citations=0, failures=1) < 0.0
 
-    def test_completed_runs_alone_saturate_at_a_small_ceiling(self) -> None:
-        """Diminishing returns: the weak credit of a run that merely completed
-        can never carry a fact past WEAK_UTILITY_CEILING, however many runs."""
-        from robothor.memory.utility import WEAK_UTILITY_CEILING, compute_utility
-
-        assert compute_utility(10_000, 0, 0) <= WEAK_UTILITY_CEILING + 1e-9
-        assert WEAK_UTILITY_CEILING <= 0.35
-        gains = [compute_utility(s + 1, 0, 0) - compute_utility(s, 0, 0) for s in range(6)]
-        assert all(b <= a for a, b in itertools.pairwise(gains))
-
-    def test_a_cited_use_credits_more_than_a_completed_run(self) -> None:
+    def test_diminishing_returns(self) -> None:
         from robothor.memory.utility import compute_utility
 
-        assert compute_utility(1, 1, 0) > compute_utility(2, 0, 0)
-        assert compute_utility(0, 50, 0) > 0.9
+        ups = [compute_utility(citations=c, failures=0) for c in range(8)]
+        downs = [compute_utility(citations=0, failures=f) for f in range(8)]
+        for seq in (ups, [-d for d in downs]):
+            gains = [b - a for a, b in itertools.pairwise(seq)]
+            assert all(b <= a for a, b in itertools.pairwise(gains))
+
+    def test_merely_completing_is_not_evidence_of_use(self) -> None:
+        """Criterion 3: a fact returned in many successful runs that never used
+        it does not rise, and those runs do not offset its failures either."""
+        import inspect
+
+        from robothor.memory.utility import compute_utility, utility_for_row
+
+        assert "successes" not in inspect.signature(compute_utility).parameters
+        ridealong = {"outcome_successes": 10_000, "outcome_citations": 0, "outcome_failures": 0}
+        assert utility_for_row(ridealong) == 0.0
+        blamed = {"outcome_successes": 50, "outcome_citations": 0, "outcome_failures": 1}
+        assert utility_for_row(blamed) == compute_utility(citations=0, failures=1)
+
+    def test_cited_use_saturates_toward_the_ceiling(self) -> None:
+        from robothor.memory.utility import compute_utility
+
+        assert 0.9 < compute_utility(citations=50, failures=0) < 1.0
 
     def test_failures_saturate_toward_the_floor(self) -> None:
         from robothor.memory.utility import compute_utility
 
-        assert compute_utility(0, 0, 200) > -1.0
-        assert compute_utility(0, 0, 200) < -0.95
+        assert compute_utility(citations=0, failures=200) > -1.0
+        assert compute_utility(citations=0, failures=200) < -0.95
 
     def test_negative_counts_are_treated_as_zero(self) -> None:
         from robothor.memory.utility import compute_utility
 
-        assert compute_utility(-3, -1, -2) == compute_utility(0, 0, 0)
+        assert compute_utility(citations=-1, failures=-2) == compute_utility(
+            citations=0, failures=0
+        )
 
 
 class TestUtilityDecayTerm:
@@ -108,6 +118,16 @@ class TestUtilityDecayTerm:
         for u in (-1.0, -5.0, -0.999):
             assert utility_decay_term(u) >= -MAX_FAILURE_PENALTY
         assert utility_decay_term(-1.0) == pytest.approx(-MAX_FAILURE_PENALTY)
+
+    def test_failure_penalty_is_never_weaker_than_the_linear_one_it_replaced(self) -> None:
+        """The old penalty was 0.1 per failure, capped at 0.4 (reached at 4)."""
+        from robothor.memory.utility import compute_utility, utility_decay_term
+
+        for f in range(0, 30):
+            penalty = -utility_decay_term(compute_utility(citations=0, failures=f))
+            assert penalty >= min(0.1 * f, 0.4) - 1e-9, (f, penalty)
+            assert penalty <= 0.4 + 1e-9
+        assert -utility_decay_term(compute_utility(citations=0, failures=4)) == pytest.approx(0.4)
 
     def test_positive_side_is_bounded(self) -> None:
         from robothor.memory.utility import MAX_UTILITY_BOOST, utility_decay_term
@@ -207,6 +227,24 @@ class TestCitationDetection:
         from robothor.memory.utility import distinctive_tokens
 
         assert distinctive_tokens("In 2026 Bob had 12 meetings.") == set()
+
+    def test_a_short_bare_number_is_not_distinctive(self) -> None:
+        from robothor.memory.utility import distinctive_tokens, is_cited
+
+        assert not is_cited("The office has 120 desks.", "Processed 120 emails today.", "")
+        assert distinctive_tokens("Budget 1000, then 25000 later.") == set()
+
+    def test_a_long_bare_number_is_distinctive(self) -> None:
+        from robothor.memory.utility import is_cited
+
+        assert is_cited("Alice's account number is 4417203.", "Account 4417203 is open.", "")
+
+    def test_clock_times_and_calendar_dates_are_not_distinctive(self) -> None:
+        """Digests print today's date and times; a fact holding them is not used."""
+        from robothor.memory.utility import distinctive_tokens
+
+        text = "Standup at 9:30, review 10:00, due 11/25, shipped 2026-11-24 and 24.11.2026."
+        assert distinctive_tokens(text) == set()
 
     def test_matching_is_whole_token_and_case_insensitive(self) -> None:
         from robothor.memory.utility import is_cited
