@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -553,6 +554,11 @@ def format_world_report(report: dict[str, Any], *, as_json: bool = False) -> str
         lines.append(f"  {stratum}: {agg['passed']}/{agg['total']} ({rate:.1%})")
     for stratum, n in sorted(report.get("unscored", {}).items()):
         lines.append(f"  {stratum}: {n} unscored (retrieval cannot judge an abstention)")
+    t = report.get("timings")
+    if t:
+        lines.append(
+            f"  time: seed {t['seed_s']:.1f}s, queries {t['query_s']:.1f}s, total {t['total_s']:.1f}s"
+        )
     return "\n".join(lines)
 
 
@@ -574,14 +580,19 @@ async def run_world(
     from robothor.memory.eval_world import generate_world, world_cases
     from robothor.memory.facts import search_facts
 
+    started = time.perf_counter()
     world = generate_world(seed, size)
     cases = world_cases(world, split)
     tenants = [tenant_id, shadow]
     if cleanup:
         cleanup_world(tenants)  # residue from an interrupted run
     results: list[CaseResult | None] = []
+    seed_s = query_s = 0.0
     try:
+        t0 = time.perf_counter()
         await seed_world(world, tenant_id, shadow_tenant_id=shadow, embed_batch=embed_batch)
+        seed_s = time.perf_counter() - t0
+        t0 = time.perf_counter()
         for case in cases:
             if case.stratum in _UNSCORED:
                 results.append(None)
@@ -589,11 +600,17 @@ async def run_world(
             with tenant_scope(tenant_id):
                 found = await search_facts(case.question, limit=k, tenant_id=tenant_id)
             results.append(score_world_case(case, [r.get("fact_text", "") for r in found], k))
+        query_s = time.perf_counter() - t0
     finally:
         if cleanup:
             cleanup_world(tenants)
+    timings = {
+        "seed_s": round(seed_s, 3),
+        "query_s": round(query_s, 3),
+        "total_s": round(time.perf_counter() - started, 3),
+    }
     return build_world_report(
         cases,
         results,
-        meta={"seed": seed, "size": size, "split": split, "k": k},
+        meta={"seed": seed, "size": size, "split": split, "k": k, "timings": timings},
     )
