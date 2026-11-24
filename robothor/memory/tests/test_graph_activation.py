@@ -651,3 +651,57 @@ def test_extra_entity_ids_are_seeds_only_within_the_tenant(world: Graph) -> None
     mine, theirs = world.entity("Alice Smith"), world.entity("Bob Jones", tenant=OTHER)
     got = seeds_from_text(TENANT, "hello there", extra_entity_ids=(mine, theirs))
     assert [s.entity_id for s in got] == [mine]
+
+
+# ─── review hardening ────────────────────────────────────────────────────
+
+
+def test_an_agent_scoped_row_never_counts_for_a_reader_with_the_same_id(world: Graph) -> None:
+    """Visibility names the scope kind: a row private to an agent whose id
+    happens to equal the reader's person id is not the reader's — not as
+    edge evidence, not as a returned fact, not as an entity."""
+    reader = str(uuid.uuid4())
+    a, b, c = (world.entity(n) for n in ("Alice Smith", "Bob Jones", "Carol White"))
+    agent_support = world.fact("agent's private support", scope_id=reader)
+    world.edge(a, b, evidence=(agent_support,))
+    world.link(a, c)
+    agent_fact = world.fact("Carol White agent-private note", about=(c,), scope_id=reader)
+    agent_entity = world.entity("Dan Agent", scope_id=reader)
+    world.link(a, agent_entity)
+    about_b = world.fact("Bob Jones manages shipping", about=(b,))
+    about_d = world.fact("Dan Agent detail", about=(agent_entity,))
+
+    # Negative control: as user-scoped rows the reader sees all of them.
+    user_view = set(_ids(_activate(TENANT, [a], reader_scope_id=reader, limit=50)))
+    assert {about_b, agent_fact, about_d} <= user_view
+
+    world.sql(
+        "UPDATE memory_facts SET scope_kind = 'agent' WHERE id = ANY(%s)",
+        ([agent_support, agent_fact],),
+    )
+    world.sql("UPDATE memory_entities SET scope_kind = 'agent' WHERE id = %s", (agent_entity,))
+
+    got = set(_ids(_activate(TENANT, [a], reader_scope_id=reader, limit=50)))
+    assert about_b not in got, "an agent-private fact carried an edge for a person reader"
+    assert agent_fact not in got, "an agent-private fact was returned to a person reader"
+    assert about_d not in got, "an agent-private entity was walked for a person reader"
+
+
+def test_the_operators_entities_are_excluded_by_crm_person_inside_the_walk(
+    world: Graph,
+) -> None:
+    owner = world.person("Olive", "Operator")
+    hub = world.entity("Olive Operator", crm_person_id=owner)
+    a = world.entity("Alice Smith")
+    lonely = world.entity("Lonely Person")
+    world.link(a, hub)
+    world.link(hub, lonely)
+    hub_fact = world.fact("Olive Operator private calendar", about=(hub,))
+    lonely_fact = world.fact("Lonely Person likes tea", about=(lonely,))
+    alice_fact = world.fact("Alice Smith keeps the passport", about=(a,))
+
+    assert {hub_fact, lonely_fact} <= set(_ids(_activate(TENANT, [a, hub], limit=50)))
+    got = set(_ids(_activate(TENANT, [a, hub], exclude_crm_person_id=owner, limit=50)))
+
+    assert alice_fact in got
+    assert hub_fact not in got and lonely_fact not in got

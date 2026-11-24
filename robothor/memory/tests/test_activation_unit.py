@@ -73,3 +73,64 @@ class TestNoSeeds:
 @pytest.mark.parametrize("hops", [-1, 0, 1, 2, 3, 10])
 def test_hops_are_clamped_before_the_call(hops: int) -> None:
     assert 0 <= activation.clamp_hops(hops) <= activation.HARD_MAX_HOPS
+
+
+class TestOperatorLookup:
+    """Without the operator's identity the walk could run through the
+    operator's own node, so it does not run."""
+
+    def _connect(self, statements: list[str]):
+        from contextlib import contextmanager
+
+        class _Cur:
+            def execute(self, sql: str, _params: object = None) -> None:
+                statements.append(sql)
+
+            def fetchall(self) -> list[dict[str, object]]:
+                if "memory_entities" in statements[-1]:
+                    return [{"id": 1, "name": "Alice Smith", "method": "full_name"}]
+                return []
+
+            def fetchone(self) -> None:
+                return None
+
+        class _Conn:
+            def cursor(self, cursor_factory: object = None) -> _Cur:
+                return _Cur()
+
+        @contextmanager
+        def _connect(*_a: object, **_k: object):
+            yield _Conn()
+
+        return _connect
+
+    def test_a_failed_lookup_raises_and_never_walks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import robothor.crm.dal
+
+        def _boom(*_a: object, **_k: object) -> object:
+            raise RuntimeError("pool exhausted")
+
+        monkeypatch.setattr(robothor.crm.dal, "get_owner_person", _boom)
+        statements: list[str] = []
+        with pytest.raises(activation.OperatorUnknownError):
+            activation.graph_candidates_for_query(
+                "test-tenant", "Alice Smith", connect=self._connect(statements)
+            )
+        assert not any("memory_activate" in s for s in statements)
+
+    def test_the_lookup_runs_on_the_held_cursor(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import robothor.crm.dal
+
+        seen: dict[str, object] = {}
+
+        def _owner(tenant_id: str, *, cur: object = None) -> dict[str, object]:
+            seen["cur"] = cur
+            return {"id": None}
+
+        monkeypatch.setattr(robothor.crm.dal, "get_owner_person", _owner)
+        statements: list[str] = []
+        activation.graph_candidates_for_query(
+            "test-tenant", "Alice Smith", connect=self._connect(statements)
+        )
+        assert seen["cur"] is not None, "the operator lookup opened its own connection"
+        assert any("memory_activate" in s for s in statements)

@@ -43,7 +43,7 @@ def world(scratch_db, monkeypatch) -> Iterator[Graph]:
     import robothor.crm.dal
     import robothor.db
     from robothor.llm import ollama
-    from robothor.memory import facts
+    from robothor.memory import entities, facts
     from robothor.rag import reranker
 
     db, dsn = scratch_db(through=_migration())
@@ -60,7 +60,7 @@ def world(scratch_db, monkeypatch) -> Iterator[Graph]:
         finally:
             conn.close()
 
-    for module in (robothor.db, facts, robothor.crm.dal):
+    for module in (robothor.db, facts, entities, robothor.crm.dal):
         monkeypatch.setattr(module, "get_connection", _conn)
     monkeypatch.setattr(facts, "apply_hnsw_session", lambda _cur: None)
 
@@ -237,3 +237,67 @@ async def test_the_search_path_writes_nothing(world: Graph, monkeypatch) -> None
     assert world.sql("SELECT id, access_count, last_accessed FROM memory_facts ORDER BY id") == (
         before
     )
+
+
+@pytest.mark.asyncio
+async def test_a_top_hit_the_reader_cannot_see_does_not_seed_the_walk(
+    world: Graph, monkeypatch
+) -> None:
+    """The keyword leg does not filter by scope, so it can return a fact
+    private to someone else. Its mentions must not start a walk for a reader
+    who cannot see it."""
+    from robothor.memory.facts import search_facts
+    from robothor.rag import reranker
+
+    alice_reader, bob_reader = world.person("Alice", "Smith"), world.person("Bob", "Jones")
+    p, q = world.entity("Pat Hidden"), world.entity("Quinn Far")
+    world.fact("zephyr logistics memo from Bob", about=(p,), scope_id=bob_reader)
+    world.link(p, q)
+    about_q = world.fact("Quinn Far operates the depot", about=(q,))
+    monkeypatch.setattr(reranker, "rerank_pair", _scorer("depot"))
+
+    bob = await search_facts(
+        "zephyr logistics memo", limit=5, tenant_id=TENANT, reader_scope_id=bob_reader
+    )
+    assert about_q in {r["id"] for r in bob}, "negative control: its owner's walk reaches it"
+
+    alice = await search_facts(
+        "zephyr logistics memo", limit=5, tenant_id=TENANT, reader_scope_id=alice_reader
+    )
+    assert about_q not in {r["id"] for r in alice}
+
+
+@pytest.mark.asyncio
+async def test_the_one_hop_expansion_answers_on_data_without_mentions(
+    world: Graph, monkeypatch
+) -> None:
+    """Existing data has entities by name and relations, but no mentions: the
+    graph leg finds nothing and the one-hop expansion answers as before."""
+    from robothor.memory.facts import search_facts
+    from robothor.rag import reranker
+
+    a, b = world.entity("Hubcorp Example", entity_type="organization"), world.entity("Spokeworks Example")
+    world.edge(a, b, legacy_fact=world.fact("support", origin=None))
+    seed = world.fact(
+        "Hubcorp Example signed the quarterly logistics agreement",
+        origin=None,
+        entities=("Hubcorp Example",),
+    )
+    world.sql("UPDATE memory_facts SET embedding = %s::vector WHERE id = %s", (str(_VECTOR), seed))
+    related = world.fact(
+        "Spokeworks Example operates the northern depot",
+        origin=None,
+        importance=0.9,
+        entities=("Spokeworks Example",),
+    )
+    monkeypatch.setattr(reranker, "rerank_pair", _scorer("northern depot"))
+
+    results = await search_facts(
+        "Hubcorp Example quarterly logistics agreement",
+        limit=5,
+        tenant_id=TENANT,
+        expand_entities=True,
+    )
+
+    row = next((r for r in results if r["id"] == related), None)
+    assert row is not None and row.get("source") == "entity_expansion"
