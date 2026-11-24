@@ -891,17 +891,16 @@ def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any
 LEG_FETCH_MIN = 30
 LEG_FETCH_MIN_WIDE = 45
 
-# RRF weight per leg (unlisted legs count 1.0). The two fan-out legs that were
-# previously appended at a fixed low score enter at half weight: they still
-# reach the reranker when their best rows are near the head, without displacing
-# the primary legs' top ranks.
-LEG_WEIGHTS: dict[str, float] = {"entity_expansion": 0.5, "chat_turn": 0.5}
+# RRF weight per leg (unlisted legs count 1.0). The two fan-out legs enter at
+# half weight: they still reach the reranker when their best rows are near the
+# head, without displacing the primary legs' top ranks.
+LEG_WEIGHTS: dict[str, float] = {"graph": 0.5, "chat_turn": 0.5}
 
 # Places in the final top-k a leg keeps whenever it returned anything (see
 # recall.apply_reserved). Graph-derived facts are related to the query, not
 # similar to it, so a query-document reranker would otherwise always drop
-# them. "graph" is reserved for the graph-activation leg.
-RESERVED_PLACES: dict[str, int] = {"graph": 2, "entity_expansion": 1}
+# them. "graph" is the graph-activation leg (robothor/memory/activation.py).
+RESERVED_PLACES: dict[str, int] = {"graph": 2}
 
 _AUX_LIMITS = {"insight": 3, "episode": 3, "chat_turn": 5}
 
@@ -1012,65 +1011,66 @@ def _fact_legs(
     }
 
 
-async def _entity_expansion_leg(
-    seed: list[Candidate],
-    tenant: str,
-    scope_clause: str,
-    scope_params: tuple[Any, ...],
-) -> list[Candidate]:
-    """Facts about entities related to the top hits' entities (best-effort)."""
-    out: list[Candidate] = []
-    try:
-        from robothor.memory.entities import get_entity
+# Payload fields the graph leg adds to a row, also when another leg found it
+# first (fusion keeps the first leg's payload).
+_GRAPH_FIELDS = (
+    "origin",
+    "origin_recorded",
+    "graph_score",
+    "graph_hops",
+    "graph_path",
+    "graph_entity",
+    "graph_entity_id",
+    "graph_edge_id",
+)
 
-        mentioned: set[str] = set()
-        for c in seed[:5]:
-            mentioned.update(c.payload.get("entities") or [])
-        exclude = {c.id for c in seed if c.kind == "fact"}
-        for entity_name in list(mentioned)[:3]:
-            entity = await get_entity(entity_name, tenant_id=tenant)
-            for rel in (entity or {}).get("relations", [])[:3]:
-                # get_entity aliases the far end as target_name (outgoing) or
-                # source_name (incoming); bare keys are a fallback for a flatter
-                # shape. Reading only the bare keys once disabled this silently.
-                related = (
-                    rel.get("target_name")
-                    or rel.get("source_name")
-                    or rel.get("target")
-                    or rel.get("source")
-                    or ""
-                )
-                if not related:
-                    continue
-                with get_connection() as conn:
-                    cur = conn.cursor(cursor_factory=RealDictCursor)
-                    cur.execute(
-                        f"""
-                        SELECT id, fact_text, category, entities, confidence,
-                               source_type, metadata, created_at, importance_score,
-                               person_id
-                        FROM memory_facts
-                        WHERE is_active = TRUE AND tenant_id = %s
-                          AND %s = ANY(entities)
-                          AND importance_score > 0.5
-                          AND id != ALL(%s)
-                          {scope_clause}
-                        ORDER BY importance_score DESC, created_at DESC
-                        LIMIT 2
-                        """,
-                        (tenant, related, list(exclude), *scope_params),
-                    )
-                    rows = [dict(r) for r in cur.fetchall()]
-                for r in rows:
-                    r["source"] = "entity_expansion"
-                    exclude.add(r["id"])
-                out.extend(_fact_candidates(rows, "entity_expansion", "importance_score"))
-    except Exception:
-        # Best-effort by design — a graph miss must not fail the search. But it
-        # stays *logged*: a bare `pass` here once hid a key-name mismatch that
-        # disabled expansion entirely.
-        logger.debug("entity expansion failed (best-effort)", exc_info=True)
-    return out
+
+async def _graph_leg(
+    query: str,
+    legs: dict[str, list[Candidate]],
+    tenant: str,
+    *,
+    reader_scope_id: str | None,
+    scope: DataScope | None,
+    limit: int,
+) -> list[Candidate]:
+    """Graph activation from the query's entities and the top hits' entities.
+
+    Off the loop, read-only, best-effort: a failure is a WARNING and the other
+    legs still rank. A deliberate search, so every origin is walked and each
+    row is labelled with its origin (see robothor/memory/activation.py).
+    """
+    from robothor.memory import activation
+
+    top = [c.id for c in fuse(legs, weights=LEG_WEIGHTS) if c.kind == "fact"]
+    restricted = scope is not None and scope.restricted
+    try:
+        return await asyncio.to_thread(
+            activation.graph_candidates_for_query,
+            tenant,
+            query,
+            top[: activation.SEARCH_SEED_HITS],
+            reader_scope_id=reader_scope_id,
+            person_restricted=restricted,
+            person_id=scope.person_id if restricted and scope is not None else None,
+            limit=max(activation.LIMIT, limit),
+            connect=get_connection,
+        )
+    except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
+        logger.warning("search_facts: graph leg failed: %s: %s", type(e).__name__, e)
+        return []
+
+
+def _label_graph_rows(pool: list[dict[str, Any]], graph: list[Candidate]) -> None:
+    """Carry the graph leg's origin and path onto every pooled row it found."""
+    by_id = {c.id: c.payload for c in graph}
+    for row in pool:
+        payload = by_id.get(row.get("id")) if row.get("kind") == "fact" else None
+        if payload is None or "graph" not in (row.get("leg_ranks") or {}):
+            continue
+        for key in _GRAPH_FIELDS:
+            if key in payload:
+                row[key] = payload[key]
 
 
 def _aux_candidates(rows: list[dict[str, Any]], kind: str, text_key: str) -> list[Candidate]:
@@ -1185,14 +1185,18 @@ async def search_facts(
     include_chat_turns: bool = False,
     tenant_id: str = "",
     scope: DataScope | None = None,
+    include_graph: bool = True,
+    reader_scope_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid recall: named legs fused by RRF, graded rerank, one relevance scale.
 
     Pipeline (contract in robothor/memory/recall.py):
         1. Legs: ``vector`` (HNSW cosine) and ``keyword`` (full text, every
-           term, then any term) over memory_facts; ``entity_expansion`` when
-           ``expand_entities``; ``insight`` / ``episode`` / ``chat_turn`` when
-           asked for. Each fetches max(30, limit * 3).
+           term, then any term) over memory_facts; ``graph`` (activation
+           from the entities the query names and the top hits mention, see
+           robothor/memory/activation.py) unless ``include_graph=False``;
+           ``insight`` / ``episode`` / ``chat_turn`` when asked for. Each
+           fact leg fetches max(30, limit * 3).
         2. ``fuse`` — reciprocal rank fusion, k=60, ``LEG_WEIGHTS``.
         3. Reranker (on by default; ``MEMORY_RERANK_ENABLED``) scores the head
            of the fused list on 0..1 and orders by that score; on any error the
@@ -1207,14 +1211,25 @@ async def search_facts(
         active_only: If True, only return active (non-superseded) facts.
         use_reranker: If True, run reranker on candidates. If None (default),
             honors MEMORY_RERANK_ENABLED env flag (on by default).
-        expand_entities: If True, pull related entity facts.
+        expand_entities: Kept for callers of the one-hop entity expansion
+            the graph leg replaced: True now means "graph leg on" (it is on
+            by default anyway).
+        include_graph: Run the graph-activation leg (default True). Its rows
+            carry ``origin`` (NULL reads as ``agent_generated``),
+            ``graph_hops`` and ``graph_path``; a row found only by it has
+            ``source="graph"``. It walks every origin: this is a deliberate
+            search, not automatic recall. Read-only, like every leg.
+        reader_scope_id: The reader's person id. The graph walk crosses only
+            edges with a supporting fact that is shared or scoped to this
+            reader. None: ``scope.person_id`` when a scope is given, else
+            only shared evidence.
         scope: Optional "own data + shared" DataScope (Task 5, Unified
             Identity Context). ``None`` (the default — every pre-existing
             caller) is unrestricted. A restricted scope adds
             ``(person_id = %s OR person_id IS NULL)`` to both fact legs AND to
-            the entity-graph expansion query (it reads the same
-            ``memory_facts`` table and must not pull in another person's
-            facts through the fan-out). The insight, episode and chat-turn
+            the graph walk, both its edges' evidence and the facts it returns
+            (it reads the same ``memory_facts`` table and must not pull in
+            another person's facts through the fan-out). The insight, episode and chat-turn
             legs are unaffected — see robothor/identity/scope.py and the Task
             5 report for the documented rationale.
 
@@ -1254,12 +1269,14 @@ async def search_facts(
     # Synchronous DB work inside this coroutine is the pre-existing pattern
     # (it blocks the loop for the two leg queries); it is not widened here.
     legs = _fact_legs(query, embedding, _tenant, filters, scope_params, max(fetch_min, limit * 3))
-    if expand_entities:
-        seed = fuse(legs, weights=LEG_WEIGHTS)
-        if seed:
-            legs["entity_expansion"] = await _entity_expansion_leg(
-                seed, _tenant, scope_clause, scope_params
-            )
+    graph: list[Candidate] = []
+    if include_graph or expand_entities:
+        reader = reader_scope_id or (scope.person_id if scope is not None else None)
+        graph = await _graph_leg(
+            query, legs, _tenant, reader_scope_id=reader, scope=scope, limit=limit
+        )
+        if graph:
+            legs["graph"] = graph
     legs.update(
         await _auxiliary_legs(
             query=query,
@@ -1273,6 +1290,7 @@ async def search_facts(
     )
 
     pool = [c.to_row() for c in fuse(legs, weights=LEG_WEIGHTS)]
+    _label_graph_rows(pool, graph)
     ranked = await _rank_pool(query, pool, limit, use_reranker)
     result = apply_reserved(ranked, pool, limit, RESERVED_PLACES)
     for r in result:

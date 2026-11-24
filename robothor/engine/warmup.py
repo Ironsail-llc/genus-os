@@ -1170,6 +1170,7 @@ def _interactive_section_builders(
                     scope=enforce_scope,
                     observe_scope_obj=observe_scope_obj,
                     user_id=scope_user_id,
+                    sender_person_id=identity.person_id if identity is not None else None,
                 )
             except Exception as e:
                 # WARNING, not DEBUG: a failure here empties entity recall
@@ -1323,6 +1324,67 @@ def build_interactive_preamble(
 
 MAX_ENTITY_CONTEXT_CHARS = 1000
 
+#: Hard time budget for graph activation in warm-up, in seconds. Past it the
+#: entity context falls back to the name-matching path below. A starting value
+#: until the measured warm-up baseline sets it.
+GRAPH_WARMUP_BUDGET_SECONDS = 0.150
+
+_graph_pool: ThreadPoolExecutor | None = None
+
+
+def _get_graph_pool() -> ThreadPoolExecutor:
+    global _graph_pool
+    with _pool_lock:
+        if _graph_pool is None:
+            _graph_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="warmup-graph")
+        return _graph_pool
+
+
+def _graph_entity_lines(
+    user_message: str,
+    tenant_id: str,
+    exclude_names: set[str] | None,
+    scope: DataScope | None,
+    sender_person_id: str | None,
+) -> list[dict[str, Any]]:
+    """Connected context from graph activation, within the time budget.
+
+    Automatic recall, so trusted evidence only (operator-confirmed,
+    user-stated, CRM); the operator's own entity is neither seed nor transit;
+    no model call. Returns the facts' payloads, best first, or ``[]`` on a
+    timeout, an error or no result — the caller then runs today's path.
+    """
+    from robothor.memory import activation
+
+    restricted = scope is not None and scope.restricted
+    person_id = scope.person_id if restricted and scope is not None else None
+    budget = GRAPH_WARMUP_BUDGET_SECONDS
+    future = _get_graph_pool().submit(
+        contextvars.copy_context().run,
+        lambda: activation.recall_for_message(
+            tenant_id,
+            user_message,
+            sender_person_id=sender_person_id,
+            reader_scope_id=sender_person_id or person_id,
+            exclude_names=exclude_names,
+            person_restricted=restricted,
+            person_id=person_id,
+            trusted_only=True,
+            statement_timeout_ms=max(1, int(budget * 1000)),
+        ),
+    )
+    try:
+        candidates = future.result(timeout=budget)
+    except TimeoutError:
+        future.cancel()
+        logger.info("Warmup graph activation exceeded %d ms; using name matching", budget * 1000)
+        return []
+    except Exception as e:
+        logger.warning("Warmup graph activation failed, using name matching: %s", e)
+        return []
+    return [c.payload for c in candidates]
+
+
 # Words that are never entities (grammar) and capitalized sentence-starters that
 # must not be mistaken for proper nouns.
 _ENTITY_STOPWORDS = frozenset(
@@ -1380,8 +1442,15 @@ def _build_entity_context(
     scope: DataScope | None = None,
     observe_scope_obj: DataScope | None = None,
     user_id: str | None = None,
+    sender_person_id: str | None = None,
 ) -> str:
     """Extract entities from the user message and pull relevant facts.
+
+    Connected context comes first from graph activation
+    (``_graph_entity_lines``: trusted evidence only, within
+    ``GRAPH_WARMUP_BUDGET_SECONDS``). On a timeout, an error or an empty result
+    — which is every instance whose memory predates origins — the section is
+    exactly what the name-matching path below returns.
 
     Args:
         exclude_names: Names to skip during entity search (e.g. the current
@@ -1398,6 +1467,9 @@ def _build_entity_context(
             scope and a would-drop count is logged — never used to alter
             the returned text.
         user_id: Identity's stable id, for the observe-mode log line only.
+        sender_person_id: The sender's CRM person, when known: its linked
+            entity seeds the graph, and it is the reader whose private
+            evidence the walk may cross.
 
     Every candidate's facts come from one statement
     (``_fetch_entity_facts_batched``).
@@ -1405,6 +1477,35 @@ def _build_entity_context(
     Budget: max 1000 chars. Stays synchronous (no async search_facts) so it can
     run inside the sync warmup path; recency awareness is done in SQL.
     """
+    from robothor.identity.scope import log_would_drop, rows_dropped_by_scope
+
+    graph_rows = _graph_entity_lines(
+        user_message, tenant_id, exclude_names, scope, sender_person_id
+    )
+    if graph_rows:
+        graph_lines = ["--- RELEVANT CONTEXT ---"]
+        graph_chars = 0
+        for f in graph_rows:
+            path = f.get("graph_path") or []
+            via = f" [via {' > '.join(path)}]" if f.get("graph_hops") and len(path) > 1 else ""
+            line = f"- {f['fact_text']}{via}"
+            if graph_chars + len(line) > MAX_ENTITY_CONTEXT_CHARS:
+                break
+            graph_lines.append(line)
+            graph_chars += len(line)
+        if observe_scope_obj is not None:
+            dropped = rows_dropped_by_scope(graph_rows, observe_scope_obj)
+            if dropped:
+                log_would_drop(
+                    tool_name="warmup:entity_context",
+                    user_id=user_id,
+                    scope=observe_scope_obj,
+                    dropped=dropped,
+                    table="memory_facts",
+                )
+        if len(graph_lines) > 1:
+            return "\n".join(graph_lines)
+
     v2 = _warmup_recall_v2_enabled()
     candidates = _extract_entity_candidates(user_message, lowercase_ok=v2)
 
@@ -1418,7 +1519,6 @@ def _build_entity_context(
     from psycopg2.extras import RealDictCursor
 
     from robothor.db import get_connection
-    from robothor.identity.scope import log_would_drop, rows_dropped_by_scope
 
     # Restricted is passed on its own: a restricted caller with no linked
     # person must still be filtered (to facts about no one), not treated as

@@ -52,8 +52,11 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      requires every term first and falls back to any term when that matches
      nothing, so a natural-language question still finds the fact that shares
      most of its words.
-   - `entity_expansion` (`expand_entities`) — facts about entities related to
-     the top hits' entities.
+   - `graph` (on unless `include_graph=False`) — graph activation from the
+     entities the query names and the entities the top hits mention (see
+     [Associative recall](#associative-recall)). It replaced the one-hop
+     `entity_expansion` leg; `expand_entities=True` is still accepted and
+     means "graph leg on".
    - `insight`, `episode`, `chat_turn` (`include_insights`,
      `include_episodes`, `include_chat_turns`).
 2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
@@ -71,7 +74,7 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    near-duplicates are dropped.
 5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps at
    least that many places in the top `limit` whenever it returned anything,
-   chosen by its own score: `entity_expansion` 1, and `graph` 2 for a graph leg.
+   chosen by its own score: `graph` keeps 2.
    A related-but-not-similar fact is exactly what a query-document reranker
    discards.
 
@@ -99,7 +102,7 @@ tool routes through `robothor/memory/router.py`, which classifies the query
 | `exact_lookup` | Knowledge Vault captions + facts | numbers, ids, addresses |
 | `temporal` | facts + episodes | results recency-reordered (latest first) |
 | `how_to` | procedures + facts | |
-| `who_is` | facts + entity-graph expansion | |
+| `who_is` | facts (with the graph leg) | |
 | `intent` | standing intents + facts | |
 | `default` | facts + insights | no episode/entity fan-out |
 
@@ -462,6 +465,73 @@ lists, the order and the helpers that rank by them (`authority_rank`,
 `least_trusted`, `is_trusted_for_auto_recall`) live in
 `robothor/memory/graph_schema.py`; a test keeps them equal to the database's
 CHECK constraints.
+
+### Associative recall
+
+When an agent works on a person, company or task, what is connected to it
+comes to mind without being asked. `robothor/memory/activation.py` links text to
+the entities it names and spreads activation from them over the graph; the
+walk itself is the database function `memory_activate` (migration
+`crm/migrations/*_memory_graph_activation.sql`).
+
+**Seeds.** `seeds_from_text` links text to entities without a model call: exact
+full names and aliases, case-insensitively, and e-mail addresses or @handles
+matched against `contact_identifiers`. A single token never resolves on its
+own, so a first name alone seeds nothing. Warm-up also seeds the sender's own
+entity (the entity whose `crm_person_id` is the sender's CRM person);
+`search_facts` also seeds the entities its top hits mention (`memory_mentions`).
+
+**The walk.** A bounded, forward-push approximation of Personalized PageRank.
+Each seed starts with its weight divided by the square root of one plus its
+visible degree. Each hop, every frontier node passes a damped share of its
+activation along at most `FANOUT` of its strongest edges (by `weight`, then
+recency), split by edge weight over all of its visible, eligible edges. Edges
+are followed in both directions. At most `MAX_HOPS` hops (2 by default; the
+function never walks more than 3, whatever it is asked). Each hop is one
+set-based query over the active-edge indexes. A fact's graph score is the
+activation of the entities it mentions; each fact carries its hop distance and
+the path of entity names that reached it, so an agent can see why it was
+recalled. The constants at the top of `activation.py` are starting values for
+the evaluation to tune.
+
+**Visibility.** The walk crosses an edge only when at least one of its
+supporting facts is visible to the reader: active, in the tenant, and shared or
+scoped to the reader. Only those edges count toward a node's degree and weight,
+so a path through evidence the reader cannot see changes no score. The
+"own data + shared" person scope applies on top. The facts returned for an
+entity obey the same rule. With no known reader, only shared evidence counts.
+An edge's evidence is `memory_relation_evidence` together with the older
+`memory_relations.fact_id` column.
+
+**Trust.** Automatic recall (warm-up) runs trusted-only: an edge counts only
+when a supporting fact is `operator_confirmed`, `user_stated` or `crm`, an
+edge whose own origin is `inferred` or `external` is never followed, and only
+facts of those origins are returned. A fact with no origin counts as
+agent-generated, so it is not trusted. **Every fact written before origins
+existed has none, so on existing data trusted-only activation finds nothing and
+warm-up uses its name-matching context instead.** A deliberate search
+(`search_facts`, the `search_memory` tool) walks every origin and labels each
+row with its `origin` and the path that reached it.
+
+**Hub control.** The operator's own entity (found through `get_owner_person`)
+is never a seed and never a transit node. Seeds are weighted by inverse degree,
+and fan-out is capped, so a node linked to everything cannot flood the result.
+
+**Tenancy.** `memory_activate` is `SECURITY DEFINER`, like the warm-up's entity
+recall function, so the planner can use its indexes under row-level security.
+It filters every table by the tenant passed to it: both ends of an edge, the
+edge, its evidence, the facts, the mentions. A session scoped to another tenant
+gets nothing.
+
+**Warm-up.** The entity context section takes its connected context from
+trusted-only activation, with a hard budget (`GRAPH_WARMUP_BUDGET_SECONDS` in
+`robothor/engine/warmup.py`, 150 ms to start). On a timeout, an error or an
+empty result it falls back to the name-matching section exactly as before. The
+section keeps its character cap. There is no model call and no reranker. The
+fallback path does not filter by origin.
+
+The search path writes nothing. Rows found only by the graph are not logged as
+fact access.
 
 ## Ingestion Pipeline
 

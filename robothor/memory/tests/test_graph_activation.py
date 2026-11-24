@@ -65,6 +65,15 @@ class Graph:
             cur.execute(statement, params)
             return cur.fetchall() if cur.description else []
 
+    def person(self, first: str, last: str, *, tenant: str = TENANT) -> str:
+        """A CRM person (facts' person_id references one)."""
+        pid = str(uuid.uuid4())
+        self.sql(
+            "INSERT INTO crm_people (id, first_name, last_name, tenant_id) VALUES (%s, %s, %s, %s)",
+            (pid, first, last, tenant),
+        )
+        return pid
+
     def entity(
         self,
         name: str,
@@ -448,7 +457,7 @@ def test_a_private_fact_of_an_activated_entity_is_not_returned_to_another_reader
 
 def test_a_restricted_person_scope_hides_another_persons_facts(world: Graph) -> None:
     """The existing "own data + shared" person scope also holds in the walk."""
-    alice_pid, bob_pid = str(uuid.uuid4()), str(uuid.uuid4())
+    alice_pid, bob_pid = world.person("Alice", "Smith"), world.person("Bob", "Jones")
     a, b, c = (world.entity(n) for n in ("Alice Smith", "Bob Jones", "Carol White"))
     support = world.fact("support", person_id=bob_pid)
     world.edge(a, b, evidence=(support,))

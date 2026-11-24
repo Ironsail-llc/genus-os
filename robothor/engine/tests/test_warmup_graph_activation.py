@@ -157,6 +157,7 @@ class TestGraphSection:
             tenant_id="test-tenant",
             channel="webchat",
             identifier="acct-1",
+            verified=True,
             display_name="Bob Jones",
             person_id="person-7",
             role="owner",

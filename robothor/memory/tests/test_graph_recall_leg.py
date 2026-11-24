@@ -198,7 +198,7 @@ async def test_a_restricted_scope_does_not_reach_another_persons_fact_through_th
     from robothor.memory.facts import search_facts
     from robothor.rag import reranker
 
-    alice_pid, bob_pid = str(uuid.uuid4()), str(uuid.uuid4())
+    alice_pid, bob_pid = world.person("Alice", "Smith"), world.person("Bob", "Jones")
     w = _chain(world, fillers=0)
     bobs = world.fact("Carol White shares Bob's private depot code", about=(w["c"],))
     world.sql("UPDATE memory_facts SET person_id = %s WHERE id = %s", (bob_pid, bobs))

@@ -108,6 +108,7 @@ async def recall(
     limit: int = 10,
     budget_chars: int = DEFAULT_BUDGET_CHARS,
     scope: Any = None,
+    reader_scope_id: str | None = None,
 ) -> dict[str, Any]:
     """Route a recall query to the relevant stores, fuse, and budget-cap.
 
@@ -117,6 +118,9 @@ async def recall(
     None for unrestricted. It must be threaded to every store that can return
     person-linked rows; a store that cannot express person scoping is excluded
     for restricted callers rather than returned unfiltered.
+
+    ``reader_scope_id`` is the reader's person id, for the facts' graph leg:
+    the walk crosses only evidence that is shared or scoped to that reader.
     """
     resolved_tenant = tenant_id or DEFAULT_TENANT
     cls = classify_query(query)
@@ -133,6 +137,7 @@ async def recall(
         include_insights=(cls == "default"),
         include_episodes=(cls == "temporal"),
         scope=scope,
+        reader_scope_id=reader_scope_id,
     )
     ranked_lists.append([_normalize_fact(r) for r in fact_rows])
 
