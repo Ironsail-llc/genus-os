@@ -563,8 +563,9 @@ call and no reranker. The name-matched facts are not filtered by origin.
 What a turn pays: a message with no two adjacent name candidates, no e-mail
 address or @handle and no known sender makes no extra query and no thread
 hand-off. Otherwise one read-only connection runs the seed lookup, and when
-it finds a seed four more statements: arming the time limit, the operator
-lookup, the walk and resetting the limit.
+it finds a seed four more: arming the time limit, the operator lookup (two
+statements when no owner row is linked and the `owner.yaml` fallback runs), the
+walk and resetting the limit.
 
 The search path writes nothing. Rows found only by the graph are not logged as
 fact access.

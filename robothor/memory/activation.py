@@ -577,8 +577,9 @@ def recall_for_message(
     connection to the time left, so Postgres itself stops the operator lookup
     and the walk at the deadline, and it is reset before the connection goes
     back. A deadline already past skips the walk. Nothing is ever cancelled
-    from outside, so no other request's query can be. Costs two statements
-    (arm and reset) on a turn that found a seed.
+    from outside, so no other request's query can be. A turn that found a
+    seed runs five statements, six when the operator lookup falls back to
+    ``owner.yaml``: seed lookup, arm, operator lookup, walk, reset.
     """
     if not has_anything_to_link(message, phrases, sender_person_id):
         return []
