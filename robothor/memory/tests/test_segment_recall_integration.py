@@ -246,6 +246,42 @@ async def test_search_facts_keeps_private_segments_to_their_reader(pg) -> None:
 
 
 @pytest.mark.integration
+async def test_a_restricted_scope_reads_segments_as_its_own_person_only(pg) -> None:
+    """Under a restricted DataScope the unscopable legs are left out, but the
+    segment leg stays on with the scope's person as its only reader: that
+    person's private segment, never another person's (even one the caller
+    names as reader), and a shared workspace segment only when gated."""
+    from robothor.identity.scope import DataScope
+
+    alice, bob = _person(pg.cur, "Alice"), _person(pg.cur, "Bob")
+    room = str(uuid.uuid4())
+    room_key = f"agent:main:room:{room}"
+    # Distinct wording per conversation, so the blend's near-duplicate removal
+    # cannot collapse them into one row.
+    for key, person, detail in (
+        ("agent:main:alice", alice, "north entrance, code 4417, renewed in March"),
+        ("agent:main:bob", bob, "south ramp, code 9902, shared with the night shift"),
+        (room_key, None, "visitor bays, code 1288, posted on the noticeboard"),
+    ):
+        await _conversation(
+            pg,
+            key,
+            [
+                ("user", f"What is the bike locker code in the garage at the {detail}?"),
+                ("assistant", f"The garage bike locker at the {detail}, uses that code."),
+            ],
+            person=person,
+        )
+    scope = DataScope(tenant_id=A, person_id=alice, restricted=True)
+
+    gated = await _search_facts(scope=scope, reader_person_id=bob, room_ids=[room])
+    ungated = await _search_facts(scope=scope, room_ids=[])
+
+    assert {r["source_ref"] for r in _segments(gated)} == {"agent:main:alice", room_key}
+    assert {r["source_ref"] for r in _segments(ungated)} == {"agent:main:alice"}
+
+
+@pytest.mark.integration
 async def test_the_reranker_reads_a_bounded_excerpt_not_the_stored_text(pg, monkeypatch) -> None:
     from robothor.rag import reranker
 
