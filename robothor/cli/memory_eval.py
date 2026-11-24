@@ -19,10 +19,11 @@ from robothor.memory.eval import (
     preflight,
     record_benchmark_row,
     report_to_benchmark_row,
+    require_eval_tenant,
     run_suite,
 )
 from robothor.memory.eval_answer import format_answers_markdown, run_answers
-from robothor.memory.eval_world_seed import format_world_report, run_world
+from robothor.memory.eval_world_seed import WORLD_TENANT, format_world_report, run_world
 
 if TYPE_CHECKING:
     import argparse
@@ -55,6 +56,13 @@ def cmd_memory_eval(args: argparse.Namespace) -> int:
         return 3
 
     tenant = args.tenant or EVAL_TENANT
+    # Before preflight, which already opens a connection: the suite deletes
+    # every fact in its tenant, so a real tenant must never get that far.
+    try:
+        require_eval_tenant(tenant)
+    except EvalPreconditionError as e:
+        print(f"memory-eval cannot run: {e}")
+        return 3
 
     # NB: robothor.cli's main() already calls load_instance_env(), which reads
     # /etc/robothor/robothor.env AND the engine's systemd drop-in and fills in
@@ -97,12 +105,20 @@ def cmd_memory_eval(args: argparse.Namespace) -> int:
 def _cmd_world(args: argparse.Namespace) -> int:
     """Seed the synthetic world, score its cases through search_facts, clean up.
 
-    Same three-way exit codes as the suite. Not recorded to benchmark_results:
+    Exit 0 when it ran, 3 when it could not (or scored nothing): there is no
+    world floor yet. Runs in its own tenant (``memory-eval-world`` by default),
+    never the nightly suite's ``memory-eval``. Not recorded to benchmark_results:
     the fleet reads the latest ``memory`` row without a suite filter, so a
     world score would silently replace the suite's. Baselines for the world
     are their own later step.
     """
-    tenant = args.tenant or EVAL_TENANT
+    tenant = args.tenant or WORLD_TENANT
+    if tenant == EVAL_TENANT:
+        print(
+            f"memory-eval cannot run: --world may not use {EVAL_TENANT!r}, the nightly suite's "
+            f"tenant; use {WORLD_TENANT!r} (the default)"
+        )
+        return 3
     blocked = preflight(tenant)
     if blocked:
         print(f"memory-eval cannot run: {blocked}")
@@ -125,7 +141,10 @@ def _cmd_world(args: argparse.Namespace) -> int:
     print(format_world_report(report, as_json=args.json_output))
     if getattr(args, "record", False):
         print("note: --record is ignored with --world (world results are not recorded yet)")
-    return exit_code_for(report, None)
+    # No floor exists for the world yet, so the suite's would make every run
+    # exit 2 (raw_detail alone cannot pass through search_facts). 0 = it ran,
+    # 3 = nothing was scored.
+    return 0 if int(report.get("total") or 0) > 0 else 3
 
 
 def _cmd_answers(args: argparse.Namespace) -> int:
@@ -147,7 +166,13 @@ def _cmd_answers(args: argparse.Namespace) -> int:
         print(f"memory-eval cannot run: {e}")
         return 3
 
-    tenant = args.tenant or EVAL_TENANT
+    tenant = args.tenant or WORLD_TENANT
+    if tenant == EVAL_TENANT:
+        print(
+            f"memory-eval cannot run: --world may not use {EVAL_TENANT!r}, the nightly suite's "
+            f"tenant; use {WORLD_TENANT!r} (the default)"
+        )
+        return 3
     blocked = preflight(tenant)
     if blocked:
         print(f"memory-eval cannot run: {blocked}")

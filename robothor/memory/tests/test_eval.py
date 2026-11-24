@@ -334,3 +334,40 @@ cases:
         # previous run would otherwise join the corpus), then one per case that
         # keeps the distractors, then one in finally. 1 + 2 + 1.
         assert cleanup.call_count == 4
+
+
+class TestCleanupTenantClearsRelationsFirst:
+    """memory_relations.fact_id references memory_facts with no ON DELETE, so a
+    stray relation in the eval tenant would make the bare facts DELETE raise
+    ForeignKeyViolation and abort the nightly suite before it records."""
+
+    @staticmethod
+    def _run(keep: bool) -> list[tuple[str, tuple]]:
+        from contextlib import contextmanager
+
+        from robothor.memory.eval import _cleanup_tenant
+
+        executed: list[tuple[str, tuple]] = []
+
+        class Cur:
+            def execute(self, sql, params=()):
+                executed.append((" ".join(sql.split()), tuple(params)))
+
+        class Conn:
+            def cursor(self):
+                return Cur()
+
+        @contextmanager
+        def fake_conn(*_a, **_k):
+            yield Conn()
+
+        with patch("robothor.db.connection.get_connection", fake_conn):
+            _cleanup_tenant("memory-eval", keep_distractors=keep)
+        return executed
+
+    @pytest.mark.parametrize("keep", [False, True])
+    def test_relations_are_deleted_before_facts(self, keep):
+        executed = self._run(keep)
+        tables = [sql.split()[2] for sql, _ in executed]
+        assert tables.index("memory_relations") < tables.index("memory_facts")
+        assert all(params[0] == "memory-eval" for _, params in executed)

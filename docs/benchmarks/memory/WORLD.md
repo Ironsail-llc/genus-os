@@ -14,7 +14,7 @@ the run are in `robothor/memory/eval_world_seed.py`.
 ## How to run
 
 ```sh
-ROBOTHOR_TENANT_ID=memory-eval \
+ROBOTHOR_TENANT_ID=memory-eval-world \
   python -m robothor.cli memory-eval --world --world-seed 1 --world-size full --split dev
 ```
 
@@ -24,20 +24,43 @@ ROBOTHOR_TENANT_ID=memory-eval \
 | `--world-seed` | `1` | Generator seed. The same seed always gives the same world |
 | `--world-size` | `full` | `small` (unit tests, about 600 facts) or `full` (about 3,500 facts) |
 | `--split` | `dev` | `dev`, `held_out` or `all` |
-| `--tenant` | `memory-eval` | Primary eval tenant. The second tenant is `<tenant>-shadow` |
-| `--keep` | off | Skip cleanup, to look at the seeded rows |
+| `--tenant` | `memory-eval-world` | Primary world tenant, `memory-eval-<suffix>`. The second tenant is `<tenant>-shadow` |
+| `--keep` | off | Skip cleanup, to look at the seeded rows (see below for removing them) |
 | `--json` | off | Print the full report as JSON |
 
 The run seeds the world once, sends each case's question through
 `search_facts` (k = 5), scores it with the existing retrieval scorers, prints
-results per stratum and then deletes every seeded row. Exit codes are the same
-as the suite's. `--record` has no effect in world mode: the fleet reads the
-latest `memory` row in `benchmark_results` with no suite filter, so a recorded
-world score would replace the suite's score.
+results per stratum and then deletes every seeded row. The exit code is 0 when
+the run completed and 3 when it could not run or scored nothing. There is no
+pass-rate floor for the world yet; the suite's 0.90 floor would fail every run,
+because `raw_detail` cannot pass through `search_facts`. `--record` has no effect
+in world mode: the fleet reads the latest `memory` row in `benchmark_results`
+with no suite filter, so a recorded world score would replace the suite's score.
 
-Seeding writes to the eval tenants only. `seed_world`, `cleanup_world` and
-`run_world` raise `EvalPreconditionError` before making any database call if
-a tenant is not `memory-eval` or `memory-eval-<suffix>`.
+The world never shares a tenant with the nightly suite. `memory-eval` belongs
+to the suite (`robothor-memory-eval.service`). A world cleanup there would wipe
+the suite's distractor corpus, and world rows left there would block the
+suite's own cleanup, because `memory_relations.fact_id` references
+`memory_facts` with no `ON DELETE`. So `seed_world`, `cleanup_world`,
+`world_row_counts` and `run_world` raise `EvalPreconditionError` before any
+database call when a tenant is `memory-eval` itself or is not
+`memory-eval-<suffix>`. The CLI exits 3 for `--world --tenant memory-eval`. As
+a second safeguard, the suite's cleanup now deletes the tenant's
+`memory_relations` rows before its `memory_facts` rows.
+
+The classic suite has the same guard. `run_suite`, `_cleanup_tenant` and the
+CLI all call `robothor.memory.eval.require_eval_tenant`, which uses the one
+predicate both modes share (`is_eval_tenant`: `memory-eval` or
+`memory-eval-<suffix>`). They refuse any other tenant before the first
+database call. `memory-eval --tenant <a real tenant>` exits 3 and leaves every
+row in that tenant in place. The nightly unit's `memory-eval` is unaffected.
+
+Rows left by `--keep` or by a killed run stay in the world tenants until the
+next world run, which cleans up before it seeds. To remove them by hand:
+
+```sh
+ROBOTHOR_TENANT_ID=memory-eval-world python -c "from robothor.memory.eval_world_seed import cleanup_world; print(cleanup_world(['memory-eval-world', 'memory-eval-world-shadow']))"
+```
 
 Seeding never calls an LLM, because the world already contains its facts and
 entities. The only model call is for embeddings: `seed_world(...,

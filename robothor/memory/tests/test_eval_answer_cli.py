@@ -89,7 +89,7 @@ class TestDispatch:
         assert rc == 0
         assert stubs["systems"] == ["recall", "full_context"]
         assert stubs["repeats"] == 2 and stubs["token_budget"] == 2048
-        assert stubs["tenant_id"] == "memory-eval"
+        assert stubs["tenant_id"] == "memory-eval-world"
         out = capsys.readouterr().out
         assert json.loads(out.split("\n<!-- markdown -->\n")[0])["suite_id"] == _REPORT["suite_id"]
 

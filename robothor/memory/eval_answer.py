@@ -40,9 +40,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from robothor.memory import eval_stats as st
-from robothor.memory.eval import EVAL_TENANT, EvalPreconditionError
+from robothor.memory.eval import EvalPreconditionError
 from robothor.memory.eval_systems import ContextBundle, WorldHandle, make_systems
 from robothor.memory.eval_world_seed import (
+    WORLD_TENANT,
     _require_eval_tenants,
     cleanup_world,
     seed_world,
@@ -681,7 +682,7 @@ async def run_answers(
     judge_model: str | None = None,
     answer_temperature: float = 0.0,
     limit_per_stratum: int | None = None,
-    tenant_id: str = EVAL_TENANT,
+    tenant_id: str = WORLD_TENANT,
     concurrency: int = 4,
     cache_dir: str | None = None,
     cleanup: bool = True,
