@@ -1687,13 +1687,8 @@ def resolve_contact(channel: str, identifier: str, name: str | None = None) -> d
     return dict(result) if result else {}
 
 
-def get_timeline(identifier: str, tenant_id: str = "") -> dict:
-    """Get unified timeline for a contact across all systems (pure SQL).
-
-    ``tenant_id`` is sent to the memory service as ``X-Tenant-Id`` so the facts
-    come from the caller's tenant. Empty sends none, and the memory service
-    applies its single-tenant rule.
-    """
+def get_timeline(identifier: str) -> dict:
+    """Get unified timeline for a contact across all systems (pure SQL)."""
     conn = _conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -1738,10 +1733,7 @@ def get_timeline(identifier: str, tenant_id: str = "") -> dict:
         import httpx
 
         r = httpx.get(
-            f"{config.MEMORY_URL}/search",
-            params={"query": identifier, "limit": 10},
-            headers={"X-Tenant-Id": tenant_id} if tenant_id else {},
-            timeout=5.0,
+            f"{config.MEMORY_URL}/search", params={"query": identifier, "limit": 10}, timeout=5.0
         )
         if r.status_code == 200:
             timeline["memory_facts"] = r.json().get("results", [])
