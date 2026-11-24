@@ -315,7 +315,16 @@ class VisionService:
                 logger.warning("Snapshot retention pass failed: %r", e)
 
     async def ingest_event(self, event_text: str, metadata: dict[str, Any]) -> None:
-        """Post a vision event to the orchestrator for ingestion."""
+        """Post a vision event to the orchestrator for ingestion, as this process's tenant.
+
+        The tenant travels in ``X-Tenant-Id``, the service-to-service convention.
+        A process bound to no tenant sends none, and the orchestrator applies its
+        single-tenant rule (``robothor.tenancy.acting``).
+        """
+        from robothor.db.connection import process_tenant
+
+        tenant = process_tenant()
+        headers = {"X-Tenant-Id": tenant} if tenant else {}
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
@@ -326,6 +335,7 @@ class VisionService:
                         "content_type": "event",
                         "metadata": metadata,
                     },
+                    headers=headers,
                 )
                 if resp.status_code == 200:
                     logger.info("Event ingested: %s", event_text[:80])

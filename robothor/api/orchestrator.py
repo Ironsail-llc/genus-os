@@ -16,6 +16,7 @@ Start:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -181,6 +182,50 @@ class VisionSuppressionRequest(BaseModel):
     suppressed: bool = Field(..., description="True to suppress alerts, False to enable")
 
 
+# ─── Acting tenant ───────────────────────────────────────────────────
+
+
+async def acting_tenant(request: Request) -> str:
+    """The tenant a memory endpoint acts as, from the caller.
+
+    1. A bearer token is verified (bridge audience: the dashboard forwards the
+       session's bridge token) and its tenant is the tenant. An invalid token is
+       a 401; an ``X-Tenant-Id`` that contradicts it is a 403, as on the bridge.
+    2. Without a token, ``X-Tenant-Id`` -- the service-to-service convention the
+       bridge and engine already use -- names the tenant.
+    3. Without either, :func:`robothor.tenancy.acting.resolve_acting_tenant`
+       decides: the default tenant on a single-tenant deployment, otherwise a
+       400 refusal rather than another tenant's memory.
+    """
+    from robothor.auth.deps import bearer_from_header, verify_token
+    from robothor.auth.tokens import TokenError
+    from robothor.tenancy.acting import TenantRequiredError, resolve_acting_tenant
+
+    header = (request.headers.get("x-tenant-id") or "").strip()
+    authorization = request.headers.get("authorization")
+    if authorization:
+        token = bearer_from_header(authorization)
+        if not token:
+            raise HTTPException(status_code=401, detail="invalid authorization header")
+        try:
+            auth = verify_token(token, expected_audience="genus-bridge")
+        except TokenError as error:
+            raise HTTPException(status_code=401, detail="invalid or expired token") from error
+        if header and header != auth.tenant_id:
+            raise HTTPException(status_code=403, detail="tenant not authorized")
+        return auth.tenant_id
+    if header:
+        return header
+    try:
+        return await asyncio.to_thread(
+            resolve_acting_tenant, "", surface=f"orchestrator {request.url.path}"
+        )
+    except TenantRequiredError as refused:
+        raise HTTPException(
+            status_code=400, detail=f"{refused} Send X-Tenant-Id or a bearer token."
+        ) from refused
+
+
 # ─── Core Endpoints ──────────────────────────────────────────────────
 
 
@@ -279,14 +324,14 @@ async def readiness() -> Any:
 
 
 @app.post("/query")
-async def query_endpoint(req: QueryRequest) -> Any:
-    """Simple RAG query endpoint."""
-    result = await run_pipeline(query=req.question, profile=req.profile)
+async def query_endpoint(req: QueryRequest, tenant_id: str = Depends(acting_tenant)) -> Any:
+    """Simple RAG query endpoint, searching the caller's tenant's memory."""
+    result = await run_pipeline(query=req.question, profile=req.profile, tenant_id=tenant_id)
     return result
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(req: ChatRequest) -> Any:
+async def chat_completions(req: ChatRequest, tenant_id: str = Depends(acting_tenant)) -> Any:
     """OpenAI-compatible chat completions endpoint.
 
     Supports the standard OpenAI API format so tools like Open WebUI,
@@ -307,6 +352,7 @@ async def chat_completions(req: ChatRequest) -> Any:
         query=last_user,
         profile=req.profile,
         messages=messages,
+        tenant_id=tenant_id,
     )
 
     response = ChatResponse(
@@ -374,16 +420,16 @@ async def list_profiles() -> Any:
 
 
 @app.get("/stats")
-async def stats() -> dict[str, Any]:
-    """Memory system statistics."""
+async def stats(tenant_id: str = Depends(acting_tenant)) -> dict[str, Any]:
+    """Memory system statistics for the caller's tenant."""
     from robothor.memory.facts import get_memory_stats
 
-    return get_memory_stats()
+    return await asyncio.to_thread(get_memory_stats, tenant_id=tenant_id)
 
 
 @app.post("/ingest")
-async def ingest_endpoint(req: IngestRequest) -> Any:
-    """Ingest content from any channel."""
+async def ingest_endpoint(req: IngestRequest, tenant_id: str = Depends(acting_tenant)) -> Any:
+    """Ingest content from any channel, into the caller's tenant."""
     from robothor.memory.ingestion import ingest_content
 
     try:
@@ -392,6 +438,7 @@ async def ingest_endpoint(req: IngestRequest) -> Any:
             source_channel=req.source_channel,
             content_type=req.content_type,
             metadata=req.metadata,
+            tenant_id=tenant_id,
         )
         return result
     except ValueError as e:

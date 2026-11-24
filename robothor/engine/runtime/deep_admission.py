@@ -21,7 +21,9 @@ def execute_deep_checked(*, run: AgentRun, workspace: str, **kwargs: Any) -> dic
 
     token = owner.set((run.tenant_id, run.id))
     try:
-        return execute_deep_reason(config=DeepReasonConfig(workspace=workspace), **kwargs)
+        return execute_deep_reason(
+            config=DeepReasonConfig(workspace=workspace, tenant_id=run.tenant_id), **kwargs
+        )
     finally:
         owner.reset(token)
 
