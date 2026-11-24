@@ -227,3 +227,72 @@ async def test_episodes_are_fused_on_the_reranked_path(env: pytest.MonkeyPatch) 
 
     assert results[0].get("source") == "episode"
     assert len(results) <= 5, "fused legs share the limit instead of being appended past it"
+
+
+@pytest.mark.asyncio
+async def test_restricted_scope_leaves_out_legs_that_cannot_scope_by_person(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Insights, episodes and chat turns carry no person_id, so a restricted
+    caller would read summaries built from other people's facts. Like the
+    router, search_facts leaves an unscopable store out rather than return it
+    unfiltered."""
+    from robothor.identity.scope import DataScope
+
+    restricted = DataScope(tenant_id="test-tenant", person_id="person-1", restricted=True)
+    insights = AsyncMock(return_value=[])
+    episodes = AsyncMock(return_value=[])
+    chat_turns = MagicMock(return_value=[])
+    env.setattr(reranker, "rerank_pair", _scorer({}))
+
+    with (
+        patch.object(facts, "search_insights", insights),
+        patch("robothor.memory.episodes.search_episodes", episodes),
+        patch("robothor.engine.chat_store.search_chat_turns", chat_turns),
+    ):
+        results = await _search(
+            _Cursor(vector=_dense(5), keyword=[]),
+            include_insights=True,
+            include_episodes=True,
+            include_chat_turns=True,
+            scope=restricted,
+        )
+
+    assert results, "the scoped fact legs still answer"
+    insights.assert_not_called()
+    episodes.assert_not_called()
+    chat_turns.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unrestricted_scope_still_queries_the_auxiliary_legs(
+    env: pytest.MonkeyPatch,
+) -> None:
+    from robothor.identity.scope import DataScope
+
+    open_scope = DataScope(tenant_id="test-tenant", person_id="person-1", restricted=False)
+    insights = AsyncMock(return_value=[])
+    env.setattr(reranker, "rerank_pair", _scorer({}))
+    with patch.object(facts, "search_insights", insights):
+        await _search(
+            _Cursor(vector=_dense(5), keyword=[]), include_insights=True, scope=open_scope
+        )
+    insights.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_a_reserved_pick_never_brings_back_a_duplicate(env: pytest.MonkeyPatch) -> None:
+    """The blend drops near-duplicates; a reserved place must not re-add one."""
+    dense = _dense(20)
+    copy = _row(701, dense[0]["fact_text"], entities=["Bob"], importance_score=0.9)
+    cur = _Cursor(vector=dense, keyword=[], expansion=[copy])
+    # The original is the best answer, so it is certain to be in the result.
+    env.setattr(reranker, "rerank_pair", _scorer({dense[0]["fact_text"]: 0.95}, default=0.6))
+    get_entity = AsyncMock(return_value={"relations": [{"target_name": "Bob"}]})
+
+    with patch("robothor.memory.entities.get_entity", get_entity):
+        results = await _search(cur, expand_entities=True)
+
+    assert results[0]["id"] == dense[0]["id"]
+    texts = [r["fact_text"] for r in results]
+    assert len(texts) == len(set(texts)), f"duplicate text in results: {texts}"

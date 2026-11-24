@@ -49,7 +49,9 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      `tsv`), scored by `ts_rank_cd` with length normalisation into 0..1. It
      requires every term first and falls back to any term when that matches
      nothing, so a natural-language question still finds the fact that shares
-     most of its words.
+     most of its words. The first pass reads the query in web-search syntax:
+     `"quoted words"` match as a phrase, `-word` excludes, and `or` is an
+     operator.
    - `entity_expansion` (`expand_entities`) — facts about entities related to
      the top hits' entities.
    - `segment` (`include_segments`, **on by default**) — raw conversation
@@ -60,17 +62,20 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      (`rerank_excerpt`). Which segments come back depends on the reader:
      `reader_person_id` and `room_ids`, applied on every call.
    - `insight`, `episode`, `chat_turn` (`include_insights`,
-     `include_episodes`, `include_chat_turns`). The dense-only `chat_turn` leg
-     does not run while the `segment` leg is on, even when asked for: both
-     read the same conversation, and the segment leg adds a keyword leg and
-     the reader rule. `search_chat_turns` itself is unchanged.
+     `include_episodes`, `include_chat_turns`). These stores cannot filter by
+     person, so a restricted data scope leaves them out. The dense-only
+     `chat_turn` leg also does not run while the `segment` leg is on, even when
+     asked for: both read the same conversation, and the segment leg adds a
+     keyword leg and the reader rule. `search_chat_turns` itself is unchanged.
 2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
    records its rank in every leg that found it (`leg_ranks`).
 3. **Reranker** (Qwen3-Reranker-0.6B, local) — on by default, off with
    `MEMORY_RERANK_ENABLED=0`. It scores the first 16 fused candidates
    (`MEMORY_RERANK_MAX_CANDIDATES`) with a graded relevance in 0..1: the
-   probability of "yes" against "no", read from the logprobs Ollama returns
-   (an Ollama without logprobs gives 1 or 0). Candidates are ordered by that
+   probability of "yes" against "no", read from the top 20 logprobs Ollama
+   returns. When one of the two is not listed, its logprob is bounded by the
+   lowest one listed, so a confident answer still gets a graded score. (An
+   Ollama without logprobs gives 1 or 0.) Candidates are ordered by that
    score alone, whichever leg found them. On any reranker error the fused
    order stands.
 4. **Blend** — `relevance` (the rerank score, or `10 / (10 + fused rank)` when
@@ -81,7 +86,9 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    least that many places in the top `limit` whenever it returned anything,
    chosen by its own score: `entity_expansion` 1, and `graph` 2 for a graph leg.
    A related-but-not-similar fact is exactly what a query-document reranker
-   discards.
+   discards. Reserved picks take at most `(limit - 1) // 2` places in total
+   (none at a `limit` of 1 or 2), never the top result, and never a
+   near-duplicate of a row already returned.
 
 Every leg shares `limit`. Returned rows keep their fields and add `kind`,
 `leg_ranks`, `leg_scores`, `rrf_score`, `fused_rank`, `rerank_score` and

@@ -1287,8 +1287,9 @@ async def search_facts(
             the entity-graph expansion query (it reads the same
             ``memory_facts`` table and must not pull in another person's
             facts through the fan-out). The insight, episode and chat-turn
-            legs are unaffected — see robothor/identity/scope.py and the Task
-            5 report for the documented rationale.
+            legs cannot filter by person, so a restricted scope leaves them
+            out (the router's rule for unscopable stores) — see
+            robothor/identity/scope.py.
         include_segments: Fuse a ``segment`` leg of raw conversation
             (``robothor.memory.segments.search_segments``). On by default;
             when on, the ``chat_turn`` leg is not run even if asked for — the
@@ -1341,15 +1342,19 @@ async def search_facts(
             legs["entity_expansion"] = await _entity_expansion_leg(
                 seed, _tenant, scope_clause, scope_params
             )
+    # Insights, episodes and chat turns carry no person_id: a restricted caller
+    # would read summaries built from other people's facts. As in the router,
+    # a store that cannot express person scoping is left out, not unfiltered.
+    unscopable_ok = scope_clause == ""
     legs.update(
         await _auxiliary_legs(
             query=query,
             embedding=embedding,
             tenant_id=tenant_id,
             _tenant=_tenant,
-            include_insights=include_insights,
-            include_episodes=include_episodes,
-            include_chat_turns=include_chat_turns,
+            include_insights=include_insights and unscopable_ok,
+            include_episodes=include_episodes and unscopable_ok,
+            include_chat_turns=include_chat_turns and unscopable_ok,
             include_segments=include_segments,
             limit=limit,
             reader_person_id=reader_person_id,
@@ -1359,7 +1364,14 @@ async def search_facts(
 
     pool = [c.to_row() for c in fuse(legs, weights=LEG_WEIGHTS)]
     ranked = await _rank_pool(query, pool, limit, use_reranker)
-    result = apply_reserved(ranked, pool, limit, RESERVED_PLACES)
+    head = ranked[:limit]
+
+    def _duplicates_head(row: dict[str, Any]) -> bool:
+        # The blend already dropped near-duplicates; a reserved pick must not
+        # bring one back. _dedupe keeps earlier rows, so a dup leaves it short.
+        return _dedup_enabled() and len(_dedupe([*head, row])) == len(head)
+
+    result = apply_reserved(ranked, pool, limit, RESERVED_PLACES, exclude=_duplicates_head)
     for r in result:
         if "relevance" not in r:  # a reserved pick the blend never saw
             _assign_relevance([r])
