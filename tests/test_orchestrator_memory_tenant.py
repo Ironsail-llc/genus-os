@@ -274,6 +274,19 @@ async def test_a_token_whose_account_no_longer_stands_is_refused(
     ingest.assert_not_called()
 
 
+async def test_an_acting_token_under_enforce_acts_as_the_child_tenant(monkeypatch):
+    from robothor.auth.tokens import issue_access_token
+
+    _multi(monkeypatch)
+    monkeypatch.setenv("GENUS_TENANT_SWITCH_MODE", "enforce")
+    acting = issue_access_token("alice", "tenant-b", "admin", home_tenant_id=TENANT)
+    with _ingest() as ingest:
+        async with _client() as c:
+            r = await c.post("/ingest", json=BODY, headers={"Authorization": f"Bearer {acting}"})
+    assert r.status_code == 200, r.text
+    assert ingest.await_args.kwargs["tenant_id"] == "tenant-b"
+
+
 async def test_an_acting_token_is_refused_once_switching_is_off(monkeypatch):
     from robothor.auth.tokens import issue_access_token
 
