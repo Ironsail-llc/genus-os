@@ -276,7 +276,10 @@ async def test_the_one_hop_expansion_answers_on_data_without_mentions(
     from robothor.memory.facts import search_facts
     from robothor.rag import reranker
 
-    a, b = world.entity("Hubcorp Example", entity_type="organization"), world.entity("Spokeworks Example")
+    a, b = (
+        world.entity("Hubcorp Example", entity_type="organization"),
+        world.entity("Spokeworks Example"),
+    )
     world.edge(a, b, legacy_fact=world.fact("support", origin=None))
     seed = world.fact(
         "Hubcorp Example signed the quarterly logistics agreement",
