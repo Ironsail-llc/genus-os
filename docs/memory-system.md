@@ -433,19 +433,27 @@ operator can settle it.
 
 **CRM records are the canonical nodes.** `sync_crm_entities(tenant_id)` gives
 every live CRM person and company in a tenant exactly one entity, linked by
-`crm_person_id` / `crm_company_id`, named with the CRM full name or company
-name, with the emails, contact display names (people) or domain (companies)
-the CRM holds as aliases. Nickname variants are never added as aliases. An
-unlinked entity with exactly the same name and type is linked rather than
-duplicated (recorded as a decision with method `exact`), unless two CRM
-records share the name. When the name is already taken by another record's
-entity, the new one is named `<name> #<first 8 characters of the CRM id>` and
-carries the plain name as an alias, so a bare mention of that name stays
-ambiguous. The CRM data layer keeps the link current on every create, update
-and merge, through `robothor/crm/hooks.py`, after its own commit. A failure
-there never fails the CRM write. The nightly lifecycle pass runs the full sync
-for every tenant to catch writes that bypassed the data layer. Memory never
-writes to the CRM.
+`crm_person_id` / `crm_company_id`, and named with the CRM full name or
+company name. No CRM contact data is copied into memory: no email, channel
+handle or domain becomes an alias, because `get_entity` applies no data scope
+and the CRM withholds those fields from restricted readers. Nickname variants
+are never added either. An unlinked entity with exactly the same name and type
+is linked rather than duplicated (recorded as a decision with method `exact`),
+unless two CRM records share the name. When the name is already taken by
+another record's entity, the new one is named
+`<name> #<first 8 characters of the CRM id>` and carries the plain name as an
+alias, so a bare mention of that name stays ambiguous. A CRM person whose name
+is not a full name (one token, or an initial at either end) never takes over an
+existing entity and is always named that way, without the bare name, so an
+entity built from every "Alex" is never anchored to one CRM record. When a
+record is renamed, its previous full name stays as an alias, because facts
+already use it. The CRM data layer keeps the link current on every create,
+update and merge, through `robothor/crm/hooks.py`, after its own commit. A
+failure there never fails the CRM write. The nightly lifecycle pass runs the
+full sync for every tenant. It catches writes that bypassed the data layer,
+and people merges whose hook failed, which it finds from the merge note the
+data layer writes. Company merges leave no note, so a failed company-merge
+hook is not repaired. Memory never writes to the CRM.
 
 **Resolution** (`resolve_mentions(tenant_id, mentions, *, cur=None)`) is
 synchronous, makes no model call, and can run inside the caller's
@@ -456,7 +464,7 @@ transaction. Rules, first match wins:
 | Strong key | A CRM id, an email the CRM holds, or a `contact_identifiers` channel identifier (`"<channel>:<identifier>"`) names one record. An email written as the name counts. Keys that disagree leave it unresolved | `strong_key` | 1.0 |
 | Full name | Two or more tokens, neither end an initial, matching exactly one entity of a compatible type by name or alias, ignoring case and whitespace | `full_name` | 0.95 |
 | Context | A full name matching several entities, or only a nickname variant ("Bob Rivera" for "Robert Rivera"), with exactly one candidate supported by the same organisation (in the context or named in the same fact), the same email domain (not a free-mail domain), or an earlier mention in the same conversation | `context` | 0.85–0.9 |
-| Single token | A first name, nickname, initials, or a name with an initial at either end: only by a strong key, or when exactly one candidate already appears in the same conversation. Never the operator | `context` | 0.75 |
+| Single token | A first name, nickname, initials, or a name with an initial at either end: only by a strong key, or when exactly one candidate already appears in the same conversation and it is not the operator | `context` | 0.75 |
 | Provisional | No candidate at all, and a full name or a known non-person type: a new unlinked entity. Never a person from a single token, never an entity of unknown type | `exact` | 1.0 |
 
 A single-token organisation name ("Globex") that matches exactly one
@@ -485,17 +493,31 @@ rows. `write_mentions` writes the `memory_mentions` rows for a fact, at most
 one per surface form.
 
 **Reversal.** `reverse_decision(tenant_id, decision_id, *, reason,
-new_entity_id=None)` sets `reversed_at`. When `new_entity_id` is given, it
-records an `operator` decision and points `superseded_by` at it. Every mention
-under the decision moves to that entity, or to NULL. It returns, and stores
-on the reversed decision under `evidence.reversal.rebuild`, the facts of those
-mentions and the relations those facts support: the derived rows to rebuild.
-After a reversal, the same name never resolves to the rejected entity again,
-and a live operator decision for it wins. A CRM merge is recorded the same way:
-a decision resolves the loser's entity to the keeper's, and nothing rewrites
-mention ids. Identity therefore lives only in decisions and mentions. Entity
-rows are never merged, and there is no canonical-entity lookup. Reversing the
-merge decision undoes the merge for memory.
+new_entity_id=None, fact_ids=None, dry_run=False)` works at one of two scopes.
+A decision is shared by every mention it resolved the same way, so the scope
+matters:
+
+- **Some facts** (`fact_ids`). Only this decision's mentions on those facts
+  move, onto a new `operator` decision that applies to them alone. The shared
+  decision stays live for every other mention, and future mentions are not
+  affected. This is how an unresolved name is settled.
+- **The whole decision.** It sets `reversed_at`. When `new_entity_id` is given,
+  it records an `operator` decision and points `superseded_by` at it. Every
+  mention under the decision moves to that entity, or to NULL. From then on the
+  name never resolves to the rejected entity, unless a later live operator
+  decision chooses it again. A decision that left its name unresolved cannot be
+  settled this way.
+
+`dry_run` returns the same report and writes nothing. The report lists the
+mentions moved, their facts, and the relations those facts support: the
+derived rows to rebuild. The same list is stored on the decision it writes.
+
+A CRM merge is recorded the same way: a decision resolves the loser's entity
+to the keeper's, and nothing rewrites mention ids. Each later decision that
+reached the keeper through the merge records it (`via_merge`). Reversing the
+merge decision reverses those decisions too, and their mentions return to the
+loser's entity. Identity therefore lives only in decisions and mentions. Entity
+rows are never merged, and there is no canonical-entity lookup.
 
 **Backfill.** `backfill_mentions(tenant_id, *, dry_run, batch_size=500,
 resume_from=None)` turns the names in existing `memory_facts.entities` into
@@ -514,13 +536,16 @@ code. Run `sync` first: the report counts CRM records still without an entity.
 genus memory-identity sync --tenant <tenant> --dry-run
 genus memory-identity backfill --tenant <tenant> --dry-run --json
 genus memory-identity backfill --tenant <tenant> --resume-from 12000
-genus memory-identity reverse --tenant <tenant> --decision 42 --reason "different person" --entity 7
+genus memory-identity reverse --tenant <tenant> --decision 42 --reason "different person" --entity 7 --fact 1301
+genus memory-identity reverse --tenant <tenant> --decision 42 --reason "different person" --all --dry-run
 ```
 
+`reverse` needs either `--fact` (repeatable) or `--all`.
+
 **Read side.** `find_entity(tenant_id, name, entity_type=None)` is a pure
-lookup by the same rules, and records nothing. It matches an email the CRM
-holds, or an exact name or alias of one shared entity, and returns several
-matches as an `Ambiguity`. `get_entity` uses it first and falls back to the
+lookup by the same rules, and records nothing. It matches an exact name or
+alias of one shared entity, and returns several matches as an `Ambiguity`. It
+does not answer an email: a reader would learn which CRM person owns it. `get_entity` uses it first and falls back to the
 best-connected entity of that name. It names its columns, so the embedding is
 never returned.
 
