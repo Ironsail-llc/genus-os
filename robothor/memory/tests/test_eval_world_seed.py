@@ -101,6 +101,47 @@ class TestEvalTenantGuard:
         with pytest.raises(EvalPreconditionError):
             seed.cleanup_world(tenants)
 
+    def test_the_world_has_its_own_default_tenant(self):
+        assert seed.WORLD_TENANT != EVAL_TENANT
+        assert seed.is_eval_tenant(seed.WORLD_TENANT)
+        assert seed.is_eval_tenant(seed.shadow_tenant_for(seed.WORLD_TENANT))
+
+    @pytest.mark.asyncio
+    async def test_world_functions_refuse_the_suites_tenant(self, monkeypatch):
+        """The nightly suite owns ``memory-eval``: the world must never seed or wipe it."""
+        self._forbid_db(monkeypatch)
+        world = ew.generate_world(1, "small")
+        with pytest.raises(EvalPreconditionError, match="suite"):
+            await seed.seed_world(world, EVAL_TENANT, embed_batch=_fake_embed_batch)
+        with pytest.raises(EvalPreconditionError, match="suite"):
+            await seed.seed_world(
+                world,
+                seed.WORLD_TENANT,
+                shadow_tenant_id=EVAL_TENANT,
+                embed_batch=_fake_embed_batch,
+            )
+        with pytest.raises(EvalPreconditionError, match="suite"):
+            seed.cleanup_world([EVAL_TENANT])
+        with pytest.raises(EvalPreconditionError, match="suite"):
+            await seed.run_world(1, "small", "dev", tenant_id=EVAL_TENANT)
+
+    @pytest.mark.asyncio
+    async def test_run_world_defaults_to_the_world_tenant(self, monkeypatch):
+        seen: list[str] = []
+
+        async def fake_seed(world, tenant_id, **_k):
+            seen.append(tenant_id)
+            return seed.SeededWorld(tenant_ids=())
+
+        async def fake_search(query, limit, tenant_id):
+            return []
+
+        monkeypatch.setattr(seed, "seed_world", fake_seed)
+        monkeypatch.setattr(seed, "cleanup_world", lambda _t: {})
+        monkeypatch.setattr("robothor.memory.facts.search_facts", fake_search)
+        await seed.run_world(1, "small", "dev")
+        assert seen == [seed.WORLD_TENANT]
+
     @pytest.mark.asyncio
     async def test_run_world_refuses_the_production_tenant(self, monkeypatch):
         self._forbid_db(monkeypatch)

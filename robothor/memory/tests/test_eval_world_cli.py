@@ -68,12 +68,44 @@ class TestDispatch:
             "seed": 4,
             "size": "small",
             "split": "dev",
-            "tenant": "memory-eval",
+            # Never the nightly suite's tenant: the world has its own.
+            "tenant": "memory-eval-world",
             "cleanup": True,
         }
         out = capsys.readouterr().out
         assert "multi_hop" in out
         assert "abstention" in out
+
+    @staticmethod
+    def _stub_world(monkeypatch, report):
+        async def fake_run_world(seed, size, split, *, tenant_id, cleanup):
+            return report
+
+        monkeypatch.setattr(cli, "run_world", fake_run_world)
+        monkeypatch.setattr(cli, "preflight", lambda _t: None)
+
+    def test_world_mode_exits_zero_when_it_ran_whatever_the_pass_rate(self, monkeypatch):
+        """No floor exists for the world yet; the suite's 0.90 would make every run exit 2."""
+        report = {
+            "suite_id": "w",
+            "total": 10,
+            "passed": 1,
+            "by_kind": {"raw_detail": {"passed": 0, "total": 9}},
+            "unscored": {},
+            "cases": [],
+        }
+        self._stub_world(monkeypatch, report)
+        assert cli.cmd_memory_eval(_parse("--world")) == 0
+
+    def test_world_mode_with_nothing_scored_cannot_have_run(self, monkeypatch):
+        report = {"suite_id": "w", "total": 0, "passed": 0, "by_kind": {}, "cases": []}
+        self._stub_world(monkeypatch, report)
+        assert cli.cmd_memory_eval(_parse("--world")) == 3
+
+    def test_world_mode_refuses_the_suites_tenant(self, monkeypatch, capsys):
+        self._stub_world(monkeypatch, {"total": 1, "passed": 1})
+        assert cli.cmd_memory_eval(_parse("--world", "--tenant", "memory-eval")) == 3
+        assert "nightly" in capsys.readouterr().out
 
     def test_suite_mode_is_unchanged(self, monkeypatch):
         seen: dict[str, Any] = {}
