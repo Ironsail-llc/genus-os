@@ -371,6 +371,9 @@ async def run_autodream(mode: str = "idle", tenant_id: str = "") -> dict[str, An
     }
 
     error_msg: str | None = None
+    # A tenant whose light pass failed. The pass carries on for the others, and
+    # the run is still recorded as failed, naming them.
+    tenant_errors: list[str] = []
 
     try:
         # Every step reads and writes one tenant at a time, inside that
@@ -389,26 +392,34 @@ async def run_autodream(mode: str = "idle", tenant_id: str = "") -> dict[str, An
             )
             results["importance_scores_updated"] = maint_results.get("facts_scored", 0)
         else:
-            # Lightweight: consolidation + pruning + insights (no importance re-scoring)
+            # Lightweight: consolidation + pruning + insights (no importance
+            # re-scoring). One tenant failing must not cost the tenants after
+            # it their pass: the order is fixed, so it would every time.
             for tid in tenant_ids:
-                with tenant_scope(tid):
-                    # Step 1: Consolidate similar facts
-                    consol = await run_intraday_consolidation(threshold=3, tenant_id=tid)
-                    if not consol.get("skipped"):
-                        results["facts_consolidated"] += consol.get("consolidation_groups", 0)
+                try:
+                    with tenant_scope(tid):
+                        # Step 1: Consolidate similar facts
+                        consol = await run_intraday_consolidation(threshold=3, tenant_id=tid)
+                        if not consol.get("skipped"):
+                            results["facts_consolidated"] += consol.get("consolidation_groups", 0)
 
-                    # Step 2: Prune low-quality facts
-                    pruned = await prune_low_quality_facts(tenant_id=tid)
-                    results["facts_pruned"] += pruned.get("total_pruned", 0)
+                        # Step 2: Prune low-quality facts
+                        pruned = await prune_low_quality_facts(tenant_id=tid)
+                        results["facts_pruned"] += pruned.get("total_pruned", 0)
 
-                    # Step 3: Discover cross-domain insights, and keep them
-                    insights = await discover_cross_domain_insights(hours_back=72, tenant_id=tid)
-                    results["insights_discovered"] += len(insights)
-                    for insight in insights:
-                        try:
-                            await store_insight(insight, tenant_id=tid)
-                        except Exception as e:  # noqa: BLE001 - one insight must not sink the pass
-                            logger.warning("autoDream insight store failed for %s: %s", tid, e)
+                        # Step 3: Discover cross-domain insights, and keep them
+                        insights = await discover_cross_domain_insights(
+                            hours_back=72, tenant_id=tid
+                        )
+                        results["insights_discovered"] += len(insights)
+                        for insight in insights:
+                            try:
+                                await store_insight(insight, tenant_id=tid)
+                            except Exception as e:  # noqa: BLE001 - one insight must not sink the pass
+                                logger.warning("autoDream insight store failed for %s: %s", tid, e)
+                except Exception as e:  # noqa: BLE001 - one tenant must not sink the rest
+                    logger.warning("autoDream light pass failed for tenant %s: %s", tid, e)
+                    tenant_errors.append(f"{tid}: {e}")
 
         # Near-duplicate collapse. Runs here rather than on its own timer so it
         # inherits autoDream's Redis lock, cooldown and quiet hours — a second
@@ -471,6 +482,9 @@ async def run_autodream(mode: str = "idle", tenant_id: str = "") -> dict[str, An
     except Exception as e:
         error_msg = str(e)
         logger.exception("autoDream failed (mode=%s): %s", mode, e)
+
+    if tenant_errors and error_msg is None:
+        error_msg = "light pass failed for " + "; ".join(tenant_errors)
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     results["duration_ms"] = elapsed_ms

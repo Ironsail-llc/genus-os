@@ -93,6 +93,11 @@ EXPECTED_TENANT_SCOPE: dict[str, int] = {
     "robothor/engine/runtime/task_recovery.py::sweep": 2,
     "robothor/engine/runtime/task_recovery.py::verify": 1,
     # ── Other fixed bindings ──
+    # autoDream's light pass and its working_context / preference refresh: each
+    # tenant from active_tenant_ids() in turn, never a tenant an agent chose.
+    # Also reachable from run_lifecycle.spawn_post_stall_autodream, which runs
+    # it after the stall watchdog kills a run.
+    "robothor/engine/autodream.py::run_autodream": 2,
     # A coding job's rows, in the tenant that owns the job.
     "robothor/engine/coding/jobs.py::PgJobStore._connect._scoped": 1,
     # A federated peer's op, in the tenant its connection was granted.
