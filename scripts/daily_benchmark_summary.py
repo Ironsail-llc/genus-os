@@ -23,6 +23,7 @@ Run via systemd timer at 18:00 ET. See infra/systemd/robothor-benchmark-summary.
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import sys
@@ -41,7 +42,7 @@ WORKSPACE = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
 def _conn():
     return psycopg2.connect(
         host=os.environ.get("PG_HOST", "localhost"),
-        user=os.environ.get("PG_USER", "robothor"),
+        user=os.environ.get("PG_USER") or os.environ.get("ROBOTHOR_DB_USER") or getpass.getuser(),
         password=os.environ.get("PG_PASSWORD"),
         dbname=os.environ.get("ROBOTHOR_DB_NAME", "robothor_memory"),
     )

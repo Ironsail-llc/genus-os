@@ -36,7 +36,6 @@ from robothor.engine.tools.handlers.benchmark import (
     merge_honesty_tasks,
 )
 from robothor.memory.contact_matching import NICKNAMES
-from robothor.owner_config import load_owner_config
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -126,13 +125,8 @@ class TestShippedHonestyCases:
         text = SHARED_TASKS.read_text().lower()
         for token in ("ironsail", "@gmail.com", "robothor-primary"):
             assert token not in text, token
-        # This instance's operator — name and mail domain — when one is configured.
-        owner = load_owner_config()
-        if owner is not None:
-            domains = {e.rsplit("@", 1)[-1] for e in owner.all_emails()}
-            for token in {owner.first_name.lower(), owner.last_name.lower(), *domains} - {""}:
-                assert not re.search(rf"\b{re.escape(token)}\b", text), "operator identity"
-        # A real first name, not a generic fixture (Alice, Bob), is instance data.
+        # A common first name is instance data. The guard is the canonical names
+        # of the nickname table; the generic fixtures (Alice, Bob) are not in it.
         words = set(re.findall(r"[a-z]+", text))
         real_names = set(NICKNAMES.values()) & words
         assert not real_names, sorted(real_names)

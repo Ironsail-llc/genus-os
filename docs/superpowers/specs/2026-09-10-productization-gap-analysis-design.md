@@ -4,7 +4,7 @@
 
 The operator's ask (2026-09-10): look deeply at OpenClaw v2 and Grok Bot, inventory their
 features and how they work, produce a gap analysis against Genus OS, and plan to build
-the gaps. The framing that matters: **he cannot install Genus OS for his own enterprise
+the gaps. The framing that matters: **they cannot install Genus OS for their own enterprise
 today** because too many pieces are unclear or underdeveloped, while Grok Bot is trivially
 easy and OpenClaw is getting feature-dense. The deliverable is productization: UI,
 configurability, install-and-run-reliably-in-a-company.
