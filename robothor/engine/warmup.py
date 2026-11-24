@@ -944,13 +944,13 @@ def _get_section_pool() -> ThreadPoolExecutor:
         return _section_pool
 
 
-def _defer_write(fn: Callable[..., Any], *args: Any) -> None:
+def _defer_write(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
     """Run a best-effort write off the warmup's critical path."""
     global _deferred_pool
 
     def _guarded() -> None:
         try:
-            fn(*args)
+            fn(*args, **kwargs)
         except Exception as e:
             logger.debug("Deferred warmup write %s failed: %s", fn.__name__, e)
 
@@ -1380,6 +1380,7 @@ def _build_entity_context(
     scope: DataScope | None = None,
     observe_scope_obj: DataScope | None = None,
     user_id: str | None = None,
+    record_access: bool = True,
 ) -> str:
     """Extract entities from the user message and pull relevant facts.
 
@@ -1398,6 +1399,10 @@ def _build_entity_context(
             scope and a would-drop count is logged — never used to alter
             the returned text.
         user_id: Identity's stable id, for the observe-mode log line only.
+        record_access: Count every injected fact as used (``access_count`` and
+            ``last_accessed``, the decay and prune inputs). The write is
+            deferred off the warm-up's critical path and never fails it; pass
+            False for a caller that must have no side effects.
 
     Every candidate's facts come from one statement
     (``_fetch_entity_facts_batched``).
@@ -1432,6 +1437,7 @@ def _build_entity_context(
     # ranks by a recency/importance blend; legacy keeps the importance-only sort.
     max_candidates = 5 if v2 else 3
     _would_drop = 0
+    injected: list[dict[str, Any]] = []
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1448,6 +1454,10 @@ def _build_entity_context(
                     break
                 lines.append(line)
                 chars_used += len(line)
+                injected.append(f)
+
+    if record_access and injected:
+        _record_injected_facts(injected, tenant_id)
 
     if observe_scope_obj is not None and _would_drop > 0:
         log_would_drop(
@@ -1459,6 +1469,27 @@ def _build_entity_context(
         )
 
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _record_injected_facts(rows: list[dict[str, Any]], tenant_id: str) -> None:
+    """Count facts warm-up injected as used, off the warm-up's critical path.
+
+    Entity recall returns text, not ids, so rows are found by their active
+    ``(tenant_id, content_hash)`` pair — the hash store_fact writes. Best-effort:
+    a failure is logged and the recall is returned unchanged.
+    """
+    try:
+        from robothor.memory.drift import compute_fact_hash
+        from robothor.memory.outcomes import record_fact_access
+
+        hashes = [
+            compute_fact_hash(r["fact_text"], tenant_id=tenant_id, category=r.get("category") or "")
+            for r in rows
+            if r.get("fact_text")
+        ]
+        _defer_write(record_fact_access, tenant_id, content_hashes=hashes)
+    except Exception as e:
+        logger.warning("Warmup could not schedule fact access recording: %s", e)
 
 
 def _fetch_entity_facts_batched(

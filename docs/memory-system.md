@@ -87,9 +87,9 @@ Ratio knobs (ported from the source project): `ROBOTHOR_MEMORY_OFFLOAD_MILD_RATI
 
 Nightly in `robothor/memory/lifecycle.py::run_lifecycle_maintenance`:
 
-1. Importance scoring (LLM-judged, 200/run, 600s budget)
-2. Decay computation (recency × access × reinforcement × importance × **outcome penalty**)
-3. Garbage pruning (low decay + low importance + zero accesses)
+1. Importance scoring (LLM-judged, 200/run, 600s budget) of facts not yet marked scored
+2. Decay computation (recency of use × access × reinforcement × importance × **outcome penalty**)
+3. Garbage pruning (low decay + low importance + never recalled)
 4. Consolidation (similar facts merged, superseded via `is_active=FALSE`)
 5. Unconsolidated sweep
 6. Cross-domain insight discovery (72h window)
@@ -183,9 +183,9 @@ Every fact has lifecycle columns that drive autonomous maintenance:
 
 | Column | Purpose |
 |--------|---------|
-| `access_count` | Incremented on search hits |
-| `last_accessed` | Updated on search hits |
-| `importance_score` | LLM-judged (0.0-1.0) |
+| `access_count` | Incremented each time recall returns the fact to an agent |
+| `last_accessed` | Set to now each time recall returns the fact (insert time until then) |
+| `importance_score` | LLM-judged (0.0-1.0); 0.5 until judged |
 | `decay_score` | Computed: recency + access + reinforcement + importance |
 | `reinforcement_count` | Incremented when fact is confirmed by new evidence |
 
@@ -200,6 +200,42 @@ score = max(importance_floor, recency) + access_boost + reinforcement_boost
 ```
 
 A fact with high importance can never fully decay (importance_floor). Frequently accessed facts resist decay via access_boost.
+
+**What counts as use.** A fact is used when recall returns it to an agent: the
+`search_memory` tool (every fact row it returns) and warm-up entity recall
+(every fact it injects into the preamble, interactive and goal recall alike).
+Each raises `access_count` by one and sets `last_accessed` to now, so recency
+is time since last use, not age. `search_facts` itself never writes; the two
+call sites do (`robothor.memory.outcomes.record_fact_access`), and a caller
+that must have no side effects passes `record_access=False` to
+`_search_memory` or `_build_entity_context`. The eval harness calls
+`search_facts` directly and records nothing. Benchmark runs record nothing.
+
+The write never slows or fails recall. The search tool hands it to a tracked
+background task that runs it in a worker thread; warm-up hands it to its
+deferred writer. A failed write is logged and the results are returned as
+they were.
+
+**History from before recall was recorded.** Migration 094's
+`access_count_shadow` and `last_accessed_shadow` hold the use history
+`scripts/memory_decay_backfill.py` recovers from `fact_access_log`. Decay and
+prune read the greater of each live column and its shadow, so that history
+counts without double-counting a search hit that is both logged and recorded.
+Retrieval ranking reads only the live `access_count`.
+
+**Prune.** A fact is retired when its decay score is below 0.1, its
+importance below 0.3, and it has never been recalled (both use counts zero),
+outside the protected categories and operator-confirmed facts. One recall
+gives an access boost of ln 2 / 5 ≈ 0.14, which keeps a used fact above the
+decay threshold.
+
+**Importance scoring.** The judge scores facts that carry no
+`metadata.importance_scored_at` marker and are either still at the 0.5
+default or have been reinforced (a reinforcement adds 0.05, which used to hide
+the fact from a selection on `importance_score = 0.5`). Each score the judge
+writes sets the marker, except a neutral 0.5, which is also what the judge
+returns on a timeout: that fact stays a candidate. Events older than 30 days
+are scored 0.3 without the judge and marked.
 
 ```python
 from robothor.memory.lifecycle import compute_decay_score, run_lifecycle_maintenance
