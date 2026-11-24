@@ -850,7 +850,7 @@ Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [-
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--suite` | `SUITE` | `docs/benchmarks/memory/suite.yaml` | Path to the eval suite YAML |
-| `--tenant` | `TENANT` | — | Isolated eval tenant (default: memory-eval) |
+| `--tenant` | `TENANT` | — | Isolated eval tenant (default: memory-eval; memory-eval-world with --world) |
 | `--keep` | — | off | Skip cleanup of seeded facts (debugging) |
 | `--json` | — | off | Output JSON |
 | `--record` | — | off | Write the result to benchmark_results so the fleet grader can see it |

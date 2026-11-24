@@ -589,6 +589,10 @@ def _cleanup_tenant(tenant_id: str, *, keep_distractors: bool = False) -> None:
 
     with get_connection() as conn:
         cur = conn.cursor()
+        # memory_relations.fact_id references memory_facts with no ON DELETE.
+        # The suite writes no relations, but a stray one in this tenant would
+        # make the DELETE below raise and abort the run before it records.
+        cur.execute("DELETE FROM memory_relations WHERE tenant_id = %s", (tenant_id,))
         if keep_distractors:
             cur.execute(
                 "DELETE FROM memory_facts WHERE tenant_id = %s AND (category IS DISTINCT FROM %s)",

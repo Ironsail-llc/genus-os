@@ -314,7 +314,7 @@ class TestRunWorldTimings:
         monkeypatch.setattr(seed, "cleanup_world", lambda _t: {})
         monkeypatch.setattr("robothor.memory.facts.search_facts", fake_search)
 
-        report = await seed.run_world(1, "small", "dev", tenant_id=EVAL_TENANT)
+        report = await seed.run_world(1, "small", "dev", tenant_id=seed.WORLD_TENANT)
         timings = report["timings"]
         assert set(timings) == {"seed_s", "query_s", "total_s"}
         assert all(isinstance(v, float) and v >= 0 for v in timings.values())

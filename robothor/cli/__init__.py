@@ -803,7 +803,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to the eval suite YAML",
     )
     memeval_parser.add_argument(
-        "--tenant", default=None, help="Isolated eval tenant (default: memory-eval)"
+        "--tenant",
+        default=None,
+        help="Isolated eval tenant (default: memory-eval; memory-eval-world with --world)",
     )
     memeval_parser.add_argument(
         "--keep", action="store_true", help="Skip cleanup of seeded facts (debugging)"

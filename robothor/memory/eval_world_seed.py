@@ -51,6 +51,8 @@ logger = logging.getLogger(__name__)
 EmbedBatch = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 SHADOW_SUFFIX = "-shadow"
+#: The world's own default tenant. Never the suite's ``memory-eval``.
+WORLD_TENANT = f"{EVAL_TENANT}-world"
 WORLD_COLLECTION = "memory-eval/world"
 WORLD_SOURCE_TYPE = "eval_world"
 WORLD_CHANNEL = "eval"
@@ -98,11 +100,24 @@ def shadow_tenant_for(tenant_id: str) -> str:
 
 
 def _require_eval_tenants(tenant_ids: Sequence[object]) -> list[str]:
+    """World tenants only: ``memory-eval-<suffix>``, never anything else.
+
+    ``memory-eval`` itself is refused. It belongs to the nightly suite, whose
+    cleanup deletes only ``memory_facts`` and whose distractor corpus a world
+    cleanup would wipe; sharing it lets either run break the other.
+    """
+    if EVAL_TENANT in tenant_ids:
+        raise EvalPreconditionError(
+            f"refusing to use {EVAL_TENANT!r} for the eval world: that tenant belongs to the "
+            f"nightly suite. Use {WORLD_TENANT!r} (the default) or another "
+            f"{EVAL_TENANT + '-<suffix>'!r} tenant"
+        )
     bad = [t for t in tenant_ids if not is_eval_tenant(t)]
     if bad or not tenant_ids:
         raise EvalPreconditionError(
             f"refusing to touch tenant(s) {bad or list(tenant_ids)!r}: the eval world may only "
-            f"be seeded into or removed from {EVAL_TENANT!r} or {EVAL_TENANT + '-<suffix>'!r}"
+            f"be seeded into or removed from {EVAL_TENANT + '-<suffix>'!r} tenants "
+            f"(default {WORLD_TENANT!r})"
         )
     return [str(t) for t in tenant_ids]
 
@@ -144,7 +159,7 @@ async def _embed_all(texts: list[str], embed_batch: EmbedBatch) -> list[list[flo
 
 async def seed_world(
     world: World,
-    tenant_id: str = EVAL_TENANT,
+    tenant_id: str = WORLD_TENANT,
     *,
     shadow_tenant_id: str | None = None,
     embed_batch: EmbedBatch | None = None,
@@ -567,7 +582,7 @@ async def run_world(
     size: str,
     split: str,
     *,
-    tenant_id: str = EVAL_TENANT,
+    tenant_id: str = WORLD_TENANT,
     cleanup: bool = True,
     embed_batch: EmbedBatch | None = None,
     k: int = 5,
