@@ -206,7 +206,8 @@ A fact with high importance can never fully decay (importance_floor). Frequently
 (every fact it injects into the preamble, interactive and goal recall alike).
 Each raises `access_count` by one and sets `last_accessed` to now, so recency
 is time since last use, not age. `search_facts` itself never writes; the two
-call sites do (`robothor.memory.outcomes.record_fact_access`), and a caller
+call sites do (`robothor.memory.outcomes.record_fact_access`, by fact id, or
+for warm-up's v2 recall, which returns no id, by the fact's content hash), and a caller
 that must have no side effects passes `record_access=False` to
 `_search_memory` or `_build_entity_context`. The eval harness calls
 `search_facts` directly and records nothing. Benchmark runs record nothing.
@@ -229,13 +230,18 @@ outside the protected categories and operator-confirmed facts. One recall
 gives an access boost of ln 2 / 5 ≈ 0.14, which keeps a used fact above the
 decay threshold.
 
-**Importance scoring.** The judge scores facts that carry no
-`metadata.importance_scored_at` marker and are either still at the 0.5
-default or have been reinforced (a reinforcement adds 0.05, which used to hide
-the fact from a selection on `importance_score = 0.5`). Each score the judge
-writes sets the marker, except a neutral 0.5, which is also what the judge
-returns on a timeout: that fact stays a candidate. Events older than 30 days
-are scored 0.3 without the judge and marked.
+**Importance scoring.** The judge scores only facts whose importance nobody
+has judged or set: no `metadata.importance_scored_at` marker, and a score
+still exactly what reinforcement alone gives from the 0.5 default
+(`LEAST(0.5 + 0.05 × reinforcement_count, 1.0)`). A score set any other way —
+an earlier verdict, a resolution's 0.85, the importance a consolidated fact
+inherits — is never overwritten. The judge's score is stored with the
+reinforcement the fact has earned added on top (same 1.0 cap), and the fact is
+marked. A neutral 0.5 on a fact never reinforced is not marked, because the
+judge also returns 0.5 on a timeout; rewriting it is a no-op, and it is
+retried. A reinforced fact is marked whatever the verdict. Unjudged events
+older than 30 days are scored 0.3, plus their reinforcement, without the
+judge, and marked.
 
 ```python
 from robothor.memory.lifecycle import compute_decay_score, run_lifecycle_maintenance
