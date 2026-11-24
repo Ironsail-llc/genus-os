@@ -86,11 +86,13 @@ def test_a_tool_result_is_tool_and_crm_rows_are_crm() -> None:
     assert origin_for("crm", "email") == Origin.EXTERNAL
 
 
-def test_operator_confirmed_metadata_wins() -> None:
+def test_operator_confirmed_metadata_never_raises_trust() -> None:
+    """Only the operator's own edit confirms a fact; ingest metadata cannot claim it
+    (review finding; test_write_path_failures.py covers the callers)."""
     from robothor.memory.write_path import origin_for
 
     meta = {"operator_confirmed": {"at": "2026-01-01T00:00:00+00:00", "by": "op"}}
-    assert origin_for("email", "email", metadata=meta) == Origin.OPERATOR_CONFIRMED
+    assert origin_for("email", "email", metadata=meta) == Origin.EXTERNAL
 
 
 @pytest.mark.parametrize("channel", ["webchat", "scheduled", "", None, "unknown-thing"])
@@ -184,9 +186,10 @@ def test_a_private_fact_hashes_apart_from_shared_and_from_another_person() -> No
         h("agent", ALICE),
     )
     assert len({shared, mine, theirs, member, agent}) == 5
-    # The person slot of the old formula: an older release recomputing a private
-    # fact's hash from its person_id gets the same digest, so it sees no drift.
-    assert mine == _old_hash("Alice likes tea", "t", "preference", ALICE)
+    # Never the digest of a SHARED row that carries the person in person_id (the
+    # bridge edit and update_fact hash such rows with it): that is a collision on
+    # the active-row unique index, and a private fact would merge into it.
+    assert mine != _old_hash("Alice likes tea", "t", "preference", ALICE)
 
 
 # ═══ predicate normalisation ═════════════════════════════════════════════

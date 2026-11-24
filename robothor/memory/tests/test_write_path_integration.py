@@ -914,3 +914,94 @@ async def test_older_code_still_writes_against_the_migrated_schema(world: World)
     )  # fmt: skip
     (row,) = [f for f in world.db.facts() if f["id"] == new]
     assert (row["scope_kind"], row["origin"]) == ("shared", None)
+
+
+# ═══ review findings, adversarially, on the database ═════════════════════
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_outage_fails_the_job_and_keeps_the_breadcrumb(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing could be stored: the promise stays visible and the source stays put."""
+    from robothor.llm import ollama
+    from robothor.memory.breadcrumbs import promote_hot_breadcrumbs
+    from robothor.memory.write_jobs import enqueue_write, process_write_job
+
+    async def _down(*_a: Any, **_k: Any) -> Any:
+        raise OSError("embedding service down")
+
+    monkeypatch.setattr(ollama, "get_embedding_async", _down)
+    monkeypatch.setattr(ollama, "get_embeddings_batch_async", _down)
+    world.model.on("OUTAGE", fact("Alice Moreno renewed the Initech Systems contract.",
+                                  [("Alice Moreno", "person")]))  # fmt: skip
+
+    job = await enqueue_write("OUTAGE renewal", content_type="note", tenant_id=TENANT)
+    assert await process_write_job(job) is False
+    status, error = world.db.q("SELECT status, error FROM memory_write_jobs WHERE id = %s",
+                               (job,))[0]  # fmt: skip
+    assert status == "failed" and "OSError" in (error or "")
+
+    world.db.q(
+        "INSERT INTO agent_breadcrumbs (tenant_id, agent_id, content, access_count) "
+        "VALUES (%s, 'example-agent', %s::jsonb, 9)",
+        (TENANT, json.dumps({"note": "Helios deploys need the staging flag"})),
+    )
+    assert (await promote_hot_breadcrumbs(tenant_id=TENANT))["promoted"] == 0
+    assert world.db.one("SELECT count(*) FROM agent_breadcrumbs") == 1
+    assert world.db.facts() == []
+
+
+@pytest.mark.asyncio
+async def test_a_private_fact_never_dedupes_into_a_shared_row_that_names_the_same_person(
+    world: World,
+) -> None:
+    """A shared row whose person_id is set (and whose hash an edit computed from it)
+    must not absorb a private fact of that person with the same text."""
+    from robothor.memory.drift import compute_fact_hash
+
+    text = "The quarterly review moved to Thursday at Northwind Traders."
+    shared = int(world.db.one(
+        "INSERT INTO memory_facts (fact_text, category, entities, embedding, tenant_id, "
+        "person_id, content_hash) VALUES (%s, 'project', %s, %s::vector, %s, %s, %s) RETURNING id",
+        (text, ["Northwind Traders"], str(world.emb.vec(text)), TENANT, ALICE,
+         compute_fact_hash(text, tenant_id=TENANT, category="project", person_id=ALICE)),
+    ))  # fmt: skip
+    world.model.on("COLLIDE", fact(text, [("Northwind Traders", "organization")]))
+    await _store_memory("COLLIDE private", person=ALICE)
+
+    rows = [f for f in world.db.facts() if f["fact_text"] == text]
+    assert len(rows) == 2 and all(r["is_active"] for r in rows)
+    private = next(r for r in rows if r["id"] != shared)
+    assert (private["scope_kind"], private["scope_id"]) == ("user", ALICE_P)
+
+
+@pytest.mark.asyncio
+async def test_a_consolidation_that_falls_back_to_a_members_text_retires_nothing(
+    world: World,
+) -> None:
+    """The consolidated text deduplicates to the member it copies: nothing may then be
+    superseded into that (or any) member, and no member is retired."""
+    from robothor.memory import lifecycle
+
+    anchor = "Project Helios ships in Q3."
+    a = _seed(world, anchor, origin="user_stated", mentions=[("Project Helios", "project")])
+    b = _seed(world, "Project Helios ships in the third quarter.", origin="external",
+              anchor=anchor)  # fmt: skip
+    group = [
+        {"id": a, "fact_text": anchor, "category": "project", "tenant_id": TENANT,
+         "origin": "user_stated", "scope_kind": "shared", "scope_id": None, "entities": []},
+        {"id": b, "fact_text": "Project Helios ships in the third quarter.",
+         "category": "project", "tenant_id": TENANT, "origin": "external",
+         "scope_kind": "shared", "scope_id": None, "entities": []},
+    ]  # fmt: skip
+    from robothor.memory.drift import compute_fact_hash
+
+    world.db.q(
+        "UPDATE memory_facts SET content_hash = %s WHERE id = %s",
+        (compute_fact_hash(anchor, tenant_id=TENANT, category="project"), a),
+    )
+    assert await lifecycle.store_consolidated(group, anchor) == 0
+    active = {f["id"]: f["is_active"] for f in world.db.facts()}
+    assert active == {a: True, b: True}
+    assert [m[0] for m in world.db.mentions(a)] == ["Project Helios"]  # nothing copied onto it
