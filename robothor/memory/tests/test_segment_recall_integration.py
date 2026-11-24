@@ -32,6 +32,10 @@ MIGRATION = "177_memory_segments"
 A = "test-tenant-a"
 B = "test-tenant-b"
 QUESTION = "what was the code for the bike locker in the garage?"
+# A member's own webchat conversation (the key derive_user_session_key gives),
+# and that member as the default reader of the searches below.
+MEMBER_UID = "0c9d8e7f-6a5b-4c3d-9e2f-1a0b9c8d7e6f"
+MEMBER = f"agent:main:user:{MEMBER_UID}"
 
 _PATCHED_MODULES = (
     "robothor.memory.facts",
@@ -39,6 +43,7 @@ _PATCHED_MODULES = (
     "robothor.memory.episodes",
     "robothor.memory.outcomes",
     "robothor.rooms.dal",
+    "robothor.crm.dal",
 )
 
 
@@ -140,6 +145,8 @@ async def _search_facts(query: str = QUESTION, **kw: Any) -> list[dict[str, Any]
 
     kw.setdefault("tenant_id", A)
     kw.setdefault("use_reranker", False)
+    if "reader_person_id" not in kw and "reader_user_id" not in kw:
+        kw["reader_user_id"] = MEMBER_UID
     return await search_facts(query, limit=10, **kw)
 
 
@@ -183,7 +190,7 @@ async def _search_memory(ctx: Any, query: str = QUESTION) -> list[dict[str, Any]
 
 @pytest.mark.integration
 async def test_a_detail_said_only_in_conversation_is_recalled_by_search_facts(pg) -> None:
-    ids = await _conversation(pg, "agent:main:shared", BIKE + DENTIST)
+    ids = await _conversation(pg, MEMBER, BIKE + DENTIST)
     _fact(pg, "The team prefers short standups on Mondays.")
 
     rows = await _search_facts()
@@ -193,7 +200,7 @@ async def test_a_detail_said_only_in_conversation_is_recalled_by_search_facts(pg
     top = hits[0]
     assert "4417" in top["fact_text"]
     assert top["source"] == "segment"
-    assert top["source_ref"] == "agent:main:shared"
+    assert top["source_ref"] == MEMBER
     assert (top["start_ref"], top["end_ref"]) == (ids[0], ids[3])
     assert top["started_at"] <= top["ended_at"]
     assert top["topic"]
@@ -202,14 +209,14 @@ async def test_a_detail_said_only_in_conversation_is_recalled_by_search_facts(pg
 
 @pytest.mark.integration
 async def test_include_segments_false_returns_no_segment(pg) -> None:
-    await _conversation(pg, "agent:main:shared")
+    await _conversation(pg, MEMBER)
 
     assert _segments(await _search_facts(include_segments=False)) == []
 
 
 @pytest.mark.integration
 async def test_search_facts_never_returns_another_tenants_segment(pg) -> None:
-    await _conversation(pg, "agent:main:shared", tenant=B)
+    await _conversation(pg, MEMBER, tenant=B)
 
     assert _segments(await _search_facts(tenant_id=A)) == []
     assert _segments(await _search_facts(tenant_id=B))
@@ -226,7 +233,7 @@ async def test_the_segment_leg_replaces_the_chat_turn_leg(pg, monkeypatch) -> No
         return []
 
     monkeypatch.setattr(chat_store, "search_chat_turns", turns)
-    await _conversation(pg, "agent:main:shared")
+    await _conversation(pg, MEMBER)
 
     await _search_facts(include_chat_turns=True)
     assert calls == []
@@ -242,7 +249,7 @@ async def test_search_facts_keeps_private_segments_to_their_reader(pg) -> None:
 
     assert _segments(await _search_facts(reader_person_id=alice))
     assert _segments(await _search_facts(reader_person_id=bob)) == []
-    assert _segments(await _search_facts()) == []
+    assert _segments(await _search_facts(reader_user_id=None)) == []
 
 
 @pytest.mark.integration
@@ -294,7 +301,7 @@ async def test_the_reranker_reads_a_bounded_excerpt_not_the_stored_text(pg, monk
         for i in range(14)
     ]
     long_topic.append(("user", "And the bike locker code in the garage is 4417, right?"))
-    await _conversation(pg, "agent:main:shared", long_topic)
+    await _conversation(pg, MEMBER, long_topic)
     seen: list[dict[str, Any]] = []
 
     async def capture(query: str, pool: list[dict[str, Any]], top_k: int) -> list[dict[str, Any]]:
@@ -318,16 +325,16 @@ async def test_the_reranker_reads_a_bounded_excerpt_not_the_stored_text(pg, monk
 
 @pytest.mark.integration
 async def test_a_detail_said_only_in_conversation_is_recalled_by_search_memory(pg) -> None:
-    ids = await _conversation(pg, "agent:main:shared", BIKE + DENTIST)
+    ids = await _conversation(pg, MEMBER, BIKE + DENTIST)
 
-    results = await _search_memory(_ctx())
+    results = await _search_memory(_ctx(user_id=MEMBER_UID))
 
     hits = [r for r in results if r.get("kind") == "segment"]
     assert hits
     top = hits[0]
     assert "4417" in top["fact"]
     assert top["source"] == "segment"
-    assert top["source_ref"] == "agent:main:shared"
+    assert top["source_ref"] == MEMBER
     assert (top["start_ref"], top["end_ref"]) == (ids[0], ids[3])
     assert top["topic"] and top["started_at"] and top["ended_at"]
 
@@ -385,11 +392,67 @@ async def test_a_segment_row_is_not_recorded_as_fact_access(pg, monkeypatch) -> 
         outcomes, "log_fact_access", lambda _run, ids, *_a, **_kw: logged.append(list(ids))
     )
     fact_id = _fact(pg, "The bike locker garage rota changes every quarter.")
-    await _conversation(pg, "agent:main:shared")
+    await _conversation(pg, MEMBER)
 
-    results = await _search_memory(_ctx(run_id="run-1"))
+    results = await _search_memory(_ctx(run_id="run-1", user_id=MEMBER_UID))
 
     assert any(r.get("kind") == "segment" for r in results)
     assert logged and all(set(ids) <= {fact_id} for ids in logged)
     seg_ids = {r["id"] for r in results if r.get("kind") == "segment"}
     assert not seg_ids & {i for ids in logged for i in ids}
+
+
+# ── no reader, no private conversation ─────────────────────────────────────
+
+
+@pytest.mark.integration
+async def test_a_caller_with_no_reader_gets_no_private_conversation(pg) -> None:
+    """The bridge's /api/memory/search, MCP and deep reasoning call search_facts
+    with no reader. A member's session, the main session and an unowned one
+    must not reach them."""
+    for key in (MEMBER, "agent:main:primary", "telegram:4242"):
+        await _conversation(pg, key)
+
+    rows = await _search_facts(reader_user_id=None)
+
+    assert _segments(rows) == []
+
+
+@pytest.mark.integration
+async def test_a_members_conversation_reaches_only_that_member_through_search_memory(
+    pg,
+) -> None:
+    bob, bob_uid = _person(pg.cur, "Bob"), "7e6d5c4b-3a29-4180-9f6e-5d4c3b2a1908"
+    await _conversation(pg, MEMBER)
+
+    mine = await _search_memory(_ctx(user_id=MEMBER_UID))
+    theirs = await _search_memory(_ctx(user_id=bob_uid, person=bob))
+
+    assert [r["source_ref"] for r in mine if r.get("kind") == "segment"] == [MEMBER]
+    assert [r for r in theirs if r.get("kind") == "segment"] == []
+
+
+# ── a keyword-only segment is a well-formed row ────────────────────────────
+
+
+@pytest.mark.integration
+async def test_a_keyword_only_segment_carries_no_null_similarity(pg, monkeypatch) -> None:
+    """With the embedder down only the keyword leg runs. Callers format rows
+    with ``round(r.get("similarity", 0), 4)`` (MCP, deep reasoning), which a
+    present-but-None key breaks."""
+    import httpx
+
+    from robothor.memory import facts
+
+    await _conversation(pg, MEMBER, BIKE + DENTIST)
+
+    async def down(_query: str) -> list[float]:
+        raise httpx.ConnectError("embedding service down")
+
+    monkeypatch.setattr(facts, "_embed_query", down)
+    rows = await _search_facts()
+
+    assert _segments(rows)
+    for r in rows:
+        assert r.get("similarity", 0) is not None
+        round(r.get("similarity", 0), 4)

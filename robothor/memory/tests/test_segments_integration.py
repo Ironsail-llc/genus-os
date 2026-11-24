@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import random
+import sys
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -72,13 +73,20 @@ def pg(scratch_db, monkeypatch):
         finally:
             conn.close()
 
+    from robothor.crm import dal
+
     monkeypatch.setattr(segments, "get_connection", connect)
+    monkeypatch.setattr(dal, "get_connection", connect)
     cur = db.cursor(cursor_factory=RealDictCursor)
+    owners: dict[str, str] = {}
     for tid in (A, B):
         cur.execute(
             "INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s) ON CONFLICT DO NOTHING",
             (tid, tid),
         )
+        owners[tid] = _operator(cur, tid)
+    # The default reader of every search below is the tenant's operator.
+    monkeypatch.setattr(sys.modules[__name__], "OWNERS", owners)
     embedded: list[str] = []
 
     async def embed_batch(texts: list[str]) -> list[list[float] | None]:
@@ -86,8 +94,33 @@ def pg(scratch_db, monkeypatch):
         return [fake_embed(t) for t in texts]
 
     return SimpleNamespace(
-        db=db, dsn=dsn, cur=cur, connect=connect, embed=embed_batch, seen=embedded
+        db=db,
+        dsn=dsn,
+        cur=cur,
+        connect=connect,
+        embed=embed_batch,
+        seen=embedded,
+        owner=owners,
     )
+
+
+OWNERS: dict[str, str] = {}
+
+
+def _operator(cur: Any, tenant: str) -> str:
+    """The tenant's operator: a person linked from an owner ``tenant_users`` row."""
+    cur.execute(
+        "INSERT INTO crm_people (tenant_id, first_name, last_name) "
+        "VALUES (%s, 'Olive', 'Operator') RETURNING id",
+        (tenant,),
+    )
+    person = str(cur.fetchone()["id"])
+    cur.execute(
+        "INSERT INTO tenant_users (display_name, tenant_id, role, user_id, person_id) "
+        "VALUES ('Olive', %s, 'owner', %s, %s)",
+        (tenant, f"owner-{tenant}", person),
+    )
+    return person
 
 
 def _session(cur: Any, tenant: str, key: str, person_id: str | None = None) -> int:
@@ -140,6 +173,15 @@ def _recent() -> datetime:
 
 
 async def _search(q: str, tenant: str = A, **kw: Any) -> list[dict[str, Any]]:
+    """Search as the tenant's operator unless the test names another reader."""
+    kw.setdefault("limit", 5)
+    kw.setdefault("query_embedding", fake_embed(q))
+    if "reader_person_id" not in kw and "reader_user_id" not in kw:
+        kw["reader_person_id"] = OWNERS.get(tenant)
+    return await segments.search_segments(q, tenant_id=tenant, **kw)
+
+
+async def _search_as_nobody(q: str, tenant: str = A, **kw: Any) -> list[dict[str, Any]]:
     kw.setdefault("limit", 5)
     kw.setdefault("query_embedding", fake_embed(q))
     return await segments.search_segments(q, tenant_id=tenant, **kw)
@@ -214,7 +256,8 @@ async def test_two_topics_are_stored_as_two_segments_with_their_turn_ranges(pg) 
         assert r["source_kind"] == "conversation"
         assert r["source_ref"] == "agent:main:primary"
         assert r["chat_session_id"] == sid
-        assert r["scope_kind"] == "shared" and r["scope_id"] is None
+        # The main session is the operator's own conversation.
+        assert (r["scope_kind"], r["scope_id"]) == ("user", f"person:{pg.owner[A]}")
         assert r["embedded"]
         assert r["started_at"] <= r["ended_at"]
     assert "4417" in rows[0]["text"] and "Tuesday" in rows[1]["text"]
@@ -375,6 +418,7 @@ async def test_a_long_natural_question_still_matches_by_keyword(pg, monkeypatch)
         "hey, sorry to bother you again, but could you remind me what the locker number thing was",
         tenant_id=A,
         limit=5,
+        reader_person_id=pg.owner[A],
     )
 
     assert hits and "4417" in hits[0]["text"]
@@ -399,9 +443,9 @@ async def test_the_limit_is_honoured_for_a_small_tenant_beside_a_large_one(pg) -
     execute_values(
         pg.cur,
         "INSERT INTO memory_segments (tenant_id, source_kind, source_ref, start_ref, end_ref, "
-        "text, embedding) VALUES %s",
+        "text, embedding, scope_kind) VALUES %s",
         [(*row[:6], row[6]) for row in big + small],
-        template="(%s, %s, %s, %s, %s, %s, %s::vector)",
+        template="(%s, %s, %s, %s, %s, %s, %s::vector, 'shared')",
     )
     pg.cur.execute("ANALYZE memory_segments")
     # Make the planner walk the HNSW index (the filtered-ANN case) instead of
@@ -422,8 +466,8 @@ async def test_the_limit_is_honoured_for_a_small_tenant_beside_a_large_one(pg) -
 async def test_since_and_until_bound_the_event_time(pg) -> None:
     old_start = datetime.now(UTC) - timedelta(days=20)
     new_start = _recent()
-    sid_old = _session(pg.cur, A, "agent:main:old")
-    sid_new = _session(pg.cur, A, "agent:main:new")
+    sid_old = _session(pg.cur, A, "agent:main:old", person_id=pg.owner[A])
+    sid_new = _session(pg.cur, A, "agent:main:new", person_id=pg.owner[A])
     _say(pg.cur, sid_old, BIKE, old_start)
     _say(pg.cur, sid_new, BIKE, new_start)
     for key in ("agent:main:old", "agent:main:new"):
@@ -437,13 +481,17 @@ async def test_since_and_until_bound_the_event_time(pg) -> None:
     assert {h["source_ref"] for h in older} == {"agent:main:old"}
 
 
+ROOM = "5d0b7c3a-9e2f-4a1b-8c6d-2f4e6a8b0c1d"
+SHARED = f"agent:main:room:{ROOM}"
+
+
 async def _three_conversations(pg) -> dict[str, str]:
-    """Alice's and Bob's own sessions and one with no person, all on one topic."""
+    """Alice's and Bob's own sessions and a workspace's, all on one topic."""
     people = {name: _person(pg.cur, name) for name in ("Alice", "Bob")}
     for key, person in (
         ("agent:main:alice", people["Alice"]),
         ("agent:main:bob", people["Bob"]),
-        ("agent:main:shared", None),
+        (SHARED, None),
     ):
         sid = _session(pg.cur, A, key, person_id=person)
         _say(pg.cur, sid, BIKE, _recent())
@@ -457,9 +505,9 @@ async def test_a_persons_session_is_stored_private_to_that_person(pg) -> None:
 
     scope = {r["source_ref"]: (r["scope_kind"], r["scope_id"]) for r in _rows(pg.cur)}
 
-    assert scope["agent:main:alice"] == ("user", people["Alice"])
-    assert scope["agent:main:bob"] == ("user", people["Bob"])
-    assert scope["agent:main:shared"] == ("shared", None)
+    assert scope["agent:main:alice"] == ("user", f"person:{people['Alice']}")
+    assert scope["agent:main:bob"] == ("user", f"person:{people['Bob']}")
+    assert scope[SHARED] == ("shared", None)
 
 
 @pytest.mark.integration
@@ -479,20 +527,21 @@ async def test_a_workspace_session_stays_shared_even_with_a_person(pg) -> None:
 async def test_a_reader_sees_shared_segments_and_only_their_own_private_ones(pg) -> None:
     people = await _three_conversations(pg)
 
-    alice = await _search("bike locker code", reader_person_id=people["Alice"])
-    bob = await _search("bike locker code", reader_person_id=people["Bob"])
+    alice = await _search("bike locker code", reader_person_id=people["Alice"], room_ids=[ROOM])
+    bob = await _search("bike locker code", reader_person_id=people["Bob"], room_ids=[ROOM])
 
-    assert {h["source_ref"] for h in alice} == {"agent:main:alice", "agent:main:shared"}
-    assert {h["source_ref"] for h in bob} == {"agent:main:bob", "agent:main:shared"}
+    assert {h["source_ref"] for h in alice} == {"agent:main:alice", SHARED}
+    assert {h["source_ref"] for h in bob} == {"agent:main:bob", SHARED}
 
 
 @pytest.mark.integration
 async def test_a_reader_with_no_known_person_sees_shared_segments_only(pg) -> None:
     await _three_conversations(pg)
 
-    hits = await _search("bike locker code")
+    hits = await _search_as_nobody("bike locker code", room_ids=[ROOM])
 
-    assert {h["source_ref"] for h in hits} == {"agent:main:shared"}
+    assert {h["source_ref"] for h in hits} == {SHARED}
+    assert await _search_as_nobody("bike locker code") == []
 
 
 @pytest.mark.integration
@@ -622,3 +671,118 @@ async def test_segments_move_with_their_conversation(pg, monkeypatch) -> None:
     assert report.counts["memory_segments"] == 1
     assert [r["source_ref"] for r in _rows(pg.cur, child)] == ["agent:alice-agent:primary"]
     assert [r["source_ref"] for r in _rows(pg.cur, A)] == ["agent:bob-agent:primary"]
+
+
+# ── who may read a conversation, through the real save path ────────────────
+
+
+async def _wait_for_rows(pg, tenant: str = A, n: int = 1) -> list[dict[str, Any]]:
+    for _ in range(200):
+        rows = _rows(pg.cur, tenant)
+        if len(rows) >= n:
+            return rows
+        await asyncio.sleep(0.02)
+    raise AssertionError("the background indexer wrote nothing")
+
+
+@pytest.mark.integration
+async def test_a_members_webchat_session_is_private_to_that_member(pg, monkeypatch) -> None:
+    """Through ``save_exchange_async`` with the key webchat really uses: the
+    session row carries no person, and the conversation is still nobody
+    else's to read."""
+    from unittest.mock import AsyncMock
+
+    from robothor.engine import chat_store
+    from robothor.engine.chat import derive_user_session_key
+
+    monkeypatch.setattr(chat_store, "get_connection", pg.connect)
+    monkeypatch.setattr(chat_store, "_embed_turns", AsyncMock())
+    monkeypatch.setattr(segments, "_default_embed_batch", pg.embed)
+    alice_uid, bob_uid = str(uuid.uuid4()), str(uuid.uuid4())
+    bob = _person(pg.cur, "Bob")
+    key = derive_user_session_key("main", alice_uid)
+    for user, assistant in BIKE_EXCHANGES:
+        assert await chat_store.save_exchange_async(
+            key, user, assistant, channel="webchat", tenant_id=A
+        )
+        await _wait_for_rows(pg)
+    pg.cur.execute("SELECT person_id FROM chat_sessions WHERE session_key = %s", (key,))
+    assert pg.cur.fetchone()["person_id"] is None
+
+    rows = _rows(pg.cur)
+    assert {(r["scope_kind"], r["scope_id"]) for r in rows} == {("user", f"user:{alice_uid}")}
+    assert await _search("bike locker code", reader_user_id=alice_uid)
+    assert await _search("bike locker code", reader_user_id=bob_uid, reader_person_id=bob) == []
+    assert await _search("bike locker code") == []  # the operator
+    assert await _search_as_nobody("bike locker code") == []
+
+
+BIKE_EXCHANGES = [(BIKE[0][1], BIKE[1][1]), (BIKE[2][1], BIKE[3][1])]
+
+
+@pytest.mark.integration
+async def test_the_main_session_is_private_to_the_operator(pg) -> None:
+    alice = _person(pg.cur, "Alice")
+    sid = _session(pg.cur, A, "agent:main:primary")
+    _say(pg.cur, sid, BIKE, _recent())
+    await segments.index_conversation("agent:main:primary", tenant_id=A, embed_batch=pg.embed)
+
+    assert await _search("bike locker code")  # the operator
+    assert await _search("bike locker code", reader_person_id=alice) == []
+    assert await _search_as_nobody("bike locker code") == []
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "key", ["telegram:4242", "agent:main:tui-alice", "agent:main:service:report-bot"]
+)
+async def test_a_session_with_no_known_owner_is_readable_by_no_one(pg, key) -> None:
+    alice = _person(pg.cur, "Alice")
+    sid = _session(pg.cur, A, key)
+    _say(pg.cur, sid, BIKE, _recent())
+    await segments.index_conversation(key, tenant_id=A, embed_batch=pg.embed)
+
+    [row] = _rows(pg.cur)
+    assert (row["scope_kind"], row["scope_id"]) == ("user", None)
+    assert await _search("bike locker code") == []
+    assert await _search("bike locker code", reader_person_id=alice) == []
+    assert await _search_as_nobody("bike locker code", room_ids=[ROOM]) == []
+
+
+@pytest.mark.integration
+async def test_a_session_that_gains_its_person_rescopes_its_earlier_segments(pg) -> None:
+    alice = _person(pg.cur, "Alice")
+    sid = _session(pg.cur, A, "telegram:4242")
+    start = _recent()
+    _say(pg.cur, sid, BIKE, start)
+    await segments.index_conversation("telegram:4242", tenant_id=A, embed_batch=pg.embed)
+    assert {(r["scope_kind"], r["scope_id"]) for r in _rows(pg.cur)} == {("user", None)}
+
+    pg.cur.execute("UPDATE chat_sessions SET person_id = %s WHERE id = %s", (alice, sid))
+    _say(pg.cur, sid, DENTIST, start + timedelta(minutes=10))
+    await segments.index_conversation("telegram:4242", tenant_id=A, embed_batch=pg.embed)
+
+    rows = _rows(pg.cur)
+    assert len(rows) == 2
+    assert {(r["scope_kind"], r["scope_id"]) for r in rows} == {("user", f"person:{alice}")}
+    hits = await _search("bike locker code", reader_person_id=alice)
+    assert any("4417" in h["text"] for h in hits)
+
+
+# ── the first index of a long history is bounded ───────────────────────────
+
+
+@pytest.mark.integration
+async def test_a_long_history_is_indexed_in_bounded_runs(pg, monkeypatch) -> None:
+    monkeypatch.setattr(segments, "SEGMENT_INDEX_MAX_TURNS", 4)
+    sid = _session(pg.cur, A, "agent:main:primary")
+    ids = _say(pg.cur, sid, BIKE + DENTIST, _recent())
+
+    await segments.index_conversation("agent:main:primary", tenant_id=A, embed_batch=pg.embed)
+    assert max(r["end_ref"] for r in _rows(pg.cur)) <= ids[3]
+
+    await segments.index_conversation("agent:main:primary", tenant_id=A, embed_batch=pg.embed)
+    assert [(r["start_ref"], r["end_ref"]) for r in _rows(pg.cur)] == [
+        (ids[0], ids[3]),
+        (ids[4], ids[7]),
+    ]

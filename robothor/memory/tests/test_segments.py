@@ -221,6 +221,111 @@ def test_an_ordinary_segment_is_part_zero():
     assert {s.part for s in segment_turns(turns_of(BIKE + DENTIST))} == {0}
 
 
+# ── who may read a conversation (fails closed) ─────────────────────────────
+
+_ROOM = "3f1c2a7e-0d4b-4c1e-9a55-6b0f2d9e8c11"
+_ALICE_PERSON = "8a6a5b0e-2f0c-4b1d-9f7e-1c2d3e4f5a6b"
+_OWNER_PERSON = "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d"
+
+
+@pytest.mark.parametrize(
+    ("key", "person", "owner", "expected"),
+    [
+        # A workspace is the only conversation known to be shared.
+        (f"agent:main:room:{_ROOM}", None, None, ("shared", None)),
+        (f"agent:main:room:{_ROOM}", _ALICE_PERSON, None, ("shared", None)),
+        # A session that records its person belongs to that person.
+        ("telegram:4242", _ALICE_PERSON, None, ("user", f"person:{_ALICE_PERSON}")),
+        # A member's webchat session belongs to the user named in its key.
+        ("agent:main:user:alice-uid", None, None, ("user", "user:alice-uid")),
+        ("agent:research:user:alice-uid", None, None, ("user", "user:alice-uid")),
+        # The main session belongs to the operator.
+        ("agent:main:primary", None, _OWNER_PERSON, ("user", f"person:{_OWNER_PERSON}")),
+        # No owner can be named: private to nobody, never shared.
+        ("agent:main:primary", None, None, ("user", None)),
+        ("telegram:4242", None, None, ("user", None)),
+        ("agent:main:tui-alice", None, None, ("user", None)),
+        ("agent:main:service:report-bot", None, None, ("user", None)),
+        ("agent:main:shared", None, None, ("user", None)),
+    ],
+)
+def test_a_conversation_is_shared_only_when_known_to_be(key, person, owner, expected):
+    assert (
+        segments.conversation_scope(
+            key, person, owner_person_id=owner, main_session_key="agent:main:primary"
+        )
+        == expected
+    )
+
+
+def test_reader_principals_name_the_person_and_the_user():
+    assert segments.reader_principals("p1", "u1") == ["person:p1", "user:u1"]
+    assert segments.reader_principals(None, "u1") == ["user:u1"]
+    assert segments.reader_principals("p1", None) == ["person:p1"]
+    assert segments.reader_principals(None, None) == []
+    assert segments.reader_principals("", "") == []
+
+
+# ── backfill is bounded ────────────────────────────────────────────────────
+
+
+async def test_one_run_indexes_at_most_the_turn_cap(monkeypatch):
+    seen: list[int] = []
+
+    def load(session_key, tenant_id, retention_days, max_turns):
+        seen.append(max_turns)
+        return
+
+    monkeypatch.setattr(segments, "_load_conversation", load)
+    await segments.index_conversation("agent:main:primary", tenant_id="test-tenant")
+    assert seen == [segments.SEGMENT_INDEX_MAX_TURNS]
+    assert segments.SEGMENT_INDEX_MAX_TURNS >= 2 * segments.SEGMENT_MAX_TURNS
+
+
+async def test_a_second_run_for_the_same_conversation_is_skipped_while_one_is_running(
+    monkeypatch,
+):
+    import asyncio
+
+    calls = 0
+    release = asyncio.Event()
+
+    def load(*_a, **_kw):
+        nonlocal calls
+        calls += 1
+        return
+
+    async def slow_load(*a, **kw):
+        await release.wait()
+        return load(*a, **kw)
+
+    real_to_thread = asyncio.to_thread
+
+    async def to_thread(fn, *a, **kw):
+        if fn is segments._load_conversation:
+            return await slow_load(*a, **kw)
+        return await real_to_thread(fn, *a, **kw)
+
+    monkeypatch.setattr(segments, "_load_conversation", load)
+    monkeypatch.setattr(segments.asyncio, "to_thread", to_thread)
+
+    first = asyncio.create_task(
+        segments.index_conversation("agent:main:primary", tenant_id="test-tenant")
+    )
+    await asyncio.sleep(0)
+    second = await segments.index_conversation("agent:main:primary", tenant_id="test-tenant")
+    other = asyncio.create_task(
+        segments.index_conversation("agent:main:primary", tenant_id="other-tenant")
+    )
+    await asyncio.sleep(0)
+    release.set()
+    await first
+    await other
+
+    assert second == 0
+    assert calls == 2  # the first run and the other tenant's, never the duplicate
+
+
 # ── what the reranker reads ────────────────────────────────────────────────
 
 
