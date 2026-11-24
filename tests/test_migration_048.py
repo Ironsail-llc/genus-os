@@ -98,7 +98,7 @@ class TestVoiceCalendarRoundtrip:
         db_cursor.execute(
             """
             INSERT INTO calendar_event (google_event_id, calendar_id, title, start_at, end_at)
-            VALUES ('gcal-evt-1', 'philip@example.com', 'Sync', NOW(), NOW() + INTERVAL '30 minutes')
+            VALUES ('gcal-evt-1', 'alice@example.com', 'Sync', NOW(), NOW() + INTERVAL '30 minutes')
             RETURNING id
             """
         )

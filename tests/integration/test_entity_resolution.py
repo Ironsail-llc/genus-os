@@ -6,18 +6,18 @@ legitimately exist as several rows. `get_entity` looked it up with
     SELECT * FROM memory_entities WHERE lower(name) = lower(%s) AND tenant_id = %s
 
 and took `fetchone()` — no ORDER BY, no entity_type. Postgres is free to return
-any matching row, and on this box it returns the wrong one.
+any matching row, and on a real instance it returned the wrong one.
 
-Measured 2026-08-22 on production. The operator's own name is split four ways:
+Seen on a live instance, the operator's own name was split four ways:
 
-    id    95  person        5207 relations   <- the real identity graph
-    id  3072  event            1 relation    <- what get_entity actually returns
-    id  8235  person (lower)   1 relation
-    id 51819  organization     0 relations
+    person          thousands of relations   <- the real identity graph
+    event           1 relation               <- what get_entity actually returned
+    person (lower)  1 relation
+    organization    0 relations
 
 So every agent that asked about the operator received an event node with one
-edge. 194 of 687 recorded get_entity calls returned found:false, and the ones
-that "succeeded" could be returning a stub like this.
+edge. A large share of recorded get_entity calls returned found:false, and the
+ones that "succeeded" could be returning a stub like this.
 
 Degree is the tie-break: among rows sharing a name, the one carrying the
 relationships is the one the caller means.
@@ -106,7 +106,7 @@ async def test_resolves_to_the_node_carrying_the_relationships(split_entity):
 
 @pytest.mark.asyncio
 async def test_the_relation_payload_is_bounded(split_entity):
-    """The operator's real node has 5,207 edges; an unbounded payload blows context."""
+    """A hub node can carry thousands of edges; an unbounded payload blows context."""
     result = await entities.get_entity(_NAME)
     assert result is not None
     relations = result.get("relations") or []

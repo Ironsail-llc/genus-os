@@ -2,7 +2,7 @@
 
 ## Context
 
-Philip's ask (2026-09-10): look deeply at OpenClaw v2 and Grok Bot, inventory their
+The operator's ask (2026-09-10): look deeply at OpenClaw v2 and Grok Bot, inventory their
 features and how they work, produce a gap analysis against Genus OS, and plan to build
 the gaps. The framing that matters: **he cannot install Genus OS for his own enterprise
 today** because too many pieces are unclear or underdeveloped, while Grok Bot is trivially
@@ -18,7 +18,7 @@ What is already known (memory, 2026-08-24 sweep):
   box hid (container could not make an LLM call; fresh DB denied every agent every tool).
 - Standing goal: Genus OS a front-runner vs OpenClaw / Hermes / DeepSeek harness; plugin
   architecture is the next cycle; Apollo/Impetus/PF must leave core.
-- Philip decides from clickable mockups, not abstract questions.
+- The operator decides from clickable mockups, not abstract questions.
 
 ## Summary (read this first)
 
@@ -151,7 +151,7 @@ teammates). Every Bot runs on ONE persistent, account-scoped cloud computer (Fir
 microVM) with a browser, filesystem, terminal, and your real logged-in sessions. Closed
 source, cloud-only, xAI models only, no self-host, no API, no model picker.
 
-**Install experience (the thing Philip is reacting to):**
+**Install experience (the thing the operator is reacting to):**
 1. Download app (dmg / msi / deb / AppImage / iOS / Android). No CLI, no package manager.
 2. Sign in with Cursor (OAuth). Org SSO is inherited from the org's existing Cursor SAML
    app. **That is the only credential asked for at install.** No model keys, no OAuth
@@ -303,7 +303,7 @@ Every PR: TDD, ratchet/guard tests where the defect class is "invisible on the b
 
 ### Workstream A — Zero to running, one path (install, wizard, doctor, config)
 
-**Decisions baked in (Philip can override):** canonical verb is `genus` (add
+**Decisions baked in (the operator can override):** canonical verb is `genus` (add
 `genus = "robothor.cli:main"` to `pyproject.toml:120`; `robothor`/`genusos` stay as
 aliases; module and `ROBOTHOR_*` prefix do NOT change this cycle). `pydantic-settings`
 becomes a core dep (pydantic v2 already is, `pyproject.toml:31`). Secrets default backend
@@ -454,7 +454,7 @@ check `orchestrator.py:210`, 1024-dim embeddings); pydantic-settings import cost
 CLI hot path (must stay <50 ms, measure in A2); two config readers coexist until the
 ratchet reaches zero; manifest `enforce` on the prod fleet may flag keys schema.yaml
 lacks (default observe, doctor counts would-be errors first); bind-mount removal
-changes Philip's dev loop (dev overlay).
+changes the operator's dev loop (dev overlay).
 
 ### Workstream B — The Helm becomes the product (UI)
 
@@ -599,7 +599,7 @@ full-screen sheet.
 **B PR train (16 + mockups):**
 | # | Title | Size |
 |---|---|---|
-| B0 | Mockup artifact (chat home, agent create + drawer, settings + providers, wizard, inbox, mobile tabs) — Philip decides from this | — |
+| B0 | Mockup artifact (chat home, agent create + drawer, settings + providers, wizard, inbox, mobile tabs) — the operator decides from this | — |
 | B1 | feat(helm): URL-synced views, sidebar groups, settings container, role-gated nav | M |
 | B2 | fix(bridge): audited-mutation helper, route-enumeration gate test, close plaintext vault read, gate installed-agents | M |
 | B3 | feat(auth): local email+password login (argon2, rate-limited, MFA) | L |
@@ -812,7 +812,7 @@ substrate → A13 fresh-install CI gate → A14 docs. **Exit criterion: a clean 
 follows `docs/quickstart.md` and reaches chat in the Helm with a real completion, with
 `genus doctor` green, in CI every night.**
 
-**Phase 2 — Configure and operate from the UI (weeks 4-7):** B0 mockups (Philip gate) →
+**Phase 2 — Configure and operate from the UI (weeks 4-7):** B0 mockups (operator gate) →
 B1 shell → B6 providers/secrets UI → B7 manifest API + reconcile → B8 agents UI → B9
 chat-first + B10 inbox → B11 channels/users → B12 automations → B16 config form → B13
 flags → B14 memory/audit/logs. C3 channel protocol → C4 Slack delivery → C10 ask_user
@@ -881,7 +881,7 @@ checkpoints.
 1. Commit this design as `docs/superpowers/specs/2026-09-10-productization-gap-analysis-design.md`
    (brainstorming skill requires the spec in-repo) and open a tracking issue with the
    three phase exit criteria.
-2. Publish the gap analysis + plan as an artifact for Philip (his decision surface), and
+2. Publish the gap analysis + plan as an artifact for the operator (their decision surface), and
    build the B0 mockup artifact before any B code.
 3. Start Phase 0 as one PR train via subagent-driven development (writing-plans skill per
    PR, worktrees, two-stage review), with the memory-recorded merge-loop gotchas applied.

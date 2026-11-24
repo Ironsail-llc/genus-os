@@ -178,7 +178,8 @@ def record_benchmark_row(row: dict[str, Any]) -> bool:
 
     The one exception is ``DatabaseGuardError``: a row about to land in a
     non-test database from inside pytest is not a reporting failure, it is the
-    defect that put 709 synthetic rows into production, and it propagates.
+    defect that put synthetic rows into a production database, and it
+    propagates.
 
     Note benchmark_results carries a tenant_id defaulting to the primary tenant
     and sits inside migration 081's RLS loop, so this insert must run on a

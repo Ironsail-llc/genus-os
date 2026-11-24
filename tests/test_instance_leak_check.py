@@ -2,7 +2,7 @@
 
 It had no tests at all, and on 2026-08-23 it passed a real leak:
 infra/tmpfiles/robothor-restart.conf shipped `d /run/robothor/restart-requests
-0700 philip philip -` into git. Two independent holes let that through.
+0700 <operator> <operator> -` into git. Two independent holes let that through.
 
   1. scripts/instance_leak_allowlist.yaml had globally exempted the operator's
      own workspace path (slash-home-slash-<operator>-slash-robothor, not spelled
@@ -54,7 +54,7 @@ def real_allowlist() -> set[str]:
 
 
 def test_a_bare_account_in_a_tmpfiles_row_is_a_leak():
-    warnings = check("infra/tmpfiles/x.conf", "d /run/x 0700 philip philip -\n")
+    warnings = check("infra/tmpfiles/x.conf", "d /run/x 0700 alice alice -\n")
     assert len(warnings) == 2, warnings
     assert "user column" in warnings[0]
     assert "group column" in warnings[1]
@@ -85,7 +85,7 @@ def test_the_word_robothor_elsewhere_is_not_an_account():
 
 
 def test_a_unit_user_line_naming_an_instance_account_is_a_leak():
-    assert len(check("infra/systemd/x.service", "User=philip\n")) == 1
+    assert len(check("infra/systemd/x.service", "User=alice\n")) == 1
 
 
 def test_a_python_group_assignment_is_not_a_unit_account():

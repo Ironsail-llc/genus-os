@@ -221,8 +221,8 @@ def list_blocks(tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
             cur.execute(
                 "SELECT block_name, length(content) AS size, last_written_at "
                 "FROM agent_memory_blocks WHERE tenant_id = %s "
-                # 1,525 soft-deleted blocks would otherwise still be enumerated
-                # here, and the 4.09M characters they hold would still be paid.
+                # Soft-deleted blocks would otherwise still be enumerated here,
+                # and every character they hold would still be paid.
                 "AND pruned_at IS NULL ORDER BY block_name",
                 (tenant_id,),
             )

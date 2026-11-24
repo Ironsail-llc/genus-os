@@ -39,7 +39,7 @@ Both manifests use `openrouter/moonshotai/kimi-k2.5`. User wants `anthropic/clau
 **Bug D — No filesystem discovery in read-only mode**
 READONLY_TOOLS (tools.py:101-156) includes `read_file` but NOT `exec`. There is no `glob`, `find`, `list_directory`, or `search_files` tool. In plan mode, the agent can read a file IF it knows the exact path, but **cannot discover file paths** on the filesystem.
 
-This is why Robothor said "Can't find the files via read_file — the paths aren't resolving" and asked Philip to run `find` commands. It literally had no tool to search the filesystem.
+This is why Robothor said "Can't find the files via read_file — the paths aren't resolving" and asked the operator to run `find` commands. It literally had no tool to search the filesystem.
 
 The plan mode preamble (runner.py:77) says:
 > "Read files, search memory, list tasks/people/companies, web search, web fetch — anything that READS."
@@ -50,8 +50,8 @@ But "Read files" is misleading — it implies browsing/discovering files, when r
 
 ### Category 3: LLM Behavioral Failures
 
-**Failure E — Asked Philip to do manual work**
-Violates the CLAUDE.md autonomy principle: "Robothor does everything itself. NEVER suggest Philip do something manually." Even without `exec`, the agent could have:
+**Failure E — Asked the operator to do manual work**
+Violates the CLAUDE.md autonomy principle: "Robothor does everything itself. NEVER suggest the operator do something manually." Even without `exec`, the agent could have:
 1. Tried common paths (`brain/agents/morning-briefing.md`, `docs/agents/morning-briefing.yaml`)
 2. Used `search_memory` for file path info
 3. Read the manifest YAML (which it knew existed from run data) to find the instruction_file config
@@ -110,7 +110,7 @@ Options (pick one):
 Changes:
 - List actual tool names available (dynamically from the filtered list)
 - Emphasize "use read_file and search_memory to find information BEFORE proposing"
-- Add explicit: "If a file path doesn't work, try alternative paths or use search_memory to find it. NEVER ask Philip to look things up for you."
+- Add explicit: "If a file path doesn't work, try alternative paths or use search_memory to find it. NEVER ask the operator to look things up for you."
 - Reinforce autonomy principle in plan mode context
 
 ### Step 5 — Validate + test

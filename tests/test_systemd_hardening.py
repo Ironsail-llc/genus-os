@@ -1,6 +1,6 @@
 """The engine must not be able to become root.
 
-The engine runs as systemd User=philip. `philip` is in the sudo group WITH
+The engine runs as systemd User=<operator>, an account in the sudo group WITH
 PASSWORDLESS sudo (`sudo -n true` succeeds). Six agents hold `exec` with no
 allowlist at all — main, conversation-inbox, crm-hygiene, vision-monitor,
 auto-researcher, email-analyst — so a prompt-injected agent runs

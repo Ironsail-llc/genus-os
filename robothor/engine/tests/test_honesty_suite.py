@@ -15,6 +15,7 @@ so these tests pin three things:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -34,6 +35,8 @@ from robothor.engine.tools.handlers.benchmark import (
     load_shared_honesty_tasks,
     merge_honesty_tasks,
 )
+from robothor.memory.contact_matching import NICKNAMES
+from robothor.owner_config import load_owner_config
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -121,8 +124,18 @@ class TestShippedHonestyCases:
     def test_fixtures_stay_generic(self):
         """Platform-tracked fixtures carry no instance data."""
         text = SHARED_TASKS.read_text().lower()
-        for token in ("ironsail", "philip", "@gmail.com", "robothor-primary"):
+        for token in ("ironsail", "@gmail.com", "robothor-primary"):
             assert token not in text, token
+        # This instance's operator — name and mail domain — when one is configured.
+        owner = load_owner_config()
+        if owner is not None:
+            domains = {e.rsplit("@", 1)[-1] for e in owner.all_emails()}
+            for token in {owner.first_name.lower(), owner.last_name.lower(), *domains} - {""}:
+                assert not re.search(rf"\b{re.escape(token)}\b", text), "operator identity"
+        # A real first name, not a generic fixture (Alice, Bob), is instance data.
+        words = set(re.findall(r"[a-z]+", text))
+        real_names = set(NICKNAMES.values()) & words
+        assert not real_names, sorted(real_names)
 
 
 # ─── the merge ────────────────────────────────────────────────────────
