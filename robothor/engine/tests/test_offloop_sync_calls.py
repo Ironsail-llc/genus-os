@@ -425,9 +425,7 @@ async def test_segment_indexing_writes_off_the_loop(monkeypatch):
     at = datetime(2026, 1, 5, 9, 0, tzinfo=UTC)
     turns = [
         segments.Turn(ref=1, role="user", text="Where is the bike locker?", at=at),
-        segments.Turn(
-            ref=2, role="assistant", text="By the lift.", at=at + timedelta(minutes=1)
-        ),
+        segments.Turn(ref=2, role="assistant", text="By the lift.", at=at + timedelta(minutes=1)),
     ]
     conversation = segments._Conversation(
         session_id=7, person_id=None, resume_from=None, covered_through=None, turns=turns

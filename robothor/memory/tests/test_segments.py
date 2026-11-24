@@ -23,7 +23,30 @@ from robothor.memory import segments
 from robothor.memory.segments import Segment, Turn, segment_turns
 
 BASE = datetime(2026, 1, 5, 9, 0, tzinfo=UTC)
-_STOP = frozenset("the a an is it to of and for on at in my i you we what do did can".split())
+_STOP = frozenset(
+    [
+        "the",
+        "a",
+        "an",
+        "is",
+        "it",
+        "to",
+        "of",
+        "and",
+        "for",
+        "on",
+        "at",
+        "in",
+        "my",
+        "i",
+        "you",
+        "we",
+        "what",
+        "do",
+        "did",
+        "can",
+    ]
+)
 
 
 def fake_embed(text: str) -> list[float]:
@@ -49,8 +72,8 @@ BIKE = [
 DENTIST = [
     ("user", "Book the dentist appointment for Tuesday morning with the dentist clinic."),
     ("assistant", "Dentist appointment booked: Tuesday morning, dentist clinic on Elm Street."),
-    ("user", "Remind me about the dentist appointment Monday evening before Tuesday."),
-    ("assistant", "Reminder set for the dentist appointment, Monday evening before Tuesday."),
+    ("user", "Remind me about the Tuesday dentist appointment at the dentist clinic."),
+    ("assistant", "Reminder set: dentist appointment Tuesday morning, dentist clinic, Elm Street."),
 ]
 
 

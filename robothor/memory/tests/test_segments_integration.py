@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import random
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -84,7 +85,9 @@ def pg(scratch_db, monkeypatch):
         embedded.extend(texts)
         return [fake_embed(t) for t in texts]
 
-    return SimpleNamespace(db=db, dsn=dsn, cur=cur, connect=connect, embed=embed_batch, seen=embedded)
+    return SimpleNamespace(
+        db=db, dsn=dsn, cur=cur, connect=connect, embed=embed_batch, seen=embedded
+    )
 
 
 def _session(cur: Any, tenant: str, key: str, person_id: str | None = None) -> int:
@@ -102,7 +105,11 @@ def _say(cur: Any, session_id: int, pairs, start_at: datetime) -> list[int]:
         cur.execute(
             "INSERT INTO chat_messages (session_id, message, created_at) "
             "VALUES (%s, %s::jsonb, %s) RETURNING id",
-            (session_id, json.dumps({"role": role, "content": text}), start_at + timedelta(minutes=i)),
+            (
+                session_id,
+                json.dumps({"role": role, "content": text}),
+                start_at + timedelta(minutes=i),
+            ),
         )
         ids.append(int(cur.fetchone()["id"]))
     return ids
@@ -187,7 +194,9 @@ async def test_two_topics_are_stored_as_two_segments_with_their_turn_ranges(pg) 
     sid = _session(pg.cur, A, "agent:main:primary")
     ids = _say(pg.cur, sid, BIKE + DENTIST, _recent())
 
-    written = await segments.index_conversation("agent:main:primary", tenant_id=A, embed_batch=pg.embed)
+    written = await segments.index_conversation(
+        "agent:main:primary", tenant_id=A, embed_batch=pg.embed
+    )
 
     rows = _rows(pg.cur)
     assert written == 2
@@ -209,7 +218,9 @@ async def test_reindexing_is_idempotent(pg) -> None:
 
     await segments.index_conversation("agent:main:primary", tenant_id=A, embed_batch=pg.embed)
     before = _rows(pg.cur)
-    again = await segments.index_conversation("agent:main:primary", tenant_id=A, embed_batch=pg.embed)
+    again = await segments.index_conversation(
+        "agent:main:primary", tenant_id=A, embed_batch=pg.embed
+    )
 
     assert again == 0
     assert _rows(pg.cur) == before
@@ -325,7 +336,7 @@ async def test_each_hit_names_its_source_and_turn_range(pg) -> None:
 
     assert hits
     for hit in hits:
-        assert HIT_KEYS <= set(hit)
+        assert set(hit) >= HIT_KEYS
         assert hit["kind"] == "segment"
         assert hit["source_kind"] == "conversation"
         assert hit["source_ref"] == "agent:main:primary"
@@ -369,18 +380,18 @@ async def test_a_long_natural_question_still_matches_by_keyword(pg, monkeypatch)
 
 @pytest.mark.integration
 async def test_the_limit_is_honoured_for_a_small_tenant_beside_a_large_one(pg) -> None:
-    def unit(dim: int, lean: float = 0.0) -> str:
-        vec = [0.0] * 1024
-        vec[dim] = 1.0
-        if lean:
-            vec[0] = lean
-        return "[" + ",".join(str(x) for x in vec) + "]"
+    # Seeded random vectors: the large tenant's lean hard toward the query, the
+    # small tenant's away from it, so every HNSW candidate within the default
+    # budget belongs to the large tenant and the tenant filter discards it.
+    rng = random.Random(867)
 
-    big = [
-        (B, "conversation", f"big-{i}", i, i, f"turn {i}", unit(1 + i % 400, lean=8.0))
-        for i in range(1500)
-    ]
-    small = [(A, "conversation", f"small-{i}", i, i, f"turn {i}", unit(600 + i)) for i in range(5)]
+    def vec(lean: float) -> str:
+        v = [rng.gauss(0, 1) for _ in range(1024)]
+        v[0] += lean
+        return "[" + ",".join(f"{x:.5f}" for x in v) + "]"
+
+    big = [(B, "conversation", f"big-{i}", i, i, f"turn {i}", vec(40.0)) for i in range(1500)]
+    small = [(A, "conversation", f"small-{i}", i, i, f"turn {i}", vec(-10.0)) for i in range(5)]
     execute_values(
         pg.cur,
         "INSERT INTO memory_segments (tenant_id, source_kind, source_ref, start_ref, end_ref, "
@@ -389,6 +400,11 @@ async def test_the_limit_is_honoured_for_a_small_tenant_beside_a_large_one(pg) -
         template="(%s, %s, %s, %s, %s, %s, %s::vector)",
     )
     pg.cur.execute("ANALYZE memory_segments")
+    # Make the planner walk the HNSW index (the filtered-ANN case) instead of
+    # sorting the small tenant's rows: on a real corpus it does.
+    pg.cur.execute("SELECT current_database()")
+    dbname = pg.cur.fetchone()["current_database"]
+    pg.cur.execute(f'ALTER DATABASE "{dbname}" SET enable_sort = off')
     query = [0.0] * 1024
     query[0] = 1.0
 
@@ -469,7 +485,9 @@ async def test_segments_past_retention_are_pruned_for_that_tenant_only(pg) -> No
     for tenant in (A, B):
         sid = _session(pg.cur, tenant, "agent:main:primary")
         _say(pg.cur, sid, BIKE, _recent())
-        await segments.index_conversation("agent:main:primary", tenant_id=tenant, embed_batch=pg.embed)
+        await segments.index_conversation(
+            "agent:main:primary", tenant_id=tenant, embed_batch=pg.embed
+        )
         pg.cur.execute(
             "INSERT INTO memory_segments (tenant_id, source_kind, source_ref, start_ref, end_ref, "
             "started_at, ended_at, text, chat_session_id) "
