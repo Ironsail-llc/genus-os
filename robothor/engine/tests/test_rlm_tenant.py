@@ -66,6 +66,46 @@ def test_the_built_tools_carry_the_tenant():
     assert sf.await_args.kwargs["tenant_id"] == TENANT
 
 
+def test_the_helpers_run_bound_to_the_tenant_for_rls():
+    """The inner model calls these from whatever thread the RLM library uses.
+
+    Naming the tenant in the query is not enough under row-level security: the
+    connection must be bound to the same tenant, or the rows are invisible. So
+    each helper binds its own scope rather than relying on the caller's context.
+    """
+    from robothor.db.connection import current_tenant_scope
+
+    seen = []
+
+    async def search(*args, **kwargs):
+        seen.append(current_tenant_scope())
+        return []
+
+    async def entity(*args, **kwargs):
+        seen.append(current_tenant_scope())
+        return
+
+    def block(*args, **kwargs):
+        seen.append(current_tenant_scope())
+        return {"content": ""}
+
+    with (
+        patch("robothor.memory.facts.search_facts", new=search),
+        patch("robothor.memory.entities.get_entity", new=entity),
+        patch("robothor.memory.blocks.read_block", new=block),
+    ):
+        rlm_tool._make_search_memory_fn(tenant_id=TENANT)("tea")
+        rlm_tool._make_get_entity_fn(tenant_id=TENANT)("Alice")
+        rlm_tool._make_memory_block_read_fn(tenant_id=TENANT)("persona")
+        for src in (
+            {"type": "memory", "query": "tea"},
+            {"type": "block", "block_name": "persona"},
+            {"type": "entity", "name": "Alice"},
+        ):
+            rlm_tool._load_context_source(src, "", tenant_id=TENANT)
+    assert seen == [TENANT] * 6
+
+
 # ─── Context pre-loading ────────────────────────────────────────────
 
 
