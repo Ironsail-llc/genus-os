@@ -237,7 +237,9 @@ def world(scratch_db, monkeypatch) -> Iterator[Any]:
     # A cold scratch connection is slower than a pooled one; the budget itself
     # is asserted in TestFallback.
     monkeypatch.setattr(warmup, "GRAPH_WARMUP_BUDGET_SECONDS", 5.0)
-    yield Graph(db)
+    graph = Graph(db)
+    graph.dsn = dsn  # type: ignore[attr-defined]
+    yield graph
 
 
 def _person(world: Any, first: str, last: str) -> str:
@@ -470,40 +472,74 @@ class TestWhatATurnPays:
             "did alice smith sign it", lowercase_ok=True
         )
 
-    def test_a_timeout_cancels_the_running_query(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The budget is hard on the database side too: the query still running
-        when it expires is cancelled, not left to finish."""
-        cancelled: list[bool] = []
+    def test_a_timeout_never_cancels_a_connection_another_request_holds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The pool hands a returned connection to the next request at once.
+        Here the walk returns its connection, another request takes it, and
+        only then does the budget expire: nothing may cancel that connection.
+        (Replaces a test that pinned cancelling the walk's connection at the
+        budget, which could reach a connection already back in the pool.)"""
+        import threading
 
-        class _SlowCur:
-            def execute(self, *_a: Any, **_k: Any) -> None:
-                deadline = time.monotonic() + 2.0
-                while time.monotonic() < deadline and not cancelled:
-                    time.sleep(0.01)
+        import robothor.crm.dal
+        from robothor.memory import activation
+
+        cancelled_while: list[str | None] = []
+
+        class _Cur:
+            def __init__(self) -> None:
+                self.last = ""
+
+            def execute(self, sql: str, _params: Any = None) -> None:
+                self.last = sql
 
             def fetchall(self) -> list[Any]:
+                if "memory_entities" in self.last:
+                    return [{"id": 1, "name": "Alice Smith", "method": "full_name"}]
                 return []
 
+            def fetchone(self) -> None:
+                return None
+
         class _Conn:
-            def cursor(self, cursor_factory: Any = None) -> _SlowCur:
-                return _SlowCur()
+            holder: str | None = None
+
+            def cursor(self, cursor_factory: Any = None) -> _Cur:
+                return _Cur()
 
             def cancel(self) -> None:
-                cancelled.append(True)
+                cancelled_while.append(self.holder)
+
+        conn = _Conn()
 
         @contextmanager
-        def _connect(*_a: Any, **_k: Any):
-            yield _Conn()
+        def _pool(*_a: Any, **_k: Any):
+            conn.holder = "graph walk"
+            yield conn
+            conn.holder = None  # back in the pool
 
-        monkeypatch.setattr("robothor.db.get_connection", _connect)
+        real = activation.recall_for_message
+        other_request_done = threading.Event()
+
+        def _walk_then_lose_the_connection(*a: Any, **k: Any) -> Any:
+            out = real(*a, **k)  # the connection is back in the pool now
+            conn.holder = "another request"
+            time.sleep(warmup.GRAPH_WARMUP_BUDGET_SECONDS * 3)  # the budget expires
+            conn.holder = None
+            other_request_done.set()
+            return out
+
+        monkeypatch.setattr("robothor.db.get_connection", _pool)
+        monkeypatch.setattr(robothor.crm.dal, "get_owner_person", lambda *_a, **_k: {"id": None})
+        monkeypatch.setattr(activation, "recall_for_message", _walk_then_lose_the_connection)
         with patch.object(warmup, "_fetch_entity_facts_batched", return_value=LEGACY_ROWS):
             text = warmup._build_entity_context(MESSAGE, tenant_id="test-tenant")
 
         assert text == "--- RELEVANT CONTEXT ---\n- legacy name-matched fact"
-        deadline = time.monotonic() + 1.0
-        while not cancelled and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert cancelled, "the running graph query was not cancelled at the budget"
+        assert other_request_done.wait(2.0)
+        assert "another request" not in cancelled_while, "cancelled another request's query"
+        assert cancelled_while == []
 
     def test_a_failed_operator_lookup_skips_the_walk_and_warns(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -552,12 +588,15 @@ class TestWhatATurnPays:
 
 
 @pytest.mark.integration
-def test_a_seeded_turn_adds_one_read_only_checkout_of_three_statements(
+def test_a_seeded_turn_adds_one_read_only_checkout_of_five_statements(
     world: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A message that names an entity pays: the seed lookup, the operator
-    lookup and the walk, on one read-only connection (no BEGIN or COMMIT, no
-    second checkout for the operator), then today's lookup as before."""
+    """A message that names an entity pays: the seed lookup, arming the
+    walk's server-side time limit, the operator lookup, the walk and
+    restoring the limit, on one read-only connection (no BEGIN or COMMIT, no
+    second checkout for the operator), then today's lookup as before. (Was
+    three statements before the limit moved to the server: arming and
+    restoring it are the two added.)"""
     import robothor.crm.dal
     import robothor.db
     from robothor.memory.tests.test_graph_activation import TENANT
@@ -576,7 +615,146 @@ def test_a_seeded_turn_adds_one_read_only_checkout_of_three_statements(
     graph = [c for c in counter.checkouts if any("memory_activate" in s for s in c["sql"])]
     assert len(graph) == 1
     assert graph[0]["read_only"] is True
-    assert graph[0]["executes"] == 3, graph[0]["sql"]
+    sql = graph[0]["sql"]
+    assert len(sql) == 5, sql
+    assert "memory_entities" in sql[0]
+    assert "set_config('statement_timeout'" in sql[1]
+    assert "tenant_users" in sql[2]
+    assert "memory_activate" in sql[3]
+    assert sql[4].strip() == "RESET statement_timeout"
     others = [c for c in counter.checkouts if c is not graph[0]]
     assert len(others) == 1, "only today's name-matched lookup besides the graph"
-    assert counter.statements == 3 + (others[0]["executes"] + 2)
+    assert counter.statements == 5 + (others[0]["executes"] + 2)
+
+
+@pytest.mark.integration
+def test_a_slow_walk_is_stopped_by_the_server_within_the_budget(
+    world: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The walk's own connection carries the time limit: a walk that would
+    take five seconds is cancelled by Postgres at the budget, nothing is left
+    running, the turn falls back, and the limit does not outlive the walk on
+    that connection."""
+    import psycopg2
+
+    import robothor.db
+    from robothor.memory import activation
+    from robothor.memory.tests.test_graph_activation import TENANT
+
+    a, b = world.entity("Alice Smith"), world.entity("Bob Jones")
+    world.link(a, b)
+    world.fact("Bob Jones manages shipping", about=(b,))
+    world.fact("Alice signed it", entities=("Alice",))
+    marker = "g872_slow_walk_marker"
+    monkeypatch.setattr(
+        activation,
+        "_ACTIVATE_SQL",
+        activation._ACTIVATE_SQL + f" AND (SELECT count(*) FROM pg_sleep(5)) = 1 -- {marker}\n",
+    )
+    monkeypatch.setattr(warmup, "GRAPH_WARMUP_BUDGET_SECONDS", 0.5)
+
+    kept = psycopg2.connect(world.dsn)
+    kept.autocommit = True
+    real_get = robothor.db.get_connection
+
+    @contextmanager
+    def _pooled(*a: Any, read_only: bool = False, **k: Any):
+        if read_only:  # the walk: one connection it gives back, as a pool would
+            yield kept
+        else:
+            with real_get(*a, **k) as conn:
+                yield conn
+
+    monkeypatch.setattr(robothor.db, "get_connection", _pooled)
+    try:
+        start = time.monotonic()
+        text = warmup._build_entity_context(MESSAGE, tenant_id=TENANT)
+        assert "Bob Jones manages shipping" not in text
+        assert "Alice signed it" in text, "the turn falls back to today's section"
+
+        # Gate on the server, not the clock: the walk's backend must stop
+        # long before its five-second sleep would end.
+        with real_get() as probe:
+            cur = probe.cursor()
+            stopped = False
+            while time.monotonic() - start < 3.0:
+                cur.execute(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE state = 'active' AND query LIKE %s AND pid <> pg_backend_pid()",
+                    (f"%{marker}%",),
+                )
+                if cur.fetchone()[0] == 0:
+                    stopped = True
+                    break
+                time.sleep(0.05)
+        assert stopped, "the walk kept running on the server past the budget"
+
+        with kept.cursor() as cur:  # waits for the walk's thread to give it back
+            cur.execute("SHOW statement_timeout")
+            assert cur.fetchone()[0] == "0", "the walk's time limit outlived it"
+    finally:
+        kept.close()
+
+
+@pytest.mark.integration
+def test_a_budget_spent_before_the_walk_starts_still_bounds_it(
+    world: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The budget can expire while no statement is running (here, in the
+    operator lookup). Cancelling then reaches nothing; the walk must still
+    not run past the budget."""
+    import threading
+
+    import psycopg2
+
+    import robothor.crm.dal
+    import robothor.db
+    from robothor.memory import activation
+    from robothor.memory.tests.test_graph_activation import TENANT
+
+    a, b = world.entity("Alice Smith"), world.entity("Bob Jones")
+    world.link(a, b)
+    world.fact("Bob Jones manages shipping", about=(b,))
+    marker = "g872_late_walk_marker"
+    monkeypatch.setattr(
+        activation,
+        "_ACTIVATE_SQL",
+        activation._ACTIVATE_SQL + f" AND (SELECT count(*) FROM pg_sleep(5)) = 1 -- {marker}\n",
+    )
+    monkeypatch.setattr(warmup, "GRAPH_WARMUP_BUDGET_SECONDS", 0.3)
+    owner_done = threading.Event()
+
+    def _slow_owner(*_a: Any, **_k: Any) -> dict[str, Any]:
+        time.sleep(0.6)  # past the budget, with no statement running
+        owner_done.set()
+        return {"id": None}
+
+    monkeypatch.setattr(robothor.crm.dal, "get_owner_person", _slow_owner)
+    kept = psycopg2.connect(world.dsn)
+    kept.autocommit = True
+    real_get = robothor.db.get_connection
+
+    @contextmanager
+    def _pooled(*a: Any, read_only: bool = False, **k: Any):
+        if read_only:
+            yield kept
+        else:
+            with real_get(*a, **k) as conn:
+                yield conn
+
+    monkeypatch.setattr(robothor.db, "get_connection", _pooled)
+    try:
+        warmup._build_entity_context(MESSAGE, tenant_id=TENANT)
+        assert owner_done.wait(3.0)
+        time.sleep(0.3)  # past the budget by any measure: the walk must not be running
+        with real_get() as probe:
+            cur = probe.cursor()
+            cur.execute(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE state = 'active' AND query LIKE %s AND pid <> pg_backend_pid()",
+                (f"%{marker}%",),
+            )
+            assert cur.fetchone()[0] == 0, "the walk started after the budget and ran unbounded"
+    finally:
+        kept.cancel()
+        kept.close()
