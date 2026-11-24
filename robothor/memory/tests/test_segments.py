@@ -167,6 +167,85 @@ def test_a_topic_break_falls_only_before_a_user_turn():
         assert seg.turns[0].role == "user"
 
 
+# ── a turn longer than the budget ──────────────────────────────────────────
+
+
+def long_text() -> str:
+    """About 11,000 characters: paragraphs of sentences, plus one unbroken run."""
+    para = " ".join(
+        f"Sentence {i} explains how the bike locker rota works for the garage on floor {i}."
+        for i in range(25)
+    )
+    paragraphs = [f"Paragraph {n}. {para}" for n in range(4)]
+    return "\n\n".join(paragraphs) + "\n\n" + "x" * 2500
+
+
+def test_a_long_turn_is_split_across_parts_and_never_clipped():
+    original = long_text()
+    turn = Turn(ref=7, role="user", text=original, at=BASE)
+
+    segs = segment_turns([turn])
+
+    assert len(segs) > 1
+    assert [s.part for s in segs] == list(range(len(segs)))
+    assert all((s.start_ref, s.end_ref) == (7, 7) for s in segs)
+    assert all(len(s.text) <= segments.SEGMENT_MAX_CHARS for s in segs)
+    assert "".join(s.text.removeprefix("User: ") for s in segs) == original
+
+
+def test_a_long_turn_splits_at_paragraph_or_sentence_boundaries():
+    segs = segment_turns([Turn(ref=7, role="user", text=long_text(), at=BASE)])
+    assert len(segs) >= 3
+    # Every piece but the unbroken run ends where a paragraph or sentence does.
+    for seg in segs[:-1]:
+        body = seg.text.removeprefix("User: ")
+        if "x" * 50 in body:
+            continue
+        assert body.endswith(("\n\n", ". ", ".")), repr(body[-20:])
+
+
+def test_the_pieces_of_a_long_turn_share_no_segment_with_other_turns():
+    turns = [
+        *turns_of(BIKE[:2]),
+        Turn(ref=3, role="user", text=long_text(), at=BASE + timedelta(minutes=3)),
+        Turn(ref=4, role="assistant", text="ok", at=BASE + timedelta(minutes=4)),
+    ]
+    segs = segment_turns(turns)
+    for seg in segs:
+        refs = {t.ref for t in seg.turns}
+        assert refs == {3} or 3 not in refs
+    assert [t.ref for s in segs for t in s.turns if t.ref != 3] == [1, 2, 4]
+
+
+def test_an_ordinary_segment_is_part_zero():
+    assert {s.part for s in segment_turns(turns_of(BIKE + DENTIST))} == {0}
+
+
+# ── what the reranker reads ────────────────────────────────────────────────
+
+
+def test_the_reranker_excerpt_is_bounded_and_centred_on_the_match():
+    text = (
+        ("Filler about the weather and nothing else. " * 60)
+        + "The locker code is 4417. "
+        + ("More filler about lunch plans. " * 60)
+    )
+    excerpt = segments.rerank_excerpt(text, "what is the locker code?")
+
+    assert len(excerpt) <= segments.SEGMENT_RERANK_CHARS
+    assert "locker code is 4417" in excerpt
+
+
+def test_the_reranker_excerpt_is_the_head_without_a_match():
+    text = "abc " * 1000
+    excerpt = segments.rerank_excerpt(text, "nothing matches here")
+    assert excerpt == text[: segments.SEGMENT_RERANK_CHARS]
+
+
+def test_a_short_text_is_its_own_excerpt():
+    assert segments.rerank_excerpt("User: hi", "hi") == "User: hi"
+
+
 # ── the minimum ────────────────────────────────────────────────────────────
 
 

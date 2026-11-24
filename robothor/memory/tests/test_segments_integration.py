@@ -99,6 +99,15 @@ def _session(cur: Any, tenant: str, key: str, person_id: str | None = None) -> i
     return int(cur.fetchone()["id"])
 
 
+def _person(cur: Any, first_name: str, tenant: str = A) -> str:
+    cur.execute(
+        "INSERT INTO crm_people (tenant_id, first_name, last_name) "
+        "VALUES (%s, %s, 'Example') RETURNING id",
+        (tenant, first_name),
+    )
+    return str(cur.fetchone()["id"])
+
+
 def _say(cur: Any, session_id: int, pairs, start_at: datetime) -> list[int]:
     ids = []
     for i, (role, text) in enumerate(pairs):
@@ -277,12 +286,7 @@ async def test_text_is_redacted_before_it_is_stored_or_embedded(pg) -> None:
 
 @pytest.mark.integration
 async def test_the_segment_carries_the_sessions_person(pg) -> None:
-    pg.cur.execute(
-        "INSERT INTO crm_people (tenant_id, first_name, last_name) "
-        "VALUES (%s, 'Alice', 'Example') RETURNING id",
-        (A,),
-    )
-    alice = str(pg.cur.fetchone()["id"])
+    alice = _person(pg.cur, "Alice")
     sid = _session(pg.cur, A, "agent:main:alice", person_id=alice)
     _say(pg.cur, sid, BIKE, _recent())
 
@@ -433,18 +437,9 @@ async def test_since_and_until_bound_the_event_time(pg) -> None:
     assert {h["source_ref"] for h in older} == {"agent:main:old"}
 
 
-@pytest.mark.integration
-async def test_a_restricted_person_scope_sees_its_own_and_shared_segments(pg) -> None:
-    from robothor.identity.scope import DataScope
-
-    people = {}
-    for name in ("Alice", "Bob"):
-        pg.cur.execute(
-            "INSERT INTO crm_people (tenant_id, first_name, last_name) "
-            "VALUES (%s, %s, 'Example') RETURNING id",
-            (A, name),
-        )
-        people[name] = str(pg.cur.fetchone()["id"])
+async def _three_conversations(pg) -> dict[str, str]:
+    """Alice's and Bob's own sessions and one with no person, all on one topic."""
+    people = {name: _person(pg.cur, name) for name in ("Alice", "Bob")}
     for key, person in (
         ("agent:main:alice", people["Alice"]),
         ("agent:main:bob", people["Bob"]),
@@ -453,13 +448,79 @@ async def test_a_restricted_person_scope_sees_its_own_and_shared_segments(pg) ->
         sid = _session(pg.cur, A, key, person_id=person)
         _say(pg.cur, sid, BIKE, _recent())
         await segments.index_conversation(key, tenant_id=A, embed_batch=pg.embed)
+    return people
 
-    scope = DataScope(tenant_id=A, person_id=people["Alice"], restricted=True)
-    hits = await _search("bike locker code", person_scope=scope)
 
-    assert {h["source_ref"] for h in hits} == {"agent:main:alice", "agent:main:shared"}
-    unrestricted = DataScope(tenant_id=A, person_id=None, restricted=False)
-    assert len(await _search("bike locker code", person_scope=unrestricted)) == 3
+@pytest.mark.integration
+async def test_a_persons_session_is_stored_private_to_that_person(pg) -> None:
+    people = await _three_conversations(pg)
+
+    scope = {r["source_ref"]: (r["scope_kind"], r["scope_id"]) for r in _rows(pg.cur)}
+
+    assert scope["agent:main:alice"] == ("user", people["Alice"])
+    assert scope["agent:main:bob"] == ("user", people["Bob"])
+    assert scope["agent:main:shared"] == ("shared", None)
+
+
+@pytest.mark.integration
+async def test_a_workspace_session_stays_shared_even_with_a_person(pg) -> None:
+    alice = _person(pg.cur, "Alice")
+    key = f"agent:main:room:{uuid.uuid4()}"
+    sid = _session(pg.cur, A, key, person_id=alice)
+    _say(pg.cur, sid, BIKE, _recent())
+
+    await segments.index_conversation(key, tenant_id=A, embed_batch=pg.embed)
+
+    [row] = _rows(pg.cur)
+    assert (row["scope_kind"], row["scope_id"]) == ("shared", None)
+
+
+@pytest.mark.integration
+async def test_a_reader_sees_shared_segments_and_only_their_own_private_ones(pg) -> None:
+    people = await _three_conversations(pg)
+
+    alice = await _search("bike locker code", reader_person_id=people["Alice"])
+    bob = await _search("bike locker code", reader_person_id=people["Bob"])
+
+    assert {h["source_ref"] for h in alice} == {"agent:main:alice", "agent:main:shared"}
+    assert {h["source_ref"] for h in bob} == {"agent:main:bob", "agent:main:shared"}
+
+
+@pytest.mark.integration
+async def test_a_reader_with_no_known_person_sees_shared_segments_only(pg) -> None:
+    await _three_conversations(pg)
+
+    hits = await _search("bike locker code")
+
+    assert {h["source_ref"] for h in hits} == {"agent:main:shared"}
+
+
+@pytest.mark.integration
+async def test_a_long_turn_round_trips_completely_across_parts(pg) -> None:
+    from robothor.memory.tests.test_segments import long_text
+
+    original = long_text()
+    sid = _session(pg.cur, A, "agent:main:primary")
+    [ref] = _say(pg.cur, sid, [("user", original)], _recent())
+
+    await segments.index_conversation("agent:main:primary", tenant_id=A, embed_batch=pg.embed)
+    pg.cur.execute(
+        "SELECT part, start_ref, end_ref, text FROM memory_segments "
+        "WHERE tenant_id = %s ORDER BY start_ref, part",
+        (A,),
+    )
+    rows = pg.cur.fetchall()
+
+    assert len(rows) > 1
+    assert [r["part"] for r in rows] == list(range(len(rows)))
+    assert all((r["start_ref"], r["end_ref"]) == (ref, ref) for r in rows)
+    assert all(len(r["text"]) <= segments.SEGMENT_MAX_CHARS for r in rows)
+    assert "".join(r["text"].removeprefix("User: ") for r in rows) == original
+
+    again = await segments.index_conversation(
+        "agent:main:primary", tenant_id=A, embed_batch=pg.embed
+    )
+    assert again == 0
 
 
 @pytest.mark.integration
