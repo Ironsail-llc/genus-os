@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -185,36 +186,59 @@ class VisionSuppressionRequest(BaseModel):
 # ─── Acting tenant ───────────────────────────────────────────────────
 
 
-async def acting_tenant(request: Request) -> str:
+#: A JSON Web Token: three base64url segments. Anything else in a bearer is
+#: not one of our tokens -- an OpenAI-compatible client (Open WebUI, LiteLLM,
+#: the openai SDK) always sends ``Bearer <api key>`` and will not start without
+#: a key, so operators give it a placeholder.
+_JWT_SHAPE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$")
+
+
+async def acting_tenant(request: Request, *, scope: str) -> str:
     """The tenant a memory endpoint acts as, from the caller.
 
-    1. A bearer token is verified (bridge audience: the dashboard forwards the
+    1. A bearer JWT is verified (bridge audience: the dashboard forwards the
        session's bridge token, and services send a minted service token) and its
-       tenant is the tenant. An invalid token is a 401; an ``X-Tenant-Id`` that
-       contradicts it is a 403, as on the bridge.
-    2. Without a token, :func:`robothor.tenancy.acting.resolve_acting_tenant`
-       decides: the default tenant on a single-tenant deployment, otherwise a
-       400 refusal rather than another tenant's memory.
+       tenant is the tenant. Then, as on the bridge: an invalid token is a 401;
+       a token without ``scope`` (``bridge:read`` to read, ``bridge:write`` to
+       ingest) is a 403; a session that no longer stands
+       (``robothor.auth.session_standing.refusal``) is refused; an
+       ``X-Tenant-Id`` that contradicts the token is a 403.
+    2. Without a token -- and a bearer that is not a JWT, such as an OpenAI
+       client's placeholder key, is no token --
+       :func:`robothor.tenancy.acting.resolve_acting_tenant` decides: the
+       default tenant on a single-tenant deployment, otherwise a 400 refusal
+       rather than another tenant's memory.
 
     A bare ``X-Tenant-Id`` never selects a tenant. Without a token it may only
     restate what step 2 resolves to; naming any other tenant is a 401. An
     unauthenticated caller of this port could only ever reach the default
     tenant, and honouring the header would hand it every tenant by name.
+
+    The handler must then run its memory calls inside ``tenant_scope`` of the
+    returned tenant: this one process serves every tenant, and under row-level
+    security a connection bound to the process's own tenant cannot see or write
+    another's rows.
     """
+    from robothor.auth import session_standing
     from robothor.auth.deps import bearer_from_header, verify_token
     from robothor.auth.tokens import TokenError
     from robothor.tenancy.acting import TenantRequiredError, resolve_acting_tenant
 
     header = (request.headers.get("x-tenant-id") or "").strip()
     authorization = request.headers.get("authorization")
-    if authorization:
-        token = bearer_from_header(authorization)
-        if not token:
-            raise HTTPException(status_code=401, detail="invalid authorization header")
+    token = bearer_from_header(authorization) if authorization else None
+    if authorization and token is None:
+        raise HTTPException(status_code=401, detail="invalid authorization header")
+    if token and _JWT_SHAPE.fullmatch(token):
         try:
             auth = verify_token(token, expected_audience="genus-bridge")
         except TokenError as error:
             raise HTTPException(status_code=401, detail="invalid or expired token") from error
+        if not auth.has_scope(scope):
+            raise HTTPException(status_code=403, detail=f"token lacks {scope}")
+        refused = await asyncio.to_thread(session_standing.refusal, auth)
+        if refused is not None:
+            raise HTTPException(status_code=refused[0], detail=refused[1])
         if header and header != auth.tenant_id:
             raise HTTPException(status_code=403, detail="tenant not authorized")
         return auth.tenant_id
@@ -228,15 +252,25 @@ async def acting_tenant(request: Request) -> str:
         resolved = await asyncio.to_thread(
             resolve_acting_tenant, "", surface=f"orchestrator {request.url.path}"
         )
-    except TenantRequiredError as refused:
+    except TenantRequiredError as refused_tenant:
         if header:
-            raise token_required from refused
+            raise token_required from refused_tenant
         raise HTTPException(
-            status_code=400, detail=f"{refused} Send a bearer token for the tenant."
-        ) from refused
+            status_code=400, detail=f"{refused_tenant} Send a bearer token for the tenant."
+        ) from refused_tenant
     if header and header != resolved:
         raise token_required
     return resolved
+
+
+async def reading_tenant(request: Request) -> str:
+    """:func:`acting_tenant` for an endpoint that reads memory."""
+    return await acting_tenant(request, scope="bridge:read")
+
+
+async def writing_tenant(request: Request) -> str:
+    """:func:`acting_tenant` for an endpoint that writes memory."""
+    return await acting_tenant(request, scope="bridge:write")
 
 
 # ─── Core Endpoints ──────────────────────────────────────────────────
@@ -337,14 +371,17 @@ async def readiness() -> Any:
 
 
 @app.post("/query")
-async def query_endpoint(req: QueryRequest, tenant_id: str = Depends(acting_tenant)) -> Any:
+async def query_endpoint(req: QueryRequest, tenant_id: str = Depends(reading_tenant)) -> Any:
     """Simple RAG query endpoint, searching the caller's tenant's memory."""
-    result = await run_pipeline(query=req.question, profile=req.profile, tenant_id=tenant_id)
+    from robothor.db.connection import tenant_scope
+
+    with tenant_scope(tenant_id):
+        result = await run_pipeline(query=req.question, profile=req.profile, tenant_id=tenant_id)
     return result
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(req: ChatRequest, tenant_id: str = Depends(acting_tenant)) -> Any:
+async def chat_completions(req: ChatRequest, tenant_id: str = Depends(reading_tenant)) -> Any:
     """OpenAI-compatible chat completions endpoint.
 
     Supports the standard OpenAI API format so tools like Open WebUI,
@@ -361,12 +398,15 @@ async def chat_completions(req: ChatRequest, tenant_id: str = Depends(acting_ten
 
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
 
-    result = await run_pipeline(
-        query=last_user,
-        profile=req.profile,
-        messages=messages,
-        tenant_id=tenant_id,
-    )
+    from robothor.db.connection import tenant_scope
+
+    with tenant_scope(tenant_id):
+        result = await run_pipeline(
+            query=last_user,
+            profile=req.profile,
+            messages=messages,
+            tenant_id=tenant_id,
+        )
 
     response = ChatResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
@@ -433,26 +473,31 @@ async def list_profiles() -> Any:
 
 
 @app.get("/stats")
-async def stats(tenant_id: str = Depends(acting_tenant)) -> dict[str, Any]:
+async def stats(tenant_id: str = Depends(reading_tenant)) -> dict[str, Any]:
     """Memory system statistics for the caller's tenant."""
+    from robothor.db.connection import tenant_scope
     from robothor.memory.facts import get_memory_stats
 
-    return await asyncio.to_thread(get_memory_stats, tenant_id=tenant_id)
+    # to_thread copies the context, so the worker's connections bind to the scope.
+    with tenant_scope(tenant_id):
+        return await asyncio.to_thread(get_memory_stats, tenant_id=tenant_id)
 
 
 @app.post("/ingest")
-async def ingest_endpoint(req: IngestRequest, tenant_id: str = Depends(acting_tenant)) -> Any:
+async def ingest_endpoint(req: IngestRequest, tenant_id: str = Depends(writing_tenant)) -> Any:
     """Ingest content from any channel, into the caller's tenant."""
+    from robothor.db.connection import tenant_scope
     from robothor.memory.ingestion import ingest_content
 
     try:
-        result = await ingest_content(
-            content=req.content,
-            source_channel=req.source_channel,
-            content_type=req.content_type,
-            metadata=req.metadata,
-            tenant_id=tenant_id,
-        )
+        with tenant_scope(tenant_id):
+            result = await ingest_content(
+                content=req.content,
+                source_channel=req.source_channel,
+                content_type=req.content_type,
+                metadata=req.metadata,
+                tenant_id=tenant_id,
+            )
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

@@ -87,6 +87,20 @@ class DeepReasonConfig:
 # (via asyncio.to_thread) with no event loop.
 
 
+def _as_tenant(tenant_id: str, call: Callable[[], Any]) -> Any:
+    """Run one memory call with its connections bound to ``tenant_id``.
+
+    Naming the tenant in the query is not enough under row-level security: the
+    connection must be bound to it too, or the rows are invisible. The inner
+    model calls these helpers from whatever thread the RLM library uses, so each
+    binds its own scope rather than trusting the caller's context.
+    """
+    from robothor.db.connection import tenant_scope
+
+    with tenant_scope(tenant_id):
+        return call()
+
+
 def _make_search_memory_fn(*, tenant_id: str) -> Callable[..., str]:
     """Return a sync wrapper around ``search_facts``, bound to ``tenant_id``."""
 
@@ -94,7 +108,9 @@ def _make_search_memory_fn(*, tenant_id: str) -> Callable[..., str]:
         """Search semantic memory. Returns JSON list of facts."""
         from robothor.memory.facts import search_facts
 
-        results = asyncio.run(search_facts(query, limit=limit, tenant_id=tenant_id))
+        results = _as_tenant(
+            tenant_id, lambda: asyncio.run(search_facts(query, limit=limit, tenant_id=tenant_id))
+        )
         return json.dumps(
             [
                 {
@@ -118,7 +134,7 @@ def _make_get_entity_fn(*, tenant_id: str) -> Callable[..., str]:
         """Look up an entity and its relationships in the knowledge graph. Returns JSON."""
         from robothor.memory.entities import get_entity as _get_entity
 
-        result = asyncio.run(_get_entity(name, tenant_id=tenant_id))
+        result = _as_tenant(tenant_id, lambda: asyncio.run(_get_entity(name, tenant_id=tenant_id)))
         return json.dumps(result or {"name": name, "found": False}, indent=2, default=str)
 
     return get_entity
@@ -159,7 +175,7 @@ def _make_memory_block_read_fn(*, tenant_id: str) -> Callable[..., str]:
 
         if is_hidden_block(block_name):
             return json.dumps({"error": HIDDEN_BLOCK_ERROR})
-        result = read_block(block_name, tenant_id=tenant_id)
+        result = _as_tenant(tenant_id, lambda: read_block(block_name, tenant_id=tenant_id))
         return json.dumps(result, indent=2)
 
     return memory_block_read
@@ -179,7 +195,9 @@ def _load_context_source(src: dict[str, Any], workspace: str, *, tenant_id: str)
             return None
         from robothor.memory.facts import search_facts
 
-        results = asyncio.run(search_facts(query, limit=limit, tenant_id=tenant_id))
+        results = _as_tenant(
+            tenant_id, lambda: asyncio.run(search_facts(query, limit=limit, tenant_id=tenant_id))
+        )
         if not results:
             return None
         lines = [f"## Memory search: {query}"]
@@ -214,7 +232,7 @@ def _load_context_source(src: dict[str, Any], workspace: str, *, tenant_id: str)
             return None
         from robothor.memory.blocks import read_block
 
-        result = read_block(block_name, tenant_id=tenant_id)
+        result = _as_tenant(tenant_id, lambda: read_block(block_name, tenant_id=tenant_id))
         if "error" in result:
             return None
         return f"## Memory block: {block_name}\n\n{result.get('content', '')}"
@@ -225,7 +243,9 @@ def _load_context_source(src: dict[str, Any], workspace: str, *, tenant_id: str)
             return None
         from robothor.memory.entities import get_entity
 
-        entity: dict[str, Any] | None = asyncio.run(get_entity(name, tenant_id=tenant_id))
+        entity: dict[str, Any] | None = _as_tenant(
+            tenant_id, lambda: asyncio.run(get_entity(name, tenant_id=tenant_id))
+        )
         if not entity:
             return None
         return f"## Entity: {name}\n\n{json.dumps(entity, indent=2, default=str)}"
