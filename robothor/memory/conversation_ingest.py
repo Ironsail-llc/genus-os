@@ -7,7 +7,9 @@ so that interactive exchanges compound into the knowledge graph (facts + entitie
 Called fire-and-forget after each agent run in telegram.py / chat.py.
 
 Architecture:
-    Session history -> format transcript -> dedup check -> ingest_content() -> record
+    Session history -> dedup check -> split by role -> ingest_content() once per
+    role (user turns are user-stated, assistant turns agent-generated; the other
+    role is read-only context) -> record
 """
 
 from __future__ import annotations
@@ -89,6 +91,43 @@ def format_transcript(history: list[dict[str, Any]], *, skip_generated: bool = F
     return "\n".join(lines)
 
 
+def role_transcripts(
+    history: list[dict[str, Any]], *, skip_generated: bool = False
+) -> dict[str, str]:
+    """The last MAX_TRANSCRIPT_MESSAGES turns, split by who said them.
+
+    ``{"user": ..., "assistant": ...}``, each in :func:`format_transcript`'s
+    line format and order. Extraction runs once per role so a fact's origin is
+    its speaker's.
+    """
+    messages = [m for m in history if m.get("role") in ("user", "assistant")]
+    if len(messages) > MAX_TRANSCRIPT_MESSAGES:
+        messages = messages[-MAX_TRANSCRIPT_MESSAGES:]
+    return {
+        role: format_transcript(
+            [m for m in messages if m["role"] == role], skip_generated=skip_generated
+        )
+        for role in ("user", "assistant")
+    }
+
+
+def _merge(total: dict[str, Any], part: dict[str, Any]) -> dict[str, Any]:
+    """Two per-role ingest results as one: ids joined, counts added."""
+    if not total:
+        return dict(part)
+    out = dict(total)
+    for key, value in part.items():
+        if isinstance(value, bool):
+            out[key] = bool(out.get(key)) or value
+        elif isinstance(value, int):
+            out[key] = int(out.get(key) or 0) + value
+        elif isinstance(value, list):
+            out[key] = list(out.get(key) or []) + value
+        elif out.get(key) is None:
+            out[key] = value
+    return out
+
+
 def _compute_session_hash(session_key: str, history: list[dict[str, Any]]) -> str:
     """Compute a deterministic hash for dedup."""
     tail = ""
@@ -132,7 +171,7 @@ async def ingest_conversation_session(
             if len(new_msgs) < 2:
                 record_ingested(_WATERMARK_SOURCE, session_key, str(len(history)), tenant_id=tid)
                 return None
-            transcript = format_transcript(window, skip_generated=True)
+            turns = role_transcripts(window, skip_generated=True)
         else:
             hash_val = _compute_session_hash(session_key, history)
             if is_already_ingested(_DEDUP_SOURCE, session_key, hash_val):
@@ -141,27 +180,38 @@ async def ingest_conversation_session(
                     sanitize_log(session_key),
                 )
                 return None
-            transcript = format_transcript(history)
+            turns = role_transcripts(history)
 
-        if not transcript.strip():
+        if not any(t.strip() for t in turns.values()):
             if incremental:
                 record_ingested(_WATERMARK_SOURCE, session_key, str(len(history)), tenant_id=tid)
             return None
 
-        result = await ingest_content(
-            content=transcript,
-            source_channel=trigger_type,
-            content_type="conversation",
-            metadata={
-                "session_key": session_key,
-                "agent_id": agent_id,
-                "run_id": run_id,
-                "message_count": len(history),
-            },
-            # Without this the watermarks were tenant-correct while the facts
-            # they tracked were written to DEFAULT_TENANT.
-            tenant_id=tenant_id,
-        )
+        metadata = {
+            "session_key": session_key,
+            "agent_id": agent_id,
+            "run_id": run_id,
+            "message_count": len(history),
+        }
+        # Extracted per role, so each fact's origin is who said it: a person's
+        # turns are user-stated, the assistant's agent-generated (even when they
+        # paraphrase an email). The other side is shown only as read-only context.
+        result: dict[str, Any] = {}
+        for role, other in (("user", "assistant"), ("assistant", "user")):
+            if not turns[role].strip():
+                continue
+            part = await ingest_content(
+                content=turns[role],
+                source_channel=trigger_type,
+                content_type="conversation",
+                metadata=metadata,
+                # Without this the watermarks were tenant-correct while the facts
+                # they tracked were written to DEFAULT_TENANT.
+                tenant_id=tenant_id,
+                role=role,
+                read_only_context=turns[other] or None,
+            )
+            result = _merge(result, part)
 
         if incremental:
             record_ingested(

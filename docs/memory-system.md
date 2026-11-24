@@ -137,13 +137,15 @@ Facts are atomic statements extracted from content via LLM. Each has:
 ```python
 from robothor.memory.facts import extract_facts, store_fact, search_facts
 
-# Extract facts from raw text (LLM-powered)
-facts = await extract_facts("Alice decided to use Redis for caching. Bob disagreed.")
+# Extract facts from raw text (LLM-powered, one call, see "Write path")
+facts = await extract_facts("Alice Moreno chose Redis for caching on 2026-03-02.")
 # Returns: [
-#   {"fact_text": "Alice decided to use Redis for caching", "category": "decision",
-#    "entities": ["Alice", "Redis"], "confidence": 0.9},
-#   {"fact_text": "Bob disagreed with Alice's caching decision", "category": "decision",
-#    "entities": ["Bob", "Alice"], "confidence": 0.85},
+#   {"fact_text": "Alice Moreno chose Redis for caching on 2026-03-02.",
+#    "category": "decision", "confidence": 0.9, "event_time": "2026-03-02",
+#    "mentions": [{"surface_form": "Alice Moreno", "entity_type": "person"},
+#                 {"surface_form": "Redis", "entity_type": "technology"}],
+#    "relations": [{"source": "Alice Moreno", "relation": "chose", "target": "Redis"}],
+#    "entities": ["Alice Moreno", "Redis"]},
 # ]
 
 # Store with embedding
@@ -368,12 +370,15 @@ unique identifier), `full_name`, `context`, `llm`, `exact`, `operator` and
 **`memory_mentions`** is the fact-to-entity join: one row per mention, with
 the fact, the entity (NULL while unresolved, or once its entity is deleted),
 the surface form and type, and the decision that resolved it. Deleting a fact
-deletes its mentions.
+deletes its mentions. A fact has at most one mention per surface form (case
+ignored): the graph keys migration (`crm/migrations/*_memory_graph_keys.sql`)
+makes `(fact_id, lower(surface_form))` unique, so writing a mention twice is a
+no-op.
 
 **`memory_relation_evidence`** lists every fact supporting an edge, keyed by
 `(relation_id, fact_id)`. The migration copies each edge's existing
-`memory_relations.fact_id` into it; edges written afterwards by code that
-predates the graph write path still set only `fact_id`.
+`memory_relations.fact_id` into it; the [write path](#write-path) adds a row for
+every fact that states the relation.
 
 **`memory_relations`** gains:
 
@@ -391,7 +396,8 @@ Active edges are indexed per endpoint for neighbourhood expansion.
 
 **`memory_facts`** gains `origin`, `event_time` (when the thing happened, as
 opposed to `valid_from`, when the fact became true as recorded) and a scope.
-None of them is part of the content hash, so no stored hash changes.
+A shared fact's content hash is unchanged; a private fact's includes its scope
+(see [Write path](#write-path)), so no stored hash changes.
 
 **`memory_entities`** gains the CRM record it is about (`crm_person_id`,
 `crm_company_id`, cleared if that record is deleted), an `embedding`, a scope,
@@ -524,9 +530,110 @@ matches as an `Ambiguity`. `get_entity` uses it first and falls back to the
 best-connected entity of that name. It names its columns, so the embedding is
 never returned.
 
+### Write path
+
+Every way of storing a memory goes through one function,
+`robothor.memory.write_path.write_facts(facts, *, source_content, context,
+conflict_check=True, deadline=None)`, or `ingest_text(content, context, ...)`,
+which extracts first and then calls it. The writers routed through it:
+`ingest_content` (and through it conversation ingest, the bridge's
+`/memory/store` and the orchestrator's `/ingest`), the `store_memory` tool (and
+the MCP `store_memory`), the deferred write jobs (`MEMORY_ASYNC_WRITE`),
+`record_resolution`, breadcrumb promotion, and nightly and intra-day
+consolidation (`write_derived_fact`). For each fact:
+
+1. the quality gate, as `store_fact` has always applied it;
+2. conflict handling (`resolve_and_store`: dedup, reinforce, classification,
+   supersession, operator-confirmed protection), searching only facts of the
+   same scope. `record_resolution` and breadcrumb promotion opt out, as before;
+3. the row, with its `origin`, `event_time` and scope;
+4. its mentions, resolved by [Identity](#identity) and written to
+   `memory_mentions`;
+5. each relation it states between two resolved mentions: the edge is upserted
+   (`relation_type` is the phrase, `predicate` its lowercased, underscored
+   form; a new edge's `fact_id` is this fact) and an evidence row ties it to
+   this fact. A relation with an unresolved endpoint creates nothing and is
+   counted (`relations_unresolved`).
+
+**One extraction.** A single model call returns, per fact, its text, category,
+confidence, typed mentions (the six entity types), the relations it states, and
+`event_time` when the text states or clearly implies when it happened (an ISO
+date or date-time, otherwise null). The schema is strict. There is no separate
+entity-extraction call on any write path (`extract_entities` and
+`extract_entities_batch` remain for their direct callers). A writer that does
+not extract (`record_resolution`, breadcrumbs) gets as mentions the names of
+known shared entities its text contains. `memory_facts.entities` is still
+filled with the mention names.
+
+**Extraction failure.** When extraction fails (a timeout, an answer that is not
+the JSON asked for, a model error), the raw content is stored as one fact
+(`metadata.extraction = "fallback_raw"`, with `extraction_error`) and the
+result reports `extraction_failed`. When the model answers and finds nothing,
+nothing is stored, except by `store_memory` and the write jobs, which keep the
+raw content as they always did.
+
+**Origin**, from the source, by `origin_for(source_channel, content_type,
+role=, metadata=)`; a conversation is extracted once per role so each fact's
+origin is its speaker's (the other role is shown to the model as read-only
+context):
+
+| Source | Origin |
+|---|---|
+| Metadata marks it operator-confirmed | `operator_confirmed` |
+| A person's turn (`role="user"`) | `user_stated` |
+| The assistant's turn, or what an agent writes (`role="assistant"`, `store_memory`, `record_resolution`, breadcrumbs) | `agent_generated` |
+| A tool result (`role="tool"`) | `tool` |
+| Channel `crm`, no speaker | `crm` |
+| Channels `email`, `discord`, `telegram`, `gchat`, `voice`, `camera`, no speaker | `external` |
+| Channels `cli`, `api`, `mcp`, `conversation`, or any other, no speaker | `agent_generated` |
+| Content type `email`, `web`, `webpage`, `web_page`, `document`, `upload`, `uploaded_document`, `pdf`, `attachment`, `external`, whoever relays it | `external` |
+
+When two rows apply, the less trusted wins, so relaying never raises trust. A
+derived row takes the least trusted origin of its inputs: a consolidated fact
+built from a user-stated and an external fact is external.
+
+**Edge origin.** An edge's `origin` is the most trusted origin among the facts
+supporting it (active ones first), recomputed whenever evidence is added: a
+relation a user stated stays user-stated when an email repeats it. Each
+evidence row keeps its own fact, so a reader that must be strict checks the
+origin of every supporting fact.
+
+**Scope.** Facts are stored `shared`, exactly as before. Making the facts of a
+one-to-one conversation private to its person would stop scheduled agents and
+other team members recalling them, so it is left to the operator to decide; a
+private scope is written only when a caller passes one (`scope=` on
+`ingest_content`, `store_memory_content` and `WriteContext.for_source`), and no
+caller does yet. `conversation_scope` gives a conversation's owner the way the
+conversation segments do (`person:{id}`, `user:{uid}`). What the mechanism
+guarantees, tested:
+
+- *Hash.* The content hash (`drift.compute_fact_hash`, unique among active
+  facts per tenant) covers a non-shared fact's scope: a `user` fact fills the
+  person slot with its owner (for `person:{id}`, the person id, which is also
+  the row's `person_id`, so older code recomputes the same digest), an `agent`
+  fact with `agent:{id}`. A shared fact hashes as it always did. So the same
+  text stored shared and private, or private to two people, is two facts.
+- *Conflicts.* The similarity search behind reinforcement, deduplication and
+  supersession only sees facts of the same scope.
+- *Consolidation.* A consolidation group never mixes tenants or scopes; the
+  consolidated fact takes the group's scope.
+- *The graph.* No reader yet filters edges by the scope of their evidence, so a
+  private fact creates no node from its own text (its mentions resolve to
+  existing nodes or stay unresolved) and no edge; the relations it stated are
+  kept on the fact (`metadata.graph_pending_relations`) and counted
+  (`relations_private_deferred`).
+
+**Latency.** `store_memory` makes the one extraction call (70 s budget) and,
+only for a fact with a similar existing one, the one conflict-classification
+call; past the call's 105 s budget a fact is stored as new
+(`conflict_checks_timed_out`, `metadata.conflict_check = "timed_out"`), and
+nothing is superseded without a classification. Every database step runs off
+the event loop.
+
 ## Ingestion Pipeline
 
-The full pipeline: extract facts, resolve conflicts, build entity graph, track dedup state.
+The full pipeline: extract facts with their mentions and relations, resolve
+conflicts, write the graph with evidence, track dedup state.
 
 ```python
 from robothor.memory.ingestion import ingest_content
@@ -540,6 +647,13 @@ result = await ingest_content(
 ```
 
 Valid channels: `discord`, `email`, `cli`, `api`, `telegram`, `gchat`, `voice`, `mcp`, `camera`, `conversation`, `crm`.
+
+`role=` (`user`, `assistant`, `tool`) names the speaker and so the facts' origin;
+`read_only_context=` is background the model sees but never extracts from;
+`scope=` asks for a private write (see [Write path](#write-path)). The result
+reports `facts_processed`, `fact_ids`, `mentions_written`, `relations_stored`,
+`relations_unresolved` and, when extraction failed, `extraction_failed` and
+`extraction_error`.
 
 ## Dedup and Watermarks
 

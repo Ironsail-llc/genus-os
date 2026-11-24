@@ -321,13 +321,15 @@ async def _store_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
     # Record the promise, then hand the work off. The row is written first on
     # purpose: a crash during extraction must still leave evidence that a write
-    # was owed, because the caller has already been told it succeeded.
+    # was owed, because the caller has already been told it succeeded. The row
+    # carries the write's origin and scope, so the replay stores it the same way.
     job_id = await enqueue_write(
         content,
         content_type=content_type,
         tenant_id=ctx.tenant_id,
         agent_id=getattr(ctx, "agent_id", None),
         run_id=getattr(ctx, "run_id", None),
+        context=store_memory_context(ctx.tenant_id, content_type),
     )
     if job_id is None:
         # Refused at the boundary — a benchmark run writing outside the sandbox
@@ -379,6 +381,32 @@ async def _memory_write_status(args: dict[str, Any], ctx: ToolContext) -> dict[s
 # instead of being killed at the wall, which is what 15 of 121 calls did.
 REQUEST_PATH_EXTRACT_TIMEOUT = 70.0
 
+# The whole call's budget, inside the same 120s wall. Conflict classification
+# (one short model call, only for a fact with a similar existing one) gets what
+# extraction left of it; past it, a fact is stored as new rather than lost.
+REQUEST_PATH_BUDGET = 105.0
+
+
+def store_memory_context(
+    tenant_id: str, content_type: str, scope: tuple[str, str | None] | None = None
+) -> Any:
+    """The write context of a ``store_memory`` call.
+
+    What the assistant writes to memory is agent-generated (external content it
+    relays stays external). Shared within the tenant, as it always was: the
+    tool never makes a fact private on its own. ``scope`` is for a caller that
+    explicitly asks for a private write (none does yet).
+    """
+    from robothor.memory.write_path import WriteContext
+
+    return WriteContext.for_source(
+        tenant_id=tenant_id,
+        source_channel="",
+        content_type=content_type or "conversation",
+        role="assistant",
+        scope=scope,
+    )
+
 
 async def store_memory_content(
     content: str,
@@ -386,6 +414,7 @@ async def store_memory_content(
     *,
     tenant_id: str = "",
     extract_timeout: float = REQUEST_PATH_EXTRACT_TIMEOUT,
+    scope: tuple[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """Extract facts from content and store them. One implementation, two callers.
 
@@ -394,38 +423,55 @@ async def store_memory_content(
     write through it landed in DEFAULT_TENANT without dedup — and any fix
     applied to one silently missed the other.
 
-    Uses store_facts_batch rather than a per-fact loop. Note this is *not* the
-    latency win it looks like: measured warm, extraction is ~23s and embedding
-    ~0.12s per fact, so batching saves fractions of a second. It is here because
-    it makes the write atomic — the old loop committed each fact on its own
-    connection, so a mid-loop failure left a partial write behind while the
-    caller was told the call had failed.
+    Goes through the one write path (``robothor.memory.write_path``), like every
+    other memory write: one extraction, then per fact the quality gate, conflict
+    handling (so a contradiction of an operator-confirmed fact leaves that fact
+    active), the fact with its origin and scope, its mentions and its relations
+    with evidence. No model call is added beyond conflict classification, which
+    runs only for a fact with a similar existing one and is cut off at
+    ``REQUEST_PATH_BUDGET``. If extraction fails or finds nothing, the raw
+    content is stored rather than dropped (``metadata.extraction =
+    "fallback_raw"``), and a failure is reported.
     """
-    from robothor.memory.facts import extract_facts, store_facts_batch
+    import time
+
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.memory import write_path
 
     if not (content or "").strip():
         return {"error": "content is required: there is nothing to store"}
 
-    facts = await extract_facts(content, timeout=extract_timeout)
-    if not facts:
-        # No facts, or extraction timed out. Storing the raw content keeps the
-        # information rather than dropping it; the metadata tag lets dechurn and
-        # any later reprocessing find these rows.
-        facts = [
-            {
-                "fact_text": content,
-                "category": "personal",
-                "entities": [],
-                "confidence": 0.5,
-                "metadata": {"extraction": "fallback_raw"},
-            }
-        ]
-
-    stored_ids = await store_facts_batch(facts, content, content_type, tenant_id=tenant_id)
-    return {
-        "id": stored_ids[0] if stored_ids else None,
-        "facts_stored": len(stored_ids),
+    started = time.monotonic()
+    context = store_memory_context(tenant_id or DEFAULT_TENANT, content_type, scope)
+    result = await write_path.ingest_text(
+        content,
+        context,
+        extract_timeout=extract_timeout,
+        fallback_on_empty=True,
+        conflict_check=True,
+        deadline=started + REQUEST_PATH_BUDGET,
+    )
+    stored = list(result.get("fact_ids") or [])
+    existing = list(result.get("existing_ids") or [])
+    out: dict[str, Any] = {
+        "id": (stored or existing or [None])[0],
+        "facts_stored": len(stored),
     }
+    for key in (
+        "facts_skipped",
+        "facts_kept_confirmed",
+        "conflict_checks_timed_out",
+        "relations_stored",
+        "relations_private_deferred",
+    ):
+        if result.get(key):
+            out[key] = result[key]
+    if existing:
+        out["already_known_ids"] = existing
+    if result.get("extraction_failed"):
+        out["extraction_failed"] = True
+        out["extraction_error"] = result.get("extraction_error")
+    return out
 
 
 @_handler("record_resolution")

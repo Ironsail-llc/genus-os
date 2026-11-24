@@ -21,7 +21,8 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 from robothor.memory.confirmed import is_operator_confirmed
 from robothor.memory.conflicts import _supersede_fact, find_similar_facts
-from robothor.memory.facts import store_fact
+from robothor.memory.graph_schema import Origin
+from robothor.memory.write_path import WriteContext, write_facts
 
 logger = logging.getLogger(__name__)
 
@@ -66,15 +67,26 @@ async def record_resolution(
 
     text = compose_resolution_text(open_item, outcome, confirmed_by)
     fact = {"fact_text": text, "category": "resolution", "entities": [], "confidence": 1.0}
-    new_id = await store_fact(
-        fact,
-        source_content=f"[resolution recorded by {agent_id}]",
-        source_type="resolution",
+    # Through the one write path: the fact is the agent's statement (agent-
+    # generated, whoever it says confirmed it), shared like the open items it
+    # closes, and its mentions are the known names it contains. Conflict
+    # handling is this function's own (the gated retirement below).
+    context = WriteContext(
         tenant_id=tenant,
+        source_channel="",
+        content_type="resolution",
+        origin=Origin.AGENT_GENERATED,
     )
+    written = await write_facts(
+        [fact],
+        source_content=f"[resolution recorded by {agent_id}]",
+        context=context,
+        conflict_check=False,
+    )
+    new_id = (written.get("fact_ids") or [0])[0]
     if not new_id:
-        # store_fact keeps nothing and answers 0 when the quality gate refuses
-        # the fact; reporting that as a resolution would hide it.
+        # Nothing is kept when the quality gate refuses the fact; reporting
+        # that as a resolution would hide it.
         return {"error": "resolution not stored: the memory quality gate refused it"}
 
     # store_fact stores the default importance (0.5); a confirmed resolution is
@@ -88,8 +100,14 @@ async def record_resolution(
 
     superseded: list[int] = []
     if _resolution_capture_enabled():
+        # Shared open items only: a resolution recorded in the shared scope never
+        # retires anyone's private fact.
         matches = await find_similar_facts(
-            open_item, limit=_MAX_SUPERSEDE, threshold=_SUPERSEDE_SIMILARITY, tenant_id=tenant
+            open_item,
+            limit=_MAX_SUPERSEDE,
+            threshold=_SUPERSEDE_SIMILARITY,
+            tenant_id=tenant,
+            scope_kind="shared",
         )
         for m in matches:
             # An operator-confirmed fact is the operator's word, not an open

@@ -18,11 +18,19 @@ that matters after an interruption: was a write promised and not completed?
 
 Re-processing is safe: ``MEMORY_WRITE_DEDUP`` is live and migration 078 gives a
 partial unique index on active ``(tenant_id, content_hash)``, so a duplicate
-extraction produces no duplicate rows.
+extraction produces no duplicate rows; mentions and relation evidence are
+unique per fact too.
+
+A job is replayed through the one write path (``robothor.memory.write_path``)
+with the context it was enqueued with (``write_context``: origin, scope,
+conversation), so a deferred write is stored exactly as an immediate one would
+have been. A job without one (enqueued by an older release) is a shared,
+agent-generated write.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
@@ -57,6 +65,7 @@ async def enqueue_write(
     tenant_id: str = "",
     agent_id: str | None = None,
     run_id: str | None = None,
+    context: Any = None,
 ) -> int | None:
     """Record the promise. Returns the job id, or None when it was refused.
 
@@ -68,18 +77,22 @@ async def enqueue_write(
     is not the benchmark sandbox (incident 2026-09-12). Nothing is queued, so
     there is no promise to keep — callers must treat it as a refusal, not as a
     job they can poll.
+
+    ``context`` is the write's ``write_path.WriteContext``; its tenant is
+    ignored in favour of ``tenant_id`` (the row's).
     """
     from robothor.engine.run_context import benchmark_write_refused
 
     tid = tenant_id or DEFAULT_TENANT
     if benchmark_write_refused(tid, what="memory write job"):
         return None
+    payload = json.dumps(context.to_json()) if context is not None else None
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO memory_write_jobs (tenant_id, content, content_type, agent_id, run_id) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (tid, content, content_type, agent_id, run_id),
+            "INSERT INTO memory_write_jobs (tenant_id, content, content_type, agent_id, run_id, "
+            "write_context) VALUES (%s, %s, %s, %s, %s, %s::jsonb) RETURNING id",
+            (tid, content, content_type, agent_id, run_id, payload),
         )
         job_id = int(cur.fetchone()[0])
         conn.commit()
@@ -110,7 +123,8 @@ async def process_write_job(job_id: int) -> bool:
         cur = conn.cursor()
         cur.execute(
             "UPDATE memory_write_jobs SET status='running', attempts = attempts + 1, "
-            "updated_at=NOW() WHERE id=%s RETURNING content, content_type, tenant_id",
+            "updated_at=NOW() WHERE id=%s RETURNING content, content_type, tenant_id, "
+            "write_context",
             (job_id,),
         )
         row = cur.fetchone()
@@ -119,27 +133,19 @@ async def process_write_job(job_id: int) -> bool:
         logger.warning("memory write job %s vanished before processing", job_id)
         return False
 
-    content, content_type, tenant_id = row
+    content, content_type, tenant_id, write_context = row
 
     try:
-        # Imported here so tests can patch robothor.memory.facts.extract_facts
+        # Imported here so tests can patch robothor.memory.write_path.ingest_text
         # and have the patch take effect.
-        from robothor.memory import facts as facts_mod
+        from robothor.memory import write_path
 
-        extracted = await facts_mod.extract_facts(content)
-        if not extracted:
-            extracted = [
-                {
-                    "fact_text": content,
-                    "category": "personal",
-                    "entities": [],
-                    "confidence": 0.5,
-                    "metadata": {"extraction": "fallback_raw"},
-                }
-            ]
-        fact_ids = await facts_mod.store_facts_batch(
-            extracted, content, content_type, tenant_id=tenant_id
+        ctx = write_path.WriteContext.from_json(
+            write_context, tenant_id=tenant_id or DEFAULT_TENANT, content_type=content_type
         )
+        # Off the request path: no deadline, so conflict classification runs in full.
+        result = await write_path.ingest_text(content, ctx, fallback_on_empty=True)
+        fact_ids = list(result.get("fact_ids") or []) + list(result.get("existing_ids") or [])
     except Exception as e:
         logger.warning("memory write job %s failed: %s", job_id, e)
         _finish(job_id, "failed", error=str(e))

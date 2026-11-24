@@ -11,6 +11,7 @@ Architecture:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -93,6 +94,9 @@ async def find_similar_facts(
     threshold: float = 0.5,
     *,
     tenant_id: str = "",
+    scope_kind: str | None = None,
+    scope_id: str | None = None,
+    embedding: list[float] | None = None,
 ) -> list[dict[str, Any]]:
     """Find existing facts semantically similar to a query.
 
@@ -100,17 +104,32 @@ async def find_similar_facts(
         query: Text to search for similar facts.
         limit: Maximum number of results.
         threshold: Minimum cosine similarity score (0.0-1.0).
+        scope_kind / scope_id: Only facts of exactly this scope. The write path
+            always passes them: a private fact must never be reinforced into,
+            deduplicated into or superseded by a shared fact or another reader's
+            private one, nor the other way round. ``None`` searches every scope
+            (the legacy behaviour, for callers that predate scope).
+        embedding: The query's vector, when the caller already has it.
 
     Returns:
         List of similar fact dictionaries with similarity scores.
     """
-    embedding = await llm_client.get_embedding_async(query)
+    if embedding is None:
+        embedding = await llm_client.get_embedding_async(query)
+    scope_sql = ""
+    scope_params: tuple[Any, ...] = ()
+    if scope_kind is not None:
+        scope_sql = "AND scope_kind = %s AND scope_id IS NOT DISTINCT FROM %s"
+        scope_params = (scope_kind, None if scope_kind == "shared" else scope_id)
 
-    with get_connection() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        apply_hnsw_session(cur)
-        cur.execute(
-            """
+    tenant = tenant_id or DEFAULT_TENANT
+
+    def _query() -> list[dict[str, Any]]:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            apply_hnsw_session(cur)
+            cur.execute(
+                f"""
             SELECT
                 id,
                 fact_text,
@@ -125,13 +144,16 @@ async def find_similar_facts(
             WHERE embedding IS NOT NULL
               AND is_active = TRUE
               AND tenant_id = %s
+              {scope_sql}
             ORDER BY embedding <=> %s::vector
             LIMIT %s
-            """,
-            (embedding, tenant_id or DEFAULT_TENANT, embedding, limit),
-        )
-        results = [dict(r) for r in cur.fetchall()]
+            """,  # noqa: S608 -- scope_sql is one of two literals
+                (embedding, tenant, *scope_params, embedding, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
 
+    # Off the event loop: the write path reaches this from the engine's loop.
+    results = await asyncio.to_thread(_query)
     return [r for r in results if r["similarity"] >= threshold]
 
 
@@ -245,7 +267,14 @@ def _confirmed_now(fact_id: int, *, tenant_id: str = "") -> bool:
     return row is not None and is_operator_confirmed({"metadata": row[0]})
 
 
-def _find_overruled(fact: dict[str, Any], kept_id: int, *, tenant_id: str = "") -> int:
+def _find_overruled(
+    fact: dict[str, Any],
+    kept_id: int,
+    *,
+    tenant_id: str = "",
+    scope_kind: str | None = None,
+    scope_id: str | None = None,
+) -> int:
     """The id of an earlier inactive copy of ``fact`` overruled by ``kept_id``, or 0.
 
     ``find_similar_facts`` and the insert's dedup index both see active rows
@@ -254,7 +283,11 @@ def _find_overruled(fact: dict[str, Any], kept_id: int, *, tenant_id: str = "") 
     """
     tenant = tenant_id or DEFAULT_TENANT
     content_hash = compute_fact_hash(
-        fact["fact_text"], tenant_id=tenant, category=fact.get("category") or ""
+        fact["fact_text"],
+        tenant_id=tenant,
+        category=fact.get("category") or "",
+        scope_kind=scope_kind,
+        scope_id=scope_id,
     )
     with get_connection() as conn:
         cur = conn.cursor()
@@ -275,6 +308,14 @@ async def resolve_and_store(
     similarity_threshold: float = 0.7,
     *,
     tenant_id: str = "",
+    metadata: dict[str, Any] | None = None,
+    origin: str | None = None,
+    event_time: str | None = None,
+    scope_kind: str | None = None,
+    scope_id: str | None = None,
+    source_channel: str | None = None,
+    embedding: list[float] | None = None,
+    classify_timeout: float | None = None,
 ) -> dict[str, Any]:
     """Full conflict resolution pipeline: find similar -> classify -> act.
 
@@ -283,21 +324,46 @@ async def resolve_and_store(
         source_content: Original content the fact was extracted from.
         source_type: Type of source (conversation, email, etc.).
         similarity_threshold: Minimum similarity to trigger classification.
+        metadata, origin, event_time, scope_kind, scope_id, source_channel,
+        embedding: Written with the new row (see ``facts.store_fact``). The
+            scope also bounds the search: only facts of the same scope are
+            reinforced, skipped as duplicates or superseded.
+        classify_timeout: Seconds the one classification call may take. On
+            timeout the fact is stored as new (nothing is superseded, an
+            operator-confirmed match stays active) and the result says
+            ``conflict_check: "timed_out"``.
 
     Returns:
         Dict with 'action' (stored/skipped/superseded/reinforced/kept_confirmed)
         and optionally 'new_id'. ``kept_confirmed`` means the best match is
         operator-confirmed: the new fact was stored, inactive and superseded by it.
     """
+    store_kw: dict[str, Any] = {
+        "tenant_id": tenant_id,
+        "origin": origin,
+        "event_time": event_time,
+        "scope_kind": scope_kind or "shared",
+        "scope_id": scope_id,
+        "source_channel": source_channel,
+        "embedding": embedding,
+    }
+
+    async def _store(extra: dict[str, Any] | None = None) -> int:
+        meta = {**(metadata or {}), **(extra or {})}
+        return await store_fact(fact, source_content, source_type, meta or None, **store_kw)
+
     similar = await find_similar_facts(
         fact["fact_text"],
         limit=3,
         threshold=similarity_threshold,
         tenant_id=tenant_id,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
+        embedding=embedding,
     )
 
     if not similar:
-        fact_id = await store_fact(fact, source_content, source_type, tenant_id=tenant_id)
+        fact_id = await _store()
         return {"action": "stored", "new_id": fact_id}
 
     best_match = similar[0]
@@ -317,10 +383,11 @@ async def resolve_and_store(
         # correctly returns "update" and supersedes.
         and not numbers_differ(fact["fact_text"], best_match.get("fact_text") or "")
     ):
-        _reinforce_fact(best_match["id"], tenant_id=tenant_id)
+        await asyncio.to_thread(_reinforce_fact, best_match["id"], tenant_id=tenant_id)
         # Recorded too: an error rate needs the cases where nothing was
         # superseded as much as the ones where something was.
-        record_conflict_decision(
+        await asyncio.to_thread(
+            record_conflict_decision,
             tenant_id=tenant_id or DEFAULT_TENANT,
             classification="reinforced",
             action="reinforced",
@@ -341,9 +408,17 @@ async def resolve_and_store(
     # earlier pass: record the decision against that row and stop, before the
     # classification and the insert.
     if is_operator_confirmed(best_match):
-        overruled_id = _find_overruled(fact, best_match["id"], tenant_id=tenant_id)
+        overruled_id = await asyncio.to_thread(
+            _find_overruled,
+            fact,
+            best_match["id"],
+            tenant_id=tenant_id,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+        )
         if overruled_id:
-            record_conflict_decision(
+            await asyncio.to_thread(
+                record_conflict_decision,
                 tenant_id=tenant_id or DEFAULT_TENANT,
                 classification="duplicate",
                 action="kept_confirmed",
@@ -362,13 +437,29 @@ async def resolve_and_store(
                 "reasoning": "already overruled",
             }
 
-    classification = await classify_relationship(
-        fact["fact_text"],
-        best_match["fact_text"],
-    )
+    try:
+        classification = await asyncio.wait_for(
+            classify_relationship(fact["fact_text"], best_match["fact_text"]),
+            timeout=classify_timeout,
+        )
+    except TimeoutError:
+        # Out of time on a request path: keep the fact rather than lose it. No
+        # supersession happens without a classification, so whatever it might
+        # contradict (an operator-confirmed fact included) stays active.
+        logger.warning(
+            "resolve_and_store: classification timed out after %.1fs; stored as new",
+            classify_timeout or 0.0,
+        )
+        fact_id = await _store({"conflict_check": "timed_out"})
+        return {
+            "action": "stored",
+            "new_id": fact_id,
+            "conflict_check": "timed_out",
+            "existing_id": best_match["id"],
+        }
 
     kind = classification["classification"]
-    _record = partial(
+    _record_sync = partial(
         record_conflict_decision,
         tenant_id=tenant_id or DEFAULT_TENANT,
         classification=kind,
@@ -379,8 +470,11 @@ async def resolve_and_store(
         existing_fact_text=best_match["fact_text"],
     )
 
+    async def _record(**kw: Any) -> None:
+        await asyncio.to_thread(_record_sync, **kw)
+
     if kind == "duplicate":
-        _record(action="skipped", new_fact_id=None)
+        await _record(action="skipped", new_fact_id=None)
         return {
             "action": "skipped",
             "existing_id": best_match["id"],
@@ -388,7 +482,7 @@ async def resolve_and_store(
         }
 
     if kind in ("contradiction", "update"):
-        new_id = await store_fact(fact, source_content, source_type, tenant_id=tenant_id)
+        new_id = await _store()
         # An UPDATE and a CONTRADICTION are both bounded in world-time, but they
         # are now recorded distinctly. They mean different things — for an update
         # the old fact was genuinely true until now; for a contradiction one of
@@ -399,10 +493,14 @@ async def resolve_and_store(
         # An operator-confirmed match is never superseded, whatever the new
         # fact's confidence. supersede_with_validity also refuses one confirmed
         # after the similarity search; both cases land in the branch below.
-        if not is_operator_confirmed(best_match) and supersede_with_validity(
-            best_match["id"], new_id, tenant_id=tenant_id, classification=kind
+        if not is_operator_confirmed(best_match) and await asyncio.to_thread(
+            supersede_with_validity,
+            best_match["id"],
+            new_id,
+            tenant_id=tenant_id,
+            classification=kind,
         ):
-            _record(action="superseded", new_fact_id=new_id)
+            await _record(action="superseded", new_fact_id=new_id)
             return {
                 "action": "superseded",
                 "new_id": new_id,
@@ -413,15 +511,15 @@ async def resolve_and_store(
 
         # Refused for a reason other than confirmation (the target is gone):
         # the new fact is the current statement, so it stays active.
-        if not is_operator_confirmed(best_match) and not _confirmed_now(
-            best_match["id"], tenant_id=tenant_id
+        if not is_operator_confirmed(best_match) and not await asyncio.to_thread(
+            _confirmed_now, best_match["id"], tenant_id=tenant_id
         ):
             logger.info(
                 "resolve_and_store: fact %s not superseded (absent); new fact %s kept active",
                 best_match["id"],
                 new_id,
             )
-            _record(action="supersede_skipped", new_fact_id=new_id)
+            await _record(action="supersede_skipped", new_fact_id=new_id)
             return {
                 "action": "supersede_skipped",
                 "new_id": new_id,
@@ -433,14 +531,14 @@ async def resolve_and_store(
         # Kept on record, overruled BY the confirmed fact, so the pipeline's
         # view is not lost and the operator's stays the active answer.
         if new_id:
-            keep_overruled(new_id, best_match["id"], tenant_id=tenant_id)
+            await asyncio.to_thread(keep_overruled, new_id, best_match["id"], tenant_id=tenant_id)
         logger.info(
             "resolve_and_store: fact %s is operator-confirmed; new fact %s kept overruled (%s)",
             best_match["id"],
             new_id,
             kind,
         )
-        _record(action="kept_confirmed", new_fact_id=new_id or None)
+        await _record(action="kept_confirmed", new_fact_id=new_id or None)
         return {
             "action": "kept_confirmed",
             "new_id": new_id,
@@ -450,5 +548,5 @@ async def resolve_and_store(
         }
 
     # Classified as new — store directly
-    fact_id = await store_fact(fact, source_content, source_type, tenant_id=tenant_id)
+    fact_id = await _store()
     return {"action": "stored", "new_id": fact_id}

@@ -290,6 +290,8 @@ async def find_consolidation_candidates(
     Returns:
         List of groups, where each group is a list of fact dicts. An
         operator-confirmed fact is never in one: consolidation would retire it.
+        Every fact of a group has the same tenant and the same scope: a
+        consolidated row is never derived across tenants or across readers.
     """
     unconsolidated_filter = "AND consolidated_at IS NULL" if unconsolidated_only else ""
     # WS-2: never feed a consolidation output back into consolidation — that is
@@ -303,7 +305,8 @@ async def find_consolidation_candidates(
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             f"""
-            SELECT id, fact_text, category, entities, embedding
+            SELECT id, fact_text, category, entities, embedding, tenant_id, origin,
+                   scope_kind, scope_id
             FROM memory_facts
             WHERE is_active = TRUE AND embedding IS NOT NULL
               AND {NOT_OPERATOR_CONFIRMED_SQL}
@@ -333,18 +336,29 @@ async def find_consolidation_candidates(
             apply_hnsw_session(cur)
             cur.execute(
                 f"""
-                SELECT id, fact_text, category, entities,
+                SELECT id, fact_text, category, entities, tenant_id, origin,
+                       scope_kind, scope_id,
                        1 - (embedding <=> %s::vector) as similarity
                 FROM memory_facts
                 WHERE is_active = TRUE
                   AND embedding IS NOT NULL
                   AND id != %s
+                  AND tenant_id = %s
+                  AND scope_kind = %s
+                  AND scope_id IS NOT DISTINCT FROM %s
                   AND {NOT_OPERATOR_CONFIRMED_SQL}
                   {consolidation_filter}
                 ORDER BY embedding <=> %s::vector
                 LIMIT 10
                 """,
-                (fact["embedding"], fact["id"], fact["embedding"]),
+                (
+                    fact["embedding"],
+                    fact["id"],
+                    fact.get("tenant_id"),
+                    fact.get("scope_kind") or "shared",
+                    fact.get("scope_id"),
+                    fact["embedding"],
+                ),
             )
 
             for similar in cur.fetchall():
@@ -357,6 +371,39 @@ async def find_consolidation_candidates(
             groups.append(group)
 
     return groups
+
+
+async def store_consolidated(group: list[dict[str, Any]], text: str) -> int:
+    """Store the consolidation of ``group`` through the write path and retire the group.
+
+    The new fact takes the group's tenant and scope (every member shares them,
+    see :func:`find_consolidation_candidates`; a mixed group is refused) and the
+    LEAST trusted origin among the members, so consolidating an email with what
+    a person said does not launder the email. It inherits the members' mentions
+    and becomes evidence of every edge they supported; once the members are
+    superseded, those edges' origins are recomputed from what still supports
+    them. Returns the new fact's id, or 0 when nothing was stored.
+    """
+    from robothor.memory.write_path import recompute_derived_edges, write_derived_fact
+
+    consolidated_fact = {
+        "fact_text": text,
+        "category": group[0].get("category", "personal"),
+        "entities": list({e for f in group for e in (f.get("entities") or [])}),
+        "confidence": 0.9,
+    }
+    new_id, edges = await write_derived_fact(
+        consolidated_fact,
+        group,
+        source_content="[consolidated from similar facts]",
+        source_type="consolidation",
+    )
+    if not new_id:
+        return 0
+    # Supersede originals (guarded: importance propagation + chain cap)
+    _apply_consolidation_supersession(new_id, [int(f["id"]) for f in group])
+    await recompute_derived_edges(group[0].get("tenant_id") or "", edges)
+    return new_id
 
 
 async def consolidate_facts(fact_group: list[dict[str, Any]]) -> dict[str, Any]:
@@ -525,21 +572,11 @@ async def run_intraday_consolidation(threshold: int = 5) -> dict[str, Any]:
         )
         for group in groups:
             result = await consolidate_facts(group)
-            if result and result.get("consolidated_text"):
-                from robothor.memory.facts import store_fact
-
-                consolidated_fact = {
-                    "fact_text": result["consolidated_text"],
-                    "category": group[0].get("category", "personal"),
-                    "entities": list({e for f in group for e in (f.get("entities") or [])}),
-                    "confidence": 0.9,
-                }
-                new_id = await store_fact(
-                    consolidated_fact,
-                    source_content="[intra-day consolidation]",
-                    source_type="consolidation",
-                )
-                _apply_consolidation_supersession(new_id, result["source_ids"])
+            if (
+                result
+                and result.get("consolidated_text")
+                and await store_consolidated(group, result["consolidated_text"])
+            ):
                 consolidation_groups += 1
     except Exception as e:
         logger.warning("Intra-day consolidation failed: %s", e)
@@ -1277,22 +1314,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     # Phase B: Store consolidated facts (needs embeddings)
     for result, group in pending_consolidations:
         try:
-            from robothor.memory.facts import store_fact
-
-            consolidated_fact = {
-                "fact_text": result["consolidated_text"],
-                "category": group[0].get("category", "personal"),
-                "entities": list({e for f in group for e in (f.get("entities") or [])}),
-                "confidence": 0.9,
-            }
-            new_id = await store_fact(
-                consolidated_fact,
-                source_content="[consolidated from similar facts]",
-                source_type="consolidation",
-            )
-            # Supersede originals (guarded: importance propagation + chain cap)
-            _apply_consolidation_supersession(new_id, result["source_ids"])
-            consolidation_groups += 1
+            if await store_consolidated(group, result["consolidated_text"]):
+                consolidation_groups += 1
         except Exception as e:
             logger.warning("Failed to store consolidated fact: %s", e)
 

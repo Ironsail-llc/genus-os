@@ -20,6 +20,9 @@ from robothor.memory.ingestion import VALID_CHANNELS
 
 ALICE = "6f1c1b7e-0000-4000-8000-000000000001"
 BOB = "6f1c1b7e-0000-4000-8000-000000000002"
+#: How a private scope names its owner (the conversation-segments convention).
+ALICE_P = f"person:{ALICE}"
+BOB_P = f"person:{BOB}"
 
 
 # ═══ origin mapping ══════════════════════════════════════════════════════
@@ -114,14 +117,36 @@ def test_every_origin_the_mapping_returns_is_a_fact_origin() -> None:
 # ═══ scope ═══════════════════════════════════════════════════════════════
 
 
-def test_a_person_bound_session_is_private_and_a_room_is_shared() -> None:
-    from robothor.memory.write_path import write_scope
+def test_the_conversation_owner_rule_mirrors_the_segments_rule_and_fails_closed() -> None:
+    from robothor.memory.write_path import conversation_scope
 
-    assert write_scope("agent:main:telegram:4242", ALICE) == ("user", ALICE)
-    assert write_scope(None, ALICE) == ("user", ALICE)
-    assert write_scope("agent:main:telegram:4242", None) == ("shared", None)
     room = "agent:main:room:" + "1b0c8f5e-1111-4222-8333-444455556666"
-    assert write_scope(room, ALICE) == ("shared", None)
+    assert conversation_scope(room, ALICE) == ("shared", None)
+    assert conversation_scope("agent:main:telegram:4242", ALICE) == ("user", ALICE_P)
+    assert conversation_scope("agent:main:user:u-7", None) == ("user", "user:u-7")
+    assert conversation_scope("agent:main:primary", None, owner_person_id=BOB) == ("user", BOB_P)
+    assert conversation_scope("agent:main:telegram:4242", None) == ("user", None)
+
+
+def test_writes_are_shared_unless_a_scope_is_asked_for() -> None:
+    from robothor.memory.write_path import WriteContext
+
+    plain = WriteContext.for_source(
+        tenant_id="test-tenant", source_channel="telegram", content_type="conversation",
+        role="user", metadata={"session_key": "agent:main:telegram:4242"},
+    )  # fmt: skip
+    assert (plain.scope_kind, plain.scope_id) == ("shared", None)
+    asked = WriteContext.for_source(
+        tenant_id="test-tenant", source_channel="telegram", content_type="conversation",
+        role="user", scope=("user", ALICE_P),
+    )  # fmt: skip
+    assert (asked.scope_kind, asked.scope_id, asked.person_id) == ("user", ALICE_P, ALICE)
+    # An owner-less private scope is refused, never widened to shared.
+    with pytest.raises(ValueError):
+        WriteContext.for_source(
+            tenant_id="test-tenant", source_channel="telegram", content_type="note",
+            scope=("user", None),
+        )  # fmt: skip
 
 
 # ═══ the content hash ════════════════════════════════════════════════════
@@ -146,16 +171,19 @@ def test_a_private_fact_hashes_apart_from_shared_and_from_another_person() -> No
     from robothor.memory.drift import compute_fact_hash
 
     shared = compute_fact_hash("Alice likes tea", tenant_id="t", category="preference")
-    mine = compute_fact_hash(
-        "Alice likes tea", tenant_id="t", category="preference", scope_kind="user", scope_id=ALICE
+
+    def h(kind: str, sid: str) -> str:
+        return compute_fact_hash(
+            "Alice likes tea", tenant_id="t", category="preference", scope_kind=kind, scope_id=sid
+        )
+
+    mine, theirs, member, agent = (
+        h("user", ALICE_P),
+        h("user", BOB_P),
+        h("user", "user:u-7"),
+        h("agent", ALICE),
     )
-    theirs = compute_fact_hash(
-        "Alice likes tea", tenant_id="t", category="preference", scope_kind="user", scope_id=BOB
-    )
-    agent = compute_fact_hash(
-        "Alice likes tea", tenant_id="t", category="preference", scope_kind="agent", scope_id=ALICE
-    )
-    assert len({shared, mine, theirs, agent}) == 4
+    assert len({shared, mine, theirs, member, agent}) == 5
     # The person slot of the old formula: an older release recomputing a private
     # fact's hash from its person_id gets the same digest, so it sees no drift.
     assert mine == _old_hash("Alice likes tea", "t", "preference", ALICE)
@@ -415,7 +443,7 @@ async def test_ingest_content_makes_no_separate_entity_extraction_call(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_store_memory_uses_the_write_path_with_agent_origin_and_the_callers_scope(
+async def test_store_memory_uses_the_write_path_with_agent_origin_and_stays_shared(
     monkeypatch: Any,
 ) -> None:
     from robothor.engine.tools.dispatch import ToolContext
@@ -436,20 +464,26 @@ async def test_store_memory_uses_the_write_path_with_agent_origin_and_the_caller
     assert out["id"] == 41 and out["facts_stored"] == 2
     ctx = write.call_args.args[1]
     assert ctx.origin == Origin.AGENT_GENERATED
-    assert (ctx.scope_kind, ctx.scope_id) == ("user", ALICE)
+    # A verified person on the run does not make the fact private: who can
+    # recall what is unchanged unless a caller explicitly asks for a scope.
+    assert (ctx.scope_kind, ctx.scope_id) == ("shared", None)
     assert write.call_args.kwargs["fallback_on_empty"] is True
     assert write.call_args.kwargs["conflict_check"] is True
 
 
 @pytest.mark.asyncio
-async def test_store_memory_without_a_verified_person_is_shared(monkeypatch: Any) -> None:
+async def test_store_memory_writes_a_private_scope_only_when_asked(monkeypatch: Any) -> None:
     from robothor.engine.tools.handlers.memory import store_memory_content
 
     write = AsyncMock(return_value={"fact_ids": [7], "facts_processed": 1})
     with patch("robothor.memory.write_path.ingest_text", new=write):
         await store_memory_content("Alice prefers email.", tenant_id="test-tenant")
-    ctx = write.call_args.args[1]
-    assert (ctx.scope_kind, ctx.scope_id) == ("shared", None)
+        await store_memory_content(
+            "Alice prefers email.", tenant_id="test-tenant", scope=("user", ALICE_P)
+        )
+    shared, private = (c.args[1] for c in write.call_args_list)
+    assert (shared.scope_kind, shared.scope_id) == ("shared", None)
+    assert (private.scope_kind, private.scope_id) == ("user", ALICE_P)
 
 
 # ═══ conversation ingest extracts per role ═══════════════════════════════
@@ -472,7 +506,6 @@ async def test_conversation_ingest_extracts_user_and_assistant_turns_separately(
     with (
         patch.object(ci, "is_already_ingested", return_value=False),
         patch.object(ci, "record_ingested") as rec,
-        patch.object(ci, "_session_person", return_value=ALICE),
         patch("robothor.memory.write_path.ingest_text", new=write),
     ):
         out = await ci.ingest_conversation_session(
@@ -491,7 +524,7 @@ async def test_conversation_ingest_extracts_user_and_assistant_turns_separately(
     assert "Lisbon in May" in asst_call.kwargs["read_only_context"]
     for c in (user_call, asst_call):
         ctx = c.args[1]
-        assert (ctx.scope_kind, ctx.scope_id) == ("user", ALICE)
+        assert (ctx.scope_kind, ctx.scope_id) == ("shared", None)  # as before this story
         assert ctx.conversation_ref == "agent:main:telegram:4242"
         assert ctx.tenant_id == "test-tenant"
     assert sorted(out["fact_ids"]) == [1, 2, 3]
@@ -508,7 +541,7 @@ async def test_a_write_job_replays_through_the_write_path_with_its_context() -> 
 
     ctx = WriteContext(
         tenant_id="test-tenant", source_channel="mcp", content_type="note",
-        origin=Origin.AGENT_GENERATED, scope_kind="user", scope_id=ALICE,
+        origin=Origin.AGENT_GENERATED, scope_kind="user", scope_id=ALICE_P,
     )  # fmt: skip
     row = ("Alice prefers email.", "note", "test-tenant", ctx.to_json())
 
@@ -546,7 +579,7 @@ def test_write_context_round_trips_and_defaults_safely() -> None:
 
     ctx = WriteContext(
         tenant_id="test-tenant", source_channel="telegram", content_type="conversation",
-        origin=Origin.USER_STATED, scope_kind="user", scope_id=ALICE,
+        origin=Origin.USER_STATED, scope_kind="user", scope_id=ALICE_P,
         conversation_ref="agent:main:telegram:4242", metadata={"run_id": "r1"},
     )  # fmt: skip
     assert WriteContext.from_json(ctx.to_json(), tenant_id="test-tenant") == ctx
@@ -558,3 +591,81 @@ def test_write_context_round_trips_and_defaults_safely() -> None:
     spoof = WriteContext.from_json({**json.loads(json.dumps(ctx.to_json())), "tenant_id": "x"},
                                    tenant_id="test-tenant")  # fmt: skip
     assert spoof.tenant_id == "test-tenant"
+
+
+# ═══ no blocking database work on the event loop ═════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_store_memory_does_its_database_work_off_the_event_loop(monkeypatch: Any) -> None:
+    """Each database step of the write path (similarity search, insert, graph)
+    takes 200 ms here; a loop callback scheduled as each starts must still run
+    within 20 ms (the probe pattern of test_offloop_sync_calls)."""
+    import asyncio
+    import threading
+    import time
+    from contextlib import contextmanager
+
+    from robothor.engine.tools.handlers.memory import store_memory_content
+    from robothor.memory import conflicts, facts, write_path
+
+    loop = asyncio.get_running_loop()
+    gate = threading.Barrier(4, timeout=2)
+    await asyncio.gather(*(asyncio.to_thread(gate.wait) for _ in range(4)))
+    lags: list[float] = []
+
+    def _slow() -> None:
+        entered = time.monotonic()
+        loop.call_soon_threadsafe(lambda: lags.append(time.monotonic() - entered))
+        time.sleep(0.2)
+
+    class _Cur:
+        def execute(self, *_a: Any, **_k: Any) -> None: ...
+
+        def fetchall(self) -> list[Any]:
+            return []
+
+        def fetchone(self) -> Any:
+            return (7,)
+
+    class _Conn:
+        def cursor(self, *_a: Any, **_k: Any) -> _Cur:
+            return _Cur()
+
+    @contextmanager
+    def _conn(*_a: Any, **_k: Any) -> Any:
+        _slow()
+        yield _Conn()
+
+    def _graph(*_a: Any, **_k: Any) -> dict[str, int]:
+        _slow()
+        return {}
+
+    extracted = facts.Extraction(
+        [
+            {
+                "fact_text": "Alice Moreno prefers email.",
+                "category": "preference",
+                "confidence": 0.9,
+                "entities": ["Alice Moreno"],
+                "mentions": [],
+                "relations": [],
+                "event_time": None,
+            }
+        ]
+    )
+    monkeypatch.setattr(facts, "extract_facts_detailed", AsyncMock(return_value=extracted))
+    monkeypatch.setattr(facts, "get_connection", _conn)
+    monkeypatch.setattr(conflicts, "get_connection", _conn)
+    monkeypatch.setattr(conflicts, "apply_hnsw_session", lambda _c: None)
+    monkeypatch.setattr(write_path, "_write_graph", _graph)
+    monkeypatch.setattr(write_path, "_embed", AsyncMock(return_value=[[0.1] * 4]))
+    monkeypatch.delenv("MEMORY_QUALITY_GATE", raising=False)
+
+    out = await store_memory_content("Alice prefers email.", tenant_id="test-tenant")
+    deadline = time.monotonic() + 2
+    while len(lags) < 3 and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    assert out["facts_stored"] == 1
+    assert len(lags) >= 3, lags  # search, insert, graph
+    assert max(lags) <= 0.02, f"a loop callback waited {max(lags) * 1000:.0f} ms"

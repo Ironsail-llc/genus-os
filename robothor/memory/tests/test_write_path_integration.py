@@ -47,6 +47,9 @@ TENANT = "test-tenant"
 OTHER = "other-tenant"
 ALICE = "6f1c1b7e-0000-4000-8000-000000000001"
 BOB = "6f1c1b7e-0000-4000-8000-000000000002"
+#: Private scopes name their owner the conversation-segments way.
+ALICE_P = f"person:{ALICE}"
+BOB_P = f"person:{BOB}"
 DIM = 1024
 
 _TABLES = (
@@ -344,20 +347,18 @@ async def _ingest(content: str, channel: str = "api", ctype: str = "note", **kw:
 
 
 async def _store_memory(content: str, *, person: str | None = None, tenant: str = TENANT) -> Any:
+    """The tool handler; with ``person``, the shared implementation asked for a private
+    write (the explicit scope parameter no production caller passes yet)."""
     from robothor.engine.tools.dispatch import ToolContext
-    from robothor.engine.tools.handlers.memory import HANDLERS
-    from robothor.identity.context import IdentityContext
+    from robothor.engine.tools.handlers.memory import HANDLERS, store_memory_content
 
-    ident = (
-        IdentityContext(
-            tenant_id=tenant, channel="telegram", identifier="4242", verified=True, person_id=person
-        )  # fmt: skip
-        if person
-        else None
-    )
+    if person:
+        return await store_memory_content(
+            content, "note", tenant_id=tenant, scope=("user", f"person:{person}")
+        )
     return await HANDLERS["store_memory"](
         {"content": content, "content_type": "note"},
-        ToolContext(agent_id="example-agent", tenant_id=tenant, identity=ident),
+        ToolContext(agent_id="example-agent", tenant_id=tenant),
     )
 
 
@@ -640,7 +641,7 @@ async def test_a_private_and_a_shared_fact_with_identical_text_never_merge(
     rows = [f for f in world.db.facts() if f["fact_text"] == text]
     assert len(rows) == 2 and all(r["is_active"] for r in rows)
     scopes = {(r["scope_kind"], r["scope_id"], r["person_id"]) for r in rows}
-    assert scopes == {("shared", None, None), ("user", ALICE, ALICE)}
+    assert scopes == {("shared", None, None), ("user", ALICE_P, ALICE)}
     # Neither was reinforced into the other.
     assert (
         world.db.one("SELECT count(*) FROM memory_conflict_decisions WHERE action = 'reinforced'")
@@ -657,7 +658,7 @@ async def test_two_peoples_private_facts_with_identical_text_never_merge(world: 
     await _store_memory("TWO-P mine", person=ALICE)  # Alice again: deduplicated into her own
 
     rows = [f for f in world.db.facts() if f["fact_text"] == text]
-    assert sorted(r["scope_id"] for r in rows) == sorted([ALICE, BOB])
+    assert sorted(r["scope_id"] for r in rows) == sorted([ALICE_P, BOB_P])
 
 
 @pytest.mark.asyncio
@@ -690,7 +691,7 @@ def _seed(world: World, text: str, *, origin: str, scope=("shared", None), tenan
           anchor: str | None = None, mentions=()) -> int:  # fmt: skip
     if anchor:
         world.emb.near(text, anchor, 0.95)
-    person = scope[1] if scope[0] == "user" else None
+    person = scope[1].removeprefix("person:") if scope[0] == "user" and scope[1] else None
     fid = int(world.db.one(
         "INSERT INTO memory_facts (fact_text, category, entities, embedding, tenant_id, origin, "
         "scope_kind, scope_id, person_id) VALUES (%s, 'project', %s, %s::vector, %s, %s, %s, %s, "
@@ -755,20 +756,20 @@ async def test_consolidation_never_groups_across_scopes_or_tenants(world: World)
     anchor = "The Lisbon offsite is booked for May."
     _seed(world, anchor, origin="user_stated")
     _seed(world, "The Lisbon offsite is booked for May 2026.", origin="user_stated",
-          anchor=anchor, scope=("user", ALICE))  # fmt: skip
+          anchor=anchor, scope=("user", ALICE_P))  # fmt: skip
     _seed(world, "Lisbon offsite booked: May.", origin="user_stated", anchor=anchor,
-          scope=("user", BOB))  # fmt: skip
+          scope=("user", BOB_P))  # fmt: skip
     _seed(world, "Offsite in Lisbon is in May.", origin="user_stated", anchor=anchor,
           tenant=OTHER)  # fmt: skip
     _seed(world, "May is when the Lisbon offsite happens.", origin="user_stated",
-          anchor=anchor, scope=("user", ALICE))  # fmt: skip
+          anchor=anchor, scope=("user", ALICE_P))  # fmt: skip
 
     groups = await lifecycle.find_consolidation_candidates(min_group_size=2)
     for group in groups:
         keys = {(f["tenant_id"], f["scope_kind"], f["scope_id"]) for f in group}
         assert len(keys) == 1, group
     # Alice's two private facts may consolidate with each other, and only with each other.
-    assert any({f["scope_id"] for f in g} == {ALICE} and len(g) == 2 for g in groups)
+    assert any({f["scope_id"] for f in g} == {ALICE_P} and len(g) == 2 for g in groups)
 
 
 # ═══ every routed writer produces mentions ═══════════════════════════════
@@ -813,12 +814,12 @@ async def test_a_write_job_produces_mentions_and_keeps_its_scope(world: World) -
                                  [("Alice Moreno", "person"),
                                   ("Initech Systems", "organization")]))  # fmt: skip
     ctx = WriteContext(tenant_id=TENANT, source_channel="mcp", content_type="note",
-                       origin=Origin.AGENT_GENERATED, scope_kind="user", scope_id=ALICE)  # fmt: skip
+                       origin=Origin.AGENT_GENERATED, scope_kind="user", scope_id=ALICE_P)  # fmt: skip
     job = await enqueue_write("JOB-W renewal", content_type="note", tenant_id=TENANT,
                               context=ctx)  # fmt: skip
     assert await process_write_job(job) is True
     (row,) = world.db.facts()
-    assert (row["scope_kind"], row["scope_id"]) == ("user", ALICE)
+    assert (row["scope_kind"], row["scope_id"], row["person_id"]) == ("user", ALICE_P, ALICE)
     assert {m[0] for m in world.db.mentions(row["id"])} == {"Alice Moreno", "Initech Systems"}
 
 
