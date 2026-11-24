@@ -563,7 +563,8 @@ async def test_the_previous_entity_and_fact_paths_run_unchanged(migrated) -> Non
     found = await get_entity("alice", tenant_id=TENANT)
     assert found is not None and found["id"] == alice and found["mention_count"] == 2
     assert [r["id"] for r in found["relations"]] == [rel]
-    assert found["scope_kind"] == "shared" and found["embedding"] is None
+    # get_entity names its columns: the 1024-float embedding never reaches the model.
+    assert found["scope_kind"] == "shared" and "embedding" not in found
 
     with migrated.cursor() as cur:
         cur.execute(
