@@ -465,8 +465,10 @@ def decide(
     pool = [c for c in compat if _norm_type(c.entity_type) == PERSON]
     reason = "single_token" if len(tokens) == 1 else "partial_name"
     if conv:
-        in_conv = [c for c in pool if c.in_conversation and not c.is_operator]
-        if len(in_conv) == 1:
+        # Count every evidenced candidate first, then refuse the operator: dropping
+        # the operator before counting would hand their first name to a namesake.
+        in_conv = [c for c in pool if c.in_conversation]
+        if len(in_conv) == 1 and not in_conv[0].is_operator:
             c = in_conv[0]
             ids = _ids(pool)
             return Outcome(
@@ -662,25 +664,10 @@ def _name_free(cur: Any, tenant_id: str, name: str, etype: str, own_id: int | No
     return cur.fetchone() is None
 
 
-def _crm_aliases(
-    kind: str, row: Mapping[str, Any], name: str, display_names: Sequence[str]
-) -> list[str]:
-    """What the CRM itself holds as other names for a record. Never nicknames."""
-    out: list[str] = []
-    if kind == PERSON:
-        out += _emails_of(row)
-        for d in display_names:
-            d = _clean(d or "")
-            if d and not is_junk_entity_name(d) and normalize_surface(d) != normalize_surface(name):
-                out.append(d)
-    else:
-        domain = str(row.get("domain_name") or "").strip().lower()
-        if domain:
-            out.append(domain)
-    unique: dict[str, str] = {}
-    for a in out:
-        unique.setdefault(a.lower(), a)
-    return list(unique.values())
+def _is_full_person_name(name: str) -> bool:
+    """Two or more tokens and no initial at either end: the bar rule (b) sets."""
+    tokens = normalize_surface(name).split()
+    return len(tokens) >= 2 and not (_is_initial(tokens[0]) or _is_initial(tokens[-1]))
 
 
 def _sync_one(
@@ -689,11 +676,21 @@ def _sync_one(
     kind: str,
     row: Mapping[str, Any],
     *,
-    display_names: Sequence[str] = (),
     ambiguous_name: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Keep one CRM record's node current. Returns the action taken (or planned)."""
+    """Keep one CRM record's node current. Returns the action taken (or planned).
+
+    No CRM contact data (emails, channel handles, domains) is copied into the
+    node: ``get_entity`` applies no data scope, and the CRM withholds those
+    fields from restricted readers. Strong keys are read from the CRM itself at
+    resolution time instead.
+
+    A person whose CRM name is not a full name (a single token, or an initial at
+    either end) never takes over an existing node, and its node is always named
+    ``"<name> #<crm id prefix>"`` with no bare-name alias, so the legacy
+    exact-name writer cannot pour every extracted "Alex" into one CRM record.
+    """
     crm_id = str(row["id"])
     etype = _entity_type_for(kind)
     col = _crm_col(kind)
@@ -701,7 +698,13 @@ def _sync_one(
     action: dict[str, Any] = {"kind": kind, "crm_id": crm_id, "name": name, "entity_id": None}
     if not name or is_junk_entity_name(name):
         return {**action, "action": "skipped"}
-    aliases = _crm_aliases(kind, row, name, display_names)
+    full = kind != PERSON or _is_full_person_name(name)
+
+    def _naming(own_id: int | None, current: str | None) -> tuple[str, list[str]]:
+        """The node name and the names the CRM implies as aliases."""
+        if full and (current == name or _name_free(cur, tenant_id, name, etype, own_id)):
+            return name, []
+        return _disambiguated(name, crm_id), [name] if full else []
 
     cur.execute(
         f"SELECT id, name, aliases, metadata FROM memory_entities WHERE tenant_id = %s "  # noqa: S608
@@ -713,34 +716,41 @@ def _sync_one(
         eid = int(linked["id"])
         meta = linked["metadata"] if isinstance(linked["metadata"], dict) else {}
         old_crm = {a.lower() for a in meta.get("crm_aliases") or []}
-        if linked["name"] == name or _name_free(cur, tenant_id, name, etype, eid):
-            new_name = name
-        elif linked["name"] == _disambiguated(name, crm_id):
-            new_name = linked["name"]
-        else:
-            new_name = _disambiguated(name, crm_id)
-        crm_set = list(aliases) + ([name] if new_name != name else [])
+        new_name, crm_set = _naming(eid, linked["name"])
         kept = [a for a in (linked["aliases"] or []) if a.lower() not in old_crm]
+        # A renamed record keeps its previous name as an alias: facts already
+        # name the person by it. Only a full name is kept (see _is_full_person_name).
+        previous = str(meta.get("crm_name") or linked["name"] or "")
+        if (
+            previous
+            and normalize_surface(previous) != normalize_surface(name)
+            and (kind != PERSON or _is_full_person_name(previous))
+            and "#" not in previous
+            and previous.lower() not in {k.lower() for k in kept}
+        ):
+            kept.append(previous)
         merged = kept + [a for a in crm_set if a.lower() not in {k.lower() for k in kept}]
         action["entity_id"] = eid
         if (
             new_name == linked["name"]
             and merged == list(linked["aliases"] or [])
             and sorted(a.lower() for a in crm_set) == sorted(old_crm)
+            and meta.get("crm_name") == name
         ):
             return {**action, "action": "unchanged"}
         if not dry_run:
             cur.execute(
                 "UPDATE memory_entities SET name = %s, aliases = %s, metadata = "
                 "COALESCE(metadata, '{}'::jsonb) || %s::jsonb, last_seen = NOW() WHERE id = %s",
-                (new_name, merged, json.dumps({"crm_aliases": crm_set}), eid),
+                (new_name, merged, json.dumps({"crm_aliases": crm_set, "crm_name": name}), eid),
             )
         return {**action, "action": "updated", "name": new_name}
 
     # An unlinked node of exactly this name and type is the same record — unless
-    # two live CRM records share the name, when it could be either.
+    # two live CRM records share the name, when it could be either, or the name
+    # is not a full name, when the node is every bare mention of it.
     legacy: list[dict[str, Any]] = []
-    if not ambiguous_name:
+    if full and not ambiguous_name:
         cur.execute(
             "SELECT id, name, aliases FROM memory_entities WHERE tenant_id = %s AND "
             "entity_type = %s AND crm_person_id IS NULL AND crm_company_id IS NULL AND "
@@ -756,12 +766,10 @@ def _sync_one(
         action["entity_id"] = eid
         if not dry_run:
             new_name = name if _name_free(cur, tenant_id, name, etype, eid) else pick["name"]
-            merged = list(pick["aliases"] or [])
-            merged += [a for a in aliases if a.lower() not in {m.lower() for m in merged}]
             cur.execute(
-                f"UPDATE memory_entities SET {col} = %s, name = %s, aliases = %s, metadata = "  # noqa: S608
+                f"UPDATE memory_entities SET {col} = %s, name = %s, metadata = "  # noqa: S608
                 "COALESCE(metadata, '{}'::jsonb) || %s::jsonb, last_seen = NOW() WHERE id = %s",
-                (crm_id, new_name, merged, json.dumps({"crm_aliases": aliases}), eid),
+                (crm_id, new_name, json.dumps({"crm_aliases": [], "crm_name": name}), eid),
             )
             _insert_decision(
                 cur,
@@ -780,34 +788,22 @@ def _sync_one(
             )
         return {**action, "action": "linked"}
 
-    crm_set = list(aliases)
-    if _name_free(cur, tenant_id, name, etype, None):
-        new_name = name
-    else:
-        new_name = _disambiguated(name, crm_id)
-        crm_set.append(name)
+    new_name, crm_set = _naming(None, None)
     if not dry_run:
         cur.execute(
             f"INSERT INTO memory_entities (name, entity_type, aliases, metadata, tenant_id, {col}) "  # noqa: S608
             "VALUES (%s, %s, %s, %s::jsonb, %s, %s) RETURNING id",
-            (new_name, etype, crm_set, json.dumps({"crm_aliases": crm_set}), tenant_id, crm_id),
+            (
+                new_name,
+                etype,
+                crm_set,
+                json.dumps({"crm_aliases": crm_set, "crm_name": name}),
+                tenant_id,
+                crm_id,
+            ),
         )
         action["entity_id"] = int(cur.fetchone()["id"])
     return {**action, "action": "created", "name": new_name}
-
-
-def _display_names(cur: Any, tenant_id: str, person_ids: Sequence[str]) -> dict[str, list[str]]:
-    if not person_ids:
-        return {}
-    cur.execute(
-        "SELECT person_id::text AS pid, display_name FROM contact_identifiers "
-        "WHERE tenant_id = %s AND person_id = ANY(%s::uuid[]) AND display_name IS NOT NULL",
-        (tenant_id, list(person_ids)),
-    )
-    out: dict[str, list[str]] = {}
-    for r in cur.fetchall():
-        out.setdefault(r["pid"], []).append(r["display_name"])
-    return out
 
 
 _PEOPLE_SQL = (
@@ -831,14 +827,16 @@ def _name_counts(kind: str, rows: Sequence[Mapping[str, Any]]) -> dict[str, int]
 def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     """Give every live CRM person and company in the tenant exactly one linked node.
 
-    Linked through ``crm_person_id`` / ``crm_company_id``, named with the CRM
-    full name or company name, with the emails, display names (people) or domain
-    (companies) the CRM holds as aliases — never nickname variants. An unlinked
-    node of exactly the same name and type is linked rather than duplicated (a
-    decision with method ``exact`` records it), unless two live CRM records
-    share that name. When the name is already taken by another record's node
-    the new node is named ``"<name> #<crm id prefix>"`` and carries the plain
-    name as an alias, so a bare mention of the name stays ambiguous. Idempotent.
+    Linked through ``crm_person_id`` / ``crm_company_id`` and named with the
+    CRM full name or company name. No CRM contact data (emails, handles,
+    domains) and no nickname variant is written to the node. An unlinked node of
+    exactly the same name and type is linked rather than duplicated (a decision
+    with method ``exact`` records it), unless two live CRM records share that
+    name or it is not a full name. When the name is already taken by another
+    record's node, or is not a full name, the node is named
+    ``"<name> #<crm id prefix>"``; a taken full name is kept as an alias, so a
+    bare mention of it stays ambiguous. A renamed record keeps its previous full
+    name as an alias. Idempotent.
     ``dry_run`` writes nothing and reports what it would do.
     """
     _require_tenant(tenant_id)
@@ -849,13 +847,13 @@ def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any
         "people": dict(blank),
         "companies": dict(blank),
         "actions": [],
+        "merges_recorded": 0,
     }
     with _cursor(tenant_id, read_only=dry_run) as cur:
         cur.execute(_PEOPLE_SQL + " ORDER BY created_at, id", (tenant_id,))
         people = [dict(r) for r in cur.fetchall()]
         cur.execute(_COMPANIES_SQL + " ORDER BY created_at, id", (tenant_id,))
         companies = [dict(r) for r in cur.fetchall()]
-        names = _display_names(cur, tenant_id, [p["id"] for p in people])
         for kind, rows, bucket in ((PERSON, people, "people"), ("company", companies, "companies")):
             counts = _name_counts(kind, rows)
             for row in rows:
@@ -864,14 +862,49 @@ def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any
                     tenant_id,
                     kind,
                     row,
-                    display_names=names.get(row["id"], []) if kind == PERSON else (),
                     ambiguous_name=counts.get(normalize_surface(_crm_name(kind, row)), 0) > 1,
                     dry_run=dry_run,
                 )
                 report[bucket][act["action"]] += 1
                 if act["action"] != "unchanged":
                     report["actions"].append(act)
+        for keeper, loser in _unrecorded_merges(cur, tenant_id):
+            if not dry_run:
+                record_crm_merge(tenant_id, PERSON, keeper, loser, cur=cur)
+            report["merges_recorded"] += 1
     return report
+
+
+def _unrecorded_merges(cur: Any, tenant_id: str) -> list[tuple[str, str]]:
+    """CRM people merges the DAL hook failed to record, read from the merge note.
+
+    ``merge_people`` writes a "Duplicate Merged" note on the keeper in the same
+    transaction as the merge, naming the loser's id. A loser with a node, no
+    merge decision ever recorded (live or reversed — an operator's reversal is
+    not undone), and exactly one live keeper is repaired. Company merges leave no
+    such note and are not repaired here.
+    """
+    cur.execute(
+        """
+        SELECT n.person_id::text AS keeper, p.id::text AS loser
+          FROM crm_people p
+          JOIN memory_entities e ON e.tenant_id = p.tenant_id AND e.crm_person_id = p.id
+          JOIN crm_notes n ON n.tenant_id = p.tenant_id AND n.deleted_at IS NULL
+                          AND n.title = 'Duplicate Merged'
+                          AND n.body LIKE '%%(id: ' || p.id::text || ')%%'
+          JOIN crm_people k ON k.id = n.person_id AND k.tenant_id = p.tenant_id
+                           AND k.deleted_at IS NULL
+         WHERE p.tenant_id = %s AND p.deleted_at IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM memory_resolution_decisions d
+                            WHERE d.tenant_id = p.tenant_id
+                              AND d.evidence->>'basis' = 'crm_merge:person:' || p.id::text)
+        """,
+        (tenant_id,),
+    )
+    pairs: dict[str, set[str]] = {}
+    for r in cur.fetchall():
+        pairs.setdefault(r["loser"], set()).add(r["keeper"])
+    return [(next(iter(k)), loser) for loser, k in sorted(pairs.items()) if len(k) == 1]
 
 
 def _sync_record(
@@ -899,10 +932,7 @@ def _sync_record(
             (tenant_id, record_id, name),
         )
     ambiguous = cur.fetchone() is not None
-    names = _display_names(cur, tenant_id, [record_id]).get(record_id, []) if kind == PERSON else []
-    return _sync_one(
-        cur, tenant_id, kind, row, display_names=names, ambiguous_name=ambiguous, dry_run=dry_run
-    )
+    return _sync_one(cur, tenant_id, kind, row, ambiguous_name=ambiguous, dry_run=dry_run)
 
 
 def sync_crm_record(
@@ -1028,7 +1058,9 @@ class _Resolver:
         self._fetched: set[str] = set()
         self._crm: dict[str, dict[str, Any] | None] = {}
         self._companies: dict[str, dict[str, Any] | None] = {}
-        self._merge: dict[str, int | None] = {}
+        self._merge: dict[str, tuple[int, int] | None] = {}
+        # Per mention: entity id -> the CRM-merge decisions followed to reach it.
+        self._via: dict[int, set[int]] = {}
         self._entity: dict[int, dict[str, Any] | None] = {}
         self._owner: str | None | bool = False
 
@@ -1160,12 +1192,13 @@ class _Resolver:
         for i in todo:
             self._companies[i] = found.get(i)
 
-    def _merged_into(self, kind: str, crm_id: str) -> int | None:
+    def _merged_into(self, kind: str, crm_id: str) -> tuple[int, int] | None:
+        """The (keeper node, merge decision id) a merged-away record resolves to."""
         key = f"{kind}:{crm_id}"
         if key not in self._merge:
             live = _live_decision_by_basis(self.cur, self.tenant, f"crm_merge:{key}")
             self._merge[key] = (
-                int(live["resolved_entity_id"])
+                (int(live["resolved_entity_id"]), int(live["id"]))
                 if live and live["resolved_entity_id"] is not None
                 else None
             )
@@ -1196,27 +1229,42 @@ class _Resolver:
             self._entity[eid] = dict(row) if row else None
         return self._entity[eid]
 
-    def effective(self, row: Mapping[str, Any], hops: int = 0) -> dict[str, Any] | None:
-        """The node a row stands for now: itself, its CRM merge winner, or nothing."""
+    def effective(
+        self, row: Mapping[str, Any], hops: int = 0, via: tuple[int, ...] = ()
+    ) -> dict[str, Any] | None:
+        """The node a row stands for now: itself, its CRM merge winner, or nothing.
+
+        A node reached through CRM merges carries ``_via_merge``: the merge
+        decisions followed, so a decision built on it can be undone with them.
+        """
         pid, cid = row.get("crm_person_id"), row.get("crm_company_id")
+        target: tuple[int, int] | None
         if pid:
             self._load_people([pid])
             person = self._crm.get(pid)
-            if person is not None and not person["deleted"]:
-                return dict(row)
-            target = self._merged_into(PERSON, pid) if person is not None else None
+            live = person is not None and not person["deleted"]
+            target = None if live or person is None else self._merged_into(PERSON, pid)
         elif cid:
             self._load_companies([cid])
             company = self._companies.get(cid)
-            if company is not None and not company["deleted"]:
-                return dict(row)
-            target = self._merged_into("company", cid) if company is not None else None
+            live = company is not None and not company["deleted"]
+            target = None if live or company is None else self._merged_into("company", cid)
         else:
-            return dict(row)
+            live = True
+            target = None
+        if live:
+            out = dict(row)
+            if via:
+                out["_via_merge"] = list(via)
+            return out
         if target is None or hops >= _MAX_MERGE_HOPS:
             return None
-        nxt = self.entity_row(target)
-        return self.effective(nxt, hops + 1) if nxt else None
+        nxt = self.entity_row(target[0])
+        return self.effective(nxt, hops + 1, (*via, target[1])) if nxt else None
+
+    def _note_via(self, eff: Mapping[str, Any] | None) -> None:
+        if eff is not None and eff.get("_via_merge"):
+            self._via.setdefault(int(eff["id"]), set()).update(eff["_via_merge"])
 
     def owner_person(self) -> str | None:
         if self._owner is False:
@@ -1278,6 +1326,7 @@ class _Resolver:
         row = self.cur.fetchone()
         if row is not None:
             eff = self.effective(dict(row))
+            self._note_via(eff)
             return (int(eff["id"]), None) if eff else (None, "deleted")
         if person["deleted"]:
             return None, "deleted"
@@ -1301,6 +1350,7 @@ class _Resolver:
         row = self.cur.fetchone()
         if row is not None:
             eff = self.effective(dict(row))
+            self._note_via(eff)
             return (int(eff["id"]), None) if eff else (None, "deleted")
         if company["deleted"]:
             return None, "deleted"
@@ -1371,6 +1421,7 @@ class _Resolver:
             ent = self.entity_row(int(row["memory_entity_id"]))
             if ent is not None and _norm_type(ent["entity_type"]) == PERSON:
                 eff = self.effective(ent)
+                self._note_via(eff)
                 return (int(eff["id"]), None) if eff else (None, "deleted")
         return None, "unknown"
 
@@ -1409,6 +1460,7 @@ class _Resolver:
                 blocked = blocked or match in ("name", "alias")
                 continue
             eid = int(eff["id"])
+            self._note_via(eff)
             if eid in by_id:
                 prev = by_id[eid]
                 prev[2].add(int(r["id"]))
@@ -1453,6 +1505,7 @@ class _Resolver:
 
     # ── deciding and recording ──
     def resolve(self, mention: MentionInput) -> _Result:
+        self._via = {}
         hits, ignored = self.strong_hits(mention)
         cands, blocked = self.candidates(mention)
         outcome = decide(mention, cands, strong_hits=hits, blocked=blocked)
@@ -1546,6 +1599,18 @@ class _Resolver:
                 {**outcome.evidence, "rejected_entity_id": outcome.entity_id, "rule": "rejected"},
             )
 
+        via = sorted(self._via.get(outcome.entity_id, ())) if outcome.entity_id is not None else []
+        if via:
+            # Reached through a CRM merge: say so, so reversing the merge finds it.
+            outcome = Outcome(
+                outcome.entity_id,
+                outcome.method,
+                outcome.confidence,
+                f"{outcome.basis}|via_merge:{','.join(map(str, via))}",
+                outcome.reason,
+                {**outcome.evidence, "via_merge": via},
+                outcome.create_type,
+            )
         evidence = {**outcome.evidence, "basis": outcome.basis, "reason": outcome.reason}
         key = (surface.lower(), etype, outcome.entity_id, outcome.method, outcome.basis)
         reused = self._reuse(key)
@@ -1593,20 +1658,31 @@ class _Resolver:
     def _operator_override(
         self, surface: str, etype: str | None, outcome: Outcome
     ) -> tuple[dict[str, Any] | None, int] | None:
-        if outcome.entity_id is not None and outcome.entity_id < 0:
+        """A live, whole-decision operator ruling on this surface form and node.
+
+        Only a resolved outcome can be overridden, and only by an operator decision
+        that replaced this node or chose it. A ruling on one fact (``scope:
+        facts``) never reaches other mentions, and nor does settling an
+        unresolved name. A decision without a type matches any type: the
+        backfill records untyped decisions.
+        """
+        if outcome.entity_id is None or outcome.entity_id < 0:
             return None
-        where = (
-            "evidence->>'replaces_entity_id' = %s"
-            if outcome.entity_id is not None
-            else "evidence->>'basis' = %s AND evidence->>'replaces_entity_id' IS NULL"
-        )
-        value = str(outcome.entity_id) if outcome.entity_id is not None else outcome.basis
         self.cur.execute(
-            "SELECT id, resolved_entity_id FROM memory_resolution_decisions WHERE tenant_id = %s "  # noqa: S608
+            "SELECT id, resolved_entity_id FROM memory_resolution_decisions WHERE tenant_id = %s "
             "AND method = 'operator' AND reversed_at IS NULL AND superseded_by IS NULL "
-            f"AND lower(surface_form) = %s AND entity_type IS NOT DISTINCT FROM %s AND {where} "
-            "ORDER BY id DESC LIMIT 1",
-            (self.tenant, surface.lower(), etype, value),
+            "AND evidence->>'scope' IS DISTINCT FROM 'facts' "
+            "AND lower(surface_form) = %s AND (entity_type IS NULL OR %s::text IS NULL "
+            "OR entity_type = %s) AND (evidence->>'replaces_entity_id' = %s "
+            "OR resolved_entity_id = %s) ORDER BY id DESC LIMIT 1",
+            (
+                self.tenant,
+                surface.lower(),
+                etype,
+                etype,
+                str(outcome.entity_id),
+                outcome.entity_id,
+            ),
         )
         row = self.cur.fetchone()
         if row is None:
@@ -1623,9 +1699,9 @@ class _Resolver:
             return False
         self.cur.execute(
             "SELECT 1 FROM memory_resolution_decisions WHERE tenant_id = %s "
-            "AND lower(surface_form) = %s AND entity_type IS NOT DISTINCT FROM %s "
-            "AND resolved_entity_id = %s AND reversed_at IS NOT NULL LIMIT 1",
-            (self.tenant, surface.lower(), etype, eid),
+            "AND lower(surface_form) = %s AND (entity_type IS NULL OR %s::text IS NULL "
+            "OR entity_type = %s) AND resolved_entity_id = %s AND reversed_at IS NOT NULL LIMIT 1",
+            (self.tenant, surface.lower(), etype, etype, eid),
         )
         return self.cur.fetchone() is not None
 
@@ -1708,109 +1784,263 @@ def write_mentions(
 # ═══ reversal ════════════════════════════════════════════════════════════
 
 
-def reverse_decision(
-    tenant_id: str, decision_id: int, *, reason: str, new_entity_id: int | None = None
+class _Rollback(Exception):  # noqa: N818 - a control-flow signal, not an error
+    def __init__(self, report: dict[str, Any]) -> None:
+        super().__init__("dry run")
+        self.report = report
+
+
+def _rebuild_set(cur: Any, tenant_id: str, fact_ids: Sequence[int]) -> list[int]:
+    if not fact_ids:
+        return []
+    cur.execute(
+        "SELECT relation_id AS id FROM memory_relation_evidence WHERE tenant_id = %s "
+        "AND fact_id = ANY(%s) UNION SELECT id FROM memory_relations WHERE tenant_id = %s "
+        "AND fact_id = ANY(%s)",
+        (tenant_id, list(fact_ids), tenant_id, list(fact_ids)),
+    )
+    return sorted({int(r["id"]) for r in cur.fetchall()})
+
+
+def _check_entity(cur: Any, tenant_id: str, entity_id: int | None) -> None:
+    if entity_id is None:
+        return
+    cur.execute(
+        "SELECT id FROM memory_entities WHERE id = %s AND tenant_id = %s", (entity_id, tenant_id)
+    )
+    if cur.fetchone() is None:
+        raise LookupError(f"no entity {entity_id} in this tenant")
+
+
+def _correct_facts(
+    cur: Any,
+    tenant_id: str,
+    row: Mapping[str, Any],
+    reason: str,
+    new_entity_id: int | None,
+    fact_ids: Sequence[int],
 ) -> dict[str, Any]:
-    """Undo a resolution decision.
+    """Re-point the mentions of one decision on the given facts only."""
+    decision_id = int(row["id"])
+    wanted = sorted({int(f) for f in fact_ids})
+    cur.execute(
+        "SELECT id, fact_id FROM memory_mentions WHERE tenant_id = %s AND decision_id = %s "
+        "AND fact_id = ANY(%s) ORDER BY id",
+        (tenant_id, decision_id, wanted),
+    )
+    mentions = [dict(r) for r in cur.fetchall()]
+    missing = sorted(set(wanted) - {int(m["fact_id"]) for m in mentions})
+    if missing:
+        raise LookupError(f"decision {decision_id} has no mention on fact(s) {missing}")
+    relation_ids = _rebuild_set(cur, tenant_id, wanted)
+    new_id = _insert_decision(
+        cur,
+        tenant_id,
+        surface=row["surface_form"],
+        entity_type=row["entity_type"],
+        entity_id=new_entity_id,
+        method="operator",
+        confidence=1.0,
+        evidence={
+            "basis": f"operator_facts:{decision_id}:{','.join(map(str, wanted))}",
+            "scope": "facts",
+            "reason": reason,
+            "corrects": decision_id,
+            "corrects_entity_id": row["resolved_entity_id"],
+            "fact_ids": wanted,
+            "normalized": normalize_surface(row["surface_form"]),
+            "rebuild": {"fact_ids": wanted, "relation_ids": relation_ids},
+        },
+    )
+    cur.execute(
+        "UPDATE memory_mentions SET entity_id = %s, decision_id = %s WHERE tenant_id = %s "
+        "AND id = ANY(%s)",
+        (new_entity_id, new_id, tenant_id, [int(m["id"]) for m in mentions]),
+    )
+    return {
+        "reversed": False,
+        "new_decision_id": new_id,
+        "mention_ids": [int(m["id"]) for m in mentions],
+        "fact_ids": wanted,
+        "relation_ids": relation_ids,
+        "cascaded": [],
+    }
 
-    Marks it reversed (``reversed_at``); with ``new_entity_id`` records an
-    ``operator`` decision for that node and points ``superseded_by`` at it.
-    Every mention carrying the decision moves to the new decision's node, or to
-    NULL. Entity rows are neither rewritten nor deleted.
 
-    Returns the fact ids those mentions belong to and the relation ids whose
+def _reverse_whole(
+    cur: Any,
+    tenant_id: str,
+    row: Mapping[str, Any],
+    reason: str,
+    new_entity_id: int | None,
+) -> dict[str, Any]:
+    decision_id = int(row["id"])
+    evidence = row["evidence"] if isinstance(row["evidence"], dict) else {}
+    basis = str(evidence.get("basis") or "")
+    if row["resolved_entity_id"] is None and new_entity_id is not None:
+        raise ValueError(
+            f"decision {decision_id} left its name unresolved; settle it per fact "
+            "(fact_ids / --fact), not for every mention at once"
+        )
+
+    mention_ids: list[int] = []
+    fact_set: set[int] = set()
+    cascaded: list[int] = []
+    if basis.startswith("crm_merge:"):
+        # Undo every decision that reached the keeper through this merge, returning
+        # its mentions to the node they had before the merge.
+        back_to = (evidence.get("crm_merge") or {}).get("from_entity_id")
+        cur.execute(
+            "SELECT id FROM memory_entities WHERE id = %s AND tenant_id = %s", (back_to, tenant_id)
+        )
+        back = int(back_to) if back_to is not None and cur.fetchone() else None
+        cur.execute(
+            "SELECT id, surface_form, entity_type, resolved_entity_id, method, evidence, "
+            "reversed_at FROM memory_resolution_decisions WHERE tenant_id = %s "
+            "AND reversed_at IS NULL AND superseded_by IS NULL "
+            "AND evidence->'via_merge' @> %s::jsonb ORDER BY id FOR UPDATE",
+            (tenant_id, json.dumps([decision_id])),
+        )
+        for derived in [dict(r) for r in cur.fetchall()]:
+            sub = _reverse_whole(
+                cur, tenant_id, derived, f"{reason} (CRM merge {decision_id} reversed)", back
+            )
+            cascaded.append(int(derived["id"]))
+            mention_ids += sub["mention_ids"]
+            fact_set.update(sub["fact_ids"])
+
+    cur.execute(
+        "SELECT id, fact_id FROM memory_mentions WHERE tenant_id = %s AND decision_id = %s "
+        "ORDER BY id",
+        (tenant_id, decision_id),
+    )
+    own = [dict(r) for r in cur.fetchall()]
+    mention_ids += [int(m["id"]) for m in own]
+    fact_set.update(int(m["fact_id"]) for m in own)
+    fact_ids = sorted(fact_set)
+    relation_ids = _rebuild_set(cur, tenant_id, fact_ids)
+
+    new_id: int | None = None
+    if new_entity_id is not None:
+        new_id = _insert_decision(
+            cur,
+            tenant_id,
+            surface=row["surface_form"],
+            entity_type=row["entity_type"],
+            entity_id=new_entity_id,
+            method="operator",
+            confidence=1.0,
+            evidence={
+                "basis": evidence.get("basis"),
+                "reason": reason,
+                "reverses": decision_id,
+                "replaces_entity_id": row["resolved_entity_id"],
+                "normalized": normalize_surface(row["surface_form"]),
+            },
+        )
+    reversal = {
+        "reason": reason,
+        "superseded_by": new_id,
+        "cascaded": cascaded,
+        "rebuild": {"fact_ids": fact_ids, "relation_ids": relation_ids},
+    }
+    cur.execute(
+        "UPDATE memory_resolution_decisions SET reversed_at = NOW(), superseded_by = %s, "
+        "evidence = evidence || jsonb_build_object('reversal', %s::jsonb) WHERE id = %s",
+        (new_id, json.dumps(reversal), decision_id),
+    )
+    cur.execute(
+        "UPDATE memory_mentions SET entity_id = %s, decision_id = COALESCE(%s, decision_id) "
+        "WHERE tenant_id = %s AND decision_id = %s",
+        (new_entity_id, new_id, tenant_id, decision_id),
+    )
+    return {
+        "reversed": True,
+        "new_decision_id": new_id,
+        "mention_ids": mention_ids,
+        "fact_ids": fact_ids,
+        "relation_ids": relation_ids,
+        "cascaded": cascaded,
+    }
+
+
+def reverse_decision(
+    tenant_id: str,
+    decision_id: int,
+    *,
+    reason: str,
+    new_entity_id: int | None = None,
+    fact_ids: Sequence[int] | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Undo a resolution decision, for every mention under it or for some facts.
+
+    **Whole decision** (``fact_ids`` omitted): marks it reversed (``reversed_at``);
+    with ``new_entity_id`` records an ``operator`` decision for that node and
+    points ``superseded_by`` at it. Every mention carrying the decision moves to
+    that node, or to NULL. A decision is shared by every mention it resolved the
+    same way, so this reaches all of them: preview it with ``dry_run``. The name
+    is never resolved to the rejected node again. A decision that left its name
+    unresolved cannot be settled this way (``ValueError``): settle it per fact.
+    Reversing a CRM merge also reverses every decision that reached the keeper
+    through it, and their mentions return to the loser's node.
+
+    **Some facts** (``fact_ids``): only the mentions of this decision on those
+    facts move, onto a new ``operator`` decision that applies to them alone. The
+    decision stays live for every other mention, and nothing about future
+    mentions changes. Not for a CRM merge or link.
+
+    Returns the mentions moved, their fact ids and the relation ids whose
     evidence includes any of those facts — the derived rows to rebuild. The same
-    set is stored on the reversed decision (``evidence.reversal.rebuild``), so a
-    rebuild that runs later can find it.
+    set is stored on the decision written (``evidence.reversal.rebuild`` or
+    ``evidence.rebuild``), so a rebuild that runs later can find it.
+    ``dry_run`` returns the same report and writes nothing (the work is rolled
+    back; sequence values may advance). Entity rows are never rewritten.
 
-    Raises ``LookupError`` for a decision or node outside the tenant and
-    ``ValueError`` for a decision already reversed.
+    Raises ``LookupError`` for a decision, node or fact outside the tenant or
+    the decision, and ``ValueError`` for a decision already reversed.
     """
     _require_tenant(tenant_id)
     if not reason or not reason.strip():
         raise ValueError("reverse_decision: a reason is required")
-    with _cursor(tenant_id) as cur:
-        cur.execute(
-            "SELECT id, surface_form, entity_type, resolved_entity_id, method, evidence, "
-            "reversed_at FROM memory_resolution_decisions WHERE id = %s AND tenant_id = %s "
-            "FOR UPDATE",
-            (decision_id, tenant_id),
-        )
-        row = cur.fetchone()
-        if row is None:
-            raise LookupError(f"no decision {decision_id} in this tenant")
-        if row["reversed_at"] is not None:
-            raise ValueError(f"decision {decision_id} is already reversed")
-        if new_entity_id is not None:
+    why = reason.strip()
+    try:
+        with _cursor(tenant_id) as cur:
             cur.execute(
-                "SELECT id FROM memory_entities WHERE id = %s AND tenant_id = %s",
-                (new_entity_id, tenant_id),
+                "SELECT id, surface_form, entity_type, resolved_entity_id, method, evidence, "
+                "reversed_at FROM memory_resolution_decisions WHERE id = %s AND tenant_id = %s "
+                "FOR UPDATE",
+                (decision_id, tenant_id),
             )
-            if cur.fetchone() is None:
-                raise LookupError(f"no entity {new_entity_id} in this tenant")
-
-        cur.execute(
-            "SELECT id, fact_id FROM memory_mentions WHERE tenant_id = %s AND decision_id = %s "
-            "ORDER BY id",
-            (tenant_id, decision_id),
-        )
-        mentions = [dict(r) for r in cur.fetchall()]
-        fact_ids = sorted({int(m["fact_id"]) for m in mentions})
-        relation_ids: list[int] = []
-        if fact_ids:
-            cur.execute(
-                "SELECT relation_id AS id FROM memory_relation_evidence WHERE tenant_id = %s "
-                "AND fact_id = ANY(%s) UNION SELECT id FROM memory_relations WHERE tenant_id = %s "
-                "AND fact_id = ANY(%s)",
-                (tenant_id, fact_ids, tenant_id, fact_ids),
-            )
-            relation_ids = sorted({int(r["id"]) for r in cur.fetchall()})
-
-        evidence = row["evidence"] if isinstance(row["evidence"], dict) else {}
-        new_id: int | None = None
-        if new_entity_id is not None:
-            new_id = _insert_decision(
-                cur,
-                tenant_id,
-                surface=row["surface_form"],
-                entity_type=row["entity_type"],
-                entity_id=new_entity_id,
-                method="operator",
-                confidence=1.0,
-                evidence={
-                    "basis": evidence.get("basis"),
-                    "reason": reason.strip(),
-                    "reverses": int(decision_id),
-                    "replaces_entity_id": row["resolved_entity_id"],
-                    "normalized": normalize_surface(row["surface_form"]),
-                },
-            )
-        reversal = {
-            "reason": reason.strip(),
-            "superseded_by": new_id,
-            "rebuild": {"fact_ids": fact_ids, "relation_ids": relation_ids},
-        }
-        cur.execute(
-            "UPDATE memory_resolution_decisions SET reversed_at = NOW(), superseded_by = %s, "
-            "evidence = evidence || jsonb_build_object('reversal', %s::jsonb) WHERE id = %s",
-            (new_id, json.dumps(reversal), decision_id),
-        )
-        cur.execute(
-            "UPDATE memory_mentions SET entity_id = %s, decision_id = COALESCE(%s, decision_id) "
-            "WHERE tenant_id = %s AND decision_id = %s",
-            (new_entity_id, new_id, tenant_id, decision_id),
-        )
-    return {
-        "tenant_id": tenant_id,
-        "decision_id": int(decision_id),
-        "reversed": True,
-        "new_decision_id": new_id,
-        "entity_id": new_entity_id,
-        "previous_entity_id": row["resolved_entity_id"],
-        "mention_ids": [int(m["id"]) for m in mentions],
-        "fact_ids": fact_ids,
-        "relation_ids": relation_ids,
-    }
+            row = cur.fetchone()
+            if row is None:
+                raise LookupError(f"no decision {decision_id} in this tenant")
+            row = dict(row)
+            if row["reversed_at"] is not None:
+                raise ValueError(f"decision {decision_id} is already reversed")
+            _check_entity(cur, tenant_id, new_entity_id)
+            if fact_ids is not None:
+                basis = str((row["evidence"] or {}).get("basis") or "")
+                if basis.startswith(("crm_merge:", "crm_link:")):
+                    raise ValueError("a CRM merge or link is reversed as a whole, not per fact")
+                if not fact_ids:
+                    raise ValueError("fact_ids is empty")
+                body = _correct_facts(cur, tenant_id, row, why, new_entity_id, fact_ids)
+            else:
+                body = _reverse_whole(cur, tenant_id, row, why, new_entity_id)
+            report = {
+                "tenant_id": tenant_id,
+                "decision_id": int(decision_id),
+                "dry_run": dry_run,
+                "entity_id": new_entity_id,
+                "previous_entity_id": row["resolved_entity_id"],
+                **body,
+            }
+            if dry_run:
+                raise _Rollback(report)
+    except _Rollback as preview:
+        return preview.report
+    return report
 
 
 # ═══ backfill ════════════════════════════════════════════════════════════
@@ -2077,34 +2307,36 @@ def find_entity(
 ) -> dict[str, Any] | Ambiguity | None:
     """Look a name up by the resolution rules, read-only. Records nothing.
 
-    A strong key (an email the CRM holds) or an exact name or alias of exactly
-    one shared node of a compatible type returns that node (explicit columns,
-    never ``embedding``). Several such nodes return an :class:`Ambiguity`. A
-    first name or nickname alone matches nothing here: it returns ``None``.
-    A node whose CRM record was merged away answers as the winner's node.
+    An exact name or alias of exactly one shared node of a compatible type
+    returns that node (explicit columns, never ``embedding``). Several such
+    nodes return an :class:`Ambiguity`. A first name or nickname alone matches
+    nothing here: it returns ``None``. A node whose CRM record was merged away
+    answers as the winner's node.
+
+    Strong keys are deliberately not used on the read side: callers of
+    ``get_entity`` are not data-scoped, and answering an email with the CRM
+    person who owns it would disclose what the CRM withholds from restricted
+    readers. An email returns ``None``.
     """
     _require_tenant(tenant_id)
-    if is_junk_entity_name(surface_form):
+    if is_junk_entity_name(surface_form) or _EMAIL_RE.match(_clean(surface_form)):
         return None
     mtype = _norm_type(entity_type)
     scope = ("shared", None, None)
     with _cursor(tenant_id, cur, read_only=cur is None) as c:
         resolver = _Resolver(c, tenant_id, read_only=True)
-        hits, _ignored = resolver.strong_hits(MentionInput(surface_form, mtype))
-        ids = sorted({h.entity_id for h in hits if h.entity_id >= 0})
-        if not ids:
-            resolver.prefetch([surface_form])
-            norm = normalize_surface(surface_form)
-            found: set[int] = set()
-            for r in resolver._rows.get(norm, []):
-                if resolver._classify(r, norm) not in ("name", "alias") or not _visible(r, scope):
-                    continue
-                if mtype is not None and _norm_type(r["entity_type"]) != mtype:
-                    continue
-                eff = resolver.effective(r)
-                if eff is not None and _visible(eff, scope):
-                    found.add(int(eff["id"]))
-            ids = sorted(found)
+        resolver.prefetch([surface_form])
+        norm = normalize_surface(surface_form)
+        found: set[int] = set()
+        for r in resolver._rows.get(norm, []):
+            if resolver._classify(r, norm) not in ("name", "alias") or not _visible(r, scope):
+                continue
+            if mtype is not None and _norm_type(r["entity_type"]) != mtype:
+                continue
+            eff = resolver.effective(r)
+            if eff is not None and _visible(eff, scope):
+                found.add(int(eff["id"]))
+        ids = sorted(found)
         rows = [r for r in _public_row(c, tenant_id, ids) if _visible(r, scope)]
     if not rows:
         return None

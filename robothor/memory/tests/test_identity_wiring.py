@@ -125,3 +125,35 @@ def test_the_crm_hooks_can_be_replaced(monkeypatch) -> None:
     finally:
         monkeypatch.setattr(hooks, "_crm_entity_sync", None)
     assert seen == [("t1", "company", "c1")]
+
+
+def _reverse_cli(argv: list[str]) -> tuple[int, dict[str, Any]]:
+    from robothor.cli import memory_identity
+
+    seen: dict[str, Any] = {}
+
+    def _reverse(tenant_id: str, decision_id: int, **kw: Any) -> dict[str, Any]:
+        seen.update(tenant_id=tenant_id, decision_id=decision_id, **kw)
+        return {
+            "new_decision_id": None,
+            "mention_ids": [],
+            "fact_ids": [],
+            "relation_ids": [],
+            "dry_run": kw.get("dry_run", False),
+        }
+
+    with patch("robothor.memory.identity.reverse_decision", _reverse):
+        rc = memory_identity.cmd_memory_identity(_build_parser().parse_args(argv))
+    return rc, seen
+
+
+def test_reverse_on_the_cli_needs_either_facts_or_all() -> None:
+    base = ["memory-identity", "reverse", "--tenant", "t1", "--decision", "7", "--reason", "r"]
+    rc, seen = _reverse_cli(base)
+    assert rc == 2 and seen == {}
+    rc, seen = _reverse_cli([*base, "--fact", "3", "--fact", "4", "--entity", "9"])
+    assert rc == 0 and seen["fact_ids"] == [3, 4] and seen["new_entity_id"] == 9
+    rc, seen = _reverse_cli([*base, "--all", "--dry-run"])
+    assert rc == 0 and seen["fact_ids"] is None and seen["dry_run"] is True
+    rc, seen = _reverse_cli([*base, "--all", "--fact", "3"])
+    assert rc == 2 and seen == {}

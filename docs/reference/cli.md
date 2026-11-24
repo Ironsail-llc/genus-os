@@ -892,15 +892,18 @@ Usage: `genus memory-identity backfill [--tenant TENANT] [--json] [--dry-run] [-
 
 Reverse a resolution decision and re-point its mentions.
 
-Usage: `genus memory-identity reverse [--tenant TENANT] [--json] [--decision DECISION] [--reason REASON] [--entity ENTITY]`
+Usage: `genus memory-identity reverse [--tenant TENANT] [--json] [--dry-run] [--decision DECISION] [--reason REASON] [--entity ENTITY] [--fact FACT] [--all]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--tenant` | `TENANT` | — | Tenant to act on (required) |
 | `--json` | — | off | Output JSON |
+| `--dry-run` | — | off | Report what would change and write nothing |
 | `--decision` | `DECISION` | — | Decision id to reverse |
 | `--reason` | `REASON` | — | Why the decision was wrong |
 | `--entity` | `ENTITY` | — | Entity id the mentions belong to instead (omit to leave them unresolved) |
+| `--fact` | `FACT` | — | Only the decision's mention on this fact (repeatable); the decision stays live |
+| `--all` | — | off | Every mention the decision carries, and the name from now on (preview with --dry-run) |
 
 ## `genus status`
 

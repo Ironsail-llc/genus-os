@@ -220,10 +220,12 @@ def test_every_crm_person_and_company_gets_exactly_one_linked_node(world: World)
     by_name = {r[0]: r for r in rows}
     assert set(by_name) == {"Dana Reyes", "Northwind Traders", "Robert Rivera"}
     assert by_name["Dana Reyes"][1:2] == ("person",) and by_name["Dana Reyes"][3] == dana
-    assert set(by_name["Dana Reyes"][2]) == {"dana@example.com", "dr@example.org"}
+    # CRM contact data (emails, domains) is never copied into memory: get_entity
+    # applies no data scope, and the CRM withholds it from restricted readers.
+    assert by_name["Dana Reyes"][2] == []
     assert by_name["Northwind Traders"][1] == "organization"
     assert by_name["Northwind Traders"][4] == acme
-    assert "northwind.example" in by_name["Northwind Traders"][2]
+    assert by_name["Northwind Traders"][2] == []
     # Nickname variants are never written as aliases: the CRM does not hold "Bob".
     assert by_name["Robert Rivera"][3] == bob
     assert not {"bob", "bob rivera", "rob rivera"} & {
@@ -296,8 +298,15 @@ def test_a_crm_rename_follows_on_the_linked_node(world: World) -> None:
     assert sync_crm_entities(TENANT)["people"]["updated"] == 1
     name, aliases = world.q("SELECT name, aliases FROM memory_entities WHERE id = %s", (node,))[0]
     assert name == "Dana Ruiz"
-    # The email the CRM no longer holds is no longer an alias.
-    assert aliases == ["druiz@example.com"]
+    # The old name stays findable: facts already name the person by it.
+    assert aliases == ["Dana Reyes"]
+    assert sync_crm_entities(TENANT)["people"]["unchanged"] == 1
+    from robothor.memory.identity import find_entity
+
+    found = find_entity(TENANT, "Dana Reyes")
+    assert isinstance(found, dict) and found["id"] == node
+    assert _one(MentionInput("Dana Reyes", "person")).entity_id == node
+    assert _one(MentionInput("Dana Ruiz", "person")).entity_id == node
 
 
 # ═══ 2. resolution — acceptance criterion 1 ══════════════════════════════
@@ -977,7 +986,9 @@ async def test_find_entity_is_a_pure_lookup_and_get_entity_keeps_its_shape(world
     node = world.entity_of(pid)
     before = world.snapshot()
 
-    found = find_entity(TENANT, "dana@example.com")
+    # An email is not a read-side key: it would tell any reader who owns an address.
+    assert find_entity(TENANT, "dana@example.com") is None
+    found = find_entity(TENANT, "Dana Reyes")
     assert isinstance(found, dict) and found["id"] == node and "embedding" not in found
     again = find_entity(TENANT, "  dana REYES")
     assert isinstance(again, dict) and again["id"] == node
@@ -987,7 +998,8 @@ async def test_find_entity_is_a_pure_lookup_and_get_entity_keeps_its_shape(world
     assert find_entity(TENANT, "Dana Reyes", "organization") is None
     assert find_entity(OTHER, "Dana Reyes") is None
 
-    entity = await get_entity("dana@example.com", tenant_id=TENANT)
+    assert await get_entity("dana@example.com", tenant_id=TENANT) is None
+    entity = await get_entity("Dana Reyes", tenant_id=TENANT)
     assert entity and entity["id"] == node and "embedding" not in entity
     assert {"id", "name", "entity_type", "aliases", "mention_count", "relations"} <= set(entity)
 
@@ -1099,3 +1111,263 @@ def test_adversarial_identity_set_precision_and_recall(world: World) -> None:
     )
     assert not wrong, wrong
     assert precision == 1.0 and recall == 1.0
+
+
+# ═══ review fixes ════════════════════════════════════════════════════════
+
+
+async def test_get_entity_exposes_no_crm_contact_data(world: World) -> None:
+    """A reader without CRM access must not learn emails or handles through memory."""
+    from robothor.memory.entities import get_entity
+    from robothor.memory.identity import find_entity, sync_crm_entities
+
+    org = world.company("Northwind Traders", "northwind.example")
+    pid = world.person(
+        "Dana", "Reyes", "dana@example.com", extra_emails=("dr@example.org",), company=org
+    )
+    world.q(
+        "INSERT INTO contact_identifiers (channel, identifier, display_name, person_id, tenant_id) "
+        "VALUES ('telegram', '777', 'dana_r_handle', %s, %s)",
+        (pid, TENANT),
+    )
+    sync_crm_entities(TENANT)
+    stored = json.dumps(
+        world.q(
+            "SELECT name, aliases, metadata FROM memory_entities WHERE tenant_id = %s", (TENANT,)
+        ),
+        default=str,
+    )
+    for secret in ("dana@example.com", "dr@example.org", "dana_r_handle", "northwind.example"):
+        assert secret not in stored
+
+    entity = await get_entity("Dana Reyes", tenant_id=TENANT)
+    assert entity is not None
+    shown = json.dumps(entity, default=str)
+    assert "@" not in shown and "dana_r_handle" not in shown
+    for probe in ("dana@example.com", "dr@example.org", "northwind.example"):
+        assert await get_entity(probe, tenant_id=TENANT) is None
+        assert find_entity(TENANT, probe) is None
+    # Resolution on the write side still uses the CRM's emails as strong keys.
+    out = _one(MentionInput("D", "person", strong_keys={"email": "dr@example.org"}))
+    assert out.entity_id == world.entity_of(pid)
+
+
+async def test_a_single_token_crm_person_never_takes_over_a_first_name_node(world: World) -> None:
+    from robothor.memory.entities import upsert_entity
+    from robothor.memory.identity import find_entity, sync_crm_entities
+
+    legacy = world.entity("Alex", "person")  # built from every extracted bare "Alex"
+    alex = world.person("Alex", "", "alex.solo@example.com")
+    sam = world.person("Sam", "", "sam.solo@example.com")
+    world.person("A.", "Morgan", "a.morgan@example.com")
+    report = sync_crm_entities(TENANT)
+    assert report["people"]["linked"] == 0
+
+    assert world.one("SELECT crm_person_id FROM memory_entities WHERE id = %s", (legacy,)) is None
+    node = world.entity_of(alex)
+    assert node != legacy
+    names = {
+        r[0] for r in world.q("SELECT name FROM memory_entities WHERE crm_person_id IS NOT NULL")
+    }
+    assert not names & {"Alex", "Sam", "A. Morgan"}
+    assert world.count("memory_resolution_decisions", TENANT) == 0  # no link was recorded
+
+    # The legacy extraction path keeps writing bare names to the unlinked node,
+    # never to a CRM person's node.
+    assert await upsert_entity("Alex", "person", tenant_id=TENANT) == legacy
+    assert await upsert_entity("Sam", "person", tenant_id=TENANT) != world.entity_of(sam)
+    found = find_entity(TENANT, "Alex")
+    assert isinstance(found, dict) and found["id"] == legacy
+    # A strong key still reaches the CRM person.
+    out = _one(MentionInput("Alex", "person", strong_keys={"crm_person_id": alex}))
+    assert out.entity_id == node
+    assert sync_crm_entities(TENANT)["people"]["unchanged"] == 3
+
+
+def test_a_first_name_shared_by_the_operator_and_a_contact_stays_unresolved(world: World) -> None:
+    from robothor.memory.identity import resolve_mentions, sync_crm_entities, write_mentions
+
+    op = world.person("Casey", "Quinn", "casey@example.com")
+    world.owner(op)
+    world.person("Casey", "Lin", "casey.lin@example.com")
+    sync_crm_entities(TENANT)
+    fid = world.fact("Casey Quinn and Casey Lin met", ["Casey Quinn", "Casey Lin"], session="s1")
+    seed = [MentionInput("Casey Quinn", "person"), MentionInput("Casey Lin", "person")]
+    write_mentions(TENANT, fid, seed, resolve_mentions(TENANT, seed))
+    out = _one(MentionInput("Casey", "person", context={"conversation_ref": "s1"}))
+    assert out.entity_id is None
+
+
+def test_reversing_a_crm_merge_returns_post_merge_mentions_to_the_loser(world: World) -> None:
+    from robothor.crm import dal
+    from robothor.memory.identity import (
+        resolve_mentions,
+        reverse_decision,
+        sync_crm_entities,
+        write_mentions,
+    )
+
+    keeper = world.person("Dana", "Reyes", "dana@example.com")
+    loser = world.person("Danielle", "Reyes", "danielle@example.org")
+    sync_crm_entities(TENANT)
+    keeper_node, loser_node = world.entity_of(keeper), world.entity_of(loser)
+    before = world.fact("Danielle Reyes called", ["Danielle Reyes"])
+    m = MentionInput("Danielle Reyes", "person")
+    write_mentions(TENANT, before, [m], resolve_mentions(TENANT, [m]))
+    assert dal.merge_people(keeper, loser, TENANT)
+
+    after = world.fact("Danielle Reyes signed the lease", ["Danielle Reyes"])
+    write_mentions(TENANT, after, [m], resolve_mentions(TENANT, [m]))
+    keyed = world.fact("She paid", ["Dani"])
+    k = MentionInput("Dani", "person", strong_keys={"crm_person_id": loser})
+    write_mentions(TENANT, keyed, [k], resolve_mentions(TENANT, [k]))
+    unrelated = world.fact("Dana Reyes likes tea", ["Dana Reyes"])
+    d = MentionInput("Dana Reyes", "person")
+    write_mentions(TENANT, unrelated, [d], resolve_mentions(TENANT, [d]))
+    assert world.one("SELECT entity_id FROM memory_mentions WHERE fact_id = %s", (after,)) == (
+        keeper_node
+    )
+    org = world.entity("Northbank", "organization")
+    rel = world.one(
+        "INSERT INTO memory_relations (source_entity_id, target_entity_id, relation_type, "
+        "tenant_id) VALUES (%s, %s, 'banks with', %s) RETURNING id",
+        (keeper_node, org, TENANT),
+    )
+    world.q(
+        "INSERT INTO memory_relation_evidence (tenant_id, relation_id, fact_id) VALUES (%s, %s, %s)",
+        (TENANT, rel, after),
+    )
+
+    merge = world.one(
+        "SELECT id FROM memory_resolution_decisions WHERE evidence->>'basis' = %s",
+        (f"crm_merge:person:{loser}",),
+    )
+    report = reverse_decision(TENANT, merge, reason="different people")
+    assert set(report["fact_ids"]) == {after, keyed}
+    assert report["relation_ids"] == [rel]
+    rows = dict(world.q("SELECT fact_id, entity_id FROM memory_mentions"))
+    assert rows[after] == loser_node and rows[keyed] == loser_node
+    assert rows[before] == loser_node and rows[unrelated] == keeper_node
+
+
+def test_a_reversal_can_be_previewed_without_writing(world: World) -> None:
+    from robothor.memory.identity import reverse_decision
+
+    w = _wrongly_resolved(world)
+    tables = ("memory_resolution_decisions", "memory_mentions")
+    before = {t: world.q(f"SELECT * FROM {t} ORDER BY 1") for t in tables}  # noqa: S608
+    preview = reverse_decision(
+        TENANT, w["decision"], reason="look", new_entity_id=w["right"], dry_run=True
+    )
+    assert preview["dry_run"] is True and sorted(preview["fact_ids"]) == sorted(w["facts"])
+    assert len(preview["mention_ids"]) == 2
+    for t, rows in before.items():
+        assert world.q(f"SELECT * FROM {t} ORDER BY 1") == rows  # noqa: S608
+
+
+def test_correcting_one_fact_moves_only_that_mention(world: World) -> None:
+    from robothor.memory.identity import reverse_decision
+
+    w = _wrongly_resolved(world)
+    fixed, untouched = w["facts"]
+    report = reverse_decision(
+        TENANT, w["decision"], reason="namesake here", new_entity_id=w["right"], fact_ids=[fixed]
+    )
+    assert report["fact_ids"] == [fixed] and report["relation_ids"] == [w["rel"]]
+    rows = dict(
+        world.q(
+            "SELECT fact_id, entity_id FROM memory_mentions WHERE surface_form = 'Robert Rivera'"
+        )
+    )
+    assert rows == {fixed: w["right"], untouched: w["wrong"]}
+    # The shared decision stays live, and new mentions are not steered by the correction.
+    assert (
+        world.one(
+            "SELECT reversed_at FROM memory_resolution_decisions WHERE id = %s", (w["decision"],)
+        )
+        is None
+    )
+    again = _one(w["mention"])
+    assert (again.entity_id, again.decision_id) == (w["wrong"], w["decision"])
+    with pytest.raises(LookupError):
+        reverse_decision(TENANT, w["decision"], reason="x", fact_ids=[987654])
+
+
+def test_settling_one_bare_first_name_leaves_the_others_unresolved(world: World) -> None:
+    from robothor.memory.identity import backfill_mentions, reverse_decision, sync_crm_entities
+
+    morgan = world.person("Alex", "Morgan")
+    world.person("Alex", "Chen")
+    sync_crm_entities(TENANT)
+    one = world.fact("Alex called", ["Alex"])
+    two = world.fact("Alex wrote", ["Alex"])
+    backfill_mentions(TENANT, dry_run=False)
+    shared = world.q("SELECT DISTINCT decision_id FROM memory_mentions")
+    assert len(shared) == 1
+    decision = shared[0][0]
+    node = world.entity_of(morgan)
+    with pytest.raises(ValueError):  # settling an unresolved name in bulk is refused
+        reverse_decision(TENANT, decision, reason="bulk", new_entity_id=node)
+    reverse_decision(TENANT, decision, reason="this one is Morgan", new_entity_id=node,
+                     fact_ids=[one])  # fmt: skip
+    rows = dict(world.q("SELECT fact_id, entity_id FROM memory_mentions"))
+    assert rows == {one: node, two: None}
+    assert _one(MentionInput("Alex", None)).entity_id is None
+    assert _one(MentionInput("Alex", "person")).entity_id is None
+
+
+def test_undoing_a_mistaken_reversal_restores_the_name(world: World) -> None:
+    from robothor.memory.identity import reverse_decision
+
+    w = _wrongly_resolved(world)
+    first = reverse_decision(TENANT, w["decision"], reason="looked wrong", new_entity_id=w["right"])
+    reverse_decision(
+        TENANT, first["new_decision_id"], reason="it was right after all", new_entity_id=w["wrong"]
+    )
+    assert _one(w["mention"]).entity_id == w["wrong"]
+
+
+def test_a_rejection_recorded_untyped_also_binds_typed_mentions(world: World) -> None:
+    from robothor.memory.identity import resolve_mentions, reverse_decision, write_mentions
+
+    wrong = world.entity("Robert Rivera", "person")
+    fid = world.fact("Robert Rivera wrote", ["Robert Rivera"])
+    m = MentionInput("Robert Rivera", None)  # as the backfill writes it
+    out = resolve_mentions(TENANT, [m])
+    assert out[0].entity_id == wrong
+    write_mentions(TENANT, fid, [m], out)
+    reverse_decision(TENANT, out[0].decision_id, reason="not this one")
+    assert _one(MentionInput("Robert Rivera", "person")).entity_id is None
+    assert _one(MentionInput("Robert Rivera", None)).entity_id is None
+
+
+def test_the_nightly_sync_repairs_a_merge_whose_hook_failed(world: World, monkeypatch) -> None:
+    from robothor.crm import dal, hooks
+    from robothor.memory.identity import reverse_decision, sync_crm_entities
+
+    keeper = world.person("Dana", "Reyes", "dana@example.com")
+    loser = world.person("Danielle", "Reyes", "danielle@example.org")
+    sync_crm_entities(TENANT)
+
+    def _boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("pool exhausted")
+
+    monkeypatch.setattr(hooks, "_crm_merge_recorder", _boom)
+    assert dal.merge_people(keeper, loser, TENANT)
+    basis = f"crm_merge:person:{loser}"
+    count = "SELECT count(*) FROM memory_resolution_decisions WHERE evidence->>'basis' = %s"
+    assert world.one(count, (basis,)) == 0
+
+    report = sync_crm_entities(TENANT)
+    assert report["merges_recorded"] == 1
+    assert world.one(count, (basis,)) == 1
+    keeper_node = world.entity_of(keeper)
+    out = _one(MentionInput("x", "person", strong_keys={"crm_person_id": loser}))
+    assert out.entity_id == keeper_node
+    # An operator's reversal of that merge is not undone by the next sync.
+    merge = world.one(
+        "SELECT id FROM memory_resolution_decisions WHERE evidence->>'basis' = %s", (basis,)
+    )
+    reverse_decision(TENANT, merge, reason="different people")
+    assert sync_crm_entities(TENANT)["merges_recorded"] == 0
+    assert world.one(count, (basis,)) == 1

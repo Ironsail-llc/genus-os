@@ -839,7 +839,7 @@ def _build_parser() -> argparse.ArgumentParser:
     for verb in (id_sync, id_backfill, id_reverse):
         verb.add_argument("--tenant", required=True, help="Tenant to act on (required)")
         verb.add_argument("--json", dest="json_output", action="store_true", help="Output JSON")
-    for verb in (id_sync, id_backfill):
+    for verb in (id_sync, id_backfill, id_reverse):
         verb.add_argument(
             "--dry-run", action="store_true", help="Report what would change and write nothing"
         )
@@ -859,6 +859,19 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Entity id the mentions belong to instead (omit to leave them unresolved)",
+    )
+    id_reverse.add_argument(
+        "--fact",
+        type=int,
+        action="append",
+        default=None,
+        help="Only the decision's mention on this fact (repeatable); the decision stays live",
+    )
+    id_reverse.add_argument(
+        "--all",
+        dest="all_mentions",
+        action="store_true",
+        help="Every mention the decision carries, and the name from now on (preview with --dry-run)",
     )
 
     # status

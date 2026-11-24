@@ -67,11 +67,25 @@ def cmd_memory_identity(args: argparse.Namespace) -> int:
             _print(report, as_json, lines)
             return 0
         if verb == "reverse":
+            facts = getattr(args, "fact", None)
+            if bool(facts) == bool(getattr(args, "all_mentions", False)):
+                print(
+                    "error: name the facts to correct (--fact, repeatable) or pass --all to "
+                    "reverse every mention the decision carries",
+                    file=sys.stderr,
+                )
+                return 2
             report = identity.reverse_decision(
-                args.tenant, args.decision, reason=args.reason, new_entity_id=args.entity
+                args.tenant,
+                args.decision,
+                reason=args.reason,
+                new_entity_id=args.entity,
+                fact_ids=facts or None,
+                dry_run=bool(getattr(args, "dry_run", False)),
             )
             _print(report, as_json, [
-                f"decision {args.decision} reversed; new decision: {report['new_decision_id']}",
+                ("would reverse" if report.get("dry_run") else "reversed")
+                + f" decision {args.decision}; new decision: {report['new_decision_id']}",
                 f"  mentions re-pointed: {len(report['mention_ids'])}",
                 f"  facts to rebuild:     {report['fact_ids']}",
                 f"  relations to rebuild: {report['relation_ids']}",
