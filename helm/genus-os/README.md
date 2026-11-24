@@ -303,7 +303,7 @@ renders it on the bridge, the root engine and every cell. A component's own
 
 | Value | Renders | Default |
 |-------|---------|---------|
-| `tenancy.switchMode` | `GENUS_TENANT_SWITCH_MODE`: `off`, `observe` or `enforce` | `""`, which renders nothing; the code's default is `off` |
+| `tenancy.switchMode` | `GENUS_TENANT_SWITCH_MODE` on the bridge, every engine and the orchestrator: `off`, `observe` or `enforce` | `""`, which renders nothing; the code's default is `off` |
 | `tenancy.allowInertRls` | `GENUS_TENANT_SWITCH_ALLOW_INERT_RLS` | unset, which renders nothing; the code's default is `false` |
 
 Both render nothing until set, so a release that sets neither renders exactly
