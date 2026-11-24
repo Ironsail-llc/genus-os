@@ -113,9 +113,11 @@ MEMORY_RECALL_INSTRUCTION = (
 # Env MEMORY_RERANK_MAX_CANDIDATES overrides; 0 disables the cap.
 RERANK_MAX_CANDIDATES = 16
 
-# Alternatives requested at the single generated position. "yes" and "no" are
-# the model's only trained answers, so in practice they are the top two.
-_TOP_LOGPROBS = 5
+# Alternatives requested at the single generated position: Ollama's maximum.
+# Case variants ("Yes", "YES") crowd the list, so on the local 0.6B model both
+# "yes" and "no" appear in only 20 of 40 pairs at 5 and 25 of 40 at 20; the
+# rest are bounded in _graded_score. Asking for 20 cost no measurable latency.
+_TOP_LOGPROBS = 20
 
 
 def _max_candidates() -> int:
@@ -195,14 +197,21 @@ def _graded_score(body: dict[str, Any]) -> float:
     positions = body.get("logprobs") or []
     if positions:
         best: dict[str, float] = {}
+        listed: list[float] = []
         for alt in positions[0].get("top_logprobs") or []:
+            lp = float(alt.get("logprob", float("-inf")))
+            listed.append(lp)
             token = str(alt.get("token", "")).strip().lower()
             if token in ("yes", "no"):
-                lp = float(alt.get("logprob", float("-inf")))
                 best[token] = max(lp, best.get(token, float("-inf")))
         if best:
-            p_yes = math.exp(best.get("yes", float("-inf")))
-            p_no = math.exp(best.get("no", float("-inf")))
+            # A confident answer often pushes the other token out of the top
+            # list (15 of 40 measured pairs, even at 20). Its logprob is then
+            # at most the lowest one listed: use that bound, which keeps the
+            # score graded instead of a flat 1.0 / 0.0.
+            floor = min(listed)
+            p_yes = math.exp(best.get("yes", floor))
+            p_no = math.exp(best.get("no", floor))
             if p_yes + p_no > 0:
                 return p_yes / (p_yes + p_no)
     text = str(body.get("response", "")).strip().lower()
