@@ -641,10 +641,19 @@ def _mention_inputs(cur: Any, fact: Mapping[str, Any], context: WriteContext) ->
     if context.conversation_ref:
         base["conversation_ref"] = context.conversation_ref
     names = [p[0] for p in pairs]
+    # An email address is a strong key, never a name to match against aliases.
     return [
-        MentionInput(s, t, context={**base, "co_mentions": [n for n in names if n != s]})
+        MentionInput(
+            s,
+            t,
+            strong_keys={"email": s.lower()} if _EMAIL.match(s) else {},
+            context={**base, "co_mentions": [n for n in names if n != s]},
+        )
         for s, t in pairs
     ]
+
+
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _write_graph(
