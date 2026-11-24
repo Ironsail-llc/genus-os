@@ -1289,14 +1289,16 @@ async def search_facts(
             facts through the fan-out). The insight, episode and chat-turn
             legs cannot filter by person, so a restricted scope leaves them
             out (the router's rule for unscopable stores) — see
-            robothor/identity/scope.py.
+            robothor/identity/scope.py. The segment leg can filter by person
+            and stays on; its reader is then the scope's person only.
         include_segments: Fuse a ``segment`` leg of raw conversation
             (``robothor.memory.segments.search_segments``). On by default;
             when on, the ``chat_turn`` leg is not run even if asked for — the
             segment leg covers the same conversation with a keyword leg too.
         reader_person_id: The reader's own person. Segments private to that
             person are returned with the shared ones; without it, shared
-            segments only. Applied whatever ``scope`` says.
+            segments only. Applied on every call; under a restricted
+            ``scope`` it is replaced by the scope's person.
         room_ids: Workspaces the reader can access; a workspace conversation's
             segments are returned only for these.
 
@@ -1346,6 +1348,10 @@ async def search_facts(
     # would read summaries built from other people's facts. As in the router,
     # a store that cannot express person scoping is left out, not unfiltered.
     unscopable_ok = scope_clause == ""
+    # Segments filter by reader themselves, so they stay on. Under a restricted
+    # scope the reader is the scope's person and nothing else, whatever the
+    # caller passed as reader_person_id.
+    segment_reader = scope.person_id if scope is not None and scope.restricted else reader_person_id
     legs.update(
         await _auxiliary_legs(
             query=query,
@@ -1357,7 +1363,7 @@ async def search_facts(
             include_chat_turns=include_chat_turns and unscopable_ok,
             include_segments=include_segments,
             limit=limit,
-            reader_person_id=reader_person_id,
+            reader_person_id=segment_reader,
             room_ids=room_ids,
         )
     )

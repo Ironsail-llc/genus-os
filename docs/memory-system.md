@@ -67,6 +67,8 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      `chat_turn` leg also does not run while the `segment` leg is on, even when
      asked for: both read the same conversation, and the segment leg adds a
      keyword leg and the reader rule. `search_chat_turns` itself is unchanged.
+     The `segment` leg can filter by person, so it stays on under a restricted
+     scope, and its reader is then the scope's person and nothing else.
 2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
    records its rank in every leg that found it (`leg_ranks`).
 3. **Reranker** (Qwen3-Reranker-0.6B, local) — on by default, off with
