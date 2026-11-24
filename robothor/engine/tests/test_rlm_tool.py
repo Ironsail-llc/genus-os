@@ -77,7 +77,7 @@ class TestLoadContextSource:
     def test_file_source(self, tmp_path):
         f = tmp_path / "test.txt"
         f.write_text("Hello from file")
-        result = _load_context_source({"type": "file", "path": str(f)}, "")
+        result = _load_context_source({"type": "file", "path": str(f)}, "", tenant_id="test-tenant")
         assert result is not None
         assert "Hello from file" in result
         assert "## File:" in result
@@ -85,16 +85,20 @@ class TestLoadContextSource:
     def test_file_source_relative(self, tmp_path):
         f = tmp_path / "data.txt"
         f.write_text("relative content")
-        result = _load_context_source({"type": "file", "path": "data.txt"}, str(tmp_path))
+        result = _load_context_source(
+            {"type": "file", "path": "data.txt"}, str(tmp_path), tenant_id="test-tenant"
+        )
         assert result is not None
         assert "relative content" in result
 
     def test_file_source_missing_path(self):
-        result = _load_context_source({"type": "file", "path": ""}, "")
+        result = _load_context_source({"type": "file", "path": ""}, "", tenant_id="test-tenant")
         assert result is None
 
     def test_file_source_nonexistent(self):
-        result = _load_context_source({"type": "file", "path": "/no/such/file.txt"}, "")
+        result = _load_context_source(
+            {"type": "file", "path": "/no/such/file.txt"}, "", tenant_id="test-tenant"
+        )
         assert result is None
 
     @patch("robothor.engine.rlm_tool.asyncio.run")
@@ -109,7 +113,9 @@ class TestLoadContextSource:
                 }
             ]
         )
-        result = _load_context_source({"type": "memory", "query": "coffee"}, "")
+        result = _load_context_source(
+            {"type": "memory", "query": "coffee"}, "", tenant_id="test-tenant"
+        )
         assert result is not None
         assert "Alice likes coffee" in result
         assert "## Memory search: coffee" in result
@@ -117,11 +123,13 @@ class TestLoadContextSource:
     @patch("robothor.engine.rlm_tool.asyncio.run")
     def test_memory_source_empty_results(self, mock_run):
         mock_run.side_effect = _closing_asyncio_run([])
-        result = _load_context_source({"type": "memory", "query": "nonexistent"}, "")
+        result = _load_context_source(
+            {"type": "memory", "query": "nonexistent"}, "", tenant_id="test-tenant"
+        )
         assert result is None
 
     def test_memory_source_missing_query(self):
-        result = _load_context_source({"type": "memory", "query": ""}, "")
+        result = _load_context_source({"type": "memory", "query": ""}, "", tenant_id="test-tenant")
         assert result is None
 
     @patch("robothor.memory.blocks.read_block")
@@ -131,7 +139,9 @@ class TestLoadContextSource:
             "content": "I am Robothor",
             "last_written_at": "2026-03-01T00:00:00",
         }
-        result = _load_context_source({"type": "block", "block_name": "persona"}, "")
+        result = _load_context_source(
+            {"type": "block", "block_name": "persona"}, "", tenant_id="test-tenant"
+        )
         assert result is not None
         assert "I am Robothor" in result
         assert "## Memory block: persona" in result
@@ -139,7 +149,9 @@ class TestLoadContextSource:
     @patch("robothor.memory.blocks.read_block")
     def test_block_source_error(self, mock_read):
         mock_read.return_value = {"error": "Block not found"}
-        result = _load_context_source({"type": "block", "block_name": "missing"}, "")
+        result = _load_context_source(
+            {"type": "block", "block_name": "missing"}, "", tenant_id="test-tenant"
+        )
         assert result is None
 
     @patch("robothor.engine.rlm_tool.asyncio.run")
@@ -151,7 +163,9 @@ class TestLoadContextSource:
                 "relations": [{"type": "owns", "target": "Robothor"}],
             }
         )
-        result = _load_context_source({"type": "entity", "name": "Alice"}, "")
+        result = _load_context_source(
+            {"type": "entity", "name": "Alice"}, "", tenant_id="test-tenant"
+        )
         assert result is not None
         assert "## Entity: Alice" in result
         assert "person" in result
@@ -159,11 +173,13 @@ class TestLoadContextSource:
     @patch("robothor.engine.rlm_tool.asyncio.run")
     def test_entity_source_not_found(self, mock_run):
         mock_run.side_effect = _closing_asyncio_run(None)
-        result = _load_context_source({"type": "entity", "name": "nobody"}, "")
+        result = _load_context_source(
+            {"type": "entity", "name": "nobody"}, "", tenant_id="test-tenant"
+        )
         assert result is None
 
     def test_unknown_source_type(self):
-        result = _load_context_source({"type": "banana"}, "")
+        result = _load_context_source({"type": "banana"}, "", tenant_id="test-tenant")
         assert result is None
 
 
@@ -183,7 +199,7 @@ class TestCustomToolWrappers:
                 }
             ]
         )
-        fn = _make_search_memory_fn()
+        fn = _make_search_memory_fn(tenant_id="test-tenant")
         result = fn("test query")
         parsed = json.loads(result)
         assert len(parsed) == 1
@@ -192,7 +208,7 @@ class TestCustomToolWrappers:
     @patch("robothor.engine.rlm_tool.asyncio.run")
     def test_get_entity_fn(self, mock_run):
         mock_run.side_effect = _closing_asyncio_run({"name": "Alice", "entity_type": "person"})
-        fn = _make_get_entity_fn()
+        fn = _make_get_entity_fn(tenant_id="test-tenant")
         result = fn("Alice")
         parsed = json.loads(result)
         assert parsed["name"] == "Alice"
@@ -200,7 +216,7 @@ class TestCustomToolWrappers:
     @patch("robothor.engine.rlm_tool.asyncio.run")
     def test_get_entity_fn_not_found(self, mock_run):
         mock_run.side_effect = _closing_asyncio_run(None)
-        fn = _make_get_entity_fn()
+        fn = _make_get_entity_fn(tenant_id="test-tenant")
         result = fn("nobody")
         parsed = json.loads(result)
         assert parsed["found"] is False
@@ -232,7 +248,7 @@ class TestCustomToolWrappers:
             "content": "block content",
             "last_written_at": None,
         }
-        fn = _make_memory_block_read_fn()
+        fn = _make_memory_block_read_fn(tenant_id="test-tenant")
         result = fn("test")
         parsed = json.loads(result)
         assert parsed["content"] == "block content"
@@ -292,7 +308,7 @@ class TestWebSearchFn:
 
 class TestBuildCustomTools:
     def test_returns_six_tools(self):
-        tools = _build_custom_tools("/workspace")
+        tools = _build_custom_tools("/workspace", tenant_id="test-tenant")
         assert "search_memory" in tools
         assert "get_entity" in tools
         assert "read_file" in tools
@@ -301,7 +317,7 @@ class TestBuildCustomTools:
         assert "exec_shell" in tools
 
     def test_each_tool_has_tool_and_description(self):
-        tools = _build_custom_tools("/workspace")
+        tools = _build_custom_tools("/workspace", tenant_id="test-tenant")
         for name, tool in tools.items():
             assert "tool" in tool, f"{name} missing tool"
             assert "description" in tool, f"{name} missing description"
@@ -353,7 +369,7 @@ class TestExecuteDeepReason:
             result = execute_deep_reason(
                 query="What is the meaning?",
                 context="Some background info",
-                config=DeepReasonConfig(log_dir="/tmp/rlm-test"),
+                config=DeepReasonConfig(tenant_id="test-tenant", log_dir="/tmp/rlm-test"),
             )
 
         assert "error" not in result
@@ -376,7 +392,7 @@ class TestExecuteDeepReason:
             with patch("builtins.__import__", side_effect=mock_import):
                 result = execute_deep_reason(
                     query="test",
-                    config=DeepReasonConfig(log_dir="/tmp/rlm-test"),
+                    config=DeepReasonConfig(tenant_id="test-tenant", log_dir="/tmp/rlm-test"),
                 )
 
         assert "error" in result
@@ -393,7 +409,7 @@ class TestExecuteDeepReason:
         with _mock_rlm_modules(mock_rlm_cls):
             result = execute_deep_reason(
                 query="expensive query",
-                config=DeepReasonConfig(log_dir="/tmp/rlm-test"),
+                config=DeepReasonConfig(tenant_id="test-tenant", log_dir="/tmp/rlm-test"),
             )
 
         assert "error" in result
@@ -409,7 +425,7 @@ class TestExecuteDeepReason:
         with _mock_rlm_modules(mock_rlm_cls):
             result = execute_deep_reason(
                 query="slow query",
-                config=DeepReasonConfig(log_dir="/tmp/rlm-test"),
+                config=DeepReasonConfig(tenant_id="test-tenant", log_dir="/tmp/rlm-test"),
             )
 
         assert "error" in result
@@ -428,7 +444,9 @@ class TestExecuteDeepReason:
             result = execute_deep_reason(
                 query="analyze notes",
                 context_sources=[{"type": "file", "path": str(f)}],
-                config=DeepReasonConfig(workspace=str(tmp_path), log_dir=str(tmp_path / "logs")),
+                config=DeepReasonConfig(
+                    tenant_id="test-tenant", workspace=str(tmp_path), log_dir=str(tmp_path / "logs")
+                ),
             )
 
         assert "error" not in result
@@ -445,7 +463,7 @@ class TestExecuteDeepReason:
         with _mock_rlm_modules(mock_rlm_cls):
             result = execute_deep_reason(
                 query="think about this",
-                config=DeepReasonConfig(log_dir="/tmp/rlm-test"),
+                config=DeepReasonConfig(tenant_id="test-tenant", log_dir="/tmp/rlm-test"),
             )
 
         assert "error" not in result
@@ -459,7 +477,7 @@ class TestExecuteDeepReason:
         with _mock_rlm_modules(mock_rlm_cls):
             result = execute_deep_reason(
                 query="broken",
-                config=DeepReasonConfig(log_dir="/tmp/rlm-test"),
+                config=DeepReasonConfig(tenant_id="test-tenant", log_dir="/tmp/rlm-test"),
             )
 
         assert "error" in result
