@@ -18,6 +18,7 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 | `agent_memory_blocks` | Named text blocks (persona, user_profile, preferences, self_model, …) |
 | `agent_breadcrumbs` | 7-day cross-run scratchpad per agent (added 2026-04) |
 | `chat_messages` | Verbatim conversation turns with embeddings + 90-day TTL (added 2026-04) |
+| `memory_segments` | Raw conversation split into topical segments, vector + keyword indexed, same 90-day TTL (added 2026-11) |
 | `fact_access_log` | Per-run retrieval audit for outcome attribution (added 2026-04) |
 | `ingested_items` | Dedup tracking (content hash per source+item+tenant) |
 | `ingestion_watermarks` | Per-source progress and error tracking |
@@ -63,6 +64,74 @@ Results from each store are fused with the shared `rrf_fuse` (k=60, in
 `robothor/memory/fusion.py`) and budget-capped. `search_facts()` keeps its
 signature for back-compat; only the tool path changes.
 
+## Conversation segments
+
+A fact is what the extractor chose to keep, and extraction loses detail: the
+code someone read out, the exact wording of a decision. `memory_segments`
+(migration 177, `robothor/memory/segments.py`) keeps the conversation itself as
+a recall unit. Each chat session is split into contiguous segments, one subject
+each, and every segment is embedded and keyword indexed.
+
+**Splitting** (`segment_turns`) is deterministic and makes no LLM call. Only
+user and assistant turns with text count. A new segment starts:
+
+| Rule | Constant | Starting value |
+|------|----------|----------------|
+| Silence between two turns | `SEGMENT_GAP_SECONDS` | 30 minutes |
+| Change of subject at a user turn: cosine between the mean vectors of the turns before and after it | `SEGMENT_SIMILARITY_BREAK`, `SEGMENT_WINDOW_TURNS` | below 0.5, 2 turns each side |
+| Size budget, so a hit fits a reranker and a context budget | `SEGMENT_MAX_CHARS`, `SEGMENT_MAX_TURNS` | 4,000 characters, 24 turns |
+
+A subject break needs the open segment to hold `SEGMENT_MIN_TURNS` (2) turns
+first. A fragment of fewer than 2 turns and under `SEGMENT_MIN_CHARS` (200)
+characters, such as a lone "thanks", joins its neighbour; a conversation that
+is only a fragment is not indexed yet. A single turn over the size budget is
+clipped. The values are starting points, to be tuned by the memory eval.
+
+**Text** is the turns verbatim, one per line, `User: …` / `Assistant: …`,
+redacted with the same `redact()` chat_store applies before embedding — also
+for rows written before the store redacted at the door. `topic` is the opening
+of the segment's first user turn. Each row names its source: `source_kind`
+(`conversation`; `document` and `email` are reserved), `source_ref` (the
+session key), `start_ref` and `end_ref` (the first and last `chat_messages.id`
+it covers) and `started_at` / `ended_at` (event time). `person_id` is the
+session's person.
+
+**Indexing** (`index_conversation(session_key, tenant_id=…)`) runs in the
+background after every saved exchange: `chat_store.save_exchange_async`
+spawns it once the turn is committed, beside the turn embedding, for every
+channel that saves through it. It re-segments from the start of the session's
+last segment, so an open segment grows as the conversation continues, and
+upserts on `(tenant_id, source_kind, source_ref, start_ref)`: running it twice
+writes nothing the second time. Database work runs in a worker thread. A
+failure (embedder down, database error) is logged and never reaches the turn;
+the next exchange retries the same turns.
+
+**Searching** (`search_segments(query, tenant_id=…, limit=…)`) fuses a dense
+leg (HNSW cosine) and a keyword leg (`ts_rank_cd` over the generated
+`tsvector`) with `rrf_fuse` (k=60). The keyword leg ORs the query's terms, so a
+long natural question still matches on the words that matter. The tenant is a
+required argument with no default. The dense leg always asks pgvector for an
+iterative scan (on top of `apply_hnsw_session`), so a small tenant beside a
+large one still gets `limit` rows. Optional filters: `person_scope` (a
+restricted `DataScope` sees its own and shared segments), `since` / `until`
+(event time), and `room_ids` — a workspace conversation is searched only for
+the workspaces passed, as `search_chat_turns` does. When the embedder is down
+the keyword leg answers alone. Each hit carries `id`, `kind: "segment"`,
+`text`, `topic`, `source_kind`, `source_ref`, `start_ref`, `end_ref`,
+`started_at`, `ended_at`, `similarity` (or `None`), `keyword_rank` (or `None`)
+and `rrf_score`.
+
+**Retention.** A segment never outlives the chat it copies. It references its
+`chat_sessions` row with `ON DELETE CASCADE`, so clearing a session or the
+stale-session sweep removes its segments with its messages. Lifecycle step 10
+deletes segments that started more than `SEGMENT_RETENTION_DAYS` (90, no more
+than `CHAT_TURN_TTL_DAYS`) ago, tenant by tenant, and turns older than that are
+never indexed. Segments move with their session in `genus tenant
+move-workload`.
+
+Segments are not yet a leg of `search_facts` or the `search_memory` tool; that
+wiring follows the ranking rework.
+
 ## Symbolic short-term memory (RIP 13)
 
 Long tool-heavy runs blow the context budget. Beyond the existing offload
@@ -96,7 +165,7 @@ Nightly in `robothor/memory/lifecycle.py::run_lifecycle_maintenance`:
 7. Cross-entity relationship inference
 8. **Episode building** — cluster recent facts by time + entity overlap, LLM-title+summarize, embed
 9. **Preference tracking** — extract from high-importance facts, detect drift (stale flag)
-10. **Chat TTL** — delete 90d+ un-pinned, un-referenced verbatim turns
+10. **Chat TTL** — delete 90d+ un-pinned, un-referenced verbatim turns, and conversation segments that started 90d+ ago
 11. **Breadcrumb pruning + promotion** — hot breadcrumbs promoted to `memory_facts`
 12. **Access log GC** — trim attribution history past 30d
 
