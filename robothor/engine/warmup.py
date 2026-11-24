@@ -1356,7 +1356,11 @@ def _graph_entity_lines(
     (``_candidate_phrases``). A message with no such phrase, no e-mail or
     handle and no known sender cannot seed a walk, and costs nothing: no
     thread hand-off, no connection. Otherwise the walk runs on one read-only
-    connection (no BEGIN or COMMIT); at the budget its query is cancelled.
+    connection (no BEGIN or COMMIT) under a server-side ``statement_timeout``
+    set to the time left of the budget (``activation.recall_for_message``), so
+    Postgres stops it at the budget. Nothing is cancelled from this side: a
+    cancel can reach a connection that is already back in the pool and serving
+    another request.
 
     Returns the facts' payloads, best first, or ``[]`` on a timeout, an error
     or no result.
@@ -1371,12 +1375,11 @@ def _graph_entity_lines(
     restricted = scope is not None and scope.restricted
     person_id = scope.person_id if restricted and scope is not None else None
     budget = GRAPH_WARMUP_BUDGET_SECONDS
-    held: list[Any] = []
+    deadline = time.monotonic() + budget
 
     @contextmanager
     def _read_only_connection() -> Iterator[Any]:
         with robothor.db.get_connection(read_only=True) as conn:
-            held.append(conn)
             yield conn
 
     future = _get_graph_pool().submit(
@@ -1391,18 +1394,16 @@ def _graph_entity_lines(
             person_id=person_id,
             trusted_only=True,
             phrases=phrases,
+            deadline=deadline,
             connect=_read_only_connection,
         ),
     )
     try:
         candidates = future.result(timeout=budget)
     except TimeoutError:
+        # The worker finishes on its own: the server stops its walk at the
+        # deadline and it resets the limit before returning the connection.
         future.cancel()
-        for conn in held:
-            try:
-                conn.cancel()  # the hard bound on the database side
-            except Exception as e:  # noqa: BLE001 - best effort; the turn goes on
-                logger.debug("Warmup graph cancel failed: %s", e)
         logger.info("Warmup graph activation exceeded %d ms; using name matching", budget * 1000)
         return []
     except Exception as e:

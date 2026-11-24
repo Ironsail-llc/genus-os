@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -556,6 +557,7 @@ def recall_for_message(
     trusted_only: bool = True,
     limit: int = LIMIT,
     phrases: Sequence[str] | None = None,
+    deadline: float | None = None,
     connect: Callable[..., Any] | None = None,
 ) -> list[Candidate]:
     """Automatic recall for one inbound message (warm-up). No model call.
@@ -563,12 +565,20 @@ def recall_for_message(
     Seeds: entities the message names (``phrases``, by default
     :func:`candidate_phrases` of it; never one of ``exclude_names``), e-mail
     addresses and @handles in it, and the sender's own entity, linked by its
-    CRM person. With none of those nothing is opened. Otherwise one connection
-    and at most three statements: the seed lookup, the operator lookup (the
+    CRM person. With none of those nothing is opened. Otherwise one connection:
+    the seed lookup, and when it finds a seed the operator lookup (the
     operator is excluded as seed and transit; a failed lookup raises
     :class:`OperatorUnknownError` and nothing is walked) and the walk.
     ``trusted_only`` by default: only operator-confirmed, user-stated and CRM
     evidence.
+
+    ``deadline`` (a ``time.monotonic()`` instant) bounds the work on the
+    server: once a seed is found, ``statement_timeout`` is set on this
+    connection to the time left, so Postgres itself stops the operator lookup
+    and the walk at the deadline, and it is reset before the connection goes
+    back. A deadline already past skips the walk. Nothing is ever cancelled
+    from outside, so no other request's query can be. Costs two statements
+    (arm and reset) on a turn that found a seed.
     """
     if not has_anything_to_link(message, phrases, sender_person_id):
         return []
@@ -582,20 +592,64 @@ def recall_for_message(
         ]
         if not seeds:
             return []
-        owner = operator_person_id(cur, tenant_id)
-        return _activate_on(
-            cur,
-            tenant_id,
-            seeds,
-            reader_scope_id=reader_scope_id,
-            trusted_only=trusted_only,
-            max_hops=MAX_HOPS,
-            fanout=FANOUT,
-            damping=DAMPING,
-            limit=limit,
-            facts_per_entity=FACTS_PER_ENTITY,
-            exclude_entity_ids=(),
-            person_restricted=person_restricted,
-            person_id=person_id,
-            exclude_crm_person_id=owner,
-        )
+        if deadline is None:
+            return _walk_from(cur, tenant_id, seeds, reader_scope_id, trusted_only, limit,
+                              person_restricted, person_id)  # fmt: skip
+        left_ms = int((deadline - time.monotonic()) * 1000)
+        if left_ms <= 0:
+            return []
+        cur.execute("SELECT set_config('statement_timeout', %s, false)", (f"{left_ms}ms",))
+        try:
+            return _walk_from(cur, tenant_id, seeds, reader_scope_id, trusted_only, limit,
+                              person_restricted, person_id, deadline=deadline)  # fmt: skip
+        finally:
+            _reset_statement_timeout(cur)
+
+
+def _walk_from(
+    cur: Any,
+    tenant_id: str,
+    seeds: Sequence[Seed],
+    reader_scope_id: str | None,
+    trusted_only: bool,
+    limit: int,
+    person_restricted: bool,
+    person_id: str | None,
+    *,
+    deadline: float | None = None,
+) -> list[Candidate]:
+    owner = operator_person_id(cur, tenant_id)
+    if deadline is not None and time.monotonic() >= deadline:
+        return []
+    return _activate_on(
+        cur,
+        tenant_id,
+        seeds,
+        reader_scope_id=reader_scope_id,
+        trusted_only=trusted_only,
+        max_hops=MAX_HOPS,
+        fanout=FANOUT,
+        damping=DAMPING,
+        limit=limit,
+        facts_per_entity=FACTS_PER_ENTITY,
+        exclude_entity_ids=(),
+        person_restricted=person_restricted,
+        person_id=person_id,
+        exclude_crm_person_id=owner,
+    )
+
+
+def _reset_statement_timeout(cur: Any) -> None:
+    """Put the connection's ``statement_timeout`` back before it is returned.
+
+    If that fails the connection is closed instead, so the pool discards it:
+    a connection carrying the walk's time limit must never serve another
+    request.
+    """
+    try:
+        cur.execute("RESET statement_timeout")
+    except Exception as e:
+        logger.warning("activation: could not reset statement_timeout, closing: %s", e)
+        conn = getattr(cur, "connection", None)
+        if conn is not None:
+            conn.close()
