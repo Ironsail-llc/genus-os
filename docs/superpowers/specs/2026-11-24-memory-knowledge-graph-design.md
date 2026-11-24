@@ -122,6 +122,7 @@ Identity is the part that caps quality, and a wrong merge is a privacy failure, 
 ### Graph activation
 
 - Bounded Personalized PageRank from the entities in the current context, computed in a database function that enforces tenant and scope itself. There is no per-process cache to invalidate.
+- The walk itself is restricted to what the reader can see, not only its results: it crosses only edges with at least one supporting fact visible to the reader, and degree weights count only those edges. A candidate's score never depends on a path through evidence the reader cannot see.
 - Hub control: the operator's own node is excluded as a seed and as a transit node, seeds are weighted by inverse degree, and fan-out is capped.
 - Automatic recall fires once per inbound message or scheduled run, in warm-up. Seeds are entities matched in the message by strong key or exact full name, and the entities the run is about (the sender's contact, the task's subject).
 - Automatic recall uses only evidence that is operator-confirmed, user-stated or from the CRM. Tool output, agent-generated and external content are reachable by a deliberate tool call, and are labelled.
@@ -134,6 +135,8 @@ Identity is the part that caps quality, and a wrong merge is a privacy failure, 
 - Extraction is per role and per source. A derived row takes the authority of its least-trusted contributor, so paraphrasing untrusted content does not launder it.
 - Lower authority cannot supersede higher, cannot seed activation, and earns no reinforcement.
 - Scope is carried on facts, entities, edges and mentions from the start: shared within the tenant, private to one person (today's person scope), or private to one agent (new). An edge is visible to a reader who can see at least one of its supporting facts.
+- A derived row takes the narrowest scope among its inputs, as it takes the lowest authority. A consolidated fact, an entity observation or an insight built from any private fact is private to the same reader; where both shared and private evidence exist, the row is derived separately for each scope.
+- The state of an edge is likewise per reader. Its time bounds and retirement are computed from the supporting and contradicting facts that reader can see, so a private fact that ends or refutes a relation changes nothing for a reader who cannot see that fact.
 
 ### Learning
 
@@ -141,11 +144,11 @@ Identity is the part that caps quality, and a wrong merge is a privacy failure, 
 - Utility rises and falls with outcomes and feeds ranking and decay. Repetition alone cannot raise a memory.
 - Procedures are learned from successful and failed runs, linked into the graph, and recalled for similar work.
 - What a run retained during compaction is written at run end as provenance-tagged candidates. It never overwrites.
-- Every write decision is logged with its downstream outcome, so a learned memory policy can be trained later.
+- Every write decision is logged with its downstream outcome, so a learned memory policy can be trained later. The log is tenant data: it is tenant-scoped, covered by erasure, and never pooled across tenants.
 
 ### Forgetting
 
-"Never lost" describes the system's own processing: consolidation, decay and supersession retire derived rows and never destroy a source. An explicit request to forget is different. It deletes the source and follows its lineage: facts, edges, summaries, insights and preferences derived from it are removed or rebuilt.
+"Never lost" describes the system's own processing: consolidation, decay and supersession retire derived rows and never destroy a source. An explicit request to forget is different. It deletes the source and follows its lineage. Removed or rebuilt: facts; mentions and the resolution decisions that record their surface form; merges whose supporting context came from the erased source, which are re-resolved; edges and their evidence; segments; summaries, entity observations, insights and preferences; the write-decision log; and the existing conflict-decision audit rows in `memory_conflict_decisions`, which hold the text of the facts they compare.
 
 ## Approaches considered
 
@@ -169,7 +172,7 @@ The evaluation decides what becomes the live path.
 
 The work is built in passes. Each pass leaves the whole system working end to end.
 
-- **Pass 1, thin and whole.** The safety fixes in full, and the thinnest working version of every layer: the evaluation world and answer-and-judge arm, the raw-segment leg, the graph schema with CRM-seeded identity, a first graph activation, and outcome-based strengthening.
+- **Pass 1, thin and whole.** The safety fixes in full (listed under Gates), and the thinnest working version of every layer: the evaluation world and answer-and-judge arm, the raw-segment leg, the graph schema with CRM-seeded identity, a first graph activation, outcome-based strengthening, and the replay dry run.
 - **Pass 2, make it right.** Ranking, resolution quality, edge lifecycle, trust rules, abstention, agent-driven recall, and documents folded into the one recall.
 - **Pass 3, get ahead.** Procedural learning, entity observations, public benchmarks and competitor systems in our harness.
 
@@ -192,15 +195,40 @@ There is no switch in the request path. Dry runs are commands:
 
 ### Gates
 
-"Significant" means a paired test at p < 0.05 on the held-out split, using `robothor/memory/eval_stats.py`, with an effect larger than the measured run-to-run spread. The Measure workstream records the baselines and fixes the numeric targets for each later gate before that workstream's readers are merged. "Equal context size" means the same token budget handed to the answering model.
+Terms used in the table:
+
+- **Significant gain.** A paired McNemar test at p < 0.05 on the held-out split, using `robothor/memory/eval_stats.py`, with an effect larger than the measured run-to-run spread.
+- **One deciding comparison per gate.** Each gate names a single primary comparison: our system against the previous live path, on the pooled cases of the strata the gate lists. Per-stratum and per-baseline results are reported but are not each tested at p < 0.05, so no correction for multiple comparisons is needed.
+- **Hard strata.** Multi-step, entity confusion, point-in-time, knowledge update, abstention and raw detail.
+- **No regression.** The existing promotion rule in `eval_stats.promotion_verdict` applies unchanged: any single stratum that regresses at p < 0.20 blocks the gate.
+- **At least level with a baseline.** Non-inferiority with a margin of five percentage points of answer accuracy: the lower bound of the 95% interval on our accuracy minus the baseline's is above minus five points.
+- **Lower latency.** p95 of end-to-end recall at or below the recorded p95 of the path being replaced, measured in the same run on the same hardware.
+- **Equal context size.** The same token budget handed to the answering model.
+
+The Measure workstream records the baselines and fixes the remaining numeric targets (resolution precision and recall, the warm-up budget) before the readers they govern are merged.
+
+### Unsafe paths closed by the Safety workstream
+
+The Safety gate is met when each of these has a test that fails before its fix and passes after:
+
+- Nightly maintenance (importance scoring, decay, pruning, consolidation, insight discovery and deduplication, relation inference) reading across tenants and writing derived rows to a default tenant.
+- Gap analysis and the density metrics reading across tenants.
+- Memory entry points that drop the acting tenant and fall back to the default: the deep-reasoning helpers, the MCP memory tools, and the orchestrator's ingest, stats and query endpoints.
+- Maintenance skipping child tenants when row-level security is on.
+- Facts in use being pruned because access was never recorded.
+- New facts carrying no person scope, because nothing writes it.
+- Auxiliary recall stores (insights, episodes, chat turns) that are not filtered by person scope.
+- Instance data in tracked files.
+
+Poisoning and cross-scope leaks through the new graph are closed by construction in the Identity and graph and Associative recall workstreams, and are tested there.
 
 | Workstream | Gate |
 |---|---|
 | Safety | An isolation test per unsafe path that fails before the fix and passes after |
 | Measure | A recorded baseline on every stratum, for our system and for every baseline |
 | Recall core | A significant gain on the hard strata, no regression, lower latency, and at least level with every simple baseline |
-| Identity and graph | Numeric precision and recall targets for resolution; no cross-person exposure in the scope tests |
-| Associative recall | A significant gain on multi-step and long-tenure strata over the recall core and over the observation-log and agent-search baselines at equal context; planted untrusted content never reaches warm-up. If this gate fails, the graph serves identity and current state only |
+| Identity and graph | Numeric precision and recall targets for resolution; no cross-person exposure in the scope tests, including a private fact that closes or changes a shared edge, and a derived row built from private evidence |
+| Associative recall | A significant gain on multi-step and long-tenure strata over the recall core and over the observation-log and agent-search baselines at equal context; planted untrusted content never reaches warm-up; a candidate reachable only through a private edge is not recalled for a reader who cannot see that edge. If this gate fails, the graph serves identity and current state only |
 | Learning | Task-success and update strata improve; reinforcement cannot lift an irrelevant memory; erasure leaves no derived trace |
 
 ## Constraints
