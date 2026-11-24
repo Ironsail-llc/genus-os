@@ -147,7 +147,7 @@ def _retire_remote_key(key: str, *, status: int | None = None, detail: str = "")
 PROVIDER_ENV = "ROBOTHOR_MEMORY_GENERATION_PROVIDER"
 REMOTE_MODEL_ENV = "ROBOTHOR_MEMORY_GENERATION_REMOTE_MODEL"
 MIN_INTERVAL_ENV = "ROBOTHOR_MEMORY_GENERATION_MIN_INTERVAL_S"
-DEFAULT_REMOTE_MODEL = "openrouter/xiaomi/mimo-v2.5"
+DEFAULT_REMOTE_MODEL = "openrouter/xiaomi/mimo-v2.6-flash"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 REMOTE_TIMEOUT_S = 60.0
 
@@ -277,10 +277,23 @@ def _provider() -> str:
     return os.environ.get(PROVIDER_ENV, "ollama").strip().lower()
 
 
+# Slugs OpenRouter has retired from its catalog. A removed slug answers 404,
+# which this module classifies as a deterministic 4xx and fails fast, so every
+# memory generation silently lands on local Ollama. The production override
+# (ROBOTHOR_MEMORY_GENERATION_REMOTE_MODEL, set in the instance env file) sits
+# on an immutable root mount and cannot be edited from the running host, so the
+# substitution belongs here where it ships with the code. Only a slug that is
+# confirmed gone appears below; a live slug is never rewritten.
+RETIRED_MODEL_SUCCESSORS = {
+    "xiaomi/mimo-v2.5": "xiaomi/mimo-v2.6-flash",  # retired 2026-11 (404 "model not found")
+}
+
+
 def _remote_model() -> str:
     """Remote model id for the raw OpenRouter API (litellm prefix stripped)."""
     model = os.environ.get(REMOTE_MODEL_ENV, DEFAULT_REMOTE_MODEL).strip()
-    return model.removeprefix("openrouter/")
+    model = model.removeprefix("openrouter/")
+    return RETIRED_MODEL_SUCCESSORS.get(model, model)
 
 
 def _remote_enabled() -> bool:
