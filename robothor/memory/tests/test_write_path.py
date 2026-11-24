@@ -669,3 +669,25 @@ async def test_store_memory_does_its_database_work_off_the_event_loop(monkeypatc
     assert out["facts_stored"] == 1
     assert len(lags) >= 3, lags  # search, insert, graph
     assert max(lags) <= 0.02, f"a loop callback waited {max(lags) * 1000:.0f} ms"
+
+
+def test_an_email_mention_reaches_identity_as_a_strong_key() -> None:
+    """Identity no longer answers an email by alias lookup; the write side must
+    hand it over as a strong key."""
+    from robothor.memory.write_path import WriteContext, _mention_inputs
+
+    ctx = WriteContext(
+        tenant_id="test-tenant", source_channel="email", content_type="email",
+        origin=Origin.EXTERNAL,
+    )  # fmt: skip
+    fact = {
+        "fact_text": "Alice.Moreno@Example.com confirmed the Helios kickoff.",
+        "mentions": [
+            {"surface_form": "Alice.Moreno@Example.com", "entity_type": "person"},
+            {"surface_form": "Helios", "entity_type": "project"},
+        ],
+        "relations": [],
+    }
+    email, project = _mention_inputs(None, fact, ctx)
+    assert dict(email.strong_keys) == {"email": "alice.moreno@example.com"}
+    assert dict(project.strong_keys) == {}
