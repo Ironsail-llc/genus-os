@@ -85,6 +85,36 @@ async def test_an_unbound_process_sends_no_token(service, monkeypatch):
     assert "X-Tenant-Id" not in _sent_headers(client)
 
 
+async def test_vision_never_generates_a_signing_key_to_mint_with(service, monkeypatch):
+    """No key provisioned anywhere: post tokenless, and do not create one.
+
+    ``signing_key()`` generates and stores a key on first boot. Done from the
+    vision process -- whose unit loads no secrets file -- that would store a key
+    the bridge and orchestrator (reading theirs from the environment) do not
+    use, and every event would then carry a token they reject.
+    """
+    from types import SimpleNamespace
+
+    from robothor.auth import tokens
+
+    monkeypatch.setenv("ROBOTHOR_TENANT_ID", "tenant-a")
+    monkeypatch.delenv("GENUS_AUTH_SIGNING_KEY", raising=False)
+    tokens.reset_signing_key_cache()
+    client = _capture_post()
+    with (
+        patch(
+            "robothor.secrets.resolve_secret",
+            return_value=SimpleNamespace(value=None, source="missing"),
+        ),
+        patch("robothor.vault.set") as vault_set,
+        patch("httpx.AsyncClient", return_value=client),
+    ):
+        await service.ingest_event("Alice arrived", {"camera": "front"})
+    vault_set.assert_not_called()
+    client.post.assert_awaited_once()
+    assert "Authorization" not in _sent_headers(client)
+
+
 async def test_a_process_that_cannot_mint_still_posts_tokenless(service, monkeypatch):
     from robothor.auth.tokens import TokenError
 
