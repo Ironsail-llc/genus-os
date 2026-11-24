@@ -848,6 +848,7 @@ def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any
         "people": dict(blank),
         "companies": dict(blank),
         "actions": [],
+        "merges_recorded": 0,
     }
     with _cursor(tenant_id, read_only=dry_run) as cur:
         cur.execute(_PEOPLE_SQL + " ORDER BY created_at, id", (tenant_id,))
@@ -868,7 +869,43 @@ def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any
                 report[bucket][act["action"]] += 1
                 if act["action"] != "unchanged":
                     report["actions"].append(act)
+        for keeper, loser in _unrecorded_merges(cur, tenant_id):
+            if not dry_run:
+                record_crm_merge(tenant_id, PERSON, keeper, loser, cur=cur)
+            report["merges_recorded"] += 1
     return report
+
+
+def _unrecorded_merges(cur: Any, tenant_id: str) -> list[tuple[str, str]]:
+    """CRM people merges the DAL hook failed to record, read from the merge note.
+
+    ``merge_people`` writes a "Duplicate Merged" note on the keeper in the same
+    transaction as the merge, naming the loser's id. A loser with a node, no
+    merge decision ever recorded (live or reversed — an operator's reversal is
+    not undone), and exactly one live keeper is repaired. Company merges leave no
+    such note and are not repaired here.
+    """
+    cur.execute(
+        """
+        SELECT n.person_id::text AS keeper, p.id::text AS loser
+          FROM crm_people p
+          JOIN memory_entities e ON e.tenant_id = p.tenant_id AND e.crm_person_id = p.id
+          JOIN crm_notes n ON n.tenant_id = p.tenant_id AND n.deleted_at IS NULL
+                          AND n.title = 'Duplicate Merged'
+                          AND n.body LIKE '%%(id: ' || p.id::text || ')%%'
+          JOIN crm_people k ON k.id = n.person_id AND k.tenant_id = p.tenant_id
+                           AND k.deleted_at IS NULL
+         WHERE p.tenant_id = %s AND p.deleted_at IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM memory_resolution_decisions d
+                            WHERE d.tenant_id = p.tenant_id
+                              AND d.evidence->>'basis' = 'crm_merge:person:' || p.id::text)
+        """,
+        (tenant_id,),
+    )
+    pairs: dict[str, set[str]] = {}
+    for r in cur.fetchall():
+        pairs.setdefault(r["loser"], set()).add(r["keeper"])
+    return [(next(iter(k)), loser) for loser, k in sorted(pairs.items()) if len(k) == 1]
 
 
 def _sync_record(
