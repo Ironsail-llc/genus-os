@@ -19,6 +19,7 @@ from robothor.memory.eval import (
     preflight,
     record_benchmark_row,
     report_to_benchmark_row,
+    require_eval_tenant,
     run_suite,
 )
 from robothor.memory.eval_world_seed import WORLD_TENANT, format_world_report, run_world
@@ -46,6 +47,13 @@ def cmd_memory_eval(args: argparse.Namespace) -> int:
         return 3
 
     tenant = args.tenant or EVAL_TENANT
+    # Before preflight, which already opens a connection: the suite deletes
+    # every fact in its tenant, so a real tenant must never get that far.
+    try:
+        require_eval_tenant(tenant)
+    except EvalPreconditionError as e:
+        print(f"memory-eval cannot run: {e}")
+        return 3
 
     # NB: robothor.cli's main() already calls load_instance_env(), which reads
     # /etc/robothor/robothor.env AND the engine's systemd drop-in and fills in

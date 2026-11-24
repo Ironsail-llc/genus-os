@@ -48,6 +48,13 @@ database call when a tenant is `memory-eval` itself or is not
 a second safeguard, the suite's cleanup now deletes the tenant's
 `memory_relations` rows before its `memory_facts` rows.
 
+The classic suite has the same guard. `run_suite`, `_cleanup_tenant` and the
+CLI all call `robothor.memory.eval.require_eval_tenant`, which uses the one
+predicate both modes share (`is_eval_tenant`: `memory-eval` or
+`memory-eval-<suffix>`). They refuse any other tenant before the first
+database call. `memory-eval --tenant <a real tenant>` exits 3 and leaves every
+row in that tenant in place. The nightly unit's `memory-eval` is unaffected.
+
 Rows left by `--keep` or by a killed run stay in the world tenants until the
 next world run, which cleans up before it seeds. To remove them by hand:
 

@@ -39,6 +39,7 @@ from robothor.memory.eval import (
     EVAL_TENANT,
     CaseResult,
     EvalPreconditionError,
+    is_eval_tenant,
     score_recall,
     score_temporal,
 )
@@ -83,15 +84,6 @@ _UNSCORED = frozenset({"abstention"})
 # --------------------------------------------------------------------------- #
 # Tenant guard
 # --------------------------------------------------------------------------- #
-
-
-def is_eval_tenant(tenant_id: object) -> bool:
-    """``memory-eval`` or ``memory-eval-<suffix>``; nothing else."""
-    if not isinstance(tenant_id, str) or not tenant_id:
-        return False
-    return tenant_id == EVAL_TENANT or (
-        tenant_id.startswith(EVAL_TENANT + "-") and len(tenant_id) > len(EVAL_TENANT) + 1
-    )
 
 
 def shadow_tenant_for(tenant_id: str) -> str:
