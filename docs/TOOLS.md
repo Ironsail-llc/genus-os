@@ -2065,6 +2065,24 @@ agent's own allow-set is the authoritative answer. The families:
 | Desktop | `desktop_*` (a real screen) |
 | n8n automations | `n8n_list_workflows`, `n8n_recent_failures` (the n8n monitor's snapshot — see above) |
 
+### Whose memory: every entry point acts as the caller's tenant
+
+Memory is read and written as the tenant of whoever is asking, on every way in:
+
+| Entry point | Where the tenant comes from |
+|---|---|
+| Engine memory tools | The run's tenant |
+| `deep_reason` (its `search_memory`, `get_entity` and `memory_block_read`, and memory, block and entity `context_sources`) | The run's tenant |
+| The `robothor-memory` MCP server (`genus mcp`) | The tenant the server process runs as: `ROBOTHOR_TENANT_ID`, then `ROBOTHOR_DEFAULT_TENANT`. A `tenant_id` argument can repeat that tenant but not change it |
+| The orchestrator's `/ingest`, `/stats`, `/query` and `/v1/chat/completions` | A verified bearer token's tenant (the dashboard forwards its session token). Without a token, the `X-Tenant-Id` header. A header that disagrees with the token gets a 403, and an invalid token gets a 401 |
+| The vision service's camera events | Sent to `/ingest` with `X-Tenant-Id` set to the tenant its process runs as |
+
+A call that names no tenant gets the default tenant only on a deployment with
+at most one active tenant, so a single-tenant install behaves exactly as it did
+before. On a deployment with more than one, the call is refused and nothing is
+read or written: `deep_reason` and the MCP tools return an `error` that names the
+entry point, and the orchestrator answers 400.
+
 ### Workspace periods: `room_request_period`
 
 `room_request_period(room_id, grain, anchor)` gets a report workspace's edition for
