@@ -296,3 +296,45 @@ async def test_a_reserved_pick_never_brings_back_a_duplicate(env: pytest.MonkeyP
     assert results[0]["id"] == dense[0]["id"]
     texts = [r["fact_text"] for r in results]
     assert len(texts) == len(set(texts)), f"duplicate text in results: {texts}"
+
+
+@pytest.mark.asyncio
+async def test_vector_leg_ranks_follow_similarity_under_relaxed_order(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Pooled connections scan with hnsw.iterative_scan = relaxed_order, which
+    may return rows slightly out of distance order. The leg's RRF rank must be
+    its similarity order, so the leg re-sorts what the index returns."""
+    env.setenv("MEMORY_RANK_BLEND", "0")
+    rows = [
+        _row(1, "first fact about apples", similarity=0.70),
+        _row(2, "second fact about pears", similarity=0.90),
+        _row(3, "third fact about plums", similarity=0.80),
+    ]
+    results = await _search(_Cursor(vector=rows, keyword=[]), use_reranker=False)
+    ranks = {r["id"]: r["leg_ranks"]["vector"] for r in results}
+    assert ranks == {2: 0, 3: 1, 1: 2}
+
+
+@pytest.mark.asyncio
+async def test_reserved_dedupe_holds_when_the_head_has_its_own_duplicate(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """With MEMORY_RANK_BLEND=0 the head is never deduped, so it can carry a
+    near-duplicate pair. The exclusion must compare against the deduped head:
+    a unique reserved pick is let in, a duplicate one is kept out."""
+    env.setenv("MEMORY_RANK_BLEND", "0")
+    dense = _dense(20)
+    dense[1]["fact_text"] = dense[0]["fact_text"]  # an internal duplicate pair at the head
+    unique = _row(702, "Bob runs the shipping team", entities=["Bob"], importance_score=0.9)
+    copy = _row(703, dense[2]["fact_text"], entities=["Bob"], importance_score=0.95)
+    cur = _Cursor(vector=dense, keyword=[], expansion=[copy, unique])
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+    get_entity = AsyncMock(return_value={"relations": [{"target_name": "Bob"}]})
+
+    with patch("robothor.memory.entities.get_entity", get_entity):
+        results = await _search(cur, expand_entities=True)
+
+    ids = [r["id"] for r in results]
+    assert 703 not in ids, "a pick duplicating a head row must stay out"
+    assert 702 in ids, "a unique pick must not be mistaken for a duplicate"

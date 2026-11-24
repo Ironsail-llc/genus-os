@@ -162,6 +162,25 @@ class TestReservedPlacesNeverTakeTheHead:
         out = apply_reserved(ranked, pool, limit=2, reserved={"graph": 2})
         assert [r["id"] for r in out] == [r["id"] for r in ranked[:2]]
 
+    def test_two_reserved_legs_never_evict_rank_zero(self) -> None:
+        """With graph rows protected by their own quota, the next leg's pick
+        found rank 0 as the only unprotected row. The victim search now never
+        reaches index 0."""
+        legs = {
+            "vector": _leg("vector", [1]),
+            "graph": [
+                Candidate(id=201, kind="fact", text="g1", leg_scores={"graph": 0.9}),
+                Candidate(id=202, kind="fact", text="g2", leg_scores={"graph": 0.8}),
+            ],
+            "entity": [Candidate(id=301, kind="fact", text="e1", leg_scores={"entity": 0.7})],
+        }
+        pool = _rows(fuse(legs))
+        by_id = {r["id"]: r for r in pool}
+        ranked = [by_id[1], by_id[201], by_id[202]]
+        out = apply_reserved(ranked, pool, limit=3, reserved={"graph": 2, "entity": 1})
+        assert out[0]["id"] == 1
+        assert len(out) == 3
+
     def test_reserved_total_is_capped_below_half(self) -> None:
         pool, ranked = self._pool_and_ranked()
         for limit in range(1, 11):
