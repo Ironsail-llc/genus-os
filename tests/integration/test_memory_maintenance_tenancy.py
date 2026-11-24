@@ -257,6 +257,66 @@ async def test_consolidation_never_merges_two_tenants_facts(
             )
 
 
+@pytest.mark.asyncio
+async def test_every_tenant_gets_importance_scoring_when_other_steps_are_slow(
+    db_cursor, mock_get_connection, stub_models, test_prefix, monkeypatch
+):
+    """The scoring budget is spent on scoring, and shared so no tenant gets none.
+
+    A fake clock: each judged fact costs one second, and each tenant's decay
+    step costs a thousand. Measured from the start of the pass, the budget was
+    gone after the first tenant's decay, so every later tenant — the same ones
+    every night, in id order — went unscored.
+    """
+    from robothor.memory import lifecycle
+
+    tenants = [f"{test_prefix}-tenant-{k}" for k in ("a", "b", "c")]
+    fact_ids: dict[str, list[int]] = {}
+    for tid in tenants:
+        db_cursor.execute("INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s)", (tid, tid))
+        fact_ids[tid] = []
+        for i in range(5):
+            db_cursor.execute(
+                "INSERT INTO memory_facts (fact_text, category, importance_score, tenant_id) "
+                "VALUES (%s, 'project', 0.5, %s) RETURNING id",
+                (f"Alice tracks milestone {i} of the planning board for Bob.", tid),
+            )
+            fact_ids[tid].append(db_cursor.fetchone()["id"])
+
+    clock = {"now": 1000.0}
+
+    class _FakeTime:
+        @staticmethod
+        def monotonic() -> float:
+            return clock["now"]
+
+    async def _judge(_text: str, timeout_s: float = 30.0) -> float:
+        clock["now"] += 1.0
+        return 0.7
+
+    async def _slow_decay(_tenant_id: str = "") -> int:
+        clock["now"] += 1000.0
+        return 0
+
+    monkeypatch.setattr(lifecycle, "time", _FakeTime)
+    monkeypatch.setattr(lifecycle, "judge_importance", _judge)
+    monkeypatch.setattr(lifecycle, "_run_decay_step", _slow_decay)
+    monkeypatch.setattr(lifecycle, "_IMPORTANCE_BUDGET_S", 9.0)
+    monkeypatch.setattr(lifecycle, "active_tenant_ids", lambda: list(tenants))
+
+    await lifecycle.run_lifecycle_maintenance()
+
+    scored = {}
+    for tid in tenants:
+        db_cursor.execute(
+            "SELECT COUNT(*) AS n FROM memory_facts WHERE id = ANY(%s) AND importance_score = 0.7",
+            (fact_ids[tid],),
+        )
+        scored[tid] = db_cursor.fetchone()["n"]
+    assert all(n > 0 for n in scored.values()), f"a tenant got no importance scoring: {scored}"
+    assert sum(scored.values()) <= 9 + len(tenants), f"the budget was overspent: {scored}"
+
+
 # ── With row-level security: every tenant is maintained under its own scope ──
 
 

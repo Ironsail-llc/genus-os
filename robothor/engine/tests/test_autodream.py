@@ -599,6 +599,50 @@ class TestAutodreamTenancy:
         assert wc == expected
         assert prefs == expected
 
+    @pytest.mark.asyncio
+    async def test_one_failing_tenant_does_not_stop_the_light_pass_for_the_rest(self, harness):
+        """Tenants run in a fixed order, so a tenant that keeps failing would
+        otherwise cost every tenant after it its maintenance on every pass."""
+        failing = self.TENANTS[0]
+        prune: list = []
+        wc: list = []
+        prefs: list = []
+
+        async def _consol(**kw):
+            if kw.get("tenant_id") == failing:
+                raise RuntimeError("consolidation broke for this tenant")
+            return {"skipped": True}
+
+        async def _prune(**kw):
+            return self._recorder(prune, {"total_pruned": 1})(**kw)
+
+        async def _discover(**kw):
+            return []
+
+        async def _prefs(**kw):
+            return self._recorder(prefs, {"new": 0})(**kw)
+
+        with (
+            patch("robothor.engine.autodream.run_intraday_consolidation", _consol),
+            patch("robothor.engine.autodream.prune_low_quality_facts", _prune),
+            patch("robothor.engine.autodream.discover_cross_domain_insights", _discover),
+            patch(
+                "robothor.memory.working_context.refresh_working_context",
+                self._recorder(wc, {"tasks": 0}),
+            ),
+            patch("robothor.memory.preferences.extract_preferences_from_facts", _prefs),
+        ):
+            from robothor.engine.autodream import run_autodream
+
+            result = await run_autodream(mode="idle")
+
+        others = [(t, t) for t in self.TENANTS if t != failing]
+        assert prune == others, "the tenants after the failing one were not pruned"
+        assert result["facts_pruned"] == len(others)
+        everyone = [(t, t) for t in self.TENANTS]
+        assert wc == everyone, "working_context was skipped after one tenant failed"
+        assert prefs == everyone, "preferences were skipped after one tenant failed"
+
 
 class TestAutodreamLoop:
     """Tests for the _autodream_loop integration in daemon.py."""
