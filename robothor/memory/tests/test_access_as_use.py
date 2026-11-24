@@ -276,3 +276,194 @@ class TestImportanceSelection:
             ids = [r["id"] for r in _select_unscored_facts(cur, limit=10_000)]
         conn.commit()
         assert fact_id in ids
+
+
+def _select_ids(conn: Any) -> list[int]:
+    from robothor.memory.lifecycle import _select_unscored_facts
+
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        ids = [r["id"] for r in _select_unscored_facts(cur, limit=10_000)]
+    conn.commit()
+    return ids
+
+
+def _auto_score(conn: Any) -> None:
+    from robothor.memory.lifecycle import _auto_score_old_events
+
+    with conn.cursor() as cur:
+        _auto_score_old_events(cur)
+    conn.commit()
+
+
+def _judge(conn: Any, fact_id: int, score: float) -> None:
+    from robothor.memory.lifecycle import _record_importance
+
+    with conn.cursor() as cur:
+        _record_importance(cur, fact_id, score)
+    conn.commit()
+
+
+def _set(conn: Any, fact_id: int, **cols: Any) -> None:
+    sets = ", ".join(f"{k} = %s" for k in cols)
+    with conn.cursor() as cur:
+        cur.execute(f"UPDATE memory_facts SET {sets} WHERE id = %s", [*cols.values(), fact_id])
+    conn.commit()
+
+
+class TestImportanceKeepsDeliberateScores:
+    """A fact is an importance candidate only if it was never judged or set:
+    its score is still the 0.5 default plus what reinforcement alone added.
+    Rows scored before the marker existed carry no marker, so the marker alone
+    cannot tell a judged fact from an unjudged one."""
+
+    def test_a_reinforced_old_event_judged_high_keeps_its_score(self, facts_db) -> None:
+        from robothor.memory.conflicts import _reinforce_fact
+
+        conn, tenant = facts_db
+        fact_id = _seed(conn, tenant, "Alice closed the security review.", importance_score=0.75)
+        _reinforce_fact(fact_id, tenant_id=tenant)  # judged 0.75, reinforced to 0.8
+
+        _auto_score(conn)
+
+        assert _row(conn, fact_id)["importance_score"] == pytest.approx(0.8)
+        assert fact_id not in _select_ids(conn)
+
+    def test_a_reinforced_resolution_keeps_its_lifted_score(self, facts_db) -> None:
+        conn, tenant = facts_db
+        fact_id = _seed(
+            conn,
+            tenant,
+            "Resolved: Bob's invoice was reissued.",
+            category="resolution",
+            importance_score=0.85,
+        )
+        _set(conn, fact_id, reinforcement_count=1)
+
+        _auto_score(conn)
+
+        assert fact_id not in _select_ids(conn)
+        assert _row(conn, fact_id)["importance_score"] == pytest.approx(0.85)
+
+    def test_a_consolidated_fact_keeps_inherited_importance_after_reinforcement(
+        self, facts_db, monkeypatch
+    ) -> None:
+        from robothor.memory.conflicts import _reinforce_fact
+        from robothor.memory.lifecycle import _apply_consolidation_supersession
+
+        monkeypatch.setenv("MEMORY_CONSOLIDATION_GUARD", "1")
+        conn, tenant = facts_db
+        source = _seed(conn, tenant, "Alice runs the Monday sync.", importance_score=0.7)
+        merged = _seed(
+            conn, tenant, "Alice runs the Monday sync and its notes.", importance_score=0.5
+        )
+        _apply_consolidation_supersession(merged, [source])
+        conn.commit()
+        _reinforce_fact(merged, tenant_id=tenant)
+
+        _auto_score(conn)
+
+        assert merged not in _select_ids(conn)
+        assert _row(conn, merged)["importance_score"] == pytest.approx(0.75)
+
+    def test_a_reinforced_unjudged_fact_is_judged_and_keeps_its_reinforcement(
+        self, facts_db
+    ) -> None:
+        from robothor.memory.conflicts import _reinforce_fact
+
+        conn, tenant = facts_db
+        fact_id = _seed(conn, tenant, "Bob prefers async updates.", importance_score=0.5)
+        _set(conn, fact_id, created_at=psycopg2.extensions.AsIs("NOW()"))
+        _reinforce_fact(fact_id, tenant_id=tenant)
+        _reinforce_fact(fact_id, tenant_id=tenant)  # 0.6, never judged
+
+        assert fact_id in _select_ids(conn)
+        _judge(conn, fact_id, 0.7)
+
+        assert _row(conn, fact_id)["importance_score"] == pytest.approx(0.8)
+        assert fact_id not in _select_ids(conn)
+
+    def test_a_reinforced_unjudged_old_event_is_auto_scored_with_its_reinforcement(
+        self, facts_db
+    ) -> None:
+        from robothor.memory.conflicts import _reinforce_fact
+
+        conn, tenant = facts_db
+        fact_id = _seed(conn, tenant, "Alice attended the offsite.", importance_score=0.5)
+        plain = _seed(conn, tenant, "Bob attended the offsite.", importance_score=0.5)
+        _reinforce_fact(fact_id, tenant_id=tenant)
+
+        _auto_score(conn)
+
+        assert _row(conn, fact_id)["importance_score"] == pytest.approx(0.35)
+        assert _row(conn, plain)["importance_score"] == pytest.approx(0.3)
+        ids = _select_ids(conn)
+        assert fact_id not in ids
+        assert plain not in ids
+
+    def test_a_neutral_verdict_on_a_reinforced_fact_is_not_rewritten_nightly(
+        self, facts_db
+    ) -> None:
+        from robothor.memory.conflicts import _reinforce_fact
+
+        conn, tenant = facts_db
+        fact_id = _seed(conn, tenant, "Alice might join the panel.", importance_score=0.5)
+        _set(conn, fact_id, created_at=psycopg2.extensions.AsIs("NOW()"))
+        _reinforce_fact(fact_id, tenant_id=tenant)
+
+        nights_judged = 0
+        for _night in range(3):
+            if fact_id in _select_ids(conn):
+                nights_judged += 1
+                _judge(conn, fact_id, 0.5)
+            _reinforce_fact(fact_id, tenant_id=tenant)
+
+        assert nights_judged == 1
+        # 0.5 verdict + four reinforcements, none of them reset.
+        assert _row(conn, fact_id)["importance_score"] == pytest.approx(0.7)
+
+
+class TestWarmupRecordsPersonLinkedFacts:
+    """Stored hashes cover person_id; a hash without it never matches a
+    person-linked fact, so warm-up silently recorded none of them."""
+
+    def _seed_person_fact(self, conn: Any, tenant: str) -> int:
+        from robothor.memory.drift import compute_fact_hash
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO crm_people (first_name, last_name, tenant_id) "
+                "VALUES ('Alice', 'Example', %s) RETURNING id",
+                (tenant,),
+            )
+            person = str(cur.fetchone()[0])
+        conn.commit()
+        text = "Alice prefers morning meetings."
+        return _seed(
+            conn,
+            tenant,
+            text,
+            category="preference",
+            importance_score=0.8,
+            entities=["Alice"],
+            person_id=person,
+            content_hash=compute_fact_hash(
+                text, tenant_id=tenant, category="preference", person_id=person
+            ),
+        )
+
+    @pytest.mark.parametrize("v2", ["0", "1"], ids=["legacy", "v2"])
+    def test_a_person_linked_fact_injected_by_warmup_is_recorded(
+        self, facts_db, monkeypatch, v2
+    ) -> None:
+        from robothor.engine import warmup
+
+        monkeypatch.setenv("MEMORY_WARMUP_RECALL_V2", v2)
+        conn, tenant = facts_db
+        fact_id = self._seed_person_fact(conn, tenant)
+
+        text = warmup._build_entity_context("Ask Alice about Thursday", tenant_id=tenant)
+        conn.commit()
+        assert warmup.wait_for_deferred_writes(timeout=5.0)
+
+        assert "Alice prefers morning meetings." in text
+        assert _row(conn, fact_id)["access_count"] == 1
