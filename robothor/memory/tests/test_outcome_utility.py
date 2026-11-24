@@ -232,7 +232,7 @@ class TestCitationDetection:
         from robothor.memory.utility import distinctive_tokens, is_cited
 
         assert not is_cited("The office has 120 desks.", "Processed 120 emails today.", "")
-        assert distinctive_tokens("Budget 1000, then 25000 later.") == set()
+        assert distinctive_tokens("Budget 1000, then 2500 later.") == set()
 
     def test_a_long_bare_number_is_distinctive(self) -> None:
         from robothor.memory.utility import is_cited

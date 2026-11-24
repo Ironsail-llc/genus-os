@@ -222,7 +222,7 @@ def compute_decay_score(
     importance_floor = importance_score * 0.4
 
     if utility is None:
-        utility = compute_utility(0, 0, outcome_failures)
+        utility = compute_utility(citations=0, failures=outcome_failures)
 
     base = max(recency, importance_floor)
     score = base + use_boost + reinforcement_boost + utility_decay_term(utility)
@@ -1180,9 +1180,12 @@ def _decay_chunk(rows: list[dict[str, Any]]) -> tuple[int, int]:
             utility = utility_for_row(fact)
             if fact["last_accessed"] is None:
                 skipped_null += 1
+                # No decay score to write; touch the row only if utility moved,
+                # or every such row would be rewritten (a dead tuple) nightly.
                 cur.execute(
-                    "UPDATE memory_facts SET utility = %s WHERE id = %s",
-                    (utility, fact["id"]),
+                    "UPDATE memory_facts SET utility = %s "
+                    "WHERE id = %s AND utility IS DISTINCT FROM %s",
+                    (utility, fact["id"], utility),
                 )
                 continue
             score = compute_decay_score(

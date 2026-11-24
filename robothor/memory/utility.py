@@ -7,25 +7,27 @@ Pure functions only — no database access. The writers live in
 
 Evidence per fact, counted once per run whose recall returned the fact:
 
-* ``outcome_successes`` — the run completed without failure (a weak credit).
-* ``outcome_citations`` — the run's final answer contains a distinctive value
-  of the fact (``is_cited``) that the task did not already state (a strong one).
+* ``outcome_citations`` — the run completed without failure AND its final
+  answer contains a distinctive value of the fact (``is_cited``) that the task
+  did not already state: evidence the fact was used.
 * ``outcome_failures`` — the run failed (a penalty, as before).
+* ``outcome_successes`` — the run completed without failure. Recorded, but NOT
+  credit: every fact a search returns rides along in a successful run whether
+  or not the answer used it, so counting it would let a fact rise by being
+  returned (GEN-873 criterion 3). It neither raises utility nor offsets
+  failures.
 
-Being returned is not evidence. A fact recalled in a thousand runs that neither
-succeeded nor failed has the same utility as one never recalled.
+Being returned is not evidence. A fact recalled in a thousand runs, successful
+or not, that never used it has the same utility as one never recalled.
 
 The function::
 
-    support = min(SUCCESS_CREDIT * successes, WEAK_SUPPORT_CAP) + CITED_CREDIT * citations
-    against = FAILURE_WEIGHT * failures
-    utility = (support - against) / (support + against + PRIOR_STRENGTH)
+    utility = (CITED_CREDIT * citations - FAILURE_WEIGHT * failures)
+              / (CITED_CREDIT * citations + FAILURE_WEIGHT * failures + PRIOR_STRENGTH)
 
-is a smoothed success rate with a neutral prior: 0 with no evidence, in the
-open interval (-1, 1), non-decreasing in successes (saturating at
-``WEAK_UTILITY_CEILING`` from successes alone), strictly increasing in
-citations and strictly decreasing in failures. Every step adds less than the
-last.
+is a smoothed use rate with a neutral prior: 0 with no evidence, in the open
+interval (-1, 1), strictly increasing in citations and strictly decreasing in
+failures, and every step moves it less than the last.
 """
 
 from __future__ import annotations
@@ -47,27 +49,16 @@ UTILITY_MAX = 1.0
 #: needed to move a fact away from 0.
 PRIOR_STRENGTH = 2.0
 
-#: Support from one run that completed without failure.
-SUCCESS_CREDIT = 0.25
-#: Most support completed runs can give on their own (4 runs' worth), so the
-#: weak credit saturates however often a fact rides along in good runs.
-WEAK_SUPPORT_CAP = 1.0
 #: Support from one run whose answer used the fact.
 CITED_CREDIT = 1.0
 #: Weight of one failed run.
 FAILURE_WEIGHT = 1.0
 
-#: Highest utility successes alone can reach.
-WEAK_UTILITY_CEILING = WEAK_SUPPORT_CAP / (WEAK_SUPPORT_CAP + PRIOR_STRENGTH)
 
-
-def compute_utility(successes: int, citations: int, failures: int) -> float:
-    """Utility in (-1, 1) from a fact's outcome counts. Negative counts are 0."""
-    s = max(int(successes or 0), 0)
-    c = max(int(citations or 0), 0)
-    f = max(int(failures or 0), 0)
-    support = min(SUCCESS_CREDIT * s, WEAK_SUPPORT_CAP) + CITED_CREDIT * c
-    against = FAILURE_WEIGHT * f
+def compute_utility(*, citations: int, failures: int) -> float:
+    """Utility in (-1, 1) from a fact's use and failure counts. Negatives are 0."""
+    support = CITED_CREDIT * max(int(citations or 0), 0)
+    against = FAILURE_WEIGHT * max(int(failures or 0), 0)
     return (support - against) / (support + against + PRIOR_STRENGTH)
 
 
@@ -79,6 +70,11 @@ MAX_UTILITY_BOOST = 0.3
 #: this term replaces had the same cap, so a streak of misattributed failures
 #: cannot destroy a fact outright.
 MAX_FAILURE_PENALTY = 0.4
+#: Decay penalty per unit of negative utility, before the cap. With no
+#: citations, f failures give utility -f/(f+2), so 0.6 keeps the penalty at or
+#: above the old linear 0.1 per failure and reaches the 0.4 cap at 4 failures,
+#: as the old one did.
+FAILURE_PENALTY_SLOPE = 0.6
 
 
 def utility_decay_term(utility: float) -> float:
@@ -86,7 +82,7 @@ def utility_decay_term(utility: float) -> float:
     u = max(UTILITY_MIN, min(UTILITY_MAX, float(utility)))
     if u >= 0.0:
         return MAX_UTILITY_BOOST * u
-    return MAX_FAILURE_PENALTY * u
+    return max(-MAX_FAILURE_PENALTY, FAILURE_PENALTY_SLOPE * u)
 
 
 # ── Trust: lower authority earns no reinforcement ───────────────────────────
@@ -112,33 +108,42 @@ def earns_positive_utility(row: Mapping[str, Any]) -> bool:
 def utility_for_row(row: Mapping[str, Any]) -> float:
     """A fact row's utility, applying the origin rule.
 
-    An ineligible fact keeps its failures and ignores its successes, so it can
-    fall but never rise above neutral.
+    An ineligible fact keeps its failures and ignores its citations, so it can
+    fall but never rise above neutral. ``outcome_successes`` is not read: see
+    the module docstring.
     """
     failures = row.get("outcome_failures") or 0
-    if not earns_positive_utility(row):
-        return compute_utility(0, 0, failures)
-    return compute_utility(
-        row.get("outcome_successes") or 0, row.get("outcome_citations") or 0, failures
-    )
+    citations = (row.get("outcome_citations") or 0) if earns_positive_utility(row) else 0
+    return compute_utility(citations=citations, failures=failures)
 
 
 # ── "Demonstrably used": a distinctive value of the fact in the answer ─────
 #
 # Deterministic and cheap: a fact counts as used by a run when one of its
-# distinctive values — an email address, a URL, or a token carrying digits
-# (an invoice or ticket number, a date, a version, an amount of 3+ digits) —
-# appears as a whole token in the run's final output and was not already in
-# the task text. Ordinary words never count: two texts on one topic share
-# words without one having used the other. Bare years are excluded; they are
-# everywhere.
+# distinctive values appears as a whole token in the run's final output and was
+# not already in the task text. Distinctive means:
+#   * an email address or a URL;
+#   * an identifier mixing letters and digits, 4+ characters (INV-20417,
+#     PO-77120, v1.4.2) — but not a number with a unit or ordinal (120kg,
+#     21st) or a clock time (10am, 9:30pm);
+#   * a bare number of 5+ digits (an account or order number).
+# Never distinctive: ordinary words (two texts on one topic share words without
+# one having used the other), short numbers (120, 1000 — counts and amounts
+# recur everywhere), clock times and calendar dates (9:30, 11/25, 2026-11-24 —
+# scheduled digests print today's), and bare years.
+#
+# Known gap: values the run read from a tool result rather than from memory
+# also match; only the task text is excluded. Excluding tool results would mean
+# reading agent_run_steps at delivery, which is written asynchronously.
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"')\]]+", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./:-]*[A-Za-z0-9]")
 _YEAR_RE = re.compile(r"(?:19|20)\d\d")
+_DATE_OR_TIME_RE = re.compile(r"\d{1,4}([:/.-])\d{1,2}(?:\1\d{1,4})?")
+_NUMBER_WITH_SUFFIX_RE = re.compile(r"\d+(?:[:.]\d+)?[a-z]{1,3}", re.IGNORECASE)
 _TRAILING = ".,;:!?"
-_MIN_DIGITS_NUMERIC = 3
+_MIN_DIGITS_NUMERIC = 5
 _MIN_LEN_MIXED = 4
 
 
@@ -161,11 +166,12 @@ def distinctive_tokens(text: str | None) -> set[str]:
     for m in _TOKEN_RE.finditer(text):
         tok = m.group(0).rstrip(_TRAILING)
         digits = sum(ch.isdigit() for ch in tok)
-        if not digits or _YEAR_RE.fullmatch(tok):
+        if not digits or "://" in tok or _YEAR_RE.fullmatch(tok):
+            continue
+        if _DATE_OR_TIME_RE.fullmatch(tok) or _NUMBER_WITH_SUFFIX_RE.fullmatch(tok):
             continue
         letters = any(ch.isalpha() for ch in tok)
-        long_enough = (letters and len(tok) >= _MIN_LEN_MIXED) or digits >= _MIN_DIGITS_NUMERIC
-        if long_enough and "://" not in tok:
+        if (letters and len(tok) >= _MIN_LEN_MIXED) or digits >= _MIN_DIGITS_NUMERIC:
             out.add(tok.lower())
     return out
 

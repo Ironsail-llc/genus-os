@@ -8,6 +8,7 @@
 --
 --   These columns hold the positive evidence and the scalar computed from it:
 --     outcome_successes  runs that recalled the fact and completed without failure
+--                        (a record only: it does not raise utility)
 --     outcome_citations  of those, runs whose final answer used a distinctive
 --                        value of the fact (robothor/memory/utility.py is_cited)
 --     last_success_at    when the latest such run ended

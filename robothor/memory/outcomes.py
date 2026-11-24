@@ -9,7 +9,7 @@ Outcome attribution: credit and blame for the facts a run recalled.
      on every fact a successful run recalled, and ``outcome_citations`` on
      those its final answer demonstrably used (``utility.is_cited``).
 
-The nightly decay pass turns the three counts into ``memory_facts.utility``
+The nightly decay pass turns citations and failures into ``memory_facts.utility``
 (``robothor.memory.utility.compute_utility``), which decay and ranking read.
 """
 
@@ -190,7 +190,7 @@ def credit_success_for_run(
     output_text: str | None = None,
     task_text: str | None = None,
 ) -> dict[str, int]:
-    """Credit every fact a successful run recalled; more for the ones it used.
+    """Record a successful run against what it recalled; credit what it used.
 
     Each fact the run's recalls returned (its ``fact_access_log`` rows) gains
     one ``outcome_successes``; those whose distinctive value appears in
