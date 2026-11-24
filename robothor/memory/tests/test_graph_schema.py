@@ -24,9 +24,7 @@ _SUFFIX = "_memory_graph_foundation.sql"
 
 def _migration_entry() -> str:
     entries = [
-        line.strip()
-        for line in MANIFEST.read_text().splitlines()
-        if line.strip().endswith(_SUFFIX)
+        line.strip() for line in MANIFEST.read_text().splitlines() if line.strip().endswith(_SUFFIX)
     ]
     assert len(entries) == 1, f"expected one *{_SUFFIX} in the manifest, found {entries}"
     return entries[0]
@@ -128,7 +126,7 @@ def test_the_authority_order_is_the_agreed_one() -> None:
 def test_inferred_is_an_edge_origin_only() -> None:
     assert "inferred" in gs.RELATION_ORIGINS
     assert "inferred" not in gs.FACT_ORIGINS
-    assert gs.RELATION_ORIGINS == (*gs.FACT_ORIGINS, "inferred")
+    assert (*gs.FACT_ORIGINS, "inferred") == gs.RELATION_ORIGINS
 
 
 def test_vocabularies_are_the_agreed_ones() -> None:

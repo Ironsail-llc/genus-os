@@ -9,6 +9,9 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 | `memory_facts` | Atomic distilled facts with lifecycle scoring (importance, decay, outcome_failures) |
 | `memory_entities` | Knowledge graph nodes (person, project, tech, …) |
 | `memory_relations` | Knowledge graph edges (uses, works_at, manages, …) |
+| `memory_mentions` | Which entity each fact mentions, by id (see [Graph schema](#graph-schema)) |
+| `memory_relation_evidence` | Every fact that supports an edge |
+| `memory_resolution_decisions` | Each decision that a name in a fact refers to an entity |
 | `memory_insights` | LLM-discovered cross-domain connections |
 | `memory_episodes` | Time-bucketed event clusters (added 2026-04) |
 | `memory_procedures` | Skill library — named playbooks with success/failure tracking (added 2026-04) |
@@ -339,6 +342,85 @@ and then be rejected by the `memory_relations` foreign key.
 entity ids are dropped before the insert, and a chunk Postgres still rejects is
 retried row by row inside a savepoint, so one bad row costs one relation instead
 of the whole batch. Every drop is logged at WARNING with a count.
+
+### Graph schema
+
+The memory graph foundation migration (`crm/migrations/*_memory_graph_foundation.sql`) adds the schema that links facts to
+entities by identity rather than by name, and gives edges time, evidence and
+trust. It is schema only: nothing writes the new tables or columns yet, and
+code written before it reads and writes exactly as before. Every new table has
+a `tenant_id` referencing `crm_tenants`, the forced `tenant_isolation`
+row-level-security policy, and stays with its tenant when a workload moves
+(`genus tenant move-workload`).
+
+**`memory_resolution_decisions`** records each decision that a surface form (a
+name as it appeared in a fact) refers to an entity: the surface form, the
+entity type if known, the entity it resolved to (`resolved_entity_id`, NULL
+when it was deliberately left unresolved), the `method`, a `confidence`
+between 0 and 1, the `evidence` the decision rested on (JSON), and
+`decided_at`. Merging two entities never rewrites ids: a decision found wrong
+is reversed by setting `reversed_at`, and points at the decision that replaced
+it through `superseded_by`. Methods: `strong_key` (an email, phone or other
+unique identifier), `full_name`, `context`, `llm`, `exact`, `operator` and
+`backfill`.
+
+**`memory_mentions`** is the fact-to-entity join: one row per mention, with
+the fact, the entity (NULL while unresolved, or once its entity is deleted),
+the surface form and type, and the decision that resolved it. Deleting a fact
+deletes its mentions.
+
+**`memory_relation_evidence`** lists every fact supporting an edge, keyed by
+`(relation_id, fact_id)`. The migration copies each edge's existing
+`memory_relations.fact_id` into it; edges written afterwards by code that
+predates the graph write path still set only `fact_id`.
+
+**`memory_relations`** gains:
+
+| Column | Meaning |
+|--------|---------|
+| `predicate` | The canonical relation; `relation_type` keeps the phrase as extracted |
+| `valid_from`, `valid_to` | When the relation held in the world (event time) |
+| `recorded_at`, `expired_at` | When the system started and stopped believing it. `recorded_at` is NULL on edges from before the migration; read it as `created_at` |
+| `is_active` | `TRUE` until the edge is retired (defaults `TRUE`) |
+| `retired_reason` | `ended` (it held, then stopped), `refuted` (it was wrong) or `evidence_merged` (its evidence moved to another edge) |
+| `origin` | Who asserted it (below) |
+| `weight` | Learned usefulness for retrieval, `1.0` by default |
+
+Active edges are indexed per endpoint for neighbourhood expansion.
+
+**`memory_facts`** gains `origin`, `event_time` (when the thing happened, as
+opposed to `valid_from`, when the fact became true as recorded) and a scope.
+None of them is part of the content hash, so no stored hash changes.
+
+**`memory_entities`** gains the CRM record it is about (`crm_person_id`,
+`crm_company_id`, cleared if that record is deleted), an `embedding`, a scope,
+and an index on `(tenant_id, lower(name))`. When `genus tenant move-account`
+moves an account's CRM contact to another tenant, a memory entity linked to
+that contact stays with its tenant's memory and its `crm_person_id` is cleared
+(the report lists it under `links_cleared`); the link does not refuse the move.
+
+**Scope** (`scope_kind`, `scope_id` on facts and entities): `shared` (the whole
+tenant, the default, no `scope_id`), `user` or `agent` (private to the owner
+named in `scope_id`, which is then required).
+
+**Origin and authority.** Origin records who asserted a fact or an edge. When
+claims disagree, or recall is filtered, they rank in this order, most trusted
+first:
+
+1. `operator_confirmed` — the operator confirmed it
+2. `user_stated` — a user said it
+3. `crm` — it comes from the CRM record
+4. `tool` — a tool returned it
+5. `agent_generated` — an agent produced it
+6. `external` — an outside source (a web page, an inbound message)
+7. `inferred` — the system derived it (edges only)
+
+A row from before origins existed has no origin and ranks as
+`agent_generated`. Only the first three are trusted for automatic recall. The
+lists, the order and the helpers that rank by them (`authority_rank`,
+`least_trusted`, `is_trusted_for_auto_recall`) live in
+`robothor/memory/graph_schema.py`; a test keeps them equal to the database's
+CHECK constraints.
 
 ## Ingestion Pipeline
 

@@ -63,7 +63,9 @@ def world(scratch_db, monkeypatch) -> Iterator[dict[str, Any]]:
 
     monkeypatch.setattr(accounts, "get_connection", _conn)
     with db.cursor() as cur:
-        cur.execute("INSERT INTO crm_tenants (id, display_name) VALUES (%s, 'Acme Parent')", (PARENT,))
+        cur.execute(
+            "INSERT INTO crm_tenants (id, display_name) VALUES (%s, 'Acme Parent')", (PARENT,)
+        )
         cur.execute(
             "INSERT INTO crm_tenants (id, display_name, parent_tenant_id) VALUES (%s, 'Child', %s)",
             (CHILD, PARENT),
@@ -123,9 +125,7 @@ def test_a_dry_run_counts_the_link_and_clears_nothing(world) -> None:
 
 def test_detaching_the_person_keeps_the_link(world) -> None:
     """With --detach-person the contact stays in the source, so the link is still sound."""
-    report = accounts.move_account(
-        world["user_id"], CHILD, actor="cli:test", detach_person=True
-    )
+    report = accounts.move_account(world["user_id"], CHILD, actor="cli:test", detach_person=True)
 
     assert _entities(world["db"])[world["alice_entity"]] == (PARENT, world["person"])
     assert report.links_cleared == {}
