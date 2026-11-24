@@ -42,7 +42,7 @@ async def _fake_generate(prompt: str = "", system: str = "", **kw: Any) -> str:
     if fmt == IMPORTANCE_SCHEMA:
         return json.dumps({"score": 0.7})
     if fmt == INSIGHT_SCHEMA:
-        ids = [int(i) for i in re.findall(r"^\[(\d+)\]", prompt, flags=re.M)]
+        ids = [int(i) for i in re.findall(r"^\[(\d+)\]", prompt, flags=re.MULTILINE)]
         return json.dumps({"insights": [{"insight_text": _INSIGHT_TEXT, "source_fact_ids": ids}]})
     if fmt == RELATION_INFERENCE_SCHEMA:
         a = re.search(r"Entity A: (.+)", prompt)
@@ -62,7 +62,7 @@ async def _fake_generate(prompt: str = "", system: str = "", **kw: Any) -> str:
             }
         )
     if system.startswith("Combine these facts"):
-        first = re.search(r"^- (.+)$", prompt, flags=re.M)
+        first = re.search(r"^- (.+)$", prompt, flags=re.MULTILINE)
         return f"Combined note: {first.group(1) if first else 'planning'}"
     return "none"
 
@@ -165,8 +165,22 @@ def _relations(cur, seeded: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(r) for r in cur.fetchall()]
 
 
+def _maintain_only(monkeypatch, tenants: dict[str, Any]) -> None:
+    """Limit the pass to the seeded tenants and the platform tenant.
+
+    The shared test database carries well over a thousand tenants left by
+    other suites; walking every one of them per test is minutes of nothing.
+    The real enumeration is ``active_tenant_ids``, exercised on its own below.
+    """
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.memory import lifecycle
+
+    ids = [DEFAULT_TENANT] + [t["tenant"] for t in tenants.values()]
+    monkeypatch.setattr(lifecycle, "active_tenant_ids", lambda: list(ids), raising=False)
+
+
 @pytest.fixture
-def two_tenants(db_cursor, test_prefix):
+def two_tenants(db_cursor, test_prefix, monkeypatch):
     tenants = {}
     for key, partner in (("a", "Bob"), ("b", "Carol")):
         tid = f"{test_prefix}-tenant-{key}"
@@ -175,6 +189,7 @@ def two_tenants(db_cursor, test_prefix):
             (tid, tid),
         )
         tenants[key] = _seed_tenant(db_cursor, tid, partner)
+    _maintain_only(monkeypatch, tenants)
     return tenants
 
 
@@ -246,11 +261,28 @@ async def test_consolidation_never_merges_two_tenants_facts(
 
 
 @pytest.fixture
-def two_child_tenants(db_cursor, rls_tenants):  # noqa: F811
-    return {
+def two_child_tenants(db_cursor, rls_tenants, monkeypatch):  # noqa: F811
+    tenants = {
         "a": _seed_tenant(db_cursor, rls_tenants["a"], "Bob"),
         "b": _seed_tenant(db_cursor, rls_tenants["b"], "Carol"),
     }
+    _maintain_only(monkeypatch, tenants)
+    return tenants
+
+
+def test_active_tenant_ids_lists_every_active_tenant_and_no_inactive_one(
+    db_cursor, mock_get_connection, test_prefix
+):
+    from robothor.memory.lifecycle import active_tenant_ids
+
+    on, off = f"{test_prefix}-tenant-on", f"{test_prefix}-tenant-off"
+    db_cursor.execute(
+        "INSERT INTO crm_tenants (id, display_name, active) VALUES (%s, %s, TRUE), (%s, %s, FALSE)",
+        (on, on, off, off),
+    )
+    ids = active_tenant_ids()
+    assert on in ids
+    assert off not in ids
 
 
 @pytest.mark.asyncio
@@ -299,9 +331,7 @@ async def test_get_knowledge_gaps_returns_nothing_of_another_tenant(
     tenant_a = f"{test_prefix}-tenant-a"
     tenant_b = f"{test_prefix}-tenant-b"
     for tid in (tenant_a, tenant_b):
-        db_cursor.execute(
-            "INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s)", (tid, tid)
-        )
+        db_cursor.execute("INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s)", (tid, tid))
 
     # Tenant A: one dominant type, and an orphan of its own so the answer is
     # not empty for a reason unrelated to tenancy.
