@@ -82,8 +82,25 @@ def classify_query(query: str) -> str:
     return "default"
 
 
+#: Fields a conversation segment row keeps through normalisation, so the tool
+#: output can say where it came from.
+SEGMENT_FIELDS = (
+    "kind",
+    "topic",
+    "source_kind",
+    "source_ref",
+    "start_ref",
+    "end_ref",
+    "part",
+    "started_at",
+    "ended_at",
+)
+
+
 def _normalize_fact(r: dict[str, Any]) -> dict[str, Any]:
+    extra = {k: r.get(k) for k in SEGMENT_FIELDS} if r.get("kind") == "segment" else {}
     return {
+        **extra,
         "id": r.get("id"),
         "source": r.get("source") or "fact",
         "text": r.get("fact_text") or r.get("insight_text") or r.get("content") or "",
@@ -108,6 +125,8 @@ async def recall(
     limit: int = 10,
     budget_chars: int = DEFAULT_BUDGET_CHARS,
     scope: Any = None,
+    reader_person_id: str | None = None,
+    room_ids: Any = None,
 ) -> dict[str, Any]:
     """Route a recall query to the relevant stores, fuse, and budget-cap.
 
@@ -117,6 +136,9 @@ async def recall(
     None for unrestricted. It must be threaded to every store that can return
     person-linked rows; a store that cannot express person scoping is excluded
     for restricted callers rather than returned unfiltered.
+
+    ``reader_person_id`` / ``room_ids`` decide which conversation segments the
+    reader may see, on every call (``robothor.memory.segments``).
     """
     resolved_tenant = tenant_id or DEFAULT_TENANT
     cls = classify_query(query)
@@ -133,6 +155,8 @@ async def recall(
         include_insights=(cls == "default"),
         include_episodes=(cls == "temporal"),
         scope=scope,
+        reader_person_id=reader_person_id,
+        room_ids=room_ids,
     )
     ranked_lists.append([_normalize_fact(r) for r in fact_rows])
 

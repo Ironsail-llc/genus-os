@@ -10,16 +10,23 @@
 -- source_kind / source_ref: where the turns came from. 'conversation' is a
 --   chat session and source_ref its session_key; 'document' and 'email' are
 --   reserved. start_ref / end_ref: the first and last chat_messages.id the
---   segment covers. (tenant_id, source_kind, source_ref, start_ref) is unique
---   so re-segmenting a conversation upserts instead of duplicating.
+--   segment covers. part: 0, except for a single turn longer than the size
+--   budget, which is split (never clipped) into consecutive segments with the
+--   same start_ref/end_ref and part 0, 1, 2 ...; their texts, label removed,
+--   concatenate to the turn. (tenant_id, source_kind, source_ref, start_ref,
+--   part) is unique so re-segmenting a conversation upserts instead of
+--   duplicating.
 -- started_at / ended_at: event time of the first and last turn.
 -- chat_session_id: the session a conversation segment copies. ON DELETE
 --   CASCADE, so a segment never outlives its conversation: clearing a
 --   session, or the stale-session sweep, removes its segments with its
 --   messages. The nightly chat TTL prunes segments past the same 90 days.
--- person_id: the session's person (chat_sessions.person_id), for the
---   "own data + shared" scope. scope_kind / scope_id: visibility class,
---   'shared' unless a later writer narrows it.
+-- person_id: the session's person (chat_sessions.person_id).
+-- scope_kind / scope_id: who may read the segment. A session that belongs to
+--   one person is private to that person: 'user' and scope_id = that person's
+--   id. A session with no single person (a workspace, a group channel, a
+--   system session) is 'shared', and a workspace's segments reach only its
+--   members. Applied on every read, whatever the data-scoping rollout says.
 --
 -- Idempotent: every statement can run twice.
 
@@ -31,6 +38,7 @@ CREATE TABLE IF NOT EXISTS memory_segments (
     source_ref TEXT NOT NULL,
     start_ref BIGINT NOT NULL,
     end_ref BIGINT NOT NULL,
+    part SMALLINT NOT NULL DEFAULT 0 CHECK (part >= 0),
     started_at TIMESTAMPTZ,
     ended_at TIMESTAMPTZ,
     topic TEXT,
@@ -45,7 +53,7 @@ CREATE TABLE IF NOT EXISTS memory_segments (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (start_ref <= end_ref),
-    UNIQUE (tenant_id, source_kind, source_ref, start_ref)
+    UNIQUE (tenant_id, source_kind, source_ref, start_ref, part)
 );
 
 -- Same index shapes as memory_facts (migration 023).

@@ -35,22 +35,21 @@ import asyncio
 import json
 import logging
 import math
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import httpx
-import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from robothor.db.connection import get_connection
 from robothor.memory.fusion import rrf_fuse
-from robothor.memory.vector_tuning import apply_hnsw_session, max_scan_tuples
+from robothor.memory.vector_tuning import apply_hnsw_session
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable, Sequence
     from datetime import datetime
 
-    from robothor.identity.scope import DataScope
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +64,9 @@ SEGMENT_GAP_SECONDS = 30 * 60
 SEGMENT_SIMILARITY_BREAK = 0.5
 #: Turns on each side of a candidate break whose mean vector is compared.
 SEGMENT_WINDOW_TURNS = 2
-#: Size budget of one segment's text, so a hit fits a reranker and a context
-#: budget. A single turn longer than this is clipped to it.
+#: Size budget of one segment's text, so a hit fits a context budget. A single
+#: turn longer than this is never clipped: it is split at paragraph, then
+#: sentence, then word boundaries into consecutive parts (see ``part``).
 SEGMENT_MAX_CHARS = 4000
 #: Most turns in one segment.
 SEGMENT_MAX_TURNS = 24
@@ -81,20 +81,66 @@ SEGMENT_TOPIC_MAX_CHARS = 80
 SEGMENT_RETENTION_DAYS = 90
 #: Candidates fetched per search leg before fusion (at least 3x the limit).
 SEARCH_CANDIDATES = 30
+#: Characters of a segment the cross-encoder reads: an excerpt around the best
+#: keyword match (else the head). The stored and returned text stay whole.
+SEGMENT_RERANK_CHARS = 1200
 
 _ROLE_LABELS = {"user": "User", "assistant": "Assistant"}
-_CLIP_MARK = " […]"
+_LABEL_ROOM = max(len(f"{label}: ") for label in _ROLE_LABELS.values())
+_SENTENCE_END = re.compile(r"[.!?][\"')\]]*\s+")
+_EXCERPT_STOP = frozenset(
+    [
+        "the",
+        "and",
+        "for",
+        "are",
+        "was",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "how",
+        "you",
+        "your",
+        "can",
+        "could",
+        "would",
+        "should",
+        "with",
+        "from",
+        "that",
+        "this",
+        "there",
+        "have",
+        "has",
+        "had",
+        "did",
+        "does",
+        "about",
+        "into",
+    ]
+)
 
 
 @dataclass(frozen=True)
 class Turn:
-    """One conversation turn. ``ref`` is its ``chat_messages.id``."""
+    """One conversation turn. ``ref`` is its ``chat_messages.id``.
+
+    A turn longer than the size budget is carried as ``pieces`` consecutive
+    turns with the same ``ref`` and ``part`` 0 .. pieces-1; their texts
+    concatenate to the original.
+    """
 
     ref: int
     role: str
     text: str
     at: datetime | None = None
     embedding: Sequence[float] | None = None
+    part: int = 0
+    pieces: int = 1
 
 
 @dataclass(frozen=True)
@@ -120,6 +166,11 @@ class Segment:
         return self.turns[-1].at
 
     @property
+    def part(self) -> int:
+        """0, or the piece number when the segment is one part of a long turn."""
+        return self.turns[0].part
+
+    @property
     def text(self) -> str:
         return "\n".join(_line(t) for t in self.turns)
 
@@ -130,10 +181,46 @@ class Segment:
 
 
 def _line(turn: Turn) -> str:
+    return f"{_ROLE_LABELS.get(turn.role, turn.role.title())}: {turn.text}"
+
+
+def _cut(text: str, lo: int, hi: int) -> int:
+    """Where to end a piece in ``text[lo:hi]``: after the last paragraph break,
+    else the last sentence end, else the last space; ``hi`` if none."""
+    window = text[lo:hi]
+    for sep in ("\n\n", "\n"):
+        j = window.rfind(sep)
+        if j >= 0:
+            return lo + j + len(sep)
+    ends = list(_SENTENCE_END.finditer(window))
+    if ends:
+        return lo + ends[-1].end()
+    j = window.rfind(" ")
+    return lo + j + 1 if j >= 0 else hi
+
+
+def _split_long(turn: Turn) -> list[Turn]:
+    """A turn over the size budget as consecutive pieces; never clipped.
+
+    Each piece is at most the budget minus the role label, cut at a paragraph,
+    sentence or word boundary in its second half when there is one. The
+    pieces' texts concatenate exactly to the turn's.
+    """
+    limit = SEGMENT_MAX_CHARS - _LABEL_ROOM
     text = turn.text
-    if len(text) > SEGMENT_MAX_CHARS - 20:
-        text = text[: SEGMENT_MAX_CHARS - 20 - len(_CLIP_MARK)] + _CLIP_MARK
-    return f"{_ROLE_LABELS.get(turn.role, turn.role.title())}: {text}"
+    if len(text) <= limit:
+        return [turn]
+    pieces: list[str] = []
+    pos = 0
+    while len(text) - pos > limit:
+        cut = _cut(text, pos + limit // 2, pos + limit)
+        pieces.append(text[pos:cut])
+        pos = cut
+    pieces.append(text[pos:])
+    return [
+        Turn(turn.ref, turn.role, piece, turn.at, turn.embedding, part=i, pieces=len(pieces))
+        for i, piece in enumerate(pieces)
+    ]
 
 
 def _label(text: str) -> str | None:
@@ -172,7 +259,13 @@ def _window_similarity(left: Sequence[Turn], right: Sequence[Turn]) -> float | N
     )
 
 
+def _is_piece(turns: Sequence[Turn]) -> bool:
+    return any(t.pieces > 1 for t in turns)
+
+
 def _is_fragment(turns: Sequence[Turn]) -> bool:
+    if _is_piece(turns):
+        return False
     chars = sum(len(_line(t)) + 1 for t in turns)
     return len(turns) < SEGMENT_MIN_TURNS and chars < SEGMENT_MIN_CHARS
 
@@ -205,6 +298,10 @@ def segment_turns(
     result fits the size budget. A conversation that is only a fragment yields
     no segment.
 
+    A single turn over the budget is split (:func:`_split_long`) into pieces,
+    each its own segment with the turn's ref and ``part`` 0, 1, 2 …; a piece
+    never shares a segment with another turn.
+
     ``embed`` is called once, with the texts of turns that carry no vector.
     Without it, such turns never cause a similarity break.
     """
@@ -218,6 +315,7 @@ def segment_turns(
             for i, vec in zip(missing, vectors, strict=True):
                 if vec is not None:
                     kept[i] = Turn(kept[i].ref, kept[i].role, kept[i].text, kept[i].at, vec)
+    kept = [piece for t in kept for piece in _split_long(t)]
 
     groups: list[list[Turn]] = [[kept[0]]]
     for i in range(1, len(kept)):
@@ -231,6 +329,8 @@ def segment_turns(
 
 
 def _breaks(kept: list[Turn], i: int, turn: Turn, prev: Turn, current: list[Turn]) -> bool:
+    if turn.pieces > 1 or prev.pieces > 1:
+        return True
     if (
         turn.at is not None
         and prev.at is not None
@@ -252,13 +352,13 @@ def _absorb_fragments(groups: list[list[Turn]]) -> list[list[Turn]]:
     pending: list[Turn] = []  # a leading fragment waiting for the next group
     for group in groups:
         if pending:
-            if _chars([*pending, *group]) <= SEGMENT_MAX_CHARS:
+            if not _is_piece(group) and _chars([*pending, *group]) <= SEGMENT_MAX_CHARS:
                 group = [*pending, *group]
             else:
                 out.append(pending)
             pending = []
         if _is_fragment(group):
-            if out and _chars([*out[-1], *group]) <= SEGMENT_MAX_CHARS:
+            if out and not _is_piece(out[-1]) and _chars([*out[-1], *group]) <= SEGMENT_MAX_CHARS:
                 out[-1] = [*out[-1], *group]
                 continue
             if not out:
@@ -281,7 +381,8 @@ class _Conversation:
     new turns may extend), ``covered_through`` the highest message id any of
     its segments covers. ``turns`` are the session's redacted turns from
     ``resume_from`` on (all of them when there is no segment yet), within
-    retention, oldest first.
+    retention, oldest first. ``scope_kind`` / ``scope_id`` are who may read the
+    session's segments (:func:`conversation_scope`).
     """
 
     session_id: int
@@ -289,6 +390,24 @@ class _Conversation:
     resume_from: int | None
     covered_through: int | None
     turns: list[Turn] = field(default_factory=list)
+    scope_kind: str = "shared"
+    scope_id: str | None = None
+
+
+def conversation_scope(session_key: str, person_id: str | None) -> tuple[str, str | None]:
+    """Who may read a conversation's segments: ``(scope_kind, scope_id)``.
+
+    A session that belongs to one person is private to that person
+    (``("user", person_id)``). One with no single person — a workspace, a
+    group channel, a system session — is ``("shared", None)``; a workspace's
+    segments are further gated by room membership at read time. A workspace
+    session stays shared even when it records a person.
+    """
+    from robothor.rooms.keys import parse_room_key
+
+    if person_id and parse_room_key(session_key) is None:
+        return "user", str(person_id)
+    return "shared", None
 
 
 def _parse_vector(value: Any) -> list[float] | None:
@@ -354,14 +473,18 @@ def _load_conversation(
                 embedding=_parse_vector(row["embedding"]),
             )
         )
+    person_id = str(session["person_id"]) if session["person_id"] else None
+    scope_kind, scope_id = conversation_scope(session_key, person_id)
     return _Conversation(
         session_id=int(session["id"]),
-        person_id=str(session["person_id"]) if session["person_id"] else None,
+        person_id=person_id,
         resume_from=int(resume_from) if resume_from is not None else None,
         covered_through=(
             int(mark["covered_through"]) if mark.get("covered_through") is not None else None
         ),
         turns=turns,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
     )
 
 
@@ -399,19 +522,29 @@ def _write_segments(
             cur.execute(
                 "DELETE FROM memory_segments "
                 "WHERE tenant_id = %s AND source_kind = 'conversation' AND source_ref = %s "
-                "AND start_ref >= %s AND start_ref <> ALL(%s::bigint[])",
-                (tenant_id, session_key, conversation.resume_from, [s.start_ref for s in segs]),
+                "AND start_ref >= %s AND (start_ref, part) NOT IN "
+                "(SELECT * FROM unnest(%s::bigint[], %s::smallint[]))",
+                (
+                    tenant_id,
+                    session_key,
+                    conversation.resume_from,
+                    [s.start_ref for s in segs],
+                    [s.part for s in segs],
+                ),
             )
         written = 0
         for seg, vec in zip(segs, vectors, strict=True):
             cur.execute(
                 """
                 INSERT INTO memory_segments (
-                    tenant_id, source_kind, source_ref, start_ref, end_ref,
+                    tenant_id, source_kind, source_ref, start_ref, end_ref, part,
                     started_at, ended_at, topic, text, embedding,
-                    person_id, chat_session_id
-                ) VALUES (%s, 'conversation', %s, %s, %s, %s, %s, %s, %s, %s::vector, %s, %s)
-                ON CONFLICT (tenant_id, source_kind, source_ref, start_ref) DO UPDATE SET
+                    person_id, scope_kind, scope_id, chat_session_id
+                ) VALUES (
+                    %s, 'conversation', %s, %s, %s, %s, %s, %s, %s, %s, %s::vector,
+                    %s, %s, %s, %s
+                )
+                ON CONFLICT (tenant_id, source_kind, source_ref, start_ref, part) DO UPDATE SET
                     end_ref = EXCLUDED.end_ref,
                     started_at = EXCLUDED.started_at,
                     ended_at = EXCLUDED.ended_at,
@@ -419,22 +552,29 @@ def _write_segments(
                     text = EXCLUDED.text,
                     embedding = EXCLUDED.embedding,
                     person_id = EXCLUDED.person_id,
+                    scope_kind = EXCLUDED.scope_kind,
+                    scope_id = EXCLUDED.scope_id,
                     chat_session_id = EXCLUDED.chat_session_id,
                     updated_at = NOW()
                 WHERE memory_segments.end_ref IS DISTINCT FROM EXCLUDED.end_ref
                    OR memory_segments.text IS DISTINCT FROM EXCLUDED.text
+                   OR memory_segments.scope_kind IS DISTINCT FROM EXCLUDED.scope_kind
+                   OR memory_segments.scope_id IS DISTINCT FROM EXCLUDED.scope_id
                 """,
                 (
                     tenant_id,
                     session_key,
                     seg.start_ref,
                     seg.end_ref,
+                    seg.part,
                     seg.started_at,
                     seg.ended_at,
                     seg.topic,
                     seg.text,
                     vec,
                     conversation.person_id,
+                    conversation.scope_kind,
+                    conversation.scope_id,
                     conversation.session_id,
                 ),
             )
@@ -460,7 +600,8 @@ async def index_conversation(
     Loads the turns from the start of the session's last stored segment on
     (every turn within retention when there is none), re-segments them so the
     open segment can grow, embeds what has no vector yet, and upserts on
-    ``(tenant_id, 'conversation', session_key, start_ref)``. Running it again
+    ``(tenant_id, 'conversation', session_key, start_ref, part)``, with the
+    session's reader scope (:func:`conversation_scope`). Running it again
     with no new turn writes nothing. Database work runs in a worker thread.
 
     ``embed_batch`` is injected in tests; the default is the local Ollama
@@ -527,7 +668,8 @@ def cleanup_stale_segments(days: int = SEGMENT_RETENTION_DAYS, tenant_id: str | 
 # ── Search ──────────────────────────────────────────────────────────────────
 
 _COLUMNS = (
-    "id, text, topic, source_kind, source_ref, start_ref, end_ref, started_at, ended_at, person_id"
+    "id, text, topic, source_kind, source_ref, start_ref, end_ref, part, "
+    "started_at, ended_at, scope_kind"
 )
 
 # The keyword leg ORs the query's terms: plainto_tsquery ANDs them, so a long
@@ -540,53 +682,39 @@ _OR_TSQUERY = "NULLIF(replace(plainto_tsquery('english', %s)::text, ' & ', ' | '
 
 def _filters(
     *,
-    person_scope: DataScope | None,
+    reader_person_id: str | None,
     since: datetime | None,
     until: datetime | None,
     room_ids: Iterable[str] | None,
 ) -> tuple[str, list[Any]]:
+    """The visibility rule and the time window, as SQL.
+
+    Visibility — applied on every search, whatever the data-scoping rollout
+    says, because verbatim conversation is more sensitive than an extracted
+    fact: a reader sees ``shared`` segments, and ``user`` segments whose
+    ``scope_id`` is the reader's own person. With no reader person, shared
+    only. A shared segment of a workspace conversation
+    (``agent:{agent}:room:{id}``) is seen only for the rooms in ``room_ids``,
+    as ``search_chat_turns`` does; with none passed, no workspace is searched.
+    """
     from robothor.rooms.keys import canonical_uuid
 
-    clauses: list[str] = []
-    params: list[Any] = []
-    if person_scope is not None and person_scope.restricted:
-        clauses.append("(person_id::text = %s OR person_id IS NULL)")
-        params.append(person_scope.person_id)
+    allowed = sorted({c for c in (canonical_uuid(r) for r in room_ids or ()) if c})
+    clauses = [
+        "((scope_kind = 'shared' AND (source_kind <> 'conversation' "
+        "OR split_part(source_ref, ':', 3) <> 'room' "
+        "OR split_part(source_ref, ':', 4) = ANY(%s::text[]))) "
+        "OR (scope_kind = 'user' AND %s::text IS NOT NULL AND scope_id = %s::text))"
+    ]
+    reader = str(reader_person_id) if reader_person_id else None
+    params: list[Any] = [allowed, reader, reader]
     if since is not None:
         clauses.append("ended_at >= %s")
         params.append(since)
     if until is not None:
         clauses.append("started_at <= %s")
         params.append(until)
-    # A workspace's conversation (``agent:{agent}:room:{id}``) is searched only
-    # for the rooms the caller can access, as search_chat_turns does. Fails
-    # closed: with no rooms passed, no workspace is searched.
-    allowed = sorted({c for c in (canonical_uuid(r) for r in room_ids or ()) if c})
-    clauses.append(
-        "(source_kind <> 'conversation' OR split_part(source_ref, ':', 3) <> 'room' "
-        "OR split_part(source_ref, ':', 4) = ANY(%s::text[]))"
-    )
-    params.append(allowed)
     return "".join(f" AND {c}" for c in clauses), params
-
-
-def _force_iterative_scan(cur: Any) -> None:
-    """Ask pgvector to scan past the tenant filter until LIMIT is met.
-
-    Segments are always tenant-filtered, and a small tenant beside a large one
-    otherwise gets fewer rows than asked for: the HNSW candidate budget fills
-    with the large tenant's vectors and the filter discards them. Unlike the
-    shared opt-in (``MEMORY_HNSW_ITERATIVE``), this is always on for segments.
-    In a savepoint, so a build without the setting leaves the query running.
-    """
-    cur.execute("SAVEPOINT segments_hnsw")
-    try:
-        cur.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
-        cur.execute("SET LOCAL hnsw.max_scan_tuples = %s", (max_scan_tuples(),))
-        cur.execute("RELEASE SAVEPOINT segments_hnsw")
-    except psycopg2.Error as e:
-        cur.execute("ROLLBACK TO SAVEPOINT segments_hnsw")
-        logger.debug("segments: iterative HNSW scan unavailable: %s", e)
 
 
 def _query_segments(
@@ -602,8 +730,9 @@ def _query_segments(
     dense: list[dict[str, Any]] = []
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        # ef_search plus, where pgvector supports it, an iterative scan: a small
+        # tenant beside a large one still fills the LIMIT.
         apply_hnsw_session(cur)
-        _force_iterative_scan(cur)
         if embedding is not None:
             vec = list(embedding)
             cur.execute(
@@ -616,7 +745,6 @@ def _query_segments(
                 """,  # noqa: S608 - fixed fragments; values are parameters
                 (vec, tenant_id, *params, vec, fetch),
             )
-            # relaxed_order may return near-ties slightly out of order.
             dense = sorted(
                 (dict(r) for r in cur.fetchall()),
                 key=lambda r: (-float(r["similarity"]), r["id"]),
@@ -647,8 +775,10 @@ def _hit(row: dict[str, Any]) -> dict[str, Any]:
         "source_ref": row["source_ref"],
         "start_ref": int(row["start_ref"]),
         "end_ref": int(row["end_ref"]),
+        "part": int(row["part"]),
         "started_at": row["started_at"],
         "ended_at": row["ended_at"],
+        "scope_kind": row["scope_kind"],
         "similarity": None,
         "keyword_rank": None,
         "rrf_score": 0.0,
@@ -673,9 +803,36 @@ def _fuse(
 
 
 async def _embed_query(query: str) -> list[float]:
+    """Embed a retrieval query the way ``search_facts`` does (query instruction)."""
     from robothor.llm import ollama as llm_client
 
-    return list(await llm_client.get_embedding_async(query))
+    return list(await llm_client.get_embedding_async(llm_client.format_embedding_query(query)))
+
+
+def rerank_excerpt(text: str, query: str, size: int = SEGMENT_RERANK_CHARS) -> str:
+    """At most ``size`` characters of ``text`` for the cross-encoder to read.
+
+    The window holding the most distinct query terms (three letters or more,
+    common words dropped), else the head. Only what the reranker reads; the
+    stored and returned text stay whole.
+    """
+    if len(text) <= size:
+        return text
+    terms = {w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) >= 3} - _EXCERPT_STOP
+    lowered = text.lower()
+    hits = sorted(
+        (m.start(), term) for term in terms for m in re.finditer(rf"\b{re.escape(term)}", lowered)
+    )[:200]
+    if not hits:
+        return text[:size]
+    half = size // 2
+    best_pos, best_count = hits[0][0], 0
+    for pos, _term in hits:
+        count = len({t for p, t in hits if abs(p - pos) <= half})
+        if count > best_count:
+            best_pos, best_count = pos, count
+    start = max(0, min(best_pos - half, len(text) - size))
+    return text[start : start + size]
 
 
 async def search_segments(
@@ -683,33 +840,38 @@ async def search_segments(
     *,
     tenant_id: str,
     limit: int = 10,
-    person_scope: DataScope | None = None,
+    reader_person_id: str | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
     query_embedding: Sequence[float] | None = None,
     room_ids: Iterable[str] | None = None,
+    embed_missing: bool = True,
 ) -> list[dict[str, Any]]:
     """Search one tenant's conversation segments: dense + keyword, fused by RRF.
 
-    ``tenant_id`` is required and never defaulted. ``person_scope`` (a
-    restricted ``DataScope``) keeps the caller to its own and shared segments.
-    ``since`` / ``until`` bound event time (a segment overlapping the window
-    matches). ``room_ids`` are the workspaces the caller can access; without
-    them no workspace conversation is searched. ``query_embedding`` skips the
-    embedding call; when the embedder is down, the keyword leg answers alone.
+    ``tenant_id`` is required and never defaulted. ``reader_person_id`` is the
+    reader's own person: their private segments are returned with the shared
+    ones; without it, shared segments only (see :func:`_filters`).
+    ``room_ids`` are the workspaces the reader can access; without them no
+    workspace conversation is searched. ``since`` / ``until`` bound event time
+    (a segment overlapping the window matches). ``query_embedding`` skips the
+    embedding call; ``embed_missing=False`` skips it too, for a caller whose
+    own embedding already failed. When there is no embedding the keyword leg
+    answers alone.
 
     Each hit: ``id``, ``kind`` ("segment"), ``source`` ("segment"), ``text``,
     ``topic``, ``source_kind``, ``source_ref``, ``start_ref``, ``end_ref``,
-    ``started_at``, ``ended_at``, ``similarity`` (cosine, None when the dense
-    leg did not return it), ``keyword_rank`` (``ts_rank_cd``, None when the
-    keyword leg did not match it) and ``rrf_score``. Best first.
+    ``part``, ``started_at``, ``ended_at``, ``scope_kind``, ``similarity``
+    (cosine, None when the dense leg did not return it), ``keyword_rank``
+    (``ts_rank_cd``, None when the keyword leg did not match it) and
+    ``rrf_score``. Best first.
     """
     if not tenant_id:
         raise ValueError("search_segments needs a tenant_id")
     if limit <= 0:
         return []
     embedding = query_embedding
-    if embedding is None:
+    if embedding is None and embed_missing:
         try:
             embedding = await _embed_query(query)
         except httpx.HTTPError as e:
@@ -717,7 +879,9 @@ async def search_segments(
                 "search_segments: embedding failed (%s); keyword leg only", type(e).__name__
             )
             embedding = None
-    where, params = _filters(person_scope=person_scope, since=since, until=until, room_ids=room_ids)
+    where, params = _filters(
+        reader_person_id=reader_person_id, since=since, until=until, room_ids=room_ids
+    )
     dense, keyword = await asyncio.to_thread(
         _query_segments,
         query,

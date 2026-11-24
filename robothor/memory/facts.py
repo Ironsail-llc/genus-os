@@ -24,6 +24,8 @@ import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from robothor.identity.scope import DataScope
 
 import httpx
@@ -905,6 +907,9 @@ RESERVED_PLACES: dict[str, int] = {"graph": 2, "entity_expansion": 1}
 
 _AUX_LIMITS = {"insight": 3, "episode": 3, "chat_turn": 5}
 
+# Conversation segments fetched for fusion: at least this many, else the limit.
+SEGMENT_LEG_MIN = 5
+
 
 async def _embed_query(query: str) -> list[float]:
     """Embed a retrieval query with the model's query instruction."""
@@ -1087,6 +1092,42 @@ def _aux_candidates(rows: list[dict[str, Any]], kind: str, text_key: str) -> lis
     ]
 
 
+def _segment_candidates(hits: list[dict[str, Any]], query: str) -> list[Candidate]:
+    """Conversation segments as candidates of kind ``segment``.
+
+    The reranker reads a bounded excerpt (``Candidate.text`` becomes the row's
+    ``content``); the row keeps the whole verbatim text as ``fact_text`` so
+    the tool output and the eval scorers see all of it. ``age_seconds`` is from
+    the segment's last turn, so the blend's recency treats it like a fact's.
+    """
+    from datetime import UTC, datetime
+
+    from robothor.memory.segments import rerank_excerpt
+
+    now = datetime.now(UTC)
+    out: list[Candidate] = []
+    for h in hits:
+        ended = h.get("ended_at")
+        payload = {
+            **h,
+            "fact_text": h["text"],
+            "category": "segment",
+            "confidence": 0.5,
+            "age_seconds": (now - ended).total_seconds() if ended is not None else None,
+        }
+        out.append(
+            Candidate(
+                id=h["id"],
+                kind="segment",
+                text=rerank_excerpt(h["text"], query),
+                similarity=h.get("similarity"),
+                leg_scores={"segment": float(h.get("rrf_score") or 0.0)},
+                payload=payload,
+            )
+        )
+    return out
+
+
 async def _auxiliary_legs(
     *,
     query: str,
@@ -1096,15 +1137,42 @@ async def _auxiliary_legs(
     include_insights: bool,
     include_episodes: bool,
     include_chat_turns: bool,
+    include_segments: bool = False,
+    limit: int = 10,
+    reader_person_id: str | None = None,
+    room_ids: Iterable[str] | None = None,
 ) -> dict[str, list[Candidate]]:
-    """Insights, episode summaries and verbatim chat turns, as fusion legs.
+    """Insights, episode summaries, conversation segments and chat turns, as legs.
 
     Each leg is best-effort: a failure is a WARNING naming the leg, and the
     other legs still rank. They used to be appended after ranking (and the
     episode leg dropped whenever the reranker ran); they are now fused and
     reranked with the facts.
+
+    The ``segment`` leg (dense + keyword over ``memory_segments``) supersedes
+    the dense-only ``chat_turn`` leg: when segments are on, chat turns are not
+    searched for the same query, so one conversation is not returned twice
+    in two shapes. ``reader_person_id`` / ``room_ids`` decide which segments
+    the reader may see (``robothor.memory.segments._filters``).
     """
     legs: dict[str, list[Candidate]] = {}
+    if include_segments:
+        try:
+            from robothor.memory.segments import search_segments
+
+            hits = await search_segments(
+                query,
+                tenant_id=_tenant,
+                limit=max(SEGMENT_LEG_MIN, limit),
+                reader_person_id=reader_person_id,
+                room_ids=room_ids,
+                query_embedding=embedding,
+                embed_missing=False,
+            )
+            legs["segment"] = _segment_candidates(hits, query)
+        except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
+            logger.warning("search_facts: segment leg failed: %s: %s", type(e).__name__, e)
+        include_chat_turns = False
     if include_insights:
         try:
             rows = await search_insights(query, limit=_AUX_LIMITS["insight"], tenant_id=tenant_id)
@@ -1185,14 +1253,18 @@ async def search_facts(
     include_chat_turns: bool = False,
     tenant_id: str = "",
     scope: DataScope | None = None,
+    include_segments: bool = True,
+    reader_person_id: str | None = None,
+    room_ids: Iterable[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid recall: named legs fused by RRF, graded rerank, one relevance scale.
 
     Pipeline (contract in robothor/memory/recall.py):
         1. Legs: ``vector`` (HNSW cosine) and ``keyword`` (full text, every
            term, then any term) over memory_facts; ``entity_expansion`` when
-           ``expand_entities``; ``insight`` / ``episode`` / ``chat_turn`` when
-           asked for. Each fetches max(30, limit * 3).
+           ``expand_entities``; ``segment`` (raw conversation, on by default);
+           ``insight`` / ``episode`` / ``chat_turn`` when asked for. Each fact
+           leg fetches max(30, limit * 3).
         2. ``fuse`` — reciprocal rank fusion, k=60, ``LEG_WEIGHTS``.
         3. Reranker (on by default; ``MEMORY_RERANK_ENABLED``) scores the head
            of the fused list on 0..1 and orders by that score; on any error the
@@ -1217,6 +1289,15 @@ async def search_facts(
             facts through the fan-out). The insight, episode and chat-turn
             legs are unaffected — see robothor/identity/scope.py and the Task
             5 report for the documented rationale.
+        include_segments: Fuse a ``segment`` leg of raw conversation
+            (``robothor.memory.segments.search_segments``). On by default;
+            when on, the ``chat_turn`` leg is not run even if asked for — the
+            segment leg covers the same conversation with a keyword leg too.
+        reader_person_id: The reader's own person. Segments private to that
+            person are returned with the shared ones; without it, shared
+            segments only. Applied whatever ``scope`` says.
+        room_ids: Workspaces the reader can access; a workspace conversation's
+            segments are returned only for these.
 
     Returns:
         Rows ordered best first. Each carries its payload (``fact_text``,
@@ -1269,6 +1350,10 @@ async def search_facts(
             include_insights=include_insights,
             include_episodes=include_episodes,
             include_chat_turns=include_chat_turns,
+            include_segments=include_segments,
+            limit=limit,
+            reader_person_id=reader_person_id,
+            room_ids=room_ids,
         )
     )
 

@@ -64,8 +64,12 @@ def pg(scratch_db, monkeypatch):
     async def embed_query(query: str) -> list[float]:
         return fake_embed(query)
 
+    from robothor.llm import ollama as llm_client
     from robothor.memory import facts
 
+    # Every leg embeds through the fake, including those that call the client
+    # directly (insights, the router's stores): no test reaches a live model.
+    monkeypatch.setattr(llm_client, "get_embedding_async", lambda t, *a, **k: embed_query(t))
     monkeypatch.setattr(facts, "_embed_query", embed_query)
     monkeypatch.setattr(segments, "_embed_query", embed_query)
     monkeypatch.setenv("MEMORY_RERANK_ENABLED", "0")

@@ -52,8 +52,18 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      most of its words.
    - `entity_expansion` (`expand_entities`) — facts about entities related to
      the top hits' entities.
+   - `segment` (`include_segments`, **on by default**) — raw conversation
+     segments from `search_segments` (see
+     [Conversation segments](#conversation-segments)), kind `segment`. Each
+     row's `fact_text` is the whole verbatim text; the reranker reads only a
+     `SEGMENT_RERANK_CHARS` (1,200) excerpt around the best keyword match
+     (`rerank_excerpt`). Which segments come back depends on the reader:
+     `reader_person_id` and `room_ids`, applied on every call.
    - `insight`, `episode`, `chat_turn` (`include_insights`,
-     `include_episodes`, `include_chat_turns`).
+     `include_episodes`, `include_chat_turns`). The dense-only `chat_turn` leg
+     does not run while the `segment` leg is on, even when asked for: both
+     read the same conversation, and the segment leg adds a keyword leg and
+     the reader rule. `search_chat_turns` itself is unchanged.
 2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
    records its rank in every leg that found it (`leg_ranks`).
 3. **Reranker** (Qwen3-Reranker-0.6B, local) — on by default, off with
@@ -85,6 +95,15 @@ pool, and gives rows scoring at least 0.5 a small blend bonus.
 `MEMORY_EPISODE_MERGE` is no longer read: the auxiliary stores are fused legs on
 every path. `MEMORY_NARROW_SEARCH` is read by the `search_memory` tool, which
 decides the `include_*` arguments.
+
+The `search_memory` tool passes the reader on both paths (direct and RIP 15):
+`reader_person_id` is the run identity's `person_id`, whatever
+`ROBOTHOR_DATA_SCOPING` is set to, and `room_ids` are the room of the current
+room run plus every room the calling user is a member of. A segment row in the
+tool's output adds `kind`, `topic`, `source_kind`, `source_ref`, `start_ref`,
+`end_ref`, `part`, `started_at` and `ended_at` to the usual fields; a fact row
+keeps its shape. Segment rows carry `source: "segment"`, so fact-access logging
+for outcome attribution skips them.
 
 ### Memory router (RIP 15)
 
@@ -120,13 +139,21 @@ user and assistant turns with text count. A new segment starts:
 |------|----------|----------------|
 | Silence between two turns | `SEGMENT_GAP_SECONDS` | 30 minutes |
 | Change of subject at a user turn: cosine between the mean vectors of the turns before and after it | `SEGMENT_SIMILARITY_BREAK`, `SEGMENT_WINDOW_TURNS` | below 0.5, 2 turns each side |
-| Size budget, so a hit fits a reranker and a context budget | `SEGMENT_MAX_CHARS`, `SEGMENT_MAX_TURNS` | 4,000 characters, 24 turns |
+| Size budget, so a hit fits a context budget | `SEGMENT_MAX_CHARS`, `SEGMENT_MAX_TURNS` | 4,000 characters, 24 turns |
 
 A subject break needs the open segment to hold `SEGMENT_MIN_TURNS` (2) turns
 first. A fragment of fewer than 2 turns and under `SEGMENT_MIN_CHARS` (200)
 characters, such as a lone "thanks", joins its neighbour; a conversation that
-is only a fragment is not indexed yet. A single turn over the size budget is
-clipped. The values are starting points, to be tuned by the memory eval.
+is only a fragment is not indexed yet. The values are starting points, to be
+tuned by the memory eval.
+
+A single turn over the size budget is never clipped. It is split into
+consecutive segments, cut after the last paragraph break, else sentence end,
+else space in the second half of each budget-sized window. Each piece has the
+turn's message id as both `start_ref` and `end_ref` and a `part` of 0, 1, 2 …;
+a piece never shares a segment with another turn. With the `User: ` /
+`Assistant: ` label removed, the pieces' texts in `part` order concatenate to
+the turn exactly.
 
 **Text** is the turns verbatim, one per line, `User: …` / `Assistant: …`,
 redacted with the same `redact()` chat_store applies before embedding — also
@@ -134,15 +161,26 @@ for rows written before the store redacted at the door. `topic` is the opening
 of the segment's first user turn. Each row names its source: `source_kind`
 (`conversation`; `document` and `email` are reserved), `source_ref` (the
 session key), `start_ref` and `end_ref` (the first and last `chat_messages.id`
-it covers) and `started_at` / `ended_at` (event time). `person_id` is the
-session's person.
+it covers), `part`, and `started_at` / `ended_at` (event time). `person_id` is
+the session's person.
+
+**Who may read a segment** (`scope_kind`, `scope_id`). A session that belongs
+to one person (`chat_sessions.person_id` set) is private to that person:
+`user` and that person's id. A session with no single person — a workspace
+(`agent:{agent}:room:{id}`, even when it records a person), a group channel,
+a system session — is `shared`. A reader sees shared segments plus user
+segments whose `scope_id` is their own person; a reader with no known person
+sees shared ones only; a workspace's shared segments reach only readers who
+pass that workspace in `room_ids`. This rule is applied on every search,
+independent of the `ROBOTHOR_DATA_SCOPING` rollout, because verbatim
+conversation is more sensitive than an extracted fact.
 
 **Indexing** (`index_conversation(session_key, tenant_id=…)`) runs in the
 background after every saved exchange: `chat_store.save_exchange_async`
 spawns it once the turn is committed, beside the turn embedding, for every
 channel that saves through it. It re-segments from the start of the session's
 last segment, so an open segment grows as the conversation continues, and
-upserts on `(tenant_id, source_kind, source_ref, start_ref)`: running it twice
+upserts on `(tenant_id, source_kind, source_ref, start_ref, part)`: running it twice
 writes nothing the second time. Database work runs in a worker thread. A
 failure (embedder down, database error) is logged and never reaches the turn;
 the next exchange retries the same turns.
@@ -151,16 +189,16 @@ the next exchange retries the same turns.
 leg (HNSW cosine) and a keyword leg (`ts_rank_cd` over the generated
 `tsvector`) with `rrf_fuse` (k=60). The keyword leg ORs the query's terms, so a
 long natural question still matches on the words that matter. The tenant is a
-required argument with no default. The dense leg always asks pgvector for an
-iterative scan (on top of `apply_hnsw_session`), so a small tenant beside a
-large one still gets `limit` rows. Optional filters: `person_scope` (a
-restricted `DataScope` sees its own and shared segments), `since` / `until`
-(event time), and `room_ids` — a workspace conversation is searched only for
-the workspaces passed, as `search_chat_turns` does. When the embedder is down
-the keyword leg answers alone. Each hit carries `id`, `kind: "segment"`,
-`text`, `topic`, `source_kind`, `source_ref`, `start_ref`, `end_ref`,
-`started_at`, `ended_at`, `similarity` (or `None`), `keyword_rank` (or `None`)
-and `rrf_score`.
+required argument with no default. The dense leg uses `apply_hnsw_session`,
+whose iterative scan (on wherever pgvector supports it) lets a small tenant
+beside a large one still get `limit` rows. The reader is `reader_person_id`
+and `room_ids` (the rule above); `since` / `until` bound event time. When the
+embedder is down the keyword leg answers alone (`embed_missing=False` skips
+the embedding call for a caller whose own already failed). Each hit carries
+`id`, `kind: "segment"`, `source: "segment"`, `text`, `topic`,
+`source_kind`, `source_ref`, `start_ref`, `end_ref`, `part`, `started_at`,
+`ended_at`, `scope_kind`, `similarity` (or `None`), `keyword_rank` (or
+`None`) and `rrf_score`.
 
 **Retention.** A segment never outlives the chat it copies. It references its
 `chat_sessions` row with `ON DELETE CASCADE`, so clearing a session or the
@@ -170,8 +208,8 @@ than `CHAT_TURN_TTL_DAYS`) ago, tenant by tenant, and turns older than that are
 never indexed. Segments move with their session in `genus tenant
 move-workload`.
 
-Segments are not yet a leg of `search_facts` or the `search_memory` tool; that
-wiring follows the ranking rework.
+Segments are the `segment` leg of `search_facts` and so of the `search_memory`
+tool (see [Retrieval](#retrieval)).
 
 ## Symbolic short-term memory (RIP 13)
 
