@@ -1474,20 +1474,29 @@ def _build_entity_context(
 def _record_injected_facts(rows: list[dict[str, Any]], tenant_id: str) -> None:
     """Count facts warm-up injected as used, off the warm-up's critical path.
 
-    Entity recall returns text, not ids, so rows are found by their active
-    ``(tenant_id, content_hash)`` pair — the hash store_fact writes. Best-effort:
-    a failure is logged and the recall is returned unchanged.
+    A row with an ``id`` (the legacy fetch) is recorded by id. The v2 fetch,
+    ``entity_facts_for_candidates`` (migration 166), returns no id, so its rows
+    are found by their active ``(tenant_id, content_hash)`` pair, hashed over
+    the same fields the stored hash covers, ``person_id`` included. Returning
+    ids from that function needs a migration. Best-effort: a failure is logged
+    and the recall is returned unchanged.
     """
     try:
         from robothor.memory.drift import compute_fact_hash
         from robothor.memory.outcomes import record_fact_access
 
+        ids = [int(r["id"]) for r in rows if r.get("id")]
         hashes = [
-            compute_fact_hash(r["fact_text"], tenant_id=tenant_id, category=r.get("category") or "")
+            compute_fact_hash(
+                r["fact_text"],
+                tenant_id=tenant_id,
+                category=r.get("category") or "",
+                person_id=str(r["person_id"]) if r.get("person_id") else None,
+            )
             for r in rows
-            if r.get("fact_text")
+            if not r.get("id") and r.get("fact_text")
         ]
-        _defer_write(record_fact_access, tenant_id, content_hashes=hashes)
+        _defer_write(record_fact_access, tenant_id, fact_ids=ids, content_hashes=hashes)
     except Exception as e:
         logger.warning("Warmup could not schedule fact access recording: %s", e)
 
@@ -1531,10 +1540,10 @@ def _fetch_entity_facts_batched(
         cur.execute(
             f"""
             SELECT c.ord AS candidate_ordinal,
-                   f.fact_text, f.category, f.importance_score, f.person_id
+                   f.id, f.fact_text, f.category, f.importance_score, f.person_id
             FROM unnest(%s::text[]) WITH ORDINALITY AS c(name, ord)
             CROSS JOIN LATERAL (
-                SELECT fact_text, category, importance_score, person_id, created_at
+                SELECT id, fact_text, category, importance_score, person_id, created_at
                 FROM memory_facts
                 WHERE is_active = TRUE AND c.name = ANY(entities) AND tenant_id = %s
                   {scope_clause}

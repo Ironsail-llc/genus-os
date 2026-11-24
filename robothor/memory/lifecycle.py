@@ -1043,30 +1043,41 @@ _DECAY_CHUNK_SIZE = 500
 _USE_COUNT_SQL = "GREATEST(COALESCE(access_count, 0), COALESCE(access_count_shadow, 0))"
 _LAST_USED_SQL = "GREATEST(last_accessed, last_accessed_shadow)"
 
-# Importance scoring marks what the judge scored in metadata instead of
-# inferring "unscored" from importance_score = 0.5: one reinforcement
-# (conflicts._reinforce_fact, +0.05) moves a fact off 0.5 and the judge never
-# saw it. Rows scored before the marker existed carry none, so a fact is a
-# candidate when unmarked AND either still at the 0.5 default or reinforced
-# (a reinforced, previously judged fact is judged once more, then marked).
-# A verdict of exactly 0.5 is not marked — judge_importance also returns 0.5
-# on a timeout or error, so that row stays a candidate, as it always was.
+# Importance candidates. Selecting ``importance_score = 0.5`` missed every
+# reinforced fact: conflicts._reinforce_fact adds 0.05 per reinforcement
+# (``LEAST(score + 0.05, 1.0)``), so the judge never saw a re-observed fact.
+# Selecting on "reinforced" instead would overwrite scores that were judged or
+# set on purpose (a resolution lifted to 0.85, a consolidated fact's inherited
+# importance), because rows scored before the marker existed carry none.
+#
+# So a fact is a candidate when it carries no marker AND its score is still
+# exactly what reinforcement alone gives from the 0.5 default:
+# ``LEAST(0.5 + 0.05 * reinforcement_count, 1.0)``, within float tolerance
+# (the reinforcement adds are accumulated in float8). Any other score was set
+# by someone and is left alone. The fragments carry no tenant predicate, so a
+# per-tenant caller ANDs its own.
 _IMPORTANCE_MARKER = "importance_scored_at"
+_REINFORCE_STEP = 0.05
+_IMPORTANCE_DEFAULT = 0.5
+_REINFORCEMENT_EARNED_SQL = f"({_REINFORCE_STEP} * COALESCE(reinforcement_count, 0))"
 _UNSCORED_IMPORTANCE_SQL = (
     f"NOT (COALESCE(metadata, '{{}}'::jsonb) ? '{_IMPORTANCE_MARKER}') "
-    "AND (importance_score = 0.5 OR COALESCE(reinforcement_count, 0) > 0)"
+    f"AND ABS(importance_score - LEAST({_IMPORTANCE_DEFAULT} + {_REINFORCEMENT_EARNED_SQL}, 1.0))"
+    " < 1e-6"
 )
 _MARK_IMPORTANCE_SQL = (
-    "metadata = COALESCE(metadata, '{}'::jsonb) "
-    f"|| jsonb_build_object('{_IMPORTANCE_MARKER}', NOW())"
+    f"COALESCE(metadata, '{{}}'::jsonb) || jsonb_build_object('{_IMPORTANCE_MARKER}', NOW())"
 )
 
 
 def _auto_score_old_events(cur: Any, tenant_id: str) -> int:
-    """Score one tenant's unjudged events older than 30 days 0.3 without the judge."""
+    """Score one tenant's unjudged events older than 30 days 0.3 (plus any
+    reinforcement earned) without the judge, and mark them scored."""
     cur.execute(
         f"""
-        UPDATE memory_facts SET importance_score = 0.3, {_MARK_IMPORTANCE_SQL}
+        UPDATE memory_facts
+        SET importance_score = LEAST(0.3 + {_REINFORCEMENT_EARNED_SQL}, 1.0),
+            metadata = {_MARK_IMPORTANCE_SQL}
         WHERE is_active = TRUE AND {_UNSCORED_IMPORTANCE_SQL}
           AND category = 'event'
           AND created_at < NOW() - INTERVAL '30 days'
@@ -1078,7 +1089,7 @@ def _auto_score_old_events(cur: Any, tenant_id: str) -> int:
 
 
 def _select_unscored_facts(cur: Any, tenant_id: str, limit: int = 200) -> list[dict[str, Any]]:
-    """One tenant's newest active facts the importance judge has not scored."""
+    """One tenant's newest active facts that were never judged or set on purpose."""
     cur.execute(
         f"""
         SELECT id, fact_text FROM memory_facts
@@ -1092,11 +1103,26 @@ def _select_unscored_facts(cur: Any, tenant_id: str, limit: int = 200) -> list[d
 
 
 def _record_importance(cur: Any, fact_id: int, score: float) -> None:
-    """Store the judge's score, marking the fact scored unless it is neutral."""
-    mark = f", {_MARK_IMPORTANCE_SQL}" if score != 0.5 else ""
+    """Store the judge's score plus the reinforcement the fact earned so far.
+
+    Marks the fact scored, except a neutral 0.5 on a never-reinforced fact:
+    judge_importance also returns 0.5 on a timeout, so that fact stays a
+    candidate, and rewriting it is idempotent (0.5 + nothing). A reinforced
+    fact is marked whatever the verdict, so a neutral verdict cannot be
+    re-selected nightly and reset the reinforcement earned since.
+    """
     cur.execute(
-        f"UPDATE memory_facts SET importance_score = %s{mark} WHERE id = %s",
-        (score, fact_id),
+        f"""
+        UPDATE memory_facts
+        SET importance_score = LEAST(%s + {_REINFORCEMENT_EARNED_SQL}, 1.0),
+            metadata = CASE
+                WHEN %s <> {_IMPORTANCE_DEFAULT} OR COALESCE(reinforcement_count, 0) > 0
+                THEN {_MARK_IMPORTANCE_SQL}
+                ELSE metadata
+            END
+        WHERE id = %s
+        """,
+        (score, score, fact_id),
     )
 
 
