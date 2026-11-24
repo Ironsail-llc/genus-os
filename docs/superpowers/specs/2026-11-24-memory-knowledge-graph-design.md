@@ -135,7 +135,7 @@ Identity is the part that caps quality, and a wrong merge is a privacy failure, 
 - Extraction is per role and per source. A derived row takes the authority of its least-trusted contributor, so paraphrasing untrusted content does not launder it.
 - Lower authority cannot supersede higher, cannot seed activation, and earns no reinforcement.
 - Scope is carried on facts, entities, edges and mentions from the start: shared within the tenant, private to one person (today's person scope), or private to one agent (new). An edge is visible to a reader who can see at least one of its supporting facts.
-- A derived row takes the narrowest scope among its inputs, as it takes the lowest authority. A consolidated fact, an entity observation or an insight built from any private fact is private to the same reader; where both shared and private evidence exist, the row is derived separately for each scope.
+- A derived row takes the narrowest scope among its inputs, as it takes the lowest authority. A consolidated fact, an entity observation or an insight built from any private fact is private to the same reader; where both shared and private evidence exist, the row is derived separately for each scope. Private scopes do not nest, so derivation never combines private facts of different readers: each private reader gets a row derived only from shared facts plus that reader's own private facts.
 - The state of an edge is likewise per reader. Its time bounds and retirement are computed from the supporting and contradicting facts that reader can see, so a private fact that ends or refutes a relation changes nothing for a reader who cannot see that fact.
 
 ### Learning
@@ -198,7 +198,7 @@ There is no switch in the request path. Dry runs are commands:
 Terms used in the table:
 
 - **Significant gain.** A paired McNemar test at p < 0.05 on the held-out split, using `robothor/memory/eval_stats.py`, with an effect larger than the measured run-to-run spread.
-- **One deciding comparison per gate.** Each gate names a single primary comparison: our system against the previous live path, on the pooled cases of the strata the gate lists. Per-stratum and per-baseline results are reported but are not each tested at p < 0.05, so no correction for multiple comparisons is needed.
+- **One deciding comparison per gate.** Each gate has a single significance test: our system against the previous live path, on the pooled cases of the strata the gate lists. Comparisons against baselines are non-inferiority checks, and a gate that names several baselines applies the Holm correction across them. Per-stratum results are reported and feed only the no-regression rule.
 - **Hard strata.** Multi-step, entity confusion, point-in-time, knowledge update, abstention and raw detail.
 - **No regression.** The existing promotion rule in `eval_stats.promotion_verdict` applies unchanged: any single stratum that regresses at p < 0.20 blocks the gate.
 - **At least level with a baseline.** Non-inferiority with a margin of five percentage points of answer accuracy: the lower bound of the 95% interval on our accuracy minus the baseline's is above minus five points.
@@ -226,10 +226,10 @@ Poisoning and cross-scope leaks through the new graph are closed by construction
 |---|---|
 | Safety | An isolation test per unsafe path that fails before the fix and passes after |
 | Measure | A recorded baseline on every stratum, for our system and for every baseline |
-| Recall core | A significant gain on the hard strata, no regression, lower latency, and at least level with every simple baseline |
-| Identity and graph | Numeric precision and recall targets for resolution; no cross-person exposure in the scope tests, including a private fact that closes or changes a shared edge, and a derived row built from private evidence |
-| Associative recall | A significant gain on multi-step and long-tenure strata over the recall core and over the observation-log and agent-search baselines at equal context; planted untrusted content never reaches warm-up; a candidate reachable only through a private edge is not recalled for a reader who cannot see that edge. If this gate fails, the graph serves identity and current state only |
-| Learning | Task-success and update strata improve; reinforcement cannot lift an irrelevant memory; erasure leaves no derived trace |
+| Recall core | Deciding test: a significant gain over today's recall on the pooled hard strata. Also: no regression, lower latency, and at least level with every simple baseline (Holm-corrected) |
+| Identity and graph | Numeric precision and recall targets for resolution; no cross-person exposure in the scope tests, including a private fact that closes or changes a shared edge, and a derived row built from private evidence of one reader and of two different readers |
+| Associative recall | Deciding test: a significant gain over the recall core on the pooled multi-step and long-tenure strata at equal context. Also: at least level with the observation-log and agent-search baselines on those strata (Holm-corrected); planted untrusted content never reaches warm-up; a candidate reachable only through a private edge is not recalled for a reader who cannot see that edge. If this gate fails, the graph serves identity and current state only |
+| Learning | Deciding test: a significant gain over the system without learning on the pooled task-success and knowledge-update strata. Also: reinforcement cannot lift an irrelevant memory; erasure leaves no derived trace |
 
 ## Constraints
 
