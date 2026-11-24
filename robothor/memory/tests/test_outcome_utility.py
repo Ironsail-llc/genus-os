@@ -413,8 +413,8 @@ async def _deliver(run: Any) -> tuple[MagicMock, MagicMock]:
 
 class TestRunOutcomeClassification:
     def test_only_a_completed_run_with_output_and_no_error_succeeded(self) -> None:
-        from robothor.engine.delivery import run_succeeded
         from robothor.engine.models import RunStatus
+        from robothor.engine.run_outcome_attribution import run_succeeded
 
         assert run_succeeded(_run()) is True
         assert run_succeeded(_run(output_text="")) is False
