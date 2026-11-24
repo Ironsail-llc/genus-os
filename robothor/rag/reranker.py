@@ -1,9 +1,9 @@
 """
 Cross-encoder reranker using Qwen3-Reranker via Ollama.
 
-The reranker outputs binary "yes"/"no" relevance judgments, not numeric
-scores. Results marked "yes" are kept (sorted by original cosine similarity),
-then backfilled from "no" results if fewer than top_k pass.
+The model answers "yes" or "no". The score is the probability it gives "yes"
+against "no" at that position, read from the logprobs Ollama returns: a graded
+relevance in 0..1. Candidates are ordered by that score alone.
 
 Usage:
     from robothor.rag.reranker import rerank_with_fallback
@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import time
 from typing import Any
@@ -97,10 +98,37 @@ async def _check_reranker_available_uncached() -> bool:
         return False
 
 
+# The reranker's task line. Qwen3-Reranker takes a free-text instruction; the
+# model card's default is about web search, which is not what memory recall
+# asks. This one says what a "relevant" memory is for an agent's question.
+MEMORY_RECALL_INSTRUCTION = (
+    "Given a question or topic, judge whether this stored memory (a fact, note or "
+    "conversation excerpt) helps answer it or is directly about it"
+)
+
+# Candidates scored per search. The pool arrives in fused (RRF) order, so pairs
+# past the cap were already ranked out by every leg; each pair is one
+# ~37 ms local generate call, serialised to the device's slot count. Scoring
+# all 30-60 fused candidates was 97% of search latency (measured 2026-08-24).
+# Env MEMORY_RERANK_MAX_CANDIDATES overrides; 0 disables the cap.
+RERANK_MAX_CANDIDATES = 16
+
+# Alternatives requested at the single generated position. "yes" and "no" are
+# the model's only trained answers, so in practice they are the top two.
+_TOP_LOGPROBS = 5
+
+
+def _max_candidates() -> int:
+    try:
+        return int(os.environ.get("MEMORY_RERANK_MAX_CANDIDATES", str(RERANK_MAX_CANDIDATES)))
+    except ValueError:
+        return RERANK_MAX_CANDIDATES
+
+
 def build_reranker_prompt(
     query: str,
     document: str,
-    instruction: str = "Given a web search query, retrieve relevant passages that answer the query",
+    instruction: str = MEMORY_RECALL_INSTRUCTION,
 ) -> str:
     """Build the ChatML prompt for the Qwen3-Reranker cross-encoder.
 
@@ -122,42 +150,63 @@ async def rerank_pair(
     client: httpx.AsyncClient,
     query: str,
     document: str,
-) -> str:
-    """Score a single query-document pair. Returns 'yes' or 'no'.
+) -> float:
+    """Score one query-document pair: graded relevance in 0..1.
 
     Takes one inference slot for the duration of the call. This is the leaf request,
     never the batch: holding a slot around the surrounding ``gather`` would deadlock
     the moment the batch needed the last slot.
 
-    The slot is acquired OUTSIDE the try below on purpose. Every other failure here
-    degrades to "no", but a gate refusal must not — marking every document
-    irrelevant silently destroys the ranking it was asked to improve. Letting it
-    propagate reaches ``rerank_with_fallback``, which falls back to cosine order.
+    Any failure — a gate refusal, a transport error, a bad response — raises.
+    Scoring a document 0 on error would silently corrupt the ranking it was asked
+    to improve; raising reaches ``rerank_with_fallback``, which returns the fused
+    order instead.
     """
     from robothor.llm.local_gate import Lane, gate
 
     prompt = build_reranker_prompt(query, document)
     async with gate().slot(lane=Lane.BACKGROUND):
-        try:
-            resp = await client.post(
-                f"{_ollama_url()}/api/generate",
-                json={
-                    "model": RERANKER_MODEL,
-                    "prompt": prompt,
-                    "raw": True,
-                    "stream": False,
-                    "keep_alive": _keep_alive_reranker(),
-                    # One token is enough for yes/no — the parser only checks the prefix.
-                    "options": {"temperature": 0.0, "num_predict": 1},
-                },
-            )
-            resp.raise_for_status()
-            text = resp.json().get("response", "").strip().lower()
-            if "yes" in text:
-                return "yes"
-            return "no"
-        except Exception:
-            return "no"
+        resp = await client.post(
+            f"{_ollama_url()}/api/generate",
+            json={
+                "model": RERANKER_MODEL,
+                "prompt": prompt,
+                "raw": True,
+                "stream": False,
+                "keep_alive": _keep_alive_reranker(),
+                "logprobs": True,
+                "top_logprobs": _TOP_LOGPROBS,
+                # One token is the answer; its alternatives carry the grade.
+                "options": {"temperature": 0.0, "num_predict": 1},
+            },
+        )
+        resp.raise_for_status()
+        return _graded_score(resp.json())
+
+
+def _graded_score(body: dict[str, Any]) -> float:
+    """P(yes) / (P(yes) + P(no)) at the answer position, in 0..1.
+
+    This is how the Qwen3-Reranker model card scores a pair (softmax over the
+    "yes" and "no" logits). Ollama returns ``logprobs`` when asked (0.12.11 and
+    later); an older server answers with text only, which degrades to 1.0 / 0.0
+    — still an order, with ties kept in fused order.
+    """
+    positions = body.get("logprobs") or []
+    if positions:
+        best: dict[str, float] = {}
+        for alt in positions[0].get("top_logprobs") or []:
+            token = str(alt.get("token", "")).strip().lower()
+            if token in ("yes", "no"):
+                lp = float(alt.get("logprob", float("-inf")))
+                best[token] = max(lp, best.get(token, float("-inf")))
+        if best:
+            p_yes = math.exp(best.get("yes", float("-inf")))
+            p_no = math.exp(best.get("no", float("-inf")))
+            if p_yes + p_no > 0:
+                return p_yes / (p_yes + p_no)
+    text = str(body.get("response", "")).strip().lower()
+    return 1.0 if text.startswith("yes") else 0.0
 
 
 async def rerank(
@@ -166,21 +215,24 @@ async def rerank(
     top_k: int = 10,
     batch_size: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Rerank search results using the cross-encoder.
+    """Rerank candidates by the cross-encoder's graded score.
 
-    Strategy:
-      1. Score each result as yes/no
-      2. Sort "yes" results by original cosine similarity
-      3. Backfill from top "no" results if fewer than top_k pass
+    Scores the first ``RERANK_MAX_CANDIDATES`` (fused order) and returns the
+    best ``top_k`` of them ordered by ``rerank_score`` alone — never re-sorted
+    by cosine, so a candidate without a ``similarity`` (keyword-only, graph,
+    episode) is ranked like any other. Equal scores keep the input order.
 
     Args:
         query: The search query.
-        results: Search results (must have 'content' and 'similarity' keys).
+        results: Candidates in fused order, each with a 'content' key.
         top_k: Number of results to return.
         batch_size: Concurrent reranking requests per batch.
 
     Returns:
-        Top-k results with 'rerank_relevant' field added.
+        Up to top_k scored rows, each with ``rerank_score`` (0..1) and, for
+        older readers, ``rerank_relevant`` ("yes" when the score is >= 0.5).
+        Raises if any pair fails; ``rerank_with_fallback`` turns that into the
+        fused order.
     """
     if not results:
         return []
@@ -191,15 +243,7 @@ async def rerank(
             r["rerank_relevant"] = "skipped"
         return results[:top_k]
 
-    # Cap the scored pool. The candidates arrive RRF-ordered from the fused
-    # retrieval legs, so pairs past the cap were already ranked out by BOTH
-    # legs — scoring them buys ~nothing and each pair costs a serialized
-    # ~37ms Ollama generate call. Scoring all 30-60 fused candidates was 97%
-    # of search_facts's 1.3s p50 (measured 2026-08-24). 0 disables the cap.
-    try:
-        max_candidates = int(os.environ.get("MEMORY_RERANK_MAX_CANDIDATES", "16"))
-    except ValueError:
-        max_candidates = 16
+    max_candidates = _max_candidates()
     if max_candidates > 0:
         results = results[:max_candidates]
 
@@ -211,29 +255,21 @@ async def rerank(
         batch_size = max(1, _gate().slots)
 
     t0 = time.time()
-    yes_results: list[dict[str, Any]] = []
-    no_results: list[dict[str, Any]] = []
+    scored: list[dict[str, Any]] = []
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         for i in range(0, len(results), batch_size):
             batch = results[i : i + batch_size]
             tasks = [rerank_pair(client, query, r.get("content", "")) for r in batch]
-            verdicts = await asyncio.gather(*tasks)
-            for r, verdict in zip(batch, verdicts, strict=True):
+            scores = await asyncio.gather(*tasks)
+            for r, score in zip(batch, scores, strict=True):
                 r_copy = dict(r)
-                r_copy["rerank_relevant"] = verdict
-                if verdict == "yes":
-                    yes_results.append(r_copy)
-                else:
-                    no_results.append(r_copy)
+                r_copy["rerank_score"] = float(score)
+                r_copy["rerank_relevant"] = "yes" if score >= 0.5 else "no"
+                scored.append(r_copy)
 
-    yes_results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-    no_results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-
-    final = yes_results[:top_k]
-    if len(final) < top_k:
-        remaining = top_k - len(final)
-        final.extend(no_results[:remaining])
+    # sorted() is stable: equal scores keep the fused order.
+    final = sorted(scored, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
 
     elapsed_ms = round((time.time() - t0) * 1000)
     for r in final:
@@ -247,7 +283,7 @@ async def rerank_with_fallback(
     results: list[dict[str, Any]],
     top_k: int = 10,
 ) -> list[dict[str, Any]]:
-    """Rerank with automatic fallback to cosine similarity ordering."""
+    """Rerank; on any reranker error return the input (fused) order, cut to top_k."""
     try:
         return await rerank(query, results, top_k=top_k)
     except Exception:
