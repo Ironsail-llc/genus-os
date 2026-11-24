@@ -401,3 +401,22 @@ async def test_a_room_delivery_reads_its_room_off_the_loop(monkeypatch):
     assert receipt.status == "failed:room_unknown_target"
     await probe.settle()
     probe.assert_loop_free()
+
+
+# ── memory: the graph-activation recall leg ───────────────────────────────
+
+
+async def test_the_graph_recall_leg_runs_off_the_loop(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from robothor.memory import activation, facts
+
+    probe = SlowProbe(asyncio.get_running_loop(), result=[])
+    monkeypatch.setattr(activation, "graph_candidates_for_query", probe)
+    monkeypatch.setattr(facts, "_embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr(facts, "_fact_legs", lambda *a, **k: {"vector": [], "keyword": []})
+
+    results = await facts.search_facts("Alice Smith", tenant_id="test-tenant", use_reranker=False)
+    assert results == []
+    await probe.settle()
+    probe.assert_loop_free()

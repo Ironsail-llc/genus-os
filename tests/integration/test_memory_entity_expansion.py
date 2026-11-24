@@ -16,9 +16,10 @@ The tests that covered this fabricated ``{"relations": [{"target": "Bob"}]}``
 — a shape production never emits — and then asserted the expansion ran. They
 passed for as long as the feature was broken.
 
-This test seeds real entities, a real relation, and real facts, and asserts an
-``entity_expansion`` row comes back. It is red until the key is fixed, and it
-cannot be satisfied by a mock.
+That leg is now superseded by graph activation (``robothor.memory.activation``,
+the ``graph`` leg of ``search_facts``); its search tests moved with it (see the
+note at the end). What stays here pins the relation shape ``get_entity`` emits,
+against real rows.
 """
 
 from __future__ import annotations
@@ -28,24 +29,6 @@ import pytest
 pytestmark = pytest.mark.integration
 
 _CONSTANT_VECTOR = [0.1] * 1024
-
-
-@pytest.fixture
-def _no_ollama(monkeypatch):
-    """Stub the embedding service only.
-
-    Embeddings are an external dependency, not the control under test — a
-    constant vector makes every row tie on the vector leg so BM25 over the
-    generated ``tsv`` column does the retrieving, and CI needs no Ollama.
-    Stubbing ``get_entity`` instead would be stubbing the thing being tested,
-    which is exactly how this bug survived.
-    """
-    from robothor.llm import ollama as llm_client
-
-    async def _fake_embedding(_text: str):
-        return list(_CONSTANT_VECTOR)
-
-    monkeypatch.setattr(llm_client, "get_embedding_async", _fake_embedding)
 
 
 @pytest.fixture
@@ -141,139 +124,11 @@ async def test_get_entity_emits_name_keys_not_bare_target(graph_fixture, mock_ge
     )
 
 
-@pytest.mark.asyncio
-async def test_expansion_returns_a_related_fact(graph_fixture, mock_get_connection, _no_ollama):
-    """The whole point: a fact reachable only through the graph comes back.
-
-    RED before the key fix — related_name is empty, so the expansion query
-    never executes and only the directly-matching seed fact is returned.
-    """
-    from robothor.memory.facts import search_facts
-
-    results = await search_facts(
-        graph_fixture["query"],
-        limit=10,
-        tenant_id=graph_fixture["tenant"],
-        expand_entities=True,
-        use_reranker=False,
-    )
-
-    sources = {r.get("source") for r in results}
-    ids = {r.get("id") for r in results}
-
-    assert "entity_expansion" in sources, (
-        f"entity expansion never ran — sources were {sources}. "
-        "38,300 memory_relations rows are unreachable."
-    )
-    assert graph_fixture["related_id"] in ids, (
-        "the related fact was not pulled in despite an entity_expansion source"
-    )
-
-
-@pytest.mark.asyncio
-async def test_expansion_is_off_by_default(graph_fixture, mock_get_connection, _no_ollama):
-    """Without expand_entities the related fact must not appear.
-
-    Negative control. Without it, a test that returns everything would pass the
-    assertion above for the wrong reason.
-    """
-    from robothor.memory.facts import search_facts
-
-    results = await search_facts(
-        graph_fixture["query"],
-        limit=10,
-        tenant_id=graph_fixture["tenant"],
-        expand_entities=False,
-        use_reranker=False,
-    )
-
-    assert "entity_expansion" not in {r.get("source") for r in results}
-
-
-@pytest.mark.asyncio
-async def test_expansion_respects_person_scope(db_cursor, test_prefix, mock_get_connection, _no_ollama):
-    """A restricted caller must not reach another person's row *through the graph*.
-
-    The expansion query carries the same scope predicate as the main candidate
-    queries, but that code had never executed, so the predicate was untested by
-    construction. Two mock-based tests in robothor/memory/tests/ claimed to
-    cover this by patching get_entity to return {"relations": [{"target": ...}]}
-    — a shape production never emits — and were deleted in favour of this.
-
-    Seeds the related fact as Bob's. Alice must see the graph work for her own
-    rows and still not receive Bob's.
-    """
-    import uuid
-
-    from robothor.identity.scope import DataScope
-    from robothor.memory.facts import search_facts
-
-    tenant = f"{test_prefix}-scoped"
-    db_cursor.execute(
-        "INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING",
-        (tenant, tenant),
-    )
-    people = {}
-    for who in ("alice", "bob"):
-        pid = str(uuid.uuid4())
-        db_cursor.execute(
-            "INSERT INTO crm_people (id, first_name, last_name, tenant_id) VALUES (%s,%s,%s,%s)",
-            (pid, test_prefix, who, tenant),
-        )
-        people[who] = pid
-
-    hub, spoke = f"{test_prefix}_Hub2", f"{test_prefix}_Spoke2"
-    ids = {}
-    for name in (hub, spoke):
-        db_cursor.execute(
-            "INSERT INTO memory_entities (name, entity_type, tenant_id) "
-            "VALUES (%s,'organization',%s) RETURNING id",
-            (name, tenant),
-        )
-        ids[name] = db_cursor.fetchone()["id"]
-    db_cursor.execute(
-        "INSERT INTO memory_relations (source_entity_id,target_entity_id,relation_type,tenant_id) "
-        "VALUES (%s,%s,'partners_with',%s)",
-        (ids[hub], ids[spoke], tenant),
-    )
-
-    db_cursor.execute(
-        "INSERT INTO memory_facts (fact_text, category, entities, tenant_id, is_active, "
-        "importance_score, embedding) VALUES (%s,'project',%s,%s,TRUE,0.6,%s::vector) RETURNING id",
-        (f"{hub} signed the quarterly logistics agreement", [hub], tenant, str(_CONSTANT_VECTOR)),
-    )
-    seed_id = db_cursor.fetchone()["id"]
-
-    # Reachable only via the relation, and owned by Bob.
-    db_cursor.execute(
-        "INSERT INTO memory_facts (fact_text, category, entities, tenant_id, is_active, "
-        "importance_score, person_id) VALUES (%s,'project',%s,%s,TRUE,0.9,%s) RETURNING id",
-        (f"{spoke} operates the northern depot", [spoke], tenant, people["bob"]),
-    )
-    bob_related = db_cursor.fetchone()["id"]
-
-    query = f"{hub} quarterly logistics agreement"
-
-    # Negative control: unrestricted, the graph reaches Bob's row.
-    unrestricted = await search_facts(
-        query, limit=10, tenant_id=tenant, expand_entities=True, use_reranker=False
-    )
-    assert bob_related in {r.get("id") for r in unrestricted}, (
-        "expansion did not reach the related fact even unrestricted — the "
-        "scoped assertion below would pass vacuously"
-    )
-
-    # Restricted Alice must not receive it.
-    scoped = await search_facts(
-        query,
-        limit=10,
-        tenant_id=tenant,
-        expand_entities=True,
-        use_reranker=False,
-        scope=DataScope(tenant_id=tenant, person_id=people["alice"], restricted=True),
-    )
-    got = {r.get("id") for r in scoped}
-    assert bob_related not in got, (
-        "entity expansion leaked another person's row past the scope predicate"
-    )
-    assert seed_id in got, "the caller's own reachable row must still be returned"
+# The three tests that followed pinned the one-hop ``entity_expansion`` leg of
+# ``search_facts``: that a related fact comes back, that it does not without
+# ``expand_entities``, and that a restricted person scope holds through it.
+# Graph activation (the ``graph`` leg) superseded that leg, and each test was
+# ported to it, on a scratch database with the graph schema, in
+# robothor/memory/tests/test_graph_recall_leg.py. "Returns a related fact" is
+# now the two-hop reserved-place test, "off by default" the include_graph=False
+# test, and "respects person scope" the restricted-scope test there.
