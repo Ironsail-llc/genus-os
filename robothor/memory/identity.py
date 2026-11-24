@@ -663,25 +663,10 @@ def _name_free(cur: Any, tenant_id: str, name: str, etype: str, own_id: int | No
     return cur.fetchone() is None
 
 
-def _crm_aliases(
-    kind: str, row: Mapping[str, Any], name: str, display_names: Sequence[str]
-) -> list[str]:
-    """What the CRM itself holds as other names for a record. Never nicknames."""
-    out: list[str] = []
-    if kind == PERSON:
-        out += _emails_of(row)
-        for d in display_names:
-            d = _clean(d or "")
-            if d and not is_junk_entity_name(d) and normalize_surface(d) != normalize_surface(name):
-                out.append(d)
-    else:
-        domain = str(row.get("domain_name") or "").strip().lower()
-        if domain:
-            out.append(domain)
-    unique: dict[str, str] = {}
-    for a in out:
-        unique.setdefault(a.lower(), a)
-    return list(unique.values())
+def _is_full_person_name(name: str) -> bool:
+    """Two or more tokens and no initial at either end: the bar rule (b) sets."""
+    tokens = normalize_surface(name).split()
+    return len(tokens) >= 2 and not (_is_initial(tokens[0]) or _is_initial(tokens[-1]))
 
 
 def _sync_one(
@@ -690,11 +675,21 @@ def _sync_one(
     kind: str,
     row: Mapping[str, Any],
     *,
-    display_names: Sequence[str] = (),
     ambiguous_name: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Keep one CRM record's node current. Returns the action taken (or planned)."""
+    """Keep one CRM record's node current. Returns the action taken (or planned).
+
+    No CRM contact data (emails, channel handles, domains) is copied into the
+    node: ``get_entity`` applies no data scope, and the CRM withholds those
+    fields from restricted readers. Strong keys are read from the CRM itself at
+    resolution time instead.
+
+    A person whose CRM name is not a full name (a single token, or an initial at
+    either end) never takes over an existing node, and its node is always named
+    ``"<name> #<crm id prefix>"`` with no bare-name alias, so the legacy
+    exact-name writer cannot pour every extracted "Alex" into one CRM record.
+    """
     crm_id = str(row["id"])
     etype = _entity_type_for(kind)
     col = _crm_col(kind)
@@ -702,7 +697,13 @@ def _sync_one(
     action: dict[str, Any] = {"kind": kind, "crm_id": crm_id, "name": name, "entity_id": None}
     if not name or is_junk_entity_name(name):
         return {**action, "action": "skipped"}
-    aliases = _crm_aliases(kind, row, name, display_names)
+    full = kind != PERSON or _is_full_person_name(name)
+
+    def _naming(own_id: int | None, current: str | None) -> tuple[str, list[str]]:
+        """The node name and the names the CRM implies as aliases."""
+        if full and (current == name or _name_free(cur, tenant_id, name, etype, own_id)):
+            return name, []
+        return _disambiguated(name, crm_id), [name] if full else []
 
     cur.execute(
         f"SELECT id, name, aliases, metadata FROM memory_entities WHERE tenant_id = %s "  # noqa: S608
@@ -714,34 +715,41 @@ def _sync_one(
         eid = int(linked["id"])
         meta = linked["metadata"] if isinstance(linked["metadata"], dict) else {}
         old_crm = {a.lower() for a in meta.get("crm_aliases") or []}
-        if linked["name"] == name or _name_free(cur, tenant_id, name, etype, eid):
-            new_name = name
-        elif linked["name"] == _disambiguated(name, crm_id):
-            new_name = linked["name"]
-        else:
-            new_name = _disambiguated(name, crm_id)
-        crm_set = list(aliases) + ([name] if new_name != name else [])
+        new_name, crm_set = _naming(eid, linked["name"])
         kept = [a for a in (linked["aliases"] or []) if a.lower() not in old_crm]
+        # A renamed record keeps its previous name as an alias: facts already
+        # name the person by it. Only a full name is kept (see _is_full_person_name).
+        previous = str(meta.get("crm_name") or linked["name"] or "")
+        if (
+            previous
+            and normalize_surface(previous) != normalize_surface(name)
+            and (kind != PERSON or _is_full_person_name(previous))
+            and "#" not in previous
+            and previous.lower() not in {k.lower() for k in kept}
+        ):
+            kept.append(previous)
         merged = kept + [a for a in crm_set if a.lower() not in {k.lower() for k in kept}]
         action["entity_id"] = eid
         if (
             new_name == linked["name"]
             and merged == list(linked["aliases"] or [])
             and sorted(a.lower() for a in crm_set) == sorted(old_crm)
+            and meta.get("crm_name") == name
         ):
             return {**action, "action": "unchanged"}
         if not dry_run:
             cur.execute(
                 "UPDATE memory_entities SET name = %s, aliases = %s, metadata = "
                 "COALESCE(metadata, '{}'::jsonb) || %s::jsonb, last_seen = NOW() WHERE id = %s",
-                (new_name, merged, json.dumps({"crm_aliases": crm_set}), eid),
+                (new_name, merged, json.dumps({"crm_aliases": crm_set, "crm_name": name}), eid),
             )
         return {**action, "action": "updated", "name": new_name}
 
     # An unlinked node of exactly this name and type is the same record — unless
-    # two live CRM records share the name, when it could be either.
+    # two live CRM records share the name, when it could be either, or the name
+    # is not a full name, when the node is every bare mention of it.
     legacy: list[dict[str, Any]] = []
-    if not ambiguous_name:
+    if full and not ambiguous_name:
         cur.execute(
             "SELECT id, name, aliases FROM memory_entities WHERE tenant_id = %s AND "
             "entity_type = %s AND crm_person_id IS NULL AND crm_company_id IS NULL AND "
@@ -757,12 +765,10 @@ def _sync_one(
         action["entity_id"] = eid
         if not dry_run:
             new_name = name if _name_free(cur, tenant_id, name, etype, eid) else pick["name"]
-            merged = list(pick["aliases"] or [])
-            merged += [a for a in aliases if a.lower() not in {m.lower() for m in merged}]
             cur.execute(
-                f"UPDATE memory_entities SET {col} = %s, name = %s, aliases = %s, metadata = "  # noqa: S608
+                f"UPDATE memory_entities SET {col} = %s, name = %s, metadata = "  # noqa: S608
                 "COALESCE(metadata, '{}'::jsonb) || %s::jsonb, last_seen = NOW() WHERE id = %s",
-                (crm_id, new_name, merged, json.dumps({"crm_aliases": aliases}), eid),
+                (crm_id, new_name, json.dumps({"crm_aliases": [], "crm_name": name}), eid),
             )
             _insert_decision(
                 cur,
@@ -781,34 +787,22 @@ def _sync_one(
             )
         return {**action, "action": "linked"}
 
-    crm_set = list(aliases)
-    if _name_free(cur, tenant_id, name, etype, None):
-        new_name = name
-    else:
-        new_name = _disambiguated(name, crm_id)
-        crm_set.append(name)
+    new_name, crm_set = _naming(None, None)
     if not dry_run:
         cur.execute(
             f"INSERT INTO memory_entities (name, entity_type, aliases, metadata, tenant_id, {col}) "  # noqa: S608
             "VALUES (%s, %s, %s, %s::jsonb, %s, %s) RETURNING id",
-            (new_name, etype, crm_set, json.dumps({"crm_aliases": crm_set}), tenant_id, crm_id),
+            (
+                new_name,
+                etype,
+                crm_set,
+                json.dumps({"crm_aliases": crm_set, "crm_name": name}),
+                tenant_id,
+                crm_id,
+            ),
         )
         action["entity_id"] = int(cur.fetchone()["id"])
     return {**action, "action": "created", "name": new_name}
-
-
-def _display_names(cur: Any, tenant_id: str, person_ids: Sequence[str]) -> dict[str, list[str]]:
-    if not person_ids:
-        return {}
-    cur.execute(
-        "SELECT person_id::text AS pid, display_name FROM contact_identifiers "
-        "WHERE tenant_id = %s AND person_id = ANY(%s::uuid[]) AND display_name IS NOT NULL",
-        (tenant_id, list(person_ids)),
-    )
-    out: dict[str, list[str]] = {}
-    for r in cur.fetchall():
-        out.setdefault(r["pid"], []).append(r["display_name"])
-    return out
 
 
 _PEOPLE_SQL = (
@@ -832,14 +826,16 @@ def _name_counts(kind: str, rows: Sequence[Mapping[str, Any]]) -> dict[str, int]
 def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     """Give every live CRM person and company in the tenant exactly one linked node.
 
-    Linked through ``crm_person_id`` / ``crm_company_id``, named with the CRM
-    full name or company name, with the emails, display names (people) or domain
-    (companies) the CRM holds as aliases — never nickname variants. An unlinked
-    node of exactly the same name and type is linked rather than duplicated (a
-    decision with method ``exact`` records it), unless two live CRM records
-    share that name. When the name is already taken by another record's node
-    the new node is named ``"<name> #<crm id prefix>"`` and carries the plain
-    name as an alias, so a bare mention of the name stays ambiguous. Idempotent.
+    Linked through ``crm_person_id`` / ``crm_company_id`` and named with the
+    CRM full name or company name. No CRM contact data (emails, handles,
+    domains) and no nickname variant is written to the node. An unlinked node of
+    exactly the same name and type is linked rather than duplicated (a decision
+    with method ``exact`` records it), unless two live CRM records share that
+    name or it is not a full name. When the name is already taken by another
+    record's node, or is not a full name, the node is named
+    ``"<name> #<crm id prefix>"``; a taken full name is kept as an alias, so a
+    bare mention of it stays ambiguous. A renamed record keeps its previous full
+    name as an alias. Idempotent.
     ``dry_run`` writes nothing and reports what it would do.
     """
     _require_tenant(tenant_id)
@@ -856,7 +852,6 @@ def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any
         people = [dict(r) for r in cur.fetchall()]
         cur.execute(_COMPANIES_SQL + " ORDER BY created_at, id", (tenant_id,))
         companies = [dict(r) for r in cur.fetchall()]
-        names = _display_names(cur, tenant_id, [p["id"] for p in people])
         for kind, rows, bucket in ((PERSON, people, "people"), ("company", companies, "companies")):
             counts = _name_counts(kind, rows)
             for row in rows:
@@ -865,7 +860,6 @@ def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any
                     tenant_id,
                     kind,
                     row,
-                    display_names=names.get(row["id"], []) if kind == PERSON else (),
                     ambiguous_name=counts.get(normalize_surface(_crm_name(kind, row)), 0) > 1,
                     dry_run=dry_run,
                 )
@@ -900,10 +894,7 @@ def _sync_record(
             (tenant_id, record_id, name),
         )
     ambiguous = cur.fetchone() is not None
-    names = _display_names(cur, tenant_id, [record_id]).get(record_id, []) if kind == PERSON else []
-    return _sync_one(
-        cur, tenant_id, kind, row, display_names=names, ambiguous_name=ambiguous, dry_run=dry_run
-    )
+    return _sync_one(cur, tenant_id, kind, row, ambiguous_name=ambiguous, dry_run=dry_run)
 
 
 def sync_crm_record(
@@ -2070,34 +2061,36 @@ def find_entity(
 ) -> dict[str, Any] | Ambiguity | None:
     """Look a name up by the resolution rules, read-only. Records nothing.
 
-    A strong key (an email the CRM holds) or an exact name or alias of exactly
-    one shared node of a compatible type returns that node (explicit columns,
-    never ``embedding``). Several such nodes return an :class:`Ambiguity`. A
-    first name or nickname alone matches nothing here: it returns ``None``.
-    A node whose CRM record was merged away answers as the winner's node.
+    An exact name or alias of exactly one shared node of a compatible type
+    returns that node (explicit columns, never ``embedding``). Several such
+    nodes return an :class:`Ambiguity`. A first name or nickname alone matches
+    nothing here: it returns ``None``. A node whose CRM record was merged away
+    answers as the winner's node.
+
+    Strong keys are deliberately not used on the read side: callers of
+    ``get_entity`` are not data-scoped, and answering an email with the CRM
+    person who owns it would disclose what the CRM withholds from restricted
+    readers. An email returns ``None``.
     """
     _require_tenant(tenant_id)
-    if is_junk_entity_name(surface_form):
+    if is_junk_entity_name(surface_form) or _EMAIL_RE.match(_clean(surface_form)):
         return None
     mtype = _norm_type(entity_type)
     scope = ("shared", None, None)
     with _cursor(tenant_id, cur, read_only=cur is None) as c:
         resolver = _Resolver(c, tenant_id, read_only=True)
-        hits, _ignored = resolver.strong_hits(MentionInput(surface_form, mtype))
-        ids = sorted({h.entity_id for h in hits if h.entity_id >= 0})
-        if not ids:
-            resolver.prefetch([surface_form])
-            norm = normalize_surface(surface_form)
-            found: set[int] = set()
-            for r in resolver._rows.get(norm, []):
-                if resolver._classify(r, norm) not in ("name", "alias") or not _visible(r, scope):
-                    continue
-                if mtype is not None and _norm_type(r["entity_type"]) != mtype:
-                    continue
-                eff = resolver.effective(r)
-                if eff is not None and _visible(eff, scope):
-                    found.add(int(eff["id"]))
-            ids = sorted(found)
+        resolver.prefetch([surface_form])
+        norm = normalize_surface(surface_form)
+        found: set[int] = set()
+        for r in resolver._rows.get(norm, []):
+            if resolver._classify(r, norm) not in ("name", "alias") or not _visible(r, scope):
+                continue
+            if mtype is not None and _norm_type(r["entity_type"]) != mtype:
+                continue
+            eff = resolver.effective(r)
+            if eff is not None and _visible(eff, scope):
+                found.add(int(eff["id"]))
+        ids = sorted(found)
         rows = [r for r in _public_row(c, tenant_id, ids) if _visible(r, scope)]
     if not rows:
         return None
