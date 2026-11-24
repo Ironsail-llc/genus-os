@@ -83,6 +83,16 @@ def classify_query(query: str) -> str:
 
 
 def _normalize_fact(r: dict[str, Any]) -> dict[str, Any]:
+    row = _normalized_fact_fields(r)
+    # A row the graph leg found keeps its labels: who asserted it and the path
+    # of entities that reached it.
+    for key in ("origin", "graph_hops", "graph_path"):
+        if key in r:
+            row[key] = r[key]
+    return row
+
+
+def _normalized_fact_fields(r: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": r.get("id"),
         "source": r.get("source") or "fact",
