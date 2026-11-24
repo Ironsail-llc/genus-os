@@ -80,6 +80,7 @@ class TestSearchMemoryRecordsAccess:
     async def test_failing_to_schedule_the_write_does_not_fail_the_search(self) -> None:
         registry = MagicMock()
         registry.spawn.side_effect = RuntimeError("no loop slot")
+        registry.drain = AsyncMock()
         with (
             patch("robothor.memory.outcomes.record_fact_access", MagicMock()),
             patch("robothor.engine.task_registry.get_task_registry", return_value=registry),
@@ -158,12 +159,12 @@ class TestWarmupRecordsAccess:
         defer.assert_called_once()
         fn, *args = defer.call_args.args
         assert fn is record_fact_access
-        assert args[0] == TENANT
+        assert args == [TENANT]
         expected = {
             compute_fact_hash(r["fact_text"], tenant_id=TENANT, category=r["category"])
             for r in self._rows()
         }
-        assert set(args[1]) == expected
+        assert set(defer.call_args.kwargs["content_hashes"]) == expected
 
     def test_a_read_only_warmup_records_nothing(self) -> None:
         text, defer = self._build(record_access=False)
