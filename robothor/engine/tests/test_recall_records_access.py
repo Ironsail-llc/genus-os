@@ -8,16 +8,19 @@ harness, anything that must have no side effects) passes ``record_access=False``
 from __future__ import annotations
 
 import asyncio
-import time
+import threading
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from robothor.engine.tests.test_offloop_sync_calls import SlowProbe, warm_executor
 from robothor.engine.tools.dispatch import ToolContext
 
 TENANT = "test-tenant"
+
+#: Generous ceilings that only a broken (deadlocked) handler reaches; nothing
+#: asserts on elapsed time.
+_GATE_TIMEOUT_S = 10.0
 
 _ROWS = [
     {"id": 11, "fact_text": "Alice prefers email.", "category": "preference", "source": "fact"},
@@ -91,28 +94,69 @@ class TestSearchMemoryRecordsAccess:
 
     @pytest.mark.asyncio
     async def test_the_write_is_off_the_request_path_and_off_the_loop(self) -> None:
-        """The search returns without waiting for the write, and the write does
-        not hold the event loop while it runs."""
+        """Proved by ordering, not timing, so a loaded machine cannot fail it.
+
+        The fake write blocks on an event the test sets only after the handler
+        has returned. A handler that awaited the write could not return, and
+        times out with a clear message. The write records the thread it runs
+        on, which must not be the loop's, and while it is still blocked the loop
+        must still run another task to completion.
+        """
         from robothor.engine.task_registry import get_task_registry
         from robothor.engine.tools.handlers import memory as handler
 
-        await warm_executor()
-        probe = SlowProbe(asyncio.get_running_loop())
-        with (
-            patch("robothor.memory.outcomes.record_fact_access", probe),
-            patch.object(
-                handler, "_recall_fallback", AsyncMock(return_value=(list(_ROWS), "lookup"))
-            ),
-            patch("robothor.engine.feature_flags.is_rip_enabled", return_value=False),
-        ):
-            started = time.monotonic()
-            await handler._search_memory({"query": "billing"}, _ctx())
-            returned_after = time.monotonic() - started
-            await get_task_registry().drain(timeout=5.0)
+        loop_thread = threading.get_ident()
+        entered = threading.Event()
+        release = threading.Event()
+        seen: dict[str, Any] = {}
 
-        assert returned_after < 0.1, f"search waited {returned_after * 1000:.0f} ms for the write"
-        await probe.settle()
-        probe.assert_loop_free()
+        def blocked_write(*_args: Any, **_kwargs: Any) -> None:
+            seen["thread"] = threading.get_ident()
+            entered.set()
+            if not release.wait(timeout=_GATE_TIMEOUT_S):
+                # Only reached when the write runs on the loop thread: the test
+                # cannot get to release.set() while the loop is held here.
+                seen["never_released"] = True
+                return
+            seen["finished"] = True
+
+        try:
+            with (
+                patch("robothor.memory.outcomes.record_fact_access", blocked_write),
+                patch.object(
+                    handler, "_recall_fallback", AsyncMock(return_value=(list(_ROWS), "lookup"))
+                ),
+                patch("robothor.engine.feature_flags.is_rip_enabled", return_value=False),
+            ):
+                try:
+                    out = await asyncio.wait_for(
+                        handler._search_memory({"query": "billing"}, _ctx()),
+                        timeout=_GATE_TIMEOUT_S,
+                    )
+                except TimeoutError:
+                    pytest.fail("search_memory did not return while the access write was blocked")
+
+                assert "finished" not in seen, "search_memory returned only after the write ran"
+                assert len(out["results"]) == 4
+
+                # The write starts in the background; wait for it without
+                # blocking the loop.
+                assert await asyncio.to_thread(entered.wait, _GATE_TIMEOUT_S), (
+                    "the access write was never started"
+                )
+                assert seen["thread"] != loop_thread, "the access write runs on the event loop"
+
+                # The loop still services other work while the write is blocked.
+                ran = asyncio.Event()
+                asyncio.get_running_loop().call_soon(ran.set)
+                await asyncio.wait_for(ran.wait(), timeout=_GATE_TIMEOUT_S)
+                assert "finished" not in seen
+        finally:
+            release.set()
+
+        await get_task_registry().drain(timeout=_GATE_TIMEOUT_S)
+        assert seen.get("finished") is True
+        assert "never_released" not in seen
 
 
 class TestWarmupRecordsAccess:
