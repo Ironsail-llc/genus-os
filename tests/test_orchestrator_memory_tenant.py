@@ -1,16 +1,15 @@
 """The orchestrator's memory endpoints act as the caller's tenant.
 
 ``/ingest``, ``/stats``, ``/query`` and ``/v1/chat/completions`` used to pass no
-tenant, so every caller read and wrote the default tenant's memory. The caller's
-tenant now comes from, in order:
+tenant, so every caller read and wrote the default tenant's memory. The tenant
+now comes from a verified bearer token -- the dashboard forwards the session's
+bridge token, and services send a minted service token. A caller with no token
+gets only what the single-tenant rule gives it: the default tenant on a
+deployment with one active tenant, a refusal on any other.
 
-1. a verified bearer token (the dashboard forwards the session's bridge token),
-   whose tenant an ``X-Tenant-Id`` header may not contradict;
-2. the ``X-Tenant-Id`` header -- the service-to-service convention the bridge
-   and engine already use;
-3. the deployment's only tenant, when it has exactly one.
-
-Anything else is refused, never defaulted.
+A bare ``X-Tenant-Id`` never selects a tenant. On main an unauthenticated caller
+could reach only the default tenant; honouring the header would let the same
+caller read and write any tenant just by naming it.
 """
 
 from __future__ import annotations
@@ -46,6 +45,10 @@ def _tenants(monkeypatch, ids):
     )
 
 
+def _multi(monkeypatch):
+    _tenants(monkeypatch, ["tenant-a", "tenant-b"])
+
+
 def _client():
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
@@ -54,6 +57,12 @@ def _bearer(tenant):
     from robothor.auth.tokens import issue_access_token
 
     return {"Authorization": f"Bearer {issue_access_token('alice', tenant, 'admin')}"}
+
+
+def _service_bearer(tenant):
+    from robothor.auth.tokens import issue_service_token
+
+    return {"Authorization": f"Bearer {issue_service_token('vision', tenant)}"}
 
 
 def _ingest():
@@ -66,20 +75,11 @@ def _ingest():
 BODY = {"content": "Alice prefers tea", "source_channel": "api"}
 
 
-# ─── /ingest ────────────────────────────────────────────────────────
-
-
-async def test_ingest_stores_under_the_header_tenant(monkeypatch):
-    _tenants(monkeypatch, ["tenant-a", "tenant-b"])
-    with _ingest() as ingest:
-        async with _client() as c:
-            r = await c.post("/ingest", json=BODY, headers={"X-Tenant-Id": TENANT})
-    assert r.status_code == 200, r.text
-    assert ingest.await_args.kwargs["tenant_id"] == TENANT
+# ─── A verified token decides ───────────────────────────────────────
 
 
 async def test_ingest_stores_under_the_verified_token_tenant(monkeypatch):
-    _tenants(monkeypatch, ["tenant-a", "tenant-b"])
+    _multi(monkeypatch)
     with _ingest() as ingest:
         async with _client() as c:
             r = await c.post("/ingest", json=BODY, headers=_bearer(TENANT))
@@ -87,8 +87,28 @@ async def test_ingest_stores_under_the_verified_token_tenant(monkeypatch):
     assert ingest.await_args.kwargs["tenant_id"] == TENANT
 
 
+async def test_a_service_token_acts_as_its_tenant(monkeypatch):
+    _multi(monkeypatch)
+    with _ingest() as ingest:
+        async with _client() as c:
+            r = await c.post("/ingest", json=BODY, headers=_service_bearer(TENANT))
+    assert r.status_code == 200, r.text
+    assert ingest.await_args.kwargs["tenant_id"] == TENANT
+
+
+async def test_a_header_restating_the_token_tenant_is_accepted(monkeypatch):
+    _multi(monkeypatch)
+    with _ingest() as ingest:
+        async with _client() as c:
+            r = await c.post(
+                "/ingest", json=BODY, headers={**_bearer(TENANT), "X-Tenant-Id": TENANT}
+            )
+    assert r.status_code == 200, r.text
+    assert ingest.await_args.kwargs["tenant_id"] == TENANT
+
+
 async def test_a_header_contradicting_the_token_is_refused(monkeypatch):
-    _tenants(monkeypatch, ["tenant-a", "tenant-b"])
+    _multi(monkeypatch)
     with _ingest() as ingest:
         async with _client() as c:
             r = await c.post(
@@ -99,7 +119,7 @@ async def test_a_header_contradicting_the_token_is_refused(monkeypatch):
 
 
 async def test_an_invalid_token_is_refused(monkeypatch):
-    _tenants(monkeypatch, ["tenant-a", "tenant-b"])
+    _multi(monkeypatch)
     with _ingest() as ingest:
         async with _client() as c:
             r = await c.post("/ingest", json=BODY, headers={"Authorization": "Bearer nonsense"})
@@ -107,8 +127,39 @@ async def test_an_invalid_token_is_refused(monkeypatch):
     ingest.assert_not_called()
 
 
+# ─── No token: the single-tenant rule, and a header never selects ───
+
+
+async def test_a_tokenless_header_cannot_select_a_tenant(monkeypatch):
+    _multi(monkeypatch)
+    with _ingest() as ingest:
+        async with _client() as c:
+            r = await c.post("/ingest", json=BODY, headers={"X-Tenant-Id": TENANT})
+    assert r.status_code == 401
+    assert "token" in r.json()["detail"].lower()
+    ingest.assert_not_called()
+
+
+async def test_a_tokenless_header_cannot_leave_a_single_tenant_deployments_tenant(monkeypatch):
+    _tenants(monkeypatch, [DEFAULT_TENANT])
+    with _ingest() as ingest:
+        async with _client() as c:
+            r = await c.post("/ingest", json=BODY, headers={"X-Tenant-Id": "tenant-b"})
+    assert r.status_code == 401
+    ingest.assert_not_called()
+
+
+async def test_a_tokenless_header_naming_the_only_tenant_is_accepted(monkeypatch):
+    _tenants(monkeypatch, [DEFAULT_TENANT])
+    with _ingest() as ingest:
+        async with _client() as c:
+            r = await c.post("/ingest", json=BODY, headers={"X-Tenant-Id": DEFAULT_TENANT})
+    assert r.status_code == 200, r.text
+    assert ingest.await_args.kwargs["tenant_id"] == DEFAULT_TENANT
+
+
 async def test_no_tenant_in_a_multi_tenant_deployment_is_refused(monkeypatch):
-    _tenants(monkeypatch, ["tenant-a", "tenant-b"])
+    _multi(monkeypatch)
     with _ingest() as ingest:
         async with _client() as c:
             r = await c.post("/ingest", json=BODY)
@@ -129,17 +180,26 @@ async def test_no_tenant_in_a_single_tenant_deployment_uses_its_tenant(monkeypat
 # ─── /stats ─────────────────────────────────────────────────────────
 
 
-async def test_stats_count_the_callers_tenant(monkeypatch):
-    _tenants(monkeypatch, ["tenant-a", "tenant-b"])
+async def test_stats_count_the_token_tenant(monkeypatch):
+    _multi(monkeypatch)
     with patch("robothor.memory.facts.get_memory_stats", return_value={"total": 0}) as stats:
         async with _client() as c:
-            r = await c.get("/stats", headers={"X-Tenant-Id": TENANT})
+            r = await c.get("/stats", headers=_bearer(TENANT))
     assert r.status_code == 200, r.text
     assert stats.call_args.kwargs["tenant_id"] == TENANT
 
 
+async def test_stats_for_a_tokenless_header_tenant_are_refused(monkeypatch):
+    _multi(monkeypatch)
+    with patch("robothor.memory.facts.get_memory_stats") as stats:
+        async with _client() as c:
+            r = await c.get("/stats", headers={"X-Tenant-Id": TENANT})
+    assert r.status_code == 401
+    stats.assert_not_called()
+
+
 async def test_stats_without_a_tenant_are_refused_when_several_exist(monkeypatch):
-    _tenants(monkeypatch, ["tenant-a", "tenant-b"])
+    _multi(monkeypatch)
     with patch("robothor.memory.facts.get_memory_stats") as stats:
         async with _client() as c:
             r = await c.get("/stats")
@@ -160,42 +220,44 @@ def _pipeline_stubs():
     ]
 
 
-@pytest.mark.parametrize(
-    ("path", "body"),
-    [
-        ("/query", {"question": "what does Alice drink"}),
-        (
-            "/v1/chat/completions",
-            {"messages": [{"role": "user", "content": "what does Alice drink"}]},
-        ),
-    ],
-)
-async def test_query_endpoints_search_the_callers_tenant(monkeypatch, path, body):
-    _tenants(monkeypatch, ["tenant-a", "tenant-b"])
+QUERY_ENDPOINTS = [
+    ("/query", {"question": "what does Alice drink"}),
+    ("/v1/chat/completions", {"messages": [{"role": "user", "content": "what does Alice drink"}]}),
+]
+
+
+async def _post_with_stubs(path, body, headers):
     search, stubs = _pipeline_stubs()
     for s in stubs:
         s.start()
     try:
         async with _client() as c:
-            r = await c.post(path, json=body, headers={"X-Tenant-Id": TENANT})
+            r = await c.post(path, json=body, headers=headers)
     finally:
         for s in stubs:
             s.stop()
+    return r, search
+
+
+@pytest.mark.parametrize(("path", "body"), QUERY_ENDPOINTS)
+async def test_query_endpoints_search_the_token_tenant(monkeypatch, path, body):
+    _multi(monkeypatch)
+    r, search = await _post_with_stubs(path, body, _bearer(TENANT))
     assert r.status_code == 200, r.text
     assert search.call_args.kwargs["tenant_id"] == TENANT
 
 
+@pytest.mark.parametrize(("path", "body"), QUERY_ENDPOINTS)
+async def test_query_endpoints_refuse_a_tokenless_header_tenant(monkeypatch, path, body):
+    _multi(monkeypatch)
+    r, search = await _post_with_stubs(path, body, {"X-Tenant-Id": TENANT})
+    assert r.status_code == 401
+    search.assert_not_called()
+
+
 async def test_query_without_a_tenant_is_refused_when_several_exist(monkeypatch):
-    _tenants(monkeypatch, ["tenant-a", "tenant-b"])
-    search, stubs = _pipeline_stubs()
-    for s in stubs:
-        s.start()
-    try:
-        async with _client() as c:
-            r = await c.post("/query", json={"question": "anything"})
-    finally:
-        for s in stubs:
-            s.stop()
+    _multi(monkeypatch)
+    r, search = await _post_with_stubs("/query", {"question": "anything"}, {})
     assert r.status_code == 400
     search.assert_not_called()
 
@@ -217,8 +279,9 @@ async def test_the_pipeline_searches_the_tenant_it_is_given():
 # ─── Integration ────────────────────────────────────────────────────
 
 
-@pytest.mark.integration
-async def test_an_ingested_fact_is_stored_under_the_callers_tenant():
+@pytest.fixture
+def ingest_fixture():
+    """A fresh tenant, a unique fact text, and the LLM steps of ingestion stubbed."""
     from robothor.db.connection import get_connection
 
     tenant = f"test-tenant-{uuid4().hex[:10]}"
@@ -228,33 +291,22 @@ async def test_an_ingested_fact_is_stored_under_the_callers_tenant():
         cur.execute("INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s)", (tenant, tenant))
         conn.commit()
     fact = {"fact_text": text, "category": "preference", "entities": ["Bob"], "confidence": 0.9}
+    stubs = [
+        patch("robothor.memory.ingestion.extract_facts", new=AsyncMock(return_value=[fact])),
+        patch(
+            "robothor.memory.ingestion.resolve_and_store",
+            new=AsyncMock(side_effect=RuntimeError("synthetic: no conflict model")),
+        ),
+        patch("robothor.memory.ingestion.extract_entities_batch", new=AsyncMock(return_value={})),
+        patch("robothor.llm.ollama.get_embedding_async", new=AsyncMock(return_value=[0.0] * 1024)),
+    ]
+    for s in stubs:
+        s.start()
     try:
-        with (
-            patch("robothor.memory.ingestion.extract_facts", new=AsyncMock(return_value=[fact])),
-            patch(
-                "robothor.memory.ingestion.resolve_and_store",
-                new=AsyncMock(side_effect=RuntimeError("synthetic: no conflict model")),
-            ),
-            patch(
-                "robothor.memory.ingestion.extract_entities_batch",
-                new=AsyncMock(return_value={}),
-            ),
-            patch(
-                "robothor.llm.ollama.get_embedding_async", new=AsyncMock(return_value=[0.0] * 1024)
-            ),
-        ):
-            async with _client() as c:
-                r = await c.post(
-                    "/ingest",
-                    json={"content": text, "source_channel": "api"},
-                    headers={"X-Tenant-Id": tenant},
-                )
-        assert r.status_code == 200, r.text
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT tenant_id FROM memory_facts WHERE fact_text = %s", (text,))
-            assert {row[0] for row in cur.fetchall()} == {tenant}
+        yield tenant, text
     finally:
+        for s in stubs:
+            s.stop()
         with get_connection() as conn:
             cur = conn.cursor()
             # By the unique text, in every tenant: a fact that went to the wrong
@@ -262,3 +314,38 @@ async def test_an_ingested_fact_is_stored_under_the_callers_tenant():
             cur.execute("DELETE FROM memory_facts WHERE fact_text = %s", (text,))
             cur.execute("DELETE FROM crm_tenants WHERE id = %s", (tenant,))
             conn.commit()
+
+
+def _fact_tenants(text):
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT tenant_id FROM memory_facts WHERE fact_text = %s", (text,))
+        return {row[0] for row in cur.fetchall()}
+
+
+@pytest.mark.integration
+async def test_an_ingested_fact_is_stored_under_the_token_tenant(ingest_fixture):
+    tenant, text = ingest_fixture
+    async with _client() as c:
+        r = await c.post(
+            "/ingest", json={"content": text, "source_channel": "api"}, headers=_bearer(tenant)
+        )
+    assert r.status_code == 200, r.text
+    assert _fact_tenants(text) == {tenant}
+
+
+@pytest.mark.integration
+async def test_a_tokenless_header_writes_nothing_anywhere(ingest_fixture):
+    # The real test database holds many active tenants, so this is the
+    # multi-tenant case end to end: refused, and no row in any tenant.
+    tenant, text = ingest_fixture
+    async with _client() as c:
+        r = await c.post(
+            "/ingest",
+            json={"content": text, "source_channel": "api"},
+            headers={"X-Tenant-Id": tenant},
+        )
+    assert r.status_code == 401
+    assert _fact_tenants(text) == set()
