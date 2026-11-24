@@ -19,39 +19,39 @@ from robothor.cli import _build_parser, main
 
 def test_memory_identity_sync_parses_and_dispatches() -> None:
     with patch("robothor.cli.memory_identity.cmd_memory_identity", return_value=0) as cmd:
-        assert main(["memory", "identity", "sync", "--tenant", "test-tenant", "--dry-run"]) == 0
+        assert main(["memory-identity", "sync", "--tenant", "test-tenant", "--dry-run"]) == 0
     args = cmd.call_args.args[0]
     assert (args.identity_command, args.tenant, args.dry_run) == ("sync", "test-tenant", True)
 
 
 def test_memory_identity_backfill_parses_its_flags() -> None:
     args = _build_parser().parse_args(
-        ["memory", "identity", "backfill", "--tenant", "t1", "--resume-from", "41",
+        ["memory-identity", "backfill", "--tenant", "t1", "--resume-from", "41",
          "--batch-size", "50", "--dry-run"]
     )  # fmt: skip
     assert (args.tenant, args.resume_from, args.batch_size, args.dry_run) == ("t1", 41, 50, True)
 
 
 def test_memory_identity_backfill_defaults_to_writing() -> None:
-    args = _build_parser().parse_args(["memory", "identity", "backfill", "--tenant", "t1"])
+    args = _build_parser().parse_args(["memory-identity", "backfill", "--tenant", "t1"])
     assert args.dry_run is False and args.resume_from is None and args.batch_size == 500
 
 
 def test_memory_identity_reverse_needs_a_decision_and_a_reason() -> None:
     args = _build_parser().parse_args(
-        ["memory", "identity", "reverse", "--tenant", "t1", "--decision", "7",
+        ["memory-identity", "reverse", "--tenant", "t1", "--decision", "7",
          "--reason", "different person", "--entity", "9"]
     )  # fmt: skip
     assert (args.decision, args.reason, args.entity) == (7, "different person", 9)
     with pytest.raises(SystemExit):
-        _build_parser().parse_args(["memory", "identity", "reverse", "--tenant", "t1"])
+        _build_parser().parse_args(["memory-identity", "reverse", "--tenant", "t1"])
 
 
 @pytest.mark.parametrize("verb", ["sync", "backfill", "reverse"])
 def test_every_identity_verb_requires_an_explicit_tenant(verb: str) -> None:
     extra = ["--decision", "1", "--reason", "r"] if verb == "reverse" else []
     with pytest.raises(SystemExit) as exc:
-        _build_parser().parse_args(["memory", "identity", verb, *extra])
+        _build_parser().parse_args(["memory-identity", verb, *extra])
     assert exc.value.code == 2
 
 
@@ -68,7 +68,7 @@ def test_the_command_calls_the_module_with_the_tenant(capsys) -> None:
     with patch("robothor.memory.identity.backfill_mentions", _backfill):
         rc = memory_identity.cmd_memory_identity(
             _build_parser().parse_args(
-                ["memory", "identity", "backfill", "--tenant", "t1", "--dry-run", "--json"]
+                ["memory-identity", "backfill", "--tenant", "t1", "--dry-run", "--json"]
             )
         )
     assert rc == 0

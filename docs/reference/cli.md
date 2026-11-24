@@ -28,7 +28,7 @@ Where to start, rather than reading this top to bottom:
 Settings are documented in the [configuration reference](configuration.md),
 not here: a flag belongs to one command, a setting to the whole instance.
 
-40 verbs.
+41 verbs.
 
 ## `genus plugin`
 
@@ -855,6 +855,52 @@ Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [-
 | `--json` | — | off | Output JSON |
 | `--record` | — | off | Write the result to benchmark_results so the fleet grader can see it |
 | `--triggered-by` | `TRIGGERED_BY` | `manual` | Provenance recorded alongside the result (e.g. cron) |
+
+## `genus memory-identity`
+
+CRM-anchored memory identity: seed, backfill, reverse.
+
+Usage: `genus memory-identity {sync,backfill,reverse}`
+
+### `genus memory-identity sync`
+
+Give every CRM person and company exactly one linked memory node.
+
+Usage: `genus memory-identity sync [--tenant TENANT] [--json] [--dry-run]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant` | `TENANT` | — | Tenant to act on (required) |
+| `--json` | — | off | Output JSON |
+| `--dry-run` | — | off | Report what would change and write nothing |
+
+### `genus memory-identity backfill`
+
+Resolve the names in existing facts into mentions (resumable).
+
+Usage: `genus memory-identity backfill [--tenant TENANT] [--json] [--dry-run] [--resume-from RESUME_FROM] [--batch-size BATCH_SIZE]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant` | `TENANT` | — | Tenant to act on (required) |
+| `--json` | — | off | Output JSON |
+| `--dry-run` | — | off | Report what would change and write nothing |
+| `--resume-from` | `RESUME_FROM` | — | Continue after this fact id (the last_fact_id of a previous run) |
+| `--batch-size` | `BATCH_SIZE` | `500` | Facts per batch, one transaction each |
+
+### `genus memory-identity reverse`
+
+Reverse a resolution decision and re-point its mentions.
+
+Usage: `genus memory-identity reverse [--tenant TENANT] [--json] [--decision DECISION] [--reason REASON] [--entity ENTITY]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant` | `TENANT` | — | Tenant to act on (required) |
+| `--json` | — | off | Output JSON |
+| `--decision` | `DECISION` | — | Decision id to reverse |
+| `--reason` | `REASON` | — | Why the decision was wrong |
+| `--entity` | `ENTITY` | — | Entity id the mentions belong to instead (omit to leave them unresolved) |
 
 ## `genus status`
 
