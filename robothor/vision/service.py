@@ -321,10 +321,18 @@ class VisionService:
         tenant = process_tenant()
         if not tenant:
             return {}
+        from robothor.auth.tokens import signing_key_provisioned
         from robothor.engine.tools.service_client import bridge_headers
 
         try:
             # Off the loop: the first mint may read the signing key from the vault.
+            # Never generate one here (see signing_key_provisioned).
+            if not await asyncio.to_thread(signing_key_provisioned):
+                logger.warning(
+                    "No signing key is provisioned for this process; posting the event "
+                    "without a token, which only a single-tenant deployment accepts"
+                )
+                return {}
             return await asyncio.to_thread(
                 bridge_headers, "vision", tenant, scopes=("bridge:write",)
             )

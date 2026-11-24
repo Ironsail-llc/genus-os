@@ -199,6 +199,26 @@ def signing_key() -> str:
     return key
 
 
+def signing_key_provisioned() -> bool:
+    """Whether a signing key already exists (environment or vault). Never generates.
+
+    For a process that only MINTS tokens other services verify (the vision
+    service): if it found no key and let :func:`signing_key` generate one, it
+    would store a key the verifiers -- which read theirs from the environment
+    -- do not hold, and every token it sent would be rejected. Generating is
+    first boot's job, done by a process that also verifies.
+    """
+    if _signing_key_cache:
+        return True
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.db.connection import tenant_scope
+    from robothor.secrets import resolve_secret
+
+    with tenant_scope(DEFAULT_TENANT):
+        resolved = resolve_secret(_ENV_NAME, vault_key=_VAULT_KEY, tenant_id=DEFAULT_TENANT)
+    return resolved.value is not None
+
+
 def reset_signing_key_cache() -> None:
     """Test hook — forget the cached key (and verdict) so the next call re-resolves."""
     global _signing_key_cache, _signing_key_unavailable_until
