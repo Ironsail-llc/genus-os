@@ -29,7 +29,7 @@ import httpx
 from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, tenant_scope
 from robothor.llm import ollama as llm_client
 from robothor.memory import generation
 from robothor.memory.confirmed import NOT_OPERATOR_CONFIRMED_SQL
@@ -278,14 +278,18 @@ async def find_consolidation_candidates(
     min_group_size: int = 3,
     similarity_threshold: float = 0.8,
     unconsolidated_only: bool = False,
+    *,
+    tenant_id: str = "",
 ) -> list[list[dict[str, Any]]]:
-    """Find groups of similar facts that could be consolidated.
+    """Find groups of one tenant's similar facts that could be consolidated.
 
     Args:
         min_group_size: Minimum facts in a group to consider consolidation.
         similarity_threshold: Minimum cosine similarity to group facts.
         unconsolidated_only: When True, only consider facts where
             consolidated_at IS NULL. Uses smaller LIMIT (100 vs 500).
+        tenant_id: The tenant whose facts are grouped. A group never spans
+            two tenants, because a consolidated fact is written to one.
 
     Returns:
         List of groups, where each group is a list of fact dicts. An
@@ -298,6 +302,7 @@ async def find_consolidation_candidates(
         "AND source_type <> 'consolidation'" if _consolidation_guard_enabled() else ""
     )
     fetch_limit = 100 if unconsolidated_only else 500
+    _tenant = tenant_id or DEFAULT_TENANT
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -306,12 +311,14 @@ async def find_consolidation_candidates(
             SELECT id, fact_text, category, entities, embedding
             FROM memory_facts
             WHERE is_active = TRUE AND embedding IS NOT NULL
+              AND tenant_id = %s
               AND {NOT_OPERATOR_CONFIRMED_SQL}
               {unconsolidated_filter}
               {consolidation_filter}
             ORDER BY created_at DESC
             LIMIT {fetch_limit}
-            """
+            """,
+            (_tenant,),
         )
         facts = [dict(r) for r in cur.fetchall()]
 
@@ -339,12 +346,13 @@ async def find_consolidation_candidates(
                 WHERE is_active = TRUE
                   AND embedding IS NOT NULL
                   AND id != %s
+                  AND tenant_id = %s
                   AND {NOT_OPERATOR_CONFIRMED_SQL}
                   {consolidation_filter}
                 ORDER BY embedding <=> %s::vector
                 LIMIT 10
                 """,
-                (fact["embedding"], fact["id"], fact["embedding"]),
+                (fact["embedding"], fact["id"], _tenant, fact["embedding"]),
             )
 
             for similar in cur.fetchall():
@@ -395,8 +403,8 @@ Return ONLY the consolidated statement, nothing else."""
         }
 
 
-async def prune_low_quality_facts() -> dict[str, Any]:
-    """Deactivate facts that are low-quality garbage.
+async def prune_low_quality_facts(*, tenant_id: str = "") -> dict[str, Any]:
+    """Deactivate one tenant's facts that are low-quality garbage.
 
     Targets:
         - decay_score < 0.1 AND importance_score < 0.3 AND access_count = 0
@@ -408,6 +416,7 @@ async def prune_low_quality_facts() -> dict[str, Any]:
     Returns:
         Dict with pruning statistics.
     """
+    _tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -416,11 +425,13 @@ async def prune_low_quality_facts() -> dict[str, Any]:
             f"""
             UPDATE memory_facts SET is_active = false, updated_at = NOW()
             WHERE is_active = true
+              AND tenant_id = %s
               AND length(fact_text) < 15
               AND category NOT IN ('decision', 'preference', 'resolution')
               AND {NOT_OPERATOR_CONFIRMED_SQL}
             RETURNING id, fact_text
-            """
+            """,
+            (_tenant,),
         )
         short_pruned = cur.fetchall()
 
@@ -429,13 +440,15 @@ async def prune_low_quality_facts() -> dict[str, Any]:
             f"""
             UPDATE memory_facts SET is_active = false, updated_at = NOW()
             WHERE is_active = true
+              AND tenant_id = %s
               AND decay_score < 0.1
               AND importance_score < 0.3
               AND access_count = 0
               AND category NOT IN ('decision', 'preference', 'resolution')
               AND {NOT_OPERATOR_CONFIRMED_SQL}
             RETURNING id, fact_text
-            """
+            """,
+            (_tenant,),
         )
         decay_pruned = cur.fetchall()
 
@@ -457,47 +470,52 @@ async def prune_low_quality_facts() -> dict[str, Any]:
 # ── Intra-Day Consolidation (P0) ─────────────────────────────────────────────
 
 
-def get_unconsolidated_count() -> int:
-    """Count active facts that haven't been consolidated yet."""
+def get_unconsolidated_count(tenant_id: str = "") -> int:
+    """Count one tenant's active facts that haven't been consolidated yet."""
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT COUNT(*) FROM memory_facts WHERE is_active = TRUE AND consolidated_at IS NULL"
+            "SELECT COUNT(*) FROM memory_facts "
+            "WHERE is_active = TRUE AND consolidated_at IS NULL AND tenant_id = %s",
+            (tenant_id or DEFAULT_TENANT,),
         )
         row = cur.fetchone()
         return int(row[0]) if row else 0
 
 
-def _mark_facts_consolidated(fact_ids: list[int] | None = None) -> int:
-    """Mark facts as consolidated by setting consolidated_at = NOW().
+def _mark_facts_consolidated(fact_ids: list[int] | None = None, tenant_id: str = "") -> int:
+    """Mark one tenant's facts as consolidated by setting consolidated_at = NOW().
 
     Args:
         fact_ids: Specific fact IDs to mark. If None, marks all unconsolidated.
+        tenant_id: The tenant whose facts are marked.
 
     Returns:
         Number of facts marked.
     """
+    _tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
         cur = conn.cursor()
         if fact_ids:
             cur.execute(
                 """
                 UPDATE memory_facts SET consolidated_at = NOW()
-                WHERE id = ANY(%s) AND consolidated_at IS NULL
+                WHERE id = ANY(%s) AND consolidated_at IS NULL AND tenant_id = %s
                 """,
-                (fact_ids,),
+                (fact_ids, _tenant),
             )
         else:
             cur.execute(
                 """
                 UPDATE memory_facts SET consolidated_at = NOW()
-                WHERE is_active = TRUE AND consolidated_at IS NULL
-                """
+                WHERE is_active = TRUE AND consolidated_at IS NULL AND tenant_id = %s
+                """,
+                (_tenant,),
             )
         return int(cur.rowcount)
 
 
-async def run_intraday_consolidation(threshold: int = 5) -> dict[str, Any]:
+async def run_intraday_consolidation(threshold: int = 5, *, tenant_id: str = "") -> dict[str, Any]:
     """Run lightweight consolidation if enough unconsolidated facts exist.
 
     Called after each continuous_ingest run. Only merges similar facts —
@@ -505,11 +523,13 @@ async def run_intraday_consolidation(threshold: int = 5) -> dict[str, Any]:
 
     Args:
         threshold: Minimum unconsolidated facts required to trigger.
+        tenant_id: The tenant consolidated; the merged fact is written to it.
 
     Returns:
         Dict with consolidation stats, including 'skipped' flag.
     """
-    count = get_unconsolidated_count()
+    _tenant = tenant_id or DEFAULT_TENANT
+    count = get_unconsolidated_count(_tenant)
     if count < threshold:
         return {"skipped": True, "unconsolidated_count": count, "threshold": threshold}
 
@@ -522,6 +542,7 @@ async def run_intraday_consolidation(threshold: int = 5) -> dict[str, Any]:
             min_group_size=2,
             similarity_threshold=0.8,
             unconsolidated_only=True,
+            tenant_id=_tenant,
         )
         for group in groups:
             result = await consolidate_facts(group)
@@ -538,6 +559,7 @@ async def run_intraday_consolidation(threshold: int = 5) -> dict[str, Any]:
                     consolidated_fact,
                     source_content="[intra-day consolidation]",
                     source_type="consolidation",
+                    tenant_id=_tenant,
                 )
                 _apply_consolidation_supersession(new_id, result["source_ids"])
                 consolidation_groups += 1
@@ -545,7 +567,7 @@ async def run_intraday_consolidation(threshold: int = 5) -> dict[str, Any]:
         logger.warning("Intra-day consolidation failed: %s", e)
 
     # Mark all remaining unconsolidated facts as consolidated
-    marked = _mark_facts_consolidated()
+    marked = _mark_facts_consolidated(tenant_id=_tenant)
 
     logger.info(
         "Intra-day consolidation complete: %d groups merged, %d facts marked",
@@ -568,21 +590,26 @@ async def infer_entity_relationships(
     min_mentions: int = 2,
     max_relations: int = 1,
     max_pairs: int = 20,
+    *,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
-    """Orchestrate cross-fact entity relationship inference."""
+    """Orchestrate cross-fact entity relationship inference inside one tenant."""
     from robothor.memory.entities import (
         find_cooccurring_entity_pairs,
         find_underconnected_entities,
         infer_relations,
     )
 
-    underconnected = await find_underconnected_entities(min_mentions, max_relations)
+    _tenant = tenant_id or DEFAULT_TENANT
+    underconnected = await find_underconnected_entities(
+        min_mentions, max_relations, tenant_id=_tenant
+    )
     if not underconnected:
         logger.info("No underconnected entities found for relationship inference")
         return []
 
     entity_ids = [e["id"] for e in underconnected]
-    pairs = await find_cooccurring_entity_pairs(entity_ids)
+    pairs = await find_cooccurring_entity_pairs(entity_ids, tenant_id=_tenant)
     if not pairs:
         logger.info("No co-occurring entity pairs found")
         return []
@@ -594,8 +621,8 @@ async def infer_entity_relationships(
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    "SELECT fact_text FROM memory_facts WHERE id = ANY(%s)",
-                    (fact_ids[:5],),
+                    "SELECT fact_text FROM memory_facts WHERE id = ANY(%s) AND tenant_id = %s",
+                    (fact_ids[:5], _tenant),
                 )
                 pair["shared_facts_text"] = [row[0] for row in cur.fetchall()]
         else:
@@ -607,7 +634,7 @@ async def infer_entity_relationships(
         len(underconnected),
     )
 
-    return await infer_relations(pairs[:max_pairs])
+    return await infer_relations(pairs[:max_pairs], tenant_id=_tenant)
 
 
 # ── Cross-Domain Insight Discovery (P1) ──────────────────────────────────────
@@ -616,8 +643,10 @@ async def infer_entity_relationships(
 async def discover_cross_domain_insights(
     hours_back: int = 24,
     max_facts: int = 50,
+    *,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
-    """Find non-obvious connections between facts from different categories.
+    """Find non-obvious connections between one tenant's facts from different categories.
 
     Selects recent facts ensuring category diversity (>= 2 categories,
     >= 3 facts), then asks the LLM to find cross-domain connections.
@@ -625,10 +654,12 @@ async def discover_cross_domain_insights(
     Args:
         hours_back: How far back to look for recent facts.
         max_facts: Maximum facts to include in the LLM prompt.
+        tenant_id: The tenant whose facts are read.
 
     Returns:
         List of validated insight dicts with 'insight_text' and 'source_fact_ids'.
     """
+    _tenant = tenant_id or DEFAULT_TENANT
     cutoff = datetime.now(UTC) - timedelta(hours=hours_back)
 
     with get_connection() as conn:
@@ -637,11 +668,11 @@ async def discover_cross_domain_insights(
             """
             SELECT id, fact_text, category, entities
             FROM memory_facts
-            WHERE is_active = TRUE AND created_at >= %s
+            WHERE is_active = TRUE AND created_at >= %s AND tenant_id = %s
             ORDER BY created_at DESC
             LIMIT %s
             """,
-            (cutoff, max_facts),
+            (cutoff, _tenant, max_facts),
         )
         facts = [dict(r) for r in cur.fetchall()]
 
@@ -723,12 +754,14 @@ Return up to 3 insights. Each insight must:
     return validated
 
 
-async def _find_similar_insight(text: str, threshold: float = 0.85) -> bool:
-    """Check if a similar insight already exists (cosine dedup).
+async def _find_similar_insight(text: str, threshold: float = 0.85, *, tenant_id: str = "") -> bool:
+    """Check if a similar insight already exists in this tenant (cosine dedup).
 
     Args:
         text: Insight text to check.
         threshold: Minimum cosine similarity to consider a duplicate.
+        tenant_id: The tenant searched. Another tenant's insight never
+            suppresses this one's.
 
     Returns:
         True if a similar insight exists.
@@ -741,29 +774,33 @@ async def _find_similar_insight(text: str, threshold: float = 0.85) -> bool:
             """
             SELECT COUNT(*) FROM memory_insights
             WHERE is_active = TRUE
+              AND tenant_id = %s
               AND embedding IS NOT NULL
               AND 1 - (embedding <=> %s::vector) >= %s
             """,
-            (embedding, threshold),
+            (tenant_id or DEFAULT_TENANT, embedding, threshold),
         )
         row = cur.fetchone()
         return bool(row and row[0] > 0)
 
 
-async def store_insight(insight: dict[str, Any]) -> int | None:
-    """Store a cross-domain insight with its embedding.
+async def store_insight(insight: dict[str, Any], *, tenant_id: str = "") -> int | None:
+    """Store a cross-domain insight with its embedding, under its facts' tenant.
 
     Args:
         insight: Dict with 'insight_text' and 'source_fact_ids'.
+        tenant_id: The tenant the source facts were read from. The insight is
+            written to it, never left to the column default.
 
     Returns:
         The database ID of the stored insight, or None if deduped.
     """
     text = insight["insight_text"]
     source_ids = insight["source_fact_ids"]
+    _tenant = tenant_id or DEFAULT_TENANT
 
     # Dedup check
-    if await _find_similar_insight(text):
+    if await _find_similar_insight(text, tenant_id=_tenant):
         logger.debug("Insight deduped (similar exists): %s", text[:60])
         return None
 
@@ -775,9 +812,9 @@ async def store_insight(insight: dict[str, Any]) -> int | None:
         cur.execute(
             """
             SELECT category, entities FROM memory_facts
-            WHERE id = ANY(%s) AND is_active = TRUE
+            WHERE id = ANY(%s) AND is_active = TRUE AND tenant_id = %s
             """,
-            (source_ids,),
+            (source_ids, _tenant),
         )
         source_facts = cur.fetchall()
 
@@ -789,11 +826,11 @@ async def store_insight(insight: dict[str, Any]) -> int | None:
         cur.execute(
             """
             INSERT INTO memory_insights
-            (insight_text, source_fact_ids, categories, entities, embedding)
-            VALUES (%s, %s, %s, %s, %s)
+            (insight_text, source_fact_ids, categories, entities, embedding, tenant_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (text, source_ids, categories, entities, embedding),
+            (text, source_ids, categories, entities, embedding, _tenant),
         )
         insight_id: int = cur.fetchone()[0]
 
@@ -801,23 +838,25 @@ async def store_insight(insight: dict[str, Any]) -> int | None:
     return insight_id
 
 
-async def run_insight_discovery(hours_back: int = 24) -> dict[str, Any]:
-    """Orchestrate cross-domain insight discovery: discover, dedup, store.
+async def run_insight_discovery(hours_back: int = 24, *, tenant_id: str = "") -> dict[str, Any]:
+    """Orchestrate cross-domain insight discovery in one tenant: discover, dedup, store.
 
     Args:
         hours_back: How far back to look for recent facts.
+        tenant_id: The tenant whose facts are read and whose insights are written.
 
     Returns:
         Dict with discovery stats.
     """
-    insights = await discover_cross_domain_insights(hours_back=hours_back)
+    _tenant = tenant_id or DEFAULT_TENANT
+    insights = await discover_cross_domain_insights(hours_back=hours_back, tenant_id=_tenant)
     if not insights:
         return {"discovered": 0, "stored": 0, "deduped": 0}
 
     stored = 0
     deduped = 0
     for insight in insights:
-        insight_id = await store_insight(insight)
+        insight_id = await store_insight(insight, tenant_id=_tenant)
         if insight_id is not None:
             stored += 1
         else:
@@ -1027,7 +1066,7 @@ def _decay_chunk(rows: list[dict[str, Any]]) -> tuple[int, int]:
     return updated, skipped_null
 
 
-def _run_decay_pass_sync(budget_s: float = _DECAY_BUDGET_S) -> dict[str, int]:
+def _run_decay_pass_sync(budget_s: float = _DECAY_BUDGET_S, tenant_id: str = "") -> dict[str, int]:
     """Sync decay pass: fetch all candidates once, then UPDATE in budgeted,
     chunked transactions. Runs inside asyncio.to_thread — see
     _run_decay_step(). Fully synchronous psycopg2 by design; there is no
@@ -1048,8 +1087,9 @@ def _run_decay_pass_sync(budget_s: float = _DECAY_BUDGET_S) -> dict[str, int]:
             SELECT id, last_accessed, access_count, reinforcement_count,
                    importance_score, outcome_failures
             FROM memory_facts
-            WHERE is_active = TRUE
-            """
+            WHERE is_active = TRUE AND tenant_id = %s
+            """,
+            (tenant_id or DEFAULT_TENANT,),
         )
         all_facts = cur.fetchall()
 
@@ -1088,7 +1128,7 @@ def _run_decay_pass_sync(budget_s: float = _DECAY_BUDGET_S) -> dict[str, int]:
     }
 
 
-async def _run_decay_step() -> int:
+async def _run_decay_step(tenant_id: str = "") -> int:
     """Step 2 entry point: dispatch the sync, chunked, budgeted decay pass to
     a worker thread so it never blocks the event loop.
 
@@ -1096,8 +1136,266 @@ async def _run_decay_step() -> int:
     budget stop, and NULL handling can be tested directly without mocking
     the rest of the 13-step maintenance pass.
     """
-    result = await asyncio.to_thread(_run_decay_pass_sync, _DECAY_BUDGET_S)
+    result = await asyncio.to_thread(_run_decay_pass_sync, _DECAY_BUDGET_S, tenant_id)
     return result["updated"]
+
+
+def active_tenant_ids() -> list[str]:
+    """Every active tenant, so per-tenant maintenance reaches each of them.
+
+    A fresh deployment has one tenant; multi-tenant instances have many.
+    ``crm_tenants`` carries no row-level security, so this list is complete
+    whatever tenant the process is bound to. Falls back to DEFAULT_TENANT when
+    the table cannot be read, so maintenance still runs for the instance.
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            # The column is `active`, not `is_active`. The typo raised, the
+            # surrounding except swallowed it, and tenant_ids silently collapsed
+            # to [DEFAULT_TENANT] — so steps 8-13 of nightly maintenance ran for
+            # exactly one tenant, and one tenant's access log was GC'd on
+            # schedule while another's went back 51 days.
+            #
+            # Only safe to fix once migration 092's roll-up was deployed:
+            # before it, correcting this would have started hard-deleting the
+            # other tenants' access history on the very first nightly pass.
+            cur.execute("SELECT id FROM crm_tenants WHERE active = TRUE ORDER BY id")
+            tenant_ids = [r["id"] for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("Could not enumerate tenants — falling back to DEFAULT_TENANT: %s", e)
+        tenant_ids = [DEFAULT_TENANT]
+    return tenant_ids or [DEFAULT_TENANT]
+
+
+# Step 1's wall-clock budget for LLM importance scoring, shared by every tenant
+# in one pass so adding tenants does not lengthen the pass without bound.
+_IMPORTANCE_BUDGET_S = 600.0
+
+
+def _add_timing(step_timings: dict[str, float], step: str, seconds: float) -> None:
+    step_timings[step] = step_timings.get(step, 0.0) + seconds
+
+
+async def _run_tenant_core_steps(
+    tenant_id: str,
+    scoring_deadline: float,
+    step_timings: dict[str, float],
+) -> dict[str, Any]:
+    """Steps 1-7 of nightly maintenance for ONE tenant.
+
+    Every read and every write here is limited to ``tenant_id``, and every
+    derived row (consolidated fact, insight, inferred edge) is written to it:
+    a consolidated fact never merges two tenants' facts, an insight never cites
+    another tenant's, and an edge never joins two tenants' entities. The caller
+    runs this inside ``tenant_scope(tenant_id)`` so that with row-level
+    security on the connections are bound to the same tenant.
+    """
+    # Step 1: Score importance
+    t0 = time.monotonic()
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Fast-path: events older than 30 days auto-score 0.3 (skip LLM call)
+        cur.execute(
+            """
+            UPDATE memory_facts SET importance_score = 0.3
+            WHERE is_active = TRUE AND importance_score = 0.5
+              AND category = 'event'
+              AND created_at < NOW() - INTERVAL '30 days'
+              AND tenant_id = %s
+            """,
+            (tenant_id,),
+        )
+        auto_scored = cur.rowcount
+
+        cur.execute(
+            """
+            SELECT id, fact_text FROM memory_facts
+            WHERE is_active = TRUE AND importance_score = 0.5 AND tenant_id = %s
+            ORDER BY created_at DESC
+            LIMIT 200
+            """,
+            (tenant_id,),
+        )
+        unscored = cur.fetchall()
+        facts_scored = 0
+        facts_skipped_budget = 0
+
+        for fact in unscored:
+            # Check wall-clock budget (shared by every tenant in this pass)
+            elapsed = time.monotonic() - t0
+            if time.monotonic() > scoring_deadline:
+                facts_skipped_budget = len(unscored) - facts_scored
+                logger.warning(
+                    "Importance scoring budget exhausted (%.0fs): scored %d, skipping %d",
+                    elapsed,
+                    facts_scored,
+                    facts_skipped_budget,
+                )
+                break
+            try:
+                score = await judge_importance(fact["fact_text"])
+                cur.execute(
+                    "UPDATE memory_facts SET importance_score = %s WHERE id = %s",
+                    (score, fact["id"]),
+                )
+                facts_scored += 1
+            except Exception as e:
+                logger.warning("Failed to score fact %d: %s", fact["id"], e)
+
+    _add_timing(step_timings, "importance_scoring", time.monotonic() - t0)
+    logger.info(
+        "Step 1 (importance) [%s]: %d scored, %d auto, %d skipped (%.1fs)",
+        tenant_id,
+        facts_scored,
+        auto_scored,
+        facts_skipped_budget,
+        time.monotonic() - t0,
+    )
+
+    # Unload generation model to free GPU for embedding model (used by later steps),
+    # but only under real memory pressure — see _should_unload_generation_model().
+    await _perform_generation_model_unload()
+
+    # Step 2: Update decay scores — chunked, budgeted, off the event loop.
+    # See _run_decay_pass_sync for why (was a 200-330s synchronous pass
+    # holding the loop and every row's lock for the whole run).
+    t1 = time.monotonic()
+    decay_updated = await _run_decay_step(tenant_id)
+    _add_timing(step_timings, "decay", time.monotonic() - t1)
+    logger.info(
+        "Step 2 (decay) [%s]: %d updated (%.1fs)", tenant_id, decay_updated, time.monotonic() - t1
+    )
+
+    # Step 3: Prune low-quality facts
+    t2 = time.monotonic()
+    prune_result = await prune_low_quality_facts(tenant_id=tenant_id)
+    _add_timing(step_timings, "prune", time.monotonic() - t2)
+    logger.info(
+        "Step 3 (prune) [%s]: %d pruned (%.1fs)",
+        tenant_id,
+        prune_result.get("total_pruned", 0),
+        time.monotonic() - t2,
+    )
+
+    # Step 4: Consolidation — two-phase to avoid model contention
+    # Phase A: Find candidates (DB only) + generate consolidated text (LLM/chat)
+    # Phase B: Unload generation model, then store with embeddings
+    t3 = time.monotonic()
+    consolidation_groups = 0
+    pending_consolidations: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    try:
+        groups = await find_consolidation_candidates(
+            min_group_size=3, similarity_threshold=0.8, tenant_id=tenant_id
+        )
+        for group in groups:
+            result = await consolidate_facts(group)
+            if result and result.get("consolidated_text"):
+                pending_consolidations.append((result, group))
+    except Exception as e:
+        logger.warning("Consolidation text generation failed: %s", e)
+
+    # Step 4 + 6: Discover insights via LLM (also needs chat, do before model unload)
+    t4 = time.monotonic()
+    discovered_insights: list[dict[str, Any]] = []
+    try:
+        discovered_insights = await discover_cross_domain_insights(
+            hours_back=72, tenant_id=tenant_id
+        )
+    except Exception as e:
+        logger.warning("Insight discovery LLM phase failed: %s", e)
+
+    # Unload generation model to free GPU for embedding-heavy storage,
+    # but only under real memory pressure — see _should_unload_generation_model().
+    # The 2s pause (only taken when the unload actually runs) gives Ollama
+    # time to release the GPU before the embedding-heavy phase below.
+    await _perform_generation_model_unload(pause_after_s=2.0)
+
+    # Phase B: Store consolidated facts (needs embeddings)
+    for result, group in pending_consolidations:
+        try:
+            from robothor.memory.facts import store_fact
+
+            consolidated_fact = {
+                "fact_text": result["consolidated_text"],
+                "category": group[0].get("category", "personal"),
+                "entities": list({e for f in group for e in (f.get("entities") or [])}),
+                "confidence": 0.9,
+            }
+            new_id = await store_fact(
+                consolidated_fact,
+                source_content="[consolidated from similar facts]",
+                source_type="consolidation",
+                tenant_id=tenant_id,
+            )
+            # Supersede originals (guarded: importance propagation + chain cap)
+            _apply_consolidation_supersession(new_id, result["source_ids"])
+            consolidation_groups += 1
+        except Exception as e:
+            logger.warning("Failed to store consolidated fact: %s", e)
+
+    _add_timing(step_timings, "consolidation", time.monotonic() - t3)
+    logger.info(
+        "Step 4 (consolidation) [%s]: %d groups (%.1fs)",
+        tenant_id,
+        consolidation_groups,
+        time.monotonic() - t3,
+    )
+
+    # Step 5: Sweep remaining unconsolidated facts (safety net)
+    swept = _mark_facts_consolidated(tenant_id=tenant_id)
+    if swept > 0:
+        logger.info("Nightly sweep: marked %d remaining facts as consolidated", swept)
+
+    # Step 6: Store discovered insights (needs embeddings; generation model was
+    # unloaded above only if memory pressure warranted it)
+    insight_result: dict[str, Any] = {
+        "discovered": len(discovered_insights),
+        "stored": 0,
+        "deduped": 0,
+    }
+    for insight in discovered_insights:
+        try:
+            insight_id = await store_insight(insight, tenant_id=tenant_id)
+            if insight_id is not None:
+                insight_result["stored"] += 1
+            else:
+                insight_result["deduped"] += 1
+        except Exception as e:
+            logger.warning("Failed to store insight: %s", e)
+    _add_timing(step_timings, "insights", time.monotonic() - t4)
+    logger.info(
+        "Step 6 (insights) [%s]: %s (%.1fs)", tenant_id, insight_result, time.monotonic() - t4
+    )
+
+    # Step 7: Cross-entity relationship inference
+    t5 = time.monotonic()
+    inferred_relations: list[dict[str, Any]] = []
+    try:
+        inferred_relations = await infer_entity_relationships(tenant_id=tenant_id)
+    except Exception as e:
+        logger.warning("Relationship inference failed: %s", e)
+    _add_timing(step_timings, "relationship_inference", time.monotonic() - t5)
+    logger.info(
+        "Step 7 (relationship inference) [%s]: %d relations inferred (%.1fs)",
+        tenant_id,
+        len(inferred_relations),
+        time.monotonic() - t5,
+    )
+
+    return {
+        "facts_scored": facts_scored,
+        "auto_scored": auto_scored,
+        "facts_skipped_budget": facts_skipped_budget,
+        "decay_updated": decay_updated,
+        "facts_pruned": prune_result.get("total_pruned", 0),
+        "consolidation_groups": consolidation_groups,
+        "unconsolidated_swept": swept,
+        "insights": insight_result,
+        "relations_inferred": len(inferred_relations),
+    }
 
 
 async def run_lifecycle_maintenance() -> dict[str, Any]:
@@ -1115,6 +1413,13 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         4. Find and consolidate similar fact groups
         5. Sweep any remaining unconsolidated facts
         6. Cross-domain insight discovery (72h window)
+        7. Cross-entity relationship inference
+        8-13. Episodes, preferences, chat TTL, breadcrumbs, access log GC,
+           intent inference
+
+    Every step runs once per active tenant, inside ``tenant_scope(tenant)``:
+    with row-level security on, a connection taken outside one is bound to
+    the process's own tenant and every child tenant would go unmaintained.
 
     Returns:
         Dict with maintenance statistics.
@@ -1141,210 +1446,33 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         logger.warning("Redis lock acquisition failed (proceeding anyway): %s", e)
 
     step_timings: dict[str, float] = {}
-
-    # Step 1: Score importance
     t0 = time.monotonic()
-    scoring_budget_s = 600.0  # Wall-clock budget for importance scoring
+    tenant_ids = active_tenant_ids()
 
-    with get_connection() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # Fast-path: events older than 30 days auto-score 0.3 (skip LLM call)
-        cur.execute(
-            """
-            UPDATE memory_facts SET importance_score = 0.3
-            WHERE is_active = TRUE AND importance_score = 0.5
-              AND category = 'event'
-              AND created_at < NOW() - INTERVAL '30 days'
-            """
-        )
-        auto_scored = cur.rowcount
-
-        cur.execute(
-            """
-            SELECT id, fact_text FROM memory_facts
-            WHERE is_active = TRUE AND importance_score = 0.5
-            ORDER BY created_at DESC
-            LIMIT 200
-            """
-        )
-        unscored = cur.fetchall()
-        facts_scored = 0
-        facts_skipped_budget = 0
-
-        for fact in unscored:
-            # Check wall-clock budget
-            elapsed = time.monotonic() - t0
-            if elapsed > scoring_budget_s:
-                facts_skipped_budget = len(unscored) - facts_scored
-                logger.warning(
-                    "Importance scoring budget exhausted (%.0fs): scored %d, skipping %d",
-                    elapsed,
-                    facts_scored,
-                    facts_skipped_budget,
-                )
-                break
-            try:
-                score = await judge_importance(fact["fact_text"])
-                cur.execute(
-                    "UPDATE memory_facts SET importance_score = %s WHERE id = %s",
-                    (score, fact["id"]),
-                )
-                facts_scored += 1
-            except Exception as e:
-                logger.warning("Failed to score fact %d: %s", fact["id"], e)
-
-    step_timings["importance_scoring"] = time.monotonic() - t0
-    logger.info(
-        "Step 1 (importance): %d scored, %d auto, %d skipped (%.1fs)",
-        facts_scored,
-        auto_scored,
-        facts_skipped_budget,
-        step_timings["importance_scoring"],
-    )
-
-    # Unload generation model to free GPU for embedding model (used by later steps),
-    # but only under real memory pressure — see _should_unload_generation_model().
-    await _perform_generation_model_unload()
-
-    # Step 2: Update decay scores — chunked, budgeted, off the event loop.
-    # See _run_decay_pass_sync for why (was a 200-330s synchronous pass
-    # holding the loop and every row's lock for the whole run).
-    t1 = time.monotonic()
-    decay_updated = await _run_decay_step()
-    step_timings["decay"] = time.monotonic() - t1
-    logger.info("Step 2 (decay): %d updated (%.1fs)", decay_updated, step_timings["decay"])
-
-    # Step 3: Prune low-quality facts
-    t2 = time.monotonic()
-    prune_result = await prune_low_quality_facts()
-    step_timings["prune"] = time.monotonic() - t2
-    logger.info(
-        "Step 3 (prune): %d pruned (%.1fs)",
-        prune_result.get("total_pruned", 0),
-        step_timings["prune"],
-    )
-
-    # Step 4: Consolidation — two-phase to avoid model contention
-    # Phase A: Find candidates (DB only) + generate consolidated text (LLM/chat)
-    # Phase B: Unload generation model, then store with embeddings
-    t3 = time.monotonic()
-    consolidation_groups = 0
-    pending_consolidations: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
-    try:
-        groups = await find_consolidation_candidates(min_group_size=3, similarity_threshold=0.8)
-        for group in groups:
-            result = await consolidate_facts(group)
-            if result and result.get("consolidated_text"):
-                pending_consolidations.append((result, group))
-    except Exception as e:
-        logger.warning("Consolidation text generation failed: %s", e)
-
-    # Step 4 + 6: Discover insights via LLM (also needs chat, do before model unload)
-    t4 = time.monotonic()
-    discovered_insights: list[dict[str, Any]] = []
-    try:
-        discovered_insights = await discover_cross_domain_insights(hours_back=72)
-    except Exception as e:
-        logger.warning("Insight discovery LLM phase failed: %s", e)
-
-    # Unload generation model to free GPU for embedding-heavy storage,
-    # but only under real memory pressure — see _should_unload_generation_model().
-    # The 2s pause (only taken when the unload actually runs) gives Ollama
-    # time to release the GPU before the embedding-heavy phase below.
-    await _perform_generation_model_unload(pause_after_s=2.0)
-
-    # Phase B: Store consolidated facts (needs embeddings)
-    for result, group in pending_consolidations:
-        try:
-            from robothor.memory.facts import store_fact
-
-            consolidated_fact = {
-                "fact_text": result["consolidated_text"],
-                "category": group[0].get("category", "personal"),
-                "entities": list({e for f in group for e in (f.get("entities") or [])}),
-                "confidence": 0.9,
-            }
-            new_id = await store_fact(
-                consolidated_fact,
-                source_content="[consolidated from similar facts]",
-                source_type="consolidation",
-            )
-            # Supersede originals (guarded: importance propagation + chain cap)
-            _apply_consolidation_supersession(new_id, result["source_ids"])
-            consolidation_groups += 1
-        except Exception as e:
-            logger.warning("Failed to store consolidated fact: %s", e)
-
-    step_timings["consolidation"] = time.monotonic() - t3
-    logger.info(
-        "Step 4 (consolidation): %d groups (%.1fs)",
-        consolidation_groups,
-        step_timings["consolidation"],
-    )
-
-    # Step 5: Sweep remaining unconsolidated facts (safety net)
-    swept = _mark_facts_consolidated()
-    if swept > 0:
-        logger.info("Nightly sweep: marked %d remaining facts as consolidated", swept)
-
-    # Step 6: Store discovered insights (needs embeddings; generation model was
-    # unloaded above only if memory pressure warranted it)
-    insight_result: dict[str, Any] = {
-        "discovered": len(discovered_insights),
-        "stored": 0,
-        "deduped": 0,
+    # Steps 1-7, one tenant at a time.
+    scoring_deadline = t0 + _IMPORTANCE_BUDGET_S
+    core: dict[str, int] = {
+        "facts_scored": 0,
+        "auto_scored": 0,
+        "facts_skipped_budget": 0,
+        "decay_updated": 0,
+        "facts_pruned": 0,
+        "consolidation_groups": 0,
+        "unconsolidated_swept": 0,
+        "relations_inferred": 0,
     }
-    for insight in discovered_insights:
+    insight_result: dict[str, int] = {"discovered": 0, "stored": 0, "deduped": 0}
+    for tid in tenant_ids:
         try:
-            insight_id = await store_insight(insight)
-            if insight_id is not None:
-                insight_result["stored"] += 1
-            else:
-                insight_result["deduped"] += 1
-        except Exception as e:
-            logger.warning("Failed to store insight: %s", e)
-    step_timings["insights"] = time.monotonic() - t4
-    logger.info("Step 6 (insights): %s (%.1fs)", insight_result, step_timings["insights"])
-
-    # Step 7: Cross-entity relationship inference
-    t5 = time.monotonic()
-    inferred_relations: list[dict[str, Any]] = []
-    try:
-        inferred_relations = await infer_entity_relationships()
-    except Exception as e:
-        logger.warning("Relationship inference failed: %s", e)
-    step_timings["relationship_inference"] = time.monotonic() - t5
-    logger.info(
-        "Step 7 (relationship inference): %d relations inferred (%.1fs)",
-        len(inferred_relations),
-        step_timings["relationship_inference"],
-    )
-
-    # Resolve the set of active tenants so per-tenant maintenance steps run
-    # for every tenant (not just the instance's default). A fresh deployment
-    # has one tenant; multi-tenant instances have many. Without this, steps
-    # that default to DEFAULT_TENANT silently skip the primary tenant's data
-    # on any instance where ROBOTHOR_DEFAULT_TENANT != the seeded tenant id.
-    try:
-        with get_connection() as conn:
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-            # The column is `active`, not `is_active`. The typo raised, the
-            # surrounding except swallowed it, and tenant_ids silently collapsed
-            # to [DEFAULT_TENANT] — so steps 8-13 of nightly maintenance ran for
-            # exactly one tenant. Visible in the data: robothor-primary's access
-            # log was GC'd on schedule while delphi's went back 51 days.
-            #
-            # Only safe to fix now that migration 092's roll-up is deployed:
-            # before it, correcting this would have started hard-deleting the
-            # other tenants' access history on the very first nightly pass.
-            cur.execute("SELECT id FROM crm_tenants WHERE active = TRUE")
-            tenant_ids = [r["id"] for r in cur.fetchall()]
-    except Exception as e:
-        logger.warning("Could not enumerate tenants — falling back to DEFAULT_TENANT: %s", e)
-        tenant_ids = [DEFAULT_TENANT]
-    if not tenant_ids:
-        tenant_ids = [DEFAULT_TENANT]
+            with tenant_scope(tid):
+                stats = await _run_tenant_core_steps(tid, scoring_deadline, step_timings)
+        except Exception as e:  # noqa: BLE001 - one tenant must not sink the rest
+            logger.warning("Lifecycle steps 1-7 failed for tenant %s: %s", tid, e)
+            continue
+        for k in core:
+            core[k] += int(stats.get(k, 0))
+        for k in insight_result:
+            insight_result[k] += int(stats["insights"].get(k, 0))
 
     # Step 8: Episodic memory — cluster recent facts into time-bucketed episodes.
     t6 = time.monotonic()
@@ -1353,7 +1481,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         from robothor.memory.episodes import build_episodes_from_facts
 
         for tid in tenant_ids:
-            stats = await build_episodes_from_facts(hours_back=72, tenant_id=tid)
+            with tenant_scope(tid):
+                stats = await build_episodes_from_facts(hours_back=72, tenant_id=tid)
             for k, v in stats.items():
                 if isinstance(v, int):
                     episode_stats[k] = episode_stats.get(k, 0) + v
@@ -1375,8 +1504,9 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         )
 
         for tid in tenant_ids:
-            ext = await extract_preferences_from_facts(hours_back=72, tenant_id=tid)
-            drift = await detect_drift(tenant_id=tid)
+            with tenant_scope(tid):
+                ext = await extract_preferences_from_facts(hours_back=72, tenant_id=tid)
+                drift = await detect_drift(tenant_id=tid)
             for k, v in ext.items():
                 if isinstance(v, int):
                     preference_stats["extract"][k] = preference_stats["extract"].get(k, 0) + v
@@ -1399,7 +1529,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         from robothor.engine.chat_store import cleanup_stale_chat_turns
 
         for tid in tenant_ids:
-            chat_pruned += await asyncio.to_thread(cleanup_stale_chat_turns, 90, tid)
+            with tenant_scope(tid):
+                chat_pruned += await asyncio.to_thread(cleanup_stale_chat_turns, 90, tid)
     except Exception as e:
         logger.warning("Chat turn TTL failed: %s", e)
     step_timings["chat_ttl"] = time.monotonic() - t8
@@ -1419,8 +1550,11 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         )
 
         for tid in tenant_ids:
-            breadcrumb_stats["pruned"] += await asyncio.to_thread(prune_expired_breadcrumbs, tid)
-            promo = await promote_hot_breadcrumbs(tenant_id=tid)
+            with tenant_scope(tid):
+                breadcrumb_stats["pruned"] += await asyncio.to_thread(
+                    prune_expired_breadcrumbs, tid
+                )
+                promo = await promote_hot_breadcrumbs(tenant_id=tid)
             breadcrumb_stats["promoted"] += promo.get("promoted", 0)
     except Exception as e:
         logger.warning("Breadcrumb maintenance failed: %s", e)
@@ -1442,7 +1576,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         from robothor.memory.outcomes import cleanup_old_access_logs
 
         for tid in tenant_ids:
-            access_log_pruned += await asyncio.to_thread(cleanup_old_access_logs, None, tid)
+            with tenant_scope(tid):
+                access_log_pruned += await asyncio.to_thread(cleanup_old_access_logs, None, tid)
     except Exception as e:
         logger.warning("Access log cleanup failed: %s", e)
     step_timings["access_log_cleanup"] = time.monotonic() - t10
@@ -1461,7 +1596,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
             from robothor.memory.intents import infer_intents_from_facts
 
             for tid in tenant_ids:
-                created = await infer_intents_from_facts(tenant_id=tid)
+                with tenant_scope(tid):
+                    created = await infer_intents_from_facts(tenant_id=tid)
                 intents_proposed += len(created)
         except Exception as e:
             logger.warning("Intent inference failed: %s", e)
@@ -1478,20 +1614,20 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     _release_lifecycle_lock()
 
     return {
-        "facts_scored": facts_scored,
-        "auto_scored": auto_scored,
-        "facts_skipped_budget": facts_skipped_budget,
-        "decay_updated": decay_updated,
-        "facts_pruned": prune_result.get("total_pruned", 0),
-        "consolidation_groups": consolidation_groups,
-        "unconsolidated_swept": swept,
+        "facts_scored": core["facts_scored"],
+        "auto_scored": core["auto_scored"],
+        "facts_skipped_budget": core["facts_skipped_budget"],
+        "decay_updated": core["decay_updated"],
+        "facts_pruned": core["facts_pruned"],
+        "consolidation_groups": core["consolidation_groups"],
+        "unconsolidated_swept": core["unconsolidated_swept"],
         "episodes": episode_stats,
         "preferences": preference_stats,
         "chat_turns_pruned": chat_pruned,
         "breadcrumbs": breadcrumb_stats,
         "access_log_pruned": access_log_pruned,
         "insights": insight_result,
-        "relations_inferred": len(inferred_relations),
+        "relations_inferred": core["relations_inferred"],
         "intents_proposed": intents_proposed,
         "step_timings": step_timings,
     }

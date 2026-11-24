@@ -27,11 +27,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from robothor.db.connection import tenant_scope
 from robothor.memory.lifecycle import (
+    active_tenant_ids,
     discover_cross_domain_insights,
     prune_low_quality_facts,
     run_intraday_consolidation,
     run_lifecycle_maintenance,
+    store_insight,
 )
 
 logger = logging.getLogger(__name__)
@@ -320,6 +323,15 @@ def _update_memory_block(results: dict[str, Any], mode: str) -> None:
         logger.debug("Failed to update autodream_log block: %s", e)
 
 
+def _sum_into(total: dict[str, Any], part: Any) -> None:
+    """Add one tenant's integer stats into the pass total."""
+    if not isinstance(part, dict):
+        return
+    for k, v in part.items():
+        if isinstance(v, int) and not isinstance(v, bool):
+            total[k] = total.get(k, 0) + v
+
+
 async def run_autodream(mode: str = "idle", tenant_id: str = "") -> dict[str, Any]:
     """Run an autoDream memory consolidation pass.
 
@@ -361,27 +373,42 @@ async def run_autodream(mode: str = "idle", tenant_id: str = "") -> dict[str, An
     error_msg: str | None = None
 
     try:
+        # Every step reads and writes one tenant at a time, inside that
+        # tenant's scope: with row-level security on, a connection taken
+        # outside one is bound to the process's tenant only.
+        tenant_ids = await asyncio.to_thread(active_tenant_ids)
+
         if mode == "deep":
-            # Full lifecycle: importance scoring + decay + prune + consolidate + insights
+            # Full lifecycle: importance scoring + decay + prune + consolidate + insights.
+            # run_lifecycle_maintenance loops the tenants itself.
             maint_results = await run_lifecycle_maintenance()
             results["facts_consolidated"] = maint_results.get("consolidation_groups", 0)
-            results["facts_pruned"] = maint_results.get("total_pruned", 0)
-            results["insights_discovered"] = len(maint_results.get("insights", []))
+            results["facts_pruned"] = maint_results.get("facts_pruned", 0)
+            results["insights_discovered"] = (maint_results.get("insights") or {}).get(
+                "discovered", 0
+            )
             results["importance_scores_updated"] = maint_results.get("facts_scored", 0)
         else:
             # Lightweight: consolidation + pruning + insights (no importance re-scoring)
-            # Step 1: Consolidate similar facts
-            consol = await run_intraday_consolidation(threshold=3)
-            if not consol.get("skipped"):
-                results["facts_consolidated"] = consol.get("consolidation_groups", 0)
+            for tid in tenant_ids:
+                with tenant_scope(tid):
+                    # Step 1: Consolidate similar facts
+                    consol = await run_intraday_consolidation(threshold=3, tenant_id=tid)
+                    if not consol.get("skipped"):
+                        results["facts_consolidated"] += consol.get("consolidation_groups", 0)
 
-            # Step 2: Prune low-quality facts
-            pruned = await prune_low_quality_facts()
-            results["facts_pruned"] = pruned.get("total_pruned", 0)
+                    # Step 2: Prune low-quality facts
+                    pruned = await prune_low_quality_facts(tenant_id=tid)
+                    results["facts_pruned"] += pruned.get("total_pruned", 0)
 
-            # Step 3: Discover cross-domain insights
-            insights = await discover_cross_domain_insights(hours_back=72)
-            results["insights_discovered"] = len(insights)
+                    # Step 3: Discover cross-domain insights, and keep them
+                    insights = await discover_cross_domain_insights(hours_back=72, tenant_id=tid)
+                    results["insights_discovered"] += len(insights)
+                    for insight in insights:
+                        try:
+                            await store_insight(insight, tenant_id=tid)
+                        except Exception as e:  # noqa: BLE001 - one insight must not sink the pass
+                            logger.warning("autoDream insight store failed for %s: %s", tid, e)
 
         # Near-duplicate collapse. Runs here rather than on its own timer so it
         # inherits autoDream's Redis lock, cooldown and quiet hours — a second
@@ -419,20 +446,27 @@ async def run_autodream(mode: str = "idle", tenant_id: str = "") -> dict[str, An
 
         # Step 4: Refresh the live working_context snapshot (replaces stale
         # content with today's open tasks + recent high-signal facts + intents).
-        try:
-            from robothor.memory.working_context import refresh_working_context
+        from robothor.memory import preferences as _preferences
+        from robothor.memory import working_context as _working_context
 
-            results["working_context"] = await asyncio.to_thread(refresh_working_context)
-        except Exception as e:  # noqa: BLE001 — best-effort hygiene
-            logger.warning("autoDream working_context refresh failed: %s", e)
+        for tid in tenant_ids:
+            with tenant_scope(tid):
+                try:
+                    wc = await asyncio.to_thread(
+                        _working_context.refresh_working_context, tenant_id=tid
+                    )
+                    _sum_into(results.setdefault("working_context", {}), wc)
+                except Exception as e:  # noqa: BLE001 — best-effort hygiene
+                    logger.warning("autoDream working_context refresh failed for %s: %s", tid, e)
 
-        # Step 5: Mine recent facts for durable operator preferences.
-        try:
-            from robothor.memory.preferences import extract_preferences_from_facts
-
-            results["preferences"] = await extract_preferences_from_facts(hours_back=168)
-        except Exception as e:  # noqa: BLE001 — best-effort hygiene
-            logger.warning("autoDream preference extraction failed: %s", e)
+                # Step 5: Mine recent facts for durable operator preferences.
+                try:
+                    prefs = await _preferences.extract_preferences_from_facts(
+                        hours_back=168, tenant_id=tid
+                    )
+                    _sum_into(results.setdefault("preferences", {}), prefs)
+                except Exception as e:  # noqa: BLE001 — best-effort hygiene
+                    logger.warning("autoDream preference extraction failed for %s: %s", tid, e)
 
     except Exception as e:
         error_msg = str(e)
