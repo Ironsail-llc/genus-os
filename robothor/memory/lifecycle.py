@@ -1267,8 +1267,10 @@ def active_tenant_ids() -> list[str]:
     return tenant_ids or [DEFAULT_TENANT]
 
 
-# Step 1's wall-clock budget for LLM importance scoring, shared by every tenant
-# in one pass so adding tenants does not lengthen the pass without bound.
+# Step 1's wall-clock budget for LLM importance scoring in one pass, shared by
+# every tenant so adding tenants does not lengthen the pass without bound. Only
+# time spent scoring is charged to it, and each tenant is offered an equal share
+# of what is left (see run_lifecycle_maintenance), so no tenant goes unscored.
 _IMPORTANCE_BUDGET_S = 600.0
 
 
@@ -1278,7 +1280,7 @@ def _add_timing(step_timings: dict[str, float], step: str, seconds: float) -> No
 
 async def _run_tenant_core_steps(
     tenant_id: str,
-    scoring_deadline: float,
+    scoring_budget_s: float,
     step_timings: dict[str, float],
 ) -> dict[str, Any]:
     """Steps 1-7 of nightly maintenance for ONE tenant.
@@ -1303,13 +1305,16 @@ async def _run_tenant_core_steps(
         facts_skipped_budget = 0
 
         for fact in unscored:
-            # Check wall-clock budget (shared by every tenant in this pass)
+            # This tenant's share of the pass's scoring budget
             elapsed = time.monotonic() - t0
-            if time.monotonic() > scoring_deadline:
+            if elapsed > scoring_budget_s:
                 facts_skipped_budget = len(unscored) - facts_scored
                 logger.warning(
-                    "Importance scoring budget exhausted (%.0fs): scored %d, skipping %d",
+                    "Importance scoring budget exhausted for %s (%.0fs of a %.0fs share): "
+                    "scored %d, skipping %d",
+                    tenant_id,
                     elapsed,
+                    scoring_budget_s,
                     facts_scored,
                     facts_skipped_budget,
                 )
@@ -1525,8 +1530,11 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     t0 = time.monotonic()
     tenant_ids = active_tenant_ids()
 
-    # Steps 1-7, one tenant at a time.
-    scoring_deadline = t0 + _IMPORTANCE_BUDGET_S
+    # Steps 1-7, one tenant at a time. Each tenant may spend an equal share of
+    # the scoring budget still unspent, and only its scoring time is charged:
+    # a tenant that uses less leaves more for those after it, and none is ever
+    # offered nothing because an earlier tenant's other steps were slow.
+    scoring_left = _IMPORTANCE_BUDGET_S
     core: dict[str, int] = {
         "facts_scored": 0,
         "auto_scored": 0,
@@ -1538,13 +1546,17 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         "relations_inferred": 0,
     }
     insight_result: dict[str, int] = {"discovered": 0, "stored": 0, "deduped": 0}
-    for tid in tenant_ids:
+    for i, tid in enumerate(tenant_ids):
+        share = max(scoring_left, 0.0) / (len(tenant_ids) - i)
+        scored_before = step_timings.get("importance_scoring", 0.0)
         try:
             with tenant_scope(tid):
-                stats = await _run_tenant_core_steps(tid, scoring_deadline, step_timings)
+                stats = await _run_tenant_core_steps(tid, share, step_timings)
         except Exception as e:  # noqa: BLE001 - one tenant must not sink the rest
             logger.warning("Lifecycle steps 1-7 failed for tenant %s: %s", tid, e)
             continue
+        finally:
+            scoring_left -= step_timings.get("importance_scoring", 0.0) - scored_before
         for k in core:
             core[k] += int(stats.get(k, 0))
         for k in insight_result:
