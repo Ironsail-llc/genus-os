@@ -511,7 +511,8 @@ agent-generated, so it is not trusted. **Every fact written before origins
 existed has none, so on existing data trusted-only activation finds nothing and
 warm-up uses its name-matching context instead.** A deliberate search
 (`search_facts`, the `search_memory` tool) walks every origin and labels each
-row with its `origin` and the path that reached it.
+row with its `origin` and the path that reached it (`origin` and `via` in the
+tool's results).
 
 **Hub control.** The operator's own entity (found through `get_owner_person`)
 is never a seed and never a transit node. Seeds are weighted by inverse degree,
