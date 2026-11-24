@@ -21,6 +21,7 @@ from robothor.memory.eval import (
     report_to_benchmark_row,
     run_suite,
 )
+from robothor.memory.eval_world_seed import format_world_report, run_world
 
 if TYPE_CHECKING:
     import argparse
@@ -36,6 +37,9 @@ def cmd_memory_eval(args: argparse.Namespace) -> int:
     eval sit broken behind row-level security while still looking like an
     ordinary failing test.
     """
+    if getattr(args, "world", False):
+        return _cmd_world(args)
+
     suite_path = Path(args.suite)
     if not suite_path.exists():
         print(f"Suite not found: {suite_path}")
@@ -78,4 +82,38 @@ def cmd_memory_eval(args: argparse.Namespace) -> int:
             # by the fleet's staleness check, not by this exit code.
             print("warning: could not record the result to benchmark_results")
 
+    return exit_code_for(report, None)
+
+
+def _cmd_world(args: argparse.Namespace) -> int:
+    """Seed the synthetic world, score its cases through search_facts, clean up.
+
+    Same three-way exit codes as the suite. Not recorded to benchmark_results:
+    the fleet reads the latest ``memory`` row without a suite filter, so a
+    world score would silently replace the suite's. Baselines for the world
+    are their own later step.
+    """
+    tenant = args.tenant or EVAL_TENANT
+    blocked = preflight(tenant)
+    if blocked:
+        print(f"memory-eval cannot run: {blocked}")
+        return exit_code_for(None, blocked)
+
+    try:
+        report = asyncio.run(
+            run_world(
+                args.world_seed,
+                args.world_size,
+                args.split,
+                tenant_id=tenant,
+                cleanup=not args.keep,
+            )
+        )
+    except EvalPreconditionError as e:
+        print(f"memory-eval cannot run: {e}")
+        return exit_code_for(None, str(e))
+
+    print(format_world_report(report, as_json=args.json_output))
+    if getattr(args, "record", False):
+        print("note: --record is ignored with --world (world results are not recorded yet)")
     return exit_code_for(report, None)

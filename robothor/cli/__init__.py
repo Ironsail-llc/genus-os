@@ -821,6 +821,29 @@ def _build_parser() -> argparse.ArgumentParser:
         default="manual",
         help="Provenance recorded alongside the result (e.g. cron)",
     )
+    memeval_parser.add_argument(
+        "--world",
+        action="store_true",
+        help="Run the generated synthetic world instead of the suite file",
+    )
+    memeval_parser.add_argument(
+        "--world-seed",
+        type=int,
+        default=1,
+        help="Seed for the synthetic world (same seed, same world)",
+    )
+    memeval_parser.add_argument(
+        "--world-size",
+        choices=["small", "full"],
+        default="full",
+        help="Synthetic world size",
+    )
+    memeval_parser.add_argument(
+        "--split",
+        choices=["dev", "held_out", "all"],
+        default="dev",
+        help="Which world cases to score",
+    )
 
     # status
     subparsers.add_parser("status", help="Show system status")
