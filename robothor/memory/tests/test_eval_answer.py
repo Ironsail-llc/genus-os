@@ -281,6 +281,8 @@ class TestPlantedAnswers:
             "other_tenant",
             "random_entity",
             "paraphrase",
+            "paraphrase_llm",
+            "wrong_llm",
         } <= kinds
         assert any(p.expect_correct for p in a) and any(not p.expect_correct for p in a)
 
@@ -293,13 +295,35 @@ class TestPlantedAnswers:
 
 class TestJudgeValidation:
     @pytest.mark.asyncio
-    async def test_the_rule_judge_passes_validation(self):
+    async def test_rules_plus_a_sound_llm_pass_validation(self):
+        async def sound_llm(case, answer):
+            # A stand-in for a model that understands reordered names and
+            # short organisation names: every answer word belongs to one gold.
+            words = set(ea.normalise(answer.text).split())
+            ok = any(words <= set(ea.normalise(g).split()) for g in case.gold)
+            return ok, "fake"
+
         w = _world()
-        result = await ea.validate_judge(w, ea.make_judge(w, llm=None))
+        result = await ea.validate_judge(w, ea.make_judge(w, llm=sound_llm))
         assert result.passed
         assert result.wrong_marked_wrong >= 0.95
         assert result.right_marked_right >= 0.95
         assert result.n_wrong > 0 and result.n_right > 0
+        assert result.by_kind["paraphrase_llm"]["ok"] == result.by_kind["paraphrase_llm"]["n"]
+
+    @pytest.mark.asyncio
+    async def test_rules_alone_cannot_pass_so_the_llm_path_is_exercised(self):
+        w = _world()
+        result = await ea.validate_judge(w, ea.make_judge(w, llm=None))
+        assert not result.passed
+        assert result.by_kind["paraphrase_llm"]["ok"] == 0
+
+    def test_llm_planted_answers_are_not_settled_by_the_rules(self):
+        w = _world()
+        known = ea.known_values(w)
+        for p in ea.planted_answers(w):
+            if p.kind in ("paraphrase_llm", "wrong_llm"):
+                assert ea.judge_rules(p.case, p.answer, known) is None, p
 
     @pytest.mark.asyncio
     async def test_a_judge_that_accepts_everything_fails(self):

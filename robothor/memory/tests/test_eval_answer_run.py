@@ -172,6 +172,16 @@ class TestRunner:
 
         monkeypatch.setattr(ea, "seed_world", fake_seed)
         monkeypatch.setattr(ea, "cleanup_world", fake_cleanup)
+
+        async def fake_llm_judge(case, answer, *, model=None):
+            # Unit tests never reach a model. Sound on the planted forms
+            # (reordered names, bare organisation roots): right only when
+            # every answer word belongs to one gold.
+            words = set(ea.normalise(answer.text).split())
+            ok = any(words <= set(ea.normalise(g).split()) for g in case.gold)
+            return ok, "fake llm judge"
+
+        monkeypatch.setattr(ea, "llm_judge", fake_llm_judge)
         es.register_system("echo_run", _Echo)
         yield calls, fake_answer
         es.unregister_system("echo_run")
