@@ -3938,7 +3938,7 @@ def check_health() -> dict[str, Any]:
 # ─── Owner Identity ──────────────────────────────────────────────────────
 
 
-def get_owner_person(tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
+def get_owner_person(tenant_id: str = DEFAULT_TENANT, *, cur: Any = None) -> dict[str, Any]:
     """Return the ``crm_people`` row for this tenant's operator.
 
     Resolution order:
@@ -3950,48 +3950,57 @@ def get_owner_person(tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
     Returns an empty dict (not None) when no operator is configured, so
     ``get_owner_person(...)["id"]`` returns ``None`` rather than raising.
     Callers that need presence should check ``if row.get("id")``.
+
+    ``cur``: a ``RealDictCursor`` the caller already holds, to run the lookup
+    on instead of checking out a second connection.
     """
+    if cur is not None:
+        return _owner_person_on(cur, tenant_id)
     with get_connection() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            """
-            SELECT p.*
-            FROM tenant_users u
-            JOIN crm_people p ON p.id = u.person_id
-            WHERE u.tenant_id = %s
-              AND u.role = 'owner'
-              AND u.person_id IS NOT NULL
-              AND p.deleted_at IS NULL
-              AND p.tenant_id = %s
-            LIMIT 1
-            """,
-            (tenant_id, tenant_id),
-        )
-        row = cur.fetchone()
-        if row:
-            return person_to_dict(row)
+        return _owner_person_on(conn.cursor(cursor_factory=RealDictCursor), tenant_id)
 
-        # Fallback — owner.yaml configured but bootstrap hasn't run yet.
-        from robothor.owner_config import load_owner_config
 
-        config = load_owner_config()
-        if config is None or config.tenant_id != tenant_id:
-            return {"id": None}
+def _owner_person_on(cur: Any, tenant_id: str) -> dict[str, Any]:
+    """The operator lookup of :func:`get_owner_person`, on ``cur``."""
+    cur.execute(
+        """
+        SELECT p.*
+        FROM tenant_users u
+        JOIN crm_people p ON p.id = u.person_id
+        WHERE u.tenant_id = %s
+          AND u.role = 'owner'
+          AND u.person_id IS NOT NULL
+          AND p.deleted_at IS NULL
+          AND p.tenant_id = %s
+        LIMIT 1
+        """,
+        (tenant_id, tenant_id),
+    )
+    row = cur.fetchone()
+    if row:
+        return person_to_dict(row)
 
-        cur.execute(
-            """
-            SELECT p.*
-            FROM crm_people p
-            WHERE p.deleted_at IS NULL
-              AND p.tenant_id = %s
-              AND LOWER(p.email) = %s
-            ORDER BY p.updated_at DESC
-            LIMIT 1
-            """,
-            (tenant_id, config.email),
-        )
-        row = cur.fetchone()
-        return person_to_dict(row) if row else {"id": None}
+    # Fallback — owner.yaml configured but bootstrap hasn't run yet.
+    from robothor.owner_config import load_owner_config
+
+    config = load_owner_config()
+    if config is None or config.tenant_id != tenant_id:
+        return {"id": None}
+
+    cur.execute(
+        """
+        SELECT p.*
+        FROM crm_people p
+        WHERE p.deleted_at IS NULL
+          AND p.tenant_id = %s
+          AND LOWER(p.email) = %s
+        ORDER BY p.updated_at DESC
+        LIMIT 1
+        """,
+        (tenant_id, config.email),
+    )
+    row = cur.fetchone()
+    return person_to_dict(row) if row else {"id": None}
 
 
 def bootstrap_owner_person_links() -> dict[str, Any]:

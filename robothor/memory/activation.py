@@ -191,9 +191,13 @@ def _link_seeds(
     *,
     extra_entity_ids: Iterable[int] = (),
     sender_person_id: str | None = None,
+    phrases: Sequence[str] | None = None,
 ) -> list[Seed]:
-    """The read-only matcher behind :func:`seeds_from_text`, on an open cursor."""
-    phrases = candidate_phrases(text)
+    """The read-only matcher behind :func:`seeds_from_text`, on an open cursor.
+
+    ``phrases`` replaces :func:`candidate_phrases` of ``text`` when given.
+    """
+    phrases = list(candidate_phrases(text) if phrases is None else phrases)
     keys = strong_keys(text)
     # A handle may be stored with or without its "@".
     keys += [k[1:] for k in keys if k.startswith("@")]
@@ -234,22 +238,24 @@ def seeds_from_text(
         return _link_seeds(cur, tenant_id, text, extra_entity_ids=extra)
 
 
-def owner_entity_ids(cur: Any, tenant_id: str) -> list[int]:
-    """The operator's own entities (via ``get_owner_person``), to exclude from a walk."""
+class OperatorUnknownError(RuntimeError):
+    """The operator could not be resolved, so a walk could run through them."""
+
+
+def operator_person_id(cur: Any, tenant_id: str) -> str | None:
+    """The operator's CRM person (``get_owner_person``) on ``cur``, or None if
+    no operator is configured.
+
+    Raises :class:`OperatorUnknownError` when the lookup itself fails: the
+    caller must then not walk, since the operator's node — usually the largest
+    hub — would be a possible seed and transit node.
+    """
     try:
         from robothor.crm.dal import get_owner_person
 
-        owner_id = _as_uuid((get_owner_person(tenant_id) or {}).get("id"))
-    except Exception as e:  # noqa: BLE001 - no operator configured is not an error here
-        logger.debug("activation: operator lookup failed: %s", e)
-        return []
-    if owner_id is None:
-        return []
-    cur.execute(
-        "SELECT id FROM memory_entities WHERE tenant_id = %s AND crm_person_id = %s::uuid",
-        (tenant_id, owner_id),
-    )
-    return [int(r["id"]) for r in cur.fetchall()]
+        return _as_uuid((get_owner_person(tenant_id, cur=cur) or {}).get("id"))
+    except Exception as e:
+        raise OperatorUnknownError(f"the operator could not be resolved: {e}") from e
 
 
 _ACTIVATE_SQL = """
@@ -259,7 +265,7 @@ _ACTIVATE_SQL = """
       FROM memory_activate(
           %(t)s, %(seeds)s::int[], %(weights)s::float8[], %(reader)s, %(hops)s,
           %(fanout)s, %(damping)s, %(exclude)s::int[], %(trusted)s, %(limit)s,
-          %(per)s, %(restricted)s, %(person)s::uuid)
+          %(per)s, %(restricted)s, %(person)s::uuid, %(owner)s::uuid)
      WHERE kind = 'fact'
 """
 
@@ -317,15 +323,10 @@ def _activate_on(
     exclude_entity_ids: Iterable[int],
     person_restricted: bool,
     person_id: str | None,
-    statement_timeout_ms: int | None,
+    exclude_crm_person_id: str | None,
 ) -> list[Candidate]:
     if not seeds:
         return []
-    if statement_timeout_ms:
-        # Transaction-local: the pooled connection keeps its own setting.
-        cur.execute(
-            "SELECT set_config('statement_timeout', %s, true)", (f"{int(statement_timeout_ms)}ms",)
-        )
     seeds = list(seeds)[:MAX_SEEDS]
     cur.execute(
         _ACTIVATE_SQL,
@@ -343,6 +344,7 @@ def _activate_on(
             "per": int(facts_per_entity),
             "restricted": bool(person_restricted),
             "person": _as_uuid(person_id),
+            "owner": _as_uuid(exclude_crm_person_id),
         },
     )
     return _candidates(cur.fetchall())
@@ -362,7 +364,7 @@ def activate(
     exclude_entity_ids: Iterable[int] = (),
     person_restricted: bool = False,
     person_id: str | None = None,
-    statement_timeout_ms: int | None = None,
+    exclude_crm_person_id: str | None = None,
     connect: Callable[..., Any] | None = None,
 ) -> list[Candidate]:
     """Spread activation from ``seeds``; the facts it reaches, best first.
@@ -373,7 +375,9 @@ def activate(
     ``agent_generated``) and ``origin_recorded`` (as stored). ``reader_scope_id``
     is the reader's person id: the walk sees shared evidence and evidence scoped
     to that reader, nothing else. ``person_restricted``/``person_id`` apply the
-    "own data + shared" person scope on top. Deterministic for the same data.
+    "own data + shared" person scope on top. ``exclude_crm_person_id``
+    excludes every entity of that CRM person as seed and transit (the
+    operator). Deterministic for the same data.
     """
     if not seeds:
         return []
@@ -392,23 +396,47 @@ def activate(
             exclude_entity_ids=exclude_entity_ids,
             person_restricted=person_restricted,
             person_id=person_id,
-            statement_timeout_ms=statement_timeout_ms,
+            exclude_crm_person_id=exclude_crm_person_id,
         )
 
 
-def _mentioned_by(cur: Any, tenant_id: str, fact_ids: Sequence[int]) -> list[Seed]:
-    """Entities the given facts mention, in the order of the facts."""
+def _mentioned_by(
+    cur: Any,
+    tenant_id: str,
+    fact_ids: Sequence[int],
+    *,
+    reader_scope_id: str | None,
+    person_restricted: bool,
+    person_id: str | None,
+) -> list[Seed]:
+    """Entities the given facts mention, in the order of the facts.
+
+    Only facts the reader may see count, by the same rule the walk applies: a
+    search leg that does not filter by scope can return someone else's
+    private fact, and its mentions must not start this reader's walk.
+    """
     if not fact_ids:
         return []
     cur.execute(
         """
         SELECT DISTINCT ON (mm.entity_id) mm.entity_id, e.name, o.ord
-          FROM unnest(%s::int[]) WITH ORDINALITY AS o(fact_id, ord)
-          JOIN memory_mentions mm ON mm.fact_id = o.fact_id AND mm.tenant_id = %s
-          JOIN memory_entities e ON e.id = mm.entity_id AND e.tenant_id = %s
+          FROM unnest(%(facts)s::int[]) WITH ORDINALITY AS o(fact_id, ord)
+          JOIN memory_facts f
+            ON f.id = o.fact_id AND f.tenant_id = %(t)s AND f.is_active IS TRUE
+           AND (f.scope_kind = 'shared'
+                OR (f.scope_kind = 'user' AND f.scope_id = %(reader)s))
+           AND (NOT %(restricted)s OR f.person_id IS NULL OR f.person_id = %(person)s::uuid)
+          JOIN memory_mentions mm ON mm.fact_id = o.fact_id AND mm.tenant_id = %(t)s
+          JOIN memory_entities e ON e.id = mm.entity_id AND e.tenant_id = %(t)s
          ORDER BY mm.entity_id, o.ord
         """,
-        (list(fact_ids), tenant_id, tenant_id),
+        {
+            "facts": list(fact_ids),
+            "t": tenant_id,
+            "reader": reader_scope_id,
+            "restricted": bool(person_restricted),
+            "person": _as_uuid(person_id),
+        },
     )
     rows = sorted(cur.fetchall(), key=lambda r: (int(r["ord"]), int(r["entity_id"])))
     return [
@@ -477,9 +505,18 @@ def _query_graph(
 ) -> list[Candidate]:
     seeds = _link_seeds(cur, tenant_id, query)
     known = {s.entity_id for s in seeds}
-    seeds += [s for s in _mentioned_by(cur, tenant_id, seed_fact_ids) if s.entity_id not in known]
+    mentioned = _mentioned_by(
+        cur,
+        tenant_id,
+        seed_fact_ids,
+        reader_scope_id=reader_scope_id,
+        person_restricted=person_restricted,
+        person_id=person_id,
+    )
+    seeds += [s for s in mentioned if s.entity_id not in known]
     if not seeds:
         return []
+    owner = operator_person_id(cur, tenant_id)
     return _activate_on(
         cur,
         tenant_id,
@@ -491,11 +528,20 @@ def _query_graph(
         damping=DAMPING,
         limit=limit,
         facts_per_entity=FACTS_PER_ENTITY,
-        exclude_entity_ids=owner_entity_ids(cur, tenant_id),
+        exclude_entity_ids=(),
         person_restricted=person_restricted,
         person_id=person_id,
-        statement_timeout_ms=None,
+        exclude_crm_person_id=owner,
     )
+
+
+def has_anything_to_link(
+    message: str, phrases: Sequence[str] | None, sender_person_id: str | None
+) -> bool:
+    """Whether a message could seed a walk at all, decided without I/O."""
+    if phrases is None:
+        phrases = candidate_phrases(message)
+    return bool(phrases) or bool(strong_keys(message)) or _as_uuid(sender_person_id) is not None
 
 
 def recall_for_message(
@@ -509,28 +555,34 @@ def recall_for_message(
     person_id: str | None = None,
     trusted_only: bool = True,
     limit: int = LIMIT,
-    statement_timeout_ms: int | None = None,
+    phrases: Sequence[str] | None = None,
     connect: Callable[..., Any] | None = None,
 ) -> list[Candidate]:
     """Automatic recall for one inbound message (warm-up). No model call.
 
-    Seeds: entities the message names (except ``exclude_names``) and the
-    sender's own entity, linked by its CRM person. The operator's entity is
-    excluded as seed and transit. ``trusted_only`` by default: only
-    operator-confirmed, user-stated and CRM evidence.
+    Seeds: entities the message names (``phrases``, by default
+    :func:`candidate_phrases` of it; never one of ``exclude_names``), e-mail
+    addresses and @handles in it, and the sender's own entity, linked by its
+    CRM person. With none of those nothing is opened. Otherwise one connection
+    and at most three statements: the seed lookup, the operator lookup (the
+    operator is excluded as seed and transit; a failed lookup raises
+    :class:`OperatorUnknownError` and nothing is walked) and the walk.
+    ``trusted_only`` by default: only operator-confirmed, user-stated and CRM
+    evidence.
     """
+    if not has_anything_to_link(message, phrases, sender_person_id):
+        return []
     excluded = {n.lower() for n in (exclude_names or ()) if n}
     sender = _as_uuid(sender_person_id)
-    if not candidate_phrases(message) and not strong_keys(message) and sender is None:
-        return []
     with _cursor(connect) as cur:
         seeds = [
             s
-            for s in _link_seeds(cur, tenant_id, message, sender_person_id=sender)
+            for s in _link_seeds(cur, tenant_id, message, sender_person_id=sender, phrases=phrases)
             if s.method == "strong_key" or s.name.lower() not in excluded
         ]
         if not seeds:
             return []
+        owner = operator_person_id(cur, tenant_id)
         return _activate_on(
             cur,
             tenant_id,
@@ -542,8 +594,8 @@ def recall_for_message(
             damping=DAMPING,
             limit=limit,
             facts_per_entity=FACTS_PER_ENTITY,
-            exclude_entity_ids=owner_entity_ids(cur, tenant_id),
+            exclude_entity_ids=(),
             person_restricted=person_restricted,
             person_id=person_id,
-            statement_timeout_ms=statement_timeout_ms,
+            exclude_crm_person_id=owner,
         )

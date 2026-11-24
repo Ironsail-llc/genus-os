@@ -1346,19 +1346,39 @@ def _graph_entity_lines(
     exclude_names: set[str] | None,
     scope: DataScope | None,
     sender_person_id: str | None,
+    phrases: list[str],
 ) -> list[dict[str, Any]]:
     """Connected context from graph activation, within the time budget.
 
     Automatic recall, so trusted evidence only (operator-confirmed,
     user-stated, CRM); the operator's own entity is neither seed nor transit;
-    no model call. Returns the facts' payloads, best first, or ``[]`` on a
-    timeout, an error or no result — the caller then runs today's path.
+    no model call. ``phrases`` are runs of today's name candidates
+    (``_candidate_phrases``). A message with no such phrase, no e-mail or
+    handle and no known sender cannot seed a walk, and costs nothing: no
+    thread hand-off, no connection. Otherwise the walk runs on one read-only
+    connection (no BEGIN or COMMIT); at the budget its query is cancelled.
+
+    Returns the facts' payloads, best first, or ``[]`` on a timeout, an error
+    or no result.
     """
     from robothor.memory import activation
+
+    if not activation.has_anything_to_link(user_message, phrases, sender_person_id):
+        return []
+
+    import robothor.db
 
     restricted = scope is not None and scope.restricted
     person_id = scope.person_id if restricted and scope is not None else None
     budget = GRAPH_WARMUP_BUDGET_SECONDS
+    held: list[Any] = []
+
+    @contextmanager
+    def _read_only_connection() -> Iterator[Any]:
+        with robothor.db.get_connection(read_only=True) as conn:
+            held.append(conn)
+            yield conn
+
     future = _get_graph_pool().submit(
         contextvars.copy_context().run,
         lambda: activation.recall_for_message(
@@ -1370,13 +1390,19 @@ def _graph_entity_lines(
             person_restricted=restricted,
             person_id=person_id,
             trusted_only=True,
-            statement_timeout_ms=max(1, int(budget * 1000)),
+            phrases=phrases,
+            connect=_read_only_connection,
         ),
     )
     try:
         candidates = future.result(timeout=budget)
     except TimeoutError:
         future.cancel()
+        for conn in held:
+            try:
+                conn.cancel()  # the hard bound on the database side
+            except Exception as e:  # noqa: BLE001 - best effort; the turn goes on
+                logger.debug("Warmup graph cancel failed: %s", e)
         logger.info("Warmup graph activation exceeded %d ms; using name matching", budget * 1000)
         return []
     except Exception as e:
@@ -1407,6 +1433,20 @@ def _warmup_recall_v2_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def _candidate_word(i: int, cleaned: str, *, lowercase_ok: bool) -> bool:
+    """Whether the ``i``-th word of a message, stripped of punctuation, is a
+    name candidate: capitalized, or (``lowercase_ok``) a lowercase content word
+    of four letters or more. Never a stopword or a word of two letters."""
+    if len(cleaned) <= 2:
+        return False
+    low = cleaned.lower()
+    if low in _ENTITY_STOPWORDS:
+        return False
+    if cleaned[0].isupper() and (i > 0 or low not in _ENTITY_STOPWORDS):
+        return True
+    return lowercase_ok and cleaned.isalpha() and len(cleaned) >= 4
+
+
 def _extract_entity_candidates(user_message: str, *, lowercase_ok: bool) -> list[str]:
     """Ordered candidate entity names from a message (pure, testable).
 
@@ -1421,18 +1461,47 @@ def _extract_entity_candidates(user_message: str, *, lowercase_ok: bool) -> list
     seen: set[str] = set()
     for i, word in enumerate(user_message.split()):
         cleaned = re.sub(r"[^\w]", "", word)
-        if len(cleaned) <= 2:
-            continue
         low = cleaned.lower()
-        if low in _ENTITY_STOPWORDS or low in seen:
+        if low in seen or not _candidate_word(i, cleaned, lowercase_ok=lowercase_ok):
             continue
-        if cleaned[0].isupper() and (i > 0 or low not in _ENTITY_STOPWORDS):
+        if cleaned[0].isupper():
             capitalized.append(cleaned)
-            seen.add(low)
-        elif lowercase_ok and cleaned.isalpha() and len(cleaned) >= 4:
+        else:
             lowercased.append(cleaned)
-            seen.add(low)
+        seen.add(low)
     return capitalized + lowercased
+
+
+def _candidate_phrases(user_message: str, *, lowercase_ok: bool) -> list[str]:
+    """Graph seed phrases from today's name candidates (pure, testable).
+
+    Runs of adjacent candidate words, lower-cased, two to
+    ``activation.MAX_NAME_TOKENS`` words long: "Alice Smith" in "Did Alice
+    Smith sign?". A lone candidate is never a phrase — a single token never
+    resolves to an entity — so a message whose candidates stand alone costs
+    graph recall nothing.
+    """
+    import re
+
+    from robothor.memory.activation import MAX_NAME_TOKENS
+
+    runs: list[list[str]] = [[]]
+    for i, word in enumerate(user_message.split()):
+        cleaned = re.sub(r"[^\w]", "", word)
+        if _candidate_word(i, cleaned, lowercase_ok=lowercase_ok):
+            runs[-1].append(cleaned.lower())
+            if word != word.rstrip(".,;:!?"):
+                runs.append([])  # punctuation ends a name
+        elif runs[-1]:
+            runs.append([])
+    out: list[str] = []
+    for run in runs:
+        for size in range(2, MAX_NAME_TOKENS + 1):
+            for j in range(len(run) - size + 1):
+                phrase = " ".join(run[j : j + size])
+                if phrase not in out:
+                    out.append(phrase)
+    return out
 
 
 def _build_entity_context(
@@ -1448,9 +1517,10 @@ def _build_entity_context(
 
     Connected context comes first from graph activation
     (``_graph_entity_lines``: trusted evidence only, within
-    ``GRAPH_WARMUP_BUDGET_SECONDS``). On a timeout, an error or an empty result
-    — which is every instance whose memory predates origins — the section is
-    exactly what the name-matching path below returns.
+    ``GRAPH_WARMUP_BUDGET_SECONDS``), then today's name-matched facts fill the
+    rest of the budget, each fact once. On a timeout, an error or an empty
+    graph result — which is every instance whose memory predates origins — the
+    section is exactly what the name-matching path returns.
 
     Args:
         exclude_names: Names to skip during entity search (e.g. the current
@@ -1479,75 +1549,75 @@ def _build_entity_context(
     """
     from robothor.identity.scope import log_would_drop, rows_dropped_by_scope
 
-    graph_rows = _graph_entity_lines(
-        user_message, tenant_id, exclude_names, scope, sender_person_id
-    )
-    if graph_rows:
-        graph_lines = ["--- RELEVANT CONTEXT ---"]
-        graph_chars = 0
-        for f in graph_rows:
-            path = f.get("graph_path") or []
-            via = f" [via {' > '.join(path)}]" if f.get("graph_hops") and len(path) > 1 else ""
-            line = f"- {f['fact_text']}{via}"
-            if graph_chars + len(line) > MAX_ENTITY_CONTEXT_CHARS:
-                break
-            graph_lines.append(line)
-            graph_chars += len(line)
-        if observe_scope_obj is not None:
-            dropped = rows_dropped_by_scope(graph_rows, observe_scope_obj)
-            if dropped:
-                log_would_drop(
-                    tool_name="warmup:entity_context",
-                    user_id=user_id,
-                    scope=observe_scope_obj,
-                    dropped=dropped,
-                    table="memory_facts",
-                )
-        if len(graph_lines) > 1:
-            return "\n".join(graph_lines)
-
     v2 = _warmup_recall_v2_enabled()
     candidates = _extract_entity_candidates(user_message, lowercase_ok=v2)
+
+    # Graph lines first; today's name-matched lines fill the rest of the same
+    # budget, so a graph result never hides the facts about the people the
+    # message names. With no graph result the section is exactly today's.
+    lines = ["--- RELEVANT CONTEXT ---"]
+    chars_used = 0
+    shown: set[str] = set()
+    _would_drop = 0
+
+    graph_rows = _graph_entity_lines(
+        user_message,
+        tenant_id,
+        exclude_names,
+        scope,
+        sender_person_id,
+        _candidate_phrases(user_message, lowercase_ok=v2),
+    )
+    for f in graph_rows:
+        path = f.get("graph_path") or []
+        via = f" [via {' > '.join(path)}]" if f.get("graph_hops") and len(path) > 1 else ""
+        line = f"- {f['fact_text']}{via}"
+        if chars_used + len(line) > MAX_ENTITY_CONTEXT_CHARS:
+            break
+        lines.append(line)
+        chars_used += len(line)
+        shown.add(f["fact_text"])
+    if observe_scope_obj is not None and graph_rows:
+        _would_drop += rows_dropped_by_scope(graph_rows, observe_scope_obj)
 
     if exclude_names:
         excluded = {n.lower() for n in exclude_names if n}
         candidates = [c for c in candidates if c.lower() not in excluded]
 
-    if not candidates:
-        return ""
+    if candidates:
+        from psycopg2.extras import RealDictCursor
 
-    from psycopg2.extras import RealDictCursor
+        from robothor.db import get_connection
 
-    from robothor.db import get_connection
+        # Restricted is passed on its own: a restricted caller with no linked
+        # person must still be filtered (to facts about no one), not treated
+        # as unrestricted because its person id is None.
+        restricted = scope is not None and scope.restricted
+        scope_person_id = scope.person_id if restricted and scope is not None else None
 
-    # Restricted is passed on its own: a restricted caller with no linked
-    # person must still be filtered (to facts about no one), not treated as
-    # unrestricted because its person id is None.
-    restricted = scope is not None and scope.restricted
-    scope_person_id = scope.person_id if restricted and scope is not None else None
+        # V2 looks at a few more candidates (lowercase queries are noisier)
+        # and ranks by a recency/importance blend; legacy keeps the
+        # importance-only sort.
+        max_candidates = 5 if v2 else 3
 
-    lines = ["--- RELEVANT CONTEXT ---"]
-    chars_used = 0
-    # V2 looks at a few more candidates (lowercase queries are noisier) and
-    # ranks by a recency/importance blend; legacy keeps the importance-only sort.
-    max_candidates = 5 if v2 else 3
-    _would_drop = 0
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    with get_connection() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        fetched = _fetch_entity_facts_batched(
-            cur, candidates[:max_candidates], tenant_id, v2, restricted, scope_person_id
-        )
-        for rows in fetched:
-            if observe_scope_obj is not None:
-                _would_drop += rows_dropped_by_scope(rows, observe_scope_obj)
-            for f in rows:
-                line = f"- {f['fact_text']}"
-                if chars_used + len(line) > MAX_ENTITY_CONTEXT_CHARS:
-                    break
-                lines.append(line)
-                chars_used += len(line)
+            fetched = _fetch_entity_facts_batched(
+                cur, candidates[:max_candidates], tenant_id, v2, restricted, scope_person_id
+            )
+            for rows in fetched:
+                if observe_scope_obj is not None:
+                    _would_drop += rows_dropped_by_scope(rows, observe_scope_obj)
+                for f in rows:
+                    if f["fact_text"] in shown:
+                        continue
+                    line = f"- {f['fact_text']}"
+                    if chars_used + len(line) > MAX_ENTITY_CONTEXT_CHARS:
+                        break
+                    lines.append(line)
+                    chars_used += len(line)
+                    shown.add(f["fact_text"])
 
     if observe_scope_obj is not None and _would_drop > 0:
         log_would_drop(

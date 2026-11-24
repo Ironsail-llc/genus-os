@@ -891,16 +891,18 @@ def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any
 LEG_FETCH_MIN = 30
 LEG_FETCH_MIN_WIDE = 45
 
-# RRF weight per leg (unlisted legs count 1.0). The two fan-out legs enter at
-# half weight: they still reach the reranker when their best rows are near the
-# head, without displacing the primary legs' top ranks.
-LEG_WEIGHTS: dict[str, float] = {"graph": 0.5, "chat_turn": 0.5}
+# RRF weight per leg (unlisted legs count 1.0). The fan-out legs enter at half
+# weight: they still reach the reranker when their best rows are near the head,
+# without displacing the primary legs' top ranks.
+LEG_WEIGHTS: dict[str, float] = {"graph": 0.5, "entity_expansion": 0.5, "chat_turn": 0.5}
 
 # Places in the final top-k a leg keeps whenever it returned anything (see
 # recall.apply_reserved). Graph-derived facts are related to the query, not
 # similar to it, so a query-document reranker would otherwise always drop
-# them. "graph" is the graph-activation leg (robothor/memory/activation.py).
-RESERVED_PLACES: dict[str, int] = {"graph": 2}
+# them. "graph" is the graph-activation leg (robothor/memory/activation.py);
+# "entity_expansion" the one-hop leg that answers when the graph leg is empty
+# (the two never both return rows for one search).
+RESERVED_PLACES: dict[str, int] = {"graph": 2, "entity_expansion": 1}
 
 _AUX_LIMITS = {"insight": 3, "episode": 3, "chat_turn": 5}
 
@@ -1078,6 +1080,67 @@ def _label_graph_rows(pool: list[dict[str, Any]], graph: list[Candidate]) -> Non
                 row[key] = payload[key]
 
 
+async def _entity_expansion_leg(
+    seed: list[Candidate],
+    tenant: str,
+    scope_clause: str,
+    scope_params: tuple[Any, ...],
+) -> list[Candidate]:
+    """Facts about entities related to the top hits' entities (best-effort)."""
+    out: list[Candidate] = []
+    try:
+        from robothor.memory.entities import get_entity
+
+        mentioned: set[str] = set()
+        for c in seed[:5]:
+            mentioned.update(c.payload.get("entities") or [])
+        exclude = {c.id for c in seed if c.kind == "fact"}
+        for entity_name in list(mentioned)[:3]:
+            entity = await get_entity(entity_name, tenant_id=tenant)
+            for rel in (entity or {}).get("relations", [])[:3]:
+                # get_entity aliases the far end as target_name (outgoing) or
+                # source_name (incoming); bare keys are a fallback for a flatter
+                # shape. Reading only the bare keys once disabled this silently.
+                related = (
+                    rel.get("target_name")
+                    or rel.get("source_name")
+                    or rel.get("target")
+                    or rel.get("source")
+                    or ""
+                )
+                if not related:
+                    continue
+                with get_connection() as conn:
+                    cur = conn.cursor(cursor_factory=RealDictCursor)
+                    cur.execute(
+                        f"""
+                        SELECT id, fact_text, category, entities, confidence,
+                               source_type, metadata, created_at, importance_score,
+                               person_id
+                        FROM memory_facts
+                        WHERE is_active = TRUE AND tenant_id = %s
+                          AND %s = ANY(entities)
+                          AND importance_score > 0.5
+                          AND id != ALL(%s)
+                          {scope_clause}
+                        ORDER BY importance_score DESC, created_at DESC
+                        LIMIT 2
+                        """,
+                        (tenant, related, list(exclude), *scope_params),
+                    )
+                    rows = [dict(r) for r in cur.fetchall()]
+                for r in rows:
+                    r["source"] = "entity_expansion"
+                    exclude.add(r["id"])
+                out.extend(_fact_candidates(rows, "entity_expansion", "importance_score"))
+    except Exception:
+        # Best-effort by design — a graph miss must not fail the search. But it
+        # stays *logged*: a bare `pass` here once hid a key-name mismatch that
+        # disabled expansion entirely.
+        logger.debug("entity expansion failed (best-effort)", exc_info=True)
+    return out
+
+
 def _aux_candidates(rows: list[dict[str, Any]], kind: str, text_key: str) -> list[Candidate]:
     return [
         Candidate(
@@ -1216,9 +1279,9 @@ async def search_facts(
         active_only: If True, only return active (non-superseded) facts.
         use_reranker: If True, run reranker on candidates. If None (default),
             honors MEMORY_RERANK_ENABLED env flag (on by default).
-        expand_entities: Kept for callers of the one-hop entity expansion
-            the graph leg replaced: True now means "graph leg on" (it is on
-            by default anyway).
+        expand_entities: The graph leg runs (it is on by default anyway),
+            and when it returns nothing the one-hop ``entity_expansion`` leg
+            pulls related entity facts as before.
         include_graph: Run the graph-activation leg (default True). Its rows
             carry ``origin`` (NULL reads as ``agent_generated``),
             ``graph_hops`` and ``graph_path``; a row found only by it has
@@ -1283,6 +1346,15 @@ async def search_facts(
         )
         if graph:
             legs["graph"] = graph
+    # Nothing writes memory_mentions yet, so on existing data the graph leg is
+    # empty. Until it is not, the one-hop expansion over memory_relations and
+    # the entity names on facts answers as it did before the graph leg.
+    if expand_entities and not graph:
+        seed = fuse(legs, weights=LEG_WEIGHTS)
+        if seed:
+            legs["entity_expansion"] = await _entity_expansion_leg(
+                seed, _tenant, scope_clause, scope_params
+            )
     # Insights, episodes and chat turns carry no person_id: a restricted caller
     # would read summaries built from other people's facts. As in the router,
     # a store that cannot express person scoping is left out, not unfiltered.

@@ -58,9 +58,10 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      operator.
    - `graph` (on unless `include_graph=False`) — graph activation from the
      entities the query names and the entities the top hits mention (see
-     [Associative recall](#associative-recall)). It replaced the one-hop
-     `entity_expansion` leg; `expand_entities=True` is still accepted and
-     means "graph leg on".
+     [Associative recall](#associative-recall)). Empty until facts have
+     mentions.
+   - `entity_expansion` (`expand_entities`, only when the graph leg returned
+     nothing) — facts about entities related to the top hits' entities.
    - `insight`, `episode`, `chat_turn` (`include_insights`,
      `include_episodes`, `include_chat_turns`). These stores cannot filter by
      person, so a restricted data scope leaves them out.
@@ -81,7 +82,7 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    near-duplicates are dropped.
 5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps at
    least that many places in the top `limit` whenever it returned anything,
-   chosen by its own score: `graph` keeps 2.
+   chosen by its own score: `graph` 2, `entity_expansion` 1.
    A related-but-not-similar fact is exactly what a query-document reranker
    discards. Reserved picks take at most `(limit - 1) // 2` places in total
    (none at a `limit` of 1 or 2), never the top result, and never a
@@ -483,12 +484,24 @@ the entities it names and spreads activation from them over the graph; the
 walk itself is the database function `memory_activate` (migration
 `crm/migrations/*_memory_graph_activation.sql`).
 
+**It needs mentions.** The walk reads which entities a fact is about from
+`memory_mentions`, and nothing writes that table yet: existing memory links
+facts to entities only by name. Until mentions are written, the graph leg
+returns nothing, and `search_facts` with `expand_entities=True` (the
+`search_memory` tool's default) uses the one-hop `entity_expansion` leg as it
+did before: facts about entities related, through `memory_relations`, to the
+entities its top hits name. The expansion leg runs only when the graph leg
+returned nothing, and keeps one reserved place.
+
 **Seeds.** `seeds_from_text` links text to entities without a model call: exact
 full names and aliases, case-insensitively, and e-mail addresses or @handles
 matched against `contact_identifiers`. A single token never resolves on its
-own, so a first name alone seeds nothing. Warm-up also seeds the sender's own
-entity (the entity whose `crm_person_id` is the sender's CRM person);
-`search_facts` also seeds the entities its top hits mention (`memory_mentions`).
+own, so a first name alone seeds nothing. Warm-up takes its phrases from the
+name candidates its name-matching step already finds (runs of two or more
+adjacent ones), and also seeds the sender's own entity (the entity whose
+`crm_person_id` is the sender's CRM person). `search_facts` also seeds the
+entities that its top hits mention (`memory_mentions`), counting only hits the
+reader may see.
 
 **The walk.** A bounded, forward-push approximation of Personalized PageRank.
 Each seed starts with its weight divided by the square root of one plus its
@@ -505,7 +518,8 @@ the evaluation to tune.
 
 **Visibility.** The walk crosses an edge only when at least one of its
 supporting facts is visible to the reader: active, in the tenant, and shared or
-scoped to the reader. Only those edges count toward a node's degree and weight,
+user-scoped to the reader (`scope_kind = 'user'` and `scope_id` the reader's
+person id; a row private to an agent is never a person's, whatever its id). Only those edges count toward a node's degree and weight,
 so a path through evidence the reader cannot see changes no score. The
 "own data + shared" person scope applies on top. The facts returned for an
 entity obey the same rule. With no known reader, only shared evidence counts.
@@ -523,8 +537,10 @@ warm-up uses its name-matching context instead.** A deliberate search
 row with its `origin` and the path that reached it (`origin` and `via` in the
 tool's results).
 
-**Hub control.** The operator's own entity (found through `get_owner_person`)
-is never a seed and never a transit node. Seeds are weighted by inverse degree,
+**Hub control.** The operator's own entities (those linked to the CRM person
+`get_owner_person` returns, resolved inside the walk) are never seeds and never
+transit nodes. If that lookup fails, nothing is walked and a warning is logged:
+the operator's node is usually the largest hub. Seeds are weighted by inverse degree,
 and fan-out is capped, so a node linked to everything cannot flood the result.
 
 **Tenancy.** `memory_activate` is `SECURITY DEFINER`, like the warm-up's entity
@@ -533,12 +549,19 @@ It filters every table by the tenant passed to it: both ends of an edge, the
 edge, its evidence, the facts, the mentions. A session scoped to another tenant
 gets nothing.
 
-**Warm-up.** The entity context section takes its connected context from
-trusted-only activation, with a hard budget (`GRAPH_WARMUP_BUDGET_SECONDS` in
-`robothor/engine/warmup.py`, 150 ms to start). On a timeout, an error or an
-empty result it falls back to the name-matching section exactly as before. The
-section keeps its character cap. There is no model call and no reranker. The
-fallback path does not filter by origin.
+**Warm-up.** The entity context section starts with connected context from
+trusted-only activation, then fills the rest of its character cap with the
+name-matched facts as before, each fact once. Activation has a hard budget
+(`GRAPH_WARMUP_BUDGET_SECONDS` in `robothor/engine/warmup.py`, 150 ms to
+start); at the budget its query is cancelled. On a timeout, an error or an
+empty result the section is exactly the name-matched one. There is no model
+call and no reranker. The name-matched facts are not filtered by origin.
+
+What a turn pays: a message with no two adjacent name candidates, no e-mail
+address or @handle and no known sender makes no extra query and no thread
+hand-off. Otherwise, one read-only connection runs at most three statements:
+the seed lookup, the operator lookup and the walk (the last two only when a
+seed was found).
 
 The search path writes nothing. Rows found only by the graph are not logged as
 fact access.

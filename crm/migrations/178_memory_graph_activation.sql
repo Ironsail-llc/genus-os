@@ -19,12 +19,18 @@
 --     * an entity in p_exclude (the caller passes the operator's own node) is
 --       never a seed and never receives or passes mass.
 --
+-- HUB CONTROL BY IDENTITY
+--   p_exclude_crm_person excludes, as seed and transit, every entity of that
+--   CRM person in the tenant: the caller passes the operator's person (from
+--   get_owner_person), so the operator's node is resolved inside the walk.
+--
 -- VISIBILITY (the walk itself, not only its output)
 --   An edge is walked only when at least one of its supporting facts is
 --   visible to the reader, and only those edges count toward a node's degree
 --   and weight total, so a path through evidence the reader cannot see
 --   changes no score. A fact is visible when it is in p_tenant, active,
---   shared or scoped to p_reader_scope_id, and — when p_person_restricted —
+--   shared, or user-scoped (scope_kind 'user') to p_reader_scope_id — an
+--   agent-scoped row is never a person reader's, whatever its id — and — when p_person_restricted —
 --   about no one or about p_person_id (the existing "own data + shared" person
 --   scope). An edge's evidence is the union of memory_relation_evidence and
 --   the older memory_relations.fact_id column. Entities are visible when
@@ -57,7 +63,8 @@
 --
 -- Rollback:
 --   DROP FUNCTION IF EXISTS memory_activate(text, integer[], double precision[], text,
---       integer, integer, double precision, integer[], boolean, integer, integer, boolean, uuid);
+--       integer, integer, double precision, integer[], boolean, integer, integer, boolean, uuid,
+--       uuid);
 --   DROP FUNCTION IF EXISTS memory_activation_edges(text, integer[], text, boolean, uuid,
 --       boolean, integer[]);
 
@@ -107,7 +114,8 @@ AS $$
        AND e.nbr <> e.node
        AND e.weight > 0
        AND NOT (e.nbr = ANY (p_exclude))
-       AND (t.scope_kind = 'shared' OR t.scope_id = p_reader_scope_id)
+       AND (t.scope_kind = 'shared'
+                    OR (t.scope_kind = 'user' AND t.scope_id = p_reader_scope_id))
        AND (NOT p_trusted_only OR e.origin IS NULL OR e.origin NOT IN ('inferred', 'external'))
        -- One correlated EXISTS over both evidence sources. Two EXISTS joined
        -- by OR let the planner hash the whole facts and evidence tables once
@@ -125,7 +133,8 @@ AS $$
               JOIN public.memory_facts f ON f.id = support.fid
              WHERE f.tenant_id = p_tenant
                AND f.is_active IS TRUE
-               AND (f.scope_kind = 'shared' OR f.scope_id = p_reader_scope_id)
+               AND (f.scope_kind = 'shared'
+                    OR (f.scope_kind = 'user' AND f.scope_id = p_reader_scope_id))
                AND (NOT p_person_restricted OR f.person_id IS NULL OR f.person_id = p_person_id)
                AND (NOT p_trusted_only
                     OR f.origin IN ('operator_confirmed', 'user_stated', 'crm'))
@@ -138,6 +147,11 @@ REVOKE ALL ON FUNCTION memory_activation_edges(text, integer[], text, boolean, u
 -- ═══════════════════════════════════════════════════════════════════════════
 -- The walk.
 -- ═══════════════════════════════════════════════════════════════════════════
+
+-- An earlier draft of this migration had no p_exclude_crm_person. Where it
+-- ran, drop it so it cannot stay callable as an overload beside this one.
+DROP FUNCTION IF EXISTS public.memory_activate(text, integer[], double precision[], text,
+    integer, integer, double precision, integer[], boolean, integer, integer, boolean, uuid);
 
 CREATE OR REPLACE FUNCTION memory_activate(
     p_tenant text,
@@ -152,7 +166,8 @@ CREATE OR REPLACE FUNCTION memory_activate(
     p_limit integer DEFAULT 20,
     p_facts_per_entity integer DEFAULT 3,
     p_person_restricted boolean DEFAULT false,
-    p_person_id uuid DEFAULT NULL
+    p_person_id uuid DEFAULT NULL,
+    p_exclude_crm_person uuid DEFAULT NULL
 )
 RETURNS TABLE (
     kind text,
@@ -196,7 +211,11 @@ DECLARE
     v_damp    double precision := LEAST(GREATEST(COALESCE(p_damping, 0.7), 0), 1);
     v_limit   integer := LEAST(GREATEST(COALESCE(p_limit, 20), 1), 500);
     v_per     integer := LEAST(GREATEST(COALESCE(p_facts_per_entity, 3), 1), 20);
-    v_excl    integer[] := COALESCE(p_exclude, '{}');
+    v_excl    integer[] := COALESCE(p_exclude, '{}') || ARRAY(
+                  SELECT me.id FROM memory_entities me
+                   WHERE me.tenant_id = p_tenant
+                     AND p_exclude_crm_person IS NOT NULL
+                     AND me.crm_person_id = p_exclude_crm_person);
     v_restr   boolean := COALESCE(p_person_restricted, false);
     v_trusted boolean := COALESCE(p_trusted_only, true);
 
@@ -236,7 +255,8 @@ BEGIN
           JOIN memory_entities e ON e.id = s.id AND e.tenant_id = p_tenant
          WHERE s.w > 0
            AND NOT (s.id = ANY (v_excl))
-           AND (e.scope_kind = 'shared' OR e.scope_id = p_reader_scope_id)
+           AND (e.scope_kind = 'shared'
+                    OR (e.scope_kind = 'user' AND e.scope_id = p_reader_scope_id))
     ),
     deg AS (
         SELECT x.node, count(*) AS d
@@ -373,7 +393,8 @@ BEGIN
                  AND mm.entity_id = ent.id
                  AND f.tenant_id = p_tenant
                  AND f.is_active IS TRUE
-                 AND (f.scope_kind = 'shared' OR f.scope_id = p_reader_scope_id)
+                 AND (f.scope_kind = 'shared'
+                    OR (f.scope_kind = 'user' AND f.scope_id = p_reader_scope_id))
                  AND (NOT v_restr OR f.person_id IS NULL OR f.person_id = p_person_id)
                  AND (NOT v_trusted
                       OR f.origin IN ('operator_confirmed', 'user_stated', 'crm'))
@@ -415,12 +436,13 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION memory_activate(text, integer[], double precision[], text, integer,
-    integer, double precision, integer[], boolean, integer, integer, boolean, uuid) FROM PUBLIC;
+    integer, double precision, integer[], boolean, integer, integer, boolean, uuid, uuid)
+    FROM PUBLIC;
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'robothor_app') THEN
         GRANT EXECUTE ON FUNCTION memory_activate(text, integer[], double precision[], text,
             integer, integer, double precision, integer[], boolean, integer, integer, boolean,
-            uuid) TO robothor_app;
+            uuid, uuid) TO robothor_app;
     END IF;
 END $$;

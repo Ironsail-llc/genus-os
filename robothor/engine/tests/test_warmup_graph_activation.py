@@ -434,7 +434,11 @@ class TestWhatATurnPays:
         monkeypatch.setattr(robothor.crm.dal, "get_connection", counter.connect)
 
         assert warmup._build_entity_context("say pong", tenant_id="test-tenant") == ""
-        assert counter.checkouts == []
+        graph = [c for c in counter.checkouts if any("memory_entities" in s for s in c["sql"])]
+        assert graph == [], "graph recall queried for a message that links to nothing"
+        # Today's path: nothing with v2 off; with v2 on, its own one lookup of
+        # the lowercase word "pong", exactly as before graph recall.
+        assert len(counter.checkouts) == (0 if v2 == "0" else 1)
 
     def test_single_name_candidates_cost_only_todays_statement(
         self, monkeypatch: pytest.MonkeyPatch
