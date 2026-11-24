@@ -260,3 +260,32 @@ def test_deep_reason_entity_lookup_returns_only_its_tenants_row(two_tenants):
     other = json.loads(rlm_tool._make_get_entity_fn(tenant_id=b)(name))
     assert found["tenant_id"] == a
     assert other["found"] is False
+
+
+def test_deep_reason_cannot_be_pointed_at_another_tenant():
+    """The tenant its helpers bind is the run's own: a `tenant` argument is refused.
+
+    ``rlm_tool._as_tenant`` is pinned in tests/test_cross_tenant_scope_callers.py
+    on exactly this ground, so it is asserted here rather than assumed.
+    """
+    from robothor.engine.tools import cross_tenant
+    from robothor.engine.tools.dispatch import ToolContext
+
+    ctx = ToolContext(agent_id="main", tenant_id=TENANT)
+    refused = cross_tenant.admit("deep_reason", {"query": "q", "tenant": "tenant-b"}, ctx)
+    assert isinstance(refused, dict)
+    assert "error" in refused
+
+
+def test_the_helpers_take_no_tenant_from_their_caller():
+    """The inner model calls the helpers; none of them accepts a tenant."""
+    import inspect
+
+    for factory in (
+        rlm_tool._make_search_memory_fn,
+        rlm_tool._make_get_entity_fn,
+        rlm_tool._make_memory_block_read_fn,
+    ):
+        params = inspect.signature(factory(tenant_id=TENANT)).parameters
+        assert "tenant_id" not in params and "tenant" not in params
+        assert not any(p.kind is p.VAR_KEYWORD for p in params.values())
