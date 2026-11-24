@@ -988,8 +988,8 @@ def _fact_legs(
     """The vector and keyword legs over memory_facts, in one transaction."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        # ef_search, plus iterative scan where pgvector supports it, so a
-        # narrow tenant/person filter still fills the LIMIT.
+        # ef_search. The iterative scan that lets a narrow tenant/person
+        # filter fill its LIMIT is set on the connection at checkout.
         apply_hnsw_session(cur)
         vector_rows: list[dict[str, Any]] = []
         if embedding is not None:
@@ -1004,7 +1004,12 @@ def _fact_legs(
                 """,
                 (embedding, tenant, *filter_params, embedding, fetch_limit),
             )
-            vector_rows = [dict(r) for r in cur.fetchall()]
+            # relaxed_order iterative scan may return rows slightly out of
+            # distance order; the leg's RRF rank must be its similarity order.
+            vector_rows = sorted(
+                (dict(r) for r in cur.fetchall()),
+                key=lambda r: -float(r.get("similarity") or 0.0),
+            )
         keyword_rows = _keyword_rows(cur, query, tenant, filters, filter_params, fetch_limit)
     return {
         "vector": _fact_candidates(vector_rows, "vector", "similarity"),
@@ -1279,12 +1284,14 @@ async def search_facts(
 
     pool = [c.to_row() for c in fuse(legs, weights=LEG_WEIGHTS)]
     ranked = await _rank_pool(query, pool, limit, use_reranker)
-    head = ranked[:limit]
+    # Deduped here, not assumed: with MEMORY_RANK_BLEND=0 the head never went
+    # through the blend's dedupe and may hold a near-duplicate pair itself.
+    unique_head = _dedupe(ranked[:limit])
 
     def _duplicates_head(row: dict[str, Any]) -> bool:
-        # The blend already dropped near-duplicates; a reserved pick must not
-        # bring one back. _dedupe keeps earlier rows, so a dup leaves it short.
-        return _dedup_enabled() and len(_dedupe([*head, row])) == len(head)
+        # A reserved pick must not bring back a near-duplicate. _dedupe keeps
+        # earlier rows, so a row it drops from the end duplicates the head.
+        return _dedup_enabled() and len(_dedupe([*unique_head, row])) == len(unique_head)
 
     result = apply_reserved(ranked, pool, limit, RESERVED_PLACES, exclude=_duplicates_head)
     for r in result:

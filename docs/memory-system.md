@@ -24,15 +24,17 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 
 All embedding columns are `vector(1024)` with HNSW indexes (m=16, ef_construction=200).
 Active-row **partial** HNSW indexes (`idx_*_active`, migrations 073/074) keep
-superseded vectors out of the candidate budget. Every vector search applies
-shared session tuning via `robothor/memory/vector_tuning.py`
-`apply_hnsw_session(cur)`: `hnsw.ef_search=100`, plus an **iterative index
-scan** (`hnsw.iterative_scan=strict_order`, `hnsw.max_scan_tuples=20000`)
-whenever the installed pgvector is 0.8 or later. The version is read once per
-process from `pg_extension`; an older pgvector is never sent the setting, and
-`MEMORY_HNSW_ITERATIVE=0` turns it off. Without it, a search under a narrow
-tenant or person filter spends the candidate budget on other rows and comes
-back with fewer rows than exist.
+superseded vectors out of the candidate budget. Every pooled connection gets
+an **iterative index scan** at checkout (`hnsw.iterative_scan=relaxed_order`,
+`ANN_ITERATIVE_SCAN_MODE` in `robothor/db/connection.py`, which records why
+relaxed rather than strict order). Without it, a search under a narrow tenant
+or person filter spends the candidate budget on other rows and comes back
+with fewer rows than exist. Relaxed order may return rows slightly out of
+distance order, so the fact vector leg re-sorts by similarity before ranking.
+Every vector search also applies `robothor/memory/vector_tuning.py`
+`apply_hnsw_session(cur)`: `hnsw.ef_search=100`, and with
+`MEMORY_HNSW_ITERATIVE=1` the same scan mode again inside the transaction
+plus `hnsw.max_scan_tuples` (20000).
 
 ## Retrieval
 

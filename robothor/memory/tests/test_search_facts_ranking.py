@@ -135,7 +135,8 @@ async def test_keyword_only_best_answer_ranks_in_the_top(env: pytest.MonkeyPatch
 async def test_returned_rows_carry_relevance_rerank_score_and_leg_ranks(
     env: pytest.MonkeyPatch,
 ) -> None:
-    both = _row(1, "Alice keeps the passport in the blue folder", similarity=0.7)
+    # Similarity 0.9: the vector leg's first row is its most similar one.
+    both = _row(1, "Alice keeps the passport in the blue folder", similarity=0.9)
     cur = _Cursor(vector=[both, *_dense(5)[1:]], keyword=[both])
     env.setattr(reranker, "rerank_pair", _scorer({"passport": 0.9}))
 

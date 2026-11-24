@@ -219,7 +219,9 @@ def apply_reserved(
     for pick in picks:
         while len(out) + 1 > limit:
             victim = next(
-                (i for i in range(len(out) - 1, -1, -1) if _row_key(out[i]) not in protected),
+                # Stops at index 1: the top ranked row is never a victim, by
+                # construction rather than by the budget arithmetic.
+                (i for i in range(len(out) - 1, 0, -1) if _row_key(out[i]) not in protected),
                 None,
             )
             if victim is None:
