@@ -7,19 +7,27 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from robothor.memory.lifecycle import compute_decay_score
-from robothor.memory.outcomes import compute_outcome_penalty
+from robothor.memory.utility import compute_utility, utility_decay_term
+
+
+def _failure_penalty(failures: int) -> float:
+    """The decay penalty for failures alone, as compute_decay_score applies it."""
+    return -utility_decay_term(compute_utility(0, 0, failures))
 
 
 class TestOutcomePenalty:
+    # The linear 0.1-per-failure penalty became the failure side of one signed
+    # utility term (robothor/memory/utility.py); its 0.4 cap is unchanged.
     def test_zero_failures_no_penalty(self):
-        assert compute_outcome_penalty(0) == 0.0
+        assert _failure_penalty(0) == 0.0
 
-    def test_one_failure_applies_per_failure_penalty(self):
-        assert compute_outcome_penalty(1) == pytest.approx(0.1)
+    def test_one_failure_applies_a_penalty(self):
+        assert 0.0 < _failure_penalty(1) <= 0.4
 
     def test_penalty_caps_at_max(self):
-        # _MAX_PENALTY is 0.4, so 10 failures should clamp
-        assert compute_outcome_penalty(10) == pytest.approx(0.4)
+        assert _failure_penalty(10) <= 0.4
+        assert _failure_penalty(10_000) == pytest.approx(0.4, abs=1e-3)
+        assert _failure_penalty(10) > _failure_penalty(1)
 
 
 class TestDecayFactorsOutcomeFailures:

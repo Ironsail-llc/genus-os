@@ -498,26 +498,52 @@ async def _send_announcement(
     return await _finish_delivery(config, run, text, name, receipt)
 
 
+def run_succeeded(run: AgentRun) -> bool:
+    """Whether a finished run is evidence that what it recalled helped.
+
+    Only a run that COMPLETED, raised no error, did not stop on its budget and
+    produced output. Timeouts, cancellations, skips and runs still pending or
+    awaiting approval are neither success nor failure.
+    """
+    status = str(getattr(run.status, "value", run.status) or "").lower()
+    return (
+        status == "completed"
+        and not run.error_message
+        and not getattr(run, "budget_exhausted", False)
+        and bool((run.output_text or "").strip())
+    )
+
+
 async def deliver(config: AgentConfig, run: AgentRun) -> bool:
     """Deliver agent output based on the delivery mode.
 
     Returns True if delivery succeeded.
     """
-    # Outcome-driven fact invalidation: when a run failed, bump outcome_failures
-    # on every fact that was retrieved during the run. Best-effort, fire-and-forget
-    # via asyncio.to_thread so delivery isn't blocked.
+    # Outcome attribution for the facts the run's recalls returned: a failed
+    # run bumps outcome_failures, a successful one credits outcome_successes
+    # (and outcome_citations for the facts its answer used). Best-effort, in a
+    # worker thread so the loop is not blocked.
     try:
         run_failed = bool(run.error_message) or (
             getattr(run, "status", None) is not None
             and str(getattr(run.status, "value", run.status)).upper() == "FAILED"
         )
-        if run_failed and run.id:
-            from robothor.memory.outcomes import bump_failure_for_run
-
-            tenant_id = getattr(run, "tenant_id", None) or getattr(config, "tenant_id", None)
+        if run.id:
             import asyncio as _aio
 
-            await _aio.to_thread(bump_failure_for_run, str(run.id), tenant_id)
+            from robothor.memory import outcomes as _outcomes
+
+            tenant_id = getattr(run, "tenant_id", None) or getattr(config, "tenant_id", None)
+            if run_failed:
+                await _aio.to_thread(_outcomes.bump_failure_for_run, str(run.id), tenant_id)
+            elif run_succeeded(run) and not getattr(run, "is_benchmark", False):
+                await _aio.to_thread(
+                    _outcomes.credit_success_for_run,
+                    str(run.id),
+                    tenant_id,
+                    output_text=run.output_text,
+                    task_text=getattr(run, "task_text", None),
+                )
     except Exception as e:
         logger.debug("Outcome attribution failed (non-fatal): %s", e)
 

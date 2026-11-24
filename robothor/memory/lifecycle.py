@@ -156,52 +156,76 @@ def _apply_consolidation_supersession(new_id: int, source_ids: list[int]) -> Non
             )
 
 
+#: Half-life of the recency term, from the last use.
+RECENCY_HALF_LIFE_HOURS = 72.0
+#: Half-life of the access boost, from the last use. Use fades: one recall long
+#: ago leaves a fact where it would be had it never been recalled.
+ACCESS_BOOST_HALF_LIFE_DAYS = 30.0
+#: A fact last used longer ago than this counts as unused for pruning (three
+#: access-boost half-lives: at most 1/8 of the boost is left).
+PRUNE_RECENT_USE_DAYS = 90
+
+
+def access_boost(access_count: int, *, days_since_use: float) -> float:
+    """``min(ln(1 + count) / 5, 0.3)``, halved every ACCESS_BOOST_HALF_LIFE_DAYS."""
+    if access_count <= 0:
+        return 0.0
+    full = min(math.log(1 + access_count) / 5.0, 0.3)
+    return full * math.pow(0.5, max(days_since_use, 0.0) / ACCESS_BOOST_HALF_LIFE_DAYS)
+
+
 def compute_decay_score(
     last_accessed: datetime,
     access_count: int,
     reinforcement_count: int,
     importance_score: float,
     outcome_failures: int = 0,
+    utility: float | None = None,
 ) -> float:
     """Compute a decay score for a memory fact.
 
-    The score represents how "alive" a memory is. Higher = more relevant.
-    Recent, frequently accessed, reinforced, and important memories score higher.
-    Facts that have been blamed for failed runs take a capped penalty so
-    repeated misattribution retires them faster.
+    The score represents how "alive" a memory is. Higher = more relevant::
+
+        max(recency, 0.4 * importance) + access_boost + reinforcement_boost
+            + utility_decay_term(utility)
+
+    clamped to 0..1. Recency halves every 72 hours since the last use and the
+    access boost every 30 days, so use fades. Utility is one signed, bounded
+    term (``robothor.memory.utility``): positive for facts that helped runs,
+    negative — capped at 0.4, as the failure penalty it replaces was — for
+    facts behind failed runs.
 
     Args:
-        last_accessed: When the memory was last accessed.
-        access_count: Number of times the memory has been accessed.
+        last_accessed: When the memory was last used.
+        access_count: Number of times recall returned the memory.
         reinforcement_count: Number of times the memory was reinforced.
         importance_score: LLM-judged importance (0.0-1.0).
-        outcome_failures: Count of failed runs that consulted this fact.
+        outcome_failures: Failed runs that recalled this fact. Read only when
+            ``utility`` is None (failures alone, no successes).
+        utility: The fact's outcome utility in [-1, 1].
 
     Returns:
         Decay score between 0.0 and 1.0.
     """
+    from robothor.memory.utility import compute_utility, utility_decay_term
+
     now = datetime.now(UTC)
 
     if last_accessed.tzinfo is None:
         last_accessed = last_accessed.replace(tzinfo=UTC)
 
     hours_since = max((now - last_accessed).total_seconds() / 3600, 0)
+    recency = math.pow(0.5, hours_since / RECENCY_HALF_LIFE_HOURS)
 
-    # Exponential decay with half-life of 72 hours (3 days)
-    half_life = 72.0
-    recency = math.exp(-hours_since * math.log(2) / half_life)
-
-    access_boost = min(math.log(1 + access_count) / 5.0, 0.3)
+    use_boost = access_boost(access_count, days_since_use=hours_since / 24.0)
     reinforcement_boost = min(math.log(1 + reinforcement_count) / 5.0, 0.2)
     importance_floor = importance_score * 0.4
 
+    if utility is None:
+        utility = compute_utility(0, 0, outcome_failures)
+
     base = max(recency, importance_floor)
-    score = base + access_boost + reinforcement_boost
-
-    if outcome_failures > 0:
-        from robothor.memory.outcomes import compute_outcome_penalty
-
-        score -= compute_outcome_penalty(outcome_failures)
+    score = base + use_boost + reinforcement_boost + utility_decay_term(utility)
 
     return max(0.0, min(1.0, score))
 
@@ -407,13 +431,17 @@ async def prune_low_quality_facts(*, tenant_id: str = "") -> dict[str, Any]:
     """Deactivate one tenant's facts that are low-quality garbage.
 
     Targets:
-        - decay_score < 0.1 AND importance_score < 0.3 AND never recalled
+        - decay_score < 0.1 AND importance_score < 0.3 AND not used recently
         - fact_text < 15 characters (garbage that got in before quality gate)
 
-    "Never recalled" reads the live ``access_count`` (raised whenever the
-    search tool or warm-up returns the fact) and migration 094's
-    ``access_count_shadow`` (history recovered from fact_access_log), so a fact
-    agents use is not retired on age alone.
+    "Not used recently" means never recalled, or last recalled more than
+    PRUNE_RECENT_USE_DAYS ago. Use reads the live ``access_count`` /
+    ``last_accessed`` (raised whenever the search tool or warm-up returns the
+    fact) and migration 094's shadow columns (history recovered from
+    fact_access_log), so a fact agents use is not retired on age alone — and a
+    fact recalled once long ago is not protected forever. Positive utility
+    protects in proportion: it lifts ``decay_score`` by up to 0.3, so a fact
+    that has helped runs stays above the 0.1 line.
 
     Never prunes: decisions, preferences, resolutions (category-protected), or
     an operator-confirmed fact.
@@ -440,7 +468,7 @@ async def prune_low_quality_facts(*, tenant_id: str = "") -> dict[str, Any]:
         )
         short_pruned = cur.fetchall()
 
-        # Prune decayed, unimportant, never-recalled facts
+        # Prune decayed, unimportant facts not used recently enough to matter
         cur.execute(
             f"""
             UPDATE memory_facts SET is_active = false, updated_at = NOW()
@@ -448,12 +476,13 @@ async def prune_low_quality_facts(*, tenant_id: str = "") -> dict[str, Any]:
               AND tenant_id = %s
               AND decay_score < 0.1
               AND importance_score < 0.3
-              AND {_USE_COUNT_SQL} = 0
+              AND ({_USE_COUNT_SQL} = 0
+                   OR {_LAST_USED_SQL} < NOW() - make_interval(days => %s))
               AND category NOT IN ('decision', 'preference', 'resolution')
               AND {NOT_OPERATOR_CONFIRMED_SQL}
             RETURNING id, fact_text
             """,
-            (_tenant,),
+            (_tenant, PRUNE_RECENT_USE_DAYS),
         )
         decay_pruned = cur.fetchall()
 
@@ -1141,27 +1170,44 @@ def _decay_chunk(rows: list[dict[str, Any]]) -> tuple[int, int]:
     datetime and is NOT touched here — see scripts/memory_decay_dryrun.py
     for why the formula itself must stay a single source of truth.
     """
+    from robothor.memory.utility import utility_for_row
+
     updated = 0
     skipped_null = 0
     with get_connection() as conn:
         cur = conn.cursor()
         for fact in rows:
+            utility = utility_for_row(fact)
             if fact["last_accessed"] is None:
                 skipped_null += 1
+                cur.execute(
+                    "UPDATE memory_facts SET utility = %s WHERE id = %s",
+                    (utility, fact["id"]),
+                )
                 continue
             score = compute_decay_score(
                 last_accessed=fact["last_accessed"],
                 access_count=fact["access_count"],
                 reinforcement_count=fact["reinforcement_count"],
                 importance_score=fact["importance_score"],
-                outcome_failures=fact.get("outcome_failures", 0) or 0,
+                utility=utility,
             )
             cur.execute(
-                "UPDATE memory_facts SET decay_score = %s WHERE id = %s",
-                (score, fact["id"]),
+                "UPDATE memory_facts SET decay_score = %s, utility = %s WHERE id = %s",
+                (score, utility, fact["id"]),
             )
             updated += 1
     return updated, skipped_null
+
+
+def _has_origin_column(cur: Any) -> bool:
+    """Whether ``memory_facts.origin`` exists (it arrives with the graph schema)."""
+    cur.execute(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'memory_facts' "
+        "AND column_name = 'origin'"
+    )
+    return cur.fetchone() is not None
 
 
 def _run_decay_pass_sync(budget_s: float = _DECAY_BUDGET_S, tenant_id: str = "") -> dict[str, int]:
@@ -1180,11 +1226,15 @@ def _run_decay_pass_sync(budget_s: float = _DECAY_BUDGET_S, tenant_id: str = "")
     t_start = time.monotonic()
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        # Outcome counts feed utility; origin, when the column exists, decides
+        # whether the fact may earn positive utility at all.
+        origin = ", origin" if _has_origin_column(cur) else ""
         cur.execute(
             f"""
             SELECT id, {_LAST_USED_SQL} AS last_accessed,
                    {_USE_COUNT_SQL} AS access_count, reinforcement_count,
-                   importance_score, outcome_failures
+                   importance_score, outcome_failures,
+                   outcome_successes, outcome_citations{origin}
             FROM memory_facts
             WHERE is_active = TRUE AND tenant_id = %s
             """,

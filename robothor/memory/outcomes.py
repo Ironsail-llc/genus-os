@@ -1,15 +1,16 @@
 """
-Outcome-driven fact invalidation.
+Outcome attribution: credit and blame for the facts a run recalled.
 
-When an agent acts on facts and the run fails, those facts are suspect —
-either stale, incorrect, or irrelevant. This module:
+  1. Logs every fact retrieved during a run (via fact_access_log) so the
+     run's outcome can be attributed to them when it ends.
+  2. ``bump_failure_for_run(run_id)`` increments ``outcome_failures`` on every
+     fact a failed run recalled.
+  3. ``credit_success_for_run(run_id, ...)`` increments ``outcome_successes``
+     on every fact a successful run recalled, and ``outcome_citations`` on
+     those its final answer demonstrably used (``utility.is_cited``).
 
-  1. Logs every fact retrieved during a run (via fact_access_log) so we
-     can attribute blame later.
-  2. Exposes `bump_failure_for_run(run_id)` to increment outcome_failures
-     on all facts touched during that run.
-  3. Exposes `compute_outcome_penalty(outcome_failures)` so the decay
-     scorer can accelerate retirement of repeatedly-blamed facts.
+The nightly decay pass turns the three counts into ``memory_facts.utility``
+(``robothor.memory.utility.compute_utility``), which decay and ranking read.
 """
 
 from __future__ import annotations
@@ -21,11 +22,6 @@ from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
-
-# Per-failure penalty applied to decay score, capped so one bad run can't
-# destroy a fact outright.
-_PER_FAILURE_PENALTY = 0.1
-_MAX_PENALTY = 0.4
 
 # How long raw per-run access rows are kept before being folded into
 # fact_access_rollup. Historically hardcoded to 30 days at the call site, which
@@ -126,13 +122,6 @@ def record_fact_access(
         logger.warning("record_fact_access failed (non-fatal): %s", e)
 
 
-def compute_outcome_penalty(outcome_failures: int) -> float:
-    """Return the decay penalty for N failures, capped at _MAX_PENALTY."""
-    if outcome_failures <= 0:
-        return 0.0
-    return min(_PER_FAILURE_PENALTY * outcome_failures, _MAX_PENALTY)
-
-
 def bump_failure_for_run(
     run_id: str,
     tenant_id: str | None = None,
@@ -189,6 +178,73 @@ def bump_failure_for_run(
         dropped = cur.rowcount
 
     return {"facts_touched": touched, "facts_confidence_dropped": dropped}
+
+
+_NO_CREDIT: dict[str, int] = {"facts_credited": 0, "facts_cited": 0}
+
+
+def credit_success_for_run(
+    run_id: str,
+    tenant_id: str | None = None,
+    *,
+    output_text: str | None = None,
+    task_text: str | None = None,
+) -> dict[str, int]:
+    """Credit every fact a successful run recalled; more for the ones it used.
+
+    Each fact the run's recalls returned (its ``fact_access_log`` rows) gains
+    one ``outcome_successes``; those whose distinctive value appears in
+    ``output_text`` and not in ``task_text`` also gain one
+    ``outcome_citations``. Once per run, however often the run recalled the
+    fact. Synchronous: the caller runs it off the event loop at run end.
+
+    Returns {facts_credited, facts_cited} for observability.
+    """
+    tid = tenant_id or DEFAULT_TENANT
+    if not run_id:
+        return dict(_NO_CREDIT)
+
+    # Same rule as the failure side: a benchmark run's outcome is not evidence
+    # about the facts of a real tenant.
+    from robothor.engine.run_context import benchmark_write_refused
+
+    if benchmark_write_refused(tid, what="credit_success_for_run"):
+        return dict(_NO_CREDIT)
+
+    from robothor.memory.utility import is_cited
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT f.id, f.fact_text FROM memory_facts f
+            WHERE f.tenant_id = %s
+              AND f.id IN (
+                  SELECT DISTINCT fact_id FROM fact_access_log
+                  WHERE run_id = %s AND tenant_id = %s
+              )
+            """,
+            (tid, run_id, tid),
+        )
+        rows = cur.fetchall()
+        if not rows:
+            return dict(_NO_CREDIT)
+        ids = [int(r[0]) for r in rows]
+        cited = [int(r[0]) for r in rows if is_cited(r[1], output_text, task_text)]
+        cur.execute(
+            """
+            UPDATE memory_facts
+            SET outcome_successes = COALESCE(outcome_successes, 0) + 1,
+                outcome_citations = COALESCE(outcome_citations, 0)
+                                    + CASE WHEN id = ANY(%s::int[]) THEN 1 ELSE 0 END,
+                last_success_at = NOW()
+            WHERE tenant_id = %s AND id = ANY(%s::int[])
+            """,
+            (cited, tid, ids),
+        )
+        credited = cur.rowcount
+
+    return {"facts_credited": int(credited or 0), "facts_cited": len(cited)}
 
 
 def access_log_retention_days() -> int:

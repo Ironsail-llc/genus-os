@@ -195,3 +195,4 @@ crm/169_rooms.sql
 crm/170_room_cronjob_unique.sql
 crm/172_room_tasks_approval.sql
 crm/175_chat_messages_session_id.sql
+crm/180_memory_fact_utility.sql
