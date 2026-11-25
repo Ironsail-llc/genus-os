@@ -242,7 +242,7 @@ async def test_include_graph_false_runs_no_graph_leg(env: pytest.MonkeyPatch) ->
 @pytest.mark.asyncio
 async def test_expand_entities_never_turns_the_graph_leg_on(env: pytest.MonkeyPatch) -> None:
     """expand_entities means the one-hop expansion leg only; the graph leg runs
-    on include_graph alone (GEN-875: it is off by default)."""
+    on include_graph alone (it is off by default)."""
     hops = [_graph_hit(700, "Bob runs the shipping team", 0.9)]
     cur = _Cursor(vector=_dense(20), keyword=[])
     env.setattr(reranker, "rerank_pair", _scorer({"shipping": 0.0}, default=0.6))

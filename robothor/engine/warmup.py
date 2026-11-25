@@ -1508,7 +1508,7 @@ def _candidate_phrases(user_message: str, *, lowercase_ok: bool) -> list[str]:
 
 #: Whether warm-up adds graph-activation lines unless told otherwise. Off, as
 #: ``robothor.memory.facts.GRAPH_LEG_DEFAULT``: on the memory evaluation's world
-#: the graph leg showed no recall benefit (GEN-875), and nothing has measured
+#: the graph leg showed no recall benefit, and nothing has measured
 #: one for warm-up.
 WARMUP_GRAPH_DEFAULT = False
 

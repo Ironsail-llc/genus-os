@@ -1336,7 +1336,7 @@ _GRAPH_FIELDS = (
 GRAPH_LEG_BUDGET_SECONDS = 0.25
 
 #: Whether search_facts runs the graph-activation leg unless told otherwise.
-#: Off: on the memory evaluation's world, dev split (GEN-875), the leg did not
+#: Off: on the memory evaluation's world, dev split, the leg did not
 #: earn its place. Multi-hop top-5 21/126 with it against 20/126 without
 #: (top-10 34 against 37); raw detail 27/110 against 40/110, its candidates
 #: crowding conversation segments out of the reranked head. Reserved places

@@ -1,6 +1,6 @@
 """The graph leg is off by default; recall and warm-up run it only when asked.
 
-On the world eval's dev split (GEN-875) the graph leg did not earn its place:
+On the world eval's dev split the graph leg did not earn its place:
 multi-hop top-5 21/126 with it against 20/126 without (top-10 34 against 37),
 and raw detail 27/110 against 40/110, because its candidates crowd conversation
 segments out of the reranked head. Tuning reserved places, facts per entity,
