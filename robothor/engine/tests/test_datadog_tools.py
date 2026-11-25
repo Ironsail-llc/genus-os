@@ -398,6 +398,42 @@ def test_an_oversized_page_is_fitted_with_a_note_and_a_cursor_that_continues(dd,
     assert len(json.dumps(result)) <= datadog_logs.RESULT_BUDGET_CHARS
 
 
+def _traced(i: int, message: str = "", **attrs: Any) -> dict[str, Any]:
+    """A log carrying its trace and span ids in the event's reserved fields."""
+    raw = _log(i, message, **attrs)
+    raw["attributes"]["trace_id"] = f"trace-{i}"
+    raw["attributes"]["span_id"] = f"span-{i}"
+    return raw
+
+
+def test_a_row_carries_its_trace_and_span_ids(dd, writer):
+    dd.make_row = _traced
+
+    result = _run(SEARCH, {"limit": 2})
+
+    row = result["rows"][1]
+    assert (row["trace_id"], row["span_id"]) == ("trace-1", "span-1")
+
+
+def test_a_row_without_a_trace_has_no_trace_fields(dd, writer):
+    result = _run(SEARCH, {"limit": 1})
+
+    row = result["rows"][0]
+    assert "trace_id" not in row and "span_id" not in row
+
+
+def test_fitting_keeps_the_trace_ids_when_it_drops_attributes(dd, writer):
+    dd.make_row = lambda i: _traced(i, "x" * 5000, payload={"blob": "y" * 3000})
+
+    result = _run(SEARCH, {"limit": 200})
+
+    assert result["truncated"] is True
+    for row in result["rows"]:
+        assert row.get("attributes_omitted") is True
+        assert row["trace_id"].startswith("trace-")
+        assert row["span_id"].startswith("span-")
+
+
 def test_no_cursor_when_the_second_page_is_not_the_rows_returned(dd, writer):
     """Logs that arrive between the two calls shift the page; the cursor from
     the second call would skip or repeat rows, so none is handed out."""
