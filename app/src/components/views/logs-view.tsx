@@ -8,10 +8,11 @@ import { PageHeader } from "@/components/business/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { isOperatorRole } from "@/components/layout/nav-config";
+import { isAuditReaderRole, isOperatorRole } from "@/components/layout/nav-config";
 import { useBridgePoll } from "@/lib/bridge/use-bridge-poll";
 import { isLogSince } from "@/lib/observe/since";
 import { ListSkeleton } from "@/components/business/list-skeleton";
+import { TelemetryLogs } from "@/components/views/telemetry-logs";
 
 /**
  * Observe › Logs — journald, for an operator who is not on the box.
@@ -158,16 +159,24 @@ function timeOf(value: string | null): string {
   return parsed.toLocaleTimeString("en-US", { hour12: false });
 }
 
-export interface LogsViewProps {
+export interface ServerLogsProps {
   /** The shell keeps every opened view mounted; this is the load gate. */
   visible?: boolean;
   /** Session role. UX only — the bridge gates both log routes itself. */
   role?: string | null;
   /** The session has not resolved yet, so the role is unknown — not "denied". */
   roleLoading?: boolean;
+  /** The Logs page's source switch, drawn in this panel's header. */
+  switcher?: React.ReactNode;
 }
 
-export function LogsView({ visible = true, role, roleLoading = false }: LogsViewProps) {
+/** The journald "Server" source of the Logs page: the appliance's, root operator only. */
+export function ServerLogs({
+  visible = true,
+  role,
+  roleLoading = false,
+  switcher,
+}: ServerLogsProps) {
   const [units, setUnits] = useState<Unit[]>([]);
   const [unitsAvailable, setUnitsAvailable] = useState(true);
   const [unitsReason, setUnitsReason] = useState<string | null>(null);
@@ -367,7 +376,14 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
 
   return (
     <div className="flex h-full min-w-0 flex-col gap-3 overflow-hidden p-4" data-testid="logs-view">
-      <PageHeader title="Logs" description="The journal of the units this instance runs.">
+      <PageHeader
+        title="Logs"
+        description="The journal of the units this instance runs."
+        // With the source switch beside the buttons the header is wider than
+        // a phone; it wraps rather than pushing the page sideways.
+        className={switcher ? "flex-wrap" : undefined}
+      >
+        {switcher}
         {/* Not before the first units answer either: on a container it would flash. */}
         {unitsAvailable && !unitsPoll.loading ? (
           <button
@@ -647,6 +663,96 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
         </>
       )}
     </div>
+  );
+}
+
+export interface LogsViewProps {
+  /** The shell keeps every opened view mounted; this is the load gate. */
+  visible?: boolean;
+  /** Session role. UX only — the bridge gates every log route itself. */
+  role?: string | null;
+  /** The session has not resolved yet, so the role is unknown — not "denied". */
+  roleLoading?: boolean;
+  /**
+   * The session is the root tenant's, at home (`isRootAtHome`). With an
+   * operator role, that is who the journald source is for: a root admin
+   * acting in a child is that child's administrator, and gets its Datadog
+   * logs only. UX only — `GET /api/logs` is `require_root_operator`.
+   */
+  rootAtHome?: boolean;
+}
+
+type Source = "datadog" | "server";
+
+/**
+ * Observe › Logs — the organization's logs.
+ *
+ * Every owner, admin and auditor of the acting tenant opens it on the
+ * organization's Datadog logs (`telemetry-logs.tsx`). The root operator at
+ * home also gets the appliance's journald as a second source, "Server"
+ * (`ServerLogs`, unchanged); nobody else is offered it, and only the source
+ * on screen is mounted, so the journal is never read behind the Datadog tab.
+ */
+export function LogsView({
+  visible = true,
+  role,
+  roleLoading = false,
+  rootAtHome = false,
+}: LogsViewProps) {
+  const [source, setSource] = useState<Source>("datadog");
+  const serverOffered = isOperatorRole(role) && rootAtHome;
+  const mayRead = isAuditReaderRole(role) || roleLoading;
+  const shown: Source = serverOffered ? source : "datadog";
+
+  if (!visible) return null;
+
+  if (!mayRead) {
+    return (
+      <div className="flex h-full flex-col gap-3 overflow-y-auto p-4" data-testid="logs-view">
+        <PageHeader title="Logs" />
+        <EmptyState
+          testId="telemetry-not-yours"
+          icon={FileText}
+          title="Logs are for the organization's admins and auditors"
+          description="An owner, admin or auditor of this organization can search its logs here. Ask one of them if you need a line looked up."
+        />
+      </div>
+    );
+  }
+
+  const switcher = serverOffered ? (
+    <div
+      role="tablist"
+      aria-label="Log source"
+      className="flex shrink-0 items-center gap-1 rounded-md border border-border p-0.5"
+    >
+      {(
+        [
+          ["datadog", "Datadog"],
+          ["server", "Server"],
+        ] as const
+      ).map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={shown === id}
+          data-testid={`logs-source-${id}`}
+          onClick={() => setSource(id)}
+          className={`rounded px-2 py-1 text-xs transition-colors ${
+            shown === id ? "bg-primary/15 text-foreground" : "text-muted-foreground hover:bg-accent/60"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  return shown === "server" ? (
+    <ServerLogs visible={visible} role={role} roleLoading={roleLoading} switcher={switcher} />
+  ) : (
+    <TelemetryLogs visible={visible && !roleLoading} switcher={switcher} />
   );
 }
 

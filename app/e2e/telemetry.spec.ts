@@ -148,6 +148,31 @@ test.describe("Observe › Logs › Datadog", () => {
     expect(seen.journal).toEqual([]);
   });
 
+  test("keeps the search and the summary usable on a 390 px screen", async ({ page }) => {
+    await setupTelemetry(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(LOGS_URL, { waitUntil: "networkidle" });
+
+    await expect(page.getByTestId("telemetry-query")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("telemetry-submit")).toBeVisible();
+    await expect(page.getByTestId("telemetry-summary")).toBeVisible();
+
+    // The table may scroll sideways inside its own frame; nothing above it may
+    // push the page wider than the phone.
+    const worst = await page.evaluate(() => {
+      let overflow = 0;
+      for (const id of ["telemetry-query", "telemetry-summary"]) {
+        let el: Element | null = document.querySelector(`[data-testid="${id}"]`);
+        while (el) {
+          overflow = Math.max(overflow, el.scrollWidth - el.clientWidth);
+          el = el.parentElement;
+        }
+      }
+      return overflow;
+    });
+    expect(worst).toBeLessThanOrEqual(1);
+  });
+
   test("a member is not offered the Logs page", async ({ page }) => {
     await setupShell(page, "member");
     await page.goto("/", { waitUntil: "networkidle" });

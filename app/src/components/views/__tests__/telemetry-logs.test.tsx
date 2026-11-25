@@ -332,7 +332,8 @@ describe("Observe › Logs — who sees which source", () => {
     fireEvent.click(server);
 
     expect(await screen.findByTestId("logs-unit")).toBeTruthy();
-    expect(server.getAttribute("aria-selected")).toBe("true");
+    // The switch is redrawn in the journald panel's header, so ask for it again.
+    expect(screen.getByTestId("logs-source-server").getAttribute("aria-selected")).toBe("true");
     expect(screen.queryByTestId("telemetry-table")).toBeNull();
   });
 
