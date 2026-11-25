@@ -388,6 +388,69 @@ Two CI gates sit beside it, both in `app/`:
   event-stream connection. `PERF_CHAT_PAINT_BUDGET_MS` and
   `PERF_FIRST_DELTA_BUDGET_MS` override the budgets for a measuring run.
 
+## Reading Datadog from Genus
+
+Several tenants can share one Datadog account. Genus reads it with one
+server-held, read-only credential and lets each tenant read only its own
+telemetry: every query Genus sends is `(<tenant scope>) AND (<caller query>)`.
+The package is `robothor/integrations/datadog/`; agent tools and dashboard views
+build on it.
+
+### Settings
+
+| Setting | What it is |
+|---------|------------|
+| `ROBOTHOR_DATADOG_API_KEY` | Secret. The API key, sent as `DD-API-KEY`. |
+| `ROBOTHOR_DATADOG_APP_KEY` | Secret. The application key, sent as `DD-APPLICATION-KEY`. Give it read scopes only. |
+| `ROBOTHOR_DATADOG_SITE` | The Datadog site, default `datadoghq.com`. Must be a known site (`us3.datadoghq.com`, `us5.datadoghq.com`, `datadoghq.eu`, `ap1.datadoghq.com`, `ap2.datadoghq.com`, `ddog-gov.com`, `us2.ddog-gov.com`); anything else reads as not configured, so the keys are never sent to another host. |
+| `ROBOTHOR_DATADOG_SCOPES` | JSON: what each tenant may read. |
+
+The two keys are one credential for the whole instance, not per tenant. They
+resolve from the vault first, always from the root tenant's rows, and then from
+the environment. Use the keys of a Datadog service account that can only read.
+
+### The scope map
+
+```json
+{
+  "acme-parent":  {"logs": "*", "metric_tags": []},
+  "acme-child-a": {"logs": "service:shop-api"},
+  "acme-child-b": {
+    "logs": "service:clinic-app",
+    "spans": "service:clinic-app env:prod",
+    "monitors": "team:clinic",
+    "metric_tags": ["service:clinic-app"]
+  }
+}
+```
+
+- `logs` is required. It is a Datadog log query that bounds the tenant. Only
+  the literal `*` means everything; a blank filter is not configured.
+- `spans` defaults to the `logs` filter.
+- `monitors` and `metric_tags` default to no access. `metric_tags: []` means
+  every metric.
+- **A tenant with no entry is refused**, and so is a tenant whose entry is
+  malformed (a blank `logs`, unbalanced brackets, a tag with a comma or space).
+  Malformed JSON leaves every tenant refused. Each case logs one warning that
+  names the tenant, never the entry.
+
+A caller's query is refused before anything is sent when it could change what
+the wrapping means: unbalanced or out-of-order brackets or parentheses, an
+unclosed quoted phrase, a backslash in a phrase or before a bracket or quote,
+an unpaired single quote outside double quotes, control characters or line
+breaks, or more than 4000 characters. Brackets inside a double-quoted phrase are
+literal. The refusal is one plain sentence the caller can act on, for instance
+to put text containing an apostrophe in double quotes.
+
+### Doctor
+
+`genus doctor` runs `datadog.reachable`. It skips when the keys are not set,
+and under `--offline`. Otherwise it asks Datadog to validate the API key. It
+fails when the site is unknown, when Datadog rejects the key (it never prints
+the key), or by error kind when Datadog cannot be reached. Its detail names the
+active tenants that have no scope entry, whose reads are refused until you add
+one.
+
 ## Notes
 
 - Export is best-effort (a 5s-timeout POST per run); a collector outage never

@@ -1,0 +1,6 @@
+Genus can now read a Datadog account that several tenants share, and each
+tenant reads only its own telemetry. Set the read-only `ROBOTHOR_DATADOG_API_KEY`
+and `ROBOTHOR_DATADOG_APP_KEY` once for the instance, plus a scope filter per
+tenant in `ROBOTHOR_DATADOG_SCOPES`; a tenant with no scope is refused. The new
+`datadog.reachable` doctor check confirms the keys and names any active tenant
+that still lacks a scope. See [Observability](OBSERVABILITY.md#reading-datadog-from-genus).

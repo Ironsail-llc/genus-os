@@ -72,6 +72,12 @@ The Helm deployment has a different boundary from the systemd appliance:
   (`app/src/app/api/bridge/[...path]`) will not forward the path at all. Humans
   set and rotate secrets with `robothor vault` on the appliance.
   `/api/vault/list` stays open to operators because it returns key names only.
+- The Datadog read keys (`ROBOTHOR_DATADOG_API_KEY`, `ROBOTHOR_DATADOG_APP_KEY`)
+  are one instance-wide credential, read vault-first from the root tenant and
+  never handed to a tenant. What separates tenants is the scope filter
+  `robothor/integrations/datadog/scope.py` ANDs into every query; a tenant with
+  no scope entry is refused. See
+  [Reading Datadog from Genus](OBSERVABILITY.md#reading-datadog-from-genus).
 - Bridge mutations under `/api/` either call an operator gate (the root gate
   `require_root_operator`, the per-tenant `require_tenant_admin`, or the Inbox's
   tenant-local `require_tenant_operator`, which for a member's own action is

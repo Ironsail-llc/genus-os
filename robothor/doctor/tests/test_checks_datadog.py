@@ -47,9 +47,7 @@ def _answer(status: int, body: object = None):
         assert request.url.path == "/api/v1/validate"
         return httpx.Response(status, json=body if body is not None else {})
 
-    return lambda _settings: DatadogClient(
-        API_KEY, APP_KEY, transport=httpx.MockTransport(handler)
-    )
+    return lambda _settings: DatadogClient(API_KEY, APP_KEY, transport=httpx.MockTransport(handler))
 
 
 def test_the_check_is_registered() -> None:
@@ -116,9 +114,7 @@ def test_an_unknown_site_fails_with_a_plain_sentence(keys, settings) -> None:
 
 
 def test_active_tenants_without_a_scope_are_named(keys, settings, monkeypatch) -> None:
-    settings(
-        ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": {"logs": "service:shop-api"}})
-    )
+    settings(ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": {"logs": "service:shop-api"}}))
     monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
     db = fake_db([("acme-child-a",), ("acme-child-b",)])
     result = _run(make_ctx(db_factory=db))
