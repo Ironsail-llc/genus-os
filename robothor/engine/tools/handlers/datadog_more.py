@@ -358,13 +358,13 @@ def _when(epoch_seconds: int | None) -> str | None:
         return None
 
 
-def _shape_monitor(row: MonitorRow) -> dict[str, Any]:
+def _shape_monitor(row: MonitorRow, memo: dict[str, bool]) -> dict[str, Any]:
     return {
         "id": row.id,
         "name": redact_personal_data(row.name),
         "status": row.status,
         "type": row.type,
-        "tags": masked_tags(row.tags),
+        "tags": masked_tags(row.tags, memo),
         "last_triggered": _when(row.last_triggered_ts),
     }
 
@@ -399,7 +399,8 @@ async def _datadog_monitors_list(args: dict[str, Any], ctx: ToolContext) -> dict
     )
     if refused is not None:
         return refused
-    shaped = [_shape_monitor(row) for row in got.rows]
+    memo: dict[str, bool] = {}
+    shaped = [_shape_monitor(row, memo) for row in got.rows]
     kept = _fit(shaped, "name", _NAME_CAPS)
     # Page N+1 at the same size starts after the monitors dropped here, so it
     # is handed out only when none were.
@@ -444,12 +445,12 @@ def _sample(points: list[list[float]], n: int) -> list[list[float]]:
     return [points[i] for i in sorted(keep)]
 
 
-def _shape_series(series: MetricSeries) -> dict[str, Any]:
+def _shape_series(series: MetricSeries, memo: dict[str, bool]) -> dict[str, Any]:
     return {
         "metric": series.metric,
         # The series' group tags, comma-joined: masked tag by tag.
-        "scope": ",".join(masked_tags(series.scope.split(","))) if series.scope else "",
-        "tags": masked_tags(series.tags),
+        "scope": ",".join(masked_tags(series.scope.split(","), memo)) if series.scope else "",
+        "tags": masked_tags(series.tags, memo),
         "points": [[ts, value] for ts, value in series.points],
     }
 
@@ -515,7 +516,8 @@ async def _datadog_metrics_query(args: dict[str, Any], ctx: ToolContext) -> dict
     )
     if refused is not None:
         return refused
-    shaped = [_shape_series(s) for s in got]
+    memo: dict[str, bool] = {}
+    shaped = [_shape_series(s, memo) for s in got]
     kept, truncated = _fit_series(shaped)
     result: dict[str, Any] = {
         "scope": ctx.tenant_id,
