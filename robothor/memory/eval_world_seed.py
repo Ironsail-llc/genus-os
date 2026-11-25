@@ -236,8 +236,11 @@ def _analyze_seeded_tables() -> datetime:
         cur = conn.cursor()
         cur.execute("SELECT clock_timestamp()")
         started: datetime = cur.fetchone()[0]
-        for table in ANALYZED_TABLES:
-            cur.execute(f"ANALYZE {table}")  # fixed names from ANALYZED_TABLES
+        # The graph and segment tables too, where this schema has them: the
+        # graph walk (``memory_activate``) plans badly on tables autovacuum has
+        # not analysed yet, and a search right after seeding took seconds.
+        for table in (*ANALYZED_TABLES, *_present_optional_tables(cur)):
+            cur.execute(f"ANALYZE {table}")  # fixed names from the two tuples
     return started
 
 
@@ -562,23 +565,7 @@ async def _seed_graph_and_segments(
             await segments.index_conversation(
                 key, tenant_id=tenant, embed_batch=_embed, retention_days=_WORLD_RETENTION_DAYS
             )
-    _analyze_world_tables()
     return reader
-
-
-def _analyze_world_tables() -> None:
-    """Refresh planner statistics after the bulk load, before anything queries it.
-
-    The graph walk (``memory_activate``) plans badly on tables autovacuum has not
-    analyzed yet; a search right after seeding then took seconds per call.
-    """
-    from robothor.db.connection import get_connection
-
-    with get_connection() as conn:
-        cur = conn.cursor()
-        present = _present_optional_tables(cur)
-        for table in ("memory_facts", "memory_entities", "memory_relations", *present):
-            cur.execute(f"ANALYZE {table}")  # noqa: S608 — fixed table names
 
 
 # --------------------------------------------------------------------------- #
