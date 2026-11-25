@@ -75,3 +75,53 @@ class TestVerdictBoost:
             del r["rerank_relevant"]
         out = _blend_rank(rows, limit=5)
         assert out[0]["id"] == 1
+
+
+def _plain(fid: int, *, sim: float | None, rank: int | None = None) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "id": fid,
+        "fact_text": f"distinct fact number {fid} about topic {fid * 7}",
+        "age_seconds": 3600.0,
+        "importance_score": 0.5,
+        "access_count": 0,
+        "category": "event",
+        "entities": [],
+        "superseded_by": None,
+    }
+    if sim is not None:
+        row["similarity"] = sim
+    if rank is not None:
+        row["fused_rank"] = rank
+    return row
+
+
+class TestSingleRelevanceScale:
+    """Relevance is one 0..1 scale: the rerank score when there is one, else a
+    function of the fused rank. Cosine similarity never enters the blend, so a
+    dense hit and a keyword-only hit are compared on the same footing."""
+
+    def test_cosine_does_not_outweigh_fused_rank(self, monkeypatch: Any) -> None:
+        monkeypatch.delenv("MEMORY_RERANK_WIDE", raising=False)
+        monkeypatch.delenv("MEMORY_TEMPORAL_COHERENCE", raising=False)
+        # Fused rank 0 is a dense hit with a low cosine; rank 1 is keyword-only.
+        rows = [_plain(1, sim=0.30, rank=0), _plain(2, sim=None, rank=1)]
+        out = _blend_rank(rows, limit=5)
+        assert out[0]["id"] == 1, "the fused order, not the cosine, sets relevance"
+
+    def test_rerank_score_is_the_relevance(self, monkeypatch: Any) -> None:
+        monkeypatch.delenv("MEMORY_RERANK_WIDE", raising=False)
+        monkeypatch.delenv("MEMORY_TEMPORAL_COHERENCE", raising=False)
+        a = _plain(1, sim=0.90, rank=0)
+        a["rerank_score"] = 0.20
+        b = _plain(2, sim=None, rank=1)
+        b["rerank_score"] = 0.95
+        out = _blend_rank([a, b], limit=5)
+        assert out[0]["id"] == 2
+        assert out[0]["relevance"] == 0.95
+
+    def test_similarity_present_or_absent_gives_the_same_relevance(self) -> None:
+        dense = _plain(1, sim=0.95, rank=3)
+        keyword_only = _plain(2, sim=None, rank=3)
+        _blend_rank([dense, keyword_only], limit=5)
+        assert dense["relevance"] == keyword_only["relevance"]
+        assert 0.0 < dense["relevance"] <= 1.0

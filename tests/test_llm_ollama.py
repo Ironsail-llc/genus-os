@@ -362,3 +362,37 @@ class TestNumCtxClamp:
         monkeypatch.setenv("ROBOTHOR_OLLAMA_NUM_CTX", "0")
         payload = await self._chat_payload()
         assert "num_ctx" not in payload["options"]
+
+
+class TestQueryInstruction:
+    """The Qwen3-Embedding family expects ``Instruct: <task>\\nQuery:<text>`` on
+    QUERIES only; documents are embedded bare, so stored vectors stay valid."""
+
+    async def _sent_inputs(self, call) -> list[str]:
+        sent: list[str] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            import json
+
+            sent.append(json.loads(request.content)["input"])
+            return _embed_response()
+
+        _install_transport(handler)
+        await call()
+        return sent
+
+    async def test_query_embedding_carries_the_instruction(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_EMBEDDING_MODEL", "qwen3-embedding:0.6b")
+        (sent,) = await self._sent_inputs(lambda: ollama.get_query_embedding_async("tea?"))
+        assert sent.startswith("Instruct: ")
+        assert sent.endswith("\nQuery:tea?")
+
+    async def test_document_embedding_is_unchanged(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_EMBEDDING_MODEL", "qwen3-embedding:0.6b")
+        (sent,) = await self._sent_inputs(lambda: get_embedding_async("Alice prefers tea"))
+        assert sent == "Alice prefers tea"
+
+    async def test_model_without_a_query_format_gets_the_bare_query(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_EMBEDDING_MODEL", "some-other-embedder:latest")
+        (sent,) = await self._sent_inputs(lambda: ollama.get_query_embedding_async("tea?"))
+        assert sent == "tea?"
