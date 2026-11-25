@@ -44,11 +44,16 @@ IDENTITY = IdentityContext(
     person_id="person-1",
 )
 
+#: The one instant every test here runs at. The blocks are stamped against it,
+#: and ``_pin_the_clock`` makes the warm-up read it, so a block's age label
+#: (``[STALE — 48h old]``) cannot change between two builds that are compared.
+NOW = datetime(2026, 1, 2, 12, 0, tzinfo=UTC)
+
 BLOCKS: dict[str, tuple[str, datetime | None]] = {
-    "persona": ("I am the operator's assistant.", datetime.now(UTC) - timedelta(hours=1)),
+    "persona": ("I am the operator's assistant.", NOW - timedelta(hours=1)),
     "user_profile": ("The operator prefers short answers.", None),
-    "user_model": ("x" * 1200, datetime.now(UTC) - timedelta(hours=48)),
-    "working_context": ("Preparing the quarterly review.", datetime.now(UTC)),
+    "user_model": ("x" * 1200, NOW - timedelta(hours=48)),
+    "working_context": ("Preparing the quarterly review.", NOW),
     "example_report": ("All checks passed.", None),
 }
 
@@ -59,6 +64,26 @@ FACTS: dict[str, list[str]] = {
 }
 
 MESSAGE = "Did Bob update the Example plan with Carol yesterday?"
+
+
+class _PinnedClockType(type):
+    # The warm-up also asks ``isinstance(x, datetime)`` of real datetimes.
+    def __instancecheck__(cls, obj: object) -> bool:
+        return isinstance(obj, datetime)
+
+
+class _PinnedClock(datetime, metaclass=_PinnedClockType):
+    """``datetime`` whose ``now()`` is always ``NOW``."""
+
+    @classmethod
+    def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+        return NOW.astimezone(tz) if tz is not None else NOW.replace(tzinfo=None)
+
+
+@pytest.fixture(autouse=True)
+def _pin_the_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The warm-up reads ``NOW``, however long the test or the suite runs."""
+    monkeypatch.setattr(warmup, "datetime", _PinnedClock)
 
 
 class FakeDB:
