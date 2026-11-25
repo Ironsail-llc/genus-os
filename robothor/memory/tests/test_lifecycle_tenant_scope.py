@@ -61,6 +61,14 @@ async def test_every_per_tenant_step_runs_inside_that_tenants_scope(monkeypatch)
             lambda days, tid: _record("chat_ttl", tid, 0),
         ),
         patch(
+            "robothor.memory.segments.cleanup_stale_segments",
+            lambda days, tid: _record("segment_ttl", tid, 0),
+        ),
+        patch(
+            "robothor.memory.identity.sync_crm_entities",
+            lambda tid: _record("crm_identity", tid, {}),
+        ),
+        patch(
             "robothor.memory.breadcrumbs.prune_expired_breadcrumbs",
             lambda tid: _record("breadcrumb_prune", tid, 0),
         ),
@@ -79,6 +87,8 @@ async def test_every_per_tenant_step_runs_inside_that_tenants_scope(monkeypatch)
         "preferences",
         "drift",
         "chat_ttl",
+        "segment_ttl",
+        "crm_identity",
         "breadcrumb_prune",
         "promote",
         "access_log",
