@@ -5,7 +5,11 @@ should come to mind without being asked. This module links a piece of text to
 the entities it names (``seeds_from_text``) and spreads activation from them
 over the graph (``activate``), returning recall :class:`Candidate` facts with a
 ``graph`` leg score, the hop distance and the path of entity names that reached
-each one — so the agent can see why a fact was recalled.
+each one — so the agent can see why a fact was recalled. A search ranks the
+facts the walk reaches by the question (``activate_for_question``, the
+database function ``memory_activate_for_question``): relevance to the question
+with its linked names removed, weighted by activation; warm-up's automatic
+recall (``recall_for_message``) ranks by activation alone.
 
 The walk is the database function ``memory_activate`` (migration
 ``*_memory_graph_activation.sql``): a forward-push approximation of
@@ -101,6 +105,12 @@ class Seed:
     name: str
     weight: float = TEXT_SEED_WEIGHT
     method: str = "full_name"
+    #: The phrase of the text that linked it, when that was a name or alias.
+    surface: str | None = None
+
+
+#: How a seed found in the text itself was linked (not through a search hit).
+NAMED_METHODS = frozenset({"full_name", "alias", "strong_key"})
 
 
 def clamp_hops(hops: int) -> int:
@@ -136,6 +146,41 @@ def strong_keys(text: str) -> list[str]:
         if key not in out:
             out.append(key)
     return out
+
+
+def named_in_question(seeds: Iterable[Seed]) -> list[int]:
+    """Entity ids of the seeds the text itself names (name, alias, e-mail, handle)."""
+    return [s.entity_id for s in seeds if s.method in NAMED_METHODS]
+
+
+def question_without_names(question: str, seeds: Iterable[Seed]) -> str:
+    """``question`` with the names, aliases, e-mail addresses and handles that
+    linked its seeds removed (with a possessive ``'s``).
+
+    What the graph ranks a reached fact by: "Alice Smith's employer" asks about
+    an employer, and every fact naming Alice Smith would otherwise look the
+    most relevant. Seeds reached through a search hit's mentions are not in the
+    question and remove nothing.
+    """
+    text = question or ""
+    named = [s for s in seeds if s.method in NAMED_METHODS]
+    surfaces = {x for s in named for x in (s.name, s.surface) if x}
+    if any(s.method == "strong_key" for s in named):
+        surfaces.update(m for m in [*_EMAIL.findall(text), *_HANDLE.findall(text)])
+    for surface in sorted(surfaces, key=len, reverse=True):
+        words = [re.escape(w) for w in surface.split()]
+        if not words:
+            continue
+        pattern = r"(?<![\w@])" + r"\s+".join(words) + r"(?:['’]s)?(?![\w@])"
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"\s+([?.!,;:])", r"\1", text)
+
+
+def _or_words(text: str) -> str:
+    """The words of ``text`` joined with OR (``websearch_to_tsquery`` syntax)."""
+    words = [w for w in re.findall(r"\w+", text or "") if w.lower() != "or"]
+    return " or ".join(words)
 
 
 @contextmanager
@@ -197,7 +242,7 @@ def _name_seeds(cur: Any, tenant_id: str, phrases: Sequence[str]) -> list[Seed]:
             continue
         name = str(hit.get("name") or "")
         method = "full_name" if normalize_surface(name) == normalize_surface(phrase) else "alias"
-        seeds.append(Seed(entity_id=int(hit["id"]), name=name, method=method))
+        seeds.append(Seed(entity_id=int(hit["id"]), name=name, method=method, surface=phrase))
     return seeds
 
 
@@ -298,6 +343,19 @@ _ACTIVATE_SQL = """
 """
 
 
+_ACTIVATE_FOR_QUESTION_SQL = """
+    SELECT kind, entity_id, entity_name, score, hops, via_edge_id, path_names,
+           fact_id, fact_text, category, origin, importance_score, created_at,
+           person_id, entities, access_count, relevance
+      FROM memory_activate_for_question(
+          %(t)s, %(seeds)s::int[], %(weights)s::float8[], %(reader)s, %(hops)s,
+          %(fanout)s, %(damping)s, %(exclude)s::int[], %(trusted)s, %(limit)s,
+          %(per)s, %(restricted)s, %(person)s::uuid, %(owner)s::uuid, %(query)s,
+          %(named)s::int[])
+     WHERE kind = 'fact'
+"""
+
+
 def _candidates(rows: Sequence[dict[str, Any]]) -> list[Candidate]:
     now = datetime.now(UTC)
     out: list[Candidate] = []
@@ -324,6 +382,8 @@ def _candidates(rows: Sequence[dict[str, Any]]) -> list[Candidate]:
             "graph_entity_id": r.get("entity_id"),
             "graph_edge_id": r.get("via_edge_id"),
         }
+        if r.get("relevance") is not None:
+            payload["graph_relevance"] = float(r["relevance"])
         out.append(
             Candidate(
                 id=r["fact_id"],
@@ -358,25 +418,77 @@ def _activate_on(
     seeds = list(seeds)[:MAX_SEEDS]
     cur.execute(
         _ACTIVATE_SQL,
-        {
-            "t": tenant_id,
-            "seeds": [s.entity_id for s in seeds],
-            "weights": [float(s.weight) for s in seeds],
-            # The write path's id space: a bare CRM person id (warm-up's
-            # sender) reads as ``person:{id}``; prefixed ids pass unchanged.
-            "reader": normalize_reader(reader_scope_id) or reader_scope_id,
-            "hops": clamp_hops(max_hops),
-            "fanout": int(fanout),
-            "damping": float(damping),
-            "exclude": sorted({int(i) for i in exclude_entity_ids}),
-            "trusted": bool(trusted_only),
-            "limit": int(limit),
-            "per": int(facts_per_entity),
-            "restricted": bool(person_restricted),
-            "person": _as_uuid(person_id),
-            "owner": _as_uuid(exclude_crm_person_id),
-        },
+        _walk_params(
+            tenant_id,
+            seeds,
+            reader_scope_id=reader_scope_id,
+            trusted_only=trusted_only,
+            max_hops=max_hops,
+            fanout=fanout,
+            damping=damping,
+            limit=limit,
+            facts_per_entity=facts_per_entity,
+            exclude_entity_ids=exclude_entity_ids,
+            person_restricted=person_restricted,
+            person_id=person_id,
+            exclude_crm_person_id=exclude_crm_person_id,
+        ),  # fmt: skip
     )
+    return _candidates(cur.fetchall())
+
+
+def _walk_params(
+    tenant_id: str,
+    seeds: Sequence[Seed],
+    *,
+    reader_scope_id: str | None,
+    trusted_only: bool,
+    max_hops: int,
+    fanout: int,
+    damping: float,
+    limit: int,
+    facts_per_entity: int,
+    exclude_entity_ids: Iterable[int],
+    person_restricted: bool,
+    person_id: str | None,
+    exclude_crm_person_id: str | None,
+) -> dict[str, Any]:
+    return {
+        "t": tenant_id,
+        "seeds": [s.entity_id for s in seeds],
+        "weights": [float(s.weight) for s in seeds],
+        # The write path's id space: a bare CRM person id (warm-up's
+        # sender) reads as ``person:{id}``; prefixed ids pass unchanged.
+        "reader": normalize_reader(reader_scope_id) or reader_scope_id,
+        "hops": clamp_hops(max_hops),
+        "fanout": int(fanout),
+        "damping": float(damping),
+        "exclude": sorted({int(i) for i in exclude_entity_ids}),
+        "trusted": bool(trusted_only),
+        "limit": int(limit),
+        "per": int(facts_per_entity),
+        "restricted": bool(person_restricted),
+        "person": _as_uuid(person_id),
+        "owner": _as_uuid(exclude_crm_person_id),
+    }
+
+
+def _activate_for_question_on(
+    cur: Any,
+    tenant_id: str,
+    seeds: Sequence[Seed],
+    question: str,
+    **walk: Any,
+) -> list[Candidate]:
+    if not seeds:
+        return []
+    seeds = list(seeds)[:MAX_SEEDS]
+    params = _walk_params(tenant_id, seeds, **walk)
+    params.update(
+        query=_or_words(question_without_names(question, seeds)) or None,
+        named=sorted(set(named_in_question(seeds))),
+    )
+    cur.execute(_ACTIVATE_FOR_QUESTION_SQL, params)
     return _candidates(cur.fetchall())
 
 
@@ -416,6 +528,57 @@ def activate(
             cur,
             tenant_id,
             seeds,
+            reader_scope_id=reader_scope_id,
+            trusted_only=trusted_only,
+            max_hops=max_hops,
+            fanout=fanout,
+            damping=damping,
+            limit=limit,
+            facts_per_entity=facts_per_entity,
+            exclude_entity_ids=exclude_entity_ids,
+            person_restricted=person_restricted,
+            person_id=person_id,
+            exclude_crm_person_id=exclude_crm_person_id,
+        )
+
+
+def activate_for_question(
+    tenant_id: str,
+    seeds: Sequence[Seed],
+    question: str,
+    *,
+    trusted_only: bool,
+    reader_scope_id: str | None = None,
+    max_hops: int = MAX_HOPS,
+    fanout: int = FANOUT,
+    damping: float = DAMPING,
+    limit: int = LIMIT,
+    facts_per_entity: int = FACTS_PER_ENTITY,
+    exclude_entity_ids: Iterable[int] = (),
+    person_restricted: bool = False,
+    person_id: str | None = None,
+    exclude_crm_person_id: str | None = None,
+    connect: Callable[..., Any] | None = None,
+) -> list[Candidate]:
+    """The walk of :func:`activate`, each reached entity's facts chosen and
+    scored by ``question`` (``memory_activate_for_question``).
+
+    Relevance is the full-text rank of a fact against the question without
+    the names it links (:func:`question_without_names`), in 0..1 and carried
+    as ``payload["graph_relevance"]``; ``leg_scores["graph"]`` is
+    ``sqrt(activation / strongest) * (0.01 + relevance)``. Facts that mention
+    an entity the question names (:func:`named_in_question`) are not
+    returned: the other legs find them by name. Tenant,
+    reader, person scope and trust apply exactly as in :func:`activate`.
+    """
+    if not seeds:
+        return []
+    with _cursor(connect) as cur:
+        return _activate_for_question_on(
+            cur,
+            tenant_id,
+            seeds,
+            question,
             reader_scope_id=reader_scope_id,
             trusted_only=trusted_only,
             max_hops=max_hops,
@@ -497,7 +660,10 @@ def graph_candidates_for_query(
     Seeds are the entities the query names and the entities the top hits of
     the other legs (``seed_fact_ids``) mention. The operator's own entity is
     excluded as seed and transit. A deliberate search, so every origin is
-    walked (``trusted_only=False``) and each row carries its origin.
+    walked (``trusted_only=False``) and each row carries its origin. What the
+    walk reaches is ranked by the query (:func:`activate_for_question`): the
+    query without the names it links, matched against each reached fact, and
+    facts about an entity the query names are left to the other legs.
 
     It runs under a savepoint, so a failure (a statement timeout, a database
     not yet migrated) rolls back only this leg and never aborts a transaction
@@ -567,10 +733,11 @@ def _query_graph(
     if not seeds:
         return []
     owner = operator_person_id(cur, tenant_id)
-    return _activate_on(
+    return _activate_for_question_on(
         cur,
         tenant_id,
         seeds,
+        query,
         reader_scope_id=reader_scope_id,
         trusted_only=False,
         max_hops=MAX_HOPS,

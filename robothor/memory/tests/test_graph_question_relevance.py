@@ -158,9 +158,7 @@ def test_a_seed_only_mentioned_by_a_top_hit_keeps_its_facts(world: Graph) -> Non
     w = _employer_world(world)
     hit = world.fact("The Aurora project is run by Quorvane Example", about=(w["org"],))
 
-    got = _ids(
-        _search("Where is the Aurora project's organisation headquartered?", seed_fact_ids=(hit,))
-    )
+    got = _ids(_search("Where is the organisation headquartered?", seed_fact_ids=(hit,)))
 
     assert got and got[0] == w["hq"]
 
