@@ -80,7 +80,8 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      asked for: both read the same conversation, and the segment leg adds a
      keyword leg and the reader rule. `search_chat_turns` itself is unchanged.
      The `segment` leg can filter by person, so it stays on under a restricted
-     scope, and its reader is then the scope's person and nothing else.
+     scope, read by the same reader as the fact legs, which the scope only
+     narrows.
 2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
    records its rank in every leg that found it (`leg_ranks`).
 3. **Reranker** (Qwen3-Reranker-0.6B, local) — on by default, off with
@@ -117,15 +118,34 @@ pool, and gives rows scoring at least 0.5 a small blend bonus.
 every path. `MEMORY_NARROW_SEARCH` is read by the `search_memory` tool, which
 decides the `include_*` arguments.
 
-The `search_memory` tool passes the reader on both paths (direct and RIP 15):
-`reader_person_id` is the run identity's `person_id`, whatever
-`ROBOTHOR_DATA_SCOPING` is set to, `reader_user_id` is the run's user id (the
-one a member's webchat session key carries), and `room_ids` are the room of
-the current room run plus every room the calling user is a member of. Callers
-that name no reader — the bridge's `/api/memory/search`, MCP `search_memory`,
-deep reasoning, cron and system runs — receive no private conversation. The
-Memory page's fact search (`GET /api/memory/facts?q=`) asks for no segments
-and keeps only `kind == "fact"` rows, because it edits and forgets facts by id. A segment row in the
+The `search_memory` tool passes the reader on both paths (direct and RIP 15),
+and the reader of a private conversation or a private fact is decided by the
+run, not inferred from its principal or its identity: `ToolContext.private_reader`
+(`robothor/engine/private_recall.py`), which each tool turn publishes from its run. A run has
+one only when it serves a verified person in their own one-to-one
+conversation: a webchat turn in their own `agent:{agent}:user:{uid}` session
+(or the main session, for the operator), or a Telegram direct message. It has
+none inside a workspace (room) run, and none for cron, hook, event,
+workflow, sub-agent, federation, manual, IDE, Slack or plugin-channel runs,
+whoever they execute as — a report workspace that runs as a member does not
+recall that member's private chats into its edition. With no private reader
+the run reads shared segments only. This is applied whatever
+`ROBOTHOR_DATA_SCOPING` is set to. `room_ids` are, inside a workspace run, that
+workspace alone; otherwise the workspaces of the member the run serves (its
+private reader), and none for a run that serves no one. Callers that name no
+reader — the bridge's `/api/memory/search`, MCP `search_memory`, deep
+reasoning — receive no private conversation and no private fact. A restricted
+data scope only narrows that reader, never creates one
+(`visibility.served_reader`, applied once to every leg): `search_facts` keeps
+the reader only when its person is the scope's person, and its user id only
+when that user is the same person (an active `user_accounts` row, or a
+`tenant_users` row, linking them); with no reader, or a reader who is someone
+else, it returns no private segment and no private fact. Interactive warm-up
+reads the same way: the runner decides the run's private reader before the
+preamble's worker thread starts, and the graph lines read as that person
+only; the sender seeds the walk but is not a reader. The Memory page's
+fact search (`GET /api/memory/facts?q=`) asks for no segments and keeps only
+`kind == "fact"` rows, because it edits and forgets facts by id. A segment row in the
 tool's output adds `kind`, `topic`, `source_kind`, `source_ref`, `start_ref`,
 `end_ref`, `part`, `started_at` and `ended_at` to the usual fields; a fact row
 keeps its shape. Segment rows carry `source: "segment"`, so fact-access logging
@@ -828,19 +848,36 @@ matters:
   it records an `operator` decision and points `superseded_by` at it. Every
   mention under the decision moves to that entity, or to NULL. From then on the
   name never resolves to the rejected entity, unless a later live operator
-  decision chooses it again. A decision that left its name unresolved cannot be
-  settled this way.
+  decision chooses it again. Three kinds of decision cannot be redirected this
+  way and must be corrected per fact: one that left its name unresolved, a
+  `context` decision (it rested on one conversation or organisation), and one
+  whose name is not a full name (a first name may only resolve on
+  conversation evidence).
 
 `dry_run` returns the same report and writes nothing. The report lists the
 mentions moved, their facts, and the relations those facts support: the
 derived rows to rebuild. The same list is stored on the decision it writes.
 
 A CRM merge is recorded the same way: a decision resolves the loser's entity
-to the keeper's, and nothing rewrites mention ids. Each later decision that
-reached the keeper through the merge records it (`via_merge`). Reversing the
-merge decision reverses those decisions too, and their mentions return to the
-loser's entity. Identity therefore lives only in decisions and mentions. Entity
-rows are never merged, and there is no canonical-entity lookup.
+to the keeper's, and nothing rewrites mention ids. A later decision records
+how the merge shaped it, judged on the match the rules decided on:
+
+- `via_merge`: it reached the keeper only through the loser's name, alias or
+  key. The mention named the loser.
+- `merge_collapsed`: the keeper's own name or key matched equally, and the
+  merge removed the loser as a competitor. This is the case of two CRM
+  records with the same name.
+- Nothing: the keeper matched on its own, and the merge added at most a weaker
+  match (a nickname variant of the loser's name).
+
+Reversing the merge decision moves `via_merge` mentions back to the loser's
+entity and leaves `merge_collapsed` mentions unresolved, because the name no
+longer singles anyone out. Everything else stays with the keeper. These moves
+are per-fact operator decisions, so they neither bind nor block later
+mentions. Those resolve by the ordinary rules: a bare name of two same-named
+people whose merge was reversed goes to the one record still live in the CRM.
+Identity therefore lives only in decisions and mentions. Entity rows are never
+merged, and there is no canonical-entity lookup.
 
 **Backfill.** `backfill_mentions(tenant_id, *, dry_run, batch_size=500,
 resume_from=None)` turns the names in existing `memory_facts.entities` into
@@ -1005,8 +1042,12 @@ gives a conversation's owner.
 
 One rule decides who reads it, in `robothor/memory/visibility.py`: a reader
 sees shared facts and the facts owned by one of their own ids. A reader with
-no ids sees shared facts only. Under a restricted data scope the reader is the
-scope's person and nothing else, whatever the caller passed.
+no ids sees shared facts only. The reader is the one conversation segments
+use: the person the run serves (`ToolContext.private_reader`, see above),
+never the run's identity alone. A restricted data scope only narrows it.
+
+The callers pass a person and a member id today, never an agent id, so a fact
+scoped to an agent is read by no caller yet: the rule fails closed.
 
 It is applied in every reader that returns fact text:
 
@@ -1018,12 +1059,23 @@ It is applied in every reader that returns fact text:
   `entity_facts_for_candidates` the shared-only rule, same signature).
 - Everything derived for every reader reads shared facts only: insight
   discovery, episodes, preferences, the working context, intents, gap
-  analysis, the memory projection and `crm.dal.get_person_memory`.
+  analysis, the memory projection, `crm.dal.get_person_memory`, and the
+  nightly relation inference (`entities.find_cooccurring_entity_pairs` and
+  the fact text `lifecycle.infer_entity_relationships` prompts with), whose
+  edges every reader sees.
+- De-churn (`robothor/memory/dechurn.py`) compares near-duplicates within one
+  owner scope, so a private fact never deactivates a shared one.
 
 Not filtered: the bridge's admin fact list (`/facts` in
-`crm/bridge/routers/memory_facts.py`). It is the tenant admin's view of what
-the tenant holds and the place a fact is forgotten from, so it shows private
-facts too.
+`crm/bridge/routers/memory_facts.py`), browse and search alike. It is the
+tenant admin's view of what the tenant holds and the place a fact is forgotten
+from, so it shows private facts too. Its search calls
+`search_facts(..., admin_erasure_view=True)`: a keyword-only switch, off by
+default, that drops the owner rule from the fact legs and skips the graph leg.
+Only that route, behind `require_tenant_admin`, passes it; no agent tool, MCP
+tool or tool argument reaches it, which
+`robothor/memory/tests/test_erasure_view_reach.py` checks. Forget acts on a
+private fact like any other.
 
 ### Associative recall
 
@@ -1121,19 +1173,19 @@ gets nothing.
 trusted-only activation, then fills the rest of its character cap with the
 name-matched facts as before, each fact once. Activation has a hard budget
 (`GRAPH_WARMUP_BUDGET_SECONDS` in `robothor/engine/warmup.py`, 150 ms to
-start), enforced by Postgres: once a seed is found, the walk's own connection
-gets a `statement_timeout` of the time left, reset before the connection goes
-back to the pool, so the walk stops at the budget and nothing ever cancels a
-query from outside. On a timeout, an error or an empty result the section is
+start), enforced by Postgres: before its first statement, the walk's own
+connection gets a `statement_timeout` of the time left, reset before the
+connection goes back to the pool, so the seed lookup and the walk stop at the
+budget and nothing ever cancels a query from outside. On a timeout, an error or an empty result the section is
 exactly the name-matched one. There is no model
 call and no reranker. The name-matched facts are not filtered by origin.
 
 What a turn pays: a message with no two adjacent name candidates, no e-mail
 address or @handle and no known sender makes no extra query and no thread
-hand-off. Otherwise one read-only connection runs the seed lookup, and when
-it finds a seed four more: arming the time limit, the operator lookup (two
-statements when no owner row is linked and the `owner.yaml` fallback runs), the
-walk and resetting the limit.
+hand-off. Otherwise one read-only connection arms the time limit, runs the
+seed lookup and resets the limit (three statements); when a seed is found the
+operator lookup and the walk run in between (five, or six when no owner row is
+linked and the `owner.yaml` fallback runs).
 
 The search path writes nothing. Rows found only by the graph are not logged as
 fact access.

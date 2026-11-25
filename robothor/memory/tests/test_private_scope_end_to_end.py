@@ -41,6 +41,7 @@ _MODULES = (
     "robothor.memory.episodes",
     "robothor.memory.outcomes",
     "robothor.memory.conflicts",
+    "robothor.memory.lifecycle",
     "robothor.crm.dal",
     "robothor.rooms.dal",
     "robothor.engine.warmup",
@@ -201,10 +202,21 @@ async def world(db) -> dict[str, Any]:
         (secret_id,),
     )
     assert [m[0] for m in mentions] == [orion], "the private fact mentions the far node"
-    return {"alice": alice, "bob": bob, "secret": secret_id, "dana": dana, "orion": orion}
+    return {
+        "alice": alice,
+        "bob": bob,
+        "secret": secret_id,
+        "dana": dana,
+        "orion": orion,
+        "conn": db,
+    }
 
 
-def _ctx(person: str | None, *, role: str = "member") -> Any:
+def _ctx(person: str | None, *, role: str = "member", served: bool = True) -> Any:
+    """A tool context whose identity is ``person``. ``served``: the run serves
+    that person in their own conversation (``ToolContext.private_reader``);
+    otherwise it only executes as them, as a cron or workspace run can."""
+    from robothor.engine.private_recall import PrivateReader
     from robothor.engine.tools.dispatch import ToolContext
     from robothor.identity.context import IdentityContext
 
@@ -218,7 +230,15 @@ def _ctx(person: str | None, *, role: str = "member") -> Any:
             role=role,
             person_id=person,
         )
-    return ToolContext(agent_id="main", run_id="", tenant_id=TENANT, user_id="", identity=identity)
+    reader = PrivateReader(person_id=person, user_id=None) if person and served else None
+    return ToolContext(
+        agent_id="main",
+        run_id="",
+        tenant_id=TENANT,
+        user_id="",
+        identity=identity,
+        private_reader=reader,
+    )
 
 
 async def _recall(monkeypatch, ctx: Any, query: str) -> tuple[list[dict[str, Any]], list[dict]]:
@@ -279,6 +299,20 @@ async def test_no_other_reader_recalls_the_private_fact_by_any_leg(
     assert _legs_with(rows, world["secret"]) == set()
 
 
+@pytest.mark.parametrize("restricted", [False, True])
+@pytest.mark.parametrize("query", [DENSE_QUERY, GRAPH_QUERY])
+async def test_a_run_that_only_executes_as_the_owner_recalls_nothing_private(
+    world, monkeypatch, query: str, restricted: bool
+) -> None:
+    """The owner's identity without the owner being served (a scheduled,
+    workspace or sub-agent run as them): its output may reach others."""
+    if restricted:
+        monkeypatch.setenv("ROBOTHOR_DATA_SCOPING", "enforce")
+    results, rows = await _recall(monkeypatch, _ctx(world["alice"], served=False), query)
+    assert SECRET not in [r["fact"] for r in results]
+    assert _legs_with(rows, world["secret"]) == set()
+
+
 @pytest.mark.parametrize("query", [DENSE_QUERY, GRAPH_QUERY])
 async def test_a_restricted_reader_never_recalls_another_persons_private_fact(
     world, monkeypatch, query: str
@@ -325,3 +359,101 @@ async def test_warm_up_never_injects_another_persons_private_fact(world) -> None
             )
             assert SECRET not in text
             assert kestrel not in text
+
+
+async def test_warm_up_graph_lines_never_inject_another_persons_private_fact(
+    world, monkeypatch
+) -> None:
+    """The graph-lines path, which is off by default, turned on. The owner as
+    the sender is not enough: only the person the run serves is a reader."""
+    from robothor.engine import warmup
+
+    monkeypatch.setattr(warmup, "WARMUP_GRAPH_DEFAULT", True)
+    for sender in (world["bob"], None, world["alice"]):
+        text = warmup._build_entity_context(
+            "Any news from Orion Freight or Dana Whitfield?",
+            tenant_id=TENANT,
+            sender_person_id=sender,
+            record_access=False,
+        )
+        assert SECRET not in text
+
+
+async def test_the_admin_erasure_view_finds_a_private_fact_the_default_hides(world) -> None:
+    """The tenant admin's erasure search must find a private fact to forget it."""
+    from robothor.memory.facts import search_facts
+
+    def _ids(rows: list[dict[str, Any]]) -> list[Any]:
+        return [r.get("id") for r in rows if r.get("kind", "fact") == "fact"]
+
+    hidden = await search_facts(DENSE_QUERY, tenant_id=TENANT, include_segments=False)
+    assert world["secret"] not in _ids(hidden)
+    erasure = await search_facts(
+        DENSE_QUERY, tenant_id=TENANT, include_segments=False, admin_erasure_view=True
+    )
+    assert world["secret"] in _ids(erasure)
+
+
+async def test_relation_inference_never_reads_a_private_fact(world, monkeypatch) -> None:
+    """Nightly inference turns fact text into SHARED edges every reader sees,
+    so a private fact must reach neither its pair search nor its prompt."""
+    from robothor.memory import entities, lifecycle
+    from robothor.memory.write_path import WriteContext, write_facts
+
+    db_conn = world["conn"]
+    kestrel = _entity(db_conn, "Kestrel Labs", "organization")
+    text = "Dana Whitfield is interviewing at Kestrel Labs next week"
+    private = await write_facts(
+        [
+            {
+                "fact_text": text,
+                "category": "work",
+                "confidence": 0.9,
+                "entities": ["Dana Whitfield", "Kestrel Labs"],
+            }
+        ],
+        source_content="private note",
+        context=WriteContext.for_source(
+            tenant_id=TENANT,
+            source_channel="webchat",
+            content_type="conversation",
+            role="user",
+            scope=("user", f"person:{world['alice']}"),
+        ),
+        conflict_check=False,
+    )
+    (private_id,) = private["fact_ids"]
+    assert _sql(db_conn, "SELECT scope_kind FROM memory_facts WHERE id = %s", (private_id,)) == [
+        ("user",)
+    ]
+
+    pairs = await entities.find_cooccurring_entity_pairs([world["dana"], kestrel], tenant_id=TENANT)
+    assert all(private_id not in (p.get("shared_fact_ids") or []) for p in pairs)
+
+    # The prompt's fact text, even when a pair names the private fact's id.
+    async def _underconnected(*_a: Any, **_k: Any) -> list[dict[str, Any]]:
+        return [{"id": world["dana"]}, {"id": kestrel}]
+
+    async def _pairs(*_a: Any, **_k: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "entity_a_id": world["dana"],
+                "entity_a_name": "Dana Whitfield",
+                "entity_b_id": kestrel,
+                "entity_b_name": "Kestrel Labs",
+                "shared_fact_ids": [private_id],
+            }
+        ]
+
+    prompted: list[dict[str, Any]] = []
+
+    async def _infer(pairs: list[dict[str, Any]], **_k: Any) -> list[dict[str, Any]]:
+        prompted.extend(pairs)
+        return []
+
+    monkeypatch.setattr(entities, "find_underconnected_entities", _underconnected)
+    monkeypatch.setattr(entities, "find_cooccurring_entity_pairs", _pairs)
+    monkeypatch.setattr(entities, "infer_relations", _infer)
+    await lifecycle.infer_entity_relationships(tenant_id=TENANT)
+    assert prompted, "the pair reached the inference step"
+    assert all(text not in (p.get("shared_facts_text") or []) for p in prompted)

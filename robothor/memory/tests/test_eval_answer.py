@@ -287,8 +287,9 @@ class TestPlantedAnswers:
         assert any(p.expect_correct for p in a) and any(not p.expect_correct for p in a)
 
     def test_planted_wrong_answers_never_contain_a_gold(self):
+        # Hedges contain the gold on purpose; every other wrong kind must not.
         for p in ea.planted_answers(_world()):
-            if not p.expect_correct:
+            if not p.expect_correct and p.kind != "hedge":
                 norm = ea.normalise(p.answer.text)
                 assert not any(ea.normalise(g) in norm for g in p.case.gold), p
 
@@ -365,3 +366,223 @@ class TestCaseSelection:
 
     def test_split_is_respected(self):
         assert {c.split for c in ea.select_cases(_world(), "dev", None)} == {"dev"}
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes: hedges, per-kind validation, judge errors, remote provider
+# --------------------------------------------------------------------------- #
+
+KINDS = {
+    "Kelvaro Systems": "organisation",
+    "Brivane Labs": "organisation",
+    "Velmere": "city",
+    "Tharholt": "city",
+    "Bob Ashby": "person",
+}
+
+
+class TestHedges:
+    """A gold beside a rival of its own kind is a hedge, and wrong by rule.
+
+    It was first sent to the LLM judge. Validation then showed the local judge
+    (qwen3:8b) accepting 55 of 150 planted hedges because "the gold appears in
+    the answer", so the rubric's "hedges between several things is wrong" is
+    applied by rule instead.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Kelvaro Systems or Brivane Labs",
+            "Brivane Labs (previously Kelvaro Systems)",
+            "Brivane Labs, then Kelvaro Systems",
+        ],
+    )
+    def test_gold_with_a_rival_of_its_kind_is_confident_wrong_by_rule(self, text):
+        v = ea.judge_rules(_case(), _answer(text), KNOWN, KINDS)
+        assert v is not None and not v.correct and v.confident_wrong
+        assert v.method == "rule" and "hedge" in v.reason
+
+    PEOPLE_KNOWN = frozenset({"Alice Vance", "Bob Rivera", "Carol Diaz", "Velmere"})
+    PEOPLE_KINDS = {
+        "Alice Vance": "person",
+        "Bob Rivera": "person",
+        "Carol Diaz": "person",
+        "Velmere": "city",
+    }
+
+    def _manager_case(self) -> ew.Case:
+        return _case(
+            "entity_confusion",
+            question="Who is Alice Vance's manager at the moment?",
+            gold=("Bob Rivera", "bob.rivera@example.com"),
+        )
+
+    def test_restating_the_question_subject_is_not_a_hedge(self):
+        v = ea.judge_rules(
+            self._manager_case(),
+            _answer("Alice Vance's manager is Bob Rivera"),
+            self.PEOPLE_KNOWN,
+            self.PEOPLE_KINDS,
+        )
+        assert v is not None and v.correct, v
+
+    def test_a_second_candidate_answer_is_still_a_hedge(self):
+        v = ea.judge_rules(
+            self._manager_case(),
+            _answer("Bob Rivera or Carol Diaz"),
+            self.PEOPLE_KNOWN,
+            self.PEOPLE_KINDS,
+        )
+        assert v is not None and not v.correct and v.confident_wrong and "hedge" in v.reason
+
+    def test_a_paraphrase_that_restates_the_subject_goes_to_the_llm(self):
+        """The other-value rule shares the question exclusion with the hedge rule."""
+        for text in ("Alice Vance's manager is Rivera, Bob", "Alice Vance"):
+            v = ea.judge_rules(
+                self._manager_case(), _answer(text), self.PEOPLE_KNOWN, self.PEOPLE_KINDS
+            )
+            assert v is None, (text, v)
+
+    def test_a_different_value_beside_the_subject_is_still_wrong(self):
+        v = ea.judge_rules(
+            self._manager_case(),
+            _answer("Alice Vance's manager is Carol Diaz"),
+            self.PEOPLE_KNOWN,
+            self.PEOPLE_KINDS,
+        )
+        assert v is not None and not v.correct and "Carol Diaz" in v.reason
+
+    def test_restating_the_subject_does_not_hide_a_hedge(self):
+        v = ea.judge_rules(
+            self._manager_case(),
+            _answer("Alice Vance's manager is Bob Rivera or Carol Diaz"),
+            self.PEOPLE_KNOWN,
+            self.PEOPLE_KINDS,
+        )
+        assert v is not None and not v.correct and "Carol Diaz" in v.reason
+
+    def test_gold_with_a_value_of_another_kind_is_still_correct(self):
+        v = ea.judge_rules(_case(), _answer("Kelvaro Systems, in Velmere"), KNOWN, KINDS)
+        assert v is not None and v.correct
+
+    @pytest.mark.asyncio
+    async def test_a_hedge_never_reaches_the_llm(self):
+        async def llm(case, answer):
+            raise AssertionError("a hedge is settled by rule")
+
+        hedge = _answer("Kelvaro Systems or Brivane Labs")
+        v = await ea.judge(_case(), hedge, known_values=KNOWN, kinds=KINDS, llm=llm)
+        assert not v.correct and v.confident_wrong
+
+    def test_planted_hedges_contain_the_gold_and_are_judged_wrong(self):
+        w = _world()
+        known, kinds = ea.known_values(w), ea.known_kinds(w)
+        hedges = [p for p in ea.planted_answers(w) if p.kind == "hedge"]
+        assert hedges
+        for p in hedges:
+            assert not p.expect_correct
+            assert any(ea.normalise(g) in ea.normalise(p.answer.text) for g in p.case.gold)
+            v = ea.judge_rules(p.case, p.answer, known, kinds)
+            assert v is not None and not v.correct, p
+
+
+class TestValidationPerKind:
+    @pytest.mark.asyncio
+    async def test_a_mediocre_llm_judge_fails_even_when_the_pool_passes(self):
+        """750 rule-settled wrong answers must not carry a weak model judge."""
+        import hashlib
+
+        async def mediocre(case, answer):
+            words = set(ea.normalise(answer.text).split())
+            ok = any(words <= set(ea.normalise(g).split()) for g in case.gold)
+            # Flip about one verdict in eight.
+            if hashlib.sha256(answer.text.encode()).digest()[0] < 32:
+                ok = not ok
+            return ok, "mediocre"
+
+        w = ew.generate_world(7, "full")
+        result = await ea.validate_judge(w, ea.make_judge(w, llm=mediocre))
+        assert result.wrong_marked_wrong >= 0.95  # the pooled gate alone would pass
+        assert not result.passed
+        weak = [k for k, v in result.by_kind.items() if v["ok"] / v["n"] < 0.95]
+        assert weak and set(weak) <= {"wrong_llm", "paraphrase_llm", "hedge"}
+
+    @pytest.mark.asyncio
+    async def test_a_judge_error_counts_as_a_failed_planted_case(self):
+        w = _world()
+        rule_judge = ea.make_judge(w, llm=None)
+        first = True
+
+        async def flaky(case, answer):
+            nonlocal first
+            if first:
+                first = False
+                raise RuntimeError("unparseable judge output")
+            return await rule_judge(case, answer)
+
+        result = await ea.validate_judge(w, flaky)
+        assert any("RuntimeError" in f for f in result.failures)
+
+
+class TestModelSelection:
+    @pytest.mark.asyncio
+    async def test_an_explicit_model_runs_locally_even_with_remote_generation_on(self, monkeypatch):
+        from robothor.llm import ollama
+        from robothor.memory import generation
+
+        async def remote_chat(*_a, **_k):
+            raise AssertionError("an explicit eval model must not go to the remote provider")
+
+        seen: dict[str, Any] = {}
+
+        async def local_chat(messages, **kw):
+            seen.update(kw)
+            return json.dumps({"answer": "Velmere", "unknown": False, "cited_ids": []})
+
+        monkeypatch.setattr(generation, "_remote_enabled", lambda: True)
+        monkeypatch.setattr(generation, "chat", remote_chat)
+        monkeypatch.setattr(ollama, "chat", local_chat)
+        out = await ea.answer("q", _bundle("x"), model="qwen-local")
+        assert seen["model"] == "qwen-local" and out.model == "qwen-local"
+
+        ok, _ = await ea.llm_judge(_case(), _answer("x"), model="qwen-local")
+        assert seen["model"] == "qwen-local"
+
+    def test_remote_generation_without_explicit_models_is_refused(self, monkeypatch):
+        from robothor.memory import generation
+
+        monkeypatch.setattr(generation, "_remote_enabled", lambda: True)
+        with pytest.raises(EvalPreconditionError, match="remote"):
+            ea.resolve_eval_models(None, None)
+        with pytest.raises(EvalPreconditionError, match="remote"):
+            ea.resolve_eval_models("a", None)
+        assert ea.resolve_eval_models("a", "b") == ("a", "b")
+
+    def test_local_generation_resolves_the_default_model(self, monkeypatch):
+        from robothor.llm import ollama
+        from robothor.memory import generation
+
+        monkeypatch.setattr(generation, "_remote_enabled", lambda: False)
+        monkeypatch.setattr(ollama, "GENERATION_MODEL", "gen-default")
+        assert ea.resolve_eval_models(None, "j") == ("gen-default", "j")
+
+
+class TestPlantedLlmWrongAnswersAreFair:
+    """A planted wrong answer must be wrong to a careful reader, not a one-letter
+    variant of the gold. Invented roots such as Drodrel and Drotrel differ by a
+    single letter, and the real judge, reasonably, called one a spelling of the
+    other."""
+
+    @pytest.mark.parametrize("size", ["small", "full"])
+    def test_no_wrong_llm_answer_shares_or_nearly_spells_a_gold_word(self, size):
+        from difflib import SequenceMatcher
+
+        w = ew.generate_world(7, size)
+        for p in ea.planted_answers(w):
+            if p.kind != "wrong_llm":
+                continue
+            gold_words = {x for g in p.case.gold for x in ea.normalise(g).split()}
+            for word in ea.normalise(p.answer.text).split():
+                for gw in gold_words:
+                    assert SequenceMatcher(None, word, gw).ratio() < 0.75, (p.answer.text, gw)

@@ -46,3 +46,13 @@ def test_the_page_does_not_ask_for_conversation_segments(ranked):
     memory_facts._ranked_by_search("locker code", "test-tenant", "true", 10)
 
     assert calls and calls[0].get("include_segments") is False
+
+
+def test_the_page_searches_the_admin_erasure_view(ranked):
+    """The admin forgets facts from this page, private ones included, so its
+    search must see every owner scope, as its browse arm does."""
+    memory_facts, calls = ranked
+
+    memory_facts._ranked_by_search("locker code", "test-tenant", "true", 10)
+
+    assert calls and calls[0].get("admin_erasure_view") is True

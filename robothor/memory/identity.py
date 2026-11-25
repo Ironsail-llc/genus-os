@@ -1091,8 +1091,11 @@ class _Resolver:
         self._crm: dict[str, dict[str, Any] | None] = {}
         self._companies: dict[str, dict[str, Any] | None] = {}
         self._merge: dict[str, tuple[int, int] | None] = {}
-        # Per mention: entity id -> the CRM-merge decisions followed to reach it.
-        self._via: dict[int, set[int]] = {}
+        # The merge path of the last node lookup (see effective / _merge_tags).
+        self._last_via: tuple[int, ...] = ()
+        # Per mention: strong-key hits' merge paths, and per-candidate merge tags.
+        self._hit_via: dict[int, list[tuple[int, ...]]] = {}
+        self._cand_tags: dict[int, tuple[list[int], list[int]]] = {}
         self._entity: dict[int, dict[str, Any] | None] = {}
         self._owner: str | None | bool = False
 
@@ -1295,8 +1298,8 @@ class _Resolver:
         return self.effective(nxt, hops + 1, (*via, target[1])) if nxt else None
 
     def _note_via(self, eff: Mapping[str, Any] | None) -> None:
-        if eff is not None and eff.get("_via_merge"):
-            self._via.setdefault(int(eff["id"]), set()).update(eff["_via_merge"])
+        """Remember how the last node lookup reached its node: directly, or through merges."""
+        self._last_via = tuple(eff.get("_via_merge") or ()) if eff is not None else ()
 
     def owner_person(self) -> str | None:
         if self._owner is False:
@@ -1401,6 +1404,7 @@ class _Resolver:
         for kind, value in keys.items():
             eid: int | None = None
             why: str | None = None
+            self._last_via = ()
             if kind == "crm_person_id":
                 eid, why = self._person_node(value) if _is_uuid(value) else (None, "malformed")
             elif kind == "crm_company_id":
@@ -1419,6 +1423,7 @@ class _Resolver:
                 ignored[kind] = "unknown"
                 continue
             hits.append(StrongHit(kind, eid, row["entity_type"], row["name"]))
+            self._hit_via.setdefault(eid, []).append(self._last_via)
         return hits, ignored
 
     def _email_node(self, email: str) -> tuple[int | None, str | None]:
@@ -1482,6 +1487,7 @@ class _Resolver:
                 )
         blocked = False
         by_id: dict[int, tuple[dict[str, Any], str, set[int]]] = {}
+        paths: dict[int, list[tuple[str, tuple[int, ...]]]] = {}
         rank = {"name": 0, "alias": 1, "nickname": 2, "first_name": 3, "initial": 4}
         for r in raw:
             match = self._classify(r, norm)
@@ -1492,7 +1498,7 @@ class _Resolver:
                 blocked = blocked or match in ("name", "alias")
                 continue
             eid = int(eff["id"])
-            self._note_via(eff)
+            paths.setdefault(eid, []).append((match, tuple(eff.get("_via_merge") or ())))
             if eid in by_id:
                 prev = by_id[eid]
                 prev[2].add(int(r["id"]))
@@ -1501,6 +1507,7 @@ class _Resolver:
             else:
                 by_id[eid] = (eff, match, {int(r["id"]), eid})
 
+        self._cand_tags = {eid: _merge_tags(rows) for eid, rows in paths.items()}
         person_ids = [e["crm_person_id"] for e, _m, _s in by_id.values() if e.get("crm_person_id")]
         self._load_people(person_ids)
         tokens = norm.split()
@@ -1537,10 +1544,23 @@ class _Resolver:
 
     # ── deciding and recording ──
     def resolve(self, mention: MentionInput) -> _Result:
-        self._via = {}
+        self._hit_via = {}
+        self._cand_tags = {}
         hits, ignored = self.strong_hits(mention)
         cands, blocked = self.candidates(mention)
         outcome = decide(mention, cands, strong_hits=hits, blocked=blocked)
+        via: list[int] = []
+        collapsed: list[int] = []
+        if outcome.entity_id is not None:
+            if outcome.method == "strong_key":
+                routes = self._hit_via.get(outcome.entity_id, [])
+                merged = sorted({m for r in routes for m in r})
+                if merged and all(routes):
+                    via = merged  # every key that decided belonged to the loser
+                elif merged:
+                    collapsed = merged  # the keeper's own key and the loser's agreed only by merge
+            else:
+                via, collapsed = self._cand_tags.get(outcome.entity_id, ([], []))
         if ignored:
             outcome = Outcome(
                 outcome.entity_id,
@@ -1551,7 +1571,7 @@ class _Resolver:
                 {**outcome.evidence, "ignored_keys": ignored},
                 outcome.create_type,
             )
-        return self.record(mention, outcome)
+        return self.record(mention, outcome, via=via, collapsed=collapsed)
 
     def _create(self, mention: MentionInput, etype: str) -> int | None:
         name = _clean(mention.surface_form)[:_MAX_NAME]
@@ -1579,7 +1599,14 @@ class _Resolver:
             return None
         return int(row["id"])
 
-    def record(self, mention: MentionInput, outcome: Outcome) -> _Result:
+    def record(
+        self,
+        mention: MentionInput,
+        outcome: Outcome,
+        *,
+        via: Sequence[int] = (),
+        collapsed: Sequence[int] = (),
+    ) -> _Result:
         surface = _clean(mention.surface_form or "")[:_MAX_NAME] or "?"
         etype = _norm_type(mention.entity_type)
         created = False
@@ -1631,16 +1658,26 @@ class _Resolver:
                 {**outcome.evidence, "rejected_entity_id": outcome.entity_id, "rule": "rejected"},
             )
 
-        via = sorted(self._via.get(outcome.entity_id, ())) if outcome.entity_id is not None else []
-        if via:
-            # Reached through a CRM merge: say so, so reversing the merge finds it.
+        if (
+            outcome.entity_id is not None
+            # A node this call just created cannot have been reached through a
+            # merge. An existing node matched with method `exact` (a single-token
+            # company name) is tagged like any other match.
+            and not created
+            and outcome.method != "operator"
+            and (via or collapsed)
+        ):
+            # Say how a CRM merge shaped this decision, so reversing the merge can
+            # undo exactly that: via_merge — reached only through the loser's node
+            # or keys; merge_collapsed — the merge removed an equal competitor.
+            tag, ids = ("via_merge", sorted(via)) if via else ("merge_collapsed", sorted(collapsed))
             outcome = Outcome(
                 outcome.entity_id,
                 outcome.method,
                 outcome.confidence,
-                f"{outcome.basis}|via_merge:{','.join(map(str, via))}",
+                f"{outcome.basis}|{tag}:{','.join(map(str, ids))}",
                 outcome.reason,
-                {**outcome.evidence, "via_merge": via},
+                {**outcome.evidence, tag: ids},
                 outcome.create_type,
             )
         evidence = {**outcome.evidence, "basis": outcome.basis, "reason": outcome.reason}
@@ -1732,10 +1769,37 @@ class _Resolver:
         self.cur.execute(
             "SELECT 1 FROM memory_resolution_decisions WHERE tenant_id = %s "
             "AND lower(surface_form) = %s AND (entity_type IS NULL OR %s::text IS NULL "
-            "OR entity_type = %s) AND resolved_entity_id = %s AND reversed_at IS NOT NULL LIMIT 1",
+            "OR entity_type = %s) AND resolved_entity_id = %s AND reversed_at IS NOT NULL "
+            "AND evidence->'reversal'->>'cascade_of' IS NULL LIMIT 1",
             (self.tenant, surface.lower(), etype, etype, eid),
         )
         return self.cur.fetchone() is not None
+
+
+_MATCH_CLASS = {"name": 0, "alias": 0, "nickname": 1, "first_name": 2, "initial": 3}
+
+
+def _merge_tags(rows: Sequence[tuple[str, tuple[int, ...]]]) -> tuple[list[int], list[int]]:
+    """How CRM merges shaped one candidate: (via_merge, merge_collapsed) decision ids.
+
+    Only rows of the candidate's best match class count — the class the rules
+    decide on (an exact name or alias beats a nickname variant). If those rows
+    reached it only through merges, it is ``via_merge``: the mention named the
+    loser. If its own row matched as well as a merged-in one, the merge removed
+    an equal competitor: ``merge_collapsed``. A merge that only added a weaker
+    match (a nickname of the loser beside the keeper's exact name) shaped
+    nothing and is not recorded.
+    """
+    if not rows:
+        return [], []
+    best = min(_MATCH_CLASS[m] for m, _v in rows)
+    top = [v for m, v in rows if _MATCH_CLASS[m] == best]
+    merged = sorted({i for v in top for i in v})
+    if not merged:
+        return [], []
+    if all(top):
+        return merged, []
+    return [], merged
 
 
 def resolve_mentions(
@@ -1899,6 +1963,72 @@ def _correct_facts(
     }
 
 
+def _undo_for_merge(
+    cur: Any, tenant_id: str, merge_id: int, reason: str, back: int | None
+) -> tuple[list[int], set[int], list[int]]:
+    """Undo, fact by fact, what a CRM merge decided. Returns (mentions, facts, decisions).
+
+    A ``via_merge`` decision named the loser: its mentions return to the loser's
+    node. A ``merge_collapsed`` decision was unique only because of the merge:
+    its mentions become unresolved. Each move is a per-fact operator decision
+    (``scope: facts``) and the derived decision is marked reversed as a cascade,
+    so none of it binds or blocks a future mention: those resolve by the rules.
+    """
+    cur.execute(
+        "SELECT id, surface_form, entity_type, resolved_entity_id, evidence "
+        "FROM memory_resolution_decisions WHERE tenant_id = %s AND reversed_at IS NULL "
+        "AND superseded_by IS NULL AND (evidence->'via_merge' @> %s::jsonb "
+        "OR evidence->'merge_collapsed' @> %s::jsonb) ORDER BY id FOR UPDATE",
+        (tenant_id, json.dumps([merge_id]), json.dumps([merge_id])),
+    )
+    mention_ids: list[int] = []
+    facts: set[int] = set()
+    cascaded: list[int] = []
+    for d in [dict(r) for r in cur.fetchall()]:
+        ev = d["evidence"] if isinstance(d["evidence"], dict) else {}
+        target = back if merge_id in (ev.get("via_merge") or []) else None
+        cur.execute(
+            "SELECT id, fact_id FROM memory_mentions WHERE tenant_id = %s AND decision_id = %s",
+            (tenant_id, d["id"]),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        fids = sorted({int(r["fact_id"]) for r in rows})
+        new_id = _insert_decision(
+            cur,
+            tenant_id,
+            surface=d["surface_form"],
+            entity_type=d["entity_type"],
+            entity_id=target,
+            method="operator",
+            confidence=1.0,
+            evidence={
+                "basis": f"merge_reversal:{merge_id}:{d['id']}",
+                "scope": "facts",
+                "reason": reason,
+                "corrects": int(d["id"]),
+                "corrects_entity_id": d["resolved_entity_id"],
+                "cascade_of": merge_id,
+                "fact_ids": fids,
+                "normalized": normalize_surface(d["surface_form"]),
+            },
+        )
+        cur.execute(
+            "UPDATE memory_mentions SET entity_id = %s, decision_id = %s WHERE tenant_id = %s "
+            "AND decision_id = %s",
+            (target, new_id, tenant_id, d["id"]),
+        )
+        cur.execute(
+            "UPDATE memory_resolution_decisions SET reversed_at = NOW(), superseded_by = %s, "
+            "evidence = evidence || jsonb_build_object('reversal', %s::jsonb) WHERE id = %s",
+            (new_id, json.dumps({"reason": reason, "cascade_of": merge_id,
+                                 "superseded_by": new_id, "fact_ids": fids}), d["id"]),
+        )  # fmt: skip
+        mention_ids += [int(r["id"]) for r in rows]
+        facts.update(fids)
+        cascaded.append(int(d["id"]))
+    return mention_ids, facts, cascaded
+
+
 def _reverse_whole(
     cur: Any,
     tenant_id: str,
@@ -1914,32 +2044,33 @@ def _reverse_whole(
             f"decision {decision_id} left its name unresolved; settle it per fact "
             "(fact_ids / --fact), not for every mention at once"
         )
+    if new_entity_id is not None:
+        person_like = _norm_type(row["entity_type"]) in (PERSON, None)
+        if (
+            row["method"] == "context"
+            or evidence.get("scope") == "facts"
+            or (person_like and not _is_full_person_name(row["surface_form"]))
+        ):
+            # A context decision rested on one conversation or organisation, and a
+            # first name may only ever resolve on conversation evidence: a
+            # tenant-wide redirect would bypass both. Correct it per fact.
+            raise ValueError(
+                f"decision {decision_id} cannot redirect its name tenant-wide (it rests on "
+                "context, or the name is not a full name); correct it per fact"
+            )
 
     mention_ids: list[int] = []
     fact_set: set[int] = set()
     cascaded: list[int] = []
     if basis.startswith("crm_merge:"):
-        # Undo every decision that reached the keeper through this merge, returning
-        # its mentions to the node they had before the merge.
         back_to = (evidence.get("crm_merge") or {}).get("from_entity_id")
         cur.execute(
             "SELECT id FROM memory_entities WHERE id = %s AND tenant_id = %s", (back_to, tenant_id)
         )
         back = int(back_to) if back_to is not None and cur.fetchone() else None
-        cur.execute(
-            "SELECT id, surface_form, entity_type, resolved_entity_id, method, evidence, "
-            "reversed_at FROM memory_resolution_decisions WHERE tenant_id = %s "
-            "AND reversed_at IS NULL AND superseded_by IS NULL "
-            "AND evidence->'via_merge' @> %s::jsonb ORDER BY id FOR UPDATE",
-            (tenant_id, json.dumps([decision_id])),
+        mention_ids, fact_set, cascaded = _undo_for_merge(
+            cur, tenant_id, decision_id, f"{reason} (CRM merge {decision_id} reversed)", back
         )
-        for derived in [dict(r) for r in cur.fetchall()]:
-            sub = _reverse_whole(
-                cur, tenant_id, derived, f"{reason} (CRM merge {decision_id} reversed)", back
-            )
-            cascaded.append(int(derived["id"]))
-            mention_ids += sub["mention_ids"]
-            fact_set.update(sub["fact_ids"])
 
     cur.execute(
         "SELECT id, fact_id FROM memory_mentions WHERE tenant_id = %s AND decision_id = %s "

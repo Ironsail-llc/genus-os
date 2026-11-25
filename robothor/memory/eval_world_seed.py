@@ -144,6 +144,8 @@ class SeededWorld:
     chat_session_keys: list[str] = field(default_factory=list)
     #: world turn id -> chat_messages.id
     turn_message_ids: dict[str, int] = field(default_factory=dict)
+    #: Database time just before the post-seed ANALYZE.
+    seeded_at: datetime | None = None
     #: The CRM person who owns the primary tenant's world conversations: the
     #: reader the scored searches run as (see :func:`_seed_graph_and_segments`).
     reader_person_id: str | None = None
@@ -200,6 +202,7 @@ async def seed_world(
             reader = await _seed_graph_and_segments(w, tenant, embed, seeded)
             if tenant == tenant_id:
                 seeded.reader_person_id = reader
+    seeded.seeded_at = _analyze_seeded_tables()
     logger.info(
         "eval world seeded: %d facts, %d entities, %d crm people, %d documents, %d chat sessions",
         len(seeded.fact_ids),
@@ -209,6 +212,36 @@ async def seed_world(
         len(seeded.chat_session_keys),
     )
     return seeded
+
+
+#: The tables bulk seeding fills. Analysed once seeding ends, so the queries
+#: that follow plan against real row counts rather than an empty table's.
+ANALYZED_TABLES: tuple[str, ...] = (
+    "memory_facts",
+    "memory_entities",
+    "memory_relations",
+    "crm_people",
+    "crm_companies",
+    "kb_documents",
+    "kb_chunks",
+    "chat_sessions",
+    "chat_messages",
+)
+
+
+def _analyze_seeded_tables() -> datetime:
+    from robothor.db.connection import get_connection
+
+    with get_connection(autocommit=True) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT clock_timestamp()")
+        started: datetime = cur.fetchone()[0]
+        # The graph and segment tables too, where this schema has them: the
+        # graph walk (``memory_activate``) plans badly on tables autovacuum has
+        # not analysed yet, and a search right after seeding took seconds.
+        for table in (*ANALYZED_TABLES, *_present_optional_tables(cur)):
+            cur.execute(f"ANALYZE {table}")  # fixed names from the two tuples
+    return started
 
 
 def _ensure_world_tenant(tenant_id: str) -> None:
@@ -532,23 +565,7 @@ async def _seed_graph_and_segments(
             await segments.index_conversation(
                 key, tenant_id=tenant, embed_batch=_embed, retention_days=_WORLD_RETENTION_DAYS
             )
-    _analyze_world_tables()
     return reader
-
-
-def _analyze_world_tables() -> None:
-    """Refresh planner statistics after the bulk load, before anything queries it.
-
-    The graph walk (``memory_activate``) plans badly on tables autovacuum has not
-    analyzed yet; a search right after seeding then took seconds per call.
-    """
-    from robothor.db.connection import get_connection
-
-    with get_connection() as conn:
-        cur = conn.cursor()
-        present = _present_optional_tables(cur)
-        for table in ("memory_facts", "memory_entities", "memory_relations", *present):
-            cur.execute(f"ANALYZE {table}")  # noqa: S608 — fixed table names
 
 
 # --------------------------------------------------------------------------- #

@@ -296,6 +296,22 @@ class TestSeedAndCleanup:
         assert unembedded == 0
         assert inactive == sum(1 for f in world.facts if f.superseded_by)
 
+        # Bulk seeding leaves stale planner statistics on a shared server;
+        # seed_world analyses every table it filled before returning.
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            filled = [*seed.ANALYZED_TABLES, *seed._present_optional_tables(cur)]
+            cur.execute(
+                "SELECT relname FROM pg_stat_user_tables WHERE relname = ANY(%s) "
+                "AND greatest(last_analyze, last_autoanalyze) >= %s",
+                (filled, seeded.seeded_at),
+            )
+            analysed = {r[0] for r in cur.fetchall()}
+        assert analysed == set(filled), "the graph and segment tables too, in the one pass"
+        assert not hasattr(seed, "_analyze_world_tables"), "one ANALYZE pass, not two"
+
         deleted = seed.cleanup_world(eval_tenants)
         after = seed.world_row_counts(eval_tenants)
         assert after == before

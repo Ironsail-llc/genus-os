@@ -34,15 +34,19 @@ def cluster_near_dup_losers(
 ) -> list[int]:
     """Pure: ids to DEACTIVATE among active near-duplicates (keep the newest).
 
-    ``facts`` items need ``id``, ``fact_text``, ``entities``. Two facts are
-    near-duplicates when they share an entity and their normalized-token Jaccard
+    ``facts`` items need ``id``, ``fact_text``, ``entities`` (and may carry
+    ``scope_kind`` / ``scope_id``). Two facts are near-duplicates when they
+    have the same owner scope, share an entity and their normalized-token Jaccard
     overlap is >= ``jaccard``. The older (lower id) of each near-dup pair is a
     loser; the newest survivor in any cluster is never dropped.
     """
-    by_entity: dict[str, list[dict[str, Any]]] = {}
+    # Compared within one owner scope only: a private fact never supersedes a
+    # shared one (the write path's rule), and a row without scope is shared.
+    by_entity: dict[tuple[str, str | None, str], list[dict[str, Any]]] = {}
     for f in facts:
+        owner = (f.get("scope_kind") or "shared", f.get("scope_id"))
         for e in f.get("entities") or []:
-            by_entity.setdefault(e, []).append(f)
+            by_entity.setdefault((*owner, e), []).append(f)
 
     tokens: dict[int, frozenset[str]] = {}
     losers: set[int] = set()
@@ -71,7 +75,7 @@ def _load_active_facts(cur: Any, tenant: str) -> list[dict[str, Any]]:
     # An operator-confirmed fact is neither a loser nor a winner: it is left
     # out of the clustering entirely, so it can never be deactivated here.
     cur2.execute(
-        "SELECT id, fact_text, entities FROM memory_facts "
+        "SELECT id, fact_text, entities, scope_kind, scope_id FROM memory_facts "
         f"WHERE is_active = TRUE AND tenant_id = %s AND {NOT_OPERATOR_CONFIRMED_SQL}",
         (tenant,),
     )

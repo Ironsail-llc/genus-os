@@ -152,8 +152,9 @@ async def recall(
     ``reader_person_id`` / ``reader_user_id`` / ``room_ids`` decide which conversation segments the
     reader may see, on every call (``robothor.memory.segments``).
 
-    ``reader_scope_id`` is the reader's person id, for the facts' graph leg:
-    the walk crosses only evidence that is shared or scoped to that reader.
+    ``reader_person_id`` / ``reader_user_id`` are also the facts' reader
+    (``robothor.memory.visibility``); ``reader_scope_id`` is one more reader id
+    for a caller outside a run, and the engine passes none.
     """
     resolved_tenant = tenant_id or DEFAULT_TENANT
     cls = classify_query(query)

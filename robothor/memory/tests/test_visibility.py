@@ -51,16 +51,35 @@ def test_a_reader_sees_shared_rows_and_rows_scoped_to_one_of_their_ids() -> None
     assert params == ([f"person:{P}"],)
 
 
-def test_a_restricted_scope_reads_as_its_person_only() -> None:
+def test_a_restricted_scope_narrows_the_reader_and_never_supplies_one() -> None:
+    """The reader is the person the run serves (the caller's reader ids). A
+    restricted scope can only take ids away: it keeps the served person when
+    it is the scope's person, and never makes the scope's person a reader of
+    a run that serves no one (a cron or workspace run executing as them)."""
     from robothor.identity.scope import DataScope
 
     scope = DataScope(tenant_id="test-tenant", person_id=P, restricted=True)
-    assert v.readers_for(scope=scope, person_id="someone-else", user_id=U) == [f"person:{P}"]
+    assert v.readers_for(scope=scope, person_id="someone-else", user_id=U) == []
+    assert v.readers_for(scope=scope) == []
+    assert v.readers_for(scope=scope, person_id=P, user_id=U) == [f"person:{P}", f"user:{U}"]
+    assert v.readers_for(scope=scope, extra=f"person:{P}") == [f"person:{P}"]
+    assert v.readers_for(scope=scope, extra="person:someone-else") == []
     assert (
         v.readers_for(
             scope=DataScope(tenant_id="test-tenant", person_id=None, restricted=True), person_id=P
         )
         == []
     )
+
+
+def test_the_served_reader_under_a_restricted_scope() -> None:
+    from robothor.identity.scope import DataScope
+
+    scope = DataScope(tenant_id="test-tenant", person_id=P, restricted=True)
+    assert v.served_reader(scope, P, U) == (P, U)
+    assert v.served_reader(scope, "someone-else", U) == (None, None)
+    assert v.served_reader(scope, None, U) == (None, None)
+    assert v.served_reader(None, P, U) == (P, U)
+    assert v.served_reader(None, None, None) == (None, None)
     assert v.readers_for(scope=None, person_id=P, user_id=U) == [f"person:{P}", f"user:{U}"]
     assert v.readers_for(scope=None, extra=P) == [f"person:{P}"]

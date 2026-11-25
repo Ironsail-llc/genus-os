@@ -292,7 +292,10 @@ def _ranked_by_search(query: str, tenant_id: str, active: str, limit: int) -> li
     from robothor.memory.facts import search_facts
 
     # Facts only: this page edits and forgets memory_facts rows, and a
-    # conversation segment's id belongs to another table.
+    # conversation segment's id belongs to another table. The erasure view
+    # reads every owner scope, as the browse arm does: the admin must be able
+    # to find a private fact to forget it. Every route here is behind
+    # ``require_tenant_admin``.
     results = asyncio.run(
         search_facts(
             query,
@@ -300,6 +303,7 @@ def _ranked_by_search(query: str, tenant_id: str, active: str, limit: int) -> li
             active_only=(active == "true"),
             tenant_id=tenant_id,
             include_segments=False,
+            admin_erasure_view=True,
         )
     )
     return [

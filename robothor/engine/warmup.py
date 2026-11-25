@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from robothor.engine.models import AgentConfig
+    from robothor.engine.private_recall import PrivateReader
     from robothor.identity import EnrichedIdentity, IdentityContext
     from robothor.identity.scope import DataScope
 
@@ -1068,6 +1069,7 @@ def _interactive_section_builders(
     observe_scope_obj: DataScope | None,
     scope_user_id: str | None,
     accessible_tenant_ids: tuple[str, ...] | None = None,
+    private_reader: PrivateReader | None = None,
 ) -> list[tuple[str, Callable[[], list[str]]]]:
     """The interactive preamble's sections, as named builders in output order.
 
@@ -1171,6 +1173,9 @@ def _interactive_section_builders(
                     observe_scope_obj=observe_scope_obj,
                     user_id=scope_user_id,
                     sender_person_id=identity.person_id if identity is not None else None,
+                    reader_person_id=(
+                        private_reader.person_id if private_reader is not None else None
+                    ),
                 )
             except Exception as e:
                 # WARNING, not DEBUG: a failure here empties entity recall
@@ -1229,6 +1234,7 @@ def build_interactive_preamble(
     agent_config: AgentConfig | None = None,
     section_timings: dict[str, float] | None = None,
     accessible_tenant_ids: tuple[str, ...] | None = None,
+    private_reader: PrivateReader | None = None,
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -1258,6 +1264,10 @@ def build_interactive_preamble(
             seconds}`` for each section that ran, for ``record_warmup_steps``.
         accessible_tenant_ids: The run's ``AgentRun.accessible_tenant_ids``.
             The ORGANISATION section names only the child tenants it holds.
+        private_reader: The person this run serves in their own conversation
+            (``robothor.engine.private_recall.private_reader_for_run``): the
+            only reader of private facts and evidence in the entity context.
+            ``None`` (the default): shared memory only, whoever the sender is.
 
     Returns:
         Warmup preamble string, or empty string if nothing to inject.
@@ -1302,6 +1312,7 @@ def build_interactive_preamble(
         observe_scope_obj=_observe_scope,
         scope_user_id=_scope_user_id,
         accessible_tenant_ids=accessible_tenant_ids,
+        private_reader=private_reader,
     )
 
     sections = _run_interactive_sections(
@@ -1347,6 +1358,8 @@ def _graph_entity_lines(
     scope: DataScope | None,
     sender_person_id: str | None,
     phrases: list[str],
+    *,
+    reader_person_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Connected context from graph activation, within the time budget.
 
@@ -1371,9 +1384,11 @@ def _graph_entity_lines(
         return []
 
     import robothor.db
+    from robothor.memory.visibility import served_reader
 
     restricted = scope is not None and scope.restricted
     person_id = scope.person_id if restricted and scope is not None else None
+    reader, _ = served_reader(scope, reader_person_id, None)
     budget = GRAPH_WARMUP_BUDGET_SECONDS
     deadline = time.monotonic() + budget
 
@@ -1388,7 +1403,7 @@ def _graph_entity_lines(
             tenant_id,
             user_message,
             sender_person_id=sender_person_id,
-            reader_scope_id=sender_person_id or person_id,
+            reader_scope_id=reader,
             exclude_names=exclude_names,
             person_restricted=restricted,
             person_id=person_id,
@@ -1508,7 +1523,7 @@ def _candidate_phrases(user_message: str, *, lowercase_ok: bool) -> list[str]:
 
 #: Whether warm-up adds graph-activation lines unless told otherwise. Off, as
 #: ``robothor.memory.facts.GRAPH_LEG_DEFAULT``: on the memory evaluation's world
-#: the graph leg showed no recall benefit (GEN-875), and nothing has measured
+#: the graph leg showed no recall benefit, and nothing has measured
 #: one for warm-up.
 WARMUP_GRAPH_DEFAULT = False
 
@@ -1523,6 +1538,7 @@ def _build_entity_context(
     record_access: bool = True,
     sender_person_id: str | None = None,
     include_graph: bool | None = None,
+    reader_person_id: str | None = None,
 ) -> str:
     """Extract entities from the user message and pull relevant facts.
 
@@ -1556,8 +1572,11 @@ def _build_entity_context(
             never fails it; pass False for a caller that must have no side
             effects. Graph lines are not counted, as in ``search_memory``.
         sender_person_id: The sender's CRM person, when known: its linked
-            entity seeds the graph, and it is the reader whose private
-            evidence the walk may cross.
+            entity seeds the graph. Not a reader.
+        reader_person_id: The person the run serves in their own
+            conversation (``robothor.engine.private_recall``), the one reader
+            whose private evidence the walk may cross; a restricted ``scope``
+            keeps it only when it is the scope's person. ``None``: shared only.
 
     Every candidate's facts come from one statement
     (``_fetch_entity_facts_batched``).
@@ -1589,6 +1608,7 @@ def _build_entity_context(
             scope,
             sender_person_id,
             _candidate_phrases(user_message, lowercase_ok=v2),
+            reader_person_id=reader_person_id,
         )
         if include_graph
         else []

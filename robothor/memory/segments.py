@@ -451,6 +451,27 @@ def reader_principals(person_id: str | None, user_id: str | None) -> list[str]:
     return out
 
 
+def user_belongs_to_person(tenant_id: str, user_id: str, person_id: str) -> bool:
+    """Whether ``user_id`` is ``person_id``'s own user.
+
+    True when the active webchat account with that id (``user_accounts.id``,
+    the id a webchat run carries) is linked to the person, or a ``tenant_users``
+    row of the tenant (the channel routing table) links them. Sync; call it
+    off the loop. A restricted reader's user id is trusted only when this holds.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM user_accounts WHERE id::text = %s AND person_id::text = %s "
+            "AND status = 'active' "
+            "UNION ALL "
+            "SELECT 1 FROM tenant_users WHERE tenant_id = %s AND user_id = %s "
+            "AND person_id::text = %s AND is_active LIMIT 1",
+            (user_id, str(person_id), tenant_id, user_id, str(person_id)),
+        )
+        return cur.fetchone() is not None
+
+
 def _main_session_key() -> str:
     """The engine's configured main session key, or the default one."""
     try:

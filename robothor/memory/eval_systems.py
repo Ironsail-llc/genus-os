@@ -11,6 +11,8 @@ stories add plug in the same way.
 Built in:
 
     recall                  the product path: search_facts, budget filled in rank order
+    recall_budget           the same ranking as the head, then search_facts' unreranked
+                            fused order until the budget is full (equal-budget recall)
     keyword_only            Postgres full-text over the seeded facts; no vectors, no reranker
     raw_verbatim            dense + keyword over raw transcript turns, plus the knowledge
                             base over the seeded documents, fused by reciprocal rank;
@@ -221,22 +223,72 @@ class RecallSystem:
         extra = {k: v for k, v in options.items() if k in accepted}
         with tenant_scope(tenant):
             rows = await search_facts(case.question, limit=_CANDIDATES, tenant_id=tenant, **extra)
-        cands: list[tuple[str, str, str]] = []
-        for row in rows:
-            if row.get("kind") == "segment":
-                turn = world_handle.turn_id(int(row.get("start_ref") or -1))
-                if turn:
-                    cands.append((turn, "turn", str(row.get("fact_text", ""))))
-                continue
-            fid = world_handle.fact_id(row.get("id", -1))
-            if fid is None:
-                meta = row.get("metadata") or {}
-                if isinstance(meta, str):
-                    meta = json.loads(meta)
-                fid = (meta.get("eval_world") or {}).get("fact_id")
-            if fid:
-                cands.append((fid, "fact", str(row.get("fact_text", ""))))
+        cands = _fact_candidates(rows, world_handle)
         return _bundle(self.name, fill_budget(cands, token_budget), token_budget, True, started)
+
+
+class RecallBudgetSystem:
+    """The product path, then more of its own candidates until the budget is full.
+
+    ``search_facts`` reranks and returns at most ``MEMORY_RERANK_MAX_CANDIDATES``
+    rows (16 by default), so the product fills about an eighth of a 2,048-token
+    budget. This variant keeps the product's ranking as the head and appends
+    ``search_facts``' own unreranked fused order behind it, so the table can show
+    both what the product returns today and what the same retrieval holds at an
+    equal budget. ``search_facts`` itself is unchanged: its legs fetch about 30
+    candidates each, so the tail is bounded by what those legs return.
+    """
+
+    name = "recall_budget"
+    equal_budget = True
+
+    async def retrieve(
+        self, case: Case, *, world_handle: WorldHandle, token_budget: int
+    ) -> ContextBundle:
+        from robothor.db.connection import tenant_scope
+        from robothor.memory.facts import search_facts
+
+        started = time.perf_counter()
+        tenant = world_handle.tenant_id
+        # As ``recall``: the world's conversations are its eval reader's.
+        reader = getattr(world_handle.seeded, "reader_person_id", None)
+        with tenant_scope(tenant):
+            head = await search_facts(
+                case.question, limit=_CANDIDATES, tenant_id=tenant, reader_person_id=reader
+            )
+            tail = await search_facts(
+                case.question,
+                limit=_CANDIDATES,
+                tenant_id=tenant,
+                use_reranker=False,
+                reader_person_id=reader,
+            )
+        cands = _fact_candidates([*head, *tail], world_handle)
+        return _bundle(self.name, fill_budget(cands, token_budget), token_budget, True, started)
+
+
+def _fact_candidates(
+    rows: Sequence[dict[str, Any]], world_handle: WorldHandle
+) -> list[tuple[str, str, str]]:
+    """World ids for ``search_facts`` rows: a fact as its fact, a conversation
+    segment as the transcript turn it starts with (a segment's ``id`` is from
+    another table and is never read as a fact id)."""
+    cands: list[tuple[str, str, str]] = []
+    for row in rows:
+        if row.get("kind") == "segment":
+            turn = world_handle.turn_id(int(row.get("start_ref") or -1))
+            if turn:
+                cands.append((turn, "turn", str(row.get("fact_text", ""))))
+            continue
+        fid = world_handle.fact_id(row.get("id", -1))
+        if fid is None:
+            meta = row.get("metadata") or {}
+            if isinstance(meta, str):
+                meta = json.loads(meta)
+            fid = (meta.get("eval_world") or {}).get("fact_id")
+        if fid:
+            cands.append((fid, "fact", str(row.get("fact_text", ""))))
+    return cands
 
 
 class KeywordOnlySystem:
@@ -422,6 +474,7 @@ def _newest_turns(tenant: str) -> list[tuple[int, str, str, str]]:
 
 _REGISTRY: dict[str, Callable[[], MemorySystem]] = {
     "recall": RecallSystem,
+    "recall_budget": RecallBudgetSystem,
     "recall_no_segments": lambda: RecallSystem(include_segments=False, name="recall_no_segments"),
     "recall_no_graph": lambda: RecallSystem(include_graph=False, name="recall_no_graph"),
     "recall_with_graph": lambda: RecallSystem(include_graph=True, name="recall_with_graph"),
@@ -431,7 +484,13 @@ _REGISTRY: dict[str, Callable[[], MemorySystem]] = {
     "full_context_unbounded": lambda: FullContextSystem(unbounded=True),
 }
 
-DEFAULT_SYSTEMS: tuple[str, ...] = ("recall", "keyword_only", "raw_verbatim", "full_context")
+DEFAULT_SYSTEMS: tuple[str, ...] = (
+    "recall",
+    "recall_budget",
+    "keyword_only",
+    "raw_verbatim",
+    "full_context",
+)
 
 
 def register_system(name: str, factory: Callable[[], MemorySystem]) -> None:

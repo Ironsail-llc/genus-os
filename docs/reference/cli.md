@@ -860,8 +860,8 @@ Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [-
 | `--world-size` | `small` \| `full` | `full` | Synthetic world size |
 | `--split` | `dev` \| `held_out` \| `all` | `dev` | Which world cases to score |
 | `--answers` | — | off | With --world: answer and judge each case per system instead of substring scoring |
-| `--systems` | `SYSTEMS` | `recall,keyword_only,raw_verbatim,full_context` | Comma-separated systems to compare (first is the system under test) |
-| `--reference` | `REFERENCE` | — | Reference system for the deciding comparison (default: the last of --systems) |
+| `--systems` | `SYSTEMS` | `recall,recall_budget,keyword_only,raw_verbatim,full_context` | Comma-separated systems to compare (first is the system under test) |
+| `--reference` | `REFERENCE` | — | Reference system for the deciding comparison (default: keyword_only) |
 | `--token-budget` | `TOKEN_BUDGET` | `2048` | Context tokens every system may fill |
 | `--repeats` | `REPEATS` | `1` | Repeat the answer runs to measure spread |
 | `--answer-model` | `ANSWER_MODEL` | — | Model that answers (default: the generation model) |

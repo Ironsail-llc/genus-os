@@ -76,7 +76,7 @@ class TestFillBudget:
 
 class TestRegistry:
     def test_the_four_baselines_and_the_unbounded_variant_exist(self):
-        for name in ("recall", "keyword_only", "raw_verbatim", "full_context"):
+        for name in ("recall", "recall_budget", "keyword_only", "raw_verbatim", "full_context"):
             assert es.make_systems([name])[0].name == name
         unbounded = es.make_systems(["full_context_unbounded"])[0]
         assert unbounded.equal_budget is False
@@ -329,3 +329,57 @@ class TestSystemsOnASeededWorld:
         a = await small.retrieve(case, world_handle=seeded, token_budget=300)
         b = await big.retrieve(case, world_handle=seeded, token_budget=300)
         assert b.tokens > a.tokens and b.equal_budget is False
+
+
+@pytest.mark.integration
+class TestRecallAtEqualBudget:
+    @pytest.mark.asyncio
+    async def test_budget_variant_keeps_the_product_ranking_and_fills_further(
+        self, seeded, monkeypatch
+    ):
+        # The product reranks and its reranker pool is capped
+        # (MEMORY_RERANK_MAX_CANDIDATES, default 16). A fake reranker keeps
+        # that cap without a model, so the product returns a short list.
+        async def capped_rerank(query, results, top_k=10):
+            return results[: min(top_k, 16)]
+
+        monkeypatch.setenv("MEMORY_RERANK_ENABLED", "1")
+        monkeypatch.setattr("robothor.rag.reranker.rerank_with_fallback", capped_rerank)
+        case = next(c for c in seeded.world.cases if c.stratum == "knowledge_update")
+        (product,) = es.make_systems(["recall"])
+        (budget,) = es.make_systems(["recall_budget"])
+        a = await product.retrieve(case, world_handle=seeded, token_budget=2048)
+        b = await budget.retrieve(case, world_handle=seeded, token_budget=2048)
+        _check_bundle(b, seeded.world, 2048)
+        # Facts, and the eval reader's conversation turns the segment leg adds.
+        assert {i.kind for i in b.items} <= {"fact", "turn"}
+        assert [i.id for i in b.items][: len(a.items)] == [i.id for i in a.items]
+        assert b.tokens > a.tokens
+
+
+class TestRecallBudgetReadsAsTheWorldReader:
+    @pytest.mark.asyncio
+    async def test_budget_variant_searches_as_the_eval_reader(self, monkeypatch):
+        """The world's conversations are private to its eval reader; the budget
+        variant must search as that reader, as ``recall`` does, or the two
+        compare different stores."""
+        from types import SimpleNamespace
+
+        calls: list[dict] = []
+
+        async def fake_search(query, **kwargs):
+            calls.append(kwargs)
+            return []
+
+        monkeypatch.setattr("robothor.memory.facts.search_facts", fake_search)
+        handle = SimpleNamespace(
+            tenant_id=EVAL_TENANT,
+            seeded=SimpleNamespace(reader_person_id="p-1"),
+            fact_id=lambda _i: None,
+            turn_id=lambda _i: None,
+        )
+        case = SimpleNamespace(question="Where does Alice work?")
+        (budget,) = es.make_systems(["recall_budget"])
+        await budget.retrieve(case, world_handle=handle, token_budget=2048)
+        assert calls
+        assert all(c.get("reader_person_id") == "p-1" for c in calls)

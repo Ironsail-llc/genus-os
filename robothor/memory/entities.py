@@ -698,6 +698,8 @@ async def find_cooccurring_entity_pairs(
                 FROM target_entities te
                 JOIN memory_facts f ON te.name = ANY(f.entities)
                 WHERE f.is_active = TRUE AND f.tenant_id = %s
+                  -- the pairs become shared edges: shared facts only (memory/visibility.py)
+                  AND f.scope_kind = 'shared'
             )
             SELECT
                 a.entity_id AS entity_a_id, a.entity_name AS entity_a_name,
