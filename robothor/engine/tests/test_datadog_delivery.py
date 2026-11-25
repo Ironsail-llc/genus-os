@@ -146,6 +146,7 @@ class Fleet:
         #: (engine tenant, level, title, body, kwargs) for every alerts.alert call.
         self.sent: list[tuple[str, str, str, str, dict[str, Any]]] = []
         self.result: Any = True
+        self.entries = 0
 
     async def alert(self, level: str, title: str, body: str, **kw: Any) -> bool:
         self.sent.append((self.current, level, title, body, kw))
@@ -153,11 +154,17 @@ class Fleet:
             raise self.result
         return bool(self.result)
 
-    async def feed(self, tenant: str, envelope: dict[bytes, bytes]) -> None:
+    async def feed(
+        self, tenant: str, envelope: dict[bytes, bytes], entry: bytes | None = None
+    ) -> None:
+        """One engine handles one stream entry; a new entry id unless ``entry`` replays one."""
         self.current = tenant
         hooks = self.engines[tenant]
         group = hooks.config.event_group
-        await hooks._handle_event(STREAM, b"1-0", envelope, self.redis, group)
+        if entry is None:
+            self.entries += 1
+            entry = f"{self.entries}-0".encode()
+        await hooks._handle_event(STREAM, entry, envelope, self.redis, group)
         await dlv.wait_for_triage()
 
     async def broadcast(self, envelope: dict[bytes, bytes]) -> None:
@@ -535,6 +542,77 @@ async def test_a_failed_write_before_anything_was_sent_accepts_the_retry(
     (row,) = audit.alerts()
     assert row["details"]["mode"] == "delivered"
     assert len(fleet.triage_runs()) == 1
+
+
+class Crash(BaseException):
+    """The engine process dies here: nothing after this line runs."""
+
+
+def _sends(fleet: Fleet) -> int:
+    return len(fleet.sent) - fleet.crashed_sends  # type: ignore[attr-defined]
+
+
+async def test_a_crash_before_the_send_is_finished_by_the_replayed_entry(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """The consumer group redelivers the unacknowledged entry: it is delivered once."""
+    fleet.crashed_sends = 1  # type: ignore[attr-defined]
+    fleet.result = Crash()
+    envelope = _webhook(_payload(tags="env:prod"))
+    with pytest.raises(Crash):
+        await fleet.feed(ROOT, envelope, entry=b"7-0")
+    assert audit.alerts() == [] and fleet.triage_runs() == []
+
+    fleet.result = True
+    await fleet.feed(ROOT, envelope, entry=b"7-0")  # the same entry, after the restart
+
+    assert _sends(fleet) == 1
+    assert len(fleet.triage_runs()) == 1
+    (row,) = audit.alerts()
+    assert row["details"]["mode"] == "delivered"
+
+
+@pytest.mark.parametrize("tags", ["env:prod", f"org:{A}"])
+async def test_a_crash_after_the_send_never_sends_twice_and_records_once(
+    fleet: Fleet, audit: Audit, tags: str
+) -> None:
+    """Sent and triaged, then the engine died before the audit write; its entry is replayed."""
+    from robothor.integrations.datadog import alerts as dd
+
+    real_record = dd._record
+    crashes = [Crash()]
+
+    def record_then_crash(*args: Any) -> None:
+        if crashes:
+            raise crashes.pop()
+        real_record(*args)
+
+    expected = ROOT if tags == "env:prod" else A
+    with patch.object(dd, "_record", side_effect=record_then_crash):
+        if expected == ROOT:
+            envelope = _webhook(_payload(tags=tags))
+        else:
+            await fleet.feed(ROOT, _webhook(_payload(tags=tags)))
+            (envelope,) = fleet.redis.handoffs()
+        with pytest.raises(Crash):
+            await fleet.feed(expected, envelope, entry=b"8-0")
+        await fleet.feed(expected, envelope, entry=b"8-0")
+
+    assert [t for t, *_ in fleet.sent] == [expected]
+    assert len(fleet.triage_runs()) == 1
+    (row,) = audit.alerts()
+    assert row["tenant_id"] == expected
+    assert row["details"]["mode"] == "delivered", "it was sent: the record says so"
+    assert row["details"]["triage"]["started"] is True
+
+
+async def test_another_entry_of_the_same_notification_is_still_a_duplicate(
+    fleet: Fleet, audit: Audit
+) -> None:
+    envelope = _webhook(_payload(tags="env:prod"))
+    await fleet.feed(ROOT, envelope, entry=b"9-0")
+    await fleet.feed(ROOT, envelope, entry=b"9-1")  # Datadog's retry: a new entry
+    assert len(fleet.sent) == 1 and len(audit.alerts()) == 1
 
 
 # ── failures are recorded, never raised ─────────────────────────────
