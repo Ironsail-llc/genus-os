@@ -409,6 +409,9 @@ class DatadogWatch:
         self._said: set[str] = set()
         # (tenant, subject) -> the highest level sent in its open episode.
         self._episodes: dict[tuple[str, str], str] = {}
+        # (tenant, subject) -> an episode's opening finding whose alert failed:
+        # tried again on each pass that still sees the condition.
+        self._failed: dict[tuple[str, str], tuple[str, str, dict[str, Any], str | None]] = {}
 
     def _once(self, key: str, message: str, *args: Any) -> None:
         if key not in self._said:
@@ -539,7 +542,7 @@ class DatadogWatch:
         for key in [k for k in self._episodes if k[0] == scope.tenant_id]:
             if key[1].startswith("spike:") and key[1] not in spiking:
                 del self._episodes[key]
-        recorded = 0
+        recorded = await self._retry(scope.tenant_id, "spike:", lambda s: s in spiking)
         for finding in findings:
             recorded += await self._spike(scope.tenant_id, finding, start, end)
         return recorded
@@ -564,6 +567,9 @@ class DatadogWatch:
             )
             return 0
         silent = self._silent.setdefault(tenant, {})
+        retried = await self._retry(
+            tenant, "silent:", lambda s: s[7:] in silent and not current.get(s[7:], 0)
+        )
         start, end = windows[0]
         hours = BASELINE_WINDOWS * WINDOW_MINUTES // 60
         when = f"the {WINDOW_MINUTES} minutes to {end.strftime('%H:%M')} UTC"
@@ -600,7 +606,7 @@ class DatadogWatch:
                 }
                 await self._finding(tenant, "service_resumed", brief, details)
             recorded += 1
-        return recorded
+        return recorded + retried
 
     async def _watch_monitors(
         self,
@@ -633,7 +639,13 @@ class DatadogWatch:
         statuses = {mid: f.status for mid, f in firing.items()}
         before = {mid: f.status for mid, f in recorded_now.items()}
         now = self._clock()
-        recorded = 0
+        # Still firing at the status that failed to go out: try it again. A
+        # status change makes a new finding below instead.
+        recorded = await self._retry(
+            tenant,
+            "monitor:",
+            lambda s: statuses.get(s[8:]) is not None and statuses.get(s[8:]) == before.get(s[8:]),
+        )
         for change in check_monitors(statuses, before):
             if change.kind == "firing":
                 monitor = firing[change.monitor_id]
@@ -750,7 +762,7 @@ class DatadogWatch:
         self._outcomes.append(outcome)
         verdict = check_connection(list(self._outcomes), lost=self._lost)
         if verdict == "none":
-            return 0
+            return await self._retry(self.home_tenant, "connection", lambda _s: self._lost)
         tenant = self.home_tenant
         if verdict == "lost":
             self._lost = True
@@ -822,6 +834,18 @@ class DatadogWatch:
                 self._episodes[key] = before
         return outcome
 
+    async def _retry(self, tenant: str, prefix: str, still: Callable[[str], bool]) -> int:
+        """Try again the failed alerts of ``tenant`` under ``prefix`` whose condition lasts."""
+        tried = 0
+        for key in [k for k in self._failed if k[0] == tenant and k[1].startswith(prefix)]:
+            kind, brief, details, target = self._failed[key]
+            if not still(key[1]):
+                del self._failed[key]
+                continue
+            await self._finding(tenant, kind, brief, details, target=target)
+            tried += 1
+        return tried
+
     async def _finding(
         self,
         tenant: str,
@@ -831,10 +855,21 @@ class DatadogWatch:
         *,
         target: str | None = None,
     ) -> None:
-        """Deliver one finding, then record it with what the delivery did."""
+        """Deliver one finding, then record it with what the delivery did.
+
+        An episode's opening finding whose alert failed is kept, and tried
+        again (same alert id) by each pass that still sees the condition,
+        until it is delivered or the condition ends.
+        """
         target = target or details.get("service") or None
         outcome = await self._deliver(tenant, kind, brief, details)
         mode = outcome["mode"]
+        key = (tenant, _subject(kind, details))
+        retryable = "error" in outcome["delivery"]
+        if mode == "delivery_failed" and retryable and kind not in _CLOSING:
+            self._failed[key] = (kind, brief, details, target)
+        else:
+            self._failed.pop(key, None)
         event = {
             "kind": kind,
             **details,
