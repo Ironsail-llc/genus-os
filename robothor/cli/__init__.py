@@ -853,13 +853,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     memeval_parser.add_argument(
         "--systems",
-        default="recall,keyword_only,raw_verbatim,full_context",
+        default="recall,recall_budget,keyword_only,raw_verbatim,full_context",
         help="Comma-separated systems to compare (first is the system under test)",
     )
     memeval_parser.add_argument(
         "--reference",
         default=None,
-        help="Reference system for the deciding comparison (default: the last of --systems)",
+        help="Reference system for the deciding comparison (default: keyword_only)",
     )
     memeval_parser.add_argument(
         "--token-budget", type=int, default=2048, help="Context tokens every system may fill"
