@@ -1643,6 +1643,8 @@ async def search_facts(
     reader_user_id: str | None = None,
     include_graph: bool | None = None,
     reader_scope_id: str | None = None,
+    *,
+    admin_erasure_view: bool = False,
 ) -> list[dict[str, Any]]:
     """Hybrid recall: named legs fused by RRF, graded rerank, one relevance scale.
 
@@ -1650,8 +1652,9 @@ async def search_facts(
         1. Legs: ``vector`` (HNSW cosine) and ``keyword`` (full text, every
            term, then any term) over memory_facts; ``graph`` (activation
            from the entities the query names and the top hits mention, see
-           robothor/memory/activation.py) unless ``include_graph=False``,
-           with ``entity_expansion`` as its fallback when ``expand_entities``;
+           robothor/memory/activation.py) only when ``include_graph=True``
+           (off by default, ``GRAPH_LEG_DEFAULT``); ``entity_expansion``
+           when ``expand_entities`` and the graph leg found nothing;
            ``segment`` (raw conversation, on by default); ``insight`` /
            ``episode`` / ``chat_turn`` when asked for. Each fact leg fetches
            max(30, limit * 3).
@@ -1709,6 +1712,15 @@ async def search_facts(
         reader_user_id: The reader's own user id; a member's webchat
             conversation (``agent:{agent}:user:{uid}``) is theirs. Without a
             reader person or user, no private segment is returned at all.
+        admin_erasure_view: The tenant admin's erasure view: the fact legs
+            read every owner scope, private facts included, so the admin can
+            find a fact to forget it. Keyword-only and off by default. Only the
+            bridge's admin fact search (behind ``require_tenant_admin``) passes
+            it; no agent tool, MCP tool or tool argument reaches it
+            (``robothor/memory/tests/test_erasure_view_reach.py``). The reader
+            arguments do not narrow the fact legs, the graph leg does not run
+            (its walk reads as one reader), and a restricted ``scope`` is
+            refused with ``ValueError``.
 
     Returns:
         Rows ordered best first. Each carries its payload (``fact_text``,
@@ -1716,6 +1728,8 @@ async def search_facts(
         it), ``leg_scores``, ``rrf_score``, ``fused_rank``, ``rerank_score``
         (None when not reranked) and ``relevance`` (0..1). Read-only.
     """
+    if admin_erasure_view and scope is not None and scope.restricted:
+        raise ValueError("the admin erasure view is unrestricted; it takes no restricted scope")
     if use_reranker is None:
         use_reranker = _reranker_enabled_default()
 
@@ -1742,14 +1756,17 @@ async def search_facts(
     # Who owns a row (scope_kind / scope_id, written by the write path) is
     # checked on every call, whatever the rollout mode: shared rows, plus rows
     # owned by one of the reader's ids. Under a restricted scope the reader is
-    # the scope's person only. See robothor/memory/visibility.py.
+    # the scope's person only. See robothor/memory/visibility.py. The one
+    # exception is the tenant admin's erasure view, which must see a private
+    # fact to forget it.
     readers = readers_for(
         scope=scope, person_id=reader_person_id, user_id=reader_user_id, extra=reader_scope_id
     )
-    visible_sql, visible_params = fact_visibility_sql(readers)
     unscopable_ok = scope_clause == ""
-    scope_clause = f"{scope_clause} AND {visible_sql}"
-    scope_params = (*scope_params, *visible_params)
+    if not admin_erasure_view:
+        visible_sql, visible_params = fact_visibility_sql(readers)
+        scope_clause = f"{scope_clause} AND {visible_sql}"
+        scope_params = (*scope_params, *visible_params)
     filters = f"{'AND is_active = TRUE' if active_only else ''} {scope_clause}"
     fetch_min = LEG_FETCH_MIN_WIDE if _rerank_wide_enabled() else LEG_FETCH_MIN
     _tenant = tenant_id or DEFAULT_TENANT
@@ -1760,7 +1777,7 @@ async def search_facts(
     graph: list[Candidate] = []
     if include_graph is None:
         include_graph = GRAPH_LEG_DEFAULT
-    if include_graph:
+    if include_graph and not admin_erasure_view:
         graph = await _graph_leg(
             query, legs, _tenant, reader_scope_id=graph_reader(readers), scope=scope, limit=limit
         )
