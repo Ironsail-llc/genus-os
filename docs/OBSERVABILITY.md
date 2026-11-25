@@ -495,7 +495,7 @@ anyone. Findings are recorded; delivery comes in a later release.
 |----------|----------|-------|
 | Error spike | `status:error` log counts per service, inside the tenant's `logs` scope | a service whose errors in the latest 15 minutes are well above its own last two hours |
 | Silent service | every log line counted per service, inside the tenant's `logs` scope | a service that logged steadily for two hours and logged nothing in the latest 15 minutes (`service_silent`); its next line is `service_resumed` |
-| Firing monitors | the monitors inside the tenant's `monitors` scope in Alert, Warn or No Data | a monitor that starts firing or changes status (`monitor_firing`), and one recorded that stops (`monitor_recovered`) |
+| Firing monitors | the monitors inside the tenant's `monitors` scope in Alert, Warn or No Data, and not muted | a monitor that starts firing or changes status (`monitor_firing`), and one recorded that stops (`monitor_recovered`) |
 | Connection lost | the API key check (`/api/v1/validate`), an application key probe (a one-row log search that matches nothing), and the watch's own reads | Datadog rejecting either key, or unreachable, on 3 checks in a row; the first good check after that is `connection_restored` |
 
 **The spike rule.** The current window is the latest complete 15-minute slot
@@ -510,9 +510,11 @@ No per-service tuning.
 **The silence rule.** The same slots, counting every line rather than errors.
 A service is silent when the current slot holds no lines from it **and** it
 logged in every one of the 8 slots before **and** its median over those slots
-is at least 50 lines. The floor keeps a naturally quiet service (a nightly job,
-a test service) from ever counting; the "every slot" condition keeps a service
-with gaps, or a new one without two hours of history, out. A silence is
+is at least 15 lines (one a minute), so a service that logs every minute is
+watched. The floor keeps a service that logs only now and then (a heartbeat
+every quarter of an hour, say) from counting one late line as a silence; the
+"every slot" condition keeps a service with gaps (a nightly job), or a new one
+without two hours of history, out. A silence is
 recorded once; `service_resumed` is recorded when the service logs again, and
 names the slot it went quiet in. Logs that carry no service tag are never a
 silent service. If a tenant logs from 1000 or more services in one slot (one
@@ -520,11 +522,14 @@ page of groups), silence is not judged for it, because a service missing from
 a full page may simply not fit; one log line says so.
 
 **The monitor rule.** Every pass lists the tenant's monitors that are firing:
-the search is `(<monitors scope>) AND (status:alert OR status:warn OR status:"no
-data")`, read page by page (100 per page) until the last. A monitor is recorded
+the search is `(<monitors scope>) AND ((status:alert OR status:warn OR
+status:"no data") AND muted:false)`, read page by page (100 per page) until the
+last. A muted monitor, muted by hand or by a scheduled downtime, is left out,
+because Datadog holds back its own notification for it. A monitor is recorded
 when it starts firing, and again only when it changes status while firing (Warn
 to Alert, say) or after it recovers and fires again. One that was recorded and
-is no longer in the list is `monitor_recovered`. A read that fails records no
+is no longer in the list is `monitor_recovered`, whether it stopped firing or
+was muted (the brief says "no longer firing, or has been muted"). A read that fails records no
 recovery: the next good read decides. A tenant whose `monitors` scope is
 missing or "no access" skips this observer only (one log line per process) and
 its logs are still watched. A key without monitor read permission is not a lost
@@ -532,10 +537,11 @@ link: the monitor watch skips that pass and the log observers carry on. The
 brief names the monitor (email addresses and phone numbers in the name are
 replaced), its status, and how long since it last triggered.
 
-Datadog's own notifications, wired to Genus's webhook, are recorded separately
-as `datadog.alert_received`. This observer is the safety net for monitors that
-are not wired to that webhook, so a monitor that is wired appears in both
-records. The two are not de-duplicated.
+Receiving Datadog's own notifications through a Genus webhook is a separate
+change, which records each one as `datadog.alert_received`. Once it is in
+place, this observer is the safety net for monitors that are not wired to that
+webhook, so a monitor that is wired appears in both records. The two are not
+de-duplicated.
 
 **Calls per pass.** Each settled slot is read once and kept, per series. A
 tenant costs 18 aggregate calls on the first pass after a restart (9 slots for
