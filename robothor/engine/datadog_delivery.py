@@ -175,12 +175,17 @@ def _is_root_engine(hooks: Any) -> bool:
     return bool(group == ROOT_EVENT_GROUP)
 
 
-async def handle_stream_event(decoded: dict[str, Any], redis_client: Any, hooks: Any) -> str:
+async def handle_stream_event(
+    decoded: dict[str, Any], redis_client: Any, hooks: Any, *, message_id: str | None = None
+) -> str:
     """Route, deliver or hand off one event of the ``datadog`` stream.
 
     ``hooks`` is the consuming :class:`~robothor.engine.hooks.EventHooks`,
-    which owns the event (its tenant is the event's). Raises only when the
-    alert could not be recorded, so the event goes to the stream's DLQ.
+    which owns the event (its tenant is the event's). ``message_id`` is the
+    stream entry being handled: the dedup claim and the episode keys hold it,
+    so a redelivery of the same entry after a crash finishes the work without
+    sending twice. Raises only when the alert could not be recorded, so the
+    event goes to the stream's DLQ.
     """
     from robothor.integrations.datadog.alerts import handle_alert_event
 
@@ -210,10 +215,14 @@ async def handle_stream_event(decoded: dict[str, Any], redis_client: Any, hooks:
             # engine only) one with no usable org tag, which is the root's.
             if tenant != own or not (routing == "org" or root):
                 return {"mode": "refused"}
-            return await _deliver_here(alert, own, title, redis_client, hooks)
+            return await _deliver_here(alert, own, title, redis_client, hooks, message_id)
 
         return await handle_alert_event(
-            payload, redis_client, deliver=deliver_handed_off, dedup_scope=f"delivered:{own}"
+            payload,
+            redis_client,
+            message_id=message_id,
+            deliver=deliver_handed_off,
+            dedup_scope=f"delivered:{own}",
         )
 
     async def route(alert: DatadogAlert, tenant: str, routing: str, title: str) -> dict[str, Any]:
@@ -222,10 +231,10 @@ async def handle_stream_event(decoded: dict[str, Any], redis_client: Any, hooks:
             # process's default tenant here is that tenant, not the root.
             return await _hand_off_to_root(payload, redis_client, own)
         if tenant == own:
-            return await _deliver_here(alert, own, title, redis_client, hooks)
+            return await _deliver_here(alert, own, title, redis_client, hooks, message_id)
         return await _hand_off(payload, tenant, redis_client)
 
-    return await handle_alert_event(payload, redis_client, deliver=route)
+    return await handle_alert_event(payload, redis_client, message_id=message_id, deliver=route)
 
 
 # ── the hand-off ────────────────────────────────────────────────────
@@ -353,12 +362,26 @@ async def _tell_root(tenant: str, reason: str) -> None:
 # ── delivery in this engine's own tenant ────────────────────────────
 
 
-async def _claim(redis_client: Any, key: str) -> bool | None:
-    """``SET NX``: True when this call took ``key``, False when taken, None when unknown."""
+async def _claim_owned(
+    redis_client: Any, key: str, value: str, mine: tuple[str, ...]
+) -> str | None:
+    """``SET NX key value``: ``"new"``, the held value when it is one of ``mine``,
+    ``"taken"`` otherwise, or ``None`` when Redis cannot be read.
+
+    ``mine`` are the values this stream entry would have left there itself, so
+    a redelivery of the entry after a crash can tell its own mark from
+    another notification's.
+    """
     if redis_client is None:
         return None
     try:
-        return bool(await redis_client.set(key, 1, nx=True, ex=EPISODE_TTL_SECONDS))
+        if await redis_client.set(key, value, nx=True, ex=EPISODE_TTL_SECONDS):
+            return "new"
+        if not mine:
+            return "taken"
+        held = await redis_client.get(key)
+        held = held.decode() if isinstance(held, bytes) else held
+        return str(held) if held in mine else "taken"
     except Exception as exc:  # noqa: BLE001 - an unknown episode still delivers
         logger.warning("Datadog episode check failed (%s)", type(exc).__name__)
         return None
@@ -373,12 +396,12 @@ async def _forget(redis_client: Any, *keys: str) -> None:
         logger.warning("Datadog episode keys not cleared (%s)", type(exc).__name__)
 
 
-async def _mark(redis_client: Any, *keys: str) -> None:
+async def _mark(redis_client: Any, *keys: str, value: str = "1") -> None:
     if redis_client is None:
         return
     for key in keys:
         try:
-            await redis_client.set(key, 1, ex=EPISODE_TTL_SECONDS)
+            await redis_client.set(key, value, ex=EPISODE_TTL_SECONDS)
         except Exception as exc:  # noqa: BLE001 - costs one repeat at a lower level
             logger.warning("Datadog episode key not set (%s)", type(exc).__name__)
 
@@ -419,9 +442,21 @@ async def webhook_covers(
 
 
 async def _deliver_here(
-    alert: DatadogAlert, tenant: str, title: str, redis_client: Any, hooks: Any
+    alert: DatadogAlert,
+    tenant: str,
+    title: str,
+    redis_client: Any,
+    hooks: Any,
+    entry: str | None = None,
 ) -> dict[str, Any]:
-    """Deliver an alert of this engine's own tenant, once per level per episode."""
+    """Deliver an alert of this engine's own tenant, once per step per episode.
+
+    The step's key holds ``sending:<entry>`` before the send and
+    ``sent:<entry>`` once it is confirmed. A redelivery of the same stream
+    entry after a crash finds its own mark: ``sending`` sends (the first try
+    never finished), ``sent`` does not send again and reports what was sent.
+    """
+    from robothor.engine import alerts
     from robothor.integrations.datadog.alerts import level_for
 
     level = level_for(alert.transition, alert.priority)
@@ -430,21 +465,31 @@ async def _deliver_here(
     recovery = alert.transition in _RECOVERIES
     stage = _stage(alert.transition, level)
     gate = f"{base}:sent:{stage}"
-    claimed = await _claim(redis_client, gate)
-    if claimed is False:
+    alert_id = f"datadog_alert:{tenant}:{monitor}:{stage}"
+    mine = (f"sending:{entry}", f"sent:{entry}") if entry else ()
+    state = await _claim_owned(redis_client, gate, f"sending:{entry or ''}", mine)
+    if state == "taken":
         return {
             "mode": SUPPRESSED,
             "delivery": {"level": level, "reason": "episode_open"},
             "triage": {"started": False, "reason": "episode_open"},
         }
-    outcome = await send_alert(
-        level,
-        f"Datadog monitor: {title or monitor}",
-        _brief(alert, title),
-        alert_id=f"datadog_alert:{tenant}:{monitor}:{stage}",
-        kind="datadog_alert",
-        metadata={"tenant": tenant, "monitor_id": monitor, "transition": alert.transition},
-    )
+    claimed = None if state is None else True
+    if state == f"sent:{entry}":
+        route = "page" if level in alerts._PAGE_LEVELS else "digest"
+        delivery = {"level": level, "route": route, "alert_id": alert_id, "replayed": True}
+        outcome: dict[str, Any] = {"mode": DELIVERED, "delivery": delivery}
+    else:
+        outcome = await send_alert(
+            level,
+            f"Datadog monitor: {title or monitor}",
+            _brief(alert, title),
+            alert_id=alert_id,
+            kind="datadog_alert",
+            metadata={"tenant": tenant, "monitor_id": monitor, "transition": alert.transition},
+        )
+        if outcome["mode"] == DELIVERED and entry:
+            await _mark(redis_client, gate, value=f"sent:{entry}")
     if outcome["mode"] != DELIVERED:
         if outcome["mode"] == FAILED and claimed:
             await _forget(redis_client, gate)  # the next notification tries again
@@ -452,7 +497,7 @@ async def _deliver_here(
             # A failed page is when the read-only look matters most; its own
             # key still keeps it to one run per episode.
             outcome["triage"] = await _maybe_triage(
-                alert, tenant, title, redis_client, hooks, base, claimed
+                alert, tenant, title, redis_client, hooks, base, claimed, entry
             )
         else:
             outcome["triage"] = {"started": False, "reason": outcome["mode"]}
@@ -466,7 +511,7 @@ async def _deliver_here(
     # A step sent covers the steps below it for the rest of the episode.
     await _mark(redis_client, *(f"{base}:sent:{n}" for n in _STAGES[: _STAGES.index(stage)]))
     outcome["triage"] = await _maybe_triage(
-        alert, tenant, title, redis_client, hooks, base, claimed
+        alert, tenant, title, redis_client, hooks, base, claimed, entry
     )
     return outcome
 
@@ -479,14 +524,20 @@ async def _maybe_triage(
     hooks: Any,
     base: str,
     claimed: bool | None,
+    entry: str | None = None,
 ) -> dict[str, Any]:
     if alert.transition not in TRIAGE_TRANSITIONS:
         return {"started": False, "reason": "not_a_trigger"}
     if claimed is None:
         # Without the episode store a storm could start a run per notification.
         return {"started": False, "reason": "episode_unknown"}
-    if not await _claim(redis_client, f"{base}:triage"):
+    mine = (f"started:{entry}",) if entry else ()
+    state = await _claim_owned(redis_client, f"{base}:triage", f"started:{entry or ''}", mine)
+    if state is None or state == "taken":
         return {"started": False, "reason": "episode_open"}
+    if state != "new":
+        # This entry started it before the engine stopped: not a second run.
+        return {"started": True, "read_only": True, "replayed": True}
     started = await _start_triage(alert, tenant, title, hooks)
     if not started.get("started"):
         await _forget(redis_client, f"{base}:triage")
