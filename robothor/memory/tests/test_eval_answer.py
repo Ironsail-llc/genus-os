@@ -436,6 +436,23 @@ class TestHedges:
         )
         assert v is not None and not v.correct and v.confident_wrong and "hedge" in v.reason
 
+    def test_a_paraphrase_that_restates_the_subject_goes_to_the_llm(self):
+        """The other-value rule shares the question exclusion with the hedge rule."""
+        for text in ("Alice Vance's manager is Rivera, Bob", "Alice Vance"):
+            v = ea.judge_rules(
+                self._manager_case(), _answer(text), self.PEOPLE_KNOWN, self.PEOPLE_KINDS
+            )
+            assert v is None, (text, v)
+
+    def test_a_different_value_beside_the_subject_is_still_wrong(self):
+        v = ea.judge_rules(
+            self._manager_case(),
+            _answer("Alice Vance's manager is Carol Diaz"),
+            self.PEOPLE_KNOWN,
+            self.PEOPLE_KINDS,
+        )
+        assert v is not None and not v.correct and "Carol Diaz" in v.reason
+
     def test_restating_the_subject_does_not_hide_a_hedge(self):
         v = ea.judge_rules(
             self._manager_case(),
