@@ -809,6 +809,46 @@ notification carries `source: n8n`, answer from `n8n_recent_failures` and give
 the operator the execution link: neither tool reruns, edits or calls an n8n
 workflow, so fixing and rerunning one happens in n8n.
 
+### Datadog (read-only)
+
+Two tools over the instance's Datadog account
+([Reading Datadog from Genus](OBSERVABILITY.md#reading-datadog-from-genus)).
+They are an opt-in family (`DATADOG_TOOLS`): log lines carry what customers
+and staff typed, so an agent is offered them only when its manifest names them
+in `tools_opt_in` or `tools_allowed`, or when an owner or admin is driving the
+run (the capability tier).
+
+| Tool | Purpose |
+|---|---|
+| `datadog_logs_search` | Log lines: `query` (Datadog log search syntax, empty for everything), `start` and `end` (ISO-8601 or relative such as `now-15m`; default `now-1h` to `now`), `limit` (rows per page, default 50), `cursor` (the previous page's `next_cursor`, with the same query and window), `newest_first` (default true). Each row has `id`, `timestamp`, `service`, `status`, `host`, `message`, the `env` and `version` tags, and `attributes`. |
+| `datadog_logs_aggregate` | Counts: the same `query`, `start` and `end`, plus `group_by` (facets such as `service`, `status`, `@http.status_code`; empty for one total) and `limit` (groups per facet, largest first, default 25). Returns `buckets` of `{by, count}`. |
+
+**Scope.** Every query is sent as `(<this tenant's scope>) AND (<query>)`, and
+the scope comes from the tenant the call runs in, never from an argument. A
+tenant with no scope entry is refused ("Datadog is not configured for this
+organization") and nothing is sent; so is a query that could break out of the
+wrapping, such as one with unbalanced parentheses. Both tools take the
+`tenant` argument (see [Child tenants](#child-tenants-org_overview-the-tenant-argument-and-dry_run)):
+a parent's top-level run naming a child reads with the child's scope. Each
+result names the tenant it read in `scope`, never the filter itself.
+
+**What comes back.** Email addresses and phone numbers in messages, attribute
+values and bucket values are masked (`<email>`, `<phone>`). A page too large
+for the result is fitted: long messages are shortened, then attributes are
+dropped, then trailing rows; `truncated` is true, `note` says how many rows
+came back, and `next_cursor` continues from the first row left out. A Datadog
+failure is an `error` with a `kind` (`auth`, `rate_limit`, `network`,
+`bad_query`, `unknown`, `not_configured`) and nothing else. Each call leaves a
+`datadog.logs_read` audit row with the query (masked and shortened), the
+window and the row count; never a log line.
+
+**Choosing.** These read the application and infrastructure logs of your
+organization's services, wherever Datadog collects them. What a Genus agent
+run did (its steps, tools and errors) is in the run tools, `list_agent_runs`
+and `get_agent_run`, not in Datadog. Start with `datadog_logs_aggregate` to
+see where the errors are ("how many, from which service"), then read lines
+with `datadog_logs_search` narrowed to that service and window.
+
 ### Vision: `view_image` and `analyze_image`
 
 Two tools, one rule:
@@ -1817,7 +1857,8 @@ it, refuse it or audit it as a crossing.
   `list_tasks_summary`, `list_notes`, `get_note`, `list_people`, `get_person`,
   `list_companies`, `get_company`, `list_conversations`, `get_conversation`,
   `list_messages`, `search_records`, `get_contact_360`,
-  `list_contact_messages`, `devops_query_metrics`.
+  `list_contact_messages`, `devops_query_metrics`, `datadog_logs_search`,
+  `datadog_logs_aggregate`.
 - Writes: `create_task`, `update_task`, `create_note`, `update_note`,
   `send_notification`. Only the verified owner of the run's own tenant, on a
   top-level run, may update a task or create or update a note in a child. Any
