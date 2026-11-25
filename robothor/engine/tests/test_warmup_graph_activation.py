@@ -460,6 +460,29 @@ class TestWhatATurnPays:
         assert counter.checkouts[0]["executes"] == 1
         assert "memory_entities" not in counter.checkouts[0]["sql"][0]
 
+    def test_a_phrase_that_links_nothing_costs_a_bounded_lookup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A two-word phrase that names no entity: one read-only checkout that
+        arms the limit, looks up the phrase and resets the limit (three
+        statements), then today's lookup as before. No operator lookup, no
+        walk."""
+        import robothor.crm.dal
+
+        counter = _Counter()
+        monkeypatch.setattr("robothor.db.get_connection", counter.connect)
+        monkeypatch.setattr(robothor.crm.dal, "get_connection", counter.connect)
+
+        warmup._build_entity_context("Did Alice Smith sign it?", tenant_id="test-tenant")
+
+        graph = [c for c in counter.checkouts if c["read_only"]]
+        assert len(graph) == 1
+        sql = graph[0]["sql"]
+        assert len(sql) == 3, sql
+        assert "set_config('statement_timeout'" in sql[0]
+        assert "memory_entities" in sql[1]
+        assert sql[2].strip() == "RESET statement_timeout"
+
     def test_seed_phrases_come_from_todays_candidates(self) -> None:
         assert warmup._candidate_phrases("say pong", lowercase_ok=False) == []
         assert (
@@ -591,9 +614,9 @@ class TestWhatATurnPays:
 def test_a_seeded_turn_adds_one_read_only_checkout_of_five_statements(
     world: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A message that names an entity pays: the seed lookup, arming the
-    walk's server-side time limit, the operator lookup, the walk and
-    restoring the limit, on one read-only connection (no BEGIN or COMMIT, no
+    """A message that names an entity pays: arming the server-side time
+    limit, the seed lookup, the operator lookup, the walk and restoring the
+    limit, on one read-only connection (no BEGIN or COMMIT, no
     second checkout for the operator), then today's lookup as before. (Was
     three statements before the limit moved to the server: arming and
     restoring it are the two added.)"""
@@ -617,8 +640,10 @@ def test_a_seeded_turn_adds_one_read_only_checkout_of_five_statements(
     assert graph[0]["read_only"] is True
     sql = graph[0]["sql"]
     assert len(sql) == 5, sql
-    assert "memory_entities" in sql[0]
-    assert "set_config('statement_timeout'" in sql[1]
+    # The limit is armed first, so the seed lookup is bounded too (it was
+    # armed after the seed lookup before; same five statements, reordered).
+    assert "set_config('statement_timeout'" in sql[0]
+    assert "memory_entities" in sql[1]
     assert "tenant_users" in sql[2]
     assert "memory_activate" in sql[3]
     assert sql[4].strip() == "RESET statement_timeout"
@@ -757,4 +782,86 @@ def test_a_budget_spent_before_the_walk_starts_still_bounds_it(
             assert cur.fetchone()[0] == 0, "the walk started after the budget and ran unbounded"
     finally:
         kept.cancel()
+        kept.close()
+
+
+@pytest.mark.integration
+def test_a_slow_seed_lookup_is_stopped_by_the_server_within_the_budget(
+    world: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seed lookup is the first statement on the walk's connection and is
+    bounded like the rest: a lookup that would take five seconds (an unindexed
+    alias scan on a large tenant, say) is stopped by Postgres at the budget,
+    no walk follows, and the limit is reset on that connection."""
+    import psycopg2
+
+    import robothor.db
+    from robothor.memory import activation
+    from robothor.memory.tests.test_graph_activation import TENANT
+
+    a, b = world.entity("Alice Smith"), world.entity("Bob Jones")
+    world.link(a, b)
+    world.fact("Bob Jones manages shipping", about=(b,))
+    world.fact("Alice signed it", entities=("Alice",))
+    marker = "g872_slow_seed_marker"
+    # The marker leads the statement: pg_stat_activity keeps only the first
+    # track_activity_query_size bytes of a query, and the lookup is longer.
+    monkeypatch.setattr(
+        activation,
+        "_LINK_SQL",
+        f"/* {marker} */"
+        + activation._LINK_SQL.replace(
+            "    ORDER BY pri, id",
+            "    WHERE (SELECT count(*) FROM pg_sleep(5)) = 1\n    ORDER BY pri, id",
+        ),
+    )
+    walks: list[str] = []
+    real_activate = activation._activate_on
+
+    def _record_walk(*a: Any, **k: Any) -> Any:
+        walks.append("walk")
+        return real_activate(*a, **k)
+
+    monkeypatch.setattr(activation, "_activate_on", _record_walk)
+    monkeypatch.setattr(warmup, "GRAPH_WARMUP_BUDGET_SECONDS", 0.3)
+    kept = psycopg2.connect(world.dsn)
+    kept.autocommit = True
+    real_get = robothor.db.get_connection
+
+    @contextmanager
+    def _pooled(*a: Any, read_only: bool = False, **k: Any):
+        if read_only:
+            yield kept
+        else:
+            with real_get(*a, **k) as conn:
+                yield conn
+
+    monkeypatch.setattr(robothor.db, "get_connection", _pooled)
+    try:
+        start = time.monotonic()
+        text = warmup._build_entity_context(MESSAGE, tenant_id=TENANT)
+        assert "Alice signed it" in text, "the turn falls back to today's section"
+
+        # Gate on the server, not the clock: the lookup's backend must stop
+        # long before its five-second sleep would end.
+        with real_get() as probe:
+            cur = probe.cursor()
+            stopped = False
+            while time.monotonic() - start < 3.0:
+                cur.execute(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE state = 'active' AND query LIKE %s AND pid <> pg_backend_pid()",
+                    (f"%{marker}%",),
+                )
+                if cur.fetchone()[0] == 0:
+                    stopped = True
+                    break
+                time.sleep(0.05)
+        assert stopped, "the seed lookup kept running on the server past the budget"
+
+        with kept.cursor() as cur:  # waits for the worker to give it back
+            cur.execute("SHOW statement_timeout")
+            assert cur.fetchone()[0] == "0", "the time limit outlived the lookup"
+        assert walks == [], "a walk ran after the budget was spent in the seed lookup"
+    finally:
         kept.close()
