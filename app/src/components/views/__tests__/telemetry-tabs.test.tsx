@@ -437,17 +437,64 @@ describe("Activity", () => {
     expect(sent(/\/api\/telemetry\/signals/)[0]).not.toMatch(/tenant/);
   });
 
-  it("says a delivered finding was sent", async () => {
-    overrides = [
-      [/\/api\/telemetry\/signals/, () => ({ body: { ...SIGNALS, signals: [{ ...SIGNALS.signals[0], mode: "deliver", sent: true }] } })],
-    ];
+  async function activityWith(signals: unknown[]) {
+    overrides = [[/\/api\/telemetry\/signals/, () => ({ body: { ...SIGNALS, signals } })]];
     render(<LogsView role="admin" />);
     await screen.findByTestId("telemetry-table");
     openTab("activity");
+    return screen.findByTestId("activity-list");
+  }
 
-    const item = await screen.findByTestId("activity-item-12");
-    expect(item.textContent).toContain("Sent");
+  it("says a delivered finding was sent, and by which route", async () => {
+    await activityWith([
+      { ...SIGNALS.signals[0], mode: "delivered", sent: true, reason: null, delivery_route: "alert_digest" },
+    ]);
+
+    const item = screen.getByTestId("activity-item-12");
+    expect(within(item).getByTestId("activity-status").textContent).toBe("Sent");
+    expect(item.textContent).toContain("alert_digest");
     expect(item.textContent).not.toContain("Recorded, not sent");
+  });
+
+  it.each([
+    ["suppressed", "episode_open", "Not sent again: already reported", "an alert for this is already open"],
+    ["suppressed", "cooldown", "Not sent again: already reported", "too soon after the last one"],
+    ["suppressed", "covered_by_webhook", "Not sent again: already reported", "already reported by the Datadog alert"],
+    ["delivery_failed", "no_engine", "Could not be sent", "this organization's engine is not running"],
+    ["delivery_failed", "handoff_failed", "Could not be sent", "the hand-off failed"],
+    ["delivery_failed", "rate_limit", "Could not be sent", "rate limit"],
+    ["dry_run", null, "Recorded, not sent", null],
+    ["something_new", "who_knows", "Recorded, not sent", null],
+  ])("labels a %s record (%s) in plain words", async (mode, reason, label, words) => {
+    await activityWith([{ ...SIGNALS.signals[0], mode, reason, sent: false }]);
+
+    const item = screen.getByTestId("activity-item-12");
+    expect(within(item).getByTestId("activity-status").textContent).toBe(label);
+    if (words) expect(item.textContent).toContain(words);
+  });
+
+  it("shows whether a first-look run was started, falling back to what it would have asked", async () => {
+    await activityWith([
+      { ...SIGNALS.signals[1], id: 21, mode: "delivered", sent: true, delivery_route: "page", triage: { started: true, reason: null } },
+      { ...SIGNALS.signals[1], id: 22, mode: "delivered", sent: true, delivery_route: "page", triage: { started: false, reason: "no_engine" } },
+      { ...SIGNALS.signals[1], id: 23, mode: "dry_run", sent: false },
+    ]);
+
+    expect(screen.getByTestId("activity-item-21").textContent).toContain("First-look run started");
+    expect(screen.getByTestId("activity-item-22").textContent).toContain("No first-look run");
+    expect(screen.getByTestId("activity-item-22").textContent).toContain("this organization's engine is not running");
+    expect(screen.getByTestId("activity-item-23").textContent).toContain("Change nothing.");
+  });
+
+  it("never breaks on a record of an unknown shape", async () => {
+    await activityWith([
+      { id: 31, type: "alert", mode: 7, reason: { x: 1 }, triage: "yes", delivery_route: ["x"], surprise: true },
+      { id: 32 },
+      "not a record",
+    ]);
+
+    expect(screen.getByTestId("activity-item-31").textContent).toContain("Recorded, not sent");
+    expect(screen.getByTestId("activity-item-32")).toBeTruthy();
   });
 
   it("says when nothing has been recorded", async () => {

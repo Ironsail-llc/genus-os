@@ -771,12 +771,125 @@ def test_a_watch_finding_is_what_happened_and_what_would_have_been_sent(audit_lo
     assert finding["recipients"] == "main agent alert digest, tenant acme-child-a"
 
 
+def _one(audit_log, kind: str, event: dict[str, Any]) -> dict[str, Any]:
+    event_type = "datadog.alert_received" if kind == "alerts" else "datadog.watch_finding"
+    audit_log.by_type[event_type] = [event]
+    body = _ok(_client(CHILD_A).get("/api/telemetry/signals", params={"kind": kind}))
+    return body["signals"][0]
+
+
 def test_a_delivered_finding_says_it_was_sent(audit_log):
-    audit_log.by_type["datadog.watch_finding"] = [_watch_event(mode="deliver")]
+    finding = _one(
+        audit_log,
+        "watch",
+        _watch_event(mode="delivered", delivery={"route": "alert_digest", "text": "x"}),
+    )
 
-    body = _ok(_client(CHILD_A).get("/api/telemetry/signals", params={"kind": "watch"}))
+    assert finding["sent"] is True
+    assert finding["mode"] == "delivered"
+    assert finding["reason"] is None
+    assert finding["delivery_route"] == "alert_digest"
 
-    assert body["signals"][0]["sent"] is True
+
+@pytest.mark.parametrize("mode", ["deliver", "dry_run", "something_new", None, 7])
+def test_only_delivered_counts_as_sent(mode, audit_log):
+    finding = _one(audit_log, "watch", _watch_event(mode=mode))
+
+    assert finding["sent"] is False
+
+
+def test_an_older_record_without_a_mode_reads_as_dry_run(audit_log):
+    event = _watch_event()
+    del event["details"]["mode"]
+
+    finding = _one(audit_log, "watch", event)
+
+    assert finding["mode"] == "dry_run"
+    assert finding["sent"] is False
+
+
+@pytest.mark.parametrize(
+    ("mode", "reason"),
+    [
+        ("suppressed", "episode_open"),
+        ("suppressed", "cooldown"),
+        ("suppressed", "covered_by_webhook"),
+        ("delivery_failed", "no_engine"),
+        ("delivery_failed", "handoff_failed"),
+        ("delivery_failed", "rate_limit"),
+    ],
+)
+def test_a_record_that_was_not_sent_carries_its_mode_and_reason(mode, reason, audit_log):
+    finding = _one(audit_log, "watch", _watch_event(mode=mode, reason=reason))
+    alert = _one(audit_log, "alerts", _alert_event(mode=mode, reason=reason))
+
+    for signal in (finding, alert):
+        assert signal["sent"] is False
+        assert signal["mode"] == mode
+        assert signal["reason"] == reason
+
+
+def test_a_delivered_alert_reads_its_delivery_and_triage(audit_log):
+    alert = _one(
+        audit_log,
+        "alerts",
+        _alert_event(
+            mode="delivered",
+            delivery={"route": "page", "channels": ["telegram"], "text": "Checkout errors"},
+            triage={"started": True, "run_id": "r-1", "agent": "main"},
+        ),
+    )
+
+    assert alert["sent"] is True
+    assert alert["delivery_route"] == "page"
+    assert alert["triage"] == {"started": True, "reason": None}
+    # The fallback fields stay, for the page to show when delivery says less.
+    assert alert["recipients"] == "the instance operator, by telegram and email"
+    assert alert["would_run"]["agent"] == "main"
+
+
+def test_a_triage_that_was_not_started_says_why(audit_log):
+    alert = _one(
+        audit_log,
+        "alerts",
+        _alert_event(mode="delivered", triage={"started": False, "reason": "no_engine"}),
+    )
+
+    assert alert["triage"] == {"started": False, "reason": "no_engine"}
+
+
+@pytest.mark.parametrize(
+    "delivery",
+    ["alert_digest", ["page"], 3, {"channel": "telegram"}, {"route": {"odd": 1}}, None],
+)
+@pytest.mark.parametrize("triage", ["started", ["x"], 0, {"run_id": "r-2"}, {}, None])
+def test_any_shape_of_delivery_and_triage_reads(delivery, triage, audit_log):
+    alert = _one(
+        audit_log,
+        "alerts",
+        _alert_event(mode="delivered", delivery=delivery, triage=triage, surprise={"k": 1}),
+    )
+
+    assert alert["delivery_route"] is None or isinstance(alert["delivery_route"], str)
+    assert alert["triage"] is None or isinstance(alert["triage"]["started"], bool)
+    assert "surprise" not in alert
+
+
+def test_delivery_and_triage_text_is_masked(audit_log):
+    alert = _one(
+        audit_log,
+        "alerts",
+        _alert_event(
+            mode="delivery_failed",
+            reason="mail to bob@example.com bounced",
+            delivery={"route": "page to alice@example.com"},
+            triage={"started": False, "reason": "asked alice@example.com"},
+        ),
+    )
+
+    assert "example.com/monitors" in alert["link"]
+    text = json.dumps({k: v for k, v in alert.items() if k != "link"})
+    assert "@example.com" not in text
 
 
 def test_signals_carry_only_what_the_page_shows(audit_log):
