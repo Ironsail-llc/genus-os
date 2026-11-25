@@ -415,6 +415,65 @@ def _build_custom_tools(workspace: str, *, tenant_id: str) -> dict[str, dict[str
     return bind_tools(tools)
 
 
+# ─── The inner model's namespace ─────────────────────────────────────
+
+#: Top-level modules the inner model's code may not import. The library's
+#: ``local`` environment runs that code inside the engine process with
+#: ``__import__`` available, so without this it could import the memory or
+#: database layer and name any tenant, bypassing the tenant-bound helpers above.
+#: ``importlib``, ``sys`` and ``builtins`` are here because each is a one-step
+#: way round the guard.
+#:
+#: This is NOT a sandbox: in-process Python can always reach a module some
+#: other way (``print.__self__`` is the real ``builtins``). It removes the
+#: direct path; the session-wide ``tenant_scope`` in :func:`execute_deep_reason`
+#: is what still binds a database connection taken past it. Containing the
+#: code means running it out of process.
+_INNER_CODE_BLOCKED_IMPORTS = frozenset(
+    {
+        "robothor",
+        "crm",
+        "psycopg2",
+        "psycopg",
+        "asyncpg",
+        "sqlalchemy",
+        "redis",
+        "importlib",
+        "sys",
+        "builtins",
+    }
+)
+
+
+def _inner_import_guard_code() -> str:
+    """The REPL ``setup_code`` that installs the import guard in the session.
+
+    The library runs it once, before the model's first cell, in the same
+    namespace; it replaces ``__import__`` in that namespace's own builtins dict,
+    never the process's ``builtins`` module.
+
+    It uses only syntax and names the library's restricted builtins carry (no
+    ``frozenset``): the library reports a failing setup cell nowhere, so a name
+    it lacks would leave the guard silently uninstalled.
+    """
+    blocked = "{" + ", ".join(repr(name) for name in sorted(_INNER_CODE_BLOCKED_IMPORTS)) + "}"
+    return (
+        "def _guard_imports(real, blocked):\n"
+        "    def guarded(name, globals=None, locals=None, fromlist=(), level=0):\n"
+        "        if level == 0 and name.partition('.')[0] in blocked:\n"
+        "            raise ImportError(\n"
+        "                f'{name} cannot be imported in deep_reason; '\n"
+        "                'use search_memory, get_entity or memory_block_read'\n"
+        "            )\n"
+        "        return real(name, globals, locals, fromlist, level)\n"
+        "    return guarded\n"
+        "__builtins__['__import__'] = _guard_imports(\n"
+        f"    __builtins__['__import__'], {blocked}\n"
+        ")\n"
+        "del _guard_imports\n"
+    )
+
+
 # ─── Main entry point ────────────────────────────────────────────────
 
 
@@ -495,6 +554,7 @@ def execute_deep_reason(
             other_backends=["litellm"],
             other_backend_kwargs=[{"model_name": config.sub_model}],
             environment="local",
+            environment_kwargs={"setup_code": _inner_import_guard_code()},
             max_budget=config.max_budget,
             max_timeout=config.max_timeout,
             max_iterations=config.max_iterations,
@@ -505,7 +565,12 @@ def execute_deep_reason(
         )
 
         _notify_progress(on_event, "running")
-        result = rlm.completion({"context": full_context, "query": query})
+        # The inner model's code runs in this thread. Bind the whole session, so
+        # a connection anything in it takes from the pool is scoped to the run's
+        # tenant for row-level security, not to the process's own tenant.
+        result = _as_tenant(
+            tenant_id, lambda: rlm.completion({"context": full_context, "query": query})
+        )
 
         elapsed = time.monotonic() - start_time
 

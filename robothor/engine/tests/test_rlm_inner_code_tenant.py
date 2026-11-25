@@ -27,18 +27,24 @@ OTHER = "other-tenant"
 
 _REPL_BLOCKED_BUILTINS = ("input", "eval", "exec", "compile", "globals", "locals")
 
+#: A narrow subset of the library's restricted builtins: what these tests' cells
+#: use, plus ``__import__``. Narrower than the library on purpose, so setup code
+#: that leans on a builtin the library lacks (it has no ``frozenset``) fails
+#: here too -- the library swallows a failing setup cell silently.
+_REPL_BUILTINS = ("__import__", "print", "repr", "sorted", "ImportError", "Exception")
+
 
 class _StandInREPL:
     """What rlms' ``LocalREPL`` does with code, without the package.
 
-    One namespace, the custom tools as globals, the library's builtins (which
-    include ``__import__`` and ``open``, and null out ``eval``/``exec``), the
-    ``setup_code`` environment kwarg run first, then each cell ``exec``'d in
-    the calling thread.
+    One namespace, the custom tools as globals, restricted builtins that still
+    include ``__import__`` and null out ``eval``/``exec``, the ``setup_code``
+    environment kwarg run first (its failure swallowed, as the library does),
+    then each cell ``exec``'d in the calling thread.
     """
 
     def __init__(self, custom_tools: dict[str, Any], setup_code: str | None = None, **_: Any):
-        safe = dict(vars(builtins))
+        safe: dict[str, Any] = {name: getattr(builtins, name) for name in _REPL_BUILTINS}
         for name in _REPL_BLOCKED_BUILTINS:
             safe[name] = None
         self.ns: dict[str, Any] = {"__builtins__": safe, "__name__": "__main__"}
