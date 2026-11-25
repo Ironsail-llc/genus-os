@@ -71,13 +71,22 @@ class TestCachedEmbedder:
         (vec,) = await b(["hello"])
         assert vec == pytest.approx([5.0, 0.0, 0.5])
 
-    def test_default_dir_is_outside_the_repo_and_overridable(self, monkeypatch, tmp_path):
+    @pytest.mark.asyncio
+    async def test_default_dir_is_outside_the_repo_and_overridable(self, monkeypatch, tmp_path):
+        """Overridden by argument (the CLI's --cache-dir), never by a raw env read:
+        configuration goes through robothor.settings, and the env-read ratchet
+        must not grow for an eval-only path."""
         repo = Path(__file__).resolve().parents[3]
-        monkeypatch.delenv(ec.CACHE_DIR_ENV, raising=False)
         default = ec.default_cache_dir()
         assert repo not in default.resolve().parents
-        monkeypatch.setenv(ec.CACHE_DIR_ENV, str(tmp_path / "x"))
-        assert ec.default_cache_dir() == tmp_path / "x"
+        assert default == Path.home() / ".cache" / "genus-os" / "memory-eval"
+        monkeypatch.setenv("ROBOTHOR_MEMORY_EVAL_CACHE_DIR", str(tmp_path / "ignored"))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "ignored"))
+        assert ec.default_cache_dir() == default
+        c = _cache(tmp_path / "x", Counting())
+        await c(["alpha"])
+        c.save()
+        assert any((tmp_path / "x").iterdir())
 
     @pytest.mark.asyncio
     async def test_a_corrupt_cache_file_is_ignored(self, tmp_path):
