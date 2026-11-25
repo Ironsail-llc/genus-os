@@ -313,3 +313,20 @@ async def test_update_fact_keeps_a_private_facts_scope_in_its_hash(monkeypatch: 
         "new text", tenant_id="t", category="preference", person_id=ALICE,
         scope_kind="user", scope_id=sid,
     ) in update.args[1]  # fmt: skip
+
+
+@pytest.mark.asyncio
+async def test_record_resolution_reports_a_failed_store_as_a_failure_not_a_refusal() -> None:
+    from robothor.memory import resolution
+
+    failed = {"fact_ids": [], "facts_failed": 1, "errors": ["OSError: embedding service down"]}
+    refused = {"fact_ids": [], "facts_refused": 1, "facts_failed": 0, "errors": []}
+    with patch.object(resolution, "write_facts", new=AsyncMock(return_value=failed)):
+        out = await resolution.record_resolution("the X alert", "confirmed safe")
+    assert out["error"].startswith("resolution not stored:")
+    assert "OSError: embedding service down" in out["error"]
+    assert "quality gate" not in out["error"]
+
+    with patch.object(resolution, "write_facts", new=AsyncMock(return_value=refused)):
+        out = await resolution.record_resolution("the X alert", "confirmed safe")
+    assert "quality gate refused it" in out["error"]
