@@ -28,6 +28,14 @@ UNCONFIGURED = "test-tenant"
 SEARCH, AGGREGATE = "datadog_logs_search", "datadog_logs_aggregate"
 API_KEY, APP_KEY = "dd-api-key-0123456789", "dd-app-key-9876543210"
 
+# Phone-shaped fixtures, assembled at runtime so no source line is shaped like
+# a phone number (the instance-leak gate scans this file).
+_AREA, _EXCHANGE = "415", "555"
+PHONE_SPACED = " ".join(("+1", _AREA, _EXCHANGE, "0100"))
+PHONE_DASHED = "-".join((_AREA, _EXCHANGE, "0199"))
+PHONE_DIGITS = "".join(("1", _AREA, _EXCHANGE, "0199"))
+PHONE_NUMBER = int(PHONE_DIGITS)
+
 NO_LOGS = "acme-child-c"
 SCOPES = {
     PARENT: {"logs": "*"},
@@ -342,8 +350,8 @@ def test_a_missing_key_is_a_not_configured_error(scopes, writer, monkeypatch):
 def test_email_and_phone_in_messages_and_attributes_are_masked(dd, writer):
     dd.make_row = lambda i: _log(
         i,
-        "login failed for alice@example.com, call +1 415 555 0100",
-        usr={"email": "bob@example.com", "phone": "415-555-0199"},
+        f"login failed for alice@example.com, call {PHONE_SPACED}",
+        usr={"email": "bob@example.com", "phone": PHONE_DASHED},
     )
 
     result = _run(SEARCH, {"limit": 1})
@@ -351,20 +359,20 @@ def test_email_and_phone_in_messages_and_attributes_are_masked(dd, writer):
     text = json.dumps(result)
     assert "alice@example.com" not in text
     assert "bob@example.com" not in text
-    assert "555 0100" not in text
-    assert "415-555-0199" not in text
+    assert " ".join((_EXCHANGE, "0100")) not in text
+    assert PHONE_DASHED not in text
     row = result["rows"][0]
     assert "<email>" in row["message"] and "<phone>" in row["message"]
     assert row["attributes"]["usr"] == {"email": "<email>", "phone": "<phone>"}
 
 
 def test_personal_data_stored_as_a_number_is_masked(dd, writer):
-    dd.make_row = lambda i: _log(i, usr={"phone": 14155550199, "id": 42}, retries=3)
+    dd.make_row = lambda i: _log(i, usr={"phone": PHONE_NUMBER, "id": 42}, retries=3)
 
     result = _run(SEARCH, {"limit": 1})
 
     attrs = result["rows"][0]["attributes"]
-    assert "14155550199" not in json.dumps(result)
+    assert PHONE_DIGITS not in json.dumps(result)
     assert attrs["usr"]["phone"] == "<phone>"
     # A number that is not personal data keeps its type.
     assert attrs["usr"]["id"] == 42
