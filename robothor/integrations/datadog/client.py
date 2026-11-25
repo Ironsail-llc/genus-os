@@ -231,6 +231,10 @@ class DatadogClient(_Base):
         """Raises :class:`DatadogError` unless Datadog accepts the API key."""
         self._send(api.validate_request())
 
+    def validate_app_key(self) -> None:
+        """Raises :class:`DatadogError` unless the application key may read logs."""
+        self._send(api.app_key_probe_request())
+
 
 class AsyncDatadogClient(_Base):
     """Async client over the shared pooled ``httpx.AsyncClient`` (``robothor.http_clients``)."""
@@ -293,6 +297,10 @@ class AsyncDatadogClient(_Base):
     async def validate(self) -> None:
         """Raises :class:`DatadogError` unless Datadog accepts the API key."""
         await self._send(api.validate_request())
+
+    async def validate_app_key(self) -> None:
+        """Raises :class:`DatadogError` unless the application key may read logs."""
+        await self._send(api.app_key_probe_request())
 
 
 # ── from settings ───────────────────────────────────────────────────────────

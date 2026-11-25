@@ -77,7 +77,20 @@ async def _reachable(ctx: DoctorContext) -> Result:
         return fail(f"Datadog call failed: {exc.kind}")
     except Exception as exc:  # noqa: BLE001 - a check reports, it does not raise
         return fail(f"Datadog call failed: {type(exc).__name__}")
-    detail = f"Datadog accepts the API key ({client.site})"
+    # /api/v1/validate ignores the application key, so a second call that needs
+    # it (and log read access) proves the pair; its filter matches no line.
+    try:
+        await ctx.run_blocking(client.validate_app_key)
+    except DatadogError as exc:
+        if exc.kind == "auth":
+            return fail(
+                "Datadog rejected the application key, or it may not read logs: "
+                "store a read-only key with log read access"
+            )
+        return fail(f"Datadog call failed: {exc.kind}")
+    except Exception as exc:  # noqa: BLE001 - a check reports, it does not raise
+        return fail(f"Datadog call failed: {type(exc).__name__}")
+    detail = f"Datadog accepts both keys ({client.site})"
     try:
         unscoped = await ctx.run_blocking(_unscoped_tenants, ctx)
     except Exception as exc:  # noqa: BLE001 - the tenant list is a note, not the verdict

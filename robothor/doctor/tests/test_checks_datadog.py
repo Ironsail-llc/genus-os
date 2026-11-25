@@ -42,8 +42,10 @@ def keys(monkeypatch):
     monkeypatch.setattr(dd_checks, "_keys_set", lambda _settings: True)
 
 
-def _answer(status: int, body: object = None):
+def _answer(status: int, body: object = None, *, app_key_status: int = 200):
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v2/logs/events/search":
+            return httpx.Response(app_key_status, json={"data": []})
         assert request.url.path == "/api/v1/validate"
         return httpx.Response(status, json=body if body is not None else {})
 
@@ -97,6 +99,16 @@ def test_a_rejected_key_fails_without_printing_it(keys, monkeypatch) -> None:
     result = _run()
     assert result.status == "fail"
     assert "rejected" in result.detail
+    assert API_KEY not in result.detail and APP_KEY not in result.detail
+
+
+def test_a_rejected_application_key_fails_even_when_the_api_key_is_valid(keys, monkeypatch) -> None:
+    monkeypatch.setattr(
+        dd_checks, "_make_client", _answer(200, {"valid": True}, app_key_status=403)
+    )
+    result = _run()
+    assert result.status == "fail"
+    assert "application key" in result.detail
     assert API_KEY not in result.detail and APP_KEY not in result.detail
 
 
