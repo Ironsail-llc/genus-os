@@ -485,6 +485,23 @@ class TestClaimWriteExtend:
         assert len(audit.rows) == 2, "at most one duplicate after the window"
 
     @pytest.mark.asyncio
+    async def test_a_replay_after_a_crash_before_the_extension_records_once_more(
+        self, audit, no_delivery
+    ) -> None:
+        """The engine's own replay of the entry finds its claim and records again at once."""
+
+        class ExtendFails(FakeRedis):
+            async def set(self, key: str, value: Any, nx: bool = False, ex: Any = None) -> Any:
+                if not nx:
+                    raise ConnectionError("engine went away before the extension")
+                return await super().set(key, value, nx=nx, ex=ex)
+
+        redis = ExtendFails()
+        assert await dd.handle_alert_event(_payload(), redis, message_id="1-0") == "recorded"
+        assert await dd.handle_alert_event(_payload(), redis, message_id="1-0") == "recorded"
+        assert len(audit.rows) == 2, "one duplicate, recorded on the replay"
+
+    @pytest.mark.asyncio
     async def test_a_failed_write_sets_no_key(self, audit, no_delivery) -> None:
         redis = FakeRedis()
         audit.fail = True
