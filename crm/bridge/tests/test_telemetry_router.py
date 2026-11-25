@@ -439,6 +439,101 @@ def test_personal_data_in_a_row_is_masked(datadog):
     assert row["attributes"]["contacts"] == ["<email>", 7]
 
 
+#: Credential shapes the platform redactor knows. Built from parts so no
+#: scanner reads this file as carrying a real secret.
+BEARER = "sk-" + "abc123def456ghi789jkl012mno345"
+DSN_PASSWORD = "hunter2" + "pass"
+
+
+def test_credentials_in_a_row_are_redacted(datadog):
+    datadog.search = _search_body(
+        rows=[
+            {
+                "id": "log-3",
+                "attributes": {
+                    "timestamp": "2026-11-25T10:00:00Z",
+                    "service": "shop-api",
+                    "status": "error",
+                    "host": "web-1",
+                    "message": f"upstream refused Authorization: Bearer {BEARER}",
+                    "tags": [f"dsn:postgres://bob:{DSN_PASSWORD}@db:5432/shop"],
+                    "attributes": {
+                        "http": {"url": f"https://api.example.invalid/v1?api_key={BEARER}"},
+                        "headers": [f"Authorization: Bearer {BEARER}"],
+                    },
+                },
+            }
+        ]
+    )
+
+    body = _ok(_client(CHILD_A).get("/api/telemetry/logs"))
+    text = json.dumps(body)
+
+    assert BEARER not in text
+    assert DSN_PASSWORD not in text
+    row = body["rows"][0]
+    assert "<redacted>" in row["message"]
+    assert "<redacted>" in row["tags"][0]
+    assert "<redacted>" in row["attributes"]["http"]["url"]
+    assert "<redacted>" in row["attributes"]["headers"][0]
+
+
+def test_a_credential_in_a_summary_bucket_is_redacted(datadog):
+    datadog.aggregate = {
+        "data": {"buckets": [{"by": {"@http.auth": f"Bearer {BEARER}"}, "computes": {"c0": 1}}]}
+    }
+
+    body = _ok(
+        _client(CHILD_A).get("/api/telemetry/logs/summary", params={"group_by": "@http.auth"})
+    )
+
+    assert BEARER not in json.dumps(body)
+    assert "<redacted>" in body["buckets"][0]["by"]
+
+
+@pytest.mark.parametrize("path", ["/api/telemetry/logs", "/api/telemetry/logs/summary"])
+def test_a_credential_in_the_query_never_reaches_the_audit_row(path, audit_rows):
+    _ok(_client(CHILD_A).get(path, params={"q": f'"{BEARER}"'}))
+
+    row = _telemetry_rows(audit_rows)[0]
+    assert BEARER not in json.dumps(row)
+    assert "<redacted>" in row["details"]["query"]
+
+
+# ─── trace correlation ─────────────────────────────────────────────────
+
+
+def test_a_row_carries_its_trace_and_span_ids(datadog):
+    datadog.search = _search_body(
+        rows=[
+            {
+                "id": "log-4",
+                "attributes": {
+                    "timestamp": "2026-11-25T10:00:00Z",
+                    "service": "shop-api",
+                    "status": "error",
+                    "message": "checkout failed",
+                    "trace_id": "8432918201992837465",
+                    "span_id": "1029384756",
+                    "attributes": {},
+                },
+            }
+        ]
+    )
+
+    row = _ok(_client(CHILD_A).get("/api/telemetry/logs"))["rows"][0]
+
+    assert row["trace_id"] == "8432918201992837465"
+    assert row["span_id"] == "1029384756"
+
+
+def test_a_row_without_a_trace_says_so(datadog):
+    row = _ok(_client(CHILD_A).get("/api/telemetry/logs"))["rows"][0]
+
+    assert row["trace_id"] is None
+    assert row["span_id"] is None
+
+
 # ─── audit ─────────────────────────────────────────────────────────────
 
 
