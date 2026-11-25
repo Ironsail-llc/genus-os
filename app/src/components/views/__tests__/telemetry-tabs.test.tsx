@@ -469,6 +469,19 @@ describe("a query handed in by a link", () => {
     expect(new URL(sent(/\/api\/telemetry\/logs\?/)[0], "http://x").searchParams.get("q")).toBe('"run_id=r1"');
   });
 
+  it("opens on the window the link carries, and shows it in the range picker", async () => {
+    const since = "2026-11-24T08:55:00.000Z";
+    render(<LogsView role="admin" query={'"run_id=r1"'} since={since} />);
+
+    await screen.findByTestId("telemetry-table");
+    const sent0 = new URL(sent(/\/api\/telemetry\/logs\?/)[0], "http://x");
+    expect(sent0.searchParams.get("since")).toBe(since);
+    expect(sent(/\/api\/telemetry\/logs\?/)).toHaveLength(1);
+    const picker = screen.getByTestId("telemetry-since") as HTMLSelectElement;
+    expect(picker.value).toBe(since);
+    expect(picker.selectedOptions[0].textContent).toMatch(/^Since /);
+  });
+
   it("switches to the Logs tab and runs a new query when the link changes", async () => {
     const { rerender } = render(<LogsView role="admin" />);
     await screen.findByTestId("telemetry-table");
@@ -495,6 +508,60 @@ describe("the organizations summary", () => {
     expect(within(summary).getByTestId("telemetry-org-acme-child-b").textContent).toContain("Not connected");
     expect(within(summary).getByTestId("telemetry-org-acme-child-c").textContent).toMatch(/too many requests|unavailable/i);
     expect(sent(/\/api\/telemetry\/overview/)).toHaveLength(1);
+  });
+
+  it("still lands when the page went off screen while it was being read", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (/\/api\/telemetry\/overview/.test(url)) {
+        requests.push(url);
+        await gate;
+        return { ok: true, status: 200, json: async () => OVERVIEW } as Response;
+      }
+      return base(url);
+    });
+
+    const { rerender } = render(<LogsView role="owner" rootAtHome hasChildTenants />);
+    await waitFor(() => expect(sent(/\/api\/telemetry\/overview/)).toHaveLength(1));
+    rerender(<LogsView role="owner" rootAtHome hasChildTenants visible={false} />);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    rerender(<LogsView role="owner" rootAtHome hasChildTenants visible />);
+
+    const summary = await screen.findByTestId("telemetry-orgs");
+    await within(summary).findByTestId("telemetry-org-acme-child-a");
+    expect(sent(/\/api\/telemetry\/overview/)).toHaveLength(1);
+  });
+
+  it("says which of an organization's two reads failed", async () => {
+    overrides = [
+      [
+        /\/api\/telemetry\/overview/,
+        () => ({
+          body: {
+            ...OVERVIEW,
+            tenants: [
+              { tenant_id: "acme-child-a", connected: true, errors: 5, firing_monitors: null, error_kind: "rate_limit" },
+              { tenant_id: "acme-child-b", connected: true, errors: null, firing_monitors: 2, error_kind: "network" },
+            ],
+          },
+        }),
+      ],
+    ];
+    render(<LogsView role="owner" rootAtHome hasChildTenants />);
+
+    const summary = await screen.findByTestId("telemetry-orgs");
+    const shop = await within(summary).findByTestId("telemetry-org-acme-child-a");
+    expect(within(shop).getByTestId("telemetry-org-errors").textContent).toBe("5");
+    expect(within(shop).getByTestId("telemetry-org-monitors").textContent).toMatch(/unavailable/i);
+    expect(within(shop).getByTestId("telemetry-org-monitors").getAttribute("title")).not.toMatch(/not shared/);
+    const clinic = within(summary).getByTestId("telemetry-org-acme-child-b");
+    expect(within(clinic).getByTestId("telemetry-org-errors").textContent).toMatch(/unavailable/i);
+    expect(within(clinic).getByTestId("telemetry-org-monitors").textContent).toBe("2");
   });
 
   it("is not read again when the tab changes", async () => {

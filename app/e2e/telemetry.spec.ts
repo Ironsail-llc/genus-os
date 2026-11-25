@@ -395,6 +395,9 @@ test.describe("Observe › Logs › Datadog", () => {
       .toBe(`"run_id=${RUN_ID}"`);
     expect(new URL(page.url()).searchParams.get("v")).toBe("logs");
     expect(new URL(page.url()).searchParams.get("q")).toBe(`"run_id=${RUN_ID}"`);
+    // The search opens a little before the run started, not on the last hour.
+    const since = new URL(seen.rows[seen.rows.length - 1]).searchParams.get("since");
+    expect(since).toBe("2099-01-01T08:55:00.000Z");
   });
 
   test("the organizations summary is shown to the root at home", async ({ page }) => {

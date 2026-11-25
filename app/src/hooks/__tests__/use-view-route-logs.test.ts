@@ -38,6 +38,31 @@ describe("the logs query parameter", () => {
     expect(logsLink(QUERY)).toBe(`?v=logs&q=${encodeURIComponent(QUERY)}`);
   });
 
+  it("carries the window the search should open on", () => {
+    const since = "2099-01-01T08:55:00.000Z";
+    const search = `?v=logs&q=${encodeURIComponent(QUERY)}&since=${encodeURIComponent(since)}`;
+
+    expect(parseViewRoute(search).since).toBe(since);
+    expect(parseViewRoute(`?v=logs&q=x&since=7d`).since).toBe("7d");
+    expect(logsLink(QUERY, since)).toBe(search);
+    expect(formatViewRoute({ view: "runs", settingsPage: "providers" }, search)).toBe("?v=runs");
+  });
+
+  it("drops a window the bridge would refuse, or one without a search", () => {
+    expect("since" in parseViewRoute("?v=logs&q=x&since=yesterday")).toBe(false);
+    expect("since" in parseViewRoute("?v=logs&since=7d")).toBe(false);
+  });
+
+  it("opens the logs view on a query and window through the hook", () => {
+    const { result } = renderHook(() => useViewRoute());
+
+    act(() => result.current.openLogs(QUERY, "7d"));
+
+    expect(result.current.query).toBe(QUERY);
+    expect(result.current.since).toBe("7d");
+    expect(new URLSearchParams(window.location.search).get("since")).toBe("7d");
+  });
+
   it("opens the logs view on a query through the hook, with a history entry", () => {
     const { result } = renderHook(() => useViewRoute());
 
