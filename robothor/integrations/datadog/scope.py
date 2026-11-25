@@ -67,8 +67,9 @@ _CLOSE = frozenset(_OPEN.values())
 _STRUCTURAL = frozenset("()[]{}\"'\\")
 _REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
 #: A metric tag: starts with a letter; no space, comma, brace or quote, any
-#: of which could change a ``{tag,tag}`` metric filter.
-_TAG = re.compile(r"[A-Za-z][A-Za-z0-9_:./\-]*")
+#: of which could change a ``{tag,tag}`` metric filter. A ``*`` wildcard in
+#: the value is allowed (``service:shop-*``): it cannot leave the braces.
+_TAG = re.compile(r"[A-Za-z][A-Za-z0-9_:./\-*]*")
 
 
 @dataclass(frozen=True)
