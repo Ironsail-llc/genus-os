@@ -382,33 +382,41 @@ KINDS = {
 
 
 class TestHedges:
-    def test_gold_with_a_competing_value_of_its_kind_is_not_settled_by_rule(self):
-        for text in (
+    """A gold beside a rival of its own kind is a hedge, and wrong by rule.
+
+    It was first sent to the LLM judge. Validation then showed the local judge
+    (qwen3:8b) accepting 55 of 150 planted hedges because "the gold appears in
+    the answer", so the rubric's "hedges between several things is wrong" is
+    applied by rule instead.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
             "Kelvaro Systems or Brivane Labs",
             "Brivane Labs (previously Kelvaro Systems)",
             "Brivane Labs, then Kelvaro Systems",
-        ):
-            assert ea.judge_rules(_case(), _answer(text), KNOWN, KINDS) is None, text
+        ],
+    )
+    def test_gold_with_a_rival_of_its_kind_is_confident_wrong_by_rule(self, text):
+        v = ea.judge_rules(_case(), _answer(text), KNOWN, KINDS)
+        assert v is not None and not v.correct and v.confident_wrong
+        assert v.method == "rule" and "hedge" in v.reason
 
     def test_gold_with_a_value_of_another_kind_is_still_correct(self):
         v = ea.judge_rules(_case(), _answer("Kelvaro Systems, in Velmere"), KNOWN, KINDS)
         assert v is not None and v.correct
 
     @pytest.mark.asyncio
-    async def test_a_hedge_goes_to_the_llm_and_is_wrong_without_one(self):
-        seen = []
-
+    async def test_a_hedge_never_reaches_the_llm(self):
         async def llm(case, answer):
-            seen.append(answer.text)
-            return False, "hedges"
+            raise AssertionError("a hedge is settled by rule")
 
         hedge = _answer("Kelvaro Systems or Brivane Labs")
         v = await ea.judge(_case(), hedge, known_values=KNOWN, kinds=KINDS, llm=llm)
-        assert not v.correct and v.method == "llm" and seen == [hedge.text]
-        v = await ea.judge(_case(), hedge, known_values=KNOWN, kinds=KINDS)
-        assert not v.correct
+        assert not v.correct and v.confident_wrong
 
-    def test_planted_hedges_are_expected_wrong_and_reach_the_llm(self):
+    def test_planted_hedges_contain_the_gold_and_are_judged_wrong(self):
         w = _world()
         known, kinds = ea.known_values(w), ea.known_kinds(w)
         hedges = [p for p in ea.planted_answers(w) if p.kind == "hedge"]
@@ -416,7 +424,8 @@ class TestHedges:
         for p in hedges:
             assert not p.expect_correct
             assert any(ea.normalise(g) in ea.normalise(p.answer.text) for g in p.case.gold)
-            assert ea.judge_rules(p.case, p.answer, known, kinds) is None, p
+            v = ea.judge_rules(p.case, p.answer, known, kinds)
+            assert v is not None and not v.correct, p
 
 
 class TestValidationPerKind:
