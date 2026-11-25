@@ -132,6 +132,8 @@ class SeededWorld:
     chat_session_keys: list[str] = field(default_factory=list)
     #: world turn id -> chat_messages.id
     turn_message_ids: dict[str, int] = field(default_factory=dict)
+    #: Database time just before the post-seed ANALYZE.
+    seeded_at: datetime | None = None
 
 
 async def _default_embed_batch(texts: list[str]) -> list[list[float]]:
@@ -182,6 +184,7 @@ async def seed_world(
             _seed_crm(w, tenant, seeded)
             await _seed_documents(w, tenant, embed, seeded)
             await _seed_chat(w, tenant, embed, seeded)
+    seeded.seeded_at = _analyze_seeded_tables()
     logger.info(
         "eval world seeded: %d facts, %d entities, %d crm people, %d documents, %d chat sessions",
         len(seeded.fact_ids),
@@ -191,6 +194,33 @@ async def seed_world(
         len(seeded.chat_session_keys),
     )
     return seeded
+
+
+#: The tables bulk seeding fills. Analysed once seeding ends, so the queries
+#: that follow plan against real row counts rather than an empty table's.
+ANALYZED_TABLES: tuple[str, ...] = (
+    "memory_facts",
+    "memory_entities",
+    "memory_relations",
+    "crm_people",
+    "crm_companies",
+    "kb_documents",
+    "kb_chunks",
+    "chat_sessions",
+    "chat_messages",
+)
+
+
+def _analyze_seeded_tables() -> datetime:
+    from robothor.db.connection import get_connection
+
+    with get_connection(autocommit=True) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT clock_timestamp()")
+        started: datetime = cur.fetchone()[0]
+        for table in ANALYZED_TABLES:
+            cur.execute(f"ANALYZE {table}")  # fixed names from ANALYZED_TABLES
+    return started
 
 
 def _ensure_world_tenant(tenant_id: str) -> None:
