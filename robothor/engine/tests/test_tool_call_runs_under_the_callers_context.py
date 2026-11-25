@@ -53,6 +53,7 @@ RUN_CONTEXT: dict[str, Any] = {
     "identity": MEMBER,
     # In the fold, the role capability tier is a ToolContext field too.
     "capability_tier": "unrestricted",
+    "trace_id": "0af7651916cd43dd8448eb211c80319c",
 }
 
 
