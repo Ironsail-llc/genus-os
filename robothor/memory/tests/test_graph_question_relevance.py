@@ -9,6 +9,8 @@ that answer what was asked, not the entity's most important facts:
   importance of the others;
 * a fact about an entity the question itself names is left to the dense and
   keyword legs, which find it by name; the graph returns what they cannot;
+* a reached fact that shares no word with the question is not returned (a
+  question that is only a name keeps the walk's own order);
 * every relevance-ranked fact still obeys tenant, reader, person scope and
   trust: a private or foreign fact that matches the question word for word
   never surfaces.
@@ -122,9 +124,35 @@ def test_the_reached_fact_that_answers_the_question_comes_first(world: Graph) ->
     assert first.payload["graph_path"] == ["Alice Smith", "Quorvane Example"]
     assert first.payload["graph_hops"] == 1
     assert first.payload["graph_relevance"] > 0
-    assert first.leg_scores["graph"] > max(
-        c.leg_scores["graph"] for c in got if int(c.id) in w["noise"]
-    )
+    assert first.leg_scores["graph"] > 0
+
+
+def test_a_reached_fact_that_shares_no_word_with_the_question_is_left_out(
+    world: Graph,
+) -> None:
+    """Facts the walk reaches but the question does not ask about crowd the
+    reranker's head and push conversation segments out (raw detail fell from
+    43 to 31 of 110 on the eval world with them in): a search returns only the
+    reached facts that match what was asked."""
+    w = _employer_world(world)
+
+    got = _search()
+
+    assert w["hq"] in _ids(got)
+    assert not set(_ids(got)) & w["noise"]
+    assert all(c.payload["graph_relevance"] > 0 for c in got)
+
+
+def test_a_question_that_is_only_a_name_ranks_by_the_walk(world: Graph) -> None:
+    """Nothing is left to match once the name is removed: the reached facts
+    come back in the walk's own order (importance first), as before."""
+    w = _employer_world(world)
+
+    got = _search("Alice Smith")
+
+    assert set(_ids(got)) <= w["noise"] | {w["hq"]}
+    assert set(_ids(got)) & w["noise"]
+    assert all(c.payload["graph_relevance"] == 0 for c in got)
 
 
 def test_importance_does_not_outrank_the_question(world: Graph) -> None:

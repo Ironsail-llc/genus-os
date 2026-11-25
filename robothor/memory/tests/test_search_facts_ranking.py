@@ -225,6 +225,26 @@ async def test_the_graph_leg_keeps_its_reserved_places(env: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
+async def test_a_graph_row_another_leg_found_first_carries_its_relevance(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Fusion keeps the first leg's payload; the graph's labels, its
+    relevance to the question included, are carried onto the row."""
+    shared = _row(700, "Bob runs the shipping team", kw_score=0.5)
+    hit = _graph_hit(700, "Bob runs the shipping team", 0.9)
+    hit.payload["graph_relevance"] = 0.3
+    cur = _Cursor(vector=_dense(5), keyword=[shared])
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=[hit]):
+        results = await _search(cur)
+
+    row = next(r for r in results if r["id"] == 700)
+    assert row["leg_ranks"].keys() >= {"keyword", "graph"}
+    assert row["graph_relevance"] == 0.3
+
+
+@pytest.mark.asyncio
 async def test_include_graph_false_runs_no_graph_leg(env: pytest.MonkeyPatch) -> None:
     hops = [_graph_hit(700, "Bob runs the shipping team", 0.9)]
     cur = _Cursor(vector=_dense(20), keyword=[])

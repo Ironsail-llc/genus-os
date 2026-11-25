@@ -103,8 +103,14 @@ def _chain(world: Graph, *, fillers: int = 12) -> dict[str, int]:
         world.sql(
             "UPDATE memory_facts SET embedding = %s::vector WHERE id = %s", (str(_VECTOR), fid)
         )
-    # Reachable only through two edges: no embedding, no shared words.
-    far = world.fact("Carol White operates the northern depot", about=(c,), importance=0.9)
+    # Reachable only through two edges: no embedding, and not every word of
+    # the query (so the keyword leg misses it), but the words it shares with
+    # the question are what the graph ranks it by.
+    far = world.fact(
+        "Carol White operates the northern depot under the logistics agreement",
+        about=(c,),
+        importance=0.9,
+    )
     return {"a": a, "b": b, "c": c, "seed": seed, "far": far}
 
 
@@ -130,6 +136,7 @@ async def test_a_two_hop_fact_keeps_a_reserved_place_when_the_reranker_discards_
     assert row["graph_hops"] == 2
     assert row["graph_path"] == ["Alice Smith", "Bob Jones", "Carol White"]
     assert row["source"] == "graph"
+    assert row["graph_relevance"] > 0
 
 
 @pytest.mark.asyncio
