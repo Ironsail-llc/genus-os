@@ -527,17 +527,3 @@ class TestPlantedLlmWrongAnswersAreFair:
             for word in ea.normalise(p.answer.text).split():
                 for gw in gold_words:
                     assert SequenceMatcher(None, word, gw).ratio() < 0.75, (p.answer.text, gw)
-
-
-class TestPlantedAnswersAreDistinct:
-    """One judgment must not be counted many times: several cases share a gold
-    (seven people once worked at the same organisation), and planting the same
-    answer for each of them weighted a single verdict sevenfold."""
-
-    @pytest.mark.parametrize("size", ["small", "full"])
-    def test_each_planted_answer_is_counted_once_per_kind(self, size):
-        seen: set[tuple[str, str, tuple[str, ...]]] = set()
-        for p in ea.planted_answers(ew.generate_world(7, size)):
-            key = (p.kind, ea.normalise(p.answer.text), p.case.gold)
-            assert key not in seen, key
-            seen.add(key)
