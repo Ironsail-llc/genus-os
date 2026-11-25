@@ -432,9 +432,13 @@ class TestRunPrivateReader:
         room = "webchat:agent:main:room:33333333-3333-4333-8333-333333333333"
         assert self._reader(trigger_detail=room) is None
 
-    def test_a_telegram_direct_message_but_not_a_group(self) -> None:
+    def test_a_telegram_run_reads_shared_rows_only(self) -> None:
+        """A Telegram run's person may come from a chat-id lookup
+        (link_run_person) when the live identity carried none, and then the
+        live call had no private reader. The record does not say which, so a
+        direct message is replayed with no reader, as a group is."""
         dm = self._reader(trigger_type="telegram", trigger_detail="chat:12345|sender:x", user_id="")
-        assert dm == (self.PERSON, None)
+        assert dm is None
         group = self._reader(trigger_type="telegram", trigger_detail="chat:-100|sender:x")
         assert group is None
 
