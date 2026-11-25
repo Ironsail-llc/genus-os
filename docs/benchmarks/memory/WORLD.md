@@ -292,7 +292,9 @@ from the world:
 - **wrong:** the confuser's value, a superseded value, the other tenant's
   value, a random other entity, an answered abstention, a hedge (the gold
   beside a rival of its own kind), and a reordered name or organisation root
-  that belongs to someone else;
+  that belongs to someone else. That last kind never shares a word with the
+  gold or nearly spells one: invented roots such as Drodrel and Drotrel
+  differ by a single letter;
 - **right:** the gold in several sentence shapes, and the gold as a
   reordered name or a bare organisation root.
 

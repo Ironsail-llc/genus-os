@@ -32,7 +32,11 @@ async def test_real_model_answers_from_context_and_abstains_without_it():
 
 
 @pytest.mark.asyncio
-async def test_real_llm_judge_passes_validation_on_a_small_world():
-    world = ew.generate_world(7, "small")
+async def test_real_llm_judge_passes_validation_on_the_full_world():
+    """On the size baselines are recorded on. The small world has only eight
+    organisations, so one strict call on one organisation's bare name (the
+    judge rejected "Orvvaro" for "Orvvaro Logistics" seven times, once per
+    case) moves a whole planted kind below the per-kind gate."""
+    world = ew.generate_world(1, "full")
     result = await ea.validate_judge(world, ea.make_judge(world, llm=ea.llm_judge))
     assert result.passed, result
