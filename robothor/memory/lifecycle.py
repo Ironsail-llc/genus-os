@@ -1509,6 +1509,26 @@ async def _chat_ttl_step(tenant_ids: list[str]) -> dict[str, int]:
     return stats
 
 
+async def sync_crm_identity(tenant_ids: list[str]) -> dict[str, int]:
+    """Keep every tenant's CRM people and companies linked to their memory nodes.
+
+    The CRM DAL keeps the link current on each write; this nightly pass catches
+    what bypassed the DAL (imports, direct SQL) and any hook that failed. One
+    tenant failing does not stop the others.
+    """
+    from robothor.memory import identity
+
+    done = failed = 0
+    for tid in tenant_ids:
+        try:
+            await asyncio.to_thread(identity.sync_crm_entities, tid)
+            done += 1
+        except Exception as e:
+            failed += 1
+            logger.warning("CRM identity sync failed for tenant %s: %s", tid, e)
+    return {"tenants": done, "failed": failed}
+
+
 async def run_lifecycle_maintenance() -> dict[str, Any]:
     """Run full lifecycle maintenance on the fact store.
 
@@ -1721,6 +1741,13 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
             step_timings["intent_inference"],
         )
 
+    # Step 14: CRM-anchored identity — every CRM person and company keeps one
+    # linked memory node, whatever wrote the CRM row.
+    t12 = time.monotonic()
+    identity_stats = await sync_crm_identity(tenant_ids)
+    step_timings["crm_identity"] = time.monotonic() - t12
+    logger.info("Step 14 (crm identity): %s (%.1fs)", identity_stats, step_timings["crm_identity"])
+
     total_time = time.monotonic() - t0
     logger.info("Lifecycle maintenance complete in %.1fs: %s", total_time, step_timings)
 
@@ -1743,5 +1770,6 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         "insights": insight_result,
         "relations_inferred": core["relations_inferred"],
         "intents_proposed": intents_proposed,
+        "crm_identity": identity_stats,
         "step_timings": step_timings,
     }
