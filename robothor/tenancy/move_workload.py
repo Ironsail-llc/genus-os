@@ -212,8 +212,13 @@ UNTOUCHED_TABLES: dict[str, str] = {
     "memory_facts_audit": _MEMORY,
     "memory_insights": _MEMORY,
     "memory_intents": _MEMORY,
+    # The graph's joins (migration 176) stay with the facts, entities and
+    # edges they join, which stay with the tenant.
+    "memory_mentions": _MEMORY,
     "memory_procedures": _MEMORY,
+    "memory_relation_evidence": _MEMORY,
     "memory_relations": _MEMORY,
+    "memory_resolution_decisions": _MEMORY,
     "memory_vault": _SECRETS,
     "message": _WORKSPACE,
     "message_participant": _WORKSPACE,
