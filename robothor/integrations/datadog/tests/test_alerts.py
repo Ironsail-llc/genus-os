@@ -30,7 +30,7 @@ def _payload(**over: Any) -> dict[str, Any]:
         "transition": "Triggered",
         "status": "Alert",
         "priority": "P2",
-        "query": "logs(\"service:shop-api status:error\").rollup(\"count\").last(\"5m\") > 10",
+        "query": 'logs("service:shop-api status:error").rollup("count").last("5m") > 10',
         "tags": "env:prod, org:acme-child-a,service:shop-api",
         "link": "https://app.example.com/monitors/12345",
         "date": "1764000000000",
@@ -208,9 +208,7 @@ class TestRecord:
 
     @pytest.mark.asyncio
     async def test_no_agent_run_is_started(self, audit, no_delivery) -> None:
-        with patch(
-            "robothor.engine.runner.AgentRunner.execute", new_callable=AsyncMock
-        ) as execute:
+        with patch("robothor.engine.runner.AgentRunner.execute", new_callable=AsyncMock) as execute:
             await dd.handle_alert_event(_payload(), FakeRedis())
         execute.assert_not_called()
 

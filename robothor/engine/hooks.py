@@ -224,6 +224,40 @@ def build_event_triggers(
     return dict(_LEGACY_EVENT_TRIGGERS)
 
 
+async def _record_datadog_alert(decoded: dict[str, Any], redis_client: Any) -> None:
+    from robothor.integrations.datadog.alerts import handle_alert_event
+
+    raw = decoded.get("payload", "")
+    try:
+        payload = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        payload = {}
+    await handle_alert_event(payload, redis_client)
+
+
+#: Streams the platform itself handles, whatever the manifests say: stream ->
+#: ``async handler(decoded envelope, redis client)``. Only the engine that owns
+#: an event runs its handler. A handler that raises has the event moved to
+#: ``<stream>:dlq``.
+_PLATFORM_STREAM_HANDLERS: dict[str, Any] = {"datadog": _record_datadog_alert}
+
+
+def _datadog_in_use() -> bool:
+    from robothor.settings import get_settings
+
+    return bool(get_settings().integrations.datadog_scopes.strip())
+
+
+def platform_streams() -> tuple[str, ...]:
+    """The platform streams this engine reads, on top of its manifests' hooks.
+
+    ``datadog`` (monitor alerts) is read once the instance uses Datadog, that
+    is once ``ROBOTHOR_DATADOG_SCOPES`` is set; an instance without it adds no
+    stream and no consumer group.
+    """
+    return ("datadog",) if _datadog_in_use() else ()
+
+
 _neutralise_boundary = neutralise_boundary
 
 
@@ -753,6 +787,8 @@ class EventHooks:
 
         # Build triggers from manifests (with legacy fallback)
         self._event_triggers = build_event_triggers(self.config.manifest_dir, manifests)
+        for platform_stream in platform_streams():
+            self._event_triggers.setdefault(platform_stream, [])
         bare_streams = list(self._event_triggers.keys())
 
         # Build prefixed stream keys and a reverse lookup
@@ -890,6 +926,22 @@ class EventHooks:
         retry_agents = {a for a in decoded.get(RETRY_AGENTS_FIELD, "").split(",") if a}
         retry_workflows = {w for w in decoded.get(RETRY_WORKFLOWS_FIELD, "").split(",") if w}
         addressed = bool(retry_agents or retry_workflows)
+
+        # The platform's own handler for this stream (a copy addressed to
+        # agents or workflows was already handled the first time).
+        platform_handler = _PLATFORM_STREAM_HANDLERS.get(bare_stream)
+        if platform_handler is not None and not addressed:
+            try:
+                await platform_handler(decoded, redis_client)
+            except Exception as e:
+                logger.error(
+                    "Platform handler for %s failed (%s); moving the event to the DLQ",
+                    bare_stream,
+                    type(e).__name__,
+                )
+                await self._dead_letter(
+                    redis_client, self._source_key.get(stream, stream), decoded, event_type
+                )
 
         # Matching workflows first: the event goes to each one's backlog, in
         # the order events were read, before it is acknowledged; the backlog

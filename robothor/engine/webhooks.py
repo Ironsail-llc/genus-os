@@ -8,7 +8,8 @@ body, GitHub-style), ``stripe_t_v1`` (``t=<unix>,v1=<hex>`` over
 prefixed, with the integer unix-seconds timestamp in the channel's
 ``timestamp_header`` and the same timestamp window; the signed string uses the
 canonical integer, so a zero-padded timestamp fails the digest rather than
-passing). A channel may also name a delivery id header, in which case a replayed delivery is answered as a duplicate and
+passing) or ``header_secret`` (the shared secret itself in a custom header,
+compared in constant time, for senders that cannot sign, such as Datadog). A channel may also name a delivery id header, in which case a replayed delivery is answered as a duplicate and
 not re-published. A ``google_oidc`` channel takes Google Cloud Pub/Sub push
 instead: the ``Authorization: Bearer`` ID token is verified against the
 channel's audience and service account, the Pub/Sub ``messageId`` is the
@@ -47,10 +48,13 @@ logger = logging.getLogger(__name__)
 # Must match hooks.py / event_bus.py
 STREAM_PREFIX = "robothor:events:"
 
-SIGNATURE_SCHEMES = ("hmac_hex", "stripe_t_v1", "hmac_ts_hex", "google_oidc")
+SIGNATURE_SCHEMES = ("hmac_hex", "stripe_t_v1", "hmac_ts_hex", "google_oidc", "header_secret")
 
 # Headers tried in order when a channel names no signature_header.
 DEFAULT_SIGNATURE_HEADERS = ("X-Hub-Signature-256", "X-Signature-256", "X-Webhook-Signature")
+
+# header_secret: header carrying the shared secret when a channel names none.
+DEFAULT_SECRET_HEADER = "X-Webhook-Secret"
 
 # hmac_ts_hex: header carrying the signed timestamp when a channel names none.
 DEFAULT_TIMESTAMP_HEADER = "X-Webhook-Timestamp"
@@ -324,6 +328,22 @@ def _verify_hmac_ts_hex(
     return False, "bad digest"
 
 
+def _verify_header_secret(supplied: str, secret: str) -> tuple[bool, str]:
+    """The header carries the shared secret itself; compare in constant time.
+
+    For senders that cannot sign a body but can send a custom header (Datadog's
+    webhook integration). Compared as bytes, so a non-ASCII value is a mismatch
+    rather than a ``TypeError``. The reason never contains either value.
+    """
+    if not secret:
+        return False, "missing secret"
+    if not supplied:
+        return False, "missing secret header"
+    if hmac.compare_digest(supplied.encode("utf-8"), secret.encode("utf-8")):
+        return True, ""
+    return False, "secret mismatch"
+
+
 def _verify_signature(
     channel: WebhookChannel,
     payload_bytes: bytes,
@@ -344,6 +364,8 @@ def _verify_signature(
         return _verify_hmac_ts_hex(
             payload_bytes, signature, timestamp, secret, channel.timestamp_tolerance_seconds
         )
+    if channel.signature_scheme == "header_secret":
+        return _verify_header_secret(signature, secret)
     return False, f"unknown signature scheme {channel.signature_scheme!r}"
 
 
@@ -839,6 +861,8 @@ def get_webhook_router(
             signature = ""
         elif ch.signature_header:
             signature = request.headers.get(ch.signature_header, "")
+        elif ch.signature_scheme == "header_secret":
+            signature = request.headers.get(DEFAULT_SECRET_HEADER, "")
         else:
             signature = next(
                 (v for h in DEFAULT_SIGNATURE_HEADERS if (v := request.headers.get(h, ""))),

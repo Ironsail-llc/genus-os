@@ -389,7 +389,49 @@ async def test_a_child_engine_does_not_record_the_roots_event(
     assert audit.rows == []
 
 
-def test_every_engine_listens_on_the_datadog_stream() -> None:
+def test_an_instance_using_datadog_listens_on_the_datadog_stream(monkeypatch) -> None:
     from robothor.engine.hooks import platform_streams
+    from robothor.settings import reset_settings
 
-    assert "datadog" in platform_streams()
+    monkeypatch.setenv("ROBOTHOR_DATADOG_SCOPES", '{"acme-child-a": {"logs": "service:shop-api"}}')
+    reset_settings()
+    try:
+        assert "datadog" in platform_streams()
+    finally:
+        reset_settings()
+
+
+def test_an_instance_without_datadog_adds_no_stream(monkeypatch) -> None:
+    from robothor.engine.hooks import platform_streams
+    from robothor.settings import reset_settings
+
+    monkeypatch.delenv("ROBOTHOR_DATADOG_SCOPES", raising=False)
+    reset_settings()
+    try:
+        assert "datadog" not in platform_streams()
+    finally:
+        reset_settings()
+
+
+@pytest.mark.asyncio
+async def test_the_consumer_creates_the_datadog_group_when_in_use(
+    engine_config, monkeypatch
+) -> None:
+    """``start()`` subscribes to the platform stream on top of the manifests' streams."""
+    import asyncio
+
+    from robothor.engine.tests.test_hooks_tenancy import FakeStreams
+
+    fake = FakeStreams()
+    hooks, _ = _root_hooks(engine_config)
+    fake.on_idle = hooks._stop_event.set
+    with (
+        patch("robothor.engine.hooks.platform_streams", return_value=("datadog",)),
+        patch("redis.asyncio.Redis", return_value=fake),
+        patch("robothor.engine.hooks.build_event_triggers", return_value={}),
+        patch("robothor.engine.leader.ha_leader_enabled", return_value=False),
+        patch("robothor.crm.dal.get_tenant", return_value={"id": DEFAULT_TENANT}),
+    ):
+        await asyncio.wait_for(hooks.start(), timeout=5)
+
+    assert (STREAM, "engine") in fake.created
