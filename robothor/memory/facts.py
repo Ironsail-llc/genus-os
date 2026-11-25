@@ -1085,8 +1085,32 @@ def _assign_relevance(results: list[dict[str, Any]]) -> None:
         r["relevance"] = float(score)
 
 
+#: Weights of the unified blend. Utility took over the 0.05 that raw
+#: ``access_count`` had: ranking by how often a fact was retrieved made it
+#: retrieved more, whatever it was worth.
+BLEND_WEIGHTS: dict[str, float] = {
+    "relevance": 0.55,
+    "recency": 0.25,
+    "importance": 0.15,
+    "utility": 0.05,
+}
+
+#: Largest relevance lead utility can overturn, other signals equal: utility
+#: in [-1, 1] spans exactly ``BLEND_WEIGHTS["utility"]`` of blend, so a fact
+#: more relevant by more than this ranks first whatever either's utility.
+UTILITY_RANK_MARGIN = BLEND_WEIGHTS["utility"] / BLEND_WEIGHTS["relevance"]
+
+
+def utility_rank_term(utility: float | None) -> float:
+    """Blend contribution of a fact's utility: 0 when neutral or unknown."""
+    if utility is None:
+        return 0.0
+    u = max(-1.0, min(1.0, float(utility)))
+    return BLEND_WEIGHTS["utility"] * u / 2.0
+
+
 def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    """Unified-score re-rank (relevance + recency + importance + access), then dedupe.
+    """Unified-score re-rank (relevance + recency + importance + utility), then dedupe.
 
     Per live feedback, recency is weighted heavily (operator wants the freshest
     of several relevant hits surfaced first) while relevance stays the largest
@@ -1127,8 +1151,12 @@ def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any
         imp = 0.5 if imp is None else float(imp)
         age_s = r.get("age_seconds")
         recency = 0.3 if age_s is None else 0.5 ** (float(age_s) / 3600.0 / _RECENCY_HALFLIFE_HOURS)
-        acc_norm = min(float(r.get("access_count") or 0) / 20.0, 0.3)
-        blend = 0.55 * rel + 0.25 * recency + 0.15 * imp + 0.05 * acc_norm
+        blend = (
+            BLEND_WEIGHTS["relevance"] * rel
+            + BLEND_WEIGHTS["recency"] * recency
+            + BLEND_WEIGHTS["importance"] * imp
+            + utility_rank_term(r.get("utility"))
+        )
         if wide_on and r.get("rerank_relevant") == "yes":
             blend += 0.10  # cross-encoder confirmed relevance — soft boost, not a gate
         if coherence_on:
@@ -1198,7 +1226,7 @@ def _fact_candidates(rows: list[dict[str, Any]], leg: str, score_key: str) -> li
 
 _FACT_COLUMNS = """id, fact_text, category, entities, confidence, source_type,
                    metadata, created_at, importance_score, access_count, superseded_by,
-                   person_id,
+                   person_id, utility,
                    EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds"""
 
 

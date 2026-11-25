@@ -384,20 +384,33 @@ Every fact has lifecycle columns that drive autonomous maintenance:
 | `access_count` | Incremented each time recall returns the fact to an agent |
 | `last_accessed` | Set to now each time recall returns the fact (insert time until then) |
 | `importance_score` | LLM-judged (0.0-1.0); 0.5 until judged |
-| `decay_score` | Computed: recency + access + reinforcement + importance |
+| `decay_score` | Computed: recency + fading access + reinforcement + importance + utility |
 | `reinforcement_count` | Incremented when fact is confirmed by new evidence |
+| `outcome_failures` | Failed runs whose recalls returned the fact |
+| `outcome_successes` | Successful runs whose recalls returned the fact (migration 180) |
+| `outcome_citations` | Successful runs whose answer used the fact (migration 180) |
+| `utility` | Computed nightly from the three outcome counts, in (-1, 1) (migration 180) |
 
 **Decay formula:**
 
 ```
-recency = exp(-hours_since_access * ln(2) / 72)    # 72h half-life
-access_boost = min(ln(1 + access_count) / 5, 0.3)
+days_since_use = hours_since_use / 24
+recency = 0.5 ** (hours_since_use / 72)                        # 72h half-life
+access_boost = min(ln(1 + access_count) / 5, 0.3) * 0.5 ** (days_since_use / 30)
 reinforcement_boost = min(ln(1 + reinforcement_count) / 5, 0.2)
 importance_floor = importance_score * 0.4
-score = max(importance_floor, recency) + access_boost + reinforcement_boost
+utility_term = 0.3 * utility             if utility >= 0       # at most +0.3
+               max(-0.4, 0.6 * utility)  if utility <  0       # at most -0.4
+score = clamp(max(importance_floor, recency) + access_boost + reinforcement_boost
+              + utility_term, 0, 1)
 ```
 
-A fact with high importance can never fully decay (importance_floor). Frequently accessed facts resist decay via access_boost.
+A fact with high importance can never fully decay (importance_floor). Use
+resists decay, but use fades: the access boost halves every 30 days since the
+last use, so a fact recalled once a year ago scores as if it had never been
+recalled. Utility replaces the old failure-only penalty with one signed term,
+so failures are not counted twice. The failure side is never milder than the
+old 0.1 per failure and reaches the old 0.4 cap at four failures, as before.
 
 **What counts as use.** A fact is used when recall returns it to an agent: the
 `search_memory` tool (every fact row it returns) and warm-up entity recall
@@ -420,13 +433,80 @@ they were.
 `scripts/memory_decay_backfill.py` recovers from `fact_access_log`. Decay and
 prune read the greater of each live column and its shadow, so that history
 counts without double-counting a search hit that is both logged and recorded.
-Retrieval ranking reads only the live `access_count`.
+Retrieval ranking reads neither: it reads `utility` (below).
 
 **Prune.** A fact is retired when its decay score is below 0.1, its
-importance below 0.3, and it has never been recalled (both use counts zero),
-outside the protected categories and operator-confirmed facts. One recall
-gives an access boost of ln 2 / 5 ≈ 0.14, which keeps a used fact above the
-decay threshold.
+importance below 0.3, and it has not been used recently enough to matter —
+never recalled, or last recalled more than 90 days ago (three access-boost
+half-lives) — outside the protected categories (decision, preference,
+resolution) and operator-confirmed facts, which are never pruned. A fact
+recalled last week keeps its recency and boost and stays. Positive utility
+protects in proportion: it lifts the decay score by up to 0.3, so a fact that
+has helped runs stays above the threshold however long ago it was last
+recalled, while a fact with low utility gets no such lift.
+
+The first deep maintenance pass after upgrading to this rule retires, in one
+go, every low-importance fact last used more than 90 days ago that the old
+never-fading boost had kept. The retirement is a soft `is_active = false`, as
+for every prune, and can be reversed.
+
+### How memories strengthen and fade
+
+A memory grows stronger when a successful run's answer uses it, weaker when
+the runs that recalled it fail, and not at all for merely being recalled —
+even in runs that went well.
+
+1. **Recall is logged per run.** Each fact `search_memory` returns is written
+   to `fact_access_log` with the run's id (warm-up injections count as use but
+   are not run-attributed).
+2. **The run's end decides the credit** (`robothor.engine.run_outcome_attribution`,
+   called by `delivery.deliver` for scheduled, hook and workflow runs):
+   - a run that failed adds one to `outcome_failures` of every fact it
+     recalled;
+   - a run that *succeeded* — status `completed`, no error, not stopped on its
+     budget, non-empty output — adds one to `outcome_citations` for each fact
+     its answer **used**. It also adds one to `outcome_successes` of every
+     fact it recalled, but that count is a record, not credit: a search
+     returns about ten facts and the answer uses few of them, so crediting all
+     of them would let a fact rise by being returned;
+   - a timeout, cancellation, skip or pending run adds nothing.
+
+   A fact counts as **used** when one of its distinctive values appears as a
+   whole word in the run's final output and was not already in the task text
+   (`robothor.memory.utility.is_cited`). Distinctive values are email
+   addresses, URLs, identifiers mixing letters and digits of four or more
+   characters (an invoice, ticket or order number, a version), and bare
+   numbers of five or more digits. Ordinary words, shorter numbers, numbers
+   with a unit or ordinal, clock times, calendar dates and bare years never
+   count. A value the run read from a tool result also matches; only the task
+   text is excluded. Each run counts once per fact, however
+   many times it recalled it. Benchmark runs credit nothing.
+3. **The nightly decay pass computes utility** per tenant from the counts
+   (`robothor.memory.utility.compute_utility`):
+
+   ```
+   utility = (citations - failures) / (citations + failures + 2)
+   ```
+
+   No evidence gives 0. Utility always lies strictly between -1 and 1. Every
+   added use or failure moves it less than the one before. Plain successes do
+   not enter it, so they neither raise a fact nor offset its failures.
+   The counts live on the fact, so they survive the access-log roll-up.
+4. **Trust.** A fact whose `origin` is `external` or `inferred` earns no
+   positive utility; its failures still count. Until the graph schema adds
+   the `origin` column, every fact is eligible.
+5. **Ranking.** In the recall blend, utility took over the 0.05 weight raw
+   `access_count` used to have
+   (`0.55 relevance + 0.25 recency + 0.15 importance + 0.05 × utility / 2`).
+   Ranking by retrieval count made popular facts more popular; it no longer
+   counts. Relevance stays dominant: utility spans 0.05 of blend at most, so
+   no utility lifts a fact over one more relevant by more than
+   `0.05 / 0.55 ≈ 0.09` (`UTILITY_RANK_MARGIN`), other signals equal.
+
+The constants live in `robothor/memory/utility.py`, `lifecycle.py`
+(`ACCESS_BOOST_HALF_LIFE_DAYS`, `PRUNE_RECENT_USE_DAYS`) and `facts.py`
+(`BLEND_WEIGHTS`). `utility.apply_edge_utility` maps a fact's utility change to
+a bounded weight change for the graph edges it supports; the graph wires it.
 
 **Importance scoring.** The judge scores only facts whose importance nobody
 has judged or set: no `metadata.importance_scored_at` marker, and a score
@@ -450,6 +530,7 @@ score = compute_decay_score(
     access_count=5,
     reinforcement_count=2,
     importance_score=0.8,
+    utility=0.25,
 )
 
 # Run full maintenance (score importance, update decay)
