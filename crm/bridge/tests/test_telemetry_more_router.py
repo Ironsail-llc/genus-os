@@ -70,7 +70,7 @@ def _span(span_id: str, parent: str, start: str, *, status: str = "ok", **extra:
 
 SPANS = {
     "data": [
-        _span("s1", "0", "2026-11-25T10:00:00Z", status="error"),
+        _span("5a1", "0", "2026-11-25T10:00:00Z", status="error"),
     ],
     "meta": {"page": {"after": "span-cursor-2"}},
 }
@@ -78,9 +78,9 @@ SPANS = {
 # Deliberately out of order: the route orders by start time.
 TRACE = {
     "data": [
-        _span("child-2", "root-1", "2026-11-25T10:00:02Z", resource="SELECT orders"),
-        _span("root-1", "0", "2026-11-25T10:00:00Z", status="error", duration=9_000_000),
-        _span("child-1", "root-1", "2026-11-25T10:00:01Z", resource="GET /cart"),
+        _span("12cc", "10aa", "2026-11-25T10:00:02Z", resource="SELECT orders"),
+        _span("10aa", "0", "2026-11-25T10:00:00Z", status="error", duration=9_000_000),
+        _span("11bb", "10aa", "2026-11-25T10:00:01Z", resource="GET /cart"),
     ]
 }
 
@@ -401,7 +401,7 @@ def test_traces_default_to_the_tenants_errors(datadog):
     row = body["rows"][0]
     assert row == {
         "trace_id": TRACE_ID,
-        "span_id": "s1",
+        "span_id": "5a1",
         "service": "shop-api",
         "resource": "POST /checkout",
         "operation": "http.request",
@@ -446,8 +446,8 @@ def test_a_trace_is_its_spans_in_order_with_their_parents(datadog):
     sent = datadog.sent("/spans/events/search")[-1]["body"]["data"]["attributes"]
     assert sent["filter"]["query"] == f"(service:shop-api) AND (trace_id:{TRACE_ID})"
     assert body["trace_id"] == TRACE_ID
-    assert [s["span_id"] for s in body["spans"]] == ["root-1", "child-1", "child-2"]
-    assert [s["parent_id"] for s in body["spans"]] == ["0", "root-1", "root-1"]
+    assert [s["span_id"] for s in body["spans"]] == ["10aa", "11bb", "12cc"]
+    assert [s["parent_id"] for s in body["spans"]] == ["0", "10aa", "10aa"]
     root = body["spans"][0]
     assert root["duration_ns"] == 9_000_000
     assert root["status"] == "error"
@@ -494,10 +494,10 @@ def test_a_malformed_trace_id_is_the_same_404_and_sends_nothing(datadog):
 
 def test_personal_data_in_spans_is_masked(datadog):
     datadog.spans = {
-        "data": [_span("s1", "0", "2026-11-25T10:00:00Z", resource="GET /users/alice@example.com")]
+        "data": [_span("5a1", "0", "2026-11-25T10:00:00Z", resource="GET /users/alice@example.com")]
     }
     datadog.trace = {
-        "data": [_span("s1", "0", "2026-11-25T10:00:00Z", tags=["user:bob@example.com"])]
+        "data": [_span("5a1", "0", "2026-11-25T10:00:00Z", tags=["user:bob@example.com"])]
     }
 
     listing = _ok(_client(CHILD_A).get("/api/telemetry/traces"))

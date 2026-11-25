@@ -128,16 +128,6 @@ def _masked(value: Any) -> Any:
     return value
 
 
-#: A trace or span id as Datadog writes one: hex (128-bit) or decimal (64-bit)
-#: digits, the same rule as ``scope.trace_query``.
-_CORRELATION_ID = re.compile(r"[0-9A-Fa-f]{1,40}")
-
-
-def _correlation_id(value: str) -> str | None:
-    text = (value or "").strip()
-    return text if _CORRELATION_ID.fullmatch(text) else None
-
-
 def _row_out(row: LogRow) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -149,10 +139,10 @@ def _row_out(row: LogRow) -> dict[str, Any]:
         "tags": [_scrub(t) for t in row.tags],
         "attributes": _masked(row.attributes),
         # For linking a line to its trace; None when the event carries none.
-        # Passed on only in the shape the trace route accepts: the client also
-        # reads them from custom attributes, which can hold anything.
-        "trace_id": _correlation_id(row.trace_id),
-        "span_id": _correlation_id(row.span_id),
+        # The client passes on only an id-shaped value (hex or decimal digits),
+        # wherever in the event it found it, so no free text arrives here.
+        "trace_id": row.trace_id or None,
+        "span_id": row.span_id or None,
     }
 
 
