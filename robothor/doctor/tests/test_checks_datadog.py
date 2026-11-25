@@ -126,7 +126,9 @@ def test_an_unknown_site_fails_with_a_plain_sentence(keys, settings) -> None:
 
 
 def test_active_tenants_without_a_scope_are_named(keys, settings, monkeypatch) -> None:
-    settings(ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": {"logs": "service:shop-api"}}))
+    # A FULL entry, so the scoped tenant is named nowhere, not even by kind.
+    full = {"logs": "service:shop-api", "spans": "*", "monitors": "*", "metric_tags": []}
+    settings(ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": full}))
     monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
     db = fake_db([("acme-child-a",), ("acme-child-b",)])
     result = _run(make_ctx(db_factory=db))
@@ -135,6 +137,83 @@ def test_active_tenants_without_a_scope_are_named(keys, settings, monkeypatch) -
     assert "acme-child-a" not in result.detail
     sql, _params = db.connection.cursors[0].executed[0]
     assert "crm_tenants" in sql and "active" in sql
+
+
+def test_the_note_says_plainly_what_a_missing_scope_means(keys, settings, monkeypatch) -> None:
+    """Not every install gives every tenant Datadog: the note is a fact, not an alarm."""
+    settings(ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": {"logs": "service:shop-api"}}))
+    monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
+    result = _run(make_ctx(db_factory=fake_db([("acme-child-b",)])))
+    assert result.status == "pass"
+    assert "are refused Datadog reads until a scope is added for them" in result.detail
+    assert "acme-child-b" in result.detail
+
+
+def test_the_benchmark_sandbox_tenant_is_not_listed(keys, settings, monkeypatch) -> None:
+    from robothor.engine.benchmark_sandbox import sandbox_tenant_id
+
+    sandbox = sandbox_tenant_id()
+    settings(ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": {"logs": "service:shop-api"}}))
+    monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
+    result = _run(make_ctx(db_factory=fake_db([(sandbox,), ("acme-child-a",)])))
+    assert result.status == "pass"
+    assert sandbox not in result.detail
+    assert "refused" not in result.detail
+
+
+def test_a_renamed_sandbox_tenant_is_not_listed_either(keys, settings, monkeypatch) -> None:
+    settings(
+        ROBOTHOR_BENCHMARK_TENANT="acme-bench",
+        ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": {"logs": "service:shop-api"}}),
+    )
+    monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
+    result = _run(make_ctx(db_factory=fake_db([("acme-bench",), ("acme-child-b",)])))
+    assert "acme-bench" not in result.detail
+    assert "acme-child-b" in result.detail
+
+
+def test_scoped_tenants_without_some_kinds_are_named_by_kind(keys, settings, monkeypatch) -> None:
+    """Span access is opt-in, so a logs-only entry silently has no traces: say so."""
+    from robothor.engine.benchmark_sandbox import sandbox_tenant_id
+
+    sandbox = sandbox_tenant_id()
+    full = {
+        "logs": "service:shop-api",
+        "spans": "service:shop-api",
+        "monitors": "team:shop",
+        "metric_tags": ["service:shop-api"],
+    }
+    settings(
+        ROBOTHOR_DATADOG_SCOPES=json.dumps(
+            {
+                "acme-parent": full,
+                "acme-child-a": {"logs": "service:shop-api"},
+                "acme-child-b": {"logs": "service:clinic-app", "spans": "service:clinic-app"},
+                sandbox: {"logs": "*"},
+            }
+        )
+    )
+    monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
+    rows = [("acme-child-a",), ("acme-child-b",), ("acme-parent",), (sandbox,)]
+    result = _run(make_ctx(db_factory=fake_db(rows)))
+    assert result.status == "pass"
+    assert "no trace access: acme-child-a;" in result.detail
+    assert "no monitor access: acme-child-a, acme-child-b;" in result.detail
+    assert result.detail.endswith("no metric access: acme-child-a, acme-child-b")
+    assert "acme-parent" not in result.detail
+    assert sandbox not in result.detail
+
+
+def test_a_fully_scoped_fleet_has_no_access_note(keys, settings, monkeypatch) -> None:
+    settings(
+        ROBOTHOR_DATADOG_SCOPES=json.dumps(
+            {"acme-parent": {"logs": "*", "spans": "*", "monitors": "*", "metric_tags": []}}
+        )
+    )
+    monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
+    result = _run(make_ctx(db_factory=fake_db([("acme-parent",)])))
+    assert result.status == "pass"
+    assert "access" not in result.detail.replace("accepts", "")
 
 
 def test_an_unreadable_tenant_list_does_not_fail_the_check(keys, monkeypatch) -> None:
