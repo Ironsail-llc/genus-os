@@ -75,9 +75,27 @@ def test_request_path_budget_is_under_the_tool_wall():
     otherwise the fix is cosmetic: the tool would still be killed before
     extraction could return.
     """
-    src = inspect.getsource(__import__("robothor.engine.tools.handlers.memory", fromlist=["x"]))
-    assert "extract_facts(" in src
-    assert "timeout=" in src.split("extract_facts(")[1][:200], (
-        "store_memory calls extract_facts without a timeout, so it inherits the "
-        "180s default inside a 120s wall"
-    )
+    from robothor.engine.tools.handlers import memory as handler
+
+    assert handler.REQUEST_PATH_EXTRACT_TIMEOUT < handler.REQUEST_PATH_BUDGET < 120.0
+
+
+@pytest.mark.asyncio
+async def test_store_memory_passes_its_budget_to_the_extraction(monkeypatch):
+    """store_memory reaches extraction through the write path; the budget must
+    travel with it, or it inherits the 180s default inside a 120s wall."""
+    from robothor.engine.tools.handlers import memory as handler
+
+    seen: dict[str, float] = {}
+
+    async def _detailed(content, max_retries=3, *, timeout=180.0, context=None):
+        seen["timeout"] = timeout
+        return facts.Extraction([], "timeout")
+
+    async def _write(*_a, **_kw):
+        return {"fact_ids": [1], "facts_processed": 1}
+
+    monkeypatch.setattr(facts, "extract_facts_detailed", _detailed)
+    monkeypatch.setattr("robothor.memory.write_path.write_facts", _write)
+    await handler.store_memory_content("Alice prefers email.", tenant_id="test-tenant")
+    assert seen["timeout"] == handler.REQUEST_PATH_EXTRACT_TIMEOUT

@@ -193,9 +193,13 @@ class TestExtractionSchema:
     def test_schema_structure(self):
         from robothor.memory.facts import FACT_EXTRACTION_SCHEMA
 
-        assert FACT_EXTRACTION_SCHEMA["type"] == "array"
-        item_props = FACT_EXTRACTION_SCHEMA["items"]["properties"]
+        # One object holding the facts; each fact names its typed mentions (the
+        # entities column is filled from them), its relations and event time.
+        assert FACT_EXTRACTION_SCHEMA["type"] == "object"
+        item_props = FACT_EXTRACTION_SCHEMA["properties"]["facts"]["items"]["properties"]
         assert "fact_text" in item_props
         assert "category" in item_props
-        assert "entities" in item_props
+        assert "mentions" in item_props
+        assert "relations" in item_props
+        assert "event_time" in item_props
         assert "confidence" in item_props

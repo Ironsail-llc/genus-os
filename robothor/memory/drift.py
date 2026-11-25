@@ -42,6 +42,8 @@ def compute_fact_hash(
     tenant_id: str,
     category: str = "",
     person_id: str | None = None,
+    scope_kind: str | None = None,
+    scope_id: str | None = None,
 ) -> str:
     """Return the canonical SHA-256 hex digest for a `memory_facts` row.
 
@@ -51,8 +53,22 @@ def compute_fact_hash(
     backfill (`069_memory_facts_drift.sql`); drift in either
     implementation will surface immediately because every existing
     row will start to mismatch on next update.
+
+    Scope. The active-row unique index (migration 078) is on
+    ``(tenant_id, content_hash)``, so the hash decides what deduplicates into
+    what. A private fact must never collapse into a shared one or into another
+    reader's, so a NON-shared scope fills the person slot with
+    ``scope:<kind>:<scope_id>``. A ``person_id`` is a bare id and never starts
+    with ``scope:``, so a private fact's digest can never equal any shared row's,
+    whatever that row's ``person_id`` (the edit paths hash shared rows with it).
+    A shared fact (or no scope given) hashes exactly as before, so every
+    existing hash stays valid. Every recompute (``update_fact``, the bridge's
+    edit route) passes the row's scope.
     """
-    canonical = f"{fact_text or ''}|{tenant_id or ''}|{category or ''}|{person_id or ''}"
+    person = person_id or ""
+    if scope_kind in ("user", "agent") and scope_id:
+        person = f"scope:{scope_kind}:{scope_id}"
+    canonical = f"{fact_text or ''}|{tenant_id or ''}|{category or ''}|{person}"
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -81,6 +97,8 @@ def evaluate_drift(
     tenant_id: str,
     category: str = "",
     person_id: str | None = None,
+    scope_kind: str | None = None,
+    scope_id: str | None = None,
 ) -> DriftDecision:
     """Compare the stored content_hash against the canonical recompute.
 
@@ -96,7 +114,12 @@ def evaluate_drift(
     if mode == "off" or stored_hash is None:
         return DriftDecision(action="proceed", drift_detected=False, mode=mode)
     expected = compute_fact_hash(
-        fact_text, tenant_id=tenant_id, category=category, person_id=person_id
+        fact_text,
+        tenant_id=tenant_id,
+        category=category,
+        person_id=person_id,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
     )
     if stored_hash == expected:
         return DriftDecision(action="proceed", drift_detected=False, mode=mode)

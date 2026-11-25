@@ -132,9 +132,8 @@ _WS_RE = re.compile(r"\s+")
 _MAX_NAME = 255
 
 UNIQUE_INDEX_NOTE = (
-    "memory_mentions has no unique key on (fact_id, lower(surface_form)); the backfill "
-    "enforces it in code with a guarded insert under a per-tenant advisory lock. "
-    "A unique index is wanted."
+    "memory_mentions is unique on (fact_id, lower(surface_form)) (migration "
+    "*_memory_graph_keys); writing a mention twice is a no-op."
 )
 
 
@@ -1047,10 +1046,12 @@ class _Resolver:
         dry_run: bool = False,
         plan: _Plan | None = None,
         read_only: bool = False,
+        create: bool = True,
     ) -> None:
         self.cur = cur
         self.tenant = tenant_id
         self.dry_run = dry_run
+        self.create = create
         self.read_only = read_only or dry_run
         self.plan = plan if plan is not None else _Plan()
         self._rows: dict[str, list[dict[str, Any]]] = {}
@@ -1577,7 +1578,18 @@ class _Resolver:
         surface = _clean(mention.surface_form or "")[:_MAX_NAME] or "?"
         etype = _norm_type(mention.entity_type)
         created = False
-        if outcome.create_type:
+        if outcome.create_type and not self.create:
+            # The caller may not mint a node (a private write: a shared node
+            # named from private text would show the name to every reader).
+            outcome = Outcome(
+                None,
+                "exact",
+                0.0,
+                f"unresolved:no_create:{normalize_surface(surface)}",
+                "no_create",
+                {**outcome.evidence, "rule": "no_create"},
+            )
+        elif outcome.create_type:
             eid = self._create(mention, outcome.create_type)
             if eid is None:
                 outcome = Outcome(
@@ -1759,7 +1771,7 @@ def _merge_tags(rows: Sequence[tuple[str, tuple[int, ...]]]) -> tuple[list[int],
 
 
 def resolve_mentions(
-    tenant_id: str, mentions: Sequence[MentionInput], *, cur: Any = None
+    tenant_id: str, mentions: Sequence[MentionInput], *, cur: Any = None, create: bool = True
 ) -> list[ResolvedMention]:
     """Resolve each mention to a node, or leave it unresolved, and record why.
 
@@ -1777,13 +1789,15 @@ def resolve_mentions(
     that surface form.
 
     May create a provisional node (rule e) and may link a CRM record that had no
-    node yet (rule a). Never writes mentions: :func:`write_mentions` does that.
+    node yet (rule a). With ``create=False`` no provisional node is created: a
+    mention that would have needed one is recorded unresolved (reason
+    ``no_create``). Never writes mentions: :func:`write_mentions` does that.
     """
     _require_tenant(tenant_id)
     if not mentions:
         return []
     with _cursor(tenant_id, cur) as c:
-        resolver = _Resolver(c, tenant_id)
+        resolver = _Resolver(c, tenant_id, create=create)
         resolver.prefetch([m.surface_form for m in mentions])
         return [resolver.resolve(m).resolved for m in mentions]
 
@@ -1798,8 +1812,8 @@ def write_mentions(
 ) -> int:
     """Write one ``memory_mentions`` row per mention of ``fact_id``. Returns rows written.
 
-    Idempotent per ``(fact_id, lower(surface_form))``: the table has no unique
-    key for it, so the insert is guarded in SQL. A fact of another tenant gets
+    Idempotent per ``(fact_id, lower(surface_form))``, which the table's unique
+    index enforces (``ON CONFLICT DO NOTHING``). A fact of another tenant gets
     nothing.
     """
     _require_tenant(tenant_id)
@@ -1815,8 +1829,7 @@ def write_mentions(
                 "INSERT INTO memory_mentions (tenant_id, fact_id, entity_id, surface_form, "
                 "entity_type, decision_id) SELECT %s, %s, %s, %s, %s, %s "
                 "WHERE EXISTS (SELECT 1 FROM memory_facts WHERE id = %s AND tenant_id = %s) "
-                "AND NOT EXISTS (SELECT 1 FROM memory_mentions WHERE fact_id = %s "
-                "AND lower(surface_form) = lower(%s))",
+                "ON CONFLICT (fact_id, lower(surface_form)) DO NOTHING",
                 (
                     tenant_id,
                     fact_id,
@@ -1826,8 +1839,6 @@ def write_mentions(
                     r.decision_id,
                     fact_id,
                     tenant_id,
-                    fact_id,
-                    surface,
                 ),
             )
             written += c.rowcount
@@ -2241,8 +2252,9 @@ def backfill_mentions(
     """Bring existing facts into the mention model. A resumable job, not a migration.
 
     Walks active facts of the tenant in id order, after ``resume_from``, in
-    batches of ``batch_size``, one transaction per batch (under a per-tenant
-    advisory lock, so two backfills of one tenant cannot interleave). Each name
+    batches of ``batch_size``, one transaction per batch. The unique index on
+    ``(fact_id, lower(surface_form))`` makes a mention written twice (by two
+    overlapping runs, or a run and the write path) a no-op. Each name
     in ``memory_facts.entities`` becomes a mention resolved by the normal rules:
     context from the other names in the fact (co-mentions), its
     ``session_key`` (conversation) and its scope; the fact's ``person_id`` is a
@@ -2296,11 +2308,6 @@ def backfill_mentions(
             if first:
                 report["crm_unsynced"] = _crm_unsynced(cur, tenant_id)
                 first = False
-            if not dry_run:
-                cur.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
-                    (f"memory_identity_backfill:{tenant_id}",),
-                )
             cur.execute(
                 "SELECT id, entities, person_id::text AS person_id, scope_kind, scope_id, "
                 "metadata->>'session_key' AS session_key FROM memory_facts "

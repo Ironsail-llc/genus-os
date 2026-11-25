@@ -78,7 +78,7 @@ class TestIntradayRunsAboveThreshold:
                 return_value=mock_result,
             ),
             patch(
-                "robothor.memory.facts.store_fact",
+                "robothor.memory.lifecycle.store_consolidated",
                 new_callable=AsyncMock,
                 return_value=99,
             ),
