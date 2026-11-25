@@ -228,3 +228,45 @@ class TestSlowCheckout:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         assert self._run(monkeypatch, checkout_seconds=1.5) == []
+
+
+class TestQuestionWithoutItsNames:
+    """What the graph ranks a reached fact by: the question minus the names it
+    links. "Alice Smith" would otherwise make every fact about Alice Smith
+    look relevant, and the facts about her employer would never be."""
+
+    def _seed(self, name: str, surface: str | None = None, method: str = "full_name"):
+        return activation.Seed(entity_id=1, name=name, method=method, surface=surface)
+
+    def test_a_named_entity_and_its_possessive_are_removed(self) -> None:
+        got = activation.question_without_names(
+            "In which city is Alice Smith's employer headquartered?", [self._seed("Alice Smith")]
+        )
+        assert got == "In which city is employer headquartered?"
+
+    def test_the_matched_alias_is_removed_too(self) -> None:
+        got = activation.question_without_names(
+            "Where does Ali Smith work?", [self._seed("Alice Smith", surface="ali smith")]
+        )
+        assert got == "Where does work?"
+
+    def test_an_email_is_removed(self) -> None:
+        got = activation.question_without_names(
+            "Who does alice@example.com report to?",
+            [self._seed("Alice Smith", method="strong_key")],
+        )
+        assert got == "Who does report to?"
+
+    def test_a_seed_only_mentioned_by_a_hit_is_not_in_the_question(self) -> None:
+        q = "Where is the Aurora project's lead headquartered?"
+        assert (
+            activation.question_without_names(q, [self._seed("Bob Jones", method="mention")]) == q
+        )
+
+    def test_names_of_the_question_are_its_text_seeds(self) -> None:
+        seeds = [
+            activation.Seed(entity_id=1, name="Alice Smith"),
+            activation.Seed(entity_id=2, name="Bob Jones", method="mention"),
+            activation.Seed(entity_id=3, name="Carol White", method="strong_key"),
+        ]
+        assert activation.named_in_question(seeds) == [1, 3]
