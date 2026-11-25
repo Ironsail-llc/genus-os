@@ -652,8 +652,10 @@ restart forgets them (see below).
   class name) or reported that it delivered nothing (`error: not_delivered`),
   or the finding belongs to another tenant than the engine's
   (`reason: not_this_engine`, which a normal pass never produces). The finding
-  is recorded all the same and the pass goes on; the next finding of that
-  episode is tried again.
+  is recorded all the same and the pass goes on. A failed alert does not
+  count as the episode's: every later pass that still sees the condition
+  sends it again under the same alert id (so the cooldown still bounds it),
+  recording `delivery_failed` until it is `delivered`, and nothing more after.
 
 Every finding also keeps the fields records had before delivery, so their
 readers go on working: `would_notify` (who is told: the main agent's alert
