@@ -72,7 +72,7 @@ HARD_STRATA: tuple[str, ...] = (
 VALIDATION_THRESHOLD = 0.95
 #: Bumped whenever a judge rule changes, so a progress file written under
 #: the old rules is refused instead of mixing two judges' verdicts.
-JUDGE_VERSION = 4
+JUDGE_VERSION = 5
 DEFAULT_REFERENCE = "keyword_only"
 NON_INFERIORITY_MARGIN = 0.05
 DEFAULT_TOKEN_BUDGET = 2048
@@ -346,29 +346,41 @@ def judge_rules(
     for value in case.forbidden:
         if _contains(text, value):
             return Verdict(False, False, True, f"forbidden value from another tenant: {value!r}")
-    golds = {normalise(g) for g in case.gold}
+    others = _other_values(case, text, known)
     for gold in case.gold:
         if _contains(text, gold):
             gold_kinds = {kinds.get(g) for g in case.gold} if kinds else set()
-            question = normalise(case.question)
-            for value in sorted(known):
-                v = normalise(value)
-                if v in golds or any(v in g for g in golds) or not _contains(text, value):
-                    continue
-                # Restating what the question is about is not a second answer:
-                # "Alice Vance's manager is Bob Rivera" for a question about
-                # Alice Vance names only one candidate.
-                if _contains(question, value):
-                    continue
+            for value in others:
                 if kinds is None or kinds.get(value) in gold_kinds:
                     return Verdict(
                         False, False, True, f"hedge: names {gold!r} beside the rival {value!r}"
                     )
             return Verdict(True, False, False, f"matches gold {gold!r}")
-    for value in sorted(known):
-        if normalise(value) not in golds and _contains(text, value):
-            return Verdict(False, False, True, f"names a different value: {value!r}")
+    if others:
+        return Verdict(False, False, True, f"names a different value: {others[0]!r}")
     return None
+
+
+def _other_values(case: Case, text: str, known: frozenset[str]) -> list[str]:
+    """Known values the answer names that are not a gold and not named by the question.
+
+    One exclusion for both rules. Restating what the question is about is not
+    a second answer: for a question about Alice Vance, "Alice Vance's manager
+    is Bob Rivera" names one candidate. A restatement with no gold match
+    ("Alice Vance's manager is Rivera, Bob") goes to the LLM judge instead of
+    being settled as wrong.
+    """
+    golds = {normalise(g) for g in case.gold}
+    question = normalise(case.question)
+    out: list[str] = []
+    for value in sorted(known):
+        v = normalise(value)
+        if v in golds or any(v in g for g in golds) or not _contains(text, value):
+            continue
+        if _contains(question, value):
+            continue
+        out.append(value)
+    return out
 
 
 JUDGE_PROMPT = (

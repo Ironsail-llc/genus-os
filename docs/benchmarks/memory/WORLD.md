@@ -285,7 +285,10 @@ The baselines run by default through `--systems`; there is no separate
      the question is about: for a question about Alice Vance, "Alice Vance's
      manager is Bob Rivera" names one candidate, while "Bob Rivera or Carol
      Diaz" is a hedge;
-   - any other value the world knows is confident-wrong.
+   - any other value the world knows is confident-wrong, except a value the
+     question itself names. Both rules share that exclusion, so "Alice
+     Vance's manager is Rivera, Bob" goes to the LLM judge rather than being
+     marked wrong for restating Alice Vance.
 
    Only an answer none of these settle goes to the LLM judge
    (`--judge-model`), whose prompt is fixed in the module.
