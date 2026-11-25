@@ -820,23 +820,34 @@ run (the capability tier).
 
 | Tool | Purpose |
 |---|---|
-| `datadog_logs_search` | Log lines: `query` (Datadog log search syntax, empty for everything), `start` and `end` (ISO-8601 or relative such as `now-15m`; default `now-1h` to `now`), `limit` (rows per page, default 50), `cursor` (the previous page's `next_cursor`, with the same query and window), `newest_first` (default true). Each row has `id`, `timestamp`, `service`, `status`, `host`, `message`, the `env` and `version` tags, and `attributes`. |
+| `datadog_logs_search` | Log lines: `query` (Datadog log search syntax, empty for everything), `start` and `end` (ISO-8601 or relative such as `now-15m`; default `now-1h` to `now`), `limit` (rows per page, default 50), `cursor` (the previous page's `next_cursor`, with the same query and the `window` that page returned), `newest_first` (default true). Each row has `id`, `timestamp`, `service`, `status`, `host`, `message`, the `env` and `version` tags, and `attributes`. |
 | `datadog_logs_aggregate` | Counts: the same `query`, `start` and `end`, plus `group_by` (facets such as `service`, `status`, `@http.status_code`; empty for one total) and `limit` (groups per facet, largest first, default 25). Returns `buckets` of `{by, count}`. |
 
 **Scope.** Every query is sent as `(<this tenant's scope>) AND (<query>)`, and
 the scope comes from the tenant the call runs in, never from an argument. A
-tenant with no scope entry is refused ("Datadog is not configured for this
-organization") and nothing is sent; so is a query that could break out of the
+tenant with no scope entry, or one whose entry grants no log access, is
+refused ("Datadog is not configured for this organization") and nothing is
+sent; so is a query that could break out of the
 wrapping, such as one with unbalanced parentheses. Both tools take the
 `tenant` argument (see [Child tenants](#child-tenants-org_overview-the-tenant-argument-and-dry_run)):
 a parent's top-level run naming a child reads with the child's scope. Each
 result names the tenant it read in `scope`, never the filter itself.
 
+**The window.** A relative `start` or `end` is resolved to an absolute
+ISO-8601 time once, when the call is made, and `window` in the result carries
+the times that were searched. To read the next page, pass `next_cursor`
+together with that `window`, so every page reads the same stretch of logs.
+
 **What comes back.** Email addresses and phone numbers in messages, attribute
-values and bucket values are masked (`<email>`, `<phone>`). A page too large
-for the result is fitted: long messages are shortened, then attributes are
-dropped, then trailing rows; `truncated` is true, `note` says how many rows
-came back, and `next_cursor` continues from the first row left out. A Datadog
+values and bucket values are masked (`<email>`, `<phone>`). So is any
+attribute whose key names a phone number (`phone`, `mobile`, `tel`, ...) when
+its value is an integer or a run of digits, which no phone pattern matches.
+A page too large for the result is fitted: long messages are shortened, then
+attributes are dropped, then trailing rows; `truncated` is true, `note` says
+how many rows came back, and `next_cursor` continues from the first row left
+out. When logs arrived while the page was being fitted, so no cursor could
+continue exactly there, `next_cursor` is null and `note` says to narrow the
+query or window. A Datadog
 failure is an `error` with a `kind` (`auth`, `rate_limit`, `network`,
 `bad_query`, `unknown`, `not_configured`) and nothing else. Each call leaves a
 `datadog.logs_read` audit row with the query (masked and shortened), the
