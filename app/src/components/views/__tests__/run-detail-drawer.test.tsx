@@ -220,3 +220,25 @@ describe("RunDetailDrawer", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("RunDetailDrawer: logs for this run", () => {
+  it("links to the Logs page filtered to the run when the page may open logs", async () => {
+    mockDetail({ run: RUN, steps: STEPS, guardrail_events: [] });
+    const onOpenLogs = vi.fn();
+    render(<RunDetailDrawer runId="r1" onClose={() => {}} onOpenLogs={onOpenLogs} />);
+
+    const link = await screen.findByTestId("run-detail-logs-link");
+    expect(link.textContent).toMatch(/Logs for this run/);
+    expect(link.getAttribute("href")).toBe(`?v=logs&q=${encodeURIComponent('"run_id=r1"')}`);
+    fireEvent.click(link);
+    expect(onOpenLogs).toHaveBeenCalledWith("r1");
+  });
+
+  it("offers no link to a role that cannot open the Logs page", async () => {
+    mockDetail({ run: RUN, steps: STEPS, guardrail_events: [] });
+    render(<RunDetailDrawer runId="r1" onClose={() => {}} />);
+
+    await screen.findByTestId("run-detail-header");
+    expect(screen.queryByTestId("run-detail-logs-link")).toBeNull();
+  });
+});
