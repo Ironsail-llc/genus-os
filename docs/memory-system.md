@@ -80,7 +80,8 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      asked for: both read the same conversation, and the segment leg adds a
      keyword leg and the reader rule. `search_chat_turns` itself is unchanged.
      The `segment` leg can filter by person, so it stays on under a restricted
-     scope, and its reader is then the scope's person and nothing else.
+     scope, read by the same reader as the fact legs, which the scope only
+     narrows.
 2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
    records its rank in every leg that found it (`leg_ranks`).
 3. **Reranker** (Qwen3-Reranker-0.6B, local) — on by default, off with
@@ -118,8 +119,8 @@ every path. `MEMORY_NARROW_SEARCH` is read by the `search_memory` tool, which
 decides the `include_*` arguments.
 
 The `search_memory` tool passes the reader on both paths (direct and RIP 15),
-and the reader of a private conversation is decided by the run, not inferred
-from its principal: `ToolContext.private_reader`
+and the reader of a private conversation or a private fact is decided by the
+run, not inferred from its principal or its identity: `ToolContext.private_reader`
 (`robothor/engine/private_recall.py`), which each tool turn publishes from its run. A run has
 one only when it serves a verified person in their own one-to-one
 conversation: a webchat turn in their own `agent:{agent}:user:{uid}` session
@@ -133,12 +134,16 @@ the run reads shared segments only. This is applied whatever
 workspace alone; otherwise the workspaces of the member the run serves (its
 private reader), and none for a run that serves no one. Callers that name no
 reader — the bridge's `/api/memory/search`, MCP `search_memory`, deep
-reasoning — receive no private conversation. A restricted data scope only narrows
-that reader, never creates one: `search_facts` keeps the reader only when its
-person is the scope's person, and its user id only when that user is the same
-person (an active `user_accounts` row, or a `tenant_users` row, linking them);
-with no reader, or a reader who is someone else, it returns no private
-segment. The Memory page's
+reasoning — receive no private conversation and no private fact. A restricted
+data scope only narrows that reader, never creates one
+(`visibility.served_reader`, applied once to every leg): `search_facts` keeps
+the reader only when its person is the scope's person, and its user id only
+when that user is the same person (an active `user_accounts` row, or a
+`tenant_users` row, linking them); with no reader, or a reader who is someone
+else, it returns no private segment and no private fact. Interactive warm-up
+reads the same way: the runner decides the run's private reader before the
+preamble's worker thread starts, and the graph lines read as that person
+only; the sender seeds the walk but is not a reader. The Memory page's
 fact search (`GET /api/memory/facts?q=`) asks for no segments and keeps only
 `kind == "fact"` rows, because it edits and forgets facts by id. A segment row in the
 tool's output adds `kind`, `topic`, `source_kind`, `source_ref`, `start_ref`,
@@ -1037,8 +1042,9 @@ gives a conversation's owner.
 
 One rule decides who reads it, in `robothor/memory/visibility.py`: a reader
 sees shared facts and the facts owned by one of their own ids. A reader with
-no ids sees shared facts only. Under a restricted data scope the reader is the
-scope's person and nothing else, whatever the caller passed.
+no ids sees shared facts only. The reader is the one conversation segments
+use: the person the run serves (`ToolContext.private_reader`, see above),
+never the run's identity alone. A restricted data scope only narrows it.
 
 The callers pass a person and a member id today, never an agent id, so a fact
 scoped to an agent is read by no caller yet: the rule fails closed.
