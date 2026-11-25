@@ -75,6 +75,8 @@ export interface TelemetryRow {
   message: string;
   tags: string[];
   attributes: Record<string, unknown>;
+  /** Datadog's reserved trace id of the line, as the bridge reads it; null when none. */
+  trace_id?: string | null;
 }
 
 interface Bucket {
@@ -101,6 +103,7 @@ function parseRows(value: unknown): TelemetryRow[] {
       service: str(row.service),
       status: str(row.status),
       host: str(row.host),
+      trace_id: str(row.trace_id) || null,
       message: str(row.message),
       tags: Array.isArray(row.tags) ? row.tags.filter((t): t is string => typeof t === "string") : [],
       attributes:
@@ -186,7 +189,8 @@ async function readSummary(url: string): Promise<Bucket[] | null> {
 }
 
 /**
- * The trace a log line belongs to, when it says: the `trace_id` attribute,
+ * The trace a log line belongs to, when it says: the bridge's `trace_id`
+ * (Datadog's reserved field of the event) first, then the `trace_id` attribute,
  * Datadog's own `dd.trace_id` (nested or flat), or `trace_id=<hex>` in the
  * message as the engine's structured lines write it. Digits only, as the
  * bridge's trace route accepts.
@@ -194,7 +198,7 @@ async function readSummary(url: string): Promise<Bucket[] | null> {
 export function traceIdOf(row: TelemetryRow): string | null {
   const attrs = row.attributes;
   const dd = attrs.dd && typeof attrs.dd === "object" ? (attrs.dd as Record<string, unknown>) : {};
-  for (const value of [attrs.trace_id, dd.trace_id, attrs["dd.trace_id"]]) {
+  for (const value of [row.trace_id, attrs.trace_id, dd.trace_id, attrs["dd.trace_id"]]) {
     const text = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : "";
     if (/^[0-9A-Fa-f]{1,40}$/.test(text)) return text;
   }

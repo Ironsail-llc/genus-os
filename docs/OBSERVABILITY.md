@@ -549,9 +549,12 @@ you open it:
   in dry-run mode every entry is labelled **Recorded, not sent**; an entry the
   watch did deliver is labelled **Sent**.
 
-**View trace.** A log line whose detail carries a trace id (the `trace_id` or
-`dd.trace_id` attribute, or `trace_id=<hex>` in the message) shows a **View
-trace** link that opens the Traces tab on that trace.
+**View trace.** A log line that carries a trace id shows a **View trace** link
+that opens the Traces tab on that trace. The id is Datadog's reserved
+`trace_id` field of the log event, which the bridge returns with each line
+(with `span_id`); failing that, a `trace_id` or `dd.trace_id` attribute, or
+`trace_id=<hex>` in the message. Most ordinary requests have no kept trace (see
+Traces above), so the link often lands on the not-found sentence.
 
 **Logs for this run.** In Observe › Runs, the run drawer links to the Logs page
 with the search `"run_id=<id>"` filled in and run, since the engine's

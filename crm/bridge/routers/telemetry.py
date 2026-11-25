@@ -124,6 +124,9 @@ def _row_out(row: LogRow) -> dict[str, Any]:
         "service": row.service,
         "status": row.status,
         "host": row.host,
+        # Datadog's reserved correlation fields: hex or decimal ids, no free text.
+        "trace_id": row.trace_id or None,
+        "span_id": row.span_id or None,
         "message": redact_personal_data(row.message),
         "tags": [redact_personal_data(t) for t in row.tags],
         "attributes": _masked(row.attributes),
