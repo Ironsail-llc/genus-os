@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FileText, RefreshCw, Search } from "lucide-react";
 
 import { EmptyState } from "@/components/business/empty-state";
@@ -26,7 +26,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
-import { BRIDGE_UNREACHABLE, useBridgePoll } from "@/lib/bridge/use-bridge-poll";
+import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
 import { isLogSince } from "@/lib/observe/since";
 
 /**
@@ -234,6 +234,18 @@ async function readPage(
   };
 }
 
+/** The buckets of `GET /api/telemetry/logs/summary`, or null for any answer that is not `ok`. */
+async function readSummary(url: string): Promise<Bucket[] | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const body = ((await res.json()) ?? {}) as Record<string, unknown>;
+    return body.status === "ok" ? parseBuckets(body.buckets) : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface TelemetryLogsProps {
   visible: boolean;
   /** The source switch, when the page offers more than one source. */
@@ -253,15 +265,24 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
   const [answered, setAnswered] = useState<{ key: string; state: ReadState } | null>(null);
   const [rows, setRows] = useState<TelemetryRow[]>([]);
   const [next, setNext] = useState<string | null>(null);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [summary, setSummary] = useState<{ key: string; buckets: Bucket[] | null } | null>(null);
+  // Which search a "Load more" is running for. Keyed rather than a boolean so
+  // a page still loading for an old search never disables the new search's
+  // button: it reads as loading only while it belongs to the search on screen.
+  const [moreFor, setMoreFor] = useState<string | null>(null);
   const [open, setOpen] = useState<TelemetryRow | null>(null);
 
   // Only the newest search may write: a slow answer to an old query must not
   // overwrite the rows for the one on screen.
   const generation = useRef(0);
+  // The search last sent. Coming back on screen is not a new search: the
+  // shell keeps this view mounted, so the rows are still here, and another
+  // read would be another Datadog query and another audit row for nothing.
+  const sentKey = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || sentKey.current === searchKey) return;
+    sentKey.current = searchKey;
     const mine = ++generation.current;
     void readPage(`${BRIDGE}/api/telemetry/logs?${params(query, since, { limit: String(PAGE_SIZE) })}`).then(
       (page) => {
@@ -271,6 +292,14 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
         setNext(page.next);
       },
     );
+    // Each summary read is a Datadog query and an audit row too: it follows
+    // the search, it does not beat on its own.
+    void readSummary(
+      `${BRIDGE}/api/telemetry/logs/summary?${params(query, since, { group_by: "service" })}`,
+    ).then((buckets) => {
+      if (generation.current !== mine) return;
+      setSummary({ key: searchKey, buckets });
+    });
   }, [visible, query, since, searchKey]);
 
   const state: ReadState =
@@ -283,12 +312,15 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
   const loadMore = useCallback(async () => {
     if (!next) return;
     const mine = generation.current;
-    setLoadingMore(true);
+    const key = searchKey;
+    setMoreFor(key);
     const page = await readPage(
       `${BRIDGE}/api/telemetry/logs?${params(query, since, { limit: String(PAGE_SIZE), cursor: next })}`,
     );
+    // Cleared before the staleness check, and only if still ours: a stale
+    // page must neither land nor leave a later button stuck on "Loading…".
+    setMoreFor((current) => (current === key ? null : current));
     if (generation.current !== mine) return;
-    setLoadingMore(false);
     if (page.state.kind !== "ok") {
       setState(page.state);
       return;
@@ -298,25 +330,10 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
       return [...prev, ...page.rows.filter((r) => !seen.has(r.id))];
     });
     setNext(page.next);
-  }, [next, query, since, setState]);
+  }, [next, query, since, searchKey, setState]);
 
-  const [buckets, setBuckets] = useState<Bucket[] | null>(null);
-  const onSummary = useCallback((body: unknown) => {
-    const root = (body ?? {}) as Record<string, unknown>;
-    setBuckets(root.status === "ok" ? parseBuckets(root.buckets) : null);
-  }, []);
-  const summaryUrl = useMemo(
-    () => `${BRIDGE}/api/telemetry/logs/summary?${params(query, since, { group_by: "service" })}`,
-    [query, since],
-  );
-  const summary = useBridgePoll({
-    visible,
-    url: summaryUrl,
-    onData: onSummary,
-    // Each read is a Datadog query and an audit row: it follows the search,
-    // it does not beat on its own.
-    paused: true,
-  });
+  const loadingMore = moreFor !== null && moreFor === searchKey;
+  const buckets = summary && summary.key === searchKey ? summary.buckets : null;
 
   const submit = useCallback(
     (event?: React.FormEvent) => {
@@ -325,12 +342,11 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
       if (nextQuery === query) {
         // Same search again is a refresh, which has to be asked for.
         setReloads((n) => n + 1);
-        summary.reload();
         return;
       }
       setQuery(nextQuery);
     },
-    [draft, query, summary],
+    [draft, query],
   );
 
   const onWindow = useCallback((value: string) => {
@@ -340,7 +356,7 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
   if (!visible) return null;
 
   const loading = state.kind === "loading";
-  const showSummary = state.kind === "ok" && summary.error === null && !summary.forbidden && buckets !== null;
+  const showSummary = state.kind === "ok" && buckets !== null;
   const total = buckets?.reduce((sum, b) => sum + b.count, 0) ?? 0;
   const largest = buckets?.reduce((max, b) => Math.max(max, b.count), 0) ?? 0;
 
@@ -352,10 +368,7 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
           variant="outline"
           size="sm"
           data-testid="telemetry-refresh"
-          onClick={() => {
-            setReloads((n) => n + 1);
-            summary.reload();
-          }}
+          onClick={() => setReloads((n) => n + 1)}
         >
           <RefreshCw aria-hidden className={loading ? "animate-spin" : undefined} />
           Refresh
