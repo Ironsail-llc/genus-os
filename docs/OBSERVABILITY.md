@@ -541,7 +541,9 @@ you open it:
   id all read the same: *This trace was not found in your organization's
   traces. Datadog keeps only a sample of traces, so most ordinary requests have
   none.* Retention keeps errors and slow requests more often, so a trace
-  opened from an ordinary log line is often not there.
+  opened from an ordinary log line is often not there. An organization whose
+  scope has no `spans` filter is told *Traces are not shared with this
+  organization.*
 - **Monitors** lists the organization's monitors with a status badge and when
   each last triggered. **Firing only** is on by default and keeps alert, warn
   and no data; turn it off to see every monitor. An organization whose scope
@@ -607,8 +609,8 @@ addresses and phone numbers masked, the same as a log line.
 
 | Route | Parameters | Audit event |
 |-------|------------|-------------|
-| `GET /api/telemetry/traces` | `q` (default `status:error`), `since`, `until`, `limit`, `cursor` | `telemetry.traces.read` |
-| `GET /api/telemetry/traces/{trace_id}` | `since` (default `7d`), `until`; `404` when the trace is not in the organization's scope | `telemetry.trace.read` |
+| `GET /api/telemetry/traces` | `q` (default `status:error`), `since`, `until`, `limit`, `cursor`; `status: no_access` when no spans are shared | `telemetry.traces.read` |
+| `GET /api/telemetry/traces/{trace_id}` | `since` (default `7d`), `until`; `404` when the trace is not in the organization's scope; `status: no_access` when no spans are shared | `telemetry.trace.read` |
 | `GET /api/telemetry/monitors` | `q`, `firing` (default `false`); every page is read; `status: no_access` when no monitors are shared | `telemetry.monitors.read` |
 | `GET /api/telemetry/signals` | `kind` (`alerts` or `watch`, both when omitted), `since` (default `7d`), `limit` | `telemetry.signals.read` |
 | `GET /api/telemetry/overview` | `since` (default `1h`); root owner or admin at home only | `telemetry.overview`, one per organization |

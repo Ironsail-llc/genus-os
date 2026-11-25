@@ -360,8 +360,33 @@ def _span_out(row: SpanRow) -> dict[str, Any]:
         "parent_id": row.parent_id,
         "end": row.end_timestamp,
         "env": row.env,
-        "tags": [_scrub(t) for t in row.tags],
+        "tags": [_tag(t) for t in row.tags],
     }
+
+
+TRACES_NOT_SHARED = "Traces are not shared with this organization."
+
+
+def _shared(filter_query: str) -> bool:
+    """Whether a scope part grants anything: span and monitor access are opt-in."""
+    return filter_query.strip() not in ("", NO_ACCESS_QUERY)
+
+
+def _not_shared(
+    request: Request,
+    tenant_id: str,
+    event: str,
+    part: str,
+    message: str,
+    details: dict[str, Any],
+    count_field: str,
+) -> dict[str, Any] | None:
+    """The ``no_access`` answer (audited) when this tenant's scope shares no ``part``."""
+    scope = scope_for(tenant_id)
+    if scope is None or _shared(getattr(scope, part)):
+        return None
+    _audit(request, event, tenant_id, "no_access", **details, **{count_field: 0})
+    return {"status": "no_access", "message": message, "scope": tenant_id}
 
 
 @router.get("/traces")
@@ -379,6 +404,11 @@ def search_traces(
     until_label, end = _time(until, field="until", default=DEFAULT_UNTIL)
     page_size = positive_int(limit, field="limit")
     details = {"query": _audited_query(q), "since": since_label, "until": until_label}
+    refused = _not_shared(
+        request, tenant_id, "telemetry.traces.read", "spans", TRACES_NOT_SHARED, details, "rows"
+    )
+    if refused is not None:
+        return refused
 
     def read(client: DatadogClient, scope: Any) -> Any:
         return client.search_spans(
@@ -409,6 +439,10 @@ def get_trace(
     since_label, start = _time(since, field="since", default=DEFAULT_TRACE_SINCE)
     until_label, end = _time(until, field="until", default=DEFAULT_UNTIL)
     event = "telemetry.trace.read"
+    window = {"since": since_label, "until": until_label}
+    refused = _not_shared(request, tenant_id, event, "spans", TRACES_NOT_SHARED, window, "spans")
+    if refused is not None:
+        return refused
     try:
         # An id that is not plain hex or decimal digits names no trace anywhere,
         # so it gets the not-found answer, not a refusal that tells it apart.
@@ -453,7 +487,7 @@ def _is_firing(status: str) -> bool:
 
 
 def _monitors_shared(scope: DatadogScope) -> bool:
-    return scope.monitors.strip() not in ("", NO_ACCESS_QUERY)
+    return _shared(scope.monitors)
 
 
 def _all_monitors(client: DatadogClient, scope: DatadogScope, query: str) -> list[MonitorRow]:
@@ -497,10 +531,11 @@ def search_monitors(
     require_tenant_audit_reader(request)
     event = "telemetry.monitors.read"
     details = {"query": _audited_query(q), "firing": firing}
-    scope = scope_for(tenant_id)
-    if scope is not None and not _monitors_shared(scope):
-        _audit(request, event, tenant_id, "no_access", **details, monitors=0)
-        return {"status": "no_access", "message": MONITORS_NOT_SHARED, "scope": tenant_id}
+    refused = _not_shared(
+        request, tenant_id, event, "monitors", MONITORS_NOT_SHARED, details, "monitors"
+    )
+    if refused is not None:
+        return refused
 
     def read(client: DatadogClient, scope: Any) -> Any:
         return _all_monitors(client, scope, q)
