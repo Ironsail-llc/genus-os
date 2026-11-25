@@ -12,9 +12,13 @@
 --       relevant, and the reached entity's facts never would;
 --     * an entity's facts are its p_facts_per_entity most relevant ones (then
 --       importance, recency, id);
+--     * only facts that match the question are returned: on the memory
+--       evaluation's world, reached facts that match nothing crowded the
+--       reranker's head and pushed conversation segments out. When nothing
+--       is left to match (the question was only a name), every reached fact
+--       is eligible and the order is the walk's (importance, recency);
 --     * a fact's score is sqrt(activation / strongest activation) *
---       (0.01 + relevance): relevance decides, activation breaks ties and
---       keeps a fact that matches nothing ranked by how close it is;
+--       (0.01 + relevance): relevance decides, activation breaks ties;
 --     * facts that mention an entity in p_named (the entities the question
 --       itself names) are not returned: the dense and keyword legs find those
 --       by name; the graph returns what they cannot.
@@ -152,6 +156,8 @@ BEGIN
                  AND (NOT v_restr OR f.person_id IS NULL OR f.person_id = p_person_id)
                  AND (NOT v_trusted
                       OR f.origin IN ('operator_confirmed', 'user_stated', 'crm'))
+                 -- With words to match, only the facts that match them.
+                 AND (v_q IS NULL OR f.tsv @@ v_q)
                  AND NOT EXISTS (
                       SELECT 1 FROM memory_mentions nm
                        WHERE nm.tenant_id = p_tenant

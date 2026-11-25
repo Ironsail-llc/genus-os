@@ -566,7 +566,10 @@ def activate_for_question(
     Relevance is the full-text rank of a fact against the question without
     the names it links (:func:`question_without_names`), in 0..1 and carried
     as ``payload["graph_relevance"]``; ``leg_scores["graph"]`` is
-    ``sqrt(activation / strongest) * (0.01 + relevance)``. Facts that mention
+    ``sqrt(activation / strongest) * (0.01 + relevance)``. Only facts that
+    match the question are returned; when nothing is left to match (the
+    question was only a name) every reached fact is, in the walk's order
+    (importance, then recency). Facts that mention
     an entity the question names (:func:`named_in_question`) are not
     returned: the other legs find them by name. Tenant,
     reader, person scope and trust apply exactly as in :func:`activate`.

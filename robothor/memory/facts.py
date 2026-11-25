@@ -1331,6 +1331,7 @@ _GRAPH_FIELDS = (
     "graph_entity",
     "graph_entity_id",
     "graph_edge_id",
+    "graph_relevance",
 )
 
 
