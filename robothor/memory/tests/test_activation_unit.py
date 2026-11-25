@@ -26,6 +26,13 @@ class TestPhrases:
         assert "acme logistics" in phrases
         assert all(p == p.lower() for p in phrases)
 
+    def test_a_possessive_names_the_owner(self) -> None:
+        """ "Dave Larkwick's manager" is about Dave Larkwick: the possessive must
+        not glue itself to the surname (the world eval's multi-hop questions
+        missed every such seed)."""
+        for text in ("Who does Dave Larkwick's manager report to?", "Who is Dave Larkwick’s lead?"):
+            assert "dave larkwick" in activation.candidate_phrases(text)
+
     def test_phrases_are_bounded(self) -> None:
         long = " ".join(f"word{i}" for i in range(500))
         phrases = activation.candidate_phrases(long)

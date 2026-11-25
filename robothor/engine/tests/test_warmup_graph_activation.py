@@ -479,6 +479,14 @@ class TestWhatATurnPays:
             "did alice smith sign it", lowercase_ok=True
         )
 
+    def test_a_possessive_seed_phrase_names_the_owner(self) -> None:
+        assert "alice smith" in warmup._candidate_phrases(
+            "What did Alice Smith's manager decide?", lowercase_ok=False
+        )
+        assert "alice smith" in warmup._candidate_phrases(
+            "What did Alice Smith’s manager decide?", lowercase_ok=False
+        )
+
     def test_a_timeout_never_cancels_a_connection_another_request_holds(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
