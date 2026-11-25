@@ -1192,8 +1192,12 @@ LEG_FETCH_MIN_WIDE = 45
 
 # RRF weight per leg (unlisted legs count 1.0). The fan-out legs enter at half
 # weight: they still reach the reranker when their best rows are near the head,
-# without displacing the primary legs' top ranks.
-LEG_WEIGHTS: dict[str, float] = {"graph": 0.5, "entity_expansion": 0.5, "chat_turn": 0.5}
+# without displacing the primary legs' top ranks. The graph leg adds nothing to
+# the fused order: it reaches through what the other legs found, and lifting
+# those rows into the reranker's head pushed the right fact out on the memory
+# evaluation's world (point in time 73 to 60 of 126). It contributes through
+# its reserved places, which hold its best rows by its own score.
+LEG_WEIGHTS: dict[str, float] = {"graph": 0.0, "entity_expansion": 0.5, "chat_turn": 0.5}
 
 # Places in the final top-k a leg keeps whenever it returned anything (see
 # recall.apply_reserved). Graph-derived facts are related to the query, not
