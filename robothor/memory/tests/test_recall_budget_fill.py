@@ -51,6 +51,25 @@ async def test_rows_past_the_reranked_head_follow_in_fused_order(env: pytest.Mon
 
 
 @pytest.mark.asyncio
+async def test_the_tail_stops_where_the_fused_score_falls_off(env: pytest.MonkeyPatch) -> None:
+    """Score-adaptive truncation: a tail row is kept only while its fused score
+    is at least ``recall.TAIL_SCORE_FLOOR`` of the weakest head row's. Here the
+    head rows are found by both legs and every remaining row by one, at under
+    half the score, so nothing follows the head."""
+    dense = _dense(40)
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+    results = await _search(_Cursor(vector=dense, keyword=dense[:16]), limit=30)
+
+    assert len(results) == reranker.RERANK_MAX_CANDIDATES
+
+
+def test_the_floor_is_half_the_weakest_head_score() -> None:
+    from robothor.memory.recall import TAIL_SCORE_FLOOR
+
+    assert TAIL_SCORE_FLOOR == 0.5
+
+
+@pytest.mark.asyncio
 async def test_the_reranker_still_scores_only_its_head(env: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
