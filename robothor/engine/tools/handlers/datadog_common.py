@@ -175,12 +175,19 @@ def masked(value: Any, key: str = "") -> Any:
 
 
 def masked_tags(tags: tuple[str, ...] | list[str]) -> list[str]:
-    """``key:value`` tags masked; a phone-like key hides its value whatever its shape."""
+    """``key:value`` tags masked by the same rules as attributes.
+
+    A credential-named key withholds its value and a phone-like key hides a
+    digit run whatever its shape; anything else is masked by shape.
+    """
+    from robothor.secrets.redaction import PLACEHOLDER
+
     shown = []
     for tag in tags:
         key, sep, value = tag.partition(":")
-        if sep and masked(value, key) == "<phone>":
-            shown.append(f"{key}:<phone>")
+        hidden = masked(value, key) if sep else None
+        if hidden in (PLACEHOLDER, "<phone>"):
+            shown.append(f"{key}:{hidden}")
         else:
             shown.append(redact_personal_data(tag))
     return shown

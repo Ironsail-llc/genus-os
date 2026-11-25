@@ -447,7 +447,8 @@ def _sample(points: list[list[float]], n: int) -> list[list[float]]:
 def _shape_series(series: MetricSeries) -> dict[str, Any]:
     return {
         "metric": series.metric,
-        "scope": redact_personal_data(series.scope),
+        # The series' group tags, comma-joined: masked tag by tag.
+        "scope": ",".join(masked_tags(series.scope.split(","))) if series.scope else "",
         "tags": masked_tags(series.tags),
         "points": [[ts, value] for ts, value in series.points],
     }
