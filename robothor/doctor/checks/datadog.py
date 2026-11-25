@@ -35,21 +35,43 @@ def _make_client(settings: GenusSettings) -> DatadogClient:
     return client_from_settings(settings)
 
 
-def _unscoped_tenants(ctx: DoctorContext) -> list[str]:
-    """Active tenants with no usable scope entry, less the benchmark sandbox. Blocking.
+#: The kinds a scope entry opts into besides logs, as the doctor names them.
+_KINDS = ("trace", "monitor", "metric")
 
-    The sandbox tenant only runs benchmark sub-runs; it never needs Datadog,
-    so listing it would be noise on every install.
+
+def _tenant_access(ctx: DoctorContext) -> tuple[list[str], dict[str, list[str]]]:
+    """Active tenants with no scope, and scoped ones lacking each kind. Blocking.
+
+    Less the benchmark sandbox: it only runs benchmark sub-runs and never needs
+    Datadog, so listing it would be noise on every install. Read through
+    :func:`scope_for`, so the doctor and the clients agree on what an entry means.
     """
     from robothor.engine.benchmark_sandbox import sandbox_tenant_id
-    from robothor.integrations.datadog.scope import scope_for
+    from robothor.integrations.datadog.scope import NO_ACCESS_QUERY, NO_ACCESS_TAG, scope_for
 
     with ctx.db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT id FROM crm_tenants WHERE active = TRUE ORDER BY id")
         tenants = [str(row[0]) for row in cur.fetchall()]
     sandbox = sandbox_tenant_id()
-    return [t for t in tenants if t != sandbox and scope_for(t) is None]
+    unscoped: list[str] = []
+    missing: dict[str, list[str]] = {kind: [] for kind in _KINDS}
+    for tenant in tenants:
+        if tenant == sandbox:
+            continue
+        scope = scope_for(tenant)
+        if scope is None:
+            unscoped.append(tenant)
+            continue
+        lacks = {
+            "trace": scope.spans == NO_ACCESS_QUERY,
+            "monitor": scope.monitors == NO_ACCESS_QUERY,
+            "metric": scope.metric_tags == (NO_ACCESS_TAG,),
+        }
+        for kind in _KINDS:
+            if lacks[kind]:
+                missing[kind].append(tenant)
+    return unscoped, missing
 
 
 async def _reachable(ctx: DoctorContext) -> Result:
@@ -61,7 +83,9 @@ async def _reachable(ctx: DoctorContext) -> Result:
     on a read-only service account and store it with ``genus vault set``), or
     by kind when Datadog cannot be reached. Active tenants without an entry
     in ``ROBOTHOR_DATADOG_SCOPES`` are named in the detail: their reads are
-    refused until one is added.
+    refused until one is added. So are scoped tenants with no trace, monitor
+    or metric access, by kind: every part but logs is opt-in, so an entry with
+    only ``logs`` reads no traces.
     """
     from robothor.integrations.datadog.client import DatadogError
 
@@ -98,15 +122,18 @@ async def _reachable(ctx: DoctorContext) -> Result:
         return fail(f"Datadog call failed: {type(exc).__name__}")
     detail = f"Datadog accepts both keys ({client.site})"
     try:
-        unscoped = await ctx.run_blocking(_unscoped_tenants, ctx)
+        unscoped, missing = await ctx.run_blocking(_tenant_access, ctx)
     except Exception as exc:  # noqa: BLE001 - the tenant list is a note, not the verdict
         return ok(f"{detail}; could not list tenants ({type(exc).__name__})")
+    # Facts, not faults: an install need not give every tenant every kind.
     if unscoped:
-        # A fact, not a fault: an install need not give every tenant Datadog.
         detail += (
             f"; {', '.join(unscoped)} have no scope in ROBOTHOR_DATADOG_SCOPES and "
             "are refused Datadog reads until a scope is added for them"
         )
+    for kind in _KINDS:
+        if missing[kind]:
+            detail += f"; no {kind} access: {', '.join(missing[kind])}"
     return ok(detail)
 
 

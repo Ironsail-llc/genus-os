@@ -482,9 +482,9 @@ to put text containing an apostrophe in double quotes.
 | `metric_tags` | Metric queries | The tags lead the metric's tag filter, ANDed with the caller's |
 
 The bracket and quote rules above apply to the `monitors` filter and to a
-caller's monitor query as well. A tenant with no `monitors` filter, or no
-`metric_tags`, is refused before anything is sent; it never gets a query that
-merely matches nothing.
+caller's monitor query as well. A tenant with no `spans` or `monitors` filter,
+or no `metric_tags`, is refused that kind of read before anything is sent; it
+never gets a query that merely matches nothing.
 
 **A trace from another tenant reads as not found.** Datadog has no way to fetch
 a trace by id inside a filter, so Genus searches the tenant's spans for
@@ -509,11 +509,14 @@ when Datadog rejects either key (it never prints a key), or by error kind when
 Datadog cannot be reached. Its detail names the active tenants that have no
 scope entry, other than the benchmark sandbox tenant. They are refused Datadog
 reads until you add a scope for them. That is not a fault: an install does not
-have to give every tenant Datadog access.
+have to give every tenant Datadog access. It also names, by kind, each scoped
+tenant with no trace, monitor or metric access (for example `no trace access:
+acme-child-a`), because an entry with only `logs` reads no traces.
 
 A log row's `trace_id` and `span_id` keep only an id-shaped value: 1 to 40 hex
 or decimal digits, in lowercase. Anything else becomes empty, because the
-fallbacks read custom attributes, which can hold free text.
+fallbacks read custom attributes, which can hold free text. A span row's
+`trace_id`, `span_id` and `parent_id` follow the same rule.
 
 ### Genus watches Datadog
 
