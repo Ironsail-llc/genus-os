@@ -994,6 +994,36 @@ call; past the call's 105 s budget a fact is stored as new
 nothing is superseded without a classification. Every database step runs off
 the event loop.
 
+### Who can read a fact
+
+A fact has an owner, `memory_facts.scope_kind` / `scope_id`, written by the
+write path: `shared` (everyone in the tenant), or private to one person
+(`user`, `person:{crm id}`), one member (`user`, `user:{uid}`) or one agent
+(`agent`, `agent:{id}`). The ids are the ones `segments.conversation_scope`
+gives a conversation's owner.
+
+One rule decides who reads it, in `robothor/memory/visibility.py`: a reader
+sees shared facts and the facts owned by one of their own ids. A reader with
+no ids sees shared facts only. Under a restricted data scope the reader is the
+scope's person and nothing else, whatever the caller passed.
+
+It is applied in every reader that returns fact text:
+
+- `search_facts`: the vector, keyword and one-hop expansion legs. The graph
+  walk (`memory_activate`) reads as one id, the person's, else the member's
+  (`visibility.graph_reader`); a bare person id is read as `person:{id}`.
+- `entities.get_all_about` and warm-up's name-matched lines (migration
+  `crm/migrations/181_memory_fact_scope_readers.sql` gives
+  `entity_facts_for_candidates` the shared-only rule, same signature).
+- Everything derived for every reader reads shared facts only: insight
+  discovery, episodes, preferences, the working context, intents, gap
+  analysis, the memory projection and `crm.dal.get_person_memory`.
+
+Not filtered: the bridge's admin fact list (`/facts` in
+`crm/bridge/routers/memory_facts.py`). It is the tenant admin's view of what
+the tenant holds and the place a fact is forgotten from, so it shows private
+facts too.
+
 ### Associative recall
 
 When an agent works on a person, company or task, what is connected to it
