@@ -83,20 +83,40 @@ class TestOperatorLookup:
         from contextlib import contextmanager
 
         class _Cur:
+            def __init__(self, conn: object) -> None:
+                self.connection = conn  # as a psycopg2 cursor names its connection
+
             def execute(self, sql: str, _params: object = None) -> None:
                 statements.append(sql)
 
             def fetchall(self) -> list[dict[str, object]]:
                 if "memory_entities" in statements[-1]:
-                    return [{"id": 1, "name": "Alice Smith", "method": "full_name"}]
+                    # The identity lookup's row for "Alice Smith".
+                    return [
+                        {
+                            "id": 1,
+                            "name": "Alice Smith",
+                            "entity_type": "person",
+                            "aliases": [],
+                            "crm_person_id": None,
+                            "crm_company_id": None,
+                            "scope_kind": "shared",
+                            "scope_id": None,
+                            "norm": "alice smith",
+                            "alias_norms": [],
+                        }
+                    ]
                 return []
 
             def fetchone(self) -> None:
                 return None
 
+            def close(self) -> None:
+                pass
+
         class _Conn:
             def cursor(self, cursor_factory: object = None) -> _Cur:
-                return _Cur()
+                return _Cur(self)
 
         @contextmanager
         def _connect(*_a: object, **_k: object):

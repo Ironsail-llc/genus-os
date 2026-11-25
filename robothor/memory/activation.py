@@ -29,11 +29,10 @@ visibility and trust itself:
 Every function here is synchronous and does blocking database I/O: an async
 caller goes through ``asyncio.to_thread``. Nothing here writes.
 
-Seed linking is a small read-only matcher (:func:`seeds_from_text`): exact full
-names and aliases (case-insensitive, never a single token on its own), e-mail
-addresses and @handles as strong keys. The identity work builds a fuller
-read-only resolver; when it lands, :func:`_link_seeds` is the one place to
-swap.
+Seed linking (:func:`seeds_from_text`) is read-only: names and aliases go
+through identity's lookup (``robothor.memory.identity.find_entities``: one
+shared node or nothing; never a single token on its own), and e-mail addresses,
+@handles and the sender's CRM person are strong keys.
 """
 
 from __future__ import annotations
@@ -155,17 +154,7 @@ def _as_uuid(value: Any) -> str | None:
 
 _LINK_SQL = """
     SELECT id, name, method FROM (
-        SELECT e.id, e.name, 'full_name' AS method, 1 AS pri
-          FROM memory_entities e
-         WHERE e.tenant_id = %(t)s AND lower(e.name) = ANY(%(phrases)s::text[])
-        UNION ALL
-        SELECT e.id, e.name, 'alias', 2
-          FROM memory_entities e
-         WHERE e.tenant_id = %(t)s AND e.aliases <> '{}'
-           AND EXISTS (SELECT 1 FROM unnest(e.aliases) AS a(alias)
-                        WHERE lower(a.alias) = ANY(%(phrases)s::text[]))
-        UNION ALL
-        SELECT e.id, e.name, 'strong_key', 0
+        SELECT e.id, e.name, 'strong_key' AS method, 0 AS pri
           FROM contact_identifiers ci
           JOIN memory_entities e
             ON e.tenant_id = %(t)s
@@ -185,6 +174,29 @@ _LINK_SQL = """
 """
 
 
+def _name_seeds(cur: Any, tenant_id: str, phrases: Sequence[str]) -> list[Seed]:
+    """Entities named by ``phrases``, by identity's read-only lookup.
+
+    ``robothor.memory.identity.find_entities``: an exact name or alias of
+    exactly one shared node (a CRM merge answers as its winner). An ambiguous
+    name, a private node, a first name or nickname alone seed nothing. A
+    single-token phrase is never looked up.
+    """
+    from robothor.memory.identity import find_entities, normalize_surface
+
+    multi = [p for p in dict.fromkeys(phrases) if len(p.split()) >= 2]
+    if not multi:
+        return []
+    seeds: list[Seed] = []
+    for phrase, hit in find_entities(tenant_id, multi, cur=cur, light=True).items():
+        if not isinstance(hit, dict):
+            continue
+        name = str(hit.get("name") or "")
+        method = "full_name" if normalize_surface(name) == normalize_surface(phrase) else "alias"
+        seeds.append(Seed(entity_id=int(hit["id"]), name=name, method=method))
+    return seeds
+
+
 def _link_seeds(
     cur: Any,
     tenant_id: str,
@@ -197,6 +209,8 @@ def _link_seeds(
     """The read-only matcher behind :func:`seeds_from_text`, on an open cursor.
 
     ``phrases`` replaces :func:`candidate_phrases` of ``text`` when given.
+    Order: strong keys (e-mail, @handle, the sender's CRM person), then names
+    (identity's lookup), then ``extra_entity_ids``.
     """
     phrases = list(candidate_phrases(text) if phrases is None else phrases)
     keys = strong_keys(text)
@@ -206,15 +220,24 @@ def _link_seeds(
     sender = _as_uuid(sender_person_id)
     if not (phrases or keys or extra or sender):
         return []
-    cur.execute(
-        _LINK_SQL,
-        {"t": tenant_id, "phrases": phrases, "keys": keys, "sender": sender, "extra": extra},
-    )
+    rows: list[dict[str, Any]] = []
+    if keys or extra or sender:
+        cur.execute(
+            _LINK_SQL,
+            {"t": tenant_id, "keys": keys, "sender": sender, "extra": extra},
+        )
+        rows = list(cur.fetchall())
+    keyed = [r for r in rows if r["method"] == "strong_key"]
+    context = [r for r in rows if r["method"] != "strong_key"]
     seeds: dict[int, Seed] = {}
-    for row in cur.fetchall():
+    for row in keyed:
         eid = int(row["id"])
-        if eid not in seeds:
-            seeds[eid] = Seed(entity_id=eid, name=str(row["name"]), method=str(row["method"]))
+        seeds.setdefault(eid, Seed(entity_id=eid, name=str(row["name"]), method="strong_key"))
+    for seed in _name_seeds(cur, tenant_id, phrases):
+        seeds.setdefault(seed.entity_id, seed)
+    for row in context:
+        eid = int(row["id"])
+        seeds.setdefault(eid, Seed(entity_id=eid, name=str(row["name"]), method=str(row["method"])))
     return list(seeds.values())
 
 

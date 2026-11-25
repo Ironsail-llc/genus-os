@@ -385,8 +385,11 @@ class _Counter:
         self.checkouts.append(record)
 
         class _Cur:
-            def __init__(self, inner: Any) -> None:
+            def __init__(self, inner: Any, conn: Any = None) -> None:
                 self.inner = inner
+                # psycopg2 cursors name their connection; the identity lookup
+                # opens its own cursor on it, which must be counted too.
+                self.connection = conn
 
             def execute(self, sql: str, params: Any = None) -> None:
                 record["executes"] += 1
@@ -400,14 +403,18 @@ class _Counter:
             def fetchone(self) -> Any:
                 return self.inner.fetchone() if self.inner is not None else None
 
+            def close(self) -> None:
+                if self.inner is not None:
+                    self.inner.close()
+
         class _Conn:
             def __init__(self, inner: Any) -> None:
                 self.inner = inner
 
             def cursor(self, cursor_factory: Any = None) -> _Cur:
                 if self.inner is None:
-                    return _Cur(None)
-                return _Cur(self.inner.cursor(cursor_factory=cursor_factory))
+                    return _Cur(None, self)
+                return _Cur(self.inner.cursor(cursor_factory=cursor_factory), self)
 
             def cancel(self) -> None:
                 if self.inner is not None:
@@ -488,25 +495,43 @@ class TestWhatATurnPays:
         cancelled_while: list[str | None] = []
 
         class _Cur:
-            def __init__(self) -> None:
+            def __init__(self, connection: Any = None) -> None:
                 self.last = ""
+                self.connection = connection  # as a psycopg2 cursor names its connection
 
             def execute(self, sql: str, _params: Any = None) -> None:
                 self.last = sql
 
             def fetchall(self) -> list[Any]:
                 if "memory_entities" in self.last:
-                    return [{"id": 1, "name": "Alice Smith", "method": "full_name"}]
+                    # The identity lookup's row for "Alice Smith".
+                    return [
+                        {
+                            "id": 1,
+                            "name": "Alice Smith",
+                            "entity_type": "person",
+                            "aliases": [],
+                            "crm_person_id": None,
+                            "crm_company_id": None,
+                            "scope_kind": "shared",
+                            "scope_id": None,
+                            "norm": "alice smith",
+                            "alias_norms": [],
+                        }
+                    ]
                 return []
 
             def fetchone(self) -> None:
                 return None
 
+            def close(self) -> None:
+                pass
+
         class _Conn:
             holder: str | None = None
 
             def cursor(self, cursor_factory: Any = None) -> _Cur:
-                return _Cur()
+                return _Cur(self)
 
             def cancel(self) -> None:
                 cancelled_while.append(self.holder)
@@ -553,17 +578,37 @@ class TestWhatATurnPays:
         statements: list[str] = []
 
         class _Cur:
+            def __init__(self, conn: Any) -> None:
+                self.connection = conn  # as a psycopg2 cursor names its connection
+
             def execute(self, sql: str, _params: Any = None) -> None:
                 statements.append(sql)
 
             def fetchall(self) -> list[Any]:
                 if "memory_entities" in statements[-1]:
-                    return [{"id": 1, "name": "Alice Smith", "method": "full_name"}]
+                    # The identity lookup's row for "Alice Smith".
+                    return [
+                        {
+                            "id": 1,
+                            "name": "Alice Smith",
+                            "entity_type": "person",
+                            "aliases": [],
+                            "crm_person_id": None,
+                            "crm_company_id": None,
+                            "scope_kind": "shared",
+                            "scope_id": None,
+                            "norm": "alice smith",
+                            "alias_norms": [],
+                        }
+                    ]
                 return []
+
+            def close(self) -> None:
+                pass
 
         class _Conn:
             def cursor(self, cursor_factory: Any = None) -> _Cur:
-                return _Cur()
+                return _Cur(self)
 
         @contextmanager
         def _connect(*_a: Any, **_k: Any):
