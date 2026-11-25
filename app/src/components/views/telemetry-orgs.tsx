@@ -51,18 +51,19 @@ export function useOrgOverview(enabled: boolean) {
     null,
   );
   const sentKey = useRef<number | null>(null);
+  // Only the newest read may write. No cleanup that drops a reply: the page
+  // going off screen mid-read must not leave the summary loading for good,
+  // since coming back does not read again (the other tabs do the same).
+  const generation = useRef(0);
 
   useEffect(() => {
     if (!enabled || sentKey.current === reloads) return;
     sentKey.current = reloads;
-    let active = true;
+    const mine = ++generation.current;
     void readTelemetry(`${TELEMETRY_BRIDGE}/api/telemetry/overview?since=1h`).then((read) => {
-      if (!active) return;
+      if (generation.current !== mine) return;
       setAnswer({ key: reloads, state: read.state, orgs: records(read.body.tenants).map(parseOrg) });
     });
-    return () => {
-      active = false;
-    };
   }, [enabled, reloads]);
 
   return {
@@ -126,17 +127,40 @@ export function OrganizationsSummary({
                     Unavailable: {unavailableText(org.errorKind)}
                   </td>
                 ) : (
+                  // One of the two reads failed: that cell says so. The other
+                  // read worked, so the failure is this cell's, not "not shared".
                   <>
                     <td
-                      className={`py-1.5 text-right tabular-nums ${org.errors ? "text-destructive" : "text-muted-foreground"}`}
+                      data-testid="telemetry-org-errors"
+                      className={`py-1.5 text-right tabular-nums ${
+                        org.errors === null && org.errorKind
+                          ? "text-warning"
+                          : org.errors
+                            ? "text-destructive"
+                            : "text-muted-foreground"
+                      }`}
+                      title={org.errors === null && org.errorKind ? unavailableText(org.errorKind) : undefined}
                     >
-                      {org.errors ?? "—"}
+                      {org.errors === null && org.errorKind ? "Unavailable" : (org.errors ?? "—")}
                     </td>
                     <td
-                      className={`py-1.5 text-right tabular-nums ${org.firingMonitors ? "text-warning" : "text-muted-foreground"}`}
-                      title={org.firingMonitors === null ? "Monitors are not shared with this organization." : undefined}
+                      data-testid="telemetry-org-monitors"
+                      className={`py-1.5 text-right tabular-nums ${
+                        org.firingMonitors === null && org.errorKind
+                          ? "text-warning"
+                          : org.firingMonitors
+                            ? "text-warning"
+                            : "text-muted-foreground"
+                      }`}
+                      title={
+                        org.firingMonitors !== null
+                          ? undefined
+                          : org.errorKind
+                            ? unavailableText(org.errorKind)
+                            : "Monitors are not shared with this organization."
+                      }
                     >
-                      {org.firingMonitors ?? "—"}
+                      {org.firingMonitors === null && org.errorKind ? "Unavailable" : (org.firingMonitors ?? "—")}
                     </td>
                   </>
                 )}

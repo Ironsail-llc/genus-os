@@ -558,8 +558,11 @@ Traces above), so the link often lands on the not-found sentence.
 
 **Logs for this run.** In Observe › Runs, the run drawer links to the Logs page
 with the search `"run_id=<id>"` filled in and run, since the engine's
-structured lines carry `run_id=<id>`. The link is `/?v=logs&q=<query>`, so it
-can be bookmarked or shared. Only roles that can open the Logs page see it.
+structured lines carry `run_id=<id>`. The search covers the time from five
+minutes before the run started until now, so an older run still shows its
+lines; the range picker shows that start as *Since …*. The link is
+`/?v=logs&q=<query>&since=<timestamp>`, so it can be bookmarked or shared. Only
+roles that can open the Logs page see it.
 
 **Organizations.** The root organization's owner or admin, at home, with child
 organizations, also sees an **Organizations** summary above the tabs: one row

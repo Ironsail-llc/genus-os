@@ -284,6 +284,7 @@ function AppShellBody() {
     settingsPage,
     room: routeRoom,
     query: logsQuery,
+    since: logsSince,
     navigate,
     openRoom,
     openLogs,
@@ -559,7 +560,9 @@ function AppShellBody() {
                   visible={view === "runs"}
                   // Only a role that may open the Logs page is offered the link.
                   onOpenLogs={
-                    isAuditReaderRole(role) ? (runId) => openLogs(runLogsQuery(runId)) : undefined
+                    isAuditReaderRole(role)
+                      ? (runId, since) => openLogs(runLogsQuery(runId), since)
+                      : undefined
                   }
                 />,
               )}
@@ -599,6 +602,7 @@ function AppShellBody() {
                   rootAtHome={isRootAtHome(session)}
                   hasChildTenants={hasChildTenants}
                   query={logsQuery}
+                  since={logsSince}
                 />,
               )}
               {mount("health", <HealthView visible={view === "health"} />)}

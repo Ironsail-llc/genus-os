@@ -688,6 +688,8 @@ export interface LogsViewProps {
   hasChildTenants?: boolean;
   /** A Datadog search handed in by a link (`?v=logs&q=`), prefilled and run. */
   query?: string;
+  /** The window that search opens on (`&since=`). */
+  since?: string;
 }
 
 type Source = "datadog" | "server";
@@ -708,6 +710,7 @@ export function LogsView({
   rootAtHome = false,
   hasChildTenants = false,
   query,
+  since,
 }: LogsViewProps) {
   const [source, setSource] = useState<Source>("datadog");
   // A search from a link is a Datadog search: it brings the Datadog source back.
@@ -777,6 +780,7 @@ export function LogsView({
       switcher={switcher}
       showOrganizations={showOrganizations}
       query={query}
+      since={since}
     />
   );
 }

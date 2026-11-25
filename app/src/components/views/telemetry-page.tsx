@@ -40,9 +40,17 @@ export interface TelemetryPageProps {
   showOrganizations?: boolean;
   /** A search handed in by a link (`?v=logs&q=`); a new one opens the Logs tab on it. */
   query?: string;
+  /** The window the linked search opens on. */
+  since?: string;
 }
 
-export function TelemetryPage({ visible, switcher, showOrganizations = false, query }: TelemetryPageProps) {
+export function TelemetryPage({
+  visible,
+  switcher,
+  showOrganizations = false,
+  query,
+  since,
+}: TelemetryPageProps) {
   const [tab, setTab] = useState<TelemetryTab>("logs");
   const [opened, setOpened] = useState<ReadonlySet<TelemetryTab>>(() => new Set(["logs"]));
   const [traceRequest, setTraceRequest] = useState<TraceRequest | null>(null);
@@ -100,6 +108,7 @@ export function TelemetryPage({ visible, switcher, showOrganizations = false, qu
         switcher={switcher}
         above={above}
         query={query}
+        since={since}
         onViewTrace={(traceId) => {
           setTraceRequest((prev) => ({ traceId, n: (prev?.n ?? 0) + 1 }));
           show("traces");

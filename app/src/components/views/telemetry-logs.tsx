@@ -214,6 +214,8 @@ export interface TelemetryLogsProps {
   above?: React.ReactNode;
   /** A search handed in by a link: prefilled and run, and again whenever it changes. */
   query?: string;
+  /** The window that search opens on, when the link carries one. */
+  since?: string;
   /** Opens a trace on the Traces tab; without it a line offers no trace link. */
   onViewTrace?: (traceId: string) => void;
   /** Called with Refresh, for what the page reads beside the search. */
@@ -225,21 +227,26 @@ export function TelemetryLogs({
   switcher,
   above,
   query: linkedQuery,
+  since: linkedSince,
   onViewTrace,
   onRefresh,
 }: TelemetryLogsProps) {
+  const linkedWindow = linkedQuery && linkedSince && isLogSince(linkedSince) ? linkedSince : null;
   const [draft, setDraft] = useState(linkedQuery ?? "");
   const [query, setQuery] = useState(linkedQuery ?? "");
-  // A new search from a link replaces the one on screen, and runs.
-  const [seenLink, setSeenLink] = useState(linkedQuery);
-  if (linkedQuery !== seenLink) {
-    setSeenLink(linkedQuery);
+  const [since, setSince] = useState(linkedWindow ?? DEFAULT_WINDOW);
+  // A new search from a link replaces the one on screen, and runs, over the
+  // window the link carries (a run's link opens just before the run started).
+  const link = `${linkedQuery ?? ""}|${linkedSince ?? ""}`;
+  const [seenLink, setSeenLink] = useState(link);
+  if (link !== seenLink) {
+    setSeenLink(link);
     if (linkedQuery) {
       setDraft(linkedQuery);
       setQuery(linkedQuery);
+      if (linkedWindow) setSince(linkedWindow);
     }
   }
-  const [since, setSince] = useState(DEFAULT_WINDOW);
   const [reloads, setReloads] = useState(0);
 
   // The search on screen, and the one the state below answers. They differ
@@ -389,6 +396,11 @@ export function TelemetryLogs({
               {w.label}
             </option>
           ))}
+          {TELEMETRY_WINDOWS.some((w) => w.value === since) ? null : (
+            // A window a link brought, such as a run's start: offered so the
+            // picker shows what is being searched, and can be picked again.
+            <option value={since}>Since {timeOf(since)}</option>
+          )}
         </NativeSelect>
         <Button type="submit" size="sm" data-testid="telemetry-submit">
           <Search aria-hidden />

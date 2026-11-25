@@ -22,7 +22,7 @@ import {
 } from "@/lib/automations/run-truth";
 import { relativeTime } from "@/lib/inbox/pending";
 import { logsLink } from "@/hooks/use-view-route";
-import { runLogsQuery } from "@/lib/observe/run-logs";
+import { runLogsQuery, runLogsSince } from "@/lib/observe/run-logs";
 import { formatCost, formatTokens } from "./runs-format";
 
 const BRIDGE_URL = "/api/bridge";
@@ -408,10 +408,11 @@ export function RunDetailDrawer({
   runId: string | null;
   onClose: () => void;
   /**
-   * Opens the Logs page on this run's lines. Given only to a role that may
+   * Opens the Logs page on this run's lines, over a window that starts a
+   * little before the run did (`runLogsSince`). Given only to a role that may
    * open the Logs page; without it the drawer offers no link.
    */
-  onOpenLogs?: (runId: string) => void;
+  onOpenLogs?: (runId: string, since: string) => void;
 }) {
   // Keyed by run id, so a newly chosen run never shows the last one's answer
   // and nothing has to be reset when the choice changes.
@@ -480,10 +481,10 @@ export function RunDetailDrawer({
           {runId && onOpenLogs ? (
             <a
               data-testid="run-detail-logs-link"
-              href={logsLink(runLogsQuery(runId))}
+              href={logsLink(runLogsQuery(runId), runLogsSince(run?.started_at))}
               onClick={(event) => {
                 event.preventDefault();
-                onOpenLogs(runId);
+                onOpenLogs(runId, runLogsSince(run?.started_at));
               }}
               className="inline-flex w-fit items-center gap-1 text-xs text-primary underline-offset-2 hover:underline"
             >
