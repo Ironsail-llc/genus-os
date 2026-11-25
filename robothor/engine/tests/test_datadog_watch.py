@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -71,12 +71,19 @@ def test_a_noisy_service_needs_a_bigger_jump() -> None:
     assert watch.check_error_spike({"shop-api": 400}, {"shop-api": noisy}) != []
 
 
-def test_tiny_counts_do_not_fire_even_from_zero() -> None:
-    quiet = [0, 1, 0, 0, 1, 0, 0, 0]
-    assert (
-        watch.check_error_spike({"shop-api": watch.SPIKE_MIN_COUNT - 1}, {"shop-api": quiet}) == []
-    )
-    assert watch.check_error_spike({"shop-api": watch.SPIKE_MIN_COUNT}, {"shop-api": quiet}) != []
+def test_tiny_counts_do_not_fire_whatever_the_ratio() -> None:
+    low = [2, 3, 2, 3, 2, 3, 2, 3]
+    assert watch.check_error_spike({"shop-api": watch.SPIKE_MIN_COUNT - 1}, {"shop-api": low}) == []
+    assert watch.check_error_spike({"shop-api": watch.SPIKE_MIN_COUNT}, {"shop-api": low}) != []
+
+
+@pytest.mark.parametrize("stray", [[0, 0, 0, 0, 0, 0, 0, 1], [0, 1, 0, 0, 1, 0, 0, 0]])
+def test_a_usually_silent_service_uses_the_higher_floor(stray: list[int]) -> None:
+    """A stray error or two in the baseline is no usual level: no jump at zero."""
+    below = watch.NEW_SERVICE_MIN_COUNT - 1
+    assert watch.check_error_spike({"shop-api": watch.SPIKE_MIN_COUNT}, {"shop-api": stray}) == []
+    assert watch.check_error_spike({"shop-api": below}, {"shop-api": stray}) == []
+    assert watch.check_error_spike({"shop-api": below + 1}, {"shop-api": stray}) != []
 
 
 def test_a_service_with_no_baseline_uses_the_higher_floor() -> None:
@@ -121,25 +128,32 @@ class Datadog:
         baseline: dict[str, dict[str, int]] | None = None,
         fail: dict[str, int] | None = None,
         validate_status: int = 200,
+        app_key_status: int = 200,
     ) -> None:
         self.current = current or {}
         self.baseline = baseline or {}
         self.fail = fail or {}
         self.validate_status = validate_status
+        self.app_key_status = app_key_status
         self.queries: list[dict[str, Any]] = []
         self.validations = 0
+        self.app_key_probes = 0
+        self.current_start = CURRENT_START
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/v1/validate":
             self.validations += 1
             return httpx.Response(self.validate_status, json={"valid": True})
         body = json.loads(request.content)
+        if request.url.path == "/api/v2/logs/events/search":
+            self.app_key_probes += 1
+            return httpx.Response(self.app_key_status, json={"data": []})
         self.queries.append(body)
         query = body["filter"]["query"]
         for scope_query, status in self.fail.items():
             if scope_query in query:
                 return httpx.Response(status, json={"errors": [SECRET_BODY]})
-        counts = self.current if body["filter"]["from"] == CURRENT_START else self.baseline
+        counts = self.current if body["filter"]["from"] == self.current_start else self.baseline
         service = next((s for s in counts if f"service:{s}" in query), None)
         buckets = []
         if service is not None:
@@ -346,6 +360,50 @@ async def test_a_network_failure_on_the_root_tenants_reads_counts(
         del SCOPES[PARENT]
 
 
+async def test_a_revoked_application_key_is_a_lost_link(audit: MagicMock, alert: AsyncMock) -> None:
+    """``/api/v1/validate`` checks only the API key; the probe checks the other one."""
+    dd = Datadog(app_key_status=403)
+    w = _watch(dd, home=PARENT, root=True)
+    for _ in range(watch.CONNECTION_FAILURES_FOR_LOST):
+        await w.tick([PARENT])
+    assert dd.validations == watch.CONNECTION_FAILURES_FOR_LOST
+    assert dd.app_key_probes == watch.CONNECTION_FAILURES_FOR_LOST
+    events = await _events(audit)
+    assert [e["kind"] for e in events] == ["connection_lost"]
+    assert "application key" in events[0]["brief"]
+
+
+async def test_each_link_episode_gets_its_own_alert_id(audit: MagicMock, alert: AsyncMock) -> None:
+    """A delivered alert id is suppressed for the cooldown; a new episode must not be."""
+    dd = Datadog(validate_status=401)
+    w = _watch(dd, home=PARENT, root=True, mode="deliver")
+    n = watch.CONNECTION_FAILURES_FOR_LOST
+    clock = {"now": NOW}
+    w._clock = lambda: clock["now"]
+    for status in [401] * n + [200] + [401] * n:
+        dd.validate_status = status
+        clock["now"] = clock["now"] + timedelta(minutes=5)
+        await w.tick([PARENT])
+    ids = [c.kwargs["alert_id"] for c in alert.call_args_list]
+    assert len(ids) == 3
+    assert len(set(ids)) == 3
+
+
+async def test_a_spike_in_a_later_window_gets_its_own_alert_id(
+    audit: MagicMock, alert: AsyncMock
+) -> None:
+    dd = Datadog(**SPIKING)
+    w = _watch(dd, mode="deliver")
+    await w.tick([CHILD_A])
+    detectors._dedup.clear()  # the hour has passed
+    later = NOW + timedelta(minutes=watch.WINDOW_MINUTES)
+    w._clock = lambda: later
+    dd.current_start = "2026-11-25T12:00:00Z"
+    await w.tick([CHILD_A])
+    ids = [c.kwargs["alert_id"] for c in alert.call_args_list]
+    assert len(ids) == 2 and ids[0] != ids[1]
+
+
 async def test_an_unconfigured_client_watches_nothing(audit: MagicMock, alert: AsyncMock) -> None:
     async def factory() -> AsyncDatadogClient:
         raise DatadogError("not_configured")
@@ -382,26 +440,58 @@ def test_the_mode_setting_is_declared_and_defaults_to_dry_run(
         reset_settings()
 
 
-async def test_the_daemon_runs_the_watch_for_its_own_tenant(
+async def test_the_daemon_runs_the_watch_in_the_background_one_pass_at_a_time(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """A slow Datadog must not hold the watchdog loop (pings, approvals, reconcile)."""
+    import asyncio
+
     from robothor.engine import daemon
 
-    for name in (
-        "repeat_error_detector",
-        "tool_degradation_detector",
-        "runaway_burn_detector",
-    ):
+    for name in ("repeat_error_detector", "tool_degradation_detector", "runaway_burn_detector"):
         monkeypatch.setattr(f"robothor.engine.detectors.{name}", AsyncMock(return_value=0))
-    detector = AsyncMock(return_value=0)
-    monkeypatch.setattr("robothor.engine.datadog_watch.datadog_watch_detector", detector)
-    await daemon._run_tick_detectors(10, "test-tenant")
-    detector.assert_awaited_once_with("test-tenant")
+    release = asyncio.Event()
+    calls: list[str] = []
 
-    detector.side_effect = RuntimeError("watch failed")
-    with caplog.at_level(logging.WARNING, logger="robothor.engine.daemon"):
+    async def hanging(tenant_id: str) -> int:
+        calls.append(tenant_id)
+        await release.wait()
+        return 0
+
+    monkeypatch.setattr("robothor.engine.datadog_watch.datadog_watch_detector", hanging)
+    await asyncio.wait_for(daemon._run_tick_detectors(10, "test-tenant"), timeout=1)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(daemon._run_tick_detectors(20, "test-tenant"), timeout=1)
+    await asyncio.sleep(0)
+    assert calls == ["test-tenant"]
+    release.set()
+    await watch.wait_for_pass()
+
+    async def failing(tenant_id: str) -> int:
+        raise RuntimeError("watch failed")
+
+    monkeypatch.setattr("robothor.engine.datadog_watch.datadog_watch_detector", failing)
+    with caplog.at_level(logging.WARNING):
         await daemon._run_tick_detectors(10, "test-tenant")
-    assert any("datadog" in r.getMessage().lower() for r in caplog.records)
+        await watch.wait_for_pass()
+    assert any(
+        "datadog watch" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records
+    )
+
+
+@pytest.mark.parametrize("gate", ["detectors_off", "follower"])
+async def test_the_detector_is_gated(
+    gate: str, monkeypatch: pytest.MonkeyPatch, audit: MagicMock
+) -> None:
+    factory = AsyncMock()
+    monkeypatch.setattr(watch, "_default_client", factory)
+    monkeypatch.setattr(watch, "_scope_map_declared", lambda: True)
+    if gate == "detectors_off":
+        monkeypatch.setenv("ROBOTHOR_DETECTORS_ENABLED", "0")
+    else:
+        monkeypatch.setattr("robothor.engine.leader.is_leader", lambda: False)
+    assert await watch.datadog_watch_detector("test-tenant") == 0
+    factory.assert_not_called()
 
 
 async def test_the_detector_does_nothing_without_a_scope_map(
@@ -420,6 +510,31 @@ async def test_the_detector_does_nothing_without_a_scope_map(
     factory.assert_not_called()
 
 
+# ── the root tenant ─────────────────────────────────────────────────────────
+
+
+def _tenant_row(tenant: str, *, parent: str | None) -> dict[str, Any]:
+    """What ``dal.get_tenant`` really returns: the ``tenant_to_dict`` shape."""
+    from robothor.crm.models import tenant_to_dict
+
+    return tenant_to_dict({"id": tenant, "display_name": tenant, "parent_tenant_id": parent})
+
+
+@pytest.mark.parametrize(
+    ("row", "root"),
+    [
+        (_tenant_row(CHILD_A, parent=PARENT), False),
+        (_tenant_row(PARENT, parent=None), True),
+        (None, True),
+    ],
+)
+async def test_only_a_tenant_without_a_parent_is_the_root(
+    row: dict[str, Any] | None, root: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("robothor.crm.dal.get_tenant", lambda _tenant: row)
+    assert await watch._default_is_root(CHILD_A) is root
+
+
 # ── no blocking call on the loop ────────────────────────────────────────────
 
 
@@ -432,7 +547,7 @@ async def test_the_tenant_tree_and_the_vault_are_read_off_the_loop(
 
     await warm_executor()
     loop = asyncio.get_running_loop()
-    tree = SlowProbe(loop, result={"id": PARENT, "parent_tenant_id": None})
+    tree = SlowProbe(loop, result=_tenant_row(PARENT, parent=None))
     vault = SlowProbe(loop, result=_client(Datadog()))
     monkeypatch.setattr("robothor.crm.dal.get_tenant", tree)
     monkeypatch.setattr("robothor.integrations.datadog.client.async_client_from_settings", vault)
