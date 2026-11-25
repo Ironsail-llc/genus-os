@@ -81,6 +81,9 @@ class LogRow:
     message: str
     tags: tuple[str, ...]
     attributes: dict[str, Any] = field(default_factory=dict)
+    #: Last and defaulted, so a constructor written before they existed still works.
+    trace_id: str = ""
+    span_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -303,10 +306,37 @@ def _str(value: Any) -> str:
     return "" if value is None or isinstance(value, dict | list) else str(value)
 
 
+def _id_text(value: Any) -> str:
+    """An id as text: a string or an integer (``dd.trace_id`` can be decimal), else ""."""
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, str | int):
+        return str(value).strip()
+    return ""
+
+
+def _correlation_id(event: dict[str, Any], name: str) -> str:
+    """``trace_id`` or ``span_id``: the event's reserved top-level field first, then
+    the custom attribute forms ``<name>``, ``dd.<name>`` and ``otel.<name>``."""
+    custom = _dict(event.get("attributes"))
+    for value in (
+        event.get(name),
+        custom.get(name),
+        _dict(custom.get("dd")).get(name),
+        _dict(custom.get("otel")).get(name),
+    ):
+        text = _id_text(value)
+        if text:
+            return text
+    return ""
+
+
 def _row(raw: dict[str, Any]) -> LogRow:
     attrs = _dict(raw.get("attributes"))
     tags = attrs.get("tags")
     return LogRow(
+        trace_id=_correlation_id(attrs, "trace_id"),
+        span_id=_correlation_id(attrs, "span_id"),
         id=_str(raw.get("id")),
         timestamp=_str(attrs.get("timestamp")),
         service=_str(attrs.get("service")),

@@ -409,6 +409,32 @@ The two keys are one credential for the whole instance, not per tenant. They
 resolve from the vault first, always from the root tenant's rows, and then from
 the environment. Use the keys of a Datadog service account that can only read.
 
+### What protects the key
+
+The keys read every tenant's telemetry, so the scope filter is a wall only if
+no agent ever holds them. They are classified with the platform's own
+credentials (`is_platform_credential` in `robothor/secrets/classification.py`):
+
+- They are never in an agent's shell environment, on any
+  `ROBOTHOR_EXEC_ENV_MODE` rung, `off` included. Shell hooks, the browser
+  driver and the Codex child do not get them either.
+- A manifest `secrets:` grant naming one is refused.
+- The engine removes them from its C environment at startup, so a child
+  started without an explicit environment does not inherit them. The engine's
+  own Datadog client still reads them.
+- The vault tools (`vault_get`, `vault_set`, `vault_test`, `vault_delete`)
+  refuse both names in every tenant, whatever the agent's credential tier.
+- `config_get` shows them only as a fingerprint, and `config_set` refuses them
+  and refuses `ROBOTHOR_DATADOG_SCOPES`, so an agent cannot widen its own
+  tenant's filter. Change the map with `genus config set` on the instance.
+- Set `ROBOTHOR_DATADOG_SCOPES` in the instance's environment rather than in
+  `config.yaml`. The environment wins over the file, and an agent that can
+  write files in the workspace can write the file.
+
+The limit: code running inside the engine process itself can use the keys.
+The engine's own code is the trusted part; an agent reaches Datadog only
+through it, with its tenant's filter applied.
+
 ### The scope map
 
 ```json
