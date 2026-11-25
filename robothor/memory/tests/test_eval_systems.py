@@ -258,7 +258,10 @@ class TestSystemsOnASeededWorld:
             bundle = await system.retrieve(case, world_handle=seeded, token_budget=800)
             assert bundle.items, system.name
             kinds[system.name] = {i.kind for i in bundle.items}
-        assert kinds["recall"] == {"fact"}
+        # Recall reads the reader's conversation segments too, as the turns
+        # they copy; it never returns a document.
+        assert "fact" in kinds["recall"]
+        assert kinds["recall"] <= {"fact", "turn"}
         assert kinds["keyword_only"] == {"fact"}
         assert kinds["raw_verbatim"] <= {"turn", "document"}
         assert kinds["full_context"] == {"turn"}
