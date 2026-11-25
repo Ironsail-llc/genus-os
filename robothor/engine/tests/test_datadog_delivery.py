@@ -206,8 +206,10 @@ def audit():
 
 
 @pytest.fixture
-def fleet(engine_config: EngineConfig, audit: Audit):
+def fleet(engine_config: EngineConfig, audit: Audit, monkeypatch: pytest.MonkeyPatch):
     dlv.reset_state()
+    # A busy main agent is waited for; in tests, without the wall-clock pauses.
+    monkeypatch.setattr(dlv, "TRIAGE_WAIT_SECONDS", (0, 0, 0), raising=False)
     redis = SharedRedis()
     f = Fleet(engine_config, redis)
     with (
@@ -659,13 +661,88 @@ async def test_a_run_that_cannot_start_is_recorded_and_raises_nothing(
     assert all(stream != f"{STREAM}:dlq" for stream, _ in fleet.redis.added)
 
 
-async def test_a_busy_main_agent_is_recorded(fleet: Fleet, audit: Audit) -> None:
-    with patch("robothor.engine.dedup.try_acquire", new_callable=AsyncMock, return_value=False):
+async def test_a_main_agent_busy_for_good_is_recorded_and_frees_the_episode(
+    fleet: Fleet, audit: Audit
+) -> None:
+    busy = AsyncMock(return_value=False)
+    with patch("robothor.engine.dedup.try_acquire", busy):
         await fleet.deliver_webhook(_payload())
     await get_event_writer().flush()
     assert fleet.triage_runs() == []
+    assert busy.await_count == 1 + len(dlv.TRIAGE_WAIT_SECONDS), "it waited before giving up"
     runs = [r for r in audit.rows if r["event_type"] == "datadog.triage_run"]
     assert [r["details"]["status"] for r in runs] == ["agent_busy"]
+    # The episode is not left without a run: the next trigger of it may start one.
+    await fleet.deliver_webhook(_payload(transition="Re-Triggered", event_id="2"))
+    assert len(fleet.triage_runs()) == 1
+
+
+async def test_a_main_agent_busy_at_first_is_waited_for(fleet: Fleet, audit: Audit) -> None:
+    """Two monitors of one incident: the second run waits for the first instead of dropping."""
+    turns = AsyncMock(side_effect=[False, False, True])
+    with patch("robothor.engine.dedup.try_acquire", turns):
+        await fleet.deliver_webhook(_payload())
+    assert len(fleet.triage_runs()) == 1
+
+
+# ── the episode moves on whatever the send did ──────────────────────
+
+
+async def test_a_step_held_by_the_cooldown_still_moves_the_episode(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """Fire, recover, fire inside the cooldown, recover: the next day's trigger is sent."""
+    from robothor.engine import alerts
+
+    await fleet.deliver_webhook(_payload(event_id="1", date="1"))
+    await fleet.deliver_webhook(_payload(transition="Recovered", event_id="2", date="2"))
+    with patch.object(alerts, "_suppressed", return_value=True):
+        await fleet.deliver_webhook(_payload(event_id="3", date="3"))
+        await fleet.deliver_webhook(_payload(transition="Recovered", event_id="4", date="4"))
+    await fleet.deliver_webhook(_payload(event_id="5", date="5"))  # the next day
+
+    modes = [r["details"]["mode"] for r in audit.alerts()]
+    assert modes == ["delivered", "delivered", "suppressed", "suppressed", "delivered"]
+    assert [r["details"]["delivery"].get("reason") for r in audit.alerts()][2:4] == [
+        "cooldown",
+        "cooldown",
+    ]
+    assert [lvl for _, lvl, *_ in fleet.sent] == ["warning", "info", "warning"]
+
+
+async def test_a_recovery_whose_send_fails_still_closes_the_episode(
+    fleet: Fleet, audit: Audit
+) -> None:
+    await fleet.deliver_webhook(_payload(event_id="1", date="1"))
+    fleet.result = False
+    await fleet.deliver_webhook(_payload(transition="Recovered", event_id="2", date="2"))
+    fleet.result = True
+    await fleet.deliver_webhook(_payload(event_id="3", date="3"))  # a new incident
+
+    assert [r["details"]["mode"] for r in audit.alerts()] == [
+        "delivered",
+        "delivery_failed",
+        "delivered",
+    ]
+    assert len(fleet.triage_runs()) == 2
+
+
+# ── a child engine never acts for another tenant ────────────────────
+
+
+@pytest.mark.parametrize(("tags", "absent"), [(f"org:{B}", B), ("env:prod", ROOT)])
+async def test_a_child_that_cannot_hand_off_tells_and_records_nothing_for_others(
+    fleet: Fleet, audit: Audit, tags: str, absent: str
+) -> None:
+    if absent == ROOT:
+        fleet.redis.root_running = False
+    else:
+        fleet.redis.running = {A}
+    await fleet.deliver_webhook(_payload(tags=tags), received_by=A)
+
+    assert fleet.sent == [], "no notice about another tenant in this tenant's digest"
+    assert audit.alerts() == [], "and no record written for another tenant from here"
+    assert fleet.triage_runs() == []
 
 
 async def test_no_main_agent_is_recorded_on_the_alert(fleet: Fleet, audit: Audit) -> None:
