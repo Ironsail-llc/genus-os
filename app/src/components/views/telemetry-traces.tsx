@@ -50,6 +50,14 @@ import {
  */
 
 const PAGE_SIZE = 50;
+
+/**
+ * A trace the bridge did not find. Outside this organization, not existing and
+ * a malformed id read the same; and Datadog keeps only a sample of traces, so
+ * a trace id from an ordinary log line often has no trace at all.
+ */
+export const TRACE_NOT_FOUND =
+  "This trace was not found in your organization's traces. Datadog keeps only a sample of traces, so most ordinary requests have none.";
 const DEFAULT_WINDOW = "1h";
 
 export interface TraceRow {
@@ -310,7 +318,7 @@ function TraceSheet({ traceId, onClose }: { traceId: string | null; onClose: () 
         <div className="flex flex-col gap-2 px-4 pb-6 text-xs">
           {state.kind !== "ok" ? (
             <TelemetryNotice
-              state={state}
+              state={state.kind === "not_found" ? { kind: "not_found", message: TRACE_NOT_FOUND } : state}
               prefix="trace"
               icon={Waypoints}
               loadingLabel="Loading the trace"

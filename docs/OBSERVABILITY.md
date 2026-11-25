@@ -506,8 +506,11 @@ you open it:
 - **Traces** lists the organization's error spans in the chosen time range:
   time, service, resource, duration and status. Click one to open its trace in
   a side sheet, its spans as an indented tree with each span's duration. A
-  trace from another organization reads exactly like a trace that does not
-  exist: *No trace with that id was found in this organization's data.*
+  trace from another organization, a trace that does not exist and a malformed
+  id all read the same: *This trace was not found in your organization's
+  traces. Datadog keeps only a sample of traces, so most ordinary requests have
+  none.* Retention keeps errors and slow requests more often, so a trace
+  opened from an ordinary log line is often not there.
 - **Monitors** lists the organization's monitors with a status badge and when
   each last triggered. **Firing only** is on by default and keeps alert, warn
   and no data; turn it off to see every monitor. An organization whose scope

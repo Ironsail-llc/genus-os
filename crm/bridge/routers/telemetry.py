@@ -276,8 +276,13 @@ def summarize_logs(
 # ── traces ──────────────────────────────────────────────────────────────────
 
 #: What a trace that is not this tenant's reads as. The same sentence as for a
-#: trace that does not exist, so the answer says nothing about other tenants.
-TRACE_NOT_FOUND = "No trace with that id was found in this organization's data."
+#: trace that does not exist or an id that is malformed, so the answer says
+#: nothing about other tenants. Datadog keeps only a sample of traces, so a
+#: trace id from an ordinary log line often has no trace; the sentence says so.
+TRACE_NOT_FOUND = (
+    "This trace was not found in your organization's traces. Datadog keeps only a "
+    "sample of traces, so most ordinary requests have none."
+)
 
 #: The window a single trace is looked for in when the caller names none: the
 #: longest range the page offers, so a trace opened from any row is in it.
