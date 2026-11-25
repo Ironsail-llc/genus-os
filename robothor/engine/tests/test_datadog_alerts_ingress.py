@@ -216,6 +216,9 @@ class FakeRedis:
     async def delete(self, key: str) -> int:
         return 1 if self.keys.pop(key, None) is not None else 0
 
+    async def exists(self, key: str) -> int:
+        return 1 if key in self.keys else 0
+
     async def xack(self, stream: str, group: str, msg_id: Any) -> int:
         self.acked.append((stream, group, msg_id))
         return 1

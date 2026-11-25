@@ -58,6 +58,9 @@ class FakeRedis:
     async def delete(self, key: str) -> int:
         return 1 if self.keys.pop(key, None) is not None else 0
 
+    async def exists(self, key: str) -> int:
+        return 1 if key in self.keys else 0
+
 
 class FakeAudit:
     def __init__(self) -> None:
@@ -389,26 +392,62 @@ class TestPlan:
 # ── the mode setting ───────────────────────────────────────────────
 
 
-class TestMode:
-    def test_default_is_dry_run(self) -> None:
+class TestNoModeSetting:
+    """Recording is the only code path; delivery arrives later as its own change."""
+
+    def test_no_mode_setting_is_declared(self) -> None:
         from robothor.settings.model import IntegrationSettings
+        from robothor.settings.registry import declared_env_names
 
-        assert IntegrationSettings().datadog_alerts_mode == "dry_run"
-        extra = IntegrationSettings.model_fields["datadog_alerts_mode"].json_schema_extra
-        assert extra["env"] == "ROBOTHOR_DATADOG_ALERTS_MODE"
+        assert "datadog_alerts_mode" not in IntegrationSettings.model_fields
+        assert "ROBOTHOR_DATADOG_ALERTS_MODE" not in declared_env_names()
 
-    def test_deliver_is_refused_plainly(self) -> None:
-        from pydantic import ValidationError
+    @pytest.mark.asyncio
+    async def test_the_event_always_says_dry_run(self, audit, no_delivery, monkeypatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_DATADOG_ALERTS_MODE", "deliver")
+        await dd.handle_alert_event(_payload(), FakeRedis())
+        assert audit.rows[0]["details"]["mode"] == "dry_run"
+        for watched in no_delivery:
+            watched.assert_not_called()
 
-        from robothor.settings.model import IntegrationSettings
 
-        with pytest.raises(ValidationError, match="delivery is not available yet"):
-            IntegrationSettings(datadog_alerts_mode="deliver")
+class TestWriteBeforeClaim:
+    """The dedup key is set only after the audit event is written.
 
-    def test_anything_else_is_refused(self) -> None:
-        from pydantic import ValidationError
+    A crash between the two can record a retry twice; it can never leave a
+    key behind for an alert that was not recorded.
+    """
 
-        from robothor.settings.model import IntegrationSettings
+    @pytest.mark.asyncio
+    async def test_no_key_exists_while_the_event_is_written(self, no_delivery) -> None:
+        redis = FakeRedis()
+        seen: list[dict[str, Any]] = []
 
-        with pytest.raises(ValidationError):
-            IntegrationSettings(datadog_alerts_mode="observe")
+        def _log_event(event_type: str, action: str, **kw: Any) -> dict[str, Any]:
+            seen.append(dict(redis.keys))
+            return {"id": 1, "timestamp": "2026-11-25T00:00:00+00:00"}
+
+        with patch("robothor.audit.logger.log_event", side_effect=_log_event):
+            await dd.handle_alert_event(_payload(), redis)
+
+        assert seen == [{}], "the key is not set before the write"
+        assert list(redis.ttls.values()) == [dd.DEDUP_TTL_SECONDS]
+
+    @pytest.mark.asyncio
+    async def test_a_crash_after_the_write_records_a_retry_again(self, audit, no_delivery) -> None:
+        class SetFails(FakeRedis):
+            async def set(self, *a: Any, **kw: Any) -> Any:
+                raise ConnectionError("engine went away")
+
+        redis = SetFails()
+        assert await dd.handle_alert_event(_payload(), redis) == "recorded"
+        assert await dd.handle_alert_event(_payload(), redis) == "recorded"
+        assert len(audit.rows) == 2, "a duplicate, not a lost alert"
+
+    @pytest.mark.asyncio
+    async def test_a_failed_write_sets_no_key(self, audit, no_delivery) -> None:
+        redis = FakeRedis()
+        audit.fail = True
+        with pytest.raises(dd.AlertRecordError):
+            await dd.handle_alert_event(_payload(), redis)
+        assert redis.keys == {}
