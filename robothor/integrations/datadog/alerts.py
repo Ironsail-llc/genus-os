@@ -421,7 +421,9 @@ async def handle_alert_event(
     duplicate, so a crash loses nothing; the deliverer is what keeps such a
     replay from sending twice (its episode keys hold the same entry id).
     Another entry, or a ``done`` key, is a duplicate. Without ``message_id``,
-    any claim is a duplicate.
+    any claim is a duplicate. A crash after the write but before the key is
+    ``done`` can record the alert once more (the redelivered entry, or another
+    copy after the pending window), never send it again.
 
     A failure before anything was sent (routing, or the write after a failed,
     suppressed or refused delivery) releases the claim, so a retry is

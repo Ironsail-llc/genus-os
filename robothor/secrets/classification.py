@@ -44,8 +44,13 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+# Constants only, no imports of its own: classification stays import-light.
+from robothor.integrations.datadog import names as _datadog_names
+
 __all__ = [
     "BOOTSTRAP_PREFIXES",
+    "CROSS_TENANT_CREDENTIALS",
+    "is_cross_tenant_credential",
     "bootstrap_names",
     "declared_secret_names",
     "is_bootstrap",
@@ -133,16 +138,34 @@ _CONNECTION_NAMES: frozenset[str] = frozenset(
 _CONNECTION_SETTING_PREFIXES: tuple[str, ...] = ("ROBOTHOR_DB_", "ROBOTHOR_REDIS_")
 
 
-def is_platform_credential(name: str, value: str | None = None) -> bool:
-    """True when ``name`` opens the platform itself rather than one integration.
+#: Application credentials that are ONE key for every tenant at once. The
+#: shared Datadog read keys read every tenant's telemetry; the only separation
+#: between tenants is the scope filter ``robothor/integrations/datadog/scope.py``
+#: ANDs into each query the platform sends. An agent holding the key itself
+#: skips that filter, so these may never be ambient in a child, granted by a
+#: manifest, or handled by a vault tool. They stay APPLICATION secrets
+#: (vault-first): held back is not the same as environment-first.
+CROSS_TENANT_CREDENTIALS: frozenset[str] = frozenset(
+    {_datadog_names.API_KEY_ENV, _datadog_names.APP_KEY_ENV}
+)
 
-    The bootstrap class plus the connection strings, and, given ``value``, a
-    connection setting whose value holds a credential. These reach every
-    tenant at once, so no child process is ever given one: see
-    :mod:`robothor.engine.exec_env`. Pass ``value`` wherever there is one; a
-    name-only answer is for a name with no value yet, such as a grant.
+
+def is_cross_tenant_credential(name: str) -> bool:
+    """True when ``name`` is one credential that reaches every tenant's data."""
+    return name.strip() in CROSS_TENANT_CREDENTIALS
+
+
+def is_platform_credential(name: str, value: str | None = None) -> bool:
+    """True when ``name`` reaches every tenant at once rather than one integration.
+
+    The bootstrap class, the connection strings, the cross-tenant application
+    credentials (:data:`CROSS_TENANT_CREDENTIALS`), and, given ``value``, a
+    connection setting whose value holds a credential. No child process is
+    ever given one: see :mod:`robothor.engine.exec_env`. Pass ``value``
+    wherever there is one; a name-only answer is for a name with no value
+    yet, such as a grant.
     """
-    if is_bootstrap(name) or name in _CONNECTION_NAMES:
+    if is_bootstrap(name) or name in _CONNECTION_NAMES or is_cross_tenant_credential(name):
         return True
     if value is None or not name.startswith(_CONNECTION_SETTING_PREFIXES):
         return False

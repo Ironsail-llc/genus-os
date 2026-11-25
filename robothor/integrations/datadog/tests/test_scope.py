@@ -66,15 +66,33 @@ def test_a_full_entry_is_read_as_declared(scopes) -> None:
     )
 
 
-def test_spans_default_to_logs_and_the_rest_to_no_access(scopes) -> None:
-    scopes({"acme-child-a": {"logs": "service:shop-api"}})
+def test_everything_but_logs_defaults_to_no_access(scopes) -> None:
+    """Every part is opt-in. A logs filter is not reused for spans: a term that
+    means something on logs (a log-only attribute in an exclusion) can mean
+    nothing on spans, which would widen the tenant's span access."""
+    scopes({"acme-child-a": {"logs": "service:shop-api -@log.only:x"}})
     scope = scope_for("acme-child-a")
     assert scope is not None
-    assert scope.spans == "service:shop-api"
+    assert scope.spans == NO_ACCESS_QUERY
     assert scope.monitors == NO_ACCESS_QUERY
     # "No access" must fail closed even for a caller that ANDs the tags in
     # without looking: () would mean everything.
     assert scope.metric_tags == (NO_ACCESS_TAG,)
+
+
+def test_a_logs_star_does_not_grant_spans(scopes) -> None:
+    scopes({"acme-parent": {"logs": "*"}})
+    scope = scope_for("acme-parent")
+    assert scope is not None and scope.spans == NO_ACCESS_QUERY
+    with pytest.raises(ScopeError):
+        compose(scope.spans, "service:shop-api")
+
+
+@pytest.mark.parametrize("spans", ["*", "service:shop-api env:prod"])
+def test_only_an_explicit_spans_filter_grants_spans(scopes, spans) -> None:
+    scopes({"acme-child-a": {"logs": "service:shop-api", "spans": spans}})
+    scope = scope_for("acme-child-a")
+    assert scope is not None and scope.spans == spans
 
 
 def test_an_explicit_empty_tag_list_means_every_metric(scopes) -> None:

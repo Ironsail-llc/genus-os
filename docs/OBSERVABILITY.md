@@ -411,12 +411,39 @@ The two keys are one credential for the whole instance, not per tenant. They
 resolve from the vault first, always from the root tenant's rows, and then from
 the environment. Use the keys of a Datadog service account that can only read.
 
+### What protects the key
+
+The keys read every tenant's telemetry, so the scope filter is a wall only if
+no agent ever holds them. They are classified with the platform's own
+credentials (`is_platform_credential` in `robothor/secrets/classification.py`):
+
+- They are never in an agent's shell environment, on any
+  `ROBOTHOR_EXEC_ENV_MODE` rung, `off` included. Shell hooks, the browser
+  driver and the Codex child do not get them either.
+- A manifest `secrets:` grant naming one is refused.
+- The engine removes them from its C environment at startup, so a child
+  started without an explicit environment does not inherit them. The engine's
+  own Datadog client still reads them.
+- The vault tools (`vault_get`, `vault_set`, `vault_test`, `vault_delete`)
+  refuse both names in every tenant, whatever the agent's credential tier.
+- `config_get` shows them only as a fingerprint, and `config_set` refuses them
+  and refuses `ROBOTHOR_DATADOG_SCOPES`, so an agent cannot widen its own
+  tenant's filter. Change the map in the instance's environment, or with
+  `genus config set --apply` where systemd owns the value.
+- Set `ROBOTHOR_DATADOG_SCOPES` in the instance's environment rather than in
+  `config.yaml`. The environment wins over the file, and an agent that can
+  write files in the workspace can write the file.
+
+The limit: code running inside the engine process itself can use the keys.
+The engine's own code is the trusted part; an agent reaches Datadog only
+through it, with its tenant's filter applied.
+
 ### The scope map
 
 ```json
 {
-  "acme-parent":  {"logs": "*", "metric_tags": []},
-  "acme-child-a": {"logs": "service:shop-api"},
+  "acme-parent":  {"logs": "*", "spans": "*", "metric_tags": []},
+  "acme-child-a": {"logs": "service:shop-api", "spans": "service:shop-api"},
   "acme-child-b": {
     "logs": "service:clinic-app",
     "spans": "service:clinic-app env:prod",
@@ -428,9 +455,10 @@ the environment. Use the keys of a Datadog service account that can only read.
 
 - `logs` is required. It is a Datadog log query that bounds the tenant. Only
   the literal `*` means everything; a blank filter is not configured.
-- `spans` defaults to the `logs` filter.
-- `monitors` and `metric_tags` default to no access. `metric_tags: []` means
-  every metric.
+- Every other part is opt-in: a missing `spans`, `monitors` or `metric_tags`
+  means no access to that kind of data. The `logs` filter is never reused for
+  spans, because a term that bounds logs can bound nothing on spans.
+  `metric_tags: []` means every metric.
 - **A tenant with no entry is refused**, and so is a tenant whose entry is
   malformed (a blank `logs`, unbalanced brackets, a tag with a comma or space).
   Malformed JSON leaves every tenant refused. Each case logs one warning that
@@ -478,9 +506,14 @@ and under `--offline`. Otherwise it asks Datadog to validate the API key, then
 makes one log search that matches nothing, because only that second call checks
 the application key and its log read access. It fails when the site is unknown,
 when Datadog rejects either key (it never prints a key), or by error kind when
-Datadog cannot be reached. Its detail names the
-active tenants that have no scope entry, whose reads are refused until you add
-one.
+Datadog cannot be reached. Its detail names the active tenants that have no
+scope entry, other than the benchmark sandbox tenant. They are refused Datadog
+reads until you add a scope for them. That is not a fault: an install does not
+have to give every tenant Datadog access.
+
+A log row's `trace_id` and `span_id` keep only an id-shaped value: 1 to 40 hex
+or decimal digits, in lowercase. Anything else becomes empty, because the
+fallbacks read custom attributes, which can hold free text.
 
 ### Genus watches Datadog
 
@@ -900,7 +933,7 @@ started. What a crash costs at each step:
 |---|---|---|
 | after the claim, before the send completes | finds its own claim and its own `sending` mark, and sends | nothing lost; a crash in the middle of a send the channel had already accepted can send it twice |
 | after the send, before the write | finds its own claim and its own `sent` mark, does not send, does not start a second run, and records the alert as `delivered` | nothing lost, nothing sent twice |
-| after the write, before the key is set to `done` | finds its own claim and its own `sent` mark: recorded a second time (`delivery.replayed: true`), not sent again | one extra record |
+| after the write, before the key is set to `done` | finds its own claim and its own `sent` mark: recorded a second time (`delivery.replayed: true`), not sent again; a Datadog copy after the pending window is recorded again as `suppressed` | one extra record |
 
 Each recorded alert also writes one log line with no title or body:
 `event=datadog_alert tenant=<tenant> monitor_id=<id> transition=<transition> mode=<mode> routing=<routing>`.

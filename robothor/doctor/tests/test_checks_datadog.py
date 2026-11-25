@@ -137,6 +137,39 @@ def test_active_tenants_without_a_scope_are_named(keys, settings, monkeypatch) -
     assert "crm_tenants" in sql and "active" in sql
 
 
+def test_the_note_says_plainly_what_a_missing_scope_means(keys, settings, monkeypatch) -> None:
+    """Not every install gives every tenant Datadog: the note is a fact, not an alarm."""
+    settings(ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": {"logs": "service:shop-api"}}))
+    monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
+    result = _run(make_ctx(db_factory=fake_db([("acme-child-b",)])))
+    assert result.status == "pass"
+    assert "are refused Datadog reads until a scope is added for them" in result.detail
+    assert "acme-child-b" in result.detail
+
+
+def test_the_benchmark_sandbox_tenant_is_not_listed(keys, settings, monkeypatch) -> None:
+    from robothor.engine.benchmark_sandbox import sandbox_tenant_id
+
+    sandbox = sandbox_tenant_id()
+    settings(ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": {"logs": "service:shop-api"}}))
+    monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
+    result = _run(make_ctx(db_factory=fake_db([(sandbox,), ("acme-child-a",)])))
+    assert result.status == "pass"
+    assert sandbox not in result.detail
+    assert "refused" not in result.detail
+
+
+def test_a_renamed_sandbox_tenant_is_not_listed_either(keys, settings, monkeypatch) -> None:
+    settings(
+        ROBOTHOR_BENCHMARK_TENANT="acme-bench",
+        ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": {"logs": "service:shop-api"}}),
+    )
+    monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
+    result = _run(make_ctx(db_factory=fake_db([("acme-bench",), ("acme-child-b",)])))
+    assert "acme-bench" not in result.detail
+    assert "acme-child-b" in result.detail
+
+
 def test_an_unreadable_tenant_list_does_not_fail_the_check(keys, monkeypatch) -> None:
     monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
     result = _run(make_ctx(db_factory=fake_db(error=RuntimeError("down"))))

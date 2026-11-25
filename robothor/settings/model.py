@@ -3981,8 +3981,9 @@ class IntegrationSettings(SettingsGroup):
         'JSON object mapping a tenant id to what it may read, e.g. {"acme-child-a": {"logs": '
         '"service:shop-api", "spans": "service:shop-api", "monitors": "team:shop", '
         '"metric_tags": ["service:shop-api"]}}. Every query is ANDed with the filter; "*" '
-        "means everything. spans defaults to the logs filter, monitors and metric_tags to no "
-        "access. A tenant with no entry, a blank logs filter or a malformed entry is refused.",
+        "means everything. Every part is opt-in: a missing spans, monitors or metric_tags "
+        "means no access to it (the logs filter is never reused for spans). A tenant with no "
+        "entry, a blank logs filter or a malformed entry is refused.",
         since="unreleased",
     )
 
