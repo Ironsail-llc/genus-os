@@ -417,12 +417,13 @@ def questions_from_chat(
             key = (row["session_key"], row["person_id"])
             if key not in readers:
                 readers[key] = _chat_reader(tenant_id, *key)
-            if readers[key] is None:
+            reader = readers[key]
+            if reader is None:
                 if skipped is not None:
                     skipped.append({"message_id": row["id"], "reason": "conversation has no owner"})
                 continue
             origin = {"source": "chat", "message_id": row["id"], "session_id": row["session_id"]}
-            out.append(Question(text, reader=readers[key], origin=origin))  # type: ignore[arg-type]
+            out.append(Question(text, reader=reader, origin=origin))
     return pick_questions(out, limit=limit, sample=sample, seed=seed)
 
 
@@ -601,15 +602,16 @@ def summarize(entries: Sequence[dict[str, Any]], name_a: str, name_b: str) -> di
                 counts.update(row["legs"] or ["(none)"])
         return dict(sorted(counts.items()))
 
+    def has_segment(side: str) -> Callable[[dict[str, Any]], bool]:
+        return lambda e: any(r["kind"] == "segment" for r in e["sides"][side]["results"])
+
     per_side: dict[str, Any] = {"latency_ms": {}, "context_tokens": {}, "segment_share": {}}
     for name in (name_a, name_b):
         lat = [e["sides"][name]["latency_ms"] for e in entries]
         tok = [e["sides"][name]["context_tokens"] for e in entries]
         per_side["latency_ms"][name] = {"p50": percentile(lat, 50), "p95": percentile(lat, 95)}
         per_side["context_tokens"][name] = {"mean": round(sum(tok) / n, 1) if n else None}
-        per_side["segment_share"][name] = share(
-            lambda e, s=name: any(r["kind"] == "segment" for r in e["sides"][s]["results"])
-        )
+        per_side["segment_share"][name] = share(has_segment(name))
     overlaps = [e["diff"]["overlap"] for e in entries]
     return {
         "questions": n,
