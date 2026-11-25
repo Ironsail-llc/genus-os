@@ -106,8 +106,10 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    near-duplicate of a row already returned.
 6. **Budget fill** — the reranker returns only the rows it scored (16), so
    the rest of the fused list follows in fused order, unscored, up to
-   `limit`, skipping near-duplicates of rows already returned. The reranker
-   still scores only its head, so its cost does not grow. Every row comes from
+   `limit`, skipping near-duplicates of rows already returned, and stops
+   where the fused score falls below `TAIL_SCORE_FLOOR` (0.5) of the weakest
+   head row's (score-adaptive truncation). The reranker still scores only its
+   head, so its cost does not grow. Every row comes from
    the same filtered legs, so the tenant, scope, trust and private-reader
    rules are the same for the tail as for the head.
 
@@ -116,6 +118,9 @@ cap, `RECALL_CONTEXT_CHARS` (4,000 characters, in `robothor/memory/recall.py`,
 the cap the routed path already applied), on both paths: with no `limit` it
 asks for up to `RECALL_FILL_ROWS` (50) rows and returns them in order until the
 next would pass the cap; a `limit` the caller names still bounds the rows.
+MCP `search_memory` follows the same rule (`recall.recall_limit` and
+`recall.within_context_cap`); it names no reader, so it reads shared rows
+only.
 Warm-up is unchanged: its entity context never used the reranked head and
 already fills its own 1,000-character section. Returned rows keep their fields and add `kind`,
 `leg_ranks`, `leg_scores`, `rrf_score`, `fused_rank`, `rerank_score` and
