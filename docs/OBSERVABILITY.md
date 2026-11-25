@@ -556,12 +556,16 @@ A recovery changes nothing in place. It is its own event with
 the trigger. Datadog retries webhooks, so the same notification (`event_id`,
 monitor, transition and date) is recorded once. Each group of a multi-alert
 monitor has its own `event_id`, so each is recorded. Without `event_id` and
-`date`, one record is kept per monitor and transition. The key is set in
-Redis for 24 hours, and only after the audit event is written. A crash
-between the write and the key, or two copies handled at the same moment, can
-therefore record a retry twice, but an alert is never lost. If Redis cannot be
-reached the alert is still recorded. When the audit write fails, no key is
-set and the event goes to `robothor:events:datadog:dlq`.
+`date`, one record is kept per monitor and transition. Each copy first
+claims a Redis key with `SET NX` and a pending life of 120 seconds. A second
+copy that finds the claim, even one handled at the same moment, is a
+duplicate. Next the audit event is written. Then the key is kept for 24
+hours. When the write fails, the claim is deleted so a retry can record the
+alert, and the event goes to `robothor:events:datadog:dlq`. A crash after the
+claim and before the write delays a retry by at most the 120-second pending
+window. A crash after the write and before the key is extended can let at
+most one duplicate through once that window has passed. If Redis cannot be
+reached, the alert is still recorded.
 
 Each recorded alert also writes one log line with no title or body:
 `event=datadog_alert tenant=<tenant> monitor_id=<id> transition=<transition> mode=dry_run routing=<routing>`.
