@@ -224,7 +224,9 @@ def build_event_triggers(
     return dict(_LEGACY_EVENT_TRIGGERS)
 
 
-async def _record_datadog_alert(decoded: dict[str, Any], redis_client: Any) -> None:
+async def _record_datadog_alert(
+    decoded: dict[str, Any], redis_client: Any, message_id: str
+) -> None:
     from robothor.integrations.datadog.alerts import handle_alert_event
 
     raw = decoded.get("payload", "")
@@ -232,11 +234,11 @@ async def _record_datadog_alert(decoded: dict[str, Any], redis_client: Any) -> N
         payload = json.loads(raw) if raw else {}
     except (TypeError, ValueError):
         payload = {}
-    await handle_alert_event(payload, redis_client)
+    await handle_alert_event(payload, redis_client, message_id=message_id)
 
 
 #: Streams the platform itself handles, whatever the manifests say: stream ->
-#: ``async handler(decoded envelope, redis client)``. Only the engine that owns
+#: ``async handler(decoded envelope, redis client, stream entry id)``. Only the engine that owns
 #: an event runs its handler. A handler that raises has the event moved to
 #: ``<stream>:dlq``.
 _PLATFORM_STREAM_HANDLERS: dict[str, Any] = {"datadog": _record_datadog_alert}
@@ -932,7 +934,8 @@ class EventHooks:
         platform_handler = _PLATFORM_STREAM_HANDLERS.get(bare_stream)
         if platform_handler is not None and not addressed:
             try:
-                await platform_handler(decoded, redis_client)
+                entry_id = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+                await platform_handler(decoded, redis_client, entry_id)
             except Exception as e:
                 logger.error(
                     "Platform handler for %s failed (%s); moving the event to the DLQ",

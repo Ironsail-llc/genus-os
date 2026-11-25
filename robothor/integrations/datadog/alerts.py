@@ -60,8 +60,8 @@ ORG_TAG = "org:"
 MODE = "dry_run"
 #: How long a notification is remembered against Datadog's retries.
 DEDUP_TTL_SECONDS = 86400
-#: How long a claim lives before its audit event is written. A crash in that
-#: window delays a retry by at most this long; it never loses the alert.
+#: How long a claim lives before its audit event is written. Another copy that
+#: finds it is a duplicate; the stream message that made it may finish it.
 PENDING_TTL_SECONDS = 120
 _DEDUP_PREFIX = "robothor:datadog:alert:"
 
@@ -292,16 +292,37 @@ def _record(alert: DatadogAlert) -> tuple[str, str]:
     return tenant, routing
 
 
-async def _claim(redis_client: Any, key: str) -> bool:
+#: The claim's value once the audit event is written.
+_DONE = "done"
+#: The claim's value when the caller names no stream message.
+_PENDING = "pending"
+
+
+def _text_of(value: Any) -> str:
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
+async def _claim(redis_client: Any, key: str, owner: str | None) -> bool:
     """Claim the notification with a short-lived pending key; ``False`` for a duplicate.
 
-    ``SET NX`` is atomic, so of two copies handled at once only one claims it.
-    No Redis: record anyway (a weaker filter, never a lost alert).
+    The claim's value is the stream message that made it. ``SET NX`` is
+    atomic, so of two copies handled at once only one claims it. A claim that
+    names THIS message was left by an earlier attempt at it that never wrote
+    (the engine died and the consumer group redelivered the message), so it
+    is this message's to finish. A claim by another message, or one already
+    ``done``, is a duplicate. No Redis: record anyway (a weaker filter, never
+    a lost alert).
     """
     if redis_client is None:
         return True
     try:
-        return bool(await redis_client.set(key, "pending", nx=True, ex=PENDING_TTL_SECONDS))
+        value = owner or _PENDING
+        if await redis_client.set(key, value, nx=True, ex=PENDING_TTL_SECONDS):
+            return True
+        if owner is None:
+            return False
+        held = await redis_client.get(key)
+        return held is not None and _text_of(held) == owner
     except Exception as exc:  # noqa: BLE001 — dedup is a filter, the record is the point
         logger.warning("Datadog alert dedup check failed (%s); recording", type(exc).__name__)
         return True
@@ -312,7 +333,7 @@ async def _keep(redis_client: Any, key: str) -> None:
     if redis_client is None:
         return
     try:
-        await redis_client.set(key, "recorded", ex=DEDUP_TTL_SECONDS)
+        await redis_client.set(key, _DONE, ex=DEDUP_TTL_SECONDS)
     except Exception as exc:  # noqa: BLE001 — the pending claim still covers its window
         logger.warning("Datadog alert dedup key not extended (%s)", type(exc).__name__)
 
@@ -327,20 +348,28 @@ async def _release(redis_client: Any, key: str) -> None:
         logger.warning("Datadog alert dedup release failed (%s)", type(exc).__name__)
 
 
-async def handle_alert_event(payload: Any, redis_client: Any) -> str:
+async def handle_alert_event(
+    payload: Any, redis_client: Any, *, message_id: str | None = None
+) -> str:
     """Record one Datadog alert; ``"recorded"`` or ``"duplicate"``.
 
     Claim, write, extend: the notification is claimed with a pending key that
     lives :data:`PENDING_TTL_SECONDS`, so a second copy handled at the same
     time is a duplicate; the audit event is written; then the key is kept for
     :data:`DEDUP_TTL_SECONDS`. A failed write deletes the claim and raises
-    :class:`AlertRecordError`. A crash after the claim but before the write
-    delays a retry by at most the pending window; a crash after the write but
-    before the extension can let one duplicate through after that window.
+    :class:`AlertRecordError`.
+
+    ``message_id`` is the stream entry being handled, and the claim records
+    it. When the consumer group redelivers that same entry after a crash
+    between the claim and the write, the alert is recorded rather than taken
+    for a duplicate, so a crash loses nothing. A crash after the write but
+    before the extension can let at most one duplicate through once the
+    pending window has passed. Without ``message_id``, any claim is a
+    duplicate.
     """
     alert = parse_alert(payload)
     key = _dedup_key(alert, payload)
-    if not await _claim(redis_client, key):
+    if not await _claim(redis_client, key, message_id or None):
         logger.info("Datadog alert for monitor %s already recorded", alert.monitor_id or "-")
         return "duplicate"
     try:
