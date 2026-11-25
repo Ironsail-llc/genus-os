@@ -555,8 +555,9 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
       )}
 
       <p className="shrink-0 text-[10px] text-muted-foreground">
-        Only this organization&rsquo;s logs are searched. Email addresses and phone numbers are
-        masked before a line leaves the server, and each search is recorded in the audit log.
+        Only this organization&rsquo;s logs are searched. Credentials, email addresses and phone
+        numbers are masked before a line leaves the server, and each search is recorded in the
+        audit log.
       </p>
 
       <Sheet open={open !== null} onOpenChange={(isOpen) => (!isOpen ? setOpen(null) : undefined)}>

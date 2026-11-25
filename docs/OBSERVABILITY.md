@@ -484,8 +484,9 @@ root admin who switched into a child organization sees that child's logs.
 - **The table** shows time, service, status and message, 50 lines at a time;
   **Load more** fetches the next page. Click a line for its host, tags and
   attributes.
-- Email addresses and phone numbers in a line are masked before it leaves the
-  bridge, and every search writes one audit row (`telemetry.logs.read` or
+- Credentials (by the same redactor as the journald source), email addresses
+  and phone numbers in a line are masked before it leaves the bridge, and in the
+  query before it is audited. Every search writes one audit row (`telemetry.logs.read` or
   `telemetry.logs.summary`): who, which organization, the masked query cut to
   200 characters, the window, the outcome and how many rows. It never stores
   the text of a line.
@@ -510,7 +511,8 @@ The bridge routes behind the page are `GET /api/telemetry/logs`
 parameter. `since` and `until` take a relative age (`30m`, `1h`, `7d`) or an
 ISO-8601 timestamp; `until` defaults to now. Both routes answer `200` with
 `status` `ok`, `not_configured` or `unavailable` (with a `kind`), and `400` with
-the plain reason for a refused query.
+the plain reason for a refused query. Each row carries `trace_id` and `span_id`
+when the log event names them, and `null` otherwise.
 
 ### Doctor
 
