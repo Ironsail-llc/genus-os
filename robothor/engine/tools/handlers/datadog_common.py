@@ -138,7 +138,7 @@ _PHONE_KEY = re.compile(
 _DIGITS_IN_A_PHONE = 7
 
 
-def names_a_credential(name: str) -> bool:
+def names_a_credential(name: str, memo: dict[str, bool] | None = None) -> bool:
     """Whether a key, facet (``@usr.password``) or tag name says it holds a credential.
 
     Asked of the platform's own per-argument redactor, so these tools and the
@@ -146,17 +146,28 @@ def names_a_credential(name: str) -> bool:
     ``password=... api_key=...`` out of a line into structured attributes, so
     the value arrives bare, with no shape a pattern can find; the name it sits
     under is the only thing left to match on.
+
+    The check runs the whole redaction pipeline, and the same names repeat on
+    every row, so a call passes one ``memo`` through. Per call, not process-wide:
+    the redactor's known-secret snapshot can change between calls.
     """
     from robothor.secrets.redaction import PLACEHOLDER, redact_tool_arguments
 
+    if memo is not None and name in memo:
+        return memo[name]
     key = name.lstrip("@")
-    return bool(key) and redact_tool_arguments("", {key: "x"}).get(key) == PLACEHOLDER
+    answer = bool(key) and redact_tool_arguments("", {key: "x"}).get(key) == PLACEHOLDER
+    if memo is not None:
+        memo[name] = answer
+    return answer
 
 
-def masked(value: Any, key: str = "") -> Any:
+def masked(value: Any, key: str = "", memo: dict[str, bool] | None = None) -> Any:
     """``value`` with credentials withheld and email addresses and phone numbers
-    masked, at any depth. ``key`` is the name the value sits under."""
-    if names_a_credential(key):
+    masked, at any depth. ``key`` is the name the value sits under; ``memo``
+    holds the name checks already made in this call."""
+    memo = {} if memo is None else memo
+    if names_a_credential(key, memo):
         from robothor.secrets.redaction import PLACEHOLDER
 
         return PLACEHOLDER
@@ -168,13 +179,15 @@ def masked(value: Any, key: str = "") -> Any:
     if isinstance(value, str):
         return redact_personal_data(value)
     if isinstance(value, dict):
-        return {k: masked(v, str(k)) for k, v in value.items()}
+        return {k: masked(v, str(k), memo) for k, v in value.items()}
     if isinstance(value, list | tuple):
-        return [masked(v, key) for v in value]
+        return [masked(v, key, memo) for v in value]
     return value
 
 
-def masked_tags(tags: tuple[str, ...] | list[str]) -> list[str]:
+def masked_tags(
+    tags: tuple[str, ...] | list[str], memo: dict[str, bool] | None = None
+) -> list[str]:
     """``key:value`` tags masked by the same rules as attributes.
 
     A credential-named key withholds its value and a phone-like key hides a
@@ -185,7 +198,7 @@ def masked_tags(tags: tuple[str, ...] | list[str]) -> list[str]:
     shown = []
     for tag in tags:
         key, sep, value = tag.partition(":")
-        hidden = masked(value, key) if sep else None
+        hidden = masked(value, key, memo) if sep else None
         if hidden in (PLACEHOLDER, "<phone>"):
             shown.append(f"{key}:{hidden}")
         else:

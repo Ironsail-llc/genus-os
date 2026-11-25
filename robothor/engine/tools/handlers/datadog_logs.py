@@ -110,7 +110,7 @@ def _facets(args: dict[str, Any]) -> list[str] | None:
 # ── shaping and fitting ────────────────────────────────────────────────────
 
 
-def _shape(row: LogRow) -> dict[str, Any]:
+def _shape(row: LogRow, memo: dict[str, bool] | None = None) -> dict[str, Any]:
     tags: dict[str, str] = {}
     for tag in row.tags:
         key, _, value = tag.partition(":")
@@ -131,7 +131,7 @@ def _shape(row: LogRow) -> dict[str, Any]:
         shaped["trace_id"] = row.trace_id
     if row.span_id:
         shaped["span_id"] = row.span_id
-    shaped["attributes"] = masked(row.attributes)
+    shaped["attributes"] = masked(row.attributes, memo=memo)
     return shaped
 
 
@@ -214,7 +214,8 @@ async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[s
             )
 
         first = await page(limit)
-        shaped = [_shape(row) for row in first.rows]
+        memo: dict[str, bool] = {}
+        shaped = [_shape(row, memo) for row in first.rows]
         # Room for the envelope around the rows: the note, the cursor, the window.
         kept = _fit(shaped, RESULT_BUDGET_CHARS - ENVELOPE_CHARS)
         if len(kept) == len(shaped):
@@ -287,7 +288,10 @@ async def _datadog_logs_aggregate(args: dict[str, Any], ctx: ToolContext) -> dic
     buckets, refused = await _scoped(AGGREGATE_TOOL, ctx, query, audited, fetch)
     if refused is not None:
         return refused
-    rows = [{"by": {k: masked(v, k) for k, v in b.by.items()}, "count": b.count} for b in buckets]
+    memo: dict[str, bool] = {}
+    rows = [
+        {"by": {k: masked(v, k, memo) for k, v in b.by.items()}, "count": b.count} for b in buckets
+    ]
     kept = list(rows)
     while len(kept) > 1 and size(kept) > RESULT_BUDGET_CHARS - ENVELOPE_CHARS:
         kept.pop()

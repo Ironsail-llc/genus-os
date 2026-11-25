@@ -412,6 +412,31 @@ def test_values_under_credential_named_keys_never_reach_the_result(dd, writer):
     assert attrs["http"] == {"status_code": 500}
 
 
+def test_each_key_name_is_checked_once_per_call(dd, writer, monkeypatch):
+    """The name check runs the whole redaction pipeline; the same attribute
+    names repeat on every row and every list element, so a call asks once
+    per distinct name, not once per occurrence."""
+    from robothor.secrets import redaction
+
+    real = redaction.redact_tool_arguments
+    asked: list[str] = []
+
+    def counting(tool: str, arguments: Any) -> Any:
+        asked.extend(arguments)
+        return real(tool, arguments)
+
+    monkeypatch.setattr(redaction, "redact_tool_arguments", counting)
+    dd.make_row = lambda i: _log(
+        i, password="hunter2hunter2", items=[{"token": "zzz999zzz999"} for _ in range(5)]
+    )
+
+    result = _run(SEARCH, {"limit": 20})
+
+    assert len(result["rows"]) == 20
+    assert result["rows"][3]["attributes"]["items"][4] == {"token": "<redacted>"}
+    assert len(asked) == len(set(asked)), sorted(asked)
+
+
 def test_aggregate_grouped_by_a_credential_facet_withholds_its_values(dd, writer):
     dd.buckets = [{"by": {"@usr.password": "hunter2hunter2"}, "computes": {"c0": 2}}]
 
@@ -447,11 +472,21 @@ def test_an_oversized_page_is_fitted_with_a_note_and_a_cursor_that_continues(dd,
     assert len(json.dumps(result)) <= datadog_logs.RESULT_BUDGET_CHARS
 
 
+def _trace(i: int) -> str:
+    """A 128-bit trace id in hex, as Datadog stores an OpenTelemetry one."""
+    return f"7f3a{i:028x}"
+
+
+def _span(i: int) -> str:
+    """A 64-bit span id in hex."""
+    return f"{i + 1:016x}"
+
+
 def _traced(i: int, message: str = "", **attrs: Any) -> dict[str, Any]:
     """A log carrying its trace and span ids in the event's reserved fields."""
     raw = _log(i, message, **attrs)
-    raw["attributes"]["trace_id"] = f"trace-{i}"
-    raw["attributes"]["span_id"] = f"span-{i}"
+    raw["attributes"]["trace_id"] = _trace(i)
+    raw["attributes"]["span_id"] = _span(i)
     return raw
 
 
@@ -461,7 +496,22 @@ def test_a_row_carries_its_trace_and_span_ids(dd, writer):
     result = _run(SEARCH, {"limit": 2})
 
     row = result["rows"][1]
-    assert (row["trace_id"], row["span_id"]) == ("trace-1", "span-1")
+    assert (row["trace_id"], row["span_id"]) == (_trace(1), _span(1))
+
+
+def test_a_value_under_trace_id_that_is_not_an_id_is_left_out(dd, writer):
+    def row(i: int) -> dict[str, Any]:
+        raw = _traced(i)
+        raw["attributes"]["trace_id"] = "see the checkout service"
+        return raw
+
+    dd.make_row = row
+
+    result = _run(SEARCH, {"limit": 1})
+
+    row_out = result["rows"][0]
+    assert "trace_id" not in row_out
+    assert row_out["span_id"] == _span(0)
 
 
 def test_a_row_without_a_trace_has_no_trace_fields(dd, writer):
@@ -479,8 +529,9 @@ def test_fitting_keeps_the_trace_ids_when_it_drops_attributes(dd, writer):
     assert result["truncated"] is True
     for row in result["rows"]:
         assert row.get("attributes_omitted") is True
-        assert row["trace_id"].startswith("trace-")
-        assert row["span_id"].startswith("span-")
+        index = int(row["id"].removeprefix("log-"))
+        assert row["trace_id"] == _trace(index)
+        assert row["span_id"] == _span(index)
 
 
 def test_no_cursor_when_the_second_page_is_not_the_rows_returned(dd, writer):
