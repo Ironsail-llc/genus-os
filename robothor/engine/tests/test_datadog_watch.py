@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -165,9 +165,7 @@ def _client(dd: Datadog) -> AsyncDatadogClient:
     return AsyncDatadogClient("api-key-0123", "app-key-4567", transport=httpx.MockTransport(dd))
 
 
-def _watch(
-    dd: Datadog, *, home: str = CHILD_A, root: bool = False, mode: str = "dry_run"
-) -> watch.DatadogWatch:
+def _watch(dd: Datadog, *, home: str = CHILD_A, root: bool = False) -> watch.DatadogWatch:
     async def factory() -> AsyncDatadogClient:
         return _client(dd)
 
@@ -179,7 +177,6 @@ def _watch(
         client_factory=factory,
         is_root=is_root,
         clock=lambda: NOW,
-        mode=lambda: mode,
     )
 
 
@@ -283,17 +280,6 @@ async def test_dry_run_records_the_finding_and_delivers_nothing(
         assert field in lines[0]
 
 
-async def test_deliver_mode_alerts_once_per_finding(audit: MagicMock, alert: AsyncMock) -> None:
-    dd = Datadog(**SPIKING)
-    w = _watch(dd, mode="deliver")
-    await w.tick([CHILD_A])
-    await w.tick([CHILD_A])
-    assert alert.await_count == 1
-    (event,) = await _events(audit)
-    assert event["mode"] == "deliver"
-    assert alert.await_args.args[2] == event["brief"]
-
-
 async def test_dedup_holds_across_ticks(audit: MagicMock, alert: AsyncMock) -> None:
     dd = Datadog(**SPIKING)
     w = _watch(dd)
@@ -307,7 +293,7 @@ async def test_no_log_body_reaches_an_event_or_a_line(
 ) -> None:
     dd = Datadog(**SPIKING, fail={"service:clinic-app": 403})
     with caplog.at_level(logging.DEBUG):
-        await _watch(dd, mode="deliver").tick([CHILD_A, CHILD_B])
+        await _watch(dd).tick([CHILD_A, CHILD_B])
     assert await _events(audit)
     assert SECRET_BODY not in json.dumps([c.kwargs for c in audit.call_args_list], default=str)
     assert SECRET_BODY not in json.dumps([c.args for c in alert.call_args_list], default=str)
@@ -373,37 +359,6 @@ async def test_a_revoked_application_key_is_a_lost_link(audit: MagicMock, alert:
     assert "application key" in events[0]["brief"]
 
 
-async def test_each_link_episode_gets_its_own_alert_id(audit: MagicMock, alert: AsyncMock) -> None:
-    """A delivered alert id is suppressed for the cooldown; a new episode must not be."""
-    dd = Datadog(validate_status=401)
-    w = _watch(dd, home=PARENT, root=True, mode="deliver")
-    n = watch.CONNECTION_FAILURES_FOR_LOST
-    clock = {"now": NOW}
-    w._clock = lambda: clock["now"]
-    for status in [401] * n + [200] + [401] * n:
-        dd.validate_status = status
-        clock["now"] = clock["now"] + timedelta(minutes=5)
-        await w.tick([PARENT])
-    ids = [c.kwargs["alert_id"] for c in alert.call_args_list]
-    assert len(ids) == 3
-    assert len(set(ids)) == 3
-
-
-async def test_a_spike_in_a_later_window_gets_its_own_alert_id(
-    audit: MagicMock, alert: AsyncMock
-) -> None:
-    dd = Datadog(**SPIKING)
-    w = _watch(dd, mode="deliver")
-    await w.tick([CHILD_A])
-    detectors._dedup.clear()  # the hour has passed
-    later = NOW + timedelta(minutes=watch.WINDOW_MINUTES)
-    w._clock = lambda: later
-    dd.current_start = "2026-11-25T12:00:00Z"
-    await w.tick([CHILD_A])
-    ids = [c.kwargs["alert_id"] for c in alert.call_args_list]
-    assert len(ids) == 2 and ids[0] != ids[1]
-
-
 async def test_an_unconfigured_client_watches_nothing(audit: MagicMock, alert: AsyncMock) -> None:
     async def factory() -> AsyncDatadogClient:
         raise DatadogError("not_configured")
@@ -419,25 +374,43 @@ async def test_an_unconfigured_client_watches_nothing(audit: MagicMock, alert: A
     assert await _events(audit) == []
 
 
-# ── the mode setting and the daemon hook ────────────────────────────────────
+# ── no mode setting, and the daemon hook ────────────────────────────────────
 
 
-def test_the_mode_setting_is_declared_and_defaults_to_dry_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from robothor.settings import get_settings, reset_settings
-    from robothor.settings.model import IntegrationSettings
+def test_there_is_no_mode_setting() -> None:
+    """Recording is the only code path; delivery arrives as its own change."""
+    from robothor.settings.model import GenusSettings, IntegrationSettings
 
-    field = IntegrationSettings.model_fields["datadog_watch_mode"]
-    assert field.json_schema_extra["env"] == "ROBOTHOR_DATADOG_WATCH_MODE"
-    assert IntegrationSettings().datadog_watch_mode == "dry_run"
-    monkeypatch.setenv("ROBOTHOR_DATADOG_WATCH_MODE", "deliver")
-    reset_settings()
+    assert "datadog_watch_mode" not in IntegrationSettings.model_fields
+    envs = {
+        (field.json_schema_extra or {}).get("env")
+        for group in GenusSettings.model_fields.values()
+        if isinstance(group.annotation, type)
+        for field in getattr(group.annotation, "model_fields", {}).values()
+        if isinstance(field.json_schema_extra, dict)
+    }
+    assert "ROBOTHOR_DATADOG_SCOPES" in envs  # the scan sees the group
+    assert "ROBOTHOR_DATADOG_WATCH_MODE" not in envs
+    assert not hasattr(watch, "watch_mode")
+
+
+async def test_no_finding_is_ever_delivered(audit: MagicMock, alert: AsyncMock) -> None:
+    """Spikes and both link findings are recorded as dry run; nothing calls alerts.alert."""
+    SCOPES[PARENT] = DatadogScope(PARENT, "service:shop-api", "*", "", ())
     try:
-        assert get_settings().integrations.datadog_watch_mode == "deliver"
-        assert watch.watch_mode() == "deliver"
+        dd = Datadog(**SPIKING, validate_status=401)
+        w = _watch(dd, home=PARENT, root=True)
+        for _ in range(watch.CONNECTION_FAILURES_FOR_LOST):
+            await w.tick([PARENT])
+        dd.validate_status = 200
+        await w.tick([PARENT])
     finally:
-        reset_settings()
+        del SCOPES[PARENT]
+    events = await _events(audit)
+    assert {e["kind"] for e in events} == {"error_spike", "connection_lost", "connection_restored"}
+    assert all(e["mode"] == "dry_run" for e in events)
+    assert all(e["brief"] and e["would_notify"] for e in events)
+    alert.assert_not_called()
 
 
 async def test_the_daemon_runs_the_watch_in_the_background_one_pass_at_a_time(
