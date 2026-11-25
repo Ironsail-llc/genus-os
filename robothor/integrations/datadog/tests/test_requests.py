@@ -345,6 +345,36 @@ def test_a_span_with_missing_or_odd_fields_is_empty_values() -> None:
     )
 
 
+def _span_ids(attributes: dict) -> tuple[str, str, str]:
+    row = parse_span_page({"data": [{"attributes": attributes}]}).rows[0]
+    return row.trace_id, row.span_id, row.parent_id
+
+
+def test_span_ids_are_lowercased_and_numbers_kept_as_text() -> None:
+    ids = {"trace_id": "4BF92F3577B34DA6A3CE929D0E0E4736", "span_id": 1234567890, "parent_id": "0"}
+    assert _span_ids(ids) == ("4bf92f3577b34da6a3ce929d0e0e4736", "1234567890", "0")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "call Alice at agent@example.com",
+        "abc 123",
+        "0x1234",
+        "g123",
+        "1" * 41,
+        "١٢٣",  # non-ASCII digits
+        True,
+        1.5,
+        {"x": 1},
+        ["1"],
+    ],
+)
+def test_a_span_id_that_is_not_hex_or_digits_is_dropped(value) -> None:
+    ids = {"trace_id": value, "span_id": value, "parent_id": value}
+    assert _span_ids(ids) == ("", "", "")
+
+
 # ── spans aggregate ─────────────────────────────────────────────────────────
 
 
@@ -572,18 +602,60 @@ def test_the_fallbacks_apply_in_order() -> None:
         {
             "trace_id": "",
             "attributes": {
-                "trace_id": "first",
-                "dd": {"trace_id": "second"},
-                "otel": {"trace_id": "third", "span_id": "otel-span"},
+                "trace_id": "aaa1",
+                "dd": {"trace_id": "bbb2"},
+                "otel": {"trace_id": "ccc3", "span_id": "ddd4"},
             },
         }
     )
-    assert row.trace_id == "first"
-    assert row.span_id == "otel-span"
-    row = _one({"attributes": {"dd": {"trace_id": "second"}, "otel": {"trace_id": "third"}}})
-    assert row.trace_id == "second"
-    top = _one({"trace_id": TRACE, "attributes": {"trace_id": "nested"}})
+    assert row.trace_id == "aaa1"
+    assert row.span_id == "ddd4"
+    row = _one({"attributes": {"dd": {"trace_id": "bbb2"}, "otel": {"trace_id": "ccc3"}}})
+    assert row.trace_id == "bbb2"
+    top = _one({"trace_id": TRACE, "attributes": {"trace_id": "eee5"}})
     assert top.trace_id == TRACE
+
+
+# A custom attribute is free text, and these fields are returned unmasked by
+# every consumer: only an id-shaped value is kept.
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "alice@example.com",
+        "not an id",
+        "4bf92f35-77b3-4da6",
+        "0x4bf92f35",
+        "g" * 8,
+        "a" * 41,
+        "１２３",  # fullwidth digits are digits to str.isdigit, not to Datadog
+        "abc\n",
+        "",
+    ],
+)
+def test_a_value_that_is_not_an_id_is_dropped(value) -> None:
+    row = _one({"trace_id": value, "span_id": value})
+    assert (row.trace_id, row.span_id) == ("", "")
+
+
+@pytest.mark.parametrize(
+    ("value", "kept"),
+    [
+        (TRACE, TRACE),
+        ("4BF92F3577B34DA6A3CE929D0E0E4736", TRACE),
+        ("1234567890123456789", "1234567890123456789"),
+        ("a" * 40, "a" * 40),
+        ("7", "7"),
+    ],
+)
+def test_an_id_shaped_value_is_kept_in_lowercase(value, kept) -> None:
+    assert _one({"trace_id": value}).trace_id == kept
+
+
+def test_a_free_text_value_does_not_hide_a_real_id_behind_it() -> None:
+    row = _one({"trace_id": "alice@example.com", "attributes": {"dd": {"trace_id": TRACE}}})
+    assert row.trace_id == TRACE
 
 
 def test_a_numeric_trace_id_is_kept_as_text() -> None:

@@ -621,9 +621,15 @@ and under `--offline`. Otherwise it asks Datadog to validate the API key, then
 makes one log search that matches nothing, because only that second call checks
 the application key and its log read access. It fails when the site is unknown,
 when Datadog rejects either key (it never prints a key), or by error kind when
-Datadog cannot be reached. Its detail names the
-active tenants that have no scope entry, whose reads are refused until you add
-one.
+Datadog cannot be reached. Its detail names the active tenants that have no
+scope entry, other than the benchmark sandbox tenant. They are refused Datadog
+reads until you add a scope for them. That is not a fault: an install does not
+have to give every tenant Datadog access.
+
+A log row's `trace_id` and `span_id` keep only an id-shaped value: 1 to 40 hex
+or decimal digits, in lowercase. Anything else becomes empty, because the
+fallbacks read custom attributes, which can hold free text. A span row's
+`trace_id`, `span_id` and `parent_id` follow the same rule.
 
 ## Notes
 

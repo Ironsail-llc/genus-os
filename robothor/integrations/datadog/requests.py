@@ -306,13 +306,19 @@ def _str(value: Any) -> str:
     return "" if value is None or isinstance(value, dict | list) else str(value)
 
 
+#: A trace or span id: hex (a W3C/OTel id) or decimal (a Datadog 64-bit id),
+#: at most 40 characters. ASCII only -- ``\d`` would also match other scripts'
+#: digits. The fallbacks read CUSTOM attributes, which are free text, and every
+#: consumer returns these fields unmasked, so anything else is dropped.
+_ID = re.compile(r"[0-9a-f]{1,40}")
+
+
 def _id_text(value: Any) -> str:
-    """An id as text: a string or an integer (``dd.trace_id`` can be decimal), else ""."""
-    if isinstance(value, bool):
+    """An id-shaped value in lowercase, or "" (``dd.trace_id`` can be an integer)."""
+    if isinstance(value, bool) or not isinstance(value, str | int):
         return ""
-    if isinstance(value, str | int):
-        return str(value).strip()
-    return ""
+    text = str(value).lower()
+    return text if _ID.fullmatch(text) else ""
 
 
 def _correlation_id(event: dict[str, Any], name: str) -> str:
@@ -418,9 +424,9 @@ def _span(raw: dict[str, Any]) -> SpanRow:
     if duration is None:
         duration = _int_or_none(inner.get("duration"))
     return SpanRow(
-        trace_id=_str(attrs.get("trace_id")),
-        span_id=_str(attrs.get("span_id")),
-        parent_id=_str(attrs.get("parent_id")),
+        trace_id=_id_text(attrs.get("trace_id")),
+        span_id=_id_text(attrs.get("span_id")),
+        parent_id=_id_text(attrs.get("parent_id")),
         service=_str(attrs.get("service")),
         resource_name=_str(attrs.get("resource_name")),
         operation_name=_first(
