@@ -37,6 +37,12 @@ const LOGS = {
     logRow("log-2", { attributes: { dd: { trace_id: "1234567890" } } }),
     logRow("log-3", { message: `payment declined trace_id=${TRACE_ID} run_id=r1` }),
     logRow("log-4", { message: "no trace here" }),
+    // The bridge's own field, from the event's reserved trace id, comes first.
+    logRow("log-5", {
+      trace_id: "4bf92f3577b34da6a3ce929d0e0e4736",
+      attributes: { trace_id: "1111" },
+      message: "trace_id=2222",
+    }),
   ],
   next_cursor: null,
 };
@@ -339,6 +345,7 @@ describe("View trace from a log line", () => {
     [0, TRACE_ID],
     [1, "1234567890"],
     [2, TRACE_ID],
+    [4, "4bf92f3577b34da6a3ce929d0e0e4736"],
   ])("links row %i to its trace and opens it on the Traces tab", async (index, traceId) => {
     render(<LogsView role="admin" />);
     fireEvent.click(await screen.findByTestId(`telemetry-row-${index}`));

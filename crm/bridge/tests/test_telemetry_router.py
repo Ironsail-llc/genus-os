@@ -179,6 +179,26 @@ def test_a_tenant_admin_reads_its_own_scope(datadog):
     assert body["rows"][0]["tags"] == ["env:prod", "service:shop-api"]
 
 
+def test_a_row_carries_its_trace_and_span_ids(datadog):
+    # Datadog files them as reserved top-level fields of the log event.
+    trace = "4bf92f3577b34da6a3ce929d0e0e4736"
+    raw = _search_body()["data"][0]
+    raw["attributes"] = {**raw["attributes"], "trace_id": trace, "span_id": "00f067aa0ba902b7"}
+    datadog.search = _search_body(rows=[raw])
+
+    row = _ok(_client(CHILD_A).get("/api/telemetry/logs"))["rows"][0]
+
+    assert row["trace_id"] == trace
+    assert row["span_id"] == "00f067aa0ba902b7"
+
+
+def test_a_row_without_a_trace_says_so(datadog):
+    row = _ok(_client(CHILD_A).get("/api/telemetry/logs"))["rows"][0]
+
+    assert row["trace_id"] is None
+    assert row["span_id"] is None
+
+
 def test_an_empty_query_reads_the_whole_scope(datadog):
     _ok(_client(CHILD_A).get("/api/telemetry/logs"))
 
