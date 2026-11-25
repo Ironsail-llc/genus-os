@@ -70,6 +70,9 @@ NOT_AVAILABLE: dict[str, Any] = {"mode": "delivery_failed", "delivery": {"reason
 _NOT_RECORDED_HERE = frozenset({"handed_off", "refused"})
 #: How long a notification is remembered against Datadog's retries.
 DEDUP_TTL_SECONDS = 86400
+#: How long a claim lives before its audit event is written. A crash in that
+#: window delays a retry by at most this long; it never loses the alert.
+PENDING_TTL_SECONDS = 120
 _DEDUP_PREFIX = "robothor:datadog:alert:"
 
 #: A field-fit bound so one odd payload cannot make a huge audit row; real
@@ -310,24 +313,39 @@ def _routed(alert: DatadogAlert) -> tuple[str, str, str]:
     return tenant, routing, redact_personal_data(alert.title)
 
 
-async def _already_recorded(redis_client: Any, key: str) -> bool:
-    """Whether this notification was recorded. No Redis: record anyway (a weaker filter)."""
+async def _claim(redis_client: Any, key: str) -> bool:
+    """Claim the notification with a short-lived pending key; ``False`` for a duplicate.
+
+    ``SET NX`` is atomic, so of two copies handled at once only one claims it.
+    No Redis: record anyway (a weaker filter, never a lost alert).
+    """
     if redis_client is None:
-        return False
+        return True
     try:
-        return bool(await redis_client.exists(key))
+        return bool(await redis_client.set(key, "pending", nx=True, ex=PENDING_TTL_SECONDS))
     except Exception as exc:  # noqa: BLE001 — dedup is a filter, the record is the point
         logger.warning("Datadog alert dedup check failed (%s); recording", type(exc).__name__)
-        return False
+        return True
 
 
-async def _remember(redis_client: Any, key: str) -> None:
+async def _keep(redis_client: Any, key: str) -> None:
+    """The event is written: remember the notification for the full window."""
     if redis_client is None:
         return
     try:
-        await redis_client.set(key, 1, ex=DEDUP_TTL_SECONDS)
-    except Exception as exc:  # noqa: BLE001 — a missed key costs a duplicate, never an alert
-        logger.warning("Datadog alert dedup key not set (%s)", type(exc).__name__)
+        await redis_client.set(key, "recorded", ex=DEDUP_TTL_SECONDS)
+    except Exception as exc:  # noqa: BLE001 — the pending claim still covers its window
+        logger.warning("Datadog alert dedup key not extended (%s)", type(exc).__name__)
+
+
+async def _release(redis_client: Any, key: str) -> None:
+    """The write failed: drop the claim so a retry can record the alert."""
+    if redis_client is None:
+        return
+    try:
+        await redis_client.delete(key)
+    except Exception as exc:  # noqa: BLE001 — the claim lapses after its pending window
+        logger.warning("Datadog alert dedup release failed (%s)", type(exc).__name__)
 
 
 #: ``deliver(alert, tenant, routing, masked title) -> outcome``.
@@ -347,6 +365,11 @@ async def _outcome(
         return {"mode": "delivery_failed", "delivery": {"error": type(exc).__name__}}
 
 
+#: Outcomes after which something left this engine (an alert, a hand-off), so
+#: the claim is never released: a retry must not send it again.
+_SENT = frozenset({"delivered", "handed_off"})
+
+
 async def handle_alert_event(
     payload: Any,
     redis_client: Any,
@@ -354,7 +377,7 @@ async def handle_alert_event(
     deliver: Deliverer | None = None,
     dedup_scope: str = "",
 ) -> str:
-    """Route, deliver and record one Datadog alert.
+    """Claim, deliver, record and keep one Datadog alert.
 
     Returns ``"recorded"``, ``"duplicate"``, ``"handed_off"`` (the routed
     tenant's engine records and delivers it) or ``"refused"`` (the deliverer
@@ -363,21 +386,33 @@ async def handle_alert_event(
     (``not_available``). ``dedup_scope`` keeps a separate set of keys, so the
     engine a hand-off is addressed to does not take it for a retry.
 
-    The dedup key is set only AFTER the audit event is written (or the
-    hand-off made). A crash between the two, or two copies handled at once,
-    can record a retry twice; nothing can leave a key behind for an alert that
-    was never recorded. Raises :class:`AlertRecordError` when it could not be
-    recorded.
+    1. Claim: ``SET NX`` a pending key that lives :data:`PENDING_TTL_SECONDS`.
+       Of two copies handled at once only one claims it; the other is a
+       duplicate, so one claim is at most one delivery.
+    2. Deliver (never raises).
+    3. Write the audit event with the real ``mode``.
+    4. Keep the key for :data:`DEDUP_TTL_SECONDS`.
+
+    A failure before anything was sent (routing, or the write after a failed,
+    suppressed or refused delivery) releases the claim, so a retry is
+    accepted. When the write fails after the alert was delivered or handed
+    off, the claim is kept for its pending window, so no retry sends it again,
+    and :class:`AlertRecordError` sends the event to the dead letter stream.
     """
     alert = parse_alert(payload)
     key = _dedup_key(alert, payload, dedup_scope)
-    if await _already_recorded(redis_client, key):
+    if not await _claim(redis_client, key):
         logger.info("Datadog alert for monitor %s already recorded", alert.monitor_id or "-")
         return "duplicate"
-    tenant, routing, title = await asyncio.to_thread(_routed, alert)
+    try:
+        tenant, routing, title = await asyncio.to_thread(_routed, alert)
+    except BaseException:
+        await _release(redis_client, key)
+        raise
     outcome = await _outcome(deliver, alert, tenant, routing, title)
     mode = str(outcome.get("mode", "delivery_failed"))
     if mode == "refused":
+        await _release(redis_client, key)
         logger.warning(
             "Datadog alert for monitor %s refused here (it routes to %s, %s)",
             alert.monitor_id or "-",
@@ -386,8 +421,13 @@ async def handle_alert_event(
         )
         return "refused"
     if mode not in _NOT_RECORDED_HERE:
-        await asyncio.to_thread(_record, alert, tenant, routing, title, outcome)
-    await _remember(redis_client, key)
+        try:
+            await asyncio.to_thread(_record, alert, tenant, routing, title, outcome)
+        except BaseException:
+            if mode not in _SENT:
+                await _release(redis_client, key)
+            raise
+    await _keep(redis_client, key)
     from robothor.engine.log_fields import kv_line
 
     logger.info(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -490,27 +491,37 @@ class TestDeliverer:
         here.assert_awaited_once()
 
 
-class TestWriteBeforeClaim:
-    """The dedup key is set only after the audit event is written.
+class TestClaimWriteExtend:
+    """Claim with a short pending key, write the event, then keep the key for 24 hours.
 
-    A crash between the two can record a retry twice; it can never leave a
-    key behind for an alert that was not recorded.
+    A second copy that finds the claim is a duplicate, even while the first is
+    still writing. A failed write deletes the claim so a retry can record.
     """
 
     @pytest.mark.asyncio
-    async def test_no_key_exists_while_the_event_is_written(self, no_delivery) -> None:
+    async def test_two_copies_at_once_record_once(self, audit, no_delivery) -> None:
         redis = FakeRedis()
-        seen: list[dict[str, Any]] = []
+        outcomes = await asyncio.gather(
+            dd.handle_alert_event(_payload(), redis), dd.handle_alert_event(_payload(), redis)
+        )
+        assert sorted(outcomes) == ["duplicate", "recorded"]
+        assert len(audit.rows) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_claim_is_short_lived_while_the_event_is_written(self, no_delivery) -> None:
+        redis = FakeRedis()
+        seen: list[dict[str, int]] = []
 
         def _log_event(event_type: str, action: str, **kw: Any) -> dict[str, Any]:
-            seen.append(dict(redis.keys))
+            seen.append(dict(redis.ttls))
             return {"id": 1, "timestamp": "2026-11-25T00:00:00+00:00"}
 
         with patch("robothor.audit.logger.log_event", side_effect=_log_event):
             await dd.handle_alert_event(_payload(), redis)
 
-        assert seen == [{}], "the key is not set before the write"
-        assert list(redis.ttls.values()) == [dd.DEDUP_TTL_SECONDS]
+        assert [list(t.values()) for t in seen] == [[dd.PENDING_TTL_SECONDS]]
+        assert dd.PENDING_TTL_SECONDS < dd.DEDUP_TTL_SECONDS
+        assert list(redis.ttls.values()) == [dd.DEDUP_TTL_SECONDS], "extended after the write"
 
     @pytest.mark.asyncio
     async def test_a_crash_after_the_write_records_a_retry_again(self, audit, no_delivery) -> None:
