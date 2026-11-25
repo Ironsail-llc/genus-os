@@ -1,0 +1,8 @@
+Observe › Logs now searches your organization's own logs in Datadog. Owners,
+admins and auditors type a Datadog query, pick a time range, see errors counted
+by service above the results, and open any line for its tags and attributes;
+nobody sees another organization's lines, personal data is masked, and every
+search is audited. Until Datadog is connected for the organization the page says
+so in plain words. The appliance's journald stays on the same page as the
+**Server** source, for the root operator only. See
+[the Logs page](OBSERVABILITY.md#for-people-the-logs-page).

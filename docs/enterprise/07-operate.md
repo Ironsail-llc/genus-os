@@ -37,7 +37,7 @@ request regardless of what the page shows.
 | **Runs** and **Fleet** | What ran, when, what it delivered, which agents are scheduled and which are off | owner, admin |
 | **Memory** | What the instance believes, what a forget would actually do, and corrections | owner, admin |
 | **Audit** | Every audited event, plus the guardrail change log, with a CSV export | owner, admin, **auditor** |
-| **Logs** | A unit's journal, redacted | owner, admin |
+| **Logs** | The organization's logs in Datadog, and errors by service; for the root operator at home, also a unit's journal (**Server**), redacted | owner, admin, **auditor** (Server: root owner, admin) |
 
 **Memory.** Search, an entity filter, and an active/inactive/all switch.
 Browsing pages with a cursor; searching does not, because a relevance ranking
@@ -71,7 +71,13 @@ in the filename names who exported it and not what is inside; and every cell is
 sanitised, redacted and prefixed where a spreadsheet would evaluate it, so an
 audit detail cannot become a formula or carry a credential off the box.
 
-**Logs need journald**, and a container does not have it. Both routes answer
+**Logs open on Datadog.** Each organization searches only its own lines in
+the shared account, with personal data masked and every search audited; until
+the keys and the organization's scope are set, the page says Datadog is not
+connected yet. See
+[the Logs page](../OBSERVABILITY.md#for-people-the-logs-page).
+
+**The Server source needs journald**, and a container does not have it. Both routes answer
 "not available on this deployment" with a 200 and a reason, and the page says
 that in the Bridge's own words rather than showing an error — nothing is
 broken. The page says the deployment writes its logs to standard output, to be

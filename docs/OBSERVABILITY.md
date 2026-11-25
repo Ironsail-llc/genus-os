@@ -442,6 +442,49 @@ breaks, or more than 4000 characters. Brackets inside a double-quoted phrase are
 literal. The refusal is one plain sentence the caller can act on, for instance
 to put text containing an apostrophe in double quotes.
 
+### For people: the Logs page
+
+**Observe › Logs** searches the organization's own logs in the shared account.
+Owners, admins and auditors of the organization the session acts in can open
+it; a member or viewer is not offered it, and the bridge refuses them anyway. A
+root admin who switched into a child organization sees that child's logs.
+
+- **Search** takes a Datadog log query, such as `status:error service:shop-api`,
+  and runs when you press Enter or **Search**, not while you type. The time
+  range (last 15 minutes to last 7 days, default the last hour) applies at once.
+- **Errors by service** above the table counts the `status:error` lines that
+  match the search in the same window.
+- **The table** shows time, service, status and message, 50 lines at a time;
+  **Load more** fetches the next page. Click a line for its host, tags and
+  attributes.
+- Email addresses and phone numbers in a line are masked before it leaves the
+  bridge, and every search writes one audit row (`telemetry.logs.read` or
+  `telemetry.logs.summary`): who, which organization, the masked query cut to
+  200 characters, the window, the outcome and how many rows. It never stores
+  the text of a line.
+
+What the page says when it has nothing to show:
+
+| State | Meaning |
+|-------|---------|
+| *Datadog is not connected for this organization yet.* | The keys are not set, or this organization has no scope entry. Only the root operator at home is told which. |
+| *Datadog is unavailable right now.* | Datadog refused the key, rate-limited the account, or could not be reached. The page names which in plain words, never with Datadog's reply. |
+| *That search was refused: …* | The query could change what the scope wrapping means (see above). The reason says what to change. |
+| *Nothing in that window* | The search ran and matched no line. |
+
+The root operator at home also gets a **Server** source on the same page: the
+appliance's journald, unchanged (see
+[Operate it](enterprise/07-operate.md#the-observe-pages)).
+
+The bridge routes behind the page are `GET /api/telemetry/logs`
+(`q`, `since`, `until`, `limit`, `cursor`) and `GET /api/telemetry/logs/summary`
+(`q`, `since`, `until`, `group_by`, default `service`; `errors`, default
+`true`). The tenant always comes from the session's token, never from a
+parameter. `since` and `until` take a relative age (`30m`, `1h`, `7d`) or an
+ISO-8601 timestamp; `until` defaults to now. Both routes answer `200` with
+`status` `ok`, `not_configured` or `unavailable` (with a `kind`), and `400` with
+the plain reason for a refused query.
+
 ### Doctor
 
 `genus doctor` runs `datadog.reachable`. It skips when the keys are not set,
