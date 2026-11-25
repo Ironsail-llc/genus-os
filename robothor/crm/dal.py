@@ -4747,6 +4747,7 @@ def get_person_memory(
                    decay_score, created_at, last_accessed
               FROM memory_facts
              WHERE tenant_id = %s AND person_id = %s
+               AND scope_kind = 'shared'  -- derived for every reader: shared facts only (memory/visibility.py)
                AND is_active = TRUE
              ORDER BY importance_score DESC, created_at DESC
              LIMIT %s

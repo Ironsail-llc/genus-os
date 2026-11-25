@@ -50,6 +50,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.memory.graph_schema import normalize_origin
 from robothor.memory.recall import Candidate
+from robothor.memory.visibility import normalize_reader
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -358,7 +359,9 @@ def _activate_on(
             "t": tenant_id,
             "seeds": [s.entity_id for s in seeds],
             "weights": [float(s.weight) for s in seeds],
-            "reader": reader_scope_id,
+            # The write path's id space: a bare CRM person id (warm-up's
+            # sender) reads as ``person:{id}``; prefixed ids pass unchanged.
+            "reader": normalize_reader(reader_scope_id) or reader_scope_id,
             "hops": clamp_hops(max_hops),
             "fanout": int(fanout),
             "damping": float(damping),

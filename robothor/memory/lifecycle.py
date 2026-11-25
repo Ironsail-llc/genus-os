@@ -738,6 +738,7 @@ async def discover_cross_domain_insights(
             SELECT id, fact_text, category, entities
             FROM memory_facts
             WHERE is_active = TRUE AND created_at >= %s AND tenant_id = %s
+              AND scope_kind = 'shared'  -- derived for every reader: shared facts only (memory/visibility.py)
             ORDER BY created_at DESC
             LIMIT %s
             """,

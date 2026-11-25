@@ -222,6 +222,7 @@ async def build_episodes_from_facts(
             FROM memory_facts f
             WHERE f.is_active = TRUE
               AND f.tenant_id = %s
+              AND f.scope_kind = 'shared'  -- derived for every reader: shared facts only (memory/visibility.py)
               AND f.created_at >= %s
               AND NOT EXISTS (
                   SELECT 1 FROM memory_episodes e

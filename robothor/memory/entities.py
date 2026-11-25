@@ -478,6 +478,7 @@ async def get_all_about(entity_name: str, *, tenant_id: str = "") -> dict[str, A
             WHERE %s = ANY(entities)
               AND is_active = TRUE
               AND tenant_id = %s
+              AND scope_kind = 'shared'  -- no reader here: shared facts only
             ORDER BY created_at DESC
             LIMIT 50
             """,

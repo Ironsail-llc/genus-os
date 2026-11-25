@@ -43,6 +43,7 @@ from robothor.memory.drift import (
 )
 from robothor.memory.recall import Candidate, apply_reserved, fuse, relevance_from_rank
 from robothor.memory.vector_tuning import apply_hnsw_session
+from robothor.memory.visibility import fact_visibility_sql, graph_reader, readers_for
 
 logger = logging.getLogger(__name__)
 
@@ -1656,10 +1657,12 @@ async def search_facts(
             ``graph_hops`` and ``graph_path``; a row found only by it has
             ``source="graph"``. It walks every origin: this is a deliberate
             search, not automatic recall. Read-only, like every leg.
-        reader_scope_id: The reader's person id. The graph walk crosses only
-            edges with a supporting fact that is shared or scoped to this
-            reader. None: ``scope.person_id`` when a scope is given, else
-            only shared evidence.
+        reader_scope_id: Another id of the reader (``person:{id}``,
+            ``user:{uid}``, ``agent:{id}``, or a bare CRM person id). Every
+            fact leg returns shared rows plus rows owned by one of the reader's
+            ids (``reader_person_id``, ``reader_user_id``, this); the graph walk
+            reads as the person, else the user (``visibility.graph_reader``).
+            Under a restricted ``scope`` the reader is the scope's person only.
         scope: Optional "own data + shared" DataScope (Task 5, Unified
             Identity Context). ``None`` (the default — every pre-existing
             caller) is unrestricted. A restricted scope adds
@@ -1714,6 +1717,17 @@ async def search_facts(
     if scope is not None and scope.restricted:
         scope_clause = "AND (person_id = %s OR person_id IS NULL)"
         scope_params = (scope.person_id,)
+    # Who owns a row (scope_kind / scope_id, written by the write path) is
+    # checked on every call, whatever the rollout mode: shared rows, plus rows
+    # owned by one of the reader's ids. Under a restricted scope the reader is
+    # the scope's person only. See robothor/memory/visibility.py.
+    readers = readers_for(
+        scope=scope, person_id=reader_person_id, user_id=reader_user_id, extra=reader_scope_id
+    )
+    visible_sql, visible_params = fact_visibility_sql(readers)
+    unscopable_ok = scope_clause == ""
+    scope_clause = f"{scope_clause} AND {visible_sql}"
+    scope_params = (*scope_params, *visible_params)
     filters = f"{'AND is_active = TRUE' if active_only else ''} {scope_clause}"
     fetch_min = LEG_FETCH_MIN_WIDE if _rerank_wide_enabled() else LEG_FETCH_MIN
     _tenant = tenant_id or DEFAULT_TENANT
@@ -1723,9 +1737,8 @@ async def search_facts(
     legs = _fact_legs(query, embedding, _tenant, filters, scope_params, max(fetch_min, limit * 3))
     graph: list[Candidate] = []
     if include_graph or expand_entities:
-        reader = reader_scope_id or (scope.person_id if scope is not None else None)
         graph = await _graph_leg(
-            query, legs, _tenant, reader_scope_id=reader, scope=scope, limit=limit
+            query, legs, _tenant, reader_scope_id=graph_reader(readers), scope=scope, limit=limit
         )
         if graph:
             legs["graph"] = graph
@@ -1740,8 +1753,8 @@ async def search_facts(
             )
     # Insights, episodes and chat turns carry no person_id: a restricted caller
     # would read summaries built from other people's facts. As in the router,
-    # a store that cannot express person scoping is left out, not unfiltered.
-    unscopable_ok = scope_clause == ""
+    # a store that cannot express person scoping is left out, not unfiltered
+    # (``unscopable_ok``, decided above before the owner predicate is added).
     # Segments filter by reader themselves, so they stay on. Under a restricted
     # scope the reader is the scope's person and nothing else, whatever the
     # caller passed as reader_person_id.

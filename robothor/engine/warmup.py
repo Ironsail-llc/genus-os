@@ -1718,6 +1718,7 @@ def _fetch_entity_facts_batched(
                 SELECT id, fact_text, category, importance_score, person_id, created_at
                 FROM memory_facts
                 WHERE is_active = TRUE AND c.name = ANY(entities) AND tenant_id = %s
+                  AND scope_kind = 'shared'  -- no reader on this path (migration 181)
                   {scope_clause}
                 ORDER BY importance_score DESC, created_at DESC
                 LIMIT 3

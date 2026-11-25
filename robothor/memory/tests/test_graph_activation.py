@@ -93,7 +93,7 @@ class Graph:
                 tenant,
                 list(aliases),
                 "user" if scope_id else "shared",
-                scope_id,
+                _owner(scope_id),
                 crm_person_id,
             ),
         )
@@ -121,7 +121,7 @@ class Graph:
                 tenant,
                 origin,
                 "user" if scope_id else "shared",
-                scope_id,
+                _owner(scope_id),
                 active,
                 importance,
                 person_id,
@@ -173,6 +173,14 @@ class Graph:
         tenant = kw.get("tenant", TENANT)
         support = self.fact(f"link {a}-{b}", tenant=tenant, origin=origin)
         return self.edge(a, b, evidence=(support,), **kw)
+
+
+def _owner(scope_id: str | None) -> str | None:
+    """A row owner in the write path's id space (``person:{id}``): a bare CRM
+    person id given by a test is stored as that person, as the write path does."""
+    from robothor.memory.visibility import normalize_reader
+
+    return (normalize_reader(scope_id) or scope_id) if scope_id else None
 
 
 @pytest.fixture
