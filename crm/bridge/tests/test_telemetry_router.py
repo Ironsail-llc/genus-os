@@ -478,6 +478,59 @@ def test_credentials_in_a_row_are_redacted(datadog):
     assert "<redacted>" in row["attributes"]["headers"][0]
 
 
+#: A credential with no shape of its own: only the name it sits under says what it is.
+BARE_SECRET = "hunter2" + "bare"
+BARE_KEY = "0123456789abcdef" + "0123456789abcdef"
+
+
+def test_a_bare_credential_under_a_credential_name_is_redacted(datadog):
+    # Datadog parses `password=... api_key=...` into structured attributes and
+    # tags, so the name is a key and the value carries no shape to match on.
+    datadog.search = _search_body(
+        rows=[
+            {
+                "id": "log-5",
+                "attributes": {
+                    "timestamp": "2026-11-25T10:00:00Z",
+                    "service": "shop-api",
+                    "status": "error",
+                    "message": "login failed",
+                    "tags": [f"password:{BARE_SECRET}", "env:prod"],
+                    "attributes": {
+                        "password": BARE_SECRET,
+                        "api_key": BARE_KEY,
+                        "usr": {"password": BARE_SECRET, "id": 42},
+                        "events": [{"token": BARE_KEY, "kind": "retry"}],
+                        "http": {"status_code": 500},
+                    },
+                },
+            }
+        ]
+    )
+
+    row = _ok(_client(CHILD_A).get("/api/telemetry/logs"))["rows"][0]
+    text = json.dumps(row)
+
+    assert BARE_SECRET not in text
+    assert BARE_KEY not in text
+    assert row["attributes"]["password"] == "<redacted>"
+    assert row["attributes"]["usr"] == {"password": "<redacted>", "id": 42}
+    assert row["attributes"]["events"] == [{"token": "<redacted>", "kind": "retry"}]
+    # Everything not named as a credential is left readable.
+    assert row["attributes"]["http"] == {"status_code": 500}
+    assert row["tags"] == ["password:<redacted>", "env:prod"]
+
+
+@pytest.mark.parametrize("facet", ["@password", "@usr.password", "api_key"])
+def test_a_summary_by_a_credential_named_facet_shows_no_values(facet, datadog):
+    datadog.aggregate = {"data": {"buckets": [{"by": {facet: BARE_SECRET}, "computes": {"c0": 3}}]}}
+
+    body = _ok(_client(CHILD_A).get("/api/telemetry/logs/summary", params={"group_by": facet}))
+
+    assert BARE_SECRET not in json.dumps(body)
+    assert body["buckets"] == [{"by": "<redacted>", "count": 3}]
+
+
 def test_a_credential_in_a_summary_bucket_is_redacted(datadog):
     datadog.aggregate = {
         "data": {"buckets": [{"by": {"@http.auth": f"Bearer {BEARER}"}, "computes": {"c0": 1}}]}
