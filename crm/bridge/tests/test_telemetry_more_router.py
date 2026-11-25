@@ -116,10 +116,16 @@ MONITOR_PAGES = [
         "monitors": [
             _monitor(3, "Payments no data", "No Data"),
             _monitor(4, "Queue depth", "Warn"),
+            # Muted while it alerts: not firing, as the watch counts it.
+            {**_monitor(5, "Muted checkout", "Alert"), "overall_state": "Alert", "muted": True},
         ],
         "metadata": {"page": 1, "page_count": 2, "total_count": 4, "per_page": 2},
     },
 ]
+
+
+#: Firing, as Datadog's monitor search spells it and the watch counts it.
+FIRING_FILTER = '(status:alert OR status:warn OR status:"no data") AND muted:false'
 
 
 class FakeDatadog:
@@ -151,7 +157,17 @@ class FakeDatadog:
         if path == "/api/v1/monitor/search":
             page = int(params.get("page", "0"))
             if page < len(self.monitor_pages):
-                return httpx.Response(200, json=self.monitor_pages[page])
+                body = self.monitor_pages[page]
+                if FIRING_FILTER in query:
+                    # What Datadog does with the status and muted filter.
+                    kept = [
+                        m
+                        for m in body["monitors"]
+                        if str(m["status"]).lower() in ("alert", "warn", "no data")
+                        and not m.get("muted")
+                    ]
+                    body = {**body, "monitors": kept}
+                return httpx.Response(200, json=body)
             return httpx.Response(200, json={"monitors": [], "metadata": {"page_count": 0}})
         if path.endswith("/spans/events/search"):
             return httpx.Response(200, json=self.trace if "trace_id:" in query else self.spans)
@@ -561,6 +577,7 @@ def test_monitors_are_the_tenants_every_page_of_them(datadog):
         "Cart latency",
         "Payments no data",
         "Queue depth",
+        "Muted checkout",
     ]
     first = body["monitors"][0]
     assert first["id"] == "1"
@@ -578,6 +595,37 @@ def test_firing_keeps_alert_warn_and_no_data(datadog):
 
     assert [m["status"] for m in body["monitors"]] == ["Alert", "No Data", "Warn"]
     assert body["firing"] is True
+
+
+def test_firing_is_asked_of_datadog_without_muted_monitors(datadog):
+    body = _ok(_client(CHILD_A).get("/api/telemetry/monitors", params={"firing": "true"}))
+
+    queries = {r["params"]["query"] for r in datadog.sent("/api/v1/monitor/search")}
+    assert queries == {f'(tag:"team:shop") AND ({FIRING_FILTER})'}
+    assert "Muted checkout" not in [m["name"] for m in body["monitors"]]
+
+
+def test_firing_ands_the_callers_query_inside_the_filter(datadog):
+    _ok(_client(CHILD_A).get("/api/telemetry/monitors", params={"firing": "true", "q": "checkout"}))
+
+    assert datadog.sent("/api/v1/monitor/search")[0]["params"]["query"] == (
+        f'(tag:"team:shop") AND ({FIRING_FILTER} AND (checkout))'
+    )
+
+
+def test_a_refused_query_with_firing_sends_nothing(datadog):
+    response = _client(CHILD_A).get(
+        "/api/telemetry/monitors", params={"firing": "true", "q": "a) OR (b"}
+    )
+
+    assert response.status_code == 400
+    assert datadog.requests == []
+
+
+def test_every_monitor_includes_the_muted_ones(datadog):
+    body = _ok(_client(CHILD_A).get("/api/telemetry/monitors"))
+
+    assert "Muted checkout" in [m["name"] for m in body["monitors"]]
 
 
 def test_a_monitor_query_is_anded_inside_the_scope(datadog):
@@ -1017,7 +1065,11 @@ def test_each_tenant_is_read_inside_its_own_scope(datadog):
         "status:error",
     ]
     monitor_queries = {r["params"].get("query", "") for r in datadog.sent("/api/v1/monitor/search")}
-    assert monitor_queries == {"", 'tag:"team:shop"', 'tag:"team:clinic"'}
+    assert monitor_queries == {
+        FIRING_FILTER,
+        f'(tag:"team:shop") AND ({FIRING_FILTER})',
+        f'(tag:"team:clinic") AND ({FIRING_FILTER})',
+    }
 
 
 def test_the_tenant_list_never_comes_from_the_request(datadog):
