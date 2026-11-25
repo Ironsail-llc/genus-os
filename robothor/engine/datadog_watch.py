@@ -325,6 +325,30 @@ _TITLES = {
 }
 
 
+def _would_notify(tenant_id: str) -> str:
+    # Who is told: alerts.alert at warning or info writes an alert_digest row
+    # for the main agent of the engine's tenant (the shape older records had).
+    return f"main agent alert digest, tenant {tenant_id}"
+
+
+async def _webhook_covers(tenant: str, monitor_id: str, recovery: bool) -> bool:
+    """Whether the Datadog webhook already has this monitor's episode in hand.
+
+    Redis unreadable is ``False``: a duplicate is better than a missed alert.
+    """
+    from robothor.engine.datadog_delivery import webhook_covers
+    from robothor.engine.webhooks import _get_async_redis
+
+    try:
+        client = await _get_async_redis()
+        if client is None:
+            return False
+        return await webhook_covers(client, tenant, monitor_id, recovery=recovery)
+    except Exception as exc:  # noqa: BLE001 - deliver rather than miss
+        logger.info("datadog watch: webhook episodes unreadable (%s)", type(exc).__name__)
+        return False
+
+
 def finding_level(kind: str, details: Mapping[str, Any]) -> str:
     """The alert level of a finding. Nothing the watch finds pages on its own.
 
@@ -763,6 +787,15 @@ class DatadogWatch:
         subject = _subject(kind, details)
         key = (tenant, subject)
         before = self._episodes.get(key)
+        monitor_id = (details.get("monitor") or {}).get("id")
+        if monitor_id and await _webhook_covers(tenant, str(monitor_id), kind in _CLOSING):
+            # The webhook sent this monitor's episode: not again from here.
+            if kind in _CLOSING:
+                self._episodes.pop(key, None)
+            return {
+                "mode": SUPPRESSED,
+                "delivery": {"level": level, "reason": "covered_by_webhook"},
+            }
         if kind in _CLOSING:
             self._episodes.pop(key, None)
             phase = "close"
@@ -807,6 +840,8 @@ class DatadogWatch:
             **details,
             "mode": mode,
             "delivery": outcome["delivery"],
+            # Kept from the records before delivery, for their readers.
+            "would_notify": _would_notify(tenant),
             "brief": brief,
         }
         from robothor.audit import logger as audit

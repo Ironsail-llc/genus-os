@@ -22,10 +22,15 @@ tenant, so nothing here can deliver in one.
   cannot be written, the alert is recorded in that tenant as
   ``delivery_failed`` and the root gets one quiet notice naming the tenant.
 
+Levels. A ``Triggered`` or ``Re-Triggered`` alert pages (``critical``) only
+for a P1 monitor; any other trigger, and Warn or No Data, is a ``warning`` in
+the digest; a recovery is ``info``.
+
 Episodes. Datadog renotifies, retries and re-triggers. One monitor's
-notifications form an episode that its recovery closes; inside one, each level
-is sent once (a Warn that escalates to Alert is sent again, at the higher
-level) and the triage run starts once. The episode lives in Redis under
+notifications form an episode that its recovery closes; inside one, each step
+(Warn or No Data, a trigger, a P1 trigger) is sent once, a step up is sent
+again, and the triage run starts once. The watch reads the same keys
+(:func:`webhook_covers`) so a monitor wired to the webhook is not sent twice. The episode lives in Redis under
 :data:`EPISODE_PREFIX`, kept :data:`EPISODE_TTL_SECONDS` so a recovery Datadog
 never sent cannot silence a monitor for good.
 
@@ -67,6 +72,7 @@ __all__ = [
     "reset_state",
     "send_alert",
     "wait_for_triage",
+    "webhook_covers",
 ]
 
 DELIVERED, SUPPRESSED, FAILED = "delivered", "suppressed", "delivery_failed"
@@ -80,7 +86,10 @@ _STREAM = "datadog"
 #: The transitions that start the read-only triage run.
 TRIAGE_TRANSITIONS = frozenset({"triggered", "re_triggered"})
 _RECOVERIES = frozenset({"recovered", "warn_recovered", "no_data_recovered"})
-_RANK = {"info": 0, "warning": 1, "critical": 2}
+#: The steps of an episode, lowest first: Warn or No Data, a trigger, a P1
+#: trigger (the one that pages). Each is sent once per episode, and sending
+#: one covers the steps below it.
+_STAGES = ("warn", "alert", "page")
 
 EPISODE_PREFIX = "robothor:datadog:episode:"
 #: How long an episode without a recovery is remembered: a staleness bound,
@@ -335,17 +344,43 @@ def _brief(alert: DatadogAlert, title: str) -> str:
     )
 
 
+def _stage(transition: str, level: str) -> str:
+    """The episode step a transition is: ``recovered``, ``page``, ``alert`` or ``warn``."""
+    if transition in _RECOVERIES:
+        return "recovered"
+    if transition in TRIAGE_TRANSITIONS:
+        return "page" if level == "critical" else "alert"
+    return "warn"
+
+
+async def webhook_covers(
+    redis_client: Any, tenant: str, monitor_id: str, *, recovery: bool
+) -> bool:
+    """Whether the webhook has an open episode for this monitor (or just closed one).
+
+    The watch asks before it sends a ``monitor_firing`` (open: any step sent)
+    or a ``monitor_recovered`` (open, or closed by a recovery the webhook
+    sent). Raises when Redis cannot be read: the caller decides.
+    """
+    base = f"{EPISODE_PREFIX}{tenant}:{monitor_id}"
+    keys = [f"{base}:sent:{name}" for name in _STAGES]
+    if recovery:
+        keys.append(f"{base}:sent:recovered")
+    return bool(await redis_client.exists(*keys))
+
+
 async def _deliver_here(
     alert: DatadogAlert, tenant: str, title: str, redis_client: Any, hooks: Any
 ) -> dict[str, Any]:
     """Deliver an alert of this engine's own tenant, once per level per episode."""
     from robothor.integrations.datadog.alerts import level_for
 
-    level = level_for(alert.transition)
+    level = level_for(alert.transition, alert.priority)
     monitor = alert.monitor_id or "-"
     base = f"{EPISODE_PREFIX}{tenant}:{monitor}"
     recovery = alert.transition in _RECOVERIES
-    gate = f"{base}:sent:{'recovered' if recovery else level}"
+    stage = _stage(alert.transition, level)
+    gate = f"{base}:sent:{stage}"
     claimed = await _claim(redis_client, gate)
     if claimed is False:
         return {
@@ -357,7 +392,7 @@ async def _deliver_here(
         level,
         f"Datadog monitor: {title or monitor}",
         _brief(alert, title),
-        alert_id=f"datadog_alert:{tenant}:{monitor}:{'recovered' if recovery else level}",
+        alert_id=f"datadog_alert:{tenant}:{monitor}:{stage}",
         kind="datadog_alert",
         metadata={"tenant": tenant, "monitor_id": monitor, "transition": alert.transition},
     )
@@ -367,13 +402,13 @@ async def _deliver_here(
         outcome["triage"] = {"started": False, "reason": outcome["mode"]}
         return outcome
     if recovery:
-        levels = [f"{base}:sent:{name}" for name in _RANK]
-        await _forget(redis_client, *levels, f"{base}:triage")
+        stages = [f"{base}:sent:{name}" for name in _STAGES]
+        await _forget(redis_client, *stages, f"{base}:triage")
         outcome["triage"] = {"started": False, "reason": "recovery"}
         return outcome
     await _forget(redis_client, f"{base}:sent:recovered")
-    # A level sent covers the levels below it for the rest of the episode.
-    await _mark(redis_client, *(f"{base}:sent:{n}" for n, r in _RANK.items() if r < _RANK[level]))
+    # A step sent covers the steps below it for the rest of the episode.
+    await _mark(redis_client, *(f"{base}:sent:{n}" for n in _STAGES[: _STAGES.index(stage)]))
     outcome["triage"] = await _maybe_triage(
         alert, tenant, title, redis_client, hooks, base, claimed
     )

@@ -49,6 +49,7 @@ __all__ = [
     "AlertRecordError",
     "DatadogAlert",
     "handle_alert_event",
+    "is_p1",
     "level_for",
     "parse_alert",
     "route_tenant",
@@ -75,10 +76,11 @@ _DEDUP_PREFIX = "robothor:datadog:alert:"
 #: monitor titles and links are far shorter.
 _FIELD_CHARS = 500
 
-#: Transition -> the alert level the normal alerts path would use.
+#: Transition -> the alert level the normal alerts path uses. A trigger is
+#: ``critical`` (it pages) only for a P1 monitor: see :func:`level_for`.
 _LEVELS = {
-    "triggered": "critical",
-    "re_triggered": "critical",
+    "triggered": "warning",
+    "re_triggered": "warning",
     "warn": "warning",
     "re_warn": "warning",
     "no_data": "warning",
@@ -186,12 +188,28 @@ def route_tenant(tags: tuple[str, ...]) -> tuple[str, str]:
     return DEFAULT_TENANT, f"unknown_org:{org}"
 
 
-def level_for(transition: str) -> str:
-    """The alert level a transition maps to; an unrecognised one is a warning."""
+#: The transitions that page when the monitor is P1.
+_TRIGGERS = frozenset({"triggered", "re_triggered"})
+
+
+def is_p1(priority: str) -> bool:
+    """Whether Datadog's ``$ALERT_PRIORITY`` is P1 (``P1``, ``p1`` or ``1``)."""
+    return (priority or "").strip().lower() in ("p1", "1")
+
+
+def level_for(transition: str, priority: str = "") -> str:
+    """The alert level of a transition; an unrecognised one is a warning.
+
+    A ``Triggered`` or ``Re-Triggered`` alert is ``critical`` (it pages) only
+    when the monitor's priority is P1; any other trigger is a ``warning``
+    (the digest). Warn and No Data are ``warning``, recoveries ``info``.
+    """
+    if transition in _TRIGGERS and is_p1(priority):
+        return "critical"
     return _LEVELS.get(transition, "warning")
 
 
-def would_notify(transition: str) -> dict[str, Any]:
+def would_notify(transition: str, priority: str = "") -> dict[str, Any]:
     """Who the normal alerts path (:func:`robothor.engine.alerts.alert`) would reach.
 
     That path is instance-wide: a ``critical`` alert pages the operator on
@@ -201,7 +219,7 @@ def would_notify(transition: str) -> dict[str, Any]:
     """
     from robothor.engine.alerts import _PAGE_LEVELS, alert_fallback_channels
 
-    level = level_for(transition)
+    level = level_for(transition, priority)
     if level in _PAGE_LEVELS:
         channels = ["telegram", *(name for name, _ in alert_fallback_channels())]
         return {
@@ -260,6 +278,15 @@ def _record(
         "mode": outcome.get("mode", "delivery_failed"),
         "delivery": outcome.get("delivery", {}),
         "triage": outcome.get("triage", {"started": False}),
+        # The two fields records carried before delivery, kept so their
+        # readers go on working: who was (or would have been) told, and the run.
+        "would_notify": would_notify(alert.transition, alert.priority),
+        "would_run": {
+            "tenant": tenant,
+            "agent": (outcome.get("triage") or {}).get("agent"),
+            "read_only": True,
+            "prompt": triage_prompt(alert, title=title),
+        },
     }
     written = log_event(
         EVENT_TYPE,
