@@ -62,6 +62,11 @@ class FakeRedis:
     async def exists(self, key: str) -> int:
         return 1 if key in self.keys else 0
 
+    async def get(self, key: str) -> bytes | None:
+        """As redis-py answers: bytes, or ``None`` for no key."""
+        value = self.keys.get(key)
+        return value.encode() if isinstance(value, str) else value
+
 
 class FakeAudit:
     def __init__(self) -> None:
@@ -524,15 +529,39 @@ class TestClaimWriteExtend:
         assert list(redis.ttls.values()) == [dd.DEDUP_TTL_SECONDS], "extended after the write"
 
     @pytest.mark.asyncio
-    async def test_a_crash_after_the_write_records_a_retry_again(self, audit, no_delivery) -> None:
+    async def test_redis_down_records_every_copy(self, audit, no_delivery) -> None:
+        """No dedup store: each copy is recorded, none is lost."""
+
         class SetFails(FakeRedis):
             async def set(self, *a: Any, **kw: Any) -> Any:
-                raise ConnectionError("engine went away")
+                raise ConnectionError("redis unreachable")
 
         redis = SetFails()
         assert await dd.handle_alert_event(_payload(), redis) == "recorded"
         assert await dd.handle_alert_event(_payload(), redis) == "recorded"
         assert len(audit.rows) == 2, "a duplicate, not a lost alert"
+
+    @pytest.mark.asyncio
+    async def test_a_crash_between_the_write_and_the_extension(self, audit, no_delivery) -> None:
+        """The claim works, the extension never happens: the pending claim still holds
+        for its window, and once it lapses one more copy can be recorded."""
+
+        class ExtendFails(FakeRedis):
+            async def set(self, key: str, value: Any, nx: bool = False, ex: Any = None) -> Any:
+                if not nx:
+                    raise ConnectionError("engine went away before the extension")
+                return await super().set(key, value, nx=nx, ex=ex)
+
+        redis = ExtendFails()
+        assert await dd.handle_alert_event(_payload(), redis, message_id="1-0") == "recorded"
+        assert list(redis.ttls.values()) == [dd.PENDING_TTL_SECONDS], "never extended"
+        # A Datadog retry inside the pending window is another stream message.
+        assert await dd.handle_alert_event(_payload(), redis, message_id="2-0") == "duplicate"
+        # The pending window passes and the claim lapses.
+        redis.keys.clear()
+        redis.ttls.clear()
+        assert await dd.handle_alert_event(_payload(), redis, message_id="3-0") == "recorded"
+        assert len(audit.rows) == 2, "at most one duplicate after the window"
 
     @pytest.mark.asyncio
     async def test_a_failed_write_sets_no_key(self, audit, no_delivery) -> None:
@@ -541,3 +570,83 @@ class TestClaimWriteExtend:
         with pytest.raises(dd.AlertRecordError):
             await dd.handle_alert_event(_payload(), redis)
         assert redis.keys == {}
+
+
+class TestClaimOwnedByTheStreamMessage:
+    """The pending claim names the stream message that made it.
+
+    A crash between the claim and the write, followed by the consumer group
+    redelivering THAT message, records the alert; any other copy (a Datadog
+    retry is another stream message) is a duplicate.
+    """
+
+    @pytest.mark.asyncio
+    async def test_redelivery_after_a_crash_before_the_write_records_once(
+        self, audit, no_delivery
+    ) -> None:
+        redis = FakeRedis()
+        # The engine claimed message 1-0, then died before the audit write:
+        # the claim is still there, pending, and nothing was recorded.
+        key = dd._dedup_key(dd.parse_alert(_payload()), _payload())
+        redis.keys[key] = "1-0"
+        redis.ttls[key] = dd.PENDING_TTL_SECONDS
+
+        # On restart the consumer group redelivers the same message.
+        assert await dd.handle_alert_event(_payload(), redis, message_id="1-0") == "recorded"
+        assert await dd.handle_alert_event(_payload(), redis, message_id="1-0") == "duplicate"
+        assert len(audit.rows) == 1
+        assert list(redis.keys.values()) == ["done"]
+        assert list(redis.ttls.values()) == [dd.DEDUP_TTL_SECONDS]
+
+    @pytest.mark.asyncio
+    async def test_another_message_with_the_same_key_is_a_duplicate(
+        self, audit, no_delivery
+    ) -> None:
+        redis = FakeRedis()
+        key = dd._dedup_key(dd.parse_alert(_payload()), _payload())
+        redis.keys[key] = "1-0"  # claimed by another message, still pending
+        assert await dd.handle_alert_event(_payload(), redis, message_id="2-0") == "duplicate"
+        assert audit.rows == []
+
+    @pytest.mark.asyncio
+    async def test_a_done_key_is_a_duplicate_even_for_the_same_message(
+        self, audit, no_delivery
+    ) -> None:
+        redis = FakeRedis()
+        assert await dd.handle_alert_event(_payload(), redis, message_id="1-0") == "recorded"
+        assert await dd.handle_alert_event(_payload(), redis, message_id="2-0") == "duplicate"
+        assert await dd.handle_alert_event(_payload(), redis, message_id="1-0") == "duplicate"
+        assert len(audit.rows) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_pending_claim_holds_the_message_id(self, no_delivery) -> None:
+        redis = FakeRedis()
+        seen: list[dict[str, Any]] = []
+
+        def _log_event(event_type: str, action: str, **kw: Any) -> dict[str, Any]:
+            seen.append(dict(redis.keys))
+            return {"id": 1, "timestamp": "2026-11-25T00:00:00+00:00"}
+
+        with patch("robothor.audit.logger.log_event", side_effect=_log_event):
+            await dd.handle_alert_event(_payload(), redis, message_id="7-3")
+        assert [list(k.values()) for k in seen] == [["7-3"]]
+
+    @pytest.mark.asyncio
+    async def test_two_messages_at_once_record_once(self, audit, no_delivery) -> None:
+        redis = FakeRedis()
+        outcomes = await asyncio.gather(
+            dd.handle_alert_event(_payload(), redis, message_id="1-0"),
+            dd.handle_alert_event(_payload(), redis, message_id="2-0"),
+        )
+        assert sorted(outcomes) == ["duplicate", "recorded"]
+        assert len(audit.rows) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_failed_write_releases_the_claim(self, audit, no_delivery) -> None:
+        redis = FakeRedis()
+        audit.fail = True
+        with pytest.raises(dd.AlertRecordError):
+            await dd.handle_alert_event(_payload(), redis, message_id="1-0")
+        assert redis.keys == {}
+        audit.fail = False
+        assert await dd.handle_alert_event(_payload(), redis, message_id="2-0") == "recorded"

@@ -219,6 +219,10 @@ class FakeRedis:
     async def exists(self, key: str) -> int:
         return 1 if key in self.keys else 0
 
+    async def get(self, key: str) -> bytes | None:
+        value = self.keys.get(key)
+        return value.encode() if isinstance(value, str) else value
+
     async def xack(self, stream: str, group: str, msg_id: Any) -> int:
         self.acked.append((stream, group, msg_id))
         return 1
@@ -445,3 +449,22 @@ async def test_the_consumer_creates_the_datadog_group_when_in_use(
         await asyncio.wait_for(hooks.start(), timeout=5)
 
     assert (STREAM, "engine") in fake.created
+
+
+@pytest.mark.asyncio
+async def test_a_replayed_message_after_a_crash_is_recorded(
+    client, published, audit, no_delivery, engine_config
+) -> None:
+    """The consumer passes the stream entry id; a claim it left is its own to finish."""
+    from robothor.integrations.datadog import alerts as dd
+
+    _post(client, json.dumps(PAYLOAD).encode(), {HEADER: SECRET})
+    hooks, _ = _root_hooks(engine_config)
+    redis = FakeRedis()
+    key = dd._dedup_key(dd.parse_alert(PAYLOAD), PAYLOAD)
+    redis.keys[key] = b"5-0"  # left by this message before the engine died
+
+    await hooks._handle_event(STREAM, b"5-0", _envelope(published[0]), redis, "engine")
+
+    assert len(audit.rows) == 1
+    assert redis.keys[key] == "done"
