@@ -820,7 +820,7 @@ run (the capability tier).
 
 | Tool | Purpose |
 |---|---|
-| `datadog_logs_search` | Log lines: `query` (Datadog log search syntax, empty for everything), `start` and `end` (ISO-8601 or relative such as `now-15m`; default `now-1h` to `now`), `limit` (rows per page, default 50), `cursor` (the previous page's `next_cursor`, with the same query and the `window` that page returned), `newest_first` (default true). Each row has `id`, `timestamp`, `service`, `status`, `host`, `message`, the `env` and `version` tags, and `attributes`. |
+| `datadog_logs_search` | Log lines: `query` (Datadog log search syntax, empty for everything), `start` and `end` (ISO-8601 or relative such as `now-15m`; default `now-1h` to `now`), `limit` (rows per page, default 50), `cursor` (the previous page's `next_cursor`, with the same query and the `window` that page returned), `newest_first` (default true). Each row has `id`, `timestamp`, `service`, `status`, `host`, `message`, the `env` and `version` tags, `trace_id` and `span_id` when the line belongs to a trace (kept even when fitting drops `attributes`, so a line can be followed to its trace), and `attributes`. |
 | `datadog_logs_aggregate` | Counts: the same `query`, `start` and `end`, plus `group_by` (facets such as `service`, `status`, `@http.status_code`; empty for one total) and `limit` (groups per facet, largest first, default 25). Returns `buckets` of `{by, count}`. |
 
 **Scope.** Every query is sent as `(<this tenant's scope>) AND (<query>)`, and
