@@ -146,7 +146,7 @@ class TestSlowCheckout:
 
         import robothor.crm.dal
 
-        clock = {"now": 100.0}
+        clock = {"now": 0.0}  # binary-exact values: no rounding in the check
 
         class _Clock:
             @staticmethod
@@ -187,8 +187,8 @@ class TestSlowCheckout:
     def test_the_armed_limit_is_the_time_left_after_the_checkout(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        statements = self._run(monkeypatch, checkout_seconds=0.4)
-        assert statements[0] == "SELECT set_config('statement_timeout', 600ms, false)", statements
+        statements = self._run(monkeypatch, checkout_seconds=0.25)
+        assert statements[0] == "SELECT set_config('statement_timeout', 750ms, false)", statements
 
     def test_a_checkout_that_outlasts_the_deadline_runs_nothing(
         self, monkeypatch: pytest.MonkeyPatch

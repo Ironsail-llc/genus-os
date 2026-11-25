@@ -587,15 +587,18 @@ def recall_for_message(
         return []
     excluded = {n.lower() for n in (exclude_names or ()) if n}
     sender = _as_uuid(sender_person_id)
-    if deadline is not None:
-        left_ms = int((deadline - time.monotonic()) * 1000)
-        if left_ms <= 0:
-            return []
+    if deadline is not None and deadline <= time.monotonic():
+        return []  # already spent: open nothing
     with _cursor(connect) as cur:
         if deadline is None:
             return _seed_and_walk(cur, tenant_id, message, sender, phrases, excluded,
                                   reader_scope_id, trusted_only, limit, person_restricted,
                                   person_id)  # fmt: skip
+        # Measured now, with the connection in hand: a checkout that had to
+        # wait (a new connection, its session settings) is not added on top.
+        left_ms = int((deadline - time.monotonic()) * 1000)
+        if left_ms <= 0:
+            return []
         cur.execute("SELECT set_config('statement_timeout', %s, false)", (f"{left_ms}ms",))
         try:
             return _seed_and_walk(cur, tenant_id, message, sender, phrases, excluded,
