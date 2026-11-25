@@ -301,6 +301,19 @@ async def _config_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "key": row["env"],
             "secret": True,
         }
+    from robothor.integrations.datadog.names import SCOPES_ENV
+
+    if row["env"] == SCOPES_ENV:
+        # The wall between tenants' Datadog data: an agent must not be able to
+        # widen its own tenant's filter.
+        return {
+            "error": (
+                f"{SCOPES_ENV} decides what each tenant may read from Datadog, so "
+                "config_set never writes it. The operator changes it with "
+                "`genus config set` on the instance."
+            ),
+            "key": row["env"],
+        }
     value = _as_text(args.get("value"))
     problem = unsafe_value_message(row["env"], value)
     if problem:
