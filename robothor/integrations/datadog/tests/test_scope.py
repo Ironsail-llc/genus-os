@@ -81,6 +81,13 @@ def test_an_explicit_empty_tag_list_means_every_metric(scopes) -> None:
     assert scope is not None and scope.metric_tags == ()
 
 
+def test_letters_outside_ascii_are_still_accepted() -> None:
+    assert (
+        compose(SCOPE, "message:caf\u00e9 \u540d\u524d")
+        == f"({SCOPE}) AND (message:caf\u00e9 \u540d\u524d)"
+    )
+
+
 def test_a_metric_tag_may_end_in_a_wildcard(scopes) -> None:
     scopes({"acme-child-a": {"logs": "service:shop-api", "metric_tags": ["service:shop-*"]}})
     scope = scope_for("acme-child-a")
@@ -221,6 +228,20 @@ def test_a_scope_with_no_access_refuses(scope) -> None:
         "a‮b",
         "message:don't",  # read as a phrase opener by a parser that honours single quotes
         "'(' ) OR ( ')'",
+        # Typographic quotes and brackets: a parser that reads them as phrase
+        # or group delimiters would see a different structure from the scan.
+        "\u201c(\u201d ) OR * OR ( \u201c)\u201d",
+        '"(\u201d ) OR * OR ( \u201c)"',
+        "\u2018(\u2019 ) OR * OR ( \u2018)\u2019",
+        "\u00ab(\u00bb ) OR * OR ( \u00ab)\u00bb",
+        "\u201e(\u201f ) OR * OR ( \u201e)\u201f",
+        "\uff02(\uff02 ) OR * OR ( \uff02)\uff02",
+        "\uff07a",
+        "a \uff09 OR \uff08 b",
+        "a \uff3d b",
+        "a \u2769 b",
+        "a\u3009b",
+        "a\uff3cb",
     ],
 )
 def test_a_query_that_could_change_the_wrapping_is_refused(user) -> None:
@@ -298,6 +319,14 @@ _TOKENS = (
     " TO ",
     " ",
     "\n",
+    "\u201c",
+    "\u201d",
+    "\u2018",
+    "\u2019",
+    "\u00ab",
+    "\uff08",
+    "\uff09",
+    "\uff02",
     "\t",
 )
 _OPEN = {"(": ")", "[": "]", "{": "}"}
