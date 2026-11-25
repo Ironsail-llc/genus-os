@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = ["GenusSettings", "SettingsGroup", "declare"]
@@ -3985,26 +3985,6 @@ class IntegrationSettings(SettingsGroup):
         "access. A tenant with no entry, a blank logs filter or a malformed entry is refused.",
         since="unreleased",
     )
-    datadog_alerts_mode: Literal["dry_run", "deliver"] = declare(
-        "dry_run",
-        "ROBOTHOR_DATADOG_ALERTS_MODE",
-        "What Genus does with a Datadog monitor alert that reaches its datadog webhook "
-        "channel. dry_run: record it as a datadog.alert_received audit event in the tenant "
-        "its org: tag names, with who it would notify and the read-only triage run it would "
-        "start, and deliver nothing. deliver: not available yet, and refused at startup with "
-        "that message. This is the one sanctioned mode switch for new behaviour, because the "
-        "feature acts on its own when an external system calls it.",
-        since="unreleased",
-    )
-
-    @field_validator("datadog_alerts_mode")
-    @classmethod
-    def _datadog_delivery_not_yet(cls, value: str) -> str:
-        if value == "deliver":
-            raise ValueError(
-                "ROBOTHOR_DATADOG_ALERTS_MODE=deliver: delivery is not available yet. Use dry_run."
-            )
-        return value
 
 
 class GenusSettings(BaseSettings):

@@ -17,9 +17,9 @@ event hands it to :func:`handle_alert_event`, which:
    (:func:`triage_plan`). A recovery is its own event with the same monitor
    id, so a reader can pair it with the trigger.
 
-``ROBOTHOR_DATADOG_ALERTS_MODE`` is ``dry_run``: nothing is delivered to
-anyone and no run is started. ``deliver`` is refused when the settings load,
-because delivery is not available yet.
+Recording is the only thing this does: nothing is delivered to anyone and no
+run is started. Every record says ``mode: "dry_run"`` (:data:`MODE`) so it
+can be told apart from delivered alerts once delivery ships as its own change.
 
 Read the records back with :func:`robothor.audit.logger.query_log`
 (``event_type="datadog.alert_received"``, ``tenants=[...]``), which is what
@@ -56,7 +56,9 @@ STREAM = "datadog"
 EVENT_TYPE = "datadog.alert_received"
 #: The tag that names the tenant a monitor belongs to.
 ORG_TAG = "org:"
-#: How long a (monitor, transition, date) is remembered against Datadog's retries.
+#: What every record says it is: recorded, not delivered.
+MODE = "dry_run"
+#: How long a notification is remembered against Datadog's retries.
 DEDUP_TTL_SECONDS = 86400
 _DEDUP_PREFIX = "robothor:datadog:alert:"
 
@@ -249,13 +251,7 @@ def _dedup_key(alert: DatadogAlert, payload: Any) -> str:
     return _DEDUP_PREFIX + hashlib.sha256(basis.encode()).hexdigest()
 
 
-def _mode() -> str:
-    from robothor.settings import get_settings
-
-    return str(get_settings().integrations.datadog_alerts_mode)
-
-
-def _record(alert: DatadogAlert, mode: str) -> tuple[str, str]:
+def _record(alert: DatadogAlert) -> tuple[str, str]:
     """Write the audit event; ``(tenant, routing)``. Blocking (tenant read, audit write)."""
     from robothor.audit.logger import log_event
     from robothor.secrets.redaction import redact_personal_data
@@ -274,7 +270,7 @@ def _record(alert: DatadogAlert, mode: str) -> tuple[str, str]:
         "link": alert.link,
         "date": alert.date,
         "routing": routing,
-        "mode": mode,
+        "mode": MODE,
         "would_notify": would_notify(alert.transition),
         "would_run": triage_plan(tenant, alert, title=title),
     }
@@ -293,43 +289,41 @@ def _record(alert: DatadogAlert, mode: str) -> tuple[str, str]:
     return tenant, routing
 
 
-async def _claim(redis_client: Any, key: str) -> bool:
-    """``False`` for a retry already recorded. No Redis: record anyway (a weaker filter)."""
+async def _already_recorded(redis_client: Any, key: str) -> bool:
+    """Whether this notification was recorded. No Redis: record anyway (a weaker filter)."""
     if redis_client is None:
-        return True
+        return False
     try:
-        return bool(await redis_client.set(key, 1, nx=True, ex=DEDUP_TTL_SECONDS))
+        return bool(await redis_client.exists(key))
     except Exception as exc:  # noqa: BLE001 — dedup is a filter, the record is the point
         logger.warning("Datadog alert dedup check failed (%s); recording", type(exc).__name__)
-        return True
+        return False
 
 
-async def _release(redis_client: Any, key: str) -> None:
+async def _remember(redis_client: Any, key: str) -> None:
     if redis_client is None:
         return
     try:
-        await redis_client.delete(key)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Datadog alert dedup release failed (%s)", type(exc).__name__)
+        await redis_client.set(key, 1, ex=DEDUP_TTL_SECONDS)
+    except Exception as exc:  # noqa: BLE001 — a missed key costs a duplicate, never an alert
+        logger.warning("Datadog alert dedup key not set (%s)", type(exc).__name__)
 
 
 async def handle_alert_event(payload: Any, redis_client: Any) -> str:
     """Record one Datadog alert; ``"recorded"`` or ``"duplicate"``.
 
-    Raises :class:`AlertRecordError` when it could not be recorded, after
-    forgetting the dedup claim so a later copy is recorded.
+    The dedup key is set only AFTER the audit event is written. A crash
+    between the two, or two copies handled at once, can record a retry twice;
+    nothing can leave a key behind for an alert that was never recorded.
+    Raises :class:`AlertRecordError` when it could not be recorded.
     """
     alert = parse_alert(payload)
-    mode = _mode()
     key = _dedup_key(alert, payload)
-    if not await _claim(redis_client, key):
+    if await _already_recorded(redis_client, key):
         logger.info("Datadog alert for monitor %s already recorded", alert.monitor_id or "-")
         return "duplicate"
-    try:
-        tenant, routing = await asyncio.to_thread(_record, alert, mode)
-    except Exception:
-        await _release(redis_client, key)
-        raise
+    tenant, routing = await asyncio.to_thread(_record, alert)
+    await _remember(redis_client, key)
     from robothor.engine.log_fields import kv_line
 
     logger.info(
@@ -339,7 +333,7 @@ async def handle_alert_event(payload: Any, redis_client: Any) -> str:
             tenant=tenant,
             monitor_id=alert.monitor_id,
             transition=alert.transition,
-            mode=mode,
+            mode=MODE,
             routing=routing,
         ),
     )
