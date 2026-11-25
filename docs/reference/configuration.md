@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-517 settings in 18 groups.
+518 settings in 18 groups.
 
 ## autonomy
 
@@ -138,6 +138,7 @@ External systems the instance watches, such as an n8n instance.
 | `ROBOTHOR_DATADOG_APP_KEY` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | unreleased | The Datadog application key paired with ROBOTHOR_DATADOG_API_KEY, sent as DD-APPLICATION-KEY. Instance-wide and resolved vault-first like the API key; give it read scopes only. |
 | `ROBOTHOR_DATADOG_SCOPES` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | JSON object mapping a tenant id to what it may read, e.g. {"acme-child-a": {"logs": "service:shop-api", "spans": "service:shop-api", "monitors": "team:shop", "metric_tags": ["service:shop-api"]}}. Every query is ANDed with the filter; "*" means everything. spans defaults to the logs filter, monitors and metric_tags to no access. A tenant with no entry, a blank logs filter or a malformed entry is refused. |
 | `ROBOTHOR_DATADOG_SITE` | str | `datadoghq.com` | `robothor-engine`, `robothor-bridge` | no | unreleased | The Datadog site the account lives on: datadoghq.com, us3.datadoghq.com, us5.datadoghq.com, datadoghq.eu, ap1.datadoghq.com, ap2.datadoghq.com, ddog-gov.com or us2.ddog-gov.com. Anything else reads as not configured, so the keys are never sent to another host. |
+| `ROBOTHOR_DATADOG_WATCH_MODE` | Literal | `dry_run` | `robothor-engine`, `robothor-bridge` | no | unreleased | What the Datadog watch does with a finding (an error spike in one of this engine's tenant's services, or the Datadog link lost or restored). dry_run: records a datadog.watch_finding audit event with the brief that would be sent and to whom, and delivers nothing. deliver: records the same event and sends the brief through the normal alerts path. The one sanctioned mode switch on new behaviour, because the watch acts on its own; it never stops, pauses or limits anything either way. |
 | `ROBOTHOR_N8N_ALLOW_INSECURE_HTTP` | bool | `false` | `robothor-engine`, `robothor-bridge` | no | unreleased | Let ROBOTHOR_N8N_BASE_URL be plain http:// on a host that is not loopback, for a self-hosted n8n reachable only on a private network. Off: the base URL must be https:// (http:// only for localhost), because the API key travels in every request. |
 | `ROBOTHOR_N8N_API_KEY` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | unreleased | An n8n public-API key (Settings > n8n API in n8n), sent as X-N8N-API-KEY. Resolved vault-first. Read-only use: the monitor never changes a workflow. |
 | `ROBOTHOR_N8N_BASE_URL` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Root URL of the n8n instance, e.g. https://n8n.example.com (no /api/v1). The poller calls its public API under it, and execution links in notifications point into it. |
