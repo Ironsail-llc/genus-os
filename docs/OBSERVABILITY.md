@@ -850,6 +850,12 @@ notification of the episode tries again. The episode moves on whatever the
 send did: a step the cooldown held counts as sent (it was, within the hour),
 and a recovery closes the episode even when its own notice could not be sent,
 so a monitor that flapped once is never left silent for the next incident.
+Every recovery closes the episode, even one already sent for it. Order is
+read from Datadog's `$DATE`: the latest recovery's time is kept, and a trigger
+dated before it (read late, or whose send finished after the recovery was
+handled) is recorded as `suppressed`, `reason: superseded_by_recovery`, or
+flagged `superseded_by_recovery` when it had already gone out, and never
+re-opens the episode or starts a run. Without a `date`, arrival order decides.
 
 **A limit of per-monitor episodes.** Episodes are kept per monitor, not per
 group: the webhook payload above carries no group. In a multi-alert monitor
@@ -867,7 +873,8 @@ start one. When the main agent is already running (another monitor's triage,
 a scheduled run), the run waits for it, trying again after pauses of about
 six minutes in all; if it is still busy, the run is recorded as `agent_busy`
 and the episode's claim is given back, so the episode's next trigger
-notification starts it. The run is
+notification starts it. An engine shutdown during the wait does the same,
+recorded as `cancelled`. A run only ever gives back its own claim. The run is
 in plan mode (`readonly_mode`): it is offered only its read-only tools, the
 runtime admission gate refuses any other, and its prompt is fixed: it names
 the monitor (id, masked title, time), asks for a first look with the Datadog
