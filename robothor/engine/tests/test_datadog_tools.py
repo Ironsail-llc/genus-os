@@ -181,6 +181,8 @@ def test_search_defaults_to_the_last_hour_newest_first(dd, writer):
         ("now-1w", "now-30s", ("2026-11-18T12:00:00.000Z", "2026-11-25T11:59:30.000Z")),
         # Absolute times are sent exactly as given.
         ("2026-11-25T09:00:00Z", "2026-11-25T10:00:00Z", None),
+        # So is a unit the handler does not know, case included: `M` is not `m`.
+        ("now-1M", "2026-11-25T10:00:00Z", None),
     ],
 )
 def test_a_relative_window_is_resolved_to_absolute_times_once(dd, writer, start, end, sent):
