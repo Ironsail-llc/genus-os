@@ -809,6 +809,49 @@ def test_a_metric_grouped_by_a_credential_named_tag_withholds_its_value(dd, writ
     assert SECRET not in json.dumps(result)
 
 
+@pytest.fixture
+def asked(monkeypatch) -> list[str]:
+    """Every name the credential check asks the platform redactor about."""
+    from robothor.secrets import redaction
+
+    real = redaction.redact_tool_arguments
+    names: list[str] = []
+
+    def counting(tool: str, arguments: Any) -> Any:
+        names.extend(arguments)
+        return real(tool, arguments)
+
+    monkeypatch.setattr(redaction, "redact_tool_arguments", counting)
+    return names
+
+
+def test_each_monitor_tag_name_is_checked_once_per_call(dd, writer, asked):
+    dd.monitors = [_monitor(i, tags=[f"api_key:{SECRET}", "team:checkout"]) for i in range(20)]
+
+    result = _run(MONITORS, {})
+
+    assert all(m["tags"][0] == "api_key:<redacted>" for m in result["monitors"])
+    assert asked and len(asked) == len(set(asked)), sorted(asked)
+
+
+def test_each_series_tag_name_is_checked_once_per_call(dd, writer, asked):
+    dd.series = [
+        {
+            "metric": "m",
+            "scope": f"host:web-{i},password:{SECRET}",
+            "tag_set": [f"host:web-{i}", f"password:{SECRET}"],
+            "pointlist": [[1795597200000.0, 1.0]],
+        }
+        for i in range(20)
+    ]
+
+    result = _run(METRICS, {"metric": "m", "group_by": ["host"]})
+
+    assert len(result["series"]) == 20
+    assert SECRET not in json.dumps(result)
+    assert asked and len(asked) == len(set(asked)), sorted(asked)
+
+
 @pytest.mark.parametrize("name", [SPANS, TRACE])
 def test_a_spans_credential_attributes_and_tags_never_come_back(dd, writer, name):
     """Span rows carry no attribute map or tag list; a credential in either stays out."""
