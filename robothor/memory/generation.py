@@ -91,7 +91,8 @@ logger = logging.getLogger(__name__)
 # 2026-08-27: this module read os.environ['OPENROUTER_API_KEY'] directly, so
 # it could not see a spare key even once one existed, and it kept dialling a
 # credential the engine's pool had already retired. It was the single
-# highest-volume consumer of the dead key (1,135 remote fallbacks in 48h).
+# highest-volume consumer of the dead key (more remote fallbacks than any
+# other caller).
 # Sharing KeyPool means it rotates, and it inherits the engine's retirement
 # classification -- notably that a weekly cap is not retried every 15 min.
 
@@ -111,7 +112,7 @@ def _key_pool() -> Any:
     Deliberately the SAME object the engine dispatches through. A private
     pool here meant a key the engine had retired was still live to memory
     generation, which was the highest-volume consumer of the dead credential
-    on 2026-08-27 (1,135 remote fallbacks in 48h).
+    on 2026-08-27.
     """
     from robothor.engine.key_pool import shared_pool
 

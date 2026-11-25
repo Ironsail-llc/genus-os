@@ -7,10 +7,11 @@ strictly worse than RLS off, because the operator believes they have isolation.
 
 This is not theoretical, it happened twice on the same instance:
 
-  * the engine originally connected as `philip` (a superuser), which is why
+  * the engine originally connected as the operator's own login role (a
+    superuser), which is why
     migration 082 had to create the non-superuser `robothor_app` role at all;
   * `robothor-orchestrator` and `robothor-vision` never loaded the main config, so
-    `config.py` fell back to `os.environ["USER"]` -> `philip` -> superuser. They
+    `config.py` fell back to `os.environ["USER"]` -> the operator -> superuser. They
     bypassed RLS for as long as they have existed, while the instance reported RLS
     "enabled". Nothing anywhere said a word.
 

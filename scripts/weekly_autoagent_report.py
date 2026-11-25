@@ -18,6 +18,7 @@ scripts/devops_send_telegram.py). Runs Sunday 20:00 ET via crontab.
 
 from __future__ import annotations
 
+import getpass
 import json
 import logging
 import os
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 DB_CONFIG = {
     "dbname": "robothor_memory",
-    "user": "philip",
+    "user": getpass.getuser(),
     "host": "/var/run/postgresql",
 }
 TENANT_ID = "robothor-primary"

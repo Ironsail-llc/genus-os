@@ -1,7 +1,7 @@
 """Core ships what every instance needs. Nothing else.
 
 CLAUDE.md rule #1 applied at the INTEGRATION layer rather than the data
-layer. Philip's 2026-08-21 ruling, verbatim: "other people don't
+layer. The operator's 2026-08-21 ruling, verbatim: "other people don't
 necessarily have Impetus One and other people don't necessarily use
 Apollo. Everything should be custom configured."
 

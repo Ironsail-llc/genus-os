@@ -15,11 +15,12 @@ the durable one: then a forgotten `WHERE` leaks nothing.
 ## The trap
 
 **A Postgres superuser bypasses RLS unconditionally** — `ENABLE` and `FORCE` are
-both ignored for them. The engine connects as `philip`, **which is a superuser**.
+both ignored for them. The engine originally connected as the operator's own login role, **which is a
+superuser**.
 So "enabling RLS" alone would have protected nothing at all. Verified:
 
 ```
-as philip (superuser),   app.tenant_id='acme-corp'  -> sees ALL 3 tenants' rows
+as operator (superuser), app.tenant_id='acme-corp'  -> sees ALL 3 tenants' rows
 as robothor_app (not),   app.tenant_id='acme-corp'  -> sees ONLY acme-corp's row
 ```
 
@@ -137,7 +138,7 @@ existence**, and nothing said so. Two independent reasons, stacked:
 
 1. Their units never loaded `/etc/robothor/robothor.env`, so they had neither
    `ROBOTHOR_DB_USER` nor `ROBOTHOR_RLS_ENABLED`.
-2. `robothor/config.py` then falls back to `$USER` — i.e. `philip`, **a
+2. `robothor/config.py` then falls back to `$USER` — i.e. the operator's own login account, **a
    superuser**, which bypasses row-level security unconditionally. And with
    `app.tenant_id` never set, migration 081's policy goes *permissive* as well.
 

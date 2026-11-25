@@ -77,7 +77,7 @@ COMPANY_BLOCKLIST: set[str] = {
 NULL_STRINGS: set[str] = {"null", "none", "n/a"}
 
 # Exact sender addresses that must never become CRM people (agent/system mailboxes).
-# Deliberately exact-match only: a domain-wide rule (e.g. *@ironsail.ai) would block
+# Deliberately exact-match only: a domain-wide rule (e.g. *@example.com) would block
 # real colleagues, including the operator, so it is intentionally NOT used here.
 BLOCKED_EMAILS: set[str] = {
     "gemini-notes@google.com",

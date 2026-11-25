@@ -132,8 +132,8 @@ def test_documented_kinds_minimum_set():
 
 # ─── Regex behavior — proves the strict pattern catches the right thing ───
 # These pin the tightening intent so a future "let's loosen it again" edit
-# trips the test instead of silently re-introducing the false positives Philip
-# flagged on the original PR review (concern #3).
+# trips the test instead of silently re-introducing the false positives the
+# operator flagged on the original PR review (concern #3).
 
 
 def test_pattern_matches_metadata_kwarg_double_quoted():

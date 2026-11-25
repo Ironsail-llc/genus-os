@@ -7,7 +7,7 @@ where every string below comes from verbatim:
     "I'm happy to log the payment ... and SET UP A REMINDER"      offer, 60 chars back
     "any 'best match' I ADDED would be a fabricated person"       modal comes AFTER
     "who SENT THE EMAIL?"                                          a question
-    "Philip SENT AN EMAIL with subject 'Poduncle'"                 someone else acted
+    "Alice SENT AN EMAIL with subject 'Poduncle'"                  someone else acted
     "Vision monitor LOGGED THAT vision remains disabled"           a different agent
     "Memory shows Acme Supplies WAS FLAGGED today"                 reported state
 
@@ -79,7 +79,7 @@ def test_a_question_is_not_a_claim(text):
 
 def test_a_named_third_party_sending_an_email_is_not_the_agent_sending_one():
     text = (
-        "Thread `1a02a2d17e767f2f` started on 2026-08-22. Key facts: Philip "
+        "Thread `1a02a2d17e767f2f` started on 2026-08-22. Key facts: Alice "
         'sent an email with subject "Poduncle" and a CRM task was created.'
     )
     assert "sent_email" not in _kinds(text)
