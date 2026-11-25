@@ -14,8 +14,8 @@ Four read-only observers, run from the daemon watchdog beside
   service that logged in each of the 8 baseline slots, with a median of at
   least :data:`SILENT_MIN_MEDIAN` lines, and logged nothing in the current one
   is ``service_silent``; its next line is ``service_resumed``.
-* **Firing monitors.** The tenant's monitors in Alert, Warn or No Data, read
-  every pass. A monitor newly firing, or firing at a new status, is
+* **Firing monitors.** The tenant's monitors in Alert, Warn or No Data and
+  not muted, read every pass. A monitor newly firing, or firing at a new status, is
   ``monitor_firing``; one recorded that is no longer firing is
   ``monitor_recovered``. A tenant with no monitor access skips this observer.
 * **Connection lost.** On the root tenant's engine only, Datadog rejecting
@@ -124,13 +124,15 @@ _LINK_FAILURES = frozenset({"auth", "network"})
 #: Groups asked for per aggregate: fits the API's group page, so every service
 #: in a tenant's scope is counted. Not a limit on what is watched.
 GROUP_PAGE = 1000
-#: A service whose usual slot holds fewer lines than this is quiet by nature,
-#: so a slot with nothing in it is not news.
-SILENT_MIN_MEDIAN = 50
+#: One line a minute: a service usually logging less than that per slot is
+#: quiet by nature, so a slot with nothing in it is not news.
+SILENT_MIN_MEDIAN = WINDOW_MINUTES
 #: Monitors asked for per search page; every page is read. Not a limit.
 MONITOR_PAGE = 100
-#: The monitor statuses that count as firing, as the search filter spells them.
-FIRING_QUERY = 'status:alert OR status:warn OR status:"no data"'
+#: The monitors that count as firing, as the search filter spells them. A
+#: muted monitor (by hand or by a downtime) is left out: Datadog holds back
+#: its own notification for it, so it is not news either.
+FIRING_QUERY = '(status:alert OR status:warn OR status:"no data") AND muted:false'
 #: Each firing status as the search returns it (lowercased) and as a brief shows it.
 _FIRING = {"alert": "Alert", "warn": "Warn", "no data": "No Data"}
 #: Logs that carry no service tag are counted under this name.
@@ -622,8 +624,8 @@ class DatadogWatch:
             else:
                 monitor = recorded_now.pop(change.monitor_id)
                 brief = (
-                    f'Datadog monitor "{monitor.name}" is no longer in Alert, Warn or No '
-                    f"Data (it was in {_FIRING[monitor.status]})."
+                    f'Datadog monitor "{monitor.name}" is no longer firing, or has been '
+                    f"muted (it was in {_FIRING[monitor.status]})."
                 )
                 kind = "monitor_recovered"
             details = {

@@ -179,6 +179,13 @@ def test_a_naturally_quiet_service_is_never_silent() -> None:
     assert _silence({}, {"shop-api": [floor] * 8}) == [("shop-api", "silent", 0)]
 
 
+def test_a_service_logging_once_a_minute_can_go_silent() -> None:
+    """The floor is one line a minute: a service that logs every minute is watched."""
+    per_slot = watch.WINDOW_MINUTES
+    assert _silence({}, {"shop-api": [per_slot] * 8}) == [("shop-api", "silent", 0)]
+    assert _silence({}, {"shop-api": [per_slot - 1] * 8}) == []
+
+
 def test_a_service_with_a_gap_in_its_baseline_is_not_silent() -> None:
     """Logging in every baseline slot is the "steadily" in "logging steadily"."""
     gappy = [200, 200, 0, 200, 200, 200, 200, 200]
@@ -273,10 +280,12 @@ class Datadog:
             counts = self.current if is_current else self.baseline
         else:
             counts = self.totals_current if is_current else self.totals_baseline
-        service = next((s for s in counts if f"service:{s}" in query), None)
-        buckets = []
-        if service is not None:
-            buckets.append({"by": {"service": service}, "computes": {"c0": counts[service]}})
+        # A service-scoped query sees its own service; the root scope sees all.
+        if "service:" in query:
+            services = [s for s in counts if f"service:{s}" in query]
+        else:
+            services = list(counts)
+        buckets = [{"by": {"service": s}, "computes": {"c0": counts[s]}} for s in services]
         return httpx.Response(200, json={"data": {"buckets": buckets}})
 
 
@@ -509,7 +518,8 @@ async def test_an_unconfigured_client_watches_nothing(audit: MagicMock, alert: A
 
 # ── the monitor watch ───────────────────────────────────────────────────────
 
-FIRING_QUERY = 'status:alert OR status:warn OR status:"no data"'
+#: Firing, and not muted: Datadog holds back a muted monitor's own notification.
+FIRING_QUERY = '(status:alert OR status:warn OR status:"no data") AND muted:false'
 
 
 def _monitor(
@@ -701,6 +711,18 @@ async def test_a_monitor_permission_refusal_is_not_a_lost_link(
     assert dd.monitor_requests[0]["query"] == FIRING_QUERY
 
 
+async def test_an_unreachable_monitor_search_counts_toward_a_lost_link(
+    audit: MagicMock, alert: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlike a permission refusal, a 5xx from the monitor search is the link failing."""
+    monkeypatch.setitem(SCOPES, PARENT, DatadogScope(PARENT, "*", "*", "*", ()))
+    dd = Datadog(monitor_status=503)
+    w = _watch(dd, home=PARENT, root=True)
+    for _ in range(watch.CONNECTION_FAILURES_FOR_LOST):
+        await w.tick([PARENT])
+    assert [e["kind"] for e in await _events(audit)] == ["connection_lost"]
+
+
 # ── the silent-service watch ────────────────────────────────────────────────
 
 NEXT_START = "2026-11-25T12:00:00Z"
@@ -748,6 +770,35 @@ async def test_a_quiet_service_logging_nothing_is_not_recorded(
     dd = Datadog(totals_baseline={"shop-api": watch.SILENT_MIN_MEDIAN - 1})
     assert await _watch(dd).tick([CHILD_A]) == 0
     assert await _events(audit) == []
+
+
+async def test_a_service_logging_once_a_minute_is_recorded_silent(
+    audit: MagicMock, alert: AsyncMock
+) -> None:
+    dd = Datadog(totals_baseline={"shop-api": watch.WINDOW_MINUTES})
+    assert await _watch(dd).tick([CHILD_A]) == 1
+    assert [(e["kind"], e["service"]) for e in await _events(audit)] == [
+        ("service_silent", "shop-api")
+    ]
+
+
+async def test_a_full_page_of_services_is_not_judged_for_silence(
+    audit: MagicMock,
+    alert: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A steady service missing from a full group page may only not have fit."""
+    monkeypatch.setitem(SCOPES, PARENT, DatadogScope(PARENT, "*", "*", "", ()))
+    page = {f"svc-{i:04d}": 500 for i in range(watch.GROUP_PAGE)}
+    dd = Datadog(totals_current=page, totals_baseline={**page, "shop-api": 200})
+    w = _watch(dd, home=PARENT)
+    with caplog.at_level(logging.INFO, logger=watch.__name__):
+        await w.tick([PARENT])
+        await w.tick([PARENT])
+    assert await _events(audit) == []
+    mentions = [r for r in caplog.records if "silence not judged" in r.getMessage()]
+    assert len(mentions) == 1
 
 
 async def test_silence_is_read_inside_each_tenants_scope(
