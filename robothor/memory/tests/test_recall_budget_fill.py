@@ -98,7 +98,13 @@ async def test_a_limit_inside_the_head_is_unchanged(env: pytest.MonkeyPatch) -> 
 
 def _rows(n: int, chars: int) -> list[dict[str, Any]]:
     return [
-        {"id": i, "kind": "fact", "fact_text": f"{i:04d} " + "x" * (chars - 5), "category": "event"}
+        {
+            "id": i,
+            "kind": "fact",
+            "fact_text": f"{i:04d} " + "x" * (chars - 5),
+            "category": "event",
+            "confidence": 0.9,
+        }
         for i in range(1, n + 1)
     ]
 
@@ -155,6 +161,30 @@ async def test_a_limit_the_caller_names_still_bounds_the_rows(
     out = await _call({"query": "garage locker code", "limit": 5})
 
     assert len(out["results"]) == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("args", "rows"), [({}, None), ({"limit": 5}, 5)])
+async def test_the_mcp_tool_follows_the_same_rule(
+    tool: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, args: dict[str, Any], rows: Any
+) -> None:
+    """MCP ``search_memory`` is recall too: it fills the same cap, and a limit
+    the client names still bounds the rows."""
+    from robothor.api import mcp
+    from robothor.memory.recall import RECALL_CONTEXT_CHARS
+
+    async def _tenant(_arguments: dict[str, Any]) -> str:
+        return "test-tenant"
+
+    monkeypatch.setattr(mcp, "_session_tenant", _tenant)
+    out = await mcp.handle_tool_call("search_memory", {"query": "garage locker code", **args})
+
+    texts = [r["fact"] for r in out["results"]]
+    if rows is None:
+        assert len(texts) > 10
+        assert sum(len(t) for t in texts) <= RECALL_CONTEXT_CHARS
+    else:
+        assert len(texts) == rows
 
 
 def test_the_cap_is_the_one_the_router_applied() -> None:
