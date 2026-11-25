@@ -451,6 +451,68 @@ async def test_a_lone_recovery_sends_one_info(fleet: Fleet, audit: Audit) -> Non
     assert fleet.triage_runs() == []
 
 
+async def _concurrently(fleet: Fleet, tenant: str, envelope: dict[bytes, bytes]) -> None:
+    """Two copies in one stream batch: EventHooks handles them side by side."""
+    import asyncio
+
+    fleet.current = tenant
+    hooks = fleet.engines[tenant]
+    group = hooks.config.event_group
+    await asyncio.gather(
+        hooks._handle_event(STREAM, b"1-0", dict(envelope), fleet.redis, group),
+        hooks._handle_event(STREAM, b"2-0", dict(envelope), fleet.redis, group),
+    )
+    await dlv.wait_for_triage()
+
+
+async def test_two_copies_handled_at_once_deliver_and_record_once(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """A Datadog retry read in the same batch as the original."""
+    await _concurrently(fleet, ROOT, _webhook(_payload(tags="env:prod")))
+
+    assert len(fleet.sent) == 1
+    assert len(fleet.triage_runs()) == 1
+    assert len(audit.alerts()) == 1
+
+
+async def test_two_copies_of_a_hand_off_handled_at_once_deliver_and_record_once(
+    fleet: Fleet, audit: Audit
+) -> None:
+    await _concurrently(fleet, ROOT, _webhook(_payload()))
+    (handoff,) = fleet.redis.handoffs()
+    await _concurrently(fleet, A, handoff)
+
+    assert [t for t, *_ in fleet.sent] == [A]
+    assert [t for t, _ in fleet.triage_runs()] == [A]
+    assert len(audit.alerts()) == 1
+
+
+async def test_a_failed_write_after_delivery_never_delivers_again(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """The claim stays for its pending window, and the event goes to the DLQ."""
+    with patch("robothor.audit.logger.log_event", return_value=None):
+        await fleet.feed(ROOT, _webhook(_payload(tags="env:prod")))
+    assert [s for s, _ in fleet.redis.added] == [f"{STREAM}:dlq"]
+    await fleet.feed(ROOT, _webhook(_payload(tags="env:prod")))  # Datadog's retry
+    assert len(fleet.sent) == 1
+    assert len(fleet.triage_runs()) == 1
+
+
+async def test_a_failed_write_before_anything_was_sent_accepts_the_retry(
+    fleet: Fleet, audit: Audit
+) -> None:
+    fleet.result = False  # the send fails, so nothing left this engine
+    with patch("robothor.audit.logger.log_event", return_value=None):
+        await fleet.feed(ROOT, _webhook(_payload(tags="env:prod")))
+    fleet.result = True
+    await fleet.feed(ROOT, _webhook(_payload(tags="env:prod")))
+    (row,) = audit.alerts()
+    assert row["details"]["mode"] == "delivered"
+    assert len(fleet.triage_runs()) == 1
+
+
 # ── failures are recorded, never raised ─────────────────────────────
 
 
