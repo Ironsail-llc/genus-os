@@ -167,13 +167,25 @@ def _session(db: Any, tenant: str, key: str, person: str | None, turns: list[tup
         )
 
 
-def _run(db: Any, tenant: str, person: str | None, steps: list[tuple]) -> str:
+ALICE_UID = "0c9d8e7f-6a5b-4c3d-9e2f-1a0b9c8d7e6f"
+
+
+def _run(
+    db: Any,
+    tenant: str,
+    person: str | None,
+    steps: list[tuple],
+    *,
+    trigger: str = "manual",
+    detail: str | None = None,
+    user_id: str = "",
+) -> str:
     run_id = str(uuid.uuid4())
     _sql(
         db,
-        "INSERT INTO agent_runs (id, tenant_id, agent_id, trigger_type, status, person_id) "
-        "VALUES (%s, %s, 'main', 'manual', 'completed', %s)",
-        (run_id, tenant, person),
+        "INSERT INTO agent_runs (id, tenant_id, agent_id, trigger_type, trigger_detail, "
+        "status, person_id, user_id) VALUES (%s, %s, 'main', %s, %s, 'completed', %s, %s)",
+        (run_id, tenant, trigger, detail, person, user_id),
     )
     for n, (tool, tool_input, age_days) in enumerate(steps, start=1):
         _sql(
@@ -289,7 +301,12 @@ def world(pg) -> dict[str, Any]:
             ("store_memory", {"content": "not a question"}, 0),
             ("search_memory", {"query": "an old question about the garage"}, 30),
         ],
+        # Alice's own one-to-one webchat conversation: the live call read as her.
+        trigger="webchat",
+        detail=f"webchat:agent:main:user:{ALICE_UID}",
+        user_id=ALICE_UID,
     )
+    # A manual run linked to Bob serves no one one to one: no private reader.
     ids["run_bob"] = _run(db, A, bob, [("search_memory", {"query": "gym bike locker code"}, 1)])
     _run(db, B, None, [("search_memory", {"query": "tenant B question about binders"}, 0)])
     return ids
@@ -458,6 +475,33 @@ async def test_a_question_with_no_reader_sees_shared_rows_only(world, pg) -> Non
     assert not {f"segment:{world['alice_seg']}", f"segment:{world['bob_seg']}"} & keys
 
 
+async def test_a_run_question_never_reads_more_than_the_run_could(world, pg) -> None:
+    """A scheduled run executed AS Alice had no private reader; her webchat turn did."""
+    from robothor.memory import replay
+
+    question = {"query": "bike locker code"}
+    _run(pg, A, world["alice"], [("search_memory", question, 0)], trigger="cron", user_id=ALICE_UID)
+    _run(
+        pg,
+        A,
+        world["alice"],
+        [("search_memory", question, 0)],
+        trigger="webchat",
+        detail=f"webchat:agent:main:user:{ALICE_UID}",
+        user_id=ALICE_UID,
+    )
+    asked = [q for q in replay.questions_from_runs(A) if q.text == "bike locker code"]
+    assert len(asked) == 2
+    report = await _replay(A, asked, compare=("today", "new"))
+    by_reader = {e["reader"]["person_id"]: _keys(e) for e in report["questions"]}
+    private = {f"fact:{world['alice_fact']}", f"segment:{world['alice_seg']}"}
+
+    assert set(by_reader) == {None, world["alice"]}
+    assert not private & by_reader[None]  # the cron run: shared rows only
+    assert private <= by_reader[world["alice"]]  # the webchat turn serving Alice
+    assert f"fact:{world['shared_a']}" in by_reader[None]
+
+
 # --------------------------------------------------------------------------- #
 # The question sources, from seeded rows
 # --------------------------------------------------------------------------- #
@@ -476,8 +520,10 @@ def test_from_runs_reads_the_persisted_search_memory_calls(world) -> None:
     }
     by_text = {q.text: q for q in questions}
     assert by_text["bike locker spare key"].reader.person_id == world["alice"]
+    assert by_text["bike locker spare key"].reader.user_id == ALICE_UID
     assert by_text["bike locker spare key"].limit == 5
-    assert by_text["gym bike locker code"].reader.person_id == world["bob"]
+    # Linked to Bob, but not serving him one to one: no private reader.
+    assert by_text["gym bike locker code"].reader == replay.Reader()
     assert by_text["locker combination"].origin["run_id"] == world["run_alice"]
     # Newest first.
     assert texts[-1] == "an old question about the garage"

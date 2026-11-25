@@ -390,3 +390,65 @@ class TestStepArguments:
     def test_another_tool_is_not_a_search(self) -> None:
         assert replay.search_arguments("store_memory", {"content": "x"}) is None
         assert replay.search_arguments("tool_call", {"name": "store_memory"}) is None
+
+
+class TestRunPrivateReader:
+    """Who a persisted run's question may be read as: never more than the run could."""
+
+    PERSON = "11111111-1111-4111-8111-111111111111"
+    UID = "0c9d8e7f-6a5b-4c3d-9e2f-1a0b9c8d7e6f"
+
+    def _reader(self, **run: Any) -> Any:
+        base = {
+            "trigger_type": "webchat",
+            "trigger_detail": f"webchat:agent:main:user:{self.UID}",
+            "user_id": self.UID,
+            "user_role": "member",
+            "person_id": self.PERSON,
+            "parent_run_id": None,
+        }
+        return replay.run_private_reader(**{**base, **run})
+
+    def test_a_webchat_turn_in_the_persons_own_conversation(self) -> None:
+        assert self._reader() == (self.PERSON, self.UID)
+
+    @pytest.mark.parametrize("detail_prefix", ["plan:", "plan-exec:", "plan-revise:"])
+    def test_a_plan_step_of_that_conversation(self, detail_prefix: str) -> None:
+        detail = f"{detail_prefix}agent:main:user:{self.UID}"
+        assert self._reader(trigger_detail=detail) == (self.PERSON, self.UID)
+
+    def test_the_operators_main_session(self) -> None:
+        main = "agent:main:primary"
+        assert self._reader(trigger_detail=f"webchat:{main}", user_role="owner") == (
+            self.PERSON,
+            self.UID,
+        )
+        assert self._reader(trigger_detail=f"webchat:{main}", user_role="member") is None
+
+    def test_someone_elses_conversation_or_a_workspace(self) -> None:
+        other = "webchat:agent:main:user:22222222-2222-4222-8222-222222222222"
+        assert self._reader(trigger_detail=other) is None
+        room = "webchat:agent:main:room:33333333-3333-4333-8333-333333333333"
+        assert self._reader(trigger_detail=room) is None
+
+    def test_a_telegram_direct_message_but_not_a_group(self) -> None:
+        dm = self._reader(trigger_type="telegram", trigger_detail="chat:12345|sender:x", user_id="")
+        assert dm == (self.PERSON, None)
+        group = self._reader(trigger_type="telegram", trigger_detail="chat:-100|sender:x")
+        assert group is None
+
+    @pytest.mark.parametrize(
+        "trigger",
+        ["cron", "hook", "event", "manual", "workflow", "sub_agent", "slack", "ide", "channel"],
+    )
+    def test_every_other_run_has_no_private_reader(self, trigger: str) -> None:
+        assert self._reader(trigger_type=trigger) is None
+
+    def test_a_spawned_run_inherits_no_reader(self) -> None:
+        assert self._reader(parent_run_id="44444444-4444-4444-8444-444444444444") is None
+
+    def test_no_person_or_no_user_means_no_reader(self) -> None:
+        assert self._reader(person_id=None, user_id=None) is None
+        assert (
+            self._reader(trigger_type="telegram", trigger_detail="chat:1", person_id=None) is None
+        )
