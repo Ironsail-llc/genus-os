@@ -469,7 +469,16 @@ async def test_the_session_signing_key_row_is_refused(stored, monkeypatch, tool)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", ["vault_get", "vault_set", "vault_test", "vault_delete"])
 @pytest.mark.parametrize(
-    "key", ["ROBOTHOR_DATADOG_APP_KEY", "robothor/datadog_api_key", " ROBOTHOR_DATADOG_API_KEY "]
+    "key",
+    [
+        "ROBOTHOR_DATADOG_APP_KEY",
+        " ROBOTHOR_DATADOG_API_KEY ",
+        # The rows a reader of the two names actually looks up, the provider
+        # row first: refusing only the exported spelling left that one open.
+        "providers/robothor_datadog/api_key",
+        "robothor_datadog_api_key",
+        "robothor_datadog_app_key",
+    ],
 )
 @pytest.mark.parametrize("tenant", ["default", "acme-child-a"])
 async def test_the_shared_datadog_keys_are_refused_to_every_vault_tool(
@@ -488,3 +497,14 @@ async def test_the_shared_datadog_keys_are_refused_to_every_vault_tool(
     )
     assert result.get("denied_by") == "cross_tenant"
     assert touched == []
+
+
+def test_every_row_a_datadog_key_reader_looks_up_is_refused():
+    """Derived, so a new candidate row in the naming rules is covered too."""
+    from robothor.engine.tools.handlers.vault import _refuse_bootstrap
+    from robothor.vault.naming import vault_keys_for_env_name
+
+    for name in ("ROBOTHOR_DATADOG_API_KEY", "ROBOTHOR_DATADOG_APP_KEY"):
+        for row in vault_keys_for_env_name(name):
+            refusal = _refuse_bootstrap(row, "write") or {}
+            assert refusal.get("denied_by") == "cross_tenant", row

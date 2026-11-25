@@ -16,7 +16,8 @@ and nothing else:
   ``not_configured`` with one plain sentence (the root operator at home is also
   told which half is missing); a Datadog failure is ``unavailable`` with its
   kind and nothing of the vendor's reply;
-* email addresses and phone numbers in a row are masked before it leaves;
+* credentials (the platform redactor, as on the journald source), email
+  addresses and phone numbers in a row are masked before it leaves;
 * each read writes one audit row: the redacted, truncated query, the window,
   the outcome and a count. Never a line's text.
 
@@ -52,7 +53,7 @@ from robothor.integrations.datadog.scope import (
     scope_for,
     trace_query,
 )
-from robothor.secrets.redaction import redact_personal_data
+from robothor.secrets.redaction import redact, redact_personal_data
 from routers._audit import audited
 from routers._operator import is_root, require_root_operator, require_tenant_audit_reader
 from routers._params import ISO_TIMESTAMP, ISO_TIMESTAMP_PATTERN, iso_timestamp, positive_int
@@ -106,10 +107,20 @@ def _time(value: str | None, *, field: str, default: str) -> tuple[str, str]:
     return text, iso_timestamp(text, field=field)
 
 
+def _scrub(text: str) -> str:
+    """``text`` with credentials, then email addresses and phone numbers, replaced.
+
+    The credential pass is the one every other bridge surface that shows log
+    or audit text runs (``routers/logs.py``, ``routers/audit.py``); a service
+    that logs a bearer token must not hand it to an auditor here either.
+    """
+    return redact_personal_data(redact(text))
+
+
 def _masked(value: Any) -> Any:
-    """``value`` with every string in it passed through ``redact_personal_data``."""
+    """``value`` with every string in it passed through :func:`_scrub`."""
     if isinstance(value, str):
-        return redact_personal_data(value)
+        return _scrub(value)
     if isinstance(value, dict):
         return {str(k): _masked(v) for k, v in value.items()}
     if isinstance(value, list | tuple):
@@ -134,19 +145,19 @@ def _row_out(row: LogRow) -> dict[str, Any]:
         "service": row.service,
         "status": row.status,
         "host": row.host,
-        # Correlation ids, passed on only in the shape the trace route accepts:
-        # the client also reads them from custom attributes, which can hold
-        # anything the application wrote, so anything else is dropped.
+        "message": _scrub(row.message),
+        "tags": [_scrub(t) for t in row.tags],
+        "attributes": _masked(row.attributes),
+        # For linking a line to its trace; None when the event carries none.
+        # Passed on only in the shape the trace route accepts: the client also
+        # reads them from custom attributes, which can hold anything.
         "trace_id": _correlation_id(row.trace_id),
         "span_id": _correlation_id(row.span_id),
-        "message": redact_personal_data(row.message),
-        "tags": [redact_personal_data(t) for t in row.tags],
-        "attributes": _masked(row.attributes),
     }
 
 
 def _audited_query(query: str) -> str:
-    return redact_personal_data(query)[:AUDIT_QUERY_CHARS]
+    return _scrub(query)[:AUDIT_QUERY_CHARS]
 
 
 def _not_configured(request: Request, tenant_id: str, reason: str) -> dict[str, Any]:
@@ -279,9 +290,7 @@ def summarize_logs(
     _audit(request, "telemetry.logs.summary", tenant_id, "ok", **details, buckets=len(result))
     return {
         "status": "ok",
-        "buckets": [
-            {"by": redact_personal_data(b.by.get(group_by, "")), "count": b.count} for b in result
-        ],
+        "buckets": [{"by": _scrub(b.by.get(group_by, "")), "count": b.count} for b in result],
         "group_by": group_by,
         "errors": errors,
         "scope": tenant_id,
