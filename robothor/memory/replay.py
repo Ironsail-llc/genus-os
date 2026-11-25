@@ -321,15 +321,20 @@ def run_private_reader(
     A replay must never read more than the original run could, so this is the
     engine's own rule, ``robothor.engine.private_recall.private_reader_for_run``,
     applied to the run record: a person only when the run served them in their
-    own one-to-one conversation (their webchat session or plan step, the
-    operator's main session, a Telegram direct message), and no one for any
-    other run (scheduled, hook, event, manual, workflow, sub-agent, workspace,
+    own one-to-one webchat conversation (their webchat session or plan step,
+    the operator's main session), and no one for any other run (scheduled, hook, event, manual, workflow, sub-agent, workspace,
     channel), whoever it ran as. The record does not carry whether the identity
     was verified, so the run's person is taken as verified. A spawned run
     (``parent_run_id``) reads as no one: ``agent_runs.person_id`` is copied onto
-    spawned runs, so the record alone cannot show whom it served.
+    spawned runs, so the record alone cannot show whom it served. A Telegram
+    run reads as no one too: its ``person_id`` may have been filled by
+    ``link_run_person``'s chat-id lookup when the live identity carried no
+    person, and then the live call had no private reader; nothing on the run
+    record says which source filled it.
     """
     if parent_run_id:
+        return None
+    if str(trigger_type or "") == "telegram":
         return None
     from robothor.engine import private_recall
     from robothor.identity.context import IdentityContext

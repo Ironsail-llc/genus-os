@@ -1214,13 +1214,16 @@ genus memory-replay --tenant <tenant> --questions questions.txt --as-person <crm
 call the engine persisted (`agent_run_steps.tool_input`, direct or wrapped in
 `tool_call`), with the call's own `limit`. A question never reads more than
 its run could: it is read as a person only when the run record shows the run
-served that person in their own one-to-one conversation (a webchat turn or
-plan step in their own session, the operator's main session, or a Telegram
-direct message). Every other run (scheduled, hook, event, manual, workflow,
+served that person in their own one-to-one webchat conversation (a webchat
+turn or plan step in their own session, or the operator's main session).
+Every other run (scheduled, hook, event, manual, workflow,
 sub-agent, workspace, channel) is replayed with no reader, shared rows only,
 whoever it ran as; the run's linked person alone is not enough. The rule is
 the engine's own (`private_reader_for_run` in
-`robothor/engine/private_recall.py`), applied to the run record.
+`robothor/engine/private_recall.py`), applied to the run record. A Telegram
+direct-message question is replayed with shared rows only: the run record
+does not show whether the live identity itself carried the person, which may
+instead come from a chat-id lookup when the live call had no private reader.
 `--from-chat` uses recent user turns as stand-in questions, each read as the
 owner of its conversation (the rule segments are stored under); a turn whose
 conversation has no known owner is skipped and counted, never replayed as an
