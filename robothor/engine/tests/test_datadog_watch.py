@@ -418,3 +418,26 @@ async def test_the_detector_does_nothing_without_a_scope_map(
     finally:
         reset_settings()
     factory.assert_not_called()
+
+
+# ── no blocking call on the loop ────────────────────────────────────────────
+
+
+async def test_the_tenant_tree_and_the_vault_are_read_off_the_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from robothor.engine.tests.test_offloop_sync_calls import SlowProbe, warm_executor
+
+    await warm_executor()
+    loop = asyncio.get_running_loop()
+    tree = SlowProbe(loop, result={"id": PARENT, "parent_tenant_id": None})
+    vault = SlowProbe(loop, result=_client(Datadog()))
+    monkeypatch.setattr("robothor.crm.dal.get_tenant", tree)
+    monkeypatch.setattr("robothor.integrations.datadog.client.async_client_from_settings", vault)
+    assert await watch._default_is_root(PARENT) is True
+    await watch._default_client()
+    for probe in (tree, vault):
+        await probe.settle()
+        probe.assert_loop_free()
