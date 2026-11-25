@@ -62,6 +62,38 @@ class TestSearchMemoryRecordsAccess:
         assert sorted(kwargs["fact_ids"]) == [11, 12, 13]
 
     @pytest.mark.asyncio
+    async def test_segment_and_graph_only_rows_are_never_recorded_or_logged(self) -> None:
+        """A segment's id and a graph-only row are not memory_facts rows this
+        caller was shown as facts: neither access recording nor the per-run
+        access log (which outcome utility credits) may count them."""
+        from robothor.engine.task_registry import get_task_registry
+        from robothor.engine.tools.handlers import memory as handler
+
+        rows = [
+            {"id": 11, "fact_text": "Alice prefers email.", "kind": "fact", "source": "fact"},
+            {
+                "id": 12,
+                "fact_text": "[user] the locker code",
+                "kind": "segment",
+                "source": "segment",
+            },
+            {"id": 13, "fact_text": "Bob leads billing.", "kind": "fact", "source": "graph"},
+        ]
+        record, log = MagicMock(), MagicMock()
+        ctx = ToolContext(agent_id="main", tenant_id=TENANT, run_id="run-1")
+        with (
+            patch.object(handler, "_recall_fallback", AsyncMock(return_value=(rows, "lookup"))),
+            patch("robothor.engine.feature_flags.is_rip_enabled", return_value=False),
+            patch("robothor.memory.outcomes.record_fact_access", record),
+            patch("robothor.memory.outcomes.log_fact_access", log),
+        ):
+            await handler._search_memory({"query": "billing"}, ctx)
+        await get_task_registry().drain(timeout=5.0)
+
+        assert record.call_args.kwargs["fact_ids"] == [11]
+        assert log.call_args.args[1] == [11]
+
+    @pytest.mark.asyncio
     async def test_a_read_only_caller_records_nothing(self) -> None:
         record = MagicMock()
         with patch("robothor.memory.outcomes.record_fact_access", record):
