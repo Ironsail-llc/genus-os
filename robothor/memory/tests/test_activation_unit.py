@@ -134,3 +134,63 @@ class TestOperatorLookup:
         )
         assert seen["cur"] is not None, "the operator lookup opened its own connection"
         assert any("memory_activate" in s for s in statements)
+
+
+class TestSlowCheckout:
+    """The time limit is the time left once the connection is in hand: a
+    checkout that waits (a new connection, its session settings) is not added
+    on top of the budget."""
+
+    def _run(self, monkeypatch: pytest.MonkeyPatch, checkout_seconds: float) -> list[str]:
+        from contextlib import contextmanager
+
+        import robothor.crm.dal
+
+        clock = {"now": 100.0}
+
+        class _Clock:
+            @staticmethod
+            def monotonic() -> float:
+                return clock["now"]
+
+        statements: list[str] = []
+
+        class _Cur:
+            def execute(self, sql: str, params: object = None) -> None:
+                statements.append(sql % params if params and "%s" in sql else sql)
+
+            def fetchall(self) -> list[object]:
+                return []
+
+            def fetchone(self) -> None:
+                return None
+
+        class _Conn:
+            def cursor(self, cursor_factory: object = None) -> _Cur:
+                return _Cur()
+
+        @contextmanager
+        def _slow_checkout(*_a: object, **_k: object):
+            clock["now"] += checkout_seconds  # the pool made us wait
+            yield _Conn()
+
+        monkeypatch.setattr(activation, "time", _Clock)
+        monkeypatch.setattr(robothor.crm.dal, "get_owner_person", lambda *_a, **_k: {"id": None})
+        activation.recall_for_message(
+            "test-tenant",
+            "Did Alice Smith sign it?",
+            deadline=clock["now"] + 1.0,
+            connect=_slow_checkout,
+        )
+        return statements
+
+    def test_the_armed_limit_is_the_time_left_after_the_checkout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        statements = self._run(monkeypatch, checkout_seconds=0.4)
+        assert statements[0] == "SELECT set_config('statement_timeout', 600ms, false)", statements
+
+    def test_a_checkout_that_outlasts_the_deadline_runs_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assert self._run(monkeypatch, checkout_seconds=1.5) == []
