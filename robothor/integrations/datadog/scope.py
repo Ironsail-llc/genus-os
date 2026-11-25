@@ -175,7 +175,10 @@ def _entry(tenant_id: str, raw: Any) -> DatadogScope | None:
     logs = _query(raw.get("logs"))
     if logs is None:
         return None
-    spans = _query(raw["spans"]) if "spans" in raw else logs
+    # Every part is opt-in. The logs filter is NOT reused for spans: a term
+    # that bounds logs (a log-only attribute in an exclusion) can mean nothing
+    # on spans and so bound nothing there.
+    spans = _query(raw["spans"]) if "spans" in raw else NO_ACCESS_QUERY
     monitors = _query(raw["monitors"]) if "monitors" in raw else NO_ACCESS_QUERY
     if spans is None or monitors is None:
         return None
