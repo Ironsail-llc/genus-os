@@ -119,12 +119,16 @@ workflow, sub-agent, federation, manual, IDE, Slack or plugin-channel runs,
 whoever they execute as — a report workspace that runs as a member does not
 recall that member's private chats into its edition. With no private reader
 the run reads shared segments only. This is applied whatever
-`ROBOTHOR_DATA_SCOPING` is set to. `room_ids` are the room of the current room
-run plus every room the calling user is a member of. Callers that name no
+`ROBOTHOR_DATA_SCOPING` is set to. `room_ids` are, inside a workspace run, that
+workspace alone; otherwise the workspaces of the member the run serves (its
+private reader), and none for a run that serves no one. Callers that name no
 reader — the bridge's `/api/memory/search`, MCP `search_memory`, deep
-reasoning — receive no private conversation. Under a restricted data scope
-`search_facts` takes the reader person from the scope and keeps the caller's
-user id only when `tenant_users` links it to that person. The Memory page's
+reasoning — receive no private conversation. A restricted data scope only narrows
+that reader, never creates one: `search_facts` keeps the reader only when its
+person is the scope's person, and its user id only when that user is the same
+person (an active `user_accounts` row, or a `tenant_users` row, linking them);
+with no reader, or a reader who is someone else, it returns no private
+segment. The Memory page's
 fact search (`GET /api/memory/facts?q=`) asks for no segments and keeps only
 `kind == "fact"` rows, because it edits and forgets facts by id. A segment row in the
 tool's output adds `kind`, `topic`, `source_kind`, `source_ref`, `start_ref`,

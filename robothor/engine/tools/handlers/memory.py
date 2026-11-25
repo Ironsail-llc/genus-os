@@ -238,19 +238,23 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 async def _reader_room_ids(ctx: ToolContext) -> list[str]:
     """The workspaces whose conversation the caller may recall.
 
-    The room this run is in (a room turn's carrier), plus every room the
-    calling user is a member of. Empty for a run with neither — no workspace
-    conversation is then searched. A lookup failure is logged and narrows the
-    result; it never widens it.
+    Inside a workspace (a room turn's carrier) only that workspace: its output
+    goes to its own members, so no other workspace's conversation may reach
+    it. Otherwise every workspace the served member belongs to, but only when
+    the run serves that member in their own conversation
+    (``ctx.private_reader``): the run's principal alone (a scheduled run as a
+    member) is not a member being served. Empty otherwise. A lookup failure is
+    logged and narrows the result; it never widens it.
     """
     from robothor.rooms.run_context import current_room_run
 
     rooms: set[str] = set()
     tenant_id = getattr(ctx, "tenant_id", "")
-    user_id = getattr(ctx, "user_id", "")
     run = current_room_run()
-    if run is not None and run.tenant_id == tenant_id:
-        rooms.add(str(run.room_id))
+    if run is not None:
+        return [str(run.room_id)] if run.tenant_id == tenant_id else []
+    private = getattr(ctx, "private_reader", None)
+    user_id = private.user_id if private is not None else None
     if user_id and tenant_id:
         try:
             from robothor.rooms import dal as rooms_dal
