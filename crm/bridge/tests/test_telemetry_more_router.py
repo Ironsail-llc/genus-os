@@ -470,6 +470,19 @@ def test_a_trace_outside_the_scope_reads_exactly_as_one_that_does_not_exist(data
     assert TRACE_ID not in detail
 
 
+def test_the_not_found_sentence_says_traces_are_sampled(datadog):
+    # Datadog keeps a sample of traces, so a trace id from an ordinary log line
+    # often has no trace. The one sentence says so, for every not-found case.
+    datadog.trace = {"data": []}
+
+    detail = _client(CHILD_A).get(f"/api/telemetry/traces/{TRACE_ID}").json()["detail"]
+
+    assert detail == (
+        "This trace was not found in your organization's traces. Datadog keeps only a "
+        "sample of traces, so most ordinary requests have none."
+    )
+
+
 def test_a_malformed_trace_id_is_the_same_404_and_sends_nothing(datadog):
     response = _client(CHILD_A).get("/api/telemetry/traces/not-a-trace")
 

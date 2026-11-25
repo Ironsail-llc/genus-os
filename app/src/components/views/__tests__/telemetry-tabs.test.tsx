@@ -298,7 +298,9 @@ describe("Traces", () => {
     fireEvent.click(await screen.findByTestId("traces-row-0"));
 
     const missing = await screen.findByTestId("trace-not-found");
-    expect(missing.textContent).toContain("No trace with that id was found");
+    expect(missing.textContent).toContain("not found in your organization's traces");
+    // Most ordinary requests have no trace: the page says why, whatever the bridge's words.
+    expect(missing.textContent).toContain("Datadog keeps only a sample of traces");
   });
 
   it("says when the window has no error trace", async () => {
