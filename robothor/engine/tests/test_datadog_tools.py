@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -380,6 +381,46 @@ def test_personal_data_stored_as_a_number_is_masked(dd, writer):
     assert attrs["http"] == {"status_code": 500}
 
 
+#: Bare credential values, as Datadog leaves them after parsing
+#: ``password=... api_key=...`` out of a line: no shape a pattern can match.
+CREDENTIALS = ("hunter2hunter2", "abc123abc123", "zzz999zzz999")
+
+
+def test_values_under_credential_named_keys_never_reach_the_result(dd, writer):
+    def row(i: int) -> dict[str, Any]:
+        raw = _log(
+            i,
+            password="hunter2hunter2",
+            db={"api_key": "abc123abc123"},
+            items=[{"token": "zzz999zzz999"}],
+        )
+        raw["attributes"]["tags"].append("api_key:abc123abc123")
+        return raw
+
+    dd.make_row = row
+
+    result = _run(SEARCH, {"limit": 1})
+
+    text = json.dumps(result)
+    for secret in CREDENTIALS:
+        assert secret not in text
+    attrs = result["rows"][0]["attributes"]
+    assert attrs["password"] == "<redacted>"
+    assert attrs["db"] == {"api_key": "<redacted>"}
+    assert attrs["items"] == [{"token": "<redacted>"}]
+    # Ordinary attributes are untouched.
+    assert attrs["http"] == {"status_code": 500}
+
+
+def test_aggregate_grouped_by_a_credential_facet_withholds_its_values(dd, writer):
+    dd.buckets = [{"by": {"@usr.password": "hunter2hunter2"}, "computes": {"c0": 2}}]
+
+    result = _run(AGGREGATE, {"group_by": ["@usr.password"]})
+
+    assert "hunter2hunter2" not in json.dumps(result)
+    assert result["buckets"] == [{"by": {"@usr.password": "<redacted>"}, "count": 2}]
+
+
 def test_aggregate_bucket_values_are_masked(dd, writer):
     dd.buckets = [{"by": {"@usr.email": "alice@example.com"}, "computes": {"c0": 4}}]
 
@@ -683,19 +724,37 @@ def test_the_schemas_advertise_the_tenant_argument(registry):
 
 
 async def test_the_client_is_built_off_the_event_loop(scopes, monkeypatch):
-    """Building the client reads the vault, which blocks."""
-    from robothor.engine.tests.test_offloop_sync_calls import SlowProbe, warm_executor
+    """Building the client reads the vault, which blocks, so it runs in a worker thread.
+
+    Checked directly rather than by timing: the shared 200 ms probe asserts a
+    loop callback ran within 20 ms, which a saturated machine can miss with
+    nothing on the loop at all. The factory records the thread it ran on and
+    whether that thread was running an event loop; on the loop it would be
+    this test's own thread.
+    """
     from robothor.engine.tools.handlers import datadog_logs
     from robothor.integrations.datadog.client import AsyncDatadogClient
 
-    await warm_executor()
     fake = FakeDatadog()
     client = AsyncDatadogClient(API_KEY, APP_KEY, transport=httpx.MockTransport(fake.handler))
-    probe = SlowProbe(asyncio.get_running_loop(), result=client)
-    monkeypatch.setattr(datadog_logs, "_client_factory", probe)
+    seen: list[tuple[int, bool]] = []
+
+    def factory() -> AsyncDatadogClient:
+        try:
+            asyncio.get_running_loop()
+            on_a_loop = True
+        except RuntimeError:
+            on_a_loop = False
+        seen.append((threading.get_ident(), on_a_loop))
+        return client
+
+    monkeypatch.setattr(datadog_logs, "_client_factory", factory)
 
     with patch("robothor.engine.event_writer.get_event_writer", return_value=MagicMock()):
-        await datadog_logs.HANDLERS[SEARCH]({"limit": 1}, _ctx())
-    await probe.settle()
+        result = await datadog_logs.HANDLERS[SEARCH]({"limit": 1}, _ctx())
 
-    probe.assert_loop_free()
+    assert "error" not in result
+    assert len(seen) == 1, "the client factory was not called exactly once"
+    thread, on_a_loop = seen[0]
+    assert thread != threading.get_ident(), "the client was built on the event loop's thread"
+    assert on_a_loop is False

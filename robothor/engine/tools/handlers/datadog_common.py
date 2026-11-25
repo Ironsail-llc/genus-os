@@ -138,8 +138,28 @@ _PHONE_KEY = re.compile(
 _DIGITS_IN_A_PHONE = 7
 
 
+def names_a_credential(name: str) -> bool:
+    """Whether a key, facet (``@usr.password``) or tag name says it holds a credential.
+
+    Asked of the platform's own per-argument redactor, so these tools and the
+    tool-call recorder agree on which names those are. Datadog parses
+    ``password=... api_key=...`` out of a line into structured attributes, so
+    the value arrives bare, with no shape a pattern can find; the name it sits
+    under is the only thing left to match on.
+    """
+    from robothor.secrets.redaction import PLACEHOLDER, redact_tool_arguments
+
+    key = name.lstrip("@")
+    return bool(key) and redact_tool_arguments("", {key: "x"}).get(key) == PLACEHOLDER
+
+
 def masked(value: Any, key: str = "") -> Any:
-    """``value`` with email addresses and phone numbers masked, at any depth."""
+    """``value`` with credentials withheld and email addresses and phone numbers
+    masked, at any depth. ``key`` is the name the value sits under."""
+    if names_a_credential(key):
+        from robothor.secrets.redaction import PLACEHOLDER
+
+        return PLACEHOLDER
     if _PHONE_KEY.search(key) and (
         (isinstance(value, int) and not isinstance(value, bool))
         or (isinstance(value, str) and sum(c.isdigit() for c in value) >= _DIGITS_IN_A_PHONE)

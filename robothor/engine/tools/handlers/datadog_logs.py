@@ -26,6 +26,7 @@ from robothor.engine.tools.handlers.datadog_common import (
     audit,
     count,
     masked,
+    names_a_credential,
     resolve_window,
     scoped,
     size,
@@ -56,6 +57,9 @@ DEFAULT_START = "now-1h"
 DEFAULT_END = "now"
 DEFAULT_SEARCH_LIMIT = 50
 DEFAULT_AGGREGATE_LIMIT = 25
+
+#: The credential-name check, kept under the name the log tools' callers use.
+_names_a_credential = names_a_credential
 
 # RESULT_BUDGET_CHARS (shared) is how much a call hands the model: a page that
 # does not fit is cut at a row boundary and ``next_cursor`` continues from the
@@ -283,10 +287,7 @@ async def _datadog_logs_aggregate(args: dict[str, Any], ctx: ToolContext) -> dic
     buckets, refused = await _scoped(AGGREGATE_TOOL, ctx, query, audited, fetch)
     if refused is not None:
         return refused
-    rows = [
-        {"by": {k: redact_personal_data(v) for k, v in b.by.items()}, "count": b.count}
-        for b in buckets
-    ]
+    rows = [{"by": {k: masked(v, k) for k, v in b.by.items()}, "count": b.count} for b in buckets]
     kept = list(rows)
     while len(kept) > 1 and size(kept) > RESULT_BUDGET_CHARS - ENVELOPE_CHARS:
         kept.pop()

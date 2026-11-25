@@ -853,6 +853,10 @@ values, bucket values, span resources, monitor names and tags are masked
 (`<email>`, `<phone>`). So is any attribute or tag whose key names a phone
 number (`phone`, `mobile`, `tel`, ...) when its value is an integer or a run of
 digits, which no phone pattern matches.
+Any value under a key, facet or tag name that reads as a credential
+(`password`, `api_key`, `token`, by the same name check the tool-call recorder
+uses) is replaced with `<redacted>` at any depth, including bucket values
+grouped by such a facet and `name:value` monitor and metric tags.
 A page too large for the result is fitted: long messages are shortened, then
 attributes are dropped, then trailing rows; `truncated` is true, `note` says
 how many rows came back, and `next_cursor` continues from the first row left
