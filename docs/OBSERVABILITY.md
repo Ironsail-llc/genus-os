@@ -556,10 +556,12 @@ A recovery changes nothing in place. It is its own event with
 the trigger. Datadog retries webhooks, so the same notification (`event_id`,
 monitor, transition and date) is recorded once. Each group of a multi-alert
 monitor has its own `event_id`, so each is recorded. Without `event_id` and
-`date`, one record is kept per monitor and transition. The key is remembered in Redis for 24 hours, and if
-Redis cannot be reached the alert is still recorded. When the audit write
-fails, the event goes to `robothor:events:datadog:dlq` and the key is
-released.
+`date`, one record is kept per monitor and transition. The key is set in
+Redis for 24 hours, and only after the audit event is written. A crash
+between the write and the key, or two copies handled at the same moment, can
+therefore record a retry twice, but an alert is never lost. If Redis cannot be
+reached the alert is still recorded. When the audit write fails, no key is
+set and the event goes to `robothor:events:datadog:dlq`.
 
 Each recorded alert also writes one log line with no title or body:
 `event=datadog_alert tenant=<tenant> monitor_id=<id> transition=<transition> mode=dry_run routing=<routing>`.
@@ -568,11 +570,10 @@ To see the records, open the Helm's audit log, or call the bridge's
 `GET /api/audit/events?event_type=datadog.alert_received`. Both read
 `robothor.audit.logger.query_log`, filtered to the tenants the caller may see.
 
-**5. The mode.** `ROBOTHOR_DATADOG_ALERTS_MODE` is `dry_run`, the default.
-`deliver` is declared but not available yet. Setting it stops the settings
-from loading, with the message `delivery is not available yet`. This is the
-one mode switch the platform allows for new behaviour, because this feature
-acts on its own whenever an external system calls it.
+**5. Recorded, not delivered.** Recording is the only thing this does, and
+there is no setting that changes it. Every record and log line says
+`mode: dry_run` so you can tell it apart from delivered alerts. Delivery
+arrives in a later release as its own change.
 
 ## Notes
 
