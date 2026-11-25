@@ -526,7 +526,6 @@ async def _run_side(
         reader_person_id=q.reader.person_id,
         reader_user_id=q.reader.user_id,
         room_ids=list(q.reader.room_ids),
-        reader_scope_id=q.reader.person_id,
         **preset_kwargs(preset, fan_out=fan_out),
     )
     latency = (time.perf_counter() - started) * 1000
