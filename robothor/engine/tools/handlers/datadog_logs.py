@@ -17,17 +17,24 @@ the window and the row count; never a log line.
 
 from __future__ import annotations
 
-import asyncio
-import json
-import logging
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.tools.handlers.datadog_common import (
+    ENVELOPE_CHARS,
+    RESULT_BUDGET_CHARS,
+    audit,
+    count,
+    masked,
+    scoped,
+    size,
+    text,
+)
 from robothor.integrations.datadog.client import (
     AsyncDatadogClient,
     DatadogError,
     async_client_from_settings,
 )
-from robothor.integrations.datadog.scope import ScopeError, compose, scope_for
+from robothor.integrations.datadog.scope import compose
 from robothor.secrets.redaction import redact_personal_data
 
 if TYPE_CHECKING:
@@ -36,8 +43,6 @@ if TYPE_CHECKING:
     from robothor.engine.tools.dispatch import ToolContext
     from robothor.integrations.datadog.requests import Bucket, LogPage, LogRow
     from robothor.integrations.datadog.scope import DatadogScope
-
-logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
 
@@ -50,16 +55,14 @@ DEFAULT_END = "now"
 DEFAULT_SEARCH_LIMIT = 50
 DEFAULT_AGGREGATE_LIMIT = 25
 
-#: How much serialized result a call hands the model. Fitting, not a limit on
-#: use: a page that does not fit is cut at a row boundary and ``next_cursor``
-#: continues from the first row left out.
-RESULT_BUDGET_CHARS = 20_000
+# RESULT_BUDGET_CHARS (shared) is how much a call hands the model: a page that
+# does not fit is cut at a row boundary and ``next_cursor`` continues from the
+# first row left out.
+
 #: Successive message lengths tried when a page does not fit, longest first.
 _MESSAGE_CAPS = (2000, 500, 200)
 #: The tags every row lifts out of its tag list.
 _ROW_TAGS = ("env", "version")
-#: How much of the caller's query the audit row keeps.
-_AUDIT_QUERY_CHARS = 300
 
 #: Builds the client. Blocking (the vault read): always called through
 #: ``asyncio.to_thread``. Tests replace it with a client over a fake transport.
@@ -74,92 +77,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     return decorator
 
 
-# ── refusals and errors ────────────────────────────────────────────────────
-
-
-def _not_configured() -> dict[str, Any]:
-    from robothor.engine.refusal import refusal
-
-    return refusal(
-        "Datadog is not configured for this organization.",
-        gate="runtime",
-        name="datadog_scope",
-        unlock=(
-            "The operator adds this tenant to ROBOTHOR_DATADOG_SCOPES "
-            "(docs/OBSERVABILITY.md, Reading Datadog from Genus)."
-        ),
-    )
-
-
-def _query_refused(reason: str) -> dict[str, Any]:
-    from robothor.engine.refusal import refusal
-
-    return refusal(
-        f"The Datadog query was refused: {reason}.",
-        gate="policy",
-        name="datadog_query",
-        unlock="Rewrite the query so its brackets, parentheses and quotes balance, then retry.",
-    )
-
-
-def _failed(tool: str, exc: DatadogError) -> dict[str, Any]:
-    """The kind is the whole explanation: never a URL, a key or a vendor body."""
-    return {
-        "error": f"{tool} failed: Datadog answered {exc.kind}.",
-        "kind": exc.kind,
-        "retryable": exc.kind in ("rate_limit", "network"),
-    }
-
-
-# ── the audit row ──────────────────────────────────────────────────────────
-
-
-def _audit(tool: str, ctx: ToolContext, query: str, details: dict[str, Any], status: str) -> None:
-    """One ``datadog.logs_read`` row, queued off the loop. Never raises.
-
-    Its own event rather than extra fields on ``agent.tool_call``: that row
-    deliberately carries no arguments, and there is no hook for a handler to
-    add any. Under ``ctx.tenant_id``, the tenant whose logs were read; a
-    cross-tenant call also leaves ``agent.cross_tenant_call`` under the home
-    tenant.
-    """
-    try:
-        from robothor.audit.logger import log_event
-        from robothor.engine.event_writer import get_event_writer
-        from robothor.secrets.redaction import redact
-
-        shown = redact_personal_data(redact(query[:4096]))[:_AUDIT_QUERY_CHARS]
-        get_event_writer().submit(
-            log_event,
-            event_type=AUDIT_EVENT,
-            action=tool,
-            category="agent",
-            actor=ctx.agent_id or "unknown",
-            user_id=ctx.user_id,
-            details={"tool": tool, "query": shown, "run_id": ctx.run_id, **details},
-            status=status,
-            tenant_id=ctx.tenant_id,
-        )
-    except Exception:  # noqa: BLE001 - audit must not break the read it records
-        logger.warning("datadog audit row could not be queued", exc_info=True)
-
-
 # ── arguments ──────────────────────────────────────────────────────────────
-
-
-def _text(args: dict[str, Any], key: str, default: str = "") -> str:
-    value = args.get(key)
-    return value.strip() if isinstance(value, str) and value.strip() else default
-
-
-def _count(args: dict[str, Any], key: str, default: int) -> int:
-    value = args.get(key)
-    if isinstance(value, bool) or not isinstance(value, int | float | str):
-        return default
-    try:
-        return max(1, int(value))
-    except ValueError:
-        return default
 
 
 def _facets(args: dict[str, Any]) -> list[str] | None:
@@ -176,16 +94,6 @@ def _facets(args: dict[str, Any]) -> list[str] | None:
 # ── shaping and fitting ────────────────────────────────────────────────────
 
 
-def _masked(value: Any) -> Any:
-    if isinstance(value, str):
-        return redact_personal_data(value)
-    if isinstance(value, dict):
-        return {k: _masked(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_masked(v) for v in value]
-    return value
-
-
 def _shape(row: LogRow) -> dict[str, Any]:
     tags: dict[str, str] = {}
     for tag in row.tags:
@@ -200,12 +108,8 @@ def _shape(row: LogRow) -> dict[str, Any]:
         "host": row.host,
         "message": redact_personal_data(row.message),
         "tags": tags,
-        "attributes": _masked(row.attributes),
+        "attributes": masked(row.attributes),
     }
-
-
-def _size(payload: Any) -> int:
-    return len(json.dumps(payload, default=str))
 
 
 def _cap_message(row: dict[str, Any], cap: int) -> dict[str, Any]:
@@ -223,23 +127,19 @@ def _fit(rows: list[dict[str, Any]], room: int) -> list[dict[str, Any]]:
     At least one row is always kept.
     """
     for cap in _MESSAGE_CAPS:
-        if _size(rows) <= room:
+        if size(rows) <= room:
             return rows
         rows = [_cap_message(r, cap) for r in rows]
-    if _size(rows) > room:
+    if size(rows) > room:
         rows = [
             {**{k: v for k, v in r.items() if k != "attributes"}, "attributes_omitted": True}
             if r.get("attributes")
             else r
             for r in rows
         ]
-    while len(rows) > 1 and _size(rows) > room:
+    while len(rows) > 1 and size(rows) > room:
         rows.pop()
     return rows
-
-
-async def _client() -> AsyncDatadogClient:
-    return await asyncio.to_thread(_client_factory)
 
 
 async def _scoped(
@@ -249,25 +149,17 @@ async def _scoped(
     audited: dict[str, Any],
     call: Callable[[AsyncDatadogClient, DatadogScope], Awaitable[Any]],
 ) -> tuple[Any, dict[str, Any] | None]:
-    """``call`` under this tenant's scope: (its value, None), or (None, the answer).
-
-    The scope comes from ``ctx.tenant_id`` and nowhere else. The query is
-    judged before the client is built, so an escape is refused even on an
-    instance with no key, and nothing is sent for a refusal.
-    """
-    scope = await asyncio.to_thread(scope_for, ctx.tenant_id)
-    if scope is None:
-        _audit(tool, ctx, query, {**audited, "rows": 0}, "denied")
-        return None, _not_configured()
-    try:
-        compose(scope.logs, query)
-        return await call(await _client(), scope), None
-    except ScopeError as exc:
-        _audit(tool, ctx, query, {**audited, "rows": 0}, "denied")
-        return None, _query_refused(exc.reason)
-    except DatadogError as exc:
-        _audit(tool, ctx, query, {**audited, "rows": 0, "kind": exc.kind}, "error")
-        return None, _failed(tool, exc)
+    """``call`` under this tenant's log scope, through the shared scoped-call path."""
+    return await scoped(
+        tool,
+        AUDIT_EVENT,
+        ctx,
+        query,
+        audited,
+        call,
+        check=lambda scope: compose(scope.logs, query),
+        build=lambda: _client_factory(),
+    )
 
 
 # ── the tools ──────────────────────────────────────────────────────────────
@@ -276,11 +168,11 @@ async def _scoped(
 @_handler(SEARCH_TOOL)
 async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Log lines matching ``query`` inside this tenant's scope, newest first by default."""
-    query = _text(args, "query")
-    start, end = _text(args, "start", DEFAULT_START), _text(args, "end", DEFAULT_END)
+    query = text(args, "query")
+    start, end = text(args, "start", DEFAULT_START), text(args, "end", DEFAULT_END)
     window = {"start": start, "end": end}
-    limit = _count(args, "limit", DEFAULT_SEARCH_LIMIT)
-    cursor = _text(args, "cursor") or None
+    limit = count(args, "limit", DEFAULT_SEARCH_LIMIT)
+    cursor = text(args, "cursor") or None
     newest_first = args.get("newest_first") is not False
 
     async def fetch(
@@ -300,7 +192,7 @@ async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[s
         first = await page(limit)
         shaped = [_shape(row) for row in first.rows]
         # Room for the envelope around the rows: the note, the cursor, the window.
-        kept = _fit(shaped, RESULT_BUDGET_CHARS - 1000)
+        kept = _fit(shaped, RESULT_BUDGET_CHARS - ENVELOPE_CHARS)
         if len(kept) == len(shaped):
             return shaped, kept, first.next_cursor
         # Datadog's cursor continues after the LAST row it sent. Asking again
@@ -335,17 +227,24 @@ async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[s
         result["note"] = (
             f"{len(kept)} rows returned with long messages or attributes shortened to fit."
         )
-    _audit(SEARCH_TOOL, ctx, query, {**window, "rows": len(kept), "truncated": truncated}, "ok")
+    audit(
+        AUDIT_EVENT,
+        SEARCH_TOOL,
+        ctx,
+        query,
+        {**window, "rows": len(kept), "truncated": truncated},
+        "ok",
+    )
     return result
 
 
 @_handler(AGGREGATE_TOOL)
 async def _datadog_logs_aggregate(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Log counts matching ``query`` inside this tenant's scope, grouped by facets."""
-    query = _text(args, "query")
-    start, end = _text(args, "start", DEFAULT_START), _text(args, "end", DEFAULT_END)
+    query = text(args, "query")
+    start, end = text(args, "start", DEFAULT_START), text(args, "end", DEFAULT_END)
     window = {"start": start, "end": end}
-    limit = _count(args, "limit", DEFAULT_AGGREGATE_LIMIT)
+    limit = count(args, "limit", DEFAULT_AGGREGATE_LIMIT)
     group_by = _facets(args)
     if group_by is None:
         return {"error": "group_by must be a list of facet names, such as ['service', 'status']."}
@@ -364,7 +263,7 @@ async def _datadog_logs_aggregate(args: dict[str, Any], ctx: ToolContext) -> dic
         for b in buckets
     ]
     kept = list(rows)
-    while len(kept) > 1 and _size(kept) > RESULT_BUDGET_CHARS - 1000:
+    while len(kept) > 1 and size(kept) > RESULT_BUDGET_CHARS - ENVELOPE_CHARS:
         kept.pop()
     result: dict[str, Any] = {
         "scope": ctx.tenant_id,
@@ -379,5 +278,5 @@ async def _datadog_logs_aggregate(args: dict[str, Any], ctx: ToolContext) -> dic
             f"{len(kept)} of {len(rows)} groups returned to fit the result; "
             "narrow the query or group by fewer facets for the rest."
         )
-    _audit(AGGREGATE_TOOL, ctx, query, {**audited, "rows": len(rows)}, "ok")
+    audit(AUDIT_EVENT, AGGREGATE_TOOL, ctx, query, {**audited, "rows": len(rows)}, "ok")
     return result
