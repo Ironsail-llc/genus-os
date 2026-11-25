@@ -49,6 +49,16 @@ if TYPE_CHECKING:
 # first page of a fused list clearly separated while the tail flattens out.
 RANK_RELEVANCE_HALF = 10
 
+# The recall context cap: characters of memory text one recall returns. Recall
+# fills it, reranked head first, then the remaining fused candidates in fused
+# order; the reranker scores only its head (RERANK_MAX_CANDIDATES), so its cost
+# does not grow. It was the router's DEFAULT_BUDGET_CHARS and keeps its value.
+RECALL_CONTEXT_CHARS = 4000
+
+# The most rows a recall asks for when the caller names no limit; the
+# character cap above normally binds first.
+RECALL_FILL_ROWS = 50
+
 
 @dataclass
 class Candidate:

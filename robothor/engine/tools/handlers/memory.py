@@ -333,7 +333,7 @@ async def _recall_fallback(
 
     results = await search_facts(
         query,
-        limit=args.get("limit", 10),
+        limit=_recall_limit(args),
         tenant_id=ctx.tenant_id,
         expand_entities=bool(args.get("expand_entities", fan_out)),
         include_insights=bool(args.get("include_insights", fan_out)),
@@ -345,7 +345,38 @@ async def _recall_fallback(
     )
     # classify_query is a pure regex with no I/O, so the label is available on
     # this path too — the output shape stays identical across the flag.
-    return results, classify_query(query)
+    return _within_context_cap(results), classify_query(query)
+
+
+def _recall_limit(args: dict[str, Any]) -> int:
+    """Rows to ask recall for: the caller's ``limit``, else enough to fill the cap.
+
+    Recall fills its context cap (``recall.RECALL_CONTEXT_CHARS``): the
+    reranked head first, then the remaining fused candidates. A caller that
+    names a limit still gets at most that many rows.
+    """
+    from robothor.memory.recall import RECALL_FILL_ROWS
+
+    named = args.get("limit")
+    return int(named) if named else RECALL_FILL_ROWS
+
+
+def _within_context_cap(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rows in order until their text would pass the recall context cap.
+
+    The rule the routed path applies (``router.recall``'s budget cap): the
+    first row always, then each row while the running total stays inside.
+    """
+    from robothor.memory.recall import RECALL_CONTEXT_CHARS
+
+    kept: list[dict[str, Any]] = []
+    used = 0
+    for r in rows:
+        used += len(r.get("fact_text") or r.get("insight_text") or r.get("text") or "")
+        if kept and used > RECALL_CONTEXT_CHARS:
+            break
+        kept.append(r)
+    return kept
 
 
 def _format_results(rows: list[dict[str, Any]], query_class: str) -> dict[str, Any]:
@@ -434,7 +465,7 @@ async def _recall_routed(
 
     out = await recall(
         args.get("query", ""),
-        limit=args.get("limit", 10),
+        limit=_recall_limit(args),
         tenant_id=ctx.tenant_id,
         scope=scope,
         reader_person_id=reader_person_id,

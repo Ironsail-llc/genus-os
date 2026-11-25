@@ -24,10 +24,11 @@ from typing import Any
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.memory.fusion import rrf_fuse
+from robothor.memory.recall import RECALL_CONTEXT_CHARS
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BUDGET_CHARS = 4000
+DEFAULT_BUDGET_CHARS = RECALL_CONTEXT_CHARS
 
 QUERY_CLASSES = ("exact_lookup", "temporal", "how_to", "who_is", "intent", "default")
 
