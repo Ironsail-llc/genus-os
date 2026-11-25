@@ -192,7 +192,11 @@ class RecallSystem:
     equal_budget = True
 
     def __init__(
-        self, *, include_segments: bool = True, include_graph: bool = True, name: str = "recall"
+        self,
+        *,
+        include_segments: bool = True,
+        include_graph: bool | None = None,
+        name: str = "recall",
     ) -> None:
         self.include_segments = include_segments
         self.include_graph = include_graph
@@ -420,6 +424,7 @@ _REGISTRY: dict[str, Callable[[], MemorySystem]] = {
     "recall": RecallSystem,
     "recall_no_segments": lambda: RecallSystem(include_segments=False, name="recall_no_segments"),
     "recall_no_graph": lambda: RecallSystem(include_graph=False, name="recall_no_graph"),
+    "recall_with_graph": lambda: RecallSystem(include_graph=True, name="recall_with_graph"),
     "keyword_only": KeywordOnlySystem,
     "raw_verbatim": RawVerbatimSystem,
     "full_context": FullContextSystem,

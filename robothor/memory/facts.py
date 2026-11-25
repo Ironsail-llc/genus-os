@@ -1335,6 +1335,17 @@ _GRAPH_FIELDS = (
 #: has its own, tighter budget (``warmup.GRAPH_WARMUP_BUDGET_SECONDS``).
 GRAPH_LEG_BUDGET_SECONDS = 0.25
 
+#: Whether search_facts runs the graph-activation leg unless told otherwise.
+#: Off: on the memory evaluation's world, dev split (GEN-875), the leg did not
+#: earn its place. Multi-hop top-5 21/126 with it against 20/126 without
+#: (top-10 34 against 37); raw detail 27/110 against 40/110, its candidates
+#: crowding conversation segments out of the reranked head. Reserved places
+#: (2, 1, 0), seed linking (possessives), 10 or 20 facts per entity and a query
+#: rerank of its candidates did not change that. The design's fallback: the
+#: graph serves identity and current state; this leg runs on an explicit
+#: ``include_graph=True``.
+GRAPH_LEG_DEFAULT = False
+
 
 async def _graph_leg(
     query: str,
@@ -1630,7 +1641,7 @@ async def search_facts(
     reader_person_id: str | None = None,
     room_ids: Iterable[str] | None = None,
     reader_user_id: str | None = None,
-    include_graph: bool = True,
+    include_graph: bool | None = None,
     reader_scope_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid recall: named legs fused by RRF, graded rerank, one relevance scale.
@@ -1658,10 +1669,12 @@ async def search_facts(
         active_only: If True, only return active (non-superseded) facts.
         use_reranker: If True, run reranker on candidates. If None (default),
             honors MEMORY_RERANK_ENABLED env flag (on by default).
-        expand_entities: The graph leg runs (it is on by default anyway),
-            and when it returns nothing the one-hop ``entity_expansion`` leg
-            pulls related entity facts as before.
-        include_graph: Run the graph-activation leg (default True). Its rows
+        expand_entities: Run the one-hop ``entity_expansion`` leg: facts
+            about entities related to the top hits' entities. With
+            ``include_graph`` it runs only when the graph leg returns nothing.
+        include_graph: Run the graph-activation leg. ``None`` (the default)
+            reads ``GRAPH_LEG_DEFAULT`` at call time: off, see its comment for
+            why. Its rows
             carry ``origin`` (NULL reads as ``agent_generated``),
             ``graph_hops`` and ``graph_path``; a row found only by it has
             ``source="graph"``. It walks every origin: this is a deliberate
@@ -1745,15 +1758,16 @@ async def search_facts(
     # (it blocks the loop for the two leg queries); it is not widened here.
     legs = _fact_legs(query, embedding, _tenant, filters, scope_params, max(fetch_min, limit * 3))
     graph: list[Candidate] = []
-    if include_graph or expand_entities:
+    if include_graph is None:
+        include_graph = GRAPH_LEG_DEFAULT
+    if include_graph:
         graph = await _graph_leg(
             query, legs, _tenant, reader_scope_id=graph_reader(readers), scope=scope, limit=limit
         )
         if graph:
             legs["graph"] = graph
-    # Nothing writes memory_mentions yet, so on existing data the graph leg is
-    # empty. Until it is not, the one-hop expansion over memory_relations and
-    # the entity names on facts answers as it did before the graph leg.
+    # The one-hop expansion over memory_relations and the entity names on
+    # facts; when the graph leg ran and found something, that replaces it.
     if expand_entities and not graph:
         seed = fuse(legs, weights=LEG_WEIGHTS)
         if seed:

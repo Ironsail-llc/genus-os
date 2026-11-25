@@ -1506,6 +1506,13 @@ def _candidate_phrases(user_message: str, *, lowercase_ok: bool) -> list[str]:
     return out
 
 
+#: Whether warm-up adds graph-activation lines unless told otherwise. Off, as
+#: ``robothor.memory.facts.GRAPH_LEG_DEFAULT``: on the memory evaluation's world
+#: the graph leg showed no recall benefit (GEN-875), and nothing has measured
+#: one for warm-up.
+WARMUP_GRAPH_DEFAULT = False
+
+
 def _build_entity_context(
     user_message: str,
     tenant_id: str = DEFAULT_TENANT,
@@ -1515,10 +1522,13 @@ def _build_entity_context(
     user_id: str | None = None,
     record_access: bool = True,
     sender_person_id: str | None = None,
+    include_graph: bool | None = None,
 ) -> str:
     """Extract entities from the user message and pull relevant facts.
 
-    Connected context comes first from graph activation
+    With ``include_graph`` (``None`` reads ``WARMUP_GRAPH_DEFAULT`` at call
+    time: off, as ``facts.GRAPH_LEG_DEFAULT``, since the graph has not shown a
+    recall benefit), connected context comes first from graph activation
     (``_graph_entity_lines``: trusted evidence only, within
     ``GRAPH_WARMUP_BUDGET_SECONDS``), then today's name-matched facts fill the
     rest of the budget, each fact once. On a timeout, an error or an empty
@@ -1569,13 +1579,19 @@ def _build_entity_context(
     _would_drop = 0
     injected: list[dict[str, Any]] = []
 
-    graph_rows = _graph_entity_lines(
-        user_message,
-        tenant_id,
-        exclude_names,
-        scope,
-        sender_person_id,
-        _candidate_phrases(user_message, lowercase_ok=v2),
+    if include_graph is None:
+        include_graph = WARMUP_GRAPH_DEFAULT
+    graph_rows = (
+        _graph_entity_lines(
+            user_message,
+            tenant_id,
+            exclude_names,
+            scope,
+            sender_person_id,
+            _candidate_phrases(user_message, lowercase_ok=v2),
+        )
+        if include_graph
+        else []
     )
     for f in graph_rows:
         path = f.get("graph_path") or []

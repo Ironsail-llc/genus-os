@@ -23,6 +23,14 @@ from robothor.memory.recall import Candidate
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+
+@pytest.fixture(autouse=True)
+def _graph_lines_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Warm-up adds graph lines only when asked (WARMUP_GRAPH_DEFAULT is off);
+    every test here is about those lines."""
+    monkeypatch.setattr(warmup, "WARMUP_GRAPH_DEFAULT", True)
+
+
 MESSAGE = "Did Alice Smith sign the logistics agreement?"
 LEGACY_ROWS = [[{"fact_text": "legacy name-matched fact", "category": "x", "person_id": None}]]
 

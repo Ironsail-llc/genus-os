@@ -84,11 +84,14 @@ class TestRegistry:
 
     def test_recall_variants_switch_the_segment_and_graph_legs_off(self):
         on, no_seg, no_graph = es.make_systems(["recall", "recall_no_segments", "recall_no_graph"])
-        assert (on.include_segments, on.include_graph) == (True, True)
+        # "recall" is the product's default: the graph leg as search_facts decides.
+        assert (on.include_segments, on.include_graph) == (True, None)
+        (with_graph,) = es.make_systems(["recall_with_graph"])
+        assert with_graph.include_graph is True
         assert (no_seg.name, no_seg.include_segments, no_seg.include_graph) == (
             "recall_no_segments",
             False,
-            True,
+            None,
         )
         assert (no_graph.name, no_graph.include_segments, no_graph.include_graph) == (
             "recall_no_graph",
