@@ -620,6 +620,27 @@ async def test_another_entry_of_the_same_notification_is_still_a_duplicate(
 # ── failures are recorded, never raised ─────────────────────────────
 
 
+@pytest.mark.parametrize("transition", ["Triggered", "Warn"])
+async def test_a_failed_digest_send_is_tried_again_by_the_next_notification(
+    fleet: Fleet, audit: Audit, transition: str
+) -> None:
+    """Not only a page: a failed warning is not counted as the episode's alert."""
+    re = "Re-Triggered" if transition == "Triggered" else "Re-Warn"
+    fleet.result = False
+    await fleet.deliver_webhook(_payload(transition=transition, event_id="1", date="1"))
+    fleet.result = True
+    await fleet.deliver_webhook(_payload(transition=re, event_id="2", date="2"))
+    await fleet.deliver_webhook(_payload(transition=re, event_id="3", date="3"))
+
+    assert [lvl for _, lvl, *_ in fleet.sent] == ["warning", "warning"]
+    assert [r["details"]["mode"] for r in audit.alerts()] == [
+        "delivery_failed",
+        "delivered",
+        "suppressed",
+    ]
+    assert len({kw["alert_id"] for *_, kw in fleet.sent}) == 1
+
+
 @pytest.mark.parametrize(
     ("result", "error"), [(RuntimeError("telegram down"), "RuntimeError"), (False, "not_delivered")]
 )

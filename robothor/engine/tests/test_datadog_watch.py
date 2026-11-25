@@ -1195,3 +1195,94 @@ async def test_the_webhook_check_is_only_for_monitor_findings(
     (event,) = await _events(audit)
     assert event["kind"] == "error_spike" and event["mode"] == "delivered"
     lookup.assert_not_called()
+
+
+# ── a failed delivery is tried again while the condition lasts ──────────────
+
+
+def _flaky(monkeypatch: pytest.MonkeyPatch, *results: Any) -> AsyncMock:
+    """alerts.alert answering ``results`` in turn (an exception is raised), then True."""
+    answers = list(results)
+
+    async def answer(*_args: Any, **_kw: Any) -> bool:
+        if answers:
+            result = answers.pop(0)
+            if isinstance(result, BaseException):
+                raise result
+            return bool(result)
+        return True
+
+    sender = AsyncMock(side_effect=answer)
+    monkeypatch.setattr("robothor.engine.alerts.alert", sender)
+    return sender
+
+
+def _modes(events: list[dict[str, Any]], kind: str) -> list[str]:
+    return [e["mode"] for e in events if e["kind"] == kind]
+
+
+async def test_a_firing_monitor_whose_alert_failed_is_tried_again(
+    audit: MagicMock, monitor_scopes: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = _flaky(monkeypatch, RuntimeError("down"), False)
+    dd = Datadog(monitors=[_monitor(9)])
+    w = _watch(dd)
+    for _ in range(4):
+        await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert _modes(events, "monitor_firing") == ["delivery_failed", "delivery_failed", "delivered"]
+    assert sender.await_count == 3, "nothing more once it got through"
+    ids = {c.kwargs["alert_id"] for c in sender.await_args_list}
+    assert len(ids) == 1, "the same alert id, so the cooldown still bounds repeats"
+
+
+async def test_a_retry_stops_when_the_condition_ends(
+    audit: MagicMock, monitor_scopes: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = _flaky(monkeypatch, False)
+    dd = Datadog(monitors=[_monitor(9)])
+    w = _watch(dd)
+    await w.tick([CHILD_A])
+    dd.monitors = []
+    await w.tick([CHILD_A])
+    await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert [(e["kind"], e["mode"]) for e in events] == [
+        ("monitor_firing", "delivery_failed"),
+        ("monitor_recovered", "delivered"),
+    ]
+    assert sender.await_count == 2
+
+
+async def test_a_silent_service_whose_alert_failed_is_tried_again(
+    audit: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = _flaky(monkeypatch, False)
+    w = _watch(Datadog(totals_baseline={"shop-api": 200}))
+    for _ in range(3):
+        await w.tick([CHILD_A])
+    assert _modes(await _events(audit), "service_silent") == ["delivery_failed", "delivered"]
+    assert sender.await_count == 2
+
+
+async def test_a_lost_link_whose_alert_failed_is_tried_again(
+    audit: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = _flaky(monkeypatch, False)
+    w = _watch(Datadog(validate_status=401), home=PARENT, root=True)
+    for _ in range(watch.CONNECTION_FAILURES_FOR_LOST + 2):
+        await w.tick([PARENT])
+    assert _modes(await _events(audit), "connection_lost") == ["delivery_failed", "delivered"]
+    assert sender.await_count == 2
+
+
+async def test_a_spike_whose_alert_failed_is_tried_again_while_it_lasts(
+    audit: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = _flaky(monkeypatch, False)
+    w = _watch(Datadog(**SPIKING))
+    for _ in range(3):
+        await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert _modes(events, "error_spike") == ["delivery_failed", "delivered"]
+    assert sender.await_count == 2
