@@ -440,8 +440,8 @@ through it, with its tenant's filter applied.
 
 ```json
 {
-  "acme-parent":  {"logs": "*", "metric_tags": []},
-  "acme-child-a": {"logs": "service:shop-api"},
+  "acme-parent":  {"logs": "*", "spans": "*", "metric_tags": []},
+  "acme-child-a": {"logs": "service:shop-api", "spans": "service:shop-api"},
   "acme-child-b": {
     "logs": "service:clinic-app",
     "spans": "service:clinic-app env:prod",
@@ -453,9 +453,10 @@ through it, with its tenant's filter applied.
 
 - `logs` is required. It is a Datadog log query that bounds the tenant. Only
   the literal `*` means everything; a blank filter is not configured.
-- `spans` defaults to the `logs` filter.
-- `monitors` and `metric_tags` default to no access. `metric_tags: []` means
-  every metric.
+- Every other part is opt-in: a missing `spans`, `monitors` or `metric_tags`
+  means no access to that kind of data. The `logs` filter is never reused for
+  spans, because a term that bounds logs can bound nothing on spans.
+  `metric_tags: []` means every metric.
 - **A tenant with no entry is refused**, and so is a tenant whose entry is
   malformed (a blank `logs`, unbalanced brackets, a tag with a comma or space).
   Malformed JSON leaves every tenant refused. Each case logs one warning that
@@ -513,7 +514,9 @@ root admin who switched into a child organization sees that child's logs.
   attributes.
 - Credentials (by the same redactor as the journald source), email addresses
   and phone numbers in a line are masked before it leaves the bridge, and in the
-  query before it is audited. Every search writes one audit row (`telemetry.logs.read` or
+  query before it is audited. A value under a credential name (an attribute such
+  as `password` or `usr.api_key`, a `password:` tag, a summary grouped by such a
+  facet) is replaced whatever its shape. Every search writes one audit row (`telemetry.logs.read` or
   `telemetry.logs.summary`): who, which organization, the masked query cut to
   200 characters, the window, the outcome and how many rows. It never stores
   the text of a line.

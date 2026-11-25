@@ -53,7 +53,12 @@ from robothor.integrations.datadog.scope import (
     scope_for,
     trace_query,
 )
-from robothor.secrets.redaction import redact, redact_personal_data
+from robothor.secrets.redaction import (
+    PLACEHOLDER,
+    redact,
+    redact_personal_data,
+    redact_tool_arguments,
+)
 from routers._audit import audited
 from routers._operator import is_root, require_root_operator, require_tenant_audit_reader
 from routers._params import ISO_TIMESTAMP, ISO_TIMESTAMP_PATTERN, iso_timestamp, positive_int
@@ -117,15 +122,40 @@ def _scrub(text: str) -> str:
     return redact_personal_data(redact(text))
 
 
+def _names_a_credential(name: str) -> bool:
+    """Whether a key, tag name or facet (``@usr.password``) says it holds a credential.
+
+    Asked of the platform's own per-argument redactor, so this route and the
+    tool-call recorder agree on which names those are. It matters because
+    Datadog parses ``password=… api_key=…`` into structured attributes: the
+    value then arrives bare, with no shape of its own for :func:`redact` to
+    find, and the name it sits under is the only thing left to match on.
+    """
+    key = name.lstrip("@")
+    return bool(key) and redact_tool_arguments("", {key: "x"}).get(key) == PLACEHOLDER
+
+
 def _masked(value: Any) -> Any:
-    """``value`` with every string in it passed through :func:`_scrub`."""
+    """``value`` with every string in it passed through :func:`_scrub`, and every
+    value under a credential-named key replaced whatever its shape."""
     if isinstance(value, str):
         return _scrub(value)
     if isinstance(value, dict):
-        return {str(k): _masked(v) for k, v in value.items()}
+        return {
+            str(k): PLACEHOLDER if _names_a_credential(str(k)) else _masked(v)
+            for k, v in value.items()
+        }
     if isinstance(value, list | tuple):
         return [_masked(v) for v in value]
     return value
+
+
+def _tag(tag: str) -> str:
+    """A ``name:value`` tag, its value replaced when the name says credential."""
+    name, sep, _value = tag.partition(":")
+    if sep and _names_a_credential(name):
+        return f"{name}:{PLACEHOLDER}"
+    return _scrub(tag)
 
 
 def _row_out(row: LogRow) -> dict[str, Any]:
@@ -136,7 +166,7 @@ def _row_out(row: LogRow) -> dict[str, Any]:
         "status": row.status,
         "host": row.host,
         "message": _scrub(row.message),
-        "tags": [_scrub(t) for t in row.tags],
+        "tags": [_tag(t) for t in row.tags],
         "attributes": _masked(row.attributes),
         # For linking a line to its trace; None when the event carries none.
         # The client passes on only an id-shaped value (hex or decimal digits),
@@ -278,9 +308,14 @@ def summarize_logs(
     if state != "ok":
         return dict(result)
     _audit(request, "telemetry.logs.summary", tenant_id, "ok", **details, buckets=len(result))
+    # Grouped by a credential-named facet, every bucket value is a credential.
+    hidden = _names_a_credential(group_by)
     return {
         "status": "ok",
-        "buckets": [{"by": _scrub(b.by.get(group_by, "")), "count": b.count} for b in result],
+        "buckets": [
+            {"by": PLACEHOLDER if hidden else _scrub(b.by.get(group_by, "")), "count": b.count}
+            for b in result
+        ],
         "group_by": group_by,
         "errors": errors,
         "scope": tenant_id,

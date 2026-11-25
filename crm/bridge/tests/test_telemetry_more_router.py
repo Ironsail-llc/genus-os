@@ -40,8 +40,16 @@ CHILD_B = "acme-child-b"
 
 SCOPES = {
     ROOT: {"logs": "*", "spans": "*", "monitors": "*"},
-    CHILD_A: {"logs": "service:shop-api", "monitors": 'tag:"team:shop"'},
-    CHILD_B: {"logs": "service:clinic-app", "monitors": 'tag:"team:clinic"'},
+    CHILD_A: {
+        "logs": "service:shop-api",
+        "spans": "service:shop-api",
+        "monitors": 'tag:"team:shop"',
+    },
+    CHILD_B: {
+        "logs": "service:clinic-app",
+        "spans": "service:clinic-app",
+        "monitors": 'tag:"team:clinic"',
+    },
 }
 
 NOT_CONNECTED = "Datadog is not connected for this organization yet."
@@ -395,7 +403,7 @@ def test_traces_default_to_the_tenants_errors(datadog):
     body = _ok(_client(CHILD_A).get("/api/telemetry/traces"))
 
     sent = datadog.sent("/spans/events/search")[-1]["body"]["data"]["attributes"]
-    # A tenant without a ``spans`` filter is bounded by its ``logs`` one.
+    # The span search is bounded by the tenant's own ``spans`` filter.
     assert sent["filter"]["query"] == "(service:shop-api) AND (status:error)"
     assert sent["filter"]["from"] == "now-1h"
     row = body["rows"][0]
