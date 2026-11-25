@@ -320,6 +320,107 @@ class TestSeedAndCleanup:
         assert present <= set(counted)
         assert {t for t, _ in seed._DELETE_ORDER} >= present
 
+    @pytest.mark.asyncio
+    async def test_seeding_fills_the_graph_and_segment_tables_the_new_legs_read(self, eval_tenants):
+        """The graph leg walks edges with evidence and returns facts by their
+        mentions; the segment leg reads conversation segments its reader may
+        see. Without these rows neither leg can answer a world question."""
+        from robothor.db.connection import get_connection, tenant_scope
+        from robothor.memory import segments
+
+        primary, shadow = eval_tenants
+        world = ew.generate_world(3, "small")
+        seeded = await seed.seed_world(
+            world, primary, shadow_tenant_id=shadow, embed_batch=_fake_embed_batch
+        )
+        expected_mentions = {
+            (seeded.fact_ids[f.id], seeded.entity_ids[m.entity_id])
+            for f in world.facts
+            for m in f.mentions
+            if m.entity_id in seeded.entity_ids
+        }
+        with tenant_scope(primary), get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT fact_id, entity_id FROM memory_mentions WHERE tenant_id = %s", (primary,)
+            )
+            mentions = {(int(a), int(b)) for a, b in cur.fetchall()}
+            cur.execute(
+                "SELECT id, origin FROM memory_facts WHERE tenant_id = %s AND id = ANY(%s)",
+                (primary, [seeded.fact_ids[f.id] for f in world.facts]),
+            )
+            origins = dict(cur.fetchall())
+            cur.execute(
+                "SELECT count(*) FROM memory_relations r WHERE r.tenant_id = %s AND NOT EXISTS "
+                "(SELECT 1 FROM memory_relation_evidence e WHERE e.relation_id = r.id)",
+                (primary,),
+            )
+            unevidenced = cur.fetchone()[0]
+            cur.execute("SELECT count(*) FROM memory_segments WHERE tenant_id = %s", (primary,))
+            segment_rows = cur.fetchone()[0]
+        assert mentions == expected_mentions
+        assert origins == {seeded.fact_ids[f.id]: f.origin for f in world.facts}
+        assert unevidenced == 0
+        assert segment_rows > 0
+        assert seeded.reader_person_id is not None
+
+        detail = world.raw_details[0]
+        with tenant_scope(primary):
+            as_reader = await segments.search_segments(
+                detail.question,
+                tenant_id=primary,
+                limit=50,
+                query_embedding=(await _fake_embed_batch([detail.question]))[0],
+                reader_person_id=seeded.reader_person_id,
+            )
+            as_nobody = await segments.search_segments(
+                detail.question,
+                tenant_id=primary,
+                limit=50,
+                query_embedding=(await _fake_embed_batch([detail.question]))[0],
+            )
+        assert as_reader, "the eval reader recalls the world's conversations"
+        assert as_nobody == [], "the world's conversations are private to the eval reader"
+
+
+class TestRunWorldLegSwitches:
+    @pytest.mark.asyncio
+    async def test_run_world_passes_the_reader_and_the_leg_switches(self, monkeypatch):
+        calls: list[dict] = []
+
+        async def fake_seed(world, tenant_id, **_k):
+            return seed.SeededWorld(tenant_ids=(), reader_person_id="p-1")
+
+        async def fake_search(
+            query,
+            limit=10,
+            tenant_id="",
+            include_segments=True,
+            include_graph=True,
+            reader_person_id=None,
+        ):
+            calls.append(
+                {
+                    "include_segments": include_segments,
+                    "include_graph": include_graph,
+                    "reader_person_id": reader_person_id,
+                }
+            )
+            return []
+
+        monkeypatch.setattr(seed, "seed_world", fake_seed)
+        monkeypatch.setattr(seed, "cleanup_world", lambda _t: {})
+        monkeypatch.setattr("robothor.memory.facts.search_facts", fake_search)
+        report = await seed.run_world(
+            1, "small", "dev", include_segments=False, include_graph=False
+        )
+        assert calls
+        assert all(
+            c == {"include_segments": False, "include_graph": False, "reader_person_id": "p-1"}
+            for c in calls
+        )
+        assert report["meta"]["legs"] == {"segments": False, "graph": False}
+
 
 class TestRunWorldTimings:
     @pytest.mark.asyncio
