@@ -1008,3 +1008,14 @@ async def test_a_recovery_older_than_the_latest_trigger_does_not_close_the_episo
 
     await fleet.deliver_webhook(_payload(transition="Recovered", event_id="5", date="50"))
     assert [lvl for _, lvl, *_ in fleet.sent] == ["warning", "info"]
+
+
+async def test_without_dates_a_new_p1_incident_still_pages(
+    fleet: Fleet, audit: Audit, cooldown: None
+) -> None:
+    """A webhook template without $DATE: the recovery that closed the episode names it."""
+    for n, transition in enumerate(["Triggered", "Recovered", "Triggered"]):
+        await fleet.deliver_webhook(
+            _payload(transition=transition, priority="P1", event_id=str(n), date="")
+        )
+    assert [lvl for _, lvl, *_ in fleet.sent] == ["critical", "info", "critical"]
