@@ -9,7 +9,8 @@ Questions come from one tenant, in order of preference:
 
 * ``questions_from_runs`` — the ``query`` of every ``search_memory`` tool call
   the engine persisted in ``agent_run_steps.tool_input`` (direct, or wrapped in
-  ``tool_call``), read as the run's person and user;
+  ``tool_call``), read as a person only when the run served that person one
+  to one (:func:`run_private_reader`), otherwise as no reader;
 * ``questions_from_chat`` — recent user turns, each read as the owner of its
   conversation (``segments.session_scope``); a turn whose conversation has no
   known owner is skipped, never replayed as an unscoped reader;
@@ -306,9 +307,71 @@ def _result_limit(value: Any) -> int:
     return min(max(n, 1), MAX_RESULTS)
 
 
+_WEBCHAT_DETAIL_PREFIXES = ("webchat:", "plan:", "plan-exec:", "plan-revise:")
+
+
+def run_private_reader(
+    *,
+    trigger_type: str | None,
+    trigger_detail: str | None,
+    user_id: str | None,
+    user_role: str | None,
+    person_id: str | None,
+    parent_run_id: str | None,
+) -> tuple[str | None, str | None] | None:
+    """``(person_id, user_id)`` a persisted run could read private memory as, or None.
+
+    A replay must never read more than the original run could. A run reads
+    private conversation and facts only when it serves a person in their own
+    one-to-one conversation: a webchat turn (or plan step) in the member's own
+    ``agent:{agent}:user:{uid}`` session, or the operator's main session; or a
+    Telegram direct message (positive chat id). Every other run (scheduled,
+    hook, event, manual, workflow, sub-agent, workspace, channel) has none,
+    whoever it ran as. ``agent_runs.person_id`` alone is not enough: it is
+    also filled from a chat-id lookup and copied onto spawned runs.
+
+    Local, conservative copy of the engine's rule
+    (``robothor.engine.private_recall.private_reader_for_run``), which is not
+    on this branch's base. Replace this with a call to that function at
+    re-sync. The run record does not carry whether the identity was verified,
+    so a run that passes the rest is taken as verified.
+    """
+    if parent_run_id:
+        return None
+    detail = trigger_detail or ""
+    if trigger_type == "webchat":
+        key = next((detail[len(p) :] for p in _WEBCHAT_DETAIL_PREFIXES if detail.startswith(p)), "")
+        if not key or not user_id:
+            return None
+        parts = key.split(":")
+        own = len(parts) == 4 and parts[0] == "agent" and parts[2] == "user" and parts[3] == user_id
+        if own or (key == _main_session_key() and user_role == "owner"):
+            return (person_id or None, user_id)
+        return None
+    if trigger_type == "telegram" and detail.startswith("chat:"):
+        try:
+            chat_id = int(detail[len("chat:") :].split("|", 1)[0])
+        except ValueError:
+            return None
+        return (person_id, None) if chat_id > 0 and person_id else None
+    return None
+
+
+def _main_session_key() -> str:
+    from robothor.memory.segments import DEFAULT_MAIN_SESSION_KEY
+
+    try:
+        from robothor.engine.chat import get_main_session_key
+
+        return str(get_main_session_key())
+    except ImportError:
+        return DEFAULT_MAIN_SESSION_KEY
+
+
 _RUN_STEPS_SQL = """
     SELECT s.id::text AS step_id, s.created_at, s.tool_name, s.tool_input,
-           r.id::text AS run_id, r.agent_id, r.person_id::text AS person_id, r.user_id
+           r.id::text AS run_id, r.agent_id, r.person_id::text AS person_id, r.user_id,
+           r.user_role, r.trigger_type, r.trigger_detail, r.parent_run_id::text AS parent_run_id
       FROM agent_run_steps s
       JOIN agent_runs r ON r.id = s.run_id
      WHERE r.tenant_id = %s
@@ -335,15 +398,22 @@ def questions_from_runs(
         cur.execute(_RUN_STEPS_SQL, (tenant_id, since, since, SOURCE_POOL))
         cols = [d[0] for d in cur.description]
         rows = [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
-    readers: dict[tuple[Any, Any], Reader] = {}
+    readers: dict[tuple[Any, Any] | None, Reader] = {None: Reader()}
     out: list[Question] = []
     for row in rows:
         args = search_arguments(row["tool_name"], row["tool_input"])
         text = _clean((args or {}).get("query"))
         if not text:
             continue
-        who = (row["person_id"], row["user_id"] or None)
-        if who not in readers:
+        who = run_private_reader(
+            trigger_type=row["trigger_type"],
+            trigger_detail=row["trigger_detail"],
+            user_id=row["user_id"] or None,
+            user_role=row["user_role"],
+            person_id=row["person_id"],
+            parent_run_id=row["parent_run_id"],
+        )
+        if who is not None and who not in readers:
             readers[who] = reader_for(tenant_id, person_id=who[0], user_id=who[1])
         origin = {
             "source": "runs",

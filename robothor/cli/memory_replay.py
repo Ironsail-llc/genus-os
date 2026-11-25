@@ -32,7 +32,7 @@ def add_parser(subparsers: Any) -> None:
     source.add_argument(
         "--from-runs",
         action="store_true",
-        help="The queries of past search_memory tool calls, as each run's person and user",
+        help="The queries of past search_memory tool calls, read as the run could read",
     )
     source.add_argument(
         "--from-chat",

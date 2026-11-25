@@ -882,7 +882,7 @@ Usage: `genus memory-replay [--tenant TENANT] [--from-runs] [--from-chat] [--que
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--tenant` | `TENANT` | — | Tenant whose questions and memory to read |
-| `--from-runs` | — | off | The queries of past search_memory tool calls, as each run's person and user |
+| `--from-runs` | — | off | The queries of past search_memory tool calls, read as the run could read |
 | `--from-chat` | — | off | Recent user chat turns, each read as its conversation's owner |
 | `--questions` | `QUESTIONS` | — | File with one question per line |
 | `--as-person` | `AS_PERSON` | — | With --questions: read as this CRM person |
