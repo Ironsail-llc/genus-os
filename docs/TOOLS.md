@@ -879,8 +879,8 @@ with `datadog_logs_search` narrowed to that service and window. Reach for
 `datadog_spans_search` for slow or failing requests (`@duration:>1s`,
 `status:error`), and `datadog_metrics_query` for a rate or level over time.
 
-**Following one failure.** A log line carries the trace it belongs to
-(`dd.trace_id` in its attributes): pass that id to `datadog_trace_get` to see
+**Following one failure.** A log row from `datadog_logs_search` carries the
+trace it belongs to as `trace_id`: pass that id to `datadog_trace_get` to see
 every span of the request, which service it reached and where it failed.
 To answer "is anything alerting right now?", call `datadog_monitors_list` with
 `only_firing: true`; a firing monitor's tags name the service to read next.
