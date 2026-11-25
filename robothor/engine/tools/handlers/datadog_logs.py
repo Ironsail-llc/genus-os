@@ -182,7 +182,9 @@ def _absolute(text: str, now: datetime) -> str:
     Resolved once here and returned in ``window``, the model passes the same
     absolute window back with the cursor.
     """
-    match = _RELATIVE.fullmatch(text.strip().lower())
+    # Case-sensitive: in date math `M` is a month and `m` a minute, so a unit
+    # this does not know is passed through as written, never guessed at.
+    match = _RELATIVE.fullmatch(text.strip())
     if match is None:
         return text
     amount, unit = match.groups()
