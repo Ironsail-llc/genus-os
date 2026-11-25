@@ -22,12 +22,16 @@ from robothor.memory.eval import (
     require_eval_tenant,
     run_suite,
 )
+from robothor.memory.eval_answer import format_answers_markdown, run_answers
 from robothor.memory.eval_world_seed import WORLD_TENANT, format_world_report, run_world
 
 if TYPE_CHECKING:
     import argparse
 
 _DEFAULT_SUITE = "docs/benchmarks/memory/suite.yaml"
+
+#: Where --record-baseline writes the world answer-arm baseline.
+BASELINE_DIR = Path("docs/benchmarks/memory")
 
 
 def cmd_memory_eval(args: argparse.Namespace) -> int:
@@ -38,6 +42,11 @@ def cmd_memory_eval(args: argparse.Namespace) -> int:
     eval sit broken behind row-level security while still looking like an
     ordinary failing test.
     """
+    if getattr(args, "answers", False):
+        if not getattr(args, "world", False):
+            print("memory-eval cannot run: --answers needs --world")
+            return 3
+        return _cmd_answers(args)
     if getattr(args, "world", False):
         return _cmd_world(args)
 
@@ -136,3 +145,82 @@ def _cmd_world(args: argparse.Namespace) -> int:
     # exit 2 (raw_detail alone cannot pass through search_facts). 0 = it ran,
     # 3 = nothing was scored.
     return 0 if int(report.get("total") or 0) > 0 else 3
+
+
+def _cmd_answers(args: argparse.Namespace) -> int:
+    """Answer-and-judge comparison of several systems on the world.
+
+    Writes the JSON report to ``--report`` (with a Markdown summary beside it)
+    or to stdout. ``--record-baseline`` also writes both under
+    ``docs/benchmarks/memory/``. Never touches benchmark_results: the suite
+    owns that row.
+    """
+    import json
+
+    from robothor.memory.eval_systems import make_systems
+
+    systems = [s.strip() for s in args.systems.split(",") if s.strip()]
+    try:
+        make_systems(systems)
+    except ValueError as e:
+        print(f"memory-eval cannot run: {e}")
+        return 3
+
+    tenant = args.tenant or WORLD_TENANT
+    if tenant == EVAL_TENANT:
+        print(
+            f"memory-eval cannot run: --world may not use {EVAL_TENANT!r}, the nightly suite's "
+            f"tenant; use {WORLD_TENANT!r} (the default)"
+        )
+        return 3
+    blocked = preflight(tenant)
+    if blocked:
+        print(f"memory-eval cannot run: {blocked}")
+        return exit_code_for(None, blocked)
+
+    try:
+        report = asyncio.run(
+            run_answers(
+                args.world_seed,
+                args.world_size,
+                args.split,
+                systems=systems,
+                reference=args.reference,
+                token_budget=args.token_budget,
+                repeats=args.repeats,
+                answer_model=args.answer_model,
+                judge_model=args.judge_model,
+                limit_per_stratum=args.limit_per_stratum,
+                tenant_id=tenant,
+                concurrency=args.concurrency,
+                cache_dir=args.cache_dir,
+                cleanup=not args.keep,
+                progress_path=args.progress,
+            )
+        )
+    except (EvalPreconditionError, ValueError) as e:
+        print(f"memory-eval cannot run: {e}")
+        return 3
+
+    payload = json.dumps(report, indent=2, default=str)
+    markdown = format_answers_markdown(report)
+    if args.report:
+        path = Path(args.report)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(payload + "\n", encoding="utf-8")
+        path.with_suffix(".md").write_text(markdown, encoding="utf-8")
+        print(markdown)
+        print(f"report: {path} (summary: {path.with_suffix('.md')})")
+    else:
+        print(payload)
+        print("\n<!-- markdown -->\n")
+        print(markdown)
+    if args.record_baseline:
+        BASELINE_DIR.mkdir(parents=True, exist_ok=True)
+        summary = {k: v for k, v in report.items() if k != "records"}
+        (BASELINE_DIR / "world-baseline.json").write_text(
+            json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8"
+        )
+        (BASELINE_DIR / "world-baseline.md").write_text(markdown, encoding="utf-8")
+        print(f"recorded baseline under {BASELINE_DIR}")
+    return 0

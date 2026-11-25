@@ -131,3 +131,92 @@ def promotion_verdict(report: dict[str, Any], stratum_alpha: float = 0.20) -> tu
                 f"stratum {name!r} regressed ({s['improved']}↑/{s['regressed']}↓, p={s['p']:.3f})"
             )
     return True, (f"delta {report['delta']:+.3f}, p={report['p']:.3f}, no stratum regression")
+
+
+# --------------------------------------------------------------------------- #
+# Answer-arm additions: non-inferiority, power, run-to-run spread
+# --------------------------------------------------------------------------- #
+
+_Z_95 = 1.959964
+_Z_POWER_80 = 0.841621
+
+
+def paired_difference_ci(
+    before: dict[str, bool], after: dict[str, bool], z: float = _Z_95
+) -> tuple[float, float, float]:
+    """Accuracy difference ``after - before`` over shared questions, with a
+    Wald interval for paired proportions.
+
+    With ``b`` improvements, ``c`` regressions and ``n`` shared questions:
+    ``d = (b - c) / n`` and ``var = ((b + c) - (b - c)^2 / n) / n^2``.
+    Returns ``(d, lower, upper)``; all zero when nothing is shared.
+    """
+    shared = sorted(set(before) & set(after))
+    n = len(shared)
+    if n == 0:
+        return (0.0, 0.0, 0.0)
+    b = sum(1 for q in shared if after[q] and not before[q])
+    c = sum(1 for q in shared if before[q] and not after[q])
+    diff = (b - c) / n
+    var = max(0.0, ((b + c) - (b - c) ** 2 / n) / (n * n))
+    half = z * math.sqrt(var)
+    if half == 0.0:
+        return (diff, diff, diff)
+    return (diff, diff - half, diff + half)
+
+
+def non_inferiority(
+    reference: dict[str, bool], candidate: dict[str, bool], margin: float = 0.05
+) -> dict[str, Any]:
+    """Is ``candidate`` no worse than ``reference`` by more than ``margin``?
+
+    Non-inferior when the lower bound of the 95% interval on the paired
+    accuracy difference (candidate minus reference) is above ``-margin``.
+    """
+    diff, lower, upper = paired_difference_ci(reference, candidate)
+    return {
+        "diff": diff,
+        "lower": lower,
+        "upper": upper,
+        "margin": margin,
+        "n": len(set(reference) & set(candidate)),
+        "non_inferior": lower > -margin,
+    }
+
+
+def minimum_detectable_effect(
+    n: int, p: float = 0.5, z_alpha: float = _Z_95, z_power: float = _Z_POWER_80
+) -> float:
+    """Smallest accuracy difference a stratum of ``n`` cases can detect.
+
+    Two-sided alpha 0.05, power 0.8, for two arms at accuracy ``p``:
+    ``(z_a + z_b) * sqrt(2 p (1 - p) / n)``. ``p`` is clamped to [0.05, 0.95]
+    so a perfect stratum still reports a non-zero floor. Stated per stratum so
+    a difference smaller than this is never read as a result.
+    """
+    if n <= 0:
+        return 1.0
+    p = min(max(p, 0.05), 0.95)
+    return min(1.0, (z_alpha + z_power) * math.sqrt(2 * p * (1 - p) / n))
+
+
+def run_spread(accuracies: list[float]) -> dict[str, Any]:
+    """Min, max, range and sample standard deviation across repeated runs."""
+    if not accuracies:
+        return {"runs": 0, "min": 0.0, "max": 0.0, "range": 0.0, "stdev": 0.0}
+    lo, hi = min(accuracies), max(accuracies)
+    n = len(accuracies)
+    stdev = 0.0
+    if n > 1:
+        mean = sum(accuracies) / n
+        stdev = math.sqrt(sum((a - mean) ** 2 for a in accuracies) / (n - 1))
+    return {"runs": n, "min": lo, "max": hi, "range": hi - lo, "stdev": stdev}
+
+
+def percentile(values: list[float], q: float) -> float:
+    """Nearest-rank percentile; 0.0 for no values."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    rank = max(1, math.ceil(q / 100 * len(ordered)))
+    return float(ordered[min(rank, len(ordered)) - 1])

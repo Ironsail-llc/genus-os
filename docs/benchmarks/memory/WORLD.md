@@ -226,7 +226,7 @@ Case
 | relations | `memory_relations` | `entities.add_relations_batch`: `works_at`, `lives_in`, `reports_to`, `member_of`, `run_by`, `leads`, `headquartered_in`, `held_in`, `attended`, each linked to its fact |
 | `crm_companies`, `crm_people` | `crm_companies`, `crm_people` (and `audit_log`) | `crm.dal.create_company`, `create_person` and `update_person` (job title, city, company) |
 | `documents` | `kb_documents`, `kb_chunks` | `knowledge.store.upsert_document`, collection `memory-eval/world` |
-| `conversations` | `chat_sessions`, `chat_messages` | `engine.chat_store.save_exchange`, one session per world session (`eval-world:<session id>`), then the turn timestamps |
+| `conversations` | `chat_sessions`, `chat_messages` | `engine.chat_store.save_exchange`, one session per world session (`eval-world:<session id>`), then the turn timestamps and each turn's embedding (the content, as the engine embeds chat turns) |
 | the tenants | `crm_tenants` | created if absent |
 
 `cleanup_world([tenant, shadow])` deletes every row in all of those tables for
@@ -236,3 +236,96 @@ else references it. The integration test in
 named eval tenants on real PostgreSQL. It checks that every table gained rows,
 that every row belongs to those tenants, and that the row counts return to
 their starting values after cleanup.
+
+## Answer-and-judge mode (`--answers`)
+
+Substring scoring cannot measure abstention, cannot compare against a
+full-context baseline, and flatters a system that retrieves a lot. With
+`--answers` every case is answered end to end:
+
+```sh
+ROBOTHOR_TENANT_ID=memory-eval python -m robothor.cli memory-eval --world --answers \
+  --world-size full --split dev --limit-per-stratum 30 \
+  --systems recall,keyword_only,raw_verbatim,full_context --reference full_context \
+  --token-budget 2048 --repeats 3 --report /tmp/memory-world.json
+```
+
+1. **Retrieve.** Each system (`robothor/memory/eval_systems.py`) turns the case
+   into a `ContextBundle`: ordered items with world ids and kinds, filled best
+   first up to `--token-budget` (tokens are `block_budget.estimate_tokens`,
+   chars / 4). An item that does not fit is skipped and a smaller later one may
+   still go in. A bundle never exceeds its budget.
+2. **Answer.** `eval_answer.answer` sends the bundle and the question to the
+   generation module (`--answer-model`, default the configured generation
+   model) with a fixed prompt: answer only from the context, say "unknown" when
+   it does not hold the answer, cite the item ids. JSON output, temperature 0,
+   no thinking.
+3. **Judge.** `eval_answer.judge` applies rules first, in this order:
+   - an abstention case is correct only when the answer abstains;
+   - "unknown" on an answerable case is wrong but not confident-wrong;
+   - a forbidden (other-tenant) value is wrong, even next to the gold;
+   - a normalised whole-word gold or alias is correct;
+   - any other value the world knows is confident-wrong.
+
+   Only an answer none of these settle goes to the LLM judge
+   (`--judge-model`), whose prompt is fixed in the module.
+
+The judge is validated before any case runs, on planted answers generated
+from the world:
+- **wrong:** the confuser's value, a superseded value, the other tenant's
+  value, a random other entity, an answered abstention, and a reordered name
+  or organisation root that belongs to someone else;
+- **right:** the gold in several sentence shapes, and the gold as a
+  reordered name or a bare organisation root.
+
+The reordered and root forms can only be settled by the LLM judge, so
+validation always exercises it. If fewer than 95% of planted wrong answers
+are marked wrong, or fewer than 95% of planted right answers are marked
+right, the run aborts with `judge failed validation`.
+
+### Systems
+
+| Name | What it retrieves |
+|------|-------------------|
+| `recall` | The product path: `search_facts` with whatever legs the checked-out code has (vector, BM25, reranker, ...), budget filled in rank order |
+| `keyword_only` | Postgres full-text (`to_tsquery` OR over the question's words, `ts_rank_cd`) over the tenant's active facts. No vectors, no reranker |
+| `raw_verbatim` | Raw transcript turns (dense `search_chat_turns` plus full-text over the turn content) and the seeded documents (`knowledge.search` over `memory-eval/world`), fused by reciprocal rank. No extracted facts, no reranker |
+| `full_context` | No retrieval: the newest transcript turns that fit the budget, in chronological order |
+| `full_context_unbounded` | The same, filled to 24,000 tokens. Reported with `equal_budget: false`, so it is never a fair comparison |
+
+To add a system (for example an observation-log memory, or an agent that
+searches raw history with tools), implement `MemorySystem` (`name`,
+`equal_budget`, `async retrieve(case, *, world_handle, token_budget) ->
+ContextBundle`) and call `register_system(name, factory)`. The runner, judge
+and report need no change.
+
+### Report
+
+The JSON report (and a Markdown summary beside it) gives, per system and
+stratum and pooled over `all` and the `hard` strata (multi_hop,
+entity_confusion, point_in_time, knowledge_update, abstention, raw_detail):
+- accuracy with a Wilson 95% interval;
+- confident-wrong rate;
+- abstention precision and recall;
+- mean context tokens;
+- retrieval p50/p95 and answer p50/p95 latency;
+- run-to-run spread across `--repeats`;
+- the minimum detectable effect at the stratum's n: two-sided alpha 0.05,
+  power 0.8, `(z_a + z_b) * sqrt(2p(1-p)/n)`.
+
+The deciding comparison pools the hard strata and compares the first system
+in `--systems` with `--reference`, using the existing McNemar
+`promotion_verdict` and a non-inferiority check: the lower bound of the 95%
+interval on the paired accuracy difference must be above -5 points.
+
+`--record-baseline` also writes `world-baseline.json` and
+`world-baseline.md` here. Answer mode never writes `benchmark_results`.
+
+### Embedding cache
+
+Seeding the full world embeds about 3,500 facts, the document chunks and about
+6,500 turns. Vectors are cached as float32 per (embedding model, world schema
+version, seed, size) under `~/.cache/genus-os/memory-eval`. Override the
+location with `--cache-dir`. A change to
+any of the four keys reads a different file, so a stale vector is never
+served.
