@@ -455,9 +455,11 @@ the log lines.
 ### Doctor
 
 `genus doctor` runs `datadog.reachable`. It skips when the keys are not set,
-and under `--offline`. Otherwise it asks Datadog to validate the API key. It
-fails when the site is unknown, when Datadog rejects the key (it never prints
-the key), or by error kind when Datadog cannot be reached. Its detail names the
+and under `--offline`. Otherwise it asks Datadog to validate the API key, then
+makes one log search that matches nothing, because only that second call checks
+the application key and its log read access. It fails when the site is unknown,
+when Datadog rejects either key (it never prints a key), or by error kind when
+Datadog cannot be reached. Its detail names the
 active tenants that have no scope entry, whose reads are refused until you add
 one.
 

@@ -131,6 +131,19 @@ def logs_aggregate(
     return ApiRequest("POST", "/api/v2/logs/analytics/aggregate", body)
 
 
+#: A log filter no line carries: the application-key probe reads no tenant data.
+APP_KEY_PROBE_QUERY = "genus_scope:no_access"
+
+
+def app_key_probe_request() -> ApiRequest:
+    """A one-row log search that matches nothing: Datadog checks the application key for it."""
+    body = {
+        "filter": {"query": APP_KEY_PROBE_QUERY, "from": "now-1m", "to": "now"},
+        "page": {"limit": 1},
+    }
+    return ApiRequest("POST", "/api/v2/logs/events/search", body)
+
+
 def validate_request() -> ApiRequest:
     """``GET /api/v1/validate``: checks the API key (Datadog ignores the application key)."""
     return ApiRequest("GET", "/api/v1/validate")
