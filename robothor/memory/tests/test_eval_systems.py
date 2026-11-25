@@ -82,6 +82,20 @@ class TestRegistry:
         assert unbounded.equal_budget is False
         assert all(s.equal_budget for s in es.make_systems(["recall", "keyword_only"]))
 
+    def test_recall_variants_switch_the_segment_and_graph_legs_off(self):
+        on, no_seg, no_graph = es.make_systems(["recall", "recall_no_segments", "recall_no_graph"])
+        assert (on.include_segments, on.include_graph) == (True, True)
+        assert (no_seg.name, no_seg.include_segments, no_seg.include_graph) == (
+            "recall_no_segments",
+            False,
+            True,
+        )
+        assert (no_graph.name, no_graph.include_segments, no_graph.include_graph) == (
+            "recall_no_graph",
+            True,
+            False,
+        )
+
     def test_unknown_system_is_refused(self):
         with pytest.raises(ValueError, match="unknown system"):
             es.make_systems(["oracle"])
@@ -269,6 +283,26 @@ class TestSystemsOnASeededWorld:
             if case.supporting_ids[0] in {i.id for i in bundle.items}:
                 hits += 1
         assert hits >= 1
+
+    @pytest.mark.asyncio
+    async def test_recall_reaches_a_transcript_only_detail_through_its_segment_leg(self, seeded):
+        """Recall searches as the world's reader, so its conversation segments
+        count; a segment is the transcript turn it starts with."""
+        world = seeded.world
+        on, off = es.make_systems(["recall", "recall_no_segments"])
+        cases = [c for c in world.cases if c.stratum == "raw_detail"][:5]
+        hits = {"recall": 0, "recall_no_segments": 0}
+        for system in (on, off):
+            for case in cases:
+                bundle = await system.retrieve(case, world_handle=seeded, token_budget=1500)
+                _check_bundle(bundle, world, 1500)
+                if system is off:
+                    assert {i.kind for i in bundle.items} <= {"fact"}
+                hits[system.name] += any(
+                    case.gold[0].lower() in i.text.lower() for i in bundle.items
+                )
+        assert hits["recall"] >= 1
+        assert hits["recall"] >= hits["recall_no_segments"]
 
     @pytest.mark.asyncio
     async def test_full_context_is_the_newest_history_in_chronological_order(self, seeded):
