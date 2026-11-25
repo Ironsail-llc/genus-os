@@ -1113,3 +1113,69 @@ def test_each_tenant_read_is_audited_under_that_tenant(audit_rows):
         assert row["details"]["outcome"] == "ok"
         assert "errors" in row["details"]
     assert len(_telemetry_rows(audit_rows)) == 3
+
+
+# ─── credentials, as well as personal data ─────────────────────────────
+
+#: A credential shape the platform redactor knows, built from parts so no
+#: scanner reads this file as carrying a real secret.
+BEARER = "sk-" + "abc123def456ghi789jkl012mno345"
+LEAK = f"Authorization: Bearer {BEARER}"
+
+
+def test_a_credential_in_a_span_is_redacted(datadog):
+    datadog.spans = {"data": [_span("5a1", "0", "2026-11-25T10:00:00Z", resource=f"GET /x {LEAK}")]}
+    datadog.trace = {
+        "data": [_span("5a1", "0", "2026-11-25T10:00:00Z", resource=LEAK, tags=[f"auth:{LEAK}"])]
+    }
+
+    listing = _ok(_client(CHILD_A).get("/api/telemetry/traces"))
+    trace = _ok(_client(CHILD_A).get(f"/api/telemetry/traces/{TRACE_ID}"))
+
+    for body in (listing, trace):
+        assert BEARER not in json.dumps(body)
+        assert "<redacted>" in json.dumps(body)
+
+
+def test_a_credential_in_a_monitor_name_is_redacted(datadog):
+    datadog.monitor_pages = [
+        {"monitors": [_monitor(9, f"Probe {LEAK}", "Alert")], "metadata": {"page_count": 1}}
+    ]
+
+    body = _ok(_client(CHILD_A).get("/api/telemetry/monitors"))
+
+    assert BEARER not in json.dumps(body)
+    assert "<redacted>" in body["monitors"][0]["name"]
+
+
+def test_a_credential_in_a_recorded_signal_is_redacted(audit_log):
+    audit_log.by_type["datadog.alert_received"] = [
+        _alert_event(
+            title=f"Checkout {LEAK}",
+            reason=LEAK,
+            would_run={"agent": "main", "prompt": f"Look at {LEAK}"},
+            delivery={"route": LEAK},
+            triage={"started": False, "reason": LEAK},
+        )
+    ]
+    audit_log.by_type["datadog.watch_finding"] = [_watch_event(brief=f"Spike, see {LEAK}")]
+
+    body = _ok(_client(CHILD_A).get("/api/telemetry/signals"))
+
+    assert BEARER not in json.dumps(body)
+    assert "<redacted>" in json.dumps(body)
+
+
+@pytest.mark.parametrize(
+    ("path", "event"),
+    [
+        ("/api/telemetry/traces", "telemetry.traces.read"),
+        ("/api/telemetry/monitors", "telemetry.monitors.read"),
+    ],
+)
+def test_a_credential_in_the_query_is_redacted_in_the_audit_row(path, event, audit_rows):
+    _client(CHILD_A).get(path, params={"q": f'"{BEARER}"'})
+
+    rows = _telemetry_rows(audit_rows, event)
+    assert len(rows) == 1
+    assert BEARER not in json.dumps(rows[0])
