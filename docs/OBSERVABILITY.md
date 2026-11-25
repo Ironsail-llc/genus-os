@@ -480,9 +480,9 @@ to put text containing an apostrophe in double quotes.
 | `metric_tags` | Metric queries | The tags lead the metric's tag filter, ANDed with the caller's |
 
 The bracket and quote rules above apply to the `monitors` filter and to a
-caller's monitor query as well. A tenant with no `monitors` filter, or no
-`metric_tags`, is refused before anything is sent; it never gets a query that
-merely matches nothing.
+caller's monitor query as well. A tenant with no `spans` or `monitors` filter,
+or no `metric_tags`, is refused that kind of read before anything is sent; it
+never gets a query that merely matches nothing.
 
 **A trace from another tenant reads as not found.** Datadog has no way to fetch
 a trace by id inside a filter, so Genus searches the tenant's spans for
