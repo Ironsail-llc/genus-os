@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -27,11 +28,18 @@ UNCONFIGURED = "test-tenant"
 SEARCH, AGGREGATE = "datadog_logs_search", "datadog_logs_aggregate"
 API_KEY, APP_KEY = "dd-api-key-0123456789", "dd-app-key-9876543210"
 
+NO_LOGS = "acme-child-c"
 SCOPES = {
     PARENT: {"logs": "*"},
     CHILD_A: {"logs": "service:shop-api"},
     CHILD_B: {"logs": "service:clinic-app"},
+    # An entry that grants no log access: the scope itself is refused.
+    NO_LOGS: {"logs": 'tag:"genus_scope:no_access"'},
 }
+
+#: The fixed "now" every test runs at, and the default window it resolves to.
+NOW = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
+HOUR_AGO, NOW_ISO = "2026-11-25T11:00:00.000Z", "2026-11-25T12:00:00.000Z"
 
 
 # ── a fake Datadog ─────────────────────────────────────────────────────────
@@ -100,6 +108,13 @@ def scopes(monkeypatch):
     reset_settings()
 
 
+@pytest.fixture(autouse=True)
+def clock(monkeypatch):
+    from robothor.engine.tools.handlers import datadog_logs
+
+    monkeypatch.setattr(datadog_logs, "_now", lambda: NOW, raising=False)
+
+
 @pytest.fixture
 def dd(monkeypatch, scopes):
     from robothor.engine.tools.handlers import datadog_logs
@@ -150,10 +165,39 @@ def test_search_defaults_to_the_last_hour_newest_first(dd, writer):
 
     (body,) = dd.bodies()
     assert body["filter"]["query"] == "service:shop-api"
-    assert (body["filter"]["from"], body["filter"]["to"]) == ("now-1h", "now")
+    # The relative default is resolved once, so the window the model is handed
+    # back (and pages with) is the one that was searched.
+    assert (body["filter"]["from"], body["filter"]["to"]) == (HOUR_AGO, NOW_ISO)
     assert body["sort"] == "-timestamp"
     assert 1 <= body["page"]["limit"] <= 100
-    assert result["window"] == {"start": "now-1h", "end": "now"}
+    assert result["window"] == {"start": HOUR_AGO, "end": NOW_ISO}
+
+
+@pytest.mark.parametrize(
+    "start,end,sent",
+    [
+        ("now-15m", "now", ("2026-11-25T11:45:00.000Z", NOW_ISO)),
+        ("now-2d", "now-1d", ("2026-11-23T12:00:00.000Z", "2026-11-24T12:00:00.000Z")),
+        ("now-1w", "now-30s", ("2026-11-18T12:00:00.000Z", "2026-11-25T11:59:30.000Z")),
+        # Absolute times are sent exactly as given.
+        ("2026-11-25T09:00:00Z", "2026-11-25T10:00:00Z", None),
+    ],
+)
+def test_a_relative_window_is_resolved_to_absolute_times_once(dd, writer, start, end, sent):
+    result = _run(SEARCH, {"start": start, "end": end})
+
+    expected = sent or (start, end)
+    (body,) = dd.bodies()
+    assert (body["filter"]["from"], body["filter"]["to"]) == expected
+    assert result["window"] == {"start": expected[0], "end": expected[1]}
+
+
+def test_aggregate_resolves_its_window_the_same_way(dd, writer):
+    result = _run(AGGREGATE, {"start": "now-15m", "group_by": ["service"]})
+
+    (body,) = dd.bodies()
+    assert (body["filter"]["from"], body["filter"]["to"]) == ("2026-11-25T11:45:00.000Z", NOW_ISO)
+    assert result["window"] == {"start": "2026-11-25T11:45:00.000Z", "end": NOW_ISO}
 
 
 def test_search_passes_window_limit_cursor_and_order(dd, writer):
@@ -201,7 +245,7 @@ def test_aggregate_counts_grouped_by_facets_inside_the_scope(dd, writer):
     (body,) = dd.bodies()
     assert body["filter"]["query"] == "(service:shop-api) AND (status:error)"
     assert [g["facet"] for g in body["group_by"]] == ["service", "status"]
-    assert (body["filter"]["from"], body["filter"]["to"]) == ("now-1h", "now")
+    assert (body["filter"]["from"], body["filter"]["to"]) == (HOUR_AGO, NOW_ISO)
     assert result["scope"] == CHILD_A
     assert result["buckets"] == [
         {"by": {"service": "shop-api", "status": "error"}, "count": 12},
@@ -225,6 +269,18 @@ def test_a_tenant_with_no_scope_is_refused_with_no_request(dd, writer, name):
 
     assert result["refused"] is True
     assert "not configured for this organization" in result["error"]
+    assert dd.requests == []
+
+
+@pytest.mark.parametrize("name", [SEARCH, AGGREGATE])
+def test_a_scope_with_no_log_access_is_refused_as_not_configured(dd, writer, name):
+    """The tenant's scope is the problem, not the query: no rewrite hint."""
+    result = _run(name, {"query": "status:error", "group_by": ["service"]}, _ctx(NO_LOGS))
+
+    assert result["refused"] is True
+    assert result["gate"] == "runtime"
+    assert "not configured for this organization" in result["error"]
+    assert "bracket" not in result["unlock"]
     assert dd.requests == []
 
 
@@ -300,6 +356,20 @@ def test_email_and_phone_in_messages_and_attributes_are_masked(dd, writer):
     assert row["attributes"]["usr"] == {"email": "<email>", "phone": "<phone>"}
 
 
+def test_personal_data_stored_as_a_number_is_masked(dd, writer):
+    dd.make_row = lambda i: _log(i, usr={"phone": 14155550199, "id": 42}, retries=3)
+
+    result = _run(SEARCH, {"limit": 1})
+
+    attrs = result["rows"][0]["attributes"]
+    assert "14155550199" not in json.dumps(result)
+    assert attrs["usr"]["phone"] == "<phone>"
+    # A number that is not personal data keeps its type.
+    assert attrs["usr"]["id"] == 42
+    assert attrs["retries"] == 3
+    assert attrs["http"] == {"status_code": 500}
+
+
 def test_aggregate_bucket_values_are_masked(dd, writer):
     dd.buckets = [{"by": {"@usr.email": "alice@example.com"}, "computes": {"c0": 4}}]
 
@@ -324,6 +394,27 @@ def test_an_oversized_page_is_fitted_with_a_note_and_a_cursor_that_continues(dd,
     # 200th: the rows that did not fit are on the next page.
     assert result["next_cursor"] == f"after-{kept}"
     assert len(json.dumps(result)) <= datadog_logs.RESULT_BUDGET_CHARS
+
+
+def test_no_cursor_when_the_second_page_is_not_the_rows_returned(dd, writer):
+    """Logs that arrive between the two calls shift the page; the cursor from
+    the second call would skip or repeat rows, so none is handed out."""
+    calls = {"n": 0}
+
+    def shifting(i: int) -> dict[str, Any]:
+        if i == 0:
+            calls["n"] += 1
+        offset = 0 if calls["n"] == 1 else 1000
+        return _log(i + offset, "x" * 5000, payload={"blob": "y" * 3000})
+
+    dd.make_row = shifting
+
+    result = _run(SEARCH, {"limit": 200})
+
+    assert result["truncated"] is True
+    assert len(dd.requests) == 2
+    assert result["next_cursor"] is None
+    assert "narrow the query or window" in result["note"]
 
 
 def test_a_page_that_fits_is_not_marked_truncated(dd, writer):
@@ -357,7 +448,7 @@ def test_a_search_is_audited_with_the_query_and_row_count_never_the_logs(dd, wri
     assert row["tenant_id"] == CHILD_A
     assert details["rows"] == 4
     assert details["query"] == "status:error @usr.email:<email>"
-    assert (details["start"], details["end"]) == ("now-1h", "now")
+    assert (details["start"], details["end"]) == (HOUR_AGO, NOW_ISO)
     text = json.dumps(row, default=str)
     assert "SECRET-LOG-BODY" not in text
     assert "carol@example.com" not in text
@@ -413,6 +504,14 @@ def registry():
     from robothor.engine.tools.registry import ToolRegistry
 
     return ToolRegistry()
+
+
+def test_a_benchmark_run_is_never_offered_them():
+    """They read real logs; a graded run touches nothing real."""
+    from robothor.engine.tools import DATADOG_TOOLS
+    from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
+
+    assert DATADOG_TOOLS.isdisjoint(benchmark_readonly_tools())
 
 
 def test_an_agent_with_no_grant_is_not_offered_them(registry):
