@@ -10,6 +10,8 @@ Gap categories:
     - Entity type imbalances: thin coverage in some entity categories
     - Thin clusters: well-mentioned but poorly connected entities
     - Uncertainty signals: recent agent outputs expressing uncertainty
+
+Every analysis reads one tenant: ``tenant_id``, defaulting to DEFAULT_TENANT.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -32,8 +35,11 @@ _IMBALANCE_RATIO = 0.10
 
 async def find_orphaned_entities(
     limit: int = 20,
+    *,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
     """Find entities with exactly 1 mention and zero relations."""
+    _tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
@@ -42,13 +48,15 @@ async def find_orphaned_entities(
             FROM memory_entities e
             LEFT JOIN memory_relations r
                 ON (r.source_entity_id = e.id OR r.target_entity_id = e.id)
+               AND r.tenant_id = e.tenant_id
             WHERE e.mention_count = 1
+              AND e.tenant_id = %s
             GROUP BY e.id, e.name, e.entity_type, e.mention_count
             HAVING COUNT(r.id) = 0
             ORDER BY e.last_seen DESC
             LIMIT %s
             """,
-            (limit,),
+            (_tenant, limit),
         )
         return [dict(row) for row in cur.fetchall()]
 
@@ -56,8 +64,11 @@ async def find_orphaned_entities(
 async def find_low_confidence_facts(
     threshold: float = 0.5,
     limit: int = 20,
+    *,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
     """Find active facts with confidence below the threshold."""
+    _tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
@@ -66,25 +77,29 @@ async def find_low_confidence_facts(
             FROM memory_facts
             WHERE is_active = TRUE
               AND confidence < %s
+              AND tenant_id = %s
             ORDER BY confidence ASC
             LIMIT %s
             """,
-            (threshold, limit),
+            (threshold, _tenant, limit),
         )
         return [dict(row) for row in cur.fetchall()]
 
 
-async def find_entity_type_imbalances() -> list[dict[str, Any]]:
+async def find_entity_type_imbalances(*, tenant_id: str = "") -> list[dict[str, Any]]:
     """Find entity types that are underrepresented relative to the dominant type."""
+    _tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             """
             SELECT entity_type, COUNT(*) AS count
             FROM memory_entities
+            WHERE tenant_id = %s
             GROUP BY entity_type
             ORDER BY count DESC
             """,
+            (_tenant,),
         )
         rows = [dict(row) for row in cur.fetchall()]
 
@@ -116,8 +131,11 @@ async def find_thin_entity_clusters(
     min_mentions: int = 3,
     max_relations: int = 1,
     limit: int = 20,
+    *,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
     """Find entities mentioned frequently but with few graph connections."""
+    _tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
@@ -127,13 +145,15 @@ async def find_thin_entity_clusters(
             FROM memory_entities e
             LEFT JOIN memory_relations r
                 ON (r.source_entity_id = e.id OR r.target_entity_id = e.id)
+               AND r.tenant_id = e.tenant_id
             WHERE e.mention_count >= %s
+              AND e.tenant_id = %s
             GROUP BY e.id, e.name, e.entity_type, e.mention_count
             HAVING COUNT(r.id) <= %s
             ORDER BY e.mention_count DESC
             LIMIT %s
             """,
-            (min_mentions, max_relations, limit),
+            (min_mentions, _tenant, max_relations, limit),
         )
         return [dict(row) for row in cur.fetchall()]
 
@@ -141,8 +161,11 @@ async def find_thin_entity_clusters(
 async def find_uncertainty_signals(
     hours_back: int = 168,
     limit: int = 20,
+    *,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
     """Find recent agent outputs that express uncertainty."""
+    _tenant = tenant_id or DEFAULT_TENANT
     with get_engine_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
@@ -152,6 +175,7 @@ async def find_uncertainty_signals(
                    created_at
             FROM agent_runs
             WHERE created_at > NOW() - INTERVAL '%s hours'
+              AND tenant_id = %s
               AND status = 'completed'
               AND (
                   output_text ILIKE '%%I don''t know%%'
@@ -164,34 +188,36 @@ async def find_uncertainty_signals(
             ORDER BY created_at DESC
             LIMIT %s
             """,
-            (hours_back, limit),
+            (hours_back, _tenant, limit),
         )
         return [dict(row) for row in cur.fetchall()]
 
 
-async def analyze_knowledge_gaps() -> dict[str, Any]:
-    """Run all gap detection analyses and return structured results."""
+async def analyze_knowledge_gaps(tenant_id: str = "") -> dict[str, Any]:
+    """Run all gap detection analyses for one tenant and return structured results."""
+    _tenant = tenant_id or DEFAULT_TENANT
     return {
-        "orphaned_entities": await find_orphaned_entities(),
-        "low_confidence_facts": await find_low_confidence_facts(),
-        "type_imbalances": await find_entity_type_imbalances(),
-        "thin_clusters": await find_thin_entity_clusters(),
-        "uncertainty_signals": await find_uncertainty_signals(),
+        "orphaned_entities": await find_orphaned_entities(tenant_id=_tenant),
+        "low_confidence_facts": await find_low_confidence_facts(tenant_id=_tenant),
+        "type_imbalances": await find_entity_type_imbalances(tenant_id=_tenant),
+        "thin_clusters": await find_thin_entity_clusters(tenant_id=_tenant),
+        "uncertainty_signals": await find_uncertainty_signals(tenant_id=_tenant),
     }
 
 
-async def get_memory_density_metrics() -> dict[str, Any]:
+async def get_memory_density_metrics(tenant_id: str = "") -> dict[str, Any]:
     """Summary gap metrics for reactive curiosity decisions.
 
     Returns counts of orphans, low-confidence facts, imbalances, thin clusters,
     plus a boolean `should_spawn` signal set when enough gaps accumulate to
     warrant an out-of-cycle curiosity-engine run.
     """
-    orphans = await find_orphaned_entities(limit=50)
-    low_conf = await find_low_confidence_facts(limit=50)
-    imbalances = await find_entity_type_imbalances()
-    thin = await find_thin_entity_clusters(limit=50)
-    uncertainty = await find_uncertainty_signals(limit=50)
+    _tenant = tenant_id or DEFAULT_TENANT
+    orphans = await find_orphaned_entities(limit=50, tenant_id=_tenant)
+    low_conf = await find_low_confidence_facts(limit=50, tenant_id=_tenant)
+    imbalances = await find_entity_type_imbalances(tenant_id=_tenant)
+    thin = await find_thin_entity_clusters(limit=50, tenant_id=_tenant)
+    uncertainty = await find_uncertainty_signals(limit=50, tenant_id=_tenant)
 
     orphan_count = len(orphans)
     low_conf_count = len(low_conf)

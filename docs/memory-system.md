@@ -99,6 +99,11 @@ Nightly in `robothor/memory/lifecycle.py::run_lifecycle_maintenance`:
 10. **Chat TTL** — delete 90d+ un-pinned, un-referenced verbatim turns
 11. **Breadcrumb pruning + promotion** — hot breadcrumbs promoted to `memory_facts`
 12. **Access log GC** — trim attribution history past 30d
+13. **Intent inference** — propose standing intents from recent facts (when `MEMORY_INTENT_POPULATE` is on)
+
+Every step runs once per active tenant (`crm_tenants.active`), inside `tenant_scope(tenant)`, and reads and writes only that tenant's rows. A consolidated fact never merges two tenants' facts, an insight never cites another tenant's facts and is deduplicated only against its own tenant's insights, and an inferred relation never joins two tenants' entities. Each derived row is written to the tenant of its sources. With `ROBOTHOR_RLS_ENABLED` on, the scope binds each step's connections to that tenant, so child tenants are maintained as well as the process's own. Step 1's 600s scoring budget covers the whole pass and is charged only for time spent scoring: each tenant may use an equal share of what is still unspent, so a tenant that needs less leaves more for the rest and no tenant is left unscored because an earlier tenant's other steps were slow. A tenant whose steps fail is logged and skipped; the others are still maintained. autoDream's lighter idle pass works the same way: intra-day consolidation, pruning, insight discovery (whose insights it now stores), the `working_context` refresh and preference mining each run once per tenant, and a tenant that fails is named in the run's recorded error while the pass carries on for the rest.
+
+Knowledge-gap analysis (`robothor/memory/gap_analysis.py`) reads one tenant: the calling run's tenant for the `get_knowledge_gaps` engine tool, `DEFAULT_TENANT` when no tenant is given (the MCP `get_knowledge_gaps` handler and the curiosity-density check currently pass none).
 
 ## Outcome-Driven Invalidation
 

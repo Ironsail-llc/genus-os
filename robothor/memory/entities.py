@@ -631,8 +631,11 @@ async def find_underconnected_entities(
     min_mentions: int = 2,
     max_relations: int = 1,
     limit: int = 50,
+    *,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
-    """Find entities mentioned multiple times but with few graph connections."""
+    """Find one tenant's entities mentioned multiple times but with few graph connections."""
+    _tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
@@ -642,36 +645,41 @@ async def find_underconnected_entities(
             FROM memory_entities e
             LEFT JOIN memory_relations r
                 ON (r.source_entity_id = e.id OR r.target_entity_id = e.id)
+               AND r.tenant_id = e.tenant_id
             WHERE e.mention_count >= %s
+              AND e.tenant_id = %s
             GROUP BY e.id, e.name, e.entity_type, e.mention_count
             HAVING COUNT(r.id) <= %s
             ORDER BY e.mention_count DESC
             LIMIT %s
             """,
-            (min_mentions, max_relations, limit),
+            (min_mentions, _tenant, max_relations, limit),
         )
         return [dict(row) for row in cur.fetchall()]
 
 
 async def find_cooccurring_entity_pairs(
     entity_ids: list[int],
+    *,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
-    """Find pairs of entities that appear in the same facts."""
+    """Find pairs of one tenant's entities that appear in the same facts of that tenant."""
     if not entity_ids:
         return []
 
+    _tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             """
             WITH target_entities AS (
-                SELECT id, name FROM memory_entities WHERE id = ANY(%s)
+                SELECT id, name FROM memory_entities WHERE id = ANY(%s) AND tenant_id = %s
             ),
             entity_facts AS (
                 SELECT te.id AS entity_id, te.name AS entity_name, f.id AS fact_id, f.fact_text
                 FROM target_entities te
                 JOIN memory_facts f ON te.name = ANY(f.entities)
-                WHERE f.is_active = TRUE
+                WHERE f.is_active = TRUE AND f.tenant_id = %s
             )
             SELECT
                 a.entity_id AS entity_a_id, a.entity_name AS entity_a_name,
@@ -684,20 +692,25 @@ async def find_cooccurring_entity_pairs(
             HAVING COUNT(DISTINCT a.fact_id) >= 1
             ORDER BY COUNT(DISTINCT a.fact_id) DESC
             """,
-            (entity_ids,),
+            (entity_ids, _tenant, _tenant),
         )
         return [dict(row) for row in cur.fetchall()]
 
 
 async def infer_relations(
     pairs: list[dict[str, Any]],
+    *,
+    tenant_id: str = "",
 ) -> list[dict[str, Any]]:
     """Use LLM to infer relationship types between co-occurring entity pairs.
 
-    Inferred relations are stored with confidence capped at MAX_INFERRED_CONFIDENCE.
+    Inferred relations are stored with confidence capped at MAX_INFERRED_CONFIDENCE,
+    under ``tenant_id``: the tenant the pairs and their shared facts were read from.
     """
     if not pairs:
         return []
+
+    _tenant = tenant_id or DEFAULT_TENANT
 
     stored = []
     for pair in pairs:
@@ -733,12 +746,14 @@ async def infer_relations(
                 src_id = name_to_id.get(rel.get("source", ""))
                 tgt_id = name_to_id.get(rel.get("target", ""))
                 rel_type = rel.get("relation", "")
-                if not (src_id and tgt_id and rel_type):
+                if src_id is None or tgt_id is None or not rel_type:
                     continue
 
                 confidence = min(float(rel.get("confidence", 0.6)), MAX_INFERRED_CONFIDENCE)
                 fact_ref = pair["shared_fact_ids"][0] if pair.get("shared_fact_ids") else None
-                rel_id = await add_relation(src_id, tgt_id, rel_type, fact_ref, confidence)
+                rel_id = await add_relation(
+                    src_id, tgt_id, rel_type, fact_ref, confidence, tenant_id=_tenant
+                )
                 stored.append(
                     {
                         "relation_id": rel_id,

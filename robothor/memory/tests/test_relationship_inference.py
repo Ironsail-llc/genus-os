@@ -282,3 +282,64 @@ class TestInferRelations:
         ):
             result = await infer_relations(pairs)
             assert result == []
+
+
+class TestInferRelationsTenancy:
+    """An inferred edge is written to the tenant of the entities it joins."""
+
+    @staticmethod
+    def _pair(a_id: int, b_id: int) -> dict:
+        return {
+            "entity_a_id": a_id,
+            "entity_a_name": "Alice",
+            "entity_b_id": b_id,
+            "entity_b_name": "Bob",
+            "shared_fact_ids": [10],
+            "shared_facts_text": ["Alice and Bob plan the Monday session together"],
+        }
+
+    @staticmethod
+    def _llm() -> str:
+        return json.dumps(
+            {
+                "relations": [
+                    {
+                        "source": "Alice",
+                        "target": "Bob",
+                        "relation": "collaborates_with",
+                        "confidence": 0.6,
+                    }
+                ]
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_stores_the_edge_under_the_given_tenant(self):
+        with (
+            patch(
+                "robothor.memory.entities.generation.generate",
+                new_callable=AsyncMock,
+                return_value=self._llm(),
+            ),
+            patch(
+                "robothor.memory.entities.add_relation", new_callable=AsyncMock, return_value=5
+            ) as mock_add_rel,
+        ):
+            await infer_relations([self._pair(1, 2)], tenant_id="test-tenant-a")
+        assert mock_add_rel.call_args.kwargs["tenant_id"] == "test-tenant-a"
+
+    @pytest.mark.asyncio
+    async def test_an_entity_with_id_zero_is_not_dropped(self):
+        with (
+            patch(
+                "robothor.memory.entities.generation.generate",
+                new_callable=AsyncMock,
+                return_value=self._llm(),
+            ),
+            patch(
+                "robothor.memory.entities.add_relation", new_callable=AsyncMock, return_value=5
+            ) as mock_add_rel,
+        ):
+            result = await infer_relations([self._pair(0, 2)])
+        assert len(result) == 1
+        assert mock_add_rel.call_args[0][:2] == (0, 2)
