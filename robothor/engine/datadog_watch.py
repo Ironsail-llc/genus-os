@@ -8,26 +8,26 @@ Two read-only observers, run from the daemon watchdog beside
   compared with the same count over the 8 windows before it (two hours). It
   fires when the count is at least :data:`SPIKE_MIN_COUNT` and above both
   :data:`SPIKE_RATIO` times the baseline median and the median plus
-  :data:`SPIKE_SPREAD` robust deviations. A service with no errors in the
-  baseline fires only at :data:`NEW_SERVICE_MIN_COUNT`.
+  :data:`SPIKE_SPREAD` robust deviations. A service whose baseline median is
+  zero (new, silent, or a stray error) fires only at :data:`NEW_SERVICE_MIN_COUNT`.
 * **Connection lost.** On the root tenant's engine only, Datadog rejecting
-  the key or being unreachable on :data:`CONNECTION_FAILURES_FOR_LOST`
+  the API key or the application key, or being unreachable, on :data:`CONNECTION_FAILURES_FOR_LOST`
   consecutive checks is one finding; the first good check after it is
   ``connection_restored``.
 
 Where it runs: each engine watches its OWN tenant (``EngineConfig.tenant_id``),
-so every tenant with an engine is covered exactly once and a delivered alert
-lands in that tenant's own alert digest -- :func:`robothor.engine.alerts.alert`
-has no tenant parameter and always writes to the process's tenant, so this is
-the only placement under which ``deliver`` reaches the right people. The
-engine whose tenant has no parent in ``crm_tenants`` also owns the
-connection check, so a lost key is reported once, not once per engine.
+so every tenant with an engine is covered once, and the tenant is the one
+whose alert digest the normal alerts path writes to (``alerts.alert`` has
+no tenant parameter and always writes to the process's tenant). The engine whose tenant has no parent in ``crm_tenants`` also owns
+the connection check, so a lost key is reported once, not once per engine.
+Each pass runs as a background task, so a slow Datadog never holds the
+watchdog loop.
 
 Every finding is one ``datadog.watch_finding`` audit event in the tenant it
-concerns, plus one ``event=datadog_watch`` log line. Under the default
-``ROBOTHOR_DATADOG_WATCH_MODE=dry_run`` nothing is delivered; under
-``deliver`` the same brief goes through ``alerts.alert``. Briefs carry counts
-and service names only, never a log message.
+concerns, plus one ``event=datadog_watch`` log line, both marked
+``mode=dry_run``: findings are recorded, not delivered. ``brief`` is the text
+that would be sent and ``would_notify`` says to whom. Briefs carry counts and
+service names only, never a log message.
 
 These observers flag only: nothing here stops, pauses or limits anything.
 """
@@ -64,7 +64,6 @@ __all__ = [
     "check_error_spike",
     "datadog_watch_detector",
     "reset_state",
-    "watch_mode",
 ]
 
 # ── detection thresholds (not usage limits) ─────────────────────────────────
@@ -97,7 +96,9 @@ _LINK_FAILURES = frozenset({"auth", "network"})
 #: in a tenant's scope is counted. Not a limit on what is watched.
 GROUP_PAGE = 1000
 
-Mode = Literal["dry_run", "deliver"]
+#: Every finding is recorded, never delivered, and says so: delivery is a
+#: separate, later change, and this tells its records apart from these.
+MODE = "dry_run"
 ConnectionVerdict = Literal["lost", "restored", "none"]
 
 
@@ -173,13 +174,6 @@ def _windows(now: datetime) -> list[tuple[datetime, datetime]]:
 # ── the watch ───────────────────────────────────────────────────────────────
 
 
-def watch_mode() -> Mode:
-    from robothor.settings import get_settings
-
-    mode = get_settings().integrations.datadog_watch_mode
-    return "deliver" if mode == "deliver" else "dry_run"
-
-
 async def _default_client() -> AsyncDatadogClient:
     from robothor.integrations.datadog.client import async_client_from_settings
 
@@ -197,8 +191,8 @@ async def _default_is_root(tenant_id: str) -> bool:
 
 
 def _would_notify(tenant_id: str) -> str:
-    # alerts.alert at warning level writes an alert_digest row for the main
-    # agent of the engine's tenant, which its heartbeat and briefing surface.
+    # Where the normal alerts path would put it: alerts.alert at warning level
+    # writes an alert_digest row for the main agent of the engine's tenant.
     return f"main agent alert digest, tenant {tenant_id}"
 
 
@@ -212,17 +206,14 @@ class DatadogWatch:
         client_factory: Callable[[], Awaitable[AsyncDatadogClient]] = _default_client,
         is_root: Callable[[str], Awaitable[bool]] = _default_is_root,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-        mode: Callable[[], Mode] = watch_mode,
     ) -> None:
         self.home_tenant = home_tenant
         self._client_factory = client_factory
         self._is_root = is_root
         self._clock = clock
-        self._mode = mode
         self._counts: dict[str, dict[str, dict[str, int]]] = {}
         self._outcomes: deque[str] = deque(maxlen=CONNECTION_FAILURES_FOR_LOST + 1)
         self._lost = False
-        self._episode = ""
         self._said: set[str] = set()
 
     def _once(self, key: str, message: str, *args: Any) -> None:
@@ -331,11 +322,7 @@ class DatadogWatch:
             },
             "window": {"start": _iso(start), "end": _iso(end), "minutes": WINDOW_MINUTES},
         }
-        title = f"Datadog error spike: {f.service}"
-        # The window in the id, so a spike in a later window is never
-        # suppressed by the alert cooldown of an earlier one.
-        alert_id = f"{fingerprint}:{_iso(end)}"
-        await self._finding(tenant, "error_spike", title, brief, details, alert_id)
+        self._finding(tenant, "error_spike", brief, details)
         return 1
 
     async def _watch_connection(self, client: AsyncDatadogClient, failures: list[str]) -> int:
@@ -368,7 +355,6 @@ class DatadogWatch:
         tenant = self.home_tenant
         if verdict == "lost":
             self._lost = True
-            self._episode = _iso(self._clock())
             cause = (
                 f"Datadog rejected {rejected}"
                 if self._outcomes[-1] == "auth"
@@ -379,41 +365,22 @@ class DatadogWatch:
                 f"{CONNECTION_FAILURES_FOR_LOST} checks. Error spikes are not being watched "
                 "until it works again; run `genus doctor --only datadog.reachable`."
             )
-            kind, title = "connection_lost", "Datadog link lost"
+            kind = "connection_lost"
         else:
             self._lost = False
             brief = "Genus can read Datadog again. Error-spike watching has resumed."
-            kind, title = "connection_restored", "Datadog link restored"
+            kind = "connection_restored"
         details = {"service": None, "checks": list(self._outcomes)}
         self._outcomes.clear()
-        # One alert id per episode: a delivered id is suppressed for the
-        # alert cooldown, and a second loss inside it is a new episode.
-        alert_id = f"datadog_link:{tenant}:{kind}:{self._episode}"
-        await self._finding(tenant, kind, title, brief, details, alert_id)
+        self._finding(tenant, kind, brief, details)
         return 1
 
-    async def _finding(
-        self,
-        tenant: str,
-        kind: str,
-        title: str,
-        brief: str,
-        details: dict[str, Any],
-        alert_id: str,
-    ) -> None:
-        """Record one finding; deliver it too under ``deliver`` for this engine's tenant."""
-        mode = self._mode()
-        if mode == "deliver" and tenant != self.home_tenant:
-            # alerts.alert writes to this engine's tenant only; never misroute.
-            logger.warning(
-                "datadog watch: a finding for tenant %s cannot be delivered from this engine",
-                tenant,
-            )
-            mode = "dry_run"
+    def _finding(self, tenant: str, kind: str, brief: str, details: dict[str, Any]) -> None:
+        """Record one finding: an audit event and a log line. Nothing is delivered."""
         event = {
             "kind": kind,
             **details,
-            "mode": mode,
+            "mode": MODE,
             "would_notify": _would_notify(tenant),
             "brief": brief,
         }
@@ -438,21 +405,9 @@ class DatadogWatch:
                 tenant=tenant,
                 kind=kind,
                 service=details.get("service"),
-                mode=mode,
+                mode=MODE,
             ),
         )
-        if mode == "deliver":
-            from robothor.engine import alerts
-
-            level = "info" if kind == "connection_restored" else "warning"
-            await alerts.alert(
-                level,
-                title,
-                brief,
-                alert_id=alert_id,
-                kind="datadog_watch",
-                metadata={"tenant_id": tenant, "kind": kind, "service": details.get("service")},
-            )
 
 
 # ── the daemon's entry point ────────────────────────────────────────────────

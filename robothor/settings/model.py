@@ -3985,17 +3985,6 @@ class IntegrationSettings(SettingsGroup):
         "access. A tenant with no entry, a blank logs filter or a malformed entry is refused.",
         since="unreleased",
     )
-    datadog_watch_mode: Literal["dry_run", "deliver"] = declare(
-        "dry_run",
-        "ROBOTHOR_DATADOG_WATCH_MODE",
-        "What the Datadog watch does with a finding (an error spike in one of this engine's "
-        "tenant's services, or the Datadog link lost or restored). dry_run: records a "
-        "datadog.watch_finding audit event with the brief that would be sent and to whom, and "
-        "delivers nothing. deliver: records the same event and sends the brief through the "
-        "normal alerts path. The one sanctioned mode switch on new behaviour, because the "
-        "watch acts on its own; it never stops, pauses or limits anything either way.",
-        since="unreleased",
-    )
 
 
 class GenusSettings(BaseSettings):
