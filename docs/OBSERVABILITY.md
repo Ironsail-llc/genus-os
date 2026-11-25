@@ -851,7 +851,12 @@ cooldown applies on top (alert id `datadog_alert:<tenant>:<monitor>:<step>`),
 except to a P1 page, whose id also carries the time of the recovery that
 closed the previous episode (`...:page:<recovery $DATE>`): a P1 monitor that
 triggers, recovers and triggers again inside the cooldown pages twice, once
-per incident, while a storm inside one episode still pages once.
+per incident, while a storm inside one episode still pages once. Without a
+`date` in the payload, the closing recovery's `event_id` names the next
+episode instead. This is deliberate: a P1 monitor that flaps (or a multi-alert
+one whose groups recover separately) pages once per episode rather than once
+an hour, because missing a second real incident is worse than the noise; give
+a flapping monitor a recovery threshold or a lower priority.
 A send that fails is recorded as `delivery_failed` (with `error`) and the next
 notification of the episode tries again. The episode moves on whatever the
 send did: a step the cooldown held counts as sent (it was, within the hour),
