@@ -293,6 +293,9 @@ def test_the_read_allowlist_is_exactly_the_audited_set():
                 "list_contact_messages",
                 # devops_metrics_snapshots by ctx.tenant_id.
                 "devops_query_metrics",
+                # Datadog logs, bounded by scope_for(ctx.tenant_id).
+                "datadog_logs_search",
+                "datadog_logs_aggregate",
             }
         )
         == CROSS_TENANT_READS
