@@ -238,7 +238,8 @@ class TestSeedAndCleanup:
         primary, shadow = eval_tenants
         world = ew.generate_world(3, "small")
         before = seed.world_row_counts(eval_tenants)
-        assert set(before) == set(seed.WORLD_TABLES)
+        assert set(seed.WORLD_TABLES) <= set(before)
+        assert set(before) <= set(seed.WORLD_TABLES) | set(seed.OPTIONAL_WORLD_TABLES)
 
         seeded = await seed.seed_world(
             world, primary, shadow_tenant_id=shadow, embed_batch=_fake_embed_batch
@@ -301,9 +302,7 @@ class TestSeedAndCleanup:
         assert sum(deleted.values()) > 0
 
     @pytest.mark.integration
-    def test_counts_and_cleanup_cover_the_graph_and_segment_tables_when_present(
-        self, eval_tenants
-    ):
+    def test_counts_and_cleanup_cover_the_graph_and_segment_tables_when_present(self, eval_tenants):
         """Seeding CRM rows fires identity hooks that write resolution decisions;
         conversation segments and mentions reference the eval tenant too. Cleanup
         must remove them, or the tenant row can never be deleted."""

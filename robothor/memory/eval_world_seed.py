@@ -75,6 +75,18 @@ WORLD_TABLES: tuple[str, ...] = (
     "crm_tenants",
 )
 
+#: Tables of the graph schema and conversation segments. They hold rows for an
+#: eval tenant whenever they exist: CRM seeding fires identity hooks (entities
+#: and resolution decisions), segments index the seeded chat history, and the
+#: write path records mentions and evidence. Counted and cleaned only where the
+#: schema has them.
+OPTIONAL_WORLD_TABLES: tuple[str, ...] = (
+    "memory_relation_evidence",
+    "memory_mentions",
+    "memory_resolution_decisions",
+    "memory_segments",
+)
+
 #: Strata scored by "the current value ranks first" rather than "in top-k".
 _RANK_FIRST = frozenset({"knowledge_update", "long_tenure"})
 #: Strata retrieval alone cannot score; the answer-and-judge arm does.
@@ -435,6 +447,10 @@ _COUNT_SQL: dict[str, str] = {
 # Children before parents: relations reference facts and entities, messages
 # reference sessions, chunks reference documents, people reference companies.
 _DELETE_ORDER: tuple[tuple[str, str], ...] = (
+    ("memory_relation_evidence", "DELETE FROM memory_relation_evidence WHERE tenant_id = %s"),
+    ("memory_mentions", "DELETE FROM memory_mentions WHERE tenant_id = %s"),
+    ("memory_resolution_decisions", "DELETE FROM memory_resolution_decisions WHERE tenant_id = %s"),
+    ("memory_segments", "DELETE FROM memory_segments WHERE tenant_id = %s"),
     ("memory_relations", "DELETE FROM memory_relations WHERE tenant_id = %s"),
     ("memory_facts", "DELETE FROM memory_facts WHERE tenant_id = %s"),
     ("memory_entities", "DELETE FROM memory_entities WHERE tenant_id = %s"),
@@ -452,8 +468,17 @@ _DELETE_ORDER: tuple[tuple[str, str], ...] = (
 )
 
 
+def _present_optional_tables(cur: Any) -> tuple[str, ...]:
+    cur.execute(
+        "SELECT c FROM unnest(%s::text[]) c WHERE to_regclass(c) IS NOT NULL",
+        (list(OPTIONAL_WORLD_TABLES),),
+    )
+    present = {r[0] for r in cur.fetchall()}
+    return tuple(t for t in OPTIONAL_WORLD_TABLES if t in present)
+
+
 def world_row_counts(tenant_ids: Sequence[str]) -> dict[str, int]:
-    """Rows each of ``WORLD_TABLES`` holds for the given eval tenants."""
+    """Rows each of ``WORLD_TABLES`` (and each present optional table) holds."""
     tenants = _require_eval_tenants(tenant_ids)
     from robothor.db.connection import get_connection, tenant_scope
 
@@ -461,7 +486,8 @@ def world_row_counts(tenant_ids: Sequence[str]) -> dict[str, int]:
     for tenant in tenants:
         with tenant_scope(tenant), get_connection() as conn:
             cur = conn.cursor()
-            for table in WORLD_TABLES:
+            for table in (*WORLD_TABLES, *_present_optional_tables(cur)):
+                counts.setdefault(table, 0)
                 sql = _COUNT_SQL.get(table, f"SELECT count(*) FROM {table} WHERE tenant_id = %s")  # noqa: S608 — fixed table names
                 cur.execute(sql, (tenant,))
                 counts[table] += int(cur.fetchone()[0])
@@ -483,9 +509,13 @@ def cleanup_world(tenant_ids: Sequence[str]) -> dict[str, int]:
     for tenant in tenants:
         with tenant_scope(tenant), get_connection() as conn:
             cur = conn.cursor()
+            optional = set(OPTIONAL_WORLD_TABLES)
+            present = set(_present_optional_tables(cur))
             for table, sql in _DELETE_ORDER:
+                if table in optional and table not in present:
+                    continue
                 cur.execute(sql, (tenant,))
-                deleted[table] += max(cur.rowcount, 0)
+                deleted[table] = deleted.get(table, 0) + max(cur.rowcount, 0)
             cur.execute("SAVEPOINT eval_world_tenant")
             try:
                 cur.execute("DELETE FROM crm_tenants WHERE id = %s", (tenant,))
