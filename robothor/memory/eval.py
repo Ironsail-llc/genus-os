@@ -35,6 +35,20 @@ logger = logging.getLogger(__name__)
 EVAL_TENANT = "memory-eval"
 
 
+def is_eval_tenant(tenant_id: object) -> bool:
+    """``memory-eval`` or ``memory-eval-<suffix>``; nothing else.
+
+    The one predicate both the suite and world mode use. Every eval path
+    deletes all memory rows in the tenant it is given, so it may only ever be
+    given one of these.
+    """
+    if not isinstance(tenant_id, str) or not tenant_id:
+        return False
+    return tenant_id == EVAL_TENANT or (
+        tenant_id.startswith(EVAL_TENANT + "-") and len(tenant_id) > len(EVAL_TENANT) + 1
+    )
+
+
 class EvalPreconditionError(RuntimeError):
     """The eval cannot run — as distinct from running and failing cases.
 
@@ -58,6 +72,29 @@ class EvalPreconditionError(RuntimeError):
 # the nightly unit fails every night, and a gate that always pages gets muted.
 # That is the exact failure this overhaul exists to prevent.
 DEFAULT_MIN_PASS_RATE = 0.90
+
+
+def require_eval_tenant(tenant_id: str) -> str:
+    """Return ``tenant_id`` if it is an evaluation tenant, else raise.
+
+    Raised before any database call. The suite's cleanup deletes every fact
+    and relation in its tenant, so ``--tenant`` pointed at a real tenant must
+    stop here, not partway through someone's memory.
+    """
+    from robothor.constants import DEFAULT_TENANT
+
+    if not tenant_id or tenant_id == DEFAULT_TENANT:
+        raise EvalPreconditionError(
+            f"refusing to seed eval fixtures into {tenant_id or DEFAULT_TENANT!r} "
+            f"(the production tenant); pass an isolated tenant such as {EVAL_TENANT!r}"
+        )
+    if not is_eval_tenant(tenant_id):
+        raise EvalPreconditionError(
+            f"refusing to run against {tenant_id!r}: it is not an evaluation tenant. The eval "
+            f"deletes every fact and relation in its tenant, so it runs only in {EVAL_TENANT!r} "
+            f"or {EVAL_TENANT + '-<suffix>'!r}"
+        )
+    return tenant_id
 
 
 def min_pass_rate() -> float:
@@ -580,16 +617,21 @@ def _refresh_distractor_recency(tenant_id: str) -> None:
 
 
 def _cleanup_tenant(tenant_id: str, *, keep_distractors: bool = False) -> None:
-    """Delete all seeded facts for the eval tenant. Never touches DEFAULT_TENANT."""
-    from robothor.constants import DEFAULT_TENANT
-    from robothor.db.connection import get_connection
+    """Delete all seeded facts for the eval tenant. Refuses any other tenant.
 
-    if tenant_id == DEFAULT_TENANT:
-        logger.warning("refusing to cleanup memory_facts for DEFAULT_TENANT")
-        return
+    The guard is repeated here, not only in ``run_suite``: this function
+    deletes every fact and relation in the tenant, so a direct call with a
+    real tenant must raise before the database is touched.
+    """
+    require_eval_tenant(tenant_id)
+    from robothor.db.connection import get_connection
 
     with get_connection() as conn:
         cur = conn.cursor()
+        # memory_relations.fact_id references memory_facts with no ON DELETE.
+        # The suite writes no relations, but a stray one in this tenant would
+        # make the DELETE below raise and abort the run before it records.
+        cur.execute("DELETE FROM memory_relations WHERE tenant_id = %s", (tenant_id,))
         if keep_distractors:
             cur.execute(
                 "DELETE FROM memory_facts WHERE tenant_id = %s AND (category IS DISTINCT FROM %s)",
@@ -762,13 +804,7 @@ async def run_suite(
     # older guard lived in _cleanup_tenant, which meant a mistyped --tenant
     # would happily seed fixture facts into the operator's real memory and
     # then merely decline to delete them.
-    from robothor.constants import DEFAULT_TENANT
-
-    if not tenant_id or tenant_id == DEFAULT_TENANT:
-        raise EvalPreconditionError(
-            f"refusing to seed eval fixtures into {tenant_id or DEFAULT_TENANT!r} "
-            f"(the production tenant); pass an isolated tenant such as {EVAL_TENANT!r}"
-        )
+    require_eval_tenant(tenant_id)
 
     meta, cases = load_suite(suite_path)
     _ensure_tenant(tenant_id)
