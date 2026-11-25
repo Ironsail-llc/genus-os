@@ -451,6 +451,125 @@ the key), or by error kind when Datadog cannot be reached. Its detail names the
 active tenants that have no scope entry, whose reads are refused until you add
 one.
 
+### Datadog alerts into Genus
+
+When a monitor in the shared account changes state (alert, warn, no data,
+recovered), Datadog can call Genus. Genus works out which tenant the monitor
+belongs to and records the alert there, together with who it would notify and
+the read-only triage run it would start. **This is a dry run for now:** the
+alert is recorded and visible, nobody is notified and no run starts.
+
+**1. The webhook channel.** Add a channel to the webhook receiver's channels
+(`docs/webhooks.yaml`, a `docs/webhooks.d/` drop-in (both instance files), or the chart's
+`hooks.channels`; see [Webhook ingress](event-bus.md#webhook-ingress)). The
+stream must be `datadog`:
+
+```yaml
+channels:
+  datadog:
+    stream: datadog
+    secret_env: DATADOG_WEBHOOK_SECRET
+    signature_scheme: header_secret
+    signature_header: X-Genus-Webhook-Secret
+    event_type_prefix: datadog.alert
+```
+
+Datadog cannot sign a webhook body, so the `header_secret` scheme checks a
+shared secret that Datadog sends in a custom header. The comparison runs in
+constant time. Generate a long random value and put it in the receiver's
+environment under the `secret_env` name. A wrong or missing header gets
+`401`. The receiver logs one warning naming the channel and the reason
+(`secret mismatch` or `missing secret header`), and never logs the value
+sent. Nothing is published or recorded. If the variable is not set, every
+delivery gets `503`.
+
+**2. The Datadog webhook.** In Datadog's Webhooks integration, add a webhook
+whose URL is the receiver's public address followed by `/api/webhooks/datadog`.
+Set **Custom Headers** to
+`{"X-Genus-Webhook-Secret": "<the secret>"}`, and set the **Payload** to:
+
+```json
+{
+  "monitor_id": "$ALERT_ID",
+  "event_id": "$ID",
+  "title": "$ALERT_TITLE",
+  "transition": "$ALERT_TRANSITION",
+  "status": "$ALERT_STATUS",
+  "priority": "$ALERT_PRIORITY",
+  "query": "$ALERT_QUERY",
+  "tags": "$TAGS",
+  "link": "$LINK",
+  "date": "$DATE",
+  "hostname": "$HOSTNAME"
+}
+```
+
+Then mention the webhook (`@webhook-<its name>`) in each monitor's message.
+Genus parses the body defensively. A missing field is read as empty, a body
+that is valid JSON but not an object is recorded with empty fields, and a
+body that is not JSON gets `400`. `tags` may be the comma-separated `$TAGS`
+string or a JSON list. `monitor_id` falls back to an `alert_id` field.
+
+**3. The `org:` tag decides the tenant.** Tag each monitor with
+`org:<tenant id>`. Only the tags are read for tenancy, never any other
+field.
+
+| Tags | Recorded in | `routing` |
+|------|-------------|-----------|
+| `org:` names an active tenant | that tenant | `org` |
+| no `org:` tag | the root tenant (`ROBOTHOR_DEFAULT_TENANT`) | `untagged` |
+| `org:` names no active tenant | the root tenant | `unknown_org:<value>` |
+| two different `org:` tags | the root tenant | `ambiguous_org:<a>,<b>` |
+
+`$TAGS` also carries the tags of the group that triggered a multi-alert
+monitor. Keep `org:` off your hosts and services, so that only the monitor
+sets it.
+
+**4. What a dry run records.** The engine reads the `datadog` stream once
+`ROBOTHOR_DATADOG_SCOPES` is set. For each transition it writes one audit
+event, `datadog.alert_received`, in the routed tenant. The event has category
+`datadog`, actor `datadog` and target `datadog_monitor:<monitor id>`, and its
+details hold:
+
+- `monitor_id`, `event_id`, `title`, `transition`, `datadog_transition`,
+  `status`, `priority`, `tags`, `link`, `date`. `transition` is normalised
+  (`triggered`, `re_triggered`, `warn`, `no_data`, `recovered`, ...).
+  `datadog_transition` is the value Datadog sent. Email addresses and phone
+  numbers in the title and tags are masked.
+- `routing`, from the table above, and `mode: "dry_run"`.
+- `would_notify`: where the normal alerts path would deliver an alert at this
+  level. `triggered` and `re_triggered` are `critical` and would page the
+  instance operator on Telegram and then each `ROBOTHOR_ALERT_FALLBACK_CHANNELS`
+  channel (names only, never their targets). Warn and no-data transitions are
+  `warning`, recoveries are `info`, and both would go to the main agent's
+  `alert_digest` inbox.
+- `would_run`: the triage run. It names the tenant and the agent (this
+  engine's main agent when the alert is its own tenant's, otherwise `null`,
+  because another tenant's engine names its own main agent). It is marked
+  `read_only: true` and carries a fixed prompt that names the monitor and asks
+  for a read-only look at the tenant's logs with the Datadog log tools.
+
+A recovery changes nothing in place. It is its own event with
+`transition: recovered` and the same `monitor_id`, so you can pair it with
+the trigger. Datadog retries webhooks, so the same (monitor, transition,
+date) is recorded once. The key is remembered in Redis for 24 hours, and if
+Redis cannot be reached the alert is still recorded. When the audit write
+fails, the event goes to `robothor:events:datadog:dlq` and the key is
+released.
+
+Each recorded alert also writes one log line with no title or body:
+`event=datadog_alert tenant=<tenant> monitor_id=<id> transition=<transition> mode=dry_run routing=<routing>`.
+
+To see the records, open the Helm's audit log, or call the bridge's
+`GET /api/audit/events?event_type=datadog.alert_received`. Both read
+`robothor.audit.logger.query_log`, filtered to the tenants the caller may see.
+
+**5. The mode.** `ROBOTHOR_DATADOG_ALERTS_MODE` is `dry_run`, the default.
+`deliver` is declared but not available yet. Setting it stops the settings
+from loading, with the message `delivery is not available yet`. This is the
+one mode switch the platform allows for new behaviour, because this feature
+acts on its own whenever an external system calls it.
+
 ## Notes
 
 - Export is best-effort (a 5s-timeout POST per run); a collector outage never

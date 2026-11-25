@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-517 settings in 18 groups.
+518 settings in 18 groups.
 
 ## autonomy
 
@@ -134,6 +134,7 @@ External systems the instance watches, such as an n8n instance.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_DATADOG_ALERTS_MODE` | Literal | `dry_run` | `robothor-engine`, `robothor-bridge` | no | unreleased | What Genus does with a Datadog monitor alert that reaches its datadog webhook channel. dry_run: record it as a datadog.alert_received audit event in the tenant its org: tag names, with who it would notify and the read-only triage run it would start, and deliver nothing. deliver: not available yet, and refused at startup with that message. This is the one sanctioned mode switch for new behaviour, because the feature acts on its own when an external system calls it. |
 | `ROBOTHOR_DATADOG_API_KEY` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | unreleased | The Datadog API key Genus reads the shared Datadog account with, sent as DD-API-KEY. One key for the whole instance, resolved vault-first from the root tenant: every tenant's reads go through it, bounded by that tenant's entry in ROBOTHOR_DATADOG_SCOPES. Use a key of a read-only service account. |
 | `ROBOTHOR_DATADOG_APP_KEY` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | unreleased | The Datadog application key paired with ROBOTHOR_DATADOG_API_KEY, sent as DD-APPLICATION-KEY. Instance-wide and resolved vault-first like the API key; give it read scopes only. |
 | `ROBOTHOR_DATADOG_SCOPES` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | JSON object mapping a tenant id to what it may read, e.g. {"acme-child-a": {"logs": "service:shop-api", "spans": "service:shop-api", "monitors": "team:shop", "metric_tags": ["service:shop-api"]}}. Every query is ANDed with the filter; "*" means everything. spans defaults to the logs filter, monitors and metric_tags to no access. A tenant with no entry, a blank logs filter or a malformed entry is refused. |
