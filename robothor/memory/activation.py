@@ -486,6 +486,7 @@ def graph_candidates_for_query(
     person_restricted: bool = False,
     person_id: str | None = None,
     limit: int = LIMIT,
+    deadline: float | None = None,
     connect: Callable[..., Any] | None = None,
 ) -> list[Candidate]:
     """The ``graph`` leg of ``search_facts``: one connection, read-only.
@@ -498,25 +499,44 @@ def graph_candidates_for_query(
     It runs under a savepoint, so a failure (a statement timeout, a database
     not yet migrated) rolls back only this leg and never aborts a transaction
     the connection shares with the caller.
+
+    ``deadline`` (a ``time.monotonic()`` instant) bounds it on the server, as
+    :func:`recall_for_message` does: ``statement_timeout`` is armed on this
+    connection for the time left, Postgres itself stops the seed lookup and
+    the walk at the deadline (:class:`psycopg2.errors.QueryCanceled` reaches
+    the caller), and it is reset before the connection goes back; a failed
+    reset closes the connection. Nothing is cancelled from outside. A
+    deadline already past returns nothing.
     """
+    if deadline is not None and deadline <= time.monotonic():
+        return []
     with _cursor(connect) as cur:
-        cur.execute("SAVEPOINT memory_graph_leg")
+        armed = False
         try:
-            found = _query_graph(
-                cur,
-                tenant_id,
-                query,
-                seed_fact_ids,
-                reader_scope_id=reader_scope_id,
-                person_restricted=person_restricted,
-                person_id=person_id,
-                limit=limit,
-            )
-        except Exception:
-            cur.execute("ROLLBACK TO SAVEPOINT memory_graph_leg")
-            raise
-        cur.execute("RELEASE SAVEPOINT memory_graph_leg")
-        return found
+            if deadline is not None:
+                left_ms = max(1, int((deadline - time.monotonic()) * 1000))
+                cur.execute("SELECT set_config('statement_timeout', %s, false)", (f"{left_ms}ms",))
+                armed = True
+            cur.execute("SAVEPOINT memory_graph_leg")
+            try:
+                found = _query_graph(
+                    cur,
+                    tenant_id,
+                    query,
+                    seed_fact_ids,
+                    reader_scope_id=reader_scope_id,
+                    person_restricted=person_restricted,
+                    person_id=person_id,
+                    limit=limit,
+                )
+            except Exception:
+                cur.execute("ROLLBACK TO SAVEPOINT memory_graph_leg")
+                raise
+            cur.execute("RELEASE SAVEPOINT memory_graph_leg")
+            return found
+        finally:
+            if armed:
+                _reset_statement_timeout(cur)
 
 
 def _query_graph(

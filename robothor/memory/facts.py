@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -1328,6 +1329,13 @@ _GRAPH_FIELDS = (
 )
 
 
+#: Time the graph leg of ``search_facts`` may take, enforced by Postgres on
+#: the leg's own connection (``activation.graph_candidates_for_query``). On
+#: timeout the leg returns nothing and the other legs' results stand. Warm-up
+#: has its own, tighter budget (``warmup.GRAPH_WARMUP_BUDGET_SECONDS``).
+GRAPH_LEG_BUDGET_SECONDS = 0.25
+
+
 async def _graph_leg(
     query: str,
     legs: dict[str, list[Candidate]],
@@ -1357,6 +1365,7 @@ async def _graph_leg(
             person_restricted=restricted,
             person_id=scope.person_id if restricted and scope is not None else None,
             limit=max(activation.LIMIT, limit),
+            deadline=time.monotonic() + GRAPH_LEG_BUDGET_SECONDS,
             connect=get_connection,
         )
     except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
