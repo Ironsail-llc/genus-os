@@ -427,6 +427,9 @@ credentials (`is_platform_credential` in `robothor/secrets/classification.py`):
 - `config_get` shows them only as a fingerprint, and `config_set` refuses them
   and refuses `ROBOTHOR_DATADOG_SCOPES`, so an agent cannot widen its own
   tenant's filter. Change the map with `genus config set` on the instance.
+- Set `ROBOTHOR_DATADOG_SCOPES` in the instance's environment rather than in
+  `config.yaml`. The environment wins over the file, and an agent that can
+  write files in the workspace can write the file.
 
 The limit: code running inside the engine process itself can use the keys.
 The engine's own code is the trusted part; an agent reaches Datadog only
