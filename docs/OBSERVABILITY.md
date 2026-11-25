@@ -546,7 +546,9 @@ you open it:
   organization.*
 - **Monitors** lists the organization's monitors with a status badge and when
   each last triggered. **Firing only** is on by default and keeps alert, warn
-  and no data; turn it off to see every monitor. An organization whose scope
+  and no data. A muted monitor never counts as firing, here or in the
+  Organizations summary, which matches how the watch counts them. Turn the
+  toggle off to see every monitor, muted ones included. An organization whose scope
   shares no monitors is told *Monitors are not shared with this organization.*
 - **Activity** lists what Genus recorded for this organization in the last
   7 days: Datadog monitor alerts that reached it, and the watch's error spikes

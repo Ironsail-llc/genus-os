@@ -478,6 +478,23 @@ MONITORS_NOT_SHARED = "Monitors are not shared with this organization."
 #: Monitor statuses that mean someone should look (Datadog spells them so).
 FIRING_STATUSES = frozenset({"alert", "warn", "no data"})
 
+#: Firing, asked of Datadog's monitor search: those statuses, and not muted. The
+#: watch counts firing monitors with the same filter, so the page and the
+#: briefs agree; a muted monitor in alert is someone's decision, not news.
+FIRING_FILTER = '(status:alert OR status:warn OR status:"no data") AND muted:false'
+
+
+def _firing_query(query: str) -> str:
+    """``query`` narrowed to firing monitors; raises ScopeError for a refused query.
+
+    The caller's query is checked on its own first, so it cannot close the
+    filter's parenthesis any more than the scope's.
+    """
+    text = query.strip()
+    compose("*", text)
+    return f"{FIRING_FILTER} AND ({text})" if text else FIRING_FILTER
+
+
 #: Monitors per search page; the route reads every page.
 MONITOR_PAGE = 100
 
@@ -538,13 +555,11 @@ def search_monitors(
         return refused
 
     def read(client: DatadogClient, scope: Any) -> Any:
-        return _all_monitors(client, scope, q)
+        return _all_monitors(client, scope, _firing_query(q) if firing else q)
 
     state, rows = _read(request, tenant_id, event, details, "monitors", read)
     if state != "ok":
         return dict(rows)
-    if firing:
-        rows = [r for r in rows if _is_firing(r.status)]
     _audit(request, event, tenant_id, "ok", **details, monitors=len(rows))
     return {
         "status": "ok",
@@ -775,8 +790,7 @@ def _tenant_figures(client: DatadogClient, tenant_id: str, start: str) -> dict[s
         entry["error_kind"] = _kind_of(exc)
     if _monitors_shared(scope):
         try:
-            monitors = _all_monitors(client, scope, "")
-            entry["firing_monitors"] = sum(1 for m in monitors if _is_firing(m.status))
+            entry["firing_monitors"] = len(_all_monitors(client, scope, FIRING_FILTER))
         except Exception as exc:  # noqa: BLE001 — one tenant's failure is its own row
             entry["error_kind"] = entry["error_kind"] or _kind_of(exc)
     if entry["error_kind"]:
