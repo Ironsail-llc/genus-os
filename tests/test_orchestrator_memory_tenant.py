@@ -493,15 +493,25 @@ def ingest_fixture():
         cur = conn.cursor()
         cur.execute("INSERT INTO crm_tenants (id, display_name) VALUES (%s, %s)", (tenant, tenant))
         conn.commit()
+    from robothor.memory.facts import Extraction
+
     fact = {"fact_text": text, "category": "preference", "entities": ["Bob"], "confidence": 0.9}
+    # Ingestion runs through the one write path (robothor/memory/write_path.py):
+    # one extraction call, then conflict handling, then the fact and its graph.
     stubs = [
-        patch("robothor.memory.ingestion.extract_facts", new=AsyncMock(return_value=[fact])),
         patch(
-            "robothor.memory.ingestion.resolve_and_store",
+            "robothor.memory.facts.extract_facts_detailed",
+            new=AsyncMock(return_value=Extraction(facts=[fact])),
+        ),
+        patch(
+            "robothor.memory.write_path.resolve_and_store",
             new=AsyncMock(side_effect=RuntimeError("synthetic: no conflict model")),
         ),
-        patch("robothor.memory.ingestion.extract_entities_batch", new=AsyncMock(return_value={})),
         patch("robothor.llm.ollama.get_embedding_async", new=AsyncMock(return_value=[0.0] * 1024)),
+        patch(
+            "robothor.llm.ollama.get_embeddings_batch_async",
+            new=AsyncMock(side_effect=lambda texts, *_a, **_k: [[0.0] * 1024 for _ in texts]),
+        ),
     ]
     for s in stubs:
         s.start()
