@@ -223,21 +223,7 @@ class RecallSystem:
         extra = {k: v for k, v in options.items() if k in accepted}
         with tenant_scope(tenant):
             rows = await search_facts(case.question, limit=_CANDIDATES, tenant_id=tenant, **extra)
-        cands: list[tuple[str, str, str]] = []
-        for row in rows:
-            if row.get("kind") == "segment":
-                turn = world_handle.turn_id(int(row.get("start_ref") or -1))
-                if turn:
-                    cands.append((turn, "turn", str(row.get("fact_text", ""))))
-                continue
-            fid = world_handle.fact_id(row.get("id", -1))
-            if fid is None:
-                meta = row.get("metadata") or {}
-                if isinstance(meta, str):
-                    meta = json.loads(meta)
-                fid = (meta.get("eval_world") or {}).get("fact_id")
-            if fid:
-                cands.append((fid, "fact", str(row.get("fact_text", ""))))
+        cands = _fact_candidates(rows, world_handle)
         return _bundle(self.name, fill_budget(cands, token_budget), token_budget, True, started)
 
 
@@ -264,10 +250,18 @@ class RecallBudgetSystem:
 
         started = time.perf_counter()
         tenant = world_handle.tenant_id
+        # As ``recall``: the world's conversations are its eval reader's.
+        reader = getattr(world_handle.seeded, "reader_person_id", None)
         with tenant_scope(tenant):
-            head = await search_facts(case.question, limit=_CANDIDATES, tenant_id=tenant)
+            head = await search_facts(
+                case.question, limit=_CANDIDATES, tenant_id=tenant, reader_person_id=reader
+            )
             tail = await search_facts(
-                case.question, limit=_CANDIDATES, tenant_id=tenant, use_reranker=False
+                case.question,
+                limit=_CANDIDATES,
+                tenant_id=tenant,
+                use_reranker=False,
+                reader_person_id=reader,
             )
         cands = _fact_candidates([*head, *tail], world_handle)
         return _bundle(self.name, fill_budget(cands, token_budget), token_budget, True, started)
@@ -276,8 +270,16 @@ class RecallBudgetSystem:
 def _fact_candidates(
     rows: Sequence[dict[str, Any]], world_handle: WorldHandle
 ) -> list[tuple[str, str, str]]:
+    """World ids for ``search_facts`` rows: a fact as its fact, a conversation
+    segment as the transcript turn it starts with (a segment's ``id`` is from
+    another table and is never read as a fact id)."""
     cands: list[tuple[str, str, str]] = []
     for row in rows:
+        if row.get("kind") == "segment":
+            turn = world_handle.turn_id(int(row.get("start_ref") or -1))
+            if turn:
+                cands.append((turn, "turn", str(row.get("fact_text", ""))))
+            continue
         fid = world_handle.fact_id(row.get("id", -1))
         if fid is None:
             meta = row.get("metadata") or {}

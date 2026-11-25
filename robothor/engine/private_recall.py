@@ -75,7 +75,6 @@ def _main_session_key() -> str:
 
 
 def private_reader_for_run(
-    *,
     trigger_type: Any,
     trigger_detail: str | None,
     user_id: str | None,

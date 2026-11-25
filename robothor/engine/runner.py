@@ -82,6 +82,7 @@ from robothor.engine.models import (
 )
 from robothor.engine.output_validation import validated_completion
 from robothor.engine.plan_integrity import nudge_for_plan_research
+from robothor.engine.private_recall import private_reader_for_run
 from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
     with_surface_note,
@@ -787,6 +788,10 @@ class AgentRunner(
             elif self.config.operator_name:
                 _sender = self.config.operator_name
 
+            _private_reader = private_reader_for_run(  # the only private reader
+                trigger_type, trigger_detail, effective_user_id, effective_identity
+            )
+
             def _build_interactive_warmup() -> tuple[str, dict[str, float]]:
                 # Filled per section with its elapsed seconds.
                 _timings: dict[str, float] = {}
@@ -803,6 +808,7 @@ class AgentRunner(
                         agent_config=agent_config,
                         section_timings=_timings,
                         accessible_tenant_ids=_accessible_tenants,
+                        private_reader=_private_reader,
                     )
                 return text, _timings
 

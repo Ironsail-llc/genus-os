@@ -44,7 +44,12 @@ from robothor.memory.drift import (
 )
 from robothor.memory.recall import Candidate, apply_reserved, fuse, relevance_from_rank
 from robothor.memory.vector_tuning import apply_hnsw_session
-from robothor.memory.visibility import fact_visibility_sql, graph_reader, readers_for
+from robothor.memory.visibility import (
+    fact_visibility_sql,
+    graph_reader,
+    readers_for,
+    served_reader,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1683,11 +1688,13 @@ async def search_facts(
             ``source="graph"``. It walks every origin: this is a deliberate
             search, not automatic recall. Read-only, like every leg.
         reader_scope_id: Another id of the reader (``person:{id}``,
-            ``user:{uid}``, ``agent:{id}``, or a bare CRM person id). Every
-            fact leg returns shared rows plus rows owned by one of the reader's
-            ids (``reader_person_id``, ``reader_user_id``, this); the graph walk
-            reads as the person, else the user (``visibility.graph_reader``).
-            Under a restricted ``scope`` the reader is the scope's person only.
+            ``user:{uid}``, ``agent:{id}``, or a bare CRM person id), for a
+            caller outside a run; the engine passes none (its reader is
+            ``reader_person_id`` / ``reader_user_id``). Every fact leg returns
+            shared rows plus rows owned by one of the reader's ids; the graph
+            walk reads as the person, else the user (``visibility.graph_reader``).
+            A restricted ``scope`` only narrows the reader
+            (``visibility.served_reader``).
         scope: Optional "own data + shared" DataScope (Task 5, Unified
             Identity Context). ``None`` (the default — every pre-existing
             caller) is unrestricted. A restricted scope adds
@@ -1698,18 +1705,21 @@ async def search_facts(
             legs cannot filter by person, so a restricted scope leaves them
             out (the router's rule for unscopable stores) — see
             robothor/identity/scope.py. The segment leg can filter by person
-            and stays on, but the scope only narrows its reader: the reader
-            passed is kept only when it is the scope's person (and its user id
-            only when it belongs to that person); a restricted scope never
-            makes anyone a reader.
+            and stays on, read by the same reader as the fact legs, which the
+            scope only narrows: the reader passed is kept only when it is the
+            scope's person (and its user id only when it belongs to that
+            person); a restricted scope never makes anyone a reader.
         include_segments: Fuse a ``segment`` leg of raw conversation
             (``robothor.memory.segments.search_segments``). On by default;
             when on, the ``chat_turn`` leg is not run even if asked for — the
             segment leg covers the same conversation with a keyword leg too.
-        reader_person_id: The reader's own person. Segments private to that
-            person are returned with the shared ones; without it, shared
-            segments only. Applied on every call; under a restricted
-            ``scope`` it is kept only when it is the scope's person.
+        reader_person_id: The person the run serves (``ToolContext.private_reader``,
+            never the run's identity alone). Facts and segments private to
+            that person are returned with the shared ones; without it, shared
+            only. Applied on every call; under a restricted ``scope`` it is
+            kept only when it is the scope's person, and ``reader_user_id``
+            only when that user provably is the same person
+            (``segments.user_belongs_to_person``).
         room_ids: Workspaces the reader can access; a workspace conversation's
             segments are returned only for these.
         reader_user_id: The reader's own user id; a member's webchat
@@ -1756,14 +1766,25 @@ async def search_facts(
     if scope is not None and scope.restricted:
         scope_clause = "AND (person_id = %s OR person_id IS NULL)"
         scope_params = (scope.person_id,)
+    # One reader for every leg, facts, segments and the graph walk alike: the
+    # person the run serves (reader_person_id / reader_user_id, from
+    # ToolContext.private_reader). A restricted scope only NARROWS it, never
+    # supplies one: the reader is kept only when its person is the scope's
+    # person, and its user id only when that user provably is the same person;
+    # anything else reads nothing private. See robothor/memory/visibility.py.
+    _tenant = tenant_id or DEFAULT_TENANT
+    reader_person, reader_user = served_reader(scope, reader_person_id, reader_user_id)
+    if scope is not None and scope.restricted and reader_person and reader_user:
+        from robothor.memory.segments import user_belongs_to_person
+
+        if not await asyncio.to_thread(user_belongs_to_person, _tenant, reader_user, reader_person):
+            reader_user = None
     # Who owns a row (scope_kind / scope_id, written by the write path) is
     # checked on every call, whatever the rollout mode: shared rows, plus rows
-    # owned by one of the reader's ids. Under a restricted scope the reader is
-    # the scope's person only. See robothor/memory/visibility.py. The one
-    # exception is the tenant admin's erasure view, which must see a private
-    # fact to forget it.
+    # owned by one of the reader's ids. The one exception is the tenant admin's
+    # erasure view, which must see a private fact to forget it.
     readers = readers_for(
-        scope=scope, person_id=reader_person_id, user_id=reader_user_id, extra=reader_scope_id
+        scope=scope, person_id=reader_person, user_id=reader_user, extra=reader_scope_id
     )
     unscopable_ok = scope_clause == ""
     if not admin_erasure_view:
@@ -1772,7 +1793,6 @@ async def search_facts(
         scope_params = (*scope_params, *visible_params)
     filters = f"{'AND is_active = TRUE' if active_only else ''} {scope_clause}"
     fetch_min = LEG_FETCH_MIN_WIDE if _rerank_wide_enabled() else LEG_FETCH_MIN
-    _tenant = tenant_id or DEFAULT_TENANT
 
     # Synchronous DB work inside this coroutine is the pre-existing pattern
     # (it blocks the loop for the two leg queries); it is not widened here.
@@ -1798,21 +1818,8 @@ async def search_facts(
     # would read summaries built from other people's facts. As in the router,
     # a store that cannot express person scoping is left out, not unfiltered
     # (``unscopable_ok``, decided above before the owner predicate is added).
-    # Segments filter by reader themselves, so they stay on. A restricted scope
-    # only NARROWS the reader the caller passed (the person the run serves); it
-    # never supplies one. The reader is kept only when its person is the
-    # scope's person, and its user id only when that user provably is the same
-    # person; anything else reads no private segment.
-    segment_reader, segment_user = reader_person_id, reader_user_id
-    if scope is not None and scope.restricted:
-        from robothor.memory.segments import user_belongs_to_person
-
-        if not segment_reader or str(segment_reader) != str(scope.person_id):
-            segment_reader, segment_user = None, None
-        elif segment_user and not await asyncio.to_thread(
-            user_belongs_to_person, _tenant, segment_user, segment_reader
-        ):
-            segment_user = None
+    # Segments filter by reader themselves, so they stay on, read by the same
+    # reader as the fact legs (decided above).
     legs.update(
         await _auxiliary_legs(
             query=query,
@@ -1824,8 +1831,8 @@ async def search_facts(
             include_chat_turns=include_chat_turns and unscopable_ok,
             include_segments=include_segments,
             limit=limit,
-            reader_person_id=segment_reader,
-            reader_user_id=segment_user,
+            reader_person_id=reader_person,
+            reader_user_id=reader_user,
             room_ids=room_ids,
         )
     )

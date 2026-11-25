@@ -351,7 +351,8 @@ class TestRecallAtEqualBudget:
         a = await product.retrieve(case, world_handle=seeded, token_budget=2048)
         b = await budget.retrieve(case, world_handle=seeded, token_budget=2048)
         _check_bundle(b, seeded.world, 2048)
-        assert {i.kind for i in b.items} == {"fact"}
+        # Facts, and the eval reader's conversation turns the segment leg adds.
+        assert {i.kind for i in b.items} <= {"fact", "turn"}
         assert [i.id for i in b.items][: len(a.items)] == [i.id for i in a.items]
         assert b.tokens > a.tokens
 
