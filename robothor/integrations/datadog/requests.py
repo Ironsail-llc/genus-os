@@ -384,14 +384,9 @@ def _span(raw: dict[str, Any]) -> SpanRow:
     attrs = _dict(raw.get("attributes"))
     custom = _dict(attrs.get("custom"))
     inner = _dict(attrs.get("attributes"))
-    duration = next(
-        (
-            d
-            for d in (_int_or_none(v) for v in (custom.get("duration"), inner.get("duration")))
-            if d is not None
-        ),
-        None,
-    )
+    duration = _int_or_none(custom.get("duration"))
+    if duration is None:
+        duration = _int_or_none(inner.get("duration"))
     return SpanRow(
         trace_id=_str(attrs.get("trace_id")),
         span_id=_str(attrs.get("span_id")),

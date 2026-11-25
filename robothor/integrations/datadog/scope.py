@@ -30,6 +30,12 @@ that swallows it. In practice that means:
 
 Refusing a rare legitimate query is acceptable; letting an escape through is
 not. The operator's own scope filters are held to the same rules.
+
+Two reads take no query text at all. A trace is fetched as the span filter
+``trace_id:<id>`` (:func:`trace_query`), and the id must be plain hex or
+decimal digits. A metric query is built from validated parts
+(:func:`compose_metric`) with the tenant's ``metric_tags`` always first in the
+tag filter.
 """
 
 from __future__ import annotations
