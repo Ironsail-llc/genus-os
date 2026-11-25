@@ -147,11 +147,20 @@ class Fleet:
         self.sent: list[tuple[str, str, str, str, dict[str, Any]]] = []
         self.result: Any = True
         self.entries = 0
+        #: Levels whose send fails (a tenant without a working pager).
+        self.failing_levels: set[str] = set()
+        #: Awaited inside the next send, before it returns: work that lands meanwhile.
+        self.during_send: Any = None
 
     async def alert(self, level: str, title: str, body: str, **kw: Any) -> bool:
         self.sent.append((self.current, level, title, body, kw))
+        if self.during_send is not None:
+            hook, self.during_send = self.during_send, None
+            await hook()
         if isinstance(self.result, BaseException):
             raise self.result
+        if level in self.failing_levels:
+            return False
         return bool(self.result)
 
     async def feed(
@@ -826,3 +835,99 @@ def test_a_read_only_run_offers_no_write_tool() -> None:
     assert offered, "and read-only tools to offer"
     assert not offered & writes
     assert offered <= READONLY_TOOLS
+
+
+# ── closing an episode, in any order ────────────────────────────────
+
+
+def _triage_key(tenant: str, monitor: str = "12345") -> str:
+    return f"{dlv.EPISODE_PREFIX}{tenant}:{monitor}:triage"
+
+
+async def test_a_recovery_closes_the_episode_even_after_a_failed_page(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """No working pager: every P1 page fails, and still each episode recovers and triages."""
+    fleet.failing_levels = {"critical"}
+    for episode in range(3):
+        t, r = str(10 * episode + 1), str(10 * episode + 2)
+        await fleet.deliver_webhook(_payload(priority="P1", event_id=t, date=t))
+        await fleet.deliver_webhook(_payload(transition="Recovered", event_id=r, date=r))
+
+    recoveries = [r for r in audit.alerts() if r["details"]["transition"] == "recovered"]
+    assert [r["details"]["mode"] for r in recoveries] == ["delivered"] * 3
+    assert len(fleet.triage_runs()) == 3
+
+
+async def test_a_trigger_older_than_the_recovery_does_not_reopen_the_episode(
+    fleet: Fleet, audit: Audit
+) -> None:
+    await fleet.deliver_webhook(_payload(transition="Recovered", event_id="2", date="20"))
+    await fleet.deliver_webhook(_payload(event_id="1", date="10"))  # read late
+    await fleet.deliver_webhook(_payload(event_id="3", date="30"))  # the next incident
+
+    modes = [(r["details"]["date"], r["details"]["mode"]) for r in audit.alerts()]
+    assert modes == [("20", "delivered"), ("10", "suppressed"), ("30", "delivered")]
+    assert audit.alerts()[1]["details"]["delivery"]["reason"] == "superseded_by_recovery"
+    assert [lvl for _, lvl, *_ in fleet.sent] == ["info", "warning"]
+    assert len(fleet.triage_runs()) == 1
+
+
+async def test_a_recovery_that_lands_during_the_triggers_send_wins(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """The trigger's page returns after its recovery was handled: the episode stays closed."""
+    recovery = _webhook(_payload(transition="Recovered", event_id="2", date="20", tags="env:prod"))
+
+    async def recovery_lands() -> None:
+        await fleet.feed(ROOT, recovery)
+
+    fleet.during_send = recovery_lands
+    await fleet.feed(
+        ROOT, _webhook(_payload(priority="P1", event_id="1", date="10", tags="env:prod"))
+    )
+    await fleet.feed(
+        ROOT, _webhook(_payload(priority="P1", event_id="3", date="30", tags="env:prod"))
+    )
+
+    assert [lvl for _, lvl, *_ in fleet.sent] == ["critical", "info", "critical"]
+    assert [r["details"]["mode"] for r in audit.alerts()][-1] == "delivered"
+    assert len(fleet.triage_runs()) == 1, "the stale trigger starts no run; the new one does"
+
+
+# ── the triage wait gives its claim back, and only its own ──────────
+
+
+async def test_a_triage_wait_cancelled_by_shutdown_gives_the_claim_back(
+    fleet: Fleet, audit: Audit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    monkeypatch.setattr(dlv, "TRIAGE_WAIT_SECONDS", (30,))
+    hooks = fleet.engines[ROOT]
+    fleet.current = ROOT
+    with patch("robothor.engine.dedup.try_acquire", new_callable=AsyncMock, return_value=False):
+        await hooks._handle_event(
+            STREAM, b"1-0", _webhook(_payload(tags="env:prod")), fleet.redis, "engine"
+        )
+        await asyncio.sleep(0)
+        for task in list(dlv._triage_tasks):
+            task.cancel()
+        await asyncio.gather(*dlv._triage_tasks, return_exceptions=True)
+    await get_event_writer().flush()
+
+    assert _triage_key(ROOT) not in fleet.redis.keys
+    runs = [r["details"]["status"] for r in audit.rows if r["event_type"] == "datadog.triage_run"]
+    assert runs == ["cancelled"]
+
+
+async def test_a_triage_wait_never_deletes_another_entrys_claim(fleet: Fleet, audit: Audit) -> None:
+    key = _triage_key(ROOT)
+
+    async def busy_while_the_episode_moves_on(_agent: str) -> bool:
+        fleet.redis.keys[key] = "started:another-entry"
+        return False
+
+    with patch("robothor.engine.dedup.try_acquire", side_effect=busy_while_the_episode_moves_on):
+        await fleet.deliver_webhook(_payload(tags="env:prod"))
+    assert fleet.redis.keys[key] == "started:another-entry"
