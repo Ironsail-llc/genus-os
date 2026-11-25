@@ -32,14 +32,16 @@ def _stub_llm(monkeypatch):
     from robothor.memory import facts as facts_mod
 
     async def _fake_extract(_content, *_a, **_kw):
-        return [
-            {
-                "fact_text": "the depot runs fortnightly",
-                "category": "project",
-                "entities": [],
-                "confidence": 0.9,
-            }
-        ]
+        return facts_mod.Extraction(
+            [
+                {
+                    "fact_text": "the depot runs fortnightly",
+                    "category": "project",
+                    "entities": [],
+                    "confidence": 0.9,
+                }
+            ]
+        )
 
     async def _fake_embedding(_t):
         return list(_CONSTANT_VECTOR)
@@ -47,7 +49,8 @@ def _stub_llm(monkeypatch):
     async def _fake_batch(texts):
         return [list(_CONSTANT_VECTOR) for _ in texts]
 
-    monkeypatch.setattr(facts_mod, "extract_facts", _fake_extract)
+    # Where the write path calls extraction (it no longer calls extract_facts).
+    monkeypatch.setattr(facts_mod, "extract_facts_detailed", _fake_extract)
     monkeypatch.setattr(llm_client, "get_embedding_async", _fake_embedding)
     monkeypatch.setattr(llm_client, "get_embeddings_batch_async", _fake_batch)
 
@@ -105,9 +108,7 @@ async def test_processing_stores_facts_and_marks_done(
     assert row["attempts"] == 1
     assert row["fact_ids"], "a completed job must record what it stored"
 
-    db_cursor.execute(
-        "SELECT tenant_id FROM memory_facts WHERE id = ANY(%s)", (row["fact_ids"],)
-    )
+    db_cursor.execute("SELECT tenant_id FROM memory_facts WHERE id = ANY(%s)", (row["fact_ids"],))
     assert {r["tenant_id"] for r in db_cursor.fetchall()} == {job_tenant}
 
 
@@ -121,7 +122,7 @@ async def test_failure_is_recorded_not_swallowed(
     async def _explode(*_a, **_kw):
         raise RuntimeError("ollama unreachable")
 
-    monkeypatch.setattr(facts_mod, "extract_facts", _explode)
+    monkeypatch.setattr(facts_mod, "extract_facts_detailed", _explode)
 
     job_id = await enqueue_write("something", tenant_id=job_tenant)
     await process_write_job(job_id)
@@ -187,7 +188,7 @@ async def test_poison_payload_stops_after_max_attempts(
     async def _explode(*_a, **_kw):
         raise RuntimeError("always fails")
 
-    monkeypatch.setattr(facts_mod, "extract_facts", _explode)
+    monkeypatch.setattr(facts_mod, "extract_facts_detailed", _explode)
 
     job_id = await enqueue_write("poison", tenant_id=job_tenant)
     db_cursor.execute(

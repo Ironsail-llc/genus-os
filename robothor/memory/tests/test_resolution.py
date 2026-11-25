@@ -12,6 +12,11 @@ from robothor.memory.facts import VALID_CATEGORIES, parse_extraction_response
 from robothor.memory.resolution import compose_resolution_text, record_resolution
 
 
+def _written(fact_id: int) -> AsyncMock:
+    """The write path's answer: the fact it kept, or none when the gate refused it."""
+    return AsyncMock(return_value={"fact_ids": [fact_id] if fact_id else []})
+
+
 def _mock_conn() -> tuple[Any, Any]:
     cur = MagicMock()
     conn = MagicMock()
@@ -45,7 +50,7 @@ class TestRecordResolution:
         ctx, cur = _mock_conn()
         supersede = MagicMock()
         with (
-            patch.object(res, "store_fact", new=AsyncMock(return_value=500)),
+            patch.object(res, "write_facts", new=_written(500)),
             patch.object(res, "get_connection", return_value=ctx),
             patch.object(
                 res,
@@ -68,7 +73,7 @@ class TestRecordResolution:
         supersede = MagicMock()
         confirmed = {"operator_confirmed": {"at": "2026-01-01T00:00:00+00:00", "by": "op"}}
         with (
-            patch.object(res, "store_fact", new=AsyncMock(return_value=500)),
+            patch.object(res, "write_facts", new=_written(500)),
             patch.object(res, "get_connection", return_value=ctx),
             patch.object(
                 res,
@@ -92,7 +97,7 @@ class TestRecordResolution:
         ctx, _cur = _mock_conn()
         find = AsyncMock()
         with (
-            patch.object(res, "store_fact", new=AsyncMock(return_value=501)),
+            patch.object(res, "write_facts", new=_written(501)),
             patch.object(res, "get_connection", return_value=ctx),
             patch.object(res, "find_similar_facts", new=find),
         ):
@@ -103,12 +108,12 @@ class TestRecordResolution:
 
     @pytest.mark.asyncio
     async def test_a_refused_store_is_an_error_not_a_success(self) -> None:
-        """store_fact answers 0 when it keeps nothing (the quality gate refused
+        """The write path keeps nothing (the quality gate refused
         the fact). Reporting ``resolution_id: 0`` as success hides that the
         resolution was never recorded."""
         ctx, cur = _mock_conn()
         with (
-            patch.object(res, "store_fact", new=AsyncMock(return_value=0)),
+            patch.object(res, "write_facts", new=_written(0)),
             patch.object(res, "get_connection", return_value=ctx),
         ):
             out = await record_resolution("the X alert", "confirmed safe")
@@ -132,7 +137,7 @@ class TestHandlerArguments:
     @pytest.mark.asyncio
     async def test_wrong_argument_names_are_named_in_the_error(self) -> None:
         store = AsyncMock()
-        with patch.object(res, "store_fact", new=store):
+        with patch.object(res, "write_facts", new=store):
             out = await self._call({"item": "the X alert", "resolution": "closed"})
         assert "missing: open_item, outcome" in out["error"]
         assert "received: item, resolution" in out["error"]
@@ -140,7 +145,7 @@ class TestHandlerArguments:
 
     @pytest.mark.asyncio
     async def test_only_the_blank_argument_is_reported_missing(self) -> None:
-        with patch.object(res, "store_fact", new=AsyncMock()):
+        with patch.object(res, "write_facts", new=AsyncMock()):
             out = await self._call({"open_item": "the X alert", "outcome": "  "})
         assert out["error"].split("missing: ")[1].split(";")[0] == "outcome"
 

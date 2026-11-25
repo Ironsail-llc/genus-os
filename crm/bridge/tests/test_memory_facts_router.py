@@ -233,7 +233,7 @@ def test_an_edit_without_a_reason_says_edit_not_forget(controls_client_as_operat
 # statement, not by call order, so the test says what the table holds rather
 # than how many queries the handler happens to make.
 
-_LOCKED = ("Alice prefers tea", ["Alice"], True, "fact", None, None)
+_LOCKED = ("Alice prefers tea", ["Alice"], True, "fact", None, None, "shared", None)
 
 
 class _ScriptedCursor:
@@ -367,7 +367,9 @@ def test_editing_another_tenants_fact_is_404(controls_client_as_operator, script
 
 def test_editing_an_inactive_fact_is_409(controls_client_as_operator, scripted_db, audit_calls):
     """The row is stale, as in Forget's 409: the page's copy is what is wrong."""
-    cursor = scripted_db(locked=("Alice moved on", ["Alice"], False, "fact", None, None))
+    cursor = scripted_db(
+        locked=("Alice moved on", ["Alice"], False, "fact", None, None, "shared", None)
+    )
     resp = controls_client_as_operator.patch(EDIT, json=GOOD_EDIT)
     assert resp.status_code == 409
     assert isinstance(resp.json()["detail"], str)
@@ -524,7 +526,9 @@ def test_an_unchanged_text_keeps_the_stored_vector(
     controls_client_as_operator, scripted_db, embeddings, audit_calls
 ):
     """Saving the same words (give or take surrounding blanks) is not a text edit."""
-    cursor = scripted_db(locked=("Alice prefers tea ", ["Alice"], True, "fact", None, None))
+    cursor = scripted_db(
+        locked=("Alice prefers tea ", ["Alice"], True, "fact", None, None, "shared", None)
+    )
     resp = controls_client_as_operator.patch(
         EDIT, json={"fact_text": "  Alice prefers tea", "reason": "confirming it"}
     )
@@ -595,8 +599,26 @@ def test_the_bound_is_well_under_the_dashboard_proxy_timeout():
     "locked",
     [
         None,  # another tenant's id, or no such fact
-        ("Alice moved on for good", ["Alice"], False, "fact", None, None),  # inactive
-        ("Alice prefers green tea", ["Alice"], True, "fact", None, None),  # same words
+        (
+            "Alice moved on for good",
+            ["Alice"],
+            False,
+            "fact",
+            None,
+            None,
+            "shared",
+            None,
+        ),  # inactive
+        (
+            "Alice prefers green tea",
+            ["Alice"],
+            True,
+            "fact",
+            None,
+            None,
+            "shared",
+            None,
+        ),  # same words
     ],
 )
 def test_no_embedding_is_fetched_for_an_edit_that_cannot_use_one(
@@ -638,7 +660,9 @@ def test_a_short_text_the_nightly_prune_would_retire_is_refused(
 def test_a_short_text_in_a_category_the_prune_protects_is_allowed(
     controls_client_as_operator, scripted_db, embeddings, audit_calls
 ):
-    scripted_db(locked=("Alice likes coffee", ["Alice"], True, "preference", None, None))
+    scripted_db(
+        locked=("Alice likes coffee", ["Alice"], True, "preference", None, None, "shared", None)
+    )
     resp = controls_client_as_operator.patch(
         EDIT, json={"fact_text": "tea at 4pm", "reason": "she changed her mind"}
     )

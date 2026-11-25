@@ -2042,6 +2042,33 @@ the workspace and listed in its history.
 - **Revisions.** Publishing a period that already has an edition publishes the
   next revision of it; earlier revisions stay.
 
+### Storing a memory: `store_memory`
+
+`store_memory` takes `content` (and optionally `content_type`) and stores it
+through the same write path as every other memory
+([Memory System — Write path](memory-system.md#write-path)): one extraction
+turns the content into facts, each naming the people, organisations, projects
+and other entities it mentions and the relations it states; each fact then goes
+through conflict handling. So a call that repeats a known fact reinforces it
+rather than adding a copy, an update supersedes the older fact, and a call that
+contradicts an operator-confirmed fact is kept on record but leaves the
+operator's fact the active one. What the tool stores is agent-generated, and
+content you pass as an email, web page or document (`content_type` `email`,
+`web`, `document`, ...) is stored as external; both rank below what a user or
+the CRM said. Facts are shared within the tenant, as before.
+
+The result has `id` (the first fact now in memory, a new one or one it
+reinforced) and `facts_stored` (new facts), plus, when they apply,
+`facts_skipped`, `facts_kept_confirmed` (facts the operator's word overruled),
+`already_known_ids`, `relations_stored`, `graph_errors` and
+`conflict_checks_timed_out`. If extraction fails, or finds nothing, the content
+is stored as written and the result says `extraction_failed` with the reason. If
+the store itself fails (the embedding service or database is down) the result
+has an `error` naming the reason and nothing was kept; a partial failure is
+`facts_failed` with a `warning`. Conflict classification is one
+short model call made only when a similar fact already exists; past the call's
+time budget the fact is stored as new rather than lost.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
