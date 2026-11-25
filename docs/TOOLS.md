@@ -2083,6 +2083,19 @@ before. On a deployment with more than one, the call is refused and nothing is
 read or written: `deep_reason` and the MCP tools return an `error` that names the
 entry point, and the orchestrator answers 400.
 
+`deep_reason`'s inner model writes Python that runs inside the engine process.
+That code reaches memory through `search_memory`, `get_entity` and
+`memory_block_read`. It cannot import the platform's own modules (`robothor`,
+`crm`), the database and Redis drivers, or `importlib`, `sys` and `builtins`, so
+an `import` of any of them in a REPL cell raises `ImportError`. The whole session
+also runs bound to the run's tenant, so a database connection taken anywhere in
+it is bound to that tenant for row-level security. This is not a sandbox. Code
+running in the same process can still find a way round the import guard, and the
+connection binding only holds where row-level security is on and the engine
+connects as its non-superuser role ([Tenant RLS](runbooks/TENANT_RLS.md)). Don't grant
+`deep_reason` to an agent whose prompts an untrusted party controls on a
+multi-tenant deployment.
+
 On the orchestrator, `X-Tenant-Id` on its own never chooses a tenant. A request
 with no token may send it only to name the tenant the rule above already gives
 it. A request that names any other tenant this way gets a 401, because acting as
