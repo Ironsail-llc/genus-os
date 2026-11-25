@@ -363,8 +363,9 @@ async def handle_alert_event(
     it. When the consumer group redelivers that same entry after a crash
     between the claim and the write, the alert is recorded rather than taken
     for a duplicate, so a crash loses nothing. A crash after the write but
-    before the extension can let at most one duplicate through once the
-    pending window has passed. Without ``message_id``, any claim is a
+    before the extension can record the alert once more: at once when the
+    engine redelivers the same entry, or when another copy arrives after the
+    pending window. Without ``message_id``, any claim is a
     duplicate.
     """
     alert = parse_alert(payload)

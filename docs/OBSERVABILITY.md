@@ -600,8 +600,9 @@ retry can record the alert, and the event goes to
 `robothor:events:datadog:dlq`. If the engine dies after the claim and before
 the write, the consumer group redelivers the same entry, which finds its own
 claim and records the alert. So a crash loses nothing. A crash after the
-write and before the key is set to `done` can let at most one duplicate
-through once the pending window has passed. If Redis cannot be reached, the
+write and before the key is set to `done` can record the alert once more:
+straight away when the engine redelivers the same entry, or when another copy
+arrives after the pending window. If Redis cannot be reached, the
 alert is still recorded.
 
 Each recorded alert also writes one log line with no title or body:
