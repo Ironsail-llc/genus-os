@@ -36,14 +36,20 @@ def _make_client(settings: GenusSettings) -> DatadogClient:
 
 
 def _unscoped_tenants(ctx: DoctorContext) -> list[str]:
-    """Active tenants with no usable scope entry. Blocking."""
+    """Active tenants with no usable scope entry, less the benchmark sandbox. Blocking.
+
+    The sandbox tenant only runs benchmark sub-runs; it never needs Datadog,
+    so listing it would be noise on every install.
+    """
+    from robothor.engine.benchmark_sandbox import sandbox_tenant_id
     from robothor.integrations.datadog.scope import scope_for
 
     with ctx.db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT id FROM crm_tenants WHERE active = TRUE ORDER BY id")
         tenants = [str(row[0]) for row in cur.fetchall()]
-    return [t for t in tenants if scope_for(t) is None]
+    sandbox = sandbox_tenant_id()
+    return [t for t in tenants if t != sandbox and scope_for(t) is None]
 
 
 async def _reachable(ctx: DoctorContext) -> Result:
@@ -96,7 +102,11 @@ async def _reachable(ctx: DoctorContext) -> Result:
     except Exception as exc:  # noqa: BLE001 - the tenant list is a note, not the verdict
         return ok(f"{detail}; could not list tenants ({type(exc).__name__})")
     if unscoped:
-        detail += "; active tenants with no scope, refused: " + ", ".join(unscoped)
+        # A fact, not a fault: an install need not give every tenant Datadog.
+        detail += (
+            f"; {', '.join(unscoped)} have no scope in ROBOTHOR_DATADOG_SCOPES and "
+            "are refused Datadog reads until a scope is added for them"
+        )
     return ok(detail)
 
 
