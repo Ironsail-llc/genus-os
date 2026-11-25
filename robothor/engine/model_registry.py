@@ -266,6 +266,11 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_000_14,
         output_cost_per_token=0.000_000_28,  # $0.28/M
         ttft_hint_ms=3000,
+        # RETIRED 2026-11-24: the whole v2.5 family 404s on OpenRouter.
+        # Kept RESOLVABLE on purpose (deleting it would fall through to the
+        # 128K fallback and mis-size every stale manifest still naming it).
+        status="deprecated",
+        replaced_by="openrouter/xiaomi/mimo-v2.6-flash",
     ),
     # DeepSeek V4.1 Flash via OpenRouter — registered 2026-09-11.
     # Limits and pricing read from OpenRouter's live model metadata that day
@@ -353,6 +358,31 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_000_435,  # $0.435/M
         output_cost_per_token=0.000_000_87,  # $0.87/M
         cache_read_cost_per_token=0.000_000_2,  # $0.20/M
+        ttft_hint_ms=3000,
+        # RETIRED 2026-11-24 with the rest of the v2.5 family.
+        status="deprecated",
+        replaced_by="openrouter/xiaomi/mimo-v2.6-pro",
+    ),
+    # MiMo-V2.6-Flash via OpenRouter — registered 2026-11-24. The v2.5 family
+    # was RETIRED by OpenRouter (every slug 404s); this is the like-for-like
+    # successor the fleet manifests were repointed to. Limits/pricing read
+    # from the live catalog: 1M ctx, $0.14/$0.28 per M — identical to v2.5.
+    "openrouter/xiaomi/mimo-v2.6-flash": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=65_536,
+        default_output_tokens=8_192,
+        input_cost_per_token=0.000_000_14,  # $0.14/M
+        output_cost_per_token=0.000_000_28,  # $0.28/M
+        ttft_hint_ms=3000,
+    ),
+    # MiMo-V2.6-Pro via OpenRouter — registered 2026-11-24; the v2.5-pro
+    # successor. Same 1M ctx, $0.14/$0.28 per M.
+    "openrouter/xiaomi/mimo-v2.6-pro": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=65_536,
+        default_output_tokens=8_192,
+        input_cost_per_token=0.000_000_14,  # $0.14/M
+        output_cost_per_token=0.000_000_28,  # $0.28/M
         ttft_hint_ms=3000,
     ),
     # DeepSeek V4 Pro via OpenRouter — main's primary (2026-04-24)
