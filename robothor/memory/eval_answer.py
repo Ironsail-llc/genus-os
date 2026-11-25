@@ -574,7 +574,7 @@ def planted_answers(world: World) -> list[PlantedAnswer]:
                 for v in others
                 if (w := _llm_form(v, org_names, person_names))
                 and _clean(case, w)
-                and not set(normalise(w).split()) <= gold_words
+                and not _near_any(normalise(w).split(), gold_words)
             ]
             if wrong_pool:
                 out.setdefault("wrong_llm", []).append(
@@ -587,6 +587,18 @@ def planted_answers(world: World) -> list[PlantedAnswer]:
     for kind in sorted(out):
         planted.extend(out[kind][:_PLANTED_PER_KIND])
     return planted
+
+
+def _near_any(words: Sequence[str], gold_words: set[str]) -> bool:
+    """True when any word equals or nearly spells a gold word.
+
+    Invented roots can differ by one letter (Drodrel / Drotrel), and a planted
+    wrong answer that is a near-spelling of the gold is not wrong to a careful
+    reader; the judge must not be failed for agreeing.
+    """
+    from difflib import SequenceMatcher
+
+    return any(SequenceMatcher(None, w, g).ratio() >= 0.75 for w in words for g in gold_words)
 
 
 def _llm_form(value: str, org_names: set[str], person_names: set[str]) -> str | None:
