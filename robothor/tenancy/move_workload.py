@@ -85,6 +85,9 @@ MOVED_TABLES: dict[str, str] = {
     "workflow_approvals": f"run_id IN {_WF_RUNS}",
     "chat_sessions": "id IN (SELECT id FROM _mw_sessions)",
     "chat_approval_receipts": f"session_key IN {_SESSION_KEYS}",
+    # A conversation segment is a verbatim copy of a moved session's turns;
+    # leaving it behind would leave that conversation readable in the source.
+    "memory_segments": "chat_session_id IN (SELECT id FROM _mw_sessions)",
     # By session only. The channel bus maps a non-main agent's delivery into
     # MAIN's session with the workload's run as author; that row belongs to
     # main's conversation, which stays (``author_run_id`` has no foreign key).

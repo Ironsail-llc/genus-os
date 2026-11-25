@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: How long an un-pinned, unreferenced chat turn is kept (lifecycle step 10).
+#: Conversation segments, which copy the turns, are kept no longer.
+CHAT_TURN_TTL_DAYS = 90
+
 
 # ── Sync functions (called from async wrappers via run_in_executor) ──
 
@@ -758,8 +762,34 @@ async def save_exchange_async(
     if inserted_ids:
         texts = [user_content, assistant_content]
         asyncio.create_task(_embed_turns(inserted_ids, texts))
+        # After the commit, so the indexer reads the turn it is indexing.
+        from robothor.engine.task_registry import get_task_registry
+
+        get_task_registry().spawn(
+            _index_segments(session_key, tenant_id),
+            name=f"segment-index:{session_key}",
+        )
 
     return inserted_ids
+
+
+async def _index_segments(session_key: str, tenant_id: str) -> None:
+    """Background task: fold the session's new turns into conversation segments.
+
+    Best-effort — a failure is logged and never reaches the turn; the next
+    saved exchange retries the same turns (``robothor.memory.segments``).
+    """
+    try:
+        from robothor.memory.segments import index_conversation
+
+        await index_conversation(session_key, tenant_id=tenant_id)
+    except Exception as e:
+        logger.warning(
+            "conversation segment indexing failed for %s: %s: %s",
+            sanitize_log(session_key),
+            type(e).__name__,
+            e,
+        )
 
 
 async def _embed_turns(message_ids: list[int], texts: list[str]) -> None:
