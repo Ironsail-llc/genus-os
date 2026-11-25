@@ -31,11 +31,19 @@ the connection check, so a lost key is reported once, not once per engine.
 Each pass runs as a background task, so a slow Datadog never holds the
 watchdog loop.
 
-Every finding is one ``datadog.watch_finding`` audit event in the tenant it
-concerns, plus one ``event=datadog_watch`` log line, both marked
-``mode=dry_run``: findings are recorded, not delivered. ``brief`` is the text
-that would be sent and ``would_notify`` says to whom. Briefs carry counts and
-service names only, never a log message.
+Every finding is delivered once through the alerts path
+(:func:`robothor.engine.datadog_delivery.send_alert`) at the level in
+:func:`finding_level`, never ``critical``, so it reaches the main agent's
+alert digest and pages no one. One alert per EPISODE: a spike that continues,
+a monitor that stays firing, is not sent again until the episode closes (the
+recovery, or a pass where the spike is gone); a higher level inside an
+episode (Warn to Alert) is sent. Repeats of an alert id inside the alerts
+cooldown are not sent either. Then the finding is one ``datadog.watch_finding``
+audit event in the tenant it concerns, plus one ``event=datadog_watch`` log
+line, with ``mode`` ``delivered``, ``suppressed`` or ``delivery_failed`` and
+the ``delivery`` it made. A failed send never loses the finding and never
+stops the pass. ``brief`` is the text sent. Briefs carry counts, service
+names and masked monitor names only, never a log message.
 
 Each observer runs on its own for each tenant: one failing never stops
 another, nor another tenant. Their state (cached slots, which monitors and
@@ -83,6 +91,7 @@ __all__ = [
     "check_monitors",
     "check_silence",
     "datadog_watch_detector",
+    "finding_level",
     "reset_state",
 ]
 
@@ -127,9 +136,6 @@ _FIRING = {"alert": "Alert", "warn": "Warn", "no data": "No Data"}
 #: Logs that carry no service tag are counted under this name.
 _NO_SERVICE = "(no service)"
 
-#: Every finding is recorded, never delivered, and says so: delivery is a
-#: separate, later change, and this tells its records apart from these.
-MODE = "dry_run"
 ConnectionVerdict = Literal["lost", "restored", "none"]
 
 
@@ -302,10 +308,42 @@ def _since(triggered: int | None, now: datetime) -> str:
     return f" for about {round(minutes / 1440)} days"
 
 
-def _would_notify(tenant_id: str) -> str:
-    # Where the normal alerts path would put it: alerts.alert at warning level
-    # writes an alert_digest row for the main agent of the engine's tenant.
-    return f"main agent alert digest, tenant {tenant_id}"
+#: Findings that close an episode: each is sent at info.
+_CLOSING = frozenset({"monitor_recovered", "service_resumed", "connection_restored"})
+_RANK = {"info": 0, "warning": 1}
+#: How a finding is titled in the alert digest.
+_TITLES = {
+    "error_spike": "Datadog error spike",
+    "service_silent": "Datadog service silent",
+    "service_resumed": "Datadog service logging again",
+    "monitor_firing": "Datadog monitor firing",
+    "monitor_recovered": "Datadog monitor recovered",
+    "connection_lost": "Datadog link lost",
+    "connection_restored": "Datadog link restored",
+}
+
+
+def finding_level(kind: str, details: Mapping[str, Any]) -> str:
+    """The alert level of a finding. Nothing the watch finds pages on its own.
+
+    A lost link, a spike, a silent service and a monitor in Alert are
+    ``warning``; a monitor in Warn or No Data, and every recovery, ``info``.
+    """
+    if kind in _CLOSING:
+        return "info"
+    if kind == "monitor_firing":
+        return "warning" if (details.get("monitor") or {}).get("status") == "alert" else "info"
+    return "warning"
+
+
+def _subject(kind: str, details: Mapping[str, Any]) -> str:
+    """What an episode is about: one service, one monitor, or the link."""
+    if kind.startswith("monitor_"):
+        return f"monitor:{(details.get('monitor') or {}).get('id')}"
+    if kind.startswith("connection_"):
+        return "connection"
+    family = "spike" if kind == "error_spike" else "silent"
+    return f"{family}:{details.get('service')}"
 
 
 @dataclass(frozen=True)
@@ -343,6 +381,8 @@ class DatadogWatch:
         self._outcomes: deque[str] = deque(maxlen=CONNECTION_FAILURES_FOR_LOST + 1)
         self._lost = False
         self._said: set[str] = set()
+        # (tenant, subject) -> the highest level sent in its open episode.
+        self._episodes: dict[tuple[str, str], str] = {}
 
     def _once(self, key: str, message: str, *args: Any) -> None:
         if key not in self._said:
@@ -467,8 +507,14 @@ class DatadogWatch:
     ) -> int:
         current, baseline = await self._series(client, scope, "status:error", windows)
         start, end = windows[0]
+        findings = check_error_spike(current, baseline)
+        # A spike no longer found has ended: its episode closes, quietly.
+        spiking = {f"spike:{f.service}" for f in findings}
+        for key in [k for k in self._episodes if k[0] == scope.tenant_id]:
+            if key[1].startswith("spike:") and key[1] not in spiking:
+                del self._episodes[key]
         recorded = 0
-        for finding in check_error_spike(current, baseline):
+        for finding in findings:
             recorded += await self._spike(scope.tenant_id, finding, start, end)
         return recorded
 
@@ -513,7 +559,7 @@ class DatadogWatch:
                     "baseline": {"median": change.baseline_median, "windows": BASELINE_WINDOWS},
                     "window": window,
                 }
-                self._finding(tenant, "service_silent", brief, details)
+                await self._finding(tenant, "service_silent", brief, details)
             else:
                 since = silent.pop(service)
                 brief = (
@@ -526,7 +572,7 @@ class DatadogWatch:
                     "silent_since": since,
                     "window": window,
                 }
-                self._finding(tenant, "service_resumed", brief, details)
+                await self._finding(tenant, "service_resumed", brief, details)
             recorded += 1
         return recorded
 
@@ -590,7 +636,7 @@ class DatadogWatch:
                     "previous_status": change.previous,
                 },
             }
-            self._finding(tenant, kind, brief, details, target=f"monitor:{monitor.id}")
+            await self._finding(tenant, kind, brief, details, target=f"monitor:{monitor.id}")
             recorded += 1
         return recorded
 
@@ -649,7 +695,7 @@ class DatadogWatch:
             },
             "window": {"start": _iso(start), "end": _iso(end), "minutes": WINDOW_MINUTES},
         }
-        self._finding(tenant, "error_spike", brief, details)
+        await self._finding(tenant, "error_spike", brief, details)
         return 1
 
     async def _watch_connection(self, client: AsyncDatadogClient, failures: list[str]) -> int:
@@ -699,10 +745,49 @@ class DatadogWatch:
             kind = "connection_restored"
         details = {"service": None, "checks": list(self._outcomes)}
         self._outcomes.clear()
-        self._finding(tenant, kind, brief, details)
+        await self._finding(tenant, kind, brief, details)
         return 1
 
-    def _finding(
+    async def _deliver(
+        self, tenant: str, kind: str, brief: str, details: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Send a finding once per episode; ``{"mode", "delivery"}``. Never raises."""
+        from robothor.engine.datadog_delivery import FAILED, SUPPRESSED, send_alert
+
+        if tenant != self.home_tenant:
+            # The alerts path delivers in this engine's tenant only.
+            return {"mode": FAILED, "delivery": {"reason": "not_this_engine"}}
+        level = finding_level(kind, details)
+        subject = _subject(kind, details)
+        key = (tenant, subject)
+        before = self._episodes.get(key)
+        if kind in _CLOSING:
+            self._episodes.pop(key, None)
+            phase = "close"
+        elif before is not None and _RANK[level] <= _RANK[before]:
+            return {"mode": SUPPRESSED, "delivery": {"level": level, "reason": "episode_open"}}
+        else:
+            self._episodes[key] = level
+            phase = f"open:{level}"
+        name = (details.get("monitor") or {}).get("name") or details.get("service")
+        title = f"{_TITLES.get(kind, 'Datadog')}: {name}" if name else _TITLES.get(kind, kind)
+        outcome = await send_alert(
+            level,
+            title,
+            brief,
+            alert_id=f"datadog_watch:{tenant}:{subject}:{phase}",
+            kind=f"datadog_{kind}",
+            metadata={"tenant": tenant, "kind": kind},
+        )
+        if outcome["mode"] == FAILED and kind not in _CLOSING:
+            # Nobody heard: the next finding of this episode tries again.
+            if before is None:
+                self._episodes.pop(key, None)
+            else:
+                self._episodes[key] = before
+        return outcome
+
+    async def _finding(
         self,
         tenant: str,
         kind: str,
@@ -711,13 +796,15 @@ class DatadogWatch:
         *,
         target: str | None = None,
     ) -> None:
-        """Record one finding: an audit event and a log line. Nothing is delivered."""
+        """Deliver one finding, then record it with what the delivery did."""
         target = target or details.get("service") or None
+        outcome = await self._deliver(tenant, kind, brief, details)
+        mode = outcome["mode"]
         event = {
             "kind": kind,
             **details,
-            "mode": MODE,
-            "would_notify": _would_notify(tenant),
+            "mode": mode,
+            "delivery": outcome["delivery"],
             "brief": brief,
         }
         from robothor.audit import logger as audit
@@ -737,7 +824,7 @@ class DatadogWatch:
         fields: dict[str, Any] = {"tenant": tenant, "kind": kind, "service": details.get("service")}
         if target != fields["service"]:
             fields["target"] = target
-        logger.warning("%s", kv_line("datadog_watch", **fields, mode=MODE))
+        logger.warning("%s", kv_line("datadog_watch", **fields, mode=mode))
 
 
 # ── the daemon's entry point ────────────────────────────────────────────────
