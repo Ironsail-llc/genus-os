@@ -859,7 +859,8 @@ how many rows came back, and `next_cursor` continues from the first row left
 out. When logs arrived while the page was being fitted, so no cursor could
 continue exactly there, `next_cursor` is null and `note` says to narrow the
 query or window. Span pages fit the same way (long resources are shortened
-first), a trace keeps its earliest spans, monitors drop trailing rows, and a
+first), a trace keeps its earliest spans, monitors drop trailing rows (and
+`next_page` is then null, with a `limit` that fits named in `note`), and a
 long metric series is down-sampled, keeping its first, last, lowest and
 highest points and an even spread, with `points_total` the full count. A
 Datadog failure is an `error` with a `kind` (`auth`, `rate_limit`, `network`,

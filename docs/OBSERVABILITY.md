@@ -418,7 +418,7 @@ the environment. Use the keys of a Datadog service account that can only read.
   "acme-child-b": {
     "logs": "service:clinic-app",
     "spans": "service:clinic-app env:prod",
-    "monitors": "team:clinic",
+    "monitors": "tag:\"team:clinic\"",
     "metric_tags": ["service:clinic-app"]
   }
 }
