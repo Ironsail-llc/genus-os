@@ -21,7 +21,9 @@ from robothor.integrations.datadog.scope import (
     DatadogScope,
     ScopeError,
     compose,
+    compose_metric,
     scope_for,
+    trace_query,
 )
 
 SCOPE = "service:shop-api"
@@ -444,3 +446,180 @@ def test_generated_balanced_queries_are_accepted() -> None:
     for _ in range(500):
         user = gen(4)
         assert compose(SCOPE, user) == f"({SCOPE}) AND ({user})"
+
+
+# ── trace ids: a value, never query syntax ──────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "trace_id",
+    ["1234567890123456789", "4bf92f3577b34da6a3ce929d0e0e4736", "ABCDEF0123", "7"],
+)
+def test_a_hex_or_decimal_trace_id_becomes_a_trace_filter(trace_id) -> None:
+    assert trace_query(trace_id) == f"trace_id:{trace_id}"
+
+
+def test_a_trace_id_is_stripped() -> None:
+    assert trace_query("  abc123 ") == "trace_id:abc123"
+
+
+@pytest.mark.parametrize(
+    "trace_id",
+    [
+        "",
+        "   ",
+        "abc) OR (service:other",
+        "abc OR service:other",
+        "abc*",
+        'abc"',
+        "abc\\",
+        "trace_id:abc",
+        "12-34",
+        "0x1234",
+        "g123",
+        "1" * 41,
+        "abc\n",
+    ],
+)
+def test_a_trace_id_that_is_not_plain_hex_or_digits_is_refused(trace_id) -> None:
+    with pytest.raises(ScopeError) as caught:
+        trace_query(trace_id)
+    assert caught.value.reason
+
+
+# ── metric queries: built from parts, the scope tags always inside ──────────
+
+METRIC_SCOPE = ("service:shop-api", "env:prod")
+
+
+def test_a_metric_query_carries_the_scope_tags_then_the_callers() -> None:
+    assert (
+        compose_metric(METRIC_SCOPE, "trace.http.request.hits", tags=("resource_name:checkout",))
+        == "avg:trace.http.request.hits{service:shop-api,env:prod,resource_name:checkout}"
+    )
+
+
+def test_a_metric_query_with_aggregator_group_by_and_count() -> None:
+    assert (
+        compose_metric(
+            METRIC_SCOPE,
+            "trace.http.request.errors",
+            aggregator="sum",
+            group_by=("resource_name", "http.status_code"),
+            as_count=True,
+        )
+        == "sum:trace.http.request.errors{service:shop-api,env:prod}"
+        " by {resource_name,http.status_code}.as_count()"
+    )
+
+
+def test_the_every_metric_scope_with_no_tags_is_a_star() -> None:
+    assert compose_metric((), "system.cpu.user") == "avg:system.cpu.user{*}"
+
+
+def test_the_every_metric_scope_takes_the_callers_tags_alone() -> None:
+    assert (
+        compose_metric((), "system.cpu.user", aggregator="max", tags=("host:web-1",))
+        == "max:system.cpu.user{host:web-1}"
+    )
+
+
+@pytest.mark.parametrize("aggregator", ["avg", "sum", "min", "max"])
+def test_each_aggregator_is_accepted(aggregator) -> None:
+    assert compose_metric(METRIC_SCOPE, "m", aggregator=aggregator).startswith(f"{aggregator}:m{{")
+
+
+@pytest.mark.parametrize("scope", [(NO_ACCESS_TAG,), ("service:shop-api", NO_ACCESS_TAG)])
+def test_a_no_access_metric_scope_refuses(scope) -> None:
+    with pytest.raises(ScopeError):
+        compose_metric(scope, "system.cpu.user")
+
+
+@pytest.mark.parametrize("scope", [("service:a}",), ("a b",), ("",), ("x,y",)])
+def test_a_malformed_metric_scope_refuses(scope) -> None:
+    with pytest.raises(ScopeError):
+        compose_metric(scope, "system.cpu.user")
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        "",
+        "1metric",
+        "cpu{*}",
+        "cpu}",
+        "cpu,host:a",
+        "cpu user",
+        'cpu"',
+        "cpu-user",
+        "cpu:user",
+        "a" * 201,
+        "sum:cpu",
+        "cpu\n",
+    ],
+)
+def test_an_injection_in_the_metric_name_is_refused(metric) -> None:
+    with pytest.raises(ScopeError):
+        compose_metric(METRIC_SCOPE, metric)
+
+
+@pytest.mark.parametrize("aggregator", ["", "count", "avg:x", "AVG ", "p99", "avg}"])
+def test_an_unknown_aggregator_is_refused(aggregator) -> None:
+    with pytest.raises(ScopeError):
+        compose_metric(METRIC_SCOPE, "m", aggregator=aggregator)
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "",
+        "*",
+        "host:a}",
+        "host:a},{",
+        "host:a,service:other",
+        "host:a OR service:other",
+        'host:"a"',
+        "host:'a'",
+        "!host:a",
+        "-host:a",
+        "(host:a)",
+        "host:a\n",
+    ],
+)
+def test_an_injection_in_a_caller_tag_is_refused(tag) -> None:
+    with pytest.raises(ScopeError):
+        compose_metric(METRIC_SCOPE, "m", tags=(tag,))
+    with pytest.raises(ScopeError):
+        compose_metric((), "m", tags=("env:prod", tag))
+
+
+@pytest.mark.parametrize("key", ["", "host}", "host,env", "host env", 'host"', "{host", "*"])
+def test_an_injection_in_a_group_by_key_is_refused(key) -> None:
+    with pytest.raises(ScopeError):
+        compose_metric(METRIC_SCOPE, "m", group_by=(key,))
+
+
+_TAG_TOKENS = ("host", ":", "a", "-", "*", ".", "/", "_", "}", "{", ",", " ", '"', "'", "1", "!")
+
+
+def test_no_generated_metric_tag_escapes_the_scope_braces() -> None:
+    """Whatever caller tags are accepted, the braces hold the scope tags first, intact."""
+    rng = random.Random(20261126)
+    accepted = 0
+    for _ in range(5000):
+        tags = tuple(
+            "".join(rng.choice(_TAG_TOKENS) for _ in range(rng.randint(0, 6)))
+            for _ in range(rng.randint(0, 3))
+        )
+        try:
+            out = compose_metric(METRIC_SCOPE, "m", tags=tags)
+        except ScopeError:
+            continue
+        accepted += 1
+        assert out.startswith("avg:m{") and out.endswith("}")
+        inner = out[len("avg:m{") : -1]
+        assert "{" not in inner and "}" not in inner and " " not in inner
+        parts = inner.split(",")
+        assert tuple(parts[: len(METRIC_SCOPE)]) == METRIC_SCOPE
+        assert tuple(parts[len(METRIC_SCOPE) :]) == tags
+    assert accepted > 200

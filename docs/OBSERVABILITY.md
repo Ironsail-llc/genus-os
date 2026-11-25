@@ -444,6 +444,33 @@ breaks, or more than 4000 characters. Brackets inside a double-quoted phrase are
 literal. The refusal is one plain sentence the caller can act on, for instance
 to put text containing an apostrophe in double quotes.
 
+### What each part of the scope bounds
+
+| Part | Bounds | How |
+|------|--------|-----|
+| `logs` | Log search and log counts | `(<logs>) AND (<caller query>)` |
+| `spans` | Span search, span counts and single traces | `(<spans>) AND (<caller query>)` |
+| `monitors` | Monitor search | `(<monitors>) AND (<caller query>)`, in monitor search syntax (`tag:"team:shop"`, `status:alert`, free text) |
+| `metric_tags` | Metric queries | The tags lead the metric's tag filter, ANDed with the caller's |
+
+The bracket and quote rules above apply to the `monitors` filter and to a
+caller's monitor query as well. A tenant with no `monitors` filter, or no
+`metric_tags`, is refused before anything is sent; it never gets a query that
+merely matches nothing.
+
+**A trace from another tenant reads as not found.** Datadog has no way to fetch
+a trace by id inside a filter, so Genus searches the tenant's spans for
+`trace_id:<id>`. A trace outside the tenant's `spans` filter matches no span.
+The id must be hex or decimal digits, so it cannot carry search syntax.
+
+**Metric queries are built from parts, never from query text.** The caller
+names a metric, an aggregator (`avg`, `sum`, `min` or `max`), optional tags,
+optional group-by keys, and whether to count. Genus builds
+`<aggregator>:<metric>{<scope tags>,<caller tags>} by {<keys>}`, using `{*}`
+only when the scope is `metric_tags: []` and the caller adds no tags. A metric
+name, tag or key containing a space, comma, brace or quote is refused. The time
+window is ISO-8601, `now`, or `now-<n>` with `s`, `m`, `h` or `d`.
+
 ### Doctor
 
 `genus doctor` runs `datadog.reachable`. It skips when the keys are not set,
