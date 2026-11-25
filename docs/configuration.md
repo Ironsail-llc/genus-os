@@ -857,8 +857,11 @@ The group also holds the read-only Datadog access: `ROBOTHOR_DATADOG_API_KEY`
 and `ROBOTHOR_DATADOG_APP_KEY` (secrets, one instance-wide credential),
 `ROBOTHOR_DATADOG_SITE` and `ROBOTHOR_DATADOG_SCOPES` (what each tenant may
 read). See [Reading Datadog from Genus](OBSERVABILITY.md#reading-datadog-from-genus).
-The Datadog watch needs no setting of its own: it records what it finds and
-sends nothing; see [Genus watches Datadog](OBSERVABILITY.md#genus-watches-datadog).
+The Datadog watch and Datadog alerts need no setting of their own: each
+finding and alert is delivered in its own tenant through the normal alerts
+path (`ROBOTHOR_ALERT_COOLDOWN_SECONDS`, `ROBOTHOR_ALERT_FALLBACK_CHANNELS`);
+see [Genus watches Datadog](OBSERVABILITY.md#genus-watches-datadog) and
+[Datadog alerts into Genus](OBSERVABILITY.md#datadog-alerts-into-genus).
 
 ## Plugins
 
