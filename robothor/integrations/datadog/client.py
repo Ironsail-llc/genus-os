@@ -102,6 +102,35 @@ def _body(response: httpx.Response) -> Any:
         raise DatadogError("unknown", response.status_code) from None
 
 
+def _search(
+    scope: DatadogScope,
+    query: str,
+    start: str,
+    end: str,
+    limit: int,
+    cursor: str | None,
+    newest_first: bool,
+) -> api.ApiRequest:
+    """The log search for ``query`` inside ``scope``; raises ScopeError before any I/O."""
+    return api.logs_search(
+        compose(scope.logs, query),
+        start=start,
+        end=end,
+        limit=limit,
+        cursor=cursor,
+        newest_first=newest_first,
+    )
+
+
+def _aggregate(
+    scope: DatadogScope, query: str, start: str, end: str, group_by: Sequence[str], limit: int
+) -> api.ApiRequest:
+    """The log aggregate for ``query`` inside ``scope``; raises ScopeError before any I/O."""
+    return api.logs_aggregate(
+        compose(scope.logs, query), start=start, end=end, group_by=group_by, limit=limit
+    )
+
+
 class _Base:
     def __init__(
         self,
@@ -182,14 +211,7 @@ class DatadogClient(_Base):
         cursor: str | None = None,
         newest_first: bool = True,
     ) -> LogPage:
-        request = api.logs_search(
-            compose(scope.logs, query),
-            start=start,
-            end=end,
-            limit=limit,
-            cursor=cursor,
-            newest_first=newest_first,
-        )
+        request = _search(scope, query, start, end, limit, cursor, newest_first)
         return api.parse_log_page(self._send(request))
 
     def aggregate_logs(
@@ -202,9 +224,7 @@ class DatadogClient(_Base):
         group_by: Sequence[str],
         limit: int = 25,
     ) -> tuple[Bucket, ...]:
-        request = api.logs_aggregate(
-            compose(scope.logs, query), start=start, end=end, group_by=group_by, limit=limit
-        )
+        request = _aggregate(scope, query, start, end, group_by, limit)
         return api.parse_buckets(self._send(request))
 
     def validate(self) -> None:
@@ -254,14 +274,7 @@ class AsyncDatadogClient(_Base):
         cursor: str | None = None,
         newest_first: bool = True,
     ) -> LogPage:
-        request = api.logs_search(
-            compose(scope.logs, query),
-            start=start,
-            end=end,
-            limit=limit,
-            cursor=cursor,
-            newest_first=newest_first,
-        )
+        request = _search(scope, query, start, end, limit, cursor, newest_first)
         return api.parse_log_page(await self._send(request))
 
     async def aggregate_logs(
@@ -274,9 +287,7 @@ class AsyncDatadogClient(_Base):
         group_by: Sequence[str],
         limit: int = 25,
     ) -> tuple[Bucket, ...]:
-        request = api.logs_aggregate(
-            compose(scope.logs, query), start=start, end=end, group_by=group_by, limit=limit
-        )
+        request = _aggregate(scope, query, start, end, group_by, limit)
         return api.parse_buckets(await self._send(request))
 
     async def validate(self) -> None:
