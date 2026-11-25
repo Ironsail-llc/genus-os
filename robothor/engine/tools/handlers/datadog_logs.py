@@ -17,6 +17,7 @@ the window and the row count; never a log line.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.tools.handlers.datadog_common import (
@@ -25,6 +26,7 @@ from robothor.engine.tools.handlers.datadog_common import (
     audit,
     count,
     masked,
+    resolve_window,
     scoped,
     size,
     text,
@@ -67,6 +69,16 @@ _ROW_TAGS = ("env", "version")
 #: Builds the client. Blocking (the vault read): always called through
 #: ``asyncio.to_thread``. Tests replace it with a client over a fake transport.
 _client_factory: Callable[[], AsyncDatadogClient] = async_client_from_settings
+
+
+def _now() -> datetime:
+    """The moment a relative window is resolved against. Tests fix it."""
+    return datetime.now(UTC)
+
+
+def _window(args: dict[str, Any]) -> dict[str, str]:
+    """The call's ``{start, end}``, relative times resolved against one ``now``."""
+    return resolve_window(args, _now(), DEFAULT_START, DEFAULT_END)
 
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -157,6 +169,7 @@ async def _scoped(
         query,
         audited,
         call,
+        part=lambda scope: compose(scope.logs, ""),
         check=lambda scope: compose(scope.logs, query),
         build=lambda: _client_factory(),
     )
@@ -169,8 +182,8 @@ async def _scoped(
 async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Log lines matching ``query`` inside this tenant's scope, newest first by default."""
     query = text(args, "query")
-    start, end = text(args, "start", DEFAULT_START), text(args, "end", DEFAULT_END)
-    window = {"start": start, "end": end}
+    window = _window(args)
+    start, end = window["start"], window["end"]
     limit = count(args, "limit", DEFAULT_SEARCH_LIMIT)
     cursor = text(args, "cursor") or None
     newest_first = args.get("newest_first") is not False
@@ -196,11 +209,16 @@ async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[s
         if len(kept) == len(shaped):
             return shaped, kept, first.next_cursor
         # Datadog's cursor continues after the LAST row it sent. Asking again
-        # for exactly the rows kept gives the cursor that continues after them.
+        # for exactly the rows kept gives the cursor that continues after them,
+        # but only if that page IS the rows kept: logs arriving in between
+        # would shift it, and its cursor would then skip or repeat rows.
         try:
-            return shaped, kept, (await page(len(kept))).next_cursor
+            second = await page(len(kept))
         except DatadogError:
             return shaped, kept, None
+        if [row.id for row in second.rows] != [row["id"] for row in kept]:
+            return shaped, kept, None
+        return shaped, kept, second.next_cursor
 
     got, refused = await _scoped(SEARCH_TOOL, ctx, query, window, fetch)
     if refused is not None:
@@ -242,8 +260,8 @@ async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[s
 async def _datadog_logs_aggregate(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Log counts matching ``query`` inside this tenant's scope, grouped by facets."""
     query = text(args, "query")
-    start, end = text(args, "start", DEFAULT_START), text(args, "end", DEFAULT_END)
-    window = {"start": start, "end": end}
+    window = _window(args)
+    start, end = window["start"], window["end"]
     limit = count(args, "limit", DEFAULT_AGGREGATE_LIMIT)
     group_by = _facets(args)
     if group_by is None:

@@ -1902,7 +1902,7 @@ _DATADOG_SCHEMAS: dict[str, dict[str, Any]] = {
                     "cursor": {
                         "type": "string",
                         "description": "next_cursor from the previous page, with the same "
-                        "query and window.",
+                        "query and the start/end from that page's window.",
                     },
                     "newest_first": {
                         "type": "boolean",

@@ -111,6 +111,17 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     return decorator
 
 
+#: Each tool's own part of the scope, judged alone: a part that grants no
+#: access refuses the tenant as not configured for that kind of data.
+_PARTS: dict[str, Callable[[DatadogScope], object]] = {
+    SPANS_TOOL: lambda scope: compose(scope.spans, ""),
+    TRACE_TOOL: lambda scope: compose(scope.spans, ""),
+    MONITORS_TOOL: lambda scope: compose(scope.monitors, ""),
+    # Any valid metric name: what is judged is the tenant's tags.
+    METRICS_TOOL: lambda scope: compose_metric(scope.metric_tags, "probe"),
+}
+
+
 async def _scoped(
     tool: str,
     event: str,
@@ -129,6 +140,7 @@ async def _scoped(
         query,
         audited,
         call,
+        part=_PARTS[tool],
         check=check,
         build=lambda: _client_factory(),
         unlock=unlock,
