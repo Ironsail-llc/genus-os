@@ -137,7 +137,9 @@ deduped in-process (1h for fast signals, 24h for the sustained-outage ones).
 | `stuck_workflow_detector` | 10 min | `workflow_runs` running past timeout + grace |
 | `workflow_failure_streak_detector` | 10 min | the same workflow's last 3 terminal runs all failed |
 
-Disable all of them with `ROBOTHOR_DETECTORS_ENABLED=0`.
+Disable all of them with `ROBOTHOR_DETECTORS_ENABLED=0`. The Datadog watch
+runs on the 5-minute tick too, in its own module: see
+[Genus watches Datadog](#genus-watches-datadog).
 
 `tool_degradation_detector`, `tool_outage_detector`, and `tracking.get_tool_stats`
 all exclude rows the benchmark sandbox refused (`error_type='sandbox_denied'`,
@@ -450,6 +452,65 @@ fails when the site is unknown, when Datadog rejects the key (it never prints
 the key), or by error kind when Datadog cannot be reached. Its detail names the
 active tenants that have no scope entry, whose reads are refused until you add
 one.
+
+### Genus watches Datadog
+
+`robothor/engine/datadog_watch.py` runs two read-only observers from the
+watchdog, every 5 minutes beside the failure-mode detectors. They only flag:
+nothing they find stops, pauses or limits anything.
+
+| Observer | Looks at | Finds |
+|----------|----------|-------|
+| Error spike | `status:error` log counts per service, inside the tenant's `logs` scope | a service whose errors in the latest 15 minutes are well above its own last two hours |
+| Connection lost | the key check (`/api/v1/validate`) and the watch's own reads | Datadog rejecting the key, or unreachable, on 3 checks in a row; the first good check after that is `connection_restored` |
+
+**The spike rule.** The current window is the latest complete 15-minute slot
+that ended at least 2 minutes ago; the baseline is the 8 slots before it. A
+service fires when its current count is at least 20 **and** above both 3× its
+baseline median and the median plus 5 robust deviations (scaled median
+absolute deviation), so a noisy service needs a bigger jump than a steady one.
+A service with no errors anywhere in the baseline, new or silent, fires only at
+100. No per-service tuning. Each settled slot is read once and kept, so a
+tenant costs 9 aggregate calls on the first pass after a restart and then one
+per new slot (about one every 15 minutes). The root engine adds one key check
+per pass.
+
+**Where it runs.** Each engine watches its own tenant (`ROBOTHOR_TENANT_ID`), so
+every tenant with an engine is covered once and a delivered alert lands in that
+tenant's own alert digest. The engine whose tenant has no parent in
+`crm_tenants` also owns the connection check, so a lost key is one finding, not
+one per engine. With HA leader election only the scheduler leader watches. The
+watch does nothing while `ROBOTHOR_DATADOG_SCOPES` is empty, or while the keys
+are unset (one log line says so), and a tenant with no scope entry is skipped
+with one log line per process. `ROBOTHOR_DETECTORS_ENABLED=0` stops it with the
+other detectors.
+
+**Where findings appear.** Each finding is one `datadog.watch_finding` audit
+event in the tenant it concerns (the connection findings in the root tenant)
+with `kind` (`error_spike`, `connection_lost`, `connection_restored`),
+`service`, `current`, `baseline`, `window`, `mode`, `would_notify` and `brief`,
+the two or three sentences that would be sent. Briefs and events carry counts
+and service names only, never a log message. Each finding also writes one log
+line:
+
+```
+event=datadog_watch tenant=acme-child-a kind=error_spike service=shop-api mode=dry_run
+```
+
+A continuing spike is recorded once an hour per service. A lost link is
+recorded once, until it is restored.
+
+**The mode.** `ROBOTHOR_DATADOG_WATCH_MODE` is `dry_run` by default: the event
+and the line are written and nothing is delivered. `deliver` writes the same
+event and sends the brief through `alerts.alert` at `warning` (`info` for a
+restored link), so it reaches the tenant's alert digest. This is the one mode
+switch on new behaviour, because the watch acts on its own.
+
+**Is it running?** Look for `event=datadog_watch` lines, or for
+`datadog.watch_finding` rows in the audit log. If there are none, check that
+`ROBOTHOR_DATADOG_SCOPES` has an entry for the engine's tenant and that
+`genus doctor --only datadog.reachable` passes. A `datadog watch: not running`
+line names the reason.
 
 ## Notes
 
