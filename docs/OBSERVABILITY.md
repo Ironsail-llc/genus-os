@@ -596,8 +596,11 @@ the plain reason for a refused query. Each row carries `trace_id` and `span_id`
 when the log event names them, and `null` otherwise.
 
 The other tabs use the same rules: owners, admins and auditors of the acting
-organization, the tenant from the token, masking of free text, never a 500, and
-one audit row per read with counts and no content.
+organization, the tenant from the token, never a 500, and one audit row per
+read with counts and no content. Every piece of free text they return (span
+resource and operation names and tags, monitor names, and the titles, briefs,
+prompts and reasons of recorded signals) has credentials redacted and email
+addresses and phone numbers masked, the same as a log line.
 
 | Route | Parameters | Audit event |
 |-------|------------|-------------|

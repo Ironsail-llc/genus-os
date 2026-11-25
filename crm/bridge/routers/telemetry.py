@@ -310,9 +310,9 @@ def _span_row_out(row: SpanRow) -> dict[str, Any]:
     return {
         "trace_id": row.trace_id,
         "span_id": row.span_id,
-        "service": redact_personal_data(row.service),
-        "resource": redact_personal_data(row.resource_name),
-        "operation": redact_personal_data(row.operation_name),
+        "service": _scrub(row.service),
+        "resource": _scrub(row.resource_name),
+        "operation": _scrub(row.operation_name),
         "timestamp": row.start_timestamp,
         "duration_ns": row.duration_ns,
         "status": row.status,
@@ -325,7 +325,7 @@ def _span_out(row: SpanRow) -> dict[str, Any]:
         "parent_id": row.parent_id,
         "end": row.end_timestamp,
         "env": row.env,
-        "tags": [redact_personal_data(t) for t in row.tags],
+        "tags": [_scrub(t) for t in row.tags],
     }
 
 
@@ -444,7 +444,7 @@ def _epoch_iso(value: int | None) -> str | None:
 def _monitor_out(row: MonitorRow) -> dict[str, Any]:
     return {
         "id": row.id,
-        "name": redact_personal_data(row.name),
+        "name": _scrub(row.name),
         "status": row.status,
         "firing": _is_firing(row.status),
         "type": row.type,
@@ -511,7 +511,7 @@ def _since_timestamp(value: str | None, default: str) -> tuple[str, str]:
 
 
 def _text(value: Any) -> str:
-    return redact_personal_data(value) if isinstance(value, str) else ""
+    return _scrub(value) if isinstance(value, str) else ""
 
 
 def _dict_of(value: Any) -> dict[str, Any]:
