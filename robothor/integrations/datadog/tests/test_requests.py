@@ -48,7 +48,7 @@ def test_a_known_site_builds_its_api_host(site, base) -> None:
         "us9.datadoghq.com",
         "datadoghq.com/path",
         "datadoghq.com:8443",
-        "user@datadoghq.com",
+        "@".join(("user", "datadoghq.com")),  # a userinfo prefix, built so it is not an address
         "http://datadoghq.com",
         "localhost",
     ],

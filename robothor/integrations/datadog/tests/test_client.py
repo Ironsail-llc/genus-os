@@ -208,6 +208,29 @@ def test_a_body_that_is_not_json_is_unknown() -> None:
     assert caught.value.kind == "unknown"
 
 
+def test_the_application_key_probe_reads_no_tenant_data() -> None:
+    rec = Recorder(body={"data": []})
+    _sync(rec).validate_app_key()
+    request = rec.requests[0]
+    assert request.method == "POST"
+    assert request.url.path == "/api/v2/logs/events/search"
+    sent = json.loads(request.content)
+    assert sent["filter"]["query"] == "genus_scope:no_access"
+    assert sent["page"]["limit"] == 1
+
+
+def test_a_rejected_application_key_is_an_auth_error() -> None:
+    with pytest.raises(DatadogError) as caught:
+        _sync(Recorder(status=403)).validate_app_key()
+    assert caught.value.kind == "auth"
+
+
+async def test_the_async_client_probes_the_application_key_too() -> None:
+    rec = Recorder(body={"data": []})
+    await _async(rec).validate_app_key()
+    assert rec.requests[0].url.path == "/api/v2/logs/events/search"
+
+
 def test_validate_passes_on_200() -> None:
     rec = Recorder(body={"valid": True})
     _sync(rec).validate()
