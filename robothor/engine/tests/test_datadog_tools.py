@@ -412,6 +412,31 @@ def test_values_under_credential_named_keys_never_reach_the_result(dd, writer):
     assert attrs["http"] == {"status_code": 500}
 
 
+def test_each_key_name_is_checked_once_per_call(dd, writer, monkeypatch):
+    """The name check runs the whole redaction pipeline; the same attribute
+    names repeat on every row and every list element, so a call asks once
+    per distinct name, not once per occurrence."""
+    from robothor.secrets import redaction
+
+    real = redaction.redact_tool_arguments
+    asked: list[str] = []
+
+    def counting(tool: str, arguments: Any) -> Any:
+        asked.extend(arguments)
+        return real(tool, arguments)
+
+    monkeypatch.setattr(redaction, "redact_tool_arguments", counting)
+    dd.make_row = lambda i: _log(
+        i, password="hunter2hunter2", items=[{"token": "zzz999zzz999"} for _ in range(5)]
+    )
+
+    result = _run(SEARCH, {"limit": 20})
+
+    assert len(result["rows"]) == 20
+    assert result["rows"][3]["attributes"]["items"][4] == {"token": "<redacted>"}
+    assert len(asked) == len(set(asked)), sorted(asked)
+
+
 def test_aggregate_grouped_by_a_credential_facet_withholds_its_values(dd, writer):
     dd.buckets = [{"by": {"@usr.password": "hunter2hunter2"}, "computes": {"c0": 2}}]
 
