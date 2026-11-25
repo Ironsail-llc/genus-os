@@ -484,7 +484,7 @@ one.
 
 ### Genus watches Datadog
 
-`robothor/engine/datadog_watch.py` runs two read-only observers from the
+`robothor/engine/datadog_watch.py` runs four read-only observers from the
 watchdog, every 5 minutes beside the failure-mode detectors. Each pass runs as
 a background task, so a slow Datadog never holds the watchdog loop, and a tick
 that finds the previous pass still running skips. They only flag: nothing they
@@ -494,6 +494,8 @@ anyone. Findings are recorded; delivery comes in a later release.
 | Observer | Looks at | Finds |
 |----------|----------|-------|
 | Error spike | `status:error` log counts per service, inside the tenant's `logs` scope | a service whose errors in the latest 15 minutes are well above its own last two hours |
+| Silent service | every log line counted per service, inside the tenant's `logs` scope | a service that logged steadily for two hours and logged nothing in the latest 15 minutes (`service_silent`); its next line is `service_resumed` |
+| Firing monitors | the monitors inside the tenant's `monitors` scope in Alert, Warn or No Data | a monitor that starts firing or changes status (`monitor_firing`), and one recorded that stops (`monitor_recovered`) |
 | Connection lost | the API key check (`/api/v1/validate`), an application key probe (a one-row log search that matches nothing), and the watch's own reads | Datadog rejecting either key, or unreachable, on 3 checks in a row; the first good check after that is `connection_restored` |
 
 **The spike rule.** The current window is the latest complete 15-minute slot
@@ -503,10 +505,43 @@ baseline median and the median plus 5 robust deviations (scaled median
 absolute deviation), so a noisy service needs a bigger jump than a steady one.
 A service whose baseline median is zero (new, silent, or a stray error or two)
 fires only at 100, so there is no jump between "silent" and "one stray error".
-No per-service tuning. Each settled slot is read once and kept, so a
-tenant costs 9 aggregate calls on the first pass after a restart and then one
-per new slot (about one every 15 minutes). The root engine adds the two key
-checks per pass.
+No per-service tuning.
+
+**The silence rule.** The same slots, counting every line rather than errors.
+A service is silent when the current slot holds no lines from it **and** it
+logged in every one of the 8 slots before **and** its median over those slots
+is at least 50 lines. The floor keeps a naturally quiet service (a nightly job,
+a test service) from ever counting; the "every slot" condition keeps a service
+with gaps, or a new one without two hours of history, out. A silence is
+recorded once; `service_resumed` is recorded when the service logs again, and
+names the slot it went quiet in. Logs that carry no service tag are never a
+silent service. If a tenant logs from 1000 or more services in one slot (one
+page of groups), silence is not judged for it, because a service missing from
+a full page may simply not fit; one log line says so.
+
+**The monitor rule.** Every pass lists the tenant's monitors that are firing:
+the search is `(<monitors scope>) AND (status:alert OR status:warn OR status:"no
+data")`, read page by page (100 per page) until the last. A monitor is recorded
+when it starts firing, and again only when it changes status while firing (Warn
+to Alert, say) or after it recovers and fires again. One that was recorded and
+is no longer in the list is `monitor_recovered`. A read that fails records no
+recovery: the next good read decides. A tenant whose `monitors` scope is
+missing or "no access" skips this observer only (one log line per process) and
+its logs are still watched. A key without monitor read permission is not a lost
+link: the monitor watch skips that pass and the log observers carry on. The
+brief names the monitor (email addresses and phone numbers in the name are
+replaced), its status, and how long since it last triggered.
+
+Datadog's own notifications, wired to Genus's webhook, are recorded separately
+as `datadog.alert_received`. This observer is the safety net for monitors that
+are not wired to that webhook, so a monitor that is wired appears in both
+records. The two are not de-duplicated.
+
+**Calls per pass.** Each settled slot is read once and kept, per series. A
+tenant costs 18 aggregate calls on the first pass after a restart (9 slots for
+errors, 9 for every line) and then two per new slot (about two every 15
+minutes), plus one monitor search per 100 firing monitors on every pass (one
+when none fire). The root engine adds the two key checks per pass.
 
 **Where it runs.** Each engine watches its own tenant (`ROBOTHOR_TENANT_ID`), so
 every tenant with an engine is covered once. A service inside two tenants'
@@ -521,10 +556,14 @@ other detectors.
 
 **Where findings appear.** Each finding is one `datadog.watch_finding` audit
 event in the tenant it concerns (the connection findings in the root tenant)
-with `kind` (`error_spike`, `connection_lost`, `connection_restored`),
-`service`, `current`, `baseline`, `window`, `mode`, `would_notify` and `brief`,
-the two or three sentences that would be sent. Briefs and events carry counts
-and service names only, never a log message. Each finding also writes one log
+with `kind` (`error_spike`, `service_silent`, `service_resumed`,
+`monitor_firing`, `monitor_recovered`, `connection_lost`,
+`connection_restored`), `service`, `current`, `baseline`, `window`, `mode`,
+`would_notify` and `brief`, the two or three sentences that would be sent. A
+monitor finding carries `monitor` (`id`, `name`, `type`, `status`,
+`previous_status`) in place of the counts, and the audit target
+`monitor:<id>`. Briefs and events carry counts, service names and monitor
+names only, never a log message or a monitor's notification text. Each finding also writes one log
 line:
 
 ```
@@ -536,11 +575,20 @@ records apart from delivered ones once delivery ships. `would_notify` names
 where the normal alerts path would put the brief (the main agent's alert
 digest in that tenant). There is no setting for it.
 
+Each observer runs on its own for each tenant: one failing (a Datadog error, a
+malformed scope) never stops another observer or another tenant.
+
 A continuing spike is recorded once an hour per service. A lost link is
-recorded once, until it is restored. The link state lives in the engine
-process: a restart while the link is down records the loss again after 3 more
-failed checks, and a restart that happens just as the link comes back records
-no `connection_restored`.
+recorded once, until it is restored. All of this state lives in the engine
+process, so a restart forgets it:
+
+- a restart while the link is down records the loss again after 3 more failed
+  checks, and one just as the link comes back records no `connection_restored`;
+- every monitor still firing is recorded again on the first pass after a
+  restart, and a monitor that recovered while the engine was down gets no
+  `monitor_recovered`;
+- a service silent across a restart is not recorded again (its baseline now
+  holds the silent slots), and gets no `service_resumed` when it comes back.
 
 **Is it running?** Look for `event=datadog_watch` lines, or for
 `datadog.watch_finding` rows in the audit log. If there are none, check that
