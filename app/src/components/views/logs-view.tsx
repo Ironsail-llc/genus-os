@@ -704,9 +704,12 @@ export function LogsView({
   const mayRead = isAuditReaderRole(role) || roleLoading;
   const shown: Source = serverOffered ? source : "datadog";
 
-  if (!visible) return null;
-
+  // No early return for `visible`: the shell keeps an opened view mounted so
+  // its state survives navigating away, and each source gates itself on
+  // `visible` after its hooks. Unmounting them here lost the search, the
+  // loaded pages and the chosen unit, and cost a fresh read on every visit.
   if (!mayRead) {
+    if (!visible) return null;
     return (
       <div className="flex h-full flex-col gap-3 overflow-y-auto p-4" data-testid="logs-view">
         <PageHeader title="Logs" />
