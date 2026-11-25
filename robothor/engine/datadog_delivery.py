@@ -535,7 +535,8 @@ async def _deliver_here(
     base = f"{EPISODE_PREFIX}{tenant}:{monitor}"
     recovery = alert.transition in _RECOVERIES
     date = _date(alert)
-    if not recovery and _older(date, await _closed_at(redis_client, base)):
+    closed = None if recovery else await _closed_at(redis_client, base)
+    if _older(date, closed):
         return {
             "mode": SUPPRESSED,
             "delivery": {"level": level, "reason": "superseded_by_recovery"},
@@ -544,6 +545,12 @@ async def _deliver_here(
     stage = _stage(alert.transition, level)
     gate = f"{base}:sent:{stage}"
     alert_id = f"datadog_alert:{tenant}:{monitor}:{stage}"
+    if stage == "page":
+        # Each episode of a P1 monitor pages under its own id (the time of the
+        # recovery that closed the last one), so the alerts cooldown cannot
+        # hold a new incident's page; inside one episode the step gate still
+        # pages once. Other steps keep one id, and the cooldown, as noise control.
+        alert_id = f"{alert_id}:{closed or 0}"
     mine = (f"sending:{entry}", f"sent:{entry}") if entry else ()
     state = await _claim_owned(redis_client, gate, f"sending:{entry or ''}", mine)
     if state == "taken":
