@@ -1557,29 +1557,31 @@ async def _run_tenant_core_steps(
 async def _chat_ttl_step(tenant_ids: list[str]) -> dict[str, int]:
     """Step 10: prune stale chat turns and the conversation segments copying them.
 
-    Per tenant, off the loop. Segments use the same window as the turns
-    (``SEGMENT_RETENTION_DAYS`` is no longer than ``CHAT_TURN_TTL_DAYS``), so
-    a verbatim copy never outlives what it copied. Each half is best-effort
-    and does not stop the other.
+    Per tenant, inside ``tenant_scope(tenant)``, off the loop. Segments use the
+    same window as the turns (``SEGMENT_RETENTION_DAYS`` is no longer than
+    ``CHAT_TURN_TTL_DAYS``), so a verbatim copy never outlives what it copied.
+    Each half is best-effort per tenant: a failure stops neither the other
+    half nor the next tenant.
     """
     from robothor.engine import chat_store
     from robothor.memory import segments
 
     stats = {"chat_pruned": 0, "segments_pruned": 0}
-    try:
-        for tid in tenant_ids:
-            stats["chat_pruned"] += await asyncio.to_thread(
-                chat_store.cleanup_stale_chat_turns, chat_store.CHAT_TURN_TTL_DAYS, tid
-            )
-    except Exception as e:
-        logger.warning("Chat turn TTL failed: %s", e)
-    try:
-        for tid in tenant_ids:
-            stats["segments_pruned"] += await asyncio.to_thread(
-                segments.cleanup_stale_segments, segments.SEGMENT_RETENTION_DAYS, tid
-            )
-    except Exception as e:
-        logger.warning("Conversation segment TTL failed: %s", e)
+    for tid in tenant_ids:
+        try:
+            with tenant_scope(tid):
+                stats["chat_pruned"] += await asyncio.to_thread(
+                    chat_store.cleanup_stale_chat_turns, chat_store.CHAT_TURN_TTL_DAYS, tid
+                )
+        except Exception as e:
+            logger.warning("Chat turn TTL failed for tenant %s: %s", tid, e)
+        try:
+            with tenant_scope(tid):
+                stats["segments_pruned"] += await asyncio.to_thread(
+                    segments.cleanup_stale_segments, segments.SEGMENT_RETENTION_DAYS, tid
+                )
+        except Exception as e:
+            logger.warning("Conversation segment TTL failed for tenant %s: %s", tid, e)
     return stats
 
 
@@ -1587,15 +1589,17 @@ async def sync_crm_identity(tenant_ids: list[str]) -> dict[str, int]:
     """Keep every tenant's CRM people and companies linked to their memory nodes.
 
     The CRM DAL keeps the link current on each write; this nightly pass catches
-    what bypassed the DAL (imports, direct SQL) and any hook that failed. One
-    tenant failing does not stop the others.
+    what bypassed the DAL (imports, direct SQL) and any hook that failed. Each
+    tenant runs inside ``tenant_scope(tenant)``; one failing does not stop the
+    others.
     """
     from robothor.memory import identity
 
     done = failed = 0
     for tid in tenant_ids:
         try:
-            await asyncio.to_thread(identity.sync_crm_entities, tid)
+            with tenant_scope(tid):
+                await asyncio.to_thread(identity.sync_crm_entities, tid)
             done += 1
         except Exception as e:
             failed += 1
