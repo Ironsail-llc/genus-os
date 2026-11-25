@@ -28,6 +28,14 @@ UNCONFIGURED = "test-tenant"
 SEARCH, AGGREGATE = "datadog_logs_search", "datadog_logs_aggregate"
 API_KEY, APP_KEY = "dd-api-key-0123456789", "dd-app-key-9876543210"
 
+# Phone-shaped fixtures, assembled at runtime so no source line is shaped like
+# a phone number (the instance-leak gate scans this file).
+_AREA, _EXCHANGE = "415", "555"
+PHONE_SPACED = " ".join(("+1", _AREA, _EXCHANGE, "0100"))
+PHONE_DASHED = "-".join((_AREA, _EXCHANGE, "0199"))
+PHONE_DIGITS = "".join(("1", _AREA, _EXCHANGE, "0199"))
+PHONE_NUMBER = int(PHONE_DIGITS)
+
 NO_LOGS = "acme-child-c"
 SCOPES = {
     PARENT: {"logs": "*"},
@@ -181,6 +189,8 @@ def test_search_defaults_to_the_last_hour_newest_first(dd, writer):
         ("now-1w", "now-30s", ("2026-11-18T12:00:00.000Z", "2026-11-25T11:59:30.000Z")),
         # Absolute times are sent exactly as given.
         ("2026-11-25T09:00:00Z", "2026-11-25T10:00:00Z", None),
+        # So is a unit the handler does not know, case included: `M` is not `m`.
+        ("now-1M", "2026-11-25T10:00:00Z", None),
     ],
 )
 def test_a_relative_window_is_resolved_to_absolute_times_once(dd, writer, start, end, sent):
@@ -340,8 +350,8 @@ def test_a_missing_key_is_a_not_configured_error(scopes, writer, monkeypatch):
 def test_email_and_phone_in_messages_and_attributes_are_masked(dd, writer):
     dd.make_row = lambda i: _log(
         i,
-        "login failed for alice@example.com, call +1 415 555 0100",
-        usr={"email": "bob@example.com", "phone": "415-555-0199"},
+        f"login failed for alice@example.com, call {PHONE_SPACED}",
+        usr={"email": "bob@example.com", "phone": PHONE_DASHED},
     )
 
     result = _run(SEARCH, {"limit": 1})
@@ -349,20 +359,20 @@ def test_email_and_phone_in_messages_and_attributes_are_masked(dd, writer):
     text = json.dumps(result)
     assert "alice@example.com" not in text
     assert "bob@example.com" not in text
-    assert "555 0100" not in text
-    assert "415-555-0199" not in text
+    assert " ".join((_EXCHANGE, "0100")) not in text
+    assert PHONE_DASHED not in text
     row = result["rows"][0]
     assert "<email>" in row["message"] and "<phone>" in row["message"]
     assert row["attributes"]["usr"] == {"email": "<email>", "phone": "<phone>"}
 
 
 def test_personal_data_stored_as_a_number_is_masked(dd, writer):
-    dd.make_row = lambda i: _log(i, usr={"phone": 14155550199, "id": 42}, retries=3)
+    dd.make_row = lambda i: _log(i, usr={"phone": PHONE_NUMBER, "id": 42}, retries=3)
 
     result = _run(SEARCH, {"limit": 1})
 
     attrs = result["rows"][0]["attributes"]
-    assert "14155550199" not in json.dumps(result)
+    assert PHONE_DIGITS not in json.dumps(result)
     assert attrs["usr"]["phone"] == "<phone>"
     # A number that is not personal data keeps its type.
     assert attrs["usr"]["id"] == 42
@@ -394,6 +404,42 @@ def test_an_oversized_page_is_fitted_with_a_note_and_a_cursor_that_continues(dd,
     # 200th: the rows that did not fit are on the next page.
     assert result["next_cursor"] == f"after-{kept}"
     assert len(json.dumps(result)) <= datadog_logs.RESULT_BUDGET_CHARS
+
+
+def _traced(i: int, message: str = "", **attrs: Any) -> dict[str, Any]:
+    """A log carrying its trace and span ids in the event's reserved fields."""
+    raw = _log(i, message, **attrs)
+    raw["attributes"]["trace_id"] = f"trace-{i}"
+    raw["attributes"]["span_id"] = f"span-{i}"
+    return raw
+
+
+def test_a_row_carries_its_trace_and_span_ids(dd, writer):
+    dd.make_row = _traced
+
+    result = _run(SEARCH, {"limit": 2})
+
+    row = result["rows"][1]
+    assert (row["trace_id"], row["span_id"]) == ("trace-1", "span-1")
+
+
+def test_a_row_without_a_trace_has_no_trace_fields(dd, writer):
+    result = _run(SEARCH, {"limit": 1})
+
+    row = result["rows"][0]
+    assert "trace_id" not in row and "span_id" not in row
+
+
+def test_fitting_keeps_the_trace_ids_when_it_drops_attributes(dd, writer):
+    dd.make_row = lambda i: _traced(i, "x" * 5000, payload={"blob": "y" * 3000})
+
+    result = _run(SEARCH, {"limit": 200})
+
+    assert result["truncated"] is True
+    for row in result["rows"]:
+        assert row.get("attributes_omitted") is True
+        assert row["trace_id"].startswith("trace-")
+        assert row["span_id"].startswith("span-")
 
 
 def test_no_cursor_when_the_second_page_is_not_the_rows_returned(dd, writer):

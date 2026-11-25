@@ -74,7 +74,10 @@ The Helm deployment has a different boundary from the systemd appliance:
   `/api/vault/list` stays open to operators because it returns key names only.
 - The Datadog read keys (`ROBOTHOR_DATADOG_API_KEY`, `ROBOTHOR_DATADOG_APP_KEY`)
   are one instance-wide credential, read vault-first from the root tenant and
-  never handed to a tenant. What separates tenants is the scope filter
+  never handed to a tenant: they are classified with the platform credentials,
+  so no exec rung, manifest grant, hook or browser driver carries them, the
+  startup drop takes them from the C environment, and the vault tools refuse
+  them. What separates tenants is the scope filter
   `robothor/integrations/datadog/scope.py` ANDs into every query; a tenant with
   no scope entry is refused. See
   [Reading Datadog from Genus](OBSERVABILITY.md#reading-datadog-from-genus).

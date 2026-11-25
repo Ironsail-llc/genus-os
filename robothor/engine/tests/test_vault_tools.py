@@ -464,3 +464,47 @@ async def test_the_session_signing_key_row_is_refused(stored, monkeypatch, tool)
     result = await HANDLERS[tool]({"key": "auth/jwt_signing_key", "value": "x" * 40}, _ctx())
     assert result.get("denied_by") == "bootstrap"
     assert deleted == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["vault_get", "vault_set", "vault_test", "vault_delete"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "ROBOTHOR_DATADOG_APP_KEY",
+        " ROBOTHOR_DATADOG_API_KEY ",
+        # The rows a reader of the two names actually looks up, the provider
+        # row first: refusing only the exported spelling left that one open.
+        "providers/robothor_datadog/api_key",
+        "robothor_datadog_api_key",
+        "robothor_datadog_app_key",
+    ],
+)
+@pytest.mark.parametrize("tenant", ["default", "acme-child-a"])
+async def test_the_shared_datadog_keys_are_refused_to_every_vault_tool(
+    stored, monkeypatch, tool, key, tenant
+):
+    """One key pair reads every tenant's telemetry. No agent, in any tenant and
+    with any tier, reads its fingerprint, replaces it, probes it or deletes it."""
+    from robothor import vault
+
+    touched: list[str] = []
+    monkeypatch.setattr(vault, "delete", lambda k, **kw: touched.append(k) or True)
+    monkeypatch.setattr(vault, "set", lambda k, v, **kw: touched.append(k))
+    monkeypatch.setattr(vault, "get_metadata", lambda k, **kw: touched.append(k) or {})
+    result = await HANDLERS[tool](
+        {"key": key, "value": "x" * 40}, ToolContext(agent_id="main", tenant_id=tenant)
+    )
+    assert result.get("denied_by") == "cross_tenant"
+    assert touched == []
+
+
+def test_every_row_a_datadog_key_reader_looks_up_is_refused():
+    """Derived, so a new candidate row in the naming rules is covered too."""
+    from robothor.engine.tools.handlers.vault import _refuse_bootstrap
+    from robothor.vault.naming import vault_keys_for_env_name
+
+    for name in ("ROBOTHOR_DATADOG_API_KEY", "ROBOTHOR_DATADOG_APP_KEY"):
+        for row in vault_keys_for_env_name(name):
+            refusal = _refuse_bootstrap(row, "write") or {}
+            assert refusal.get("denied_by") == "cross_tenant", row
