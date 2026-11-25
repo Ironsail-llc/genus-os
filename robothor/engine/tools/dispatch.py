@@ -240,6 +240,9 @@ class ToolContext:
     # user_role, trigger and identity. Read from the run's published toolset
     # (capability_tier.current_run_tier) when the call is dispatched.
     capability_tier: str = ""
+    # The run's trace id, "" outside a traced run. Carried so a call made on
+    # the caller's behalf (``tool_call``) names the same trace on its log line.
+    trace_id: str = ""
 
 
 def get_db() -> Any:
@@ -735,6 +738,7 @@ async def _execute_tool(
     is_benchmark: bool = False,
     identity: IdentityContext | None = None,
     capability_tier: str = "",
+    trace_id: str = "",
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
 
@@ -761,6 +765,7 @@ async def _execute_tool(
         identity=identity,
         # An explicit tier is a caller's (tool_call's call_kwargs); else the run's.
         capability_tier=capability_tier or current_run_tier(),
+        trace_id=trace_id,
     )
     # ── A `tenant` argument: may this call act in that tenant? ──
     # Decided against the run's OWN context, before anything is reserved or

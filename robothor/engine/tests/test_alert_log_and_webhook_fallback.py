@@ -122,6 +122,13 @@ class TestEveryAlertIsLogged:
         assert f["trace_id"] == "0af7651916cd43dd8448eb211c80319c"
         assert list(f)[-2:] == ["tenant_id", "trace_id"]
 
+    def test_run_scope_reads_the_tenant_and_trace_off_a_session(self) -> None:
+        from types import SimpleNamespace
+
+        session = SimpleNamespace(run=SimpleNamespace(tenant_id="acme-child-a"), trace_id="ab" * 16)
+        assert alerts.run_scope(session) == {"tenant_id": "acme-child-a", "trace_id": "ab" * 16}
+        assert alerts.run_scope(None) == {"tenant_id": "", "trace_id": ""}
+
     @pytest.mark.asyncio
     async def test_an_alert_outside_any_run_omits_both_keys(self, caplog) -> None:
         await alerts.alert("critical", "Tool outage: example_tool", "9/9 calls failed")

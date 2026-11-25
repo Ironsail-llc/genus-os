@@ -5,6 +5,7 @@ and writes one line on the ``robothor.engine.tool_calls`` logger::
 
     event=tool_call tool=<name> agent=<id> run_id=<id> outcome=<outcome>
         error_type=<type> duration_ms=<n> reason="<short redacted text>"
+        tenant_id=<id> trace_id=<hex>
 
 ``workflow=<id>`` takes the place of ``agent=`` for a workflow step's call.
 ``outcome`` is one of :data:`OUTCOMES`: ``ok``; ``error`` (the tool failed, or
@@ -13,6 +14,8 @@ another system refused it); ``denied`` (a role or allowlist gate refused it);
 guard); ``timeout``; ``cancelled``. ``ok`` logs at INFO, every other outcome
 at WARNING. Tool arguments and result bodies are never logged; ``reason`` is
 the error text only, through :func:`robothor.engine.log_fields.short_reason`.
+``tenant_id`` and ``trace_id`` come from the ``tenant_id`` and ``trace_id`` the
+call was made with, each left out when empty (a workflow step has no trace).
 
 A ``tool_call`` wrapper is logged as the tool it wraps, once: when the wrapped
 tool runs, its own line is the line; when the wrapper refuses before it runs,
@@ -35,7 +38,7 @@ import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from robothor.engine.log_fields import kv_line, short_reason
+from robothor.engine.log_fields import kv_line, scope_fields, short_reason
 from robothor.engine.repeat_guard import canonical_key
 
 if TYPE_CHECKING:
@@ -121,6 +124,8 @@ def log_tool_call(
     error_type: str = "",
     reason: str = "",
     duration_ms: int = 0,
+    tenant_id: str = "",
+    trace_id: str = "",
 ) -> None:
     """Write the line. Never raises."""
     try:
@@ -135,6 +140,7 @@ def log_tool_call(
         fields["duration_ms"] = duration_ms
         if outcome != "ok":
             fields["reason"] = short_reason(reason)
+        fields.update(scope_fields(tenant_id, trace_id))
         level = logging.INFO if outcome == "ok" else logging.WARNING
         line_logger.log(level, "%s", kv_line("tool_call", **fields))
     except Exception:  # noqa: BLE001 — a log line must never fail the call
@@ -165,6 +171,8 @@ def log_refused(tool_name: str, result: dict[str, Any], *, tool_args: Any, sessi
             outcome=outcome,
             error_type=error_type,
             reason=reason,
+            tenant_id=str(getattr(run, "tenant_id", "") or ""),
+            trace_id=str(getattr(session, "trace_id", "") or ""),
         )
     except Exception:  # noqa: BLE001 — a log line must never fail the call
         with contextlib.suppress(Exception):
@@ -289,6 +297,8 @@ def logged(execute: _F) -> _F:
                     error_type=error_type,
                     reason=reason,
                     duration_ms=int((time.monotonic() - started) * 1000),
+                    tenant_id=str(kwargs.get("tenant_id") or ""),
+                    trace_id=str(kwargs.get("trace_id") or ""),
                 )
 
     return cast("_F", _execute)

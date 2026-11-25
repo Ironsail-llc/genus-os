@@ -363,10 +363,21 @@ _call_log: ContextVar[dict[str, Any] | None] = ContextVar("llm_call_log", defaul
 _line_logger = logging.getLogger("robothor.engine.llm_calls")
 
 
-def begin_call_log(*, agent_id: str, run_id: str, streamed: bool) -> Token[dict[str, Any] | None]:
-    """Name the agent and run on every ``event=llm_call`` line until :func:`end_call_log`."""
+def begin_call_log(
+    *, agent_id: str, run_id: str, streamed: bool, tenant_id: str = "", trace_id: str = ""
+) -> Token[dict[str, Any] | None]:
+    """Name the agent, run, tenant and trace on every ``event=llm_call`` line
+    until :func:`end_call_log`. An empty tenant or trace is left off the line.
+    """
     return _call_log.set(
-        {"agent": agent_id, "run_id": run_id, "streamed": streamed, "attempt": 0, "models": []}
+        {
+            "agent": agent_id,
+            "run_id": run_id,
+            "streamed": streamed,
+            "attempt": 0,
+            "models": [],
+            "scope": {"tenant_id": tenant_id, "trace_id": trace_id},
+        }
     )
 
 
@@ -387,7 +398,7 @@ def _log_call(
     No prompt or reply text: model, tokens, latency, position and outcome only.
     """
     try:
-        from robothor.engine.log_fields import kv_line
+        from robothor.engine.log_fields import kv_line, scope_fields
 
         scope = _call_log.get()
         attempt: Any = "-"
@@ -419,6 +430,7 @@ def _log_call(
         fields["streamed"] = bool(scope["streamed"]) if scope else "-"
         fields["attempt"] = attempt
         fields["fallback"] = fallback
+        fields.update(scope_fields(**scope["scope"]) if scope else {})
         level = logging.INFO if fields["outcome"] == OUTCOME_SUCCESS else logging.WARNING
         _line_logger.log(level, "%s", kv_line("llm_call", **fields))
     except Exception:  # noqa: BLE001 — diagnostics never break a call

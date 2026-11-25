@@ -37,7 +37,9 @@ Per `llm_call` span (GenAI conventions):
 - `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
 - `gen_ai.response.finish_reasons`
 
-Resource attributes: `service.name=robothor-engine`, `agent.id`, merged with the
+Resource attributes: `service.name=robothor-engine`, `agent.id`, `run.id` (the
+run's id, the `run_id` of its log lines) and `tenant.id` (the tenant the run
+belongs to, left out when unknown), merged with the
 standard OpenTelemetry environment: `OTEL_RESOURCE_ATTRIBUTES` (comma-separated
 `key=value`, values percent-decoded, e.g.
 `deployment.environment=staging,service.namespace=example`) overrides those
@@ -74,18 +76,32 @@ credentials, email addresses and phone numbers replaced (`<redacted>`, `<email>`
 `<phone>`), then is cut to 200 characters. `genus engine failures` scrubs its
 error text the same way when it prints it; the stored rows are unchanged.
 
+Every line ends with `tenant_id=<id>` and `trace_id=<hex>` when they are known,
+so a run's lines can be told apart by tenant in a log service several tenants
+share, and joined to the run's trace (the same 32-hex `trace_id` the OTLP export
+sends; a sub-agent's lines carry its parent's). A key that is not known is left
+out, never printed as `-`:
+
+| Event | `tenant_id` | `trace_id` |
+|---|---|---|
+| `tool_call` | the calling run's tenant; absent for a call made outside a run | the run's trace; absent for a workflow tool step (a workflow run has no trace) |
+| `llm_call` | the run's tenant | the run's trace; absent for a model call made before the run's trace exists, or outside a run |
+| `run_end` | the run's tenant | the run's trace; absent for a run that ended before its trace was created |
+| `workflow_step_failed` | the workflow run's tenant | always absent: a workflow run has no trace |
+| `alert` | present only when the run that raised it passed it (the runaway-token hard cap, a rejected run recording, a failed or approval-blocked workflow); absent for a detector or any alert raised outside a run | present only for an alert raised inside a traced run (the runaway-token hard cap) |
+
 | Event | Logger | Level | Fields |
 |---|---|---|---|
-| `tool_call` | `robothor.engine.tool_calls` | INFO when `outcome=ok`, WARNING otherwise | `tool`, `agent` (or `workflow` for a workflow step), `run_id`, `outcome` (`ok`, `error`, `refused`, `denied`, `timeout`, `cancelled`), `error_type`, `duration_ms`, `reason` |
-| `llm_call` | `robothor.engine.llm_calls` | INFO on `outcome=success`, WARNING otherwise | `agent`, `run_id`, `model`, `outcome`, `error_type` (on a failure), `input_tokens`, `output_tokens`, `cached_tokens`, `finish_reason`, `latency_ms`, `streamed`, `attempt` (1-based, within one dispatch), `fallback` (0 for the first model in the chain), and `estimated=true` when the provider reported no usage and the input count is the engine's estimate |
-| `run_end` | `robothor.engine.runs` | INFO when `outcome=completed`, WARNING otherwise | `agent`, `run_id`, `trigger`, `outcome` (`completed`, `error`, `cap`, `timeout`, `cancelled`), `duration_ms`, `iterations`, `input_tokens`, `output_tokens`, `total_tokens` |
-| `workflow_step_failed` | `robothor.engine.workflow` | WARNING | `workflow`, `run_id`, `step`, `step_type`, `tool`, `duration_ms`, `reason` |
-| `alert` | `robothor.engine.alerts` | ERROR (INFO for benchmark traffic) | `kind`, `severity`, `subject`, `alert_id` — see `docs/runbooks/PAGING.md` (repository only) |
+| `tool_call` | `robothor.engine.tool_calls` | INFO when `outcome=ok`, WARNING otherwise | `tool`, `agent` (or `workflow` for a workflow step), `run_id`, `outcome` (`ok`, `error`, `refused`, `denied`, `timeout`, `cancelled`), `error_type`, `duration_ms`, `reason`, `tenant_id`, `trace_id` |
+| `llm_call` | `robothor.engine.llm_calls` | INFO on `outcome=success`, WARNING otherwise | `agent`, `run_id`, `model`, `outcome`, `error_type` (on a failure), `input_tokens`, `output_tokens`, `cached_tokens`, `finish_reason`, `latency_ms`, `streamed`, `attempt` (1-based, within one dispatch), `fallback` (0 for the first model in the chain), `estimated=true` when the provider reported no usage and the input count is the engine's estimate, `tenant_id`, `trace_id` |
+| `run_end` | `robothor.engine.runs` | INFO when `outcome=completed`, WARNING otherwise | `agent`, `run_id`, `trigger`, `outcome` (`completed`, `error`, `cap`, `timeout`, `cancelled`), `duration_ms`, `iterations`, `input_tokens`, `output_tokens`, `total_tokens`, `tenant_id`, `trace_id` |
+| `workflow_step_failed` | `robothor.engine.workflow` | WARNING | `workflow`, `run_id`, `step`, `step_type`, `tool`, `duration_ms`, `reason`, `tenant_id` |
+| `alert` | `robothor.engine.alerts` | ERROR (INFO for benchmark traffic) | `kind`, `severity`, `subject`, `alert_id`, `tenant_id`, `trace_id` — see `docs/runbooks/PAGING.md` (repository only) |
 
 ```text
-event=tool_call tool=example_tool agent=example-agent run_id=9b1c… outcome=denied error_type=role.rbac duration_ms=4 reason="Your role here is 'viewer', which may not use 'example_tool'"
-event=llm_call agent=example-agent run_id=9b1c… model=openai/gpt-6-luna outcome=error_403 error_type=PermissionDeniedError latency_ms=231 streamed=false attempt=1 fallback=0
-event=run_end agent=example-agent run_id=9b1c… trigger=telegram outcome=completed duration_ms=4321 iterations=3 input_tokens=9000 output_tokens=400 total_tokens=9400
+event=tool_call tool=example_tool agent=example-agent run_id=9b1c… outcome=denied error_type=role.rbac duration_ms=4 reason="Your role here is 'viewer', which may not use 'example_tool'" tenant_id=acme-child-a trace_id=0af76519…
+event=llm_call agent=example-agent run_id=9b1c… model=openai/gpt-6-luna outcome=error_403 error_type=PermissionDeniedError latency_ms=231 streamed=false attempt=1 fallback=0 tenant_id=acme-child-a trace_id=0af76519…
+event=run_end agent=example-agent run_id=9b1c… trigger=telegram outcome=completed duration_ms=4321 iterations=3 input_tokens=9000 output_tokens=400 total_tokens=9400 tenant_id=acme-child-a trace_id=0af76519…
 ```
 
 `denied` is a role or allowlist gate; `refused` is any other engine gate, or a

@@ -230,6 +230,9 @@ class AgentSession:
     pending_goal_report: str | None = None
     pending_goal_report_tool: str = "report_pursuit_goal"
     goal_report_complete: bool = False
+    #: The run's trace id, set when its TraceContext is created; "" untraced.
+    #: Named on the run's ``event=`` log lines.
+    trace_id: str = ""
 
     def __init__(
         self,

@@ -4,11 +4,12 @@
 
     event=run_end agent=<id> run_id=<id> trigger=<type> outcome=<outcome>
         duration_ms=<n> iterations=<n> input_tokens=<n> output_tokens=<n>
-        total_tokens=<n>
+        total_tokens=<n> tenant_id=<id> trace_id=<hex>
 
 ``outcome`` is ``completed``, ``error``, ``cap`` (a token or cost budget
 stopped it), ``timeout``, ``cancelled`` or the run's own status for anything
-else. ``iterations`` counts the model calls that answered. ``completed`` logs
+else. ``iterations`` counts the model calls that answered. ``trace_id`` is the
+run's trace, left out when the run had none. ``completed`` logs
 at INFO, the rest at WARNING. No prompt, output or error text.
 """
 
@@ -38,10 +39,10 @@ def run_outcome(run: Any) -> str:
     return _BY_STATUS.get(status, status or "unknown")
 
 
-def log_run_end(run: Any) -> None:
+def log_run_end(run: Any, trace: Any = None) -> None:
     """Write the line. Never raises."""
     try:
-        from robothor.engine.log_fields import kv_line
+        from robothor.engine.log_fields import kv_line, scope_fields
         from robothor.engine.models import StepType
 
         steps = getattr(run, "steps", None) or []
@@ -66,6 +67,7 @@ def log_run_end(run: Any) -> None:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=input_tokens + output_tokens,
+                **scope_fields(getattr(run, "tenant_id", ""), getattr(trace, "trace_id", "")),
             ),
         )
     except Exception:  # noqa: BLE001 — a log line never blocks finalization
