@@ -245,6 +245,31 @@ async def test_a_graph_row_another_leg_found_first_carries_its_relevance(
 
 
 @pytest.mark.asyncio
+async def test_the_graph_leg_never_moves_rows_into_the_reranked_head(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """The graph reaches through what the dense and keyword legs found; it
+    must not lift those rows over the others into the reranker's head (on the
+    eval world that pushed the right fact out for point-in-time and raw-detail
+    questions). It contributes through its reserved places only."""
+    env.setenv("MEMORY_RERANK_MAX_CANDIDATES", "8")
+    dense = _dense(20)
+    # The graph also reaches dense rows 15..20, which the reranker would love.
+    for r in dense[14:]:
+        r["fact_text"] = f"boosted {r['fact_text']}"
+    hops = [_graph_hit(r["id"], r["fact_text"], 0.9 - i / 100) for i, r in enumerate(dense[14:])]
+    env.setattr(reranker, "rerank_pair", _scorer({"boosted": 0.95}, default=0.5))
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=hops):
+        on = await _search(_Cursor(vector=dense, keyword=[]))
+    off = await _search(_Cursor(vector=dense, keyword=[]), include_graph=False)
+
+    head_on = [r["id"] for r in on if not r.get("reserved_leg")]
+    assert head_on == [r["id"] for r in off][: len(head_on)]
+    assert [r["id"] for r in on if r.get("reserved_leg") == "graph"] == [15, 16]
+
+
+@pytest.mark.asyncio
 async def test_include_graph_false_runs_no_graph_leg(env: pytest.MonkeyPatch) -> None:
     hops = [_graph_hit(700, "Bob runs the shipping team", 0.9)]
     cur = _Cursor(vector=_dense(20), keyword=[])

@@ -125,6 +125,22 @@ class TestReservedPlaces:
         out = apply_reserved(ranked, pool, limit=5, reserved={"graph": 1})
         assert [r["id"] for r in out] == [r["id"] for r in ranked[:5]]
 
+    def test_the_places_go_to_the_legs_best_rows_not_to_any_row_it_found(self) -> None:
+        """A weak graph row that the ranked head holds anyway (another leg
+        found it too) does not use up the leg's place: the leg's best row by
+        its own score is what the place is for. On the eval world the wrong
+        organisation's address sat in the head and kept the right one out."""
+        pool = self._pool()
+        weakest = next(r for r in pool if r["id"] == 101)
+        ranked = (
+            [r for r in pool if r["id"] <= 2] + [weakest] + [r for r in pool if 3 <= r["id"] <= 10]
+        )
+        out = apply_reserved(ranked, pool, limit=5, reserved={"graph": 1})
+
+        ids = [r["id"] for r in out]
+        assert 102 in ids, ids
+        assert len(out) == 5 and ids[:3] == [1, 2, 101]
+
     def test_no_candidates_from_the_leg_means_nothing_reserved(self) -> None:
         pool = _rows(fuse({"vector": _leg("vector", [1, 2, 3])}))
         out = apply_reserved(pool, pool, limit=2, reserved={"graph": 2})
