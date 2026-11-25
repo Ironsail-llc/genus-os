@@ -821,12 +821,12 @@ alert already recorded this way is not sent later.
 
 **Levels.** Only a P1 monitor pages.
 
-| Transition | Monitor priority | Level | Goes to |
-|------------|------------------|-------|---------|
-| `Triggered`, `Re-Triggered` | P1 (`P1`, `p1` or `1`) | `critical` | a page: Telegram, then each `ROBOTHOR_ALERT_FALLBACK_CHANNELS` channel, of the tenant's engine |
-| `Triggered`, `Re-Triggered` | anything else, or none | `warning` | the main agent's `alert_digest` inbox |
-| Warn, No Data (and their `Re-`) | any | `warning` | the digest |
-| recoveries | any | `info` | the digest |
+| Transition | Monitor priority | Level | Goes to | Alerts cooldown |
+|------------|------------------|-------|---------|-----------------|
+| `Triggered`, `Re-Triggered` | P1 (`P1`, `p1` or `1`) | `critical` | a page: Telegram, then each `ROBOTHOR_ALERT_FALLBACK_CHANNELS` channel, of the tenant's engine | never holds a new episode: each episode pages under its own id |
+| `Triggered`, `Re-Triggered` | anything else, or none | `warning` | the main agent's `alert_digest` inbox | holds a repeat inside the cooldown (`suppressed`, `cooldown`) |
+| Warn, No Data (and their `Re-`) | any | `warning` | the digest | holds a repeat |
+| recoveries | any | `info` | the digest | holds a repeat |
 
 Priority is the payload's `priority` field (`$ALERT_PRIORITY`). To make a
 monitor page, give it priority P1 in Datadog; every other triggered monitor
@@ -847,7 +847,11 @@ recovery is sent once at `info` and closes the episode, so the next trigger is
 a new one. Episodes are kept in Redis
 (`robothor:datadog:episode:<tenant>:<monitor>:*`) for seven days, so a
 recovery Datadog never sent cannot silence a monitor for good. The alerts
-cooldown applies on top (alert id `datadog_alert:<tenant>:<monitor>:<step>`).
+cooldown applies on top (alert id `datadog_alert:<tenant>:<monitor>:<step>`),
+except to a P1 page, whose id also carries the time of the recovery that
+closed the previous episode (`...:page:<recovery $DATE>`): a P1 monitor that
+triggers, recovers and triggers again inside the cooldown pages twice, once
+per incident, while a storm inside one episode still pages once.
 A send that fails is recorded as `delivery_failed` (with `error`) and the next
 notification of the episode tries again. The episode moves on whatever the
 send did: a step the cooldown held counts as sent (it was, within the hour),
