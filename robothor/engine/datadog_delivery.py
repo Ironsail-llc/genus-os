@@ -417,6 +417,19 @@ async def _forget(redis_client: Any, *keys: str) -> None:
         logger.warning("Datadog episode keys not cleared (%s)", type(exc).__name__)
 
 
+async def _forget_owned(redis_client: Any, key: str, value: str) -> None:
+    """Delete ``key`` only while it still holds ``value``: never another entry's claim."""
+    if redis_client is None or not key:
+        return
+    try:
+        held = await redis_client.get(key)
+        held = held.decode() if isinstance(held, bytes) else held
+        if held == value:
+            await redis_client.delete(key)
+    except Exception as exc:  # noqa: BLE001 - the claim lapses with its episode
+        logger.warning("Datadog triage claim not given back (%s)", type(exc).__name__)
+
+
 async def _mark(redis_client: Any, *keys: str, value: str = "1") -> None:
     if redis_client is None:
         return
@@ -462,6 +475,41 @@ async def webhook_covers(
     return bool(await redis_client.exists(*keys))
 
 
+def _date(alert: DatadogAlert) -> int | None:
+    """The notification's ``$DATE`` (epoch milliseconds), when it is one."""
+    text = (alert.date or "").strip()
+    return int(text) if text.isdigit() else None
+
+
+async def _closed_at(redis_client: Any, base: str) -> int | None:
+    """The ``$DATE`` of the latest recovery handled for this monitor, if any."""
+    if redis_client is None:
+        return None
+    try:
+        held = await redis_client.get(f"{base}:closed_at")
+    except Exception as exc:  # noqa: BLE001 - without it, arrival order decides
+        logger.warning("Datadog episode close time unreadable (%s)", type(exc).__name__)
+        return None
+    held = held.decode() if isinstance(held, bytes) else held
+    return int(held) if isinstance(held, str) and held.isdigit() else None
+
+
+def _older(date: int | None, closed: int | None) -> bool:
+    return date is not None and closed is not None and date < closed
+
+
+async def _close(redis_client: Any, base: str, date: int | None) -> None:
+    """The monitor recovered: its episode closes, and the recovery's time is kept.
+
+    A trigger dated before it (read late, or finishing its send after it) is
+    an older notification and never re-opens the episode.
+    """
+    await _forget(redis_client, *(f"{base}:sent:{name}" for name in _STAGES), f"{base}:triage")
+    closed = await _closed_at(redis_client, base)
+    if date is not None and (closed is None or date > closed):
+        await _mark(redis_client, f"{base}:closed_at", value=str(date))
+
+
 async def _deliver_here(
     alert: DatadogAlert,
     tenant: str,
@@ -476,6 +524,8 @@ async def _deliver_here(
     ``sent:<entry>`` once it is confirmed. A redelivery of the same stream
     entry after a crash finds its own mark: ``sending`` sends (the first try
     never finished), ``sent`` does not send again and reports what was sent.
+    A recovery always closes the episode, whatever its own send did; a
+    trigger dated before the latest recovery never re-opens it.
     """
     from robothor.engine import alerts
     from robothor.integrations.datadog.alerts import level_for
@@ -484,25 +534,38 @@ async def _deliver_here(
     monitor = alert.monitor_id or "-"
     base = f"{EPISODE_PREFIX}{tenant}:{monitor}"
     recovery = alert.transition in _RECOVERIES
+    date = _date(alert)
+    if not recovery and _older(date, await _closed_at(redis_client, base)):
+        return {
+            "mode": SUPPRESSED,
+            "delivery": {"level": level, "reason": "superseded_by_recovery"},
+            "triage": {"started": False, "reason": "superseded_by_recovery"},
+        }
     stage = _stage(alert.transition, level)
     gate = f"{base}:sent:{stage}"
     alert_id = f"datadog_alert:{tenant}:{monitor}:{stage}"
     mine = (f"sending:{entry}", f"sent:{entry}") if entry else ()
     state = await _claim_owned(redis_client, gate, f"sending:{entry or ''}", mine)
     if state == "taken":
-        # The step was sent; the episode's one run may still be owed (a busy
-        # main agent gave its claim back).
-        triage = (
-            await _maybe_triage(alert, tenant, title, redis_client, hooks, base, True, entry)
-            if not recovery
-            else {"started": False, "reason": "episode_open"}
-        )
+        if recovery:
+            await _close(redis_client, base, date)
+            triage = {"started": False, "reason": "recovery"}
+        else:
+            # The step was sent; the episode's one run may still be owed (a
+            # busy main agent gave its claim back).
+            triage = await _maybe_triage(
+                alert, tenant, title, redis_client, hooks, base, True, entry
+            )
         return {
             "mode": SUPPRESSED,
             "delivery": {"level": level, "reason": "episode_open"},
             "triage": triage,
         }
     claimed = None if state is None else True
+    if not recovery:
+        # A step of a new episode: the last episode's recovery mark goes,
+        # whatever this send does, so the next recovery is sent.
+        await _forget(redis_client, f"{base}:sent:recovered")
     if state == f"sent:{entry}":
         route = "page" if level in alerts._PAGE_LEVELS else "digest"
         delivery = {"level": level, "route": route, "alert_id": alert_id, "replayed": True}
@@ -516,24 +579,31 @@ async def _deliver_here(
             kind="datadog_alert",
             metadata={"tenant": tenant, "monitor_id": monitor, "transition": alert.transition},
         )
-        if outcome["mode"] == DELIVERED and entry:
-            await _mark(redis_client, gate, value=f"sent:{entry}")
     failed = outcome["mode"] == FAILED
-    if failed and claimed:
-        await _forget(redis_client, gate)  # the next notification tries again
-    elif outcome["mode"] == SUPPRESSED and entry:
-        # Held by the cooldown: it was sent within the hour, so the step counts.
-        await _mark(redis_client, gate, value=f"sent:{entry}")
     if recovery:
-        # The monitor recovered, whether or not the notice reached anyone: the
-        # episode closes, so the next trigger is a new one.
-        stages = [f"{base}:sent:{name}" for name in _STAGES]
-        await _forget(redis_client, *stages, f"{base}:triage")
+        if failed and claimed:
+            await _forget(redis_client, gate)
+        elif entry:
+            await _mark(redis_client, gate, value=f"sent:{entry}")
+        # The monitor recovered, whether or not the notice reached anyone.
+        await _close(redis_client, base, date)
         outcome["triage"] = {"started": False, "reason": "recovery"}
         return outcome
-    if not failed:
-        await _forget(redis_client, f"{base}:sent:recovered")
-        # A step sent covers the steps below it for the rest of the episode.
+    if _older(date, await _closed_at(redis_client, base)):
+        # Its recovery was handled while this send was in flight: the episode
+        # stays closed, and this older notification starts nothing.
+        await _forget(redis_client, gate)
+        outcome["delivery"]["superseded_by_recovery"] = True
+        outcome["triage"] = {"started": False, "reason": "superseded_by_recovery"}
+        return outcome
+    if failed:
+        if claimed:
+            await _forget(redis_client, gate)  # the next notification tries again
+    else:
+        # Sent, or held by the cooldown (sent within the hour): the step counts,
+        # and covers the steps below it for the rest of the episode.
+        if entry:
+            await _mark(redis_client, gate, value=f"sent:{entry}")
         lower = _STAGES[: _STAGES.index(stage)]
         await _mark(redis_client, *(f"{base}:sent:{n}" for n in lower))
     # A failed page is when the read-only look matters most; the triage key
@@ -566,9 +636,10 @@ async def _maybe_triage(
     if state != "new":
         # This entry started it before the engine stopped: not a second run.
         return {"started": True, "read_only": True, "replayed": True}
-    started = await _start_triage(alert, tenant, title, hooks, redis_client, f"{base}:triage")
+    claim = (f"{base}:triage", f"started:{entry or ''}")
+    started = await _start_triage(alert, tenant, title, hooks, redis_client, claim)
     if not started.get("started"):
-        await _forget(redis_client, f"{base}:triage")
+        await _forget_owned(redis_client, *claim)
     return started
 
 
@@ -581,9 +652,12 @@ async def _start_triage(
     title: str,
     hooks: Any,
     redis_client: Any = None,
-    triage_key: str = "",
+    claim: tuple[str, str] = ("", ""),
 ) -> dict[str, Any]:
-    """Start one read-only run of this tenant's main agent in the background."""
+    """Start one read-only run of this tenant's main agent in the background.
+
+    ``claim`` is the episode's triage key and the value this run holds there.
+    """
     from robothor.engine.config import load_agent_config
     from robothor.engine.manifest_store import main_agent_id
     from robothor.engine.models import TriggerType
@@ -605,7 +679,7 @@ async def _start_triage(
     prompt = triage_prompt(alert, title=title)
     monitor = alert.monitor_id or "-"
     task = get_task_registry().spawn(
-        _run_triage(hooks.runner, agent, config, prompt, tenant, monitor, redis_client, triage_key),
+        _run_triage(hooks.runner, agent, config, prompt, tenant, monitor, redis_client, claim),
         name=f"datadog-triage:{tenant}:{monitor}",
     )
     _triage_tasks.add(task)
@@ -637,20 +711,26 @@ async def _run_triage(
     tenant: str,
     monitor: str,
     redis_client: Any = None,
-    triage_key: str = "",
+    claim: tuple[str, str] = ("", ""),
 ) -> None:
     """The run itself; whatever happens is one ``datadog.triage_run`` event.
 
-    A main agent still busy after the waits gives the episode's claim back, so
-    the next notification of the episode may start the run.
+    A main agent still busy after the waits, or a shutdown during them, gives
+    the episode's claim back, so the next notification of the episode may
+    start the run. Only this run's own claim is ever given back.
     """
     from robothor.engine import dedup, delivery
     from robothor.engine.models import TriggerType
 
     status, error = "agent_busy", ""
-    if not await _acquire_waiting(agent):
-        if triage_key:
-            await _forget(redis_client, triage_key)
+    try:
+        acquired = await _acquire_waiting(agent)
+    except asyncio.CancelledError:
+        await _forget_owned(redis_client, *claim)
+        _record_triage(tenant, monitor, agent, "cancelled", "")
+        raise
+    if not acquired:
+        await _forget_owned(redis_client, *claim)
     else:
         try:
             run = await runner.execute(
