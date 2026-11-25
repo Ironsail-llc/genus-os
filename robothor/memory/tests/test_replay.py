@@ -252,7 +252,8 @@ class TestReader:
 
         by_query = {c["query"]: c for c in search.calls}
         assert by_query["q1"]["reader_person_id"] == alice.person_id
-        assert by_query["q1"]["reader_scope_id"] == alice.person_id
+        # As search_memory: the person and user are the one reader; no second id.
+        assert by_query["q1"].get("reader_scope_id") is None
         assert by_query["q1"]["reader_user_id"] is None
         assert list(by_query["q1"]["room_ids"]) == ["r1"]
         assert by_query["q1"]["limit"] == 10
