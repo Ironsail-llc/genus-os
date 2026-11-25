@@ -169,6 +169,7 @@ class TestGraphSection:
                 exclude_names={"Bob Jones"},
                 scope=scope,
                 sender_person_id="person-1",
+                reader_person_id="person-1",
             )
 
         assert seen["tenant_id"] == "test-tenant"
@@ -177,6 +178,40 @@ class TestGraphSection:
         assert seen["reader_scope_id"] == "person-1"
         assert seen["person_restricted"] is True and seen["person_id"] == "person-1"
         assert seen["exclude_names"] == {"Bob Jones"}
+
+    def test_the_sender_alone_is_not_a_reader(self) -> None:
+        """The sender seeds the walk; only the person the run serves reads
+        private evidence (robothor/engine/private_recall.py)."""
+        seen: dict[str, Any] = {}
+
+        def _capture(tenant_id: str, message: str, **kw: Any) -> list[Candidate]:
+            seen.update(kw)
+            return []
+
+        with _legacy_db(), patch("robothor.memory.activation.recall_for_message", _capture):
+            warmup._build_entity_context(
+                MESSAGE, tenant_id="test-tenant", sender_person_id="person-1"
+            )
+
+        assert seen["sender_person_id"] == "person-1"
+        assert seen["reader_scope_id"] is None
+
+    def test_a_restricted_scope_never_supplies_a_reader(self) -> None:
+        from robothor.identity.scope import DataScope
+
+        seen: dict[str, Any] = {}
+
+        def _capture(tenant_id: str, message: str, **kw: Any) -> list[Candidate]:
+            seen.update(kw)
+            return []
+
+        scope = DataScope(tenant_id="test-tenant", person_id="person-1", restricted=True)
+        with _legacy_db(), patch("robothor.memory.activation.recall_for_message", _capture):
+            warmup._build_entity_context(
+                MESSAGE, tenant_id="test-tenant", scope=scope, sender_person_id="person-1"
+            )
+
+        assert seen["reader_scope_id"] is None
 
     def test_the_interactive_builder_passes_the_senders_person(self) -> None:
         from robothor.identity.context import IdentityContext

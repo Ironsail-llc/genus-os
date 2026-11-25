@@ -354,3 +354,31 @@ class TestRecallAtEqualBudget:
         assert {i.kind for i in b.items} == {"fact"}
         assert [i.id for i in b.items][: len(a.items)] == [i.id for i in a.items]
         assert b.tokens > a.tokens
+
+
+class TestRecallBudgetReadsAsTheWorldReader:
+    @pytest.mark.asyncio
+    async def test_budget_variant_searches_as_the_eval_reader(self, monkeypatch):
+        """The world's conversations are private to its eval reader; the budget
+        variant must search as that reader, as ``recall`` does, or the two
+        compare different stores."""
+        from types import SimpleNamespace
+
+        calls: list[dict] = []
+
+        async def fake_search(query, **kwargs):
+            calls.append(kwargs)
+            return []
+
+        monkeypatch.setattr("robothor.memory.facts.search_facts", fake_search)
+        handle = SimpleNamespace(
+            tenant_id=EVAL_TENANT,
+            seeded=SimpleNamespace(reader_person_id="p-1"),
+            fact_id=lambda _i: None,
+            turn_id=lambda _i: None,
+        )
+        case = SimpleNamespace(question="Where does Alice work?")
+        (budget,) = es.make_systems(["recall_budget"])
+        await budget.retrieve(case, world_handle=handle, token_budget=2048)
+        assert calls
+        assert all(c.get("reader_person_id") == "p-1" for c in calls)
