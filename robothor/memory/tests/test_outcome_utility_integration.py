@@ -407,32 +407,38 @@ class TestBenchmarkRunsCreateNoUtility:
 
 
 class TestOriginGatesReinforcement:
-    def test_viii_external_or_inferred_origin_earns_no_positive_utility(self, facts_db) -> None:
+    def test_viii_external_origin_earns_no_positive_utility(self, facts_db) -> None:
+        """On the combined chain the graph schema (176) owns ``origin`` and its
+        CHECK: ``inferred`` is an edge origin, never a fact's, and the column
+        always exists. A row from before 176 has no origin and stays eligible."""
         from robothor.memory.lifecycle import _run_decay_pass_sync
 
         conn, tenant = facts_db
-        # The graph schema adds this column; until it lands here, add it locally.
-        with conn.cursor() as cur:
-            cur.execute("ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS origin TEXT")
-        conn.commit()
         external = _seed(conn, tenant, "A web page says PRJ-8812 ships in May.", origin="external")
-        inferred = _seed(conn, tenant, "PRJ-8812 is probably led by Bob.", origin="inferred")
         stated = _seed(conn, tenant, "Alice said PRJ-8812 ships in June.", origin="user_stated")
         legacy = _seed(conn, tenant, "PRJ-8812 has a budget review.")
         blamed = _seed(conn, tenant, "A web page says PRJ-8812 is cancelled.", origin="external")
 
-        _succeed(tenant, [external, inferred, stated, legacy], output="PRJ-8812 is due.", n=4)
+        _succeed(tenant, [external, stated, legacy], output="PRJ-8812 is due.", n=4)
         _fail(tenant, [blamed], n=2)
         _run_decay_pass_sync(tenant_id=tenant)
 
         assert _utility(conn, external) == 0.0
-        assert _utility(conn, inferred) == 0.0
         assert _utility(conn, stated) > 0.0
         assert _utility(conn, legacy) > 0.0
         assert _utility(conn, blamed) < 0.0
 
-    def test_viii_without_the_origin_column_every_fact_is_eligible(self, facts_db) -> None:
+
+class TestOriginGatesReinforcementOnTheCombinedChain:
+    """With the graph schema (176) and the write path in the chain, the trust
+    rule reads the origin the write path records: no column is added locally."""
+
+    async def test_an_external_fact_from_the_write_path_earns_no_positive_utility(
+        self, facts_db, monkeypatch
+    ) -> None:
+        from robothor.llm import ollama
         from robothor.memory.lifecycle import _run_decay_pass_sync
+        from robothor.memory.write_path import WriteContext, write_facts
 
         conn, tenant = facts_db
         with conn.cursor() as cur:
@@ -440,9 +446,40 @@ class TestOriginGatesReinforcement:
                 "SELECT 1 FROM information_schema.columns "
                 "WHERE table_name = 'memory_facts' AND column_name = 'origin'"
             )
-            assert cur.fetchone() is None
+            assert cur.fetchone() is not None, "the graph schema's origin column"
         conn.commit()
-        fact = _seed(conn, tenant, "Alice's locker is LKR-0921.")
-        _succeed(tenant, [fact], output="Locker LKR-0921.", n=2)
+
+        async def _embed_batch(texts: list[str], *_a: Any, **_k: Any) -> list[list[float]]:
+            return [[0.1] * 1024 for _ in texts]
+
+        async def _embed(_t: str, *_a: Any, **_k: Any) -> list[float]:
+            return [0.1] * 1024
+
+        monkeypatch.setattr(ollama, "get_embeddings_batch_async", _embed_batch)
+        monkeypatch.setattr(ollama, "get_embedding_async", _embed)
+
+        async def _write(text: str, channel: str, content_type: str) -> int:
+            out = await write_facts(
+                [{"fact_text": text, "category": "event", "confidence": 0.9}],
+                source_content=text,
+                context=WriteContext.for_source(
+                    tenant_id=tenant,
+                    source_channel=channel,
+                    content_type=content_type,
+                    role="user",
+                ),
+                conflict_check=False,
+            )
+            (fid,) = out["fact_ids"]
+            return int(fid)
+
+        external = await _write("An inbound mail says PRJ-4410 ships in May.", "email", "email")
+        stated = await _write("Alice said PRJ-4410 ships in June.", "webchat", "conversation")
+        assert _get(conn, external)["origin"] == "external"
+        assert _get(conn, stated)["origin"] == "user_stated"
+
+        _succeed(tenant, [external, stated], output="PRJ-4410 is due.", n=4)
         _run_decay_pass_sync(tenant_id=tenant)
-        assert _utility(conn, fact) > 0.0
+
+        assert _utility(conn, external) == 0.0
+        assert _utility(conn, stated) > 0.0
