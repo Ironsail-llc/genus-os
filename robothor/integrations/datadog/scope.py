@@ -21,10 +21,21 @@ that swallows it. In practice that means:
   reads ``'...'`` as a phrase sees the same structure (put text with an
   apostrophe in double quotes);
 * no control, format or line-separator characters;
+* no punctuation outside ASCII: typographic quotes (``\u201c \u201d \u2018 \u2019 \u00ab \u00bb``)
+  and fullwidth or ornamental brackets, quotes and backslashes are refused
+  outright, because a parser that reads any of them as a delimiter would see
+  a different structure from the one scanned here (letters and digits in any
+  script are fine);
 * no more than :data:`MAX_QUERY_CHARS` characters.
 
 Refusing a rare legitimate query is acceptable; letting an escape through is
 not. The operator's own scope filters are held to the same rules.
+
+Two reads take no query text at all. A trace is fetched as the span filter
+``trace_id:<id>`` (:func:`trace_query`), and the id must be plain hex or
+decimal digits. A metric query is built from validated parts
+(:func:`compose_metric`) with the tenant's ``metric_tags`` always first in the
+tag filter.
 """
 
 from __future__ import annotations
@@ -34,7 +45,10 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +59,9 @@ __all__ = [
     "DatadogScope",
     "ScopeError",
     "compose",
+    "compose_metric",
     "scope_for",
+    "trace_query",
 ]
 
 #: A malformed-input guard, not a usage limit: no hand-written or
@@ -128,6 +144,8 @@ def _refusal(query: str) -> str | None:
         return f"the query is longer than {MAX_QUERY_CHARS} characters"
     if any(unicodedata.category(ch) in _REFUSED_CATEGORIES for ch in query):
         return "the query contains a control character or line break"
+    if any(ord(ch) > 127 and unicodedata.category(ch).startswith("P") for ch in query):
+        return "the query contains a typographic quote or bracket (use plain ASCII ones)"
     # Double quotes are phrases; a parser that also honours single quotes
     # must see the same structure, so the query is scanned both ways.
     return _scan(query, '"') or _scan(query, "\"'")
@@ -149,6 +167,57 @@ def compose(scope_query: str, user_query: str) -> str:
     if not user:
         return scope
     return f"({scope}) AND ({user})"
+
+
+# ── traces and metrics: built from validated parts, never from query text ───
+
+#: A trace id as Datadog shows it: hex (128-bit) or decimal (64-bit) digits.
+#: Nothing else, so the id can never carry search syntax into the filter.
+_TRACE_ID = re.compile(r"[0-9A-Fa-f]{1,40}")
+#: A metric name as Datadog accepts one; the bound is a malformed-input guard.
+_METRIC = re.compile(r"[A-Za-z][A-Za-z0-9_.]{0,199}")
+_AGGREGATORS = frozenset({"avg", "sum", "min", "max"})
+
+
+def trace_query(trace_id: str) -> str:
+    """``trace_id:<id>`` for a plain hex or decimal id; raises :class:`ScopeError`."""
+    # Spaces only: a line break or control character is refused, not trimmed.
+    text = (trace_id or "").strip(" ")
+    if not _TRACE_ID.fullmatch(text):
+        raise ScopeError("a trace id is hex or decimal digits only")
+    return f"trace_id:{text}"
+
+
+def compose_metric(
+    scope_tags: tuple[str, ...],
+    metric: str,
+    *,
+    aggregator: str = "avg",
+    tags: Sequence[str] = (),
+    group_by: Sequence[str] = (),
+    as_count: bool = False,
+) -> str:
+    """``<agg>:<metric>{<scope tags>,<caller tags>} by {<keys>}``; raises :class:`ScopeError`.
+
+    The scope tags always lead the filter. Every part is checked against a
+    pattern that cannot leave the braces, so no caller value can widen it.
+    ``scope_tags == ()`` is every metric; the no-access tag refuses outright.
+    """
+    if NO_ACCESS_TAG in scope_tags:
+        raise ScopeError("this tenant has no access to Datadog metrics")
+    if not all(isinstance(t, str) and _TAG.fullmatch(t) for t in scope_tags):
+        raise ScopeError("this tenant's Datadog metric scope is malformed")
+    if not isinstance(metric, str) or not _METRIC.fullmatch(metric):
+        raise ScopeError("a metric name is letters, digits, dots and underscores")
+    if aggregator not in _AGGREGATORS:
+        raise ScopeError("the aggregator is one of avg, sum, min or max")
+    for value in (*tags, *group_by):
+        if not isinstance(value, str) or not _TAG.fullmatch(value):
+            raise ScopeError("a tag or group-by key may not contain a space, comma, brace or quote")
+    query = f"{aggregator}:{metric}{{{','.join((*scope_tags, *tags)) or '*'}}}"
+    if group_by:
+        query += f" by {{{','.join(group_by)}}}"
+    return query + (".as_count()" if as_count else "")
 
 
 # ── the declared scope map ───────────────────────────────────────────────────

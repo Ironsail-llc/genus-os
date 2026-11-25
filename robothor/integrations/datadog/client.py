@@ -20,6 +20,7 @@ site; anything else is ``not_configured``, so a key is never sent elsewhere.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
@@ -27,8 +28,22 @@ import httpx
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.integrations.datadog import requests as api
-from robothor.integrations.datadog.requests import Bucket, LogPage, LogRow
-from robothor.integrations.datadog.scope import DatadogScope, compose
+from robothor.integrations.datadog.requests import (
+    Bucket,
+    LogPage,
+    LogRow,
+    MetricSeries,
+    MonitorPage,
+    MonitorRow,
+    SpanPage,
+    SpanRow,
+)
+from robothor.integrations.datadog.scope import (
+    DatadogScope,
+    compose,
+    compose_metric,
+    trace_query,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +57,11 @@ __all__ = [
     "ErrorKind",
     "LogPage",
     "LogRow",
+    "MetricSeries",
+    "MonitorPage",
+    "MonitorRow",
+    "SpanPage",
+    "SpanRow",
     "async_client_from_settings",
     "client_from_settings",
     "resolve_keys",
@@ -131,6 +151,90 @@ def _aggregate(
     )
 
 
+def _span_search(
+    scope: DatadogScope,
+    query: str,
+    start: str,
+    end: str,
+    limit: int,
+    cursor: str | None,
+    newest_first: bool,
+) -> api.ApiRequest:
+    """The span search for ``query`` inside ``scope.spans``; raises ScopeError before any I/O."""
+    return api.spans_search(
+        compose(scope.spans, query),
+        start=start,
+        end=end,
+        limit=limit,
+        cursor=cursor,
+        newest_first=newest_first,
+    )
+
+
+def _span_aggregate(
+    scope: DatadogScope, query: str, start: str, end: str, group_by: Sequence[str], limit: int
+) -> api.ApiRequest:
+    """The span aggregate for ``query`` inside ``scope.spans``; raises ScopeError before any I/O."""
+    return api.spans_aggregate(
+        compose(scope.spans, query), start=start, end=end, group_by=group_by, limit=limit
+    )
+
+
+def _trace(scope: DatadogScope, trace_id: str, start: str, end: str, limit: int) -> api.ApiRequest:
+    """One trace's spans, oldest first, inside ``scope.spans``.
+
+    Datadog has no scope-safe fetch-by-id, so this is a span search for the
+    id: a trace that belongs to another tenant simply matches nothing.
+    """
+    return _span_search(scope, trace_query(trace_id), start, end, limit, None, False)
+
+
+def _monitor_search(scope: DatadogScope, query: str, limit: int, page: int) -> api.ApiRequest:
+    """The monitor search for ``query`` inside ``scope.monitors``; raises ScopeError first."""
+    composed = compose(scope.monitors, query)
+    # Only the root scope composes to a bare "*"; monitor search lists every
+    # monitor for an empty query, which is what root asked for.
+    return api.monitors_search("" if composed == "*" else composed, page=page, limit=limit)
+
+
+def _metric_query(
+    scope: DatadogScope,
+    metric: str,
+    aggregator: str,
+    tags: Sequence[str],
+    group_by: Sequence[str],
+    start: str,
+    end: str,
+    as_count: bool,
+) -> api.ApiRequest:
+    """The metric query built from parts inside ``scope.metric_tags``.
+
+    Raises ScopeError for a refused part and ``DatadogError("bad_query")`` for
+    a window it cannot resolve, both before any I/O.
+    """
+    query = compose_metric(
+        scope.metric_tags,
+        metric,
+        aggregator=aggregator,
+        tags=tags,
+        group_by=group_by,
+        as_count=as_count,
+    )
+    now = time.time()
+    try:
+        window = api.resolve_epoch(start, now=now), api.resolve_epoch(end, now=now)
+    except ValueError as exc:
+        raise DatadogError("bad_query", detail=str(exc)) from None
+    return api.metrics_query(query, start=window[0], end=window[1])
+
+
+def _metric_body(body: Any) -> Any:
+    """A 200 whose body says ``status: error`` is a query Datadog could not run."""
+    if isinstance(body, dict) and body.get("status") == "error":
+        raise DatadogError("bad_query", 200)
+    return body
+
+
 class _Base:
     def __init__(
         self,
@@ -194,6 +298,7 @@ class DatadogClient(_Base):
                     request.method,
                     f"{self._base}{request.path}",
                     json=request.body,
+                    params=request.params,
                     headers=self._headers(),
                 )
         except httpx.HTTPError as exc:
@@ -227,9 +332,68 @@ class DatadogClient(_Base):
         request = _aggregate(scope, query, start, end, group_by, limit)
         return api.parse_buckets(self._send(request))
 
+    def search_spans(
+        self,
+        scope: DatadogScope,
+        query: str,
+        *,
+        start: str,
+        end: str,
+        limit: int = 50,
+        cursor: str | None = None,
+        newest_first: bool = True,
+    ) -> SpanPage:
+        request = _span_search(scope, query, start, end, limit, cursor, newest_first)
+        return api.parse_span_page(self._send(request))
+
+    def aggregate_spans(
+        self,
+        scope: DatadogScope,
+        query: str,
+        *,
+        start: str,
+        end: str,
+        group_by: Sequence[str],
+        limit: int = 25,
+    ) -> tuple[Bucket, ...]:
+        request = _span_aggregate(scope, query, start, end, group_by, limit)
+        return api.parse_span_buckets(self._send(request))
+
+    def get_trace(
+        self, scope: DatadogScope, trace_id: str, *, start: str, end: str, limit: int = 200
+    ) -> tuple[SpanRow, ...]:
+        """The trace's spans inside the scope; empty when it is not this tenant's."""
+        request = _trace(scope, trace_id, start, end, limit)
+        return api.parse_span_page(self._send(request)).rows
+
+    def search_monitors(
+        self, scope: DatadogScope, query: str = "", *, limit: int = 50, page: int = 0
+    ) -> MonitorPage:
+        request = _monitor_search(scope, query, limit, page)
+        return api.parse_monitor_page(self._send(request))
+
+    def query_metric(
+        self,
+        scope: DatadogScope,
+        metric: str,
+        *,
+        aggregator: str = "avg",
+        tags: Sequence[str] = (),
+        group_by: Sequence[str] = (),
+        start: str,
+        end: str,
+        as_count: bool = False,
+    ) -> tuple[MetricSeries, ...]:
+        request = _metric_query(scope, metric, aggregator, tags, group_by, start, end, as_count)
+        return api.parse_metric_series(_metric_body(self._send(request)))
+
     def validate(self) -> None:
         """Raises :class:`DatadogError` unless Datadog accepts the API key."""
         self._send(api.validate_request())
+
+    def validate_app_key(self) -> None:
+        """Raises :class:`DatadogError` unless the application key may read logs."""
+        self._send(api.app_key_probe_request())
 
 
 class AsyncDatadogClient(_Base):
@@ -256,6 +420,7 @@ class AsyncDatadogClient(_Base):
                 request.method,
                 f"{self._base}{request.path}",
                 json=request.body,
+                params=request.params,
                 headers=self._headers(),
                 timeout=self._timeout,
             )
@@ -290,9 +455,68 @@ class AsyncDatadogClient(_Base):
         request = _aggregate(scope, query, start, end, group_by, limit)
         return api.parse_buckets(await self._send(request))
 
+    async def search_spans(
+        self,
+        scope: DatadogScope,
+        query: str,
+        *,
+        start: str,
+        end: str,
+        limit: int = 50,
+        cursor: str | None = None,
+        newest_first: bool = True,
+    ) -> SpanPage:
+        request = _span_search(scope, query, start, end, limit, cursor, newest_first)
+        return api.parse_span_page(await self._send(request))
+
+    async def aggregate_spans(
+        self,
+        scope: DatadogScope,
+        query: str,
+        *,
+        start: str,
+        end: str,
+        group_by: Sequence[str],
+        limit: int = 25,
+    ) -> tuple[Bucket, ...]:
+        request = _span_aggregate(scope, query, start, end, group_by, limit)
+        return api.parse_span_buckets(await self._send(request))
+
+    async def get_trace(
+        self, scope: DatadogScope, trace_id: str, *, start: str, end: str, limit: int = 200
+    ) -> tuple[SpanRow, ...]:
+        """The trace's spans inside the scope; empty when it is not this tenant's."""
+        request = _trace(scope, trace_id, start, end, limit)
+        return api.parse_span_page(await self._send(request)).rows
+
+    async def search_monitors(
+        self, scope: DatadogScope, query: str = "", *, limit: int = 50, page: int = 0
+    ) -> MonitorPage:
+        request = _monitor_search(scope, query, limit, page)
+        return api.parse_monitor_page(await self._send(request))
+
+    async def query_metric(
+        self,
+        scope: DatadogScope,
+        metric: str,
+        *,
+        aggregator: str = "avg",
+        tags: Sequence[str] = (),
+        group_by: Sequence[str] = (),
+        start: str,
+        end: str,
+        as_count: bool = False,
+    ) -> tuple[MetricSeries, ...]:
+        request = _metric_query(scope, metric, aggregator, tags, group_by, start, end, as_count)
+        return api.parse_metric_series(_metric_body(await self._send(request)))
+
     async def validate(self) -> None:
         """Raises :class:`DatadogError` unless Datadog accepts the API key."""
         await self._send(api.validate_request())
+
+    async def validate_app_key(self) -> None:
+        """Raises :class:`DatadogError` unless the application key may read logs."""
+        await self._send(api.app_key_probe_request())
 
 
 # ── from settings ───────────────────────────────────────────────────────────
