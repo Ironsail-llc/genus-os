@@ -931,3 +931,60 @@ async def test_a_triage_wait_never_deletes_another_entrys_claim(fleet: Fleet, au
     with patch("robothor.engine.dedup.try_acquire", side_effect=busy_while_the_episode_moves_on):
         await fleet.deliver_webhook(_payload(tags="env:prod"))
     assert fleet.redis.keys[key] == "started:another-entry"
+
+
+# ── a new incident of a P1 monitor always pages ─────────────────────
+
+
+@pytest.fixture
+def cooldown(fleet: Fleet):
+    """The alerts cooldown, as the alerts path keeps it: an id sent is held."""
+    from robothor.engine import alerts
+
+    def held(alert_id: str) -> bool:
+        return any(kw.get("alert_id") == alert_id for *_, kw in fleet.sent)
+
+    with patch.object(alerts, "_suppressed", side_effect=held):
+        yield
+
+
+async def _incident_twice(fleet: Fleet, priority: str) -> None:
+    for n, transition in enumerate(["Triggered", "Recovered", "Triggered"]):
+        d = str(n + 1)
+        await fleet.deliver_webhook(
+            _payload(transition=transition, priority=priority, event_id=d, date=d)
+        )
+
+
+async def test_a_p1_monitor_pages_for_a_second_incident_inside_the_cooldown(
+    fleet: Fleet, audit: Audit, cooldown: None
+) -> None:
+    await _incident_twice(fleet, "P1")
+
+    assert [lvl for _, lvl, *_ in fleet.sent] == ["critical", "info", "critical"]
+    pages = [kw["alert_id"] for _, lvl, _, _, kw in fleet.sent if lvl == "critical"]
+    assert len(set(pages)) == 2, "each episode of a P1 monitor has its own alert id"
+    assert [r["details"]["mode"] for r in audit.alerts()] == ["delivered"] * 3
+    assert len(fleet.triage_runs()) == 2
+
+
+async def test_a_non_p1_monitor_keeps_the_cooldown_for_a_second_incident(
+    fleet: Fleet, audit: Audit, cooldown: None
+) -> None:
+    await _incident_twice(fleet, "P2")
+
+    assert [lvl for _, lvl, *_ in fleet.sent] == ["warning", "info"]
+    third = audit.alerts()[2]["details"]
+    assert (third["mode"], third["delivery"]["reason"]) == ("suppressed", "cooldown")
+
+
+async def test_a_p1_storm_inside_one_episode_still_pages_once(
+    fleet: Fleet, audit: Audit, cooldown: None
+) -> None:
+    for n in range(10):
+        transition = "Triggered" if n == 0 else "Re-Triggered"
+        await fleet.deliver_webhook(
+            _payload(transition=transition, priority="P1", event_id=str(n), date=str(n + 1))
+        )
+    assert [lvl for _, lvl, *_ in fleet.sent] == ["critical"]
+    assert len(fleet.triage_runs()) == 1
