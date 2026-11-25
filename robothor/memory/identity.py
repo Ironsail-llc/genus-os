@@ -824,6 +824,31 @@ def _name_counts(kind: str, rows: Sequence[Mapping[str, Any]]) -> dict[str, int]
     return counts
 
 
+#: A writing backfill refreshes planner statistics every this many batches,
+#: and once at the end. The graph walk (``memory_activate``) planned without
+#: statistics on freshly filled tables and took seconds per call.
+ANALYZE_EVERY_BATCHES = 20
+#: A CRM sync that creates or links at least this many nodes refreshes the
+#: statistics of ``memory_entities``.
+SYNC_ANALYZE_MIN_ROWS = 500
+#: What a backfill fills.
+_BACKFILL_TABLES = ("memory_mentions", "memory_resolution_decisions", "memory_entities")
+
+
+def analyze_tables(tenant_id: str, tables: Sequence[str]) -> None:
+    """Refresh planner statistics after a bulk write. Best-effort.
+
+    ``ANALYZE`` samples rows and changes no data; a role that does not own a
+    table is told so by a warning, not an error, so this never fails a job.
+    """
+    try:
+        with _cursor(tenant_id) as cur:
+            for table in tables:
+                cur.execute(f"ANALYZE {table}")  # noqa: S608 — fixed table names
+    except Exception as e:  # noqa: BLE001 — statistics must never fail the job
+        logger.warning("identity: ANALYZE of %s failed: %s", ", ".join(tables), e)
+
+
 def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     """Give every live CRM person and company in the tenant exactly one linked node.
 
@@ -872,6 +897,13 @@ def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any
             if not dry_run:
                 record_crm_merge(tenant_id, PERSON, keeper, loser, cur=cur)
             report["merges_recorded"] += 1
+    changed = sum(
+        report[bucket].get(action, 0)
+        for bucket in ("people", "companies")
+        for action in ("created", "linked")
+    )
+    if not dry_run and changed >= SYNC_ANALYZE_MIN_ROWS:
+        analyze_tables(tenant_id, ("memory_entities",))
     return report
 
 
@@ -2229,9 +2261,13 @@ def backfill_mentions(
             report["last_fact_id"] = cursor_id
             report["facts_scanned"] += len(facts)
             report["batches"] += 1
+        if not dry_run and report["batches"] % ANALYZE_EVERY_BATCHES == 0:
+            analyze_tables(tenant_id, _BACKFILL_TABLES)
         if len(facts) < batch_size:
             report["done"] = True
             break
+    if not dry_run and report["mentions_written"]:
+        analyze_tables(tenant_id, _BACKFILL_TABLES)
     return report
 
 
@@ -2387,6 +2423,7 @@ def find_entities(
 
 
 __all__ = [
+    "ANALYZE_EVERY_BATCHES",
     "CONFIDENCE",
     "ENTITY_COLUMNS",
     "EVIDENCE_METHODS",
@@ -2395,8 +2432,10 @@ __all__ = [
     "Candidate",
     "MentionInput",
     "Outcome",
+    "SYNC_ANALYZE_MIN_ROWS",
     "ResolvedMention",
     "StrongHit",
+    "analyze_tables",
     "backfill_mentions",
     "decide",
     "find_entities",

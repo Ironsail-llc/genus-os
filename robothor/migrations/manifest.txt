@@ -201,3 +201,4 @@ crm/178_memory_graph_activation.sql
 crm/179_memory_graph_keys.sql
 crm/180_memory_fact_utility.sql
 crm/181_memory_fact_scope_readers.sql
+crm/182_memory_graph_analyze.sql
