@@ -381,6 +381,46 @@ def test_personal_data_stored_as_a_number_is_masked(dd, writer):
     assert attrs["http"] == {"status_code": 500}
 
 
+#: Bare credential values, as Datadog leaves them after parsing
+#: ``password=... api_key=...`` out of a line: no shape a pattern can match.
+CREDENTIALS = ("hunter2hunter2", "abc123abc123", "zzz999zzz999")
+
+
+def test_values_under_credential_named_keys_never_reach_the_result(dd, writer):
+    def row(i: int) -> dict[str, Any]:
+        raw = _log(
+            i,
+            password="hunter2hunter2",
+            db={"api_key": "abc123abc123"},
+            items=[{"token": "zzz999zzz999"}],
+        )
+        raw["attributes"]["tags"].append("api_key:abc123abc123")
+        return raw
+
+    dd.make_row = row
+
+    result = _run(SEARCH, {"limit": 1})
+
+    text = json.dumps(result)
+    for secret in CREDENTIALS:
+        assert secret not in text
+    attrs = result["rows"][0]["attributes"]
+    assert attrs["password"] == "<redacted>"
+    assert attrs["db"] == {"api_key": "<redacted>"}
+    assert attrs["items"] == [{"token": "<redacted>"}]
+    # Ordinary attributes are untouched.
+    assert attrs["http"] == {"status_code": 500}
+
+
+def test_aggregate_grouped_by_a_credential_facet_withholds_its_values(dd, writer):
+    dd.buckets = [{"by": {"@usr.password": "hunter2hunter2"}, "computes": {"c0": 2}}]
+
+    result = _run(AGGREGATE, {"group_by": ["@usr.password"]})
+
+    assert "hunter2hunter2" not in json.dumps(result)
+    assert result["buckets"] == [{"by": {"@usr.password": "<redacted>"}, "count": 2}]
+
+
 def test_aggregate_bucket_values_are_masked(dd, writer):
     dd.buckets = [{"by": {"@usr.email": "alice@example.com"}, "computes": {"c0": 4}}]
 
