@@ -440,8 +440,8 @@ through it, with its tenant's filter applied.
 
 ```json
 {
-  "acme-parent":  {"logs": "*", "metric_tags": []},
-  "acme-child-a": {"logs": "service:shop-api"},
+  "acme-parent":  {"logs": "*", "spans": "*", "metric_tags": []},
+  "acme-child-a": {"logs": "service:shop-api", "spans": "service:shop-api"},
   "acme-child-b": {
     "logs": "service:clinic-app",
     "spans": "service:clinic-app env:prod",
@@ -453,9 +453,10 @@ through it, with its tenant's filter applied.
 
 - `logs` is required. It is a Datadog log query that bounds the tenant. Only
   the literal `*` means everything; a blank filter is not configured.
-- `spans` defaults to the `logs` filter.
-- `monitors` and `metric_tags` default to no access. `metric_tags: []` means
-  every metric.
+- Every other part is opt-in: a missing `spans`, `monitors` or `metric_tags`
+  means no access to that kind of data. The `logs` filter is never reused for
+  spans, because a term that bounds logs can bound nothing on spans.
+  `metric_tags: []` means every metric.
 - **A tenant with no entry is refused**, and so is a tenant whose entry is
   malformed (a blank `logs`, unbalanced brackets, a tag with a comma or space).
   Malformed JSON leaves every tenant refused. Each case logs one warning that
@@ -506,7 +507,9 @@ when Datadog rejects either key (it never prints a key), or by error kind when
 Datadog cannot be reached. Its detail names the active tenants that have no
 scope entry, other than the benchmark sandbox tenant. They are refused Datadog
 reads until you add a scope for them. That is not a fault: an install does not
-have to give every tenant Datadog access.
+have to give every tenant Datadog access. It also names, by kind, each scoped
+tenant with no trace, monitor or metric access (for example `no trace access:
+acme-child-a`), because an entry with only `logs` reads no traces.
 
 A log row's `trace_id` and `span_id` keep only an id-shaped value: 1 to 40 hex
 or decimal digits, in lowercase. Anything else becomes empty, because the
