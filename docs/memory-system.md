@@ -1138,6 +1138,69 @@ walk and resetting the limit.
 The search path writes nothing. Rows found only by the graph are not logged as
 fact access.
 
+## Replaying real questions before a change goes live
+
+A change to recall reaches agents only by a code change at its gate; until
+then `genus memory-replay` shows what it would do to the questions a tenant
+really asked. It runs each question through two recall configurations and
+reports, per question, what each returned (rank, kind, an excerpt, the legs
+that found it, relevance), the overlap of the two result sets (Jaccard on row
+identity), the rows only one side found, the rows that moved, the retrieval
+latency and the estimated context tokens of each side, then a summary: mean
+overlap, how often the top result changed, how often each side returns a
+conversation segment, p50/p95 latency per side and the legs of the rows only
+the second side found.
+
+```bash
+genus memory-replay --tenant <tenant> --from-runs --since 7d
+genus memory-replay --tenant <tenant> --from-chat --sample --seed 3 --limit 40
+genus memory-replay --tenant <tenant> --questions questions.txt --as-person <crm-person-id> \
+    --compare new+graph,new-segments --json --out replay.json --redact
+```
+
+**Questions.** `--from-runs` replays the `query` of every `search_memory` tool
+call the engine persisted (`agent_run_steps.tool_input`, direct or wrapped in
+`tool_call`), with the call's own `limit`, read as the run's person and user.
+`--from-chat` uses recent user turns as stand-in questions, each read as the
+owner of its conversation (the rule segments are stored under); a turn whose
+conversation has no known owner is skipped and counted, never replayed as an
+unscoped reader. `--questions FILE` reads one question per line, as
+`--as-person` / `--as-user` or as no reader (shared rows only). Automatic
+warm-up recall and searches made outside a tool call record no query text,
+and `fact_access_log` links runs to facts without the question, so neither
+can be replayed. `--limit` (default 50) caps the questions; `--sample` takes a
+seeded sample instead of the newest, the same for the same `--seed`.
+
+**Configurations.** The presets are `PRESETS` in `robothor/memory/replay.py`,
+the one place to add another:
+
+| Preset | Segments | Graph leg |
+| --- | --- | --- |
+| `today` (recall as main serves it) | off | off |
+| `new` (the product default on this tree) | on | `GRAPH_LEG_DEFAULT` |
+| `new+graph` | on | on |
+| `new-segments` | off | `GRAPH_LEG_DEFAULT` |
+
+All four keep the tool's fan-out (entity expansion, insights, episodes) unless
+`MEMORY_NARROW_SEARCH` is set, and all rerank. `--compare A,B` picks two;
+the default is `today,new`. The two sides alternate which runs first, so a
+warm cache favours neither. Latency is end to end per call: embedding the
+question, the legs and the rerank, against the same local model server the
+product uses.
+
+**It writes nothing.** The replay calls `search_facts` directly, not the
+`search_memory` handler, so no access count, access-log row or utility credit
+is written, and no segment is indexed. Every connection it checks out is
+inside `robothor.db.connection.read_only_scope`, which sets
+`default_transaction_read_only` on the session and clears it before the
+connection returns to the pool: a write that slipped in fails with
+`ReadOnlySqlTransaction` instead of landing. Only the named tenant is read;
+an unknown tenant is refused and there is no default.
+
+**The report is sensitive.** It holds recalled memory and the questions
+people asked, so its first line says so. `--redact` replaces every excerpt and
+question with its id and length.
+
 ## Ingestion Pipeline
 
 The full pipeline: extract facts with their mentions and relations, resolve

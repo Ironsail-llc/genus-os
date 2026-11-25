@@ -67,6 +67,13 @@ entities. The only model call is for embeddings: `seed_world(...,
 embed_batch=...)` takes any `async (list[str]) -> list[list[float]]`, and
 tests pass a deterministic fake.
 
+The world scores recall against known answers. To see what a recall change
+does to the questions a real tenant asked, which have no known answers, use
+the read-only replay instead: [Replaying real questions before a change goes
+live](../../memory-system.md#replaying-real-questions-before-a-change-goes-live).
+It also runs against a seeded world tenant with `--questions` built from the
+world's case questions.
+
 ## Determinism
 
 `generate_world(seed, size)` depends only on its arguments. Each tenant has
