@@ -92,6 +92,10 @@ _RECOVERIES = frozenset({"recovered", "warn_recovered", "no_data_recovered"})
 _STAGES = ("warn", "alert", "page")
 
 EPISODE_PREFIX = "robothor:datadog:episode:"
+#: Pauses before trying a busy main agent's run lock again (about six
+#: minutes in all): a plan-mode run is at most ten iterations, so another
+#: triage or a short cron run is usually done by then. A fail-safe, not a limit.
+TRIAGE_WAIT_SECONDS: tuple[float, ...] = (5, 10, 20, 40, 60, 60, 60, 60, 60)
 #: How long an episode without a recovery is remembered: a staleness bound,
 #: not a limit on anything.
 EPISODE_TTL_SECONDS = 7 * 86400
@@ -232,7 +236,7 @@ async def handle_stream_event(
             return await _hand_off_to_root(payload, redis_client, own)
         if tenant == own:
             return await _deliver_here(alert, own, title, redis_client, hooks, message_id)
-        return await _hand_off(payload, tenant, redis_client)
+        return await _hand_off(payload, tenant, redis_client, root=root, own=own)
 
     return await handle_alert_event(payload, redis_client, message_id=message_id, deliver=route)
 
@@ -324,8 +328,16 @@ async def _hand_off_to_root(payload: Any, redis_client: Any, own: str) -> dict[s
     return {"mode": "refused"}
 
 
-async def _hand_off(payload: Any, tenant: str, redis_client: Any) -> dict[str, Any]:
-    """Address the alert to ``tenant``'s own engine, or say why it could not be."""
+async def _hand_off(
+    payload: Any, tenant: str, redis_client: Any, *, root: bool = True, own: str = ""
+) -> dict[str, Any]:
+    """Address the alert to ``tenant``'s own engine, or say why it could not be.
+
+    Only the root engine records a failed hand-off (in that tenant) and tells
+    the root. Another tenant's engine that received the webhook does neither:
+    it would put another tenant's alert, or a notice about it, in its own
+    tenant. It logs at ERROR and refuses, so a retry may still be accepted.
+    """
     if redis_client is None:
         reason = "handoff_failed"
     elif not await _engine_running(redis_client, tenant):
@@ -334,6 +346,15 @@ async def _hand_off(payload: Any, tenant: str, redis_client: Any) -> dict[str, A
         return {"mode": "handed_off", "handoff": {"tenant": tenant}}
     else:
         reason = "handoff_failed"
+    if not root:
+        logger.error(
+            "Datadog alert for tenant %s reached tenant %s's engine and could not be handed "
+            "on (%s); not recorded. Send the Datadog webhook to the root tenant's receiver.",
+            tenant,
+            own,
+            reason,
+        )
+        return {"mode": "refused"}
     await _tell_root(tenant, reason)
     return {
         "mode": FAILED,
@@ -469,10 +490,17 @@ async def _deliver_here(
     mine = (f"sending:{entry}", f"sent:{entry}") if entry else ()
     state = await _claim_owned(redis_client, gate, f"sending:{entry or ''}", mine)
     if state == "taken":
+        # The step was sent; the episode's one run may still be owed (a busy
+        # main agent gave its claim back).
+        triage = (
+            await _maybe_triage(alert, tenant, title, redis_client, hooks, base, True, entry)
+            if not recovery
+            else {"started": False, "reason": "episode_open"}
+        )
         return {
             "mode": SUPPRESSED,
             "delivery": {"level": level, "reason": "episode_open"},
-            "triage": {"started": False, "reason": "episode_open"},
+            "triage": triage,
         }
     claimed = None if state is None else True
     if state == f"sent:{entry}":
@@ -490,26 +518,26 @@ async def _deliver_here(
         )
         if outcome["mode"] == DELIVERED and entry:
             await _mark(redis_client, gate, value=f"sent:{entry}")
-    if outcome["mode"] != DELIVERED:
-        if outcome["mode"] == FAILED and claimed:
-            await _forget(redis_client, gate)  # the next notification tries again
-        if outcome["mode"] == FAILED and not recovery:
-            # A failed page is when the read-only look matters most; its own
-            # key still keeps it to one run per episode.
-            outcome["triage"] = await _maybe_triage(
-                alert, tenant, title, redis_client, hooks, base, claimed, entry
-            )
-        else:
-            outcome["triage"] = {"started": False, "reason": outcome["mode"]}
-        return outcome
+    failed = outcome["mode"] == FAILED
+    if failed and claimed:
+        await _forget(redis_client, gate)  # the next notification tries again
+    elif outcome["mode"] == SUPPRESSED and entry:
+        # Held by the cooldown: it was sent within the hour, so the step counts.
+        await _mark(redis_client, gate, value=f"sent:{entry}")
     if recovery:
+        # The monitor recovered, whether or not the notice reached anyone: the
+        # episode closes, so the next trigger is a new one.
         stages = [f"{base}:sent:{name}" for name in _STAGES]
         await _forget(redis_client, *stages, f"{base}:triage")
         outcome["triage"] = {"started": False, "reason": "recovery"}
         return outcome
-    await _forget(redis_client, f"{base}:sent:recovered")
-    # A step sent covers the steps below it for the rest of the episode.
-    await _mark(redis_client, *(f"{base}:sent:{n}" for n in _STAGES[: _STAGES.index(stage)]))
+    if not failed:
+        await _forget(redis_client, f"{base}:sent:recovered")
+        # A step sent covers the steps below it for the rest of the episode.
+        lower = _STAGES[: _STAGES.index(stage)]
+        await _mark(redis_client, *(f"{base}:sent:{n}" for n in lower))
+    # A failed page is when the read-only look matters most; the triage key
+    # keeps it to one run per episode either way.
     outcome["triage"] = await _maybe_triage(
         alert, tenant, title, redis_client, hooks, base, claimed, entry
     )
@@ -538,7 +566,7 @@ async def _maybe_triage(
     if state != "new":
         # This entry started it before the engine stopped: not a second run.
         return {"started": True, "read_only": True, "replayed": True}
-    started = await _start_triage(alert, tenant, title, hooks)
+    started = await _start_triage(alert, tenant, title, hooks, redis_client, f"{base}:triage")
     if not started.get("started"):
         await _forget(redis_client, f"{base}:triage")
     return started
@@ -547,7 +575,14 @@ async def _maybe_triage(
 # ── the triage run ──────────────────────────────────────────────────
 
 
-async def _start_triage(alert: DatadogAlert, tenant: str, title: str, hooks: Any) -> dict[str, Any]:
+async def _start_triage(
+    alert: DatadogAlert,
+    tenant: str,
+    title: str,
+    hooks: Any,
+    redis_client: Any = None,
+    triage_key: str = "",
+) -> dict[str, Any]:
     """Start one read-only run of this tenant's main agent in the background."""
     from robothor.engine.config import load_agent_config
     from robothor.engine.manifest_store import main_agent_id
@@ -570,7 +605,7 @@ async def _start_triage(alert: DatadogAlert, tenant: str, title: str, hooks: Any
     prompt = triage_prompt(alert, title=title)
     monitor = alert.monitor_id or "-"
     task = get_task_registry().spawn(
-        _run_triage(hooks.runner, agent, config, prompt, tenant, monitor),
+        _run_triage(hooks.runner, agent, config, prompt, tenant, monitor, redis_client, triage_key),
         name=f"datadog-triage:{tenant}:{monitor}",
     )
     _triage_tasks.add(task)
@@ -578,15 +613,45 @@ async def _start_triage(alert: DatadogAlert, tenant: str, title: str, hooks: Any
     return {"started": True, "agent": agent, "read_only": True}
 
 
+async def _acquire_waiting(agent: str) -> bool:
+    """The main agent's run lock, waiting out a run already holding it.
+
+    One try, then one more after each pause in :data:`TRIAGE_WAIT_SECONDS`.
+    """
+    from robothor.engine import dedup
+
+    if await dedup.try_acquire(agent):
+        return True
+    for pause in TRIAGE_WAIT_SECONDS:
+        await asyncio.sleep(pause)
+        if await dedup.try_acquire(agent):
+            return True
+    return False
+
+
 async def _run_triage(
-    runner: Any, agent: str, config: Any, prompt: str, tenant: str, monitor: str
+    runner: Any,
+    agent: str,
+    config: Any,
+    prompt: str,
+    tenant: str,
+    monitor: str,
+    redis_client: Any = None,
+    triage_key: str = "",
 ) -> None:
-    """The run itself; whatever happens is one ``datadog.triage_run`` event."""
+    """The run itself; whatever happens is one ``datadog.triage_run`` event.
+
+    A main agent still busy after the waits gives the episode's claim back, so
+    the next notification of the episode may start the run.
+    """
     from robothor.engine import dedup, delivery
     from robothor.engine.models import TriggerType
 
     status, error = "agent_busy", ""
-    if await dedup.try_acquire(agent):
+    if not await _acquire_waiting(agent):
+        if triage_key:
+            await _forget(redis_client, triage_key)
+    else:
         try:
             run = await runner.execute(
                 agent_id=agent,

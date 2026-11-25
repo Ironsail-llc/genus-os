@@ -209,7 +209,7 @@ def audit():
 def fleet(engine_config: EngineConfig, audit: Audit, monkeypatch: pytest.MonkeyPatch):
     dlv.reset_state()
     # A busy main agent is waited for; in tests, without the wall-clock pauses.
-    monkeypatch.setattr(dlv, "TRIAGE_WAIT_SECONDS", (0, 0, 0), raising=False)
+    monkeypatch.setattr(dlv, "TRIAGE_WAIT_SECONDS", (0, 0, 0))
     redis = SharedRedis()
     f = Fleet(engine_config, redis)
     with (
