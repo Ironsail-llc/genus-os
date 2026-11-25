@@ -45,6 +45,7 @@ itself is recorded as one ``datadog.triage_run`` audit event.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -510,7 +511,7 @@ def _older(date: int | None, closed: int | None) -> bool:
     return date is not None and closed is not None and date < closed
 
 
-async def _close(redis_client: Any, base: str, date: int | None) -> None:
+async def _close(redis_client: Any, base: str, date: int | None, closed_by: str = "") -> None:
     """The monitor recovered: its episode closes, and the recovery's time is kept.
 
     A trigger dated before it (read late, or finishing its send after it) is
@@ -518,6 +519,9 @@ async def _close(redis_client: Any, base: str, date: int | None) -> None:
     """
     await _forget(redis_client, *(f"{base}:sent:{name}" for name in _STAGES), f"{base}:triage")
     await _advance(redis_client, f"{base}:closed_at", date)
+    if closed_by:
+        # Names the episode that follows when there is no $DATE to do it.
+        await _mark(redis_client, f"{base}:closed_by", value=closed_by)
 
 
 async def _deliver_here(
@@ -571,12 +575,17 @@ async def _deliver_here(
         # recovery that closed the last one), so the alerts cooldown cannot
         # hold a new incident's page; inside one episode the step gate still
         # pages once. Other steps keep one id, and the cooldown, as noise control.
-        alert_id = f"{alert_id}:{closed or 0}"
+        episode: Any = closed
+        if episode is None and redis_client is not None:
+            with contextlib.suppress(Exception):
+                held = await redis_client.get(f"{base}:closed_by")
+                episode = held.decode() if isinstance(held, bytes) else held
+        alert_id = f"{alert_id}:{episode or 0}"
     mine = (f"sending:{entry}", f"sent:{entry}") if entry else ()
     state = await _claim_owned(redis_client, gate, f"sending:{entry or ''}", mine)
     if state == "taken":
         if recovery:
-            await _close(redis_client, base, date)
+            await _close(redis_client, base, date, alert.event_id or entry or "")
             triage = {"started": False, "reason": "recovery"}
         else:
             # The step was sent; the episode's one run may still be owed (a
@@ -614,7 +623,7 @@ async def _deliver_here(
         elif entry:
             await _mark(redis_client, gate, value=f"sent:{entry}")
         # The monitor recovered, whether or not the notice reached anyone.
-        await _close(redis_client, base, date)
+        await _close(redis_client, base, date, alert.event_id or entry or "")
         outcome["triage"] = {"started": False, "reason": "recovery"}
         return outcome
     if _older(date, await _closed_at(redis_client, base)):
