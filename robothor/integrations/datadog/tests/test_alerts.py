@@ -450,15 +450,39 @@ class TestClaimWriteExtend:
         assert list(redis.ttls.values()) == [dd.DEDUP_TTL_SECONDS], "extended after the write"
 
     @pytest.mark.asyncio
-    async def test_a_crash_after_the_write_records_a_retry_again(self, audit, no_delivery) -> None:
+    async def test_redis_down_records_every_copy(self, audit, no_delivery) -> None:
+        """No dedup store: each copy is recorded, none is lost."""
+
         class SetFails(FakeRedis):
             async def set(self, *a: Any, **kw: Any) -> Any:
-                raise ConnectionError("engine went away")
+                raise ConnectionError("redis unreachable")
 
         redis = SetFails()
         assert await dd.handle_alert_event(_payload(), redis) == "recorded"
         assert await dd.handle_alert_event(_payload(), redis) == "recorded"
         assert len(audit.rows) == 2, "a duplicate, not a lost alert"
+
+    @pytest.mark.asyncio
+    async def test_a_crash_between_the_write_and_the_extension(self, audit, no_delivery) -> None:
+        """The claim works, the extension never happens: the pending claim still holds
+        for its window, and once it lapses one more copy can be recorded."""
+
+        class ExtendFails(FakeRedis):
+            async def set(self, key: str, value: Any, nx: bool = False, ex: Any = None) -> Any:
+                if not nx:
+                    raise ConnectionError("engine went away before the extension")
+                return await super().set(key, value, nx=nx, ex=ex)
+
+        redis = ExtendFails()
+        assert await dd.handle_alert_event(_payload(), redis, message_id="1-0") == "recorded"
+        assert list(redis.ttls.values()) == [dd.PENDING_TTL_SECONDS], "never extended"
+        # A Datadog retry inside the pending window is another stream message.
+        assert await dd.handle_alert_event(_payload(), redis, message_id="2-0") == "duplicate"
+        # The pending window passes and the claim lapses.
+        redis.keys.clear()
+        redis.ttls.clear()
+        assert await dd.handle_alert_event(_payload(), redis, message_id="3-0") == "recorded"
+        assert len(audit.rows) == 2, "at most one duplicate after the window"
 
     @pytest.mark.asyncio
     async def test_a_failed_write_sets_no_key(self, audit, no_delivery) -> None:
