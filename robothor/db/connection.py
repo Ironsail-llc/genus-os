@@ -509,6 +509,39 @@ unbound_scope.__doc__ = _RLS_WIDENING_DOC
 read_every_tenant_in_transaction.__doc__ = _RLS_WIDENING_DOC
 
 
+#: Set by :func:`read_only_scope`; read by :func:`get_connection` at checkout.
+_read_only: ContextVar[bool] = ContextVar("db_read_only", default=False)
+
+
+@contextmanager
+def read_only_scope() -> Generator[None, None, None]:
+    """Every connection checked out inside this block refuses to write.
+
+    For a command that promises to change nothing (the memory replay dry run):
+    ``get_connection`` sets ``default_transaction_read_only`` on the session at
+    checkout and clears it before the connection goes back to the pool, so a
+    write that slips in raises ``ReadOnlySqlTransaction`` instead of landing.
+    A ContextVar, like :func:`tenant_scope`: it follows ``asyncio.to_thread``
+    and tasks started inside the block, and nothing outside it.
+    """
+    token = _read_only.set(True)
+    try:
+        yield
+    finally:
+        _read_only.reset(token)
+
+
+def read_only_active() -> bool:
+    """Whether connections checked out here are read-only (:func:`read_only_scope`)."""
+    return _read_only.get()
+
+
+def _set_read_only(conn: psycopg2.extensions.connection, on: bool) -> None:
+    """Session-level read-only switch; the connection must be in autocommit."""
+    with conn.cursor() as cur:
+        cur.execute(f"SET default_transaction_read_only = {'on' if on else 'off'}")
+
+
 @contextmanager
 def get_connection(
     autocommit: bool = False,
@@ -543,9 +576,13 @@ def get_connection(
         raise ConnectionError("Failed to acquire DB connection from pool") from exc
 
     transactional = not (autocommit or read_only)
+    refuse_writes = _read_only.get()
+    discard = False
     try:
         conn.autocommit = True
         _apply_session_settings(conn)
+        if refuse_writes:
+            _set_read_only(conn, True)
         if transactional:
             conn.autocommit = False
         yield conn
@@ -559,10 +596,34 @@ def get_connection(
         try:
             if conn.closed:
                 _forget_session(conn)
+            elif refuse_writes:
+                discard = not _clear_read_only(conn)
             elif conn.autocommit:
                 conn.autocommit = False
         finally:
-            pool.putconn(conn)
+            if discard:
+                pool.putconn(conn, close=True)
+            else:
+                pool.putconn(conn)
+
+
+def _clear_read_only(conn: psycopg2.extensions.connection) -> bool:
+    """Make a read-only session writable again before it goes back to the pool.
+
+    False when that failed: the caller then closes the connection rather than
+    hand a read-only session to the next borrower.
+    """
+    try:
+        if conn.get_transaction_status() != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+            conn.rollback()
+        conn.autocommit = True
+        _set_read_only(conn, False)
+        conn.autocommit = False
+        return True
+    except Exception as exc:  # noqa: BLE001 - the connection is closed instead
+        logger.warning("could not clear the read-only session; closing it: %s", exc)
+        _forget_session(conn)
+        return False
 
 
 def release_connection(conn: psycopg2.extensions.connection) -> None:

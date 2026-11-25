@@ -28,7 +28,7 @@ Where to start, rather than reading this top to bottom:
 Settings are documented in the [configuration reference](configuration.md),
 not here: a flag belongs to one command, a setting to the whole instance.
 
-41 verbs.
+42 verbs.
 
 ## `genus plugin`
 
@@ -872,6 +872,29 @@ Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [-
 | `--report` | `REPORT` | — | Write the JSON report here and a .md summary beside it |
 | `--progress` | `PROGRESS` | — | Append each judged case to this JSONL; rerunning with it resumes |
 | `--record-baseline` | — | off | Also write the report as the recorded world baseline under docs/benchmarks/memory/ |
+
+## `genus memory-replay`
+
+Replay real recall questions through today's and the new recall (read-only).
+
+Usage: `genus memory-replay [--tenant TENANT] [--from-runs] [--from-chat] [--questions QUESTIONS] [--as-person AS_PERSON] [--as-user AS_USER] [--since SINCE] [--limit LIMIT] [--sample] [--seed SEED] [--compare COMPARE] [--json] [--out OUT] [--redact]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant` | `TENANT` | — | Tenant whose questions and memory to read |
+| `--from-runs` | — | off | The queries of past search_memory tool calls, as each run's person and user |
+| `--from-chat` | — | off | Recent user chat turns, each read as its conversation's owner |
+| `--questions` | `QUESTIONS` | — | File with one question per line |
+| `--as-person` | `AS_PERSON` | — | With --questions: read as this CRM person |
+| `--as-user` | `AS_USER` | — | With --questions: read as this user id |
+| `--since` | `SINCE` | — | Only questions since: 7d, 12h, 30m or a date |
+| `--limit` | `LIMIT` | `50` | Questions to replay |
+| `--sample` | — | off | A seeded random sample, not the newest |
+| `--seed` | `SEED` | `1` | Seed for --sample |
+| `--compare` | `COMPARE` | — | Two presets A,B (default today,new; also new+graph, new-segments) |
+| `--json` | — | off | Output JSON |
+| `--out` | `OUT` | — | Write the report here instead of stdout |
+| `--redact` | — | off | Replace recalled text and questions with ids and lengths |
 
 ## `genus memory-identity`
 
