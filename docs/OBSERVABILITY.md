@@ -760,9 +760,11 @@ If another tenant's engine receives the webhook, it routes the same way: it
 delivers an `org:` alert for itself, hands an `org:` alert for another tenant
 to that tenant's engine, and hands an alert with no usable `org:` tag
 (untagged, unknown, ambiguous) to the root engine with an untagged hand-off
-that only the root engine reads. When the root engine is not reading the
-stream, that alert is logged at ERROR and not recorded anywhere: it is the
-root's, and is never kept in the receiving tenant.
+that only the root engine reads. When the engine it should go to is not
+reading the stream, or the hand-off cannot be written, the receiving engine
+logs it at ERROR and does nothing else: no record and no notice in its own
+tenant, since the alert is another tenant's. Only the root engine records a
+failed hand-off (in the routed tenant) and sends the notice below.
 
 The alerts path only delivers in the process's own tenant, so an alert is
 never delivered or triaged in a tenant other than the one its tags name.
@@ -809,20 +811,28 @@ a new one. Episodes are kept in Redis
 recovery Datadog never sent cannot silence a monitor for good. The alerts
 cooldown applies on top (alert id `datadog_alert:<tenant>:<monitor>:<step>`).
 A send that fails is recorded as `delivery_failed` (with `error`) and the next
-notification of the episode tries again.
+notification of the episode tries again. The episode moves on whatever the
+send did: a step the cooldown held counts as sent (it was, within the hour),
+and a recovery closes the episode even when its own notice could not be sent,
+so a monitor that flapped once is never left silent for the next incident.
 
 **A limit of per-monitor episodes.** Episodes are kept per monitor, not per
 group: the webhook payload above carries no group. In a multi-alert monitor
 the first group to recover closes the episode for the whole monitor, so a
 group still in Alert that renotifies opens a new episode: it is sent again
-and starts a second triage run, and its own recovery is then suppressed. For
+and starts a second triage run. For
 monitors whose groups recover separately, prefer a simple monitor per service,
 or read the recovery as "one group recovered".
 
-**The triage rule.** When a `Triggered` or `Re-Triggered` alert is delivered,
-or its send fails, whatever its priority (never Warn, No Data or a recovery,
-and never one suppressed by its episode or the cooldown), the
-tenant's engine starts ONE run of its main agent for the episode. The run is
+**The triage rule.** An episode with a `Triggered` or `Re-Triggered`
+notification gets ONE run of the tenant's main agent, whatever the priority:
+the first such notification starts it, whether its alert was sent, failed,
+or was held by the episode or the cooldown. Warn, No Data and recoveries never
+start one. When the main agent is already running (another monitor's triage,
+a scheduled run), the run waits for it, trying again after pauses of about
+six minutes in all; if it is still busy, the run is recorded as `agent_busy`
+and the episode's claim is given back, so the episode's next trigger
+notification starts it. The run is
 in plan mode (`readonly_mode`): it is offered only its read-only tools, the
 runtime admission gate refuses any other, and its prompt is fixed: it names
 the monitor (id, masked title, time), asks for a first look with the Datadog
@@ -833,7 +843,7 @@ records `triage` (`started`, `agent`, `read_only`, or `reason`: `not_a_trigger`,
 `recovery`, `episode_open`, `no_main_agent`, `no_agent_config`, ...), and the
 run's end is one `datadog.triage_run` audit event in the tenant with `status`
 (the run's status, `failed` with `error`, or `agent_busy` when the main agent
-was already running and no run started).
+stayed busy through the waits and no run started).
 
 **5. What is recorded.** For each transition the engine that delivers it
 writes one audit event, `datadog.alert_received`, in the routed tenant. The
