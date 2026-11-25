@@ -419,7 +419,7 @@ class TestRunWorldLegSwitches:
             c == {"include_segments": False, "include_graph": False, "reader_person_id": "p-1"}
             for c in calls
         )
-        assert report["meta"]["legs"] == {"segments": False, "graph": False}
+        assert report["legs"] == {"segments": False, "graph": False}
 
 
 class TestRunWorldTimings:
