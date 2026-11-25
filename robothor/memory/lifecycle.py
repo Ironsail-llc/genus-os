@@ -399,8 +399,13 @@ async def prune_low_quality_facts() -> dict[str, Any]:
     """Deactivate facts that are low-quality garbage.
 
     Targets:
-        - decay_score < 0.1 AND importance_score < 0.3 AND access_count = 0
+        - decay_score < 0.1 AND importance_score < 0.3 AND never recalled
         - fact_text < 15 characters (garbage that got in before quality gate)
+
+    "Never recalled" reads the live ``access_count`` (raised whenever the
+    search tool or warm-up returns the fact) and migration 094's
+    ``access_count_shadow`` (history recovered from fact_access_log), so a fact
+    agents use is not retired on age alone.
 
     Never prunes: decisions, preferences, resolutions (category-protected), or
     an operator-confirmed fact.
@@ -424,14 +429,14 @@ async def prune_low_quality_facts() -> dict[str, Any]:
         )
         short_pruned = cur.fetchall()
 
-        # Prune decayed, unimportant, never-accessed facts
+        # Prune decayed, unimportant, never-recalled facts
         cur.execute(
             f"""
             UPDATE memory_facts SET is_active = false, updated_at = NOW()
             WHERE is_active = true
               AND decay_score < 0.1
               AND importance_score < 0.3
-              AND access_count = 0
+              AND {_USE_COUNT_SQL} = 0
               AND category NOT IN ('decision', 'preference', 'resolution')
               AND {NOT_OPERATOR_CONFIRMED_SQL}
             RETURNING id, fact_text
@@ -989,6 +994,97 @@ def _release_lifecycle_lock() -> None:
 # loses the in-flight chunk instead of the entire run.
 _DECAY_CHUNK_SIZE = 500
 
+# Use signals for decay and prune. The live columns are written by recall
+# (outcomes.record_fact_access); migration 094's shadow columns hold the
+# history scripts/memory_decay_backfill.py recovered from fact_access_log
+# before anything wrote the live ones. GREATEST, not a sum: the backfill
+# counts log rows, and every search_memory hit both logs a row and bumps the
+# live count, so adding them would count one use twice. GREATEST ignores the
+# NULL an unbackfilled shadow timestamp holds.
+_USE_COUNT_SQL = "GREATEST(COALESCE(access_count, 0), COALESCE(access_count_shadow, 0))"
+_LAST_USED_SQL = "GREATEST(last_accessed, last_accessed_shadow)"
+
+# Importance candidates. Selecting ``importance_score = 0.5`` missed every
+# reinforced fact: conflicts._reinforce_fact adds 0.05 per reinforcement
+# (``LEAST(score + 0.05, 1.0)``), so the judge never saw a re-observed fact.
+# Selecting on "reinforced" instead would overwrite scores that were judged or
+# set on purpose (a resolution lifted to 0.85, a consolidated fact's inherited
+# importance), because rows scored before the marker existed carry none.
+#
+# So a fact is a candidate when it carries no marker AND its score is still
+# exactly what reinforcement alone gives from the 0.5 default:
+# ``LEAST(0.5 + 0.05 * reinforcement_count, 1.0)``, within float tolerance
+# (the reinforcement adds are accumulated in float8). Any other score was set
+# by someone and is left alone. The fragments carry no tenant predicate, so a
+# per-tenant caller ANDs its own.
+_IMPORTANCE_MARKER = "importance_scored_at"
+_REINFORCE_STEP = 0.05
+_IMPORTANCE_DEFAULT = 0.5
+_REINFORCEMENT_EARNED_SQL = f"({_REINFORCE_STEP} * COALESCE(reinforcement_count, 0))"
+_UNSCORED_IMPORTANCE_SQL = (
+    f"NOT (COALESCE(metadata, '{{}}'::jsonb) ? '{_IMPORTANCE_MARKER}') "
+    f"AND ABS(importance_score - LEAST({_IMPORTANCE_DEFAULT} + {_REINFORCEMENT_EARNED_SQL}, 1.0))"
+    " < 1e-6"
+)
+_MARK_IMPORTANCE_SQL = (
+    f"COALESCE(metadata, '{{}}'::jsonb) || jsonb_build_object('{_IMPORTANCE_MARKER}', NOW())"
+)
+
+
+def _auto_score_old_events(cur: Any) -> int:
+    """Score unjudged events older than 30 days 0.3 (plus any reinforcement
+    earned) without the judge, and mark them scored."""
+    cur.execute(
+        f"""
+        UPDATE memory_facts
+        SET importance_score = LEAST(0.3 + {_REINFORCEMENT_EARNED_SQL}, 1.0),
+            metadata = {_MARK_IMPORTANCE_SQL}
+        WHERE is_active = TRUE AND {_UNSCORED_IMPORTANCE_SQL}
+          AND category = 'event'
+          AND created_at < NOW() - INTERVAL '30 days'
+        """
+    )
+    return int(cur.rowcount or 0)
+
+
+def _select_unscored_facts(cur: Any, limit: int = 200) -> list[dict[str, Any]]:
+    """The newest active facts that were never judged or set on purpose."""
+    cur.execute(
+        f"""
+        SELECT id, fact_text FROM memory_facts
+        WHERE is_active = TRUE AND {_UNSCORED_IMPORTANCE_SQL}
+        ORDER BY created_at DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    return list(cur.fetchall())
+
+
+def _record_importance(cur: Any, fact_id: int, score: float) -> None:
+    """Store the judge's score plus the reinforcement the fact earned so far.
+
+    Marks the fact scored, except a neutral 0.5 on a never-reinforced fact:
+    judge_importance also returns 0.5 on a timeout, so that fact stays a
+    candidate, and rewriting it is idempotent (0.5 + nothing). A reinforced
+    fact is marked whatever the verdict, so a neutral verdict cannot be
+    re-selected nightly and reset the reinforcement earned since.
+    """
+    cur.execute(
+        f"""
+        UPDATE memory_facts
+        SET importance_score = LEAST(%s + {_REINFORCEMENT_EARNED_SQL}, 1.0),
+            metadata = CASE
+                WHEN %s <> {_IMPORTANCE_DEFAULT} OR COALESCE(reinforcement_count, 0) > 0
+                THEN {_MARK_IMPORTANCE_SQL}
+                ELSE metadata
+            END
+        WHERE id = %s
+        """,
+        (score, score, fact_id),
+    )
+
+
 # Wall-clock budget for Step 2 (decay). asyncio.to_thread already keeps this
 # work off the event loop (see _run_decay_step), but the budget still bounds
 # total row-lock time and lets a slow pass yield to Steps 3+ instead of
@@ -1044,8 +1140,9 @@ def _run_decay_pass_sync(budget_s: float = _DECAY_BUDGET_S) -> dict[str, int]:
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """
-            SELECT id, last_accessed, access_count, reinforcement_count,
+            f"""
+            SELECT id, {_LAST_USED_SQL} AS last_accessed,
+                   {_USE_COUNT_SQL} AS access_count, reinforcement_count,
                    importance_score, outcome_failures
             FROM memory_facts
             WHERE is_active = TRUE
@@ -1150,25 +1247,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         # Fast-path: events older than 30 days auto-score 0.3 (skip LLM call)
-        cur.execute(
-            """
-            UPDATE memory_facts SET importance_score = 0.3
-            WHERE is_active = TRUE AND importance_score = 0.5
-              AND category = 'event'
-              AND created_at < NOW() - INTERVAL '30 days'
-            """
-        )
-        auto_scored = cur.rowcount
-
-        cur.execute(
-            """
-            SELECT id, fact_text FROM memory_facts
-            WHERE is_active = TRUE AND importance_score = 0.5
-            ORDER BY created_at DESC
-            LIMIT 200
-            """
-        )
-        unscored = cur.fetchall()
+        auto_scored = _auto_score_old_events(cur)
+        unscored = _select_unscored_facts(cur, limit=200)
         facts_scored = 0
         facts_skipped_budget = 0
 
@@ -1186,10 +1266,7 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
                 break
             try:
                 score = await judge_importance(fact["fact_text"])
-                cur.execute(
-                    "UPDATE memory_facts SET importance_score = %s WHERE id = %s",
-                    (score, fact["id"]),
-                )
+                _record_importance(cur, fact["id"], score)
                 facts_scored += 1
             except Exception as e:
                 logger.warning("Failed to score fact %d: %s", fact["id"], e)
