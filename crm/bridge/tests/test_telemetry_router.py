@@ -302,9 +302,7 @@ def test_the_root_at_home_is_told_which_half_is_missing(monkeypatch):
     assert scope["reason"] == "scope"
 
 
-@pytest.mark.parametrize(
-    ("status", "kind"), [(429, "rate_limit"), (403, "auth"), (503, "network")]
-)
+@pytest.mark.parametrize(("status", "kind"), [(429, "rate_limit"), (403, "auth"), (503, "network")])
 @pytest.mark.parametrize("path", ["/api/telemetry/logs", "/api/telemetry/logs/summary"])
 def test_a_datadog_failure_is_unavailable(path, status, kind, datadog):
     datadog.status = status
@@ -362,11 +360,7 @@ def test_since_takes_the_observe_pages_values(since, sent, datadog):
 
 
 def test_until_takes_the_same_values(datadog):
-    _ok(
-        _client(CHILD_A).get(
-            "/api/telemetry/logs", params={"since": "2d", "until": "2026-11-25"}
-        )
-    )
+    _ok(_client(CHILD_A).get("/api/telemetry/logs", params={"since": "2d", "until": "2026-11-25"}))
 
     assert datadog.last["filter"]["from"] == "now-2d"
     assert datadog.last["filter"]["to"] == "2026-11-25T00:00:00"
@@ -558,9 +552,7 @@ def test_the_summary_counts_everything_when_asked(datadog):
 
 
 def test_the_summary_groups_by_another_facet(datadog):
-    datadog.aggregate = {
-        "data": {"buckets": [{"by": {"host": "web-1"}, "computes": {"c0": 3}}]}
-    }
+    datadog.aggregate = {"data": {"buckets": [{"by": {"host": "web-1"}, "computes": {"c0": 3}}]}}
 
     body = _ok(_client(CHILD_A).get("/api/telemetry/logs/summary", params={"group_by": "host"}))
 
