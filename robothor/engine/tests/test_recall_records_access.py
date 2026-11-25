@@ -285,3 +285,64 @@ class TestRecordingRespectsTheBenchmarkSandbox:
             outcomes.record_fact_access(TENANT)
 
         conn.assert_not_called()
+
+
+class TestATurnThatRecallsNothingWritesNothing:
+    """A turn whose recall returned no fact performs no access write: no task
+    is spawned, no deferred write is queued, no connection is checked out."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rows",
+        [[], [{"id": 99, "insight_text": "Billing slips on Fridays.", "source": "insight"}]],
+        ids=["no-rows", "no-fact-rows"],
+    )
+    async def test_search_memory_with_no_fact_rows(self, rows: list[dict[str, Any]]) -> None:
+        from robothor.engine.tools.handlers import memory as handler
+        from robothor.memory import outcomes
+
+        registry = MagicMock()
+        connect = MagicMock()
+        with (
+            patch.object(handler, "_recall_fallback", AsyncMock(return_value=(rows, "lookup"))),
+            patch("robothor.engine.feature_flags.is_rip_enabled", return_value=False),
+            patch("robothor.engine.task_registry.get_task_registry", return_value=registry),
+            patch.object(outcomes, "get_connection", connect),
+        ):
+            await handler._search_memory({"query": "billing"}, _ctx())
+
+        registry.spawn.assert_not_called()
+        connect.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "message",
+        ["say pong", "Tell Alice about the invoice"],
+        ids=["no-candidates", "candidates-but-no-rows"],
+    )
+    def test_warmup_with_nothing_injected(self, message: str) -> None:
+        from robothor.engine import warmup
+        from robothor.memory import outcomes
+
+        defer = MagicMock()
+        connect = MagicMock()
+        with (
+            patch("robothor.db.get_connection") as fetch_conn,
+            patch.object(warmup, "_defer_write", defer),
+            patch.object(outcomes, "get_connection", connect),
+        ):
+            cur = fetch_conn.return_value.__enter__.return_value.cursor.return_value
+            cur.fetchall.return_value = []
+            assert warmup._build_entity_context(message, tenant_id=TENANT) == ""
+
+        defer.assert_not_called()
+        connect.assert_not_called()
+
+    def test_recording_empty_or_blank_lists_opens_no_connection(self) -> None:
+        from robothor.memory import outcomes
+
+        connect = MagicMock()
+        with patch.object(outcomes, "get_connection", connect):
+            outcomes.record_fact_access(TENANT, fact_ids=[], content_hashes=[])
+            outcomes.record_fact_access(TENANT, fact_ids=[0], content_hashes=[""])
+
+        connect.assert_not_called()
