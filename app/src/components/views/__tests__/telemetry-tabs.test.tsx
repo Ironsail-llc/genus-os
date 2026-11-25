@@ -321,6 +321,7 @@ describe("Traces", () => {
   it.each([
     [{ status: "not_configured", message: "Datadog is not connected for this organization yet." }, "traces-not-configured", "not connected"],
     [{ status: "unavailable", kind: "rate_limit", scope: "acme-child-a" }, "traces-unavailable", "too many requests"],
+    [{ status: "no_access", message: "Traces are not shared with this organization.", scope: "acme-child-a" }, "traces-no-access", "not shared"],
   ])("shows the bridge's state in plain words", async (body, testId, words) => {
     overrides = [[/\/api\/telemetry\/traces\?/, () => ({ body })]];
     render(<LogsView role="admin" />);

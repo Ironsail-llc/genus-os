@@ -588,6 +588,42 @@ def test_a_monitor_query_is_anded_inside_the_scope(datadog):
     )
 
 
+@pytest.mark.parametrize("path", ["/api/telemetry/traces", f"/api/telemetry/traces/{TRACE_ID}"])
+def test_a_tenant_whose_spans_are_not_shared_says_so(path, monkeypatch, datadog, audit_rows):
+    # Span access is opt-in: a scope without a ``spans`` filter grants none.
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv(
+        "ROBOTHOR_DATADOG_SCOPES", json.dumps({**SCOPES, CHILD_A: {"logs": "service:shop-api"}})
+    )
+    reset_settings()
+
+    response = _client(CHILD_A).get(path)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "no_access",
+        "message": "Traces are not shared with this organization.",
+        "scope": CHILD_A,
+    }
+    assert datadog.requests == []
+    rows = _telemetry_rows(audit_rows)
+    assert len(rows) == 1
+    assert rows[0]["details"]["outcome"] == "no_access"
+
+
+def test_a_credential_named_span_tag_is_replaced(datadog):
+    datadog.trace = {
+        "data": [
+            _span("5a1", "0", "2026-11-25T10:00:00Z", tags=["password:hunter2pass", "env:prod"])
+        ]
+    }
+
+    trace = _ok(_client(CHILD_A).get(f"/api/telemetry/traces/{TRACE_ID}"))
+
+    assert trace["spans"][0]["tags"] == ["password:<redacted>", "env:prod"]
+
+
 def test_a_tenant_whose_monitors_are_not_shared_says_so(monkeypatch, datadog):
     from robothor.settings import reset_settings
 
