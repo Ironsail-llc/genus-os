@@ -553,8 +553,10 @@ details hold:
 
 A recovery changes nothing in place. It is its own event with
 `transition: recovered` and the same `monitor_id`, so you can pair it with
-the trigger. Datadog retries webhooks, so the same (monitor, transition,
-date) is recorded once. The key is remembered in Redis for 24 hours, and if
+the trigger. Datadog retries webhooks, so the same notification (`event_id`,
+monitor, transition and date) is recorded once. Each group of a multi-alert
+monitor has its own `event_id`, so each is recorded. Without `event_id` and
+`date`, one record is kept per monitor and transition. The key is remembered in Redis for 24 hours, and if
 Redis cannot be reached the alert is still recorded. When the audit write
 fails, the event goes to `robothor:events:datadog:dlq` and the key is
 released.

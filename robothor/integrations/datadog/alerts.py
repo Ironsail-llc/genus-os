@@ -240,8 +240,10 @@ def triage_plan(tenant_id: str, alert: DatadogAlert, *, title: str | None = None
 
 
 def _dedup_key(alert: DatadogAlert, payload: Any) -> str:
-    if alert.monitor_id or alert.transition or alert.date:
-        basis = "\x1f".join((alert.monitor_id, alert.transition, alert.date))
+    # ``$ID`` names the notification: a retry resends it, another group or
+    # occurrence of the same monitor carries a new one.
+    if alert.event_id or alert.monitor_id or alert.transition or alert.date:
+        basis = "\x1f".join((alert.event_id, alert.monitor_id, alert.transition, alert.date))
     else:
         basis = json.dumps(payload, sort_keys=True, default=str)
     return _DEDUP_PREFIX + hashlib.sha256(basis.encode()).hexdigest()
