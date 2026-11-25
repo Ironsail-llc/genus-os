@@ -72,7 +72,7 @@ HARD_STRATA: tuple[str, ...] = (
 VALIDATION_THRESHOLD = 0.95
 #: Bumped whenever a judge rule changes, so a progress file written under
 #: the old rules is refused instead of mixing two judges' verdicts.
-JUDGE_VERSION = 3
+JUDGE_VERSION = 4
 DEFAULT_REFERENCE = "keyword_only"
 NON_INFERIORITY_MARGIN = 0.05
 DEFAULT_TOKEN_BUDGET = 2048
@@ -350,9 +350,15 @@ def judge_rules(
     for gold in case.gold:
         if _contains(text, gold):
             gold_kinds = {kinds.get(g) for g in case.gold} if kinds else set()
+            question = normalise(case.question)
             for value in sorted(known):
                 v = normalise(value)
                 if v in golds or any(v in g for g in golds) or not _contains(text, value):
+                    continue
+                # Restating what the question is about is not a second answer:
+                # "Alice Vance's manager is Bob Rivera" for a question about
+                # Alice Vance names only one candidate.
+                if _contains(question, value):
                     continue
                 if kinds is None or kinds.get(value) in gold_kinds:
                     return Verdict(
@@ -555,11 +561,16 @@ def planted_answers(world: World) -> list[PlantedAnswer]:
         if others:
             _plant("random_entity", case, rng.choice(others), False, n)
             # A hedge: the gold beside a rival of its own kind. Expected wrong.
-            rival = rng.choice(others)
-            text = (f"{gold} or {rival}", f"{rival} (previously {gold})")[n % 2]
-            out.setdefault("hedge", []).append(
-                PlantedAnswer(case, Answer(text, False, ()), False, "hedge")
-            )
+            # The rival is never something the question itself names: restating
+            # the question's subject is not a second answer.
+            question = normalise(case.question)
+            rivals = [v for v in others if not _contains(question, v)]
+            if rivals:
+                rival = rng.choice(rivals)
+                text = (f"{gold} or {rival}", f"{rival} (previously {gold})")[n % 2]
+                out.setdefault("hedge", []).append(
+                    PlantedAnswer(case, Answer(text, False, ()), False, "hedge")
+                )
         # Forms only a model can grade: "Last, First" for a person and the bare
         # root of an organisation's name. Neither contains a gold string or a
         # known value, so they reach the LLM judge and test it.

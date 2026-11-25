@@ -281,7 +281,10 @@ The baselines run by default through `--systems`; there is no separate
      current. Both are confident-wrong by rule, as the rubric says an answer
      that hedges between several things is wrong. When hedges were left to
      the LLM judge, validation caught it accepting 55 of 150 planted hedges.
-     "Kelvaro Systems, in Velmere" stays correct;
+     "Kelvaro Systems, in Velmere" stays correct, and so does restating what
+     the question is about: for a question about Alice Vance, "Alice Vance's
+     manager is Bob Rivera" names one candidate, while "Bob Rivera or Carol
+     Diaz" is a hedge;
    - any other value the world knows is confident-wrong.
 
    Only an answer none of these settle goes to the LLM judge
