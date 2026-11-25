@@ -66,6 +66,31 @@ RECALL_FILL_ROWS = 50
 TAIL_SCORE_FLOOR = 0.5
 
 
+def recall_limit(named: Any) -> int:
+    """Rows to ask recall for: the caller's limit, else enough to fill the cap.
+
+    A caller that names a limit still gets at most that many rows; one that
+    names none gets up to ``RECALL_FILL_ROWS``, cut by ``within_context_cap``.
+    """
+    return int(named) if named else RECALL_FILL_ROWS
+
+
+def within_context_cap(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rows in order until their text would pass ``RECALL_CONTEXT_CHARS``.
+
+    The first row always, then each row while the running total stays inside:
+    the rule the routed path (``router.recall``) applies.
+    """
+    kept: list[dict[str, Any]] = []
+    used = 0
+    for r in rows:
+        used += len(r.get("fact_text") or r.get("insight_text") or r.get("text") or "")
+        if kept and used > RECALL_CONTEXT_CHARS:
+            break
+        kept.append(r)
+    return kept
+
+
 @dataclass
 class Candidate:
     """One recall candidate. See the module docstring for what a leg must set."""
