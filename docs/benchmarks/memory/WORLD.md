@@ -278,7 +278,9 @@ The baselines run by default through `--systems`; there is no separate
      names another known value of the gold's own kind (another organisation,
      city, person or role). "Kelvaro Systems or Brivane Labs" is a hedge, and
      "Brivane Labs (previously Kelvaro Systems)" states a superseded value as
-     current. Both go to the LLM judge, whose rubric rejects hedges.
+     current. Both are confident-wrong by rule, as the rubric says an answer
+     that hedges between several things is wrong. When hedges were left to
+     the LLM judge, validation caught it accepting 55 of 150 planted hedges.
      "Kelvaro Systems, in Velmere" stays correct;
    - any other value the world knows is confident-wrong.
 
@@ -294,8 +296,8 @@ from the world:
 - **right:** the gold in several sentence shapes, and the gold as a
   reordered name or a bare organisation root.
 
-Only the LLM judge can settle hedges and the reordered and root forms, so
-validation always exercises it. Each planted kind must clear 95% on its own,
+Only the LLM judge can settle the reordered and root forms, so validation
+always exercises it. Each planted kind must clear 95% on its own,
 in addition to the pooled wrong and right rates. Most planted answers are
 settled by rules, so a pooled gate alone would let a weak model judge through.
 If any rate falls short, or the judge raises on a planted case, the run aborts

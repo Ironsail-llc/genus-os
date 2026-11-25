@@ -72,7 +72,7 @@ HARD_STRATA: tuple[str, ...] = (
 VALIDATION_THRESHOLD = 0.95
 #: Bumped whenever a judge rule changes, so a progress file written under
 #: the old rules is refused instead of mixing two judges' verdicts.
-JUDGE_VERSION = 2
+JUDGE_VERSION = 3
 DEFAULT_REFERENCE = "keyword_only"
 NON_INFERIORITY_MARGIN = 0.05
 DEFAULT_TOKEN_BUDGET = 2048
@@ -327,10 +327,12 @@ def judge_rules(
 ) -> Verdict | None:
     """Settle what can be settled without a model; ``None`` otherwise.
 
-    A gold match settles the case only when the answer names no other known
-    value of the gold's own kind. "Kelvaro Systems or Brivane Labs" is a hedge
-    (or a superseded value stated beside the current one) and goes to the LLM
-    judge, whose rubric rejects hedges. "Kelvaro Systems, in Velmere" names a
+    A gold match counts only when the answer names no other known value of the
+    gold's own kind. "Kelvaro Systems or Brivane Labs" is a hedge, or a
+    superseded value stated beside the current one, and is confident-wrong: the
+    rubric says an answer that hedges between several things is wrong. This is
+    settled by rule because the local LLM judge accepted 55 of 150 planted
+    hedges when they were left to it. "Kelvaro Systems, in Velmere" names a
     city beside an organisation and stays correct. Without ``kinds`` every
     known value counts as the same kind, which is the cautious reading.
     """
@@ -353,7 +355,9 @@ def judge_rules(
                 if v in golds or any(v in g for g in golds) or not _contains(text, value):
                     continue
                 if kinds is None or kinds.get(value) in gold_kinds:
-                    return None  # gold beside a rival of its own kind: a model decides
+                    return Verdict(
+                        False, False, True, f"hedge: names {gold!r} beside the rival {value!r}"
+                    )
             return Verdict(True, False, False, f"matches gold {gold!r}")
     for value in sorted(known):
         if normalise(value) not in golds and _contains(text, value):
