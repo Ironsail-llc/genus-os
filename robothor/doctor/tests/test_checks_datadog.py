@@ -126,7 +126,9 @@ def test_an_unknown_site_fails_with_a_plain_sentence(keys, settings) -> None:
 
 
 def test_active_tenants_without_a_scope_are_named(keys, settings, monkeypatch) -> None:
-    settings(ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": {"logs": "service:shop-api"}}))
+    # A FULL entry, so the scoped tenant is named nowhere, not even by kind.
+    full = {"logs": "service:shop-api", "spans": "*", "monitors": "*", "metric_tags": []}
+    settings(ROBOTHOR_DATADOG_SCOPES=json.dumps({"acme-child-a": full}))
     monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
     db = fake_db([("acme-child-a",), ("acme-child-b",)])
     result = _run(make_ctx(db_factory=db))

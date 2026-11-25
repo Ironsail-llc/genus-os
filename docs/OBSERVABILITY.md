@@ -480,7 +480,9 @@ when Datadog rejects either key (it never prints a key), or by error kind when
 Datadog cannot be reached. Its detail names the active tenants that have no
 scope entry, other than the benchmark sandbox tenant. They are refused Datadog
 reads until you add a scope for them. That is not a fault: an install does not
-have to give every tenant Datadog access.
+have to give every tenant Datadog access. It also names, by kind, each scoped
+tenant with no trace, monitor or metric access (for example `no trace access:
+acme-child-a`), because an entry with only `logs` reads no traces.
 
 A log row's `trace_id` and `span_id` keep only an id-shaped value: 1 to 40 hex
 or decimal digits, in lowercase. Anything else becomes empty, because the
