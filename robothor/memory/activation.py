@@ -86,6 +86,9 @@ MAX_NAME_TOKENS = 4
 MAX_PHRASES = 400
 
 _WORD = re.compile(r"[^\W_]+(?:['’.-][^\W_]+)*", re.UNICODE)
+#: "Alice Smith's manager" is about Alice Smith: a possessive is dropped
+#: before the text is split into words.
+_POSSESSIVE = re.compile(r"(?<=[^\W_])['’]s\b", re.UNICODE)
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 _HANDLE = re.compile(r"(?<![\w@])@[A-Za-z0-9_][A-Za-z0-9_.]{1,63}")
 
@@ -109,9 +112,9 @@ def candidate_phrases(text: str) -> list[str]:
     """Lower-cased word runs of 2..:data:`MAX_NAME_TOKENS` tokens, shortest first.
 
     A single token is never a candidate: a first name alone must not resolve to
-    a person.
+    a person. A possessive (``'s``) is not part of the name it follows.
     """
-    words = [w.lower() for w in _WORD.findall(text or "")]
+    words = [w.lower() for w in _WORD.findall(_POSSESSIVE.sub("", text or ""))]
     out: list[str] = []
     seen: set[str] = set()
     for size in range(2, MAX_NAME_TOKENS + 1):

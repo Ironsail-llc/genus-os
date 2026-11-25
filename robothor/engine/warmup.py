@@ -1488,7 +1488,8 @@ def _candidate_phrases(user_message: str, *, lowercase_ok: bool) -> list[str]:
 
     runs: list[list[str]] = [[]]
     for i, word in enumerate(user_message.split()):
-        cleaned = re.sub(r"[^\w]", "", word)
+        # "Alice Smith's" names Alice Smith: drop the possessive, then punctuation.
+        cleaned = re.sub(r"[^\w]", "", re.sub(r"['’]s(?=\W*$)", "", word))
         if _candidate_word(i, cleaned, lowercase_ok=lowercase_ok):
             runs[-1].append(cleaned.lower())
             if word != word.rstrip(".,;:!?"):
