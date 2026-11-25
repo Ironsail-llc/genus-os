@@ -57,12 +57,13 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      most of its words. The first pass reads the query in web-search syntax:
      `"quoted words"` match as a phrase, `-word` excludes, and `or` is an
      operator.
-   - `graph` (on unless `include_graph=False`) — graph activation from the
-     entities the query names and the entities the top hits mention (see
-     [Associative recall](#associative-recall)). Empty until facts have
-     mentions.
-   - `entity_expansion` (`expand_entities`, only when the graph leg returned
-     nothing) — facts about entities related to the top hits' entities.
+   - `graph` (**off by default**; `include_graph=True`) — graph activation
+     from the entities the query names and the entities the top hits mention
+     (see [Associative recall](#associative-recall)). Off because it has not
+     earned its place: see [Is the graph leg on?](#is-the-graph-leg-on).
+   - `entity_expansion` (`expand_entities`; with the graph leg on, only when it
+     returned nothing) — facts about entities related to the top hits'
+     entities.
    - `segment` (`include_segments`, **on by default**) — raw conversation
      segments from `search_segments` (see
      [Conversation segments](#conversation-segments)), kind `segment`. Each
@@ -141,7 +142,7 @@ tool routes through `robothor/memory/router.py`, which classifies the query
 | `exact_lookup` | Knowledge Vault captions + facts | numbers, ids, addresses |
 | `temporal` | facts + episodes | results recency-reordered (latest first) |
 | `how_to` | procedures + facts | |
-| `who_is` | facts (with the graph leg) | |
+| `who_is` | facts (with the one-hop entity expansion) | |
 | `intent` | standing intents + facts | |
 | `default` | facts + insights | no episode/entity fan-out |
 
@@ -1032,14 +1033,33 @@ the entities it names and spreads activation from them over the graph; the
 walk itself is the database function `memory_activate` (migration
 `crm/migrations/*_memory_graph_activation.sql`).
 
+#### Is the graph leg on?
+
+No, not in recall and not in warm-up, unless a caller asks:
+`search_facts(include_graph=True)`, `_build_entity_context(include_graph=True)`.
+`robothor.memory.facts.GRAPH_LEG_DEFAULT` and
+`robothor.engine.warmup.WARMUP_GRAPH_DEFAULT` are `False`.
+
+The memory evaluation's synthetic world decided it (dev split, top-5 hits):
+multi-hop was 21 of 126 with the leg on and 20 without (34 against 37 at
+top-10), and raw detail fell from 40 to 27 of 110 with it on, because its
+candidates crowd conversation segments out of the reranked head. Reserved
+places (2, 1 or none), reserving only when the question itself names an
+entity, seeding from possessives, 10 or 20 facts per entity, a wider walk and
+reranking the graph's candidates by the question changed none of that. The
+walk does reach the answer of most multi-hop questions, but ranks it by
+activation mass (10th to 48th), which knows nothing of the question. The
+graph keeps serving identity and current state; recall's associative leg
+waits for a design that ranks what the walk reaches by the question.
+
 **It needs mentions.** The walk reads which entities a fact is about from
 `memory_mentions`, and nothing writes that table yet: existing memory links
 facts to entities only by name. Until mentions are written, the graph leg
-returns nothing, and `search_facts` with `expand_entities=True` (the
-`search_memory` tool's default) uses the one-hop `entity_expansion` leg as it
-did before: facts about entities related, through `memory_relations`, to the
-entities its top hits name. The expansion leg runs only when the graph leg
-returned nothing, and keeps one reserved place.
+returns nothing. `search_facts` with `expand_entities=True` (the
+`search_memory` tool's default) runs the one-hop `entity_expansion` leg: facts
+about entities related, through `memory_relations`, to the entities its top
+hits name. With the graph leg on, the expansion runs only when it returned
+nothing; it keeps one reserved place.
 
 **Seeds.** `seeds_from_text` links text to entities without a model call: exact
 full names and aliases, case-insensitively, and e-mail addresses or @handles
