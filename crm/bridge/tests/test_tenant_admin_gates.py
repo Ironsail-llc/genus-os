@@ -182,6 +182,12 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     # the acting tenant's scope: its admins and auditors read them.
     ("GET", "/api/telemetry/logs"): TA,
     ("GET", "/api/telemetry/logs/summary"): TA,
+    ("GET", "/api/telemetry/traces"): TA,
+    ("GET", "/api/telemetry/traces/{trace_id}"): TA,
+    ("GET", "/api/telemetry/monitors"): TA,
+    ("GET", "/api/telemetry/signals"): TA,
+    # Every organization's figures at once: the root operator at home only.
+    ("GET", "/api/telemetry/overview"): R,
     ("GET", "/api/controls"): R,
     ("PATCH", "/api/controls/{name}"): R,
     ("GET", "/api/health/system"): R,
