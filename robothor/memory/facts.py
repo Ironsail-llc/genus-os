@@ -1640,20 +1640,28 @@ def _fill_from_pool(
     (``RERANK_MAX_CANDIDATES``) and returns what it scored, so a caller asking
     for more rows than that used to get the head alone. The rest of the pool
     follows in fused order, unscored (``rerank_score`` None, relevance from its
-    fused rank), skipping a row already returned or a near-duplicate of one.
-    Every pool row came through the same filtered legs, so the tail obeys the
-    same tenant, scope, trust and reader rules as the head.
+    fused rank), skipping a row already returned or a near-duplicate of one,
+    and stops where the fused score falls below ``TAIL_SCORE_FLOOR`` of the
+    weakest head row's (score-adaptive truncation). Every pool row came
+    through the same filtered legs, so the tail obeys the same tenant, scope,
+    trust and reader rules as the head.
     """
     if len(head) >= limit:
         return head
+    from robothor.memory.recall import TAIL_SCORE_FLOOR
+
     out = list(head)
     seen = {(r.get("kind", "fact"), r.get("id")) for r in out}
+    head_scores = [float(r["rrf_score"]) for r in head if r.get("rrf_score") is not None]
+    floor = TAIL_SCORE_FLOOR * min(head_scores) if head_scores else 0.0
     for row in pool:
         if len(out) >= limit:
             break
         key = (row.get("kind", "fact"), row.get("id"))
         if key in seen:
             continue
+        if float(row.get("rrf_score") or 0.0) < floor:
+            break  # the pool is in fused order: everything after scores lower
         if _dedup_enabled() and len(_dedupe([*out, row])) == len(out):
             continue
         seen.add(key)
