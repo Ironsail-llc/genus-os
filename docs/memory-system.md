@@ -553,19 +553,19 @@ gets nothing.
 trusted-only activation, then fills the rest of its character cap with the
 name-matched facts as before, each fact once. Activation has a hard budget
 (`GRAPH_WARMUP_BUDGET_SECONDS` in `robothor/engine/warmup.py`, 150 ms to
-start), enforced by Postgres: once a seed is found, the walk's own connection
-gets a `statement_timeout` of the time left, reset before the connection goes
-back to the pool, so the walk stops at the budget and nothing ever cancels a
-query from outside. On a timeout, an error or an empty result the section is
+start), enforced by Postgres: before its first statement, the walk's own
+connection gets a `statement_timeout` of the time left, reset before the
+connection goes back to the pool, so the seed lookup and the walk stop at the
+budget and nothing ever cancels a query from outside. On a timeout, an error or an empty result the section is
 exactly the name-matched one. There is no model
 call and no reranker. The name-matched facts are not filtered by origin.
 
 What a turn pays: a message with no two adjacent name candidates, no e-mail
 address or @handle and no known sender makes no extra query and no thread
-hand-off. Otherwise one read-only connection runs the seed lookup, and when
-it finds a seed four more: arming the time limit, the operator lookup (two
-statements when no owner row is linked and the `owner.yaml` fallback runs), the
-walk and resetting the limit.
+hand-off. Otherwise one read-only connection arms the time limit, runs the
+seed lookup and resets the limit (three statements); when a seed is found the
+operator lookup and the walk run in between (five, or six when no owner row is
+linked and the `owner.yaml` fallback runs).
 
 The search path writes nothing. Rows found only by the graph are not logged as
 fact access.
