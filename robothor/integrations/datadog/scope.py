@@ -211,6 +211,9 @@ def compose_metric(
         raise ScopeError("a metric name is letters, digits, dots and underscores")
     if aggregator not in _AGGREGATORS:
         raise ScopeError("the aggregator is one of avg, sum, min or max")
+    # A str is a Sequence[str]: unrefused, "prod" would become p,r,o,d.
+    if isinstance(tags, str) or isinstance(group_by, str):
+        raise ScopeError("tags and group-by keys are a list, not a single string")
     for value in (*tags, *group_by):
         if not isinstance(value, str) or not _TAG.fullmatch(value):
             raise ScopeError("a tag or group-by key may not contain a space, comma, brace or quote")

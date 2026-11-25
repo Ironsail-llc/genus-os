@@ -500,6 +500,29 @@ def test_a_no_access_spans_scope_makes_no_request() -> None:
     assert rec.requests == []
 
 
+def test_a_declared_entry_without_spans_reads_no_spans(monkeypatch) -> None:
+    """The logs filter is never reused for spans: no ``spans`` key is no access."""
+    from robothor.integrations.datadog.scope import scope_for
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_DATADOG_SCOPES", json.dumps({"acme-child-a": {"logs": "*"}}))
+    reset_settings()
+    try:
+        scope = scope_for("acme-child-a")
+    finally:
+        reset_settings()
+    assert scope is not None
+    rec = Recorder(body=SPAN_BODY)
+    client = _sync(rec)
+    with pytest.raises(ScopeError):
+        client.search_spans(scope, "", start="now-1h", end="now")
+    with pytest.raises(ScopeError):
+        client.aggregate_spans(scope, "", start="now-1h", end="now", group_by=["service"])
+    with pytest.raises(ScopeError):
+        client.get_trace(scope, "abc123", start="now-1h", end="now")
+    assert rec.requests == []
+
+
 # ── the root scope passes the caller's query through ───────────────────────
 
 

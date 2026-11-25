@@ -617,6 +617,13 @@ def test_an_injection_in_a_group_by_key_is_refused(key) -> None:
         compose_metric(METRIC_SCOPE, "m", group_by=(key,))
 
 
+@pytest.mark.parametrize(("tags", "group_by"), [("env:prod", ()), ((), "host"), ("prod", "host")])
+def test_a_bare_string_for_tags_or_group_by_is_refused_not_split(tags, group_by) -> None:
+    with pytest.raises(ScopeError) as caught:
+        compose_metric(METRIC_SCOPE, "m", tags=tags, group_by=group_by)
+    assert "list" in caught.value.reason
+
+
 _TAG_TOKENS = ("host", ":", "a", "-", "*", ".", "/", "_", "}", "{", ",", " ", '"', "'", "1", "!")
 
 
