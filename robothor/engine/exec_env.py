@@ -67,8 +67,9 @@ first gives an agent a credential.
 
 **One class is outside the ladder.** The credentials that open the platform
 itself (:func:`robothor.secrets.classification.is_platform_credential`: the
-database, the cache, the signing keys, the vault's key files, and connection
-strings) reach every tenant at once. No rung keeps them, ``off`` included, and
+database, the cache, the signing keys, the vault's key files, connection
+strings, and the cross-tenant application credentials such as the shared
+Datadog read keys) reach every tenant at once. No rung keeps them, ``off`` included, and
 no manifest grants them. ``off`` and ``observe`` protect an agent's working
 credentials from a surprise; nothing an agent does should depend on these.
 :func:`robothor.engine.process_hardening.drop_inherited_credentials` applies the
@@ -251,8 +252,8 @@ class ExecEnvironment:
     withheld: tuple[str, ...] = ()
     #: Granted names that were resolved and injected.
     granted: tuple[str, ...] = ()
-    #: Granted names refused outright: a bootstrap credential may not be
-    #: handed to an agent whatever its manifest says.
+    #: Granted names refused outright: a credential that reaches every tenant
+    #: may not be handed to an agent whatever its manifest says.
     refused: tuple[str, ...] = ()
     #: Granted names the accessor could not resolve from either store.
     unresolved: tuple[str, ...] = ()
@@ -268,8 +269,8 @@ class ExecEnvironment:
         parts: list[str] = []
         if self.refused:
             parts.append(
-                "refused as bootstrap credentials the platform never grants to an "
-                f"agent: {', '.join(self.refused)}"
+                "refused as credentials that reach every tenant, which the platform "
+                f"never grants to an agent: {', '.join(self.refused)}"
             )
         if self.unresolved:
             parts.append(
@@ -420,7 +421,7 @@ def build_exec_env(
         )
     if refused:
         logger.warning(
-            "exec_env: agent %s is granted bootstrap credential(s) it may never have; "
+            "exec_env: agent %s is granted platform-wide credential(s) it may never have; "
             "remove them from its manifest: %s",
             agent_id or "<unattributed>",
             ", ".join(refused),

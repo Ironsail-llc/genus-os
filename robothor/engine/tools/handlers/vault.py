@@ -695,12 +695,29 @@ def _refuse_bootstrap(key: str, verb: str) -> dict[str, Any] | None:
     safely, and a fingerprint of one is a fact about the instance's identity
     that a tool result has no reason to carry.
     """
-    from robothor.secrets.classification import is_bootstrap
-    from robothor.vault.naming import env_name, normalise_key
+    from robothor.secrets.classification import is_bootstrap, is_cross_tenant_credential
+    from robothor.vault.naming import env_name, env_names_for_vault_key, normalise_key
 
     # Normalised first: `'ROBOTHOR_DB_PASSWORD '` compared as a padded string
     # is not the bootstrap name, and slipped straight past this refusal.
-    if not is_bootstrap(env_name(normalise_key(str(key)))):
+    stored_at = normalise_key(str(key))
+    name = env_name(stored_at)
+    # Every name a reader resolves this row by, not only its exported spelling:
+    # ``providers/robothor_datadog/api_key`` exports as PROVIDERS_..., yet it is
+    # the FIRST row a reader of ROBOTHOR_DATADOG_API_KEY looks up.
+    readers = (name, *env_names_for_vault_key(stored_at))
+    if any(is_cross_tenant_credential(reader) for reader in readers):
+        # One key for every tenant: reading its fingerprint, replacing it,
+        # probing it or deleting it is the operator's, in every tenant.
+        return {
+            "error": (
+                f"{key!r} is a credential shared by every tenant on this instance, so "
+                f"the vault tools will not {verb} it. The operator stores it with "
+                "`genus vault set` on the instance."
+            ),
+            "denied_by": "cross_tenant",
+        }
+    if not is_bootstrap(name):
         return None
     return {
         "error": (
