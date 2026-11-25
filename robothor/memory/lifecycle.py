@@ -690,7 +690,9 @@ async def infer_entity_relationships(
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    "SELECT fact_text FROM memory_facts WHERE id = ANY(%s) AND tenant_id = %s",
+                    # Inferred edges are shared: shared facts only (memory/visibility.py).
+                    "SELECT fact_text FROM memory_facts WHERE id = ANY(%s) AND tenant_id = %s "
+                    "AND scope_kind = 'shared'",
                     (fact_ids[:5], _tenant),
                 )
                 pair["shared_facts_text"] = [row[0] for row in cur.fetchall()]
