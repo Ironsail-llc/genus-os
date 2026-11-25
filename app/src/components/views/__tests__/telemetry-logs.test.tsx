@@ -292,6 +292,68 @@ describe("Observe › Logs — Datadog", () => {
     expect(await screen.findByTestId("telemetry-forbidden")).toBeTruthy();
     expect(screen.queryByTestId("telemetry-unavailable")).toBeNull();
   });
+
+  it("does not leave Load more stuck when a new search starts while a page is loading", async () => {
+    let releaseMore: (reply: Reply) => void = () => {};
+    respond([
+      [SUMMARY_URL, () => ({ body: SUMMARY })],
+      [ROWS_URL, () => ({ body: ROWS })],
+    ]);
+    render(<LogsView role="admin" />);
+    await screen.findByTestId("telemetry-table");
+
+    // The next page hangs until released; meanwhile the person searches again.
+    const settle = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (ROWS_URL.test(url) && url.includes("cursor=")) {
+        requests.push(url);
+        const reply = await new Promise<Reply>((resolve) => {
+          releaseMore = resolve;
+        });
+        return { ok: true, status: 200, json: async () => reply.body } as Response;
+      }
+      return settle(url);
+    });
+    fireEvent.click(screen.getByTestId("telemetry-more"));
+    await waitFor(() => expect(screen.getByTestId("telemetry-more").textContent).toContain("Loading"));
+
+    fireEvent.change(screen.getByTestId("telemetry-query"), { target: { value: "env:prod" } });
+    fireEvent.submit(screen.getByTestId("telemetry-search"));
+    await waitFor(() => expect(rowRequests().some((u) => u.includes("q=env"))).toBe(true));
+    releaseMore({ body: PAGE_TWO });
+
+    await waitFor(() => {
+      const more = screen.getByTestId("telemetry-more");
+      expect(more.textContent).toContain("Load more");
+      expect((more as HTMLButtonElement).disabled).toBe(false);
+    });
+    // The stale page never lands on the new search's rows.
+    expect(screen.getByTestId("telemetry-table").textContent).not.toContain("slow checkout");
+  });
+
+  it("keeps the search, the rows and the loaded pages while the view is off screen", async () => {
+    healthy();
+    const { rerender } = render(<LogsView role="admin" />);
+    await screen.findByTestId("telemetry-table");
+    fireEvent.change(screen.getByTestId("telemetry-query"), { target: { value: "env:prod" } });
+    fireEvent.submit(screen.getByTestId("telemetry-search"));
+    await waitFor(() => expect(rowRequests().some((u) => u.includes("q=env"))).toBe(true));
+    await screen.findByTestId("telemetry-more");
+    fireEvent.click(screen.getByTestId("telemetry-more"));
+    await waitFor(() => expect(screen.getByTestId("telemetry-table").textContent).toContain("slow checkout"));
+    const asked = requests.length;
+
+    rerender(<LogsView role="admin" visible={false} />);
+    expect(screen.queryByTestId("telemetry-table")).toBeNull();
+    rerender(<LogsView role="admin" />);
+
+    expect((screen.getByTestId("telemetry-query") as HTMLInputElement).value).toBe("env:prod");
+    expect(screen.getByTestId("telemetry-table").textContent).toContain("slow checkout");
+    expect(screen.getByTestId("telemetry-summary")).toBeTruthy();
+    // Coming back is not a new search: no Datadog read, no audit row.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(requests).toHaveLength(asked);
+  });
 });
 
 describe("Observe › Logs — who sees which source", () => {
@@ -335,6 +397,20 @@ describe("Observe › Logs — who sees which source", () => {
     // The switch is redrawn in the journald panel's header, so ask for it again.
     expect(screen.getByTestId("logs-source-server").getAttribute("aria-selected")).toBe("true");
     expect(screen.queryByTestId("telemetry-table")).toBeNull();
+  });
+
+  it("keeps the root operator on the Server source while the view is off screen", async () => {
+    healthy();
+    const { rerender } = render(<LogsView role="owner" rootAtHome />);
+    await screen.findByTestId("telemetry-table");
+    fireEvent.click(screen.getByTestId("logs-source-server"));
+    await screen.findByTestId("logs-unit");
+
+    rerender(<LogsView role="owner" rootAtHome visible={false} />);
+    rerender(<LogsView role="owner" rootAtHome />);
+
+    expect(screen.getByTestId("logs-source-server").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("logs-unit")).toBeTruthy();
   });
 
   it("does not offer the journal to an auditor at the root either", async () => {
