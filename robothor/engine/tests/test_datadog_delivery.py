@@ -54,15 +54,15 @@ def _payload(**over: Any) -> dict[str, Any]:
     return base
 
 
-def _webhook(payload: dict[str, Any]) -> dict[bytes, bytes]:
-    """What the hooks receiver publishes: no tenant but its own (the root's)."""
+def _webhook(payload: dict[str, Any], received_by: str = ROOT) -> dict[bytes, bytes]:
+    """What the hooks receiver publishes: tagged with the receiving engine's tenant."""
     fields = {
         "type": "datadog.alert",
         "event_type": "datadog.alert",
         "source": "webhook",
         "actor": "external",
         "payload": json.dumps(payload),
-        "tenant_id": ROOT,
+        "tenant_id": received_by,
     }
     return {k.encode(): v.encode() for k, v in fields.items()}
 
@@ -76,6 +76,7 @@ class SharedRedis:
         self.acked: list[tuple[str, str, Any]] = []
         self.running = set(running)
         self.fail_xadd = False
+        self.root_running = True
 
     async def set(self, key: str, value: Any, nx: bool = False, ex: int | None = None) -> Any:
         if nx and key in self.keys:
@@ -109,7 +110,7 @@ class SharedRedis:
 
     async def xinfo_consumers(self, stream: str, group: str) -> list[dict[str, Any]]:
         if group == "engine":
-            return [{"name": f"engine-{ROOT}", "idle": 100}]
+            return [{"name": f"engine-{ROOT}", "idle": 100}] if self.root_running else []
         tenant = group.removeprefix("engine-")
         return [{"name": f"engine-{tenant}", "idle": 100}] if tenant in self.running else []
 
@@ -164,9 +165,9 @@ class Fleet:
         for tenant in (ROOT, A, B):
             await self.feed(tenant, envelope)
 
-    async def deliver_webhook(self, payload: dict[str, Any]) -> None:
+    async def deliver_webhook(self, payload: dict[str, Any], received_by: str = ROOT) -> None:
         before = len(self.redis.handoffs())
-        await self.broadcast(_webhook(payload))
+        await self.broadcast(_webhook(payload, received_by))
         for handoff in self.redis.handoffs()[before:]:
             await self.broadcast(handoff)
 
@@ -302,6 +303,29 @@ async def test_an_alert_is_delivered_only_in_the_tenant_it_routes_to(
     assert {t for t, _ in fleet.triage_runs()} <= {expected}
     for _, kwargs in fleet.triage_runs():
         assert kwargs.get("tenant_id") in (None, expected)
+
+
+@pytest.mark.parametrize("received_by", [A, B])
+@pytest.mark.parametrize("tags", list(TAGS))
+async def test_a_webhook_received_by_a_child_engine_routes_the_same(
+    fleet: Fleet, audit: Audit, received_by: str, tags: str
+) -> None:
+    """The receiver may run beside any engine; the root's alerts still reach only the root."""
+    raw, expected = TAGS[tags]
+    await fleet.deliver_webhook(_payload(tags=raw), received_by=received_by)
+
+    assert [t for t, *_ in fleet.sent] == [expected]
+    assert [r["tenant_id"] for r in audit.alerts()] == [expected]
+    assert {t for t, _ in fleet.triage_runs()} == {expected}
+
+
+async def test_a_root_alert_a_child_received_is_not_recorded_in_the_child(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """No root engine to hand it to: logged, and never kept in the child's tenant."""
+    fleet.redis.root_running = False
+    await fleet.deliver_webhook(_payload(tags="env:prod"), received_by=A)
+    assert fleet.sent == [] and audit.alerts() == [] and fleet.triage_runs() == []
 
 
 @pytest.mark.parametrize(
@@ -519,17 +543,27 @@ async def test_a_failed_write_before_anything_was_sent_accepts_the_retry(
 @pytest.mark.parametrize(
     ("result", "error"), [(RuntimeError("telegram down"), "RuntimeError"), (False, "not_delivered")]
 )
-async def test_a_failed_send_is_recorded_and_starts_no_run(
+async def test_a_failed_send_is_recorded_and_the_trigger_is_still_triaged(
     fleet: Fleet, audit: Audit, result: Any, error: str
 ) -> None:
+    """When paging is broken, the read-only look matters most: once per episode."""
     fleet.result = result
-    await fleet.deliver_webhook(_payload())
+    await fleet.deliver_webhook(_payload(priority="P1"))
+    await fleet.deliver_webhook(_payload(priority="P1", transition="Re-Triggered", event_id="2"))
 
-    (row,) = audit.alerts()
-    assert row["details"]["mode"] == "delivery_failed"
-    assert row["details"]["delivery"]["error"] == error
-    assert fleet.triage_runs() == []
+    rows = audit.alerts()
+    assert [r["details"]["mode"] for r in rows] == ["delivery_failed", "delivery_failed"]
+    assert rows[0]["details"]["delivery"]["error"] == error
+    assert rows[0]["details"]["triage"]["started"] is True
+    assert len(fleet.triage_runs()) == 1
+    assert len(fleet.sent) == 2, "the failed page is tried again"
     assert all(stream != f"{STREAM}:dlq" for stream, _ in fleet.redis.added)
+
+
+async def test_a_failed_warn_starts_no_run(fleet: Fleet, audit: Audit) -> None:
+    fleet.result = False
+    await fleet.deliver_webhook(_payload(transition="Warn"))
+    assert fleet.triage_runs() == []
 
 
 async def test_a_run_that_cannot_start_is_recorded_and_raises_nothing(
