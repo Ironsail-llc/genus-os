@@ -557,15 +557,19 @@ the trigger. Datadog retries webhooks, so the same notification (`event_id`,
 monitor, transition and date) is recorded once. Each group of a multi-alert
 monitor has its own `event_id`, so each is recorded. Without `event_id` and
 `date`, one record is kept per monitor and transition. Each copy first
-claims a Redis key with `SET NX` and a pending life of 120 seconds. A second
-copy that finds the claim, even one handled at the same moment, is a
-duplicate. Next the audit event is written. Then the key is kept for 24
-hours. When the write fails, the claim is deleted so a retry can record the
-alert, and the event goes to `robothor:events:datadog:dlq`. A crash after the
-claim and before the write delays a retry by at most the 120-second pending
-window. A crash after the write and before the key is extended can let at
-most one duplicate through once that window has passed. If Redis cannot be
-reached, the alert is still recorded.
+claims a Redis key with `SET NX` and a pending life of 120 seconds. The
+claim's value is the stream entry being handled. A copy that finds a claim
+made by a different stream entry, or a key already marked `done`, is a
+duplicate, even when both are handled at the same moment. A Datadog retry is
+always a different entry. Next the audit event is written. Then the key is
+set to `done` for 24 hours. When the write fails, the claim is deleted so a
+retry can record the alert, and the event goes to
+`robothor:events:datadog:dlq`. If the engine dies after the claim and before
+the write, the consumer group redelivers the same entry, which finds its own
+claim and records the alert. So a crash loses nothing. A crash after the
+write and before the key is set to `done` can let at most one duplicate
+through once the pending window has passed. If Redis cannot be reached, the
+alert is still recorded.
 
 Each recorded alert also writes one log line with no title or body:
 `event=datadog_alert tenant=<tenant> monitor_id=<id> transition=<transition> mode=dry_run routing=<routing>`.
