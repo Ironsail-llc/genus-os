@@ -542,7 +542,7 @@ Datadog's own notifications, wired to Genus's webhook, are handled separately
 as `datadog.alert_received` ([Datadog alerts into Genus](#datadog-alerts-into-genus)).
 This observer is the safety net for monitors that are not wired to that
 webhook, so a monitor that is wired appears in both records but is sent once:
-see [No double notification](#who-hears-about-a-finding) below.
+see [No double notification](#no-double-notification) below.
 
 **Calls per pass.** Each settled slot is read once and kept, per series. A
 tenant costs 18 aggregate calls on the first pass after a restart (9 slots for
@@ -613,7 +613,8 @@ restart forgets them (see below).
 - `delivered`: the alerts path confirmed it. `delivery` holds `level`,
   `route` (`digest`) and `alert_id`.
 - `suppressed`: not sent, because its episode already was
-  (`reason: episode_open`) or the cooldown holds its id (`reason: cooldown`).
+  (`reason: episode_open`), the cooldown holds its id (`reason: cooldown`), or
+  the webhook already sent this monitor (`reason: covered_by_webhook`, below).
 - `delivery_failed`: the alerts path raised (`error` is the exception's
   class name) or reported that it delivered nothing (`error: not_delivered`),
   or the finding belongs to another tenant than the engine's
@@ -621,10 +622,25 @@ restart forgets them (see below).
   is recorded all the same and the pass goes on; the next finding of that
   episode is tried again.
 
-Records written before delivery existed say `mode: dry_run` and carry
-`would_notify` instead of `delivery`. Read anything that is not `delivered`
-as recorded and not sent. There is no setting for any of this; to stop
-delivery, revert the change that added it.
+Every finding also keeps the fields records had before delivery, so their
+readers go on working: `would_notify` (who is told: the main agent's alert
+digest in that tenant), `brief`, and `current` where the finding has a count.
+Records written before delivery existed say `mode: dry_run`. Read anything
+that is not `delivered` as recorded and not sent. There is no setting for any
+of this; to stop delivery, revert the change that added it.
+
+#### No double notification
+
+A monitor wired to the Datadog webhook is also seen here, as
+`monitor_firing` and then `monitor_recovered`. Before sending either, the
+watch reads the webhook's episode keys for that tenant and monitor id in Redis
+(`robothor:datadog:episode:<tenant>:<monitor id>:sent:*`, see
+[the episode rule](#datadog-alerts-into-genus)). When the webhook's episode is
+open (for a recovery: open, or just closed by a recovery the webhook sent),
+the finding is recorded as `mode: suppressed`, `reason: covered_by_webhook`,
+and nothing is sent. Spikes, silences and the link are never checked. When
+Redis cannot be read the finding is sent: a duplicate is better than a missed
+alert.
 
 Each observer runs on its own for each tenant: one failing (a Datadog error, a
 malformed scope) never stops another observer or another tenant.
@@ -752,29 +768,41 @@ the tenant and nothing of the alert, and its alert id
 Start that tenant's engine with `ROBOTHOR_DATADOG_SCOPES` set to fix it; an
 alert already recorded this way is not sent later.
 
-**Levels.** `triggered` and `re_triggered` are `critical`: they page the
-tenant engine's operator on Telegram and then each
-`ROBOTHOR_ALERT_FALLBACK_CHANNELS` channel. Warn and no-data transitions are
-`warning`, recoveries are `info`; both become an `alert_digest` row in the
-main agent's inbox. The alert's title is `Datadog monitor: <title>` and its
+**Levels.** Only a P1 monitor pages.
+
+| Transition | Monitor priority | Level | Goes to |
+|------------|------------------|-------|---------|
+| `Triggered`, `Re-Triggered` | P1 (`P1`, `p1` or `1`) | `critical` | a page: Telegram, then each `ROBOTHOR_ALERT_FALLBACK_CHANNELS` channel, of the tenant's engine |
+| `Triggered`, `Re-Triggered` | anything else, or none | `warning` | the main agent's `alert_digest` inbox |
+| Warn, No Data (and their `Re-`) | any | `warning` | the digest |
+| recoveries | any | `info` | the digest |
+
+Priority is the payload's `priority` field (`$ALERT_PRIORITY`). To make a
+monitor page, give it priority P1 in Datadog; every other triggered monitor
+reaches the digest, which the main agent's heartbeat and the morning briefing
+read, so a monitor that sits in Alert for long stretches never pages. The
+alert's title is `Datadog monitor: <title>` and its
 body names the monitor (title masked, id), its state and a `P1`-`P5`
 priority. Never the query, the message or a log line.
 
 **The episode rule.** A monitor's notifications form an episode that its
-recovery closes. Inside one, each level is sent once: a renotification, a
-`Re-Triggered`, a `Re-Warn` or a storm of one monitor's groups is recorded and
-not sent (`mode: suppressed`, `reason: episode_open`), a Warn that escalates
-to Alert is sent again at `critical`, and a fall back to Warn is not. The
+recovery closes. It has three steps, lowest first: Warn or No Data, a trigger,
+a P1 trigger. Inside an episode each step is sent once, and a step sent covers
+the ones below it: a renotification, a `Re-Triggered`, a `Re-Warn` or a storm
+of one monitor's groups is recorded and not sent (`mode: suppressed`,
+`reason: episode_open`), a Warn that becomes a trigger is sent again (at
+`warning`, or `critical` for P1), and a fall back to Warn is not. The
 recovery is sent once at `info` and closes the episode, so the next trigger is
 a new one. Episodes are kept in Redis
 (`robothor:datadog:episode:<tenant>:<monitor>:*`) for seven days, so a
 recovery Datadog never sent cannot silence a monitor for good. The alerts
-cooldown applies on top (alert id `datadog_alert:<tenant>:<monitor>:<level>`).
+cooldown applies on top (alert id `datadog_alert:<tenant>:<monitor>:<step>`).
 A send that fails is recorded as `delivery_failed` (with `error`) and the next
 notification of the episode tries again.
 
-**The triage rule.** When a `Triggered` or `Re-Triggered` alert is delivered
-(never Warn, No Data or a recovery, and never a suppressed or failed one), the
+**The triage rule.** When a `Triggered` or `Re-Triggered` alert is delivered,
+whatever its priority (never Warn, No Data or a recovery, and never a
+suppressed or failed one), the
 tenant's engine starts ONE run of its main agent for the episode. The run is
 in plan mode (`readonly_mode`): it is offered only its read-only tools, the
 runtime admission gate refuses any other, and its prompt is fixed: it names
@@ -804,10 +832,12 @@ details hold:
 - `delivery`: `level`, `route` (`page` or `digest`) and `alert_id`, plus
   `reason` or `error` when it was not sent.
 - `triage`: as above.
+- `would_notify` (`level`, `route`, `channels`, `audience`: who was, or would
+  have been, told) and `would_run` (`tenant`, `agent`, `read_only`, `prompt`),
+  the fields records carried before delivery, kept for their readers.
 
-Records written before delivery existed say `mode: "dry_run"` and carry
-`would_notify` and `would_run`. Read anything that is not `delivered` as
-recorded and not sent.
+Records written before delivery existed say `mode: "dry_run"`. Read anything
+that is not `delivered` as recorded and not sent.
 
 A recovery changes nothing in place. It is its own event with
 `transition: recovered` and the same `monitor_id`, so you can pair it with
