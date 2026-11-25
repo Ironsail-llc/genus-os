@@ -403,6 +403,48 @@ class TestHedges:
         assert v is not None and not v.correct and v.confident_wrong
         assert v.method == "rule" and "hedge" in v.reason
 
+    PEOPLE_KNOWN = frozenset({"Alice Vance", "Bob Rivera", "Carol Diaz", "Velmere"})
+    PEOPLE_KINDS = {
+        "Alice Vance": "person",
+        "Bob Rivera": "person",
+        "Carol Diaz": "person",
+        "Velmere": "city",
+    }
+
+    def _manager_case(self) -> ew.Case:
+        return _case(
+            "entity_confusion",
+            question="Who is Alice Vance's manager at the moment?",
+            gold=("Bob Rivera", "bob.rivera@example.com"),
+        )
+
+    def test_restating_the_question_subject_is_not_a_hedge(self):
+        v = ea.judge_rules(
+            self._manager_case(),
+            _answer("Alice Vance's manager is Bob Rivera"),
+            self.PEOPLE_KNOWN,
+            self.PEOPLE_KINDS,
+        )
+        assert v is not None and v.correct, v
+
+    def test_a_second_candidate_answer_is_still_a_hedge(self):
+        v = ea.judge_rules(
+            self._manager_case(),
+            _answer("Bob Rivera or Carol Diaz"),
+            self.PEOPLE_KNOWN,
+            self.PEOPLE_KINDS,
+        )
+        assert v is not None and not v.correct and v.confident_wrong and "hedge" in v.reason
+
+    def test_restating_the_subject_does_not_hide_a_hedge(self):
+        v = ea.judge_rules(
+            self._manager_case(),
+            _answer("Alice Vance's manager is Bob Rivera or Carol Diaz"),
+            self.PEOPLE_KNOWN,
+            self.PEOPLE_KINDS,
+        )
+        assert v is not None and not v.correct and "Carol Diaz" in v.reason
+
     def test_gold_with_a_value_of_another_kind_is_still_correct(self):
         v = ea.judge_rules(_case(), _answer("Kelvaro Systems, in Velmere"), KNOWN, KINDS)
         assert v is not None and v.correct
