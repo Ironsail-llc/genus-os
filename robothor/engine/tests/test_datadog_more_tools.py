@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,6 +24,7 @@ from robothor.engine.tools.dispatch import ToolContext
 
 PARENT, CHILD_A, CHILD_B = "acme-parent", "acme-child-a", "acme-child-b"
 UNCONFIGURED = "test-tenant"
+NO_SPANS = "acme-child-c"
 SPANS, TRACE = "datadog_spans_search", "datadog_trace_get"
 MONITORS, METRICS = "datadog_monitors_list", "datadog_metrics_query"
 TOOLS = (SPANS, TRACE, MONITORS, METRICS)
@@ -39,7 +41,17 @@ SCOPES = {
     },
     # Spans default to the log filter; monitors and metrics to no access.
     CHILD_B: {"logs": "service:clinic-app"},
+    # Logs, but no spans: the span part itself is refused.
+    NO_SPANS: {"logs": "service:shop-api", "spans": 'tag:"genus_scope:no_access"'},
 }
+
+#: The fixed "now" every test runs at, and the windows it resolves to.
+NOW = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
+NOW_ISO, HOUR_AGO, DAY_AGO = (
+    "2026-11-25T12:00:00.000Z",
+    "2026-11-25T11:00:00.000Z",
+    "2026-11-24T12:00:00.000Z",
+)
 
 #: Arguments each tool accepts with no other input, for the parametrized cases.
 MINIMAL: dict[str, dict[str, Any]] = {
@@ -142,6 +154,13 @@ def scopes(monkeypatch):
     reset_settings()
 
 
+@pytest.fixture(autouse=True)
+def clock(monkeypatch):
+    from robothor.engine.tools.handlers import datadog_more
+
+    monkeypatch.setattr(datadog_more, "_now", lambda: NOW, raising=False)
+
+
 @pytest.fixture
 def dd(monkeypatch, scopes):
     from robothor.engine.tools.handlers import datadog_more
@@ -188,7 +207,10 @@ def test_spans_search_sends_the_tenants_span_scope_with_the_query(dd, writer):
     assert "error" not in result
     attrs = _attrs(dd)
     assert attrs["filter"]["query"] == "(service:shop-api) AND (status:error)"
-    assert (attrs["filter"]["from"], attrs["filter"]["to"]) == ("now-1h", "now")
+    # The relative default is resolved once, so the window handed back (and
+    # paged with) is the one that was searched.
+    assert (attrs["filter"]["from"], attrs["filter"]["to"]) == (HOUR_AGO, NOW_ISO)
+    assert result["window"] == {"start": HOUR_AGO, "end": NOW_ISO}
     assert attrs["sort"] == "-timestamp"
     assert result["scope"] == CHILD_A
 
@@ -289,7 +311,7 @@ def test_trace_get_searches_the_tenants_spans_for_the_id_over_a_day(dd, writer):
 
     attrs = _attrs(dd)
     assert attrs["filter"]["query"] == f"(service:shop-api) AND (trace_id:{TRACE_ID})"
-    assert (attrs["filter"]["from"], attrs["filter"]["to"]) == ("now-1d", "now")
+    assert (attrs["filter"]["from"], attrs["filter"]["to"]) == (DAY_AGO, NOW_ISO)
 
 
 def test_trace_get_returns_the_spans_by_start_time_with_parent_ids(dd, writer):
@@ -303,7 +325,8 @@ def test_trace_get_returns_the_spans_by_start_time_with_parent_ids(dd, writer):
     assert [s["parent_id"] for s in result["spans"]] == ["0", "1000", "1000"]
     assert result["spans_returned"] == 3
     attrs = _attrs(dd)
-    assert (attrs["filter"]["from"], attrs["filter"]["to"]) == ("now-2d", "now-1d")
+    assert (attrs["filter"]["from"], attrs["filter"]["to"]) == ("2026-11-23T12:00:00.000Z", DAY_AGO)
+    assert result["window"] == {"start": "2026-11-23T12:00:00.000Z", "end": DAY_AGO}
 
 
 def test_a_trace_outside_the_scope_reads_as_not_found_never_as_an_error(dd, writer):
@@ -462,6 +485,7 @@ def test_metrics_query_is_built_from_parts_inside_the_scope(dd, writer):
         "sum:trace.http.request.hits{service:shop-api,env:prod} by {host}.as_count()"
     )
     assert int(params["to"]) - int(params["from"]) == 4 * 3600
+    assert result["window"] == {"start": "2026-11-25T08:00:00.000Z", "end": NOW_ISO}
     assert result["scope"] == CHILD_A
 
 
@@ -513,7 +537,7 @@ def test_a_metric_injection_in_any_argument_is_refused_with_no_request(dd, write
     assert dd.requests == []
 
 
-@pytest.mark.parametrize("start", ["yesterday", "now-1w", "1h"])
+@pytest.mark.parametrize("start", ["yesterday", "now-1y", "1h"])
 def test_a_metric_window_it_cannot_read_is_bad_query_with_no_request(dd, writer, start):
     result = _run(METRICS, {"metric": "m", "start": start})
 
@@ -631,7 +655,7 @@ def test_a_span_search_is_audited_with_query_window_and_count_never_span_text(dd
     assert (row["action"], row["actor"], row["tenant_id"]) == (SPANS, "ops-agent", CHILD_A)
     assert row["details"]["rows"] == 3
     assert row["details"]["query"] == "@usr.email:<email>"
-    assert (row["details"]["start"], row["details"]["end"]) == ("now-1h", "now")
+    assert (row["details"]["start"], row["details"]["end"]) == (HOUR_AGO, NOW_ISO)
     text = json.dumps(row, default=str)
     assert "SECRET-RESOURCE" not in text and "dave@example.com" not in text
 
@@ -666,7 +690,7 @@ def test_a_metric_query_is_audited_with_the_metric_window_and_counts(dd, writer)
     (row,) = _audit_rows(writer, "datadog.metrics_read")
     details = row["details"]
     assert details["query"] == "trace.http.request.hits"
-    assert (details["start"], details["end"]) == ("now-4h", "now")
+    assert (details["start"], details["end"]) == ("2026-11-25T08:00:00.000Z", NOW_ISO)
     assert (details["series"], details["points"]) == (1, 2)
 
 
@@ -682,6 +706,63 @@ def test_a_refused_read_is_audited_as_denied(dd, writer, name):
     }[name]
     (row,) = _audit_rows(writer, event)
     assert row["status"] == "denied"
+
+
+# ── the parent's review rules, held by every new tool ──────────────────────
+
+
+def test_no_span_cursor_when_the_second_page_is_not_the_spans_returned(dd, writer):
+    """Spans that arrive between the two calls shift the page; the cursor from
+    the second call would skip or repeat spans, so none is handed out."""
+    calls = {"n": 0}
+
+    def shifting(i: int) -> dict[str, Any]:
+        if i == 0:
+            calls["n"] += 1
+        offset = 0 if calls["n"] == 1 else 1000
+        return _span(i + offset, "x" * 3000)
+
+    dd.make_span = shifting
+
+    result = _run(SPANS, {"limit": 300})
+
+    assert result["truncated"] is True
+    assert len(dd.requests) == 2
+    assert result["next_cursor"] is None
+    assert "narrow the query or window" in result["note"]
+
+
+@pytest.mark.parametrize(
+    "name,tenant",
+    [(SPANS, NO_SPANS), (TRACE, NO_SPANS), (MONITORS, CHILD_B), (METRICS, CHILD_B)],
+)
+def test_a_scope_part_with_no_access_is_refused_as_not_configured(dd, writer, name, tenant):
+    """The tenant's scope is the problem, not the input: no rewrite hint."""
+    result = _run(name, MINIMAL[name], _ctx(tenant))
+
+    assert result["refused"] is True
+    assert result["gate"] == "runtime"
+    assert "not configured for this organization" in result["error"]
+    assert dd.requests == []
+
+
+def test_phone_numbers_in_tags_are_masked_whatever_their_shape(dd, writer):
+    dd.monitors = [_monitor(0, tags=["owner_phone:4155550199", "team:checkout"])]
+    dd.series[0]["tag_set"] = ["mobile:+14155550123", "host:web-1"]
+
+    monitors = _run(MONITORS, {})
+    metrics = _run(METRICS, {"metric": "m"})
+
+    assert monitors["monitors"][0]["tags"] == ["owner_phone:<phone>", "team:checkout"]
+    assert metrics["series"][0]["tags"] == ["mobile:<phone>", "host:web-1"]
+    assert "4155550" not in json.dumps([monitors, metrics])
+
+
+def test_a_benchmark_run_is_never_offered_them():
+    """They read real spans, monitors and metrics; a graded run touches nothing real."""
+    from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
+
+    assert set(TOOLS).isdisjoint(benchmark_readonly_tools())
 
 
 # ── registration, read-only, opt-in ────────────────────────────────────────
