@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -945,19 +946,37 @@ def test_a_child_naming_a_sibling_is_refused_as_unreachable(dispatch_env, name):
 
 
 async def test_the_client_is_built_off_the_event_loop(scopes, monkeypatch):
-    """Building the client reads the vault, which blocks."""
-    from robothor.engine.tests.test_offloop_sync_calls import SlowProbe, warm_executor
+    """Building the client reads the vault, which blocks, so it runs in a worker thread.
+
+    Checked directly rather than by timing: the shared 200 ms probe asserts a
+    loop callback ran within 20 ms, which a saturated machine can miss with
+    nothing on the loop at all (seen once in 137 runs under full CPU load).
+    The factory records the thread it ran on and whether that thread was
+    running an event loop; on the loop it would be this test's own thread.
+    """
     from robothor.engine.tools.handlers import datadog_more
     from robothor.integrations.datadog.client import AsyncDatadogClient
 
-    await warm_executor()
     fake = FakeDatadog()
     client = AsyncDatadogClient(API_KEY, APP_KEY, transport=httpx.MockTransport(fake.handler))
-    probe = SlowProbe(asyncio.get_running_loop(), result=client)
-    monkeypatch.setattr(datadog_more, "_client_factory", probe)
+    seen: list[tuple[int, bool]] = []
+
+    def factory() -> AsyncDatadogClient:
+        try:
+            asyncio.get_running_loop()
+            on_a_loop = True
+        except RuntimeError:
+            on_a_loop = False
+        seen.append((threading.get_ident(), on_a_loop))
+        return client
+
+    monkeypatch.setattr(datadog_more, "_client_factory", factory)
 
     with patch("robothor.engine.event_writer.get_event_writer", return_value=MagicMock()):
-        await datadog_more.HANDLERS[SPANS]({"limit": 1}, _ctx())
-    await probe.settle()
+        result = await datadog_more.HANDLERS[SPANS]({"limit": 1}, _ctx())
 
-    probe.assert_loop_free()
+    assert "error" not in result
+    assert len(seen) == 1, "the client factory was not called exactly once"
+    thread, on_a_loop = seen[0]
+    assert thread != threading.get_ident(), "the client was built on the event loop's thread"
+    assert on_a_loop is False
