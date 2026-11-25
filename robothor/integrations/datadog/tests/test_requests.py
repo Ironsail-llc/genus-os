@@ -345,6 +345,36 @@ def test_a_span_with_missing_or_odd_fields_is_empty_values() -> None:
     )
 
 
+def _span_ids(attributes: dict) -> tuple[str, str, str]:
+    row = parse_span_page({"data": [{"attributes": attributes}]}).rows[0]
+    return row.trace_id, row.span_id, row.parent_id
+
+
+def test_span_ids_are_lowercased_and_numbers_kept_as_text() -> None:
+    ids = {"trace_id": "4BF92F3577B34DA6A3CE929D0E0E4736", "span_id": 1234567890, "parent_id": "0"}
+    assert _span_ids(ids) == ("4bf92f3577b34da6a3ce929d0e0e4736", "1234567890", "0")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "call Alice at agent@example.com",
+        "abc 123",
+        "0x1234",
+        "g123",
+        "1" * 41,
+        "١٢٣",  # non-ASCII digits
+        True,
+        1.5,
+        {"x": 1},
+        ["1"],
+    ],
+)
+def test_a_span_id_that_is_not_hex_or_digits_is_dropped(value) -> None:
+    ids = {"trace_id": value, "span_id": value, "parent_id": value}
+    assert _span_ids(ids) == ("", "", "")
+
+
 # ── spans aggregate ─────────────────────────────────────────────────────────
 
 

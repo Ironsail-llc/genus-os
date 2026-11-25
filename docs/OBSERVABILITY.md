@@ -524,7 +524,8 @@ have to give every tenant Datadog access.
 
 A log row's `trace_id` and `span_id` keep only an id-shaped value: 1 to 40 hex
 or decimal digits, in lowercase. Anything else becomes empty, because the
-fallbacks read custom attributes, which can hold free text.
+fallbacks read custom attributes, which can hold free text. A span row's
+`trace_id`, `span_id` and `parent_id` follow the same rule.
 
 ## Notes
 
