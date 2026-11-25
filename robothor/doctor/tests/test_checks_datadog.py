@@ -170,6 +170,50 @@ def test_a_renamed_sandbox_tenant_is_not_listed_either(keys, settings, monkeypat
     assert "acme-child-b" in result.detail
 
 
+def test_scoped_tenants_without_some_kinds_are_named_by_kind(keys, settings, monkeypatch) -> None:
+    """Span access is opt-in, so a logs-only entry silently has no traces: say so."""
+    from robothor.engine.benchmark_sandbox import sandbox_tenant_id
+
+    sandbox = sandbox_tenant_id()
+    full = {
+        "logs": "service:shop-api",
+        "spans": "service:shop-api",
+        "monitors": "team:shop",
+        "metric_tags": ["service:shop-api"],
+    }
+    settings(
+        ROBOTHOR_DATADOG_SCOPES=json.dumps(
+            {
+                "acme-parent": full,
+                "acme-child-a": {"logs": "service:shop-api"},
+                "acme-child-b": {"logs": "service:clinic-app", "spans": "service:clinic-app"},
+                sandbox: {"logs": "*"},
+            }
+        )
+    )
+    monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
+    rows = [("acme-child-a",), ("acme-child-b",), ("acme-parent",), (sandbox,)]
+    result = _run(make_ctx(db_factory=fake_db(rows)))
+    assert result.status == "pass"
+    assert "no trace access: acme-child-a;" in result.detail
+    assert "no monitor access: acme-child-a, acme-child-b;" in result.detail
+    assert result.detail.endswith("no metric access: acme-child-a, acme-child-b")
+    assert "acme-parent" not in result.detail
+    assert sandbox not in result.detail
+
+
+def test_a_fully_scoped_fleet_has_no_access_note(keys, settings, monkeypatch) -> None:
+    settings(
+        ROBOTHOR_DATADOG_SCOPES=json.dumps(
+            {"acme-parent": {"logs": "*", "spans": "*", "monitors": "*", "metric_tags": []}}
+        )
+    )
+    monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
+    result = _run(make_ctx(db_factory=fake_db([("acme-parent",)])))
+    assert result.status == "pass"
+    assert "access" not in result.detail.replace("accepts", "")
+
+
 def test_an_unreadable_tenant_list_does_not_fail_the_check(keys, monkeypatch) -> None:
     monkeypatch.setattr(dd_checks, "_make_client", _answer(200, {"valid": True}))
     result = _run(make_ctx(db_factory=fake_db(error=RuntimeError("down"))))
