@@ -862,7 +862,11 @@ read from Datadog's `$DATE`: the latest recovery's time is kept, and a trigger
 dated before it (read late, or whose send finished after the recovery was
 handled) is recorded as `suppressed`, `reason: superseded_by_recovery`, or
 flagged `superseded_by_recovery` when it had already gone out, and never
-re-opens the episode or starts a run. Without a `date`, arrival order decides.
+re-opens the episode or starts a run. The other way round too: the latest
+trigger's time is kept, and a recovery dated before it (a late Datadog retry
+of an earlier recovery) is recorded as `suppressed`,
+`reason: superseded_by_trigger`, sends nothing and leaves the episode open.
+Without a `date`, arrival order decides.
 
 **A limit of per-monitor episodes.** Episodes are kept per monitor, not per
 group: the webhook payload above carries no group. In a multi-alert monitor
