@@ -1008,6 +1008,9 @@ sees shared facts and the facts owned by one of their own ids. A reader with
 no ids sees shared facts only. Under a restricted data scope the reader is the
 scope's person and nothing else, whatever the caller passed.
 
+The callers pass a person and a member id today, never an agent id, so a fact
+scoped to an agent is read by no caller yet: the rule fails closed.
+
 It is applied in every reader that returns fact text:
 
 - `search_facts`: the vector, keyword and one-hop expansion legs. The graph
@@ -1018,12 +1021,23 @@ It is applied in every reader that returns fact text:
   `entity_facts_for_candidates` the shared-only rule, same signature).
 - Everything derived for every reader reads shared facts only: insight
   discovery, episodes, preferences, the working context, intents, gap
-  analysis, the memory projection and `crm.dal.get_person_memory`.
+  analysis, the memory projection, `crm.dal.get_person_memory`, and the
+  nightly relation inference (`entities.find_cooccurring_entity_pairs` and
+  the fact text `lifecycle.infer_entity_relationships` prompts with), whose
+  edges every reader sees.
+- De-churn (`robothor/memory/dechurn.py`) compares near-duplicates within one
+  owner scope, so a private fact never deactivates a shared one.
 
 Not filtered: the bridge's admin fact list (`/facts` in
-`crm/bridge/routers/memory_facts.py`). It is the tenant admin's view of what
-the tenant holds and the place a fact is forgotten from, so it shows private
-facts too.
+`crm/bridge/routers/memory_facts.py`), browse and search alike. It is the
+tenant admin's view of what the tenant holds and the place a fact is forgotten
+from, so it shows private facts too. Its search calls
+`search_facts(..., admin_erasure_view=True)`: a keyword-only switch, off by
+default, that drops the owner rule from the fact legs and skips the graph leg.
+Only that route, behind `require_tenant_admin`, passes it; no agent tool, MCP
+tool or tool argument reaches it, which
+`robothor/memory/tests/test_erasure_view_reach.py` checks. Forget acts on a
+private fact like any other.
 
 ### Associative recall
 
