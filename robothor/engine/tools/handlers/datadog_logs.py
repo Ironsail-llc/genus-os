@@ -245,7 +245,7 @@ def _shape(row: LogRow) -> dict[str, Any]:
         key, _, value = tag.partition(":")
         if key in _ROW_TAGS and value and key not in tags:
             tags[key] = redact_personal_data(value)
-    return {
+    shaped: dict[str, Any] = {
         "id": row.id,
         "timestamp": row.timestamp,
         "service": row.service,
@@ -253,8 +253,15 @@ def _shape(row: LogRow) -> dict[str, Any]:
         "host": row.host,
         "message": redact_personal_data(row.message),
         "tags": tags,
-        "attributes": _masked(row.attributes),
     }
+    # Top-level, not inside attributes: fitting drops attributes, and these
+    # are how the model follows a log line to its trace.
+    if row.trace_id:
+        shaped["trace_id"] = row.trace_id
+    if row.span_id:
+        shaped["span_id"] = row.span_id
+    shaped["attributes"] = _masked(row.attributes)
+    return shaped
 
 
 def _size(payload: Any) -> int:

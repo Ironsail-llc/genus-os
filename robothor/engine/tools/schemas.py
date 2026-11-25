@@ -1889,8 +1889,9 @@ _DATADOG_SCHEMAS: dict[str, dict[str, Any]] = {
             "description": (
                 "Search your organization's application and infrastructure logs in Datadog "
                 "(read-only; only your organization's logs are ever searched). Returns log "
-                "lines with timestamp, service, status, host, message, env/version tags and "
-                "attributes; personal data is masked. Not for what a Genus agent run did: "
+                "lines with timestamp, service, status, host, message, env/version tags, "
+                "trace_id/span_id when the line belongs to a trace, and attributes; personal "
+                "data is masked. Not for what a Genus agent run did: "
                 "use the agent run tools for that."
             ),
             "parameters": {
