@@ -1,0 +1,530 @@
+"""Datadog alerts reach people, in the tenant they belong to and nowhere else.
+
+The root engine consumes every Datadog webhook (it carries no tenant), routes
+it by the monitor's ``org:`` tag, and either delivers it itself (its own
+tenant's alert) or hands it to the routed tenant's own engine through a
+tenant-addressed event on the same stream. Only that engine delivers it, and
+only after routing it again from the alert's own tags.
+
+These tests drive real :class:`EventHooks` instances for three tenants over
+one shared fake Redis, so every safety property is a statement about what the
+engines actually did, not about a helper.
+"""
+
+from __future__ import annotations
+
+import itertools
+import json
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from robothor.constants import DEFAULT_TENANT
+from robothor.engine import datadog_delivery as dlv
+from robothor.engine.event_writer import get_event_writer
+from robothor.engine.hooks import STREAM_PREFIX, EventHooks
+
+if TYPE_CHECKING:
+    from robothor.engine.config import EngineConfig
+
+ROOT, A, B = DEFAULT_TENANT, "acme-child-a", "acme-child-b"
+STREAM = f"{STREAM_PREFIX}datadog"
+TENANTS = {A: {"id": A, "active": True}, B: {"id": B, "active": True}}
+#: Text that a webhook body may carry beside the title and must never be sent.
+QUERY_TEXT = 'logs("service:shop-api status:error card 4111").rollup("count") > 10'
+
+
+def _payload(**over: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "monitor_id": "12345",
+        "event_id": "777",
+        "title": "[Triggered] shop-api error rate high",
+        "transition": "Triggered",
+        "status": "Alert",
+        "priority": "P2",
+        "query": QUERY_TEXT,
+        "text_only_message": f"Last log line: {QUERY_TEXT}",
+        "tags": f"env:prod,org:{A},service:shop-api",
+        "link": "https://app.example.com/monitors/12345",
+        "date": "1764000000000",
+    }
+    base.update(over)
+    return base
+
+
+def _webhook(payload: dict[str, Any]) -> dict[bytes, bytes]:
+    """What the hooks receiver publishes: no tenant but its own (the root's)."""
+    fields = {
+        "type": "datadog.alert",
+        "event_type": "datadog.alert",
+        "source": "webhook",
+        "actor": "external",
+        "payload": json.dumps(payload),
+        "tenant_id": ROOT,
+    }
+    return {k.encode(): v.encode() for k, v in fields.items()}
+
+
+class SharedRedis:
+    """One Redis for every engine: keys, the stream, and who reads it."""
+
+    def __init__(self, running: tuple[str, ...] = (A, B)) -> None:
+        self.keys: dict[str, Any] = {}
+        self.added: list[tuple[str, dict[str, Any]]] = []
+        self.acked: list[tuple[str, str, Any]] = []
+        self.running = set(running)
+        self.fail_xadd = False
+
+    async def set(self, key: str, value: Any, nx: bool = False, ex: int | None = None) -> Any:
+        if nx and key in self.keys:
+            return None
+        self.keys[key] = value
+        return True
+
+    async def get(self, key: str) -> Any:
+        return self.keys.get(key)
+
+    async def exists(self, *keys: str) -> int:
+        return sum(1 for k in keys if k in self.keys)
+
+    async def delete(self, *keys: str) -> int:
+        return sum(1 for k in keys if self.keys.pop(k, None) is not None)
+
+    async def xack(self, stream: str, group: str, msg_id: Any) -> int:
+        self.acked.append((stream, group, msg_id))
+        return 1
+
+    async def xadd(self, stream: str, fields: dict[str, Any], **kw: Any) -> bytes:
+        if self.fail_xadd and not stream.endswith(":dlq"):
+            raise ConnectionError("redis went away")
+        self.added.append((stream, dict(fields)))
+        return f"{len(self.added)}-0".encode()
+
+    async def xinfo_groups(self, stream: str) -> list[dict[str, Any]]:
+        groups = [{"name": "engine"}]
+        groups += [{"name": f"engine-{t}"} for t in sorted(self.running)]
+        return groups
+
+    async def xinfo_consumers(self, stream: str, group: str) -> list[dict[str, Any]]:
+        if group == "engine":
+            return [{"name": f"engine-{ROOT}", "idle": 100}]
+        tenant = group.removeprefix("engine-")
+        return [{"name": f"engine-{tenant}", "idle": 100}] if tenant in self.running else []
+
+    def handoffs(self) -> list[dict[bytes, bytes]]:
+        return [
+            {k.encode(): str(v).encode() for k, v in fields.items()}
+            for stream, fields in self.added
+            if stream == STREAM
+        ]
+
+
+class Fleet:
+    """Three engines on one Redis, and everything each of them sent or started."""
+
+    def __init__(self, engine_config: EngineConfig, redis: SharedRedis) -> None:
+        self.redis = redis
+        self.engines: dict[str, EventHooks] = {}
+        self.runners: dict[str, MagicMock] = {}
+        for tenant in (ROOT, A, B):
+            runner = MagicMock()
+            run = MagicMock()
+            run.status.value = "completed"
+            runner.execute = AsyncMock(return_value=run)
+            group = "engine" if tenant == ROOT else f"engine-{tenant}"
+            hooks = EventHooks(
+                replace(engine_config, tenant_id=tenant, event_group=group), runner=runner
+            )
+            hooks._event_triggers = {"datadog": []}
+            hooks._prefixed_to_bare = {STREAM: "datadog"}
+            self.engines[tenant] = hooks
+            self.runners[tenant] = runner
+        self.current = ""
+        #: (engine tenant, level, title, body, kwargs) for every alerts.alert call.
+        self.sent: list[tuple[str, str, str, str, dict[str, Any]]] = []
+        self.result: Any = True
+
+    async def alert(self, level: str, title: str, body: str, **kw: Any) -> bool:
+        self.sent.append((self.current, level, title, body, kw))
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return bool(self.result)
+
+    async def feed(self, tenant: str, envelope: dict[bytes, bytes]) -> None:
+        self.current = tenant
+        hooks = self.engines[tenant]
+        group = hooks.config.event_group
+        await hooks._handle_event(STREAM, b"1-0", envelope, self.redis, group)
+        await dlv.wait_for_triage()
+
+    async def broadcast(self, envelope: dict[bytes, bytes]) -> None:
+        """Every engine reads every event on the stream (one group each)."""
+        for tenant in (ROOT, A, B):
+            await self.feed(tenant, envelope)
+
+    async def deliver_webhook(self, payload: dict[str, Any]) -> None:
+        before = len(self.redis.handoffs())
+        await self.broadcast(_webhook(payload))
+        for handoff in self.redis.handoffs()[before:]:
+            await self.broadcast(handoff)
+
+    def triage_runs(self) -> list[tuple[str, dict[str, Any]]]:
+        return [
+            (tenant, call.kwargs)
+            for tenant, runner in self.runners.items()
+            for call in runner.execute.await_args_list
+        ]
+
+
+class Audit:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+
+    def log_event(self, event_type: str, action: str, **kw: Any) -> dict[str, Any]:
+        self.rows.append({"event_type": event_type, "action": action, **kw})
+        return {"id": len(self.rows), "timestamp": "2026-11-25T00:00:00+00:00"}
+
+    def alerts(self) -> list[dict[str, Any]]:
+        return [r for r in self.rows if r["event_type"] == "datadog.alert_received"]
+
+
+@pytest.fixture
+def audit():
+    fake = Audit()
+    with patch("robothor.audit.logger.log_event", side_effect=fake.log_event):
+        yield fake
+
+
+@pytest.fixture
+def fleet(engine_config: EngineConfig, audit: Audit):
+    dlv.reset_state()
+    redis = SharedRedis()
+    f = Fleet(engine_config, redis)
+    with (
+        patch("robothor.crm.dal.get_tenant", side_effect=lambda t: TENANTS.get(t)),
+        patch("robothor.engine.alerts.alert", side_effect=f.alert),
+        patch("robothor.engine.manifest_store.main_agent_id", return_value="main"),
+        patch("robothor.engine.config.load_agent_config", return_value=MagicMock(name="cfg")),
+        patch("robothor.engine.delivery.deliver", new_callable=AsyncMock) as deliver,
+        patch("robothor.engine.dedup.try_acquire", new_callable=AsyncMock, return_value=True),
+        patch("robothor.engine.dedup.release", new_callable=AsyncMock),
+    ):
+        f.deliver = deliver  # type: ignore[attr-defined]
+        yield f
+    dlv.reset_state()
+
+
+# ── where an alert is delivered ─────────────────────────────────────
+
+
+async def test_the_routed_tenants_own_engine_delivers_it(fleet: Fleet, audit: Audit) -> None:
+    await fleet.deliver_webhook(_payload())
+
+    assert [(t, level) for t, level, *_ in fleet.sent] == [(A, "critical")]
+    (row,) = audit.alerts()
+    assert row["tenant_id"] == A
+    d = row["details"]
+    assert d["mode"] == "delivered"
+    assert d["delivery"]["level"] == "critical"
+    assert d["delivery"]["route"] == "page"
+    assert d["triage"]["started"] is True
+    assert [t for t, _ in fleet.triage_runs()] == [A]
+
+
+async def test_the_root_hands_off_and_delivers_nothing_itself(fleet: Fleet, audit: Audit) -> None:
+    await fleet.feed(ROOT, _webhook(_payload()))
+
+    assert fleet.sent == [] and fleet.triage_runs() == [] and audit.alerts() == []
+    (handoff,) = fleet.redis.handoffs()
+    assert handoff[b"tenant_id"] == A.encode()
+    assert handoff[b"type"] == dlv.HANDOFF_TYPE.encode()
+    assert handoff[b"source"] == dlv.HANDOFF_SOURCE.encode()
+
+
+async def test_the_roots_own_alert_is_delivered_by_the_root(fleet: Fleet, audit: Audit) -> None:
+    await fleet.deliver_webhook(_payload(tags="env:prod"))
+
+    assert [(t, level) for t, level, *_ in fleet.sent] == [(ROOT, "critical")]
+    (row,) = audit.alerts()
+    assert row["tenant_id"] == ROOT and row["details"]["routing"] == "untagged"
+    assert [t for t, _ in fleet.triage_runs()] == [ROOT]
+    assert fleet.redis.handoffs() == []
+
+
+TAGS = {
+    "org_a": (f"org:{A},service:shop-api", A),
+    "org_b": (f"org:{B}", B),
+    "untagged": ("env:prod", ROOT),
+    "unknown": ("org:acme-nobody", ROOT),
+    "ambiguous": (f"org:{A},org:{B}", ROOT),
+}
+
+
+@pytest.mark.parametrize(
+    ("tags", "transition"),
+    list(itertools.product(TAGS, ["Triggered", "Warn", "Recovered"])),
+)
+async def test_an_alert_is_delivered_only_in_the_tenant_it_routes_to(
+    fleet: Fleet, audit: Audit, tags: str, transition: str
+) -> None:
+    raw, expected = TAGS[tags]
+    await fleet.deliver_webhook(_payload(tags=raw, transition=transition))
+
+    assert {t for t, *_ in fleet.sent} == {expected}
+    assert len(fleet.sent) == 1
+    assert {r["tenant_id"] for r in audit.alerts()} == {expected}
+    assert {t for t, _ in fleet.triage_runs()} <= {expected}
+    for _, kwargs in fleet.triage_runs():
+        assert kwargs.get("tenant_id") in (None, expected)
+
+
+@pytest.mark.parametrize(
+    ("addressed_to", "tags"),
+    [
+        (A, f"org:{B}"),  # addressed to A, belongs to B
+        (A, "env:prod"),  # untagged: only the root's
+        (A, "org:acme-nobody"),
+        (A, f"org:{A},org:{B}"),
+    ],
+)
+async def test_a_hand_off_that_routes_elsewhere_is_refused(
+    fleet: Fleet, audit: Audit, addressed_to: str, tags: str
+) -> None:
+    forged = {
+        "type": dlv.HANDOFF_TYPE,
+        "source": dlv.HANDOFF_SOURCE,
+        "payload": json.dumps(_payload(tags=tags)),
+        "tenant_id": addressed_to,
+    }
+    await fleet.broadcast({k.encode(): v.encode() for k, v in forged.items()})
+
+    assert fleet.sent == []
+    assert fleet.triage_runs() == []
+    assert audit.alerts() == []
+
+
+async def test_a_webhook_typed_as_a_hand_off_is_not_one(fleet: Fleet, audit: Audit) -> None:
+    """Only the engine's own hand-off source counts, whatever the type says."""
+    fake = {
+        "type": dlv.HANDOFF_TYPE,
+        "source": "webhook",
+        "payload": json.dumps(_payload()),
+        "tenant_id": A,
+    }
+    await fleet.feed(A, {k.encode(): v.encode() for k, v in fake.items()})
+    assert fleet.sent == [] and audit.alerts() == []
+
+
+# ── a tenant without an engine ──────────────────────────────────────
+
+
+async def test_no_engine_for_the_tenant_is_recorded_there_and_the_root_is_told(
+    fleet: Fleet, audit: Audit
+) -> None:
+    fleet.redis.running = {B}
+    await fleet.deliver_webhook(_payload())
+
+    (row,) = audit.alerts()
+    assert row["tenant_id"] == A
+    assert row["details"]["mode"] == "delivery_failed"
+    assert row["details"]["delivery"]["reason"] == "no_engine"
+    assert fleet.triage_runs() == []
+    # One quiet notice at the root, naming the tenant and not the alert.
+    ((tenant, level, title, body, kw),) = fleet.sent
+    assert (tenant, level) == (ROOT, "info")
+    assert A in title
+    assert "shop-api error rate" not in title + body
+    assert kw["alert_id"] == f"datadog_undelivered:{A}"
+
+
+async def test_a_failed_hand_off_is_recorded_as_failed(fleet: Fleet, audit: Audit) -> None:
+    fleet.redis.fail_xadd = True
+    await fleet.deliver_webhook(_payload())
+    (row,) = audit.alerts()
+    assert row["tenant_id"] == A
+    assert row["details"]["mode"] == "delivery_failed"
+    assert row["details"]["delivery"]["reason"] == "handoff_failed"
+    assert [(t, level) for t, level, *_ in fleet.sent] == [(ROOT, "info")]
+
+
+# ── once per notification, once per episode ─────────────────────────
+
+
+async def test_a_retried_webhook_and_a_replayed_hand_off_deliver_once(
+    fleet: Fleet, audit: Audit
+) -> None:
+    await fleet.deliver_webhook(_payload())
+    await fleet.deliver_webhook(_payload())  # Datadog's retry: same $ID
+    (handoff,) = fleet.redis.handoffs()
+    await fleet.broadcast(handoff)  # the stream entry read again after a restart
+
+    assert len(fleet.sent) == 1
+    assert len(audit.alerts()) == 1
+    assert len(fleet.triage_runs()) == 1
+
+
+async def test_a_storm_for_one_monitor_is_one_alert_and_one_triage(
+    fleet: Fleet, audit: Audit
+) -> None:
+    for n in range(20):
+        transition = "Triggered" if n == 0 else "Re-Triggered"
+        await fleet.deliver_webhook(
+            _payload(event_id=str(1000 + n), date=str(1764000000000 + n), transition=transition)
+        )
+
+    assert len(fleet.sent) == 1
+    assert len(fleet.triage_runs()) == 1
+    modes = [r["details"]["mode"] for r in audit.alerts()]
+    assert modes == ["delivered"] + ["suppressed"] * 19
+    assert {r["details"]["delivery"].get("reason") for r in audit.alerts()[1:]} == {"episode_open"}
+
+
+async def test_warn_then_trigger_escalates_once_and_triages_once(
+    fleet: Fleet, audit: Audit
+) -> None:
+    await fleet.deliver_webhook(_payload(transition="Warn", event_id="1", date="1"))
+    await fleet.deliver_webhook(_payload(transition="Re-Warn", event_id="2", date="2"))
+    await fleet.deliver_webhook(_payload(transition="Triggered", event_id="3", date="3"))
+    await fleet.deliver_webhook(_payload(transition="Warn", event_id="4", date="4"))
+
+    assert [level for _, level, *_ in fleet.sent] == ["warning", "critical"]
+    assert len(fleet.triage_runs()) == 1
+    assert [r["details"]["mode"] for r in audit.alerts()] == [
+        "delivered",
+        "suppressed",
+        "delivered",
+        "suppressed",
+    ]
+
+
+async def test_warn_and_no_data_start_no_run(fleet: Fleet, audit: Audit) -> None:
+    await fleet.deliver_webhook(_payload(transition="Warn"))
+    await fleet.deliver_webhook(_payload(transition="No Data", event_id="2", monitor_id="2"))
+    assert fleet.triage_runs() == []
+    assert all(r["details"]["triage"]["started"] is False for r in audit.alerts())
+
+
+async def test_a_recovery_sends_one_info_and_starts_no_run(fleet: Fleet, audit: Audit) -> None:
+    await fleet.deliver_webhook(_payload())
+    await fleet.deliver_webhook(_payload(transition="Recovered", event_id="9", date="9"))
+    await fleet.deliver_webhook(_payload(transition="Recovered", event_id="10", date="10"))
+
+    assert [level for _, level, *_ in fleet.sent] == ["critical", "info"]
+    assert len(fleet.triage_runs()) == 1
+    # The recovery closed the episode: the next trigger is a new one.
+    await fleet.deliver_webhook(_payload(event_id="11", date="11"))
+    assert [level for _, level, *_ in fleet.sent] == ["critical", "info", "critical"]
+    assert len(fleet.triage_runs()) == 2
+
+
+async def test_a_lone_recovery_sends_one_info(fleet: Fleet, audit: Audit) -> None:
+    await fleet.deliver_webhook(_payload(transition="Recovered"))
+    assert [level for _, level, *_ in fleet.sent] == ["info"]
+    assert fleet.triage_runs() == []
+
+
+# ── failures are recorded, never raised ─────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("result", "error"), [(RuntimeError("telegram down"), "RuntimeError"), (False, "not_delivered")]
+)
+async def test_a_failed_send_is_recorded_and_starts_no_run(
+    fleet: Fleet, audit: Audit, result: Any, error: str
+) -> None:
+    fleet.result = result
+    await fleet.deliver_webhook(_payload())
+
+    (row,) = audit.alerts()
+    assert row["details"]["mode"] == "delivery_failed"
+    assert row["details"]["delivery"]["error"] == error
+    assert fleet.triage_runs() == []
+    assert all(stream != f"{STREAM}:dlq" for stream, _ in fleet.redis.added)
+
+
+async def test_a_run_that_cannot_start_is_recorded_and_raises_nothing(
+    fleet: Fleet, audit: Audit
+) -> None:
+    fleet.runners[A].execute.side_effect = RuntimeError("no model")
+    await fleet.deliver_webhook(_payload())
+    await get_event_writer().flush()
+
+    (row,) = audit.alerts()
+    assert row["details"]["mode"] == "delivered"
+    runs = [r for r in audit.rows if r["event_type"] == "datadog.triage_run"]
+    assert [(r["tenant_id"], r["details"]["status"]) for r in runs] == [(A, "failed")]
+    assert runs[0]["details"]["error"] == "RuntimeError"
+    assert all(stream != f"{STREAM}:dlq" for stream, _ in fleet.redis.added)
+
+
+async def test_a_busy_main_agent_is_recorded(fleet: Fleet, audit: Audit) -> None:
+    with patch("robothor.engine.dedup.try_acquire", new_callable=AsyncMock, return_value=False):
+        await fleet.deliver_webhook(_payload())
+    await get_event_writer().flush()
+    assert fleet.triage_runs() == []
+    runs = [r for r in audit.rows if r["event_type"] == "datadog.triage_run"]
+    assert [r["details"]["status"] for r in runs] == ["agent_busy"]
+
+
+async def test_no_main_agent_is_recorded_on_the_alert(fleet: Fleet, audit: Audit) -> None:
+    with patch("robothor.engine.manifest_store.main_agent_id", return_value=""):
+        await fleet.deliver_webhook(_payload())
+    (row,) = audit.alerts()
+    assert row["details"]["mode"] == "delivered"
+    assert row["details"]["triage"] == {"started": False, "reason": "no_main_agent"}
+    assert fleet.triage_runs() == []
+
+
+# ── what is sent ────────────────────────────────────────────────────
+
+
+async def test_only_names_and_the_masked_title_are_sent(fleet: Fleet, audit: Audit) -> None:
+    await fleet.deliver_webhook(_payload(title="[Triggered] login failures for agent@example.com"))
+
+    sent = json.dumps([s[1:] for s in fleet.sent], default=str)
+    assert "agent@example.com" not in sent
+    assert "<email>" in sent and "login failures" in sent
+    assert "card 4111" not in sent and "status:error" not in sent
+    assert "12345" in sent
+    prompts = json.dumps([kw["message"] for _, kw in fleet.triage_runs()])
+    assert "agent@example.com" not in prompts and "card 4111" not in prompts
+
+
+# ── the triage run ──────────────────────────────────────────────────
+
+
+async def test_the_triage_run_is_read_only_for_the_main_agent(fleet: Fleet) -> None:
+    await fleet.deliver_webhook(_payload())
+
+    ((tenant, kw),) = fleet.triage_runs()
+    assert tenant == A
+    assert kw["agent_id"] == "main"
+    assert kw["readonly_mode"] is True
+    assert kw["tenant_id"] == A
+    assert "12345" in kw["message"]
+    assert "do not have the Datadog tools" in kw["message"]
+    # Its result goes out through the agent's normal delivery, once.
+    fleet.deliver.assert_awaited_once()
+
+
+def test_a_read_only_run_offers_no_write_tool() -> None:
+    """The restriction the triage run relies on: plan mode's read-only tool set."""
+    from robothor.engine.models import AgentConfig
+    from robothor.engine.tools import get_registry
+    from robothor.engine.tools.constants import READONLY_TOOLS
+
+    registry = get_registry()
+    main = AgentConfig(
+        id="main",
+        name="main",
+        tools_allowed=["read_file", "web_search", "write_file", "exec", "create_task"],
+    )
+    full = set(registry.get_tool_names(main))
+    offered = set(registry.get_readonly_tool_names(main))
+    writes = full - READONLY_TOOLS
+    assert writes, "the agent holds write tools to withhold"
+    assert offered, "and read-only tools to offer"
+    assert not offered & writes
+    assert offered <= READONLY_TOOLS
