@@ -1075,7 +1075,11 @@ Three-tier memory with structured facts and knowledge graph:
 
 ### Ingestion Channels
 
-Data enters through `POST /ingest` on the orchestrator (:9099):
+Data enters through `POST /ingest` on the orchestrator (:9099). Each request is
+stored under the tenant of its verified bearer token. A request with no token is
+accepted only on a deployment with one active tenant, and gets a 400 otherwise.
+`X-Tenant-Id` without a token never selects a tenant (see
+[Whose memory](TOOLS.md#whose-memory-every-entry-point-acts-as-the-callers-tenant)):
 
 | Channel | Source |
 |---------|--------|
