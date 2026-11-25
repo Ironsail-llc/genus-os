@@ -424,9 +424,9 @@ def _span(raw: dict[str, Any]) -> SpanRow:
     if duration is None:
         duration = _int_or_none(inner.get("duration"))
     return SpanRow(
-        trace_id=_str(attrs.get("trace_id")),
-        span_id=_str(attrs.get("span_id")),
-        parent_id=_str(attrs.get("parent_id")),
+        trace_id=_id_text(attrs.get("trace_id")),
+        span_id=_id_text(attrs.get("span_id")),
+        parent_id=_id_text(attrs.get("parent_id")),
         service=_str(attrs.get("service")),
         resource_name=_str(attrs.get("resource_name")),
         operation_name=_first(
