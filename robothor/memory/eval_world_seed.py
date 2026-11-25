@@ -532,7 +532,23 @@ async def _seed_graph_and_segments(
             await segments.index_conversation(
                 key, tenant_id=tenant, embed_batch=_embed, retention_days=_WORLD_RETENTION_DAYS
             )
+    _analyze_world_tables()
     return reader
+
+
+def _analyze_world_tables() -> None:
+    """Refresh planner statistics after the bulk load, before anything queries it.
+
+    The graph walk (``memory_activate``) plans badly on tables autovacuum has not
+    analyzed yet; a search right after seeding then took seconds per call.
+    """
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        present = _present_optional_tables(cur)
+        for table in ("memory_facts", "memory_entities", "memory_relations", *present):
+            cur.execute(f"ANALYZE {table}")  # noqa: S608 — fixed table names
 
 
 # --------------------------------------------------------------------------- #
