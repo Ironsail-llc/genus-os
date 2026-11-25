@@ -108,6 +108,27 @@ class TestEveryAlertIsLogged:
         await alerts.alert("critical", "Tool outage: example_tool", "graded run")
         assert all(r.levelno < logging.ERROR for r in _alert_lines(caplog))
 
+    @pytest.mark.asyncio
+    async def test_an_alert_raised_in_a_run_names_its_tenant_and_trace(self, caplog) -> None:
+        await alerts.alert(
+            "critical",
+            "Runaway-token hard cap: example-agent",
+            "x",
+            tenant_id="acme-child-a",
+            trace_id="0af7651916cd43dd8448eb211c80319c",
+        )
+        f = _fields(_alert_lines(caplog)[0].getMessage())
+        assert f["tenant_id"] == "acme-child-a"
+        assert f["trace_id"] == "0af7651916cd43dd8448eb211c80319c"
+        assert list(f)[-2:] == ["tenant_id", "trace_id"]
+
+    @pytest.mark.asyncio
+    async def test_an_alert_outside_any_run_omits_both_keys(self, caplog) -> None:
+        await alerts.alert("critical", "Tool outage: example_tool", "9/9 calls failed")
+        f = _fields(_alert_lines(caplog)[0].getMessage())
+        assert "tenant_id" not in f
+        assert "trace_id" not in f
+
 
 class TestWebhookFallback:
     @pytest.mark.asyncio

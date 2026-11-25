@@ -363,7 +363,17 @@ class TestOtlpResourceAttributes:
         assert _resource(_trace()) == {
             "service.name": "robothor-engine",
             "agent.id": "example-agent",
+            "run.id": "run-1",
         }
+
+    def test_the_run_and_its_tenant_are_resource_attributes(self):
+        trace = TraceContext(agent_id="example-agent", run_id="run-1", tenant_id="acme-child-a")
+        res = _resource(trace)
+        assert res["run.id"] == "run-1"
+        assert res["tenant.id"] == "acme-child-a"
+
+    def test_an_unknown_tenant_is_left_out(self):
+        assert "tenant.id" not in _resource(TraceContext(agent_id="example-agent", run_id="r"))
 
     def test_resource_attributes_env_is_merged(self, monkeypatch):
         monkeypatch.setenv(
@@ -373,6 +383,7 @@ class TestOtlpResourceAttributes:
         assert _resource(_trace()) == {
             "service.name": "robothor-engine",
             "agent.id": "example-agent",
+            "run.id": "run-1",
             "deployment.environment": "staging",
             "service.namespace": "example",
         }
