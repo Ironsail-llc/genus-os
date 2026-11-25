@@ -84,6 +84,11 @@ async def record_resolution(
         conflict_check=False,
     )
     new_id = (written.get("fact_ids") or [0])[0]
+    if not new_id and written.get("facts_failed"):
+        # The store broke (embedding service, database): say why, as
+        # store_memory does, rather than blaming the quality gate.
+        reasons = "; ".join(written.get("errors") or []) or "unknown error"
+        return {"error": f"resolution not stored: {reasons}"}
     if not new_id:
         # Nothing is kept when the quality gate refuses the fact; reporting
         # that as a resolution would hide it.
