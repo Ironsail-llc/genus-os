@@ -524,10 +524,13 @@ async def _seed_graph_and_segments(
     if reader is not None:
         from robothor.memory import segments
 
+        async def _embed(texts: list[str]) -> list[list[float] | None]:
+            return list(await embed(texts))
+
         for key in seeded.chat_session_keys:
             # World turns carry the world's clock, years back: read them all.
             await segments.index_conversation(
-                key, tenant_id=tenant, embed_batch=embed, retention_days=_WORLD_RETENTION_DAYS
+                key, tenant_id=tenant, embed_batch=_embed, retention_days=_WORLD_RETENTION_DAYS
             )
     return reader
 
@@ -763,7 +766,7 @@ async def run_world(
             "include_graph": include_graph,
             "reader_person_id": seeded.reader_person_id,
         }
-        extra = {name: value for name, value in options.items() if name in accepted}
+        extra: dict[str, Any] = {name: value for name, value in options.items() if name in accepted}
         t0 = time.perf_counter()
         for case in cases:
             if case.stratum in _UNSCORED:
