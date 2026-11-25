@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileText, RefreshCw, Search } from "lucide-react";
+import { FileText, RefreshCw, Search, Waypoints } from "lucide-react";
 
 import { EmptyState } from "@/components/business/empty-state";
 import { ListSkeleton } from "@/components/business/list-skeleton";
@@ -246,15 +246,56 @@ async function readSummary(url: string): Promise<Bucket[] | null> {
   }
 }
 
+/**
+ * The trace a log line belongs to, when it says: the `trace_id` attribute,
+ * Datadog's own `dd.trace_id` (nested or flat), or `trace_id=<hex>` in the
+ * message as the engine's structured lines write it. Digits only, as the
+ * bridge's trace route accepts.
+ */
+export function traceIdOf(row: TelemetryRow): string | null {
+  const attrs = row.attributes;
+  const dd = attrs.dd && typeof attrs.dd === "object" ? (attrs.dd as Record<string, unknown>) : {};
+  for (const value of [attrs.trace_id, dd.trace_id, attrs["dd.trace_id"]]) {
+    const text = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : "";
+    if (/^[0-9A-Fa-f]{1,40}$/.test(text)) return text;
+  }
+  const match = /\btrace_id=([0-9A-Fa-f]{1,40})\b/.exec(row.message);
+  return match ? match[1] : null;
+}
+
 export interface TelemetryLogsProps {
   visible: boolean;
   /** The source switch, when the page offers more than one source. */
   switcher?: React.ReactNode;
+  /** What the page draws between the header and the search (the summary and tabs). */
+  above?: React.ReactNode;
+  /** A search handed in by a link: prefilled and run, and again whenever it changes. */
+  query?: string;
+  /** Opens a trace on the Traces tab; without it a line offers no trace link. */
+  onViewTrace?: (traceId: string) => void;
+  /** Called with Refresh, for what the page reads beside the search. */
+  onRefresh?: () => void;
 }
 
-export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
-  const [draft, setDraft] = useState("");
-  const [query, setQuery] = useState("");
+export function TelemetryLogs({
+  visible,
+  switcher,
+  above,
+  query: linkedQuery,
+  onViewTrace,
+  onRefresh,
+}: TelemetryLogsProps) {
+  const [draft, setDraft] = useState(linkedQuery ?? "");
+  const [query, setQuery] = useState(linkedQuery ?? "");
+  // A new search from a link replaces the one on screen, and runs.
+  const [seenLink, setSeenLink] = useState(linkedQuery);
+  if (linkedQuery !== seenLink) {
+    setSeenLink(linkedQuery);
+    if (linkedQuery) {
+      setDraft(linkedQuery);
+      setQuery(linkedQuery);
+    }
+  }
   const [since, setSince] = useState(DEFAULT_WINDOW);
   const [reloads, setReloads] = useState(0);
 
@@ -368,12 +409,17 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
           variant="outline"
           size="sm"
           data-testid="telemetry-refresh"
-          onClick={() => setReloads((n) => n + 1)}
+          onClick={() => {
+            setReloads((n) => n + 1);
+            onRefresh?.();
+          }}
         >
           <RefreshCw aria-hidden className={loading ? "animate-spin" : undefined} />
           Refresh
         </Button>
       </PageHeader>
+
+      {above}
 
       <form
         data-testid="telemetry-search"
@@ -569,6 +615,21 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
             <SheetDescription className="break-all font-mono text-[11px]">
               {open ? `${open.timestamp}${open.host ? ` · ${open.host}` : ""}` : ""}
             </SheetDescription>
+            {open && onViewTrace && traceIdOf(open) ? (
+              <button
+                type="button"
+                data-testid="telemetry-view-trace"
+                onClick={() => {
+                  const traceId = traceIdOf(open);
+                  setOpen(null);
+                  if (traceId) onViewTrace(traceId);
+                }}
+                className="inline-flex w-fit items-center gap-1 text-xs text-primary underline-offset-2 hover:underline"
+              >
+                <Waypoints aria-hidden className="size-3.5" />
+                View trace
+              </button>
+            ) : null}
           </SheetHeader>
           {open ? (
             <div className="flex flex-col gap-4 px-4 pb-6 text-xs">

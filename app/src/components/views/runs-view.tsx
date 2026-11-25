@@ -133,7 +133,14 @@ function errorText(status: number): string {
   return status === 403 ? "Operator access is required to read runs." : `Error ${status}`;
 }
 
-export function RunsView({ visible = true }: { visible?: boolean }) {
+export function RunsView({
+  visible = true,
+  onOpenLogs,
+}: {
+  visible?: boolean;
+  /** Opens the Logs page on a run's lines; only for a role that may open it. */
+  onOpenLogs?: (runId: string) => void;
+}) {
   const [filters, setFilters] = useState<Filters>({
     status: "",
     agent: "",
@@ -440,7 +447,11 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
         </div>
       )}
 
-      <RunDetailDrawer runId={visible ? openId : null} onClose={() => setOpenId(null)} />
+      <RunDetailDrawer
+        runId={visible ? openId : null}
+        onClose={() => setOpenId(null)}
+        onOpenLogs={onOpenLogs}
+      />
     </div>
   );
 }

@@ -31,11 +31,18 @@ export interface ViewRoute {
    * for the main conversation, so that route reads exactly as it always has.
    */
   room?: string;
+  /**
+   * A search handed to the Logs page: `?v=logs&q={query}`, the link the run
+   * drawer's "Logs for this run" opens. Absent, the key itself, for every
+   * other route.
+   */
+  query?: string;
 }
 
 const VIEW_PARAM = "v";
 const SUB_PARAM = "s";
 const ROOM_PARAM = "room";
+const QUERY_PARAM = "q";
 
 const viewIds = new Set<string>(ALL_VIEW_IDS);
 const settingsPageIds = new Set<string>(settingsPages.map((p) => p.id));
@@ -73,6 +80,10 @@ export function parseViewRoute(search: string): ViewRoute {
   const rawRoom = params.get(ROOM_PARAM);
   if (view === "chat" && isRoomId(rawRoom)) return { view, settingsPage, room: rawRoom };
 
+  // Only the logs view reads a search, and only a non-empty one.
+  const rawQuery = params.get(QUERY_PARAM);
+  if (view === "logs" && rawQuery) return { view, settingsPage, query: rawQuery };
+
   return { view, settingsPage };
 }
 
@@ -95,13 +106,25 @@ export function formatViewRoute(route: ViewRoute, currentSearch = ""): string {
   } else {
     params.delete(ROOM_PARAM);
   }
+  if (route.view === "logs" && route.query) {
+    params.set(QUERY_PARAM, route.query);
+  } else {
+    params.delete(QUERY_PARAM);
+  }
   return `?${params.toString()}`;
+}
+
+/** The link to the Logs page with `query` prefilled and run, for an `href`. */
+export function logsLink(query: string): string {
+  return formatViewRoute({ view: "logs", settingsPage: DEFAULT_SETTINGS_PAGE, query });
 }
 
 export interface ViewRouteApi extends ViewRoute {
   navigate: (view: ViewId, settingsPage?: SettingsPageId) => void;
   /** Open a workspace on the chat view, or (null) go back to the main conversation. */
   openRoom: (roomId: string | null) => void;
+  /** Open the Logs page with `query` prefilled and run. */
+  openLogs: (query: string) => void;
 }
 
 export function useViewRoute(): ViewRouteApi {
@@ -171,5 +194,10 @@ export function useViewRoute(): ViewRouteApi {
     [go]
   );
 
-  return { ...route, navigate, openRoom };
+  const openLogs = useCallback(
+    (query: string) => go({ view: "logs", settingsPage: routeRef.current.settingsPage, query }),
+    [go]
+  );
+
+  return { ...route, navigate, openRoom, openLogs };
 }

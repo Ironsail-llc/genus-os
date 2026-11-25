@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText } from "lucide-react";
 import { StatusBadge, fromEngineStatus } from "@/components/business/status-badge";
 import {
   Sheet,
@@ -21,6 +21,8 @@ import {
   verdictTone,
 } from "@/lib/automations/run-truth";
 import { relativeTime } from "@/lib/inbox/pending";
+import { logsLink } from "@/hooks/use-view-route";
+import { runLogsQuery } from "@/lib/observe/run-logs";
 import { formatCost, formatTokens } from "./runs-format";
 
 const BRIDGE_URL = "/api/bridge";
@@ -398,7 +400,19 @@ function Body({ detail, loadedAt }: { detail: Detail; loadedAt: number }) {
  * One run, explained: what it was asked, what it did step by step, what it
  * cost, whether the answer arrived and whether it held up.
  */
-export function RunDetailDrawer({ runId, onClose }: { runId: string | null; onClose: () => void }) {
+export function RunDetailDrawer({
+  runId,
+  onClose,
+  onOpenLogs,
+}: {
+  runId: string | null;
+  onClose: () => void;
+  /**
+   * Opens the Logs page on this run's lines. Given only to a role that may
+   * open the Logs page; without it the drawer offers no link.
+   */
+  onOpenLogs?: (runId: string) => void;
+}) {
   // Keyed by run id, so a newly chosen run never shows the last one's answer
   // and nothing has to be reset when the choice changes.
   const [loaded, setLoaded] = useState<{ id: string; detail?: Detail; error?: string; at?: number } | null>(null);
@@ -463,6 +477,20 @@ export function RunDetailDrawer({ runId, onClose }: { runId: string | null; onCl
             {run ? <StatusBadge status={fromEngineStatus(run.status)} label={run.status ?? undefined} /> : null}
           </SheetTitle>
           <SheetDescription className="break-all font-mono text-[11px]">{runId ?? ""}</SheetDescription>
+          {runId && onOpenLogs ? (
+            <a
+              data-testid="run-detail-logs-link"
+              href={logsLink(runLogsQuery(runId))}
+              onClick={(event) => {
+                event.preventDefault();
+                onOpenLogs(runId);
+              }}
+              className="inline-flex w-fit items-center gap-1 text-xs text-primary underline-offset-2 hover:underline"
+            >
+              <FileText aria-hidden className="size-3.5" />
+              Logs for this run
+            </a>
+          ) : null}
         </SheetHeader>
         {error ? (
           <p data-testid="run-detail-error" className="mx-4 rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground">
