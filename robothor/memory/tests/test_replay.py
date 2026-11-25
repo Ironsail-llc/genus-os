@@ -447,6 +447,30 @@ class TestRunPrivateReader:
     def test_a_spawned_run_inherits_no_reader(self) -> None:
         assert self._reader(parent_run_id="44444444-4444-4444-8444-444444444444") is None
 
+    def test_the_engines_rule_decides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """One rule: the engine's ``private_reader_for_run`` decides, with the
+        run record as its run and a verified identity of the run's person."""
+        from robothor.engine import private_recall
+
+        seen: dict[str, Any] = {}
+
+        def _rule(trigger_type: Any, trigger_detail: Any, user_id: Any, identity: Any) -> Any:
+            seen.update(
+                trigger_type=trigger_type,
+                trigger_detail=trigger_detail,
+                user_id=user_id,
+                identity=identity,
+            )
+            return private_recall.PrivateReader(person_id="p-from-engine", user_id=None)
+
+        monkeypatch.setattr(private_recall, "private_reader_for_run", _rule)
+        assert self._reader(trigger_type="cron") == ("p-from-engine", None)
+        assert seen["trigger_type"] == "cron"
+        assert seen["user_id"] == self.UID
+        assert seen["identity"].verified is True
+        assert seen["identity"].person_id == self.PERSON
+        assert seen["identity"].role == "member"
+
     def test_no_person_or_no_user_means_no_reader(self) -> None:
         assert self._reader(person_id=None, user_id=None) is None
         assert (
