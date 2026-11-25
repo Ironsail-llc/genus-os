@@ -737,7 +737,8 @@ async def test_a_consolidated_fact_takes_the_least_trusted_origin_and_the_source
         (TENANT, rel, a),
     )
 
-    groups = await lifecycle.find_consolidation_candidates(min_group_size=3)
+    # Maintenance runs one tenant at a time (tenant-scoped maintenance).
+    groups = await lifecycle.find_consolidation_candidates(min_group_size=3, tenant_id=TENANT)
     assert [sorted(f["id"] for f in g) for g in groups] == [sorted([a, b, c])]
     new_id = await lifecycle.store_consolidated(groups[0], "Project Helios ships in Q3 2026.")
 
@@ -764,7 +765,13 @@ async def test_consolidation_never_groups_across_scopes_or_tenants(world: World)
     _seed(world, "May is when the Lisbon offsite happens.", origin="user_stated",
           anchor=anchor, scope=("user", ALICE_P))  # fmt: skip
 
-    groups = await lifecycle.find_consolidation_candidates(min_group_size=2)
+    # Maintenance runs one tenant at a time (tenant-scoped maintenance): each
+    # tenant's candidates are found on their own, and none crosses a scope.
+    groups = [
+        g
+        for tenant in (TENANT, OTHER)
+        for g in await lifecycle.find_consolidation_candidates(min_group_size=2, tenant_id=tenant)
+    ]
     for group in groups:
         keys = {(f["tenant_id"], f["scope_kind"], f["scope_id"]) for f in group}
         assert len(keys) == 1, group
