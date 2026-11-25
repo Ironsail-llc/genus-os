@@ -842,6 +842,10 @@ together with that `window`, so every page reads the same stretch of logs.
 values and bucket values are masked (`<email>`, `<phone>`). So is any
 attribute whose key names a phone number (`phone`, `mobile`, `tel`, ...) when
 its value is an integer or a run of digits, which no phone pattern matches.
+Any value under a key or facet whose name reads as a credential (`password`,
+`api_key`, `token`, by the same name check the tool-call recorder uses) is
+replaced with `<redacted>` at any depth, including bucket values grouped by
+such a facet.
 A page too large for the result is fitted: long messages are shortened, then
 attributes are dropped, then trailing rows; `truncated` is true, `note` says
 how many rows came back, and `next_cursor` continues from the first row left

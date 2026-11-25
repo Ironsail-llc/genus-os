@@ -223,8 +223,28 @@ _PHONE_KEY = re.compile(
 _DIGITS_IN_A_PHONE = 7
 
 
+def _names_a_credential(name: str) -> bool:
+    """Whether a key or facet (``@usr.password``) says it holds a credential.
+
+    Asked of the platform's own per-argument redactor, so these tools and the
+    tool-call recorder agree on which names those are. Datadog parses
+    ``password=... api_key=...`` out of a line into structured attributes, so
+    the value arrives bare, with no shape a pattern can find; the name it sits
+    under is the only thing left to match on.
+    """
+    from robothor.secrets.redaction import PLACEHOLDER, redact_tool_arguments
+
+    key = name.lstrip("@")
+    return bool(key) and redact_tool_arguments("", {key: "x"}).get(key) == PLACEHOLDER
+
+
 def _masked(value: Any, key: str = "") -> Any:
-    """``value`` with email addresses and phone numbers masked, at any depth."""
+    """``value`` with credentials withheld and email addresses and phone numbers
+    masked, at any depth. ``key`` is the name the value sits under."""
+    if _names_a_credential(key):
+        from robothor.secrets.redaction import PLACEHOLDER
+
+        return PLACEHOLDER
     if _PHONE_KEY.search(key) and (
         (isinstance(value, int) and not isinstance(value, bool))
         or (isinstance(value, str) and sum(c.isdigit() for c in value) >= _DIGITS_IN_A_PHONE)
@@ -431,10 +451,7 @@ async def _datadog_logs_aggregate(args: dict[str, Any], ctx: ToolContext) -> dic
     buckets, refused = await _scoped(AGGREGATE_TOOL, ctx, query, audited, fetch)
     if refused is not None:
         return refused
-    rows = [
-        {"by": {k: redact_personal_data(v) for k, v in b.by.items()}, "count": b.count}
-        for b in buckets
-    ]
+    rows = [{"by": {k: _masked(v, k) for k, v in b.by.items()}, "count": b.count} for b in buckets]
     kept = list(rows)
     while len(kept) > 1 and _size(kept) > RESULT_BUDGET_CHARS - 1000:
         kept.pop()
