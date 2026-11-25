@@ -20,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from robothor.integrations.datadog.client import (
@@ -64,6 +66,11 @@ _AUDIT_QUERY_CHARS = 300
 #: Builds the client. Blocking (the vault read): always called through
 #: ``asyncio.to_thread``. Tests replace it with a client over a fake transport.
 _client_factory: Callable[[], AsyncDatadogClient] = async_client_from_settings
+
+
+def _now() -> datetime:
+    """The moment a relative window is resolved against. Tests fix it."""
+    return datetime.now(UTC)
 
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -162,6 +169,36 @@ def _count(args: dict[str, Any], key: str, default: int) -> int:
         return default
 
 
+#: Datadog's relative times: ``now``, or ``now-<n><unit>``.
+_RELATIVE = re.compile(r"now(?:-(\d+)([smhdw]))?")
+_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+
+
+def _absolute(text: str, now: datetime) -> str:
+    """``text`` as an ISO-8601 time when it is a relative time, else unchanged.
+
+    A relative window moves between calls, so a cursor handed out with one
+    would page through a different set of logs than the page it came from.
+    Resolved once here and returned in ``window``, the model passes the same
+    absolute window back with the cursor.
+    """
+    match = _RELATIVE.fullmatch(text.strip().lower())
+    if match is None:
+        return text
+    amount, unit = match.groups()
+    moment = now - timedelta(**{_UNITS[unit]: int(amount)}) if unit else now
+    return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _window(args: dict[str, Any]) -> dict[str, str]:
+    """The call's ``{start, end}``, relative times resolved against one ``now``."""
+    now = _now()
+    return {
+        "start": _absolute(_text(args, "start", DEFAULT_START), now),
+        "end": _absolute(_text(args, "end", DEFAULT_END), now),
+    }
+
+
 def _facets(args: dict[str, Any]) -> list[str] | None:
     raw = args.get("group_by")
     if raw is None:
@@ -176,13 +213,27 @@ def _facets(args: dict[str, Any]) -> list[str] | None:
 # ── shaping and fitting ────────────────────────────────────────────────────
 
 
-def _masked(value: Any) -> Any:
+#: Attribute keys whose value is a phone number whatever its shape: a number
+#: stored as an integer, or as bare digits, matches no phone pattern.
+_PHONE_KEY = re.compile(
+    r"phone|mobile|msisdn|(?:^|[_.-])(?:tel|fax|cell)(?:$|[_.-])", re.IGNORECASE
+)
+_DIGITS_IN_A_PHONE = 7
+
+
+def _masked(value: Any, key: str = "") -> Any:
+    """``value`` with email addresses and phone numbers masked, at any depth."""
+    if _PHONE_KEY.search(key) and (
+        (isinstance(value, int) and not isinstance(value, bool))
+        or (isinstance(value, str) and sum(c.isdigit() for c in value) >= _DIGITS_IN_A_PHONE)
+    ):
+        return "<phone>"
     if isinstance(value, str):
         return redact_personal_data(value)
     if isinstance(value, dict):
-        return {k: _masked(v) for k, v in value.items()}
+        return {k: _masked(v, str(k)) for k, v in value.items()}
     if isinstance(value, list):
-        return [_masked(v) for v in value]
+        return [_masked(v, key) for v in value]
     return value
 
 
@@ -256,6 +307,13 @@ async def _scoped(
     instance with no key, and nothing is sent for a refusal.
     """
     scope = await asyncio.to_thread(scope_for, ctx.tenant_id)
+    try:
+        if scope is not None:
+            # The scope alone: a tenant whose entry grants no log access is
+            # not configured for logs, whatever the query says.
+            compose(scope.logs, "")
+    except ScopeError:
+        scope = None
     if scope is None:
         _audit(tool, ctx, query, {**audited, "rows": 0}, "denied")
         return None, _not_configured()
@@ -277,8 +335,8 @@ async def _scoped(
 async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Log lines matching ``query`` inside this tenant's scope, newest first by default."""
     query = _text(args, "query")
-    start, end = _text(args, "start", DEFAULT_START), _text(args, "end", DEFAULT_END)
-    window = {"start": start, "end": end}
+    window = _window(args)
+    start, end = window["start"], window["end"]
     limit = _count(args, "limit", DEFAULT_SEARCH_LIMIT)
     cursor = _text(args, "cursor") or None
     newest_first = args.get("newest_first") is not False
@@ -304,11 +362,16 @@ async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[s
         if len(kept) == len(shaped):
             return shaped, kept, first.next_cursor
         # Datadog's cursor continues after the LAST row it sent. Asking again
-        # for exactly the rows kept gives the cursor that continues after them.
+        # for exactly the rows kept gives the cursor that continues after them,
+        # but only if that page IS the rows kept: logs arriving in between
+        # would shift it, and its cursor would then skip or repeat rows.
         try:
-            return shaped, kept, (await page(len(kept))).next_cursor
+            second = await page(len(kept))
         except DatadogError:
             return shaped, kept, None
+        if [row.id for row in second.rows] != [row["id"] for row in kept]:
+            return shaped, kept, None
+        return shaped, kept, second.next_cursor
 
     got, refused = await _scoped(SEARCH_TOOL, ctx, query, window, fetch)
     if refused is not None:
@@ -343,8 +406,8 @@ async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[s
 async def _datadog_logs_aggregate(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Log counts matching ``query`` inside this tenant's scope, grouped by facets."""
     query = _text(args, "query")
-    start, end = _text(args, "start", DEFAULT_START), _text(args, "end", DEFAULT_END)
-    window = {"start": start, "end": end}
+    window = _window(args)
+    start, end = window["start"], window["end"]
     limit = _count(args, "limit", DEFAULT_AGGREGATE_LIMIT)
     group_by = _facets(args)
     if group_by is None:
