@@ -688,8 +688,16 @@ async def run_answers(
     cleanup: bool = True,
     answer_fn: AnswerFn | None = None,
     embed_batch: Callable[[list[str]], Awaitable[list[list[float]]]] | None = None,
+    progress_path: str | None = None,
 ) -> dict[str, Any]:
-    """Seed the world once, answer and judge every selected case per system."""
+    """Seed the world once, answer and judge every selected case per system.
+
+    With ``progress_path``, every judged case is appended to that JSONL as it
+    finishes, and a restart with the same parameters reuses the cases already
+    there instead of answering them again. ``--limit-per-stratum`` selects a
+    prefix of a fixed per-stratum order, so a larger limit extends a smaller
+    run. Errored cases are not written, so a restart retries them.
+    """
     shadow = shadow_tenant_for(tenant_id or "")
     _require_eval_tenants([tenant_id, shadow])
     names = list(systems)
@@ -734,6 +742,23 @@ async def run_answers(
     if answer_fn is None:
         answer_fn = functools.partial(answer, model=answer_model, temperature=answer_temperature)
 
+    fingerprint = {
+        "kind": "header",
+        "suite_id": ANSWERS_SUITE_ID,
+        "schema_version": WORLD_SCHEMA_VERSION,
+        "seed": seed,
+        "size": size,
+        "split": split,
+        "token_budget": token_budget,
+        "answer_model": answer_model or _default_answer_model(),
+        "answer_temperature": answer_temperature,
+        "judge_model": judge_model or _default_answer_model(),
+        "embedding_model": embedding_model,
+    }
+    done = _load_progress(progress_path, fingerprint)
+    write_lock = asyncio.Lock()
+    resumed = 0
+
     tenants = [tenant_id, shadow]
     records: list[CaseRecord] = []
     errors: list[str] = []
@@ -750,6 +775,11 @@ async def run_answers(
         gate = asyncio.Semaphore(max(1, concurrency))
 
         async def _one(system: Any, case: Case, repeat: int) -> CaseRecord:
+            nonlocal resumed
+            prior = done.get((system.name, case.id, repeat))
+            if prior is not None:
+                resumed += 1
+                return prior
             async with gate:
                 bundle = await system.retrieve(case, world_handle=handle, token_budget=token_budget)
                 try:
@@ -762,7 +792,7 @@ async def run_answers(
                     errors.append(f"{system.name} {case.id}: {type(exc).__name__}: {exc}")
                     ans = Answer("", False, ())
                     verdict = Verdict(False, False, False, f"error: {exc}", "error")
-                return CaseRecord(
+                record = CaseRecord(
                     system=system.name,
                     case_id=case.id,
                     stratum=case.stratum,
@@ -779,6 +809,10 @@ async def run_answers(
                     cited_ids=ans.cited_ids,
                     reason=verdict.reason,
                 )
+            if progress_path and record.judge_method != "error":
+                async with write_lock:
+                    _append_progress(progress_path, record)
+            return record
 
         t0 = time.perf_counter()
         for repeat in range(max(1, repeats)):
@@ -809,6 +843,8 @@ async def run_answers(
             "limit_per_stratum": limit_per_stratum,
             "concurrency": concurrency,
             "cases": len(cases),
+            "resumed": resumed,
+            "progress_path": progress_path,
         },
         "judge_validation": dataclasses.asdict(validation),
         "systems": summarise(records),
@@ -824,6 +860,51 @@ async def run_answers(
         "errors": errors,
         "records": [dataclasses.asdict(r) for r in records],
     }
+
+
+def _load_progress(
+    path: str | None, fingerprint: dict[str, Any]
+) -> dict[tuple[str, str, int], CaseRecord]:
+    """Records already in the progress file; writes the header for a new file."""
+    if not path:
+        return {}
+    from pathlib import Path
+
+    file = Path(path)
+    if not file.exists() or not file.read_text(encoding="utf-8").strip():
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(json.dumps(fingerprint, sort_keys=True) + "\n", encoding="utf-8")
+        return {}
+    lines = file.read_text(encoding="utf-8").splitlines()
+    header = json.loads(lines[0])
+    if header != fingerprint:
+        diff = sorted(k for k in fingerprint if header.get(k) != fingerprint[k])
+        raise ValueError(
+            f"progress file {path} was written with different parameters ({', '.join(diff)}); "
+            "use another --progress path or delete it"
+        )
+    out: dict[tuple[str, str, int], CaseRecord] = {}
+    fields = {f.name for f in dataclasses.fields(CaseRecord)}
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # a line cut off by a kill: that case simply runs again
+        data = {k: v for k, v in row.items() if k in fields}
+        data["cited_ids"] = tuple(data.get("cited_ids") or ())
+        rec = CaseRecord(**data)
+        out[(rec.system, rec.case_id, rec.repeat)] = rec
+    return out
+
+
+def _append_progress(path: str, record: CaseRecord) -> None:
+    from pathlib import Path
+
+    with Path(path).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(dataclasses.asdict(record), default=str) + "\n")
+        fh.flush()
 
 
 def _pct(x: float | None) -> str:

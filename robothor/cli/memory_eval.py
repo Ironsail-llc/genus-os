@@ -195,6 +195,7 @@ def _cmd_answers(args: argparse.Namespace) -> int:
                 concurrency=args.concurrency,
                 cache_dir=args.cache_dir,
                 cleanup=not args.keep,
+                progress_path=args.progress,
             )
         )
     except (EvalPreconditionError, ValueError) as e:

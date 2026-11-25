@@ -886,6 +886,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--report", default=None, help="Write the JSON report here and a .md summary beside it"
     )
     memeval_parser.add_argument(
+        "--progress",
+        default=None,
+        help="Append each judged case to this JSONL; rerunning with it resumes",
+    )
+    memeval_parser.add_argument(
         "--record-baseline",
         action="store_true",
         help="Also write the report as the recorded world baseline under docs/benchmarks/memory/",
