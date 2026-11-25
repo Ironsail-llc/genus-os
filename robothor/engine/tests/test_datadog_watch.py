@@ -149,7 +149,7 @@ def test_a_recorded_monitor_that_stops_firing_has_recovered() -> None:
 
 # ── the silence rule ────────────────────────────────────────────────────────
 
-BUSY = [200, 180, 220, 210, 190, 205, 199, 201]
+BUSY = [200, 180, 220, 210, 190, 205, 199, 200]
 
 
 def _silence(

@@ -1,6 +1,6 @@
-"""Genus watches Datadog: error spikes in a tenant's services, and the link itself.
+"""Genus watches Datadog: a tenant's services and monitors, and the link itself.
 
-Two read-only observers, run from the daemon watchdog beside
+Four read-only observers, run from the daemon watchdog beside
 :mod:`robothor.engine.detectors` (every 5 minutes, scheduler leader only):
 
 * **Error spike.** For each service inside the tenant's Datadog scope, the
@@ -10,6 +10,14 @@ Two read-only observers, run from the daemon watchdog beside
   :data:`SPIKE_RATIO` times the baseline median and the median plus
   :data:`SPIKE_SPREAD` robust deviations. A service whose baseline median is
   zero (new, silent, or a stray error) fires only at :data:`NEW_SERVICE_MIN_COUNT`.
+* **Silent service.** The same slots, counting every log line per service: a
+  service that logged in each of the 8 baseline slots, with a median of at
+  least :data:`SILENT_MIN_MEDIAN` lines, and logged nothing in the current one
+  is ``service_silent``; its next line is ``service_resumed``.
+* **Firing monitors.** The tenant's monitors in Alert, Warn or No Data, read
+  every pass. A monitor newly firing, or firing at a new status, is
+  ``monitor_firing``; one recorded that is no longer firing is
+  ``monitor_recovered``. A tenant with no monitor access skips this observer.
 * **Connection lost.** On the root tenant's engine only, Datadog rejecting
   the API key or the application key, or being unreachable, on :data:`CONNECTION_FAILURES_FOR_LOST`
   consecutive checks is one finding; the first good check after it is
@@ -29,6 +37,11 @@ concerns, plus one ``event=datadog_watch`` log line, both marked
 that would be sent and ``would_notify`` says to whom. Briefs carry counts and
 service names only, never a log message.
 
+Each observer runs on its own for each tenant: one failing never stops
+another, nor another tenant. Their state (cached slots, which monitors and
+services are recorded) lives in the engine process; see the docs for what a
+restart means.
+
 These observers flag only: nothing here stops, pauses or limits anything.
 """
 
@@ -43,10 +56,11 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from robothor.integrations.datadog.client import DatadogError
-from robothor.integrations.datadog.scope import scope_for
+from robothor.integrations.datadog.scope import ScopeError, scope_for
+from robothor.secrets.redaction import redact_personal_data
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 
     from robothor.integrations.datadog.client import AsyncDatadogClient
     from robothor.integrations.datadog.scope import DatadogScope
@@ -56,12 +70,18 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "BASELINE_WINDOWS",
     "CONNECTION_FAILURES_FOR_LOST",
+    "MONITOR_PAGE",
     "NEW_SERVICE_MIN_COUNT",
+    "SILENT_MIN_MEDIAN",
     "SPIKE_MIN_COUNT",
     "DatadogWatch",
+    "MonitorChange",
+    "SilenceChange",
     "SpikeFinding",
     "check_connection",
     "check_error_spike",
+    "check_monitors",
+    "check_silence",
     "datadog_watch_detector",
     "reset_state",
 ]
@@ -95,6 +115,17 @@ _LINK_FAILURES = frozenset({"auth", "network"})
 #: Groups asked for per aggregate: fits the API's group page, so every service
 #: in a tenant's scope is counted. Not a limit on what is watched.
 GROUP_PAGE = 1000
+#: A service whose usual slot holds fewer lines than this is quiet by nature,
+#: so a slot with nothing in it is not news.
+SILENT_MIN_MEDIAN = 50
+#: Monitors asked for per search page; every page is read. Not a limit.
+MONITOR_PAGE = 100
+#: The monitor statuses that count as firing, as the search filter spells them.
+FIRING_QUERY = 'status:alert OR status:warn OR status:"no data"'
+#: Each firing status as the search returns it (lowercased) and as a brief shows it.
+_FIRING = {"alert": "Alert", "warn": "Warn", "no data": "No Data"}
+#: Logs that carry no service tag are counted under this name.
+_NO_SERVICE = "(no service)"
 
 #: Every finding is recorded, never delivered, and says so: delivery is a
 #: separate, later change, and this tells its records apart from these.
@@ -155,6 +186,71 @@ def check_connection(results: Sequence[str], *, lost: bool) -> ConnectionVerdict
     return "none"
 
 
+@dataclass(frozen=True)
+class MonitorChange:
+    monitor_id: str
+    kind: Literal["firing", "recovered"]
+    status: str | None
+    previous: str | None
+
+
+def check_monitors(firing: Mapping[str, str], recorded: Mapping[str, str]) -> list[MonitorChange]:
+    """What changed between the monitors firing now and the ones recorded.
+
+    Both map a monitor id to its lowercased status. A monitor firing that is
+    not recorded, or recorded at another status, is ``firing``; one recorded
+    that no longer fires is ``recovered``.
+    """
+    changes = [
+        MonitorChange(monitor_id, "firing", status, recorded.get(monitor_id))
+        for monitor_id, status in sorted(firing.items())
+        if recorded.get(monitor_id) != status
+    ]
+    changes += [
+        MonitorChange(monitor_id, "recovered", None, status)
+        for monitor_id, status in sorted(recorded.items())
+        if monitor_id not in firing
+    ]
+    return changes
+
+
+@dataclass(frozen=True)
+class SilenceChange:
+    service: str
+    kind: Literal["silent", "resumed"]
+    current: int
+    baseline_median: float
+
+
+def check_silence(
+    current: Mapping[str, int], baseline: Mapping[str, Sequence[int]], silent: Collection[str]
+) -> list[SilenceChange]:
+    """Services gone silent in the current slot, and silent ones logging again.
+
+    Silent: no lines now, a line in every one of the :data:`BASELINE_WINDOWS`
+    slots before, and a baseline median of at least :data:`SILENT_MIN_MEDIAN`.
+    A service with a shorter history (new) is never silent. ``silent`` holds
+    the ones already recorded: they are not found again, and resume on their
+    first line.
+    """
+    changes: list[SilenceChange] = []
+    for service, history in sorted(baseline.items()):
+        if service in silent or service == _NO_SERVICE or current.get(service, 0):
+            continue
+        counts = list(history)
+        if len(counts) < BASELINE_WINDOWS or not all(counts):
+            continue
+        median = float(statistics.median(counts))
+        if median >= SILENT_MIN_MEDIAN:
+            changes.append(SilenceChange(service, "silent", 0, median))
+    changes += [
+        SilenceChange(service, "resumed", current[service], 0.0)
+        for service in sorted(silent)
+        if current.get(service, 0)
+    ]
+    return changes
+
+
 # ── windows ─────────────────────────────────────────────────────────────────
 
 
@@ -190,14 +286,41 @@ async def _default_is_root(tenant_id: str) -> bool:
     return row is None or not row.get("parentTenantId")
 
 
+def _since(triggered: int | None, now: datetime) -> str:
+    """`` for about 2 hours`` from a monitor's last trigger time, or ``""``."""
+    if not triggered:
+        return ""
+    # The search returns seconds; tolerate milliseconds.
+    seconds = triggered / 1000 if triggered > 10**11 else triggered
+    minutes = int((now - datetime.fromtimestamp(seconds, UTC)).total_seconds() // 60)
+    if minutes < 0:
+        return ""
+    if minutes < 90:
+        return f" for about {max(minutes, 1)} minutes"
+    if minutes < 48 * 60:
+        return f" for about {round(minutes / 60)} hours"
+    return f" for about {round(minutes / 1440)} days"
+
+
 def _would_notify(tenant_id: str) -> str:
     # Where the normal alerts path would put it: alerts.alert at warning level
     # writes an alert_digest row for the main agent of the engine's tenant.
     return f"main agent alert digest, tenant {tenant_id}"
 
 
+@dataclass(frozen=True)
+class _Firing:
+    """A firing monitor as the watch keeps it: the name is already redacted."""
+
+    id: str
+    name: str
+    type: str
+    status: str
+    triggered: int | None
+
+
 class DatadogWatch:
-    """The watch's state for one engine: cached windows, link history, dedup."""
+    """The watch's state for one engine: cached slots, firing monitors, silent services, link."""
 
     def __init__(
         self,
@@ -211,7 +334,12 @@ class DatadogWatch:
         self._client_factory = client_factory
         self._is_root = is_root
         self._clock = clock
-        self._counts: dict[str, dict[str, dict[str, int]]] = {}
+        # (tenant, query) -> slot start -> per-service count.
+        self._counts: dict[tuple[str, str], dict[str, dict[str, int]]] = {}
+        # tenant -> monitor id -> the firing monitor as last recorded.
+        self._firing: dict[str, dict[str, _Firing]] = {}
+        # tenant -> service -> the start of the slot it went silent in.
+        self._silent: dict[str, dict[str, str]] = {}
         self._outcomes: deque[str] = deque(maxlen=CONNECTION_FAILURES_FOR_LOST + 1)
         self._lost = False
         self._said: set[str] = set()
@@ -257,29 +385,67 @@ class DatadogWatch:
                 f"scope:{tenant}", "datadog watch: tenant %s has no Datadog scope; skipped", tenant
             )
             return 0
-        counts = [await self._count(client, scope, start, end) for start, end in windows]
-        cache = self._counts.setdefault(tenant, {})
+        observers = (
+            ("error spike", self._watch_spikes),
+            ("silent service", self._watch_silence),
+            ("monitor", self._watch_monitors),
+        )
+        recorded = 0
+        for name, observer in observers:
+            try:
+                recorded += await observer(client, scope, windows, failures)
+            except DatadogError as exc:
+                failures.append(exc.kind)
+                logger.info(
+                    "datadog watch: tenant %s %s watch skipped this tick (%s)",
+                    tenant,
+                    name,
+                    exc.kind,
+                )
+            except Exception as exc:  # noqa: BLE001 - one observer never stops the others
+                logger.warning(
+                    "datadog watch: tenant %s %s watch failed this tick (%s)",
+                    tenant,
+                    name,
+                    type(exc).__name__,
+                )
+        return recorded
+
+    async def _series(
+        self,
+        client: AsyncDatadogClient,
+        scope: DatadogScope,
+        query: str,
+        windows: list[tuple[datetime, datetime]],
+    ) -> tuple[dict[str, int], dict[str, list[int]]]:
+        """Per-service counts of ``query`` in the current slot, and in each baseline slot.
+
+        Each settled slot is read once and kept; slots that left the windows
+        are dropped. A service missing from a slot counted zero there.
+        """
+        cache = self._counts.setdefault((scope.tenant_id, query), {})
         keep = {_iso(start) for start, _ in windows}
         for stale in [k for k in cache if k not in keep]:
             del cache[stale]
+        counts = [await self._count(client, scope, query, cache, s, e) for s, e in windows]
         current, history = counts[0], counts[1:]
         seen = {service for window in history for service in window}
-        baseline = {s: [w.get(s, 0) for w in history] for s in seen}
-        start, end = windows[0]
-        recorded = 0
-        for finding in check_error_spike(current, baseline):
-            recorded += await self._spike(tenant, finding, start, end)
-        return recorded
+        return current, {s: [w.get(s, 0) for w in history] for s in seen}
 
+    @staticmethod
     async def _count(
-        self, client: AsyncDatadogClient, scope: DatadogScope, start: datetime, end: datetime
+        client: AsyncDatadogClient,
+        scope: DatadogScope,
+        query: str,
+        cache: dict[str, dict[str, int]],
+        start: datetime,
+        end: datetime,
     ) -> dict[str, int]:
-        cache = self._counts.setdefault(scope.tenant_id, {})
         key = _iso(start)
         if key not in cache:
             buckets = await client.aggregate_logs(
                 scope,
-                "status:error",
+                query,
                 start=_iso(start),
                 end=_iso(end),
                 group_by=["service"],
@@ -287,10 +453,171 @@ class DatadogWatch:
             )
             per_service: dict[str, int] = {}
             for bucket in buckets:
-                service = bucket.by.get("service") or "(no service)"
+                service = bucket.by.get("service") or _NO_SERVICE
                 per_service[service] = per_service.get(service, 0) + bucket.count
             cache[key] = per_service
         return cache[key]
+
+    async def _watch_spikes(
+        self,
+        client: AsyncDatadogClient,
+        scope: DatadogScope,
+        windows: list[tuple[datetime, datetime]],
+        failures: list[str],
+    ) -> int:
+        current, baseline = await self._series(client, scope, "status:error", windows)
+        start, end = windows[0]
+        recorded = 0
+        for finding in check_error_spike(current, baseline):
+            recorded += await self._spike(scope.tenant_id, finding, start, end)
+        return recorded
+
+    async def _watch_silence(
+        self,
+        client: AsyncDatadogClient,
+        scope: DatadogScope,
+        windows: list[tuple[datetime, datetime]],
+        failures: list[str],
+    ) -> int:
+        tenant = scope.tenant_id
+        # An empty query counts every line inside the scope.
+        current, baseline = await self._series(client, scope, "", windows)
+        if len(current) >= GROUP_PAGE:
+            # A full group page may have left services out; absent is not silent.
+            self._once(
+                f"silence-page:{tenant}",
+                "datadog watch: tenant %s logs from %d+ services; silence not judged",
+                tenant,
+                GROUP_PAGE,
+            )
+            return 0
+        silent = self._silent.setdefault(tenant, {})
+        start, end = windows[0]
+        hours = BASELINE_WINDOWS * WINDOW_MINUTES // 60
+        when = f"the {WINDOW_MINUTES} minutes to {end.strftime('%H:%M')} UTC"
+        window = {"start": _iso(start), "end": _iso(end), "minutes": WINDOW_MINUTES}
+        recorded = 0
+        for change in check_silence(current, baseline, silent):
+            service = change.service
+            if change.kind == "silent":
+                silent[service] = _iso(start)
+                brief = (
+                    f"{service} logged nothing in {when}, after logging in every "
+                    f"{WINDOW_MINUTES} minutes of the {hours} hours before (usually "
+                    f"{change.baseline_median:g} lines). Check that it is running and still "
+                    "shipping logs to Datadog."
+                )
+                details: dict[str, Any] = {
+                    "service": service,
+                    "current": 0,
+                    "baseline": {"median": change.baseline_median, "windows": BASELINE_WINDOWS},
+                    "window": window,
+                }
+                self._finding(tenant, "service_silent", brief, details)
+            else:
+                since = silent.pop(service)
+                brief = (
+                    f"{service} is logging again: {change.current} lines in {when}, "
+                    f"after going silent in the slot from {since[11:16]} UTC."
+                )
+                details = {
+                    "service": service,
+                    "current": change.current,
+                    "silent_since": since,
+                    "window": window,
+                }
+                self._finding(tenant, "service_resumed", brief, details)
+            recorded += 1
+        return recorded
+
+    async def _watch_monitors(
+        self,
+        client: AsyncDatadogClient,
+        scope: DatadogScope,
+        windows: list[tuple[datetime, datetime]],
+        failures: list[str],
+    ) -> int:
+        tenant = scope.tenant_id
+        try:
+            firing = await self._firing_monitors(client, scope)
+        except ScopeError as exc:
+            self._once(
+                f"monitors:{tenant}",
+                "datadog watch: tenant %s monitor watch skipped (%s)",
+                tenant,
+                exc.reason,
+            )
+            return 0
+        except DatadogError as exc:
+            # A key without monitor read access still reads logs: only an
+            # unreachable Datadog counts toward a lost link from here.
+            if exc.kind == "network":
+                failures.append(exc.kind)
+            logger.info(
+                "datadog watch: tenant %s monitor watch skipped this tick (%s)", tenant, exc.kind
+            )
+            return 0
+        recorded_now = self._firing.setdefault(tenant, {})
+        statuses = {mid: f.status for mid, f in firing.items()}
+        before = {mid: f.status for mid, f in recorded_now.items()}
+        now = self._clock()
+        recorded = 0
+        for change in check_monitors(statuses, before):
+            if change.kind == "firing":
+                monitor = firing[change.monitor_id]
+                recorded_now[change.monitor_id] = monitor
+                shown = _FIRING[monitor.status]
+                moved = f", moved from {_FIRING[change.previous]}" if change.previous else ""
+                brief = (
+                    f'Datadog monitor "{monitor.name}" is in {shown}'
+                    f"{_since(monitor.triggered, now)}{moved}. Check it in Datadog."
+                )
+                kind = "monitor_firing"
+            else:
+                monitor = recorded_now.pop(change.monitor_id)
+                brief = (
+                    f'Datadog monitor "{monitor.name}" is no longer in Alert, Warn or No '
+                    f"Data (it was in {_FIRING[monitor.status]})."
+                )
+                kind = "monitor_recovered"
+            details = {
+                "service": None,
+                "monitor": {
+                    "id": monitor.id,
+                    "name": monitor.name,
+                    "type": monitor.type,
+                    "status": change.status,
+                    "previous_status": change.previous,
+                },
+            }
+            self._finding(tenant, kind, brief, details, target=f"monitor:{monitor.id}")
+            recorded += 1
+        return recorded
+
+    @staticmethod
+    async def _firing_monitors(
+        client: AsyncDatadogClient, scope: DatadogScope
+    ) -> dict[str, _Firing]:
+        """Every monitor in the scope now in Alert, Warn or No Data, by id; every page read."""
+        firing: dict[str, _Firing] = {}
+        page = 0
+        while True:
+            result = await client.search_monitors(
+                scope, FIRING_QUERY, limit=MONITOR_PAGE, page=page
+            )
+            for row in result.rows:
+                status = row.status.strip().lower()
+                if row.id and status in _FIRING:
+                    firing[row.id] = _Firing(
+                        row.id,
+                        redact_personal_data(row.name),
+                        row.type,
+                        status,
+                        row.last_triggered_ts,
+                    )
+            page += 1
+            if not result.rows or page >= result.page_count:
+                return firing
 
     async def _spike(self, tenant: str, f: SpikeFinding, start: datetime, end: datetime) -> int:
         from robothor.engine.detectors import _should_fire
@@ -362,21 +689,30 @@ class DatadogWatch:
             )
             brief = (
                 f"Genus has lost its Datadog link: {cause} on the last "
-                f"{CONNECTION_FAILURES_FOR_LOST} checks. Error spikes are not being watched "
-                "until it works again; run `genus doctor --only datadog.reachable`."
+                f"{CONNECTION_FAILURES_FOR_LOST} checks. Services and monitors are not being "
+                "watched until it works again; run `genus doctor --only datadog.reachable`."
             )
             kind = "connection_lost"
         else:
             self._lost = False
-            brief = "Genus can read Datadog again. Error-spike watching has resumed."
+            brief = "Genus can read Datadog again. Watching services and monitors has resumed."
             kind = "connection_restored"
         details = {"service": None, "checks": list(self._outcomes)}
         self._outcomes.clear()
         self._finding(tenant, kind, brief, details)
         return 1
 
-    def _finding(self, tenant: str, kind: str, brief: str, details: dict[str, Any]) -> None:
+    def _finding(
+        self,
+        tenant: str,
+        kind: str,
+        brief: str,
+        details: dict[str, Any],
+        *,
+        target: str | None = None,
+    ) -> None:
         """Record one finding: an audit event and a log line. Nothing is delivered."""
+        target = target or details.get("service") or None
         event = {
             "kind": kind,
             **details,
@@ -395,19 +731,13 @@ class DatadogWatch:
             category="datadog",
             actor="engine",
             details=event,
-            target=details.get("service") or None,
+            target=target,
             tenant_id=tenant,
         )
-        logger.warning(
-            "%s",
-            kv_line(
-                "datadog_watch",
-                tenant=tenant,
-                kind=kind,
-                service=details.get("service"),
-                mode=MODE,
-            ),
-        )
+        fields: dict[str, Any] = {"tenant": tenant, "kind": kind, "service": details.get("service")}
+        if target != fields["service"]:
+            fields["target"] = target
+        logger.warning("%s", kv_line("datadog_watch", **fields, mode=MODE))
 
 
 # ── the daemon's entry point ────────────────────────────────────────────────
