@@ -31,10 +31,11 @@ from robothor.integrations.datadog.scope import ScopeError, compose, scope_for
 from robothor.secrets.redaction import redact_personal_data
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from robothor.engine.tools.dispatch import ToolContext
-    from robothor.integrations.datadog.requests import LogRow
+    from robothor.integrations.datadog.requests import Bucket, LogPage, LogRow
+    from robothor.integrations.datadog.scope import DatadogScope
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +242,34 @@ async def _client() -> AsyncDatadogClient:
     return await asyncio.to_thread(_client_factory)
 
 
+async def _scoped(
+    tool: str,
+    ctx: ToolContext,
+    query: str,
+    audited: dict[str, Any],
+    call: Callable[[AsyncDatadogClient, DatadogScope], Awaitable[Any]],
+) -> tuple[Any, dict[str, Any] | None]:
+    """``call`` under this tenant's scope: (its value, None), or (None, the answer).
+
+    The scope comes from ``ctx.tenant_id`` and nowhere else. The query is
+    judged before the client is built, so an escape is refused even on an
+    instance with no key, and nothing is sent for a refusal.
+    """
+    scope = await asyncio.to_thread(scope_for, ctx.tenant_id)
+    if scope is None:
+        _audit(tool, ctx, query, {**audited, "rows": 0}, "denied")
+        return None, _not_configured()
+    try:
+        compose(scope.logs, query)
+        return await call(await _client(), scope), None
+    except ScopeError as exc:
+        _audit(tool, ctx, query, {**audited, "rows": 0}, "denied")
+        return None, _query_refused(exc.reason)
+    except DatadogError as exc:
+        _audit(tool, ctx, query, {**audited, "rows": 0, "kind": exc.kind}, "error")
+        return None, _failed(tool, exc)
+
+
 # ── the tools ──────────────────────────────────────────────────────────────
 
 
@@ -249,78 +278,64 @@ async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[s
     """Log lines matching ``query`` inside this tenant's scope, newest first by default."""
     query = _text(args, "query")
     start, end = _text(args, "start", DEFAULT_START), _text(args, "end", DEFAULT_END)
+    window = {"start": start, "end": end}
     limit = _count(args, "limit", DEFAULT_SEARCH_LIMIT)
     cursor = _text(args, "cursor") or None
     newest_first = args.get("newest_first") is not False
-    window = {"start": start, "end": end}
 
-    scope = await asyncio.to_thread(scope_for, ctx.tenant_id)
-    if scope is None:
-        _audit(SEARCH_TOOL, ctx, query, {**window, "rows": 0}, "denied")
-        return _not_configured()
-    try:
-        compose(scope.logs, query)  # judged before any client is built
-        client = await _client()
-        page = await client.search_logs(
-            scope,
-            query,
-            start=start,
-            end=end,
-            limit=limit,
-            cursor=cursor,
-            newest_first=newest_first,
-        )
-    except ScopeError as exc:
-        _audit(SEARCH_TOOL, ctx, query, {**window, "rows": 0}, "denied")
-        return _query_refused(exc.reason)
-    except DatadogError as exc:
-        _audit(SEARCH_TOOL, ctx, query, {**window, "rows": 0, "kind": exc.kind}, "error")
-        return _failed(SEARCH_TOOL, exc)
-
-    shaped = [_shape(row) for row in page.rows]
-    # Room for the envelope around the rows: the note, the cursor, the window.
-    kept = _fit(shaped, RESULT_BUDGET_CHARS - 1000)
-    next_cursor = page.next_cursor
-    result: dict[str, Any] = {"scope": ctx.tenant_id, "window": window, "query": query}
-    if len(kept) < len(shaped):
-        # Datadog's cursor continues after the LAST row it sent. Asking again
-        # for exactly the rows kept gives the cursor that continues after them.
-        try:
-            again = await client.search_logs(
+    async def fetch(
+        client: AsyncDatadogClient, scope: DatadogScope
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
+        async def page(size: int) -> LogPage:
+            return await client.search_logs(
                 scope,
                 query,
                 start=start,
                 end=end,
-                limit=len(kept),
+                limit=size,
                 cursor=cursor,
                 newest_first=newest_first,
             )
-            next_cursor = again.next_cursor
+
+        first = await page(limit)
+        shaped = [_shape(row) for row in first.rows]
+        # Room for the envelope around the rows: the note, the cursor, the window.
+        kept = _fit(shaped, RESULT_BUDGET_CHARS - 1000)
+        if len(kept) == len(shaped):
+            return shaped, kept, first.next_cursor
+        # Datadog's cursor continues after the LAST row it sent. Asking again
+        # for exactly the rows kept gives the cursor that continues after them.
+        try:
+            return shaped, kept, (await page(len(kept))).next_cursor
         except DatadogError:
-            next_cursor = None
-        result["note"] = f"{len(kept)} of {len(shaped)} rows returned to fit the result; " + (
+            return shaped, kept, None
+
+    got, refused = await _scoped(SEARCH_TOOL, ctx, query, window, fetch)
+    if refused is not None:
+        return refused
+    shaped, kept, next_cursor = got
+    truncated = kept != shaped
+    result: dict[str, Any] = {
+        "scope": ctx.tenant_id,
+        "window": window,
+        "query": query,
+        "rows": kept,
+        "rows_returned": len(kept),
+        "next_cursor": next_cursor,
+        "truncated": truncated,
+    }
+    if len(kept) < len(shaped):
+        rest = (
             "pass next_cursor with the same query and window for the rest."
             if next_cursor
             else "narrow the query or window to see the rest."
         )
-    trimmed = len(kept) < len(shaped) or kept != shaped
-    if trimmed and "note" not in result:
+        result["note"] = f"{len(kept)} of {len(shaped)} rows returned to fit the result; {rest}"
+    elif truncated:
         result["note"] = (
             f"{len(kept)} rows returned with long messages or attributes shortened to fit."
         )
-    result.update(
-        rows=kept,
-        rows_returned=len(kept),
-        next_cursor=next_cursor,
-        truncated=trimmed,
-    )
-    _audit(
-        SEARCH_TOOL,
-        ctx,
-        query,
-        {**window, "rows": len(kept), "truncated": trimmed},
-        "ok",
-    )
+    _audit(SEARCH_TOOL, ctx, query, {**window, "rows": len(kept), "truncated": truncated}, "ok")
     return result
 
 
@@ -329,30 +344,21 @@ async def _datadog_logs_aggregate(args: dict[str, Any], ctx: ToolContext) -> dic
     """Log counts matching ``query`` inside this tenant's scope, grouped by facets."""
     query = _text(args, "query")
     start, end = _text(args, "start", DEFAULT_START), _text(args, "end", DEFAULT_END)
-    limit = _count(args, "limit", DEFAULT_AGGREGATE_LIMIT)
     window = {"start": start, "end": end}
+    limit = _count(args, "limit", DEFAULT_AGGREGATE_LIMIT)
     group_by = _facets(args)
     if group_by is None:
         return {"error": "group_by must be a list of facet names, such as ['service', 'status']."}
     audited = {**window, "group_by": group_by}
 
-    scope = await asyncio.to_thread(scope_for, ctx.tenant_id)
-    if scope is None:
-        _audit(AGGREGATE_TOOL, ctx, query, {**audited, "rows": 0}, "denied")
-        return _not_configured()
-    try:
-        compose(scope.logs, query)
-        client = await _client()
-        buckets = await client.aggregate_logs(
+    async def fetch(client: AsyncDatadogClient, scope: DatadogScope) -> tuple[Bucket, ...]:
+        return await client.aggregate_logs(
             scope, query, start=start, end=end, group_by=group_by, limit=limit
         )
-    except ScopeError as exc:
-        _audit(AGGREGATE_TOOL, ctx, query, {**audited, "rows": 0}, "denied")
-        return _query_refused(exc.reason)
-    except DatadogError as exc:
-        _audit(AGGREGATE_TOOL, ctx, query, {**audited, "rows": 0, "kind": exc.kind}, "error")
-        return _failed(AGGREGATE_TOOL, exc)
 
+    buckets, refused = await _scoped(AGGREGATE_TOOL, ctx, query, audited, fetch)
+    if refused is not None:
+        return refused
     rows = [
         {"by": {k: redact_personal_data(v) for k, v in b.by.items()}, "count": b.count}
         for b in buckets
@@ -366,12 +372,11 @@ async def _datadog_logs_aggregate(args: dict[str, Any], ctx: ToolContext) -> dic
         "query": query,
         "group_by": group_by,
         "buckets": kept,
-        "total": sum(b["count"] for b in rows),
         "truncated": len(kept) < len(rows),
     }
     if result["truncated"]:
         result["note"] = (
-            f"{len(kept)} of {len(rows)} groups returned to fit the result, largest first; "
+            f"{len(kept)} of {len(rows)} groups returned to fit the result; "
             "narrow the query or group by fewer facets for the rest."
         )
     _audit(AGGREGATE_TOOL, ctx, query, {**audited, "rows": len(rows)}, "ok")
