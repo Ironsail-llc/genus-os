@@ -129,7 +129,9 @@ class FakeDatadog:
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content or b"{}")
-        params = {k: v[0] for k, v in parse_qs(request.url.query.decode()).items()}
+        params = {
+            k: v[0] for k, v in parse_qs(request.url.query.decode(), keep_blank_values=True).items()
+        }
         self.requests.append({"path": request.url.path, "body": body, "params": params})
         query = params.get("query") or _filter_query(body)
         for needle, status in self.failing.items():
@@ -150,7 +152,9 @@ class FakeDatadog:
                 (n for scope, n in self.error_counts.items() if scope in query),
                 self.error_counts.get("*", 0),
             )
-            return httpx.Response(200, json={"data": {"buckets": [{"by": {}, "computes": {"c0": count}}]}})
+            return httpx.Response(
+                200, json={"data": {"buckets": [{"by": {}, "computes": {"c0": count}}]}}
+            )
         return httpx.Response(404, json={})
 
     def client(self):
@@ -413,7 +417,12 @@ def test_traces_take_a_query_a_window_and_a_cursor(datadog):
     _ok(
         _client(CHILD_A).get(
             "/api/telemetry/traces",
-            params={"q": "service:shop-api env:prod", "since": "24h", "cursor": "c1", "limit": "20"},
+            params={
+                "q": "service:shop-api env:prod",
+                "since": "24h",
+                "cursor": "c1",
+                "limit": "20",
+            },
         )
     )
 
@@ -837,7 +846,7 @@ def test_each_tenant_is_read_inside_its_own_scope(datadog):
         "(service:shop-api) AND (status:error)",
         "status:error",
     ]
-    monitor_queries = {r["params"]["query"] for r in datadog.sent("/api/v1/monitor/search")}
+    monitor_queries = {r["params"].get("query", "") for r in datadog.sent("/api/v1/monitor/search")}
     assert monitor_queries == {"", 'tag:"team:shop"', 'tag:"team:clinic"'}
 
 
