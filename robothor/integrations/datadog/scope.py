@@ -21,6 +21,11 @@ that swallows it. In practice that means:
   reads ``'...'`` as a phrase sees the same structure (put text with an
   apostrophe in double quotes);
 * no control, format or line-separator characters;
+* no punctuation outside ASCII: typographic quotes (``\u201c \u201d \u2018 \u2019 \u00ab \u00bb``)
+  and fullwidth or ornamental brackets, quotes and backslashes are refused
+  outright, because a parser that reads any of them as a delimiter would see
+  a different structure from the one scanned here (letters and digits in any
+  script are fine);
 * no more than :data:`MAX_QUERY_CHARS` characters.
 
 Refusing a rare legitimate query is acceptable; letting an escape through is
@@ -128,6 +133,8 @@ def _refusal(query: str) -> str | None:
         return f"the query is longer than {MAX_QUERY_CHARS} characters"
     if any(unicodedata.category(ch) in _REFUSED_CATEGORIES for ch in query):
         return "the query contains a control character or line break"
+    if any(ord(ch) > 127 and unicodedata.category(ch).startswith("P") for ch in query):
+        return "the query contains a typographic quote or bracket (use plain ASCII ones)"
     # Double quotes are phrases; a parser that also honours single quotes
     # must see the same structure, so the query is scanned both ways.
     return _scan(query, '"') or _scan(query, "\"'")
