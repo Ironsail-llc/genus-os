@@ -7,7 +7,7 @@ all of that again. Vectors are keyed by a hash of the text and stored per
 of those reads a different file, and a stale vector is never served.
 
 The cache lives outside the repository: ``~/.cache/genus-os/memory-eval`` by
-default, overridable with ``ROBOTHOR_MEMORY_EVAL_CACHE_DIR``. Vectors are
+default, overridable with ``cache_dir`` (the CLI's ``--cache-dir``). Vectors are
 stored as float32; a file that cannot be read is ignored and rebuilt.
 """
 
@@ -16,7 +16,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 from array import array
 from collections.abc import Awaitable, Callable
@@ -24,17 +23,12 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR_ENV = "ROBOTHOR_MEMORY_EVAL_CACHE_DIR"
-
 EmbedBatch = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 
 def default_cache_dir() -> Path:
-    override = os.environ.get(CACHE_DIR_ENV, "").strip()
-    if override:
-        return Path(override)
-    base = os.environ.get("XDG_CACHE_HOME", "").strip() or str(Path.home() / ".cache")
-    return Path(base) / "genus-os" / "memory-eval"
+    """``~/.cache/genus-os/memory-eval``. Override with ``cache_dir`` (``--cache-dir``)."""
+    return Path.home() / ".cache" / "genus-os" / "memory-eval"
 
 
 def _slug(value: str) -> str:

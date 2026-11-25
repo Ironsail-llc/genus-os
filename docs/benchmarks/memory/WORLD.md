@@ -326,6 +326,6 @@ interval on the paired accuracy difference must be above -5 points.
 Seeding the full world embeds about 3,500 facts, the document chunks and about
 6,500 turns. Vectors are cached as float32 per (embedding model, world schema
 version, seed, size) under `~/.cache/genus-os/memory-eval`. Override the
-location with `--cache-dir` or `ROBOTHOR_MEMORY_EVAL_CACHE_DIR`. A change to
+location with `--cache-dir`. A change to
 any of the four keys reads a different file, so a stale vector is never
 served.
