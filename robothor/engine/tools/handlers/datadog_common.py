@@ -154,6 +154,18 @@ def masked(value: Any, key: str = "") -> Any:
     return value
 
 
+def masked_tags(tags: tuple[str, ...] | list[str]) -> list[str]:
+    """``key:value`` tags masked; a phone-like key hides its value whatever its shape."""
+    shown = []
+    for tag in tags:
+        key, sep, value = tag.partition(":")
+        if sep and masked(value, key) == "<phone>":
+            shown.append(f"{key}:<phone>")
+        else:
+            shown.append(redact_personal_data(tag))
+    return shown
+
+
 # ── the window ─────────────────────────────────────────────────────────────
 
 #: Datadog's relative times: ``now``, or ``now-<n><unit>``.

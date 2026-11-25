@@ -29,7 +29,8 @@ from robothor.engine.tools.handlers.datadog_common import (
     RESULT_BUDGET_CHARS,
     audit,
     count,
-    masked,
+    masked_tags,
+    resolve_window,
     scoped,
     size,
     text,
@@ -101,6 +102,20 @@ _METRIC_UNLOCK = (
 #: Builds the client. Blocking (the vault read): always called through
 #: ``asyncio.to_thread``. Tests replace it with a client over a fake transport.
 _client_factory: Callable[[], AsyncDatadogClient] = async_client_from_settings
+
+
+def _now() -> datetime:
+    """The moment a relative window is resolved against. Tests fix it."""
+    return datetime.now(UTC)
+
+
+def _window(args: dict[str, Any], default_start: str = DEFAULT_START) -> dict[str, str]:
+    """The call's ``{start, end}``, relative times resolved against one ``now``.
+
+    Resolved once and handed back, so a cursor is used with the window that
+    produced it and a metric is read over the window the result names.
+    """
+    return resolve_window(args, _now(), default_start, DEFAULT_END)
 
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -213,8 +228,8 @@ def _fit_note(kept: int, total: int, noun: str, rest: str) -> str:
 async def _datadog_spans_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """APM spans matching ``query`` inside this tenant's span scope, newest first by default."""
     query = text(args, "query")
-    start, end = text(args, "start", DEFAULT_START), text(args, "end", DEFAULT_END)
-    window = {"start": start, "end": end}
+    window = _window(args)
+    start, end = window["start"], window["end"]
     limit = count(args, "limit", DEFAULT_SPAN_LIMIT)
     cursor = text(args, "cursor") or None
     newest_first = args.get("newest_first") is not False
@@ -239,11 +254,16 @@ async def _datadog_spans_search(args: dict[str, Any], ctx: ToolContext) -> dict[
         if len(kept) == len(shaped):
             return shaped, kept, first.next_cursor
         # Datadog's cursor continues after the LAST span it sent: asking again
-        # for exactly the spans kept gives the cursor that continues after them.
+        # for exactly the spans kept gives the cursor that continues after them,
+        # but only if that page IS the spans kept: spans arriving in between
+        # would shift it, and its cursor would then skip or repeat spans.
         try:
-            return shaped, kept, (await page(len(kept))).next_cursor
+            second = await page(len(kept))
         except DatadogError:
             return shaped, kept, None
+        if [row.span_id for row in second.rows] != [row["span_id"] for row in kept]:
+            return shaped, kept, None
+        return shaped, kept, second.next_cursor
 
     got, refused = await _scoped(
         SPANS_TOOL,
@@ -286,8 +306,8 @@ async def _datadog_trace_get(args: dict[str, Any], ctx: ToolContext) -> dict[str
     """The spans of one trace, by start time with parent ids, inside the span scope."""
     raw_id = args.get("trace_id")
     trace_id = raw_id.strip(" ") if isinstance(raw_id, str) else ""
-    start, end = text(args, "start", DEFAULT_TRACE_START), text(args, "end", DEFAULT_END)
-    window = {"start": start, "end": end}
+    window = _window(args, DEFAULT_TRACE_START)
+    start, end = window["start"], window["end"]
 
     def check(scope: DatadogScope) -> object:
         return compose(scope.spans, trace_query(trace_id))
@@ -344,7 +364,7 @@ def _shape_monitor(row: MonitorRow) -> dict[str, Any]:
         "name": redact_personal_data(row.name),
         "status": row.status,
         "type": row.type,
-        "tags": masked(list(row.tags)),
+        "tags": masked_tags(row.tags),
         "last_triggered": _when(row.last_triggered_ts),
     }
 
@@ -420,7 +440,7 @@ def _shape_series(series: MetricSeries) -> dict[str, Any]:
     return {
         "metric": series.metric,
         "scope": redact_personal_data(series.scope),
-        "tags": masked(list(series.tags)),
+        "tags": masked_tags(series.tags),
         "points": [[ts, value] for ts, value in series.points],
     }
 
@@ -452,9 +472,9 @@ async def _datadog_metrics_query(args: dict[str, Any], ctx: ToolContext) -> dict
     metric = text(args, "metric")
     aggregator = text(args, "aggregator", "avg")
     tags, group_by = _strings(args, "tags"), _strings(args, "group_by")
-    start, end = text(args, "start", DEFAULT_START), text(args, "end", DEFAULT_END)
+    window = _window(args)
+    start, end = window["start"], window["end"]
     as_count = args.get("as_count") is True
-    window = {"start": start, "end": end}
     audited = {**window, "aggregator": aggregator, "series": 0, "points": 0}
 
     def check(scope: DatadogScope) -> object:
