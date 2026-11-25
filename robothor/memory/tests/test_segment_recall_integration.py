@@ -155,7 +155,18 @@ async def _search_facts(query: str = QUESTION, **kw: Any) -> list[dict[str, Any]
     return await search_facts(query, limit=10, **kw)
 
 
-def _ctx(*, person: str | None = None, user_id: str = "", run_id: str = "", tenant: str = A) -> Any:
+def _ctx(
+    *,
+    person: str | None = None,
+    user_id: str = "",
+    run_id: str = "",
+    tenant: str = A,
+    serving: bool = False,
+) -> Any:
+    """A tool context. ``serving`` marks the run as serving this person in their
+    own conversation: what ``private_reader_for_run`` decides for an
+    interactive run (robothor/engine/tests/test_private_recall.py pins that)."""
+    from robothor.engine.private_recall import PrivateReader
     from robothor.engine.tools.dispatch import ToolContext
     from robothor.identity.context import IdentityContext
 
@@ -169,8 +180,14 @@ def _ctx(*, person: str | None = None, user_id: str = "", run_id: str = "", tena
             role="member",
             person_id=person,
         )
+    reader = PrivateReader(person, user_id or None) if serving else None
     return ToolContext(
-        agent_id="main", run_id=run_id, tenant_id=tenant, user_id=user_id, identity=identity
+        agent_id="main",
+        run_id=run_id,
+        tenant_id=tenant,
+        user_id=user_id,
+        identity=identity,
+        private_reader=reader,
     )
 
 
@@ -258,11 +275,12 @@ async def test_search_facts_keeps_private_segments_to_their_reader(pg) -> None:
 
 
 @pytest.mark.integration
-async def test_a_restricted_scope_reads_segments_as_its_own_person_only(pg) -> None:
+async def test_a_restricted_scope_narrows_the_reader_and_never_creates_one(pg) -> None:
     """Under a restricted DataScope the unscopable legs are left out, but the
-    segment leg stays on with the scope's person as its only reader: that
-    person's private segment, never another person's (even one the caller
-    names as reader), and a shared workspace segment only when gated."""
+    segment leg stays on. The scope only NARROWS the run's reader: the scope's
+    person reads their own private segment when the run serves them; a reader
+    who is someone else, or no reader, reads no private segment at all. A
+    shared workspace segment comes back only when gated."""
     from robothor.identity.scope import DataScope
 
     alice, bob = _person(pg.cur, "Alice"), _person(pg.cur, "Bob")
@@ -286,11 +304,13 @@ async def test_a_restricted_scope_reads_segments_as_its_own_person_only(pg) -> N
         )
     scope = DataScope(tenant_id=A, person_id=alice, restricted=True)
 
-    gated = await _search_facts(scope=scope, reader_person_id=bob, room_ids=[room])
-    ungated = await _search_facts(scope=scope, room_ids=[])
+    served = await _search_facts(scope=scope, reader_person_id=alice, room_ids=[room])
+    other = await _search_facts(scope=scope, reader_person_id=bob, room_ids=[room])
+    nobody = await _search_facts(scope=scope, reader_user_id=None, room_ids=[])
 
-    assert {r["source_ref"] for r in _segments(gated)} == {"agent:main:alice", room_key}
-    assert {r["source_ref"] for r in _segments(ungated)} == {"agent:main:alice"}
+    assert {r["source_ref"] for r in _segments(served)} == {"agent:main:alice", room_key}
+    assert {r["source_ref"] for r in _segments(other)} == {room_key}
+    assert _segments(nobody) == []
 
 
 @pytest.mark.integration
@@ -332,7 +352,7 @@ async def test_the_reranker_reads_a_bounded_excerpt_not_the_stored_text(pg, monk
 async def test_a_detail_said_only_in_conversation_is_recalled_by_search_memory(pg) -> None:
     ids = await _conversation(pg, MEMBER, BIKE + DENTIST)
 
-    results = await _search_memory(_ctx(user_id=MEMBER_UID))
+    results = await _search_memory(_ctx(user_id=MEMBER_UID, serving=True))
 
     hits = [r for r in results if r.get("kind") == "segment"]
     assert hits
@@ -356,9 +376,9 @@ async def test_reader_a_never_receives_reader_bs_private_segment(
     alice, bob = _person(pg.cur, "Alice"), _person(pg.cur, "Bob")
     await _conversation(pg, "agent:main:bob", person=bob)
 
-    as_alice = await _search_memory(_ctx(person=alice))
+    as_alice = await _search_memory(_ctx(person=alice, serving=True))
     as_nobody = await _search_memory(_ctx())
-    as_bob = await _search_memory(_ctx(person=bob))
+    as_bob = await _search_memory(_ctx(person=bob, serving=True))
 
     assert [r for r in as_alice if r.get("kind") == "segment"] == []
     assert [r for r in as_nobody if r.get("kind") == "segment"] == []
@@ -381,8 +401,8 @@ async def test_a_workspace_segment_reaches_only_that_workspaces_members(pg) -> N
     )
     await _conversation(pg, key)
 
-    inside = await _search_memory(_ctx(user_id=member))
-    outside = await _search_memory(_ctx(user_id=outsider))
+    inside = await _search_memory(_ctx(user_id=member, serving=True))
+    outside = await _search_memory(_ctx(user_id=outsider, serving=True))
 
     assert [r["source_ref"] for r in inside if r.get("kind") == "segment"] == [key]
     assert [r for r in outside if r.get("kind") == "segment"] == []
@@ -399,7 +419,7 @@ async def test_a_segment_row_is_not_recorded_as_fact_access(pg, monkeypatch) -> 
     fact_id = _fact(pg, "The bike locker garage rota changes every quarter.")
     await _conversation(pg, MEMBER)
 
-    results = await _search_memory(_ctx(run_id="run-1", user_id=MEMBER_UID))
+    results = await _search_memory(_ctx(run_id="run-1", user_id=MEMBER_UID, serving=True))
 
     assert any(r.get("kind") == "segment" for r in results)
     assert logged and all(set(ids) <= {fact_id} for ids in logged)
@@ -430,8 +450,8 @@ async def test_a_members_conversation_reaches_only_that_member_through_search_me
     bob, bob_uid = _person(pg.cur, "Bob"), "7e6d5c4b-3a29-4180-9f6e-5d4c3b2a1908"
     await _conversation(pg, MEMBER)
 
-    mine = await _search_memory(_ctx(user_id=MEMBER_UID))
-    theirs = await _search_memory(_ctx(user_id=bob_uid, person=bob))
+    mine = await _search_memory(_ctx(user_id=MEMBER_UID, serving=True))
+    theirs = await _search_memory(_ctx(user_id=bob_uid, person=bob, serving=True))
 
     assert [r["source_ref"] for r in mine if r.get("kind") == "segment"] == [MEMBER]
     assert [r for r in theirs if r.get("kind") == "segment"] == []
@@ -461,3 +481,246 @@ async def test_a_keyword_only_segment_carries_no_null_similarity(pg, monkeypatch
     for r in rows:
         assert r.get("similarity", 0) is not None
         round(r.get("similarity", 0), 4)
+
+
+# ── only the person being served reads their private conversation ──────────
+
+
+def _workspace(pg, room: str, member: str) -> str:
+    key = f"agent:main:room:{room}"
+    pg.cur.execute(
+        "INSERT INTO rooms (tenant_id, id, kind, title, agent_id, session_key, created_by, "
+        "run_as_user_id) VALUES (%s, %s, 'report', 'Garage report', 'main', %s, %s, %s)",
+        (A, room, key, member, member),
+    )
+    pg.cur.execute(
+        "INSERT INTO room_members (tenant_id, room_id, user_id) VALUES (%s, %s, %s)",
+        (A, room, member),
+    )
+    return key
+
+
+@pytest.mark.integration
+async def test_an_unattended_workspace_run_as_a_member_gets_none_of_their_private_segments(
+    pg,
+) -> None:
+    """A report workspace that runs as member M: the run's principal is M, it has
+    no identity, and its output is published to the workspace. It reads the
+    workspace's own conversation and nothing M said in private."""
+    from robothor.rooms.run_context import RoomRun, room_run_scope
+
+    room = str(uuid.uuid4())
+    room_key = _workspace(pg, room, MEMBER_UID)
+    await _conversation(pg, MEMBER)
+    await _conversation(
+        pg,
+        room_key,
+        [
+            ("user", "What is the bike locker code in the garage for visitors?"),
+            ("assistant", "Visitors use the garage bike locker code 1288 at the front desk."),
+        ],
+    )
+    run = RoomRun(tenant_id=A, room_id=room, session_key=room_key, unattended=True)
+
+    with room_run_scope(run):
+        results = await _search_memory(_ctx(user_id=MEMBER_UID))
+
+    refs = [r["source_ref"] for r in results if r.get("kind") == "segment"]
+    assert MEMBER not in refs
+    assert refs == [room_key]
+
+
+@pytest.mark.integration
+async def test_a_run_principal_alone_reads_no_private_conversation(pg) -> None:
+    """The run's user id and identity name M, but nothing says M is the one
+    being served: no private reader, no private segment."""
+    await _conversation(pg, MEMBER)
+
+    results = await _search_memory(_ctx(user_id=MEMBER_UID, person=_person(pg.cur, "Mia")))
+
+    assert [r for r in results if r.get("kind") == "segment"] == []
+
+
+@pytest.mark.integration
+async def test_a_member_in_their_own_conversation_still_reads_it(pg) -> None:
+    await _conversation(pg, MEMBER)
+
+    results = await _search_memory(_ctx(user_id=MEMBER_UID, serving=True))
+
+    assert [r["source_ref"] for r in results if r.get("kind") == "segment"] == [MEMBER]
+
+
+# ── a restricted scope names the reader ────────────────────────────────────
+
+
+def _tenant_user(pg, user_id: str, person: str) -> None:
+    pg.cur.execute(
+        "INSERT INTO tenant_users (display_name, tenant_id, role, user_id, person_id) "
+        "VALUES ('Member', %s, 'member', %s, %s)",
+        (A, user_id, person),
+    )
+
+
+@pytest.mark.integration
+async def test_a_restricted_scope_ignores_a_user_id_that_is_not_its_persons(pg) -> None:
+    from robothor.identity.scope import DataScope
+
+    p, q = _person(pg.cur, "Pat"), _person(pg.cur, "Quinn")
+    _tenant_user(pg, MEMBER_UID, q)  # the caller's user id is Quinn's
+    await _conversation(pg, MEMBER)
+    scope = DataScope(tenant_id=A, person_id=p, restricted=True)
+
+    rows = await _search_facts(scope=scope, reader_user_id=MEMBER_UID)
+
+    assert _segments(rows) == []
+
+
+@pytest.mark.integration
+async def test_a_restricted_scope_keeps_a_user_id_that_is_its_persons(pg) -> None:
+    from robothor.identity.scope import DataScope
+
+    p = _person(pg.cur, "Pat")
+    _tenant_user(pg, MEMBER_UID, p)
+    await _conversation(pg, MEMBER)
+    scope = DataScope(tenant_id=A, person_id=p, restricted=True)
+
+    rows = await _search_facts(scope=scope, reader_person_id=p, reader_user_id=MEMBER_UID)
+
+    assert [r["source_ref"] for r in _segments(rows)] == [MEMBER]
+
+
+# ── a restricted scope narrows, never creates, the reader ──────────────────
+
+
+def _account(pg, user_id: str, person: str | None) -> None:
+    """A webchat account: ``user_accounts.id`` is the id webchat runs carry."""
+    pg.cur.execute(
+        "INSERT INTO user_accounts (id, tenant_id, email, display_name, person_id) "
+        "VALUES (%s, %s, %s, 'Member', %s)",
+        (user_id, A, f"{user_id[:8]}@example.com", person),
+    )
+
+
+async def _p_and_q(pg) -> tuple[str, str]:
+    """P's Telegram DM (person-owned) and P's webchat session (user-owned)."""
+    p, q = _person(pg.cur, "Pat"), _person(pg.cur, "Quinn")
+    _account(pg, MEMBER_UID, p)
+    await _conversation(
+        pg,
+        "telegram:4242",
+        [
+            ("user", "What is the bike locker code in the garage at the north entrance?"),
+            ("assistant", "The north entrance garage bike locker uses code 4417."),
+        ],
+        person=p,
+    )
+    await _conversation(pg, MEMBER)
+    return p, q
+
+
+@pytest.mark.integration
+async def test_an_unattended_run_under_a_scope_restricted_to_p_reads_none_of_ps(pg) -> None:
+    from robothor.identity.scope import DataScope
+
+    p, _q = await _p_and_q(pg)
+    scope = DataScope(tenant_id=A, person_id=p, restricted=True)
+
+    rows = await _search_facts(scope=scope, reader_user_id=None)
+
+    assert _segments(rows) == []
+
+
+@pytest.mark.integration
+async def test_a_run_serving_p_under_a_scope_restricted_to_p_reads_ps(pg) -> None:
+    from robothor.identity.scope import DataScope
+
+    p, _q = await _p_and_q(pg)
+    scope = DataScope(tenant_id=A, person_id=p, restricted=True)
+
+    rows = await _search_facts(scope=scope, reader_person_id=p, reader_user_id=MEMBER_UID)
+
+    assert {r["source_ref"] for r in _segments(rows)} == {"telegram:4242", MEMBER}
+
+
+@pytest.mark.integration
+async def test_a_run_serving_q_under_a_scope_restricted_to_p_reads_neither(pg) -> None:
+    from robothor.identity.scope import DataScope
+
+    p, q = await _p_and_q(pg)
+    q_uid = "7e6d5c4b-3a29-4180-9f6e-5d4c3b2a1908"
+    _account(pg, q_uid, q)
+    await _conversation(pg, f"agent:main:user:{q_uid}")
+    scope = DataScope(tenant_id=A, person_id=p, restricted=True)
+
+    rows = await _search_facts(scope=scope, reader_person_id=q, reader_user_id=q_uid)
+
+    assert _segments(rows) == []
+
+
+# ── the same, through search_memory under enforce ──────────────────────────
+
+
+@pytest.mark.integration
+async def test_under_enforce_a_member_not_being_served_reads_no_private_segment(
+    pg, monkeypatch
+) -> None:
+    """M's identity is on the run (a workspace turn, a group chat), so enforce
+    gives a restricted scope for M; the run serves no one, so nothing private."""
+    monkeypatch.setenv("ROBOTHOR_DATA_SCOPING", "enforce")
+    p, _q = await _p_and_q(pg)
+
+    results = await _search_memory(_ctx(user_id=MEMBER_UID, person=p))
+
+    assert [r for r in results if r.get("kind") == "segment"] == []
+
+
+@pytest.mark.integration
+async def test_under_enforce_a_member_in_their_own_session_reads_their_webchat(
+    pg, monkeypatch
+) -> None:
+    monkeypatch.setenv("ROBOTHOR_DATA_SCOPING", "enforce")
+    p, _q = await _p_and_q(pg)
+
+    results = await _search_memory(_ctx(user_id=MEMBER_UID, person=p, serving=True))
+
+    refs = {r["source_ref"] for r in results if r.get("kind") == "segment"}
+    assert MEMBER in refs
+
+
+# ── workspace membership needs the member to be the one served ─────────────
+
+
+@pytest.mark.integration
+async def test_a_workspace_run_searches_only_its_own_workspace(pg) -> None:
+    """An unattended run in workspace R1, run as a member of R1 and R2, must not
+    pull R2's conversation into R1's edition."""
+    from robothor.rooms.run_context import RoomRun, room_run_scope
+
+    r1, r2 = str(uuid.uuid4()), str(uuid.uuid4())
+    k1, k2 = _workspace(pg, r1, MEMBER_UID), _workspace(pg, r2, MEMBER_UID)
+    for key, detail in ((k1, "visitor bays, code 1288"), (k2, "loading dock, code 5530")):
+        await _conversation(
+            pg,
+            key,
+            [
+                ("user", f"What is the bike locker code in the garage at the {detail}?"),
+                ("assistant", f"The garage bike locker at the {detail} is the one to use."),
+            ],
+        )
+    run = RoomRun(tenant_id=A, room_id=r1, session_key=k1, unattended=True)
+
+    with room_run_scope(run):
+        results = await _search_memory(_ctx(user_id=MEMBER_UID))
+
+    assert [r["source_ref"] for r in results if r.get("kind") == "segment"] == [k1]
+
+
+@pytest.mark.integration
+async def test_an_unattended_run_as_a_member_searches_none_of_their_workspaces(pg) -> None:
+    room = str(uuid.uuid4())
+    key = _workspace(pg, room, MEMBER_UID)
+    await _conversation(pg, key)
+
+    results = await _search_memory(_ctx(user_id=MEMBER_UID))
+
+    assert [r for r in results if r.get("kind") == "segment"] == []

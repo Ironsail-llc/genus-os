@@ -59,7 +59,8 @@ class TestFlags:
 
     def test_defaults(self):
         a = _parse("--world", "--answers")
-        assert a.systems == "recall,keyword_only,raw_verbatim,full_context"
+        assert a.systems == "recall,recall_budget,keyword_only,raw_verbatim,full_context"
+        assert a.reference is None  # the runner defaults to keyword_only
         assert a.token_budget == 2048 and a.repeats == 1
         assert a.answer_model is None and a.judge_model is None
         assert a.limit_per_stratum is None and a.report is None

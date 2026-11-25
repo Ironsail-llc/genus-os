@@ -126,6 +126,45 @@ class TestComparison:
         assert cmp_["promote"] is True
         assert cmp_["non_inferiority"]["non_inferior"] is True
 
+    def test_repeats_do_not_multiply_the_evidence(self):
+        """At temperature 0 repeats are copies; they must not shrink p or the interval."""
+
+        def recs(repeats: int) -> list[ea.CaseRecord]:
+            out = []
+            for r in range(repeats):
+                for i in range(4):
+                    out.append(_rec("ref", f"c{i}", "multi_hop", False, repeat=r))
+                    out.append(_rec("sys", f"c{i}", "multi_hop", True, repeat=r))
+                for i in range(4, 30):
+                    out.append(_rec("ref", f"c{i}", "multi_hop", True, repeat=r))
+                    out.append(_rec("sys", f"c{i}", "multi_hop", True, repeat=r))
+            return out
+
+        one = ea.compare(recs(1), system="sys", reference="ref")
+        three = ea.compare(recs(3), system="sys", reference="ref")
+        assert one["paired"]["n"] == three["paired"]["n"] == 30
+        assert one["paired"]["p"] == pytest.approx(three["paired"]["p"])
+        assert one["promote"] is three["promote"] is False  # 4 discordant: p = 0.125
+        assert one["non_inferiority"]["lower"] == pytest.approx(three["non_inferiority"]["lower"])
+
+    def test_a_case_is_correct_when_most_of_its_repeats_are(self):
+        recs = [
+            _rec("a", "c1", "multi_hop", True, repeat=0),
+            _rec("a", "c1", "multi_hop", False, repeat=1),
+            _rec("a", "c1", "multi_hop", True, repeat=2),
+            _rec("a", "c2", "multi_hop", False, repeat=0),
+            _rec("a", "c2", "multi_hop", False, repeat=1),
+            _rec("a", "c2", "multi_hop", True, repeat=2),
+        ]
+        m = ea.summarise(recs)["a"]["multi_hop"]
+        assert m["n"] == 2  # cases, not cases x repeats
+        assert m["accuracy"] == pytest.approx(0.5)
+        from robothor.memory import eval_stats as st
+
+        assert tuple(m["wilson"]) == pytest.approx(st.wilson_interval(1, 2))
+        assert m["runs"] == 3
+        assert m["spread"]["runs"] == 3
+
     def test_missing_reference_is_reported_not_crashed(self):
         cmp_ = ea.compare([_rec("sys", "c", "multi_hop", True)], system="sys", reference="ref")
         assert cmp_["paired"]["n"] == 0 and cmp_["promote"] is False
@@ -339,3 +378,64 @@ class TestProgressAndResume(_RunnerFakes):
         await self._run(fake_answer, path, limit_per_stratum=1)
         with pytest.raises(ValueError, match="progress file"):
             await self._run(fake_answer, path, limit_per_stratum=1, token_budget=999)
+
+
+class _Exploding:
+    name = "exploding_run"
+    equal_budget = True
+
+    async def retrieve(self, case, *, world_handle, token_budget):
+        if case.stratum == "multi_hop":
+            raise RuntimeError("reranker timed out")
+        return await _Echo().retrieve(case, world_handle=world_handle, token_budget=token_budget)
+
+
+class TestRobustnessAndDefaults(_RunnerFakes):
+    @pytest.mark.asyncio
+    async def test_a_retrieval_error_is_recorded_not_fatal(self, fakes):
+        _, fake_answer = fakes
+        es.register_system("exploding_run", _Exploding)
+        try:
+            report = await ea.run_answers(
+                1,
+                "small",
+                "all",
+                systems=["exploding_run"],
+                reference="exploding_run",
+                limit_per_stratum=2,
+                answer_fn=fake_answer,
+            )
+        finally:
+            es.unregister_system("exploding_run")
+        assert report["systems"]["exploding_run"]["multi_hop"]["errors"] == 2
+        assert any("reranker timed out" in e for e in report["errors"])
+        assert report["systems"]["exploding_run"]["entity_confusion"]["errors"] == 0
+
+    @pytest.mark.asyncio
+    async def test_keyword_only_is_the_default_reference(self, fakes):
+        _, fake_answer = fakes
+
+        class KeywordStandIn(_Echo):
+            name = "keyword_only"
+
+        class Tail(_Echo):
+            name = "echo_tail"
+
+        es.register_system("keyword_only", KeywordStandIn)
+        es.register_system("echo_tail", Tail)
+        try:
+            report = await ea.run_answers(
+                1,
+                "small",
+                "all",
+                systems=["echo_run", "keyword_only", "echo_tail"],
+                limit_per_stratum=1,
+                answer_fn=fake_answer,
+            )
+        finally:
+            from robothor.memory.eval_systems import KeywordOnlySystem
+
+            es.register_system("keyword_only", KeywordOnlySystem)
+            es.unregister_system("echo_tail")
+        assert report["params"]["reference"] == "keyword_only"
+        assert report["comparison"]["reference"] == "keyword_only"

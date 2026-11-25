@@ -70,6 +70,10 @@ HARD_STRATA: tuple[str, ...] = (
 )
 
 VALIDATION_THRESHOLD = 0.95
+#: Bumped whenever a judge rule changes, so a progress file written under
+#: the old rules is refused instead of mixing two judges' verdicts.
+JUDGE_VERSION = 5
+DEFAULT_REFERENCE = "keyword_only"
 NON_INFERIORITY_MARGIN = 0.05
 DEFAULT_TOKEN_BUDGET = 2048
 _PLANTED_PER_KIND = 150
@@ -206,6 +210,40 @@ def _default_answer_model() -> str:
     return ollama.GENERATION_MODEL
 
 
+def resolve_eval_models(answer_model: str | None, judge_model: str | None) -> tuple[str, str]:
+    """The local models that will answer and judge, named before anything runs.
+
+    An explicit model always runs on the local Ollama client: the memory
+    generation module ignores ``model`` on its remote path, and silently falls
+    back to local per call when the remote fails, so through it a run could be
+    labelled with one model and answered by another. With remote memory
+    generation on, both models must therefore be given explicitly.
+    """
+    from robothor.llm import ollama
+    from robothor.memory import generation
+
+    if generation._remote_enabled() and (answer_model is None or judge_model is None):
+        raise EvalPreconditionError(
+            "remote memory generation is enabled "
+            f"({generation._provider()}:{generation._remote_model()}); pass both "
+            "--answer-model and --judge-model so the eval runs on named local models "
+            "instead of a provider that may fall back to local per call"
+        )
+    default = ollama.GENERATION_MODEL
+    return (answer_model or default, judge_model or default)
+
+
+def _chat_for(model: str | None) -> ChatFn:
+    """Local Ollama for an explicit model; the generation module otherwise."""
+    if model:
+        from robothor.llm import ollama
+
+        return ollama.chat
+    from robothor.memory import generation
+
+    return generation.chat
+
+
 async def answer(
     question: str,
     bundle: ContextBundle,
@@ -220,9 +258,7 @@ async def answer(
     if bundle.budget is not None and bundle.tokens > bundle.budget:
         raise ValueError(f"context of {bundle.tokens} tokens exceeds its budget of {bundle.budget}")
     if chat is None:
-        from robothor.memory import generation
-
-        chat = generation.chat
+        chat = _chat_for(model)
     started = time.perf_counter()
     raw = await chat(
         build_answer_messages(question, bundle, as_of),
@@ -263,8 +299,43 @@ def known_values(world: World) -> frozenset[str]:
     return frozenset(out)
 
 
-def judge_rules(case: Case, ans: Answer, known: frozenset[str]) -> Verdict | None:
-    """Settle what can be settled without a model; ``None`` otherwise."""
+def known_kinds(world: World) -> dict[str, str]:
+    """What kind of thing each known value is (organisation, city, person, ...)."""
+    out: dict[str, str] = {}
+    for w in (world, world.shadow):
+        if w is None:
+            continue
+        for kind, values in (
+            ("organisation", [o.name for o in w.organisations]),
+            ("city", [loc.name for loc in w.locations]),
+            ("project", [p.name for p in w.projects]),
+            ("event", [e.name for e in w.events]),
+            ("person", [p.full_name for p in w.people] + [p.email for p in w.people]),
+            ("role", [e.role for e in w.employments]),
+            ("detail", [r.value for r in w.raw_details]),
+        ):
+            for v in values:
+                out.setdefault(v, kind)
+    return out
+
+
+def judge_rules(
+    case: Case,
+    ans: Answer,
+    known: frozenset[str],
+    kinds: dict[str, str] | None = None,
+) -> Verdict | None:
+    """Settle what can be settled without a model; ``None`` otherwise.
+
+    A gold match counts only when the answer names no other known value of the
+    gold's own kind. "Kelvaro Systems or Brivane Labs" is a hedge, or a
+    superseded value stated beside the current one, and is confident-wrong: the
+    rubric says an answer that hedges between several things is wrong. This is
+    settled by rule because the local LLM judge accepted 55 of 150 planted
+    hedges when they were left to it. "Kelvaro Systems, in Velmere" names a
+    city beside an organisation and stays correct. Without ``kinds`` every
+    known value counts as the same kind, which is the cautious reading.
+    """
     if case.stratum == "abstention":
         if ans.abstained:
             return Verdict(True, True, False, "abstained where nothing is known")
@@ -275,14 +346,41 @@ def judge_rules(case: Case, ans: Answer, known: frozenset[str]) -> Verdict | Non
     for value in case.forbidden:
         if _contains(text, value):
             return Verdict(False, False, True, f"forbidden value from another tenant: {value!r}")
+    others = _other_values(case, text, known)
     for gold in case.gold:
         if _contains(text, gold):
+            gold_kinds = {kinds.get(g) for g in case.gold} if kinds else set()
+            for value in others:
+                if kinds is None or kinds.get(value) in gold_kinds:
+                    return Verdict(
+                        False, False, True, f"hedge: names {gold!r} beside the rival {value!r}"
+                    )
             return Verdict(True, False, False, f"matches gold {gold!r}")
-    golds = {normalise(g) for g in case.gold}
-    for value in sorted(known):
-        if normalise(value) not in golds and _contains(text, value):
-            return Verdict(False, False, True, f"names a different value: {value!r}")
+    if others:
+        return Verdict(False, False, True, f"names a different value: {others[0]!r}")
     return None
+
+
+def _other_values(case: Case, text: str, known: frozenset[str]) -> list[str]:
+    """Known values the answer names that are not a gold and not named by the question.
+
+    One exclusion for both rules. Restating what the question is about is not
+    a second answer: for a question about Alice Vance, "Alice Vance's manager
+    is Bob Rivera" names one candidate. A restatement with no gold match
+    ("Alice Vance's manager is Rivera, Bob") goes to the LLM judge instead of
+    being settled as wrong.
+    """
+    golds = {normalise(g) for g in case.gold}
+    question = normalise(case.question)
+    out: list[str] = []
+    for value in sorted(known):
+        v = normalise(value)
+        if v in golds or any(v in g for g in golds) or not _contains(text, value):
+            continue
+        if _contains(question, value):
+            continue
+        out.append(value)
+    return out
 
 
 JUDGE_PROMPT = (
@@ -311,9 +409,7 @@ async def llm_judge(
 ) -> tuple[bool, str]:
     """The model judge, for answers the rules cannot settle."""
     if chat is None:
-        from robothor.memory import generation
-
-        chat = generation.chat
+        chat = _chat_for(model)
     prompt = JUDGE_PROMPT.format(
         question=case.question, gold=" | ".join(case.gold), answer=ans.text
     )
@@ -339,9 +435,10 @@ async def judge(
     ans: Answer,
     *,
     known_values: frozenset[str] = frozenset(),
+    kinds: dict[str, str] | None = None,
     llm: LlmJudge | None = None,
 ) -> Verdict:
-    verdict = judge_rules(case, ans, known_values)
+    verdict = judge_rules(case, ans, known_values, kinds)
     if verdict is not None:
         return verdict
     if llm is None:
@@ -352,9 +449,10 @@ async def judge(
 
 def make_judge(world: World, *, llm: LlmJudge | None) -> JudgeFn:
     known = known_values(world)
+    kinds = known_kinds(world)
 
     async def _judge(case: Case, ans: Answer) -> Verdict:
-        return await judge(case, ans, known_values=known, llm=llm)
+        return await judge(case, ans, known_values=known, kinds=kinds, llm=llm)
 
     return _judge
 
@@ -474,6 +572,17 @@ def planted_answers(world: World) -> list[PlantedAnswer]:
         others = [v for v in pool if _clean(case, v)]
         if others:
             _plant("random_entity", case, rng.choice(others), False, n)
+            # A hedge: the gold beside a rival of its own kind. Expected wrong.
+            # The rival is never something the question itself names: restating
+            # the question's subject is not a second answer.
+            question = normalise(case.question)
+            rivals = [v for v in others if not _contains(question, v)]
+            if rivals:
+                rival = rng.choice(rivals)
+                text = (f"{gold} or {rival}", f"{rival} (previously {gold})")[n % 2]
+                out.setdefault("hedge", []).append(
+                    PlantedAnswer(case, Answer(text, False, ()), False, "hedge")
+                )
         # Forms only a model can grade: "Last, First" for a person and the bare
         # root of an organisation's name. Neither contains a gold string or a
         # known value, so they reach the LLM judge and test it.
@@ -488,7 +597,7 @@ def planted_answers(world: World) -> list[PlantedAnswer]:
                 for v in others
                 if (w := _llm_form(v, org_names, person_names))
                 and _clean(case, w)
-                and not set(normalise(w).split()) <= gold_words
+                and not _near_any(normalise(w).split(), gold_words)
             ]
             if wrong_pool:
                 out.setdefault("wrong_llm", []).append(
@@ -501,6 +610,18 @@ def planted_answers(world: World) -> list[PlantedAnswer]:
     for kind in sorted(out):
         planted.extend(out[kind][:_PLANTED_PER_KIND])
     return planted
+
+
+def _near_any(words: Sequence[str], gold_words: set[str]) -> bool:
+    """True when any word equals or nearly spells a gold word.
+
+    Invented roots can differ by one letter (Drodrel / Drotrel), and a planted
+    wrong answer that is a near-spelling of the gold is not wrong to a careful
+    reader; the judge must not be failed for agreeing.
+    """
+    from difflib import SequenceMatcher
+
+    return any(SequenceMatcher(None, w, g).ratio() >= 0.75 for w in words for g in gold_words)
 
 
 def _llm_form(value: str, org_names: set[str], person_names: set[str]) -> str | None:
@@ -522,7 +643,12 @@ async def validate_judge(world: World, judge_fn: JudgeFn) -> JudgeValidation:
     failures: list[str] = []
     wrong_ok = right_ok = n_wrong = n_right = 0
     for p in planted:
-        verdict = await judge_fn(p.case, p.answer)
+        try:
+            verdict = await judge_fn(p.case, p.answer)
+        except Exception as exc:  # noqa: BLE001 — a judge that errors has failed this case
+            verdict = Verdict(
+                not p.expect_correct, False, False, f"judge raised {type(exc).__name__}: {exc}"
+            )
         ok = verdict.correct == p.expect_correct
         agg = by_kind.setdefault(p.kind, {"n": 0, "ok": 0})
         agg["n"] += 1
@@ -542,7 +668,12 @@ async def validate_judge(world: World, judge_fn: JudgeFn) -> JudgeValidation:
         n_right=n_right,
         wrong_marked_wrong=wrong_rate,
         right_marked_right=right_rate,
-        passed=wrong_rate >= VALIDATION_THRESHOLD and right_rate >= VALIDATION_THRESHOLD,
+        # Every planted kind must clear the bar on its own: most planted
+        # answers are settled by rules, and pooled alone they would carry a
+        # weak model judge through.
+        passed=wrong_rate >= VALIDATION_THRESHOLD
+        and right_rate >= VALIDATION_THRESHOLD
+        and all(v["ok"] / v["n"] >= VALIDATION_THRESHOLD for v in by_kind.values() if v["n"]),
         by_kind=by_kind,
         failures=tuple(failures),
     )
@@ -551,11 +682,13 @@ async def validate_judge(world: World, judge_fn: JudgeFn) -> JudgeValidation:
 async def require_valid_judge(world: World, judge_fn: JudgeFn) -> JudgeValidation:
     result = await validate_judge(world, judge_fn)
     if not result.passed:
+        by_kind = ", ".join(f"{k} {v['ok']}/{v['n']}" for k, v in sorted(result.by_kind.items()))
         raise EvalPreconditionError(
             "judge failed validation: "
             f"{result.wrong_marked_wrong:.1%} of {result.n_wrong} planted wrong answers marked "
             f"wrong and {result.right_marked_right:.1%} of {result.n_right} planted correct "
-            f"answers marked right (both must be >= {VALIDATION_THRESHOLD:.0%}). "
+            f"answers marked right (both, and every planted kind, must be >= "
+            f"{VALIDATION_THRESHOLD:.0%}; by kind: {by_kind}). "
             f"First failures: {list(result.failures[:5])}"
         )
     return result
@@ -579,9 +712,29 @@ def select_cases(world: World, split: str, limit_per_stratum: int | None) -> lis
     return chosen
 
 
+def case_outcomes(recs: Sequence[CaseRecord]) -> dict[str, bool]:
+    """One outcome per case: the majority over its repeats, ties to the first.
+
+    Repeats at temperature 0 are near-copies. Counting each as its own
+    observation would multiply the evidence by the number of repeats and make
+    every interval and test look sharper than the cases allow.
+    """
+    by_case: dict[str, list[CaseRecord]] = {}
+    for r in recs:
+        by_case.setdefault(r.case_id, []).append(r)
+    out: dict[str, bool] = {}
+    for cid, rs in by_case.items():
+        rs = sorted(rs, key=lambda r: r.repeat)
+        hits = sum(r.correct for r in rs)
+        out[cid] = rs[0].correct if hits * 2 == len(rs) else hits * 2 > len(rs)
+    return out
+
+
 def _metrics(recs: list[CaseRecord]) -> dict[str, Any]:
-    n = len(recs)
-    correct = sum(r.correct for r in recs)
+    records = len(recs)
+    outcomes = case_outcomes(recs)
+    n = len(outcomes)
+    correct = sum(outcomes.values())
     acc = correct / n if n else 0.0
     abstained = [r for r in recs if r.abstained]
     abst_cases = [r for r in recs if r.stratum == "abstention"]
@@ -589,18 +742,23 @@ def _metrics(recs: list[CaseRecord]) -> dict[str, Any]:
     for r in recs:
         by_repeat.setdefault(r.repeat, []).append(r)
     per_run = [sum(x.correct for x in by_repeat[k]) / len(by_repeat[k]) for k in sorted(by_repeat)]
-    n_cases = len({r.case_id for r in recs})
     retr = [r.retrieval_ms for r in recs]
     ans = [r.answer_ms for r in recs]
     lo, hi = st.wilson_interval(correct, n)
+    # Accuracy, its interval and the MDE are per case. The rates below are per
+    # answer (records = cases x repeats); with one repeat the two agree.
     return {
         "n": n,
-        "cases": n_cases,
+        "cases": n,
+        "runs": len(by_repeat),
+        "records": records,
         "correct": correct,
         "accuracy": acc,
         "wilson": [lo, hi],
-        "confident_wrong_rate": (sum(r.confident_wrong for r in recs) / n) if n else 0.0,
-        "abstained_rate": (len(abstained) / n) if n else 0.0,
+        "confident_wrong_rate": (
+            (sum(r.confident_wrong for r in recs) / records) if records else 0.0
+        ),
+        "abstained_rate": (len(abstained) / records) if records else 0.0,
         "abstention_precision": (
             sum(r.stratum == "abstention" for r in abstained) / len(abstained)
             if abstained
@@ -609,15 +767,15 @@ def _metrics(recs: list[CaseRecord]) -> dict[str, Any]:
         "abstention_recall": (
             sum(r.abstained for r in abst_cases) / len(abst_cases) if abst_cases else None
         ),
-        "mean_tokens": (sum(r.tokens for r in recs) / n) if n else 0.0,
+        "mean_tokens": (sum(r.tokens for r in recs) / records) if records else 0.0,
         "retrieval_p50_ms": st.percentile(retr, 50),
         "retrieval_p95_ms": st.percentile(retr, 95),
         "answer_p50_ms": st.percentile(ans, 50),
         "answer_p95_ms": st.percentile(ans, 95),
-        "answer_mean_ms": (sum(ans) / n) if n else 0.0,
+        "answer_mean_ms": (sum(ans) / records) if records else 0.0,
         "llm_judged": sum(r.judge_method == "llm" for r in recs),
         "errors": sum(r.judge_method == "error" for r in recs),
-        "mde": st.minimum_detectable_effect(n_cases, p=acc),
+        "mde": st.minimum_detectable_effect(n, p=acc),
         "spread": st.run_spread(per_run),
     }
 
@@ -641,14 +799,11 @@ def compare(records: Sequence[CaseRecord], *, system: str, reference: str) -> di
     """The deciding comparison: pooled hard strata, ``system`` vs ``reference``."""
 
     def _arm(name: str) -> dict[str, bool]:
-        return {
-            f"{r.case_id}@{r.repeat}": r.correct
-            for r in records
-            if r.system == name and r.stratum in HARD_STRATA
-        }
+        # One pair per case, never per repeat: see case_outcomes.
+        return case_outcomes([r for r in records if r.system == name and r.stratum in HARD_STRATA])
 
     before, after = _arm(reference), _arm(system)
-    strata = {f"{r.case_id}@{r.repeat}": r.stratum for r in records if r.stratum in HARD_STRATA}
+    strata = {r.case_id: r.stratum for r in records if r.stratum in HARD_STRATA}
     paired = st.paired_report(before, after, strata)
     promote, verdict = st.promotion_verdict(paired)
     return {
@@ -674,7 +829,13 @@ async def run_answers(
     size: str,
     split: str,
     *,
-    systems: Sequence[str] = ("recall", "keyword_only", "raw_verbatim", "full_context"),
+    systems: Sequence[str] = (
+        "recall",
+        "recall_budget",
+        "keyword_only",
+        "raw_verbatim",
+        "full_context",
+    ),
     reference: str | None = None,
     token_budget: int = DEFAULT_TOKEN_BUDGET,
     repeats: int = 1,
@@ -702,7 +863,7 @@ async def run_answers(
     _require_eval_tenants([tenant_id, shadow])
     names = list(systems)
     built = make_systems(names)
-    ref = reference or names[-1]
+    ref = reference or (DEFAULT_REFERENCE if DEFAULT_REFERENCE in names else names[-1])
     if ref not in names:
         raise ValueError(f"reference system {ref!r} is not among the systems run ({names})")
     subject = names[0]
@@ -712,6 +873,8 @@ async def run_answers(
     from robothor.llm import ollama
     from robothor.memory.eval_embed_cache import CachedEmbedder
     from robothor.memory.eval_world import WORLD_SCHEMA_VERSION, generate_world
+
+    answer_model, judge_model = resolve_eval_models(answer_model, judge_model)
 
     started = time.perf_counter()
     world = generate_world(seed, size)
@@ -750,9 +913,10 @@ async def run_answers(
         "size": size,
         "split": split,
         "token_budget": token_budget,
-        "answer_model": answer_model or _default_answer_model(),
+        "answer_model": answer_model,
         "answer_temperature": answer_temperature,
-        "judge_model": judge_model or _default_answer_model(),
+        "judge_model": judge_model,
+        "judge_version": JUDGE_VERSION,
         "embedding_model": embedding_model,
     }
     done = _load_progress(progress_path, fingerprint)
@@ -781,13 +945,18 @@ async def run_answers(
                 resumed += 1
                 return prior
             async with gate:
-                bundle = await system.retrieve(case, world_handle=handle, token_budget=token_budget)
+                bundle = ContextBundle(
+                    system.name, (), token_budget, system.equal_budget, True, 0.0
+                )
                 try:
+                    bundle = await system.retrieve(
+                        case, world_handle=handle, token_budget=token_budget
+                    )
                     ans = await answer_fn(case.question, bundle, as_of=case.as_of)
                     verdict = await judge_fn(case, ans)
                 except Exception as exc:  # noqa: BLE001 — recorded and counted, never hidden
                     logger.warning(
-                        "answer/judge failed for %s on %s: %s", system.name, case.id, exc
+                        "retrieve/answer/judge failed for %s on %s: %s", system.name, case.id, exc
                     )
                     errors.append(f"{system.name} {case.id}: {type(exc).__name__}: {exc}")
                     ans = Answer("", False, ())
@@ -836,9 +1005,11 @@ async def run_answers(
             "reference": ref,
             "token_budget": token_budget,
             "repeats": max(1, repeats),
-            "answer_model": answer_model or _default_answer_model(),
+            "answer_model": answer_model,
+            "answer_provider": "ollama",
             "answer_temperature": answer_temperature,
-            "judge_model": judge_model or _default_answer_model(),
+            "judge_model": judge_model,
+            "judge_version": JUDGE_VERSION,
             "embedding_model": embedding_model,
             "limit_per_stratum": limit_per_stratum,
             "concurrency": concurrency,

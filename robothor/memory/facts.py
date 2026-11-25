@@ -1698,7 +1698,10 @@ async def search_facts(
             legs cannot filter by person, so a restricted scope leaves them
             out (the router's rule for unscopable stores) — see
             robothor/identity/scope.py. The segment leg can filter by person
-            and stays on; its reader is then the scope's person only.
+            and stays on, but the scope only narrows its reader: the reader
+            passed is kept only when it is the scope's person (and its user id
+            only when it belongs to that person); a restricted scope never
+            makes anyone a reader.
         include_segments: Fuse a ``segment`` leg of raw conversation
             (``robothor.memory.segments.search_segments``). On by default;
             when on, the ``chat_turn`` leg is not run even if asked for — the
@@ -1706,7 +1709,7 @@ async def search_facts(
         reader_person_id: The reader's own person. Segments private to that
             person are returned with the shared ones; without it, shared
             segments only. Applied on every call; under a restricted
-            ``scope`` it is replaced by the scope's person.
+            ``scope`` it is kept only when it is the scope's person.
         room_ids: Workspaces the reader can access; a workspace conversation's
             segments are returned only for these.
         reader_user_id: The reader's own user id; a member's webchat
@@ -1795,10 +1798,21 @@ async def search_facts(
     # would read summaries built from other people's facts. As in the router,
     # a store that cannot express person scoping is left out, not unfiltered
     # (``unscopable_ok``, decided above before the owner predicate is added).
-    # Segments filter by reader themselves, so they stay on. Under a restricted
-    # scope the reader is the scope's person and nothing else, whatever the
-    # caller passed as reader_person_id.
-    segment_reader = scope.person_id if scope is not None and scope.restricted else reader_person_id
+    # Segments filter by reader themselves, so they stay on. A restricted scope
+    # only NARROWS the reader the caller passed (the person the run serves); it
+    # never supplies one. The reader is kept only when its person is the
+    # scope's person, and its user id only when that user provably is the same
+    # person; anything else reads no private segment.
+    segment_reader, segment_user = reader_person_id, reader_user_id
+    if scope is not None and scope.restricted:
+        from robothor.memory.segments import user_belongs_to_person
+
+        if not segment_reader or str(segment_reader) != str(scope.person_id):
+            segment_reader, segment_user = None, None
+        elif segment_user and not await asyncio.to_thread(
+            user_belongs_to_person, _tenant, segment_user, segment_reader
+        ):
+            segment_user = None
     legs.update(
         await _auxiliary_legs(
             query=query,
@@ -1811,7 +1825,7 @@ async def search_facts(
             include_segments=include_segments,
             limit=limit,
             reader_person_id=segment_reader,
-            reader_user_id=reader_user_id,
+            reader_user_id=segment_user,
             room_ids=room_ids,
         )
     )

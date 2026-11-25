@@ -621,39 +621,66 @@ def recall_for_message(
     ``trusted_only`` by default: only operator-confirmed, user-stated and CRM
     evidence.
 
-    ``deadline`` (a ``time.monotonic()`` instant) bounds the work on the
-    server: once a seed is found, ``statement_timeout`` is set on this
-    connection to the time left, so Postgres itself stops the operator lookup
-    and the walk at the deadline, and it is reset before the connection goes
-    back. A deadline already past skips the walk. Nothing is ever cancelled
-    from outside, so no other request's query can be. A turn that found a
-    seed runs five statements, six when the operator lookup falls back to
-    ``owner.yaml``: seed lookup, arm, operator lookup, walk, reset.
+    ``deadline`` (a ``time.monotonic()`` instant) bounds every statement on
+    the server: before the first one, ``statement_timeout`` is set on this
+    connection to the time left, so Postgres itself stops the seed lookup, the
+    operator lookup and the walk at the deadline; it is reset before the
+    connection goes back (and the connection closed if that fails). A deadline
+    already past runs nothing, and one that passes before the walk skips it.
+    Nothing is ever cancelled from outside, so no other request's query can
+    be. Statements: arm, seed lookup, reset (three) when nothing links; arm,
+    seed lookup, operator lookup, walk, reset (five, six when the operator
+    lookup falls back to ``owner.yaml``) when a seed is found.
     """
     if not has_anything_to_link(message, phrases, sender_person_id):
         return []
     excluded = {n.lower() for n in (exclude_names or ()) if n}
     sender = _as_uuid(sender_person_id)
+    if deadline is not None and deadline <= time.monotonic():
+        return []  # already spent: open nothing
     with _cursor(connect) as cur:
-        seeds = [
-            s
-            for s in _link_seeds(cur, tenant_id, message, sender_person_id=sender, phrases=phrases)
-            if s.method == "strong_key" or s.name.lower() not in excluded
-        ]
-        if not seeds:
-            return []
         if deadline is None:
-            return _walk_from(cur, tenant_id, seeds, reader_scope_id, trusted_only, limit,
-                              person_restricted, person_id)  # fmt: skip
+            return _seed_and_walk(cur, tenant_id, message, sender, phrases, excluded,
+                                  reader_scope_id, trusted_only, limit, person_restricted,
+                                  person_id)  # fmt: skip
+        # Measured now, with the connection in hand: a checkout that had to
+        # wait (a new connection, its session settings) is not added on top.
         left_ms = int((deadline - time.monotonic()) * 1000)
         if left_ms <= 0:
             return []
         cur.execute("SELECT set_config('statement_timeout', %s, false)", (f"{left_ms}ms",))
         try:
-            return _walk_from(cur, tenant_id, seeds, reader_scope_id, trusted_only, limit,
-                              person_restricted, person_id, deadline=deadline)  # fmt: skip
+            return _seed_and_walk(cur, tenant_id, message, sender, phrases, excluded,
+                                  reader_scope_id, trusted_only, limit, person_restricted,
+                                  person_id, deadline=deadline)  # fmt: skip
         finally:
             _reset_statement_timeout(cur)
+
+
+def _seed_and_walk(
+    cur: Any,
+    tenant_id: str,
+    message: str,
+    sender: str | None,
+    phrases: Sequence[str] | None,
+    excluded: set[str],
+    reader_scope_id: str | None,
+    trusted_only: bool,
+    limit: int,
+    person_restricted: bool,
+    person_id: str | None,
+    *,
+    deadline: float | None = None,
+) -> list[Candidate]:
+    seeds = [
+        s
+        for s in _link_seeds(cur, tenant_id, message, sender_person_id=sender, phrases=phrases)
+        if s.method == "strong_key" or s.name.lower() not in excluded
+    ]
+    if not seeds:
+        return []
+    return _walk_from(cur, tenant_id, seeds, reader_scope_id, trusted_only, limit,
+                      person_restricted, person_id, deadline=deadline)  # fmt: skip
 
 
 def _walk_from(

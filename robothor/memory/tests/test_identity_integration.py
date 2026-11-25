@@ -1373,6 +1373,228 @@ def test_the_nightly_sync_repairs_a_merge_whose_hook_failed(world: World, monkey
     assert world.one(count, (basis,)) == 1
 
 
+# ═══ merge reversal moves back only what the merge decided ═══════════════
+
+
+def _merge_and_mention(
+    world: World, keeper: str, loser: str, mentions: dict[str, MentionInput]
+) -> tuple[int, dict[str, int]]:
+    """Merge loser into keeper, then write one fact per mention. Returns (merge id, facts)."""
+    from robothor.crm import dal
+    from robothor.memory.identity import resolve_mentions, write_mentions
+
+    assert dal.merge_people(keeper, loser, TENANT)
+    merge = int(
+        world.one(
+            "SELECT id FROM memory_resolution_decisions WHERE evidence->>'basis' = %s",
+            (f"crm_merge:person:{loser}",),
+        )
+    )
+    facts: dict[str, int] = {}
+    for label, m in mentions.items():
+        fid = world.fact(f"{label} note", [m.surface_form])
+        write_mentions(TENANT, fid, [m], resolve_mentions(TENANT, [m]))
+        facts[label] = fid
+    return merge, facts
+
+
+def _on(world: World, fact_id: int) -> int | None:
+    return world.one("SELECT entity_id FROM memory_mentions WHERE fact_id = %s", (fact_id,))
+
+
+def test_merge_reversal_leaves_the_keepers_own_mentions_with_the_keeper(world: World) -> None:
+    from robothor.memory.identity import reverse_decision, sync_crm_entities
+
+    keeper = world.person("Dana", "Reyes", "dana@example.com")
+    loser = world.person("Danielle", "Reyes", "danielle@example.org")
+    sync_crm_entities(TENANT)
+    k_node, l_node = world.entity_of(keeper), world.entity_of(loser)
+    merge, f = _merge_and_mention(
+        world,
+        keeper,
+        loser,
+        {
+            "own_name": MentionInput("Dana Reyes", "person"),
+            "own_email": MentionInput("D", "person", strong_keys={"email": "dana@example.com"}),
+            "loser_name": MentionInput("Danielle Reyes", "person"),
+        },
+    )
+    assert {_on(world, x) for x in f.values()} == {k_node}
+
+    reverse_decision(TENANT, merge, reason="different people")
+    assert _on(world, f["own_name"]) == k_node
+    assert _on(world, f["own_email"]) == k_node
+    assert _on(world, f["loser_name"]) == l_node
+    # Later mentions resolve by the ordinary rules, not by anything the reversal left.
+    assert _one(MentionInput("Dana Reyes", "person")).entity_id == k_node
+    assert _one(
+        MentionInput("D", "person", strong_keys={"email": "dana@example.com"})
+    ).entity_id == (k_node)
+
+
+def test_merge_reversal_with_a_nickname_variant_keeps_the_keepers_name(world: World) -> None:
+    from robothor.memory.identity import reverse_decision, sync_crm_entities
+
+    keeper = world.person("Robert", "Rivera", "robert@initech.example")
+    loser = world.person("Bob", "Rivera", "bob.rivera@example.com")
+    sync_crm_entities(TENANT)
+    k_node, l_node = world.entity_of(keeper), world.entity_of(loser)
+    merge, f = _merge_and_mention(
+        world,
+        keeper,
+        loser,
+        {
+            "own_name": MentionInput("Robert Rivera", "person"),
+            "own_key": MentionInput("Rob", "person", strong_keys={"crm_person_id": keeper}),
+            "loser_name": MentionInput("Bob Rivera", "person"),
+            "loser_key": MentionInput("Bo", "person", strong_keys={"crm_person_id": loser}),
+        },
+    )
+    reverse_decision(TENANT, merge, reason="different people")
+    assert _on(world, f["own_name"]) == k_node
+    assert _on(world, f["own_key"]) == k_node
+    assert _on(world, f["loser_name"]) == l_node
+    assert _on(world, f["loser_key"]) == l_node
+    assert _one(MentionInput("Robert Rivera", "person")).entity_id == k_node
+    assert _one(MentionInput("Rob", "person", strong_keys={"crm_person_id": keeper})).entity_id == (
+        k_node
+    )
+
+
+def test_merge_reversal_of_two_people_with_one_name_unresolves_the_name(world: World) -> None:
+    """The merge is what made "Dana Reyes" unique, so undoing it makes it ambiguous again.
+
+    Before the merge a bare "Dana Reyes" matched two nodes and needed context.
+    A mention resolved while the merge stood cannot be attributed to either
+    person afterwards, so it becomes unresolved. Mentions carrying one person's
+    own key go to that person.
+    """
+    from robothor.memory.identity import reverse_decision, sync_crm_entities
+
+    keeper = world.person("Dana", "Reyes", "dana@example.com")
+    loser = world.person("Dana", "Reyes", "dana.r@example.org")
+    sync_crm_entities(TENANT)
+    k_node, l_node = world.entity_of(keeper), world.entity_of(loser)
+    assert _one(MentionInput("Dana Reyes", "person")).entity_id is None  # ambiguous before
+    merge, f = _merge_and_mention(
+        world,
+        keeper,
+        loser,
+        {
+            "name": MentionInput("Dana Reyes", "person"),
+            "keeper_email": MentionInput("D", "person", strong_keys={"email": "dana@example.com"}),
+            "loser_key": MentionInput("DR", "person", strong_keys={"crm_person_id": loser}),
+        },
+    )
+    assert {_on(world, x) for x in f.values()} == {k_node}
+
+    report = reverse_decision(TENANT, merge, reason="different people")
+    assert set(report["fact_ids"]) == {f["name"], f["loser_key"]}
+    assert _on(world, f["name"]) is None
+    assert _on(world, f["keeper_email"]) == k_node
+    assert _on(world, f["loser_key"]) == l_node
+    # Never the loser for a later bare mention; the keeper is the only live record.
+    assert _one(MentionInput("Dana Reyes", "person")).entity_id == k_node
+    assert _one(
+        MentionInput("D", "person", strong_keys={"email": "dana@example.com"})
+    ).entity_id == (k_node)
+
+
+def test_a_context_resolution_cannot_be_redirected_tenant_wide(world: World) -> None:
+    from robothor.memory.identity import (
+        resolve_mentions,
+        reverse_decision,
+        sync_crm_entities,
+        write_mentions,
+    )
+
+    world.person("Alex", "Morgan")
+    chen = world.person("Alex", "Chen")
+    other = world.person("Alex", "Kim")
+    sync_crm_entities(TENANT)
+    seed_fact = world.fact("Alex Chen joined", ["Alex Chen"], session="s1")
+    seed = MentionInput("Alex Chen", "person")
+    write_mentions(TENANT, seed_fact, [seed], resolve_mentions(TENANT, [seed]))
+    fid = world.fact("Alex agreed", ["Alex"], session="s1")
+    m = MentionInput("Alex", "person", context={"conversation_ref": "s1"})
+    out = resolve_mentions(TENANT, [m])
+    assert out[0].entity_id == world.entity_of(chen) and out[0].method == "context"
+    write_mentions(TENANT, fid, [m], out)
+
+    with pytest.raises(ValueError):
+        reverse_decision(
+            TENANT, out[0].decision_id, reason="x", new_entity_id=world.entity_of(other)
+        )
+    keyed = resolve_mentions(
+        TENANT, [MentionInput("Alex", "person", strong_keys={"crm_person_id": chen})]
+    )
+    with pytest.raises(ValueError):  # a bare first name is never redirected tenant-wide
+        reverse_decision(TENANT, keyed[0].decision_id, reason="x",
+                         new_entity_id=world.entity_of(other))  # fmt: skip
+    reverse_decision(TENANT, out[0].decision_id, reason="it was Kim",
+                     new_entity_id=world.entity_of(other), fact_ids=[fid])  # fmt: skip
+    assert _on(world, fid) == world.entity_of(other)
+    # In another conversation where only Alex Chen is evidenced, nothing redirects to Kim.
+    s2 = world.fact("Alex Chen again", ["Alex Chen"], session="s2")
+    write_mentions(TENANT, s2, [seed], resolve_mentions(TENANT, [seed]))
+    again = _one(MentionInput("Alex", "person", context={"conversation_ref": "s2"}))
+    assert again.entity_id == world.entity_of(chen)
+
+
+@pytest.mark.parametrize("etype", ["organization", None])
+def test_reversing_a_company_merge_returns_the_losers_single_token_name(
+    world: World, etype: str | None
+) -> None:
+    """A single-token company name resolves with method `exact`; it is tagged like any other."""
+    from robothor.crm import dal
+    from robothor.memory.identity import (
+        resolve_mentions,
+        reverse_decision,
+        sync_crm_entities,
+        write_mentions,
+    )
+
+    keeper = world.company("Globex")
+    loser = world.company("Initech")
+    sync_crm_entities(TENANT)
+    k_node, l_node = world.entity_of(keeper), world.entity_of(loser)
+    assert dal.merge_companies(keeper, loser, TENANT)
+    merge = world.one(
+        "SELECT id FROM memory_resolution_decisions WHERE evidence->>'basis' = %s",
+        (f"crm_merge:company:{loser}",),
+    )
+    facts = {}
+    for label in ("Initech", "Globex"):
+        m = MentionInput(label, etype)
+        fid = world.fact(f"{label} shipped", [label])
+        out = resolve_mentions(TENANT, [m])
+        assert out[0].entity_id == k_node and out[0].method == "exact"
+        write_mentions(TENANT, fid, [m], out)
+        facts[label] = fid
+
+    report = reverse_decision(TENANT, merge, reason="different companies")
+    assert report["fact_ids"] == [facts["Initech"]]
+    assert _on(world, facts["Initech"]) == l_node
+    assert _on(world, facts["Globex"]) == k_node
+    assert _one(MentionInput("Globex", etype)).entity_id == k_node
+
+
+def test_a_provisional_node_is_never_tagged_by_a_merge(world: World) -> None:
+    from robothor.crm import dal
+    from robothor.memory.identity import sync_crm_entities
+
+    keeper = world.company("Globex")
+    loser = world.company("Initech")
+    sync_crm_entities(TENANT)
+    assert dal.merge_companies(keeper, loser, TENANT)
+    created = _one(MentionInput("Umbrella", "organization"))
+    assert created.entity_id is not None and created.method == "exact"
+    evidence = world.one(
+        "SELECT evidence FROM memory_resolution_decisions WHERE id = %s", (created.decision_id,)
+    )
+    assert "via_merge" not in evidence and "merge_collapsed" not in evidence
+
+
 # ═══ planner statistics after bulk writes ════════════════════════════════
 
 
