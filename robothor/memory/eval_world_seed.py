@@ -130,6 +130,10 @@ class SeededWorld:
     crm_company_ids: dict[str, str] = field(default_factory=dict)
     document_ids: list[str] = field(default_factory=list)
     chat_session_keys: list[str] = field(default_factory=list)
+    #: world turn id -> chat_messages.id
+    turn_message_ids: dict[str, int] = field(default_factory=dict)
+    #: Database time just before the post-seed ANALYZE.
+    seeded_at: datetime | None = None
 
 
 async def _default_embed_batch(texts: list[str]) -> list[list[float]]:
@@ -179,7 +183,8 @@ async def seed_world(
             await _seed_entities(w, tenant, seeded)
             _seed_crm(w, tenant, seeded)
             await _seed_documents(w, tenant, embed, seeded)
-            _seed_chat(w, tenant, seeded)
+            await _seed_chat(w, tenant, embed, seeded)
+    seeded.seeded_at = _analyze_seeded_tables()
     logger.info(
         "eval world seeded: %d facts, %d entities, %d crm people, %d documents, %d chat sessions",
         len(seeded.fact_ids),
@@ -189,6 +194,33 @@ async def seed_world(
         len(seeded.chat_session_keys),
     )
     return seeded
+
+
+#: The tables bulk seeding fills. Analysed once seeding ends, so the queries
+#: that follow plan against real row counts rather than an empty table's.
+ANALYZED_TABLES: tuple[str, ...] = (
+    "memory_facts",
+    "memory_entities",
+    "memory_relations",
+    "crm_people",
+    "crm_companies",
+    "kb_documents",
+    "kb_chunks",
+    "chat_sessions",
+    "chat_messages",
+)
+
+
+def _analyze_seeded_tables() -> datetime:
+    from robothor.db.connection import get_connection
+
+    with get_connection(autocommit=True) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT clock_timestamp()")
+        started: datetime = cur.fetchone()[0]
+        for table in ANALYZED_TABLES:
+            cur.execute(f"ANALYZE {table}")  # fixed names from ANALYZED_TABLES
+    return started
 
 
 def _ensure_world_tenant(tenant_id: str) -> None:
@@ -367,7 +399,7 @@ async def _seed_documents(
         seeded.document_ids.append(doc.id)
 
 
-def _seed_chat(world: World, tenant: str, seeded: SeededWorld) -> None:
+async def _seed_chat(world: World, tenant: str, embed: EmbedBatch, seeded: SeededWorld) -> None:
     from robothor.db.connection import get_connection
     from robothor.engine.chat_store import save_exchange
 
@@ -389,6 +421,8 @@ def _seed_chat(world: World, tenant: str, seeded: SeededWorld) -> None:
                     user_at=datetime.fromisoformat(user.at),
                 )
                 stamps.append((ids[1], assistant.at))
+                seeded.turn_message_ids[user.id] = ids[0]
+                seeded.turn_message_ids[assistant.id] = ids[1]
             with get_connection() as conn:
                 cur = conn.cursor()
                 for message_id, at in stamps:
@@ -402,6 +436,18 @@ def _seed_chat(world: World, tenant: str, seeded: SeededWorld) -> None:
                     (turns[0].at, turns[-1].at, tenant, key),
                 )
             seeded.chat_session_keys.append(key)
+
+    # Turns are embedded the way the engine embeds chat turns (the content),
+    # so raw-history retrieval has a dense leg to search.
+    all_turns = [t for c in world.conversations for s in c.sessions for t in s.turns]
+    vectors = await _embed_all([t.text for t in all_turns], embed)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        for turn, vector in zip(all_turns, vectors, strict=True):
+            cur.execute(
+                "UPDATE chat_messages SET embedding = %s, embedded_at = NOW() WHERE id = %s",
+                (vector, seeded.turn_message_ids[turn.id]),
+            )
 
 
 # --------------------------------------------------------------------------- #
