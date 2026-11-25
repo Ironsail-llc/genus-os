@@ -81,6 +81,12 @@ def test_an_explicit_empty_tag_list_means_every_metric(scopes) -> None:
     assert scope is not None and scope.metric_tags == ()
 
 
+def test_a_metric_tag_may_end_in_a_wildcard(scopes) -> None:
+    scopes({"acme-child-a": {"logs": "service:shop-api", "metric_tags": ["service:shop-*"]}})
+    scope = scope_for("acme-child-a")
+    assert scope is not None and scope.metric_tags == ("service:shop-*",)
+
+
 def test_a_tenant_without_an_entry_is_not_configured(scopes) -> None:
     scopes({"acme-child-a": {"logs": "service:shop-api"}})
     assert scope_for("acme-child-b") is None
