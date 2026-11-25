@@ -778,6 +778,47 @@ def test_phone_numbers_in_tags_are_masked_whatever_their_shape(dd, writer):
     assert BARE_PHONE[:7] not in json.dumps([monitors, metrics])
 
 
+#: A bare secret value: no shape a pattern-based redactor could find.
+SECRET = "".join(("hunter", "2", "xq", "7"))
+
+
+def test_a_monitor_tag_named_as_a_credential_is_withheld(dd, writer):
+    dd.monitors = [_monitor(0, tags=[f"api_key:{SECRET}", "team:checkout"])]
+
+    result = _run(MONITORS, {})
+
+    assert result["monitors"][0]["tags"] == ["api_key:<redacted>", "team:checkout"]
+    assert SECRET not in json.dumps(result)
+
+
+def test_a_metric_grouped_by_a_credential_named_tag_withholds_its_value(dd, writer):
+    dd.series[0]["tag_set"] = [f"password:{SECRET}", "host:web-1"]
+    dd.series[0]["scope"] = f"password:{SECRET},host:web-1"
+
+    result = _run(METRICS, {"metric": "m", "group_by": ["password"]})
+
+    (series,) = result["series"]
+    assert series["tags"] == ["password:<redacted>", "host:web-1"]
+    assert series["scope"] == "password:<redacted>,host:web-1"
+    assert SECRET not in json.dumps(result)
+
+
+@pytest.mark.parametrize("name", [SPANS, TRACE])
+def test_a_spans_credential_attributes_and_tags_never_come_back(dd, writer, name):
+    """Span rows carry no attribute map or tag list; a credential in either stays out."""
+    span = _span(
+        0,
+        custom={"password": SECRET, "http": {"api_key": SECRET}},
+        tags=[f"api_key:{SECRET}", "env:prod"],
+    )
+    dd.make_span = lambda i: span
+    dd.spans = [span]
+
+    result = _run(name, MINIMAL[name] if name == TRACE else {"limit": 1})
+
+    assert SECRET not in json.dumps(result)
+
+
 def test_a_benchmark_run_is_never_offered_them():
     """They read real spans, monitors and metrics; a graded run touches nothing real."""
     from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
