@@ -113,6 +113,19 @@ _CODING: tuple[str, ...] = (
     "job",
 )
 _PR: tuple[str, ...] = ("github", "pr", "pull", "code")
+_DATADOG: tuple[str, ...] = (
+    "datadog",
+    "logs",
+    "log",
+    "errors",
+    "error",
+    "exceptions",
+    "observability",
+    "incident",
+    "outage",
+    "service",
+    "production",
+)
 
 TOOL_HINTS: dict[str, ToolHint] = {
     "exec": ToolHint(keywords=("run", "shell", "command", "terminal", "execute")),
@@ -570,6 +583,13 @@ TOOL_HINTS: dict[str, ToolHint] = {
     ),
     "n8n_recent_failures": ToolHint(
         keywords=("n8n", "automation", "workflow", "failure", "failed", "error", "broken", "run")
+    ),
+    # ── Datadog logs (the organization's own, read-only) ──────────────
+    "datadog_logs_search": ToolHint(
+        keywords=(*_DATADOG, "search", "read", "lines", "message", "find", "show")
+    ),
+    "datadog_logs_aggregate": ToolHint(
+        keywords=(*_DATADOG, "count", "how", "many", "group", "breakdown", "rate", "spike"),
     ),
     # ── The tenant tree ───────────────────────────────────────────────
     # An agent looking for this searches "tenant", "organization", "portfolio",
