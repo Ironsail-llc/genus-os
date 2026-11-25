@@ -294,7 +294,17 @@ class TestSystemsOnASeededWorld:
 @pytest.mark.integration
 class TestRecallAtEqualBudget:
     @pytest.mark.asyncio
-    async def test_budget_variant_keeps_the_product_ranking_and_fills_further(self, seeded):
+    async def test_budget_variant_keeps_the_product_ranking_and_fills_further(
+        self, seeded, monkeypatch
+    ):
+        # The product reranks and its reranker pool is capped
+        # (MEMORY_RERANK_MAX_CANDIDATES, default 16). A fake reranker keeps
+        # that cap without a model, so the product returns a short list.
+        async def capped_rerank(query, results, top_k=10):
+            return results[: min(top_k, 16)]
+
+        monkeypatch.setenv("MEMORY_RERANK_ENABLED", "1")
+        monkeypatch.setattr("robothor.rag.reranker.rerank_with_fallback", capped_rerank)
         case = next(c for c in seeded.world.cases if c.stratum == "knowledge_update")
         (product,) = es.make_systems(["recall"])
         (budget,) = es.make_systems(["recall_budget"])
