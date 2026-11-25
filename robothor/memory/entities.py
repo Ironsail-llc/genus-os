@@ -369,37 +369,54 @@ async def add_relations_batch(
 async def get_entity(name: str, *, tenant_id: str = "") -> dict[str, Any] | None:
     """Look up an entity and all its relationships.
 
+    ``name`` goes through the identity rules first, read-only
+    (:func:`robothor.memory.identity.find_entity`): an email the CRM holds, or
+    an exact name or alias (case and whitespace ignored) of one node. When
+    several nodes match, or none, the best-connected row of that name answers,
+    as before. The row's columns are named; ``embedding`` is never returned.
+
     Args:
-        name: Entity name (case-insensitive).
+        name: Entity name (case-insensitive), alias, or an email the CRM holds.
         tenant_id: Tenant scope for data isolation.
 
     Returns:
         Dict with entity info and relations, or None if not found.
     """
+    from robothor.memory.identity import ENTITY_COLUMNS, Ambiguity, find_entity
+
     _tenant = tenant_id or DEFAULT_TENANT
+    columns = ", ".join(f"e.{c}" for c in ENTITY_COLUMNS)  # never the embedding
+    degree = (
+        "(SELECT count(*) FROM memory_relations r WHERE r.tenant_id = e.tenant_id "
+        "AND (r.source_entity_id = e.id OR r.target_entity_id = e.id)) AS _degree"
+    )
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # `memory_entities` is unique on (tenant_id, name, entity_type), so one
-        # name can be several rows. Without ORDER BY, fetchone() took whichever
-        # Postgres offered: the operator's own name resolved to a 1-relation
-        # `event` node while their real `person` node, carrying thousands of
-        # relations, sat beside it. Among rows sharing a name, the one carrying the relationships is
-        # the one the caller means.
-        cur.execute(
-            """
-            SELECT e.*,
-                   (SELECT count(*) FROM memory_relations r
-                     WHERE r.tenant_id = e.tenant_id
-                       AND (r.source_entity_id = e.id OR r.target_entity_id = e.id)
-                   ) AS _degree
-            FROM memory_entities e
-            WHERE lower(e.name) = lower(%s) AND e.tenant_id = %s
-            ORDER BY _degree DESC, e.id ASC
-            LIMIT 1
-            """,
-            (name, _tenant),
-        )
+        # The identity rules first, read-only: an email the CRM holds, or an
+        # exact name or alias of one node. Several nodes, or none, fall back to
+        # the best-connected row below.
+        found = find_entity(_tenant, name, cur=cur)
+        if isinstance(found, dict | Ambiguity):
+            ids = [found["id"]] if isinstance(found, dict) else [c["id"] for c in found.candidates]
+            cur.execute(
+                f"SELECT {columns}, {degree} FROM memory_entities e "  # noqa: S608
+                "WHERE e.id = ANY(%s) AND e.tenant_id = %s ORDER BY _degree DESC, e.id ASC LIMIT 1",
+                (ids, _tenant),
+            )
+        else:
+            # `memory_entities` is unique on (tenant_id, name, entity_type), so one
+            # name can be several rows. Without ORDER BY, fetchone() took whichever
+            # Postgres offered: the operator's own name resolved to a 1-relation
+            # `event` node while their real `person` node, carrying thousands of
+            # relations, sat beside it. Among rows sharing a name, the one carrying
+            # the relationships is the one the caller means.
+            cur.execute(
+                f"SELECT {columns}, {degree} FROM memory_entities e "  # noqa: S608
+                "WHERE lower(e.name) = lower(%s) AND e.tenant_id = %s "
+                "AND e.scope_kind = 'shared' ORDER BY _degree DESC, e.id ASC LIMIT 1",
+                (name, _tenant),
+            )
         entity = cur.fetchone()
 
         if not entity:

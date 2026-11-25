@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
 _goal_parser: Callable[[dict[str, Any]], list[Any]] | None = None
 _tenant_seeder: Callable[[str], Any] | None = None
+_crm_entity_sync: Callable[[str, str, str], Any] | None = None
+_crm_merge_recorder: Callable[[str, str, str, str], Any] | None = None
 
 
 def register_goal_parser(fn: Callable[[dict[str, Any]], list[Any]]) -> None:
@@ -39,6 +41,18 @@ def register_tenant_seeder(fn: Callable[[str], Any]) -> None:
     """Override the per-tenant memory-block seeder (engine startup / tests)."""
     global _tenant_seeder
     _tenant_seeder = fn
+
+
+def register_crm_entity_sync(fn: Callable[[str, str, str], Any]) -> None:
+    """Override the CRM-record -> memory-node link keeper (tests / engine startup)."""
+    global _crm_entity_sync
+    _crm_entity_sync = fn
+
+
+def register_crm_merge_recorder(fn: Callable[[str, str, str, str], Any]) -> None:
+    """Override the recorder of CRM merges in memory identity (tests / engine startup)."""
+    global _crm_merge_recorder
+    _crm_merge_recorder = fn
 
 
 def parse_goals_from_manifest(manifest: dict[str, Any]) -> list[Any]:
@@ -57,3 +71,24 @@ def seed_blocks_for_tenant(tenant_id: str) -> Any:
     from robothor.memory.blocks import seed_blocks_for_tenant as _impl
 
     return _impl(tenant_id)
+
+
+def sync_crm_record(tenant_id: str, kind: str, record_id: str) -> Any:
+    """Keep a CRM record's memory node current. Defaults to the memory impl.
+
+    ``kind`` is ``person`` or ``company``. Memory reads the CRM; it never writes it.
+    """
+    if _crm_entity_sync is not None:
+        return _crm_entity_sync(tenant_id, kind, record_id)
+    from robothor.memory.identity import sync_crm_record as _impl
+
+    return _impl(tenant_id, kind, record_id)
+
+
+def record_crm_merge(tenant_id: str, kind: str, keeper_id: str, loser_id: str) -> Any:
+    """Record in memory that a CRM merge made the loser's node the keeper's."""
+    if _crm_merge_recorder is not None:
+        return _crm_merge_recorder(tenant_id, kind, keeper_id, loser_id)
+    from robothor.memory.identity import record_crm_merge as _impl
+
+    return _impl(tenant_id, kind, keeper_id, loser_id)
