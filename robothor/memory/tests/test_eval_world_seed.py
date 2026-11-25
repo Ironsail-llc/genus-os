@@ -300,6 +300,27 @@ class TestSeedAndCleanup:
         assert after == before
         assert sum(deleted.values()) > 0
 
+    @pytest.mark.integration
+    def test_counts_and_cleanup_cover_the_graph_and_segment_tables_when_present(
+        self, eval_tenants
+    ):
+        """Seeding CRM rows fires identity hooks that write resolution decisions;
+        conversation segments and mentions reference the eval tenant too. Cleanup
+        must remove them, or the tenant row can never be deleted."""
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT c FROM unnest(%s::text[]) c WHERE to_regclass(c) IS NOT NULL",
+                (list(seed.OPTIONAL_WORLD_TABLES),),
+            )
+            present = {r[0] for r in cur.fetchall()}
+        assert present, "the graph schema is part of this tree"
+        counted = seed.world_row_counts(eval_tenants)
+        assert present <= set(counted)
+        assert {t for t, _ in seed._DELETE_ORDER} >= present
+
 
 class TestRunWorldTimings:
     @pytest.mark.asyncio
