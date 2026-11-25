@@ -167,6 +167,14 @@ def _own_tenant(hooks: Any) -> str:
     return str(getattr(hooks.config, "tenant_id", "") or DEFAULT_TENANT)
 
 
+def _is_root_engine(hooks: Any) -> bool:
+    """Whether this engine reads the root group, the one that owns untagged events."""
+    from robothor.engine.config import ROOT_EVENT_GROUP
+
+    group = getattr(hooks.config, "event_group", "") or ROOT_EVENT_GROUP
+    return bool(group == ROOT_EVENT_GROUP)
+
+
 async def handle_stream_event(decoded: dict[str, Any], redis_client: Any, hooks: Any) -> str:
     """Route, deliver or hand off one event of the ``datadog`` stream.
 
@@ -182,12 +190,14 @@ async def handle_stream_event(decoded: dict[str, Any], redis_client: Any, hooks:
     except (TypeError, ValueError):
         payload = {}
     own = _own_tenant(hooks)
+    root = _is_root_engine(hooks)
 
     if decoded.get("type") == HANDOFF_TYPE or decoded.get("source") == HANDOFF_SOURCE:
+        addressed = decoded.get("tenant_id", "")
         if (
             decoded.get("type") != HANDOFF_TYPE
             or decoded.get("source") != HANDOFF_SOURCE
-            or decoded.get("tenant_id") != own
+            or addressed not in (own, "" if root else own)
         ):
             logger.warning("Datadog hand-off refused: not a hand-off addressed to %s", own)
             return "refused"
@@ -195,9 +205,10 @@ async def handle_stream_event(decoded: dict[str, Any], redis_client: Any, hooks:
         async def deliver_handed_off(
             alert: DatadogAlert, tenant: str, routing: str, title: str
         ) -> dict[str, Any]:
-            # Routed again from the alert's own tags: only an org-tagged alert
-            # for this very tenant is delivered here, whatever the envelope says.
-            if routing != "org" or tenant != own:
+            # Routed again from the alert's own tags, whatever the envelope
+            # says: an org-tagged alert for this very tenant, or (on the root
+            # engine only) one with no usable org tag, which is the root's.
+            if tenant != own or not (routing == "org" or root):
                 return {"mode": "refused"}
             return await _deliver_here(alert, own, title, redis_client, hooks)
 
@@ -206,6 +217,10 @@ async def handle_stream_event(decoded: dict[str, Any], redis_client: Any, hooks:
         )
 
     async def route(alert: DatadogAlert, tenant: str, routing: str, title: str) -> dict[str, Any]:
+        if routing != "org" and not root:
+            # The root's alert, received beside another tenant's engine: the
+            # process's default tenant here is that tenant, not the root.
+            return await _hand_off_to_root(payload, redis_client, own)
         if tenant == own:
             return await _deliver_here(alert, own, title, redis_client, hooks)
         return await _hand_off(payload, tenant, redis_client)
@@ -226,12 +241,14 @@ def _field(info: Any, name: str) -> Any:
     return info.get(name, info.get(name.encode()))
 
 
-async def _engine_running(redis_client: Any, tenant: str) -> bool:
+async def _engine_running(redis_client: Any, tenant: str | None) -> bool:
     """Whether ``tenant``'s engine read the ``datadog`` stream in the last minute.
 
     Engines name their consumer ``engine-<tenant>`` in whatever group they
-    read with, so every group on the stream is looked at.
+    read with, so every group on the stream is looked at. ``None`` asks for
+    the root engine: any reader of the root group.
     """
+    from robothor.engine.config import ROOT_EVENT_GROUP
     from robothor.engine.hooks import GROUP_RIVAL_ACTIVE_MS, STREAM_PREFIX
 
     key = f"{STREAM_PREFIX}{_STREAM}"
@@ -239,43 +256,75 @@ async def _engine_running(redis_client: Any, tenant: str) -> bool:
     try:
         for group in await redis_client.xinfo_groups(key) or []:
             name = _text(_field(group, "name"))
+            if tenant is None and name != ROOT_EVENT_GROUP:
+                continue
             for info in await redis_client.xinfo_consumers(key, name) or []:
                 idle = int(_field(info, "idle") or 0)
-                if _text(_field(info, "name")) == consumer and idle < GROUP_RIVAL_ACTIVE_MS:
+                named = tenant is None or _text(_field(info, "name")) == consumer
+                if named and idle < GROUP_RIVAL_ACTIVE_MS:
                     return True
     except Exception as exc:  # noqa: BLE001 - unknown is not running
         logger.info("Datadog hand-off: readers of the stream unknown (%s)", type(exc).__name__)
     return False
 
 
-async def _hand_off(payload: Any, tenant: str, redis_client: Any) -> dict[str, Any]:
-    """Address the alert to ``tenant``'s own engine, or say why it could not be."""
+async def _write_hand_off(payload: Any, addressed: str, redis_client: Any) -> bool:
+    """One hand-off event on the stream, addressed to ``addressed`` (``""``: the root)."""
     from robothor.engine.hooks import STREAM_PREFIX
 
+    envelope = {
+        "id": str(uuid.uuid4()),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "type": HANDOFF_TYPE,
+        "event_type": HANDOFF_TYPE,
+        "source": HANDOFF_SOURCE,
+        "actor": "engine",
+        "payload": json.dumps(payload),
+        "correlation_id": "",
+        "tenant_id": addressed,
+    }
+    try:
+        await redis_client.xadd(
+            f"{STREAM_PREFIX}{_STREAM}", envelope, maxlen=10000, approximate=True
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 - the caller records the failure
+        logger.warning("Datadog hand-off failed (%s)", type(exc).__name__)
+        return False
+
+
+async def _hand_off_to_root(payload: Any, redis_client: Any, own: str) -> dict[str, Any]:
+    """The root's alert, received here: hand it to the root engine, never keep it here.
+
+    Untagged (``tenant_id`` empty), so only the root-group engine owns it.
+    When that cannot be done the alert is logged and refused: recording it
+    here would put the root's alert in this tenant.
+    """
+    if (
+        redis_client is not None
+        and await _engine_running(redis_client, None)
+        and await _write_hand_off(payload, "", redis_client)
+    ):
+        return {"mode": "handed_off", "handoff": {"tenant": "root"}}
+    logger.error(
+        "Datadog alert for the root tenant reached tenant %s's engine and could not be "
+        "handed to the root engine; not recorded. Send the Datadog webhook to the root "
+        "tenant's receiver.",
+        own,
+    )
+    return {"mode": "refused"}
+
+
+async def _hand_off(payload: Any, tenant: str, redis_client: Any) -> dict[str, Any]:
+    """Address the alert to ``tenant``'s own engine, or say why it could not be."""
     if redis_client is None:
         reason = "handoff_failed"
     elif not await _engine_running(redis_client, tenant):
         reason = "no_engine"
+    elif await _write_hand_off(payload, tenant, redis_client):
+        return {"mode": "handed_off", "handoff": {"tenant": tenant}}
     else:
-        envelope = {
-            "id": str(uuid.uuid4()),
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "type": HANDOFF_TYPE,
-            "event_type": HANDOFF_TYPE,
-            "source": HANDOFF_SOURCE,
-            "actor": "engine",
-            "payload": json.dumps(payload),
-            "correlation_id": "",
-            "tenant_id": tenant,
-        }
-        try:
-            await redis_client.xadd(
-                f"{STREAM_PREFIX}{_STREAM}", envelope, maxlen=10000, approximate=True
-            )
-            return {"mode": "handed_off", "handoff": {"tenant": tenant}}
-        except Exception as exc:  # noqa: BLE001 - recorded as a failed hand-off
-            logger.warning("Datadog hand-off to %s failed (%s)", tenant, type(exc).__name__)
-            reason = "handoff_failed"
+        reason = "handoff_failed"
     await _tell_root(tenant, reason)
     return {
         "mode": FAILED,
@@ -399,7 +448,14 @@ async def _deliver_here(
     if outcome["mode"] != DELIVERED:
         if outcome["mode"] == FAILED and claimed:
             await _forget(redis_client, gate)  # the next notification tries again
-        outcome["triage"] = {"started": False, "reason": outcome["mode"]}
+        if outcome["mode"] == FAILED and not recovery:
+            # A failed page is when the read-only look matters most; its own
+            # key still keeps it to one run per episode.
+            outcome["triage"] = await _maybe_triage(
+                alert, tenant, title, redis_client, hooks, base, claimed
+            )
+        else:
+            outcome["triage"] = {"started": False, "reason": outcome["mode"]}
         return outcome
     if recovery:
         stages = [f"{base}:sent:{name}" for name in _STAGES]
