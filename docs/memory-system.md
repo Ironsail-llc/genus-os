@@ -505,19 +505,36 @@ matters:
   it records an `operator` decision and points `superseded_by` at it. Every
   mention under the decision moves to that entity, or to NULL. From then on the
   name never resolves to the rejected entity, unless a later live operator
-  decision chooses it again. A decision that left its name unresolved cannot be
-  settled this way.
+  decision chooses it again. Three kinds of decision cannot be redirected this
+  way and must be corrected per fact: one that left its name unresolved, a
+  `context` decision (it rested on one conversation or organisation), and one
+  whose name is not a full name (a first name may only resolve on
+  conversation evidence).
 
 `dry_run` returns the same report and writes nothing. The report lists the
 mentions moved, their facts, and the relations those facts support: the
 derived rows to rebuild. The same list is stored on the decision it writes.
 
 A CRM merge is recorded the same way: a decision resolves the loser's entity
-to the keeper's, and nothing rewrites mention ids. Each later decision that
-reached the keeper through the merge records it (`via_merge`). Reversing the
-merge decision reverses those decisions too, and their mentions return to the
-loser's entity. Identity therefore lives only in decisions and mentions. Entity
-rows are never merged, and there is no canonical-entity lookup.
+to the keeper's, and nothing rewrites mention ids. A later decision records
+how the merge shaped it, judged on the match the rules decided on:
+
+- `via_merge`: it reached the keeper only through the loser's name, alias or
+  key. The mention named the loser.
+- `merge_collapsed`: the keeper's own name or key matched equally, and the
+  merge removed the loser as a competitor. This is the case of two CRM
+  records with the same name.
+- Nothing: the keeper matched on its own, and the merge added at most a weaker
+  match (a nickname variant of the loser's name).
+
+Reversing the merge decision moves `via_merge` mentions back to the loser's
+entity and leaves `merge_collapsed` mentions unresolved, because the name no
+longer singles anyone out. Everything else stays with the keeper. These moves
+are per-fact operator decisions, so they neither bind nor block later
+mentions. Those resolve by the ordinary rules: a bare name of two same-named
+people whose merge was reversed goes to the one record still live in the CRM.
+Identity therefore lives only in decisions and mentions. Entity rows are never
+merged, and there is no canonical-entity lookup.
 
 **Backfill.** `backfill_mentions(tenant_id, *, dry_run, batch_size=500,
 resume_from=None)` turns the names in existing `memory_facts.entities` into
