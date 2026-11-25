@@ -309,8 +309,8 @@ async def _config_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return {
             "error": (
                 f"{SCOPES_ENV} decides what each tenant may read from Datadog, so "
-                "config_set never writes it. The operator changes it with "
-                "`genus config set` on the instance."
+                "config_set never writes it. The operator sets it in the instance's "
+                "environment, or with `genus config set --apply` where systemd owns it."
             ),
             "key": row["env"],
         }

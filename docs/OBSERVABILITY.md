@@ -426,7 +426,8 @@ credentials (`is_platform_credential` in `robothor/secrets/classification.py`):
   refuse both names in every tenant, whatever the agent's credential tier.
 - `config_get` shows them only as a fingerprint, and `config_set` refuses them
   and refuses `ROBOTHOR_DATADOG_SCOPES`, so an agent cannot widen its own
-  tenant's filter. Change the map with `genus config set` on the instance.
+  tenant's filter. Change the map in the instance's environment, or with
+  `genus config set --apply` where systemd owns the value.
 - Set `ROBOTHOR_DATADOG_SCOPES` in the instance's environment rather than in
   `config.yaml`. The environment wins over the file, and an agent that can
   write files in the workspace can write the file.
