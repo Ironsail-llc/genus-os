@@ -157,6 +157,20 @@ def test_the_browser_driver_filter_drops_them():
     assert child["ACME_UNRELATED"] == "kept"
 
 
+def test_the_calendar_recovery_batch_is_not_piped_the_keys(monkeypatch):
+    """It is piped the platform credentials it needs for the database; the
+    Datadog keys are no use to it, so they stay in the engine."""
+    from robothor.engine import calendar_recovery_worker as worker
+
+    monkeypatch.setenv("ROBOTHOR_DB_PASSWORD", FIXTURE_VALUE)
+    for name in DATADOG_KEYS:
+        monkeypatch.setenv(name, FIXTURE_VALUE)
+    piped = set(json.loads(worker._credentials_for_child()))
+    survivors = sorted(piped & set(DATADOG_KEYS))
+    assert "ROBOTHOR_DB_PASSWORD" in piped
+    assert survivors == []
+
+
 def test_the_codex_child_gets_neither_key(monkeypatch):
     from robothor.engine.codex_provider import _codex_env
 
