@@ -220,7 +220,7 @@ def fleet(engine_config: EngineConfig, audit: Audit):
 
 
 async def test_the_routed_tenants_own_engine_delivers_it(fleet: Fleet, audit: Audit) -> None:
-    await fleet.deliver_webhook(_payload())
+    await fleet.deliver_webhook(_payload(priority="P1"))
 
     assert [(t, level) for t, level, *_ in fleet.sent] == [(A, "critical")]
     (row,) = audit.alerts()
@@ -231,6 +231,30 @@ async def test_the_routed_tenants_own_engine_delivers_it(fleet: Fleet, audit: Au
     assert d["delivery"]["route"] == "page"
     assert d["triage"]["started"] is True
     assert [t for t, _ in fleet.triage_runs()] == [A]
+    # Readable by the existing dashboard reader: who was told, and the run.
+    assert d["would_notify"]["level"] == "critical"
+    assert d["would_notify"]["route"] == "page"
+    assert d["would_run"]["agent"] == "main"
+    assert d["would_run"]["read_only"] is True
+    assert "12345" in d["would_run"]["prompt"]
+
+
+@pytest.mark.parametrize("priority", ["P1", "p1", "1", " P1 "])
+async def test_a_p1_trigger_pages(fleet: Fleet, priority: str) -> None:
+    await fleet.deliver_webhook(_payload(priority=priority))
+    assert [level for _, level, *_ in fleet.sent] == ["critical"]
+
+
+@pytest.mark.parametrize("priority", ["P2", "P3", "p5", "", "P10", "11", "high"])
+async def test_any_other_trigger_goes_to_the_digest_and_still_triages(
+    fleet: Fleet, audit: Audit, priority: str
+) -> None:
+    await fleet.deliver_webhook(_payload(priority=priority))
+    assert [level for _, level, *_ in fleet.sent] == ["warning"]
+    (row,) = audit.alerts()
+    assert row["details"]["delivery"]["route"] == "digest"
+    assert row["details"]["would_notify"]["route"] == "digest"
+    assert len(fleet.triage_runs()) == 1
 
 
 async def test_the_root_hands_off_and_delivers_nothing_itself(fleet: Fleet, audit: Audit) -> None:
@@ -246,7 +270,7 @@ async def test_the_root_hands_off_and_delivers_nothing_itself(fleet: Fleet, audi
 async def test_the_roots_own_alert_is_delivered_by_the_root(fleet: Fleet, audit: Audit) -> None:
     await fleet.deliver_webhook(_payload(tags="env:prod"))
 
-    assert [(t, level) for t, level, *_ in fleet.sent] == [(ROOT, "critical")]
+    assert [(t, level) for t, level, *_ in fleet.sent] == [(ROOT, "warning")]
     (row,) = audit.alerts()
     assert row["tenant_id"] == ROOT and row["details"]["routing"] == "untagged"
     assert [t for t, _ in fleet.triage_runs()] == [ROOT]
@@ -381,15 +405,17 @@ async def test_a_storm_for_one_monitor_is_one_alert_and_one_triage(
     assert {r["details"]["delivery"].get("reason") for r in audit.alerts()[1:]} == {"episode_open"}
 
 
+@pytest.mark.parametrize(("priority", "level"), [("P1", "critical"), ("P3", "warning")])
 async def test_warn_then_trigger_escalates_once_and_triages_once(
-    fleet: Fleet, audit: Audit
+    fleet: Fleet, audit: Audit, priority: str, level: str
 ) -> None:
-    await fleet.deliver_webhook(_payload(transition="Warn", event_id="1", date="1"))
-    await fleet.deliver_webhook(_payload(transition="Re-Warn", event_id="2", date="2"))
-    await fleet.deliver_webhook(_payload(transition="Triggered", event_id="3", date="3"))
-    await fleet.deliver_webhook(_payload(transition="Warn", event_id="4", date="4"))
+    """A trigger is a step above Warn even when, below P1, it is sent at the same level."""
+    for n, transition in enumerate(["Warn", "Re-Warn", "Triggered", "Warn"]):
+        await fleet.deliver_webhook(
+            _payload(transition=transition, event_id=str(n), date=str(n), priority=priority)
+        )
 
-    assert [level for _, level, *_ in fleet.sent] == ["warning", "critical"]
+    assert [lvl for _, lvl, *_ in fleet.sent] == ["warning", level]
     assert len(fleet.triage_runs()) == 1
     assert [r["details"]["mode"] for r in audit.alerts()] == [
         "delivered",
@@ -411,11 +437,11 @@ async def test_a_recovery_sends_one_info_and_starts_no_run(fleet: Fleet, audit: 
     await fleet.deliver_webhook(_payload(transition="Recovered", event_id="9", date="9"))
     await fleet.deliver_webhook(_payload(transition="Recovered", event_id="10", date="10"))
 
-    assert [level for _, level, *_ in fleet.sent] == ["critical", "info"]
+    assert [level for _, level, *_ in fleet.sent] == ["warning", "info"]
     assert len(fleet.triage_runs()) == 1
     # The recovery closed the episode: the next trigger is a new one.
     await fleet.deliver_webhook(_payload(event_id="11", date="11"))
-    assert [level for _, level, *_ in fleet.sent] == ["critical", "info", "critical"]
+    assert [level for _, level, *_ in fleet.sent] == ["warning", "info", "warning"]
     assert len(fleet.triage_runs()) == 2
 
 

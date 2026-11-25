@@ -204,7 +204,8 @@ class TestRecord:
         assert d["mode"] == "delivery_failed"
         assert d["delivery"] == {"reason": "not_available"}
         assert d["routing"] == "org"
-        assert "would_notify" not in d and "would_run" not in d
+        assert d["would_notify"]["route"] == "digest"
+        assert d["would_run"]["agent"] is None
 
         for watched in no_delivery:
             watched.assert_not_called()
@@ -356,11 +357,26 @@ class TestRecord:
 
 
 class TestPlan:
-    def test_a_trigger_would_page(self) -> None:
-        plan = dd.would_notify("triggered")
+    @pytest.mark.parametrize("priority", ["P1", "p1", "1"])
+    @pytest.mark.parametrize("transition", ["triggered", "re_triggered"])
+    def test_a_p1_trigger_would_page(self, transition: str, priority: str) -> None:
+        plan = dd.would_notify(transition, priority)
         assert plan["level"] == "critical"
         assert plan["route"] == "page"
         assert "telegram" in plan["channels"]
+
+    @pytest.mark.parametrize("priority", ["P2", "P5", "", "P11", "urgent"])
+    def test_any_other_trigger_would_go_to_the_digest(self, priority: str) -> None:
+        plan = dd.would_notify("triggered", priority)
+        assert plan["level"] == "warning"
+        assert plan["route"] == "digest"
+
+    @pytest.mark.parametrize(
+        ("transition", "level"),
+        [("warn", "warning"), ("no_data", "warning"), ("recovered", "info")],
+    )
+    def test_priority_changes_nothing_else(self, transition: str, level: str) -> None:
+        assert dd.level_for(transition, "P1") == level
 
     @pytest.mark.parametrize("transition", ["warn", "no_data", "recovered"])
     def test_the_rest_would_go_to_the_digest(self, transition: str) -> None:
@@ -374,7 +390,7 @@ class TestPlan:
         monkeypatch.setenv("ROBOTHOR_ALERT_FALLBACK_CHANNELS", "email:agent@example.com")
         reset_settings()
         try:
-            plan = dd.would_notify("triggered")
+            plan = dd.would_notify("triggered", "P1")
         finally:
             reset_settings()
         assert "email" in plan["channels"]
@@ -431,6 +447,11 @@ class TestDeliverer:
         assert d["mode"] == "delivered"
         assert d["delivery"] == outcome["delivery"]
         assert d["triage"] == outcome["triage"]
+        # The fields the existing dashboard reader shows, kept.
+        assert d["would_notify"] == dd.would_notify("triggered", "P2")
+        assert d["would_run"]["tenant"] == CHILD
+        assert d["would_run"]["read_only"] is True
+        assert "12345" in d["would_run"]["prompt"]
 
     @pytest.mark.asyncio
     async def test_a_raising_deliverer_is_recorded_as_failed(self, audit) -> None:

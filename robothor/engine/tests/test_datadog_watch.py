@@ -42,6 +42,8 @@ SECRET_BODY = "card 4111 declined for agent@example.com"
 
 @pytest.fixture(autouse=True)
 def _clean_state(monkeypatch: pytest.MonkeyPatch):
+    # No Redis unless a test gives one: no webhook episode is open.
+    monkeypatch.setattr("robothor.engine.webhooks._get_async_redis", AsyncMock(return_value=None))
     detectors._dedup.clear()
     watch.reset_state()
     monkeypatch.setattr(watch, "scope_for", lambda tenant: SCOPES.get(tenant))
@@ -413,7 +415,8 @@ async def test_a_spike_is_recorded_and_delivered_once(
     assert event["baseline"]["median"] == 10
     assert event["window"] == {"start": CURRENT_START, "end": CURRENT_END, "minutes": 15}
     assert event["mode"] == "delivered"
-    assert "would_notify" not in event
+    # Kept for the existing dashboard reader: who was told, the brief, the count.
+    assert CHILD_A in event["would_notify"]
     assert "shop-api" in event["brief"] and "80" in event["brief"]
     assert event["brief"].count(". ") + 1 <= 3
     lines = [r.getMessage() for r in caplog.records if "event=datadog_watch" in r.getMessage()]
@@ -1105,3 +1108,90 @@ async def test_a_finding_for_another_tenant_is_never_delivered_here(
     assert event["mode"] == "delivery_failed"
     assert event["delivery"]["reason"] == "not_this_engine"
     alert.assert_not_called()
+
+
+# ── no double notification with the webhook ─────────────────────────────────
+
+
+class EpisodeRedis:
+    """The few keys the watch reads: the webhook's episode keys."""
+
+    def __init__(self, keys: set[str] | None = None, *, broken: bool = False) -> None:
+        self.keys = keys or set()
+        self.broken = broken
+
+    async def exists(self, *keys: str) -> int:
+        if self.broken:
+            raise ConnectionError("redis went away")
+        return sum(1 for k in keys if k in self.keys)
+
+
+def _webhook_episode(monitor: str, stage: str) -> str:
+    from robothor.engine.datadog_delivery import EPISODE_PREFIX
+
+    return f"{EPISODE_PREFIX}{CHILD_A}:{monitor}:sent:{stage}"
+
+
+@pytest.mark.parametrize("stage", ["warn", "alert", "page"])
+async def test_a_monitor_the_webhook_already_sent_is_not_sent_again(
+    stage: str,
+    audit: MagicMock,
+    alert: AsyncMock,
+    monitor_scopes: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = EpisodeRedis({_webhook_episode("9", stage)})
+    monkeypatch.setattr("robothor.engine.webhooks._get_async_redis", AsyncMock(return_value=redis))
+    dd = Datadog(monitors=[_monitor(9)])
+    w = _watch(dd)
+    await w.tick([CHILD_A])
+    # The webhook's recovery closes its episode and leaves its mark.
+    redis.keys = {_webhook_episode("9", "recovered")}
+    dd.monitors = []
+    await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert [e["kind"] for e in events] == ["monitor_firing", "monitor_recovered"]
+    assert [e["mode"] for e in events] == ["suppressed", "suppressed"]
+    assert {e["delivery"]["reason"] for e in events} == {"covered_by_webhook"}
+    alert.assert_not_called()
+
+
+async def test_another_monitors_webhook_episode_does_not_cover_this_one(
+    audit: MagicMock, alert: AsyncMock, monitor_scopes: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    redis = EpisodeRedis({_webhook_episode("10", "alert"), _webhook_episode("9", "recovered")})
+    monkeypatch.setattr("robothor.engine.webhooks._get_async_redis", AsyncMock(return_value=redis))
+    dd = Datadog(monitors=[_monitor(9)])
+    await _watch(dd).tick([CHILD_A])
+    (event,) = await _events(audit)
+    assert event["mode"] == "delivered"
+    alert.assert_awaited_once()
+
+
+@pytest.mark.parametrize("redis", [None, "broken"])
+async def test_without_redis_the_watch_delivers(
+    redis: Any,
+    audit: MagicMock,
+    alert: AsyncMock,
+    monitor_scopes: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A duplicate is better than a missed alert."""
+    client = EpisodeRedis(broken=True) if redis == "broken" else None
+    monkeypatch.setattr("robothor.engine.webhooks._get_async_redis", AsyncMock(return_value=client))
+    dd = Datadog(monitors=[_monitor(9)])
+    await _watch(dd).tick([CHILD_A])
+    (event,) = await _events(audit)
+    assert event["mode"] == "delivered"
+    alert.assert_awaited_once()
+
+
+async def test_the_webhook_check_is_only_for_monitor_findings(
+    audit: MagicMock, alert: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lookup = AsyncMock(return_value=EpisodeRedis({_webhook_episode("shop-api", "alert")}))
+    monkeypatch.setattr("robothor.engine.webhooks._get_async_redis", lookup)
+    await _watch(Datadog(**SPIKING)).tick([CHILD_A])
+    (event,) = await _events(audit)
+    assert event["kind"] == "error_spike" and event["mode"] == "delivered"
+    lookup.assert_not_called()
