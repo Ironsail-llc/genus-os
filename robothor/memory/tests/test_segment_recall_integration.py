@@ -51,7 +51,12 @@ _PATCHED_MODULES = (
 def pg(scratch_db, monkeypatch):
     import importlib
 
-    db, dsn = scratch_db(through=MIGRATION)
+    # Recall reads every column the chain adds (utility, origin, scope), so
+    # the database is migrated through the last manifest entry, not only
+    # through the migration this leg introduced.
+    from robothor.db.migrate import _discover
+
+    db, dsn = scratch_db(through=list(_discover())[-1].migration_id)
 
     @contextlib.contextmanager
     def connect(*_a: Any, **_kw: Any):
