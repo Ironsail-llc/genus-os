@@ -1286,3 +1286,17 @@ async def test_a_spike_whose_alert_failed_is_tried_again_while_it_lasts(
     events = await _events(audit)
     assert _modes(events, "error_spike") == ["delivery_failed", "delivered"]
     assert sender.await_count == 2
+
+
+async def test_a_spike_found_afresh_is_sent_once_in_its_pass(
+    audit: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fresh finding replaces the stored one: one send, with this pass's counts."""
+    sender = _flaky(monkeypatch, False, False, False)
+    dd = Datadog(**SPIKING)
+    w = _watch(dd)
+    await w.tick([CHILD_A])
+    detectors._dedup.clear()  # an hour later: the spike is found again
+    await w.tick([CHILD_A])
+    assert sender.await_count == 2
+    assert _modes(await _events(audit), "error_spike") == ["delivery_failed", "delivery_failed"]

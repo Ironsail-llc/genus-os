@@ -988,3 +988,23 @@ async def test_a_p1_storm_inside_one_episode_still_pages_once(
         )
     assert [lvl for _, lvl, *_ in fleet.sent] == ["critical"]
     assert len(fleet.triage_runs()) == 1
+
+
+async def test_a_recovery_older_than_the_latest_trigger_does_not_close_the_episode(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """Datadog's retry of a recovery lands after the next incident's trigger."""
+    await fleet.deliver_webhook(_payload(event_id="1", date="10"))
+    await fleet.deliver_webhook(_payload(transition="Re-Triggered", event_id="3", date="30"))
+    await fleet.deliver_webhook(_payload(transition="Recovered", event_id="2", date="20"))
+    await fleet.deliver_webhook(_payload(transition="Re-Triggered", event_id="4", date="40"))
+
+    rows = audit.alerts()
+    late = rows[2]["details"]
+    assert (late["mode"], late["delivery"]["reason"]) == ("suppressed", "superseded_by_trigger")
+    assert [lvl for _, lvl, *_ in fleet.sent] == ["warning"], "no false 'recovered'"
+    assert rows[3]["details"]["mode"] == "suppressed", "the episode stayed open"
+    assert len(fleet.triage_runs()) == 1
+
+    await fleet.deliver_webhook(_payload(transition="Recovered", event_id="5", date="50"))
+    assert [lvl for _, lvl, *_ in fleet.sent] == ["warning", "info"]
