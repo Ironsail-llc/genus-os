@@ -79,8 +79,8 @@ BASELINE_WINDOWS = 8
 INGEST_LAG_MINUTES = 2
 #: Below this many errors in 15 minutes nothing is worth a brief, whatever the ratio.
 SPIKE_MIN_COUNT = 20
-#: A service with no errors in the baseline (new, or silent) must clear this:
-#: a deploy's startup burst is not an incident.
+#: A service with no usual level (new, silent, or a median of zero: a stray
+#: error or two in the baseline) must clear this: a startup burst is not an incident.
 NEW_SERVICE_MIN_COUNT = 100
 #: At least this many times the usual (median) count.
 SPIKE_RATIO = 3.0
@@ -119,7 +119,9 @@ def check_error_spike(
     """The services whose current error count is a spike against their own baseline.
 
     ``baseline[service]`` is the count in each preceding window. A service
-    missing from it, or with no errors in any window, has no baseline.
+    missing from it, or with no errors in any window, has no baseline. One
+    whose median is zero has no usual level either and needs the same higher
+    floor, so the rule has no jump between "silent" and "one stray error".
     """
     found: list[SpikeFinding] = []
     for service, count in sorted(current.items()):
@@ -131,7 +133,8 @@ def check_error_spike(
         median = float(statistics.median(history))
         spread = MAD_SCALE * float(statistics.median(abs(x - median) for x in history))
         threshold = max(SPIKE_RATIO * median, median + SPIKE_SPREAD * spread)
-        if count >= SPIKE_MIN_COUNT and count > threshold:
+        floor = NEW_SERVICE_MIN_COUNT if median == 0 else SPIKE_MIN_COUNT
+        if count >= floor and count > threshold:
             found.append(SpikeFinding(service, count, median, spread, new_service=False))
     return found
 
@@ -189,7 +192,8 @@ async def _default_is_root(tenant_id: str) -> bool:
     from robothor.crm import dal
 
     row = await asyncio.to_thread(dal.get_tenant, tenant_id)
-    return row is None or not row.get("parent_tenant_id")
+    # get_tenant returns the API shape (tenant_to_dict), not the raw row.
+    return row is None or not row.get("parentTenantId")
 
 
 def _would_notify(tenant_id: str) -> str:
@@ -218,6 +222,7 @@ class DatadogWatch:
         self._counts: dict[str, dict[str, dict[str, int]]] = {}
         self._outcomes: deque[str] = deque(maxlen=CONNECTION_FAILURES_FOR_LOST + 1)
         self._lost = False
+        self._episode = ""
         self._said: set[str] = set()
 
     def _once(self, key: str, message: str, *args: Any) -> None:
@@ -327,7 +332,10 @@ class DatadogWatch:
             "window": {"start": _iso(start), "end": _iso(end), "minutes": WINDOW_MINUTES},
         }
         title = f"Datadog error spike: {f.service}"
-        await self._finding(tenant, "error_spike", title, brief, details, fingerprint)
+        # The window in the id, so a spike in a later window is never
+        # suppressed by the alert cooldown of an earlier one.
+        alert_id = f"{fingerprint}:{_iso(end)}"
+        await self._finding(tenant, "error_spike", title, brief, details, alert_id)
         return 1
 
     async def _watch_connection(self, client: AsyncDatadogClient, failures: list[str]) -> int:
@@ -338,12 +346,21 @@ class DatadogWatch:
             logger.info("datadog watch: tenant tree unreadable (%s)", type(exc).__name__)
             return 0
         outcome = next((k for k in failures if k in _LINK_FAILURES), None)
+        rejected = "a key"
         if outcome is None:
-            try:
-                await client.validate()
-                outcome = "ok"
-            except DatadogError as exc:
-                outcome = exc.kind
+            # /api/v1/validate checks only the API key; the probe (a log search
+            # that matches nothing) proves the application key too.
+            checks = (
+                ("the API key", client.validate),
+                ("the application key", client.validate_app_key),
+            )
+            outcome = "ok"
+            for name, check in checks:
+                try:
+                    await check()
+                except DatadogError as exc:
+                    outcome, rejected = exc.kind, name
+                    break
         self._outcomes.append(outcome)
         verdict = check_connection(list(self._outcomes), lost=self._lost)
         if verdict == "none":
@@ -351,8 +368,9 @@ class DatadogWatch:
         tenant = self.home_tenant
         if verdict == "lost":
             self._lost = True
+            self._episode = _iso(self._clock())
             cause = (
-                "Datadog rejected the API key"
+                f"Datadog rejected {rejected}"
                 if self._outcomes[-1] == "auth"
                 else "Datadog could not be reached"
             )
@@ -368,7 +386,10 @@ class DatadogWatch:
             kind, title = "connection_restored", "Datadog link restored"
         details = {"service": None, "checks": list(self._outcomes)}
         self._outcomes.clear()
-        await self._finding(tenant, kind, title, brief, details, f"datadog_link:{tenant}:{kind}")
+        # One alert id per episode: a delivered id is suppressed for the
+        # alert cooldown, and a second loss inside it is a new episode.
+        alert_id = f"datadog_link:{tenant}:{kind}:{self._episode}"
+        await self._finding(tenant, kind, title, brief, details, alert_id)
         return 1
 
     async def _finding(
@@ -378,7 +399,7 @@ class DatadogWatch:
         title: str,
         brief: str,
         details: dict[str, Any],
-        fingerprint: str,
+        alert_id: str,
     ) -> None:
         """Record one finding; deliver it too under ``deliver`` for this engine's tenant."""
         mode = self._mode()
@@ -428,7 +449,7 @@ class DatadogWatch:
                 level,
                 title,
                 brief,
-                alert_id=fingerprint,
+                alert_id=alert_id,
                 kind="datadog_watch",
                 metadata={"tenant_id": tenant, "kind": kind, "service": details.get("service")},
             )
@@ -437,11 +458,50 @@ class DatadogWatch:
 # ── the daemon's entry point ────────────────────────────────────────────────
 
 _watches: dict[str, DatadogWatch] = {}
+#: The pass in flight, if any. Datadog calls take up to the client timeout
+#: each, so a pass runs beside the watchdog loop, never inside it.
+_pass: asyncio.Task[None] | None = None
 
 
 def reset_state() -> None:
     """Forget every engine-level watch (tests)."""
+    global _pass  # noqa: PLW0603
     _watches.clear()
+    _pass = None
+
+
+def start_datadog_watch(tenant_id: str) -> bool:
+    """Start one watch pass in the background; False when one is still running.
+
+    The watchdog calls this on its 5-minute tick and moves straight on, so a
+    slow or hanging Datadog never delays its pings, the approval driver or
+    schedule reconciliation. A tick that finds the last pass still running
+    skips, so passes never pile up.
+    """
+    global _pass  # noqa: PLW0603
+    if _pass is not None and not _pass.done():
+        logger.info("datadog watch: the previous pass is still running; this tick skips")
+        return False
+    from robothor.engine.task_registry import get_task_registry
+
+    _pass = get_task_registry().spawn(_run_pass(tenant_id), name="datadog-watch")
+    return True
+
+
+async def wait_for_pass() -> None:
+    """Return once the pass in flight (if any) has finished."""
+    if _pass is not None:
+        await asyncio.wait({_pass})
+
+
+async def _run_pass(tenant_id: str) -> None:
+    try:
+        recorded = await datadog_watch_detector(tenant_id)
+    except Exception as exc:  # noqa: BLE001 - the alarm's own failure is a WARNING; next tick retries
+        logger.warning("datadog watch: pass failed: %s", exc)
+        return
+    if recorded:
+        logger.info("datadog watch: %d finding(s) recorded", recorded)
 
 
 def _scope_map_declared() -> bool:

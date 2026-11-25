@@ -2214,15 +2214,14 @@ async def _run_tick_detectors(tick_count: int, tenant_id: str) -> None:
         except Exception as e:  # noqa: BLE001 - the alarm's own failure is a WARNING; next tick retries
             logger.warning("Detectors: pattern checks failed: %s", e)
 
-        # Datadog watch for this engine's own tenant (datadog_watch.py says why).
+        # Datadog watch for this engine's own tenant (datadog_watch.py says
+        # why). It calls a vendor, so it runs in the background, not inline.
         try:
-            from robothor.engine.datadog_watch import datadog_watch_detector
+            from robothor.engine.datadog_watch import start_datadog_watch
 
-            fired = await datadog_watch_detector(tenant_id)
-            if fired:
-                logger.info("Detectors: %d datadog watch findings recorded", fired)
+            start_datadog_watch(tenant_id)
         except Exception as e:  # noqa: BLE001 - the alarm's own failure is a WARNING; next tick retries
-            logger.warning("Detectors: datadog watch failed: %s", e)
+            logger.warning("Detectors: datadog watch not started: %s", e)
 
     # Zombie runner: every 20 ticks = 10 minutes
     if tick_count % 20 == 0:
