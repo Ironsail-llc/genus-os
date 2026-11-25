@@ -129,3 +129,8 @@ class TestDispatch:
         assert (
             cli.cmd_memory_eval(_parse("--world", "--answers", "--systems", "recall,oracle")) == 3
         )
+
+    def test_progress_flag_reaches_the_runner(self, stubs, tmp_path):
+        path = tmp_path / "p.jsonl"
+        cli.cmd_memory_eval(_parse("--world", "--answers", "--progress", str(path)))
+        assert stubs["progress_path"] == str(path)

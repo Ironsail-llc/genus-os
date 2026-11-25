@@ -3,6 +3,7 @@ with fakes (no database, no model)."""
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -149,7 +150,7 @@ class _Echo:
         )
 
 
-class TestRunner:
+class _RunnerFakes:
     @pytest.fixture
     def fakes(self, monkeypatch):
         calls: dict[str, int] = {"seed": 0, "cleanup": 0}
@@ -186,6 +187,8 @@ class TestRunner:
         yield calls, fake_answer
         es.unregister_system("echo_run")
 
+
+class TestRunner(_RunnerFakes):
     @pytest.mark.asyncio
     async def test_every_stratum_scored_for_every_system_with_tokens_and_latency(self, fakes):
         calls, fake_answer = fakes
@@ -273,3 +276,66 @@ class TestRunner:
             await ea.run_answers(
                 1, "small", "all", systems=["echo_run"], reference="nope", answer_fn=fake_answer
             )
+
+
+class TestProgressAndResume(_RunnerFakes):
+    """A long run writes each judged case to a JSONL as it goes, so progress is
+    visible and a restart resumes instead of starting over."""
+
+    @staticmethod
+    def _counting(fake_answer):
+        calls: list[str] = []
+
+        async def answer(question, bundle, *, as_of=None):
+            calls.append(question)
+            return await fake_answer(question, bundle, as_of=as_of)
+
+        return answer, calls
+
+    @staticmethod
+    async def _run(answer_fn, path, **kw):
+        return await ea.run_answers(
+            1,
+            "small",
+            "all",
+            systems=["echo_run"],
+            reference="echo_run",
+            answer_fn=answer_fn,
+            progress_path=str(path),
+            **kw,
+        )
+
+    @pytest.mark.asyncio
+    async def test_every_case_is_appended_as_it_finishes(self, fakes, tmp_path):
+        _, fake_answer = fakes
+        path = tmp_path / "progress.jsonl"
+        report = await self._run(fake_answer, path, limit_per_stratum=2)
+        lines = [json.loads(x) for x in path.read_text().splitlines()]
+        header, rows = lines[0], lines[1:]
+        assert header["kind"] == "header"
+        assert len(rows) == report["params"]["cases"]
+        assert {r["system"] for r in rows} == {"echo_run"}
+        assert {"case_id", "stratum", "correct", "tokens", "retrieval_ms"} <= set(rows[0])
+
+    @pytest.mark.asyncio
+    async def test_a_restart_resumes_from_the_file(self, fakes, tmp_path):
+        _, fake_answer = fakes
+        path = tmp_path / "progress.jsonl"
+        first, calls1 = self._counting(fake_answer)
+        await self._run(first, path, limit_per_stratum=2)
+        # A larger limit is a superset of the smaller one: only the new cases run.
+        second, calls2 = self._counting(fake_answer)
+        report = await self._run(second, path, limit_per_stratum=3)
+        n = report["params"]["cases"]
+        assert len(calls2) == n - len(calls1)
+        assert report["params"]["resumed"] == len(calls1)
+        strata = report["systems"]["echo_run"]
+        assert sum(m["n"] for k, m in strata.items() if k not in ("all", "hard")) == n
+
+    @pytest.mark.asyncio
+    async def test_a_file_from_different_parameters_is_refused(self, fakes, tmp_path):
+        _, fake_answer = fakes
+        path = tmp_path / "progress.jsonl"
+        await self._run(fake_answer, path, limit_per_stratum=1)
+        with pytest.raises(ValueError, match="progress file"):
+            await self._run(fake_answer, path, limit_per_stratum=1, token_budget=999)
