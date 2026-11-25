@@ -57,8 +57,12 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      most of its words. The first pass reads the query in web-search syntax:
      `"quoted words"` match as a phrase, `-word` excludes, and `or` is an
      operator.
-   - `entity_expansion` (`expand_entities`) — facts about entities related to
-     the top hits' entities.
+   - `graph` (on unless `include_graph=False`) — graph activation from the
+     entities the query names and the entities the top hits mention (see
+     [Associative recall](#associative-recall)). Empty until facts have
+     mentions.
+   - `entity_expansion` (`expand_entities`, only when the graph leg returned
+     nothing) — facts about entities related to the top hits' entities.
    - `segment` (`include_segments`, **on by default**) — raw conversation
      segments from `search_segments` (see
      [Conversation segments](#conversation-segments)), kind `segment`. Each
@@ -93,7 +97,7 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    near-duplicates are dropped.
 5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps at
    least that many places in the top `limit` whenever it returned anything,
-   chosen by its own score: `entity_expansion` 1, and `graph` 2 for a graph leg.
+   chosen by its own score: `graph` 2, `entity_expansion` 1.
    A related-but-not-similar fact is exactly what a query-document reranker
    discards. Reserved picks take at most `(limit - 1) // 2` places in total
    (none at a `limit` of 1 or 2), never the top result, and never a
@@ -137,7 +141,7 @@ tool routes through `robothor/memory/router.py`, which classifies the query
 | `exact_lookup` | Knowledge Vault captions + facts | numbers, ids, addresses |
 | `temporal` | facts + episodes | results recency-reordered (latest first) |
 | `how_to` | procedures + facts | |
-| `who_is` | facts + entity-graph expansion | |
+| `who_is` | facts (with the graph leg) | |
 | `intent` | standing intents + facts | |
 | `default` | facts + insights | no episode/entity fan-out |
 
@@ -908,6 +912,100 @@ call; past the call's 105 s budget a fact is stored as new
 (`conflict_checks_timed_out`, `metadata.conflict_check = "timed_out"`), and
 nothing is superseded without a classification. Every database step runs off
 the event loop.
+
+### Associative recall
+
+When an agent works on a person, company or task, what is connected to it
+comes to mind without being asked. `robothor/memory/activation.py` links text to
+the entities it names and spreads activation from them over the graph; the
+walk itself is the database function `memory_activate` (migration
+`crm/migrations/*_memory_graph_activation.sql`).
+
+**It needs mentions.** The walk reads which entities a fact is about from
+`memory_mentions`, and nothing writes that table yet: existing memory links
+facts to entities only by name. Until mentions are written, the graph leg
+returns nothing, and `search_facts` with `expand_entities=True` (the
+`search_memory` tool's default) uses the one-hop `entity_expansion` leg as it
+did before: facts about entities related, through `memory_relations`, to the
+entities its top hits name. The expansion leg runs only when the graph leg
+returned nothing, and keeps one reserved place.
+
+**Seeds.** `seeds_from_text` links text to entities without a model call: exact
+full names and aliases, case-insensitively, and e-mail addresses or @handles
+matched against `contact_identifiers`. A single token never resolves on its
+own, so a first name alone seeds nothing. Warm-up takes its phrases from the
+name candidates its name-matching step already finds (runs of two or more
+adjacent ones), and also seeds the sender's own entity (the entity whose
+`crm_person_id` is the sender's CRM person). `search_facts` also seeds the
+entities that its top hits mention (`memory_mentions`), counting only hits the
+reader may see.
+
+**The walk.** A bounded, forward-push approximation of Personalized PageRank.
+Each seed starts with its weight divided by the square root of one plus its
+visible degree. Each hop, every frontier node passes a damped share of its
+activation along at most `FANOUT` of its strongest edges (by `weight`, then
+recency), split by edge weight over all of its visible, eligible edges. Edges
+are followed in both directions. At most `MAX_HOPS` hops (2 by default; the
+function never walks more than 3, whatever it is asked). Each hop is one
+set-based query over the active-edge indexes. A fact's graph score is the
+activation of the entities it mentions; each fact carries its hop distance and
+the path of entity names that reached it, so an agent can see why it was
+recalled. The constants at the top of `activation.py` are starting values for
+the evaluation to tune.
+
+**Visibility.** The walk crosses an edge only when at least one of its
+supporting facts is visible to the reader: active, in the tenant, and shared or
+user-scoped to the reader (`scope_kind = 'user'` and `scope_id` the reader's
+person id; a row private to an agent is never a person's, whatever its id). Only those edges count toward a node's degree and weight,
+so a path through evidence the reader cannot see changes no score. The
+"own data + shared" person scope applies on top. The facts returned for an
+entity obey the same rule. With no known reader, only shared evidence counts.
+An edge's evidence is `memory_relation_evidence` together with the older
+`memory_relations.fact_id` column.
+
+**Trust.** Automatic recall (warm-up) runs trusted-only: an edge counts only
+when a supporting fact is `operator_confirmed`, `user_stated` or `crm`, an
+edge whose own origin is `inferred` or `external` is never followed, and only
+facts of those origins are returned. A fact with no origin counts as
+agent-generated, so it is not trusted. **Every fact written before origins
+existed has none, so on existing data trusted-only activation finds nothing and
+warm-up uses its name-matching context instead.** A deliberate search
+(`search_facts`, the `search_memory` tool) walks every origin and labels each
+row with its `origin` and the path that reached it (`origin` and `via` in the
+tool's results).
+
+**Hub control.** The operator's own entities (those linked to the CRM person
+`get_owner_person` returns, resolved inside the walk) are never seeds and never
+transit nodes. If that lookup fails, nothing is walked and a warning is logged:
+the operator's node is usually the largest hub. Seeds are weighted by inverse degree,
+and fan-out is capped, so a node linked to everything cannot flood the result.
+
+**Tenancy.** `memory_activate` is `SECURITY DEFINER`, like the warm-up's entity
+recall function, so the planner can use its indexes under row-level security.
+It filters every table by the tenant passed to it: both ends of an edge, the
+edge, its evidence, the facts, the mentions. A session scoped to another tenant
+gets nothing.
+
+**Warm-up.** The entity context section starts with connected context from
+trusted-only activation, then fills the rest of its character cap with the
+name-matched facts as before, each fact once. Activation has a hard budget
+(`GRAPH_WARMUP_BUDGET_SECONDS` in `robothor/engine/warmup.py`, 150 ms to
+start), enforced by Postgres: once a seed is found, the walk's own connection
+gets a `statement_timeout` of the time left, reset before the connection goes
+back to the pool, so the walk stops at the budget and nothing ever cancels a
+query from outside. On a timeout, an error or an empty result the section is
+exactly the name-matched one. There is no model
+call and no reranker. The name-matched facts are not filtered by origin.
+
+What a turn pays: a message with no two adjacent name candidates, no e-mail
+address or @handle and no known sender makes no extra query and no thread
+hand-off. Otherwise one read-only connection runs the seed lookup, and when
+it finds a seed four more: arming the time limit, the operator lookup (two
+statements when no owner row is linked and the `owner.yaml` fallback runs), the
+walk and resetting the limit.
+
+The search path writes nothing. Rows found only by the graph are not logged as
+fact access.
 
 ## Ingestion Pipeline
 

@@ -98,6 +98,16 @@ SEGMENT_FIELDS = (
 
 
 def _normalize_fact(r: dict[str, Any]) -> dict[str, Any]:
+    row = _normalized_fact_fields(r)
+    # A row the graph leg found keeps its labels: who asserted it and the path
+    # of entities that reached it.
+    for key in ("origin", "graph_hops", "graph_path"):
+        if key in r:
+            row[key] = r[key]
+    return row
+
+
+def _normalized_fact_fields(r: dict[str, Any]) -> dict[str, Any]:
     extra = {k: r.get(k) for k in SEGMENT_FIELDS} if r.get("kind") == "segment" else {}
     return {
         **extra,
@@ -128,6 +138,7 @@ async def recall(
     reader_person_id: str | None = None,
     room_ids: Any = None,
     reader_user_id: str | None = None,
+    reader_scope_id: str | None = None,
 ) -> dict[str, Any]:
     """Route a recall query to the relevant stores, fuse, and budget-cap.
 
@@ -140,6 +151,9 @@ async def recall(
 
     ``reader_person_id`` / ``reader_user_id`` / ``room_ids`` decide which conversation segments the
     reader may see, on every call (``robothor.memory.segments``).
+
+    ``reader_scope_id`` is the reader's person id, for the facts' graph leg:
+    the walk crosses only evidence that is shared or scoped to that reader.
     """
     resolved_tenant = tenant_id or DEFAULT_TENANT
     cls = classify_query(query)
@@ -159,6 +173,7 @@ async def recall(
         reader_person_id=reader_person_id,
         reader_user_id=reader_user_id,
         room_ids=room_ids,
+        reader_scope_id=reader_scope_id,
     )
     ranked_lists.append([_normalize_fact(r) for r in fact_rows])
 
