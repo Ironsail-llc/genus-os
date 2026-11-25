@@ -192,6 +192,23 @@ def test_a_row_carries_its_trace_and_span_ids(datadog):
     assert row["span_id"] == "00f067aa0ba902b7"
 
 
+@pytest.mark.parametrize("value", ["jane@example.com", "abc-123", "a" * 41, "1 OR 2"])
+def test_an_id_that_is_not_hex_or_decimal_is_dropped(value, datadog):
+    # A custom attribute can hold anything the application wrote; only an id
+    # of the shape the trace route accepts is passed on, never free text.
+    raw = _search_body()["data"][0]
+    raw["attributes"] = {
+        **raw["attributes"],
+        "attributes": {"trace_id": value, "span_id": value},
+    }
+    datadog.search = _search_body(rows=[raw])
+
+    row = _ok(_client(CHILD_A).get("/api/telemetry/logs"))["rows"][0]
+
+    assert row["trace_id"] is None
+    assert row["span_id"] is None
+
+
 def test_a_row_without_a_trace_says_so(datadog):
     row = _ok(_client(CHILD_A).get("/api/telemetry/logs"))["rows"][0]
 
