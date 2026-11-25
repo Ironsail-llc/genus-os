@@ -845,16 +845,28 @@ the trigger. Datadog retries webhooks, so the same notification (`event_id`,
 monitor, transition and date) is recorded and delivered once, and a hand-off
 read twice is delivered once. Each group of a multi-alert
 monitor has its own `event_id`, so each is recorded. Without `event_id` and
-`date`, one record is kept per monitor and transition. Each copy first
-claims a Redis key with `SET NX` and a pending life of 120 seconds. A second
-copy that finds the claim, even one handled at the same moment, is a
-duplicate. Next the audit event is written. Then the key is kept for 24
-hours. When the write fails, the claim is deleted so a retry can record the
-alert, and the event goes to `robothor:events:datadog:dlq`. A crash after the
-claim and before the write delays a retry by at most the 120-second pending
-window. A crash after the write and before the key is extended can let at
-most one duplicate through once that window has passed. If Redis cannot be
-reached, the alert is still recorded.
+`date`, one record is kept per monitor and transition.
+
+**Claim, deliver, write, keep.** Each copy first claims a Redis key with
+`SET NX` and a pending life of 120 seconds. A second copy that finds the
+claim, even one handled at the same moment in the same stream batch, is a
+duplicate, so one claim is at most one delivery. Then the alert is delivered
+(or handed off), then the audit event is written with the real `mode`, then
+the key is kept for 24 hours. When something fails before anything left the
+engine (the tenant lookup, or the write after a send that failed, was
+suppressed or was refused), the claim is deleted so a retry is accepted. When
+the write fails after the alert was delivered or handed off, the claim is
+kept for its pending window, so no retry sends it again, and the event goes
+to `robothor:events:datadog:dlq`. If Redis cannot be reached, the alert is
+still delivered and recorded, without the duplicate filter.
+
+What a crash costs at each step:
+
+| The engine stops | Cost |
+|---|---|
+| after the claim, before the send | The event is not acknowledged, so it is read again on restart. A copy read inside the 120-second window is taken for a duplicate and the alert is neither sent nor recorded; after the window it is delivered. |
+| after the send, before the write | Sent, not recorded. A copy after the window finds the monitor's episode keys and is recorded as `suppressed`, not sent again. |
+| after the write, before the key is kept | A copy after the window is recorded a second time, as `suppressed`; it is not sent again. |
 
 Each recorded alert also writes one log line with no title or body:
 `event=datadog_alert tenant=<tenant> monitor_id=<id> transition=<transition> mode=<mode> routing=<routing>`.
