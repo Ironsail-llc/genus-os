@@ -1539,3 +1539,57 @@ def test_a_context_resolution_cannot_be_redirected_tenant_wide(world: World) -> 
     write_mentions(TENANT, s2, [seed], resolve_mentions(TENANT, [seed]))
     again = _one(MentionInput("Alex", "person", context={"conversation_ref": "s2"}))
     assert again.entity_id == world.entity_of(chen)
+
+
+@pytest.mark.parametrize("etype", ["organization", None])
+def test_reversing_a_company_merge_returns_the_losers_single_token_name(
+    world: World, etype: str | None
+) -> None:
+    """A single-token company name resolves with method `exact`; it is tagged like any other."""
+    from robothor.crm import dal
+    from robothor.memory.identity import (
+        resolve_mentions,
+        reverse_decision,
+        sync_crm_entities,
+        write_mentions,
+    )
+
+    keeper = world.company("Globex")
+    loser = world.company("Initech")
+    sync_crm_entities(TENANT)
+    k_node, l_node = world.entity_of(keeper), world.entity_of(loser)
+    assert dal.merge_companies(keeper, loser, TENANT)
+    merge = world.one(
+        "SELECT id FROM memory_resolution_decisions WHERE evidence->>'basis' = %s",
+        (f"crm_merge:company:{loser}",),
+    )
+    facts = {}
+    for label in ("Initech", "Globex"):
+        m = MentionInput(label, etype)
+        fid = world.fact(f"{label} shipped", [label])
+        out = resolve_mentions(TENANT, [m])
+        assert out[0].entity_id == k_node and out[0].method == "exact"
+        write_mentions(TENANT, fid, [m], out)
+        facts[label] = fid
+
+    report = reverse_decision(TENANT, merge, reason="different companies")
+    assert report["fact_ids"] == [facts["Initech"]]
+    assert _on(world, facts["Initech"]) == l_node
+    assert _on(world, facts["Globex"]) == k_node
+    assert _one(MentionInput("Globex", etype)).entity_id == k_node
+
+
+def test_a_provisional_node_is_never_tagged_by_a_merge(world: World) -> None:
+    from robothor.crm import dal
+    from robothor.memory.identity import sync_crm_entities
+
+    keeper = world.company("Globex")
+    loser = world.company("Initech")
+    sync_crm_entities(TENANT)
+    assert dal.merge_companies(keeper, loser, TENANT)
+    created = _one(MentionInput("Umbrella", "organization"))
+    assert created.entity_id is not None and created.method == "exact"
+    evidence = world.one(
+        "SELECT evidence FROM memory_resolution_decisions WHERE id = %s", (created.decision_id,)
+    )
+    assert "via_merge" not in evidence and "merge_collapsed" not in evidence
