@@ -862,7 +862,7 @@ notification of the episode tries again. The episode moves on whatever the
 send did: a step the cooldown held counts as sent (it was, within the hour),
 and a recovery closes the episode even when its own notice could not be sent,
 so a monitor that flapped once is never left silent for the next incident.
-Every recovery closes the episode, even one already sent for it. Order is
+Every recovery closes the episode, even one already sent for it, unless it is dated before the latest trigger (below). Order is
 read from Datadog's `$DATE`: the latest recovery's time is kept, and a trigger
 dated before it (read late, or whose send finished after the recovery was
 handled) is recorded as `suppressed`, `reason: superseded_by_recovery`, or
