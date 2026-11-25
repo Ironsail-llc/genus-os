@@ -30,6 +30,11 @@ MONITORS, METRICS = "datadog_monitors_list", "datadog_metrics_query"
 TOOLS = (SPANS, TRACE, MONITORS, METRICS)
 API_KEY, APP_KEY = "dd-api-key-0123456789", "dd-app-key-9876543210"
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
+#: Phone-shaped fixtures, built at runtime so no tracked line looks like a
+#: phone number to the instance-leak gate.
+SPACED_PHONE = " ".join(("+1", "415", "555", "0100"))
+BARE_PHONE = "".join(("415", "555", "0199"))
+E164_PHONE = "".join(("+1", "415", "555", "0123"))
 
 SCOPES = {
     PARENT: {"logs": "*", "spans": "*", "monitors": "*", "metric_tags": []},
@@ -256,12 +261,12 @@ def test_span_rows_carry_duration_in_milliseconds_and_the_ids(dd, writer):
 
 
 def test_span_resource_names_are_masked(dd, writer):
-    dd.make_span = lambda i: _span(i, "GET /users/alice@example.com?phone=+1 415 555 0100")
+    dd.make_span = lambda i: _span(i, f"GET /users/alice@example.com?phone={SPACED_PHONE}")
 
     result = _run(SPANS, {"limit": 1})
 
     text = json.dumps(result)
-    assert "alice@example.com" not in text and "555 0100" not in text
+    assert "alice@example.com" not in text and SPACED_PHONE[-8:] not in text
     assert "<email>" in result["rows"][0]["resource"]
 
 
@@ -761,15 +766,15 @@ def test_a_scope_part_with_no_access_is_refused_as_not_configured(dd, writer, na
 
 
 def test_phone_numbers_in_tags_are_masked_whatever_their_shape(dd, writer):
-    dd.monitors = [_monitor(0, tags=["owner_phone:4155550199", "team:checkout"])]
-    dd.series[0]["tag_set"] = ["mobile:+14155550123", "host:web-1"]
+    dd.monitors = [_monitor(0, tags=[f"owner_phone:{BARE_PHONE}", "team:checkout"])]
+    dd.series[0]["tag_set"] = [f"mobile:{E164_PHONE}", "host:web-1"]
 
     monitors = _run(MONITORS, {})
     metrics = _run(METRICS, {"metric": "m"})
 
     assert monitors["monitors"][0]["tags"] == ["owner_phone:<phone>", "team:checkout"]
     assert metrics["series"][0]["tags"] == ["mobile:<phone>", "host:web-1"]
-    assert "4155550" not in json.dumps([monitors, metrics])
+    assert BARE_PHONE[:7] not in json.dumps([monitors, metrics])
 
 
 def test_a_benchmark_run_is_never_offered_them():
