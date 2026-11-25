@@ -34,7 +34,7 @@ again, and the triage run starts once. The watch reads the same keys
 :data:`EPISODE_PREFIX`, kept :data:`EPISODE_TTL_SECONDS` so a recovery Datadog
 never sent cannot silence a monitor for good.
 
-Triage. A delivered ``Triggered`` or ``Re-Triggered`` alert (never Warn, No
+Triage. A ``Triggered`` or ``Re-Triggered`` alert delivered or failed (never Warn, No
 Data or a recovery) starts ONE run of the tenant's main agent per episode in
 plan mode (``AgentRunner.execute(readonly_mode=True)``): its schemas are
 filtered to the read-only tools and the runtime admission gate refuses any

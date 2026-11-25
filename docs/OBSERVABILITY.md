@@ -739,8 +739,11 @@ monitor. Keep `org:` off your hosts and services, so that only the monitor
 sets it.
 
 **4. Who delivers it.** Every engine reads the `datadog` stream once
-`ROBOTHOR_DATADOG_SCOPES` is set. A webhook carries no tenant, so the root
-tenant's engine (the one on the `engine` group) consumes it and routes it:
+`ROBOTHOR_DATADOG_SCOPES` is set. The webhook receiver tags the event with
+its own process's tenant, so it is consumed by the engine of whichever tenant
+runs the receiver Datadog calls. Point Datadog at the root tenant's receiver;
+when it is the root tenant's engine (the one on the `engine` group), it routes
+the alert:
 
 - routed to the root tenant (its own, or untagged, unknown or ambiguous):
   the root engine delivers it itself;
@@ -752,6 +755,14 @@ tenant's engine (the one on the `engine` group) consumes it and routes it:
   delivers it only when the answer is an `org:` tag naming itself; anything
   else is refused, logged, and neither recorded nor sent. It records the alert
   in its own tenant.
+
+If another tenant's engine receives the webhook, it routes the same way: it
+delivers an `org:` alert for itself, hands an `org:` alert for another tenant
+to that tenant's engine, and hands an alert with no usable `org:` tag
+(untagged, unknown, ambiguous) to the root engine with an untagged hand-off
+that only the root engine reads. When the root engine is not reading the
+stream, that alert is logged at ERROR and not recorded anywhere: it is the
+root's, and is never kept in the receiving tenant.
 
 The alerts path only delivers in the process's own tenant, so an alert is
 never delivered or triaged in a tenant other than the one its tags name.
@@ -800,9 +811,17 @@ cooldown applies on top (alert id `datadog_alert:<tenant>:<monitor>:<step>`).
 A send that fails is recorded as `delivery_failed` (with `error`) and the next
 notification of the episode tries again.
 
+**A limit of per-monitor episodes.** Episodes are kept per monitor, not per
+group: the webhook payload above carries no group. In a multi-alert monitor
+the first group to recover closes the episode for the whole monitor, so a
+group still in Alert that renotifies opens a new episode: it is sent again
+and starts a second triage run, and its own recovery is then suppressed. For
+monitors whose groups recover separately, prefer a simple monitor per service,
+or read the recovery as "one group recovered".
+
 **The triage rule.** When a `Triggered` or `Re-Triggered` alert is delivered,
-whatever its priority (never Warn, No Data or a recovery, and never a
-suppressed or failed one), the
+or its send fails, whatever its priority (never Warn, No Data or a recovery,
+and never one suppressed by its episode or the cooldown), the
 tenant's engine starts ONE run of its main agent for the episode. The run is
 in plan mode (`readonly_mode`): it is offered only its read-only tools, the
 runtime admission gate refuses any other, and its prompt is fixed: it names
