@@ -223,7 +223,7 @@ _PHONE_KEY = re.compile(
 _DIGITS_IN_A_PHONE = 7
 
 
-def _names_a_credential(name: str) -> bool:
+def _names_a_credential(name: str, memo: dict[str, bool] | None = None) -> bool:
     """Whether a key or facet (``@usr.password``) says it holds a credential.
 
     Asked of the platform's own per-argument redactor, so these tools and the
@@ -231,17 +231,28 @@ def _names_a_credential(name: str) -> bool:
     ``password=... api_key=...`` out of a line into structured attributes, so
     the value arrives bare, with no shape a pattern can find; the name it sits
     under is the only thing left to match on.
+
+    The check runs the whole redaction pipeline, and the same names repeat on
+    every row, so a call passes one ``memo`` through. Per call, not process-wide:
+    the redactor's known-secret snapshot can change between calls.
     """
     from robothor.secrets.redaction import PLACEHOLDER, redact_tool_arguments
 
+    if memo is not None and name in memo:
+        return memo[name]
     key = name.lstrip("@")
-    return bool(key) and redact_tool_arguments("", {key: "x"}).get(key) == PLACEHOLDER
+    answer = bool(key) and redact_tool_arguments("", {key: "x"}).get(key) == PLACEHOLDER
+    if memo is not None:
+        memo[name] = answer
+    return answer
 
 
-def _masked(value: Any, key: str = "") -> Any:
+def _masked(value: Any, key: str = "", memo: dict[str, bool] | None = None) -> Any:
     """``value`` with credentials withheld and email addresses and phone numbers
-    masked, at any depth. ``key`` is the name the value sits under."""
-    if _names_a_credential(key):
+    masked, at any depth. ``key`` is the name the value sits under; ``memo``
+    holds the name checks already made in this call."""
+    memo = {} if memo is None else memo
+    if _names_a_credential(key, memo):
         from robothor.secrets.redaction import PLACEHOLDER
 
         return PLACEHOLDER
@@ -253,13 +264,13 @@ def _masked(value: Any, key: str = "") -> Any:
     if isinstance(value, str):
         return redact_personal_data(value)
     if isinstance(value, dict):
-        return {k: _masked(v, str(k)) for k, v in value.items()}
+        return {k: _masked(v, str(k), memo) for k, v in value.items()}
     if isinstance(value, list):
-        return [_masked(v, key) for v in value]
+        return [_masked(v, key, memo) for v in value]
     return value
 
 
-def _shape(row: LogRow) -> dict[str, Any]:
+def _shape(row: LogRow, memo: dict[str, bool] | None = None) -> dict[str, Any]:
     tags: dict[str, str] = {}
     for tag in row.tags:
         key, _, value = tag.partition(":")
@@ -280,7 +291,7 @@ def _shape(row: LogRow) -> dict[str, Any]:
         shaped["trace_id"] = row.trace_id
     if row.span_id:
         shaped["span_id"] = row.span_id
-    shaped["attributes"] = _masked(row.attributes)
+    shaped["attributes"] = _masked(row.attributes, memo=memo)
     return shaped
 
 
@@ -385,7 +396,8 @@ async def _datadog_logs_search(args: dict[str, Any], ctx: ToolContext) -> dict[s
             )
 
         first = await page(limit)
-        shaped = [_shape(row) for row in first.rows]
+        memo: dict[str, bool] = {}
+        shaped = [_shape(row, memo) for row in first.rows]
         # Room for the envelope around the rows: the note, the cursor, the window.
         kept = _fit(shaped, RESULT_BUDGET_CHARS - 1000)
         if len(kept) == len(shaped):
@@ -451,7 +463,10 @@ async def _datadog_logs_aggregate(args: dict[str, Any], ctx: ToolContext) -> dic
     buckets, refused = await _scoped(AGGREGATE_TOOL, ctx, query, audited, fetch)
     if refused is not None:
         return refused
-    rows = [{"by": {k: _masked(v, k) for k, v in b.by.items()}, "count": b.count} for b in buckets]
+    memo: dict[str, bool] = {}
+    rows = [
+        {"by": {k: _masked(v, k, memo) for k, v in b.by.items()}, "count": b.count} for b in buckets
+    ]
     kept = list(rows)
     while len(kept) > 1 and _size(kept) > RESULT_BUDGET_CHARS - 1000:
         kept.pop()
