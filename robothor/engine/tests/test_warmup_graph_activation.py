@@ -900,17 +900,16 @@ def test_a_slow_seed_lookup_is_stopped_by_the_server_within_the_budget(
     world.fact("Bob Jones manages shipping", about=(b,))
     world.fact("Alice signed it", entities=("Alice",))
     marker = "g872_slow_seed_marker"
-    # The marker leads the statement: pg_stat_activity keeps only the first
-    # track_activity_query_size bytes of a query, and the lookup is longer.
-    monkeypatch.setattr(
-        activation,
-        "_LINK_SQL",
-        f"/* {marker} */"
-        + activation._LINK_SQL.replace(
-            "    ORDER BY pri, id",
-            "    WHERE (SELECT count(*) FROM pg_sleep(5)) = 1\n    ORDER BY pri, id",
-        ),
-    )
+    # Names seed through identity's lookup (activation._name_seeds) on the
+    # walk's own cursor; a five-second statement on that cursor stands in for
+    # a slow lookup. The marker leads it so pg_stat_activity shows it.
+    real_name_seeds = activation._name_seeds
+
+    def _slow_name_seeds(cur: Any, tenant_id: str, phrases: Any) -> Any:
+        cur.execute(f"/* {marker} */ SELECT pg_sleep(5)")
+        return real_name_seeds(cur, tenant_id, phrases)
+
+    monkeypatch.setattr(activation, "_name_seeds", _slow_name_seeds)
     walks: list[str] = []
     real_activate = activation._activate_on
 

@@ -183,6 +183,10 @@ class TestSlowCheckout:
         statements: list[str] = []
 
         class _Cur:
+            # identity's name lookup opens its own cursor on this connection.
+            def __init__(self, conn: object) -> None:
+                self.connection = conn
+
             def execute(self, sql: str, params: object = None) -> None:
                 statements.append(sql % params if params and "%s" in sql else sql)
 
@@ -192,9 +196,12 @@ class TestSlowCheckout:
             def fetchone(self) -> None:
                 return None
 
+            def close(self) -> None:
+                return None
+
         class _Conn:
             def cursor(self, cursor_factory: object = None) -> _Cur:
-                return _Cur()
+                return _Cur(self)
 
         @contextmanager
         def _slow_checkout(*_a: object, **_k: object):
