@@ -401,6 +401,10 @@ async def _datadog_monitors_list(args: dict[str, Any], ctx: ToolContext) -> dict
         return refused
     shaped = [_shape_monitor(row) for row in got.rows]
     kept = _fit(shaped, "name", _NAME_CAPS)
+    # Page N+1 at the same size starts after the monitors dropped here, so it
+    # is handed out only when none were.
+    dropped = len(kept) < len(shaped)
+    more = got.page + 1 < got.page_count
     result: dict[str, Any] = {
         "scope": ctx.tenant_id,
         "query": query,
@@ -408,12 +412,16 @@ async def _datadog_monitors_list(args: dict[str, Any], ctx: ToolContext) -> dict
         "total_count": got.total_count,
         "page": got.page,
         "page_count": got.page_count,
-        "next_page": got.page + 1 if got.page + 1 < got.page_count else None,
+        "next_page": got.page + 1 if more and not dropped else None,
         "truncated": kept != shaped,
     }
     if result["truncated"]:
         result["note"] = _fit_note(
-            len(kept), len(shaped), "monitors", "pass a smaller limit to page through the rest."
+            len(kept),
+            len(shaped),
+            "monitors",
+            f"repeat with limit={len(kept)} and page from 0 to read every monitor in pages "
+            "that fit.",
         )
     audited = {"only_firing": only_firing, "page": page, "rows": len(shaped)}
     audit(MONITORS_EVENT, MONITORS_TOOL, ctx, query, audited, "ok")
