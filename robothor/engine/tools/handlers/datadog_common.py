@@ -156,7 +156,7 @@ async def scoped(
     *,
     check: Callable[[DatadogScope], object],
     build: Callable[[], AsyncDatadogClient],
-    unlock: str = _QUERY_UNLOCK,
+    unlock: str | None = None,
 ) -> tuple[Any, dict[str, Any] | None]:
     """``call`` under this tenant's scope: (its value, None), or (None, the answer).
 
@@ -164,7 +164,8 @@ async def scoped(
     the caller's input against the scope (raising :class:`ScopeError`) before
     ``build`` makes the client, so an escape is refused even on an instance
     with no key, and nothing is sent for a refusal. ``build`` blocks (the
-    vault read) and runs off the loop.
+    vault read) and runs off the loop. ``unlock`` is the refusal's advice
+    when the default (balance the brackets) does not fit the input.
     """
     scope = await asyncio.to_thread(scope_for, ctx.tenant_id)
     if scope is None:
@@ -176,7 +177,7 @@ async def scoped(
         return await call(client, scope), None
     except ScopeError as exc:
         audit(event, tool, ctx, query, {**audited, "rows": 0}, "denied")
-        return None, query_refused(exc.reason, unlock)
+        return None, query_refused(exc.reason, unlock or _QUERY_UNLOCK)
     except DatadogError as exc:
         audit(event, tool, ctx, query, {**audited, "rows": 0, "kind": exc.kind}, "error")
         return None, failed(tool, exc)

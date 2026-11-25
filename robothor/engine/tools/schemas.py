@@ -1940,6 +1940,152 @@ _DATADOG_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "datadog_spans_search": {
+        "type": "function",
+        "function": {
+            "name": "datadog_spans_search",
+            "description": (
+                "Search your organization's APM spans in Datadog (read-only; only your "
+                "organization's spans are ever searched). Returns spans with time, service, "
+                "resource, operation, duration_ms, status/error, trace_id, span_id and env; "
+                "personal data is masked. Use it for slow or failing requests; pass a trace_id "
+                "to datadog_trace_get to see the whole request."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Datadog span search syntax, e.g. 'service:shop-api "
+                        "status:error' or '@duration:>1s'. Empty = every span your "
+                        "organization may read.",
+                    },
+                    **_DATADOG_WINDOW,
+                    "limit": {"type": "integer", "description": "Spans per page (default 50)."},
+                    "cursor": {
+                        "type": "string",
+                        "description": "next_cursor from the previous page, with the same "
+                        "query and window.",
+                    },
+                    "newest_first": {
+                        "type": "boolean",
+                        "description": "Newest span first (default true).",
+                    },
+                },
+            },
+        },
+    },
+    "datadog_trace_get": {
+        "type": "function",
+        "function": {
+            "name": "datadog_trace_get",
+            "description": (
+                "Every span of one trace in your organization's Datadog APM, ordered by start "
+                "time with parent_id so you can read the call tree (read-only). Take the "
+                "trace_id from a log line or a span. A trace that is not your organization's "
+                "reads as not found."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trace_id": {
+                        "type": "string",
+                        "description": "The trace id: hex or decimal digits.",
+                    },
+                    "start": {
+                        "type": "string",
+                        "description": "Window start: ISO-8601 or relative such as now-2d "
+                        "(default now-1d).",
+                    },
+                    "end": _DATADOG_WINDOW["end"],
+                },
+                "required": ["trace_id"],
+            },
+        },
+    },
+    "datadog_monitors_list": {
+        "type": "function",
+        "function": {
+            "name": "datadog_monitors_list",
+            "description": (
+                "List your organization's Datadog monitors with status (Alert, Warn, No Data, "
+                "OK), type, tags and when each last triggered (read-only). only_firing=true "
+                "answers 'is anything alerting right now?'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Monitor search syntax, e.g. 'type:metric', "
+                        "'tag:\"team:checkout\"', 'status:alert' or free text in the name. "
+                        "Empty = every monitor your organization may read.",
+                    },
+                    "only_firing": {
+                        "type": "boolean",
+                        "description": "Only monitors in Alert, Warn or No Data (default false).",
+                    },
+                    "limit": {"type": "integer", "description": "Monitors per page (default 50)."},
+                    "page": {
+                        "type": "integer",
+                        "description": "Page number from 0; the result's next_page.",
+                    },
+                },
+            },
+        },
+    },
+    "datadog_metrics_query": {
+        "type": "function",
+        "function": {
+            "name": "datadog_metrics_query",
+            "description": (
+                "Query one Datadog metric for your organization as time series (read-only). "
+                "Built from parts, not query text: metric, aggregator, tags, group_by. "
+                "Returns each series with its group tags and [epoch_ms, value] points; long "
+                "series are down-sampled to fit."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "metric": {
+                        "type": "string",
+                        "description": "Metric name, e.g. trace.http.request.hits or "
+                        "system.cpu.user.",
+                    },
+                    "aggregator": {
+                        "type": "string",
+                        "enum": ["avg", "sum", "min", "max"],
+                        "description": "How series are combined (default avg).",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Extra tag filters ANDed in, e.g. ['env:prod'].",
+                    },
+                    "group_by": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Tag keys to split series by, e.g. ['host'].",
+                    },
+                    "start": {
+                        "type": "string",
+                        "description": "Window start: ISO-8601, now, or now-<n> with s, m, h "
+                        "or d (default now-1h).",
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "Window end, same forms (default now).",
+                    },
+                    "as_count": {
+                        "type": "boolean",
+                        "description": "Counts per interval instead of a rate (for count "
+                        "metrics such as hits or errors).",
+                    },
+                },
+                "required": ["metric"],
+            },
+        },
+    },
 }
 
 

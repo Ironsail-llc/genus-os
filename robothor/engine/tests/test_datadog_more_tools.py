@@ -61,8 +61,8 @@ def _span(i: int, resource: str = "", **over: Any) -> dict[str, Any]:
         "service": "shop-api",
         "resource_name": resource or f"GET /checkout/{i}",
         "operation_name": "http.request",
-        "start_timestamp": f"2026-11-25T10:00:{i % 60:02d}.000Z",
-        "end_timestamp": f"2026-11-25T10:00:{i % 60:02d}.250Z",
+        "start_timestamp": f"2026-11-25T10:{i // 60:02d}:{i % 60:02d}.000Z",
+        "end_timestamp": f"2026-11-25T10:{i // 60:02d}:{i % 60:02d}.250Z",
         "status": "error" if i % 2 else "ok",
         "env": "prod",
         "tags": ["env:prod", "service:shop-api"],
@@ -338,14 +338,14 @@ def test_trace_span_resource_names_are_masked(dd, writer):
 def test_an_oversized_trace_keeps_the_earliest_spans_and_says_truncated(dd, writer):
     from robothor.engine.tools.handlers import datadog_more
 
-    dd.spans = [_span(i, "y" * 3000) for i in range(40)]
+    dd.spans = [_span(i, "y" * 3000) for i in range(200)]
 
     result = _run(TRACE, {"trace_id": TRACE_ID})
 
     assert result["truncated"] is True
     kept = result["spans_returned"]
-    assert 1 <= kept < 40
-    assert result["spans_total"] == 40
+    assert 1 <= kept < 200
+    assert result["spans_total"] == 200
     assert [s["span_id"] for s in result["spans"]] == [f"{1000 + i}" for i in range(kept)]
     assert str(kept) in result["note"]
     assert len(json.dumps(result)) <= datadog_more.RESULT_BUDGET_CHARS
@@ -417,12 +417,12 @@ def test_more_monitor_pages_are_named(dd, writer):
 def test_an_oversized_monitor_page_is_fitted(dd, writer):
     from robothor.engine.tools.handlers import datadog_more
 
-    dd.monitors = [_monitor(i, "z" * 2000) for i in range(50)]
+    dd.monitors = [_monitor(i, "z" * 2000) for i in range(300)]
 
     result = _run(MONITORS, {})
 
     assert result["truncated"] is True
-    assert 1 <= len(result["monitors"]) < 50
+    assert 1 <= len(result["monitors"]) < 300
     assert len(json.dumps(result)) <= datadog_more.RESULT_BUDGET_CHARS
 
 

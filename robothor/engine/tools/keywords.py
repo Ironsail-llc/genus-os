@@ -584,12 +584,24 @@ TOOL_HINTS: dict[str, ToolHint] = {
     "n8n_recent_failures": ToolHint(
         keywords=("n8n", "automation", "workflow", "failure", "failed", "error", "broken", "run")
     ),
-    # ── Datadog logs (the organization's own, read-only) ──────────────
+    # ── Datadog (the organization's own, read-only) ───────────────────
     "datadog_logs_search": ToolHint(
         keywords=(*_DATADOG, "search", "read", "lines", "message", "find", "show")
     ),
     "datadog_logs_aggregate": ToolHint(
         keywords=(*_DATADOG, "count", "how", "many", "group", "breakdown", "rate", "spike"),
+    ),
+    "datadog_spans_search": ToolHint(
+        keywords=(*_DATADOG, "apm", "spans", "span", "traces", "latency", "slow", "requests"),
+    ),
+    "datadog_trace_get": ToolHint(
+        keywords=(*_DATADOG, "apm", "trace", "traces", "spans", "request", "tree", "follow"),
+    ),
+    "datadog_monitors_list": ToolHint(
+        keywords=(*_DATADOG, "monitors", "monitor", "alerts", "alerting", "firing", "paging"),
+    ),
+    "datadog_metrics_query": ToolHint(
+        keywords=(*_DATADOG, "metrics", "metric", "timeseries", "graph", "cpu", "throughput"),
     ),
     # ── The tenant tree ───────────────────────────────────────────────
     # An agent looking for this searches "tenant", "organization", "portfolio",

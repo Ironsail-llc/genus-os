@@ -263,13 +263,18 @@ N8N_TOOLS = frozenset(
     }
 )
 
-# Datadog log tools (handlers/datadog_logs.py): a tenant searches and counts its
-# own logs in a shared Datadog account, bounded by its scope filter. Read-only,
-# but log lines carry what customers typed, so the family is OPT_IN_TOOLS.
+# Datadog tools (handlers/datadog_logs.py, handlers/datadog_more.py): a tenant
+# reads its own logs, spans, traces, monitors and metrics in a shared Datadog
+# account, each bounded by its part of the scope. Read-only, but log lines and
+# span resources carry what customers typed, so the family is OPT_IN_TOOLS.
 DATADOG_TOOLS = frozenset(
     {
         "datadog_logs_search",
         "datadog_logs_aggregate",
+        "datadog_spans_search",
+        "datadog_trace_get",
+        "datadog_monitors_list",
+        "datadog_metrics_query",
     }
 )
 
@@ -402,7 +407,7 @@ CROSS_TENANT_READS: frozenset[str] = frozenset(
         "list_contact_messages",
         # devops_metrics_snapshots.
         "devops_query_metrics",
-        # Datadog logs: the scope comes from scope_for(ctx.tenant_id) alone.
+        # Datadog: the scope comes from scope_for(ctx.tenant_id) alone.
         *DATADOG_TOOLS,
     }
 )
@@ -579,7 +584,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # n8n monitor: the poller's snapshot, read-only
         "n8n_list_workflows",
         "n8n_recent_failures",
-        # Datadog logs: search and count, never a write anywhere
+        # Datadog: logs, spans, traces, monitors, metrics; never a write anywhere
         *DATADOG_TOOLS,
         # Identity read-only tools
         "resolve_identities",
@@ -643,7 +648,7 @@ WORKFLOW_WRITE_TOOLS: frozenset[str] = frozenset({"run_workflow"})
 # the instance's account; same rule. Migration 153 denies them to `user` and
 # `member`; `service` keeps them, so an unattended agent that names them works.
 #
-# The Datadog log tools read the instance's shared Datadog account, bounded by
+# The Datadog tools read the instance's shared Datadog account, bounded by
 # the tenant's scope. Log lines carry what customers and staff typed, so an
 # agent reads them only when its manifest says so (or an owner or admin is
 # driving the run). No RBAC half: they write nothing.
