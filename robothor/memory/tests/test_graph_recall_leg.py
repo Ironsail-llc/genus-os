@@ -190,7 +190,7 @@ async def test_the_reader_decides_which_private_evidence_is_walked(
     seed = world.fact("Alice Smith signed the quarterly logistics agreement", about=(a,))
     secret = world.fact("private support", scope_id=bob_reader)
     world.edge(a, p, evidence=(secret,))
-    about_p = world.fact("Pat Hidden lives on Elm Street", about=(p,))
+    about_p = world.fact("Pat Hidden keeps the logistics agreement on Elm Street", about=(p,))
     monkeypatch.setattr(reranker, "rerank_pair", _scorer("Elm Street"))
     query = "Alice Smith quarterly logistics agreement"
 
@@ -215,7 +215,10 @@ async def test_a_restricted_scope_does_not_reach_another_persons_fact_through_th
 
     alice_pid, bob_pid = world.person("Alice", "Smith"), world.person("Bob", "Jones")
     w = _chain(world, fillers=0)
-    bobs = world.fact("Carol White shares Bob's private depot code", about=(w["c"],))
+    bobs = world.fact(
+        "Carol White shares Bob's private depot code for the logistics agreement",
+        about=(w["c"],),
+    )
     world.sql("UPDATE memory_facts SET person_id = %s WHERE id = %s", (bob_pid, bobs))
     monkeypatch.setattr(reranker, "rerank_pair", _scorer("depot"))
     query = "Alice Smith quarterly logistics agreement"
@@ -267,8 +270,11 @@ async def test_a_top_hit_the_reader_cannot_see_does_not_seed_the_walk(
     alice_reader, bob_reader = world.person("Alice", "Smith"), world.person("Bob", "Jones")
     p, q = world.entity("Pat Hidden"), world.entity("Quinn Far")
     world.fact("zephyr logistics memo from Bob", about=(p,), scope_id=bob_reader)
+    # A shared hit on every word, so the keyword leg never falls back to any
+    # word and finds the fact below directly; it mentions no one.
+    world.fact("zephyr logistics memo template")
     world.link(p, q)
-    about_q = world.fact("Quinn Far operates the depot", about=(q,))
+    about_q = world.fact("Quinn Far files each memo at the depot", about=(q,))
     monkeypatch.setattr(reranker, "rerank_pair", _scorer("depot"))
 
     bob = await search_facts(

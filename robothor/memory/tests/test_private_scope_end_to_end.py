@@ -274,7 +274,9 @@ def _legs_with(rows: list[dict[str, Any]], fact_id: int) -> set[str]:
 
 
 DENSE_QUERY = "What is the loading-dock door code?"
-GRAPH_QUERY = "What do we know about Dana Whitfield?"
+# The graph leg returns the reached facts that match the question without
+# its names ("door code"): the walk goes Dana Whitfield -> Orion Freight.
+GRAPH_QUERY = "Which door code does Dana Whitfield use?"
 
 
 async def test_the_owner_recalls_the_private_fact_by_the_dense_leg(world, monkeypatch) -> None:
