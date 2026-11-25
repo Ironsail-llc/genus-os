@@ -471,13 +471,16 @@ window is ISO-8601, `now`, or `now-<n>` with `s`, `m`, `h` or `d`.
 
 ### For agents
 
-Agents read logs with `datadog_logs_search` and `datadog_logs_aggregate`
+Agents read logs with `datadog_logs_search` and `datadog_logs_aggregate`,
+spans with `datadog_spans_search`, one trace with `datadog_trace_get`,
+monitors with `datadog_monitors_list` and metrics with `datadog_metrics_query`
 ([Datadog tools](TOOLS.md#datadog-read-only)). They are opt-in: name them in a
 manifest's `tools_opt_in` (or `tools_allowed`). The scope is the tenant the
 run belongs to; a parent tenant's run can pass `tenant` to read a child. Email
 addresses and phone numbers in what comes back are masked, and every call
-writes a `datadog.logs_read` audit row with the query and the row count, never
-the log lines.
+writes an audit row (`datadog.logs_read`, `datadog.spans_read`,
+`datadog.trace_read`, `datadog.monitors_read`, `datadog.metrics_read`) with the
+query and the counts, never the log lines, spans or monitor text.
 
 ### Doctor
 
