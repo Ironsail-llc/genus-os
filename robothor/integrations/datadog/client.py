@@ -28,6 +28,7 @@ import httpx
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.integrations.datadog import requests as api
+from robothor.integrations.datadog.names import API_KEY_ENV, APP_KEY_ENV
 from robothor.integrations.datadog.requests import (
     Bucket,
     LogPage,
@@ -67,8 +68,6 @@ __all__ = [
     "resolve_keys",
 ]
 
-API_KEY_ENV = "ROBOTHOR_DATADOG_API_KEY"
-APP_KEY_ENV = "ROBOTHOR_DATADOG_APP_KEY"
 TIMEOUT_SECONDS = 20.0
 
 ErrorKind = Literal["auth", "rate_limit", "network", "bad_query", "unknown", "not_configured"]
