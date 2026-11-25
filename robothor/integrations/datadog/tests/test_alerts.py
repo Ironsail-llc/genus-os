@@ -251,6 +251,44 @@ class TestRecord:
         assert len(audit.rows) == 1
 
     @pytest.mark.asyncio
+    async def test_two_groups_of_one_monitor_in_one_evaluation_are_two_events(
+        self, audit, no_delivery
+    ) -> None:
+        """A multi-alert monitor: same monitor, transition and date, a different ``$ID``."""
+        redis = FakeRedis()
+        await dd.handle_alert_event(_payload(event_id="777"), redis)
+        await dd.handle_alert_event(_payload(event_id="778"), redis)
+        assert len(audit.rows) == 2
+
+    @pytest.mark.asyncio
+    async def test_an_empty_date_does_not_merge_later_notifications(
+        self, audit, no_delivery
+    ) -> None:
+        redis = FakeRedis()
+        await dd.handle_alert_event(_payload(date="", event_id="777"), redis)
+        await dd.handle_alert_event(_payload(date="", event_id="901"), redis)
+        assert len(audit.rows) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_retry_carries_the_same_event_id_and_records_once(
+        self, audit, no_delivery
+    ) -> None:
+        redis = FakeRedis()
+        await dd.handle_alert_event(_payload(date=""), redis)
+        assert await dd.handle_alert_event(_payload(date=""), redis) == "duplicate"
+        assert len(audit.rows) == 1
+
+    @pytest.mark.asyncio
+    async def test_without_event_id_or_date_one_transition_per_monitor_is_kept(
+        self, audit, no_delivery
+    ) -> None:
+        """Pinned: with neither ``$ID`` nor ``$DATE`` only (monitor, transition) is left."""
+        redis = FakeRedis()
+        await dd.handle_alert_event(_payload(date="", event_id=""), redis)
+        assert await dd.handle_alert_event(_payload(date="", event_id=""), redis) == "duplicate"
+        assert len(audit.rows) == 1
+
+    @pytest.mark.asyncio
     async def test_the_same_transition_at_another_date_is_a_new_event(
         self, audit, no_delivery
     ) -> None:
