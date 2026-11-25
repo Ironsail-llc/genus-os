@@ -507,3 +507,23 @@ class TestModelSelection:
         monkeypatch.setattr(generation, "_remote_enabled", lambda: False)
         monkeypatch.setattr(ollama, "GENERATION_MODEL", "gen-default")
         assert ea.resolve_eval_models(None, "j") == ("gen-default", "j")
+
+
+class TestPlantedLlmWrongAnswersAreFair:
+    """A planted wrong answer must be wrong to a careful reader, not a one-letter
+    variant of the gold. Invented roots such as Drodrel and Drotrel differ by a
+    single letter, and the real judge, reasonably, called one a spelling of the
+    other."""
+
+    @pytest.mark.parametrize("size", ["small", "full"])
+    def test_no_wrong_llm_answer_shares_or_nearly_spells_a_gold_word(self, size):
+        from difflib import SequenceMatcher
+
+        w = ew.generate_world(7, size)
+        for p in ea.planted_answers(w):
+            if p.kind != "wrong_llm":
+                continue
+            gold_words = {x for g in p.case.gold for x in ea.normalise(g).split()}
+            for word in ea.normalise(p.answer.text).split():
+                for gw in gold_words:
+                    assert SequenceMatcher(None, word, gw).ratio() < 0.75, (p.answer.text, gw)
