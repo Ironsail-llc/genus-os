@@ -483,10 +483,22 @@ def _date(alert: DatadogAlert) -> int | None:
 
 async def _closed_at(redis_client: Any, base: str) -> int | None:
     """The ``$DATE`` of the latest recovery handled for this monitor, if any."""
+    return await _time_at(redis_client, f"{base}:closed_at")
+
+
+async def _advance(redis_client: Any, key: str, date: int | None) -> None:
+    """Move the time held at ``key`` forward to ``date``, never back."""
+    held = await _time_at(redis_client, key)
+    if date is not None and (held is None or date > held):
+        await _mark(redis_client, key, value=str(date))
+
+
+async def _time_at(redis_client: Any, key: str) -> int | None:
+    """A ``$DATE`` kept at ``key``, if any."""
     if redis_client is None:
         return None
     try:
-        held = await redis_client.get(f"{base}:closed_at")
+        held = await redis_client.get(key)
     except Exception as exc:  # noqa: BLE001 - without it, arrival order decides
         logger.warning("Datadog episode close time unreadable (%s)", type(exc).__name__)
         return None
@@ -505,9 +517,7 @@ async def _close(redis_client: Any, base: str, date: int | None) -> None:
     an older notification and never re-opens the episode.
     """
     await _forget(redis_client, *(f"{base}:sent:{name}" for name in _STAGES), f"{base}:triage")
-    closed = await _closed_at(redis_client, base)
-    if date is not None and (closed is None or date > closed):
-        await _mark(redis_client, f"{base}:closed_at", value=str(date))
+    await _advance(redis_client, f"{base}:closed_at", date)
 
 
 async def _deliver_here(
@@ -524,8 +534,9 @@ async def _deliver_here(
     ``sent:<entry>`` once it is confirmed. A redelivery of the same stream
     entry after a crash finds its own mark: ``sending`` sends (the first try
     never finished), ``sent`` does not send again and reports what was sent.
-    A recovery always closes the episode, whatever its own send did; a
-    trigger dated before the latest recovery never re-opens it.
+    A recovery closes the episode, whatever its own send did, unless it is
+    dated before the latest trigger; a trigger dated before the latest
+    recovery never re-opens it.
     """
     from robothor.engine import alerts
     from robothor.integrations.datadog.alerts import level_for
@@ -542,6 +553,16 @@ async def _deliver_here(
             "delivery": {"level": level, "reason": "superseded_by_recovery"},
             "triage": {"started": False, "reason": "superseded_by_recovery"},
         }
+    if recovery and _older(date, await _time_at(redis_client, f"{base}:triggered_at")):
+        # A recovery dated before the latest trigger (a late Datadog retry):
+        # the monitor fired again since, so the episode stays open.
+        return {
+            "mode": SUPPRESSED,
+            "delivery": {"level": level, "reason": "superseded_by_trigger"},
+            "triage": {"started": False, "reason": "superseded_by_trigger"},
+        }
+    if not recovery:
+        await _advance(redis_client, f"{base}:triggered_at", date)
     stage = _stage(alert.transition, level)
     gate = f"{base}:sent:{stage}"
     alert_id = f"datadog_alert:{tenant}:{monitor}:{stage}"

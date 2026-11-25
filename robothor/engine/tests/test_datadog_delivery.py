@@ -475,7 +475,7 @@ async def test_warn_and_no_data_start_no_run(fleet: Fleet, audit: Audit) -> None
 
 
 async def test_a_recovery_sends_one_info_and_starts_no_run(fleet: Fleet, audit: Audit) -> None:
-    await fleet.deliver_webhook(_payload())
+    await fleet.deliver_webhook(_payload(date="8"))
     await fleet.deliver_webhook(_payload(transition="Recovered", event_id="9", date="9"))
     await fleet.deliver_webhook(_payload(transition="Recovered", event_id="10", date="10"))
 

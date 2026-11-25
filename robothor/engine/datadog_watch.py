@@ -542,10 +542,16 @@ class DatadogWatch:
         for key in [k for k in self._episodes if k[0] == scope.tenant_id]:
             if key[1].startswith("spike:") and key[1] not in spiking:
                 del self._episodes[key]
-        recorded = await self._retry(scope.tenant_id, "spike:", lambda s: s in spiking)
+        recorded = 0
+        fresh: set[str] = set()
         for finding in findings:
-            recorded += await self._spike(scope.tenant_id, finding, start, end)
-        return recorded
+            if await self._spike(scope.tenant_id, finding, start, end):
+                recorded += 1
+                fresh.add(f"spike:{finding.service}")
+        # A spike found afresh this pass replaced its stored finding: one send.
+        return recorded + await self._retry(
+            scope.tenant_id, "spike:", lambda s: s in spiking, skip=fresh
+        )
 
     async def _watch_silence(
         self,
@@ -834,10 +840,23 @@ class DatadogWatch:
                 self._episodes[key] = before
         return outcome
 
-    async def _retry(self, tenant: str, prefix: str, still: Callable[[str], bool]) -> int:
-        """Try again the failed alerts of ``tenant`` under ``prefix`` whose condition lasts."""
+    async def _retry(
+        self,
+        tenant: str,
+        prefix: str,
+        still: Callable[[str], bool],
+        *,
+        skip: Collection[str] = (),
+    ) -> int:
+        """Try again the failed alerts of ``tenant`` under ``prefix`` whose condition lasts.
+
+        ``skip``: subjects already sent afresh this pass, whose stored finding
+        that fresh one replaced.
+        """
         tried = 0
         for key in [k for k in self._failed if k[0] == tenant and k[1].startswith(prefix)]:
+            if key[1] in skip:
+                continue
             kind, brief, details, target = self._failed[key]
             if not still(key[1]):
                 del self._failed[key]
