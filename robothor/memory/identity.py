@@ -1616,7 +1616,11 @@ class _Resolver:
 
         if (
             outcome.entity_id is not None
-            and outcome.method not in ("operator", "exact")
+            # A node this call just created cannot have been reached through a
+            # merge. An existing node matched with method `exact` (a single-token
+            # company name) is tagged like any other match.
+            and not created
+            and outcome.method != "operator"
             and (via or collapsed)
         ):
             # Say how a CRM merge shaped this decision, so reversing the merge can
