@@ -190,20 +190,140 @@ async def test_search_embeds_the_query_with_the_query_instruction(
     assert seen and seen[0].startswith("Instruct: ") and seen[0].endswith("Query:tea?")
 
 
+def _graph_hit(fid: int, text: str, score: float) -> Any:
+    from robothor.memory.recall import Candidate
+
+    payload = _row(fid, text, source="graph", origin="user_stated", graph_hops=2)
+    return Candidate(id=fid, kind="fact", text=text, leg_scores={"graph": score}, payload=payload)
+
+
 @pytest.mark.asyncio
-async def test_entity_expansion_keeps_a_reserved_place(env: pytest.MonkeyPatch) -> None:
-    """The entity-graph expansion leg finds facts that are related, not similar.
-    A query-document reranker scores them low; a reserved place keeps one."""
+async def test_the_graph_leg_keeps_its_reserved_places(env: pytest.MonkeyPatch) -> None:
+    """The graph leg finds facts that are related, not similar. A
+    query-document reranker scores them 0; the reserved places keep two, chosen
+    by the leg's own score. (Replaces the one-hop entity_expansion leg's test.)"""
+    hops = [
+        _graph_hit(700, "Bob runs the shipping team", 0.9),
+        _graph_hit(701, "Carol drives the shipping van", 0.5),
+        _graph_hit(702, "Dan shipping weakest link", 0.1),
+    ]
+    cur = _Cursor(vector=_dense(20), keyword=[])
+    env.setattr(reranker, "rerank_pair", _scorer({"shipping": 0.0}, default=0.6))
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=hops):
+        results = await _search(cur)
+
+    ids = [r["id"] for r in results]
+    assert len(results) == 5
+    assert 700 in ids and 701 in ids and 702 not in ids
+    row = next(r for r in results if r["id"] == 700)
+    assert "graph" in row["leg_ranks"]
+    assert row["origin"] == "user_stated"
+
+
+@pytest.mark.asyncio
+async def test_include_graph_false_runs_no_graph_leg(env: pytest.MonkeyPatch) -> None:
+    hops = [_graph_hit(700, "Bob runs the shipping team", 0.9)]
+    cur = _Cursor(vector=_dense(20), keyword=[])
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+    graph = MagicMock(return_value=hops)
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", graph):
+        results = await _search(cur, include_graph=False)
+
+    graph.assert_not_called()
+    assert 700 not in [r["id"] for r in results]
+    assert not any("graph" in r["leg_ranks"] for r in results)
+
+
+@pytest.mark.asyncio
+async def test_expand_entities_is_still_accepted(env: pytest.MonkeyPatch) -> None:
+    """Callers that pass the superseded argument keep working: it now means
+    "graph leg on"."""
+    hops = [_graph_hit(700, "Bob runs the shipping team", 0.9)]
+    cur = _Cursor(vector=_dense(20), keyword=[])
+    env.setattr(reranker, "rerank_pair", _scorer({"shipping": 0.0}, default=0.6))
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=hops):
+        results = await _search(cur, expand_entities=True, include_graph=False)
+
+    assert 700 in [r["id"] for r in results]
+
+
+@pytest.mark.asyncio
+async def test_the_one_hop_expansion_answers_when_the_graph_returns_nothing(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Nothing writes memory_mentions yet, so on existing data the graph leg is
+    empty; the one-hop expansion keeps answering until it is not. (Replaces a
+    test that pinned the expansion leg as removed.)"""
     hop = _row(700, "Bob runs the shipping team", entities=["Bob"], importance_score=0.9)
     cur = _Cursor(vector=_dense(20), keyword=[], expansion=[hop])
     env.setattr(reranker, "rerank_pair", _scorer({"shipping": 0.01}, default=0.6))
     get_entity = AsyncMock(return_value={"relations": [{"target_name": "Bob"}]})
 
-    with patch("robothor.memory.entities.get_entity", get_entity):
+    with (
+        patch("robothor.memory.activation.graph_candidates_for_query", return_value=[]),
+        patch("robothor.memory.entities.get_entity", get_entity),
+    ):
         results = await _search(cur, expand_entities=True)
 
+    row = next((r for r in results if r["id"] == 700), None)
+    assert row is not None and "entity_expansion" in row["leg_ranks"]
+    assert facts.RESERVED_PLACES == {"graph": 2, "entity_expansion": 1}
+
+
+@pytest.mark.asyncio
+async def test_the_one_hop_expansion_does_not_run_beside_a_graph_result(
+    env: pytest.MonkeyPatch,
+) -> None:
+    hop = _row(800, "Dan runs the night shift", entities=["Dan"], importance_score=0.9)
+    cur = _Cursor(vector=_dense(20), keyword=[], expansion=[hop])
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+    get_entity = AsyncMock(return_value={"relations": [{"target_name": "Dan"}]})
+    graph = [_graph_hit(700, "Bob runs the shipping team", 0.9)]
+
+    with (
+        patch("robothor.memory.activation.graph_candidates_for_query", return_value=graph),
+        patch("robothor.memory.entities.get_entity", get_entity),
+    ):
+        results = await _search(cur, expand_entities=True)
+
+    get_entity.assert_not_called()
+    assert 800 not in [r["id"] for r in results]
+
+
+@pytest.mark.asyncio
+async def test_without_expand_entities_an_empty_graph_adds_nothing(
+    env: pytest.MonkeyPatch,
+) -> None:
+    hop = _row(700, "Bob runs the shipping team", entities=["Bob"], importance_score=0.9)
+    cur = _Cursor(vector=_dense(20), keyword=[], expansion=[hop])
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+    get_entity = AsyncMock(return_value={"relations": [{"target_name": "Bob"}]})
+
+    with (
+        patch("robothor.memory.activation.graph_candidates_for_query", return_value=[]),
+        patch("robothor.memory.entities.get_entity", get_entity),
+    ):
+        results = await _search(cur)
+
+    get_entity.assert_not_called()
+    assert 700 not in [r["id"] for r in results]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_graph_leg_does_not_fail_the_search(env: pytest.MonkeyPatch) -> None:
+    cur = _Cursor(vector=_dense(6), keyword=[])
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+
+    with patch(
+        "robothor.memory.activation.graph_candidates_for_query",
+        side_effect=RuntimeError("function memory_activate does not exist"),
+    ):
+        results = await _search(cur)
+
     assert len(results) == 5
-    assert 700 in [r["id"] for r in results]
 
 
 @pytest.mark.asyncio
