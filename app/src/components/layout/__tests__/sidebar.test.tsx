@@ -75,11 +75,11 @@ describe("Sidebar", () => {
    * The gate is per item, not per group: taking Observe away from a member to
    * protect Memory would take Runs, Fleet and Health away with it.
    */
-  it("shows an auditor Audit and hides Memory and Logs", () => {
+  it("shows an auditor Audit and Logs and hides Memory", () => {
     renderSidebar({ role: "auditor" });
     expect(screen.getByTestId("nav-audit")).toBeTruthy();
     expect(screen.queryByTestId("nav-memory")).toBeNull();
-    expect(screen.queryByTestId("nav-logs")).toBeNull();
+    expect(screen.getByTestId("nav-logs")).toBeTruthy();
     expect(screen.getByTestId("nav-runs")).toBeTruthy();
   });
 
