@@ -307,9 +307,6 @@ def _result_limit(value: Any) -> int:
     return min(max(n, 1), MAX_RESULTS)
 
 
-_WEBCHAT_DETAIL_PREFIXES = ("webchat:", "plan:", "plan-exec:", "plan-revise:")
-
-
 def run_private_reader(
     *,
     trigger_type: str | None,
@@ -321,51 +318,36 @@ def run_private_reader(
 ) -> tuple[str | None, str | None] | None:
     """``(person_id, user_id)`` a persisted run could read private memory as, or None.
 
-    A replay must never read more than the original run could. A run reads
-    private conversation and facts only when it serves a person in their own
-    one-to-one conversation: a webchat turn (or plan step) in the member's own
-    ``agent:{agent}:user:{uid}`` session, or the operator's main session; or a
-    Telegram direct message (positive chat id). Every other run (scheduled,
-    hook, event, manual, workflow, sub-agent, workspace, channel) has none,
-    whoever it ran as. ``agent_runs.person_id`` alone is not enough: it is
-    also filled from a chat-id lookup and copied onto spawned runs.
-
-    Local, conservative copy of the engine's rule
-    (``robothor.engine.private_recall.private_reader_for_run``), which is not
-    on this branch's base. Replace this with a call to that function at
-    re-sync. The run record does not carry whether the identity was verified,
-    so a run that passes the rest is taken as verified.
+    A replay must never read more than the original run could, so this is the
+    engine's own rule, ``robothor.engine.private_recall.private_reader_for_run``,
+    applied to the run record: a person only when the run served them in their
+    own one-to-one conversation (their webchat session or plan step, the
+    operator's main session, a Telegram direct message), and no one for any
+    other run (scheduled, hook, event, manual, workflow, sub-agent, workspace,
+    channel), whoever it ran as. The record does not carry whether the identity
+    was verified, so the run's person is taken as verified. A spawned run
+    (``parent_run_id``) reads as no one: ``agent_runs.person_id`` is copied onto
+    spawned runs, so the record alone cannot show whom it served.
     """
     if parent_run_id:
         return None
-    detail = trigger_detail or ""
-    if trigger_type == "webchat":
-        key = next((detail[len(p) :] for p in _WEBCHAT_DETAIL_PREFIXES if detail.startswith(p)), "")
-        if not key or not user_id:
-            return None
-        parts = key.split(":")
-        own = len(parts) == 4 and parts[0] == "agent" and parts[2] == "user" and parts[3] == user_id
-        if own or (key == _main_session_key() and user_role == "owner"):
-            return (person_id or None, user_id)
+    from robothor.engine import private_recall
+    from robothor.identity.context import IdentityContext
+
+    identity = IdentityContext(
+        tenant_id="",
+        channel=str(trigger_type or ""),
+        identifier=user_id or person_id or "",
+        verified=True,
+        role=user_role or "",
+        person_id=person_id or None,
+    )
+    reader = private_recall.private_reader_for_run(
+        trigger_type, trigger_detail, user_id or None, identity
+    )
+    if reader is None:
         return None
-    if trigger_type == "telegram" and detail.startswith("chat:"):
-        try:
-            chat_id = int(detail[len("chat:") :].split("|", 1)[0])
-        except ValueError:
-            return None
-        return (person_id, None) if chat_id > 0 and person_id else None
-    return None
-
-
-def _main_session_key() -> str:
-    from robothor.memory.segments import DEFAULT_MAIN_SESSION_KEY
-
-    try:
-        from robothor.engine.chat import get_main_session_key
-
-        return str(get_main_session_key())
-    except ImportError:
-        return DEFAULT_MAIN_SESSION_KEY
+    return (reader.person_id, reader.user_id)
 
 
 _RUN_STEPS_SQL = """

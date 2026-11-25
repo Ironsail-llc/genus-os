@@ -1218,7 +1218,9 @@ served that person in their own one-to-one conversation (a webchat turn or
 plan step in their own session, the operator's main session, or a Telegram
 direct message). Every other run (scheduled, hook, event, manual, workflow,
 sub-agent, workspace, channel) is replayed with no reader, shared rows only,
-whoever it ran as; the run's linked person alone is not enough.
+whoever it ran as; the run's linked person alone is not enough. The rule is
+the engine's own (`private_reader_for_run` in
+`robothor/engine/private_recall.py`), applied to the run record.
 `--from-chat` uses recent user turns as stand-in questions, each read as the
 owner of its conversation (the rule segments are stored under); a turn whose
 conversation has no known owner is skipped and counted, never replayed as an
