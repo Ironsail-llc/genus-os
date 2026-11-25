@@ -287,8 +287,9 @@ class TestPlantedAnswers:
         assert any(p.expect_correct for p in a) and any(not p.expect_correct for p in a)
 
     def test_planted_wrong_answers_never_contain_a_gold(self):
+        # Hedges contain the gold on purpose; every other wrong kind must not.
         for p in ea.planted_answers(_world()):
-            if not p.expect_correct:
+            if not p.expect_correct and p.kind != "hedge":
                 norm = ea.normalise(p.answer.text)
                 assert not any(ea.normalise(g) in norm for g in p.case.gold), p
 
@@ -365,3 +366,135 @@ class TestCaseSelection:
 
     def test_split_is_respected(self):
         assert {c.split for c in ea.select_cases(_world(), "dev", None)} == {"dev"}
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes: hedges, per-kind validation, judge errors, remote provider
+# --------------------------------------------------------------------------- #
+
+KINDS = {
+    "Kelvaro Systems": "organisation",
+    "Brivane Labs": "organisation",
+    "Velmere": "city",
+    "Tharholt": "city",
+    "Bob Ashby": "person",
+}
+
+
+class TestHedges:
+    def test_gold_with_a_competing_value_of_its_kind_is_not_settled_by_rule(self):
+        for text in (
+            "Kelvaro Systems or Brivane Labs",
+            "Brivane Labs (previously Kelvaro Systems)",
+            "Brivane Labs, then Kelvaro Systems",
+        ):
+            assert ea.judge_rules(_case(), _answer(text), KNOWN, KINDS) is None, text
+
+    def test_gold_with_a_value_of_another_kind_is_still_correct(self):
+        v = ea.judge_rules(_case(), _answer("Kelvaro Systems, in Velmere"), KNOWN, KINDS)
+        assert v is not None and v.correct
+
+    @pytest.mark.asyncio
+    async def test_a_hedge_goes_to_the_llm_and_is_wrong_without_one(self):
+        seen = []
+
+        async def llm(case, answer):
+            seen.append(answer.text)
+            return False, "hedges"
+
+        hedge = _answer("Kelvaro Systems or Brivane Labs")
+        v = await ea.judge(_case(), hedge, known_values=KNOWN, kinds=KINDS, llm=llm)
+        assert not v.correct and v.method == "llm" and seen == [hedge.text]
+        v = await ea.judge(_case(), hedge, known_values=KNOWN, kinds=KINDS)
+        assert not v.correct
+
+    def test_planted_hedges_are_expected_wrong_and_reach_the_llm(self):
+        w = _world()
+        known, kinds = ea.known_values(w), ea.known_kinds(w)
+        hedges = [p for p in ea.planted_answers(w) if p.kind == "hedge"]
+        assert hedges
+        for p in hedges:
+            assert not p.expect_correct
+            assert any(ea.normalise(g) in ea.normalise(p.answer.text) for g in p.case.gold)
+            assert ea.judge_rules(p.case, p.answer, known, kinds) is None, p
+
+
+class TestValidationPerKind:
+    @pytest.mark.asyncio
+    async def test_a_mediocre_llm_judge_fails_even_when_the_pool_passes(self):
+        """750 rule-settled wrong answers must not carry a weak model judge."""
+        import hashlib
+
+        async def mediocre(case, answer):
+            words = set(ea.normalise(answer.text).split())
+            ok = any(words <= set(ea.normalise(g).split()) for g in case.gold)
+            # Flip about one verdict in eight.
+            if hashlib.sha256(answer.text.encode()).digest()[0] < 32:
+                ok = not ok
+            return ok, "mediocre"
+
+        w = ew.generate_world(7, "full")
+        result = await ea.validate_judge(w, ea.make_judge(w, llm=mediocre))
+        assert result.wrong_marked_wrong >= 0.95  # the pooled gate alone would pass
+        assert not result.passed
+        weak = [k for k, v in result.by_kind.items() if v["ok"] / v["n"] < 0.95]
+        assert weak and set(weak) <= {"wrong_llm", "paraphrase_llm", "hedge"}
+
+    @pytest.mark.asyncio
+    async def test_a_judge_error_counts_as_a_failed_planted_case(self):
+        w = _world()
+        rule_judge = ea.make_judge(w, llm=None)
+        first = True
+
+        async def flaky(case, answer):
+            nonlocal first
+            if first:
+                first = False
+                raise RuntimeError("unparseable judge output")
+            return await rule_judge(case, answer)
+
+        result = await ea.validate_judge(w, flaky)
+        assert any("RuntimeError" in f for f in result.failures)
+
+
+class TestModelSelection:
+    @pytest.mark.asyncio
+    async def test_an_explicit_model_runs_locally_even_with_remote_generation_on(self, monkeypatch):
+        from robothor.llm import ollama
+        from robothor.memory import generation
+
+        async def remote_chat(*_a, **_k):
+            raise AssertionError("an explicit eval model must not go to the remote provider")
+
+        seen: dict[str, Any] = {}
+
+        async def local_chat(messages, **kw):
+            seen.update(kw)
+            return json.dumps({"answer": "Velmere", "unknown": False, "cited_ids": []})
+
+        monkeypatch.setattr(generation, "_remote_enabled", lambda: True)
+        monkeypatch.setattr(generation, "chat", remote_chat)
+        monkeypatch.setattr(ollama, "chat", local_chat)
+        out = await ea.answer("q", _bundle("x"), model="qwen-local")
+        assert seen["model"] == "qwen-local" and out.model == "qwen-local"
+
+        ok, _ = await ea.llm_judge(_case(), _answer("x"), model="qwen-local")
+        assert seen["model"] == "qwen-local"
+
+    def test_remote_generation_without_explicit_models_is_refused(self, monkeypatch):
+        from robothor.memory import generation
+
+        monkeypatch.setattr(generation, "_remote_enabled", lambda: True)
+        with pytest.raises(EvalPreconditionError, match="remote"):
+            ea.resolve_eval_models(None, None)
+        with pytest.raises(EvalPreconditionError, match="remote"):
+            ea.resolve_eval_models("a", None)
+        assert ea.resolve_eval_models("a", "b") == ("a", "b")
+
+    def test_local_generation_resolves_the_default_model(self, monkeypatch):
+        from robothor.llm import ollama
+        from robothor.memory import generation
+
+        monkeypatch.setattr(generation, "_remote_enabled", lambda: False)
+        monkeypatch.setattr(ollama, "GENERATION_MODEL", "gen-default")
+        assert ea.resolve_eval_models(None, "j") == ("gen-default", "j")
