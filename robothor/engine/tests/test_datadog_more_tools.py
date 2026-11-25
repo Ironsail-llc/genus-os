@@ -45,7 +45,7 @@ SCOPES = {
         "monitors": 'tag:"service:shop-api"',
         "metric_tags": ["service:shop-api"],
     },
-    # Spans default to the log filter; monitors and metrics to no access.
+    # Logs only: spans, monitors and metrics are no access without their own entry.
     CHILD_B: {"logs": "service:clinic-app"},
     # Logs, but no spans: the span part itself is refused.
     NO_SPANS: {"logs": "service:shop-api", "spans": 'tag:"genus_scope:no_access"'},
@@ -301,10 +301,16 @@ def test_a_parent_with_every_span_sends_the_query_alone(dd, writer):
     assert _attrs(dd)["filter"]["query"] == "status:error"
 
 
-def test_a_sibling_without_a_span_filter_reads_with_its_log_filter(dd, writer):
-    _run(SPANS, {"query": "status:error"}, _ctx(CHILD_B))
+@pytest.mark.parametrize("name", [SPANS, TRACE])
+def test_a_tenant_without_a_span_filter_gets_no_span_access(dd, writer, name):
+    """Span access is granted only by an explicit spans filter: the log filter
+    is not borrowed, since a log-only exclusion would exclude nothing on spans."""
+    result = _run(name, MINIMAL[name], _ctx(CHILD_B))
 
-    assert _attrs(dd)["filter"]["query"] == "(service:clinic-app) AND (status:error)"
+    assert result["refused"] is True
+    assert result["gate"] == "runtime"
+    assert "not configured for this organization" in result["error"]
+    assert dd.requests == []
 
 
 # ── datadog_trace_get ──────────────────────────────────────────────────────
