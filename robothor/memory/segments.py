@@ -451,6 +451,22 @@ def reader_principals(person_id: str | None, user_id: str | None) -> list[str]:
     return out
 
 
+def user_belongs_to_person(tenant_id: str, user_id: str, person_id: str) -> bool:
+    """Whether ``tenant_users`` links ``user_id`` to ``person_id`` in the tenant.
+
+    Sync; call it off the loop. A restricted reader's user id is trusted only
+    when this holds.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM tenant_users WHERE tenant_id = %s AND user_id = %s "
+            "AND person_id::text = %s AND is_active LIMIT 1",
+            (tenant_id, user_id, str(person_id)),
+        )
+        return cur.fetchone() is not None
+
+
 def _main_session_key() -> str:
     """The engine's configured main session key, or the default one."""
     try:

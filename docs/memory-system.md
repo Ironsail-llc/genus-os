@@ -107,15 +107,26 @@ pool, and gives rows scoring at least 0.5 a small blend bonus.
 every path. `MEMORY_NARROW_SEARCH` is read by the `search_memory` tool, which
 decides the `include_*` arguments.
 
-The `search_memory` tool passes the reader on both paths (direct and RIP 15):
-`reader_person_id` is the run identity's `person_id`, whatever
-`ROBOTHOR_DATA_SCOPING` is set to, `reader_user_id` is the run's user id (the
-one a member's webchat session key carries), and `room_ids` are the room of
-the current room run plus every room the calling user is a member of. Callers
-that name no reader — the bridge's `/api/memory/search`, MCP `search_memory`,
-deep reasoning, cron and system runs — receive no private conversation. The
-Memory page's fact search (`GET /api/memory/facts?q=`) asks for no segments
-and keeps only `kind == "fact"` rows, because it edits and forgets facts by id. A segment row in the
+The `search_memory` tool passes the reader on both paths (direct and RIP 15),
+and the reader of a private conversation is decided by the run, not inferred
+from its principal: `ToolContext.private_reader`
+(`robothor/engine/private_recall.py`), which each tool turn publishes from its run. A run has
+one only when it serves a verified person in their own one-to-one
+conversation: a webchat turn in their own `agent:{agent}:user:{uid}` session
+(or the main session, for the operator), or a Telegram direct message. It has
+none inside a workspace (room) run, and none for cron, hook, event,
+workflow, sub-agent, federation, manual, IDE, Slack or plugin-channel runs,
+whoever they execute as — a report workspace that runs as a member does not
+recall that member's private chats into its edition. With no private reader
+the run reads shared segments only. This is applied whatever
+`ROBOTHOR_DATA_SCOPING` is set to. `room_ids` are the room of the current room
+run plus every room the calling user is a member of. Callers that name no
+reader — the bridge's `/api/memory/search`, MCP `search_memory`, deep
+reasoning — receive no private conversation. Under a restricted data scope
+`search_facts` takes the reader person from the scope and keeps the caller's
+user id only when `tenant_users` links it to that person. The Memory page's
+fact search (`GET /api/memory/facts?q=`) asks for no segments and keeps only
+`kind == "fact"` rows, because it edits and forgets facts by id. A segment row in the
 tool's output adds `kind`, `topic`, `source_kind`, `source_ref`, `start_ref`,
 `end_ref`, `part`, `started_at` and `ended_at` to the usual fields; a fact row
 keeps its shape. Segment rows carry `source: "segment"`, so fact-access logging

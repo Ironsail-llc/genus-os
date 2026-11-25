@@ -136,6 +136,40 @@ async def test_the_registry_puts_the_private_reader_on_the_tool_context():
     assert [c.private_reader for c in seen] == [reader, None]
 
 
+async def test_dispatch_uses_the_reader_the_tool_turn_published():
+    from types import SimpleNamespace
+
+    from robothor.engine.private_recall import private_reader_scope
+    from robothor.engine.tools import dispatch
+    from robothor.engine.tools.registry import get_registry
+
+    seen: list[Any] = []
+
+    async def probe(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
+        seen.append(ctx.private_reader)
+        return {"ok": True}
+
+    def session(trigger: TriggerType) -> Any:
+        run = SimpleNamespace(trigger_type=trigger, trigger_detail=f"webchat:{OWN}", user_id=MEMBER)
+        return SimpleNamespace(run=run, identity=_identity())
+
+    with (
+        patch.object(dispatch, "_get_handlers", return_value={"probe": probe}),
+        patch.object(dispatch, "_refuse_before_handler", AsyncMock(return_value=None)),
+        patch.object(dispatch, "_runtime_denial", AsyncMock(return_value=None)),
+    ):
+        with private_reader_scope(session(TriggerType.WEBCHAT)):
+            await get_registry().execute("probe", {}, timeout=0)
+            # A sub-agent spawned inside the parent's turn publishes its own.
+            with private_reader_scope(session(TriggerType.SUB_AGENT)):
+                await get_registry().execute("probe", {}, timeout=0)
+            await get_registry().execute("probe", {}, timeout=0)
+        await get_registry().execute("probe", {}, timeout=0)
+
+    reader = PrivateReader(PERSON, MEMBER)
+    assert seen == [reader, None, reader, None]
+
+
 # ── a real run decides it from its own trigger ─────────────────────────────
 
 
@@ -198,7 +232,18 @@ async def _reader_seen_by_the_tool(runner, agent_config, **run_kwargs) -> Any:
             return _response(tool_calls=[_tool_call("search_memory", {"query": "locker"})])
         return _response(content="done")
 
-    runner.registry.execute = AsyncMock(return_value={"results": []})
+    from robothor.engine.private_recall import current_private_reader
+
+    # What dispatch would put on the ToolContext for this call: the reader the
+    # run's tool turn published (an explicit kwarg would win, and none is sent).
+    seen: list[Any] = []
+
+    async def execute(name, args, **kwargs):
+        if name == "search_memory":
+            seen.append(kwargs.get("private_reader") or current_private_reader())
+        return {"results": []}
+
+    runner.registry.execute = AsyncMock(side_effect=execute)
     with (
         patch("robothor.engine.runner.create_run"),
         patch("robothor.engine.runner.update_run"),
@@ -206,9 +251,8 @@ async def _reader_seen_by_the_tool(runner, agent_config, **run_kwargs) -> Any:
         patch("litellm.acompletion", side_effect=completion),
     ):
         await runner.execute("recall-agent", "go", agent_config=agent_config, **run_kwargs)
-    calls = [c for c in runner.registry.execute.call_args_list if c.args[0] == "search_memory"]
-    assert calls, "the tool was never called"
-    return calls[0].kwargs.get("private_reader", "missing")
+    assert seen, "the tool was never called"
+    return seen[0]
 
 
 @pytest.mark.usefixtures("_mock_run_persistence")

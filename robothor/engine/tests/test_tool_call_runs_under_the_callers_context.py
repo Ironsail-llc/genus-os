@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from robothor.engine.private_recall import PrivateReader
 from robothor.engine.tools import dispatch
 from robothor.engine.tools.dispatch import (
     ToolContext,
@@ -53,6 +54,9 @@ RUN_CONTEXT: dict[str, Any] = {
     "identity": MEMBER,
     # In the fold, the role capability tier is a ToolContext field too.
     "capability_tier": "unrestricted",
+    # The person the run serves in their own conversation: a wrapped recall
+    # must read private conversation exactly as the direct call would.
+    "private_reader": PrivateReader("11111111-1111-4111-8111-111111111111", "user-1"),
 }
 
 

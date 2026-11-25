@@ -1296,7 +1296,8 @@ async def search_facts(
             legs cannot filter by person, so a restricted scope leaves them
             out (the router's rule for unscopable stores) — see
             robothor/identity/scope.py. The segment leg can filter by person
-            and stays on; its reader is then the scope's person only.
+            and stays on; its reader is then the scope's person, plus the
+            caller's user id only when it belongs to that person.
         include_segments: Fuse a ``segment`` leg of raw conversation
             (``robothor.memory.segments.search_segments``). On by default;
             when on, the ``chat_turn`` leg is not run even if asked for — the
@@ -1358,9 +1359,21 @@ async def search_facts(
     # a store that cannot express person scoping is left out, not unfiltered.
     unscopable_ok = scope_clause == ""
     # Segments filter by reader themselves, so they stay on. Under a restricted
-    # scope the reader is the scope's person and nothing else, whatever the
-    # caller passed as reader_person_id.
-    segment_reader = scope.person_id if scope is not None and scope.restricted else reader_person_id
+    # scope both reader ids come from the scope: the person is the scope's,
+    # and the caller's user id is kept only when tenant_users links it to
+    # that same person (else it is dropped, never trusted).
+    segment_reader, segment_user = reader_person_id, reader_user_id
+    if scope is not None and scope.restricted:
+        from robothor.memory.segments import user_belongs_to_person
+
+        segment_reader = scope.person_id
+        owned = False
+        if segment_user and segment_reader:
+            owned = await asyncio.to_thread(
+                user_belongs_to_person, _tenant, segment_user, segment_reader
+            )
+        if not owned:
+            segment_user = None
     legs.update(
         await _auxiliary_legs(
             query=query,
@@ -1373,7 +1386,7 @@ async def search_facts(
             include_segments=include_segments,
             limit=limit,
             reader_person_id=segment_reader,
-            reader_user_id=reader_user_id,
+            reader_user_id=segment_user,
             room_ids=room_ids,
         )
     )

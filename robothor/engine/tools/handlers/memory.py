@@ -163,11 +163,13 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     _scoping_mode = data_scoping_mode()
     _query_scope = scope_for_query(_scoping_mode, identity)
     # Conversation segments are scoped on EVERY call, whatever the rollout mode:
-    # verbatim conversation is more sensitive than an extracted fact. The reader
-    # (their person and their user id) sees the conversations they own and the
-    # workspaces they belong to; nothing else.
-    reader_person_id: str | None = getattr(identity, "person_id", None) or None
-    reader_user_id: str | None = getattr(ctx, "user_id", "") or None
+    # verbatim conversation is more sensitive than an extracted fact. A private
+    # conversation is read only for the person this run is serving in their
+    # own conversation (ctx.private_reader, decided by the run); never for the
+    # run's principal or identity alone. Workspaces are gated by membership.
+    private = getattr(ctx, "private_reader", None)
+    reader_person_id = private.person_id if private is not None else None
+    reader_user_id = private.user_id if private is not None else None
     room_ids = await _reader_room_ids(ctx)
 
     recall_path = _recall_routed if is_rip_enabled(15) else _recall_fallback
