@@ -532,14 +532,47 @@ def _recipients(would_notify: Any) -> str:
     return f"{audience}, by {joined}"
 
 
+#: What a recorded record's ``mode`` says happened to it. Older records are
+#: ``dry_run``; a recorder that delivers writes ``delivered``, ``suppressed`` or
+#: ``delivery_failed`` with a ``reason``. Anything else reads as not sent.
+DELIVERED = "delivered"
+
+
+def _delivery_route(delivery: Any) -> str | None:
+    """The route a delivered record went by, from whatever shape ``delivery`` has."""
+    if isinstance(delivery, str):
+        return _text(delivery) or None
+    record = _dict_of(delivery)
+    for key in ("route", "channel"):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            return _text(value.strip())
+    return None
+
+
+def _triage(triage: Any) -> dict[str, Any] | None:
+    """Whether the read-only first-look run was started, and why not, from any shape."""
+    record = _dict_of(triage)
+    if not record:
+        return None
+    started = record.get("started")
+    if not isinstance(started, bool):
+        started = bool(record.get("run_id"))
+    reason = record.get("reason")
+    return {"started": started, "reason": _text(reason) or None}
+
+
 def _signal_base(row: dict[str, Any], kind: str, details: dict[str, Any]) -> dict[str, Any]:
+    mode = _text(details.get("mode")) or "dry_run"
     return {
         "id": row.get("id"),
         "type": kind,
         "timestamp": row.get("timestamp") or "",
-        "mode": _text(details.get("mode")) or "dry_run",
-        "sent": details.get("mode") == "deliver",
+        "mode": mode,
+        "sent": mode == DELIVERED,
+        "reason": _text(details.get("reason")) or None,
         "recipients": _recipients(details.get("would_notify")),
+        "delivery_route": _delivery_route(details.get("delivery")),
     }
 
 
@@ -554,6 +587,7 @@ def _alert_out(row: dict[str, Any]) -> dict[str, Any]:
         "monitor_id": _text(details.get("monitor_id")),
         "link": _safe_link(details.get("link")),
         "level": _text(_dict_of(details.get("would_notify")).get("level")),
+        "triage": _triage(details.get("triage")),
         "would_run": (
             {"agent": _text(run.get("agent")) or None, "prompt": _text(run.get("prompt"))}
             if run

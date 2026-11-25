@@ -544,10 +544,15 @@ you open it:
 - **Activity** lists what Genus recorded for this organization in the last
   7 days: Datadog monitor alerts that reached it, and the watch's error spikes
   and lost or restored connections. Each entry says what happened and when,
-  who Genus would have told, and the plain text it would have sent (for an
-  alert, the read-only question it would have asked). While the recorders run
-  in dry-run mode every entry is labelled **Recorded, not sent**; an entry the
-  watch did deliver is labelled **Sent**.
+  who Genus told or would have told, and the plain text it sent or would have
+  sent. Each entry also carries a label for what became of it:
+
+  | Label | When |
+  |-------|------|
+  | **Sent** | It was delivered. The entry names the route it went by and, for an alert, whether a read-only first-look run was started (or why not). |
+  | **Not sent again: already reported** | An alert for this is already open, it came too soon after the last one, or the Datadog alert already reported it. |
+  | **Could not be sent** | This organization's engine is not running, the hand-off failed, or delivery failed with the error kind shown. |
+  | **Recorded, not sent** | A dry-run record, or one this page does not recognise. The entry shows who Genus would have told and, for an alert, the read-only question it would have asked. |
 
 **View trace.** A log line that carries a trace id shows a **View trace** link
 that opens the Traces tab on that trace. The id is Datadog's reserved
