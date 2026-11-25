@@ -24,6 +24,8 @@ import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from robothor.identity.scope import DataScope
 
 import httpx
@@ -905,6 +907,9 @@ RESERVED_PLACES: dict[str, int] = {"graph": 2, "entity_expansion": 1}
 
 _AUX_LIMITS = {"insight": 3, "episode": 3, "chat_turn": 5}
 
+# Conversation segments fetched for fusion: at least this many, else the limit.
+SEGMENT_LEG_MIN = 5
+
 
 async def _embed_query(query: str) -> list[float]:
     """Embed a retrieval query with the model's query instruction."""
@@ -1092,6 +1097,45 @@ def _aux_candidates(rows: list[dict[str, Any]], kind: str, text_key: str) -> lis
     ]
 
 
+def _segment_candidates(hits: list[dict[str, Any]], query: str) -> list[Candidate]:
+    """Conversation segments as candidates of kind ``segment``.
+
+    The reranker reads a bounded excerpt (``Candidate.text`` becomes the row's
+    ``content``); the row keeps the whole verbatim text as ``fact_text`` so
+    the tool output and the eval scorers see all of it. ``age_seconds`` is from
+    the segment's last turn, so the blend's recency treats it like a fact's.
+    """
+    from datetime import UTC, datetime
+
+    from robothor.memory.segments import rerank_excerpt
+
+    now = datetime.now(UTC)
+    out: list[Candidate] = []
+    for h in hits:
+        ended = h.get("ended_at")
+        # A keyword-only hit has no cosine. Leave the key out rather than send
+        # None: callers format rows with round(r.get("similarity", 0), 4).
+        hit = {k: v for k, v in h.items() if not (k == "similarity" and v is None)}
+        payload = {
+            **hit,
+            "fact_text": h["text"],
+            "category": "segment",
+            "confidence": 0.5,
+            "age_seconds": (now - ended).total_seconds() if ended is not None else None,
+        }
+        out.append(
+            Candidate(
+                id=h["id"],
+                kind="segment",
+                text=rerank_excerpt(h["text"], query),
+                similarity=h.get("similarity"),
+                leg_scores={"segment": float(h.get("rrf_score") or 0.0)},
+                payload=payload,
+            )
+        )
+    return out
+
+
 async def _auxiliary_legs(
     *,
     query: str,
@@ -1101,15 +1145,44 @@ async def _auxiliary_legs(
     include_insights: bool,
     include_episodes: bool,
     include_chat_turns: bool,
+    include_segments: bool = False,
+    limit: int = 10,
+    reader_person_id: str | None = None,
+    room_ids: Iterable[str] | None = None,
+    reader_user_id: str | None = None,
 ) -> dict[str, list[Candidate]]:
-    """Insights, episode summaries and verbatim chat turns, as fusion legs.
+    """Insights, episode summaries, conversation segments and chat turns, as legs.
 
     Each leg is best-effort: a failure is a WARNING naming the leg, and the
     other legs still rank. They used to be appended after ranking (and the
     episode leg dropped whenever the reranker ran); they are now fused and
     reranked with the facts.
+
+    The ``segment`` leg (dense + keyword over ``memory_segments``) supersedes
+    the dense-only ``chat_turn`` leg: when segments are on, chat turns are not
+    searched for the same query, so one conversation is not returned twice
+    in two shapes. ``reader_person_id`` / ``room_ids`` decide which segments
+    the reader may see (``robothor.memory.segments._filters``).
     """
     legs: dict[str, list[Candidate]] = {}
+    if include_segments:
+        try:
+            from robothor.memory.segments import search_segments
+
+            hits = await search_segments(
+                query,
+                tenant_id=_tenant,
+                limit=max(SEGMENT_LEG_MIN, limit),
+                reader_person_id=reader_person_id,
+                reader_user_id=reader_user_id,
+                room_ids=room_ids,
+                query_embedding=embedding,
+                embed_missing=False,
+            )
+            legs["segment"] = _segment_candidates(hits, query)
+        except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
+            logger.warning("search_facts: segment leg failed: %s: %s", type(e).__name__, e)
+        include_chat_turns = False
     if include_insights:
         try:
             rows = await search_insights(query, limit=_AUX_LIMITS["insight"], tenant_id=tenant_id)
@@ -1190,14 +1263,19 @@ async def search_facts(
     include_chat_turns: bool = False,
     tenant_id: str = "",
     scope: DataScope | None = None,
+    include_segments: bool = True,
+    reader_person_id: str | None = None,
+    room_ids: Iterable[str] | None = None,
+    reader_user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid recall: named legs fused by RRF, graded rerank, one relevance scale.
 
     Pipeline (contract in robothor/memory/recall.py):
         1. Legs: ``vector`` (HNSW cosine) and ``keyword`` (full text, every
            term, then any term) over memory_facts; ``entity_expansion`` when
-           ``expand_entities``; ``insight`` / ``episode`` / ``chat_turn`` when
-           asked for. Each fetches max(30, limit * 3).
+           ``expand_entities``; ``segment`` (raw conversation, on by default);
+           ``insight`` / ``episode`` / ``chat_turn`` when asked for. Each fact
+           leg fetches max(30, limit * 3).
         2. ``fuse`` — reciprocal rank fusion, k=60, ``LEG_WEIGHTS``.
         3. Reranker (on by default; ``MEMORY_RERANK_ENABLED``) scores the head
            of the fused list on 0..1 and orders by that score; on any error the
@@ -1222,7 +1300,24 @@ async def search_facts(
             facts through the fan-out). The insight, episode and chat-turn
             legs cannot filter by person, so a restricted scope leaves them
             out (the router's rule for unscopable stores) — see
-            robothor/identity/scope.py.
+            robothor/identity/scope.py. The segment leg can filter by person
+            and stays on, but the scope only narrows its reader: the reader
+            passed is kept only when it is the scope's person (and its user id
+            only when it belongs to that person); a restricted scope never
+            makes anyone a reader.
+        include_segments: Fuse a ``segment`` leg of raw conversation
+            (``robothor.memory.segments.search_segments``). On by default;
+            when on, the ``chat_turn`` leg is not run even if asked for — the
+            segment leg covers the same conversation with a keyword leg too.
+        reader_person_id: The reader's own person. Segments private to that
+            person are returned with the shared ones; without it, shared
+            segments only. Applied on every call; under a restricted
+            ``scope`` it is kept only when it is the scope's person.
+        room_ids: Workspaces the reader can access; a workspace conversation's
+            segments are returned only for these.
+        reader_user_id: The reader's own user id; a member's webchat
+            conversation (``agent:{agent}:user:{uid}``) is theirs. Without a
+            reader person or user, no private segment is returned at all.
 
     Returns:
         Rows ordered best first. Each carries its payload (``fact_text``,
@@ -1270,6 +1365,21 @@ async def search_facts(
     # would read summaries built from other people's facts. As in the router,
     # a store that cannot express person scoping is left out, not unfiltered.
     unscopable_ok = scope_clause == ""
+    # Segments filter by reader themselves, so they stay on. A restricted scope
+    # only NARROWS the reader the caller passed (the person the run serves); it
+    # never supplies one. The reader is kept only when its person is the
+    # scope's person, and its user id only when that user provably is the same
+    # person; anything else reads no private segment.
+    segment_reader, segment_user = reader_person_id, reader_user_id
+    if scope is not None and scope.restricted:
+        from robothor.memory.segments import user_belongs_to_person
+
+        if not segment_reader or str(segment_reader) != str(scope.person_id):
+            segment_reader, segment_user = None, None
+        elif segment_user and not await asyncio.to_thread(
+            user_belongs_to_person, _tenant, segment_user, segment_reader
+        ):
+            segment_user = None
     legs.update(
         await _auxiliary_legs(
             query=query,
@@ -1279,6 +1389,11 @@ async def search_facts(
             include_insights=include_insights and unscopable_ok,
             include_episodes=include_episodes and unscopable_ok,
             include_chat_turns=include_chat_turns and unscopable_ok,
+            include_segments=include_segments,
+            limit=limit,
+            reader_person_id=segment_reader,
+            reader_user_id=segment_user,
+            room_ids=room_ids,
         )
     )
 

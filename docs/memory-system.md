@@ -21,6 +21,7 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 | `agent_memory_blocks` | Named text blocks (persona, user_profile, preferences, self_model, …) |
 | `agent_breadcrumbs` | 7-day cross-run scratchpad per agent (added 2026-04) |
 | `chat_messages` | Verbatim conversation turns with embeddings + 90-day TTL (added 2026-04) |
+| `memory_segments` | Raw conversation split into topical segments, vector + keyword indexed, same 90-day TTL (added 2026-11) |
 | `fact_access_log` | Per-run retrieval audit for outcome attribution (added 2026-04) |
 | `ingested_items` | Dedup tracking (content hash per source+item+tenant) |
 | `ingestion_watermarks` | Per-source progress and error tracking |
@@ -58,9 +59,23 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      operator.
    - `entity_expansion` (`expand_entities`) — facts about entities related to
      the top hits' entities.
+   - `segment` (`include_segments`, **on by default**) — raw conversation
+     segments from `search_segments` (see
+     [Conversation segments](#conversation-segments)), kind `segment`. Each
+     row's `fact_text` is the whole verbatim text; the reranker reads only a
+     `SEGMENT_RERANK_CHARS` (1,200) excerpt around the best keyword match
+     (`rerank_excerpt`). Which segments come back depends on the reader:
+     `reader_person_id`, `reader_user_id` and `room_ids`, applied on every
+     call. A caller that names no reader gets no private conversation at all.
+     A keyword-only segment row has no `similarity` key (there is no cosine).
    - `insight`, `episode`, `chat_turn` (`include_insights`,
      `include_episodes`, `include_chat_turns`). These stores cannot filter by
-     person, so a restricted data scope leaves them out.
+     person, so a restricted data scope leaves them out. The dense-only
+     `chat_turn` leg also does not run while the `segment` leg is on, even when
+     asked for: both read the same conversation, and the segment leg adds a
+     keyword leg and the reader rule. `search_chat_turns` itself is unchanged.
+     The `segment` leg can filter by person, so it stays on under a restricted
+     scope, and its reader is then the scope's person and nothing else.
 2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
    records its rank in every leg that found it (`leg_ranks`).
 3. **Reranker** (Qwen3-Reranker-0.6B, local) — on by default, off with
@@ -97,6 +112,35 @@ pool, and gives rows scoring at least 0.5 a small blend bonus.
 every path. `MEMORY_NARROW_SEARCH` is read by the `search_memory` tool, which
 decides the `include_*` arguments.
 
+The `search_memory` tool passes the reader on both paths (direct and RIP 15),
+and the reader of a private conversation is decided by the run, not inferred
+from its principal: `ToolContext.private_reader`
+(`robothor/engine/private_recall.py`), which each tool turn publishes from its run. A run has
+one only when it serves a verified person in their own one-to-one
+conversation: a webchat turn in their own `agent:{agent}:user:{uid}` session
+(or the main session, for the operator), or a Telegram direct message. It has
+none inside a workspace (room) run, and none for cron, hook, event,
+workflow, sub-agent, federation, manual, IDE, Slack or plugin-channel runs,
+whoever they execute as — a report workspace that runs as a member does not
+recall that member's private chats into its edition. With no private reader
+the run reads shared segments only. This is applied whatever
+`ROBOTHOR_DATA_SCOPING` is set to. `room_ids` are, inside a workspace run, that
+workspace alone; otherwise the workspaces of the member the run serves (its
+private reader), and none for a run that serves no one. Callers that name no
+reader — the bridge's `/api/memory/search`, MCP `search_memory`, deep
+reasoning — receive no private conversation. A restricted data scope only narrows
+that reader, never creates one: `search_facts` keeps the reader only when its
+person is the scope's person, and its user id only when that user is the same
+person (an active `user_accounts` row, or a `tenant_users` row, linking them);
+with no reader, or a reader who is someone else, it returns no private
+segment. The Memory page's
+fact search (`GET /api/memory/facts?q=`) asks for no segments and keeps only
+`kind == "fact"` rows, because it edits and forgets facts by id. A segment row in the
+tool's output adds `kind`, `topic`, `source_kind`, `source_ref`, `start_ref`,
+`end_ref`, `part`, `started_at` and `ended_at` to the usual fields; a fact row
+keeps its shape. Segment rows carry `source: "segment"`, so fact-access logging
+for outcome attribution skips them.
+
 ### Memory router (RIP 15)
 
 Off unless `ROBOTHOR_RIP_15_ENABLED` is set. When it is, the `search_memory`
@@ -115,6 +159,111 @@ tool routes through `robothor/memory/router.py`, which classifies the query
 The facts it gets come from `search_facts` (ranked as above); the stores are
 then merged with `rrf_fuse` (k=60, `robothor/memory/fusion.py`) and
 budget-capped. Without the flag the tool calls `search_facts` directly.
+
+## Conversation segments
+
+A fact is what the extractor chose to keep, and extraction loses detail: the
+code someone read out, the exact wording of a decision. `memory_segments`
+(migration 177, `robothor/memory/segments.py`) keeps the conversation itself as
+a recall unit. Each chat session is split into contiguous segments, one subject
+each, and every segment is embedded and keyword indexed.
+
+**Splitting** (`segment_turns`) is deterministic and makes no LLM call. Only
+user and assistant turns with text count. A new segment starts:
+
+| Rule | Constant | Starting value |
+|------|----------|----------------|
+| Silence between two turns | `SEGMENT_GAP_SECONDS` | 30 minutes |
+| Change of subject at a user turn: cosine between the mean vectors of the turns before and after it | `SEGMENT_SIMILARITY_BREAK`, `SEGMENT_WINDOW_TURNS` | below 0.5, 2 turns each side |
+| Size budget, so a hit fits a context budget | `SEGMENT_MAX_CHARS`, `SEGMENT_MAX_TURNS` | 4,000 characters, 24 turns |
+
+A subject break needs the open segment to hold `SEGMENT_MIN_TURNS` (2) turns
+first. A fragment of fewer than 2 turns and under `SEGMENT_MIN_CHARS` (200)
+characters, such as a lone "thanks", joins its neighbour; a conversation that
+is only a fragment is not indexed yet. The values are starting points, to be
+tuned by the memory eval.
+
+A single turn over the size budget is never clipped. It is split into
+consecutive segments, cut after the last paragraph break, else sentence end,
+else space in the second half of each budget-sized window. Each piece has the
+turn's message id as both `start_ref` and `end_ref` and a `part` of 0, 1, 2 …;
+a piece never shares a segment with another turn. With the `User: ` /
+`Assistant: ` label removed, the pieces' texts in `part` order concatenate to
+the turn exactly.
+
+**Text** is the turns verbatim, one per line, `User: …` / `Assistant: …`,
+redacted with the same `redact()` chat_store applies before embedding — also
+for rows written before the store redacted at the door. `topic` is the opening
+of the segment's first user turn. Each row names its source: `source_kind`
+(`conversation`; `document` and `email` are reserved), `source_ref` (the
+session key), `start_ref` and `end_ref` (the first and last `chat_messages.id`
+it covers), `part`, and `started_at` / `ended_at` (event time). `person_id` is
+the session's person.
+
+**Who may read a segment** (`scope_kind`, `scope_id`, `conversation_scope`).
+The rule fails closed: a conversation is `shared` only when it is known to be
+multi-party, and today that is a workspace (`agent:{agent}:room:{id}`, even
+when it records a person), whose segments reach only readers who pass that
+workspace in `room_ids`. Every other conversation is `user`, owned by the
+first of:
+
+1. the session's recorded person (`chat_sessions.person_id`) — `person:{id}`;
+2. the member a webchat session key names (`agent:{agent}:user:{uid}`, the key
+   `chat.derive_user_session_key` writes; the session row itself carries no
+   person) — `user:{uid}`;
+3. for the operator's main session (`EngineConfig.main_session_key`), the
+   operator's person from `get_owner_person` — `person:{id}`.
+
+A conversation with no owner — a direct message from an unrecognised sender, a
+TUI or service session, the main session of an instance whose operator is not
+linked to a person, and for now group chats — is `user` with no `scope_id`:
+readable by no one. A reader sees shared segments plus the user segments whose
+`scope_id` is one of theirs (`person:` their person, `user:` their user id).
+Scope belongs to the conversation: every indexing run re-scopes all of a
+session's stored segments, so a session whose person becomes known later is
+re-scoped in full. This rule is applied on every search, independent of the
+`ROBOTHOR_DATA_SCOPING` rollout, because verbatim conversation is more
+sensitive than an extracted fact.
+
+**Indexing** (`index_conversation(session_key, tenant_id=…)`) runs in the
+background after every saved exchange: `chat_store.save_exchange_async`
+spawns it once the turn is committed, beside the turn embedding, for every
+channel that saves through it. It re-segments from the start of the session's
+last segment, so an open segment grows as the conversation continues, and
+upserts on `(tenant_id, source_kind, source_ref, start_ref, part)`: running it twice
+writes nothing the second time. Database work runs in a worker thread. A
+failure (embedder down, database error) is logged and never reaches the turn;
+the next exchange retries the same turns. One run reads the last segment's
+turns plus at most `SEGMENT_INDEX_MAX_TURNS` (200) new ones, so the first
+index of a long history proceeds over several exchanges rather than in one
+batch, and a run for a conversation that already has one in progress in the
+process is skipped.
+
+**Searching** (`search_segments(query, tenant_id=…, limit=…)`) fuses a dense
+leg (HNSW cosine) and a keyword leg (`ts_rank_cd` over the generated
+`tsvector`) with `rrf_fuse` (k=60). The keyword leg ORs the query's terms, so a
+long natural question still matches on the words that matter. The tenant is a
+required argument with no default. The dense leg uses `apply_hnsw_session`,
+whose iterative scan (on wherever pgvector supports it) lets a small tenant
+beside a large one still get `limit` rows. The reader is `reader_person_id`,
+`reader_user_id` and `room_ids` (the rule above); `since` / `until` bound event time. When the
+embedder is down the keyword leg answers alone (`embed_missing=False` skips
+the embedding call for a caller whose own already failed). Each hit carries
+`id`, `kind: "segment"`, `source: "segment"`, `text`, `topic`,
+`source_kind`, `source_ref`, `start_ref`, `end_ref`, `part`, `started_at`,
+`ended_at`, `scope_kind`, `similarity` (or `None`), `keyword_rank` (or
+`None`) and `rrf_score`.
+
+**Retention.** A segment never outlives the chat it copies. It references its
+`chat_sessions` row with `ON DELETE CASCADE`, so clearing a session or the
+stale-session sweep removes its segments with its messages. Lifecycle step 10
+deletes segments that started more than `SEGMENT_RETENTION_DAYS` (90, no more
+than `CHAT_TURN_TTL_DAYS`) ago, tenant by tenant, and turns older than that are
+never indexed. Segments move with their session in `genus tenant
+move-workload`.
+
+Segments are the `segment` leg of `search_facts` and so of the `search_memory`
+tool (see [Retrieval](#retrieval)).
 
 ## Symbolic short-term memory (RIP 13)
 
@@ -149,7 +298,7 @@ Nightly in `robothor/memory/lifecycle.py::run_lifecycle_maintenance`:
 7. Cross-entity relationship inference
 8. **Episode building** — cluster recent facts by time + entity overlap, LLM-title+summarize, embed
 9. **Preference tracking** — extract from high-importance facts, detect drift (stale flag)
-10. **Chat TTL** — delete 90d+ un-pinned, un-referenced verbatim turns
+10. **Chat TTL** — delete 90d+ un-pinned, un-referenced verbatim turns, and conversation segments that started 90d+ ago
 11. **Breadcrumb pruning + promotion** — hot breadcrumbs promoted to `memory_facts`
 12. **Access log GC** — trim attribution history past 30d
 13. **Intent inference** — propose standing intents from recent facts (when `MEMORY_INTENT_POPULATE` is on)

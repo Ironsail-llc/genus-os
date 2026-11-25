@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 from contextlib import contextmanager
 
 from robothor.engine.goal_report_delivery import report_scope
+from robothor.engine.private_recall import private_reader_scope
 from robothor.engine.tool_proxy import (
     RunToolProxy,
     clear_tool_proxy,
@@ -35,7 +36,7 @@ def tool_turn_context(
         )
     )
     try:
-        with report_scope(req, names) as report_state:
+        with private_reader_scope(req.session), report_scope(req, names) as report_state:
             yield report_state
     finally:
         clear_tool_proxy(token)

@@ -1480,6 +1480,35 @@ async def _run_tenant_core_steps(
     }
 
 
+async def _chat_ttl_step(tenant_ids: list[str]) -> dict[str, int]:
+    """Step 10: prune stale chat turns and the conversation segments copying them.
+
+    Per tenant, off the loop. Segments use the same window as the turns
+    (``SEGMENT_RETENTION_DAYS`` is no longer than ``CHAT_TURN_TTL_DAYS``), so
+    a verbatim copy never outlives what it copied. Each half is best-effort
+    and does not stop the other.
+    """
+    from robothor.engine import chat_store
+    from robothor.memory import segments
+
+    stats = {"chat_pruned": 0, "segments_pruned": 0}
+    try:
+        for tid in tenant_ids:
+            stats["chat_pruned"] += await asyncio.to_thread(
+                chat_store.cleanup_stale_chat_turns, chat_store.CHAT_TURN_TTL_DAYS, tid
+            )
+    except Exception as e:
+        logger.warning("Chat turn TTL failed: %s", e)
+    try:
+        for tid in tenant_ids:
+            stats["segments_pruned"] += await asyncio.to_thread(
+                segments.cleanup_stale_segments, segments.SEGMENT_RETENTION_DAYS, tid
+            )
+    except Exception as e:
+        logger.warning("Conversation segment TTL failed: %s", e)
+    return stats
+
+
 async def run_lifecycle_maintenance() -> dict[str, Any]:
     """Run full lifecycle maintenance on the fact store.
 
@@ -1611,21 +1640,16 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         step_timings["preferences"],
     )
 
-    # Step 10: Chat turn TTL — delete old un-pinned, un-referenced chat turns.
+    # Step 10: Chat turn TTL — delete old un-pinned, un-referenced chat turns,
+    # and the conversation segments that copy them.
     t8 = time.monotonic()
-    chat_pruned = 0
-    try:
-        from robothor.engine.chat_store import cleanup_stale_chat_turns
-
-        for tid in tenant_ids:
-            with tenant_scope(tid):
-                chat_pruned += await asyncio.to_thread(cleanup_stale_chat_turns, 90, tid)
-    except Exception as e:
-        logger.warning("Chat turn TTL failed: %s", e)
+    ttl_stats = await _chat_ttl_step(tenant_ids)
+    chat_pruned = ttl_stats["chat_pruned"]
     step_timings["chat_ttl"] = time.monotonic() - t8
     logger.info(
-        "Step 10 (chat_ttl): %d pruned (%.1fs)",
+        "Step 10 (chat_ttl): %d pruned, %d segments pruned (%.1fs)",
         chat_pruned,
+        ttl_stats["segments_pruned"],
         step_timings["chat_ttl"],
     )
 
@@ -1713,6 +1737,7 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         "episodes": episode_stats,
         "preferences": preference_stats,
         "chat_turns_pruned": chat_pruned,
+        "segments_pruned": ttl_stats["segments_pruned"],
         "breadcrumbs": breadcrumb_stats,
         "access_log_pruned": access_log_pruned,
         "insights": insight_result,
