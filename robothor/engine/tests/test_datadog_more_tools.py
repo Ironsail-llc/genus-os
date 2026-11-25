@@ -449,6 +449,20 @@ def test_an_oversized_monitor_page_is_fitted(dd, writer):
     assert len(json.dumps(result)) <= datadog_more.RESULT_BUDGET_CHARS
 
 
+def test_a_monitor_page_cut_to_fit_hands_out_no_next_page_that_skips_rows(dd, writer):
+    """Page N+1 at the same size starts after the rows dropped from page N, so
+    following it would skip them: the result names the size that fits instead."""
+    dd.monitors = [_monitor(i, "z" * 2000) for i in range(300)]
+    dd.monitor_meta = {"total_count": 900, "page": 0, "page_count": 3}
+
+    result = _run(MONITORS, {"limit": 300})
+
+    kept = len(result["monitors"])
+    assert kept < 300
+    assert result["next_page"] is None
+    assert f"limit={kept}" in result["note"]
+
+
 def test_a_tenant_without_monitor_access_is_refused_with_no_request(dd, writer):
     result = _run(MONITORS, {}, _ctx(CHILD_B))
 
