@@ -6,7 +6,7 @@ import { FileText, RefreshCw, Search, Waypoints } from "lucide-react";
 import { EmptyState } from "@/components/business/empty-state";
 import { ListSkeleton } from "@/components/business/list-skeleton";
 import { PageHeader } from "@/components/business/page-header";
-import { StatusBadge, type Status } from "@/components/business/status-badge";
+import { StatusBadge } from "@/components/business/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -28,6 +28,11 @@ import {
 import { readBridgeReply } from "@/lib/bridge/read-reply";
 import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
 import { isLogSince } from "@/lib/observe/since";
+
+import { NOT_CONNECTED, notConfiguredHint, statusOf, str, timeOf, unavailableText } from "./telemetry-shared";
+
+// Exported from here as they always were; they live with the other tabs' helpers.
+export { NOT_CONNECTED, statusOf, unavailableText };
 
 /**
  * Observe › Logs › Datadog — the organization's own lines in the shared
@@ -61,8 +66,6 @@ export const TELEMETRY_WINDOWS: Array<{ value: string; label: string }> = [
 ];
 const DEFAULT_WINDOW = "1h";
 
-export const NOT_CONNECTED = "Datadog is not connected for this organization yet.";
-
 export interface TelemetryRow {
   id: string;
   timestamp: string;
@@ -88,56 +91,6 @@ type ReadState =
   | { kind: "forbidden" }
   | { kind: "error"; message: string };
 
-/** What a Datadog failure means to the person reading, by the bridge's kind. */
-export function unavailableText(kind: string): string {
-  switch (kind) {
-    case "auth":
-      return "Datadog refused this instance's key. An operator needs to check the Datadog API and application keys.";
-    case "rate_limit":
-      return "Datadog is getting too many requests from this instance right now. Try again in a minute.";
-    case "network":
-      return "Datadog could not be reached. Try again in a moment.";
-    case "bad_query":
-      return "Datadog could not run that search. Check the query syntax and try again.";
-    default:
-      return "Datadog answered in a way Genus could not read. Try again in a moment.";
-  }
-}
-
-/** The root operator is told which half is missing; everyone else is not. */
-function notConfiguredHint(reason: string | null): string {
-  if (reason === "keys") {
-    return "The Datadog API and application keys are not set on this instance.";
-  }
-  if (reason === "scope") {
-    return "This organization has no entry in the Datadog scope map (ROBOTHOR_DATADOG_SCOPES).";
-  }
-  return "An operator of this instance connects it. Nothing here is broken.";
-}
-
-/** Datadog's statuses on the five the Helm draws. */
-export function statusOf(status: string): Status {
-  switch (status.toLowerCase()) {
-    case "emergency":
-    case "alert":
-    case "critical":
-    case "error":
-      return "failing";
-    case "warn":
-    case "warning":
-      return "degraded";
-    case "ok":
-    case "success":
-      return "ok";
-    default:
-      return "idle";
-  }
-}
-
-function str(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
 function parseRows(value: unknown): TelemetryRow[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -162,20 +115,6 @@ function parseBuckets(value: unknown): Bucket[] {
   return value
     .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
     .map((b) => ({ by: str(b.by) || "(none)", count: typeof b.count === "number" ? b.count : 0 }));
-}
-
-function timeOf(value: string): string {
-  if (!value) return "—";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
 }
 
 function params(query: string, since: string, extra: Record<string, string> = {}): string {

@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/table";
 import { isLogSince } from "@/lib/observe/since";
 
-import { TELEMETRY_WINDOWS, statusOf } from "./telemetry-logs";
+import { TELEMETRY_WINDOWS } from "./telemetry-logs";
 import {
   TELEMETRY_BRIDGE,
   TelemetryFrame,
@@ -31,6 +31,7 @@ import {
   durationOf,
   num,
   readTelemetry,
+  statusOf,
   records,
   str,
   timeOf,

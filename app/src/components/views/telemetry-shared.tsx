@@ -6,11 +6,10 @@ import { RefreshCw, type LucideIcon } from "lucide-react";
 import { EmptyState } from "@/components/business/empty-state";
 import { ListSkeleton } from "@/components/business/list-skeleton";
 import { PageHeader } from "@/components/business/page-header";
+import type { Status } from "@/components/business/status-badge";
 import { Button } from "@/components/ui/button";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
 import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
-
-import { NOT_CONNECTED, unavailableText } from "./telemetry-logs";
 
 /**
  * What the Datadog tabs of the Logs page share: one reader for the bridge's
@@ -25,6 +24,43 @@ import { NOT_CONNECTED, unavailableText } from "./telemetry-logs";
  */
 
 export const TELEMETRY_BRIDGE = "/api/bridge";
+
+export const NOT_CONNECTED = "Datadog is not connected for this organization yet.";
+
+/** What a Datadog failure means to the person reading, by the bridge's kind. */
+export function unavailableText(kind: string): string {
+  switch (kind) {
+    case "auth":
+      return "Datadog refused this instance's key. An operator needs to check the Datadog API and application keys.";
+    case "rate_limit":
+      return "Datadog is getting too many requests from this instance right now. Try again in a minute.";
+    case "network":
+      return "Datadog could not be reached. Try again in a moment.";
+    case "bad_query":
+      return "Datadog could not run that search. Check the query syntax and try again.";
+    default:
+      return "Datadog answered in a way Genus could not read. Try again in a moment.";
+  }
+}
+
+/** Datadog's statuses on the five the Helm draws. */
+export function statusOf(status: string): Status {
+  switch (status.toLowerCase()) {
+    case "emergency":
+    case "alert":
+    case "critical":
+    case "error":
+      return "failing";
+    case "warn":
+    case "warning":
+      return "degraded";
+    case "ok":
+    case "success":
+      return "ok";
+    default:
+      return "idle";
+  }
+}
 
 export type TelemetryState =
   | { kind: "loading" }

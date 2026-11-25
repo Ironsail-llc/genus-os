@@ -14,7 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-import { statusOf } from "./telemetry-logs";
+import { statusOf } from "./telemetry-shared";
 import {
   TELEMETRY_BRIDGE,
   TelemetryFrame,

@@ -6,6 +6,11 @@
  * service summary, and loads more with the bridge's cursor. The journald
  * "Server" source is the root operator's and is not offered. A member is not
  * offered the page at all (the bridge refuses them whatever the nav shows).
+ *
+ * The other tabs: a log line opens its trace on the Traces tab, Monitors
+ * shows firing monitors until the toggle is turned off, Activity lists what
+ * Genus recorded, a run's drawer links to the Logs page filtered to that run,
+ * and the Organizations summary is the root operator's at home only.
  */
 import { test, expect, type Page, type Route } from "@playwright/test";
 

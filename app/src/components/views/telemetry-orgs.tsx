@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useAccessibleTenants } from "@/hooks/use-accessible-tenants";
 
-import { unavailableText } from "./telemetry-logs";
+import { unavailableText } from "./telemetry-shared";
 import {
   TELEMETRY_BRIDGE,
   num,
