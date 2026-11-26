@@ -255,15 +255,9 @@ async def recall(
             key=lambda r: (r.get("created_at") is not None, r.get("created_at")), reverse=True
         )
 
-    # Budget cap: stop once the accumulated text would exceed budget_chars.
-    capped: list[dict[str, Any]] = []
-    used = 0
-    for r in fused:
-        if len(capped) >= limit:
-            break
-        used += len(r.get("text") or "")
-        if capped and used > budget_chars:
-            break
-        capped.append(r)
+    # Budget cap: the one packing rule (recall.pack_within), then the limit.
+    from robothor.memory.recall import pack_within, row_chars
+
+    capped = pack_within(fused, budget_chars, row_chars)[:limit]
 
     return {"query_class": cls, "results": capped}

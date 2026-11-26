@@ -39,7 +39,7 @@ Ranking after fusion, in ``search_facts``:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from robothor.memory.fusion import RRF_K
 
@@ -49,6 +49,8 @@ if TYPE_CHECKING:
 # Fused rank at which the rank-derived relevance falls to 0.5. Ten keeps the
 # first page of a fused list clearly separated while the tail flattens out.
 RANK_RELEVANCE_HALF = 10
+
+_T = TypeVar("_T")
 
 # The recall context cap: characters of memory text one recall returns. Recall
 # fills it, reranked head first, then the remaining fused candidates in fused
@@ -70,20 +72,38 @@ def recall_limit(named: Any) -> int:
     return int(named) if named else RECALL_FILL_ROWS
 
 
-def within_context_cap(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rows in order until their text would pass ``RECALL_CONTEXT_CHARS``.
+def pack_within(items: Sequence[_T], cap: int | None, size: Callable[[_T], int]) -> list[_T]:
+    """The one packing rule: ``items`` in order, each kept while it still fits.
 
-    The first row always, then each row while the running total stays inside:
-    the rule the routed path (``router.recall``) applies.
+    An item that does not fit in what is left of ``cap`` is skipped and a
+    later, smaller one may still go in, so the cap is used and never exceeded
+    and the kept items stay in rank order. ``cap`` None keeps everything.
+    Skipping, not stopping: one long conversation segment early in the head
+    must not end a context that has room for the rows after it. The recall
+    tool, the routed path and the eval all pack with this function, so the
+    measured context is the shipped one.
     """
-    kept: list[dict[str, Any]] = []
+    if cap is None:
+        return list(items)
+    kept: list[_T] = []
     used = 0
-    for r in rows:
-        used += len(r.get("fact_text") or r.get("insight_text") or r.get("text") or "")
-        if kept and used > RECALL_CONTEXT_CHARS:
-            break
-        kept.append(r)
+    for item in items:
+        n = size(item)
+        if used + n > cap:
+            continue
+        kept.append(item)
+        used += n
     return kept
+
+
+def row_chars(row: dict[str, Any]) -> int:
+    """Characters of a recall row's text, as the context counts them."""
+    return len(row.get("fact_text") or row.get("insight_text") or row.get("text") or "")
+
+
+def within_context_cap(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rows in order packed into ``RECALL_CONTEXT_CHARS`` by :func:`pack_within`."""
+    return pack_within(rows, RECALL_CONTEXT_CHARS, row_chars)
 
 
 @dataclass

@@ -89,23 +89,26 @@ def fill_budget(
 ) -> tuple[ContextItem, ...]:
     """Take ``(id, kind, text)`` candidates best first until the budget is full.
 
-    A candidate that does not fit is skipped and a later, smaller one may
-    still go in, so the budget is used, never exceeded, and the kept items stay
-    in rank order. Duplicate ids keep their first (best) occurrence.
+    Packed by the product's own rule, ``robothor.memory.recall.pack_within``
+    (a candidate that does not fit is skipped and a later, smaller one may
+    still go in), so the measured context is the one the tool ships.
+    Duplicate ids keep their first (best) occurrence; ``rank`` is the
+    position before packing.
     """
-    out: list[ContextItem] = []
-    used = 0
+    from robothor.memory import recall
+
     seen: set[str] = set()
+    ranked: list[tuple[int, str, str, str]] = []
     for rank, (item_id, kind, text) in enumerate(candidates, start=1):
         if item_id in seen:
             continue
         seen.add(item_id)
-        tokens = estimate_tokens(text)
-        if budget is not None and used + tokens > budget:
-            continue
-        out.append(ContextItem(item_id, kind, text, tokens, rank))
-        used += tokens
-    return tuple(out)
+        ranked.append((rank, item_id, kind, text))
+    packed = recall.pack_within(ranked, budget, lambda c: estimate_tokens(c[3]))
+    return tuple(
+        ContextItem(item_id, kind, text, estimate_tokens(text), rank)
+        for rank, item_id, kind, text in packed
+    )
 
 
 @dataclass
