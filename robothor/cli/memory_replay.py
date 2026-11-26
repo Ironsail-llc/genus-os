@@ -49,7 +49,7 @@ def add_parser(subparsers: Any) -> None:
     p.add_argument(
         "--compare",
         default=None,
-        help="Two presets A,B (default today,new; also new+graph, new-segments)",
+        help="Two presets A,B (default today,new; also new-graph, new-segments)",
     )
     p.add_argument("--json", dest="json_output", action="store_true", help="Output JSON")
     p.add_argument("--out", default=None, help="Write the report here instead of stdout")

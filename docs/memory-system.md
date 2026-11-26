@@ -57,10 +57,12 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      most of its words. The first pass reads the query in web-search syntax:
      `"quoted words"` match as a phrase, `-word` excludes, and `or` is an
      operator.
-   - `graph` (**off by default**; `include_graph=True`) — graph activation
-     from the entities the query names and the entities the top hits mention
-     (see [Associative recall](#associative-recall)). Off because it has not
-     earned its place: see [Is the graph leg on?](#is-the-graph-leg-on).
+   - `graph` (**on**) — graph activation from the entities the query names
+     and the entities the top hits mention, the facts it reaches ranked by the
+     question (see [Associative recall](#associative-recall) and
+     [What the graph leg returns](#what-the-graph-leg-returns)).
+     `include_graph=False` leaves it out, only so the replay's `today`
+     preset and the evaluation's `recall_no_graph` can measure without it.
    - `entity_expansion` (`expand_entities`; with the graph leg on, only when it
      returned nothing) — facts about entities related to the top hits'
      entities.
@@ -82,8 +84,11 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      The `segment` leg can filter by person, so it stays on under a restricted
      scope, read by the same reader as the fact legs, which the scope only
      narrows.
-2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
-   records its rank in every leg that found it (`leg_ranks`).
+2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`), weighted
+   by `LEG_WEIGHTS`; each row records its rank in every leg that found it
+   (`leg_ranks`). The `graph` leg has weight 0: it reaches through what the
+   other legs found, and lifting those rows into the reranker's head pushed
+   the right fact out. It contributes through its reserved places.
 3. **Reranker** (Qwen3-Reranker-0.6B, local) — on by default, off with
    `MEMORY_RERANK_ENABLED=0`. It scores the first 16 fused candidates
    (`MEMORY_RERANK_MAX_CANDIDATES`) with a graded relevance in 0..1: the
@@ -97,9 +102,10 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    there is none — one 0..1 scale for every leg; cosine similarity is not used)
    + recency + importance + access count, with supersession demotion; then
    near-duplicates are dropped.
-5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps at
-   least that many places in the top `limit` whenever it returned anything,
-   chosen by its own score: `graph` 2, `entity_expansion` 1.
+5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps its
+   best that many rows, by its own score, in the top `limit` whenever it
+   returned anything: `graph` 2, `entity_expansion` 1. A weaker row of the leg
+   that the head holds anyway does not use up a place.
    A related-but-not-similar fact is exactly what a query-document reranker
    discards. Reserved picks take at most `(limit - 1) // 2` places in total
    (none at a `limit` of 1 or 2), never the top result, and never a
@@ -1087,22 +1093,65 @@ walk itself is the database function `memory_activate` (migration
 
 #### Is the graph leg on?
 
-No, not in recall and not in warm-up, unless a caller asks:
-`search_facts(include_graph=True)`, `_build_entity_context(include_graph=True)`.
-`robothor.memory.facts.GRAPH_LEG_DEFAULT` and
-`robothor.engine.warmup.WARMUP_GRAPH_DEFAULT` are `False`.
+Yes, in recall: `search_facts` runs it on every call (there is no module
+switch; `include_graph=False` exists only for measurement, see above). Warm-up
+does not, unless a caller asks (`_build_entity_context(include_graph=True)`;
+`robothor.engine.warmup.WARMUP_GRAPH_DEFAULT` is `False`): its automatic
+recall still ranks what the walk reaches by activation, not by the message,
+and nothing has measured it.
 
-The memory evaluation's synthetic world decided it (dev split, top-5 hits):
-multi-hop was 21 of 126 with the leg on and 20 without (34 against 37 at
-top-10), and raw detail fell from 40 to 27 of 110 with it on, because its
-candidates crowd conversation segments out of the reranked head. Reserved
-places (2, 1 or none), reserving only when the question itself names an
-entity, seeding from possessives, 10 or 20 facts per entity, a wider walk and
-reranking the graph's candidates by the question changed none of that. The
-walk does reach the answer of most multi-hop questions, but ranks it by
-activation mass (10th to 48th), which knows nothing of the question. The
-graph keeps serving identity and current state; recall's associative leg
-waits for a design that ranks what the walk reaches by the question.
+The memory evaluation's synthetic world decided it (seed 1, full size, dev
+split, 803 scored cases; the leg off against on, paired in one run, McNemar's
+exact test):
+
+| Stratum | Top 5, off | Top 5, on | Better / worse | Top 10, off | Top 10, on |
+| --- | --- | --- | --- | --- | --- |
+| multi-hop (126) | 20 | 82 | 62 / 0 (p < 0.001) | 37 | 98 |
+| point in time (126) | 73 | 71 | 0 / 2 (p = 0.50) | 75 | 74 |
+| raw detail (110) | 43 | 43 | 0 / 0 | 43 | 43 |
+| entity confusion (117) | 105 | 103 | 1 / 3 (p = 0.63) | 106 | 107 |
+| long tenure (126) | 100 | 100 | 0 / 0 | 100 | 100 |
+| knowledge update (119) | 111 | 111 | 0 / 0 | 111 | 111 |
+| cross-tenant (79) | 64 | 64 | 0 / 0 | 72 | 72 |
+| all (803) | 516 | 574 | 63 / 5 (p < 0.001) | 544 | 605 |
+
+Retrieval latency per search, top 5: p50 363 ms on against 353 ms off, p95
+411 ms against 395 ms. The first version of the leg returned each reached
+entity's most important facts and failed this gate (multi-hop 21 against 20,
+raw detail 26 against 43): the walk reached the answer's entity, but not the
+fact the question needed.
+
+#### What the graph leg returns
+
+The walk (below) is unchanged; what changed is which of the reached facts come
+back and how they rank (`activation.activate_for_question`, the database
+function `memory_activate_for_question`, migration
+`crm/migrations/*_memory_graph_question_relevance.sql`):
+
+- **Relevance is the question without its names.** "In which city is Alice
+  Smith's employer headquartered?" is about an employer and a city; with the
+  name left in, every fact naming Alice Smith would look most relevant and
+  the employer's address never would. The names, aliases, e-mail addresses
+  and handles that linked the question's seeds are removed
+  (`question_without_names`), and each reached fact is ranked by PostgreSQL
+  full text (`ts_rank_cd`, 0..1) against the remaining words, any of them.
+- **Only facts that match.** A reached fact that shares no word with the
+  question is not returned. When nothing is left to match (the question was
+  only a name), every reached fact is eligible, in the walk's order.
+- **The named entity's own facts are left to the other legs.** A fact that
+  mentions an entity the question names is found by the dense and keyword
+  legs; the graph returns what they cannot.
+- **Score.** Each entity keeps its `FACTS_PER_ENTITY` most relevant facts; a
+  fact scores `sqrt(activation / strongest activation) * (0.01 + relevance)`,
+  carried as `leg_scores["graph"]`, and its relevance as `graph_relevance`.
+- **Places, not the head.** The leg has no weight in fusion and keeps its two
+  reserved places for its two best rows by that score.
+
+Tenant, reader, person scope and trust are enforced inside the function
+exactly as in the walk, for every fact it returns
+(`robothor/memory/tests/test_graph_question_relevance.py`: another tenant's,
+another reader's private and another person's facts never surface however
+well they match, and trusted mode never returns external content).
 
 **It needs mentions.** The walk reads which entities a fact is about from
 `memory_mentions`, and nothing writes that table yet: existing memory links
@@ -1134,7 +1183,10 @@ set-based query over the active-edge indexes. A fact's graph score is the
 activation of the entities it mentions; each fact carries its hop distance and
 the path of entity names that reached it, so an agent can see why it was
 recalled. The constants at the top of `activation.py` are starting values for
-the evaluation to tune.
+the evaluation to tune. In a search, which of the reached facts come back and
+in what order is decided by the question (see
+[What the graph leg returns](#what-the-graph-leg-returns)); warm-up ranks them
+by activation.
 
 **Visibility.** The walk crosses an edge only when at least one of its
 supporting facts is visible to the reader: active, in the tenant, and shared or
@@ -1207,7 +1259,7 @@ the second side found.
 genus memory-replay --tenant <tenant> --from-runs --since 7d
 genus memory-replay --tenant <tenant> --from-chat --sample --seed 3 --limit 40
 genus memory-replay --tenant <tenant> --questions questions.txt --as-person <crm-person-id> \
-    --compare new+graph,new-segments --json --out replay.json --redact
+    --compare new-graph,new-segments --json --out replay.json --redact
 ```
 
 **Questions.** `--from-runs` replays the `query` of every `search_memory` tool
@@ -1240,9 +1292,9 @@ the one place to add another:
 | Preset | Segments | Graph leg |
 | --- | --- | --- |
 | `today` (recall as main serves it) | off | off |
-| `new` (the product default on this tree) | on | `GRAPH_LEG_DEFAULT` |
-| `new+graph` | on | on |
-| `new-segments` | off | `GRAPH_LEG_DEFAULT` |
+| `new` (the product default on this tree) | on | on |
+| `new-graph` | on | off |
+| `new-segments` | off | on |
 
 All four keep the tool's fan-out (entity expansion, insights, episodes) unless
 `MEMORY_NARROW_SEARCH` is set, and all rerank. `--compare A,B` picks two;

@@ -1345,17 +1345,6 @@ _GRAPH_FIELDS = (
 #: has its own, tighter budget (``warmup.GRAPH_WARMUP_BUDGET_SECONDS``).
 GRAPH_LEG_BUDGET_SECONDS = 0.25
 
-#: Whether search_facts runs the graph-activation leg unless told otherwise.
-#: Off: on the memory evaluation's world, dev split, the leg did not
-#: earn its place. Multi-hop top-5 21/126 with it against 20/126 without
-#: (top-10 34 against 37); raw detail 27/110 against 40/110, its candidates
-#: crowding conversation segments out of the reranked head. Reserved places
-#: (2, 1, 0), seed linking (possessives), 10 or 20 facts per entity and a query
-#: rerank of its candidates did not change that. The design's fallback: the
-#: graph serves identity and current state; this leg runs on an explicit
-#: ``include_graph=True``.
-GRAPH_LEG_DEFAULT = False
-
 
 async def _graph_leg(
     query: str,
@@ -1651,7 +1640,7 @@ async def search_facts(
     reader_person_id: str | None = None,
     room_ids: Iterable[str] | None = None,
     reader_user_id: str | None = None,
-    include_graph: bool | None = None,
+    include_graph: bool = True,
     reader_scope_id: str | None = None,
     *,
     admin_erasure_view: bool = False,
@@ -1661,10 +1650,10 @@ async def search_facts(
     Pipeline (contract in robothor/memory/recall.py):
         1. Legs: ``vector`` (HNSW cosine) and ``keyword`` (full text, every
            term, then any term) over memory_facts; ``graph`` (activation
-           from the entities the query names and the top hits mention, see
-           robothor/memory/activation.py) only when ``include_graph=True``
-           (off by default, ``GRAPH_LEG_DEFAULT``); ``entity_expansion``
-           when ``expand_entities`` and the graph leg found nothing;
+           from the entities the query names and the top hits mention, the
+           reached facts ranked by the question; see
+           robothor/memory/activation.py); ``entity_expansion`` when
+           ``expand_entities`` and the graph leg found nothing;
            ``segment`` (raw conversation, on by default); ``insight`` /
            ``episode`` / ``chat_turn`` when asked for. Each fact leg fetches
            max(30, limit * 3).
@@ -1685,9 +1674,9 @@ async def search_facts(
         expand_entities: Run the one-hop ``entity_expansion`` leg: facts
             about entities related to the top hits' entities. With
             ``include_graph`` it runs only when the graph leg returns nothing.
-        include_graph: Run the graph-activation leg. ``None`` (the default)
-            reads ``GRAPH_LEG_DEFAULT`` at call time: off, see its comment for
-            why. Its rows
+        include_graph: Run the graph-activation leg (on; ``False`` only to
+            measure recall without it, as the replay's ``today`` preset and
+            the evaluation's ``recall_no_graph`` do). Its rows
             carry ``origin`` (NULL reads as ``agent_generated``),
             ``graph_hops`` and ``graph_path``; a row found only by it has
             ``source="graph"``. It walks every origin: this is a deliberate
@@ -1803,8 +1792,6 @@ async def search_facts(
     # (it blocks the loop for the two leg queries); it is not widened here.
     legs = _fact_legs(query, embedding, _tenant, filters, scope_params, max(fetch_min, limit * 3))
     graph: list[Candidate] = []
-    if include_graph is None:
-        include_graph = GRAPH_LEG_DEFAULT
     if include_graph and not admin_erasure_view:
         graph = await _graph_leg(
             query, legs, _tenant, reader_scope_id=graph_reader(readers), scope=scope, limit=limit

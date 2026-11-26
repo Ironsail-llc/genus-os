@@ -761,7 +761,7 @@ async def run_world(
     embed_batch: EmbedBatch | None = None,
     k: int = 5,
     include_segments: bool = True,
-    include_graph: bool | None = None,
+    include_graph: bool = True,
 ) -> dict[str, Any]:
     """Seed the world once, score its cases through ``search_facts``, clean up.
 

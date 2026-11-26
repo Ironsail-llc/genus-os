@@ -197,7 +197,7 @@ class RecallSystem:
         self,
         *,
         include_segments: bool = True,
-        include_graph: bool | None = None,
+        include_graph: bool = True,
         name: str = "recall",
     ) -> None:
         self.include_segments = include_segments
@@ -477,7 +477,6 @@ _REGISTRY: dict[str, Callable[[], MemorySystem]] = {
     "recall_budget": RecallBudgetSystem,
     "recall_no_segments": lambda: RecallSystem(include_segments=False, name="recall_no_segments"),
     "recall_no_graph": lambda: RecallSystem(include_graph=False, name="recall_no_graph"),
-    "recall_with_graph": lambda: RecallSystem(include_graph=True, name="recall_with_graph"),
     "keyword_only": KeywordOnlySystem,
     "raw_verbatim": RawVerbatimSystem,
     "full_context": FullContextSystem,
