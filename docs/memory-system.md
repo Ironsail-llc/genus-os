@@ -1193,6 +1193,18 @@ function `memory_activate_for_question`, migration
   graph found reads `Related via Alice Smith → Example Co: <fact>`, from the
   walk's own path (every node of it visible to the reader); a row another leg
   also found keeps its text.
+- **Only when the direct evidence is weak.** After reranking, if the head
+  holds a row that mentions an entity the question names with a reranker
+  score of at least `DIRECT_EVIDENCE_RERANK` (0.85), or, when the head was not
+  reranked, a dense similarity of at least `DIRECT_EVIDENCE_SIMILARITY` (0.6),
+  the graph's reserved places stay unused (`facts.py`). On the dev split this
+  removed the four cross-tenant answer losses but also most of the gain: the
+  reranker rates the first-hop fact about the named person ("Alice Smith
+  joined Example Co") as highly for a multi-step question (median 0.987) as
+  for a direct one (the four losses: 0.888 to 0.994), so the head is rarely
+  weak. Reworded multi-hop retrieval went from 21 to 31 of 126 at top 5 (10 /
+  0, p = 0.002), but answers only from 1 to 3 of 40 (2 / 0, p = 0.5), so the
+  leg stays off.
 - **Seed linking is bounded.** It reads at most the first 20,000 characters
   of a text, and the e-mail pattern is linear.
 
