@@ -749,7 +749,9 @@ monitor. Keep `org:` off your hosts and services, so that only the monitor
 sets it.
 
 **4. What a dry run records.** The engine reads the `datadog` stream once
-`ROBOTHOR_DATADOG_SCOPES` is set. For each transition it writes one audit
+`ROBOTHOR_DATADOG_SCOPES` is set, and records nothing from it before then: a
+manifest's own hook on a stream named `datadog` is left as it was. For each
+transition it writes one audit
 event, `datadog.alert_received`, in the routed tenant. The event has category
 `datadog`, actor `datadog` and target `datadog_monitor:<monitor id>`, and its
 details hold:

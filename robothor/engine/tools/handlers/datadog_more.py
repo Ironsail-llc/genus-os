@@ -83,8 +83,9 @@ DEFAULT_TRACE_START = "now-1d"
 DEFAULT_SPAN_LIMIT = 50
 DEFAULT_MONITOR_LIMIT = 50
 
-#: The monitor search filter ``only_firing`` adds: alerting, warning, no data.
-FIRING_QUERY = 'status:alert OR status:warn OR status:"no data"'
+#: The monitor search filter ``only_firing`` adds: alerting, warning or no
+#: data, and not muted, as the Logs page and the watch read "firing".
+FIRING_QUERY = '(status:alert OR status:warn OR status:"no data") AND muted:false'
 
 #: Successive resource-name lengths tried when spans do not fit, longest first.
 _RESOURCE_CAPS = (500, 200, 80)

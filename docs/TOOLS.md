@@ -816,7 +816,9 @@ Six tools over the instance's Datadog account
 They are an opt-in family (`DATADOG_TOOLS`): log lines and span resources carry
 what customers and staff typed, so an agent is offered them only when its manifest names them
 in `tools_opt_in` or `tools_allowed`, or when an owner or admin is driving the
-run (the capability tier).
+run (the capability tier). For the same reason their results reach the model
+inside the `<untrusted_content>` boundary (`EXTERNAL_DATA_TOOLS`), like
+`web_fetch`.
 
 | Tool | Purpose |
 |---|---|
@@ -824,7 +826,7 @@ run (the capability tier).
 | `datadog_logs_aggregate` | Counts: the same `query`, `start` and `end`, plus `group_by` (facets such as `service`, `status`, `@http.status_code`; empty for one total) and `limit` (groups per facet, largest first, default 25). Returns `buckets` of `{by, count}`. |
 | `datadog_spans_search` | APM spans: `query` (span search syntax, such as `service:shop-api status:error` or `@duration:>1s`), `start`, `end`, `limit`, `cursor` and `newest_first`, as for log search. Each row has `time`, `service`, `resource`, `operation`, `duration_ms`, `status`, `error` (true when the status is error), `trace_id`, `span_id` and `env`. |
 | `datadog_trace_get` | One trace: `trace_id` (hex or decimal digits, from a log line or a span), `start` and `end` (default `now-1d` to `now`). Returns `spans` ordered by start time, each with `parent_id`, so the call tree can be read; `found` is false when no span of the trace is in your organization's scope. |
-| `datadog_monitors_list` | Monitors: `query` (monitor search syntax, such as `type:metric`, `tag:"team:checkout"`, `status:alert` or words in the name), `only_firing` (true adds `status:alert OR status:warn OR status:"no data"`), `limit` (per page, default 50) and `page` (from 0; the result's `next_page`). Each monitor has `id`, `name`, `status` (`Alert`, `Warn`, `No Data`, `OK`), `type`, `tags` and `last_triggered`. |
+| `datadog_monitors_list` | Monitors: `query` (monitor search syntax, such as `type:metric`, `tag:"team:checkout"`, `status:alert` or words in the name), `only_firing` (true adds `(status:alert OR status:warn OR status:"no data") AND muted:false`, the Logs page's and the watch's idea of firing), `limit` (per page, default 50) and `page` (from 0; the result's `next_page`). Each monitor has `id`, `name`, `status` (`Alert`, `Warn`, `No Data`, `OK`), `type`, `tags` and `last_triggered`. |
 | `datadog_metrics_query` | One metric from parts, never query text: `metric`, `aggregator` (`avg`, `sum`, `min`, `max`; default `avg`), `tags` (filters ANDed in, such as `env:prod`), `group_by` (tag keys such as `host`), `start` and `end` (ISO-8601, `now` or `now-<n>` with `s`, `m`, `h`, `d` or `w`; default the last hour) and `as_count`. Returns each series with its group `tags` and `points` as `[epoch_ms, value]`. |
 
 **Scope.** Every query is sent as `(<this tenant's scope>) AND (<query>)`, and

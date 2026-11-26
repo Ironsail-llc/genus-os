@@ -2024,7 +2024,7 @@ _DATADOG_SCHEMAS: dict[str, dict[str, Any]] = {
                     },
                     "only_firing": {
                         "type": "boolean",
-                        "description": "Only monitors in Alert, Warn or No Data (default false).",
+                        "description": "Only unmuted monitors in Alert, Warn or No Data (default false).",
                     },
                     "limit": {"type": "integer", "description": "Monitors per page (default 50)."},
                     "page": {

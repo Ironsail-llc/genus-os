@@ -198,6 +198,14 @@ EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
         # written by other people and by earlier agent runs.
         "room_read",
         "room_list",
+        # Datadog: log lines, attributes, span resources and monitor names
+        # carry what customers and staff typed.
+        "datadog_logs_search",
+        "datadog_logs_aggregate",
+        "datadog_spans_search",
+        "datadog_trace_get",
+        "datadog_monitors_list",
+        "datadog_metrics_query",
     }
 )
 

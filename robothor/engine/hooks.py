@@ -931,8 +931,10 @@ class EventHooks:
 
         # The platform's own handler for this stream (a copy addressed to
         # agents or workflows was already handled the first time).
+        # Only a stream this instance subscribes to as a platform stream: a
+        # manifest's own stream that happens to share the name is left alone.
         platform_handler = _PLATFORM_STREAM_HANDLERS.get(bare_stream)
-        if platform_handler is not None and not addressed:
+        if platform_handler is not None and not addressed and bare_stream in platform_streams():
             try:
                 entry_id = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
                 await platform_handler(decoded, redis_client, entry_id)
