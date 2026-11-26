@@ -4,13 +4,16 @@ On real Postgres, through ``activation.graph_candidates_for_query``. The walk
 reaches the right entity; what it returns must be the facts about that entity
 that answer what was asked, not the entity's most important facts:
 
-* among a reached entity's facts, the one that shares the question's words
-  (with the names the question links removed) comes first, whatever the
-  importance of the others;
+* among a reached entity's facts, the one closest in meaning to the question
+  (its embedding against the embedding of the question with the names it
+  links removed) comes first, whatever the importance of the others, and
+  whether or not it shares a word with the question;
 * a fact about an entity the question itself names is left to the dense and
   keyword legs, which find it by name; the graph returns what they cannot;
-* a reached fact that shares no word with the question is not returned (a
-  question that is only a name keeps the walk's own order);
+* a reached fact below the similarity floor is not returned, and a question
+  with nothing beyond the names it links ("Alice Smith", "Who is Alice
+  Smith?") gets no graph rows at all, nor does one without an embedding;
+* an inactive fact never surfaces;
 * every relevance-ranked fact still obeys tenant, reader, person scope and
   trust: a private or foreign fact that matches the question word for word
   never surfaces.
@@ -25,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from robothor.memory.tests.fake_embedding import embed_all_facts, fake_embed
 from robothor.memory.tests.test_graph_activation import OTHER, TENANT, Graph
 
 if TYPE_CHECKING:
@@ -73,7 +77,13 @@ def world(scratch_db, monkeypatch) -> Iterator[Graph]:
     monkeypatch.setattr(activation, "operator_person_id", lambda *_a, **_k: None)
     graph = Graph(db)
     graph.connect = _conn  # type: ignore[attr-defined]
+    _CURRENT[:] = [graph]
     yield graph
+    _CURRENT.clear()
+
+
+#: The world of the running test, so ``_search`` can embed what it planted.
+_CURRENT: list[Graph] = []
 
 
 def _employer_world(world: Graph, *, tenant: str = TENANT) -> dict[str, int]:
@@ -102,8 +112,11 @@ def _also_mentions(world: Graph, fact_id: int, entity_id: int) -> None:
 
 
 def _search(query: str = QUESTION, **kw: Any) -> list[Any]:
+    """The search leg, with every planted fact embedded by the fake model."""
     from robothor.memory.activation import graph_candidates_for_query
 
+    embed_all_facts(_CURRENT[0].sql)
+    kw.setdefault("embed", fake_embed)
     kw.setdefault("tenant_id", TENANT)
     tenant = kw.pop("tenant_id")
     return graph_candidates_for_query(tenant, query, **kw)
@@ -127,32 +140,56 @@ def test_the_reached_fact_that_answers_the_question_comes_first(world: Graph) ->
     assert first.leg_scores["graph"] > 0
 
 
-def test_a_reached_fact_that_shares_no_word_with_the_question_is_left_out(
-    world: Graph,
-) -> None:
+def test_a_reached_fact_unrelated_to_the_question_is_left_out(world: Graph) -> None:
     """Facts the walk reaches but the question does not ask about crowd the
-    reranker's head and push conversation segments out (raw detail fell from
-    43 to 31 of 110 on the eval world with them in): a search returns only the
-    reached facts that match what was asked."""
+    results (raw detail fell from 43 to 31 of 110 on the eval world with them
+    in): only reached facts at or above the similarity floor come back."""
+    from robothor.memory.activation import GRAPH_MIN_SIMILARITY
+
     w = _employer_world(world)
 
     got = _search()
 
     assert w["hq"] in _ids(got)
     assert not set(_ids(got)) & w["noise"]
-    assert all(c.payload["graph_relevance"] > 0 for c in got)
+    assert all(c.payload["graph_relevance"] >= GRAPH_MIN_SIMILARITY for c in got)
 
 
-def test_a_question_that_is_only_a_name_ranks_by_the_walk(world: Graph) -> None:
-    """Nothing is left to match once the name is removed: the reached facts
-    come back in the walk's own order (importance first), as before."""
+def test_a_paraphrase_finds_the_fact_without_sharing_a_word(world: Graph) -> None:
+    """ "based" is not in "headquartered": the graph ranks by meaning, so a
+    reworded question still reaches the employer's address (on the eval
+    world, full-text matching answered none of 30 reworded questions)."""
     w = _employer_world(world)
 
-    got = _search("Alice Smith")
+    got = _search("Where is Alice Smith's employer based?")
 
-    assert set(_ids(got)) <= w["noise"] | {w["hq"]}
-    assert set(_ids(got)) & w["noise"]
-    assert all(c.payload["graph_relevance"] == 0 for c in got)
+    assert _ids(got)[:1] == [w["hq"]], [c.text for c in got]
+
+
+@pytest.mark.parametrize("query", ["Alice Smith", "Who is Alice Smith?", "alice smith's"])
+def test_a_question_with_nothing_beyond_a_name_gets_no_graph_rows(world: Graph, query: str) -> None:
+    """Once the name is removed nothing is asked, so nothing reached is
+    relevant: a bare name used to give its two reserved places to unranked
+    neighbours (an external-origin fact two hops away among them)."""
+    _employer_world(world)
+    assert _search("In which city is Alice Smith's employer headquartered?"), "negative control"
+
+    assert _search(query) == []
+
+
+def test_without_the_questions_embedding_the_graph_returns_nothing(world: Graph) -> None:
+    _employer_world(world)
+
+    assert _search(embed=lambda _text: None) == []
+
+
+def test_an_inactive_fact_never_surfaces(world: Graph) -> None:
+    w = _employer_world(world)
+    old = world.fact(
+        "Quorvane Example was headquartered in Madrid city", about=(w["org"],), active=False
+    )
+    assert w["hq"] in _ids(_search()), "negative control"
+    assert old not in _ids(_search())
 
 
 def test_importance_does_not_outrank_the_question(world: Graph) -> None:
@@ -244,16 +281,48 @@ def test_another_tenants_matching_facts_never_surface(world: Graph) -> None:
     assert not got & theirs["noise"]
 
 
+_COUNT = (
+    "SELECT count(*) FROM memory_activate_for_question(%s, ARRAY[%s]::int[], "
+    "p_query => 'city employer headquartered', p_query_embedding => %s::vector, "
+    "p_trusted_only => false)"
+)
+
+
 def test_a_session_scoped_to_another_tenant_gets_nothing(world: Graph) -> None:
     w = _employer_world(world)
-    count = (
-        "SELECT count(*) FROM memory_activate_for_question(%s, ARRAY[%s]::int[], "
-        "p_query => 'headquartered', p_trusted_only => false)"
-    )
-    assert world.sql(count, (TENANT, w["alice"]))[0][0] > 0, "negative control"
+    embed_all_facts(world.sql)
+    args = (TENANT, w["alice"], str(fake_embed("In which city is employer headquartered?")))
+    assert world.sql(_COUNT, args)[0][0] > 0, "negative control"
     world.sql("SELECT set_config('app.tenant_id', %s, false)", (OTHER,))
     try:
-        assert world.sql(count, (TENANT, w["alice"]))[0][0] == 0
+        assert world.sql(_COUNT, args)[0][0] == 0
+    finally:
+        world.sql("SELECT set_config('app.tenant_id', '', false)")
+
+
+def test_the_function_refuses_a_foreign_session_itself(world: Graph) -> None:
+    """Not only through the walk it calls: with a walk that ignores the
+    session (planted in this scratch database), the function still returns
+    nothing to a session scoped to another tenant."""
+    w = _employer_world(world)
+    embed_all_facts(world.sql)
+    world.sql(
+        "CREATE OR REPLACE FUNCTION memory_activate(text, integer[], double precision[], text, "
+        "integer, integer, double precision, integer[], boolean, integer, integer, boolean, uuid, "
+        "uuid) RETURNS TABLE (kind text, entity_id integer, entity_name text, score double "
+        "precision, hops integer, via_edge_id integer, path_names text[], fact_id integer, "
+        "fact_text text, category text, origin text, importance_score double precision, "
+        "created_at timestamptz, person_id uuid, entities text[], access_count integer) "
+        "LANGUAGE sql AS $$ SELECT 'entity'::text, id, name::text, 1.0::float8, "
+        "CASE WHEN id = $2[1] THEN 0 ELSE 1 END, NULL::int, NULL::text[], NULL::int, NULL::text, "
+        "NULL::text, NULL::text, NULL::float8, NULL::timestamptz, NULL::uuid, NULL::text[], "
+        "NULL::int FROM memory_entities WHERE tenant_id = $1 $$"
+    )
+    args = (TENANT, w["alice"], str(fake_embed("In which city is employer headquartered?")))
+    assert world.sql(_COUNT, args)[0][0] > 0, "negative control: the stub walk answers"
+    world.sql("SELECT set_config('app.tenant_id', %s, false)", (OTHER,))
+    try:
+        assert world.sql(_COUNT, args)[0][0] == 0
     finally:
         world.sql("SELECT set_config('app.tenant_id', '', false)")
 
@@ -267,11 +336,18 @@ def test_trusted_mode_never_returns_external_content_however_relevant(world: Gra
         about=(w["org"],),
         origin="external",
     )
-    from robothor.memory.activation import Seed
+    from robothor.memory.activation import Seed, question_without_names
 
+    embed_all_facts(world.sql)
     seeds = [Seed(entity_id=w["alice"], name="Alice Smith")]
-    trusted = set(_ids(activate_for_question(TENANT, seeds, QUESTION, trusted_only=True)))
-    untrusted = set(_ids(activate_for_question(TENANT, seeds, QUESTION, trusted_only=False)))
+    emb = fake_embed(question_without_names(QUESTION, seeds))
+
+    def walk(trusted: bool) -> set[int]:
+        return set(_ids(activate_for_question(
+            TENANT, seeds, QUESTION, query_embedding=emb, trusted_only=trusted
+        )))  # fmt: skip
+
+    trusted, untrusted = walk(True), walk(False)
 
     assert w["hq"] in trusted and planted not in trusted
     assert planted in untrusted, "negative control: a deliberate search labels and returns it"

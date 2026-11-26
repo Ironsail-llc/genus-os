@@ -16,10 +16,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from robothor.memory.tests import test_graph_recall_leg as _leg
 from robothor.memory.tests.test_graph_activation import TENANT, Graph
-from robothor.memory.tests.test_graph_recall_leg import _chain, _scorer, world  # noqa: F401
 
 pytestmark = pytest.mark.integration
+
+#: The recall-leg tests' world (full migration chain, fake models).
+world = _leg.world
+_chain, _scorer = _leg._chain, _leg._scorer
 
 QUERY = "Alice Smith quarterly logistics agreement"
 
