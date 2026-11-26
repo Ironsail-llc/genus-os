@@ -263,6 +263,21 @@ N8N_TOOLS = frozenset(
     }
 )
 
+# Datadog tools (handlers/datadog_logs.py, handlers/datadog_more.py): a tenant
+# reads its own logs, spans, traces, monitors and metrics in a shared Datadog
+# account, each bounded by its part of the scope. Read-only, but log lines and
+# span resources carry what customers typed, so the family is OPT_IN_TOOLS.
+DATADOG_TOOLS = frozenset(
+    {
+        "datadog_logs_search",
+        "datadog_logs_aggregate",
+        "datadog_spans_search",
+        "datadog_trace_get",
+        "datadog_monitors_list",
+        "datadog_metrics_query",
+    }
+)
+
 # Identity mapping tools (CRM contact_identifiers)
 IDENTITY_TOOLS = frozenset(
     {
@@ -392,6 +407,8 @@ CROSS_TENANT_READS: frozenset[str] = frozenset(
         "list_contact_messages",
         # devops_metrics_snapshots.
         "devops_query_metrics",
+        # Datadog: the scope comes from scope_for(ctx.tenant_id) alone.
+        *DATADOG_TOOLS,
     }
 )
 
@@ -567,6 +584,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # n8n monitor: the poller's snapshot, read-only
         "n8n_list_workflows",
         "n8n_recent_failures",
+        # Datadog: logs, spans, traces, monitors, metrics; never a write anywhere
+        *DATADOG_TOOLS,
         # Identity read-only tools
         "resolve_identities",
         # Report rendering (pure output, no side effects)
@@ -629,6 +648,11 @@ WORKFLOW_WRITE_TOOLS: frozenset[str] = frozenset({"run_workflow"})
 # the instance's account; same rule. Migration 153 denies them to `user` and
 # `member`; `service` keeps them, so an unattended agent that names them works.
 #
+# The Datadog tools read the instance's shared Datadog account, bounded by
+# the tenant's scope. Log lines carry what customers and staff typed, so an
+# agent reads them only when its manifest says so (or an owner or admin is
+# driving the run). No RBAC half: they write nothing.
+#
 # `run_workflow` starts any declared workflow, which can do anything its steps
 # do; the HTTP route it mirrors needs `engine:control`. Same rule again:
 # migration 157 denies it to `user` and `member`. Its two reads stay default.
@@ -660,6 +684,7 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
         *PR_REVIEW_TOOLS,
         *WORKFLOW_WRITE_TOOLS,
         *ROOM_TOOLS,
+        *DATADOG_TOOLS,
     }
 )
 

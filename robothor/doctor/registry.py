@@ -67,6 +67,7 @@ CHECK_MODULES = (
     "workspace_m365",
     # Opt-in external integrations: skip unless switched on.
     "n8n",
+    "datadog",
     "services",
     "manifests",
     # Right after the manifests parse: "does this agent's prose agree with its

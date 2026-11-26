@@ -72,8 +72,10 @@ export interface NavItem {
    * UX gate for ONE item, for the groups that are not gated wholesale.
    *
    * Observe is a mixed group: Runs, Fleet and Health are everybody's, Memory
-   * and Logs are the operator's, and Audit is the operator's plus the
-   * read-only `auditor`. Hiding the whole group to protect three of its items
+   * is the operator's, and Audit and Logs are the operator's plus the
+   * read-only `auditor` (Logs is the organization's Datadog search; its
+   * journald source is the root operator's, gated inside the view). Hiding
+   * the whole group to protect three of its items
    * would take the other three away from everyone, so the gate is per item.
    *
    * Like `NavGroup.requiresOperator`, this authorizes NOTHING — the bridge
@@ -118,9 +120,11 @@ export function isOperatorRole(role: string | null | undefined): boolean {
  *
  * `auditor` reads the record of what was done and who widened which guardrail
  * (`GET /api/audit/*`, `GET /api/controls/audit`) and nothing else. It is
- * deliberately NOT an operator: Memory and Logs stay shut to it, because the
- * journal carries every value every process printed — a far wider surface than
- * a record of decisions — and a memory forget is a write.
+ * deliberately NOT an operator: Memory and the journald source of Logs stay
+ * shut to it, because the journal carries every value every process printed —
+ * a far wider surface than a record of decisions — and a memory forget is a
+ * write. The organization's Datadog logs, scoped and masked by the bridge, are
+ * a read an auditor may make.
  */
 const AUDIT_ROLES = new Set([...OPERATOR_ROLES, "auditor"]);
 
@@ -252,7 +256,7 @@ export const navGroups: NavGroup[] = [
       { id: "fleet", label: "Fleet", view: "fleet", icon: Users },
       { id: "memory", label: "Memory", view: "memory", icon: Brain, requires: "operator" },
       { id: "audit", label: "Audit", view: "audit", icon: ScrollText, requires: "audit" },
-      { id: "logs", label: "Logs", view: "logs", icon: FileText, requires: "operator" },
+      { id: "logs", label: "Logs", view: "logs", icon: FileText, requires: "audit" },
       { id: "health", label: "Health", view: "health", icon: HeartPulse },
     ],
   },

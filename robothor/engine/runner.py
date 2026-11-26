@@ -1053,6 +1053,7 @@ class AgentRunner(
                                 "Deterministic schema rejection — this run tree is "
                                 "untracked and every run of this shape will be too "
                                 "until a constraint migration lands.",
+                                tenant_id=session.run.tenant_id,
                             ),
                             name=f"run-recording-alert:{agent_config.id}",
                         )
