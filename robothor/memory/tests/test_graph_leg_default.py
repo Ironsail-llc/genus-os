@@ -1,12 +1,11 @@
 """The graph leg is on in recall; warm-up walks the graph only when asked.
 
 On the memory evaluation's world, dev split, top 5, the graph leg ranked by
-the question (``activation.activate_for_question``), with no weight in the
-fused order and its reserved places held by its best rows, took multi-hop from
-20 to 82 of 126 (62 better, none worse) with no stratum significantly worse,
-so ``search_facts`` runs it on every call. ``include_graph=False`` remains only so
-the replay's ``today`` preset and the evaluation's ``recall_no_graph`` can
-measure recall without it. Warm-up's automatic recall ranks by activation, not
+the meaning of the question (``activation.activate_for_question``) took the
+reworded multi-hop questions from 21 to 56 of 126 (40 better, 5 worse) with
+no stratum significantly worse, so ``search_facts`` runs it on every call.
+``include_graph=False`` remains only so the replay's ``today`` preset and the
+evaluation's ``recall_no_graph`` can measure recall without it. Warm-up's automatic recall ranks by activation, not
 by the message, and nothing has measured it, so it stays off unless asked.
 """
 

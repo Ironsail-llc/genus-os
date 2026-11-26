@@ -1101,25 +1101,31 @@ recall still ranks what the walk reaches by activation, not by the message,
 and nothing has measured it.
 
 The memory evaluation's synthetic world decided it (seed 1, full size, dev
-split, 803 scored cases; the leg off against on, paired in one run, McNemar's
-exact test):
+split, 929 scored cases; the leg off against on, paired in one run, McNemar's
+exact test). `multi_hop_paraphrase` asks the multi-hop questions reworded so
+they share no content word with their facts except the names
+([World](benchmarks/memory/WORLD.md)); it is the stratum that decides, since
+the original multi-hop questions share their one rare word with the fact.
 
 | Stratum | Top 5, off | Top 5, on | Better / worse | Top 10, off | Top 10, on |
 | --- | --- | --- | --- | --- | --- |
-| multi-hop (126) | 20 | 82 | 62 / 0 (p < 0.001) | 37 | 98 |
-| point in time (126) | 73 | 71 | 0 / 2 (p = 0.50) | 75 | 74 |
+| multi-hop, reworded (126) | 21 | 56 | 40 / 5 (p < 0.001) | 47 | 73 |
+| multi-hop (126) | 20 | 65 | 46 / 1 (p < 0.001) | 37 | 77 |
+| point in time (126) | 73 | 71 | 0 / 2 (p = 0.50) | 75 | 75 |
 | raw detail (110) | 43 | 43 | 0 / 0 | 43 | 43 |
-| entity confusion (117) | 105 | 103 | 1 / 3 (p = 0.63) | 106 | 107 |
+| entity confusion (117) | 105 | 105 | 1 / 1 | 106 | 106 |
 | long tenure (126) | 100 | 100 | 0 / 0 | 100 | 100 |
 | knowledge update (119) | 111 | 111 | 0 / 0 | 111 | 111 |
-| cross-tenant (79) | 64 | 64 | 0 / 0 | 72 | 72 |
-| all (803) | 516 | 574 | 63 / 5 (p < 0.001) | 544 | 605 |
+| cross-tenant (79) | 64 | 69 | 5 / 0 (p = 0.06) | 72 | 73 |
+| all (929) | 537 | 620 | 92 / 9 (p < 0.001) | 591 | 658 |
 
-Retrieval latency per search, top 5: p50 363 ms on against 353 ms off, p95
-411 ms against 395 ms. The first version of the leg returned each reached
-entity's most important facts and failed this gate (multi-hop 21 against 20,
-raw detail 26 against 43): the walk reached the answer's entity, but not the
-fact the question needed.
+Retrieval latency per search, top 5: p50 377 ms on against 348 ms off, p95
+469 ms against 410 ms (the leg embeds the question without its names once).
+Two earlier versions failed: ranking each reached entity's facts by
+importance (multi-hop 21 against 20, raw detail 26 against 43), and ranking
+them by full-text match, which looked strong on the original questions (82
+against 20) only because those share their one rare word with the fact, and
+returned none of the answers to the reworded ones.
 
 #### What the graph leg returns
 
@@ -1128,30 +1134,43 @@ back and how they rank (`activation.activate_for_question`, the database
 function `memory_activate_for_question`, migration
 `crm/migrations/*_memory_graph_question_relevance.sql`):
 
-- **Relevance is the question without its names.** "In which city is Alice
-  Smith's employer headquartered?" is about an employer and a city; with the
+- **Relevance is what the question means, without its names.** "Where is
+  Alice Smith's employer based?" is about an employer and a place; with the
   name left in, every fact naming Alice Smith would look most relevant and
   the employer's address never would. The names, aliases, e-mail addresses
   and handles that linked the question's seeds are removed
-  (`question_without_names`), and each reached fact is ranked by PostgreSQL
-  full text (`ts_rank_cd`, 0..1) against the remaining words, any of them.
-- **Only facts that match.** A reached fact that shares no word with the
-  question is not returned. When nothing is left to match (the question was
-  only a name), every reached fact is eligible, in the walk's order.
+  (`question_without_names`), what is left is embedded once (the query
+  instruction included, inside the leg's 250 ms budget), and each reached
+  fact is ranked by the cosine similarity of its own embedding to it. A
+  reworded question needs no word in common with the fact: "based" finds
+  "is headquartered in".
+- **A similarity floor.** Only reached facts at or above
+  `GRAPH_MIN_SIMILARITY` (0.35, cosine) are returned; the neighbours of a
+  reached entity that answer nothing are left out.
+- **Nothing asked, nothing returned.** A question with no word left once
+  its names are removed ("Alice Smith", "Who is Alice Smith?"), or a search
+  whose embedding failed, gets no graph rows at all.
 - **The named entity's own facts are left to the other legs.** A fact that
   mentions an entity the question names is found by the dense and keyword
   legs; the graph returns what they cannot.
-- **Score.** Each entity keeps its `FACTS_PER_ENTITY` most relevant facts; a
-  fact scores `sqrt(activation / strongest activation) * (0.01 + relevance)`,
-  carried as `leg_scores["graph"]`, and its relevance as `graph_relevance`.
+- **Score.** Each entity keeps its `FACTS_PER_ENTITY` most similar facts; a
+  fact scores `(activation / strongest activation) ** 0.25 * similarity`,
+  carried as `leg_scores["graph"]`, and its similarity as `graph_relevance`.
+  Every row carries the columns of any fact row (`confidence`,
+  `source_type`, `metadata`, `superseded_by`, `utility`), so consumers that
+  format rows by key read a graph row like any other.
 - **Places, not the head.** The leg has no weight in fusion and keeps its two
-  reserved places for its two best rows by that score.
+  reserved places for its two best rows by that score; a best row the head
+  already holds counts as one of them.
+- **Seed linking is bounded.** It reads at most the first 20,000 characters
+  of a text, and the e-mail pattern is linear.
 
 Tenant, reader, person scope and trust are enforced inside the function
 exactly as in the walk, for every fact it returns
 (`robothor/memory/tests/test_graph_question_relevance.py`: another tenant's,
-another reader's private and another person's facts never surface however
-well they match, and trusted mode never returns external content).
+another reader's private and another person's facts and inactive facts never
+surface however close they are, the function refuses a session scoped to
+another tenant itself, and trusted mode never returns external content).
 
 **It needs mentions.** The walk reads which entities a fact is about from
 `memory_mentions`, and nothing writes that table yet: existing memory links
