@@ -1017,7 +1017,12 @@ class WorkflowEngine:
             from robothor.engine.task_registry import get_task_registry
 
             get_task_registry().spawn(
-                alert("critical", f"Workflow failed: {run.workflow_id}", error),
+                alert(
+                    "critical",
+                    f"Workflow failed: {run.workflow_id}",
+                    error,
+                    tenant_id=getattr(run, "tenant_id", ""),
+                ),
                 name=f"workflow-failure-alert:{run.workflow_id}",
             )
         except Exception as e:
@@ -1906,6 +1911,7 @@ class WorkflowEngine:
                     "critical",
                     f"Approval needed: {run.workflow_id}",
                     f"{req.prompt}\n\n{req.detail}",
+                    tenant_id=getattr(run, "tenant_id", ""),
                 ),
                 name=f"workflow-approval-alert:{run.workflow_id}",
             )
@@ -2195,8 +2201,11 @@ class WorkflowEngine:
 
 
 def _log_step_failure(run: WorkflowRun, result: WorkflowStepResult) -> None:
-    """One ``event=workflow_step_failed`` line with the step's redacted error."""
-    from robothor.engine.log_fields import kv_line, short_reason
+    """One ``event=workflow_step_failed`` line with the step's redacted error.
+
+    A workflow run has no trace of its own, so the line names its tenant only.
+    """
+    from robothor.engine.log_fields import kv_line, scope_fields, short_reason
 
     with contextlib.suppress(Exception):
         logger.warning(
@@ -2210,5 +2219,6 @@ def _log_step_failure(run: WorkflowRun, result: WorkflowStepResult) -> None:
                 tool=result.tool_name,
                 duration_ms=result.duration_ms,
                 reason=short_reason(result.error_message),
+                **scope_fields(run.tenant_id),
             ),
         )

@@ -26,7 +26,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LogsView } from "../logs-view";
+// The journald source of the Logs page. The page itself now opens on the
+// organization's Datadog logs (`telemetry-logs.test.tsx`) and offers this
+// panel as its "Server" source to the root operator at home only; everything
+// below is about the panel, so it is rendered directly.
+import { ServerLogs as LogsView } from "../logs-view";
 
 const UNITS = {
   units: [

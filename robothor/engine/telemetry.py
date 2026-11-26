@@ -156,6 +156,7 @@ class TraceContext:
     trace_id: str = field(default_factory=_trace_id)
     run_id: str = ""
     agent_id: str = ""
+    tenant_id: str = ""
     # Sub-agent trace linkage — reuse parent trace_id for unified traces
     parent_trace_id: str = ""
     parent_span_id: str = ""
@@ -316,6 +317,9 @@ class TraceContext:
         wins over ``service.name`` from either, as the OTel spec orders them.
         """
         attrs: dict[str, Any] = {"service.name": "robothor-engine", "agent.id": self.agent_id}
+        attrs.update(
+            {k: v for k, v in (("run.id", self.run_id), ("tenant.id", self.tenant_id)) if v}
+        )
         for entry in os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "").split(","):
             key, sep, value = entry.partition("=")
             key = key.strip()

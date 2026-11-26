@@ -105,6 +105,42 @@ async def test_a_proxied_call_over_the_cap_writes_one_line(runner, caplog) -> No
 
 
 @pytest.mark.asyncio
+async def test_a_proxied_call_hands_the_registry_its_tenant_and_trace(runner) -> None:
+    proxy, session = _proxy(runner)
+    session.run.tenant_id = "acme-child-a"
+    session.trace_id = "0af7651916cd43dd8448eb211c80319c"
+    await proxy.call("read_file", {"path": "a.txt"})
+    kwargs = runner.registry.execute.await_args.kwargs
+    assert kwargs["tenant_id"] == "acme-child-a"
+    assert kwargs["trace_id"] == "0af7651916cd43dd8448eb211c80319c"
+
+
+@pytest.mark.asyncio
+async def test_a_workflow_tool_step_line_names_its_tenant(monkeypatch, caplog) -> None:
+    from robothor.engine.workflow import WorkflowEngine
+
+    async def _execute_tool(name: str, args: dict[str, Any], **kwargs: Any) -> Any:
+        return {"ok": True}
+
+    monkeypatch.setattr("robothor.engine.tools.registry._execute_tool", _execute_tool)
+    engine = WorkflowEngine.__new__(WorkflowEngine)
+    engine.config = SimpleNamespace(workspace="/tmp/ws")
+    engine.runner = SimpleNamespace(registry=ToolRegistry.__new__(ToolRegistry))
+    engine._workflows = {}
+    run = WorkflowRun(id="wr-1", workflow_id="example-flow", tenant_id="acme-child-a")
+    step = WorkflowStepDef(
+        id="s1", type=WorkflowStepType.TOOL, tool_name="search_memory", tool_args={"query": "x"}
+    )
+    caplog.set_level(logging.INFO)
+    await engine._run_tool_step(
+        step, run, WorkflowStepResult(step_id="s1", step_type=WorkflowStepType.TOOL)
+    )
+    (line,) = _lines(caplog)
+    assert line["tenant_id"] == "acme-child-a"
+    assert "trace_id" not in line  # a workflow run has no trace of its own
+
+
+@pytest.mark.asyncio
 async def test_a_workflow_tool_step_line_names_its_run(monkeypatch, caplog) -> None:
     from robothor.engine.workflow import WorkflowEngine
 

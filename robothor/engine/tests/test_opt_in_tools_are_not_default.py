@@ -68,6 +68,7 @@ def test_the_opt_in_list_cannot_drift_from_the_sales_package():
     """A hand-maintained name list drifted once already (2026-08-22)."""
     from robothor.engine.tools.constants import (
         CLAUDE_CODE_TOOLS,
+        DATADOG_TOOLS,
         GITHUB_REVIEW_WRITE_TOOLS,
         JIRA_WRITE_TOOLS,
         PR_REVIEW_TOOLS,
@@ -80,6 +81,7 @@ def test_the_opt_in_list_cannot_drift_from_the_sales_package():
     assert OPT_IN_TOOLS - set(SALES_SCHEMAS) == (
         {"web_render"}
         | CLAUDE_CODE_TOOLS
+        | DATADOG_TOOLS
         | GITHUB_REVIEW_WRITE_TOOLS
         | JIRA_WRITE_TOOLS
         | PR_REVIEW_TOOLS

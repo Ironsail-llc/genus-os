@@ -74,6 +74,7 @@ from routers.secrets import router as secrets_router
 from routers.settings import router as settings_router
 from routers.setup import router as setup_router
 from routers.system_health import router as system_health_router
+from routers.telemetry import router as telemetry_router
 from routers.tenants import router as tenants_router
 from routers.users import router as users_router
 from routers.workflows import router as workflows_router
@@ -243,6 +244,9 @@ app.include_router(system_health_router)
 # both answer "what is this appliance doing right now" — one as numbers, one as
 # the lines the processes actually printed.
 app.include_router(logs_router)
+# The organization's own lines in the shared Datadog account, bounded by the
+# acting tenant's scope. Beside journald: the same question for a tenant.
+app.include_router(telemetry_router)
 app.include_router(workflows_router)
 # External n8n: the operator's own automations outside the engine, as the
 # poller last saw them. Beside workflows for the same reason as automations.
