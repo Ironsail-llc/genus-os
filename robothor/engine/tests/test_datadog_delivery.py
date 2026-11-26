@@ -458,6 +458,26 @@ async def test_a_hand_off_whose_tenant_lookup_fails_there_is_still_delivered_the
     assert [t for t, _ in fleet.triage_runs()] == [A]
 
 
+async def test_a_child_receiver_whose_tenant_lookup_fails_still_delivers_its_own_alert(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """The webhook reaches the child's receiver and the child's read fails: kept, not dropped."""
+
+    def get_tenant(tenant: str) -> Any:
+        if fleet.current == A:
+            raise ConnectionError("db down")
+        return TENANTS.get(tenant)
+
+    with patch("robothor.crm.dal.get_tenant", side_effect=get_tenant):
+        await fleet.deliver_webhook(_payload(priority="P1"), received_by=A)
+
+    assert [(t, level) for t, level, *_ in fleet.sent] == [(A, "critical")]
+    (row,) = audit.alerts()
+    assert row["tenant_id"] == A
+    assert row["details"]["mode"] == "delivered"
+    assert [t for t, _ in fleet.triage_runs()] == [A]
+
+
 async def test_a_failed_tenant_lookup_never_delivers_a_hand_off_for_another_tenant(
     fleet: Fleet, audit: Audit
 ) -> None:
