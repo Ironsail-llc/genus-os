@@ -323,6 +323,14 @@ def audit(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return recorder
 
 
+@pytest.fixture(autouse=True)
+def fallback_page(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """The alert channels a failed digest falls back to: none reachable unless a test says so."""
+    pager = AsyncMock(return_value=False)
+    monkeypatch.setattr("robothor.engine.alerts._page", pager)
+    return pager
+
+
 @pytest.fixture
 def alert(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     sender = AsyncMock(return_value=True)
@@ -1095,6 +1103,39 @@ async def test_a_failed_delivery_is_recorded_and_the_pass_goes_on(
     assert all(e["mode"] == "delivery_failed" for e in events)
     assert all(e["delivery"]["error"] == error for e in events)
     assert all(e["brief"] for e in events), "a failed send never loses the finding"
+
+
+async def test_a_failed_digest_falls_back_to_the_alert_channels(
+    audit: MagicMock, fallback_page: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("robothor.engine.alerts.alert", AsyncMock(return_value=False))
+    fallback_page.return_value = True
+    dd = Datadog(**SPIKING, totals_baseline={"shop-api": 200})
+    await _watch(dd).tick([CHILD_A])
+    events = await _events(audit)
+    assert events and all(e["mode"] == "delivered" for e in events)
+    assert all(e["delivery"]["fallback_from"] == "digest" for e in events)
+    assert fallback_page.await_count == len(events)
+
+
+async def test_a_finding_not_sent_says_why_beside_its_mode(
+    audit: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Activity page reads ``reason`` at the top of the record."""
+    monkeypatch.setattr("robothor.engine.alerts.alert", AsyncMock(return_value=False))
+    dd = Datadog(**SPIKING)
+    await _watch(dd).tick([CHILD_A])
+    await _watch(dd, home=CHILD_A).tick([CHILD_B])
+    events = await _events(audit)
+    reasons = {(e["mode"], e.get("reason")) for e in events}
+    assert ("delivery_failed", "not_delivered") in reasons
+    assert ("delivery_failed", "not_this_engine") in reasons
+
+
+async def test_a_delivered_finding_has_no_reason(audit: MagicMock, alert: AsyncMock) -> None:
+    await _watch(Datadog(**SPIKING)).tick([CHILD_A])
+    events = await _events(audit)
+    assert events and all("reason" not in e for e in events if e["mode"] == "delivered")
 
 
 async def test_a_finding_for_another_tenant_is_never_delivered_here(

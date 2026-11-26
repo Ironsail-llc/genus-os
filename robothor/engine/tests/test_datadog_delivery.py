@@ -151,6 +151,14 @@ class Fleet:
         self.failing_levels: set[str] = set()
         #: Awaited inside the next send, before it returns: work that lands meanwhile.
         self.during_send: Any = None
+        #: (engine tenant, level, title, body, alert id) for every fallback page tried.
+        self.fallbacks: list[tuple[str, str, str, str, str | None]] = []
+        #: Whether a fallback page reaches anyone (tests have no pager unless they say so).
+        self.fallback_result = False
+
+    async def page(self, level: str, title: str, body: str, alert_id: str | None) -> bool:
+        self.fallbacks.append((self.current, level, title, body, alert_id))
+        return self.fallback_result
 
     async def alert(self, level: str, title: str, body: str, **kw: Any) -> bool:
         self.sent.append((self.current, level, title, body, kw))
@@ -238,6 +246,7 @@ def fleet(engine_config: EngineConfig, audit: Audit, monkeypatch: pytest.MonkeyP
     with (
         patch("robothor.crm.dal.get_tenant", side_effect=lambda t: TENANTS.get(t)),
         patch("robothor.engine.alerts.alert", side_effect=f.alert),
+        patch("robothor.engine.alerts._page", side_effect=f.page),
         patch("robothor.engine.manifest_store.main_agent_id", return_value="main"),
         patch("robothor.engine.config.load_agent_config", return_value=MagicMock(name="cfg")),
         patch("robothor.engine.delivery.deliver", new_callable=AsyncMock) as deliver,
@@ -427,6 +436,84 @@ async def test_a_failed_hand_off_is_recorded_as_failed(fleet: Fleet, audit: Audi
     assert row["details"]["mode"] == "delivery_failed"
     assert row["details"]["delivery"]["reason"] == "handoff_failed"
     assert [(t, level) for t, level, *_ in fleet.sent] == [(ROOT, "info")]
+
+
+async def test_a_hand_off_whose_tenant_lookup_fails_there_is_still_delivered_there(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """The root routed it; a failed tenant read on the child's side must not drop it."""
+
+    def get_tenant(tenant: str) -> Any:
+        if fleet.current == A:
+            raise ConnectionError("db down")
+        return TENANTS.get(tenant)
+
+    with patch("robothor.crm.dal.get_tenant", side_effect=get_tenant):
+        await fleet.deliver_webhook(_payload(priority="P1"))
+
+    assert [(t, level) for t, level, *_ in fleet.sent] == [(A, "critical")]
+    (row,) = audit.alerts()
+    assert row["tenant_id"] == A
+    assert row["details"]["mode"] == "delivered"
+    assert [t for t, _ in fleet.triage_runs()] == [A]
+
+
+async def test_a_failed_tenant_lookup_never_delivers_a_hand_off_for_another_tenant(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """Only an alert whose own tag names this engine's tenant is delivered on a failed read."""
+    forged = {
+        "type": dlv.HANDOFF_TYPE,
+        "source": dlv.HANDOFF_SOURCE,
+        "payload": json.dumps(_payload(tags=f"org:{B}")),
+        "tenant_id": A,
+    }
+    with patch("robothor.crm.dal.get_tenant", side_effect=ConnectionError("db down")):
+        await fleet.feed(A, {k.encode(): v.encode() for k, v in forged.items()})
+
+    assert fleet.sent == [] and fleet.triage_runs() == [] and audit.alerts() == []
+
+
+# ── when the digest cannot be written ───────────────────────────────
+
+
+async def test_a_failed_digest_send_falls_back_to_the_alert_channels(
+    fleet: Fleet, audit: Audit
+) -> None:
+    fleet.failing_levels = {"warning"}
+    fleet.fallback_result = True
+    await fleet.deliver_webhook(_payload(priority="P2"))
+
+    ((tenant, level, title, body, alert_id),) = fleet.fallbacks
+    assert (tenant, level) == (A, "warning")
+    ((_, _, sent_title, sent_body, kw),) = fleet.sent
+    assert (title, body, alert_id) == (sent_title, sent_body, kw["alert_id"])
+    (row,) = audit.alerts()
+    assert row["details"]["mode"] == "delivered"
+    assert row["details"]["delivery"]["route"] == "page"
+    assert row["details"]["delivery"]["fallback_from"] == "digest"
+
+
+async def test_a_digest_whose_fallback_also_fails_is_recorded_as_failed(
+    fleet: Fleet, audit: Audit
+) -> None:
+    fleet.failing_levels = {"warning"}
+    await fleet.deliver_webhook(_payload(priority="P2"))
+
+    assert len(fleet.fallbacks) == 1
+    (row,) = audit.alerts()
+    assert row["details"]["mode"] == "delivery_failed"
+    assert row["details"]["delivery"]["error"] == "not_delivered"
+    assert row["details"]["reason"] == "not_delivered"
+
+
+async def test_a_failed_page_is_not_paged_a_second_time_by_the_digest_fallback(
+    fleet: Fleet, audit: Audit
+) -> None:
+    """The page route already tried every channel; the fallback is for the digest only."""
+    fleet.failing_levels = {"critical"}
+    await fleet.deliver_webhook(_payload(priority="P1"))
+    assert fleet.fallbacks == []
 
 
 # ── once per notification, once per episode ─────────────────────────
