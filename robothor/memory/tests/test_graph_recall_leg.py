@@ -350,3 +350,33 @@ async def test_the_one_hop_expansion_answers_on_data_without_mentions(
 
     row = next((r for r in results if r["id"] == related), None)
     assert row is not None and "entity_expansion" in row["leg_ranks"]
+
+
+@pytest.mark.asyncio
+async def test_a_slow_embedding_model_does_not_cost_the_graph_its_budget(
+    world: Graph, monkeypatch
+) -> None:
+    """The question without its names is embedded with the query, before the
+    leg's 250 ms budget starts: under load the model answered in more than
+    that, and the leg timed out on most searches of the answer evaluation."""
+    import asyncio
+
+    from robothor.memory import facts
+    from robothor.memory.facts import search_facts
+    from robothor.rag import reranker
+
+    w = _chain(world)
+    monkeypatch.setattr(reranker, "rerank_pair", _scorer("northern depot"))
+    calls: list[str] = []
+
+    async def slow_embed(text: str) -> list[float]:
+        calls.append(text)
+        await asyncio.sleep(0.4)  # longer than the leg's whole budget
+        return fake_embed(text)
+
+    monkeypatch.setattr(facts, "_embed_query", slow_embed)
+    query = "Alice Smith quarterly logistics agreement"
+    results = await search_facts(query, limit=5, tenant_id=TENANT, use_reranker=True)
+
+    assert w["far"] in {r["id"] for r in results}, "the graph leg ran out of time"
+    assert sorted(calls) == sorted([query, "quarterly logistics agreement"])
