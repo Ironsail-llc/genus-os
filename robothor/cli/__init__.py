@@ -846,6 +846,55 @@ def _build_parser() -> argparse.ArgumentParser:
         default="dev",
         help="Which world cases to score",
     )
+    memeval_parser.add_argument(
+        "--answers",
+        action="store_true",
+        help="With --world: answer and judge each case per system instead of substring scoring",
+    )
+    memeval_parser.add_argument(
+        "--systems",
+        default="recall,recall_budget,keyword_only,raw_verbatim,full_context",
+        help="Comma-separated systems to compare (first is the system under test)",
+    )
+    memeval_parser.add_argument(
+        "--reference",
+        default=None,
+        help="Reference system for the deciding comparison (default: keyword_only)",
+    )
+    memeval_parser.add_argument(
+        "--token-budget", type=int, default=2048, help="Context tokens every system may fill"
+    )
+    memeval_parser.add_argument(
+        "--repeats", type=int, default=1, help="Repeat the answer runs to measure spread"
+    )
+    memeval_parser.add_argument(
+        "--answer-model", default=None, help="Model that answers (default: the generation model)"
+    )
+    memeval_parser.add_argument(
+        "--judge-model", default=None, help="Model for answers the rule judge cannot settle"
+    )
+    memeval_parser.add_argument(
+        "--limit-per-stratum", type=int, default=None, help="At most this many cases per stratum"
+    )
+    memeval_parser.add_argument(
+        "--concurrency", type=int, default=4, help="Cases answered at once (model slots)"
+    )
+    memeval_parser.add_argument(
+        "--cache-dir", default=None, help="Embedding cache directory (default: ~/.cache/...)"
+    )
+    memeval_parser.add_argument(
+        "--report", default=None, help="Write the JSON report here and a .md summary beside it"
+    )
+    memeval_parser.add_argument(
+        "--progress",
+        default=None,
+        help="Append each judged case to this JSONL; rerunning with it resumes",
+    )
+    memeval_parser.add_argument(
+        "--record-baseline",
+        action="store_true",
+        help="Also write the report as the recorded world baseline under docs/benchmarks/memory/",
+    )
 
     # status
     subparsers.add_parser("status", help="Show system status")
