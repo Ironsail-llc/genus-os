@@ -202,3 +202,4 @@ crm/179_memory_graph_keys.sql
 crm/180_memory_fact_utility.sql
 crm/181_memory_fact_scope_readers.sql
 crm/182_memory_graph_analyze.sql
+crm/183_memory_graph_question_relevance.sql

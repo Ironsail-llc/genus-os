@@ -504,3 +504,119 @@ class TestSplit:
         assert len(dev) + len(held) == len(ew.world_cases(w, "all")) == len(w.cases)
         with pytest.raises(ValueError):
             ew.world_cases(w, "train")
+
+
+# Words a question may share with its facts without giving the answer away.
+_STOP = frozenset(
+    [
+        "a",
+        "an",
+        "the",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "by",
+        "with",
+        "and",
+        "or",
+        "which",
+        "what",
+        "who",
+        "whom",
+        "whose",
+        "where",
+        "when",
+        "how",
+        "does",
+        "do",
+        "did",
+        "has",
+        "have",
+        "had",
+        "it",
+        "its",
+        "this",
+        "that",
+        "as",
+        "from",
+        "s",
+        "now",
+    ]
+)
+
+
+def _content_stems(text: str, names: set[str]) -> set[str]:
+    """Lower-cased words, five-letter prefixes (a crude stem), minus stop words
+    and the words of the given names."""
+    words = {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in _STOP}
+    return {w[:5] for w in words - names}
+
+
+class TestParaphrasedMultiHop:
+    """The multi-hop questions share their one rare word with the second-hop
+    fact ("headquartered", "report(ed) to"), so a retriever that matches words
+    looks like one that follows links. A reworded twin of every multi-hop case
+    shares no content word with any of its supporting facts except the names;
+    the original cases stay as they were, so earlier numbers still compare."""
+
+    def _pairs(self, world: ew.World) -> list[tuple[ew.Case, ew.Case]]:
+        by_id = {c.id: c for c in world.cases}
+        twins = [c for c in world.cases if c.stratum == "multi_hop_paraphrase"]
+        return [(by_id["multi_hop:" + c.id.split(":", 1)[1]], c) for c in twins]
+
+    def test_every_multi_hop_case_has_a_reworded_twin(self):
+        w = _full()
+        originals = [c for c in w.cases if c.stratum == "multi_hop"]
+        pairs = self._pairs(w)
+        assert "multi_hop_paraphrase" in ew.STRATA
+        assert len(pairs) == len(originals) > 0
+        for orig, twin in pairs:
+            assert twin.question != orig.question
+            assert (twin.gold, twin.supporting_ids, twin.subject_id, twin.split) == (
+                orig.gold,
+                orig.supporting_ids,
+                orig.subject_id,
+                orig.split,
+            )
+
+    def test_a_twin_shares_no_content_word_with_its_facts_but_the_names(self):
+        w = _full()
+        facts = {f.id: f.text for f in w.facts}
+        names = {
+            t
+            for n in [p.full_name for p in w.people]
+            + [o.name for o in w.organisations]
+            + [p.name for p in w.projects]
+            for t in re.findall(r"[a-z0-9]+", n.lower())
+        }
+        for _orig, twin in self._pairs(w):
+            q = _content_stems(twin.question, names)
+            for fid in twin.supporting_ids:
+                shared = q & _content_stems(facts[fid], names)
+                assert not shared, (twin.id, twin.question, facts[fid], shared)
+
+    def test_the_original_questions_are_unchanged(self):
+        w = _full()
+        mh = [c for c in w.cases if c.stratum == "multi_hop"]
+        assert all(
+            re.match(r"(Who does .+'s manager report to\?|In which city is the organisation .+ "
+                     r"currently works for headquartered\?|Where is the employer of the .+ "
+                     r"project's lead headquartered\?)$", c.question)
+            for c in mh
+        )  # fmt: skip
+
+    def test_the_wording_varies_and_is_deterministic(self):
+        twins = [c.question for c in _full().cases if c.stratum == "multi_hop_paraphrase"]
+        shapes = {re.sub(r"[A-Z][a-z]+(?: [A-Z][a-z]+)*", "N", q) for q in twins}
+        assert len(shapes) >= 6
+        again = [c.question for c in ew.generate_world(7, "full").cases
+                 if c.stratum == "multi_hop_paraphrase"]  # fmt: skip
+        assert twins == again

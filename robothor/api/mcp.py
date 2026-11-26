@@ -1041,7 +1041,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
 
     if name == "search_memory":
         from robothor.memory.facts import search_facts
-        from robothor.memory.recall import recall_limit, within_context_cap
+        from robothor.memory.recall import recall_limit, row_text, within_context_cap
 
         # The tool's rule (recall.py): fill the recall context cap unless the
         # client names a limit.
@@ -1055,7 +1055,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
         return {
             "results": [
                 {
-                    "fact": r["fact_text"],
+                    "fact": row_text(r),
                     "category": r["category"],
                     "confidence": r["confidence"],
                     "similarity": round(r.get("similarity", 0), 4),

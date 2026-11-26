@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from robothor.memory.block_budget import estimate_tokens as _estimate_tokens
+from robothor.memory.recall import row_text
 
 if TYPE_CHECKING:
     from robothor.memory.eval_world import Case, World
@@ -287,7 +288,9 @@ def _fact_candidates(
                 meta = json.loads(meta)
             fid = (meta.get("eval_world") or {}).get("fact_id")
         if fid:
-            cands.append((fid, "fact", str(row.get("fact_text", ""))))
+            # As the model would read it in production (a graph-only row
+            # names the path that relates it to the question).
+            cands.append((fid, "fact", row_text(row)))
     return cands
 
 

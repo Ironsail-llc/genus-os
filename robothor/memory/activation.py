@@ -5,7 +5,11 @@ should come to mind without being asked. This module links a piece of text to
 the entities it names (``seeds_from_text``) and spreads activation from them
 over the graph (``activate``), returning recall :class:`Candidate` facts with a
 ``graph`` leg score, the hop distance and the path of entity names that reached
-each one — so the agent can see why a fact was recalled.
+each one — so the agent can see why a fact was recalled. A search ranks the
+facts the walk reaches by the question (``activate_for_question``, the
+database function ``memory_activate_for_question``): relevance to the question
+with its linked names removed, weighted by activation; warm-up's automatic
+recall (``recall_for_message``) ranks by activation alone.
 
 The walk is the database function ``memory_activate`` (migration
 ``*_memory_graph_activation.sql``): a forward-push approximation of
@@ -71,6 +75,11 @@ DAMPING = 0.7
 FACTS_PER_ENTITY = 3
 #: Facts returned by one activation.
 LIMIT = 20
+#: A search's graph leg returns a reached fact only when its embedding is at
+#: least this similar (cosine) to the question without its names. Set on the
+#: memory evaluation's dev split: it keeps most answers to multi-step
+#: questions while cutting the reached facts that answer nothing.
+GRAPH_MIN_SIMILARITY = 0.35
 
 #: Seed weight of an entity named in the text, and of one mentioned by a top
 #: search hit (a step removed from what was asked).
@@ -89,7 +98,17 @@ _WORD = re.compile(r"[^\W_]+(?:['’.-][^\W_]+)*", re.UNICODE)
 #: "Alice Smith's manager" is about Alice Smith: a possessive is dropped
 #: before the text is split into words.
 _POSSESSIVE = re.compile(r"(?<=[^\W_])['’]s\b", re.UNICODE)
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+#: Linear by construction: a match starts only where a run of address
+#: characters starts, and every part is bounded (local part 64, labels 63,
+#: at most 8 of them). The unbounded form backtracked quadratically on a long
+#: run with no "@" (200,000 characters: 37 s inside the leg's budget).
+_EMAIL = re.compile(
+    r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@(?:[A-Za-z0-9-]{1,63}\.){1,8}[A-Za-z]{2,24}"
+    r"(?![A-Za-z])"
+)
+#: Seed linking reads at most this much of a text (names and keys are looked
+#: for near where a message starts; a pasted document is not a question).
+MAX_LINK_CHARS = 20_000
 _HANDLE = re.compile(r"(?<![\w@])@[A-Za-z0-9_][A-Za-z0-9_.]{1,63}")
 
 
@@ -101,6 +120,12 @@ class Seed:
     name: str
     weight: float = TEXT_SEED_WEIGHT
     method: str = "full_name"
+    #: The phrase of the text that linked it, when that was a name or alias.
+    surface: str | None = None
+
+
+#: How a seed found in the text itself was linked (not through a search hit).
+NAMED_METHODS = frozenset({"full_name", "alias", "strong_key"})
 
 
 def clamp_hops(hops: int) -> int:
@@ -114,7 +139,7 @@ def candidate_phrases(text: str) -> list[str]:
     A single token is never a candidate: a first name alone must not resolve to
     a person. A possessive (``'s``) is not part of the name it follows.
     """
-    words = [w.lower() for w in _WORD.findall(_POSSESSIVE.sub("", text or ""))]
+    words = [w.lower() for w in _WORD.findall(_POSSESSIVE.sub("", (text or "")[:MAX_LINK_CHARS]))]
     out: list[str] = []
     seen: set[str] = set()
     for size in range(2, MAX_NAME_TOKENS + 1):
@@ -131,11 +156,41 @@ def candidate_phrases(text: str) -> list[str]:
 def strong_keys(text: str) -> list[str]:
     """E-mail addresses and @handles in ``text``, lower-cased, in order."""
     out: list[str] = []
-    for match in [*_EMAIL.findall(text or ""), *_HANDLE.findall(text or "")]:
+    text = (text or "")[:MAX_LINK_CHARS]
+    for match in [*_EMAIL.findall(text), *_HANDLE.findall(text)]:
         key = match.lower().rstrip(".")
         if key not in out:
             out.append(key)
     return out
+
+
+def named_in_question(seeds: Iterable[Seed]) -> list[int]:
+    """Entity ids of the seeds the text itself names (name, alias, e-mail, handle)."""
+    return [s.entity_id for s in seeds if s.method in NAMED_METHODS]
+
+
+def question_without_names(question: str, seeds: Iterable[Seed]) -> str:
+    """``question`` with the names, aliases, e-mail addresses and handles that
+    linked its seeds removed (with a possessive ``'s``).
+
+    What the graph ranks a reached fact by: "Alice Smith's employer" asks about
+    an employer, and every fact naming Alice Smith would otherwise look the
+    most relevant. Seeds reached through a search hit's mentions are not in the
+    question and remove nothing.
+    """
+    text = question or ""
+    named = [s for s in seeds if s.method in NAMED_METHODS]
+    surfaces = {x for s in named for x in (s.name, s.surface) if x}
+    if any(s.method == "strong_key" for s in named):
+        surfaces.update(m for m in [*_EMAIL.findall(text), *_HANDLE.findall(text)])
+    for surface in sorted(surfaces, key=len, reverse=True):
+        words = [re.escape(w) for w in surface.split()]
+        if not words:
+            continue
+        pattern = r"(?<![\w@])" + r"\s+".join(words) + r"(?:['’]s)?(?![\w@])"
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"\s+([?.!,;:])", r"\1", text)
 
 
 @contextmanager
@@ -197,7 +252,7 @@ def _name_seeds(cur: Any, tenant_id: str, phrases: Sequence[str]) -> list[Seed]:
             continue
         name = str(hit.get("name") or "")
         method = "full_name" if normalize_surface(name) == normalize_surface(phrase) else "alias"
-        seeds.append(Seed(entity_id=int(hit["id"]), name=name, method=method))
+        seeds.append(Seed(entity_id=int(hit["id"]), name=name, method=method, surface=phrase))
     return seeds
 
 
@@ -298,6 +353,20 @@ _ACTIVATE_SQL = """
 """
 
 
+_ACTIVATE_FOR_QUESTION_SQL = """
+    SELECT kind, entity_id, entity_name, score, hops, via_edge_id, path_names,
+           fact_id, fact_text, category, origin, importance_score, created_at,
+           person_id, entities, access_count, relevance, confidence, source_type,
+           metadata, superseded_by, utility
+      FROM memory_activate_for_question(
+          %(t)s, %(seeds)s::int[], %(weights)s::float8[], %(reader)s, %(hops)s,
+          %(fanout)s, %(damping)s, %(exclude)s::int[], %(trusted)s, %(limit)s,
+          %(per)s, %(restricted)s, %(person)s::uuid, %(owner)s::uuid, %(query)s,
+          %(embedding)s::vector, %(named)s::int[], %(floor)s)
+     WHERE kind = 'fact'
+"""
+
+
 def _candidates(rows: Sequence[dict[str, Any]]) -> list[Candidate]:
     now = datetime.now(UTC)
     out: list[Candidate] = []
@@ -324,6 +393,14 @@ def _candidates(rows: Sequence[dict[str, Any]]) -> list[Candidate]:
             "graph_entity_id": r.get("entity_id"),
             "graph_edge_id": r.get("via_edge_id"),
         }
+        if r.get("relevance") is not None:
+            payload["graph_relevance"] = float(r["relevance"])
+        # The other fact columns, so a row the graph alone found has the keys
+        # every fact leg's rows have (consumers format rows by key).
+        for key in ("confidence", "source_type", "metadata", "superseded_by", "utility"):
+            payload.setdefault(key, r.get(key))
+        if payload["confidence"] is None:
+            payload["confidence"] = 0.5
         out.append(
             Candidate(
                 id=r["fact_id"],
@@ -358,25 +435,80 @@ def _activate_on(
     seeds = list(seeds)[:MAX_SEEDS]
     cur.execute(
         _ACTIVATE_SQL,
-        {
-            "t": tenant_id,
-            "seeds": [s.entity_id for s in seeds],
-            "weights": [float(s.weight) for s in seeds],
-            # The write path's id space: a bare CRM person id (warm-up's
-            # sender) reads as ``person:{id}``; prefixed ids pass unchanged.
-            "reader": normalize_reader(reader_scope_id) or reader_scope_id,
-            "hops": clamp_hops(max_hops),
-            "fanout": int(fanout),
-            "damping": float(damping),
-            "exclude": sorted({int(i) for i in exclude_entity_ids}),
-            "trusted": bool(trusted_only),
-            "limit": int(limit),
-            "per": int(facts_per_entity),
-            "restricted": bool(person_restricted),
-            "person": _as_uuid(person_id),
-            "owner": _as_uuid(exclude_crm_person_id),
-        },
+        _walk_params(
+            tenant_id,
+            seeds,
+            reader_scope_id=reader_scope_id,
+            trusted_only=trusted_only,
+            max_hops=max_hops,
+            fanout=fanout,
+            damping=damping,
+            limit=limit,
+            facts_per_entity=facts_per_entity,
+            exclude_entity_ids=exclude_entity_ids,
+            person_restricted=person_restricted,
+            person_id=person_id,
+            exclude_crm_person_id=exclude_crm_person_id,
+        ),  # fmt: skip
     )
+    return _candidates(cur.fetchall())
+
+
+def _walk_params(
+    tenant_id: str,
+    seeds: Sequence[Seed],
+    *,
+    reader_scope_id: str | None,
+    trusted_only: bool,
+    max_hops: int,
+    fanout: int,
+    damping: float,
+    limit: int,
+    facts_per_entity: int,
+    exclude_entity_ids: Iterable[int],
+    person_restricted: bool,
+    person_id: str | None,
+    exclude_crm_person_id: str | None,
+) -> dict[str, Any]:
+    return {
+        "t": tenant_id,
+        "seeds": [s.entity_id for s in seeds],
+        "weights": [float(s.weight) for s in seeds],
+        # The write path's id space: a bare CRM person id (warm-up's
+        # sender) reads as ``person:{id}``; prefixed ids pass unchanged.
+        "reader": normalize_reader(reader_scope_id) or reader_scope_id,
+        "hops": clamp_hops(max_hops),
+        "fanout": int(fanout),
+        "damping": float(damping),
+        "exclude": sorted({int(i) for i in exclude_entity_ids}),
+        "trusted": bool(trusted_only),
+        "limit": int(limit),
+        "per": int(facts_per_entity),
+        "restricted": bool(person_restricted),
+        "person": _as_uuid(person_id),
+        "owner": _as_uuid(exclude_crm_person_id),
+    }
+
+
+def _activate_for_question_on(
+    cur: Any,
+    tenant_id: str,
+    seeds: Sequence[Seed],
+    question: str,
+    query_embedding: Sequence[float] | None,
+    **walk: Any,
+) -> list[Candidate]:
+    if not seeds or query_embedding is None:
+        return []
+    seeds = list(seeds)[:MAX_SEEDS]
+    params = _walk_params(tenant_id, seeds, **walk)
+    params.update(
+        query=question_without_names(question, seeds),
+        embedding=str([float(x) for x in query_embedding]),
+        named=sorted(set(named_in_question(seeds))),
+        floor=GRAPH_MIN_SIMILARITY,
+    )
+    cur.execute(_ACTIVATE_FOR_QUESTION_SQL, params)
     return _candidates(cur.fetchall())
 
 
@@ -416,6 +548,61 @@ def activate(
             cur,
             tenant_id,
             seeds,
+            reader_scope_id=reader_scope_id,
+            trusted_only=trusted_only,
+            max_hops=max_hops,
+            fanout=fanout,
+            damping=damping,
+            limit=limit,
+            facts_per_entity=facts_per_entity,
+            exclude_entity_ids=exclude_entity_ids,
+            person_restricted=person_restricted,
+            person_id=person_id,
+            exclude_crm_person_id=exclude_crm_person_id,
+        )
+
+
+def activate_for_question(
+    tenant_id: str,
+    seeds: Sequence[Seed],
+    question: str,
+    *,
+    trusted_only: bool,
+    reader_scope_id: str | None = None,
+    max_hops: int = MAX_HOPS,
+    fanout: int = FANOUT,
+    damping: float = DAMPING,
+    limit: int = LIMIT,
+    facts_per_entity: int = FACTS_PER_ENTITY,
+    exclude_entity_ids: Iterable[int] = (),
+    person_restricted: bool = False,
+    person_id: str | None = None,
+    exclude_crm_person_id: str | None = None,
+    query_embedding: Sequence[float] | None = None,
+    connect: Callable[..., Any] | None = None,
+) -> list[Candidate]:
+    """The walk of :func:`activate`, each reached entity's facts chosen and
+    scored by ``question`` (``memory_activate_for_question``).
+
+    ``query_embedding`` is the embedding of the question without the names
+    it links (:func:`question_without_names`). Relevance is a reached fact's
+    cosine similarity to it, carried as ``payload["graph_relevance"]``; only
+    facts at or above :data:`GRAPH_MIN_SIMILARITY` come back, and
+    ``leg_scores["graph"]`` is ``(activation / strongest) ** 0.25 *
+    relevance``. Without an embedding, or when nothing but names is asked,
+    nothing is returned. Facts that mention an entity the question names
+    (:func:`named_in_question`) are left to the other legs. Tenant, reader,
+    person scope and trust apply exactly as in :func:`activate`.
+    """
+    if not seeds or query_embedding is None:
+        return []
+    with _cursor(connect) as cur:
+        return _activate_for_question_on(
+            cur,
+            tenant_id,
+            seeds,
+            question,
+            query_embedding,
             reader_scope_id=reader_scope_id,
             trusted_only=trusted_only,
             max_hops=max_hops,
@@ -490,14 +677,21 @@ def graph_candidates_for_query(
     person_id: str | None = None,
     limit: int = LIMIT,
     deadline: float | None = None,
+    embed: Callable[[str], Sequence[float] | None] | None = None,
     connect: Callable[..., Any] | None = None,
 ) -> list[Candidate]:
     """The ``graph`` leg of ``search_facts``: one connection, read-only.
 
+    ``embed`` embeds the question without its names (called at most once,
+    on this thread, after the seed lookup); without it nothing is walked.
+
     Seeds are the entities the query names and the entities the top hits of
     the other legs (``seed_fact_ids``) mention. The operator's own entity is
     excluded as seed and transit. A deliberate search, so every origin is
-    walked (``trusted_only=False``) and each row carries its origin.
+    walked (``trusted_only=False``) and each row carries its origin. What the
+    walk reaches is ranked by the query (:func:`activate_for_question`): the
+    query without the names it links, matched against each reached fact, and
+    facts about an entity the query names are left to the other legs.
 
     It runs under a savepoint, so a failure (a statement timeout, a database
     not yet migrated) rolls back only this leg and never aborts a transaction
@@ -531,6 +725,7 @@ def graph_candidates_for_query(
                     person_restricted=person_restricted,
                     person_id=person_id,
                     limit=limit,
+                    embed=embed,
                 )
             except Exception:
                 cur.execute("ROLLBACK TO SAVEPOINT memory_graph_leg")
@@ -552,7 +747,10 @@ def _query_graph(
     person_restricted: bool,
     person_id: str | None,
     limit: int,
+    embed: Callable[[str], Sequence[float] | None] | None = None,
 ) -> list[Candidate]:
+    if embed is None:
+        return []
     seeds = _link_seeds(cur, tenant_id, query)
     known = {s.entity_id for s in seeds}
     mentioned = _mentioned_by(
@@ -566,11 +764,23 @@ def _query_graph(
     seeds += [s for s in mentioned if s.entity_id not in known]
     if not seeds:
         return []
+    asked = question_without_names(query, seeds)
+    # Nothing beyond the names (the database function's own rule, asked
+    # first so no embedding is spent on it).
+    cur.execute("SELECT to_tsvector('english', %s) <> ''::tsvector AS asks", (asked,))
+    row = cur.fetchone()
+    if not (row and (row["asks"] if isinstance(row, dict) else row[0])):
+        return []
+    embedding = embed(asked)
+    if embedding is None:
+        return []
     owner = operator_person_id(cur, tenant_id)
-    return _activate_on(
+    return _activate_for_question_on(
         cur,
         tenant_id,
         seeds,
+        query,
+        embedding,
         reader_scope_id=reader_scope_id,
         trusted_only=False,
         max_hops=MAX_HOPS,
@@ -583,6 +793,26 @@ def _query_graph(
         person_id=person_id,
         exclude_crm_person_id=owner,
     )
+
+
+def question_for_graph(
+    tenant_id: str, query: str, *, connect: Callable[..., Any] | None = None
+) -> str | None:
+    """``query`` without the names, aliases, e-mail addresses and handles it
+    links (:func:`question_without_names`), or None when nothing else is asked.
+
+    Read-only, one connection: the seed lookup of the query's own text and one
+    check that full text would index a word of what is left (the database
+    function's own rule). The search embeds the result with the query, before
+    the graph leg's budget starts.
+    """
+    with _cursor(connect) as cur:
+        asked = question_without_names(query, _link_seeds(cur, tenant_id, query))
+        cur.execute("SELECT to_tsvector('english', %s) <> ''::tsvector AS asks", (asked,))
+        row = cur.fetchone()
+    if not (row and (row["asks"] if isinstance(row, dict) else row[0])):
+        return None
+    return asked
 
 
 def has_anything_to_link(

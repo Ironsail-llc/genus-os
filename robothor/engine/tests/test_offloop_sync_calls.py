@@ -470,12 +470,18 @@ async def test_the_graph_recall_leg_runs_off_the_loop(monkeypatch):
     from robothor.memory import activation, facts
 
     probe = SlowProbe(asyncio.get_running_loop(), result=[])
+    # The question without its names is looked up before the embedding.
+    asked = SlowProbe(asyncio.get_running_loop(), result="Where does work?")
     monkeypatch.setattr(activation, "graph_candidates_for_query", probe)
-    monkeypatch.setattr(facts, "_embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr(activation, "question_for_graph", asked)
+    monkeypatch.setattr(facts, "_embed_query", AsyncMock(return_value=[0.1] * 4))
     monkeypatch.setattr(facts, "_fact_legs", lambda *a, **k: {"vector": [], "keyword": []})
     monkeypatch.setattr(facts, "GRAPH_LEG_DEFAULT", True)
 
-    results = await facts.search_facts("Alice Smith", tenant_id="test-tenant", use_reranker=False)
+    results = await facts.search_facts(
+        "Where does Alice Smith work?", tenant_id="test-tenant", use_reranker=False
+    )
     assert results == []
-    await probe.settle()
-    probe.assert_loop_free()
+    for p in (asked, probe):
+        await p.settle()
+        p.assert_loop_free()
