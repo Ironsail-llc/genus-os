@@ -491,11 +491,18 @@ class BenchHandle(WorldHandle):
 # --------------------------------------------------------------------------- #
 
 
-def code_version() -> str:
-    """A hash of the memory package's source: the version a context belongs to."""
-    root = Path(__file__).resolve().parent
+def code_version(root: Path | None = None) -> str:
+    """A hash of the memory system's source: the version a context belongs to.
+
+    The eval harness itself (``eval_*.py``) is left out: changing how a run is
+    scored or reported does not change what a system retrieves, so it must
+    not throw the cached contexts away.
+    """
+    base = root if root is not None else Path(__file__).resolve().parent
     h = hashlib.sha256()
-    for path in sorted(root.glob("*.py")):
+    for path in sorted(base.glob("*.py")):
+        if path.name.startswith("eval"):
+            continue
         h.update(path.name.encode())
         h.update(path.read_bytes())
     return h.hexdigest()[:12]
@@ -661,6 +668,7 @@ async def validate_longmemeval_judge(
     by_kind: dict[str, dict[str, int]] = {}
     right = right_ok = wrong = wrong_ok = 0
     failures: list[str] = []
+    spent = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     for p in planted:
         res, _ms = await _call(
             chat,
@@ -668,6 +676,10 @@ async def validate_longmemeval_judge(
             model=model,
             max_tokens=bd.LONGMEMEVAL_JUDGE_MAX_TOKENS,
         )
+        spent["calls"] += 1
+        spent["input_tokens"] += res.input_tokens
+        spent["output_tokens"] += res.output_tokens
+        spent["cost_usd"] += res.cost_usd or 0.0
         ok = bd.longmemeval_label(res.text) == p.expect_yes
         agg = by_kind.setdefault(p.kind, {"n": 0, "ok": 0})
         agg["n"] += 1
@@ -692,6 +704,7 @@ async def validate_longmemeval_judge(
         "threshold": VALIDATION_THRESHOLD,
         "passed": rr >= VALIDATION_THRESHOLD and wr >= VALIDATION_THRESHOLD,
         "failures": failures,
+        "usage": spent,
     }
 
 
@@ -843,6 +856,8 @@ async def run_benchmark(
     records: list[bd.BenchRecord] = []
     errors: list[str] = []
     usage: dict[str, dict[str, float]] = {}
+    if validation is not None:
+        usage[f"judge_validation:{judge_model}"] = dict(validation["usage"])
     carried: dict[str, int] = {}
     ingests: list[dict[str, Any]] = []
     resumed = 0
@@ -1330,7 +1345,7 @@ def format_bench_markdown(report: dict[str, Any]) -> str:
     if report.get("usage"):
         lines += [
             "",
-            "| Calls | n | Input tokens | Output tokens | Cost (provider-reported) |",
+            "| Calls | n | Input tokens | Output tokens | Cost (provider token counts at list prices) |",
             "|---|---|---|---|---|",
         ]
         for k, u in report["usage"].items():

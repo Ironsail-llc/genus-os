@@ -1534,7 +1534,11 @@ read-only, in windows of the product's transcript cap) with the session's date
 as the extraction's "today" (`facts.extraction_reference_date`), and every fact
 row written is stamped with the session time. Extraction is the slow part (on
 the local 8B model, about a minute per session), so `segments` is the default
-and every report names the mode. `recall_today` (main's recall: facts only,
+and every report names the mode. A history's extraction calls run ahead, four
+at a time, into `--bench-dir` (keyed by the extraction model and the exact
+prompt), and the write path, which stays sequential because supersession
+depends on order, reads them; re-ingesting the same history under a new code
+version pays for no extraction already made. `recall_today` (main's recall: facts only,
 reranked head only) reads extracted facts and returns nothing in `segments`
 mode; compare it only on an `extract` run. Then each system retrieves at
 `--context-tokens` (default: the product's recall cap, 1,000 tokens), the
@@ -1593,6 +1597,26 @@ context; a full-context row for a hosted model is the published one, not ours.
 On LoCoMo the conversations fit any modern context, so a LoCoMo score means
 little without a full-context row from the same answer model. Many LoCoMo
 comparisons use an LLM judge rather than the official F1; ours is F1.
+
+**Where a run departs from the published protocol**, and says so in its report:
+
+- The reader prompt is LongMemEval's own (`prepare_prompt`, without chain of
+  thought), but its history is what the system retrieved, each item rendered
+  as a session: a turn or segment with its session date, an extracted fact as
+  one line without a date (the `search_memory` tool shows a fact without its
+  date too).
+- Turns are dated by their session; turn `n` of a session is stamped
+  `n × 30` seconds after its start (the benchmarks date sessions only).
+- Extraction runs over consecutive windows of the product's transcript cap,
+  as many as the session needs; production extracts the trailing window after
+  each run. The dedup ledger (`ingested_items`) is not written.
+- LoCoMo's two speakers are written as the user side (the first speaker) and
+  the assistant side (the second), each line prefixed with the speaker's name;
+  in extract mode the second speaker's facts are therefore agent-generated.
+  The category 5 choice order is seeded per question instead of drawn at
+  random, and the adversarial answer comes from `adversarial_answer`.
+- A hosted reasoning model runs at its provider's default reasoning effort,
+  with no sampling temperature.
 
 **Next benchmark.** BEAM (ICLR 2026, conversations of 128K to 10M tokens,
 nugget-scored by an LLM judge) measures memory beyond any context window, which
