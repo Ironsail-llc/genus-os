@@ -94,3 +94,34 @@ async def test_a_failed_extraction_is_not_cached(tmp_path, monkeypatch):
         not (tmp_path / "extractions.jsonl").exists()
         or not (tmp_path / "extractions.jsonl").read_text(encoding="utf-8").strip()
     )
+
+
+@pytest.mark.asyncio
+async def test_prefetch_defaults_to_one_call_in_flight(tmp_path):
+    """A local model server that runs one request at a time queues the rest,
+    and a queued extraction can outlive the product's extraction timeout; so
+    one call in flight unless the operator says the server runs more."""
+    from robothor.memory import eval_systems as es
+    from robothor.memory.tests.test_eval_bench import _bench, _EchoSystem, _FakeChat
+
+    seen: list[int] = []
+
+    async def ingest(history, tenant, **kwargs):
+        seen.append(kwargs.get("prefetch_concurrency"))
+        return eb.IngestResult(eb.SeededWorld(tenant_ids=(tenant,)), {}, 0, 0, 0.0)
+
+    es.register_system("echo_bench", _EchoSystem)
+    try:
+        common = {
+            "systems": ["echo_bench"],
+            "ingest_fn": ingest,
+            "cleanup_fn": lambda _t: {},
+            "chat": _FakeChat(),
+            "validate_judge": False,
+            "ingest_mode": "extract",
+        }
+        await eb.run_benchmark(_bench(1), **common)
+        await eb.run_benchmark(_bench(1), extract_concurrency=3, **common)
+    finally:
+        es.unregister_system("echo_bench")
+    assert seen == [1, 3]
