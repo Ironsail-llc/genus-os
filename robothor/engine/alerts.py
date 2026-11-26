@@ -36,7 +36,7 @@ import html
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, TypedDict
 
 from robothor.constants import BENCHMARK_DIGEST_NOTIFICATION_TYPE
 
@@ -147,6 +147,21 @@ def _derived_id(level: str, title: str) -> str:
     return hashlib.sha256(f"{level}:{title}".encode()).hexdigest()[:12]
 
 
+class RunScope(TypedDict):
+    """The raising run's identity on an alert's log line."""
+
+    tenant_id: str
+    trace_id: str
+
+
+def run_scope(session: Any) -> RunScope:
+    """:func:`alert`'s ``tenant_id`` and ``trace_id`` for an alert raised in ``session``'s run."""
+    return RunScope(
+        tenant_id=str(getattr(getattr(session, "run", None), "tenant_id", "") or ""),
+        trace_id=str(getattr(session, "trace_id", "") or ""),
+    )
+
+
 async def alert(
     level: str,
     title: str,
@@ -156,6 +171,8 @@ async def alert(
     metadata: dict[str, Any] | None = None,
     alert_id: str | None = None,
     kind: str | None = None,
+    tenant_id: str = "",
+    trace_id: str = "",
 ) -> bool:
     """Send an alert, routed by severity.
 
@@ -172,6 +189,8 @@ async def alert(
             again. Without one, nothing is suppressed.
         kind: What sort of alert this is, for the log line. Defaults to the
             part of ``title`` before its first colon, as ``snake_case``.
+        tenant_id, trace_id: The tenant and trace of the run that raised it,
+            for the log line. Left empty (and off the line) outside a run.
 
     Returns:
         True if the alert was verifiably delivered (Telegram or a fallback
@@ -181,7 +200,7 @@ async def alert(
     from robothor.engine.run_context import in_benchmark_run
 
     if in_benchmark_run():
-        _log_alert(level, title, kind, alert_id, benchmark=True)
+        _log_alert(level, title, kind, alert_id, benchmark=True, scope=(tenant_id, trace_id))
         # A graded child is not production. Whatever the level, whatever the
         # channel: no page, no webhook, and a row in a type the operator's
         # heartbeat does not read. Checked before the channel switch so a
@@ -198,7 +217,7 @@ async def alert(
         logger.info("Alert %s suppressed: delivered inside its cooldown window", alert_id)
         return True
 
-    _log_alert(level, title, kind, alert_id)
+    _log_alert(level, title, kind, alert_id, scope=(tenant_id, trace_id))
 
     if channel == "telegram":
         if level in _PAGE_LEVELS:
@@ -341,17 +360,24 @@ def _kind_and_subject(title: str, kind: str | None) -> tuple[str, str]:
 
 
 def _log_alert(
-    level: str, title: str, kind: str | None, alert_id: str | None, *, benchmark: bool = False
+    level: str,
+    title: str,
+    kind: str | None,
+    alert_id: str | None,
+    *,
+    benchmark: bool = False,
+    scope: tuple[str, str] = ("", ""),
 ) -> None:
     """One ``event=alert`` line, at ERROR, whatever happens to delivery.
 
     Every instance has a log pipeline even when it has no alert channel, so
     this is the route that always exists. The body is never logged: it is free
     text a detector filled. A benchmark alert is logged at INFO, since graded
-    traffic is not an incident.
+    traffic is not an incident. ``scope`` is the raising run's ``(tenant_id,
+    trace_id)``; an empty one is left off the line.
     """
     try:
-        from robothor.engine.log_fields import kv_line, short_reason
+        from robothor.engine.log_fields import kv_line, scope_fields, short_reason
 
         name, subject = _kind_and_subject(title, kind)
         fields: dict[str, Any] = {
@@ -362,6 +388,7 @@ def _log_alert(
         }
         if benchmark:
             fields["benchmark"] = True
+        fields.update(scope_fields(*scope))
         logger.log(logging.INFO if benchmark else logging.ERROR, "%s", kv_line("alert", **fields))
     except Exception:  # noqa: BLE001 — the log line never blocks the alert
         logger.debug("alert log line failed", exc_info=True)

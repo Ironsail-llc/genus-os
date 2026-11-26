@@ -439,10 +439,8 @@ class RunLifecycleMixin:
         try:
             from robothor.engine.telemetry import TraceContext
 
-            kwargs: dict[str, Any] = {
-                "run_id": session.run_id,
-                "agent_id": agent_config.id,
-            }
+            kwargs: dict[str, Any] = {"run_id": session.run_id, "agent_id": agent_config.id}
+            kwargs["tenant_id"] = session.run.tenant_id
             # Reuse parent's trace_id for unified cross-run traces
             if spawn_context and spawn_context.parent_trace_id:
                 kwargs["trace_id"] = spawn_context.parent_trace_id
@@ -450,6 +448,7 @@ class RunLifecycleMixin:
                 kwargs["parent_span_id"] = spawn_context.parent_span_id
 
             trace = TraceContext(**kwargs)
+            session.trace_id = trace.trace_id
             started = getattr(session.run, "started_at", None)
             trace.start_run(started.timestamp() if started else None)
             return trace

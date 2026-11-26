@@ -315,6 +315,7 @@ class ToolTurnMixin:
             "task_author_override": req.agent_config.task_author_override,
             "is_benchmark": req.session.run.is_benchmark,
             "identity": getattr(req.session, "identity", None),
+            "trace_id": getattr(req.session, "trace_id", ""),
         }
         if req.trace:
             with req.trace.span("tool_call", tool=call.tool_name):

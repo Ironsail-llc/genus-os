@@ -853,6 +853,13 @@ See [n8n monitoring](integrations/n8n.md) for setup, what is polled and what
 alerts, and the [settings reference](reference/configuration.md#integrations)
 for the full table.
 
+The group also holds the read-only Datadog access: `ROBOTHOR_DATADOG_API_KEY`
+and `ROBOTHOR_DATADOG_APP_KEY` (secrets, one instance-wide credential),
+`ROBOTHOR_DATADOG_SITE` and `ROBOTHOR_DATADOG_SCOPES` (what each tenant may
+read). See [Reading Datadog from Genus](OBSERVABILITY.md#reading-datadog-from-genus).
+The Datadog watch needs no setting of its own: it records what it finds and
+sends nothing; see [Genus watches Datadog](OBSERVABILITY.md#genus-watches-datadog).
+
 ## Plugins
 
 `ROBOTHOR_PLUGIN_LOCKFILE` points at the plugin lockfile — the record of which

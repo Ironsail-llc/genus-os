@@ -21,12 +21,9 @@
  * bridge.
  */
 
-/** ISO-8601, as much of it as this appliance's callers write. */
-export const ISO_TIMESTAMP =
-  /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,6})?)?)?(?:Z|[+-]\d{2}:?\d{2})?$/;
+import { ISO_TIMESTAMP } from "./log-since";
 
-/** A relative age in journald's units — the half `--since` has and a column does not. */
-export const RELATIVE_AGE = /^\d{1,6}[smhd]$/;
+export { ISO_TIMESTAMP, RELATIVE_AGE, isLogSince } from "./log-since";
 
 /**
  * The shape AND the calendar.
@@ -59,9 +56,4 @@ export function isIsoTimestamp(value: string): boolean {
   // 60 is a leap second, which Postgres accepts and this has no business refusing.
   if (second !== undefined && Number(second) > 60) return false;
   return true;
-}
-
-/** What `GET /api/logs?since=` accepts: a relative age or an ISO-8601 stamp. */
-export function isLogSince(value: string): boolean {
-  return RELATIVE_AGE.test(value) || ISO_TIMESTAMP.test(value);
 }
