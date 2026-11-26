@@ -822,6 +822,58 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Provenance recorded alongside the result (e.g. cron)",
     )
 
+    # memory-identity — CRM-anchored entity resolution: seed, backfill, reverse
+    identity_parser = subparsers.add_parser(
+        "memory-identity", help="CRM-anchored memory identity: seed, backfill, reverse"
+    )
+    identity_sub = identity_parser.add_subparsers(dest="identity_command")
+    id_sync = identity_sub.add_parser(
+        "sync", help="Give every CRM person and company exactly one linked memory node"
+    )
+    id_backfill = identity_sub.add_parser(
+        "backfill", help="Resolve the names in existing facts into mentions (resumable)"
+    )
+    id_reverse = identity_sub.add_parser(
+        "reverse", help="Reverse a resolution decision and re-point its mentions"
+    )
+    for verb in (id_sync, id_backfill, id_reverse):
+        verb.add_argument("--tenant", required=True, help="Tenant to act on (required)")
+        verb.add_argument("--json", dest="json_output", action="store_true", help="Output JSON")
+    for verb in (id_sync, id_backfill, id_reverse):
+        verb.add_argument(
+            "--dry-run", action="store_true", help="Report what would change and write nothing"
+        )
+    id_backfill.add_argument(
+        "--resume-from",
+        type=int,
+        default=None,
+        help="Continue after this fact id (the last_fact_id of a previous run)",
+    )
+    id_backfill.add_argument(
+        "--batch-size", type=int, default=500, help="Facts per batch, one transaction each"
+    )
+    id_reverse.add_argument("--decision", type=int, required=True, help="Decision id to reverse")
+    id_reverse.add_argument("--reason", required=True, help="Why the decision was wrong")
+    id_reverse.add_argument(
+        "--entity",
+        type=int,
+        default=None,
+        help="Entity id the mentions belong to instead (omit to leave them unresolved)",
+    )
+    id_reverse.add_argument(
+        "--fact",
+        type=int,
+        action="append",
+        default=None,
+        help="Only the decision's mention on this fact (repeatable); the decision stays live",
+    )
+    id_reverse.add_argument(
+        "--all",
+        dest="all_mentions",
+        action="store_true",
+        help="Every mention the decision carries, and the name from now on (preview with --dry-run)",
+    )
+
     # status
     subparsers.add_parser("status", help="Show system status")
 
@@ -1551,6 +1603,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.memory_eval import cmd_memory_eval
 
         return cmd_memory_eval(args)
+    if args.command == "memory-identity":
+        from robothor.cli import memory_identity
+
+        return memory_identity.cmd_memory_identity(args)
     if args.command == "serve":
         from robothor.cli.admin import cmd_serve
 

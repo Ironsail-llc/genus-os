@@ -99,6 +99,35 @@ def _safe_audit(operation: str, entity_type: str, entity_id: str | None, **kwarg
         logger.warning("Audit call failed (non-fatal): %s", e)
 
 
+def _keep_memory_link(tenant_id: str, kind: str, record_id: str | None) -> None:
+    """Keep the record's memory node linked and named. Never fails the CRM write.
+
+    One cheap upsert after the CRM commit. Writes that bypass the DAL, and any
+    failure here, are caught up by the nightly identity sync.
+    """
+    if not record_id:
+        return
+    try:
+        hooks.sync_crm_record(tenant_id, kind, record_id)
+    except Exception as e:
+        logger.warning(
+            "memory link for %s %s skipped (non-fatal): %s", kind, sanitize_log(record_id), e
+        )
+
+
+def _record_memory_merge(tenant_id: str, kind: str, keeper_id: str, loser_id: str) -> None:
+    """Tell memory identity the loser's node now resolves to the keeper's."""
+    try:
+        hooks.record_crm_merge(tenant_id, kind, keeper_id, loser_id)
+    except Exception as e:
+        logger.warning(
+            "memory merge record for %s %s skipped (non-fatal): %s",
+            kind,
+            sanitize_log(loser_id),
+            e,
+        )
+
+
 # ─── People ──────────────────────────────────────────────────────────────
 
 
@@ -205,6 +234,7 @@ def create_person(
                     "tenant_id": tenant_id,
                 },
             )
+            _keep_memory_link(tenant_id, "person", person_id)
             return person_id
         except Exception as e:
             conn.rollback()
@@ -294,6 +324,7 @@ def update_person(person_id: str, tenant_id: str = DEFAULT_TENANT, **fields: Any
             conn.commit()
             if ok:
                 _safe_audit("update", "person", person_id, details={"fields": list(fields.keys())})
+                _keep_memory_link(tenant_id, "person", person_id)
             return ok
         except Exception as e:
             conn.rollback()
@@ -456,6 +487,7 @@ def merge_people(
                 keeper_id,
                 details={"loser_id": loser_id, "loser_name": loser_name},
             )
+            _record_memory_merge(tenant_id, "person", keeper_id, loser_id)
             return get_person(keeper_id, tenant_id)
 
         except Exception as e:
@@ -543,6 +575,7 @@ def merge_companies(
                 keeper_id,
                 details={"loser_id": loser_id, "loser_name": loser.get("name", "")},
             )
+            _record_memory_merge(tenant_id, "company", keeper_id, loser_id)
             return get_company(keeper_id, tenant_id)
 
         except Exception as e:
@@ -775,6 +808,7 @@ def find_or_create_company(name: str, tenant_id: str = DEFAULT_TENANT) -> str | 
             _safe_audit(
                 "create", "company", company_id, details={"name": name, "via": "find_or_create"}
             )
+            _keep_memory_link(tenant_id, "company", company_id)
             return company_id
         except Exception as e:
             conn.rollback()
@@ -832,6 +866,7 @@ def create_company(
             )
             conn.commit()
             _safe_audit("create", "company", company_id, details={"name": name})
+            _keep_memory_link(tenant_id, "company", company_id)
             return company_id
         except Exception as e:
             conn.rollback()
@@ -893,6 +928,7 @@ def update_company(company_id: str, tenant_id: str = DEFAULT_TENANT, **fields: A
                 _safe_audit(
                     "update", "company", company_id, details={"fields": list(fields.keys())}
                 )
+                _keep_memory_link(tenant_id, "company", company_id)
             return ok
         except Exception as e:
             conn.rollback()

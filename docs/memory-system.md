@@ -9,6 +9,9 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 | `memory_facts` | Atomic distilled facts with lifecycle scoring (importance, decay, outcome_failures) |
 | `memory_entities` | Knowledge graph nodes (person, project, tech, …) |
 | `memory_relations` | Knowledge graph edges (uses, works_at, manages, …) |
+| `memory_mentions` | Which entity each fact mentions, by id (see [Graph schema](#graph-schema)) |
+| `memory_relation_evidence` | Every fact that supports an edge |
+| `memory_resolution_decisions` | Each decision that a name in a fact refers to an entity |
 | `memory_insights` | LLM-discovered cross-domain connections |
 | `memory_episodes` | Time-bucketed event clusters (added 2026-04) |
 | `memory_procedures` | Skill library — named playbooks with success/failure tracking (added 2026-04) |
@@ -339,6 +342,229 @@ and then be rejected by the `memory_relations` foreign key.
 entity ids are dropped before the insert, and a chunk Postgres still rejects is
 retried row by row inside a savepoint, so one bad row costs one relation instead
 of the whole batch. Every drop is logged at WARNING with a count.
+
+### Graph schema
+
+The memory graph foundation migration (`crm/migrations/*_memory_graph_foundation.sql`) adds the schema that links facts to
+entities by identity rather than by name, and gives edges time, evidence and
+trust. Code written before it reads and writes exactly as before. The first
+writer of the new tables is [Identity](#identity): it links CRM records to
+entities and records resolution decisions and mentions. Every new table has
+a `tenant_id` referencing `crm_tenants`, the forced `tenant_isolation`
+row-level-security policy, and stays with its tenant when a workload moves
+(`genus tenant move-workload`).
+
+**`memory_resolution_decisions`** records each decision that a surface form (a
+name as it appeared in a fact) refers to an entity: the surface form, the
+entity type if known, the entity it resolved to (`resolved_entity_id`, NULL
+when it was deliberately left unresolved), the `method`, a `confidence`
+between 0 and 1, the `evidence` the decision rested on (JSON), and
+`decided_at`. Merging two entities never rewrites ids: a decision found wrong
+is reversed by setting `reversed_at`, and points at the decision that replaced
+it through `superseded_by`. Methods: `strong_key` (an email, phone or other
+unique identifier), `full_name`, `context`, `llm`, `exact`, `operator` and
+`backfill`.
+
+**`memory_mentions`** is the fact-to-entity join: one row per mention, with
+the fact, the entity (NULL while unresolved, or once its entity is deleted),
+the surface form and type, and the decision that resolved it. Deleting a fact
+deletes its mentions.
+
+**`memory_relation_evidence`** lists every fact supporting an edge, keyed by
+`(relation_id, fact_id)`. The migration copies each edge's existing
+`memory_relations.fact_id` into it; edges written afterwards by code that
+predates the graph write path still set only `fact_id`.
+
+**`memory_relations`** gains:
+
+| Column | Meaning |
+|--------|---------|
+| `predicate` | The canonical relation; `relation_type` keeps the phrase as extracted |
+| `valid_from`, `valid_to` | When the relation held in the world (event time) |
+| `recorded_at`, `expired_at` | When the system started and stopped believing it. `recorded_at` is NULL on edges from before the migration; read it as `created_at` |
+| `is_active` | `TRUE` until the edge is retired (defaults `TRUE`) |
+| `retired_reason` | `ended` (it held, then stopped), `refuted` (it was wrong) or `evidence_merged` (its evidence moved to another edge) |
+| `origin` | Who asserted it (below) |
+| `weight` | Learned usefulness for retrieval, `1.0` by default |
+
+Active edges are indexed per endpoint for neighbourhood expansion.
+
+**`memory_facts`** gains `origin`, `event_time` (when the thing happened, as
+opposed to `valid_from`, when the fact became true as recorded) and a scope.
+None of them is part of the content hash, so no stored hash changes.
+
+**`memory_entities`** gains the CRM record it is about (`crm_person_id`,
+`crm_company_id`, cleared if that record is deleted), an `embedding`, a scope,
+and an index on `(tenant_id, lower(name))`. When `genus tenant move-account`
+moves an account's CRM contact to another tenant, a memory entity linked to
+that contact stays with its tenant's memory and its `crm_person_id` is cleared
+(the report lists it under `links_cleared`); the link does not refuse the move.
+
+**Scope** (`scope_kind`, `scope_id` on facts and entities): `shared` (the whole
+tenant, the default, no `scope_id`), `user` or `agent` (private to the owner
+named in `scope_id`, which is then required).
+
+**Origin and authority.** Origin records who asserted a fact or an edge. When
+claims disagree, or recall is filtered, they rank in this order, most trusted
+first:
+
+1. `operator_confirmed` — the operator confirmed it
+2. `user_stated` — a user said it
+3. `crm` — it comes from the CRM record
+4. `tool` — a tool returned it
+5. `agent_generated` — an agent produced it
+6. `external` — an outside source (a web page, an inbound message)
+7. `inferred` — the system derived it (edges only)
+
+A row from before origins existed has no origin and ranks as
+`agent_generated`. Only the first three are trusted for automatic recall. The
+lists, the order and the helpers that rank by them (`authority_rank`,
+`least_trusted`, `is_trusted_for_auto_recall`) live in
+`robothor/memory/graph_schema.py`; a test keeps them equal to the database's
+CHECK constraints.
+
+### Identity
+
+`robothor/memory/identity.py` decides which entity a name in a fact refers to.
+A wrong merge would attribute one person's facts to another, so it is
+conservative: when the evidence does not single out one entity, the name stays
+**unresolved**, and the decision records the candidates so a later pass or the
+operator can settle it.
+
+**CRM records are the canonical nodes.** `sync_crm_entities(tenant_id)` gives
+every live CRM person and company in a tenant exactly one entity, linked by
+`crm_person_id` / `crm_company_id`, and named with the CRM full name or
+company name. No CRM contact data is copied into memory: no email, channel
+handle or domain becomes an alias, because `get_entity` applies no data scope
+and the CRM withholds those fields from restricted readers. Nickname variants
+are never added either. An unlinked entity with exactly the same name and type
+is linked rather than duplicated (recorded as a decision with method `exact`),
+unless two CRM records share the name. When the name is already taken by
+another record's entity, the new one is named
+`<name> #<first 8 characters of the CRM id>` and carries the plain name as an
+alias, so a bare mention of that name stays ambiguous. A CRM person whose name
+is not a full name (one token, or an initial at either end) never takes over an
+existing entity and is always named that way, without the bare name, so an
+entity built from every "Alex" is never anchored to one CRM record. When a
+record is renamed, its previous full name stays as an alias, because facts
+already use it. The CRM data layer keeps the link current on every create,
+update and merge, through `robothor/crm/hooks.py`, after its own commit. A
+failure there never fails the CRM write. The nightly lifecycle pass runs the
+full sync for every tenant. It catches writes that bypassed the data layer,
+and people merges whose hook failed, which it finds from the merge note the
+data layer writes. Company merges leave no note, so a failed company-merge
+hook is not repaired. Memory never writes to the CRM.
+
+**Resolution** (`resolve_mentions(tenant_id, mentions, *, cur=None)`) is
+synchronous, makes no model call, and can run inside the caller's
+transaction. Rules, first match wins:
+
+| Rule | Resolves when | Method | Confidence |
+|------|---------------|--------|------------|
+| Strong key | A CRM id, an email the CRM holds, or a `contact_identifiers` channel identifier (`"<channel>:<identifier>"`) names one record. An email written as the name counts. Keys that disagree leave it unresolved | `strong_key` | 1.0 |
+| Full name | Two or more tokens, neither end an initial, matching exactly one entity of a compatible type by name or alias, ignoring case and whitespace | `full_name` | 0.95 |
+| Context | A full name matching several entities, or only a nickname variant ("Bob Rivera" for "Robert Rivera"), with exactly one candidate supported by the same organisation (in the context or named in the same fact), the same email domain (not a free-mail domain), or an earlier mention in the same conversation | `context` | 0.85–0.9 |
+| Single token | A first name, nickname, initials, or a name with an initial at either end: only by a strong key, or when exactly one candidate already appears in the same conversation and it is not the operator | `context` | 0.75 |
+| Provisional | No candidate at all, and a full name or a known non-person type: a new unlinked entity. Never a person from a single token, never an entity of unknown type | `exact` | 1.0 |
+
+A single-token organisation name ("Globex") that matches exactly one
+organisation resolves with method `exact`. A person name never resolves to an
+organisation, and the reverse is also true. A name of unknown type that both a
+person and an organisation carry stays unresolved. Entities whose CRM record
+was deleted are not candidates, and they also stop a duplicate from being
+created. The operator, found through `get_owner_person`, is reached by strong
+key or full name, never by a first name.
+
+"The same conversation" means an active fact with the same
+`metadata->>'session_key'` that mentions the candidate under a live
+`strong_key`, `full_name` or `operator` decision. Only facts the write itself
+may see count: shared ones, private ones of the write's own scope, and none
+with another person's `person_id`. The write's scope comes from the mention's
+context (`scope_kind`, `scope_id`, `person_id`). Without it, only shared,
+unscoped evidence is used. This module never sets a fact's `person_id` or
+scope.
+
+**Decisions are recorded once.** Every mention gets a decision row, or reuses
+a live one with the same tenant, surface form (ignoring case and whitespace),
+entity type, resolved entity, method and basis. The basis is the evidence the
+decision rests on: the candidates and the matching context, or the reason it
+was left unresolved and the conversation. Re-ingesting the same text adds no
+rows. `write_mentions` writes the `memory_mentions` rows for a fact, at most
+one per surface form.
+
+**Reversal.** `reverse_decision(tenant_id, decision_id, *, reason,
+new_entity_id=None, fact_ids=None, dry_run=False)` works at one of two scopes.
+A decision is shared by every mention it resolved the same way, so the scope
+matters:
+
+- **Some facts** (`fact_ids`). Only this decision's mentions on those facts
+  move, onto a new `operator` decision that applies to them alone. The shared
+  decision stays live for every other mention, and future mentions are not
+  affected. This is how an unresolved name is settled.
+- **The whole decision.** It sets `reversed_at`. When `new_entity_id` is given,
+  it records an `operator` decision and points `superseded_by` at it. Every
+  mention under the decision moves to that entity, or to NULL. From then on the
+  name never resolves to the rejected entity, unless a later live operator
+  decision chooses it again. Three kinds of decision cannot be redirected this
+  way and must be corrected per fact: one that left its name unresolved, a
+  `context` decision (it rested on one conversation or organisation), and one
+  whose name is not a full name (a first name may only resolve on
+  conversation evidence).
+
+`dry_run` returns the same report and writes nothing. The report lists the
+mentions moved, their facts, and the relations those facts support: the
+derived rows to rebuild. The same list is stored on the decision it writes.
+
+A CRM merge is recorded the same way: a decision resolves the loser's entity
+to the keeper's, and nothing rewrites mention ids. A later decision records
+how the merge shaped it, judged on the match the rules decided on:
+
+- `via_merge`: it reached the keeper only through the loser's name, alias or
+  key. The mention named the loser.
+- `merge_collapsed`: the keeper's own name or key matched equally, and the
+  merge removed the loser as a competitor. This is the case of two CRM
+  records with the same name.
+- Nothing: the keeper matched on its own, and the merge added at most a weaker
+  match (a nickname variant of the loser's name).
+
+Reversing the merge decision moves `via_merge` mentions back to the loser's
+entity and leaves `merge_collapsed` mentions unresolved, because the name no
+longer singles anyone out. Everything else stays with the keeper. These moves
+are per-fact operator decisions, so they neither bind nor block later
+mentions. Those resolve by the ordinary rules: a bare name of two same-named
+people whose merge was reversed goes to the one record still live in the CRM.
+Identity therefore lives only in decisions and mentions. Entity rows are never
+merged, and there is no canonical-entity lookup.
+
+**Backfill.** `backfill_mentions(tenant_id, *, dry_run, batch_size=500,
+resume_from=None)` turns the names in existing `memory_facts.entities` into
+mentions. It walks active facts in id order, one transaction per batch, under
+a per-tenant advisory lock. Context comes from the other names in the fact, its
+conversation and its scope. Its `person_id` is a strong key for the one
+person-typed name it carries, and only when that name is the CRM person's full
+name. The job returns `last_fact_id` so that it can resume. A dry run writes
+nothing: each batch is read-only. It reports counts by method, every unresolved
+name with its candidates, the provisional entities it would create, and the
+evidence of each `full_name` and `context` resolution. The schema has no unique
+key on a fact's mentions, so the backfill enforces one per surface form in
+code. Run `sync` first: the report counts CRM records still without an entity.
+
+```bash
+genus memory-identity sync --tenant <tenant> --dry-run
+genus memory-identity backfill --tenant <tenant> --dry-run --json
+genus memory-identity backfill --tenant <tenant> --resume-from 12000
+genus memory-identity reverse --tenant <tenant> --decision 42 --reason "different person" --entity 7 --fact 1301
+genus memory-identity reverse --tenant <tenant> --decision 42 --reason "different person" --all --dry-run
+```
+
+`reverse` needs either `--fact` (repeatable) or `--all`.
+
+**Read side.** `find_entity(tenant_id, name, entity_type=None)` is a pure
+lookup by the same rules, and records nothing. It matches an exact name or
+alias of one shared entity, and returns several matches as an `Ambiguity`. It
+does not answer an email: a reader would learn which CRM person owns it. `get_entity` uses it first and falls back to the
+best-connected entity of that name. It names its columns, so the embedding is
+never returned.
 
 ## Ingestion Pipeline
 
