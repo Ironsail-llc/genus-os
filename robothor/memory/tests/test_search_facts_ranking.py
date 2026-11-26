@@ -111,6 +111,8 @@ def env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     from robothor.memory import activation
 
     monkeypatch.setattr(activation, "question_for_graph", lambda _t, q, **_k: q)
+    # No database: no head row is about an entity the question names.
+    monkeypatch.setattr(activation, "facts_about_named", lambda *_a, **_k: set(), raising=False)
     return monkeypatch
 
 
@@ -226,6 +228,97 @@ async def test_the_graph_leg_keeps_its_reserved_places(env: pytest.MonkeyPatch) 
     row = next(r for r in results if r["id"] == 700)
     assert "graph" in row["leg_ranks"]
     assert row["origin"] == "user_stated"
+
+
+def _direct(env: pytest.MonkeyPatch, *, named: set[int]) -> None:
+    """The head rows in ``named`` are about an entity the question names."""
+    from robothor.memory import activation
+
+    env.setattr(activation, "facts_about_named", lambda _t, _q, ids, **_k: set(ids) & named)
+
+
+_HOPS = [
+    ("Bob runs the shipping team", 700, 0.9),
+    ("Carol drives the shipping van", 701, 0.5),
+]
+
+
+def _hops() -> list[Any]:
+    return [_graph_hit(fid, text, score) for text, fid, score in _HOPS]
+
+
+def _graph_rows(results: list[dict[str, Any]]) -> list[int]:
+    return [r["id"] for r in results if r.get("reserved_leg") == "graph"]
+
+
+@pytest.mark.asyncio
+async def test_a_strong_direct_row_about_the_named_entity_keeps_the_graph_out(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """The question names someone and the head already holds a fact about
+    them that the reranker rates highly: the graph's related facts would only
+    compete with it (on the eval world they drew "where is X based" answers to
+    an employer's city), so its places stay unused."""
+    direct = _row(1, "Alice keeps the passport in the blue folder", similarity=0.9)
+    cur = _Cursor(vector=[direct, *_dense(20)[1:]], keyword=[])
+    _direct(env, named={1})
+    strong = facts.DIRECT_EVIDENCE_RERANK + 0.05
+    env.setattr(reranker, "rerank_pair", _scorer({"passport": strong, "shipping": 0.0}, 0.3))
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=_hops()):
+        results = await _search(cur)
+
+    assert results[0]["id"] == 1
+    assert _graph_rows(results) == []
+
+
+@pytest.mark.asyncio
+async def test_a_weak_direct_row_leaves_the_graph_its_places(env: pytest.MonkeyPatch) -> None:
+    direct = _row(1, "Alice keeps the passport in the blue folder", similarity=0.9)
+    cur = _Cursor(vector=[direct, *_dense(20)[1:]], keyword=[])
+    _direct(env, named={1})
+    weak = facts.DIRECT_EVIDENCE_RERANK - 0.05
+    env.setattr(reranker, "rerank_pair", _scorer({"passport": weak, "shipping": 0.0}, 0.3))
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=_hops()):
+        results = await _search(cur)
+
+    assert _graph_rows(results) == [700, 701]
+
+
+@pytest.mark.asyncio
+async def test_a_strong_row_about_someone_else_leaves_the_graph_its_places(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """No head row is about an entity the question names (or it names none):
+    the graph comes in exactly as before."""
+    direct = _row(1, "Alice keeps the passport in the blue folder", similarity=0.9)
+    cur = _Cursor(vector=[direct, *_dense(20)[1:]], keyword=[])
+    _direct(env, named=set())
+    env.setattr(reranker, "rerank_pair", _scorer({"passport": 0.99, "shipping": 0.0}, 0.3))
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=_hops()):
+        results = await _search(cur)
+
+    assert _graph_rows(results) == [700, 701]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("delta", "graph_in"), [(0.05, False), (-0.05, True)])
+async def test_without_the_reranker_the_dense_similarity_decides(
+    env: pytest.MonkeyPatch, delta: float, graph_in: bool
+) -> None:
+    """Reranker off (or failed): the named-entity row's dense similarity is
+    the strength, against its own threshold."""
+    sim = facts.DIRECT_EVIDENCE_SIMILARITY + delta
+    direct = _row(1, "Alice keeps the passport in the blue folder", similarity=sim)
+    cur = _Cursor(vector=[direct, *_dense(20)[1:]], keyword=[])
+    _direct(env, named={1})
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=_hops()):
+        results = await _search(cur, use_reranker=False)
+
+    assert bool(_graph_rows(results)) is graph_in
 
 
 @pytest.mark.asyncio
