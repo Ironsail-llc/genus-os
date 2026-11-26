@@ -714,6 +714,20 @@ async def validate_longmemeval_judge(
 # --------------------------------------------------------------------------- #
 
 
+def evidence_recall(q: bd.BenchQuestion, items: Sequence[dict[str, Any]]) -> float | None:
+    """Share of ``q``'s evidence sessions that reached the context sent.
+
+    An item's session is the part of its turn id before ``#`` (a segment
+    enters as the turn it starts with; segments never span sessions). None
+    for an abstention question or one with no evidence listed.
+    """
+    if q.abstention or not q.evidence_sessions:
+        return None
+    present = {str(i.get("id", "")).rsplit("#", 1)[0] for i in items if "#" in str(i.get("id", ""))}
+    want = set(q.evidence_sessions)
+    return len(want & present) / len(want)
+
+
 def dev_split(questions: Sequence[bd.BenchQuestion], *, seed: int) -> dict[str, str]:
     """A recorded, stratified half: ``dev`` to diagnose losses, ``held_out`` never tuned on.
 
@@ -953,6 +967,7 @@ async def run_benchmark(
             judge_ms=judge_ms,
             answer=answer,
             judge_output=judge_output,
+            evidence_recall=evidence_recall(q, ctx["items"]),
         )
 
     def _error(system: str, q: bd.BenchQuestion, exc: Exception) -> bd.BenchRecord:
@@ -968,6 +983,16 @@ async def run_benchmark(
             0.0,
             error=f"{type(exc).__name__}: {exc}",
         )
+
+    answering: list[asyncio.Task[None]] = []
+
+    async def _finish(system: str, q: bd.BenchQuestion, ctx: dict[str, Any]) -> None:
+        try:
+            rec = await _answer_and_score(system, q, ctx)
+        except Exception as exc:  # noqa: BLE001 — recorded, never hidden
+            rec = _error(system, q, exc)
+        records.append(rec)
+        ledger.add(rec)
 
     fmt = session_date_format(bench.name)
     for hid, qs in by_history.items():
@@ -1045,12 +1070,11 @@ async def run_benchmark(
                 continue
             if "key" not in ctx:
                 ctx = {**ctx, "key": _key(ctx.get("base", ""), ctx.get("version", ""))}
-            try:
-                rec = await _answer_and_score(s.name, q, ctx)
-            except Exception as exc:  # noqa: BLE001
-                rec = _error(s.name, q, exc)
-            records.append(rec)
-            ledger.add(rec)
+            # Answered while the next history is ingested; the gate bounds
+            # how many model calls are in flight.
+            answering.append(asyncio.create_task(_finish(s.name, q, ctx)))
+    if answering:
+        await asyncio.gather(*answering)
 
     summary = bd.summarise_bench(records, benchmark=bench.name)
     by_split = {
@@ -1100,6 +1124,98 @@ async def run_benchmark(
         "errors": errors,
         "records": [dataclasses.asdict(r) for r in records],
     }
+
+
+async def prefill_contexts(
+    bench: bd.Benchmark,
+    questions: Sequence[bd.BenchQuestion],
+    *,
+    systems: Sequence[str],
+    token_budgets: Sequence[int],
+    cache_dir: str,
+    ingest_mode: str = "segments",
+    tenant_id: str = BENCH_TENANT,
+    carry_forward: Sequence[str] = (),
+    cleanup: bool = True,
+    ingest_fn: Callable[..., Awaitable[IngestResult]] | None = None,
+    cleanup_fn: Callable[[str], Any] | None = None,
+    embed_batch: Callable[[list[str]], Awaitable[list[list[float]]]] | None = None,
+    extract_concurrency: int = 1,
+) -> dict[str, int]:
+    """Ingest each history once and cache every system's context at every budget.
+
+    The runs that follow (one per answer model and budget) then find their
+    contexts in ``cache_dir`` and ingest nothing. Nothing is answered here.
+    """
+    (tenant,) = _require_eval_tenants([tenant_id])
+    if not cache_dir:
+        raise ValueError("prefill_contexts needs a cache_dir")
+    built = make_systems(list(systems))
+    ingest = ingest_fn or ingest_history
+    clean = cleanup_fn or cleanup_bench
+    cache = BenchCache(cache_dir)
+    store = (
+        ExtractionStore(cache_dir, model=_extraction_model()) if ingest_mode == "extract" else None
+    )
+    version = code_version()
+    fmt = session_date_format(bench.name)
+    by_history: dict[str, list[bd.BenchQuestion]] = {}
+    for q in questions:
+        by_history.setdefault(q.history_id, []).append(q)
+    stats = {"histories": len(by_history), "ingested": 0, "contexts": 0, "cached": 0, "errors": 0}
+    for hid, qs in by_history.items():
+        need = [
+            (s, q, b)
+            for q in qs
+            for s in built
+            for b in token_budgets
+            if cache.context(
+                context_base(bench, ingest_mode, b, s.name, q),
+                version,
+                carry_forward=s.name in carry_forward,
+            )
+            is None
+        ]
+        stats["cached"] += len(qs) * len(built) * len(token_budgets) - len(need)
+        if not need:
+            continue
+        if cleanup:
+            clean(tenant)
+        try:
+            ing = await ingest(
+                bench.histories[hid],
+                tenant,
+                mode=ingest_mode,
+                embed_batch=embed_batch,
+                embed_turns=any(s.name == "raw_verbatim" for s, _q, _b in need),
+                date_format=fmt,
+                extraction_store=store,
+                prefetch_concurrency=extract_concurrency,
+            )
+            stats["ingested"] += 1
+            handle = BenchHandle(
+                cast("Any", None), ing.seeded, tenant, f"{tenant}-shadow", _embed_one(embed_batch)
+            )
+            for s, q, b in need:
+                try:
+                    bundle = await s.retrieve(cast("Any", q), world_handle=handle, token_budget=b)
+                except Exception as exc:  # noqa: BLE001 — counted; the run retries it
+                    logger.warning("prefill retrieve failed for %s %s: %s", s.name, q.id, exc)
+                    stats["errors"] += 1
+                    continue
+                cache.put_context(
+                    context_base(bench, ingest_mode, b, s.name, q),
+                    version,
+                    _bundle_to_row(bundle, ing.turn_dates),
+                )
+                stats["contexts"] += 1
+        except Exception as exc:  # noqa: BLE001 — counted; the run retries it
+            logger.warning("prefill ingest failed for %s: %s", hid, exc)
+            stats["errors"] += 1
+        finally:
+            if cleanup:
+                clean(tenant)
+    return stats
 
 
 def context_base(

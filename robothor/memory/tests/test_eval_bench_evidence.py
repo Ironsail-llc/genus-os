@@ -64,7 +64,7 @@ class _SessionEcho:
         return es.ContextBundle(
             system=self.name,
             items=es.fill_budget(
-                [("answer_1#0u", "turn", "User: hi " * (token_budget // 10))], token_budget
+                [("answer_1#0u", "turn", "User: " + "x" * (4 * token_budget - 6))], token_budget
             ),
             budget=token_budget,
             equal_budget=True,
@@ -125,6 +125,7 @@ async def test_one_ingestion_serves_every_budget(session_system, tmp_path):
         cleanup_fn=lambda _t: {},
     )
     assert len(log) == 2 and stats["contexts"] == 4
+    tokens: dict[int, float] = {}
     for budget in (1000, 4000):
         report = await eb.run_benchmark(
             bench,
@@ -137,9 +138,10 @@ async def test_one_ingestion_serves_every_budget(session_system, tmp_path):
             validate_judge=False,
         )
         assert report["systems"][session_system]["overall"]["n"] == 2
+        tokens[budget] = report["systems"][session_system]["overall"]["mean_tokens"]
     assert len(log) == 2, "no history is ingested again"
     # Each budget really was retrieved at its own size.
-    assert report["systems"][session_system]["overall"]["mean_tokens"] > 1000
+    assert tokens[4000] > 1000 >= tokens[1000]
 
 
 @pytest.mark.asyncio

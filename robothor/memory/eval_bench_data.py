@@ -89,6 +89,8 @@ class BenchQuestion:
     abstention: bool = False
     #: LoCoMo's numeric category.
     category: int | None = None
+    #: The sessions holding the answer (LongMemEval ``answer_session_ids``).
+    evidence_sessions: tuple[str, ...] = ()
 
     @property
     def stratum(self) -> str:
@@ -123,6 +125,9 @@ class BenchRecord:
     answer: str = ""
     judge_output: str = ""
     error: str = ""
+    #: Share of the question's evidence sessions in the context sent; None
+    #: when there is none to find (an abstention question).
+    evidence_recall: float | None = None
 
 
 @dataclass(frozen=True)
@@ -217,6 +222,7 @@ def load_longmemeval(path: str | Path) -> Benchmark:
                 as_of=str(entry.get("question_date") or "") or None,
                 # evaluate_qa.py: abstention='_abs' in entry['question_id'].
                 abstention="_abs" in qid,
+                evidence_sessions=tuple(str(x) for x in entry.get("answer_session_ids") or ()),
             )
         )
     return Benchmark(
@@ -702,9 +708,16 @@ def _block(recs: Sequence[BenchRecord]) -> dict[str, Any]:
     from robothor.memory.eval_stats import wilson_interval
 
     lo, hi = wilson_interval(round(correct), n) if n else (0.0, 0.0)
+    found = [r.evidence_recall for r in recs if r.evidence_recall is not None]
+    wrong = [r for r in recs if r.score < 1.0 and r.evidence_recall is not None]
     return {
         "n": n,
         "accuracy": (correct / n) if n else 0.0,
+        "evidence_n": len(found),
+        "evidence_recall": (sum(found) / len(found)) if found else None,
+        "evidence_complete": sum(1 for x in found if x >= 1.0),
+        "wrong_with_evidence": sum(1 for r in wrong if (r.evidence_recall or 0.0) >= 1.0),
+        "wrong_missing_evidence": sum(1 for r in wrong if (r.evidence_recall or 0.0) < 1.0),
         "wilson": [lo, hi],
         "errors": sum(1 for r in recs if r.error),
         "mean_tokens": (sum(r.tokens for r in recs) / n) if n else 0.0,
