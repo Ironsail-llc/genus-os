@@ -1113,6 +1113,13 @@ cross-tenant 30 to 26 (0 / 4, p = 0.125); the six hard strata pooled 117 to
 134 of 240 (17 / 0, p < 0.001). Retrieval p50 2.2 s against 1.7 s while the
 model server was answering at the same time.
 
+Labelling every graph-only row with its relation path (below) did not
+change that: with labels, multi-hop reworded 1 to 14 of 40 (13 / 0, p <
+0.001), multi-hop 3 to 18 (15 / 0), and cross-tenant 31 to 27 (0 / 4, p =
+0.125), the same four questions answered with an employer's city. The labels
+stay, since they did not hurt (against the unlabelled leg: 8 better, 4 worse,
+p = 0.39, within the off arm's own run-to-run spread of 3 / 3).
+
 Retrieval, on the memory evaluation's synthetic world (seed 1, full size, dev
 split, 929 scored cases; the leg off against on, paired in one run, McNemar's
 exact test). `multi_hop_paraphrase` asks the multi-hop questions reworded so
@@ -1176,6 +1183,12 @@ function `memory_activate_for_question`, migration
 - **Places, not the head.** The leg has no weight in fusion and keeps its two
   reserved places for its two best rows by that score; a best row the head
   already holds counts as one of them.
+- **Labelled as related.** Every surface that shows recall rows to a model
+  (the engine's `search_memory` tool, MCP, deep reason, the memory
+  evaluation's context) formats them with `recall.row_text`: a row only the
+  graph found reads `Related via Alice Smith → Example Co: <fact>`, from the
+  walk's own path (every node of it visible to the reader); a row another leg
+  also found keeps its text.
 - **Seed linking is bounded.** It reads at most the first 20,000 characters
   of a text, and the e-mail pattern is linear.
 
