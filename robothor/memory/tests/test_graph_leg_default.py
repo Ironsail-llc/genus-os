@@ -12,7 +12,7 @@ the recall leg runs only on an explicit ``include_graph=True``.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -80,6 +80,8 @@ def test_warm_up_walks_the_graph_only_when_asked(monkeypatch) -> None:
     walked: list[bool] = []
     monkeypatch.setattr(warmup, "_graph_entity_lines", lambda *a, **k: walked.append(True) or [])
     monkeypatch.setattr(warmup, "_fetch_entity_facts_batched", lambda *a, **k: [])
+    # Warm-up opens a connection before it fetches; a unit test has no database.
+    monkeypatch.setattr("robothor.db.get_connection", lambda *a, **k: MagicMock())
 
     warmup._build_entity_context("Did Alice Smith sign it?", tenant_id="test-tenant")
     assert walked == []
