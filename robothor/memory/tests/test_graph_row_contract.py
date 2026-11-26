@@ -10,6 +10,7 @@ is produced by the real ``search_facts`` and then handed to each consumer.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -26,6 +27,11 @@ world = _leg.world
 _chain, _scorer = _leg._chain, _leg._scorer
 
 QUERY = "Alice Smith quarterly logistics agreement"
+#: The far fact as every surface shows it: reached through two edges.
+_LABEL = (
+    "Related via Alice Smith → Bob Jones → Carol White: "
+    "Carol White operates the northern depot under the logistics agreement"
+)
 
 
 def _fact_columns() -> set[str]:
@@ -67,6 +73,7 @@ def test_mcp_search_memory_formats_a_graph_only_row(world: Graph, monkeypatch) -
         out = asyncio.run(handle_tool_call("search_memory", {"query": QUERY}))
     assert len(out["results"]) == len(rows)
     assert all("confidence" in r for r in out["results"])
+    assert _LABEL in [r["fact"] for r in out["results"]]
 
 
 def test_deep_reason_search_and_context_loader_format_a_graph_only_row(
@@ -78,5 +85,24 @@ def test_deep_reason_search_and_context_loader_format_a_graph_only_row(
     with patch("robothor.memory.facts.search_facts", new=AsyncMock(return_value=rows)):
         listed = _make_search_memory_fn(tenant_id=TENANT)(QUERY)
         loaded = _load_context_source({"type": "memory", "query": QUERY}, "", tenant_id=TENANT)
-    assert "northern depot" in listed
-    assert loaded is not None and "northern depot" in loaded
+    assert _LABEL in [r["fact"] for r in json.loads(listed)]
+    assert loaded is not None and _LABEL in loaded
+
+
+def test_the_engine_tool_and_the_eval_context_label_a_graph_only_row(
+    world: Graph, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    from robothor.engine.tools.handlers.memory import _format_row
+    from robothor.memory.eval_systems import _fact_candidates
+
+    rows, far = _graph_only_rows(world, monkeypatch)
+    row = next(r for r in rows if r["id"] == far)
+    assert _format_row(row)["fact"] == _LABEL
+
+    handle = SimpleNamespace(fact_id=lambda i: f"fct-{i}", turn_id=lambda _i: None)
+    texts = {fid: text for fid, _kind, text in _fact_candidates(rows, handle)}
+    assert texts[f"fct-{far}"] == _LABEL
+    seed = next(r for r in rows if "vector" in r["leg_ranks"] or "keyword" in r["leg_ranks"])
+    assert texts[f"fct-{seed['id']}"] == seed["fact_text"], "a head row keeps its plain text"

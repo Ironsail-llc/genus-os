@@ -183,6 +183,33 @@ def test_without_the_questions_embedding_the_graph_returns_nothing(world: Graph)
     assert _search(embed=lambda _text: None) == []
 
 
+def test_a_relation_path_never_names_an_entity_the_reader_cannot_see(world: Graph) -> None:
+    """The path a graph row is labelled with is the walk's own first-reach
+    path. A node private to Bob, on the strongest route, is on Bob's path and
+    never on anyone else's (nor in the text that names it)."""
+    from robothor.memory.recall import row_text
+
+    alice_reader, bob_reader = str(uuid.uuid4()), str(uuid.uuid4())
+    w = _employer_world(world)
+    hidden = world.entity("Pat Hidden", scope_id=bob_reader)
+    world.link(w["alice"], hidden, weight=5.0)
+    world.link(hidden, w["org"], weight=5.0)
+
+    def labels(reader: str) -> list[str]:
+        got = _search(reader_scope_id=reader)
+        assert any(int(c.id) == w["hq"] for c in got), "negative control"
+        return [
+            row_text({**c.payload, "leg_ranks": {"graph": 0}})
+            + " "
+            + " ".join(c.payload["graph_path"])
+            for c in got
+        ]
+
+    assert not any("Pat Hidden" in text for text in labels(alice_reader))
+    assert not any("Pat Hidden" in text for text in labels(""))
+    assert any("Pat Hidden" in text for text in labels(bob_reader)), "negative control"
+
+
 def test_an_inactive_fact_never_surfaces(world: Graph) -> None:
     w = _employer_world(world)
     old = world.fact(

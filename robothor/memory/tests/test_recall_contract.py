@@ -93,6 +93,44 @@ def _rows(fused: list[Candidate]) -> list[dict]:
     return [c.to_row() for c in fused]
 
 
+class TestRowText:
+    """What a model reads for a recall row (``recall.row_text``, the one
+    formatter every surface uses). A row only the graph found is about an
+    entity related to the one asked about, and says so; the answer model
+    otherwise took an employer's address for the person's."""
+
+    def _row(self, legs: set[str], **kw: object) -> dict:
+        return {
+            "id": 1,
+            "kind": "fact",
+            "fact_text": "Example Co is headquartered in Brelford.",
+            "leg_ranks": dict.fromkeys(legs, 0),
+            "graph_path": ["Alice Smith", "Example Co"],
+            **kw,
+        }
+
+    def test_a_graph_only_row_names_its_relation_path(self) -> None:
+        from robothor.memory.recall import row_text
+
+        assert row_text(self._row({"graph"})) == (
+            "Related via Alice Smith → Example Co: Example Co is headquartered in Brelford."
+        )
+
+    def test_a_row_the_head_legs_also_found_keeps_its_plain_text(self) -> None:
+        from robothor.memory.recall import row_text
+
+        for legs in ({"graph", "vector"}, {"keyword"}, {"vector", "graph", "segment"}):
+            assert row_text(self._row(legs)) == "Example Co is headquartered in Brelford."
+
+    def test_without_a_path_the_text_is_plain(self) -> None:
+        from robothor.memory.recall import row_text
+
+        assert row_text(self._row({"graph"}, graph_path=[])) == (
+            "Example Co is headquartered in Brelford."
+        )
+        assert row_text({"insight_text": "An insight", "leg_ranks": {"insight": 0}}) == "An insight"
+
+
 class TestReservedPlaces:
     """A fake third leg ('graph') whose candidates the reranker would drop."""
 
