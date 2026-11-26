@@ -110,6 +110,19 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    still scores only its head, so its cost does not grow. Every row comes from
    the same filtered legs, so the tenant, scope, trust and private-reader
    rules are the same for the tail as for the head.
+7. **Entity-aware tail** (`robothor/memory/tail_entities.py`) — the tail
+   leaves out a row about a different person or company that shares a name
+   with one the question names. The question's entities are the ones recall's
+   seed linking resolves (`activation.seeds_from_text`: strong keys, or a full
+   name or alias of exactly one shared node, never a single token). A tail fact
+   is dropped when it is linked (its mentions, else its `entities` names) to a
+   person or company whose full name shares a token with a named one, and it is
+   not also linked to a named entity. Rows about the named entity, about
+   entities with no shared token, with no links, or under a question that names
+   no resolvable person or company are kept; a first-name-only link never
+   counts as a different person. The reranked head is untouched. It runs off
+   the loop, makes no model call, and only ever removes rows the caller already
+   holds; on a failure the tail is the unfiltered one and the failure is logged.
 
 Every leg shares `limit`. The `search_memory` tool fills the recall context
 cap, `RECALL_CONTEXT_CHARS` (4,000 characters, in `robothor/memory/recall.py`,
@@ -120,7 +133,35 @@ MCP `search_memory` follows the same rule (`recall.recall_limit` and
 `recall.within_context_cap`); it names no reader, so it reads shared rows
 only.
 Warm-up is unchanged: its entity context never used the reranked head and
-already fills its own 1,000-character section. Returned rows keep their fields and add `kind`,
+already fills its own 1,000-character section.
+
+#### What the budget fill measured
+
+Answer-and-judge on the eval world (seed 1, full), 40 cases per stratum, at
+the tool's real cap (`--token-budget 1000`, 4,000 characters), each run paired
+case by case with recall before the budget fill (head only) under the same
+answer model; judge `qwen3:8b`, its validation 100% / 99.6% on every run:
+
+| Answer model, split | Before | Budget fill + entity-aware tail | Improved / regressed | Strata that block |
+|---|---|---|---|---|
+| `qwen3:32b`, dev | 48.1% | 65.6% (hard 47.9% → 68.8%) | 60 / 4 | none |
+| `qwen3:32b`, held out | 48.8% | 62.8% (hard 47.5% → 65.0%) | 53 / 8 | none |
+| `qwen3:8b`, dev | 51.2% | 67.2% (hard 45.4% → 69.2%) | 71 / 20 | cross_tenant (0 / 5, p = 0.06) |
+| `qwen3:8b`, held out | 51.6% | 62.5% (hard 45.8% → 61.7%) | 51 / 16 | none |
+
+Every pooled and hard gain is significant (McNemar p < 0.001). A stratum
+blocks when it regresses more than it improves at its own p < 0.20. The
+32b answer model is the closer stand-in for production, whose agents answer
+with models far stronger than the local 8B one; the 8B results stand beside
+it. With the 8B model the dev split's cross_tenant stratum regresses: every
+lost case kept the right fact in the reranked head, and the small model, given
+about 50 more rows, more often picks a same-tenant distractor (a person with
+the same first name or a near-spelled surname) that today's shorter context
+also held. No returned row ever belonged to another tenant, in any context of
+either split. Raw detail rises from 0% to about 90% on both splits. Retrieval
+p50 rises by roughly the extra rows' fetch and the tail's entity lookup, and
+the context per question from about 250 to about 1,000 tokens. The classic
+267-case suite is unchanged (265 / 267). Returned rows keep their fields and add `kind`,
 `leg_ranks`, `leg_scores`, `rrf_score`, `fused_rank`, `rerank_score` and
 `relevance`. The search path is read-only.
 
