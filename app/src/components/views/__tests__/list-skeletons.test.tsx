@@ -11,7 +11,7 @@ import { InboxView } from "../inbox-view";
 import { GoalsView } from "../goals-view";
 import { MemoryView } from "../memory-view";
 import { AuditView } from "../audit-view";
-import { LogsView } from "../logs-view";
+import { LogsView, ServerLogs } from "../logs-view";
 import { MarketplaceView } from "../marketplace-view";
 import { SalesView } from "../sales-view";
 
@@ -90,8 +90,14 @@ describe("list view skeletons", () => {
   });
 
   it("Logs", async () => {
-    render(<LogsView role="owner" />);
+    // The journald "Server" source, rendered directly: the page opens on Datadog.
+    render(<ServerLogs role="owner" />);
     await expectSkeleton("logs-loading");
+  });
+
+  it("Logs (Datadog)", async () => {
+    render(<LogsView role="admin" />);
+    await expectSkeleton("telemetry-loading");
   });
 
   it("Marketplace", async () => {

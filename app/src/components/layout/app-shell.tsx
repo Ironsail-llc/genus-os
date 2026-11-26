@@ -15,6 +15,7 @@ import { isChunkLoadError } from "@/lib/chunk-load-error";
 import { reloadPage } from "@/lib/reload-page";
 import { ActingTenantBanner, TenantSwitcher } from "@/components/layout/tenant-switcher";
 import { useHasChildTenants } from "@/hooks/use-accessible-tenants";
+import { isRootAtHome } from "@/lib/tenant-session";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { CommandPalette } from "@/components/business/command-palette";
 import { useTasks } from "@/hooks/use-tasks";
@@ -567,7 +568,12 @@ function AppShellBody() {
               )}
               {mount(
                 "logs",
-                <LogsView visible={view === "logs"} role={role} roleLoading={roleLoading} />,
+                <LogsView
+                  visible={view === "logs"}
+                  role={role}
+                  roleLoading={roleLoading}
+                  rootAtHome={isRootAtHome(session)}
+                />,
               )}
               {mount("health", <HealthView visible={view === "health"} />)}
               {mount(
