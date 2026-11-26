@@ -336,6 +336,7 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
                     concurrency=args.concurrency,
                     cleanup=not args.keep,
                     split_seed=split_seed,
+                    extract_concurrency=args.extract_concurrency,
                 )
             )
         except (EvalPreconditionError, ValueError) as e:

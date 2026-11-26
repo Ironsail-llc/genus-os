@@ -967,6 +967,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="With --benchmark locomo: keep category 5, which published comparisons drop",
     )
     memeval_parser.add_argument(
+        "--extract-concurrency",
+        type=int,
+        default=1,
+        help="With --benchmark --ingest extract: extraction calls in flight (a server's parallel slots)",
+    )
+    memeval_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="With --benchmark: print the questions, tokens and spend per cell; ingest and call nothing",

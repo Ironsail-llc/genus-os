@@ -255,7 +255,7 @@ async def ingest_history(
     embed_turns: bool = False,
     date_format: Callable[[datetime], str] | None = None,
     extraction_store: ExtractionStore | None = None,
-    prefetch_concurrency: int = 4,
+    prefetch_concurrency: int = 1,
 ) -> IngestResult:
     """Write one history into ``tenant_id`` the way production writes chat.
 
@@ -801,6 +801,7 @@ async def run_benchmark(
     judge_chat: Chat | None = None,
     embed_batch: Callable[[list[str]], Awaitable[list[list[float]]]] | None = None,
     validate_judge: bool = True,
+    extract_concurrency: int = 1,
 ) -> dict[str, Any]:
     """Ingest each history once, ask every system every question on it, score."""
     (tenant,) = _require_eval_tenants([tenant_id])
@@ -999,6 +1000,7 @@ async def run_benchmark(
                     embed_turns=any(s.name == "raw_verbatim" for s, _ in need),
                     date_format=fmt,
                     extraction_store=extraction_store,
+                    prefetch_concurrency=extract_concurrency,
                 )
                 ingests.append(
                     {

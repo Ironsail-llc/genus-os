@@ -845,7 +845,7 @@ Usage: `genus legacy-goal remove-target <target_id> [--json]`
 
 Run the memory retrieval benchmark suite.
 
-Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [--record] [--triggered-by TRIGGERED_BY] [--world] [--world-seed WORLD_SEED] [--world-size WORLD_SIZE] [--split SPLIT] [--answers] [--systems SYSTEMS] [--reference REFERENCE] [--token-budget TOKEN_BUDGET] [--repeats REPEATS] [--answer-model ANSWER_MODEL] [--judge-model JUDGE_MODEL] [--limit-per-stratum LIMIT_PER_STRATUM] [--concurrency CONCURRENCY] [--cache-dir CACHE_DIR] [--report REPORT] [--progress PROGRESS] [--record-baseline] [--benchmark BENCHMARK] [--benchmark-path BENCHMARK_PATH] [--limit LIMIT] [--limit-per-type LIMIT_PER_TYPE] [--abstention-stratum] [--half HALF] [--split-seed SPLIT_SEED] [--ingest INGEST] [--context-tokens CONTEXT_TOKENS] [--answer-models ANSWER_MODELS] [--bench-dir BENCH_DIR] [--carry-forward CARRY_FORWARD] [--include-adversarial] [--dry-run]`
+Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [--record] [--triggered-by TRIGGERED_BY] [--world] [--world-seed WORLD_SEED] [--world-size WORLD_SIZE] [--split SPLIT] [--answers] [--systems SYSTEMS] [--reference REFERENCE] [--token-budget TOKEN_BUDGET] [--repeats REPEATS] [--answer-model ANSWER_MODEL] [--judge-model JUDGE_MODEL] [--limit-per-stratum LIMIT_PER_STRATUM] [--concurrency CONCURRENCY] [--cache-dir CACHE_DIR] [--report REPORT] [--progress PROGRESS] [--record-baseline] [--benchmark BENCHMARK] [--benchmark-path BENCHMARK_PATH] [--limit LIMIT] [--limit-per-type LIMIT_PER_TYPE] [--abstention-stratum] [--half HALF] [--split-seed SPLIT_SEED] [--ingest INGEST] [--context-tokens CONTEXT_TOKENS] [--answer-models ANSWER_MODELS] [--bench-dir BENCH_DIR] [--carry-forward CARRY_FORWARD] [--include-adversarial] [--extract-concurrency EXTRACT_CONCURRENCY] [--dry-run]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
@@ -885,6 +885,7 @@ Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [-
 | `--bench-dir` | `BENCH_DIR` | — | With --benchmark: cache of contexts, answers and judgements, reused across runs |
 | `--carry-forward` | `CARRY_FORWARD` | — | With --benchmark: systems whose cached contexts from any code version are reused |
 | `--include-adversarial` | — | off | With --benchmark locomo: keep category 5, which published comparisons drop |
+| `--extract-concurrency` | `EXTRACT_CONCURRENCY` | `1` | With --benchmark --ingest extract: extraction calls in flight (a server's parallel slots) |
 | `--dry-run` | — | off | With --benchmark: print the questions, tokens and spend per cell; ingest and call nothing |
 
 ## `genus memory-replay`

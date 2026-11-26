@@ -1534,8 +1534,10 @@ read-only, in windows of the product's transcript cap) with the session's date
 as the extraction's "today" (`facts.extraction_reference_date`), and every fact
 row written is stamped with the session time. Extraction is the slow part (on
 the local 8B model, about a minute per session), so `segments` is the default
-and every report names the mode. A history's extraction calls run ahead, four
-at a time, into `--bench-dir` (keyed by the extraction model and the exact
+and every report names the mode. A history's extraction calls run ahead
+(`--extract-concurrency` at a time, default 1: a local model server that runs
+one request at a time queues the rest past the extraction timeout) into
+`--bench-dir` (keyed by the extraction model and the exact
 prompt), and the write path, which stays sequential because supersession
 depends on order, reads them; re-ingesting the same history under a new code
 version pays for no extraction already made. `recall_today` (main's recall: facts only,
