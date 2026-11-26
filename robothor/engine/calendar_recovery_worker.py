@@ -47,12 +47,18 @@ def _credentials_for_child() -> bytes:
 
     A process's environment is readable by its own uid until it hardens itself,
     and a batch is a same-uid child that needs the database. So these travel on
-    a pipe, and the batch's environment never holds them.
+    a pipe, and the batch's environment never holds them. The cross-tenant
+    application keys (the shared Datadog read keys) are platform credentials
+    too, but the batch has no use for them, so they stay in the engine.
     """
-    from robothor.secrets.classification import is_platform_credential
+    from robothor.secrets.classification import is_cross_tenant_credential, is_platform_credential
 
     return json.dumps(
-        {k: v for k, v in os.environ.items() if is_platform_credential(k, v)}
+        {
+            k: v
+            for k, v in os.environ.items()
+            if is_platform_credential(k, v) and not is_cross_tenant_credential(k)
+        }
     ).encode()
 
 

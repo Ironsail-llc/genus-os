@@ -225,3 +225,62 @@ class TestRunEndLine:
         _finish(_finished(RunStatus.FAILED, error_message="failed for Alice", output_text=PROMPT))
         (line,) = _events(caplog, "run_end")
         assert "Alice" not in line.getMessage()
+
+
+TENANT = "acme-child-a"
+TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
+
+
+async def _call_in(tenant: str, trace_id: str) -> None:
+    session = _session()
+    session.run.tenant_id = tenant
+    session.trace_id = trace_id
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch(
+            "robothor.engine.llm_client.litellm.acompletion",
+            new=AsyncMock(return_value=_response()),
+        ),
+    ):
+        await _Runner()._llm_call_and_record(session, ["openrouter/primary"], [], None, set(), 0.3)
+
+
+class TestTenantAndTrace:
+    @pytest.mark.asyncio
+    async def test_the_llm_call_line_names_the_tenant_and_trace_last(self, caplog) -> None:
+        await _call_in(TENANT, TRACE_ID)
+        (line,) = _events(caplog, "llm_call")
+        f = _fields(line.getMessage())
+        assert f["tenant_id"] == TENANT
+        assert f["trace_id"] == TRACE_ID
+        assert list(f)[-2:] == ["tenant_id", "trace_id"]
+
+    @pytest.mark.asyncio
+    async def test_an_llm_call_with_no_trace_omits_the_key(self, caplog) -> None:
+        await _call_in(TENANT, "")
+        f = _fields(_events(caplog, "llm_call")[0].getMessage())
+        assert f["tenant_id"] == TENANT
+        assert "trace_id" not in f
+
+    def test_the_run_end_line_names_the_tenant_and_trace_last(self, caplog) -> None:
+        from robothor.engine.telemetry import TraceContext
+
+        run = _finished(RunStatus.COMPLETED, tenant_id=TENANT)
+        trace = TraceContext(trace_id=TRACE_ID, run_id=run.id, agent_id=run.agent_id)
+        runner = AgentRunner(EngineConfig())
+        with (
+            patch.object(AgentRunner, "_persist_run_sync"),
+            patch.object(AgentRunner, "_persist_run"),
+            patch.object(TraceContext, "publish_metrics"),
+        ):
+            runner._finish_run(run, trace)
+        f = _fields(_events(caplog, "run_end")[0].getMessage())
+        assert f["tenant_id"] == TENANT
+        assert f["trace_id"] == TRACE_ID
+        assert list(f)[-2:] == ["tenant_id", "trace_id"]
+
+    def test_a_run_end_with_no_trace_omits_the_key(self, caplog) -> None:
+        _finish(_finished(RunStatus.COMPLETED, tenant_id=TENANT))
+        f = _fields(_events(caplog, "run_end")[0].getMessage())
+        assert f["tenant_id"] == TENANT
+        assert "trace_id" not in f

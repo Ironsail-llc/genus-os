@@ -139,7 +139,8 @@ percentiles come from `server.request`; model latency from `client.request`; the
 tool-call overhead of the table above is `agent_run` minus its `llm_call` and
 `tool_call` children.
 
-Resource attributes default to `service.name=robothor-engine` and `agent.id`.
+Resource attributes default to `service.name=robothor-engine`, `agent.id`,
+`run.id` and `tenant.id` (left out when unknown).
 `OTEL_RESOURCE_ATTRIBUTES` (comma-separated `key=value`, percent-decoded) is
 merged over them, and `OTEL_SERVICE_NAME` overrides `service.name`, in the
 OpenTelemetry order. Use them to tag the environment, for example

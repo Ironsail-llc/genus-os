@@ -258,6 +258,14 @@ class TestConfigSet:
         assert "vault_set" in out["error"]
         assert not _config_path(tmp_path).exists()
 
+    def test_the_datadog_scope_map_is_refused(self, tmp_path):
+        """The map is the wall between tenants: an agent must not widen its own."""
+        widened = '{"test": {"logs": "*"}}'
+        out = _call("config_set", {"key": "ROBOTHOR_DATADOG_SCOPES", "value": widened})
+        assert "error" in out
+        assert "genus config set" in out["error"]
+        assert not _config_path(tmp_path).exists()
+
     def test_a_control_character_is_refused(self, tmp_path):
         out = _call("config_set", {"key": "ROBOTHOR_MAX_CONCURRENT_AGENTS", "value": "5\nX=1"})
         assert "error" in out

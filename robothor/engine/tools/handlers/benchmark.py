@@ -38,6 +38,7 @@ from robothor.engine.models import TriggerType
 from robothor.engine.tools.constants import (
     BENCHMARK_TOOLS,
     CHAT_SEND_TOOLS,
+    DATADOG_TOOLS,
     DESKTOP_TOOLS,
     GOAL_TOOLS,
     GWS_TOOLS,
@@ -226,11 +227,15 @@ _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
 #:
 #: The n8n reads (``N8N_TOOLS``) joined with the n8n monitor: they read the
 #: snapshot of the operator's REAL automations, so a graded run gets neither.
+#:
+#: The Datadog reads (``DATADOG_TOOLS``) read REAL application logs, which
+#: carry what customers and staff typed; a graded run gets neither.
 _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(
     DESKTOP_TOOLS
     | BENCHMARK_TOOLS
     | GWS_TOOLS
     | N8N_TOOLS
+    | DATADOG_TOOLS
     | {
         "claude_code_status",
         "claude_code_wait",

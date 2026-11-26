@@ -355,3 +355,46 @@ async def test_an_http_error_status_is_an_error_outcome(monkeypatch, caplog, key
 async def test_a_success_status_stays_ok(monkeypatch, caplog) -> None:
     await _call(monkeypatch, {"status_code": 200, "body": "fine"})
     assert _fields(_lines(caplog)[0].getMessage())["outcome"] == "ok"
+
+
+TENANT = "acme-child-a"
+TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [{"ok": True}, {"error": "the remote service answered 503"}])
+async def test_the_line_names_the_tenant_and_trace_last(monkeypatch, caplog, result) -> None:
+    await _call(monkeypatch, result, tenant_id=TENANT, trace_id=TRACE_ID)
+    f = _fields(_lines(caplog)[0].getMessage())
+    assert f["tenant_id"] == TENANT
+    assert f["trace_id"] == TRACE_ID
+    assert list(f)[-2:] == ["tenant_id", "trace_id"]
+
+
+@pytest.mark.asyncio
+async def test_a_call_with_no_trace_omits_the_key(monkeypatch, caplog) -> None:
+    await _call(monkeypatch, {"ok": True}, tenant_id=TENANT)
+    f = _fields(_lines(caplog)[0].getMessage())
+    assert f["tenant_id"] == TENANT
+    assert "trace_id" not in f
+
+
+@pytest.mark.asyncio
+async def test_a_call_with_no_tenant_omits_the_key(monkeypatch, caplog) -> None:
+    await _call(monkeypatch, {"ok": True})
+    f = _fields(_lines(caplog)[0].getMessage())
+    assert "tenant_id" not in f
+    assert "trace_id" not in f
+
+
+def test_a_refusal_before_the_registry_names_the_tenant_and_trace(caplog) -> None:
+    from types import SimpleNamespace
+
+    from robothor.engine.tool_call_log import log_refused
+
+    run = SimpleNamespace(agent_id="example-agent", id="run-1", tenant_id=TENANT)
+    session = SimpleNamespace(run=run, trace_id=TRACE_ID)
+    log_refused("example_tool", {"error": "no"}, tool_args={}, session=session)
+    f = _fields(_lines(caplog)[0].getMessage())
+    assert f["tenant_id"] == TENANT
+    assert f["trace_id"] == TRACE_ID

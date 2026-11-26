@@ -17,6 +17,7 @@ import {
   verdictTone,
 } from "@/lib/automations/run-truth";
 import { relativeTime } from "@/lib/inbox/pending";
+import { runLogsQuery } from "@/lib/observe/run-logs";
 import { RunDetailDrawer } from "./run-detail-drawer";
 import { formatCost, formatTokens } from "./runs-format";
 
@@ -133,7 +134,14 @@ function errorText(status: number): string {
   return status === 403 ? "Operator access is required to read runs." : `Error ${status}`;
 }
 
-export function RunsView({ visible = true }: { visible?: boolean }) {
+export function RunsView({
+  visible = true,
+  openLogs,
+}: {
+  visible?: boolean;
+  /** Opens the Logs page on a search; only for a role that may open it. */
+  openLogs?: (query: string, since?: string) => void;
+}) {
   const [filters, setFilters] = useState<Filters>({
     status: "",
     agent: "",
@@ -440,7 +448,11 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
         </div>
       )}
 
-      <RunDetailDrawer runId={visible ? openId : null} onClose={() => setOpenId(null)} />
+      <RunDetailDrawer
+        runId={visible ? openId : null}
+        onClose={() => setOpenId(null)}
+        onOpenLogs={openLogs && ((runId, since) => openLogs(runLogsQuery(runId), since))}
+      />
     </div>
   );
 }

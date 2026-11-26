@@ -138,7 +138,6 @@ def _runaway(session: Any, agent_config: Any, state: GuardState) -> bool:
     )
 
     used = (session.run.input_tokens or 0) + (session.run.output_tokens or 0)
-
     if used >= RUNAWAY_TOKEN_HARD_CAP and not state.runaway_cap_observed:
         reason = f"runaway_token_cap_hit ({used}/{RUNAWAY_TOKEN_HARD_CAP})"
         logger.error(
@@ -181,15 +180,16 @@ def _spawn_hard_cap_alert(session: Any, agent_config: Any, used: int) -> None:
     (audit 2026-05-29).
     """
     try:
-        from robothor.engine.alerts import alert as _alert
+        from robothor.engine import alerts
         from robothor.engine.task_registry import get_task_registry
 
         get_task_registry().spawn(
-            _alert(
+            alerts.alert(
                 "critical",
                 f"Runaway-token hard cap: {agent_config.id}",
                 f"run_id={session.run_id} tokens={used:,} model={session.run.model_used}. "
                 f"{budget_stops.runaway_cap_note()}.",
+                **alerts.run_scope(session),
             ),
             name=f"runaway-hardcap-alert:{agent_config.id}",
         )

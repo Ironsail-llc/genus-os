@@ -132,6 +132,53 @@ class TestARunHasOneRootSpan:
         assert otlp["tool_call"][0]["kind"] == OTLP_KIND_INTERNAL
         assert otlp["run_summary"][0]["kind"] == OTLP_KIND_INTERNAL
 
+    async def test_the_runs_lines_and_tool_calls_name_its_tenant_and_trace(
+        self, runner, sample_agent_config, mock_litellm_response, published, caplog
+    ):
+        import logging
+        import re
+
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "list_tasks"
+        tc.function.arguments = json.dumps({"status": "TODO"})
+        first = _int_usage(mock_litellm_response(content=None, tool_calls=[tc]))
+        first.choices[0].message.content = None
+        responses = [first, _int_usage(mock_litellm_response(content="Found 3 tasks."))]
+
+        async def completion(**kwargs):
+            return responses.pop(0)
+
+        runner.registry.execute = AsyncMock(return_value={"tasks": [], "count": 0})
+        runner.registry.build_for_agent.return_value = [
+            {"type": "function", "function": {"name": "list_tasks"}}
+        ]
+        runner.registry.get_tool_names.return_value = ["list_tasks"]
+        caplog.set_level(logging.INFO)
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.create_step"),
+            patch("litellm.acompletion", side_effect=completion),
+        ):
+            run = await runner.execute(
+                "test-agent", "hello", agent_config=sample_agent_config, tenant_id="acme-child-a"
+            )
+
+        assert run.tenant_id == "acme-child-a"
+        trace, _ = published[0]
+        assert trace.tenant_id == "acme-child-a"
+        kwargs = runner.registry.execute.await_args.kwargs
+        assert kwargs["tenant_id"] == "acme-child-a"
+        assert kwargs["trace_id"] == trace.trace_id
+        for event in ("llm_call", "run_end"):
+            lines = [r.getMessage() for r in caplog.records if f"event={event} " in r.getMessage()]
+            assert lines, event
+            for line in lines:
+                fields = dict(re.findall(r"(\w+)=(\S+)", line))
+                assert fields["tenant_id"] == "acme-child-a", line
+                assert fields["trace_id"] == trace.trace_id, line
+
     async def test_failed_run_root_is_an_error_with_the_reason(
         self, runner, sample_agent_config, published
     ):
