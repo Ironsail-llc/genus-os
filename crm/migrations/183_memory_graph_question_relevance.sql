@@ -42,6 +42,12 @@
 --       double precision[], text, integer, integer, double precision, integer[], boolean,
 --       integer, integer, boolean, uuid, uuid, text, integer[]);
 
+-- An earlier draft of this migration returned fewer columns; a function's
+-- return type cannot be replaced in place, so it is dropped first.
+DROP FUNCTION IF EXISTS memory_activate_for_question(text, integer[], double precision[], text,
+    integer, integer, double precision, integer[], boolean, integer, integer, boolean, uuid, uuid,
+    text, integer[]);
+
 CREATE OR REPLACE FUNCTION memory_activate_for_question(
     p_tenant text,
     p_seeds integer[],
@@ -77,7 +83,14 @@ RETURNS TABLE (
     person_id uuid,
     entities text[],
     access_count integer,
-    relevance double precision
+    relevance double precision,
+    -- The remaining columns every fact leg returns, so a row the graph alone
+    -- found has the same keys as any other fact row.
+    confidence double precision,
+    source_type text,
+    metadata jsonb,
+    superseded_by integer,
+    utility double precision
 )
 LANGUAGE plpgsql
 STABLE
@@ -143,6 +156,8 @@ BEGIN
                      f.origin AS forigin, f.importance_score AS fimp,
                      f.created_at AS fcreated, f.person_id AS fperson,
                      f.entities AS fentities, f.access_count AS faccess,
+                     f.confidence AS fconf, f.source_type::text AS fsrc,
+                     f.metadata AS fmeta, f.superseded_by AS fsup, f.utility AS futil,
                      CASE WHEN v_q IS NULL THEN 0::double precision
                           ELSE ts_rank_cd(f.tsv, v_q, 33)::double precision END AS frel
                 FROM memory_mentions mm
@@ -190,7 +205,7 @@ BEGIN
            -- The path back to a seed, at most three steps, by the first-reach links.
            array_remove(ARRAY[n3.name::text, n2.name::text, n1.name::text, fx.name], NULL),
            fx.fid, fx.ftext, fx.fcat, fx.forigin, fx.fimp, fx.fcreated, fx.fperson,
-           fx.fentities, fx.faccess, rk.rel
+           fx.fentities, fx.faccess, rk.rel, fx.fconf, fx.fsrc, fx.fmeta, fx.fsup, fx.futil
       FROM ranked rk
       JOIN fx ON fx.fid = rk.fid AND fx.ent_id = rk.via
       JOIN ent ON ent.id = fx.ent_id

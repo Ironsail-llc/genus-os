@@ -346,7 +346,8 @@ _ACTIVATE_SQL = """
 _ACTIVATE_FOR_QUESTION_SQL = """
     SELECT kind, entity_id, entity_name, score, hops, via_edge_id, path_names,
            fact_id, fact_text, category, origin, importance_score, created_at,
-           person_id, entities, access_count, relevance
+           person_id, entities, access_count, relevance, confidence, source_type,
+           metadata, superseded_by, utility
       FROM memory_activate_for_question(
           %(t)s, %(seeds)s::int[], %(weights)s::float8[], %(reader)s, %(hops)s,
           %(fanout)s, %(damping)s, %(exclude)s::int[], %(trusted)s, %(limit)s,
@@ -384,6 +385,12 @@ def _candidates(rows: Sequence[dict[str, Any]]) -> list[Candidate]:
         }
         if r.get("relevance") is not None:
             payload["graph_relevance"] = float(r["relevance"])
+        # The other fact columns, so a row the graph alone found has the keys
+        # every fact leg's rows have (consumers format rows by key).
+        for key in ("confidence", "source_type", "metadata", "superseded_by", "utility"):
+            payload.setdefault(key, r.get(key))
+        if payload["confidence"] is None:
+            payload["confidence"] = 0.5
         out.append(
             Candidate(
                 id=r["fact_id"],
