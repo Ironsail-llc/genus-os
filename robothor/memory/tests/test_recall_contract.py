@@ -247,11 +247,9 @@ class TestReservedPlaces:
         ranked = [r for r in pool if r["id"] <= 10]
         out = apply_reserved(ranked, pool, limit=5, reserved={"graph": 2})
 
-        assert len(out) == 5
-        graph_ids = [r["id"] for r in out if "graph" in r["leg_ranks"]]
-        assert graph_ids == [102, 103], "the leg's own score picks which hops survive"
-        # The non-reserved head of the ranked list keeps its order.
-        assert [r["id"] for r in out[:3]] == [r["id"] for r in ranked[:3]]
+        # The head is untouched; the graph's rows come after it.
+        assert [r["id"] for r in out[:5]] == [r["id"] for r in ranked[:5]]
+        assert [r["id"] for r in out[5:]] == [102, 103], "the leg's own score picks the hops"
 
     def test_no_change_when_the_quota_is_already_met(self) -> None:
         pool = self._pool()
@@ -272,14 +270,14 @@ class TestReservedPlaces:
         out = apply_reserved(ranked, pool, limit=5, reserved={"graph": 1})
 
         ids = [r["id"] for r in out]
-        assert 102 in ids, ids
-        assert len(out) == 5 and ids[:3] == [1, 2, 101]
+        assert ids[:5] == [r["id"] for r in ranked[:5]]
+        assert ids[5:] == [102], ids
 
     def test_a_best_row_the_head_holds_counts_toward_the_places(self) -> None:
         """``search_facts`` passes an exclude that is true for any row already
         in the head (it duplicates itself). That must not drop the leg's best
         row from its places: the head holds it, so one place is used, and only
-        the second-best row may push a ranked row out."""
+        the second-best row is added after the head."""
         pool = self._pool()
         best = next(r for r in pool if r["id"] == 102)
         ranked = (
@@ -293,8 +291,8 @@ class TestReservedPlaces:
         )  # fmt: skip
 
         ids = [r["id"] for r in out]
-        assert ids[:4] == [1, 2, 102, 3], ids
-        assert ids[4] == 103, "the second-best graph row takes the one free place"
+        assert ids[:5] == [r["id"] for r in ranked[:5]], ids
+        assert ids[5:] == [103], "only the second-best graph row is added"
 
     def test_no_candidates_from_the_leg_means_nothing_reserved(self) -> None:
         pool = _rows(fuse({"vector": _leg("vector", [1, 2, 3])}))
@@ -304,34 +302,36 @@ class TestReservedPlaces:
     def test_fewer_candidates_than_reserved_takes_what_exists(self) -> None:
         pool = self._pool()
         ranked = [r for r in pool if r["id"] <= 10]
-        # limit 9 leaves room for four reserved places; only three candidates exist.
+        # Ten places asked for; only three candidates exist.
         out = apply_reserved(ranked, pool, limit=9, reserved={"graph": 10})
-        assert len(out) == 9
+        assert len(out) == 9 + 3
         assert {r["id"] for r in out if "graph" in r["leg_ranks"]} == {101, 102, 103}
 
 
 class TestReservedPlacesNeverTakeTheHead:
-    """Reserved places are a minority of a result, never its top.
+    """Reserved places never take the head.
 
     At a small ``limit`` a reserved pick used to evict every ranked row — with
     ``limit=1`` the single best answer was replaced by a graph neighbour chosen
-    by importance alone. Reserved picks now take at most ``(limit - 1) // 2``
-    places in total, so the ranked head always keeps the majority.
+    by importance alone. Picks of other legs take at most ``(limit - 1) // 2``
+    places in total; the graph's rows are added after the head and evict
+    nothing (on the held-out split a reserved graph row pushed the right
+    point-in-time fact out of a five-row result in 4 of 6 losses).
     """
 
     def _pool_and_ranked(self) -> tuple[list[dict], list[dict]]:
         pool = TestReservedPlaces()._pool()
         return pool, [r for r in pool if r["id"] <= 10]
 
-    def test_limit_one_returns_the_best_ranked_row(self) -> None:
+    def test_limit_one_keeps_the_best_ranked_row_first(self) -> None:
         pool, ranked = self._pool_and_ranked()
         out = apply_reserved(ranked, pool, limit=1, reserved={"graph": 2, "entity": 1})
-        assert [r["id"] for r in out] == [ranked[0]["id"]]
+        assert [r["id"] for r in out] == [ranked[0]["id"], 102, 103]
 
     def test_limit_two_keeps_both_ranked_rows(self) -> None:
         pool, ranked = self._pool_and_ranked()
         out = apply_reserved(ranked, pool, limit=2, reserved={"graph": 2})
-        assert [r["id"] for r in out] == [r["id"] for r in ranked[:2]]
+        assert [r["id"] for r in out[:2]] == [r["id"] for r in ranked[:2]]
 
     def test_two_reserved_legs_never_evict_rank_zero(self) -> None:
         """With graph rows protected by their own quota, the next leg's pick
@@ -352,10 +352,29 @@ class TestReservedPlacesNeverTakeTheHead:
         assert out[0]["id"] == 1
         assert len(out) == 3
 
-    def test_reserved_total_is_capped_below_half(self) -> None:
+    def test_graph_rows_follow_the_head_and_never_replace_it(self) -> None:
+        """At most ``limit`` + the graph's reserved count rows come back, and
+        the first ``limit`` are the ranked head exactly."""
         pool, ranked = self._pool_and_ranked()
         for limit in range(1, 11):
-            out = apply_reserved(ranked, pool, limit=limit, reserved={"graph": 10})
-            reserved_rows = [r for r in out if "graph" in r["leg_ranks"]]
-            assert len(reserved_rows) <= (limit - 1) // 2, limit
+            for want in (1, 2, 10):
+                out = apply_reserved(ranked, pool, limit=limit, reserved={"graph": want})
+                assert [r["id"] for r in out[:limit]] == [r["id"] for r in ranked[:limit]]
+                assert len(out) <= limit + want, (limit, want)
+                assert all(r.get("reserved_leg") == "graph" for r in out[limit:])
+
+    def test_other_legs_still_take_at_most_a_minority(self) -> None:
+        pool = _rows(fuse({
+            "vector": _leg("vector", list(range(1, 11))),
+            "entity_expansion": [
+                Candidate(id=300 + i, kind="fact", text=f"e{i}",
+                          leg_scores={"entity_expansion": 1 - i / 10})
+                for i in range(5)
+            ],
+        }))  # fmt: skip
+        ranked = [r for r in pool if r["id"] <= 10]
+        for limit in range(1, 11):
+            out = apply_reserved(ranked, pool, limit=limit, reserved={"entity_expansion": 5})
+            picked = [r for r in out if "entity_expansion" in r["leg_ranks"]]
+            assert len(out) <= limit and len(picked) <= (limit - 1) // 2, limit
             assert out[0]["id"] == ranked[0]["id"], limit
