@@ -24,9 +24,10 @@ Ranking after fusion, in ``search_facts``:
 2. The reranker scores the head of the fused list on 0..1 (``rerank_score``).
 3. The blend uses one relevance scale (``relevance``): the rerank score when
    there is one, else :func:`relevance_from_rank` of the fused rank.
-4. :func:`apply_reserved` — a leg named in ``reserved`` keeps its best that
-   many rows, by its own ``leg_scores``, in the final top-k whenever it
-   returned anything, capped at :func:`max_reserved_picks` (``(limit-1)//2``)
+4. :func:`apply_reserved` — a leg named in ``reserved`` keeps at least that
+   many places in the final top-k whenever it returned anything, chosen by its
+   own ``leg_scores`` (the graph leg, :data:`BEST_ROW_LEGS`, keeps its best
+   that many rows), capped at :func:`max_reserved_picks` (``(limit-1)//2``)
    in total so the reranked head is never displaced. A multi-hop fact is by
    definition not similar to the query, so a query-document reranker would
    otherwise always discard it. To
@@ -175,6 +176,40 @@ def _leg_order(leg: str) -> Callable[[Mapping[str, Any]], tuple[float, int]]:
     return key
 
 
+#: Legs whose reserved places hold their best rows by their own score: a
+#: weaker row of the leg that the head holds anyway does not use a place, and
+#: a best row the head holds counts. Only the graph leg (off by default); every
+#: other reserved leg keeps the earlier rule, so the default search is
+#: unchanged.
+BEST_ROW_LEGS: frozenset[str] = frozenset({"graph"})
+
+
+def _best_rows_held(
+    leg: str,
+    want: int,
+    out: Sequence[dict[str, Any]],
+    pool: Sequence[dict[str, Any]],
+    exclude: Callable[[dict[str, Any]], bool] | None,
+) -> tuple[list[dict[str, Any]], int]:
+    """The rows of ``out`` among the leg's best ``want`` and how many best rows
+    there are. ``exclude`` keeps out only rows that would come in from outside
+    the head."""
+    in_head = {_row_key(r) for r in out}
+    best = {
+        _row_key(r)
+        for r in sorted(
+            (
+                r
+                for r in pool
+                if leg in (r.get("leg_ranks") or {})
+                and (_row_key(r) in in_head or not (exclude is not None and exclude(r)))
+            ),
+            key=_leg_order(leg),
+        )[:want]
+    }
+    return [r for r in out if _row_key(r) in best], len(best)
+
+
 def max_reserved_picks(limit: int) -> int:
     """Most places reserved picks may take in a result of ``limit``: (limit-1)//2.
 
@@ -195,11 +230,13 @@ def apply_reserved(
 
     ``ranked`` is the final order (reranked and blended); ``pool`` is every
     fused candidate as a row (``Candidate.to_row``), including those the
-    reranker never saw. For each ``leg -> n`` in ``reserved``: the leg's best
-    ``n`` rows in ``pool``, in the order of its own ``leg_scores`` (then its
-    rank), are kept in the top ``limit``; those missing from it replace the
-    lowest-ranked rows that do not themselves hold a reserved place. Another
-    row of the leg that the head holds anyway uses up no place. Reserved picks go at the end of the list — they are
+    reranker never saw. For each ``leg -> n`` in ``reserved``: if fewer than
+    ``n`` rows in the top ``limit`` came from that leg, the missing ones are
+    taken from ``pool`` in the order of that leg's own ``leg_scores`` (then its
+    rank), and they replace the lowest-ranked rows that do not themselves hold
+    a reserved place. A leg in :data:`BEST_ROW_LEGS` (the graph) keeps its
+    best ``n`` rows instead: another of its rows that the head holds anyway
+    uses up no place. Reserved picks go at the end of the list — they are
     guaranteed a place, not a position. A leg with no candidates reserves
     nothing, and a pool row for which ``exclude(row)`` is true is never picked
     (``search_facts`` uses it to keep out near-duplicates of ranked rows).
@@ -214,26 +251,14 @@ def apply_reserved(
     for leg, want in reserved.items():
         if want <= 0:
             continue
-        # The places are for the leg's best rows by its own score; a weaker
-        # row of the leg that the head holds anyway does not use one up, and
-        # a best row the head holds counts (``exclude`` keeps out only rows
-        # that would come in from outside the head).
-        in_head = {_row_key(r) for r in out}
-        best = {
-            _row_key(r)
-            for r in sorted(
-                (
-                    r
-                    for r in pool
-                    if leg in (r.get("leg_ranks") or {})
-                    and (_row_key(r) in in_head or not (exclude is not None and exclude(r)))
-                ),
-                key=_leg_order(leg),
-            )[:want]
-        }
-        have = [r for r in out if _row_key(r) in best]
+        if leg in BEST_ROW_LEGS:
+            have, need_total = _best_rows_held(leg, want, out, pool, exclude)
+        else:
+            # Every other leg: any of its rows in the head holds a place.
+            have = [r for r in out if leg in (r.get("leg_ranks") or {})][:want]
+            need_total = want
         protected.update(_row_key(r) for r in have)
-        need = min(len(best) - len(have), budget - len(picks))
+        need = min(need_total - len(have), budget - len(picks))
         if need <= 0:
             continue
         taken = {_row_key(r) for r in out} | {_row_key(r) for r in picks}
