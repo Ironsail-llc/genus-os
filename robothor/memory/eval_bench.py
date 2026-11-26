@@ -31,12 +31,13 @@ cleans it before and after every history, and refuses any tenant that is not
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import hashlib
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -253,6 +254,8 @@ async def ingest_history(
     embed_batch: Callable[[list[str]], Awaitable[list[list[float]]]] | None = None,
     embed_turns: bool = False,
     date_format: Callable[[datetime], str] | None = None,
+    extraction_store: ExtractionStore | None = None,
+    prefetch_concurrency: int = 4,
 ) -> IngestResult:
     """Write one history into ``tenant_id`` the way production writes chat.
 
@@ -290,6 +293,9 @@ async def ingest_history(
             )
             reader = str(cur.fetchone()[0])
         result.seeded.reader_person_id = reader
+        if mode == "extract" and extraction_store is not None:
+            # The model calls run ahead, concurrently; the writes stay in order.
+            await prefetch_extractions(history, extraction_store, concurrency=prefetch_concurrency)
         stored: list[tuple[int, str]] = []
         for session in sorted(history.sessions, key=lambda s: s.at):
             key = f"bench:{history.id}:{session.id}"
@@ -336,7 +342,12 @@ async def ingest_history(
             )
             if mode == "extract":
                 since = _db_now()
-                stats = await extract_session(session, tenant, key)
+                with (
+                    cached_extraction(extraction_store)
+                    if extraction_store is not None
+                    else contextlib.nullcontext()
+                ):
+                    stats = await extract_session(session, tenant, key)
                 _stamp_facts(tenant, since, _utc(session.at))
                 result.extraction_windows += stats["windows"]
                 result.extraction_failed += stats["failed"]
@@ -354,6 +365,114 @@ async def ingest_history(
     seed._analyze_seeded_tables()
     result.seconds = time.perf_counter() - started
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Extraction: prefetched concurrently, cached on disk
+# --------------------------------------------------------------------------- #
+
+
+class ExtractionStore:
+    """Extractions by (extraction model, exact prompt), on disk under ``root``.
+
+    The prompt holds the content, the read-only context and the pinned date,
+    so a cached extraction is served only for exactly the call that made it.
+    A failed extraction is not stored.
+    """
+
+    def __init__(self, root: str | Path | None, *, model: str) -> None:
+        self.model = model
+        self._rows = _Jsonl(Path(root) / "extractions.jsonl") if root else None
+        self._memory: dict[str, dict[str, Any]] = {}
+
+    def key(self, prompt: str) -> str:
+        return _key("extraction", self.model, prompt)
+
+    def get(self, prompt: str) -> list[dict[str, Any]] | None:
+        k = self.key(prompt)
+        row = self._memory.get(k) or (self._rows.get(k) if self._rows else None)
+        return None if row is None else list(row["facts"])
+
+    def put(self, prompt: str, extracted: list[dict[str, Any]]) -> None:
+        k = self.key(prompt)
+        row = {"model": self.model, "facts": extracted}
+        self._memory[k] = row
+        if self._rows:
+            self._rows.put(k, row)
+
+
+def _extraction_inputs(history: bd.BenchHistory) -> list[tuple[str, str | None, str]]:
+    """Every (content, read-only context, date) the extract ingest will ask for."""
+    from robothor.memory.conversation_ingest import role_transcripts
+
+    out: list[tuple[str, str | None, str]] = []
+    for session in sorted(history.sessions, key=lambda s: s.at):
+        date = session.at.date().isoformat()
+        for window in transcript_windows(session.turns):
+            turns = role_transcripts(window)
+            for role, other in (("user", "assistant"), ("assistant", "user")):
+                if turns[role].strip():
+                    out.append((turns[role], turns[other] or None, date))
+    return out
+
+
+async def prefetch_extractions(
+    history: bd.BenchHistory, store: ExtractionStore, *, concurrency: int = 4
+) -> dict[str, int]:
+    """Run the history's extraction calls ahead of the write path, concurrently."""
+    from robothor.memory import facts
+
+    inputs = _extraction_inputs(history)
+    gate = asyncio.Semaphore(max(1, concurrency))
+    stats = {"inputs": len(inputs), "cached": 0, "computed": 0, "failed": 0}
+
+    async def _one(content: str, context: str | None, date: str) -> None:
+        prompt = facts.build_extraction_prompt(content, context=context, reference_date=date)
+        if store.get(prompt) is not None:
+            stats["cached"] += 1
+            return
+        async with gate:
+            with facts.extraction_reference_date(date):
+                result = await facts.extract_facts_detailed(content, context=context)
+        if result.error is None:
+            store.put(prompt, list(result.facts))
+            stats["computed"] += 1
+        else:
+            stats["failed"] += 1
+
+    await asyncio.gather(*(_one(c, x, d) for c, x, d in inputs))
+    return stats
+
+
+@contextlib.contextmanager
+def cached_extraction(store: ExtractionStore) -> Iterator[None]:
+    """Serve ``facts.extract_facts_detailed`` from ``store`` while inside.
+
+    A call the store has (same model, same prompt) returns its facts; any
+    other runs as usual and is stored when it succeeds. The original is put
+    back on exit.
+    """
+    from robothor.memory import facts
+
+    original = facts.extract_facts_detailed
+
+    async def _served(
+        content: str, max_retries: int = 3, *, timeout: float = 180.0, context: str | None = None
+    ) -> Any:
+        prompt = facts.build_extraction_prompt(content, context=context)
+        hit = store.get(prompt)
+        if hit is not None:
+            return facts.Extraction(hit)
+        result = await original(content, max_retries, timeout=timeout, context=context)
+        if result.error is None:
+            store.put(prompt, list(result.facts))
+        return result
+
+    facts.extract_facts_detailed = _served
+    try:
+        yield
+    finally:
+        facts.extract_facts_detailed = original
 
 
 class BenchHandle(WorldHandle):
@@ -684,6 +803,9 @@ async def run_benchmark(
     ingest = ingest_fn or ingest_history
     clean = cleanup_fn or cleanup_bench
     cache = BenchCache(cache_dir)
+    extraction_store = (
+        ExtractionStore(cache_dir, model=_extraction_model()) if ingest_mode == "extract" else None
+    )
     version = code_version()
     split = dev_split(bench.questions, seed=split_seed)
 
@@ -861,6 +983,7 @@ async def run_benchmark(
                     embed_batch=embed_batch,
                     embed_turns=any(s.name == "raw_verbatim" for s, _ in need),
                     date_format=fmt,
+                    extraction_store=extraction_store,
                 )
                 ingests.append(
                     {
@@ -1113,6 +1236,13 @@ def format_estimate(est: dict[str, Any]) -> str:
         "Assumptions: " + "; ".join(est["assumptions"]) + ".",
     ]
     return "\n".join(lines) + "\n"
+
+
+def _extraction_model() -> str:
+    """The model the product's extraction calls, as the eval names it."""
+    from robothor.memory.eval_answer import _default_answer_model
+
+    return _default_answer_model()
 
 
 def _default_local_model() -> str:
