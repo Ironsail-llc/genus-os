@@ -65,3 +65,33 @@ def test_cli_dry_run_takes_several_budgets(tmp_path, capsys):
     assert cmd_memory_eval(args) == 0
     out = capsys.readouterr().out
     assert "context budget 1000 tokens" in out and "context budget 4000 tokens" in out
+
+
+def test_cli_cells_pick_budget_and_model_pairs(tmp_path, capsys):
+    from robothor.cli import _build_parser
+    from robothor.cli.memory_eval import cmd_memory_eval
+
+    data = [_lme_entry(f"q{i}", "multi-session", "Q?", "A") for i in range(2)]
+    path = tmp_path / "longmemeval_s_cleaned.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    args = _build_parser().parse_args(
+        [
+            "memory-eval",
+            "--benchmark",
+            "longmemeval",
+            "--benchmark-path",
+            str(path),
+            "--systems",
+            "recall",
+            "--judge-model",
+            "openai/gpt-4o-2024-08-06",
+            "--dry-run",
+            "--cells",
+            "1000:openai/gpt-5-mini,1000:openai/gpt-4o,4000:openai/gpt-5-mini",
+        ]
+    )
+    assert cmd_memory_eval(args) == 0
+    out = capsys.readouterr().out
+    rows = [line for line in out.splitlines() if line.startswith("| recall |")]
+    assert len(rows) == 3
+    assert "Iteration total" in out
