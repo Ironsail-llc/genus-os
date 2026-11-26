@@ -1158,8 +1158,7 @@ most of the gain, because the reranker rates the first-hop fact about the
 named person as highly for a multi-step question as for a direct one; it is
 not used.
 
-Retrieval on the dev split (seed 1, full size
-929 scored cases; the leg off against on, paired in one run, McNemar's
+Retrieval on the dev split (seed 1, full size, dev split, 929 scored cases; the leg off against on, paired in one run, McNemar's
 exact test). `multi_hop_paraphrase` asks the multi-hop questions reworded so
 they share no content word with their facts except the names
 ([World](benchmarks/memory/WORLD.md)); it is the stratum that decides, since
