@@ -1059,21 +1059,29 @@ def _dedupe(results: list[dict[str, Any]], threshold: float = 0.75) -> list[dict
     kept: list[dict[str, Any]] = []
     kept_tokens: list[frozenset[str]] = []
     for r in results:
-        txt = r.get("fact_text") or r.get("insight_text") or r.get("content") or ""
-        toks = _norm_tokens(txt)
-        is_dup = False
-        for kt in kept_tokens:
-            if not toks or not kt:
-                continue
-            union = len(toks | kt)
-            jac = len(toks & kt) / union if union else 0.0
-            if jac >= threshold or toks <= kt or kt <= toks:
-                is_dup = True
-                break
-        if not is_dup:
+        toks = _row_tokens(r)
+        if not _is_near_duplicate(toks, kept_tokens, threshold):
             kept.append(r)
             kept_tokens.append(toks)
     return kept
+
+
+def _row_tokens(r: dict[str, Any]) -> frozenset[str]:
+    return _norm_tokens(r.get("fact_text") or r.get("insight_text") or r.get("content") or "")
+
+
+def _is_near_duplicate(
+    toks: frozenset[str], kept_tokens: list[frozenset[str]], threshold: float = 0.75
+) -> bool:
+    """``_dedupe``'s test of one row against rows already kept."""
+    for kt in kept_tokens:
+        if not toks or not kt:
+            continue
+        union = len(toks | kt)
+        jac = len(toks & kt) / union if union else 0.0
+        if jac >= threshold or toks <= kt or kt <= toks:
+            return True
+    return False
 
 
 def _assign_relevance(results: list[dict[str, Any]]) -> None:
@@ -1661,6 +1669,79 @@ async def _rank_pool(
     return pool[:limit]
 
 
+async def _confusable_tail(
+    query: str,
+    tenant_id: str,
+    head: list[dict[str, Any]],
+    pool: list[dict[str, Any]],
+    limit: int,
+) -> set[tuple[str, Any]]:
+    """Unscored rows about a different person sharing a name with a named one.
+
+    Every candidate outside the ranked ``head`` is checked: the tail the fill
+    appends and the reserved picks ``apply_reserved`` adds (a graph row is
+    unscored too). Only the ranked head is exempt. Off the loop. On a failure
+    nothing is left out (every row already passed the reader's visibility),
+    and the failure is logged.
+    """
+    held = {(r.get("kind", "fact"), r.get("id")) for r in head}
+    tail = [r for r in pool if (r.get("kind", "fact"), r.get("id")) not in held]
+    if not tail:
+        return set()
+    from robothor.memory.tail_entities import confusable_tail_keys
+
+    try:
+        return await asyncio.to_thread(confusable_tail_keys, tenant_id, query, tail)
+    except Exception as e:  # noqa: BLE001 - the tail stays as filtered as the head
+        logger.warning("search_facts: entity-aware tail failed: %s: %s", type(e).__name__, e)
+        return set()
+
+
+def _fill_from_pool(
+    head: list[dict[str, Any]],
+    pool: list[dict[str, Any]],
+    limit: int,
+    drop: set[tuple[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """The reranked head, then the rest of the fused pool in fused order, to ``limit``.
+
+    The reranker scores only the head of the fused list
+    (``RERANK_MAX_CANDIDATES``) and returns what it scored, so a caller asking
+    for more rows than that used to get the head alone. The rest of the pool
+    follows in fused order, unscored (``rerank_score`` None, relevance from its
+    fused rank), skipping a row already returned, a near-duplicate of one, or
+    one in ``drop`` (``tail_entities.confusable_tail_keys``: a row about a
+    different person sharing a name with one the question names). Every pool
+    row came through the same filtered legs, so the tail obeys the same
+    tenant, scope, trust and reader rules as the head.
+    """
+    if len(head) >= limit:
+        return head
+    out = list(head)
+    seen = {(r.get("kind", "fact"), r.get("id")) for r in out}
+    dedup = _dedup_enabled()
+    # Incremental: each kept row is tokenized once (the head is already free
+    # of near-duplicates), so a candidate costs one pass over the kept rows.
+    kept_tokens = [_row_tokens(r) for r in out] if dedup else []
+    for row in pool:
+        if len(out) >= limit:
+            break
+        key = (row.get("kind", "fact"), row.get("id"))
+        if key in seen or (drop and key in drop):
+            continue
+        if dedup:
+            toks = _row_tokens(row)
+            if _is_near_duplicate(toks, kept_tokens):
+                continue
+            kept_tokens.append(toks)
+        seen.add(key)
+        # Marked so a later re-sort (the routed path's recency order) keeps it
+        # behind the head.
+        row["budget_tail"] = True
+        out.append(row)
+    return out
+
+
 async def search_facts(
     query: str,
     limit: int = 10,
@@ -1924,9 +2005,18 @@ async def search_facts(
         # earlier rows, so a row it drops from the end duplicates the head.
         return _dedup_enabled() and len(_dedupe([*unique_head, row])) == len(unique_head)
 
-    result = apply_reserved(ranked, pool, limit, RESERVED_PLACES, exclude=_duplicates_head)
+    # One rule for every unscored row, reserved pick or tail: a row about a
+    # different person who shares a name with one the question names is left
+    # out (tail_entities); only the ranked head is exempt.
+    confusable = await _confusable_tail(query, _tenant, ranked[:limit], pool, limit)
+
+    def _excluded(row: dict[str, Any]) -> bool:
+        return (row.get("kind", "fact"), row.get("id")) in confusable or _duplicates_head(row)
+
+    result = apply_reserved(ranked, pool, limit, RESERVED_PLACES, exclude=_excluded)
+    result = _fill_from_pool(result, pool, limit, confusable)
     for r in result:
-        if "relevance" not in r:  # a reserved pick the blend never saw
+        if "relevance" not in r:  # a reserved pick or a tail row the blend never saw
             _assign_relevance([r])
     if degraded is not None:
         for r in result:

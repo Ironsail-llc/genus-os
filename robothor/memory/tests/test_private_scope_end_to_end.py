@@ -19,6 +19,7 @@ import importlib
 import uuid
 from contextlib import contextmanager
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -379,6 +380,52 @@ async def test_warm_up_graph_lines_never_inject_another_persons_private_fact(
             record_access=False,
         )
         assert SECRET not in text
+
+
+async def test_a_private_fact_never_fills_another_readers_budget(world, monkeypatch) -> None:
+    """The rows past the reranked head come from the same filtered legs: with
+    enough shared facts to fill the budget, another reader's tail holds none
+    of Alice's private fact, and Alice's holds it."""
+    from robothor.memory.facts import search_facts
+    from robothor.memory.write_path import WriteContext, write_facts
+    from robothor.rag import reranker
+
+    # Distinct wording per fact, so neither write dedup nor the search's
+    # near-duplicate removal collapses them.
+    words = [f"w{n:03d}x" for n in range(200)]
+    filler = [
+        {
+            "fact_text": "Door " + " ".join(words[5 * n : 5 * n + 5]),
+            "category": "work",
+            "confidence": 0.9,
+            "entities": ["Orion Freight"],
+        }
+        for n in range(40)
+    ]
+    await write_facts(
+        filler,
+        source_content="shared dock notes",
+        context=WriteContext.for_source(
+            tenant_id=TENANT, source_channel="webchat", content_type="conversation", role="user"
+        ),
+        conflict_check=False,
+    )
+    monkeypatch.setenv("MEMORY_RERANK_ENABLED", "1")
+    monkeypatch.setattr(reranker, "check_reranker_available", AsyncMock(return_value=True))
+    monkeypatch.setattr(reranker, "rerank_pair", AsyncMock(return_value=0.5))
+
+    def _ids(rows: list[dict[str, Any]]) -> list[Any]:
+        return [r.get("id") for r in rows if r.get("kind", "fact") == "fact"]
+
+    bob = await search_facts(DENSE_QUERY, limit=40, tenant_id=TENANT, reader_person_id=world["bob"])
+    assert len(bob) > reranker.RERANK_MAX_CANDIDATES, "the budget reaches past the head"
+    assert world["secret"] not in _ids(bob)
+    nobody = await search_facts(DENSE_QUERY, limit=40, tenant_id=TENANT)
+    assert world["secret"] not in _ids(nobody)
+    alice = await search_facts(
+        DENSE_QUERY, limit=40, tenant_id=TENANT, reader_person_id=world["alice"]
+    )
+    assert world["secret"] in _ids(alice)
 
 
 async def test_the_admin_erasure_view_finds_a_private_fact_the_default_hides(world) -> None:

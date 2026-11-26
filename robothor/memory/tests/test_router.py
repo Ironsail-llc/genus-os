@@ -174,3 +174,45 @@ async def test_a_graph_only_row_is_labelled_on_the_routed_path() -> None:
         == "Related via Alice Smith → Example Co: Example Co is headquartered in Brelford."
     )
     assert facts_out[8] == "Alice Smith works at Example Co."
+
+
+class TestTemporalKeepsGraphRowsBehindTheHead:
+    @pytest.mark.asyncio
+    async def test_a_newer_graph_row_does_not_pass_the_ranked_head(self) -> None:
+        """A row only the graph leg found follows the head; recency never lifts it."""
+        rows = [
+            {"id": 1, "fact_text": "older decision", "created_at": 100},
+            {"id": 2, "fact_text": "newer decision", "created_at": 200},
+            {
+                "id": 3,
+                "fact_text": "related company fact",
+                "created_at": 300,
+                "graph_path": ["Alice Smith", "Example Co"],
+                "leg_ranks": {"graph": 1},
+            },
+        ]
+        with (
+            patch("robothor.memory.facts.search_facts", new=AsyncMock(return_value=rows)),
+            patch("robothor.memory.episodes.search_episodes", new=AsyncMock(return_value=[])),
+        ):
+            out = await router.recall("what did Alice decide most recently", tenant_id="t1")
+        assert [r["id"] for r in out["results"]] == [2, 1, 3]
+
+    @pytest.mark.asyncio
+    async def test_a_row_another_leg_also_found_is_still_sorted_with_the_head(self) -> None:
+        rows = [
+            {"id": 1, "fact_text": "older decision", "created_at": 100},
+            {
+                "id": 2,
+                "fact_text": "newer decision",
+                "created_at": 200,
+                "graph_path": ["Alice Smith"],
+                "leg_ranks": {"graph": 1, "dense": 4},
+            },
+        ]
+        with (
+            patch("robothor.memory.facts.search_facts", new=AsyncMock(return_value=rows)),
+            patch("robothor.memory.episodes.search_episodes", new=AsyncMock(return_value=[])),
+        ):
+            out = await router.recall("what did Alice decide most recently", tenant_id="t1")
+        assert [r["id"] for r in out["results"]] == [2, 1]

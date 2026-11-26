@@ -102,8 +102,10 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                     "query": {"type": "string", "description": "The search query"},
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum number of results (default 10)",
-                        "default": 10,
+                        "description": (
+                            "Maximum number of results; omit it to get as much as the "
+                            "recall context cap holds"
+                        ),
                     },
                 },
                 "required": ["query"],
@@ -1039,10 +1041,16 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
 
     if name == "search_memory":
         from robothor.memory.facts import search_facts
-        from robothor.memory.recall import row_text
+        from robothor.memory.recall import recall_limit, row_text, within_context_cap
 
-        results = await search_facts(
-            arguments.get("query", ""), limit=arguments.get("limit", 10), tenant_id=tenant
+        # The tool's rule (recall.py): fill the recall context cap unless the
+        # client names a limit.
+        results = within_context_cap(
+            await search_facts(
+                arguments.get("query", ""),
+                limit=recall_limit(arguments.get("limit")),
+                tenant_id=tenant,
+            )
         )
         return {
             "results": [
