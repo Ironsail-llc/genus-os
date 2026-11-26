@@ -262,6 +262,11 @@ async def handle_stream_event(
         )
 
     async def route(alert: DatadogAlert, tenant: str, routing: str, title: str) -> dict[str, Any]:
+        if routing == f"{LOOKUP_FAILED}{own}" and not root:
+            # The alert's tag names this tenant; only this engine's read of
+            # it failed. Delivered and recorded here, as for a hand-off.
+            outcome = await _deliver_here(alert, own, title, redis_client, hooks, message_id)
+            return {**outcome, "tenant": own}
         if routing != "org" and not root:
             # The root's alert, received beside another tenant's engine: the
             # process's default tenant here is that tenant, not the root.

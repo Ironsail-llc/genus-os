@@ -770,6 +770,8 @@ the alert:
   (`lookup_failed:<itself>`), the alert's tag still names it and the root read
   the tenant when it handed off, so it delivers and records the alert there
   all the same, with that `routing`; a failed read never drops an alert.
+  Another tenant's engine that receives the webhook does the same with an
+  alert whose tag names itself.
 
 If another tenant's engine receives the webhook, it routes the same way: it
 delivers an `org:` alert for itself, hands an `org:` alert for another tenant
