@@ -1,3 +1,10 @@
+## [1.139.0](https://github.com/Ironsail-llc/genus-os/compare/v1.138.3...v1.139.0) (2026-11-26)
+
+### Features
+
+* **engine:** datadog tools, logs page, watch and alert intake (GEN-888) ([#939](https://github.com/Ironsail-llc/genus-os/issues/939)) ([0767519](https://github.com/Ironsail-llc/genus-os/commit/07675190fc7dcac48dc62ef3562ed8e49bebecf0)), closes [#932](https://github.com/Ironsail-llc/genus-os/issues/932) [#930](https://github.com/Ironsail-llc/genus-os/issues/930) [#934](https://github.com/Ironsail-llc/genus-os/issues/934) [#931](https://github.com/Ironsail-llc/genus-os/issues/931) [#935](https://github.com/Ironsail-llc/genus-os/issues/935) [#928](https://github.com/Ironsail-llc/genus-os/issues/928) [#927](https://github.com/Ironsail-llc/genus-os/issues/927) [#933](https://github.com/Ironsail-llc/genus-os/issues/933) [#929](https://github.com/Ironsail-llc/genus-os/issues/929) [#926](https://github.com/Ironsail-llc/genus-os/issues/926)
+* **engine:** read datadog per tenant behind a scope filter (GEN-889) ([#926](https://github.com/Ironsail-llc/genus-os/issues/926)) ([79dca75](https://github.com/Ironsail-llc/genus-os/commit/79dca753d03d41cfd724d27750d5ceacd628496a))
+
 ## [1.138.3](https://github.com/Ironsail-llc/genus-os/compare/v1.138.2...v1.138.3) (2026-11-23)
 
 ### Bug Fixes
