@@ -131,3 +131,22 @@ async def test_private_rows_never_appear(world) -> None:
     for query in ("Where is Wendy Calley employed?", "What is the locker code?"):
         rows = [*await _head(query), *await _texts(query, reader_person_id=world["bob"])]
         assert world["secret"] not in rows
+
+
+async def test_a_confusable_row_the_graph_leg_finds_takes_no_reserved_place(world) -> None:
+    """The graph leg's reserved places are unscored rows too: a confusable
+    row it reaches (here through the fact both Wendys share) is held to the
+    same rule as the tail, whichever leg found it. Only the reranked head is
+    exempt."""
+    from robothor.memory.facts import search_facts
+
+    for graph in (True, False):
+        rows = await search_facts(
+            "Where is Wendy Larkmore employed?",
+            limit=60,
+            tenant_id=TENANT,
+            include_segments=False,
+            include_graph=graph,
+        )
+        unscored = [str(r.get("fact_text")) for r in rows if r.get("rerank_score") is None]
+        assert CALLEY not in unscored, f"include_graph={graph}"
