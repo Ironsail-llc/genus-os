@@ -67,6 +67,7 @@ VALIDATION_THRESHOLD = 0.9
 #: Tables the extract write path can fill beyond the eval world's, deleted
 #: first (they reference facts). Only those present in the schema are touched.
 BENCH_EXTRA_TABLES: tuple[str, ...] = (
+    "memory_conflict_decisions",
     "memory_fact_access",
     "memory_fact_history",
     "memory_conflicts",
