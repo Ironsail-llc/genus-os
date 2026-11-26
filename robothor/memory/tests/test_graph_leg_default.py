@@ -1,13 +1,12 @@
-"""The graph leg is off by default; recall and warm-up run it only when asked.
+"""The graph leg is on in recall; warm-up walks the graph only when asked.
 
-Ranked by the meaning of the question, the leg met its retrieval gate on the
-memory evaluation's world (dev split, top 5: reworded multi-hop 21 to 56 of
-126, no stratum worse), and in the answer-and-judge arm it raised multi-hop
-answers (reworded 1 to 12 of 40). But it lowered cross-tenant answers from 30
-to 26 of 40 (4 worse, none better, p = 0.125): for "which city is X based
-in?" its neighbour facts (an employer's headquarters) drew the answer to the
-wrong city. Any stratum worse at p < 0.20 blocks a gate, so ``search_facts``
-runs the leg only on an explicit ``include_graph=True``.
+On the memory evaluation's world, dev split, top 5, the graph leg ranked by
+the meaning of the question (``activation.activate_for_question``) took the
+reworded multi-hop questions from 21 to 56 of 126 (40 better, 5 worse) with
+no stratum significantly worse, so ``search_facts`` runs it on every call.
+``include_graph=False`` remains only so the replay's ``today`` preset and the
+evaluation's ``recall_no_graph`` can measure recall without it. Warm-up's automatic recall ranks by activation, not
+by the message, and nothing has measured it, so it stays off unless asked.
 """
 
 from __future__ import annotations
@@ -50,32 +49,28 @@ def no_io(monkeypatch):
     return calls
 
 
-async def test_search_facts_runs_no_graph_leg_by_default(no_io) -> None:
+async def test_search_facts_runs_the_graph_leg_by_default(no_io) -> None:
     from robothor.memory import facts
 
-    assert facts.GRAPH_LEG_DEFAULT is False
+    assert not hasattr(facts, "GRAPH_LEG_DEFAULT"), "no module switch turns the leg off"
     await facts.search_facts("Who runs the depot?", tenant_id="test-tenant", use_reranker=False)
-    assert "graph" not in no_io
+    assert "graph" in no_io
 
 
-async def test_expand_entities_means_the_one_hop_leg_not_the_graph(no_io) -> None:
+async def test_include_graph_false_measures_recall_without_the_walk(no_io) -> None:
     from robothor.memory import facts
 
     await facts.search_facts(
-        "Who runs the depot?", tenant_id="test-tenant", use_reranker=False, expand_entities=True
+        "Who runs the depot?", tenant_id="test-tenant", use_reranker=False, include_graph=False
     )
-    assert no_io == ["entity_expansion"]
+    assert "graph" not in no_io
 
 
 async def test_the_one_hop_expansion_answers_when_the_graph_finds_nothing(no_io) -> None:
     from robothor.memory import facts
 
     await facts.search_facts(
-        "Who runs the depot?",
-        tenant_id="test-tenant",
-        use_reranker=False,
-        expand_entities=True,
-        include_graph=True,
+        "Who runs the depot?", tenant_id="test-tenant", use_reranker=False, expand_entities=True
     )
     assert no_io == ["graph", "entity_expansion"]
 

@@ -359,8 +359,8 @@ async def test_a_replay_writes_nothing_to_any_memory_table(world, pg) -> None:
     from_chat = replay.questions_from_chat(A)
     reports = [
         await _replay(A, from_runs),
-        await _replay(A, from_chat, compare=("new+graph", "new-segments")),
-        await _replay(A, [replay.Question(QUESTION)], compare=("today", "new+graph")),
+        await _replay(A, from_chat, compare=("new-graph", "new-segments")),
+        await _replay(A, [replay.Question(QUESTION)], compare=("today", "new")),
     ]
     after = _memory_snapshot(pg)
 
@@ -467,7 +467,7 @@ async def test_a_chat_turn_is_replayed_as_its_own_person(world, pg) -> None:
 async def test_a_question_with_no_reader_sees_shared_rows_only(world, pg) -> None:
     from robothor.memory import replay
 
-    report = await _replay(A, [replay.Question(QUESTION)], compare=("today", "new+graph"))
+    report = await _replay(A, [replay.Question(QUESTION)], compare=("today", "new"))
     keys = _keys(report["questions"][0])
     assert f"fact:{world['shared_a']}" in keys
     private = {world["alice_fact"], world["bob_fact"]}
