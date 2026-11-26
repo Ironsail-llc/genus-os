@@ -242,6 +242,9 @@ class FakeRedis:
         self.added.append((stream, fields))
         return b"9-0"
 
+    async def xinfo_groups(self, stream: str) -> list[dict[str, Any]]:
+        return []  # no other tenant's engine reads the stream
+
 
 class FakeAudit:
     def __init__(self) -> None:
@@ -296,7 +299,7 @@ def no_delivery():
 
 
 @pytest.mark.asyncio
-async def test_an_accepted_delivery_is_recorded_in_the_tagged_tenant(
+async def test_an_alert_for_a_tenant_without_an_engine_is_recorded_there_not_delivered(
     client, published, audit, no_delivery, engine_config
 ) -> None:
     resp = _post(client, json.dumps(PAYLOAD).encode(), {HEADER: SECRET})
@@ -310,13 +313,17 @@ async def test_an_accepted_delivery_is_recorded_in_the_tagged_tenant(
     row = audit.rows[0]
     assert row["event_type"] == "datadog.alert_received"
     assert row["tenant_id"] == CHILD
-    assert row["details"]["mode"] == "dry_run"
-    assert row["details"]["would_notify"]
-    assert row["details"]["would_run"]
+    assert row["details"]["mode"] == "delivery_failed"
+    assert row["details"]["delivery"]["reason"] == "no_engine"
     assert redis.acked == [(STREAM, "engine", b"1-0")]
     runner.execute.assert_not_called()
-    for watched in no_delivery:
-        watched.assert_not_called()
+    # The root hears, once and quietly, that a tenant's alert was not delivered;
+    # it is not shown the alert itself.
+    alert, _, _ = no_delivery
+    alert.assert_awaited_once()
+    assert alert.await_args.args[0] == "info"
+    assert CHILD in alert.await_args.args[1]
+    assert "error rate" not in repr(alert.await_args)
 
 
 @pytest.mark.asyncio

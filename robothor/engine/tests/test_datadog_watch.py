@@ -42,6 +42,8 @@ SECRET_BODY = "card 4111 declined for agent@example.com"
 
 @pytest.fixture(autouse=True)
 def _clean_state(monkeypatch: pytest.MonkeyPatch):
+    # No Redis unless a test gives one: no webhook episode is open.
+    monkeypatch.setattr("robothor.engine.webhooks._get_async_redis", AsyncMock(return_value=None))
     detectors._dedup.clear()
     watch.reset_state()
     monkeypatch.setattr(watch, "scope_for", lambda tenant: SCOPES.get(tenant))
@@ -392,28 +394,34 @@ async def test_an_error_for_one_tenant_does_not_stop_the_other(
     assert [(e["tenant_id"], e["service"]) for e in events] == [(CHILD_B, "clinic-app")]
 
 
-async def test_dry_run_records_the_finding_and_delivers_nothing(
+async def test_a_spike_is_recorded_and_delivered_once(
     audit: MagicMock, alert: AsyncMock, caplog: pytest.LogCaptureFixture
 ) -> None:
     dd = Datadog(**SPIKING)
     with caplog.at_level(logging.INFO, logger=watch.__name__):
         found = await _watch(dd).tick([CHILD_A])
     assert found == 1
-    alert.assert_not_called()
     (event,) = await _events(audit)
+    alert.assert_awaited_once()
+    assert alert.await_args.args[0] == "warning"
+    assert alert.await_args.args[2] == event["brief"]
+    assert alert.await_args.kwargs["alert_id"] == event["delivery"]["alert_id"]
+    assert event["delivery"]["route"] == "digest"
+    assert event["delivery"]["level"] == "warning"
     assert event["tenant_id"] == CHILD_A
     assert event["kind"] == "error_spike"
     assert event["service"] == "shop-api"
     assert event["current"] == 80
     assert event["baseline"]["median"] == 10
     assert event["window"] == {"start": CURRENT_START, "end": CURRENT_END, "minutes": 15}
-    assert event["mode"] == "dry_run"
+    assert event["mode"] == "delivered"
+    # Kept for the existing dashboard reader: who was told, the brief, the count.
     assert CHILD_A in event["would_notify"]
     assert "shop-api" in event["brief"] and "80" in event["brief"]
     assert event["brief"].count(". ") + 1 <= 3
     lines = [r.getMessage() for r in caplog.records if "event=datadog_watch" in r.getMessage()]
     assert len(lines) == 1
-    for field in (f"tenant={CHILD_A}", "kind=error_spike", "service=shop-api", "mode=dry_run"):
+    for field in (f"tenant={CHILD_A}", "kind=error_spike", "service=shop-api", "mode=delivered"):
         assert field in lines[0]
 
 
@@ -460,13 +468,13 @@ async def test_connection_lost_then_restored_in_the_root_tenant(
         await w.tick([PARENT])
     events = await _events(audit)
     assert [(e["tenant_id"], e["kind"]) for e in events] == [(PARENT, "connection_lost")]
-    assert events[0]["mode"] == "dry_run" and events[0]["brief"]
+    assert events[0]["mode"] == "delivered" and events[0]["brief"]
     dd.validate_status = 200
     await w.tick([PARENT])
     await w.tick([PARENT])
     kinds = [e["kind"] for e in await _events(audit)]
     assert kinds == ["connection_lost", "connection_restored"]
-    alert.assert_not_called()
+    assert [c.args[0] for c in alert.await_args_list] == ["warning", "info"]
 
 
 async def test_a_network_failure_on_the_root_tenants_reads_counts(
@@ -572,17 +580,19 @@ async def test_a_firing_monitor_is_recorded_once_with_a_brief(
     (event,) = await _events(audit)
     assert event["tenant_id"] == CHILD_A
     assert event["kind"] == "monitor_firing"
-    assert event["mode"] == "dry_run"
+    assert event["mode"] == "delivered"
+    # Warn is a heads-up, not an incident: info, once.
+    assert [c.args[0] for c in alert.await_args_list] == ["info"]
     assert event["monitor"]["id"] == "9"
     assert event["monitor"]["status"] == "warn"
     assert event["monitor"]["previous_status"] is None
     assert "agent@example.com" not in json.dumps(event)
     assert "<email>" in event["brief"] and "checkout errors" in event["brief"]
     assert "Warn" in event["brief"] and "2 hours" in event["brief"]
-    assert CHILD_A in event["would_notify"]
+    assert "agent@example.com" not in json.dumps([c.args for c in alert.await_args_list])
     lines = [r.getMessage() for r in caplog.records if "event=datadog_watch" in r.getMessage()]
     assert len(lines) == 1
-    assert "kind=monitor_firing" in lines[0] and "mode=dry_run" in lines[0]
+    assert "kind=monitor_firing" in lines[0] and "mode=delivered" in lines[0]
     assert "agent@example.com" not in caplog.text
 
 
@@ -595,10 +605,28 @@ async def test_a_status_change_is_recorded_again(
     dd.monitors = [_monitor(9, "Alert")]
     await w.tick([CHILD_A])
     await w.tick([CHILD_A])
-    assert _monitor_events(await _events(audit)) == [
+    events = await _events(audit)
+    assert _monitor_events(events) == [
         ("monitor_firing", "9", "warn", None),
         ("monitor_firing", "9", "alert", "warn"),
     ]
+    # Warn to Alert raises the level inside the episode, so it is sent.
+    assert [e["mode"] for e in events] == ["delivered", "delivered"]
+    assert [c.args[0] for c in alert.await_args_list] == ["info", "warning"]
+
+
+async def test_a_monitor_falling_back_to_warn_is_not_alerted_again(
+    audit: MagicMock, alert: AsyncMock, monitor_scopes: None
+) -> None:
+    dd = Datadog(monitors=[_monitor(9, "Alert")])
+    w = _watch(dd)
+    await w.tick([CHILD_A])
+    dd.monitors = [_monitor(9, "Warn")]
+    await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert [e["mode"] for e in events] == ["delivered", "suppressed"]
+    assert events[1]["delivery"]["reason"] == "episode_open"
+    assert [c.args[0] for c in alert.await_args_list] == ["warning"]
 
 
 async def test_recovery_is_recorded_and_a_new_firing_is_recorded_again(
@@ -619,9 +647,12 @@ async def test_recovery_is_recorded_and_a_new_firing_is_recorded_again(
         ("monitor_firing", "9", "alert", None),
     ]
     recovered = events[1]
-    assert recovered["mode"] == "dry_run"
+    assert recovered["mode"] == "delivered"
     assert "shop-api error rate 9" in recovered["brief"]
-    alert.assert_not_called()
+    # The recovery closes the episode, so the next firing is a new one.
+    assert [c.args[0] for c in alert.await_args_list] == ["warning", "info", "warning"]
+    ids = [c.kwargs["alert_id"] for c in alert.await_args_list]
+    assert ids[0] == ids[2] != ids[1]
 
 
 async def test_a_failed_monitor_read_is_not_a_recovery(
@@ -712,7 +743,7 @@ async def test_a_silent_service_is_recorded_once_then_resumes(
         assert await w.tick([CHILD_A]) == 0
     (silent,) = await _events(audit)
     assert silent["kind"] == "service_silent"
-    assert silent["mode"] == "dry_run"
+    assert silent["mode"] == "delivered"
     assert silent["service"] == "shop-api"
     assert silent["current"] == 0
     assert silent["baseline"]["median"] == 200
@@ -730,10 +761,10 @@ async def test_a_silent_service_is_recorded_once_then_resumes(
     assert [e["kind"] for e in events] == ["service_silent", "service_resumed"]
     resumed = events[1]
     assert resumed["service"] == "shop-api" and resumed["current"] == 150
-    assert resumed["mode"] == "dry_run"
+    assert resumed["mode"] == "delivered"
     assert resumed["window"]["start"] == NEXT_START
     assert "150" in resumed["brief"]
-    alert.assert_not_called()
+    assert [c.args[0] for c in alert.await_args_list] == ["warning", "info"]
 
 
 async def test_a_quiet_service_logging_nothing_is_not_recorded(
@@ -797,7 +828,7 @@ async def test_a_failed_silence_read_does_not_stop_the_spike_watch(
     assert [e["kind"] for e in await _events(audit)] == ["error_spike"]
 
 
-async def test_every_new_kind_is_dry_run_and_nothing_is_delivered(
+async def test_every_new_kind_is_delivered_with_its_brief(
     audit: MagicMock, alert: AsyncMock, monitor_scopes: None
 ) -> None:
     now = [NOW]
@@ -816,16 +847,16 @@ async def test_every_new_kind_is_dry_run_and_nothing_is_delivered(
         "service_silent",
         "service_resumed",
     }
-    assert all(e["mode"] == "dry_run" and e["brief"] and e["would_notify"] for e in events)
+    assert all(e["mode"] == "delivered" and e["brief"] and e["delivery"] for e in events)
     assert SECRET_BODY not in json.dumps(events)
-    alert.assert_not_called()
+    assert alert.await_count == len(events)
 
 
 # ── no mode setting, and the daemon hook ────────────────────────────────────
 
 
 def test_there_is_no_mode_setting() -> None:
-    """Recording is the only code path; delivery arrives as its own change."""
+    """Delivery is the only code path: no setting turns it off or back to recording."""
     from robothor.settings.model import GenusSettings, IntegrationSettings
 
     assert "datadog_watch_mode" not in IntegrationSettings.model_fields
@@ -841,8 +872,8 @@ def test_there_is_no_mode_setting() -> None:
     assert not hasattr(watch, "watch_mode")
 
 
-async def test_no_finding_is_ever_delivered(audit: MagicMock, alert: AsyncMock) -> None:
-    """Spikes and both link findings are recorded as dry run; nothing calls alerts.alert."""
+async def test_nothing_the_watch_finds_pages_on_its_own(audit: MagicMock, alert: AsyncMock) -> None:
+    """Spikes and both link findings go to the digest: warning or info, never critical."""
     SCOPES[PARENT] = DatadogScope(PARENT, "service:shop-api", "*", "", ())
     try:
         dd = Datadog(**SPIKING, validate_status=401)
@@ -855,9 +886,14 @@ async def test_no_finding_is_ever_delivered(audit: MagicMock, alert: AsyncMock) 
         del SCOPES[PARENT]
     events = await _events(audit)
     assert {e["kind"] for e in events} == {"error_spike", "connection_lost", "connection_restored"}
-    assert all(e["mode"] == "dry_run" for e in events)
-    assert all(e["brief"] and e["would_notify"] for e in events)
-    alert.assert_not_called()
+    assert all(e["mode"] == "delivered" for e in events)
+    levels = {e["kind"]: e["delivery"]["level"] for e in events}
+    assert levels == {
+        "error_spike": "warning",
+        "connection_lost": "warning",
+        "connection_restored": "info",
+    }
+    assert {c.args[0] for c in alert.await_args_list} <= {"warning", "info"}
 
 
 async def test_the_daemon_runs_the_watch_in_the_background_one_pass_at_a_time(
@@ -976,3 +1012,291 @@ async def test_the_tenant_tree_and_the_vault_are_read_off_the_loop(
     for probe in (tree, vault):
         await probe.settle()
         probe.assert_loop_free()
+
+
+# ── delivery: episodes, cooldown, failures ──────────────────────────────────
+
+
+async def test_a_continuing_spike_is_not_alerted_again(audit: MagicMock, alert: AsyncMock) -> None:
+    """The hourly re-record of a spike that never ended stays in its episode."""
+    dd = Datadog(**SPIKING)
+    w = _watch(dd)
+    await w.tick([CHILD_A])
+    detectors._dedup.clear()  # an hour later: the finding is recorded again
+    await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert [e["mode"] for e in events] == ["delivered", "suppressed"]
+    assert events[1]["delivery"]["reason"] == "episode_open"
+    alert.assert_awaited_once()
+
+
+async def test_a_spike_that_ended_and_came_back_is_a_new_episode(
+    audit: MagicMock, alert: AsyncMock
+) -> None:
+    now = [NOW]
+    dd = Datadog(**SPIKING)
+    w = _watch(dd, clock=lambda: now[0])
+    await w.tick([CHILD_A])
+    # The next slot is normal: the episode ends, and nothing is sent for that.
+    now[0] = NOW + timedelta(minutes=15)
+    dd.current_start = NEXT_START
+    dd.current = {"shop-api": 10}
+    await w.tick([CHILD_A])
+    # The slot after spikes again.
+    now[0] = NOW + timedelta(minutes=30)
+    dd.current_start = "2026-11-25T12:15:00Z"
+    dd.current = {"shop-api": 90}
+    detectors._dedup.clear()
+    await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert [e["mode"] for e in events] == ["delivered", "delivered"]
+    assert alert.await_count == 2
+
+
+async def test_the_alerts_cooldown_holds_a_flapping_monitor(
+    audit: MagicMock, monitor_scopes: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fire, recover, fire again inside ROBOTHOR_ALERT_COOLDOWN_SECONDS: two sends, not three."""
+    from robothor.engine import alerts
+
+    monkeypatch.setattr(alerts, "_delivered_at", {})
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(alerts, "_write_notification", notify)
+    dd = Datadog(monitors=[_monitor(9)])
+    w = _watch(dd)
+    await w.tick([CHILD_A])
+    dd.monitors = []
+    await w.tick([CHILD_A])
+    dd.monitors = [_monitor(9)]
+    await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert [e["mode"] for e in events] == ["delivered", "delivered", "suppressed"]
+    assert events[2]["delivery"]["reason"] == "cooldown"
+    assert notify.await_count == 2
+
+
+@pytest.mark.parametrize(
+    ("behaviour", "error"),
+    [(RuntimeError("telegram down"), "RuntimeError"), (False, "not_delivered")],
+)
+async def test_a_failed_delivery_is_recorded_and_the_pass_goes_on(
+    behaviour: Any, error: str, audit: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = AsyncMock()
+    if isinstance(behaviour, Exception):
+        sender.side_effect = behaviour
+    else:
+        sender.return_value = behaviour
+    monkeypatch.setattr("robothor.engine.alerts.alert", sender)
+    dd = Datadog(**SPIKING, totals_baseline={"shop-api": 200})
+    assert await _watch(dd).tick([CHILD_A]) == 2
+    events = await _events(audit)
+    assert {e["kind"] for e in events} == {"error_spike", "service_silent"}
+    assert all(e["mode"] == "delivery_failed" for e in events)
+    assert all(e["delivery"]["error"] == error for e in events)
+    assert all(e["brief"] for e in events), "a failed send never loses the finding"
+
+
+async def test_a_finding_for_another_tenant_is_never_delivered_here(
+    audit: MagicMock, alert: AsyncMock
+) -> None:
+    """The alerts path writes to this engine's own tenant, so only its own findings go there."""
+    dd = Datadog(**SPIKING)
+    await _watch(dd, home=CHILD_A).tick([CHILD_B])
+    (event,) = await _events(audit)
+    assert event["tenant_id"] == CHILD_B
+    assert event["mode"] == "delivery_failed"
+    assert event["delivery"]["reason"] == "not_this_engine"
+    alert.assert_not_called()
+
+
+# ── no double notification with the webhook ─────────────────────────────────
+
+
+class EpisodeRedis:
+    """The few keys the watch reads: the webhook's episode keys."""
+
+    def __init__(self, keys: set[str] | None = None, *, broken: bool = False) -> None:
+        self.keys = keys or set()
+        self.broken = broken
+
+    async def exists(self, *keys: str) -> int:
+        if self.broken:
+            raise ConnectionError("redis went away")
+        return sum(1 for k in keys if k in self.keys)
+
+
+def _webhook_episode(monitor: str, stage: str) -> str:
+    from robothor.engine.datadog_delivery import EPISODE_PREFIX
+
+    return f"{EPISODE_PREFIX}{CHILD_A}:{monitor}:sent:{stage}"
+
+
+@pytest.mark.parametrize("stage", ["warn", "alert", "page"])
+async def test_a_monitor_the_webhook_already_sent_is_not_sent_again(
+    stage: str,
+    audit: MagicMock,
+    alert: AsyncMock,
+    monitor_scopes: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = EpisodeRedis({_webhook_episode("9", stage)})
+    monkeypatch.setattr("robothor.engine.webhooks._get_async_redis", AsyncMock(return_value=redis))
+    dd = Datadog(monitors=[_monitor(9)])
+    w = _watch(dd)
+    await w.tick([CHILD_A])
+    # The webhook's recovery closes its episode and leaves its mark.
+    redis.keys = {_webhook_episode("9", "recovered")}
+    dd.monitors = []
+    await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert [e["kind"] for e in events] == ["monitor_firing", "monitor_recovered"]
+    assert [e["mode"] for e in events] == ["suppressed", "suppressed"]
+    assert {e["delivery"]["reason"] for e in events} == {"covered_by_webhook"}
+    alert.assert_not_called()
+
+
+async def test_another_monitors_webhook_episode_does_not_cover_this_one(
+    audit: MagicMock, alert: AsyncMock, monitor_scopes: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    redis = EpisodeRedis({_webhook_episode("10", "alert"), _webhook_episode("9", "recovered")})
+    monkeypatch.setattr("robothor.engine.webhooks._get_async_redis", AsyncMock(return_value=redis))
+    dd = Datadog(monitors=[_monitor(9)])
+    await _watch(dd).tick([CHILD_A])
+    (event,) = await _events(audit)
+    assert event["mode"] == "delivered"
+    alert.assert_awaited_once()
+
+
+@pytest.mark.parametrize("redis", [None, "broken"])
+async def test_without_redis_the_watch_delivers(
+    redis: Any,
+    audit: MagicMock,
+    alert: AsyncMock,
+    monitor_scopes: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A duplicate is better than a missed alert."""
+    client = EpisodeRedis(broken=True) if redis == "broken" else None
+    monkeypatch.setattr("robothor.engine.webhooks._get_async_redis", AsyncMock(return_value=client))
+    dd = Datadog(monitors=[_monitor(9)])
+    await _watch(dd).tick([CHILD_A])
+    (event,) = await _events(audit)
+    assert event["mode"] == "delivered"
+    alert.assert_awaited_once()
+
+
+async def test_the_webhook_check_is_only_for_monitor_findings(
+    audit: MagicMock, alert: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lookup = AsyncMock(return_value=EpisodeRedis({_webhook_episode("shop-api", "alert")}))
+    monkeypatch.setattr("robothor.engine.webhooks._get_async_redis", lookup)
+    await _watch(Datadog(**SPIKING)).tick([CHILD_A])
+    (event,) = await _events(audit)
+    assert event["kind"] == "error_spike" and event["mode"] == "delivered"
+    lookup.assert_not_called()
+
+
+# ── a failed delivery is tried again while the condition lasts ──────────────
+
+
+def _flaky(monkeypatch: pytest.MonkeyPatch, *results: Any) -> AsyncMock:
+    """alerts.alert answering ``results`` in turn (an exception is raised), then True."""
+    answers = list(results)
+
+    async def answer(*_args: Any, **_kw: Any) -> bool:
+        if answers:
+            result = answers.pop(0)
+            if isinstance(result, BaseException):
+                raise result
+            return bool(result)
+        return True
+
+    sender = AsyncMock(side_effect=answer)
+    monkeypatch.setattr("robothor.engine.alerts.alert", sender)
+    return sender
+
+
+def _modes(events: list[dict[str, Any]], kind: str) -> list[str]:
+    return [e["mode"] for e in events if e["kind"] == kind]
+
+
+async def test_a_firing_monitor_whose_alert_failed_is_tried_again(
+    audit: MagicMock, monitor_scopes: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = _flaky(monkeypatch, RuntimeError("down"), False)
+    dd = Datadog(monitors=[_monitor(9)])
+    w = _watch(dd)
+    for _ in range(4):
+        await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert _modes(events, "monitor_firing") == ["delivery_failed", "delivery_failed", "delivered"]
+    assert sender.await_count == 3, "nothing more once it got through"
+    ids = {c.kwargs["alert_id"] for c in sender.await_args_list}
+    assert len(ids) == 1, "the same alert id, so the cooldown still bounds repeats"
+
+
+async def test_a_retry_stops_when_the_condition_ends(
+    audit: MagicMock, monitor_scopes: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = _flaky(monkeypatch, False)
+    dd = Datadog(monitors=[_monitor(9)])
+    w = _watch(dd)
+    await w.tick([CHILD_A])
+    dd.monitors = []
+    await w.tick([CHILD_A])
+    await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert [(e["kind"], e["mode"]) for e in events] == [
+        ("monitor_firing", "delivery_failed"),
+        ("monitor_recovered", "delivered"),
+    ]
+    assert sender.await_count == 2
+
+
+async def test_a_silent_service_whose_alert_failed_is_tried_again(
+    audit: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = _flaky(monkeypatch, False)
+    w = _watch(Datadog(totals_baseline={"shop-api": 200}))
+    for _ in range(3):
+        await w.tick([CHILD_A])
+    assert _modes(await _events(audit), "service_silent") == ["delivery_failed", "delivered"]
+    assert sender.await_count == 2
+
+
+async def test_a_lost_link_whose_alert_failed_is_tried_again(
+    audit: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = _flaky(monkeypatch, False)
+    w = _watch(Datadog(validate_status=401), home=PARENT, root=True)
+    for _ in range(watch.CONNECTION_FAILURES_FOR_LOST + 2):
+        await w.tick([PARENT])
+    assert _modes(await _events(audit), "connection_lost") == ["delivery_failed", "delivered"]
+    assert sender.await_count == 2
+
+
+async def test_a_spike_whose_alert_failed_is_tried_again_while_it_lasts(
+    audit: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender = _flaky(monkeypatch, False)
+    w = _watch(Datadog(**SPIKING))
+    for _ in range(3):
+        await w.tick([CHILD_A])
+    events = await _events(audit)
+    assert _modes(events, "error_spike") == ["delivery_failed", "delivered"]
+    assert sender.await_count == 2
+
+
+async def test_a_spike_found_afresh_is_sent_once_in_its_pass(
+    audit: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fresh finding replaces the stored one: one send, with this pass's counts."""
+    sender = _flaky(monkeypatch, False, False, False)
+    dd = Datadog(**SPIKING)
+    w = _watch(dd)
+    await w.tick([CHILD_A])
+    detectors._dedup.clear()  # an hour later: the spike is found again
+    await w.tick([CHILD_A])
+    assert sender.await_count == 2
+    assert _modes(await _events(audit), "error_spike") == ["delivery_failed", "delivery_failed"]

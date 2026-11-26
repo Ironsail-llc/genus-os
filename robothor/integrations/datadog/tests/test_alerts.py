@@ -1,4 +1,4 @@
-"""Datadog monitor alerts into Genus: parse, route by ``org:`` tag, record (dry run)."""
+"""Datadog monitor alerts into Genus: parse, route by ``org:`` tag, record the delivery outcome."""
 
 from __future__ import annotations
 
@@ -190,7 +190,10 @@ class TestRouting:
 
 class TestRecord:
     @pytest.mark.asyncio
-    async def test_one_dry_run_event_in_the_tagged_tenant(self, audit, no_delivery) -> None:
+    async def test_without_a_deliverer_it_is_recorded_as_not_delivered(
+        self, audit, no_delivery
+    ) -> None:
+        """This module alone cannot deliver: the engine hands it the deliverer."""
         outcome = await dd.handle_alert_event(_payload(), FakeRedis())
 
         assert outcome == "recorded"
@@ -204,13 +207,11 @@ class TestRecord:
         assert d["priority"] == "P2"
         assert d["tags"] == ["env:prod", "org:acme-child-a", "service:shop-api"]
         assert d["link"] == "https://app.example.com/monitors/12345"
-        assert d["mode"] == "dry_run"
+        assert d["mode"] == "delivery_failed"
+        assert d["delivery"] == {"reason": "not_available"}
         assert d["routing"] == "org"
-        assert d["would_notify"]
-        assert d["would_run"]["prompt"]
-        assert "12345" in d["would_run"]["prompt"]
-        assert "read-only" in d["would_run"]["prompt"]
-        assert "agent" in d["would_run"]
+        assert d["would_notify"]["route"] == "digest"
+        assert d["would_run"]["agent"] is None
 
         for watched in no_delivery:
             watched.assert_not_called()
@@ -353,7 +354,7 @@ class TestRecord:
         assert f"tenant={CHILD}" in line
         assert "monitor_id=12345" in line
         assert "transition=triggered" in line
-        assert "mode=dry_run" in line
+        assert "mode=delivery_failed" in line
         assert "agent@example.com" not in line
         assert "service:shop-api status:error" not in line, "the monitor query is not logged"
 
@@ -362,11 +363,26 @@ class TestRecord:
 
 
 class TestPlan:
-    def test_a_trigger_would_page(self) -> None:
-        plan = dd.would_notify("triggered")
+    @pytest.mark.parametrize("priority", ["P1", "p1", "1"])
+    @pytest.mark.parametrize("transition", ["triggered", "re_triggered"])
+    def test_a_p1_trigger_would_page(self, transition: str, priority: str) -> None:
+        plan = dd.would_notify(transition, priority)
         assert plan["level"] == "critical"
         assert plan["route"] == "page"
         assert "telegram" in plan["channels"]
+
+    @pytest.mark.parametrize("priority", ["P2", "P5", "", "P11", "urgent"])
+    def test_any_other_trigger_would_go_to_the_digest(self, priority: str) -> None:
+        plan = dd.would_notify("triggered", priority)
+        assert plan["level"] == "warning"
+        assert plan["route"] == "digest"
+
+    @pytest.mark.parametrize(
+        ("transition", "level"),
+        [("warn", "warning"), ("no_data", "warning"), ("recovered", "info")],
+    )
+    def test_priority_changes_nothing_else(self, transition: str, level: str) -> None:
+        assert dd.level_for(transition, "P1") == level
 
     @pytest.mark.parametrize("transition", ["warn", "no_data", "recovered"])
     def test_the_rest_would_go_to_the_digest(self, transition: str) -> None:
@@ -380,26 +396,28 @@ class TestPlan:
         monkeypatch.setenv("ROBOTHOR_ALERT_FALLBACK_CHANNELS", "email:agent@example.com")
         reset_settings()
         try:
-            plan = dd.would_notify("triggered")
+            plan = dd.would_notify("triggered", "P1")
         finally:
             reset_settings()
         assert "email" in plan["channels"]
         assert "agent@example.com" not in repr(plan)
 
-    def test_triage_plan_is_read_only_and_names_the_monitor(self) -> None:
+    def test_the_triage_prompt_is_fixed_short_and_names_the_monitor(self) -> None:
         alert = dd.parse_alert(_payload())
-        plan = dd.triage_plan(CHILD, alert)
-        assert plan["tenant"] == CHILD
-        assert "12345" in plan["prompt"]
-        assert "read-only" in plan["prompt"]
-        assert plan["read_only"] is True
+        prompt = dd.triage_prompt(alert, title="shop-api error rate high")
+        assert "12345" in prompt and "shop-api error rate high" in prompt
+        assert "read-only" in prompt
+        assert "Datadog tools" in prompt
+        assert "do not have the Datadog tools" in prompt, "a missing tool set is reported"
+        assert len(prompt) < 600
+        assert "service:shop-api status:error" not in prompt, "never the monitor query"
 
 
 # ── the mode setting ───────────────────────────────────────────────
 
 
 class TestNoModeSetting:
-    """Recording is the only code path; delivery arrives later as its own change."""
+    """Delivery is the only code path; no setting switches it."""
 
     def test_no_mode_setting_is_declared(self) -> None:
         from robothor.settings.model import IntegrationSettings
@@ -409,12 +427,73 @@ class TestNoModeSetting:
         assert "ROBOTHOR_DATADOG_ALERTS_MODE" not in declared_env_names()
 
     @pytest.mark.asyncio
-    async def test_the_event_always_says_dry_run(self, audit, no_delivery, monkeypatch) -> None:
-        monkeypatch.setenv("ROBOTHOR_DATADOG_ALERTS_MODE", "deliver")
-        await dd.handle_alert_event(_payload(), FakeRedis())
-        assert audit.rows[0]["details"]["mode"] == "dry_run"
-        for watched in no_delivery:
-            watched.assert_not_called()
+    async def test_an_old_mode_variable_changes_nothing(self, audit, monkeypatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_DATADOG_ALERTS_MODE", "dry_run")
+        deliver = AsyncMock(return_value={"mode": "delivered", "delivery": {"level": "critical"}})
+        await dd.handle_alert_event(_payload(), FakeRedis(), deliver=deliver)
+        deliver.assert_awaited_once()
+        assert audit.rows[0]["details"]["mode"] == "delivered"
+
+
+class TestDeliverer:
+    """The engine's deliverer decides the outcome; this module records it."""
+
+    @pytest.mark.asyncio
+    async def test_the_outcome_is_recorded_in_the_routed_tenant(self, audit) -> None:
+        outcome = {
+            "mode": "delivered",
+            "delivery": {"level": "critical", "route": "page"},
+            "triage": {"started": True},
+        }
+        deliver = AsyncMock(return_value=outcome)
+        assert await dd.handle_alert_event(_payload(), FakeRedis(), deliver=deliver) == "recorded"
+        alert, tenant, routing, title = deliver.await_args.args
+        assert (alert.monitor_id, tenant, routing) == ("12345", CHILD, "org")
+        d = audit.rows[0]["details"]
+        assert d["mode"] == "delivered"
+        assert d["delivery"] == outcome["delivery"]
+        assert d["triage"] == outcome["triage"]
+        # The fields the existing dashboard reader shows, kept.
+        assert d["would_notify"] == dd.would_notify("triggered", "P2")
+        assert d["would_run"]["tenant"] == CHILD
+        assert d["would_run"]["read_only"] is True
+        assert "12345" in d["would_run"]["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_a_raising_deliverer_is_recorded_as_failed(self, audit) -> None:
+        deliver = AsyncMock(side_effect=RuntimeError("boom"))
+        assert await dd.handle_alert_event(_payload(), FakeRedis(), deliver=deliver) == "recorded"
+        d = audit.rows[0]["details"]
+        assert d["mode"] == "delivery_failed"
+        assert d["delivery"]["error"] == "RuntimeError"
+
+    @pytest.mark.asyncio
+    async def test_a_hand_off_is_not_recorded_here_and_is_remembered(self, audit) -> None:
+        redis = FakeRedis()
+        deliver = AsyncMock(return_value={"mode": "handed_off", "handoff": {"tenant": CHILD}})
+        assert await dd.handle_alert_event(_payload(), redis, deliver=deliver) == "handed_off"
+        assert audit.rows == []
+        assert await dd.handle_alert_event(_payload(), redis, deliver=deliver) == "duplicate"
+        deliver.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_refused_alert_is_neither_recorded_nor_remembered(self, audit) -> None:
+        redis = FakeRedis()
+        deliver = AsyncMock(return_value={"mode": "refused"})
+        assert await dd.handle_alert_event(_payload(), redis, deliver=deliver) == "refused"
+        assert audit.rows == [] and redis.keys == {}
+
+    @pytest.mark.asyncio
+    async def test_a_dedup_scope_keeps_its_own_keys(self, audit) -> None:
+        redis = FakeRedis()
+        deliver = AsyncMock(return_value={"mode": "handed_off"})
+        await dd.handle_alert_event(_payload(), redis, deliver=deliver)
+        here = AsyncMock(return_value={"mode": "delivered", "delivery": {}})
+        assert (
+            await dd.handle_alert_event(_payload(), redis, deliver=here, dedup_scope="t:" + CHILD)
+            == "recorded"
+        )
+        here.assert_awaited_once()
 
 
 class TestClaimWriteExtend:
