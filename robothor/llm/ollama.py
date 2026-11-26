@@ -682,8 +682,9 @@ async def get_embeddings_batch_async(
         List of embedding vectors (one per input text).
 
     Raises:
-        InvalidEmbeddingError: a vector came back empty or not
-            ``EMBEDDING_DIMENSIONS`` wide, on the call and on its one retry.
+        InvalidEmbeddingError: a text's vector stayed empty or not
+            ``EMBEDDING_DIMENSIONS`` wide after the batch was retried once and
+            the text was then asked for alone.
     """
     if not texts:
         return []
@@ -692,7 +693,6 @@ async def get_embeddings_batch_async(
         return [emb]
 
     model_name = model or _embedding_model()
-    got = 0
     for shape_attempt in range(EMBED_SHAPE_ATTEMPTS):
         embeddings = await _embed_batch_call(texts, model_name)
         if embeddings is None:
@@ -701,20 +701,21 @@ async def get_embeddings_batch_async(
         if not problems:
             logger.info("batch embed: %d texts in one call", len(texts))
             return embeddings
-        got = problems[0]
-        if shape_attempt < EMBED_SHAPE_ATTEMPTS - 1:
-            logger.warning(
-                "Batch embed: model %s returned %d unusable vector(s) (a %d-dimension one, "
-                "expected %d) — retrying",
-                model_name,
-                len(problems),
-                got,
-                EMBEDDING_DIMENSIONS,
-            )
+        last = shape_attempt == EMBED_SHAPE_ATTEMPTS - 1
+        logger.warning(
+            "Batch embed: model %s returned %d unusable vector(s) (a %d-dimension one, "
+            "expected %d) — %s",
+            model_name,
+            len(problems),
+            problems[0],
+            EMBEDDING_DIMENSIONS,
+            "asking for each text alone" if last else "retrying",
+        )
+        if not last:
             await asyncio.sleep(_embed_backoff_seconds(0))
-    else:
-        raise InvalidEmbeddingError(model_name, got)
 
+    # A batch that stays bad must not cost the good vectors in it: each text is
+    # asked alone, so only a text whose own vector stays unusable raises.
     # Fallback: sequential single-text calls, each validated the same way
     results = []
     for text in texts:
