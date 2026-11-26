@@ -583,3 +583,44 @@ class TestIngestAndCleanup:
         )
         eb.cleanup_bench(bench_tenant)
         assert _rows_by_tenant_table(bench_tenant) == {}
+
+
+@pytest.mark.integration
+class TestCleanupAfterConflicts:
+    @pytest.mark.asyncio
+    async def test_conflict_decisions_are_cleaned_too(self, bench_tenant, monkeypatch):
+        """A fact extracted again in a later session is reinforced, which
+        records a conflict decision for the tenant; cleanup must remove it."""
+        from robothor.llm import ollama
+        from robothor.memory import facts
+
+        async def fake_extract(content, max_retries=3, *, timeout=180.0, context=None):
+            return facts.Extraction(
+                [
+                    {
+                        "fact_text": "Alice Moreno lives in Brelford with Bob.",
+                        "category": "personal",
+                        "confidence": 0.9,
+                        "entities": ["Alice Moreno", "Brelford"],
+                        "mentions": [],
+                        "relations": [],
+                        "event_time": None,
+                    }
+                ]
+            )
+
+        async def fake_embed_one(text, *_a, **_k):
+            return (await fake_embed_batch(["same"]))[0]
+
+        async def same_embed_batch(texts):
+            return await fake_embed_batch(["same" for _ in texts])
+
+        monkeypatch.setattr(facts, "extract_facts_detailed", fake_extract)
+        monkeypatch.setattr(ollama, "get_embedding_async", fake_embed_one)
+        monkeypatch.setattr(ollama, "get_embeddings_batch_async", same_embed_batch)
+        await eb.ingest_history(
+            _history(), bench_tenant, mode="extract", embed_batch=same_embed_batch
+        )
+        assert "memory_conflict_decisions" in _rows_by_tenant_table(bench_tenant)
+        eb.cleanup_bench(bench_tenant)
+        assert _rows_by_tenant_table(bench_tenant) == {}
