@@ -795,6 +795,26 @@ def _query_graph(
     )
 
 
+def question_for_graph(
+    tenant_id: str, query: str, *, connect: Callable[..., Any] | None = None
+) -> str | None:
+    """``query`` without the names, aliases, e-mail addresses and handles it
+    links (:func:`question_without_names`), or None when nothing else is asked.
+
+    Read-only, one connection: the seed lookup of the query's own text and one
+    check that full text would index a word of what is left (the database
+    function's own rule). The search embeds the result with the query, before
+    the graph leg's budget starts.
+    """
+    with _cursor(connect) as cur:
+        asked = question_without_names(query, _link_seeds(cur, tenant_id, query))
+        cur.execute("SELECT to_tsvector('english', %s) <> ''::tsvector AS asks", (asked,))
+        row = cur.fetchone()
+    if not (row and (row["asks"] if isinstance(row, dict) else row[0])):
+        return None
+    return asked
+
+
 def has_anything_to_link(
     message: str, phrases: Sequence[str] | None, sender_person_id: str | None
 ) -> bool:

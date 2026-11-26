@@ -41,9 +41,10 @@ def no_io(monkeypatch):
         calls.append("entity_expansion")
         return []
 
-    monkeypatch.setattr(facts, "_embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr(facts, "_embed_query", AsyncMock(return_value=[0.1] * 4))
     monkeypatch.setattr(facts, "_fact_legs", _one_fact_legs)
     monkeypatch.setattr(activation, "graph_candidates_for_query", _walk)
+    monkeypatch.setattr(activation, "question_for_graph", lambda _t, q, **_k: q)
     monkeypatch.setattr(facts, "_entity_expansion_leg", _expansion)
     return calls
 

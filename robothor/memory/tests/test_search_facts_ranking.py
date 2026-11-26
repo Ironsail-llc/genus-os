@@ -104,6 +104,10 @@ def env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
         monkeypatch.delenv(flag, raising=False)
     monkeypatch.setenv("MEMORY_RANK_BLEND", "1")
     monkeypatch.setattr(reranker, "check_reranker_available", AsyncMock(return_value=True))
+    # No database: the graph's question is the query itself (no names linked).
+    from robothor.memory import activation
+
+    monkeypatch.setattr(activation, "question_for_graph", lambda _t, q, **_k: q)
     return monkeypatch
 
 

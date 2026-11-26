@@ -1354,29 +1354,26 @@ async def _graph_leg(
     reader_scope_id: str | None,
     scope: DataScope | None,
     limit: int,
+    asked: str,
+    asked_embedding: list[float],
 ) -> list[Candidate]:
     """Graph activation from the query's entities and the top hits' entities.
 
     Off the loop, read-only, best-effort: a failure is a WARNING and the other
     legs still rank. A deliberate search, so every origin is walked and each
     row is labelled with its origin (see robothor/memory/activation.py).
+    ``asked`` is the query without its names and ``asked_embedding`` its
+    embedding, made with the query's before the leg's budget starts: no model
+    call happens inside the budget.
     """
     from robothor.memory import activation
 
     top = [c.id for c in fuse(legs, weights=LEG_WEIGHTS) if c.kind == "fact"]
     restricted = scope is not None and scope.restricted
     deadline = time.monotonic() + GRAPH_LEG_BUDGET_SECONDS
-    loop = asyncio.get_running_loop()
 
     def embed(text: str) -> list[float] | None:
-        # Called on the leg's worker thread: the embedding runs on this event
-        # loop (free while the thread works), within what is left of the budget.
-        future = asyncio.run_coroutine_threadsafe(_embed_query(text), loop)
-        try:
-            return future.result(timeout=max(0.001, deadline - time.monotonic()))
-        except BaseException:
-            future.cancel()
-            raise
+        return asked_embedding if text == asked else None
 
     try:
         return await asyncio.to_thread(
@@ -1395,6 +1392,20 @@ async def _graph_leg(
     except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
         logger.warning("search_facts: graph leg failed: %s: %s", type(e).__name__, e)
         return []
+
+
+async def _question_for_graph(tenant: str, query: str) -> str | None:
+    """The query without the names it links, or None when nothing else is
+    asked (or the lookup failed): best-effort, like the leg itself."""
+    from robothor.memory import activation
+
+    try:
+        return await asyncio.to_thread(
+            activation.question_for_graph, tenant, query, connect=get_connection
+        )
+    except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
+        logger.warning("search_facts: graph question failed: %s: %s", type(e).__name__, e)
+        return None
 
 
 def _label_graph_rows(pool: list[dict[str, Any]], graph: list[Candidate]) -> None:
@@ -1757,10 +1768,26 @@ async def search_facts(
     # Hybrid search treats the embedding as one leg, not a prerequisite: when
     # the embedding service is down (GPU wedge, post-boot model load), degrade
     # to the keyword leg instead of failing the whole memory read path.
+    _tenant = tenant_id or DEFAULT_TENANT
+    # The graph leg ranks what it reaches by the question without its names;
+    # that is found now and embedded with the query, so the leg's own budget
+    # never waits on the model. None: the graph leg will not run.
+    asked = (
+        await _question_for_graph(_tenant, query)
+        if include_graph and not admin_erasure_view
+        else None
+    )
+    asked_embedding: list[float] | None = None
     degraded: str | None = None
     embedding: list[float] | None
     try:
-        embedding = await _embed_query(query)
+        if asked is not None and asked != query:
+            embedding, asked_embedding = await asyncio.gather(
+                _embed_query(query), _embed_query(asked)
+            )
+        else:
+            embedding = await _embed_query(query)
+            asked_embedding = embedding if asked is not None else None
     except httpx.HTTPError as embed_exc:
         logger.warning(
             "search_facts: embedding fetch failed (%s) — degrading to keyword-only search",
@@ -1780,7 +1807,6 @@ async def search_facts(
     # supplies one: the reader is kept only when its person is the scope's
     # person, and its user id only when that user provably is the same person;
     # anything else reads nothing private. See robothor/memory/visibility.py.
-    _tenant = tenant_id or DEFAULT_TENANT
     reader_person, reader_user = served_reader(scope, reader_person_id, reader_user_id)
     if scope is not None and scope.restricted and reader_person and reader_user:
         from robothor.memory.segments import user_belongs_to_person
@@ -1806,9 +1832,16 @@ async def search_facts(
     # (it blocks the loop for the two leg queries); it is not widened here.
     legs = _fact_legs(query, embedding, _tenant, filters, scope_params, max(fetch_min, limit * 3))
     graph: list[Candidate] = []
-    if include_graph and not admin_erasure_view:
+    if asked is not None and asked_embedding is not None:
         graph = await _graph_leg(
-            query, legs, _tenant, reader_scope_id=graph_reader(readers), scope=scope, limit=limit
+            query,
+            legs,
+            _tenant,
+            reader_scope_id=graph_reader(readers),
+            scope=scope,
+            limit=limit,
+            asked=asked,
+            asked_embedding=asked_embedding,
         )
         if graph:
             legs["graph"] = graph
