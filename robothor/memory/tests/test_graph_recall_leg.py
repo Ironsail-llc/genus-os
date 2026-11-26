@@ -26,14 +26,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from robothor.memory.tests.fake_embedding import embed_all_facts, fake_embed
 from robothor.memory.tests.test_graph_activation import TENANT, Graph
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
 pytestmark = pytest.mark.integration
-
-_VECTOR = [0.1] * 1024
 
 
 @pytest.fixture
@@ -72,13 +71,22 @@ def world(scratch_db, monkeypatch) -> Iterator[Graph]:
     # are about the leg, so they run with it on.
     monkeypatch.setattr(facts, "GRAPH_LEG_DEFAULT", True)
 
-    async def _embed(_text: str) -> list[float]:
-        return list(_VECTOR)
+    async def _embed(text: str) -> list[float]:
+        return fake_embed(text)
 
     monkeypatch.setattr(ollama, "get_embedding_async", _embed)
     monkeypatch.setattr(reranker, "check_reranker_available", AsyncMock(return_value=True))
     monkeypatch.setenv("MEMORY_RANK_BLEND", "1")
-    yield Graph(db)
+    graph = Graph(db)
+    real = facts.search_facts
+
+    async def search_after_embedding(*a: Any, **k: Any) -> list[dict[str, Any]]:
+        # Every planted fact gets its embedding (the fake model's) first.
+        embed_all_facts(graph.sql)
+        return await real(*a, **k)
+
+    monkeypatch.setattr(facts, "search_facts", search_after_embedding)
+    yield graph
 
 
 def _scorer(zero: str):
@@ -90,21 +98,37 @@ def _scorer(zero: str):
     return fake_pair
 
 
-def _chain(world: Graph, *, fillers: int = 12) -> dict[str, int]:
+def _fillers(world: Graph, text: str, n: int = 40, **kw: Any) -> None:
+    """``n`` shared facts closer to the query than anything planted: they fill
+    the vector leg's 30 and the fused head, so a planted fact can reach the
+    results only through the walk (or not at all)."""
+    for i in range(n):
+        world.fact(f"{text} filler {i}", **kw)
+
+
+def _legs_of(rows: list[dict[str, Any]], fact_id: int) -> set[str]:
+    """The legs that found ``fact_id`` in ``rows`` (empty if it is not there)."""
+    return next((set(r["leg_ranks"]) for r in rows if r["id"] == fact_id), set())
+
+
+def _chain(world: Graph, *, fillers: int = 40) -> dict[str, int]:
     a, b, c = (world.entity(n) for n in ("Alice Smith", "Bob Jones", "Carol White"))
     world.link(a, b)
     world.link(b, c)
     # Directly retrievable, and mentioning Alice.
     seed = world.fact("Alice Smith signed the quarterly logistics agreement", about=(a,))
-    world.sql("UPDATE memory_facts SET embedding = %s::vector WHERE id = %s", (str(_VECTOR), seed))
-    # Many dense hits that outrank it on every leg but the graph.
+    # Many dense hits that outrank it on every leg but the graph: more than the
+    # vector leg fetches (30), so the two-hop fact is the graph's alone.
     for i in range(fillers):
-        fid = world.fact(f"quarterly logistics agreement filler {i}")
-        world.sql(
-            "UPDATE memory_facts SET embedding = %s::vector WHERE id = %s", (str(_VECTOR), fid)
-        )
-    # Reachable only through two edges: no embedding, no shared words.
-    far = world.fact("Carol White operates the northern depot", about=(c,), importance=0.9)
+        world.fact(f"quarterly logistics agreement filler {i}")
+    # Reachable through two edges; not every word of the query (so the
+    # keyword leg misses it) and further from it than the fillers (so the
+    # vector leg does), but close in meaning to the question without its name.
+    far = world.fact(
+        "Carol White operates the northern depot under the logistics agreement",
+        about=(c,),
+        importance=0.9,
+    )
     return {"a": a, "b": b, "c": c, "seed": seed, "far": far}
 
 
@@ -130,6 +154,7 @@ async def test_a_two_hop_fact_keeps_a_reserved_place_when_the_reranker_discards_
     assert row["graph_hops"] == 2
     assert row["graph_path"] == ["Alice Smith", "Bob Jones", "Carol White"]
     assert row["source"] == "graph"
+    assert row["graph_relevance"] > 0
 
 
 @pytest.mark.asyncio
@@ -180,10 +205,11 @@ async def test_the_reader_decides_which_private_evidence_is_walked(
 
     bob_reader = str(uuid.uuid4())
     a, p = world.entity("Alice Smith"), world.entity("Pat Hidden")
-    seed = world.fact("Alice Smith signed the quarterly logistics agreement", about=(a,))
+    world.fact("Alice Smith signed the quarterly logistics agreement", about=(a,))
     secret = world.fact("private support", scope_id=bob_reader)
     world.edge(a, p, evidence=(secret,))
-    about_p = world.fact("Pat Hidden lives on Elm Street", about=(p,))
+    about_p = world.fact("Pat Hidden keeps the logistics agreement on Elm Street", about=(p,))
+    _fillers(world, "Alice Smith quarterly logistics agreement")
     monkeypatch.setattr(reranker, "rerank_pair", _scorer("Elm Street"))
     query = "Alice Smith quarterly logistics agreement"
 
@@ -192,9 +218,11 @@ async def test_the_reader_decides_which_private_evidence_is_walked(
         query, limit=5, tenant_id=TENANT, use_reranker=True, reader_scope_id=bob_reader
     )
 
-    assert seed in {r["id"] for r in anonymous}
-    assert about_p not in {r["id"] for r in anonymous}
-    assert about_p in {r["id"] for r in bob}
+    # What is asserted is whether the WALK reached it (the fillers keep it
+    # out of the other legs and out of the top hits that seed the walk).
+    assert anonymous, "negative control: the anonymous search answers"
+    assert "graph" not in _legs_of(anonymous, about_p)
+    assert "graph" in _legs_of(bob, about_p)
 
 
 @pytest.mark.asyncio
@@ -208,7 +236,10 @@ async def test_a_restricted_scope_does_not_reach_another_persons_fact_through_th
 
     alice_pid, bob_pid = world.person("Alice", "Smith"), world.person("Bob", "Jones")
     w = _chain(world, fillers=0)
-    bobs = world.fact("Carol White shares Bob's private depot code", about=(w["c"],))
+    bobs = world.fact(
+        "Carol White shares Bob's private depot code for the logistics agreement",
+        about=(w["c"],),
+    )
     world.sql("UPDATE memory_facts SET person_id = %s WHERE id = %s", (bob_pid, bobs))
     monkeypatch.setattr(reranker, "rerank_pair", _scorer("depot"))
     query = "Alice Smith quarterly logistics agreement"
@@ -260,19 +291,24 @@ async def test_a_top_hit_the_reader_cannot_see_does_not_seed_the_walk(
     alice_reader, bob_reader = world.person("Alice", "Smith"), world.person("Bob", "Jones")
     p, q = world.entity("Pat Hidden"), world.entity("Quinn Far")
     world.fact("zephyr logistics memo from Bob", about=(p,), scope_id=bob_reader)
+    # A shared hit on every word, so the keyword leg never falls back to any
+    # word and finds the fact below directly; it mentions no one.
+    world.fact("zephyr logistics memo template")
     world.link(p, q)
-    about_q = world.fact("Quinn Far operates the depot", about=(q,))
+    # A note is a memo (the fake model's synonym), with no word of the query.
+    about_q = world.fact("Quinn Far files each note at the depot", about=(q,))
+    _fillers(world, "zephyr logistics memo")
     monkeypatch.setattr(reranker, "rerank_pair", _scorer("depot"))
 
     bob = await search_facts(
         "zephyr logistics memo", limit=5, tenant_id=TENANT, reader_scope_id=bob_reader
     )
-    assert about_q in {r["id"] for r in bob}, "negative control: its owner's walk reaches it"
+    assert "graph" in _legs_of(bob, about_q), "negative control: its owner's walk reaches it"
 
     alice = await search_facts(
         "zephyr logistics memo", limit=5, tenant_id=TENANT, reader_scope_id=alice_reader
     )
-    assert about_q not in {r["id"] for r in alice}
+    assert "graph" not in _legs_of(alice, about_q)
 
 
 @pytest.mark.asyncio
@@ -289,12 +325,17 @@ async def test_the_one_hop_expansion_answers_on_data_without_mentions(
         world.entity("Spokeworks Example"),
     )
     world.edge(a, b, legacy_fact=world.fact("support", origin=None))
-    seed = world.fact(
+    world.fact(
         "Hubcorp Example signed the quarterly logistics agreement",
         origin=None,
         entities=("Hubcorp Example",),
     )
-    world.sql("UPDATE memory_facts SET embedding = %s::vector WHERE id = %s", (str(_VECTOR), seed))
+    _fillers(
+        world,
+        "Hubcorp Example quarterly logistics agreement",
+        origin=None,
+        entities=("Hubcorp Example",),
+    )
     related = world.fact(
         "Spokeworks Example operates the northern depot",
         origin=None,
@@ -311,4 +352,34 @@ async def test_the_one_hop_expansion_answers_on_data_without_mentions(
     )
 
     row = next((r for r in results if r["id"] == related), None)
-    assert row is not None and row.get("source") == "entity_expansion"
+    assert row is not None and "entity_expansion" in row["leg_ranks"]
+
+
+@pytest.mark.asyncio
+async def test_a_slow_embedding_model_does_not_cost_the_graph_its_budget(
+    world: Graph, monkeypatch
+) -> None:
+    """The question without its names is embedded with the query, before the
+    leg's 250 ms budget starts: under load the model answered in more than
+    that, and the leg timed out on most searches of the answer evaluation."""
+    import asyncio
+
+    from robothor.memory import facts
+    from robothor.memory.facts import search_facts
+    from robothor.rag import reranker
+
+    w = _chain(world)
+    monkeypatch.setattr(reranker, "rerank_pair", _scorer("northern depot"))
+    calls: list[str] = []
+
+    async def slow_embed(text: str) -> list[float]:
+        calls.append(text)
+        await asyncio.sleep(0.4)  # longer than the leg's whole budget
+        return fake_embed(text)
+
+    monkeypatch.setattr(facts, "_embed_query", slow_embed)
+    query = "Alice Smith quarterly logistics agreement"
+    results = await search_facts(query, limit=5, tenant_id=TENANT, use_reranker=True)
+
+    assert w["far"] in {r["id"] for r in results}, "the graph leg ran out of time"
+    assert sorted(calls) == sorted([query, "quarterly logistics agreement"])

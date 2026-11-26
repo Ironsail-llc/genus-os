@@ -1192,8 +1192,12 @@ LEG_FETCH_MIN_WIDE = 45
 
 # RRF weight per leg (unlisted legs count 1.0). The fan-out legs enter at half
 # weight: they still reach the reranker when their best rows are near the head,
-# without displacing the primary legs' top ranks.
-LEG_WEIGHTS: dict[str, float] = {"graph": 0.5, "entity_expansion": 0.5, "chat_turn": 0.5}
+# without displacing the primary legs' top ranks. The graph leg adds nothing to
+# the fused order: it reaches through what the other legs found, and lifting
+# those rows into the reranker's head pushed the right fact out on the memory
+# evaluation's world (point in time 73 to 60 of 126). It contributes through
+# its reserved places, which hold its best rows by its own score.
+LEG_WEIGHTS: dict[str, float] = {"graph": 0.0, "entity_expansion": 0.5, "chat_turn": 0.5}
 
 # Places in the final top-k a leg keeps whenever it returned anything (see
 # recall.apply_reserved). Graph-derived facts are related to the query, not
@@ -1331,6 +1335,7 @@ _GRAPH_FIELDS = (
     "graph_entity",
     "graph_entity_id",
     "graph_edge_id",
+    "graph_relevance",
 )
 
 
@@ -1341,14 +1346,14 @@ _GRAPH_FIELDS = (
 GRAPH_LEG_BUDGET_SECONDS = 0.25
 
 #: Whether search_facts runs the graph-activation leg unless told otherwise.
-#: Off: on the memory evaluation's world, dev split, the leg did not
-#: earn its place. Multi-hop top-5 21/126 with it against 20/126 without
-#: (top-10 34 against 37); raw detail 27/110 against 40/110, its candidates
-#: crowding conversation segments out of the reranked head. Reserved places
-#: (2, 1, 0), seed linking (possessives), 10 or 20 facts per entity and a query
-#: rerank of its candidates did not change that. The design's fallback: the
-#: graph serves identity and current state; this leg runs on an explicit
-#: ``include_graph=True``.
+#: Off. Ranked by the meaning of the question, the leg met its retrieval gate
+#: on the memory evaluation's world (dev split, top 5: reworded multi-hop
+#: 21/126 off against 56/126 on, no stratum worse), and in the answer arm it
+#: raised multi-hop answers (reworded 1/40 to 12/40). But it lowered
+#: cross-tenant answers from 30/40 to 26/40 (4 worse, none better, p = 0.125):
+#: for "which city is X based in?" a neighbour fact (an employer's
+#: headquarters) drew the answer to the wrong city. A stratum worse at
+#: p < 0.20 blocks a gate, so the leg runs on an explicit ``include_graph=True``.
 GRAPH_LEG_DEFAULT = False
 
 
@@ -1360,17 +1365,27 @@ async def _graph_leg(
     reader_scope_id: str | None,
     scope: DataScope | None,
     limit: int,
+    asked: str,
+    asked_embedding: list[float],
 ) -> list[Candidate]:
     """Graph activation from the query's entities and the top hits' entities.
 
     Off the loop, read-only, best-effort: a failure is a WARNING and the other
     legs still rank. A deliberate search, so every origin is walked and each
     row is labelled with its origin (see robothor/memory/activation.py).
+    ``asked`` is the query without its names and ``asked_embedding`` its
+    embedding, made with the query's before the leg's budget starts: no model
+    call happens inside the budget.
     """
     from robothor.memory import activation
 
     top = [c.id for c in fuse(legs, weights=LEG_WEIGHTS) if c.kind == "fact"]
     restricted = scope is not None and scope.restricted
+    deadline = time.monotonic() + GRAPH_LEG_BUDGET_SECONDS
+
+    def embed(text: str) -> list[float] | None:
+        return asked_embedding if text == asked else None
+
     try:
         return await asyncio.to_thread(
             activation.graph_candidates_for_query,
@@ -1381,12 +1396,27 @@ async def _graph_leg(
             person_restricted=restricted,
             person_id=scope.person_id if restricted and scope is not None else None,
             limit=max(activation.LIMIT, limit),
-            deadline=time.monotonic() + GRAPH_LEG_BUDGET_SECONDS,
+            deadline=deadline,
+            embed=embed,
             connect=get_connection,
         )
     except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
         logger.warning("search_facts: graph leg failed: %s: %s", type(e).__name__, e)
         return []
+
+
+async def _question_for_graph(tenant: str, query: str) -> str | None:
+    """The query without the names it links, or None when nothing else is
+    asked (or the lookup failed): best-effort, like the leg itself."""
+    from robothor.memory import activation
+
+    try:
+        return await asyncio.to_thread(
+            activation.question_for_graph, tenant, query, connect=get_connection
+        )
+    except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
+        logger.warning("search_facts: graph question failed: %s: %s", type(e).__name__, e)
+        return None
 
 
 def _label_graph_rows(pool: list[dict[str, Any]], graph: list[Candidate]) -> None:
@@ -1749,10 +1779,29 @@ async def search_facts(
     # Hybrid search treats the embedding as one leg, not a prerequisite: when
     # the embedding service is down (GPU wedge, post-boot model load), degrade
     # to the keyword leg instead of failing the whole memory read path.
+    _tenant = tenant_id or DEFAULT_TENANT
+    # The graph leg ranks what it reaches by the question without its names;
+    # that is found now and embedded with the query, so the leg's own budget
+    # never waits on the model. None: the graph leg will not run.
+    if include_graph is None:
+        include_graph = GRAPH_LEG_DEFAULT
+    asked = (
+        await _question_for_graph(_tenant, query)
+        if include_graph and not admin_erasure_view
+        else None
+    )
+    asked_embedding: list[float] | None = None
     degraded: str | None = None
     embedding: list[float] | None
+    # The graph's question is embedded beside the query, and its failure costs
+    # only the graph leg: the dense leg keeps its own embedding.
+    asked_task = (
+        asyncio.ensure_future(_embed_query(asked)) if asked is not None and asked != query else None
+    )
     try:
         embedding = await _embed_query(query)
+        if asked is not None and asked_task is None:
+            asked_embedding = embedding
     except httpx.HTTPError as embed_exc:
         logger.warning(
             "search_facts: embedding fetch failed (%s) — degrading to keyword-only search",
@@ -1760,6 +1809,18 @@ async def search_facts(
         )
         embedding = None
         degraded = "keyword-only (embedding service unavailable)"
+    except BaseException:
+        if asked_task is not None:
+            asked_task.cancel()
+        raise
+    if asked_task is not None:
+        try:
+            asked_embedding = await asked_task
+        except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
+            logger.warning(
+                "search_facts: graph question embedding failed: %s: %s", type(e).__name__, e
+            )
+            asked_embedding = None
 
     scope_clause = ""
     scope_params: tuple[Any, ...] = ()
@@ -1772,7 +1833,6 @@ async def search_facts(
     # supplies one: the reader is kept only when its person is the scope's
     # person, and its user id only when that user provably is the same person;
     # anything else reads nothing private. See robothor/memory/visibility.py.
-    _tenant = tenant_id or DEFAULT_TENANT
     reader_person, reader_user = served_reader(scope, reader_person_id, reader_user_id)
     if scope is not None and scope.restricted and reader_person and reader_user:
         from robothor.memory.segments import user_belongs_to_person
@@ -1798,11 +1858,16 @@ async def search_facts(
     # (it blocks the loop for the two leg queries); it is not widened here.
     legs = _fact_legs(query, embedding, _tenant, filters, scope_params, max(fetch_min, limit * 3))
     graph: list[Candidate] = []
-    if include_graph is None:
-        include_graph = GRAPH_LEG_DEFAULT
-    if include_graph and not admin_erasure_view:
+    if asked is not None and asked_embedding is not None:
         graph = await _graph_leg(
-            query, legs, _tenant, reader_scope_id=graph_reader(readers), scope=scope, limit=limit
+            query,
+            legs,
+            _tenant,
+            reader_scope_id=graph_reader(readers),
+            scope=scope,
+            limit=limit,
+            asked=asked,
+            asked_embedding=asked_embedding,
         )
         if graph:
             legs["graph"] = graph

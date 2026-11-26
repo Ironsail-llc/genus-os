@@ -107,6 +107,10 @@ def env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
         monkeypatch.delenv(flag, raising=False)
     monkeypatch.setenv("MEMORY_RANK_BLEND", "1")
     monkeypatch.setattr(reranker, "check_reranker_available", AsyncMock(return_value=True))
+    # No database: the graph's question is the query itself (no names linked).
+    from robothor.memory import activation
+
+    monkeypatch.setattr(activation, "question_for_graph", lambda _t, q, **_k: q)
     return monkeypatch
 
 
@@ -222,6 +226,133 @@ async def test_the_graph_leg_keeps_its_reserved_places(env: pytest.MonkeyPatch) 
     row = next(r for r in results if r["id"] == 700)
     assert "graph" in row["leg_ranks"]
     assert row["origin"] == "user_stated"
+
+
+@pytest.mark.asyncio
+async def test_a_graph_row_another_leg_found_first_carries_its_relevance(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Fusion keeps the first leg's payload; the graph's labels, its
+    relevance to the question included, are carried onto the row."""
+    shared = _row(700, "Bob runs the shipping team", kw_score=0.5)
+    hit = _graph_hit(700, "Bob runs the shipping team", 0.9)
+    hit.payload["graph_relevance"] = 0.3
+    cur = _Cursor(vector=_dense(5), keyword=[shared])
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=[hit]):
+        results = await _search(cur)
+
+    row = next(r for r in results if r["id"] == 700)
+    assert row["leg_ranks"].keys() >= {"keyword", "graph"}
+    assert row["graph_relevance"] == 0.3
+
+
+@pytest.mark.asyncio
+async def test_the_graph_leg_never_moves_rows_into_the_reranked_head(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """The graph reaches through what the dense and keyword legs found; it
+    must not lift those rows over the others into the reranker's head (on the
+    eval world that pushed the right fact out for point-in-time and raw-detail
+    questions). It contributes through its reserved places only."""
+    env.setenv("MEMORY_RERANK_MAX_CANDIDATES", "8")
+    dense = _dense(20)
+    # The graph also reaches dense rows 15..20, which the reranker would love.
+    for r in dense[14:]:
+        r["fact_text"] = f"boosted {r['fact_text']}"
+    hops = [_graph_hit(r["id"], r["fact_text"], 0.9 - i / 100) for i, r in enumerate(dense[14:])]
+    env.setattr(reranker, "rerank_pair", _scorer({"boosted": 0.95}, default=0.5))
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=hops):
+        on = await _search(_Cursor(vector=dense, keyword=[]))
+    off = await _search(_Cursor(vector=dense, keyword=[]), include_graph=False)
+
+    head_on = [r["id"] for r in on if not r.get("reserved_leg")]
+    assert head_on == [r["id"] for r in off][: len(head_on)]
+    assert [r["id"] for r in on if r.get("reserved_leg") == "graph"] == [15, 16]
+
+
+@pytest.mark.asyncio
+async def test_a_head_held_graph_row_uses_one_of_its_places(env: pytest.MonkeyPatch) -> None:
+    """With the real near-duplicate exclude: the graph's best row is already
+    in the head, so only one more graph row may take a reserved place."""
+    env.delenv("MEMORY_DEDUP", raising=False)
+    dense = _dense(20)
+    hops = [
+        _graph_hit(dense[0]["id"], dense[0]["fact_text"], 0.95),
+        _graph_hit(700, "Bob runs the shipping team", 0.5),
+        _graph_hit(701, "Carol drives the shipping van", 0.4),
+    ]
+    env.setattr(reranker, "rerank_pair", _scorer({"shipping": 0.0}, default=0.6))
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=hops):
+        results = await _search(_Cursor(vector=dense, keyword=[]))
+    off = await _search(_Cursor(vector=dense, keyword=[]), include_graph=False)
+
+    ids = [r["id"] for r in results]
+    assert dense[0]["id"] in ids
+    assert 700 in ids and 701 not in ids, ids
+    gave_way = {r["id"] for r in off} - set(ids)
+    assert len(gave_way) == 1, f"only one head row may give way, not {gave_way}"
+
+
+def _two_questions(env: pytest.MonkeyPatch, fail: str) -> MagicMock:
+    """The graph's question differs from the query; the embedding of ``fail``
+    ("query" or "asked") raises a transport error."""
+    import httpx
+
+    from robothor.memory import activation
+
+    query, asked = "Who does Alice Smith work for?", "Who does work for?"
+    env.setattr(activation, "question_for_graph", lambda _t, _q, **_k: asked)
+    broken = query if fail == "query" else asked
+
+    async def embed(text: str) -> list[float]:
+        if text == broken:
+            raise httpx.ConnectError("embedding service down")
+        return [0.1] * 8
+
+    env.setattr(facts, "_embed_query", embed)
+    return MagicMock(return_value=[])
+
+
+@pytest.mark.asyncio
+async def test_a_failed_graph_question_embedding_costs_only_the_graph_leg(
+    env: pytest.MonkeyPatch,
+) -> None:
+    graph = _two_questions(env, fail="asked")
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+    with patch("robothor.memory.activation.graph_candidates_for_query", graph):
+        results = await _search_with_own_embedding(_Cursor(vector=_dense(5), keyword=[]))
+    assert results and not any("degraded" in r for r in results)
+    assert any("vector" in r["leg_ranks"] for r in results), "the dense leg lost its embedding"
+    graph.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_query_embedding_still_degrades_to_keyword_only(
+    env: pytest.MonkeyPatch,
+) -> None:
+    _two_questions(env, fail="query")
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+    keyword = [_row(9, "Alice Smith works for Example Co", kw_score=0.5)]
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=[]):
+        results = await _search_with_own_embedding(_Cursor(vector=_dense(5), keyword=keyword))
+    assert [r["id"] for r in results] == [9]
+    assert all(r.get("degraded") for r in results)
+
+
+async def _search_with_own_embedding(cur: _Cursor) -> list[dict[str, Any]]:
+    """As ``_search``, but with the test's own ``facts._embed_query``."""
+    with (
+        patch.object(facts, "get_connection", return_value=_conn(cur)),
+        patch.object(facts, "apply_hnsw_session"),
+    ):
+        return await facts.search_facts(
+            "Who does Alice Smith work for?", tenant_id="test-tenant", limit=5,
+            use_reranker=False, include_graph=True,
+        )  # fmt: skip
 
 
 @pytest.mark.asyncio

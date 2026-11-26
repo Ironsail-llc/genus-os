@@ -107,6 +107,7 @@ def _make_search_memory_fn(*, tenant_id: str) -> Callable[..., str]:
     def search_memory(query: str, limit: int = 10) -> str:
         """Search semantic memory. Returns JSON list of facts."""
         from robothor.memory.facts import search_facts
+        from robothor.memory.recall import row_text
 
         results = _as_tenant(
             tenant_id, lambda: asyncio.run(search_facts(query, limit=limit, tenant_id=tenant_id))
@@ -114,7 +115,7 @@ def _make_search_memory_fn(*, tenant_id: str) -> Callable[..., str]:
         return json.dumps(
             [
                 {
-                    "fact": r["fact_text"],
+                    "fact": row_text(r),
                     "category": r["category"],
                     "confidence": r["confidence"],
                     "similarity": round(r.get("similarity", 0), 4),
@@ -194,6 +195,7 @@ def _load_context_source(src: dict[str, Any], workspace: str, *, tenant_id: str)
         if not query:
             return None
         from robothor.memory.facts import search_facts
+        from robothor.memory.recall import row_text
 
         results = _as_tenant(
             tenant_id, lambda: asyncio.run(search_facts(query, limit=limit, tenant_id=tenant_id))
@@ -201,9 +203,7 @@ def _load_context_source(src: dict[str, Any], workspace: str, *, tenant_id: str)
         if not results:
             return None
         lines = [f"## Memory search: {query}"]
-        lines.extend(
-            f"- [{r['category']}, conf={r['confidence']}] {r['fact_text']}" for r in results
-        )
+        lines.extend(f"- [{r['category']}, conf={r['confidence']}] {row_text(r)}" for r in results)
         return "\n".join(lines)
 
     if src_type == "file":

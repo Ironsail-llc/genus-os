@@ -26,7 +26,8 @@ Ranking after fusion, in ``search_facts``:
    there is one, else :func:`relevance_from_rank` of the fused rank.
 4. :func:`apply_reserved` — a leg named in ``reserved`` keeps at least that
    many places in the final top-k whenever it returned anything, chosen by its
-   own ``leg_scores``, capped at :func:`max_reserved_picks` (``(limit-1)//2``)
+   own ``leg_scores`` (the graph leg, :data:`BEST_ROW_LEGS`, keeps its best
+   that many rows), capped at :func:`max_reserved_picks` (``(limit-1)//2``)
    in total so the reranked head is never displaced. A multi-hop fact is by
    definition not similar to the query, so a query-document reranker would
    otherwise always discard it. To
@@ -143,6 +144,25 @@ def relevance_from_rank(rank: int, half: int = RANK_RELEVANCE_HALF) -> float:
     return half / (half + max(0, int(rank)))
 
 
+def row_text(row: Mapping[str, Any]) -> str:
+    """The text a model reads for a recall row: the one formatter every
+    surface that renders rows uses (the engine's ``search_memory`` tool, MCP,
+    deep reason, the memory evaluation's context).
+
+    A row only the graph leg found is about an entity *related* to the one
+    asked about, so it is shown with the walk's path to it: ``Related via
+    Alice Smith → Example Co: Example Co is headquartered in Brelford.`` (the
+    answer model otherwise took an employer's address for the person's). The
+    path is the walk's first-reach path, every node of it visible to the
+    reader. Any row another leg also found keeps its plain text.
+    """
+    text = str(row.get("fact_text") or row.get("insight_text") or row.get("text") or "")
+    path = [str(n) for n in (row.get("graph_path") or []) if n]
+    if path and set(row.get("leg_ranks") or {}) == {"graph"}:
+        return f"Related via {' → '.join(path)}: {text}"
+    return text
+
+
 def _row_key(row: Mapping[str, Any]) -> tuple[Any, Any]:
     return (row.get("kind"), row.get("id"))
 
@@ -154,6 +174,40 @@ def _leg_order(leg: str) -> Callable[[Mapping[str, Any]], tuple[float, int]]:
         return (-(float(score) if score is not None else float("-inf")), int(rank))
 
     return key
+
+
+#: Legs whose reserved places hold their best rows by their own score: a
+#: weaker row of the leg that the head holds anyway does not use a place, and
+#: a best row the head holds counts. Only the graph leg (off by default); every
+#: other reserved leg keeps the earlier rule, so the default search is
+#: unchanged.
+BEST_ROW_LEGS: frozenset[str] = frozenset({"graph"})
+
+
+def _best_rows_held(
+    leg: str,
+    want: int,
+    out: Sequence[dict[str, Any]],
+    pool: Sequence[dict[str, Any]],
+    exclude: Callable[[dict[str, Any]], bool] | None,
+) -> tuple[list[dict[str, Any]], int]:
+    """The rows of ``out`` among the leg's best ``want`` and how many best rows
+    there are. ``exclude`` keeps out only rows that would come in from outside
+    the head."""
+    in_head = {_row_key(r) for r in out}
+    best = {
+        _row_key(r)
+        for r in sorted(
+            (
+                r
+                for r in pool
+                if leg in (r.get("leg_ranks") or {})
+                and (_row_key(r) in in_head or not (exclude is not None and exclude(r)))
+            ),
+            key=_leg_order(leg),
+        )[:want]
+    }
+    return [r for r in out if _row_key(r) in best], len(best)
 
 
 def max_reserved_picks(limit: int) -> int:
@@ -180,7 +234,9 @@ def apply_reserved(
     ``n`` rows in the top ``limit`` came from that leg, the missing ones are
     taken from ``pool`` in the order of that leg's own ``leg_scores`` (then its
     rank), and they replace the lowest-ranked rows that do not themselves hold
-    a reserved place. Reserved picks go at the end of the list — they are
+    a reserved place. A leg in :data:`BEST_ROW_LEGS` (the graph) keeps its
+    best ``n`` rows instead: another of its rows that the head holds anyway
+    uses up no place. Reserved picks go at the end of the list — they are
     guaranteed a place, not a position. A leg with no candidates reserves
     nothing, and a pool row for which ``exclude(row)`` is true is never picked
     (``search_facts`` uses it to keep out near-duplicates of ranked rows).
@@ -195,9 +251,14 @@ def apply_reserved(
     for leg, want in reserved.items():
         if want <= 0:
             continue
-        have = [r for r in out if leg in (r.get("leg_ranks") or {})][:want]
+        if leg in BEST_ROW_LEGS:
+            have, need_total = _best_rows_held(leg, want, out, pool, exclude)
+        else:
+            # Every other leg: any of its rows in the head holds a place.
+            have = [r for r in out if leg in (r.get("leg_ranks") or {})][:want]
+            need_total = want
         protected.update(_row_key(r) for r in have)
-        need = min(want - len(have), budget - len(picks))
+        need = min(need_total - len(have), budget - len(picks))
         if need <= 0:
             continue
         taken = {_row_key(r) for r in out} | {_row_key(r) for r in picks}

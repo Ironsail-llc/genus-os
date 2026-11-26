@@ -139,6 +139,14 @@ Each stratum has at least 150 cases at full size, capped at 240 per stratum.
 | `raw_detail` | A detail found only in a transcript turn | The detail | Any gold in top-k |
 | `long_tenure` | Current home, with `history_length` from 1 to 8 | City | Gold ranks first |
 | `cross_tenant` | Employer, city or manager of a person whose name also exists in the shadow tenant | Primary tenant's value | Any gold in top-k and no `forbidden` value in top-k |
+| `multi_hop_paraphrase` | The `multi_hop` cases reworded (`PARAPHRASES`, one of three wordings per kind) so the question shares no content word with its supporting facts except the names | As `multi_hop` | Any gold in top-k |
+
+Every `multi_hop` question shares its one rare word with the second-hop fact
+("headquartered", "report to"), so a retriever that matches words can look
+like one that follows links. `multi_hop_paraphrase` asks the same pairs without
+that word; a twin takes the split and the per-stratum cap of the case it
+rewords. `multi_hop` is kept as it was, so earlier numbers still compare; the
+`hard` pool of the answer arm does not include the reworded stratum.
 
 `raw_detail` cases cannot pass through `search_facts`, which only reads
 `memory_facts`. They measure the gap that raw-conversation recall is meant to

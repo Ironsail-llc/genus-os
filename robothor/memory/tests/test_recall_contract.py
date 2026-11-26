@@ -93,6 +93,140 @@ def _rows(fused: list[Candidate]) -> list[dict]:
     return [c.to_row() for c in fused]
 
 
+class TestRowText:
+    """What a model reads for a recall row (``recall.row_text``, the one
+    formatter every surface uses). A row only the graph found is about an
+    entity related to the one asked about, and says so; the answer model
+    otherwise took an employer's address for the person's."""
+
+    def _row(self, legs: set[str], **kw: object) -> dict:
+        return {
+            "id": 1,
+            "kind": "fact",
+            "fact_text": "Example Co is headquartered in Brelford.",
+            "leg_ranks": dict.fromkeys(legs, 0),
+            "graph_path": ["Alice Smith", "Example Co"],
+            **kw,
+        }
+
+    def test_a_graph_only_row_names_its_relation_path(self) -> None:
+        from robothor.memory.recall import row_text
+
+        assert row_text(self._row({"graph"})) == (
+            "Related via Alice Smith → Example Co: Example Co is headquartered in Brelford."
+        )
+
+    def test_a_row_the_head_legs_also_found_keeps_its_plain_text(self) -> None:
+        from robothor.memory.recall import row_text
+
+        for legs in ({"graph", "vector"}, {"keyword"}, {"vector", "graph", "segment"}):
+            assert row_text(self._row(legs)) == "Example Co is headquartered in Brelford."
+
+    def test_without_a_path_the_text_is_plain(self) -> None:
+        from robothor.memory.recall import row_text
+
+        assert row_text(self._row({"graph"}, graph_path=[])) == (
+            "Example Co is headquartered in Brelford."
+        )
+        assert row_text({"insight_text": "An insight", "leg_ranks": {"insight": 0}}) == "An insight"
+
+
+def _base_apply_reserved(ranked, pool, limit, reserved, exclude=None):
+    """``apply_reserved`` exactly as the base branch has it (before the graph's
+    best-rows rule), for legs other than the graph."""
+    from robothor.memory.recall import _leg_order, _row_key, max_reserved_picks
+
+    out = list(ranked[:limit])
+    protected: set = set()
+    picks: list = []
+    budget = max_reserved_picks(limit)
+    for leg, want in reserved.items():
+        if want <= 0:
+            continue
+        have = [r for r in out if leg in (r.get("leg_ranks") or {})][:want]
+        protected.update(_row_key(r) for r in have)
+        need = min(want - len(have), budget - len(picks))
+        if need <= 0:
+            continue
+        taken = {_row_key(r) for r in out} | {_row_key(r) for r in picks}
+        extra = sorted(
+            (
+                r
+                for r in pool
+                if leg in (r.get("leg_ranks") or {})
+                and _row_key(r) not in taken
+                and not (exclude is not None and exclude(r))
+            ),
+            key=_leg_order(leg),
+        )[:need]
+        for r in extra:
+            r["reserved_leg"] = leg
+            protected.add(_row_key(r))
+        picks.extend(extra)
+    for pick in picks:
+        while len(out) + 1 > limit:
+            victim = next(
+                (i for i in range(len(out) - 1, 0, -1) if _row_key(out[i]) not in protected),
+                None,
+            )
+            if victim is None:
+                break
+            out.pop(victim)
+        if len(out) < limit:
+            out.append(pick)
+    return out
+
+
+class TestTheDefaultPathIsUnchanged:
+    """The graph leg is off by default; what a default search does must be
+    exactly what the base branch does. The best-rows rule is the graph's
+    alone: ``entity_expansion`` (and any other reserved leg) keeps the
+    previous rule, compared here row for row with a frozen copy of it."""
+
+    def _pool(self, expansion_scores: list[float]) -> list[dict]:
+        legs = {
+            "vector": _leg("vector", list(range(1, 11))),
+            "entity_expansion": [
+                Candidate(
+                    id=500 + i, kind="fact", text=f"exp {i}",
+                    leg_scores={"entity_expansion": s},
+                )
+                for i, s in enumerate(expansion_scores)
+            ],
+        }  # fmt: skip
+        return _rows(fuse(legs))
+
+    def _cases(self):
+        import copy
+
+        pool = self._pool([0.9, 0.6, 0.3])
+        by_id = {r["id"]: r for r in pool}
+        head = [r for r in pool if r["id"] <= 10]
+        weakest_in_head = [*head[:2], by_id[502], *head[2:]]
+        best_in_head = [*head[:2], by_id[500], *head[2:]]
+        for ranked in (head, weakest_in_head, best_in_head):
+            for limit in (3, 5, 10):
+                for reserved in ({"entity_expansion": 1}, {"graph": 2, "entity_expansion": 1}):
+                    keys = {(r["kind"], r["id"]) for r in ranked[:limit]}
+                    for exclude in (None, lambda r, k=keys: (r["kind"], r["id"]) in k):
+                        yield copy.deepcopy(ranked), copy.deepcopy(pool), limit, reserved, exclude
+
+    def test_entity_expansion_reservations_match_the_previous_rule(self) -> None:
+        n = 0
+        for ranked, pool, limit, reserved, exclude in self._cases():
+            import copy
+
+            new = apply_reserved(
+                copy.deepcopy(ranked), copy.deepcopy(pool), limit, reserved, exclude
+            )
+            old = _base_apply_reserved(ranked, pool, limit, reserved, exclude)
+            assert [(r["id"], r.get("reserved_leg")) for r in new] == [
+                (r["id"], r.get("reserved_leg")) for r in old
+            ], (limit, reserved, [r["id"] for r in ranked[:limit]])
+            n += 1
+        assert n == 36
+
+
 class TestReservedPlaces:
     """A fake third leg ('graph') whose candidates the reranker would drop."""
 
@@ -124,6 +258,43 @@ class TestReservedPlaces:
         ranked = [next(r for r in pool if r["id"] == 102)] + [r for r in pool if r["id"] <= 10]
         out = apply_reserved(ranked, pool, limit=5, reserved={"graph": 1})
         assert [r["id"] for r in out] == [r["id"] for r in ranked[:5]]
+
+    def test_the_places_go_to_the_legs_best_rows_not_to_any_row_it_found(self) -> None:
+        """A weak graph row that the ranked head holds anyway (another leg
+        found it too) does not use up the leg's place: the leg's best row by
+        its own score is what the place is for. On the eval world the wrong
+        organisation's address sat in the head and kept the right one out."""
+        pool = self._pool()
+        weakest = next(r for r in pool if r["id"] == 101)
+        ranked = (
+            [r for r in pool if r["id"] <= 2] + [weakest] + [r for r in pool if 3 <= r["id"] <= 10]
+        )
+        out = apply_reserved(ranked, pool, limit=5, reserved={"graph": 1})
+
+        ids = [r["id"] for r in out]
+        assert 102 in ids, ids
+        assert len(out) == 5 and ids[:3] == [1, 2, 101]
+
+    def test_a_best_row_the_head_holds_counts_toward_the_places(self) -> None:
+        """``search_facts`` passes an exclude that is true for any row already
+        in the head (it duplicates itself). That must not drop the leg's best
+        row from its places: the head holds it, so one place is used, and only
+        the second-best row may push a ranked row out."""
+        pool = self._pool()
+        best = next(r for r in pool if r["id"] == 102)
+        ranked = (
+            [r for r in pool if r["id"] <= 2] + [best] + [r for r in pool if 3 <= r["id"] <= 10]
+        )
+        head = {(r["kind"], r["id"]) for r in ranked[:5]}
+
+        out = apply_reserved(
+            ranked, pool, limit=5, reserved={"graph": 2},
+            exclude=lambda r: (r["kind"], r["id"]) in head,
+        )  # fmt: skip
+
+        ids = [r["id"] for r in out]
+        assert ids[:4] == [1, 2, 102, 3], ids
+        assert ids[4] == 103, "the second-best graph row takes the one free place"
 
     def test_no_candidates_from_the_leg_means_nothing_reserved(self) -> None:
         pool = _rows(fuse({"vector": _leg("vector", [1, 2, 3])}))
