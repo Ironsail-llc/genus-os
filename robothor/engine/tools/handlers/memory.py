@@ -243,6 +243,7 @@ async def _recall_fallback(
         include_insights=bool(args.get("include_insights", fan_out)),
         include_episodes=bool(args.get("include_episodes", fan_out)),
         scope=scope,
+        reader_scope_id=_reader(ctx),
     )
     # classify_query is a pure regex with no I/O, so the label is available on
     # this path too — the output shape stays identical across the flag.
@@ -260,12 +261,15 @@ def _format_results(rows: list[dict[str, Any]], query_class: str) -> dict[str, A
 
     This emits the superset on every call. `id` is included because outcome
     attribution already depends on it and because a caller cannot reason about
-    row identity — scoping, dedup, citation — without it.
+    row identity — scoping, dedup, citation — without it. A row the graph leg
+    found also carries `origin` (who asserted it) and `via` (the entities that
+    connect it to the question), so the agent can weigh it and see why it came.
     """
     return {
         "query_class": query_class,
         "results": [
             {
+                **_graph_labels(r),
                 "id": r.get("id"),
                 "fact": r.get("fact_text") or r.get("insight_text") or r.get("text") or "",
                 "category": r.get("category", "")
@@ -281,6 +285,17 @@ def _format_results(rows: list[dict[str, Any]], query_class: str) -> dict[str, A
     }
 
 
+def _graph_labels(r: dict[str, Any]) -> dict[str, Any]:
+    if "graph_path" not in r and "origin" not in r:
+        return {}
+    labels: dict[str, Any] = {}
+    if "origin" in r:
+        labels["origin"] = r["origin"]
+    if r.get("graph_path"):
+        labels["via"] = list(r["graph_path"])
+    return labels
+
+
 async def _recall_routed(
     args: dict[str, Any], ctx: ToolContext, *, scope: Any = None
 ) -> tuple[list[dict[str, Any]], str]:
@@ -292,8 +307,15 @@ async def _recall_routed(
         limit=args.get("limit", 10),
         tenant_id=ctx.tenant_id,
         scope=scope,
+        reader_scope_id=_reader(ctx),
     )
     return out["results"], out["query_class"]
+
+
+def _reader(ctx: ToolContext) -> str | None:
+    """The caller's person id: whose private evidence the graph walk may cross."""
+    identity = getattr(ctx, "identity", None)
+    return getattr(identity, "person_id", None) if identity is not None else None
 
 
 def _argument_error(

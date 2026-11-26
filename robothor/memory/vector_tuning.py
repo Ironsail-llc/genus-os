@@ -5,15 +5,17 @@ all search sites share one policy:
 
 - ``hnsw.ef_search`` — candidate budget (default 100, env ``MEMORY_HNSW_EF_SEARCH``).
 - ``hnsw.iterative_scan`` — pgvector >= 0.8: keep fetching past the ``WHERE``
-  filter until ``LIMIT`` is met (the proper fix for post-filter recall collapse).
-  The live build is 0.8.2 and the partial active index (migrations 073/074)
-  already keeps dead vectors out of the budget; iterative scan is opt-in via
-  ``MEMORY_HNSW_ITERATIVE`` (so an older build is never asked for an unsupported GUC).
+  filter until ``LIMIT`` is met, so a narrow tenant or person filter still
+  fills its LIMIT. **Already on for every pooled connection**:
+  ``robothor.db.connection`` sets it to ``ANN_ITERATIVE_SCAN_MODE``
+  (``relaxed_order``, reasoning recorded there) at checkout. This module
+  never sets a second mode; the ``MEMORY_HNSW_ITERATIVE`` opt-in only
+  re-asserts the same one inside the transaction, together with:
 - ``hnsw.max_scan_tuples`` — ceiling for iterative scan (env
-  ``MEMORY_HNSW_MAX_SCAN_TUPLES``, default 20000).
+  ``MEMORY_HNSW_MAX_SCAN_TUPLES``, default 20000 — pgvector's own default).
 
 Every ``SET`` is wrapped so an unsupported GUC (e.g. pre-0.8, or an autocommit
-connection) is a silent no-op and never raises into the caller's query path.
+connection) never raises into the caller's query path.
 ``SET LOCAL`` only takes effect inside a transaction — all callers use
 ``get_connection()`` (non-autocommit), which wraps each unit of work in one.
 """
@@ -23,6 +25,8 @@ from __future__ import annotations
 import contextlib
 import os
 from typing import Any
+
+from robothor.db.connection import ANN_ITERATIVE_SCAN_MODE
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
 
@@ -41,7 +45,10 @@ def hnsw_ef_search() -> int:
 
 
 def iterative_scan_enabled() -> bool:
-    """Whether to request pgvector 0.8 iterative scan. Default off."""
+    """Whether to re-assert the iterative scan per transaction. Default off.
+
+    Off does not mean no iterative scan: the connection already carries it.
+    """
     return os.environ.get("MEMORY_HNSW_ITERATIVE", "").strip().lower() in _TRUE
 
 
@@ -60,6 +67,6 @@ def apply_hnsw_session(cur: Any) -> None:
         cur.execute("SET LOCAL hnsw.ef_search = %s", (hnsw_ef_search(),))
     if iterative_scan_enabled():
         with contextlib.suppress(Exception):
-            cur.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+            cur.execute(f"SET LOCAL hnsw.iterative_scan = {ANN_ITERATIVE_SCAN_MODE}")
         with contextlib.suppress(Exception):
             cur.execute("SET LOCAL hnsw.max_scan_tuples = %s", (max_scan_tuples(),))

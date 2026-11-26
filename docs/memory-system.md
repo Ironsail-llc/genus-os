@@ -9,6 +9,9 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 | `memory_facts` | Atomic distilled facts with lifecycle scoring (importance, decay, outcome_failures) |
 | `memory_entities` | Knowledge graph nodes (person, project, tech, …) |
 | `memory_relations` | Knowledge graph edges (uses, works_at, manages, …) |
+| `memory_mentions` | Which entity each fact mentions, by id (see [Graph schema](#graph-schema)) |
+| `memory_relation_evidence` | Every fact that supports an edge |
+| `memory_resolution_decisions` | Each decision that a name in a fact refers to an entity |
 | `memory_insights` | LLM-discovered cross-domain connections |
 | `memory_episodes` | Time-bucketed event clusters (added 2026-04) |
 | `memory_procedures` | Skill library — named playbooks with success/failure tracking (added 2026-04) |
@@ -24,44 +27,98 @@ The memory system is Genus OS's core — a multi-store architecture where facts 
 
 All embedding columns are `vector(1024)` with HNSW indexes (m=16, ef_construction=200).
 Active-row **partial** HNSW indexes (`idx_*_active`, migrations 073/074) keep
-superseded vectors out of the candidate budget. pgvector **0.8.2** is installed;
-every vector search applies shared session tuning via
-`robothor/memory/vector_tuning.py` `apply_hnsw_session(cur)` —
-`hnsw.ef_search=100` plus, when `MEMORY_HNSW_ITERATIVE=1`,
-`hnsw.iterative_scan=relaxed_order` (fetches past the `WHERE` filter until `LIMIT`
-is met — the robust fix for filtered-vector recall).
+superseded vectors out of the candidate budget. Every pooled connection gets
+an **iterative index scan** at checkout (`hnsw.iterative_scan=relaxed_order`,
+`ANN_ITERATIVE_SCAN_MODE` in `robothor/db/connection.py`, which records why
+relaxed rather than strict order). Without it, a search under a narrow tenant
+or person filter spends the candidate budget on other rows and comes back
+with fewer rows than exist. Relaxed order may return rows slightly out of
+distance order, so the fact vector leg re-sorts by similarity before ranking.
+Every vector search also applies `robothor/memory/vector_tuning.py`
+`apply_hnsw_session(cur)`: `hnsw.ef_search=100`, and with
+`MEMORY_HNSW_ITERATIVE=1` the same scan mode again inside the transaction
+plus `hnsw.max_scan_tuples` (20000).
 
 ## Retrieval
 
-`search_facts(query, …)` implements hybrid retrieval:
+`search_facts(query, …)` ranks every source through one path. The contract a
+source ("leg") implements is in `robothor/memory/recall.py`.
 
-1. Vector search (HNSW cosine, top 30)
-2. BM25 keyword search (GIN tsvector, top 30)
-3. **Reciprocal Rank Fusion** (k=60)
-4. Optional entity-graph expansion (follow relations)
-5. Optional **cross-encoder reranker** (Qwen3-Reranker-0.6B) — on by default; kill-switch via `MEMORY_RERANK_ENABLED=0`
-6. Optional appended `memory_insights`, `memory_episodes`, and verbatim `chat_messages` (low-weight RRF merge)
+1. **Legs.** Each returns `Candidate`s, best first, up to `max(30, limit × 3)`:
+   - `vector` — HNSW cosine over `memory_facts`. The query is embedded with the
+     instruction the embedding model expects on queries
+     (`Instruct: …\nQuery:…` for Qwen3-Embedding); stored documents are
+     embedded bare, so nothing is re-embedded.
+   - `keyword` — PostgreSQL full text (`websearch_to_tsquery`, GIN index on
+     `tsv`), scored by `ts_rank_cd` with length normalisation into 0..1. It
+     requires every term first and falls back to any term when that matches
+     nothing, so a natural-language question still finds the fact that shares
+     most of its words. The first pass reads the query in web-search syntax:
+     `"quoted words"` match as a phrase, `-word` excludes, and `or` is an
+     operator.
+   - `graph` (on unless `include_graph=False`) — graph activation from the
+     entities the query names and the entities the top hits mention (see
+     [Associative recall](#associative-recall)). Empty until facts have
+     mentions.
+   - `entity_expansion` (`expand_entities`, only when the graph leg returned
+     nothing) — facts about entities related to the top hits' entities.
+   - `insight`, `episode`, `chat_turn` (`include_insights`,
+     `include_episodes`, `include_chat_turns`). These stores cannot filter by
+     person, so a restricted data scope leaves them out.
+2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
+   records its rank in every leg that found it (`leg_ranks`).
+3. **Reranker** (Qwen3-Reranker-0.6B, local) — on by default, off with
+   `MEMORY_RERANK_ENABLED=0`. It scores the first 16 fused candidates
+   (`MEMORY_RERANK_MAX_CANDIDATES`) with a graded relevance in 0..1: the
+   probability of "yes" against "no", read from the top 20 logprobs Ollama
+   returns. When one of the two is not listed, its logprob is bounded by the
+   lowest one listed, so a confident answer still gets a graded score. (An
+   Ollama without logprobs gives 1 or 0.) Candidates are ordered by that
+   score alone, whichever leg found them. On any reranker error the fused
+   order stands.
+4. **Blend** — `relevance` (the rerank score, or `10 / (10 + fused rank)` when
+   there is none — one 0..1 scale for every leg; cosine similarity is not used)
+   + recency + importance + access count, with supersession demotion; then
+   near-duplicates are dropped.
+5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps at
+   least that many places in the top `limit` whenever it returned anything,
+   chosen by its own score: `graph` 2, `entity_expansion` 1.
+   A related-but-not-similar fact is exactly what a query-document reranker
+   discards. Reserved picks take at most `(limit - 1) // 2` places in total
+   (none at a `limit` of 1 or 2), never the top result, and never a
+   near-duplicate of a row already returned.
+
+Every leg shares `limit`. Returned rows keep their fields and add `kind`,
+`leg_ranks`, `leg_scores`, `rrf_score`, `fused_rank`, `rerank_score` and
+`relevance`. The search path is read-only.
+
+Flags that still shape this path: `MEMORY_RANK_BLEND=0` skips the blend (fused
+or reranked order, cut to `limit`); `MEMORY_DEDUP=0` keeps near-duplicates;
+`MEMORY_TEMPORAL_COHERENCE=1` turns on supersession inference among decisions;
+`MEMORY_RERANK_WIDE=1` widens the leg fetch to 45 and the reranker's survivor
+pool, and gives rows scoring at least 0.5 a small blend bonus.
+`MEMORY_EPISODE_MERGE` is no longer read: the auxiliary stores are fused legs on
+every path. `MEMORY_NARROW_SEARCH` is read by the `search_memory` tool, which
+decides the `include_*` arguments.
 
 ### Memory router (RIP 15)
 
-The `search_memory` tool previously hard-coded `expand_entities + insights +
-episodes = True` on *every* call — a full fan-out for even a trivial lookup.
-When `ROBOTHOR_RIP_15_ENABLED` is set, it routes through
-`robothor/memory/router.py`, which classifies the query (heuristics) and queries
-only the stores that fit:
+Off unless `ROBOTHOR_RIP_15_ENABLED` is set. When it is, the `search_memory`
+tool routes through `robothor/memory/router.py`, which classifies the query
+(heuristics) and queries only the stores that fit:
 
 | Class | Stores | Notes |
 |-------|--------|-------|
 | `exact_lookup` | Knowledge Vault captions + facts | numbers, ids, addresses |
 | `temporal` | facts + episodes | results recency-reordered (latest first) |
 | `how_to` | procedures + facts | |
-| `who_is` | facts + entity-graph expansion | |
+| `who_is` | facts (with the graph leg) | |
 | `intent` | standing intents + facts | |
 | `default` | facts + insights | no episode/entity fan-out |
 
-Results from each store are fused with the shared `rrf_fuse` (k=60, in
-`robothor/memory/fusion.py`) and budget-capped. `search_facts()` keeps its
-signature for back-compat; only the tool path changes.
+The facts it gets come from `search_facts` (ranked as above); the stores are
+then merged with `rrf_fuse` (k=60, `robothor/memory/fusion.py`) and
+budget-capped. Without the flag the tool calls `search_facts` directly.
 
 ## Symbolic short-term memory (RIP 13)
 
@@ -339,6 +396,179 @@ and then be rejected by the `memory_relations` foreign key.
 entity ids are dropped before the insert, and a chunk Postgres still rejects is
 retried row by row inside a savepoint, so one bad row costs one relation instead
 of the whole batch. Every drop is logged at WARNING with a count.
+
+### Graph schema
+
+The memory graph foundation migration (`crm/migrations/*_memory_graph_foundation.sql`) adds the schema that links facts to
+entities by identity rather than by name, and gives edges time, evidence and
+trust. It is schema only: nothing writes the new tables or columns yet, and
+code written before it reads and writes exactly as before. Every new table has
+a `tenant_id` referencing `crm_tenants`, the forced `tenant_isolation`
+row-level-security policy, and stays with its tenant when a workload moves
+(`genus tenant move-workload`).
+
+**`memory_resolution_decisions`** records each decision that a surface form (a
+name as it appeared in a fact) refers to an entity: the surface form, the
+entity type if known, the entity it resolved to (`resolved_entity_id`, NULL
+when it was deliberately left unresolved), the `method`, a `confidence`
+between 0 and 1, the `evidence` the decision rested on (JSON), and
+`decided_at`. Merging two entities never rewrites ids: a decision found wrong
+is reversed by setting `reversed_at`, and points at the decision that replaced
+it through `superseded_by`. Methods: `strong_key` (an email, phone or other
+unique identifier), `full_name`, `context`, `llm`, `exact`, `operator` and
+`backfill`.
+
+**`memory_mentions`** is the fact-to-entity join: one row per mention, with
+the fact, the entity (NULL while unresolved, or once its entity is deleted),
+the surface form and type, and the decision that resolved it. Deleting a fact
+deletes its mentions.
+
+**`memory_relation_evidence`** lists every fact supporting an edge, keyed by
+`(relation_id, fact_id)`. The migration copies each edge's existing
+`memory_relations.fact_id` into it; edges written afterwards by code that
+predates the graph write path still set only `fact_id`.
+
+**`memory_relations`** gains:
+
+| Column | Meaning |
+|--------|---------|
+| `predicate` | The canonical relation; `relation_type` keeps the phrase as extracted |
+| `valid_from`, `valid_to` | When the relation held in the world (event time) |
+| `recorded_at`, `expired_at` | When the system started and stopped believing it. `recorded_at` is NULL on edges from before the migration; read it as `created_at` |
+| `is_active` | `TRUE` until the edge is retired (defaults `TRUE`) |
+| `retired_reason` | `ended` (it held, then stopped), `refuted` (it was wrong) or `evidence_merged` (its evidence moved to another edge) |
+| `origin` | Who asserted it (below) |
+| `weight` | Learned usefulness for retrieval, `1.0` by default |
+
+Active edges are indexed per endpoint for neighbourhood expansion.
+
+**`memory_facts`** gains `origin`, `event_time` (when the thing happened, as
+opposed to `valid_from`, when the fact became true as recorded) and a scope.
+None of them is part of the content hash, so no stored hash changes.
+
+**`memory_entities`** gains the CRM record it is about (`crm_person_id`,
+`crm_company_id`, cleared if that record is deleted), an `embedding`, a scope,
+and an index on `(tenant_id, lower(name))`. When `genus tenant move-account`
+moves an account's CRM contact to another tenant, a memory entity linked to
+that contact stays with its tenant's memory and its `crm_person_id` is cleared
+(the report lists it under `links_cleared`); the link does not refuse the move.
+
+**Scope** (`scope_kind`, `scope_id` on facts and entities): `shared` (the whole
+tenant, the default, no `scope_id`), `user` or `agent` (private to the owner
+named in `scope_id`, which is then required).
+
+**Origin and authority.** Origin records who asserted a fact or an edge. When
+claims disagree, or recall is filtered, they rank in this order, most trusted
+first:
+
+1. `operator_confirmed` — the operator confirmed it
+2. `user_stated` — a user said it
+3. `crm` — it comes from the CRM record
+4. `tool` — a tool returned it
+5. `agent_generated` — an agent produced it
+6. `external` — an outside source (a web page, an inbound message)
+7. `inferred` — the system derived it (edges only)
+
+A row from before origins existed has no origin and ranks as
+`agent_generated`. Only the first three are trusted for automatic recall. The
+lists, the order and the helpers that rank by them (`authority_rank`,
+`least_trusted`, `is_trusted_for_auto_recall`) live in
+`robothor/memory/graph_schema.py`; a test keeps them equal to the database's
+CHECK constraints.
+
+### Associative recall
+
+When an agent works on a person, company or task, what is connected to it
+comes to mind without being asked. `robothor/memory/activation.py` links text to
+the entities it names and spreads activation from them over the graph; the
+walk itself is the database function `memory_activate` (migration
+`crm/migrations/*_memory_graph_activation.sql`).
+
+**It needs mentions.** The walk reads which entities a fact is about from
+`memory_mentions`, and nothing writes that table yet: existing memory links
+facts to entities only by name. Until mentions are written, the graph leg
+returns nothing, and `search_facts` with `expand_entities=True` (the
+`search_memory` tool's default) uses the one-hop `entity_expansion` leg as it
+did before: facts about entities related, through `memory_relations`, to the
+entities its top hits name. The expansion leg runs only when the graph leg
+returned nothing, and keeps one reserved place.
+
+**Seeds.** `seeds_from_text` links text to entities without a model call: exact
+full names and aliases, case-insensitively, and e-mail addresses or @handles
+matched against `contact_identifiers`. A single token never resolves on its
+own, so a first name alone seeds nothing. Warm-up takes its phrases from the
+name candidates its name-matching step already finds (runs of two or more
+adjacent ones), and also seeds the sender's own entity (the entity whose
+`crm_person_id` is the sender's CRM person). `search_facts` also seeds the
+entities that its top hits mention (`memory_mentions`), counting only hits the
+reader may see.
+
+**The walk.** A bounded, forward-push approximation of Personalized PageRank.
+Each seed starts with its weight divided by the square root of one plus its
+visible degree. Each hop, every frontier node passes a damped share of its
+activation along at most `FANOUT` of its strongest edges (by `weight`, then
+recency), split by edge weight over all of its visible, eligible edges. Edges
+are followed in both directions. At most `MAX_HOPS` hops (2 by default; the
+function never walks more than 3, whatever it is asked). Each hop is one
+set-based query over the active-edge indexes. A fact's graph score is the
+activation of the entities it mentions; each fact carries its hop distance and
+the path of entity names that reached it, so an agent can see why it was
+recalled. The constants at the top of `activation.py` are starting values for
+the evaluation to tune.
+
+**Visibility.** The walk crosses an edge only when at least one of its
+supporting facts is visible to the reader: active, in the tenant, and shared or
+user-scoped to the reader (`scope_kind = 'user'` and `scope_id` the reader's
+person id; a row private to an agent is never a person's, whatever its id). Only those edges count toward a node's degree and weight,
+so a path through evidence the reader cannot see changes no score. The
+"own data + shared" person scope applies on top. The facts returned for an
+entity obey the same rule. With no known reader, only shared evidence counts.
+An edge's evidence is `memory_relation_evidence` together with the older
+`memory_relations.fact_id` column.
+
+**Trust.** Automatic recall (warm-up) runs trusted-only: an edge counts only
+when a supporting fact is `operator_confirmed`, `user_stated` or `crm`, an
+edge whose own origin is `inferred` or `external` is never followed, and only
+facts of those origins are returned. A fact with no origin counts as
+agent-generated, so it is not trusted. **Every fact written before origins
+existed has none, so on existing data trusted-only activation finds nothing and
+warm-up uses its name-matching context instead.** A deliberate search
+(`search_facts`, the `search_memory` tool) walks every origin and labels each
+row with its `origin` and the path that reached it (`origin` and `via` in the
+tool's results).
+
+**Hub control.** The operator's own entities (those linked to the CRM person
+`get_owner_person` returns, resolved inside the walk) are never seeds and never
+transit nodes. If that lookup fails, nothing is walked and a warning is logged:
+the operator's node is usually the largest hub. Seeds are weighted by inverse degree,
+and fan-out is capped, so a node linked to everything cannot flood the result.
+
+**Tenancy.** `memory_activate` is `SECURITY DEFINER`, like the warm-up's entity
+recall function, so the planner can use its indexes under row-level security.
+It filters every table by the tenant passed to it: both ends of an edge, the
+edge, its evidence, the facts, the mentions. A session scoped to another tenant
+gets nothing.
+
+**Warm-up.** The entity context section starts with connected context from
+trusted-only activation, then fills the rest of its character cap with the
+name-matched facts as before, each fact once. Activation has a hard budget
+(`GRAPH_WARMUP_BUDGET_SECONDS` in `robothor/engine/warmup.py`, 150 ms to
+start), enforced by Postgres: before its first statement, the walk's own
+connection gets a `statement_timeout` of the time left, reset before the
+connection goes back to the pool, so the seed lookup and the walk stop at the
+budget and nothing ever cancels a query from outside. On a timeout, an error or an empty result the section is
+exactly the name-matched one. There is no model
+call and no reranker. The name-matched facts are not filtered by origin.
+
+What a turn pays: a message with no two adjacent name candidates, no e-mail
+address or @handle and no known sender makes no extra query and no thread
+hand-off. Otherwise one read-only connection arms the time limit, runs the
+seed lookup and resets the limit (three statements); when a seed is found the
+operator lookup and the walk run in between (five, or six when no owner row is
+linked and the `owner.yaml` fallback runs).
+
+The search path writes nothing. Rows found only by the graph are not logged as
+fact access.
 
 ## Ingestion Pipeline
 
