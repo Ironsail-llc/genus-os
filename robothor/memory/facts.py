@@ -1345,6 +1345,17 @@ _GRAPH_FIELDS = (
 #: has its own, tighter budget (``warmup.GRAPH_WARMUP_BUDGET_SECONDS``).
 GRAPH_LEG_BUDGET_SECONDS = 0.25
 
+#: Whether search_facts runs the graph-activation leg unless told otherwise.
+#: Off. Ranked by the meaning of the question, the leg met its retrieval gate
+#: on the memory evaluation's world (dev split, top 5: reworded multi-hop
+#: 21/126 off against 56/126 on, no stratum worse), and in the answer arm it
+#: raised multi-hop answers (reworded 1/40 to 12/40). But it lowered
+#: cross-tenant answers from 30/40 to 26/40 (4 worse, none better, p = 0.125):
+#: for "which city is X based in?" a neighbour fact (an employer's
+#: headquarters) drew the answer to the wrong city. A stratum worse at
+#: p < 0.20 blocks a gate, so the leg runs on an explicit ``include_graph=True``.
+GRAPH_LEG_DEFAULT = False
+
 
 async def _graph_leg(
     query: str,
@@ -1665,7 +1676,7 @@ async def search_facts(
     reader_person_id: str | None = None,
     room_ids: Iterable[str] | None = None,
     reader_user_id: str | None = None,
-    include_graph: bool = True,
+    include_graph: bool | None = None,
     reader_scope_id: str | None = None,
     *,
     admin_erasure_view: bool = False,
@@ -1675,10 +1686,10 @@ async def search_facts(
     Pipeline (contract in robothor/memory/recall.py):
         1. Legs: ``vector`` (HNSW cosine) and ``keyword`` (full text, every
            term, then any term) over memory_facts; ``graph`` (activation
-           from the entities the query names and the top hits mention, the
-           reached facts ranked by the question; see
-           robothor/memory/activation.py); ``entity_expansion`` when
-           ``expand_entities`` and the graph leg found nothing;
+           from the entities the query names and the top hits mention, see
+           robothor/memory/activation.py) only when ``include_graph=True``
+           (off by default, ``GRAPH_LEG_DEFAULT``); ``entity_expansion``
+           when ``expand_entities`` and the graph leg found nothing;
            ``segment`` (raw conversation, on by default); ``insight`` /
            ``episode`` / ``chat_turn`` when asked for. Each fact leg fetches
            max(30, limit * 3).
@@ -1701,9 +1712,9 @@ async def search_facts(
         expand_entities: Run the one-hop ``entity_expansion`` leg: facts
             about entities related to the top hits' entities. With
             ``include_graph`` it runs only when the graph leg returns nothing.
-        include_graph: Run the graph-activation leg (on; ``False`` only to
-            measure recall without it, as the replay's ``today`` preset and
-            the evaluation's ``recall_no_graph`` do). Its rows
+        include_graph: Run the graph-activation leg. ``None`` (the default)
+            reads ``GRAPH_LEG_DEFAULT`` at call time: off, see its comment for
+            why. Its rows
             carry ``origin`` (NULL reads as ``agent_generated``),
             ``graph_hops`` and ``graph_path``; a row found only by it has
             ``source="graph"``. It walks every origin: this is a deliberate
@@ -1757,11 +1768,12 @@ async def search_facts(
             refused with ``ValueError``.
 
     Returns:
-        Rows ordered best first: the ranked head, at most ``limit`` rows, then
-        up to ``RESERVED_PLACES["graph"]`` (2) rows only the graph leg found,
-        which never take a head row's place. So a call returns at most
-        ``limit + 2`` rows; the first ``limit`` are exactly what it returns
-        with ``include_graph=False``. Each carries its payload (``fact_text``,
+        Rows ordered best first: the ranked head, at most ``limit`` rows, then,
+        with ``include_graph=True``, up to ``RESERVED_PLACES["graph"]`` (2)
+        rows only the graph leg found, which never take a head row's place. So
+        a call returns at most ``limit + 2`` rows; the head is exactly what the
+        same call returns without the graph (when it is shorter than
+        ``limit``, the graph's rows follow it directly). Each carries its payload (``fact_text``,
         ``category`` …) plus ``kind``, ``leg_ranks`` (rank per leg that found
         it), ``leg_scores``, ``rrf_score``, ``fused_rank``, ``rerank_score``
         (None when not reranked) and ``relevance`` (0..1). Read-only.
@@ -1778,6 +1790,8 @@ async def search_facts(
     # The graph leg ranks what it reaches by the question without its names;
     # that is found now and embedded with the query, so the leg's own budget
     # never waits on the model. None: the graph leg will not run.
+    if include_graph is None:
+        include_graph = GRAPH_LEG_DEFAULT
     asked = (
         await _question_for_graph(_tenant, query)
         if include_graph and not admin_erasure_view

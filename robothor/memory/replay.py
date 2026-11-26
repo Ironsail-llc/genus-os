@@ -116,8 +116,8 @@ class Preset:
     description: str
     #: ``search_facts`` include_segments.
     segments: bool
-    #: ``search_facts`` include_graph.
-    graph: bool
+    #: ``search_facts`` include_graph; None is the product default (GRAPH_LEG_DEFAULT).
+    graph: bool | None
 
 
 PRESETS: dict[str, Preset] = {
@@ -132,13 +132,13 @@ PRESETS: dict[str, Preset] = {
         ),
         Preset(
             "new",
-            "the product default on this tree: today's legs plus conversation segments "
-            "and the graph-activation leg",
+            "the product default on this tree: today's legs plus conversation segments, "
+            "the graph leg as GRAPH_LEG_DEFAULT says",
             segments=True,
-            graph=True,
+            graph=None,
         ),
-        Preset("new-graph", "new without the graph-activation leg", segments=True, graph=False),
-        Preset("new-segments", "new without conversation segments", segments=False, graph=True),
+        Preset("new+graph", "new with the graph-activation leg on", segments=True, graph=True),
+        Preset("new-segments", "new without conversation segments", segments=False, graph=None),
     )
 }
 
@@ -615,10 +615,13 @@ async def run_replay(
 
 
 def _describe(preset: Preset, fan_out: bool) -> dict[str, Any]:
+    from robothor.memory.facts import GRAPH_LEG_DEFAULT
+
+    graph = GRAPH_LEG_DEFAULT if preset.graph is None else preset.graph
     return {
         "description": preset.description,
         "search": preset_kwargs(preset, fan_out=fan_out),
-        "graph_leg_runs": preset.graph,
+        "graph_leg_runs": graph,
     }
 
 
