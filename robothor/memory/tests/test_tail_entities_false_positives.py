@@ -99,8 +99,18 @@ async def test_a_generic_company_word_is_not_a_confusable(world) -> None:
 
 
 async def test_a_distinctive_company_token_still_confuses(world) -> None:
-    rows = await _returned("What does Acme Systems Inc make?")
-    assert ACME_ROBOTICS not in rows[1:]
+    """Asked of the rule itself, so whichever row the reranked head holds
+    cannot make the check vacuous."""
+    from robothor.memory.facts import search_facts
+    from robothor.memory.tail_entities import confusable_tail_keys
+
+    rows = await search_facts(
+        "acme", limit=60, tenant_id=TENANT, include_segments=False, use_reranker=False
+    )
+    drop = confusable_tail_keys(TENANT, "What does Acme Systems Inc make?", rows)
+    dropped = {str(r.get("fact_text")) for r in rows if ("fact", r.get("id")) in drop}
+    assert ACME_ROBOTICS in dropped
+    assert not dropped & {GLOBEX, INITECH, ACME}
 
 
 async def test_an_honorific_in_an_alias_is_not_a_confusable(world) -> None:
