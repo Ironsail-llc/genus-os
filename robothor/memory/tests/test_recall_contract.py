@@ -141,6 +141,27 @@ class TestReservedPlaces:
         assert 102 in ids, ids
         assert len(out) == 5 and ids[:3] == [1, 2, 101]
 
+    def test_a_best_row_the_head_holds_counts_toward_the_places(self) -> None:
+        """``search_facts`` passes an exclude that is true for any row already
+        in the head (it duplicates itself). That must not drop the leg's best
+        row from its places: the head holds it, so one place is used, and only
+        the second-best row may push a ranked row out."""
+        pool = self._pool()
+        best = next(r for r in pool if r["id"] == 102)
+        ranked = (
+            [r for r in pool if r["id"] <= 2] + [best] + [r for r in pool if 3 <= r["id"] <= 10]
+        )
+        head = {(r["kind"], r["id"]) for r in ranked[:5]}
+
+        out = apply_reserved(
+            ranked, pool, limit=5, reserved={"graph": 2},
+            exclude=lambda r: (r["kind"], r["id"]) in head,
+        )  # fmt: skip
+
+        ids = [r["id"] for r in out]
+        assert ids[:4] == [1, 2, 102, 3], ids
+        assert ids[4] == 103, "the second-best graph row takes the one free place"
+
     def test_no_candidates_from_the_leg_means_nothing_reserved(self) -> None:
         pool = _rows(fuse({"vector": _leg("vector", [1, 2, 3])}))
         out = apply_reserved(pool, pool, limit=2, reserved={"graph": 2})

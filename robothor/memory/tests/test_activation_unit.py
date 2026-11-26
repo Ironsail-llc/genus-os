@@ -230,6 +230,26 @@ class TestSlowCheckout:
         assert self._run(monkeypatch, checkout_seconds=1.5) == []
 
 
+class TestHostileInput:
+    """Seed linking runs inside the graph leg's budget, on the event loop's
+    worker thread, holding a pooled connection: it must stay linear in what
+    it scans. The e-mail pattern used to backtrack quadratically on a long
+    run of e-mail characters with no "@" (200,000 characters: 37 s)."""
+
+    def test_a_long_run_without_an_at_sign_is_scanned_quickly(self) -> None:
+        import time
+
+        for text in ("a" * 200_000, "a." * 100_000, ("ab%+-" * 40_000) + "@"):
+            started = time.monotonic()
+            activation.strong_keys(text)
+            activation.question_without_names(text, [])
+            assert time.monotonic() - started < 2.0, text[:12]
+
+    def test_a_key_in_a_long_message_is_still_found_near_the_start(self) -> None:
+        text = "mail alice@example.com about it " + "x" * 200_000
+        assert activation.strong_keys(text) == ["alice@example.com"]
+
+
 class TestQuestionWithoutItsNames:
     """What the graph ranks a reached fact by: the question minus the names it
     links. "Alice Smith" would otherwise make every fact about Alice Smith

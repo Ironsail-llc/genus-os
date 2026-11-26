@@ -267,6 +267,30 @@ async def test_the_graph_leg_never_moves_rows_into_the_reranked_head(
 
 
 @pytest.mark.asyncio
+async def test_a_head_held_graph_row_uses_one_of_its_places(env: pytest.MonkeyPatch) -> None:
+    """With the real near-duplicate exclude: the graph's best row is already
+    in the head, so only one more graph row may take a reserved place."""
+    env.delenv("MEMORY_DEDUP", raising=False)
+    dense = _dense(20)
+    hops = [
+        _graph_hit(dense[0]["id"], dense[0]["fact_text"], 0.95),
+        _graph_hit(700, "Bob runs the shipping team", 0.5),
+        _graph_hit(701, "Carol drives the shipping van", 0.4),
+    ]
+    env.setattr(reranker, "rerank_pair", _scorer({"shipping": 0.0}, default=0.6))
+
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=hops):
+        results = await _search(_Cursor(vector=dense, keyword=[]))
+    off = await _search(_Cursor(vector=dense, keyword=[]), include_graph=False)
+
+    ids = [r["id"] for r in results]
+    assert dense[0]["id"] in ids
+    assert 700 in ids and 701 not in ids, ids
+    gave_way = {r["id"] for r in off} - set(ids)
+    assert len(gave_way) == 1, f"only one head row may give way, not {gave_way}"
+
+
+@pytest.mark.asyncio
 async def test_include_graph_false_runs_no_graph_leg(env: pytest.MonkeyPatch) -> None:
     hops = [_graph_hit(700, "Bob runs the shipping team", 0.9)]
     cur = _Cursor(vector=_dense(20), keyword=[])
