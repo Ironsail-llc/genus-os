@@ -1771,9 +1771,12 @@ async def search_facts(
         Rows ordered best first: the ranked head, at most ``limit`` rows, then,
         with ``include_graph=True``, up to ``RESERVED_PLACES["graph"]`` (2)
         rows only the graph leg found, which never take a head row's place. So
-        a call returns at most ``limit + 2`` rows; the head is exactly what the
-        same call returns without the graph (when it is shorter than
-        ``limit``, the graph's rows follow it directly). Each carries its payload (``fact_text``,
+        a call returns at most ``limit + 2`` rows; the head is the ranked top
+        ``limit``, and graph rows never take one of its places (when it is
+        shorter than ``limit``, the graph's rows follow it directly). The
+        graph's candidates are in the pool the head is ranked from, so the head
+        is not guaranteed identical to a call without the graph, though in
+        measurement it almost always is. Each carries its payload (``fact_text``,
         ``category`` …) plus ``kind``, ``leg_ranks`` (rank per leg that found
         it), ``leg_scores``, ``rrf_score``, ``fused_rank``, ``rerank_score``
         (None when not reranked) and ``relevance`` (0..1). Read-only.

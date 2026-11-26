@@ -111,9 +111,12 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      adds them *after* the ranked head: they never replace a head row. A
      graph row the head already holds counts as one of the two, and a weaker
      one the head holds uses up none. A search with the graph leg therefore
-     returns at most `limit + 2` rows, and its head is exactly what the same
-     search returns without the graph (when the head is shorter than `limit`,
-     the graph's rows follow it directly).
+     returns at most `limit + 2` rows. Its head is the ranked top `limit`, and
+     graph rows never take one of its places (when the head is shorter than
+     `limit`, the graph's rows follow it directly). The graph's candidates are
+     in the pool the head is ranked from, so the head is not guaranteed
+     identical to a search without the graph; in measurement it almost always
+     is.
    - **Every other leg** (`entity_expansion`) keeps the earlier rule, so the
      default search is unchanged: any of its rows in the head holds its place,
      and its picks take the head's last places, at most `(limit - 1) // 2` in
