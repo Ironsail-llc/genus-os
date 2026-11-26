@@ -99,9 +99,10 @@ SEGMENT_FIELDS = (
 
 def _normalize_fact(r: dict[str, Any]) -> dict[str, Any]:
     row = _normalized_fact_fields(r)
-    # A row the graph leg found keeps its labels: who asserted it and the path
-    # of entities that reached it.
-    for key in ("origin", "graph_hops", "graph_path"):
+    # A row the graph leg found keeps its labels: who asserted it, the path of
+    # entities that reached it, and which legs found it (the shared formatter,
+    # ``recall.row_text``, labels a row only the graph found).
+    for key in ("origin", "graph_hops", "graph_path", "leg_ranks"):
         if key in r:
             row[key] = r[key]
     return row
