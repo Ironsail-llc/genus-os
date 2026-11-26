@@ -896,6 +896,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Also write the report as the recorded world baseline under docs/benchmarks/memory/",
     )
 
+    # memory-replay — read-only dry run: real questions, today's recall vs the new
+    from robothor.cli.memory_replay import add_parser as _add_memory_replay
+
+    _add_memory_replay(subparsers)
+
     # memory-identity — CRM-anchored entity resolution: seed, backfill, reverse
     identity_parser = subparsers.add_parser(
         "memory-identity", help="CRM-anchored memory identity: seed, backfill, reverse"
@@ -1677,6 +1682,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.memory_eval import cmd_memory_eval
 
         return cmd_memory_eval(args)
+    if args.command == "memory-replay":
+        from robothor.cli import memory_replay
+
+        return memory_replay.cmd_memory_replay(args)
     if args.command == "memory-identity":
         from robothor.cli import memory_identity
 

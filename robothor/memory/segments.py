@@ -482,6 +482,17 @@ def _main_session_key() -> str:
         return DEFAULT_MAIN_SESSION_KEY
 
 
+def session_scope(
+    tenant_id: str, session_key: str, person_id: str | None
+) -> tuple[str, str | None]:
+    """:func:`conversation_scope` of one stored session, the operator looked up if needed."""
+    main_key = _main_session_key()
+    owner = _owner_person_id(tenant_id) if session_key == main_key and not person_id else None
+    return conversation_scope(
+        session_key, person_id, owner_person_id=owner, main_session_key=main_key
+    )
+
+
 def _owner_person_id(tenant_id: str) -> str | None:
     """The operator's person (root CLAUDE.md rule 12: ``get_owner_person``)."""
     from robothor.crm.dal import get_owner_person
@@ -571,11 +582,7 @@ def _load_conversation(
             )
         )
     person_id = str(session["person_id"]) if session["person_id"] else None
-    main_key = _main_session_key()
-    owner = _owner_person_id(tenant_id) if session_key == main_key and not person_id else None
-    scope_kind, scope_id = conversation_scope(
-        session_key, person_id, owner_person_id=owner, main_session_key=main_key
-    )
+    scope_kind, scope_id = session_scope(tenant_id, session_key, person_id)
     return _Conversation(
         session_id=int(session["id"]),
         person_id=person_id,
