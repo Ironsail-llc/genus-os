@@ -147,7 +147,11 @@ the rows and is itself bounded by `RECALL_FILL_ROWS`. Rows are packed by one
 rule, `recall.pack_within`, on every path (both tools, the routed path and the
 eval): a row that does not fit in what is left of the cap is skipped and a
 later, smaller one may still go in, so one long conversation segment does not
-end a context with room left. On the routed path a temporal query re-sorts the
+end a context with room left. The top-ranked row is never dropped: if it alone
+is over the cap it is cut to the cap and ends with ` [truncated]` (the row
+carries `truncated: true`), so a result is never empty because its best row
+was long. No eval context had a first candidate over the cap (0 of 360 on each
+split; the longest was 27 tokens), so the measured numbers are unaffected. On the routed path a temporal query re-sorts the
 head by recency; the tail stays behind it.
 MCP `search_memory` follows the same rule (`recall.recall_limit` and
 `recall.within_context_cap`); it names no reader, so it reads shared rows
