@@ -1668,14 +1668,14 @@ async def _confusable_tail(
     pool: list[dict[str, Any]],
     limit: int,
 ) -> set[tuple[str, Any]]:
-    """Tail rows about a different person sharing a name with a named one.
+    """Unscored rows about a different person sharing a name with a named one.
 
-    Only when there is a tail to fill. Off the loop. On a failure the tail is
-    the unfiltered one (every row of it already passed the reader's
-    visibility), and the failure is logged.
+    Every candidate outside the ranked ``head`` is checked: the tail the fill
+    appends and the reserved picks ``apply_reserved`` adds (a graph row is
+    unscored too). Only the ranked head is exempt. Off the loop. On a failure
+    nothing is left out (every row already passed the reader's visibility),
+    and the failure is logged.
     """
-    if len(head) >= limit:
-        return set()
     held = {(r.get("kind", "fact"), r.get("id")) for r in head}
     tail = [r for r in pool if (r.get("kind", "fact"), r.get("id")) not in held]
     if not tail:
@@ -1977,10 +1977,16 @@ async def search_facts(
         # earlier rows, so a row it drops from the end duplicates the head.
         return _dedup_enabled() and len(_dedupe([*unique_head, row])) == len(unique_head)
 
-    result = apply_reserved(ranked, pool, limit, RESERVED_PLACES, exclude=_duplicates_head)
-    result = _fill_from_pool(
-        result, pool, limit, await _confusable_tail(query, _tenant, result, pool, limit)
-    )
+    # One rule for every unscored row, reserved pick or tail: a row about a
+    # different person who shares a name with one the question names is left
+    # out (tail_entities); only the ranked head is exempt.
+    confusable = await _confusable_tail(query, _tenant, ranked[:limit], pool, limit)
+
+    def _excluded(row: dict[str, Any]) -> bool:
+        return (row.get("kind", "fact"), row.get("id")) in confusable or _duplicates_head(row)
+
+    result = apply_reserved(ranked, pool, limit, RESERVED_PLACES, exclude=_excluded)
+    result = _fill_from_pool(result, pool, limit, confusable)
     for r in result:
         if "relevance" not in r:  # a reserved pick or a tail row the blend never saw
             _assign_relevance([r])
