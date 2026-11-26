@@ -845,7 +845,7 @@ Usage: `genus legacy-goal remove-target <target_id> [--json]`
 
 Run the memory retrieval benchmark suite.
 
-Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [--record] [--triggered-by TRIGGERED_BY] [--world] [--world-seed WORLD_SEED] [--world-size WORLD_SIZE] [--split SPLIT] [--answers] [--systems SYSTEMS] [--reference REFERENCE] [--token-budget TOKEN_BUDGET] [--repeats REPEATS] [--answer-model ANSWER_MODEL] [--judge-model JUDGE_MODEL] [--limit-per-stratum LIMIT_PER_STRATUM] [--concurrency CONCURRENCY] [--cache-dir CACHE_DIR] [--report REPORT] [--progress PROGRESS] [--record-baseline] [--benchmark BENCHMARK] [--benchmark-path BENCHMARK_PATH] [--limit LIMIT] [--limit-per-type LIMIT_PER_TYPE] [--abstention-stratum] [--half HALF] [--split-seed SPLIT_SEED] [--ingest INGEST] [--context-tokens CONTEXT_TOKENS] [--answer-models ANSWER_MODELS] [--bench-dir BENCH_DIR] [--carry-forward CARRY_FORWARD] [--include-adversarial] [--extract-concurrency EXTRACT_CONCURRENCY] [--dry-run]`
+Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [--record] [--triggered-by TRIGGERED_BY] [--world] [--world-seed WORLD_SEED] [--world-size WORLD_SIZE] [--split SPLIT] [--answers] [--systems SYSTEMS] [--reference REFERENCE] [--token-budget TOKEN_BUDGET] [--repeats REPEATS] [--answer-model ANSWER_MODEL] [--judge-model JUDGE_MODEL] [--limit-per-stratum LIMIT_PER_STRATUM] [--concurrency CONCURRENCY] [--cache-dir CACHE_DIR] [--report REPORT] [--progress PROGRESS] [--record-baseline] [--benchmark BENCHMARK] [--benchmark-path BENCHMARK_PATH] [--limit LIMIT] [--limit-per-type LIMIT_PER_TYPE] [--abstention-stratum] [--half HALF] [--split-seed SPLIT_SEED] [--ingest INGEST] [--context-tokens CONTEXT_TOKENS] [--cells CELLS] [--answer-models ANSWER_MODELS] [--bench-dir BENCH_DIR] [--carry-forward CARRY_FORWARD] [--include-adversarial] [--extract-concurrency EXTRACT_CONCURRENCY] [--dry-run]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
@@ -880,7 +880,8 @@ Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [-
 | `--half` | `dev` \| `held_out` \| `all` | `all` | With --benchmark: only the seeded dev half, only the held-out half, or both |
 | `--split-seed` | `SPLIT_SEED` | — | With --benchmark: seed of the dev / held-out split |
 | `--ingest` | `segments` \| `extract` | `segments` | With --benchmark: raw chat and segments only, or also the product's fact extraction |
-| `--context-tokens` | `CONTEXT_TOKENS` | — | With --benchmark: context budget per question (default: the product's recall cap) |
+| `--context-tokens` | `CONTEXT_TOKENS` | — | With --benchmark: context budget(s) per question, comma-separated (default: the product's recall cap) |
+| `--cells` | `CELLS` | — | With --benchmark: budget:answer-model pairs to run, comma-separated (default: every --context-tokens with every --answer-models) |
 | `--answer-models` | `ANSWER_MODELS` | — | With --benchmark: comma-separated answer models, one cell each (openai/<id> is hosted) |
 | `--bench-dir` | `BENCH_DIR` | — | With --benchmark: cache of contexts, answers and judgements, reused across runs |
 | `--carry-forward` | `CARRY_FORWARD` | — | With --benchmark: systems whose cached contexts from any code version are reused |

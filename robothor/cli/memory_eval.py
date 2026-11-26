@@ -275,7 +275,11 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
     if args.half != "all":
         split = eb.dev_split(bench.questions, seed=split_seed)
         questions = [q for q in questions if split.get(q.id) == args.half]
-    budget = args.context_tokens or RECALL_CONTEXT_CHARS // 4
+    budgets = [
+        int(b)
+        for b in str(args.context_tokens or RECALL_CONTEXT_CHARS // 4).split(",")
+        if b.strip()
+    ]
     models = [
         m.strip() for m in (args.answer_models or args.answer_model or "").split(",") if m.strip()
     ]
@@ -283,42 +287,68 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
         from robothor.llm import ollama
 
         models = [ollama.GENERATION_MODEL]
-    judge = args.judge_model or models[0]
     carry = [s.strip() for s in args.carry_forward.split(",") if s.strip()]
     tenant = args.tenant or eb.BENCH_TENANT
 
+    if args.cells:
+        cells = []
+        for part in args.cells.split(","):
+            b, _, m = part.strip().partition(":")
+            cells.append((int(b), m.strip()))
+    else:
+        cells = [(b, m) for b in budgets for m in models]
+    judge = args.judge_model or cells[0][1]
     if args.dry_run:
-        try:
-            est = eb.estimate_run(
-                bench,
-                questions,
-                systems=systems,
-                answer_models=models,
-                judge_model=judge,
-                token_budget=budget,
-                ingest_mode=args.ingest,
-                cache_dir=args.bench_dir,
-                carry_forward=carry,
-            )
-        except ValueError as e:
-            print(f"memory-eval cannot run: {e}")
-            return 3
         print(
             f"{len(questions)} questions selected: "
             + ", ".join(f"{t} {n}" for t, n in sorted(_count(questions).items()))
         )
-        print(eb.format_estimate(est))
+        total = 0.0
+        for budget in sorted({b for b, _m in cells}):
+            try:
+                est = eb.estimate_run(
+                    bench,
+                    questions,
+                    systems=systems,
+                    answer_models=[m for b, m in cells if b == budget],
+                    judge_model=judge,
+                    token_budget=budget,
+                    ingest_mode=args.ingest,
+                    cache_dir=args.bench_dir,
+                    carry_forward=carry,
+                )
+            except ValueError as e:
+                print(f"memory-eval cannot run: {e}")
+                return 3
+            total += est["total_cost_usd"]
+            print(eb.format_estimate(est))
+        print(f"Iteration total: ${total:.2f} (judge validation not included).")
         return 0
 
     blocked = preflight(tenant)
     if blocked:
         print(f"memory-eval cannot run: {blocked}")
         return exit_code_for(None, blocked)
-    reports = []
-    for model in models:
-        progress = None
-        if args.progress:
-            progress = args.progress if len(models) == 1 else f"{args.progress}.{_slug(model)}"
+    if len(cells) > 1 and args.bench_dir:
+        # One ingestion per history for every budget; the cells then ingest nothing.
+        stats = asyncio.run(
+            eb.prefill_contexts(
+                bench,
+                questions,
+                systems=systems,
+                token_budgets=sorted({b for b, _m in cells}),
+                cache_dir=args.bench_dir,
+                ingest_mode=args.ingest,
+                tenant_id=tenant,
+                carry_forward=carry,
+                cleanup=not args.keep,
+                extract_concurrency=args.extract_concurrency,
+            )
+        )
+        print(f"contexts prefilled: {stats}")
+    for budget, model in cells:
+        suffix = "" if len(cells) == 1 else f".{budget}.{_slug(model)}"
+        progress = f"{args.progress}{suffix}" if args.progress else None
         try:
             report = asyncio.run(
                 eb.run_benchmark(
@@ -342,10 +372,9 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
         except (EvalPreconditionError, ValueError) as e:
             print(f"memory-eval cannot run: {e}")
             return 3
-        reports.append(report)
         markdown = eb.format_bench_markdown(report)
         if args.report:
-            out = Path(args.report if len(models) == 1 else f"{args.report}.{_slug(model)}.json")
+            out = Path(f"{args.report}{suffix}.json" if suffix else args.report)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
             out.with_suffix(".md").write_text(markdown, encoding="utf-8")

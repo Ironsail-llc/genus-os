@@ -1568,6 +1568,12 @@ answers and the judge per cell, and the spend at the list prices in
 `robothor/memory/eval_hosted.py` (check them before a run); a real run reports
 the provider's token counts and their cost.
 
+**Several budgets, several answer models.** `--context-tokens 1000,4000`
+with `--answer-models` runs every pair; `--cells 1000:openai/gpt-5-mini,4000:openai/gpt-5-mini`
+names the pairs instead. With more than one cell and `--bench-dir`, each
+history is ingested once and every system's context is retrieved at every
+budget before any cell answers; each cell then ingests nothing.
+
 **Development and held-out halves.** Every report scores two seeded halves of
 the benchmark (`--split-seed`, default 885, stratified by question type) as
 well as the whole. Diagnose losses on `dev` only (`--half dev`); `held_out` is
@@ -1576,7 +1582,11 @@ never tuned on, so a gain that holds there is not fitted to the questions.
 **Reading the result.** Per system: accuracy overall (question-weighted),
 task-averaged (the mean of the per-type accuracies, which several published
 tables use), per question type, and the abstention questions on their own
-(also counted in their type); the context tokens per question (mean and
+(also counted in their type); evidence recall, the share of each
+question's evidence sessions (LongMemEval's `answer_session_ids`) that reached
+the context actually sent, per type, with the losses split into those whose
+context held all the evidence (the answer model's) and those missing some
+(retrieval's); the context tokens per question (mean and
 median), retrieval and answer latency; errors, scored as wrong. Before any
 question, a LongMemEval judge is checked on planted responses (each reference
 answer phrased plainly, another question's answer, a plain "not mentioned",

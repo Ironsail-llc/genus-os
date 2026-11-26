@@ -1417,6 +1417,11 @@ def format_bench_markdown(report: dict[str, Any]) -> str:
         f"ingest mode `{p.get('ingest_mode')}`; context budget {p.get('token_budget')} tokens.",
         f"Answer model `{p.get('answer_model')}`, judge `{p.get('judge_model')}`; metric: {metric}.",
     ]
+    if p.get("ingest_mode") == "segments":
+        lines.append(
+            "Ingest mode `segments`: extracted facts are absent in this mode, so this measures "
+            "raw-segment recall plus ranking, not the whole product."
+        )
     jv = report.get("judge_validation")
     if jv:
         lines.append(
@@ -1426,8 +1431,8 @@ def format_bench_markdown(report: dict[str, Any]) -> str:
         )
     lines += [
         "",
-        "| System | Type | n | Score [95% CI] | Errors | Tokens (mean / median) | Retrieval p50 / p95 ms | Answer p50 ms |",
-        "|---|---|---|---|---|---|---|---|",
+        "| System | Type | n | Score [95% CI] | Evidence recall | Errors | Tokens (mean / median) | Retrieval p50 / p95 ms | Answer p50 ms |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for system, m in (report.get("systems") or {}).items():
         rows = [*m.get("by_type", {}).items(), ("all", m["overall"])]
@@ -1437,11 +1442,17 @@ def format_bench_markdown(report: dict[str, Any]) -> str:
             lo, hi = b.get("wilson", (0.0, 0.0))
             lines.append(
                 f"| {system} | {name} | {b.get('n')} | {_pct(b.get('accuracy'))} [{lo:.0%}–{hi:.0%}] | "
+                f"{_pct(b.get('evidence_recall'))} | "
                 f"{b.get('errors', 0)} | {b.get('mean_tokens', 0):.0f} / {b.get('median_tokens', 0):.0f} | "
                 f"{b.get('retrieval_p50_ms', 0):.0f} / {b.get('retrieval_p95_ms', 0):.0f} | "
                 f"{b.get('answer_p50_ms', 0):.0f} |"
             )
-        lines.append(f"| {system} | task-averaged | | {_pct(m.get('task_averaged'))} | | | | |")
+        lines.append(f"| {system} | task-averaged | | {_pct(m.get('task_averaged'))} | | | | | |")
+        ov = m["overall"]
+        lines.append(
+            f"| {system} | losses | | wrong with all evidence in context {ov.get('wrong_with_evidence', 0)} "
+            f"(answer model); missing evidence {ov.get('wrong_missing_evidence', 0)} (retrieval) | | | | | |"
+        )
     halves = report.get("by_split") or {}
     if any(halves.values()):
         lines += [

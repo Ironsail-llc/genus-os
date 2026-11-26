@@ -942,9 +942,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     memeval_parser.add_argument(
         "--context-tokens",
-        type=int,
         default=None,
-        help="With --benchmark: context budget per question (default: the product's recall cap)",
+        help="With --benchmark: context budget(s) per question, comma-separated "
+        "(default: the product's recall cap)",
+    )
+    memeval_parser.add_argument(
+        "--cells",
+        default=None,
+        help="With --benchmark: budget:answer-model pairs to run, comma-separated "
+        "(default: every --context-tokens with every --answer-models)",
     )
     memeval_parser.add_argument(
         "--answer-models",
