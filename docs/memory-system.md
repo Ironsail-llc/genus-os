@@ -57,13 +57,13 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      most of its words. The first pass reads the query in web-search syntax:
      `"quoted words"` match as a phrase, `-word` excludes, and `or` is an
      operator.
-   - `graph` (**on**) — graph activation from the entities the query names
-     and the entities the top hits mention, the facts it reaches ranked by
-     what the question means (see [Associative recall](#associative-recall),
-     [What the graph leg returns](#what-the-graph-leg-returns) and
-     [Is the graph leg on?](#is-the-graph-leg-on)). `include_graph=False`
-     leaves it out, only so the replay's `today` and `new-graph` presets and
-     the evaluation's `recall_no_graph` can measure without it.
+   - `graph` (**off by default**; `include_graph=True`) — graph activation
+     from the entities the query names and the entities the top hits mention,
+     the facts it reaches ranked by what the question means (see
+     [Associative recall](#associative-recall) and
+     [What the graph leg returns](#what-the-graph-leg-returns)). Off because
+     it has not yet passed every stratum: see
+     [Is the graph leg on?](#is-the-graph-leg-on).
    - `entity_expansion` (`expand_entities`; with the graph leg on, only when it
      returned nothing) — facts about entities related to the top hits'
      entities.
@@ -103,17 +103,27 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    there is none — one 0..1 scale for every leg; cosine similarity is not used)
    + recency + importance + access count, with supersession demotion; then
    near-duplicates are dropped.
-5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps at
-   least that many places in the top `limit` whenever it returned anything,
-   chosen by its own score: `graph` 2, `entity_expansion` 1. For the graph leg
-   only (`recall.BEST_ROW_LEGS`) the places hold its best rows: a weaker row
-   of it that the head holds anyway does not use up a place, and a best row
-   the head holds counts. `entity_expansion` keeps the earlier rule (any of
-   its rows in the head holds its place), so the default search is unchanged.
-   A related-but-not-similar fact is exactly what a query-document reranker
-   discards. Reserved picks take at most `(limit - 1) // 2` places in total
-   (none at a `limit` of 1 or 2), never the top result, and never a
-   near-duplicate of a row already returned.
+5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps
+   reserved rows whenever it returned anything, chosen by its own score:
+   `graph` 2, `entity_expansion` 1. A related-but-not-similar fact is exactly
+   what a query-document reranker discards.
+   - **The graph leg** (`recall.BEST_ROW_LEGS`) keeps its best two rows and
+     adds them *after* the ranked head: they never replace a head row. A
+     graph row the head already holds counts as one of the two, and a weaker
+     one the head holds uses up none. A search with the graph leg therefore
+     returns at most `limit + 2` rows, and its head is exactly what the same
+     search returns without the graph (when the head is shorter than `limit`,
+     the graph's rows follow it directly).
+   - **Every other leg** (`entity_expansion`) keeps the earlier rule, so the
+     default search is unchanged: any of its rows in the head holds its place,
+     and its picks take the head's last places, at most `(limit - 1) // 2` in
+     total (none at a `limit` of 1 or 2), never the top result.
+   - No reserved pick is ever a near-duplicate of a row already returned.
+   - **Callers.** Every caller of `search_facts` reads the rows it gets,
+     except the RIP 15 router (`router.recall`), which re-fuses its stores and
+     cuts the result to `limit`: on that path a graph row that follows the
+     head is usually cut. The router's 4,000-character budget and the
+     engine's tool-output cap bound the text either way.
 
 Every leg shares `limit`. Returned rows keep their fields and add `kind`,
 `leg_ranks`, `leg_scores`, `rrf_score`, `fused_rank`, `rerank_score` and
@@ -1097,93 +1107,81 @@ walk itself is the database function `memory_activate` (migration
 
 #### Is the graph leg on?
 
-Yes, in recall: `search_facts` runs it on every call (no module switch;
-`include_graph=False` exists only for measurement). Warm-up does not, unless a
-caller asks (`_build_entity_context(include_graph=True)`;
-`robothor.engine.warmup.WARMUP_GRAPH_DEFAULT` is `False`): its automatic
-recall ranks what the walk reaches by activation, not by the message, and
-nothing has measured it.
+No, not in recall and not in warm-up, unless a caller asks:
+`search_facts(include_graph=True)`, `_build_entity_context(include_graph=True)`.
+`robothor.memory.facts.GRAPH_LEG_DEFAULT` and
+`robothor.engine.warmup.WARMUP_GRAPH_DEFAULT` are `False`.
 
-The answer-and-judge arm decided it, on the memory evaluation's synthetic
-world: 40 cases per stratum, 2,048-token budget, judge `qwen3:8b` (its
-validation re-run and passed each time), the leg on (`recall`; these runs
-used its earlier name, `recall_with_graph`, from before the leg was the
-default) against off (`recall_no_graph`), paired per case (McNemar). Production
-agents answer with models far stronger than the local 8B one, so the
-`qwen3:32b` runs are the closer stand-in; the 8B runs are reported beside
-them, not replaced.
+Why, in short: retrieval now holds on both splits and answers improve with
+both answer models on both splits, but with the default small answer model
+(`qwen3:8b`) on the dev split the cross-tenant stratum (people whose name also
+exists in another tenant) loses 4 of 40 answers and gains none (p = 0.125).
+The no-regression rule blocks any stratum worse at p < 0.20. The four are
+"where is X based" questions answered with a related entity's city: the
+graph adds, say, the person's employer's headquarters, and the model takes
+it for the person's. The held-out split and the larger answer model
+(`qwen3:32b`) do not show it, but those do not lift the rule.
+
+All results below are from the memory evaluation's synthetic world (seed 1,
+full size), the leg off against on, paired per case (McNemar's exact test).
+`multi_hop_paraphrase` asks the multi-hop questions reworded so they share no
+content word with their facts except the names
+([World](benchmarks/memory/WORLD.md)); it decides, since the original
+multi-hop questions share their one rare word with the fact.
+
+**Retrieval, with the graph's rows following the head**, for a top-5 search,
+counted two ways: hits within the first five rows returned, and hits within
+every row returned (the head plus up to two graph rows). In every case the
+head was the leg-off result (dev: all 929; held-out: all but 1 of 916, whose
+last row differed). The leg-off search returns fewer than five rows in about
+a quarter of cases (near-duplicates removed), and there a graph row comes
+within the first five.
+
+| Stratum | Dev off | Dev on, first 5 | Dev on, all rows | Held-out off | Held-out on, first 5 | Held-out on, all rows |
+| --- | --- | --- | --- | --- | --- | --- |
+| multi-hop, reworded | 21 / 126 | 33 (12 / 0) | 61 (40 / 0) | 19 / 114 | 27 (8 / 0) | 60 (41 / 0) |
+| multi-hop | 20 / 126 | 34 (14 / 0) | 66 (46 / 0) | 21 / 114 | 30 (9 / 0) | 69 (48 / 0) |
+| point in time | 73 / 126 | 73 | 73 | 59 / 114 | 59 | 59 |
+| cross-tenant | 64 / 79 | 64 | 69 (5 / 0) | 79 / 89 | 79 | 82 (3 / 0) |
+| entity confusion | 105 / 117 | 105 | 106 (1 / 0) | 107 / 123 | 107 | 109 (2 / 0) |
+| raw detail, long tenure, knowledge update | — | level | level | — | level | level |
+| all | 537 / 929 | 563 (26 / 0) | 629 (92 / 0) | 520 / 916 | 537 (17 / 0) | 614 (94 / 0) |
+
+No stratum is worse in either view on either split (better / worse in
+brackets); top 10 is the same. Before the graph's rows followed the head, a
+reserved graph row could push the right fact out of a five-row result: on the
+held-out split point in time fell from 59 to 53 (0 / 6, p = 0.03). Retrieval
+latency per top-5 search: p50 378 ms on against 339 ms off on dev, p95 424
+against 379 ms (the question without its names is embedded once more).
+
+**Answer and judge**: 40 cases per stratum, 2,048-token budget, judge
+`qwen3:8b` (validation re-run each time: wrong answers marked wrong 100%,
+right answers right 99.6%), the leg on against off. The held-out split had
+been seen before these runs, so it is a regression check, with no tuning
+after it.
 
 | Answer model, split | Off | On | Better / worse | Reworded multi-hop | Cross-tenant | Verdict |
 | --- | --- | --- | --- | --- | --- | --- |
-| `qwen3:32b`, dev | 154 / 360 | 183 | 33 / 4 (p < 0.001) | 1 to 15 (14 / 0) | 28 to 27 (1 / 2) | passes |
-| `qwen3:32b`, held-out | 156 / 360 | 182 | 33 / 7 (p < 0.001) | 1 to 15 (15 / 1) | 28 to 28 (1 / 1) | passes |
-| `qwen3:8b`, dev | 172 / 360 | 202 | 35 / 5 (p < 0.001) | 1 to 14 (13 / 0) | 31 to 27 (0 / 4, p = 0.125) | blocked by cross-tenant |
+| `qwen3:8b`, dev | 172 / 360 | 202 | 35 / 5 (p < 0.001) | 1 to 14 (13 / 0) | 31 to 27 (0 / 4, p = 0.125) | **blocked** |
 | `qwen3:8b`, held-out | 168 / 360 | 194 | 29 / 3 (p < 0.001) | 3 to 14 (11 / 0) | 30 to 30 (1 / 1) | passes |
+| `qwen3:32b`, dev | 154 / 360 | 187 | 36 / 3 (p < 0.001) | 1 to 15 (14 / 0) | 29 to 28 (1 / 2) | passes |
+| `qwen3:32b`, held-out | 156 / 360 | 182 | 33 / 7 (p < 0.001) | 1 to 15 (15 / 1) | 28 to 28 (1 / 1) | passes |
 
-"Passes" is the repo's rule: a significant pooled gain and no stratum worse
-at p < 0.20. Multi-hop (original wording) went from 0-3 to 14-18 of 40 in
-every run.
+Production agents answer with models far stronger than the local 8B one, so
+the 32b runs are the closer stand-in; they are reported beside the 8B runs,
+not instead of them. Even with `qwen3:32b`, two dev "where is X based"
+questions are answered with a related entity's city.
 
-**What still fails.** Two "where is X based" questions (dev, cross-tenant)
-are answered with a related entity's city even by `qwen3:32b` with the
-relation path shown; with `qwen3:8b` the dev split lost four such answers.
-The retrieval gate on the held-out split also shows point in time 59 to 53 of
-114 at top 5 (0 / 6, p = 0.03): a reserved graph place can push the right
-employment fact, ranked fourth or fifth, out of a five-row result. It does
-not show in the answers (point in time 13 to 12 and 9 to 8 of 40) or at
-top 10 (64 to 63).
-
-Retrieval on the held-out split (916 cases, leg off against on):
-
-| Stratum | Top 5, off | Top 5, on | Better / worse | Top 10, off | Top 10, on |
-| --- | --- | --- | --- | --- | --- |
-| multi-hop, reworded (114) | 19 | 58 | 41 / 2 (p < 0.001) | 35 | 66 |
-| multi-hop (114) | 21 | 68 | 48 / 1 (p < 0.001) | 33 | 72 |
-| point in time (114) | 59 | 53 | 0 / 6 (p = 0.03) | 64 | 63 |
-| raw detail (127) | 30 | 30 | 0 / 0 | 30 | 30 |
-| entity confusion (123) | 107 | 107 | 2 / 2 | 113 | 113 |
-| long tenure (114) | 92 | 92 | 0 / 0 | 92 | 92 |
-| knowledge update (121) | 113 | 113 | 0 / 0 | 113 | 113 |
-| cross-tenant (89) | 79 | 78 | 3 / 4 | 85 | 85 |
-| all (916) | 520 | 599 | 94 / 15 (p < 0.001) | 565 | 634 |
-
-No context held another tenant's row: every fact and segment either arm
-returned on the held-out split is the primary tenant's.
-
-Labelling every graph-only row with its relation path (below) did not hurt
-(against the unlabelled leg on dev with `qwen3:8b`: 8 better, 4 worse,
-p = 0.39). Taking the graph's places only when the head's evidence about
-the named entity is weak removed the four 8B cross-tenant losses but also
-most of the gain, because the reranker rates the first-hop fact about the
-named person as highly for a multi-step question as for a direct one; it is
-not used.
-
-Retrieval on the dev split (seed 1, full size, dev split, 929 scored cases; the leg off against on, paired in one run, McNemar's
-exact test). `multi_hop_paraphrase` asks the multi-hop questions reworded so
-they share no content word with their facts except the names
-([World](benchmarks/memory/WORLD.md)); it is the stratum that decides, since
-the original multi-hop questions share their one rare word with the fact.
-
-| Stratum | Top 5, off | Top 5, on | Better / worse | Top 10, off | Top 10, on |
-| --- | --- | --- | --- | --- | --- |
-| multi-hop, reworded (126) | 21 | 56 | 40 / 5 (p < 0.001) | 47 | 73 |
-| multi-hop (126) | 20 | 65 | 46 / 1 (p < 0.001) | 37 | 77 |
-| point in time (126) | 73 | 71 | 0 / 2 (p = 0.50) | 75 | 75 |
-| raw detail (110) | 43 | 43 | 0 / 0 | 43 | 43 |
-| entity confusion (117) | 105 | 105 | 1 / 1 | 106 | 106 |
-| long tenure (126) | 100 | 100 | 0 / 0 | 100 | 100 |
-| knowledge update (119) | 111 | 111 | 0 / 0 | 111 | 111 |
-| cross-tenant (79) | 64 | 69 | 5 / 0 (p = 0.06) | 72 | 73 |
-| all (929) | 537 | 620 | 92 / 9 (p < 0.001) | 591 | 658 |
-
-Retrieval latency per search, top 5: p50 370 ms on against 330 ms off, p95
-425 ms against 381 ms (the question without its names is embedded with the
-query, so the leg's 250 ms budget never waits on the model).
-Two earlier versions failed: ranking each reached entity's facts by
-importance (multi-hop 21 against 20, raw detail 26 against 43), and ranking
-them by full-text match, which looked strong on the original questions (82
-against 20) only because those share their one rare word with the fact, and
-returned none of the answers to the reworded ones.
+Earlier designs that failed: ranking each reached entity's facts by
+importance (multi-hop 21 against 20, raw detail 26 against 43); ranking them
+by full-text match, which looked strong on the original questions only
+because those share their one rare word with the fact and returned none of
+the answers to the reworded ones; and keeping the graph's places only when
+the head's evidence about the named person was weak, which removed the four
+losses but also most of the gain (the reranker rates the first-hop fact
+about the named person as highly for a multi-step question as for a direct
+one). Labelling every graph-only row with its relation path did not change
+the four losses and did not hurt.
 
 #### What the graph leg returns
 
@@ -1217,9 +1215,9 @@ function `memory_activate_for_question`, migration
   Every row carries the columns of any fact row (`confidence`,
   `source_type`, `metadata`, `superseded_by`, `utility`), so consumers that
   format rows by key read a graph row like any other.
-- **Places, not the head.** The leg has no weight in fusion and keeps its two
-  reserved places for its two best rows by that score; a best row the head
-  already holds counts as one of them.
+- **After the head, not in it.** The leg has no weight in fusion; its two
+  best rows by that score follow the ranked head and never replace a head
+  row (a best row the head already holds counts as one of them).
 - **Labelled as related.** Every surface that shows recall rows to a model
   (the engine's `search_memory` tool on both its paths, direct and the RIP 15
   router, which carries each row's `leg_ranks` for it; MCP; deep reason; the
@@ -1343,7 +1341,7 @@ the second side found.
 genus memory-replay --tenant <tenant> --from-runs --since 7d
 genus memory-replay --tenant <tenant> --from-chat --sample --seed 3 --limit 40
 genus memory-replay --tenant <tenant> --questions questions.txt --as-person <crm-person-id> \
-    --compare new-graph,new-segments --json --out replay.json --redact
+    --compare new+graph,new-segments --json --out replay.json --redact
 ```
 
 **Questions.** `--from-runs` replays the `query` of every `search_memory` tool
@@ -1376,9 +1374,9 @@ the one place to add another:
 | Preset | Segments | Graph leg |
 | --- | --- | --- |
 | `today` (recall as main serves it) | off | off |
-| `new` (the product default on this tree) | on | on |
-| `new-graph` | on | off |
-| `new-segments` | off | on |
+| `new` (the product default on this tree) | on | `GRAPH_LEG_DEFAULT` |
+| `new+graph` | on | on |
+| `new-segments` | off | `GRAPH_LEG_DEFAULT` |
 
 All four keep the tool's fan-out (entity expansion, insights, episodes) unless
 `MEMORY_NARROW_SEARCH` is set, and all rerank. `--compare A,B` picks two;
