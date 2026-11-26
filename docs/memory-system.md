@@ -1106,8 +1106,9 @@ nothing has measured it.
 
 The answer-and-judge arm decided it, on the memory evaluation's synthetic
 world: 40 cases per stratum, 2,048-token budget, judge `qwen3:8b` (its
-validation re-run and passed each time), the leg on (`recall_with_graph`)
-against off (`recall_no_graph`), paired per case (McNemar). Production
+validation re-run and passed each time), the leg on (`recall`; these runs
+used its earlier name, `recall_with_graph`, from before the leg was the
+default) against off (`recall_no_graph`), paired per case (McNemar). Production
 agents answer with models far stronger than the local 8B one, so the
 `qwen3:32b` runs are the closer stand-in; the 8B runs are reported beside
 them, not replaced.
