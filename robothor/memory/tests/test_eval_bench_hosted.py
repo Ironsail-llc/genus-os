@@ -383,3 +383,15 @@ class TestCli:
         from robothor.cli.memory_eval import cmd_memory_eval
 
         assert cmd_memory_eval(self._args(tmp_path / "nope.json", dry_run=True)) == 3
+
+
+class TestCodeVersion:
+    def test_the_version_follows_the_memory_code_not_the_eval_harness(self, tmp_path):
+        (tmp_path / "recall.py").write_text("A = 1\n", encoding="utf-8")
+        (tmp_path / "eval_bench.py").write_text("B = 1\n", encoding="utf-8")
+        v1 = eb.code_version(tmp_path)
+        (tmp_path / "eval_bench.py").write_text("B = 2\n", encoding="utf-8")
+        (tmp_path / "eval_hosted.py").write_text("C = 1\n", encoding="utf-8")
+        assert eb.code_version(tmp_path) == v1, "harness edits keep cached contexts"
+        (tmp_path / "recall.py").write_text("A = 2\n", encoding="utf-8")
+        assert eb.code_version(tmp_path) != v1
