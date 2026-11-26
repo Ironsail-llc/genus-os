@@ -891,7 +891,7 @@ Usage: `genus memory-replay [--tenant TENANT] [--from-runs] [--from-chat] [--que
 | `--limit` | `LIMIT` | `50` | Questions to replay |
 | `--sample` | — | off | A seeded random sample, not the newest |
 | `--seed` | `SEED` | `1` | Seed for --sample |
-| `--compare` | `COMPARE` | — | Two presets A,B (default today,new; also new+graph, new-segments) |
+| `--compare` | `COMPARE` | — | Two presets A,B (default today,new; also new-graph, new-segments) |
 | `--json` | — | off | Output JSON |
 | `--out` | `OUT` | — | Write the report here instead of stdout |
 | `--redact` | — | off | Replace recalled text and questions with ids and lengths |

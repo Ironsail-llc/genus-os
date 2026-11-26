@@ -1,12 +1,15 @@
 """The graph leg is on in recall; warm-up walks the graph only when asked.
 
-On the memory evaluation's world, dev split, top 5, the graph leg ranked by
-the meaning of the question (``activation.activate_for_question``) took the
-reworded multi-hop questions from 21 to 56 of 126 (40 better, 5 worse) with
-no stratum significantly worse, so ``search_facts`` runs it on every call.
+Answer and judge on the memory evaluation's world, answer model qwen3:32b
+(the closer stand-in for production's answer models), leg on against off:
+dev 154 to 183 of 360 (33 better, 4 worse) and held-out 156 to 182 (33 / 7),
+reworded multi-hop 1 to 15 of 40 on both, no stratum worse at p < 0.20.
+With qwen3:8b the dev split lost four cross-tenant answers; two "where is X
+based" questions are still answered with a related entity's city by 32b.
 ``include_graph=False`` remains only so the replay's ``today`` preset and the
-evaluation's ``recall_no_graph`` can measure recall without it. Warm-up's automatic recall ranks by activation, not
-by the message, and nothing has measured it, so it stays off unless asked.
+evaluation's ``recall_no_graph`` can measure recall without it. Warm-up's
+automatic recall ranks by activation, not by the message, and nothing has
+measured it, so it stays off unless asked.
 """
 
 from __future__ import annotations
