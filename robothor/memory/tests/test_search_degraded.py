@@ -152,3 +152,91 @@ async def test_store_fact_still_raises_for_dispatch_to_map():
             "source",
             "conversation",
         )
+
+
+# ── An empty vector from a server that answered 200 ─────────────────────
+#
+# Under load the embedding server has answered with ``{"embeddings": [[]]}``.
+# That used to reach SQL and fail there as a pgvector dimension mismatch. The
+# client now rejects it, and these paths must treat it as the service being
+# unavailable: search degrades, a write fails before touching the database.
+
+
+@pytest.fixture
+def empty_vector_server(monkeypatch):
+    """The real client, against a server that only ever returns an empty vector."""
+    from robothor.llm import ollama
+
+    calls = {"n": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"embeddings": [[]]})
+
+    async def no_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setenv("ROBOTHOR_OLLAMA_URL", "http://embedder.test")
+    monkeypatch.setattr(ollama.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(ollama, "_transport", httpx.MockTransport(handler))
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_search_facts_degrades_when_embedder_returns_empty_vector(empty_vector_server):
+    from robothor.memory import facts
+
+    cur = MagicMock()
+    cur.fetchall.return_value = [dict(BM25_ROW)]
+
+    with (
+        patch.object(facts, "get_connection", return_value=_mock_conn(cur)),
+        patch.object(facts, "apply_hnsw_session"),
+    ):
+        results = await facts.search_facts(
+            "tea",
+            limit=5,
+            use_reranker=False,
+            expand_entities=False,
+            include_insights=False,
+            include_episodes=False,
+        )
+
+    assert results[0]["fact_text"] == "Alice prefers tea"
+    assert results[0]["degraded"] == "keyword-only (embedding service unavailable)"
+    executed_sql = " ".join(str(c.args[0]) for c in cur.execute.call_args_list)
+    assert "<=>" not in executed_sql
+
+
+@pytest.mark.asyncio
+async def test_search_insights_returns_empty_when_embedder_returns_empty_vector(
+    empty_vector_server,
+):
+    from robothor.memory import facts
+
+    connect = MagicMock()
+    with patch.object(facts, "get_connection", connect):
+        results = await facts.search_insights("patterns", limit=3)
+
+    assert results == []
+    connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_store_fact_fails_before_any_sql_when_embedder_returns_empty_vector(
+    empty_vector_server,
+):
+    from robothor.memory import facts
+
+    connect = MagicMock()
+    with (
+        patch.object(facts, "get_connection", connect),
+        pytest.raises(httpx.HTTPError, match="expected 1024"),
+    ):
+        await facts.store_fact(
+            {"fact_text": "Alice prefers tea", "category": "preference"},
+            "source",
+            "conversation",
+        )
+
+    connect.assert_not_called()

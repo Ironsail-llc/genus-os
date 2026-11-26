@@ -52,8 +52,12 @@ def _chat_response(content: str = "hi") -> httpx.Response:
     )
 
 
+#: A vector as wide as the ``vector(1024)`` columns; the client rejects any other width.
+_VECTOR = [0.1] * 1024
+
+
 def _embed_response(vector: list[float] | None = None) -> httpx.Response:
-    return httpx.Response(200, json={"embeddings": [vector or [0.1, 0.2, 0.3]]})
+    return httpx.Response(200, json={"embeddings": [vector or _VECTOR]})
 
 
 class TestChatRetry:
@@ -130,7 +134,7 @@ class TestEmbedRetry:
 
         result = await get_embedding_async("some text")
 
-        assert result == [0.1, 0.2, 0.3]
+        assert result == _VECTOR
         assert calls["n"] == 3
         assert len(sleeps) == 2
         # Total sleep time must stay comfortably within the ~2 minute budget.
@@ -210,7 +214,7 @@ class TestEmbedRetry:
 
         result = await get_embedding_async("some text")
 
-        assert result == [0.1, 0.2, 0.3]
+        assert result == _VECTOR
         assert calls["n"] == 2
 
     async def test_chat_retries_remote_protocol_error(self, monkeypatch):
@@ -262,7 +266,7 @@ class TestEmbedRetry:
 
         result = await get_embedding_async("some text")
 
-        assert result == [0.1, 0.2, 0.3]
+        assert result == _VECTOR
         assert len(sleeps) == 2
         for s in sleeps:
             # Backoff fallback: finite, positive, within the per-sleep cap
