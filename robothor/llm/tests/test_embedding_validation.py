@@ -119,8 +119,19 @@ class TestBatchEmbedding:
         assert await ollama.get_embeddings_batch_async(["a", "b"]) == [GOOD, GOOD]
         assert calls["n"] == 2
 
-    async def test_empty_vector_twice_raises_and_returns_nothing(self):
-        calls = _serve({"embeddings": [GOOD, []]})
+    async def test_a_batch_bad_twice_falls_back_to_one_call_per_text(self):
+        """One bad vector must not cost the good ones: each text is asked alone."""
+        calls = _serve(
+            {"embeddings": [GOOD, []]},
+            {"embeddings": [GOOD, []]},
+            {"embeddings": [GOOD]},
+        )
+
+        assert await ollama.get_embeddings_batch_async(["a", "b"]) == [GOOD, GOOD]
+        assert calls["n"] == 4  # two batch calls, then one per text
+
+    async def test_a_text_that_stays_empty_raises_and_returns_nothing(self):
+        calls = _serve({"embeddings": [[], []]})
 
         with pytest.raises(httpx.HTTPError) as caught:
             await ollama.get_embeddings_batch_async(["a", "b"])
@@ -128,7 +139,7 @@ class TestBatchEmbedding:
         message = str(caught.value)
         assert MODEL in message
         assert "0" in message and str(WIDTH) in message
-        assert calls["n"] == 2
+        assert calls["n"] == 4  # two batch calls, then the first text twice
 
     async def test_wrong_width_in_a_batch_raises(self):
         _serve({"embeddings": [[0.5] * 768, [0.5] * 768]})
