@@ -147,3 +147,30 @@ class TestHandlerRouting:
         rec.assert_awaited_once()
         assert out["query_class"] == "default"
         assert out["results"][0]["fact"] == "hi"
+
+
+async def test_a_graph_only_row_is_labelled_on_the_routed_path() -> None:
+    """The routed path (RIP 15) normalises rows; it must keep what the shared
+    formatter needs, so a row only the graph found reads "Related via ..."
+    there too, and a row the head legs found keeps its text."""
+    from robothor.engine.tools.handlers.memory import _format_results
+    from robothor.memory import router
+
+    graph_only = {
+        "id": 7, "fact_text": "Example Co is headquartered in Brelford.", "category": "event",
+        "leg_ranks": {"graph": 0}, "graph_path": ["Alice Smith", "Example Co"],
+        "origin": "user_stated",
+    }  # fmt: skip
+    head = {"id": 8, "fact_text": "Alice Smith works at Example Co.", "category": "event",
+            "leg_ranks": {"vector": 0, "graph": 1}, "graph_path": ["Alice Smith"]}  # fmt: skip
+    rows = AsyncMock(return_value=[graph_only, head])
+    with patch("robothor.memory.facts.search_facts", new=rows):
+        out = await router.recall("Where is Alice Smith's employer based?", tenant_id="test-tenant")
+    facts_out = {
+        r["id"]: r["fact"] for r in _format_results(out["results"], out["query_class"])["results"]
+    }
+    assert (
+        facts_out[7]
+        == "Related via Alice Smith → Example Co: Example Co is headquartered in Brelford."
+    )
+    assert facts_out[8] == "Alice Smith works at Example Co."

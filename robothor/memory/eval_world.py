@@ -67,7 +67,35 @@ STRATA: tuple[str, ...] = (
     "raw_detail",
     "long_tenure",
     "cross_tenant",
+    # The multi-hop cases reworded so the question shares no content word with
+    # its supporting facts except the names (the originals share their one
+    # rare word with the second-hop fact). Same pairs, gold and split.
+    "multi_hop_paraphrase",
 )
+
+#: Rewordings of the multi-hop questions, by kind; one is chosen per case by a
+#: hash of its key. Each shares no content word with the facts it needs.
+PARAPHRASES: dict[str, tuple[str, ...]] = {
+    "manager-of-manager": (
+        "Who sits one level above {name}'s boss in the org chart?",
+        "Who is the boss of {name}'s boss?",
+        "Whose team includes the person {name} answers to?",
+    ),
+    "employer-city": (
+        "Which town is home to the main office of the company that employs {name}?",
+        "Where is {name}'s employer based?",
+        "In what city does the firm {name} is with have its base?",
+    ),
+    "lead-employer-city": (
+        "Which town is home to the main office of the firm that pays whoever heads {name}?",
+        "Where is the company based that employs the person in charge of {name}?",
+        "In what city does the employer of {name}'s head have its base?",
+    ),
+}
+
+#: A stratum whose cases are another's, reworded: its id maps to that case's id
+#: for the split and the per-stratum cap, so both strata hold the same pairs.
+_TWIN_OF = {"multi_hop_paraphrase": "multi_hop"}
 
 SPLITS: tuple[str, ...] = ("dev", "held_out")
 
@@ -543,13 +571,22 @@ class World:
 # --------------------------------------------------------------------------- #
 
 
+def _pair_id(case_id: str) -> str:
+    """The id a reworded twin shares its split and cap with (itself otherwise)."""
+    stratum, _, rest = case_id.partition(":")
+    return f"{_TWIN_OF[stratum]}:{rest}" if stratum in _TWIN_OF else case_id
+
+
 def split_for(case_id: str) -> str:
     """``dev`` or ``held_out`` from a hash of the case id alone.
 
     Independent of the seed and of the order cases are generated in, so a case
-    keeps its split for as long as it keeps its id.
+    keeps its split for as long as it keeps its id. A reworded twin
+    (``multi_hop_paraphrase``) takes the split of the case it rewords, so a
+    question and its rewording never sit on both sides.
     """
-    return "dev" if hashlib.sha256(case_id.encode("utf-8")).digest()[0] % 2 == 0 else "held_out"
+    key = _pair_id(case_id)
+    return "dev" if hashlib.sha256(key.encode("utf-8")).digest()[0] % 2 == 0 else "held_out"
 
 
 def world_cases(world: World, split: str = "all") -> list[Case]:
@@ -1695,10 +1732,29 @@ class _CaseBuilder:
         for stratum in STRATA:
             cases = self.by_stratum[stratum]
             if len(cases) > self.cap:
-                keep = sorted(cases, key=lambda c: hashlib.sha256(c.id.encode()).hexdigest())
+                keep = sorted(
+                    cases, key=lambda c: hashlib.sha256(_pair_id(c.id).encode()).hexdigest()
+                )
                 cases = sorted(keep[: self.cap], key=lambda c: c.id)
             out.extend(sorted(cases, key=lambda c: c.id))
         return out
+
+    def _multi_hop_case(
+        self,
+        key: str,
+        question: str,
+        name: str,
+        gold: tuple[str, ...],
+        support: tuple[str, ...],
+        subject: str,
+    ) -> None:
+        """A multi-hop case and its reworded twin (same key, gold, support)."""
+        self._case("multi_hop", key, question, gold, support, subject)
+        variants = PARAPHRASES[key.rsplit(":", 1)[1]]
+        pick = hashlib.sha256(key.encode("utf-8")).digest()[0] % len(variants)
+        self._case(
+            "multi_hop_paraphrase", key, variants[pick].format(name=name), gold, support, subject
+        )
 
     def _multi_hop(self) -> None:
         w = self.w
@@ -1708,10 +1764,10 @@ class _CaseBuilder:
             if line:
                 upper = w.current_manager(line["manager_id"])
                 if upper:
-                    self._case(
-                        "multi_hop",
+                    self._multi_hop_case(
                         f"{p.id}:manager-of-manager",
                         f"Who does {p.full_name}'s manager report to?",
+                        p.full_name,
                         self._person_gold(upper["manager_id"]),
                         (line["fact_id"], upper["fact_id"]),
                         p.id,
@@ -1719,11 +1775,11 @@ class _CaseBuilder:
             job = w.current_job(p.id)
             if job["org_id"] not in poisoned_orgs:
                 org = w._org(job["org_id"])
-                self._case(
-                    "multi_hop",
+                self._multi_hop_case(
                     f"{p.id}:employer-city",
                     f"In which city is the organisation {p.full_name} currently works for "
                     "headquartered?",
+                    p.full_name,
                     (w._loc(org["hq"]).name,),
                     (job["fact_id"], org["fact_id"]),
                     p.id,
@@ -1736,10 +1792,10 @@ class _CaseBuilder:
             if job["org_id"] in poisoned_orgs:
                 continue
             org = w._org(job["org_id"])
-            self._case(
-                "multi_hop",
+            self._multi_hop_case(
                 f"{prj['id']}:lead-employer-city",
                 f"Where is the employer of the {prj['name']} project's lead headquartered?",
+                str(prj["name"]),
                 (w._loc(org["hq"]).name,),
                 (prj["fact_id"], job["fact_id"], org["fact_id"]),
                 prj["id"],
@@ -1913,6 +1969,7 @@ __all__ = [
     "LAST_NAMES",
     "ORIGINS",
     "SPLITS",
+    "PARAPHRASES",
     "STRATA",
     "WORLD_SCHEMA_VERSION",
     "WORLD_SIZES",

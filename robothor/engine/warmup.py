@@ -1522,9 +1522,9 @@ def _candidate_phrases(user_message: str, *, lowercase_ok: bool) -> list[str]:
 
 
 #: Whether warm-up adds graph-activation lines unless told otherwise. Off, as
-#: ``robothor.memory.facts.GRAPH_LEG_DEFAULT``: on the memory evaluation's world
-#: the graph leg showed no recall benefit, and nothing has measured
-#: one for warm-up.
+#: ``robothor.memory.facts.GRAPH_LEG_DEFAULT``: warm-up's automatic recall
+#: ranks what the walk reaches by activation, not by the message, and nothing
+#: has measured a benefit for it.
 WARMUP_GRAPH_DEFAULT = False
 
 
@@ -1543,8 +1543,8 @@ def _build_entity_context(
     """Extract entities from the user message and pull relevant facts.
 
     With ``include_graph`` (``None`` reads ``WARMUP_GRAPH_DEFAULT`` at call
-    time: off, as ``facts.GRAPH_LEG_DEFAULT``, since the graph has not shown a
-    recall benefit), connected context comes first from graph activation
+    time: off, as ``facts.GRAPH_LEG_DEFAULT``; nothing has measured a benefit
+    for warm-up), connected context comes first from graph activation
     (``_graph_entity_lines``: trusted evidence only, within
     ``GRAPH_WARMUP_BUDGET_SECONDS``), then today's name-matched facts fill the
     rest of the budget, each fact once. On a timeout, an error or an empty

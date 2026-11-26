@@ -1,12 +1,13 @@
 """The graph leg is off by default; recall and warm-up run it only when asked.
 
-On the world eval's dev split the graph leg did not earn its place:
-multi-hop top-5 21/126 with it against 20/126 without (top-10 34 against 37),
-and raw detail 27/110 against 40/110, because its candidates crowd conversation
-segments out of the reranked head. Tuning reserved places, facts per entity,
-seed linking and a query rerank of the graph candidates did not change that.
-The design's fallback applies: the graph serves identity and current state, and
-the recall leg runs only on an explicit ``include_graph=True``.
+Ranked by the meaning of the question, the leg met its retrieval gate on the
+memory evaluation's world (dev split, top 5: reworded multi-hop 21 to 56 of
+126, no stratum worse), and in the answer-and-judge arm it raised multi-hop
+answers (reworded 1 to 12 of 40). But it lowered cross-tenant answers from 30
+to 26 of 40 (4 worse, none better, p = 0.125): for "which city is X based
+in?" its neighbour facts (an employer's headquarters) drew the answer to the
+wrong city. Any stratum worse at p < 0.20 blocks a gate, so ``search_facts``
+runs the leg only on an explicit ``include_graph=True``.
 """
 
 from __future__ import annotations
@@ -41,9 +42,10 @@ def no_io(monkeypatch):
         calls.append("entity_expansion")
         return []
 
-    monkeypatch.setattr(facts, "_embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr(facts, "_embed_query", AsyncMock(return_value=[0.1] * 4))
     monkeypatch.setattr(facts, "_fact_legs", _one_fact_legs)
     monkeypatch.setattr(activation, "graph_candidates_for_query", _walk)
+    monkeypatch.setattr(activation, "question_for_graph", lambda _t, q, **_k: q)
     monkeypatch.setattr(facts, "_entity_expansion_leg", _expansion)
     return calls
 
@@ -63,6 +65,19 @@ async def test_expand_entities_means_the_one_hop_leg_not_the_graph(no_io) -> Non
         "Who runs the depot?", tenant_id="test-tenant", use_reranker=False, expand_entities=True
     )
     assert no_io == ["entity_expansion"]
+
+
+async def test_the_one_hop_expansion_answers_when_the_graph_finds_nothing(no_io) -> None:
+    from robothor.memory import facts
+
+    await facts.search_facts(
+        "Who runs the depot?",
+        tenant_id="test-tenant",
+        use_reranker=False,
+        expand_entities=True,
+        include_graph=True,
+    )
+    assert no_io == ["graph", "entity_expansion"]
 
 
 async def test_an_explicit_include_graph_runs_the_walk(no_io) -> None:

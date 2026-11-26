@@ -82,6 +82,14 @@ def test_hops_are_clamped_before_the_call(hops: int) -> None:
     assert 0 <= activation.clamp_hops(hops) <= activation.HARD_MAX_HOPS
 
 
+#: A question that asks something beyond the name it links, and an embedder.
+_ASKED = "Where does Alice Smith work?"
+
+
+def _embed(_text: str) -> list[float]:
+    return [0.1] * 4
+
+
 class TestOperatorLookup:
     """Without the operator's identity the walk could run through the
     operator's own node, so it does not run."""
@@ -115,8 +123,9 @@ class TestOperatorLookup:
                     ]
                 return []
 
-            def fetchone(self) -> None:
-                return None
+            def fetchone(self) -> dict[str, object] | None:
+                # The "is anything asked beyond the names" check.
+                return {"asks": True} if "to_tsvector" in statements[-1] else None
 
             def close(self) -> None:
                 pass
@@ -141,7 +150,7 @@ class TestOperatorLookup:
         statements: list[str] = []
         with pytest.raises(activation.OperatorUnknownError):
             activation.graph_candidates_for_query(
-                "test-tenant", "Alice Smith", connect=self._connect(statements)
+                "test-tenant", _ASKED, embed=_embed, connect=self._connect(statements)
             )
         assert not any("memory_activate" in s for s in statements)
 
@@ -157,7 +166,7 @@ class TestOperatorLookup:
         monkeypatch.setattr(robothor.crm.dal, "get_owner_person", _owner)
         statements: list[str] = []
         activation.graph_candidates_for_query(
-            "test-tenant", "Alice Smith", connect=self._connect(statements)
+            "test-tenant", _ASKED, embed=_embed, connect=self._connect(statements)
         )
         assert seen["cur"] is not None, "the operator lookup opened its own connection"
         assert any("memory_activate" in s for s in statements)
@@ -228,3 +237,65 @@ class TestSlowCheckout:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         assert self._run(monkeypatch, checkout_seconds=1.5) == []
+
+
+class TestHostileInput:
+    """Seed linking runs inside the graph leg's budget, on the event loop's
+    worker thread, holding a pooled connection: it must stay linear in what
+    it scans. The e-mail pattern used to backtrack quadratically on a long
+    run of e-mail characters with no "@" (200,000 characters: 37 s)."""
+
+    def test_a_long_run_without_an_at_sign_is_scanned_quickly(self) -> None:
+        import time
+
+        for text in ("a" * 200_000, "a." * 100_000, ("ab%+-" * 40_000) + "@"):
+            started = time.monotonic()
+            activation.strong_keys(text)
+            activation.question_without_names(text, [])
+            assert time.monotonic() - started < 2.0, text[:12]
+
+    def test_a_key_in_a_long_message_is_still_found_near_the_start(self) -> None:
+        text = "mail alice@example.com about it " + "x" * 200_000
+        assert activation.strong_keys(text) == ["alice@example.com"]
+
+
+class TestQuestionWithoutItsNames:
+    """What the graph ranks a reached fact by: the question minus the names it
+    links. "Alice Smith" would otherwise make every fact about Alice Smith
+    look relevant, and the facts about her employer would never be."""
+
+    def _seed(self, name: str, surface: str | None = None, method: str = "full_name"):
+        return activation.Seed(entity_id=1, name=name, method=method, surface=surface)
+
+    def test_a_named_entity_and_its_possessive_are_removed(self) -> None:
+        got = activation.question_without_names(
+            "In which city is Alice Smith's employer headquartered?", [self._seed("Alice Smith")]
+        )
+        assert got == "In which city is employer headquartered?"
+
+    def test_the_matched_alias_is_removed_too(self) -> None:
+        got = activation.question_without_names(
+            "Where does Ali Smith work?", [self._seed("Alice Smith", surface="ali smith")]
+        )
+        assert got == "Where does work?"
+
+    def test_an_email_is_removed(self) -> None:
+        got = activation.question_without_names(
+            "Who does alice@example.com report to?",
+            [self._seed("Alice Smith", method="strong_key")],
+        )
+        assert got == "Who does report to?"
+
+    def test_a_seed_only_mentioned_by_a_hit_is_not_in_the_question(self) -> None:
+        q = "Where is the Aurora project's lead headquartered?"
+        assert (
+            activation.question_without_names(q, [self._seed("Bob Jones", method="mention")]) == q
+        )
+
+    def test_names_of_the_question_are_its_text_seeds(self) -> None:
+        seeds = [
+            activation.Seed(entity_id=1, name="Alice Smith"),
+            activation.Seed(entity_id=2, name="Bob Jones", method="mention"),
+            activation.Seed(entity_id=3, name="Carol White", method="strong_key"),
+        ]
+        assert activation.named_in_question(seeds) == [1, 3]

@@ -7,6 +7,7 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from robothor.constants import SANDBOX_DENIAL_PREFIX
+from robothor.memory.recall import row_text
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -378,7 +379,7 @@ def _format_results(rows: list[dict[str, Any]], query_class: str) -> dict[str, A
 def _format_row(r: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": r.get("id"),
-        "fact": r.get("fact_text") or r.get("insight_text") or r.get("text") or "",
+        "fact": row_text(r),
         "category": r.get("category", "")
         if isinstance(r.get("category"), str)
         else (r.get("categories") or [None])[0] or "",
