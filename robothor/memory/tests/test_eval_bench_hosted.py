@@ -395,3 +395,42 @@ class TestCodeVersion:
         assert eb.code_version(tmp_path) == v1, "harness edits keep cached contexts"
         (tmp_path / "recall.py").write_text("A = 2\n", encoding="utf-8")
         assert eb.code_version(tmp_path) != v1
+
+
+class TestValidationSpend:
+    @pytest.mark.asyncio
+    async def test_judge_validation_calls_are_counted_in_the_usage(self, two_systems):
+        async def judge(messages, **_k):
+            p = messages[-1]["content"]
+            if p.startswith("I will give you an unanswerable question"):
+                text = "yes" if "not" in p.split("Model Response: ")[1].lower() else "no"
+            else:
+                gold = p.split("Correct Answer: ")[1].split("\n\n")[0]
+                resp = p.split("Model Response: ")[1].split("\n\nIs the model")[0]
+                text = "yes" if gold.lower() in resp.lower() else "no"
+            return eb.ChatResult(text, 100, 1, 0.001)
+
+        bench = _bench(1)
+        bench = bd.Benchmark(
+            bench.name,
+            bench.variant,
+            bench.histories,
+            (
+                *bench.questions,
+                bd.BenchQuestion("x1", "h0", "single-session-user", "Pet?", "a cat"),
+                bd.BenchQuestion("x2_abs", "h0", "multi-session", "Dog?", "Not mentioned."),
+            ),
+        )
+        report = await eb.run_benchmark(
+            bench,
+            questions=bench.questions[:1],
+            systems=two_systems,
+            ingest_fn=_fake_ingest([]),
+            cleanup_fn=lambda _t: {},
+            chat=_FakeChat(),
+            judge_chat=judge,
+            judge_model="openai/gpt-4o-2024-08-06",
+        )
+        planted = report["judge_validation"]["n_right"] + report["judge_validation"]["n_wrong"]
+        usage = report["usage"]["judge_validation:openai/gpt-4o-2024-08-06"]
+        assert usage["calls"] == planted and usage["cost_usd"] == pytest.approx(0.001 * planted)
