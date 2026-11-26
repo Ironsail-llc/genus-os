@@ -13,7 +13,6 @@ import {
   viewTitles,
   type ViewId,
 } from "./nav-config";
-import { runLogsQuery } from "@/lib/observe/run-logs";
 import { ChatPanel } from "@/components/chat-panel";
 import { SurfaceBoundary, withSurfaceBoundary } from "@/components/surface-boundary";
 import { MfaSetupBanner } from "@/components/mfa-setup-banner";
@@ -559,11 +558,7 @@ function AppShellBody() {
                 <RunsView
                   visible={view === "runs"}
                   // Only a role that may open the Logs page is offered the link.
-                  onOpenLogs={
-                    isAuditReaderRole(role)
-                      ? (runId, since) => openLogs(runLogsQuery(runId), since)
-                      : undefined
-                  }
+                  openLogs={isAuditReaderRole(role) ? openLogs : undefined}
                 />,
               )}
               {/*

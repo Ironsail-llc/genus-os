@@ -7,7 +7,7 @@ import {
   type SettingsPageId,
   type ViewId,
 } from "@/components/layout/nav-config";
-import { isLogSince } from "@/lib/observe/since";
+import { isLogSince } from "@/lib/observe/log-since";
 import { isRoomId } from "@/lib/rooms/room-id";
 
 /**

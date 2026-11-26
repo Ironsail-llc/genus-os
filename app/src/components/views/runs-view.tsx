@@ -17,6 +17,7 @@ import {
   verdictTone,
 } from "@/lib/automations/run-truth";
 import { relativeTime } from "@/lib/inbox/pending";
+import { runLogsQuery } from "@/lib/observe/run-logs";
 import { RunDetailDrawer } from "./run-detail-drawer";
 import { formatCost, formatTokens } from "./runs-format";
 
@@ -135,11 +136,11 @@ function errorText(status: number): string {
 
 export function RunsView({
   visible = true,
-  onOpenLogs,
+  openLogs,
 }: {
   visible?: boolean;
-  /** Opens the Logs page on a run's lines; only for a role that may open it. */
-  onOpenLogs?: (runId: string, since: string) => void;
+  /** Opens the Logs page on a search; only for a role that may open it. */
+  openLogs?: (query: string, since?: string) => void;
 }) {
   const [filters, setFilters] = useState<Filters>({
     status: "",
@@ -450,7 +451,7 @@ export function RunsView({
       <RunDetailDrawer
         runId={visible ? openId : null}
         onClose={() => setOpenId(null)}
-        onOpenLogs={onOpenLogs}
+        onOpenLogs={openLogs && ((runId, since) => openLogs(runLogsQuery(runId), since))}
       />
     </div>
   );
