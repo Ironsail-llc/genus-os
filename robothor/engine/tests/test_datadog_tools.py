@@ -633,7 +633,20 @@ def test_both_tools_form_an_opt_in_family():
     from robothor.engine.tools import DATADOG_TOOLS
     from robothor.engine.tools.constants import OPT_IN_TOOLS
 
-    assert frozenset({SEARCH, AGGREGATE}) == DATADOG_TOOLS
+    assert (
+        frozenset(
+            {
+                SEARCH,
+                AGGREGATE,
+                # The span, trace, monitor and metric tools (test_datadog_more_tools.py).
+                "datadog_spans_search",
+                "datadog_trace_get",
+                "datadog_monitors_list",
+                "datadog_metrics_query",
+            }
+        )
+        == DATADOG_TOOLS
+    )
     assert DATADOG_TOOLS <= OPT_IN_TOOLS
 
 
