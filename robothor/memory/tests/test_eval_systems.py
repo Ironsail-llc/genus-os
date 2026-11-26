@@ -386,3 +386,43 @@ class TestRecallBudgetReadsAsTheWorldReader:
         await budget.retrieve(case, world_handle=handle, token_budget=2048)
         assert calls
         assert all(c.get("reader_person_id") == "p-1" for c in calls)
+
+
+class TestRecallToday:
+    """``recall_today``: recall as main serves it, for a before/after row.
+
+    Main has no conversation segments, no graph leg and no budget fill: the
+    reranked head is all it returns. On this tree the same call with those legs
+    off, keeping only the rows the fill did not add, is that recall.
+    """
+
+    @pytest.mark.asyncio
+    async def test_reads_facts_only_and_keeps_the_reranked_head(self, monkeypatch):
+        from types import SimpleNamespace
+
+        calls: list[dict] = []
+
+        async def fake_search(query, **kwargs):
+            calls.append(kwargs)
+            return [
+                {"id": 1, "kind": "fact", "fact_text": "Alice works at Example Co."},
+                {"id": 2, "kind": "fact", "fact_text": "Bob lives in Brelford.", "budget_tail": True},
+                {"id": 3, "kind": "fact", "fact_text": "Alice likes tea."},
+            ]
+
+        monkeypatch.setattr("robothor.memory.facts.search_facts", fake_search)
+        handle = SimpleNamespace(
+            tenant_id=EVAL_TENANT,
+            seeded=SimpleNamespace(reader_person_id="p-1"),
+            fact_id=lambda i: f"f{i}",
+            turn_id=lambda _i: None,
+        )
+        (today,) = es.make_systems(["recall_today"])
+        assert today.name == "recall_today" and today.equal_budget
+        bundle = await today.retrieve(
+            SimpleNamespace(question="Where does Alice work?"), world_handle=handle, token_budget=2048
+        )
+        assert [i.id for i in bundle.items] == ["f1", "f3"]
+        assert calls and all(
+            c.get("include_segments") is False and c.get("include_graph") is False for c in calls
+        )
