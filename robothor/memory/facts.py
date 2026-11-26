@@ -379,8 +379,8 @@ async def store_fact(
         _verdict = score_fact(fact["fact_text"], confidence=fact.get("confidence"))
         if not _verdict.accept and _mode == "enforce":
             # Refused BEFORE the embedding call: a fact we will not keep should
-            # not cost an embedding. Measured on 25,910 live facts, this gate
-            # refuses 0.80%.
+            # not cost an embedding. Measured on a live corpus, this gate
+            # refuses under 1%.
             logger.info(
                 "store_fact refused by quality gate: %s | %.60s",
                 _verdict.reason,

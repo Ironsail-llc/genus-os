@@ -1,8 +1,8 @@
 """An ANN index whose graph is mostly dead rows silently loses results.
 
 2026-08-27. ``memory_facts`` carried TWO hnsw indexes on the same
-``embedding`` column: a full one (1,085 MB) and a partial one over
-``WHERE is_active`` (306 MB). 82.4% of the table is superseded, so the full
+``embedding`` column: a full one and a much smaller partial one over
+``WHERE is_active``. 82.4% of the table is superseded, so the full
 graph is 82% dead rows — and the planner preferred it.
 
 Measured on production, same query, LIMIT 20:

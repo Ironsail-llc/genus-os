@@ -12,7 +12,8 @@ refused:
     Failed to record run start: new row violates row-level security policy
     Failed to record step: violates FK — Key (run_id)=(...) not present
 
-Reproduced as ``robothor_app``; invisible as ``philip``, who is a superuser and
+Reproduced as ``robothor_app``; invisible as the operator's own login role,
+which is a superuser and
 bypasses RLS unconditionally.
 
 Two defects, one symptom:

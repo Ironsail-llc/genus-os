@@ -15,6 +15,7 @@ so these tests pin three things:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -34,6 +35,7 @@ from robothor.engine.tools.handlers.benchmark import (
     load_shared_honesty_tasks,
     merge_honesty_tasks,
 )
+from robothor.memory.contact_matching import NICKNAMES
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -121,8 +123,13 @@ class TestShippedHonestyCases:
     def test_fixtures_stay_generic(self):
         """Platform-tracked fixtures carry no instance data."""
         text = SHARED_TASKS.read_text().lower()
-        for token in ("ironsail", "philip", "@gmail.com", "robothor-primary"):
+        for token in ("ironsail", "@gmail.com", "robothor-primary"):
             assert token not in text, token
+        # A common first name is instance data. The guard is the canonical names
+        # of the nickname table; the generic fixtures (Alice, Bob) are not in it.
+        words = set(re.findall(r"[a-z]+", text))
+        real_names = set(NICKNAMES.values()) & words
+        assert not real_names, sorted(real_names)
 
 
 # ─── the merge ────────────────────────────────────────────────────────

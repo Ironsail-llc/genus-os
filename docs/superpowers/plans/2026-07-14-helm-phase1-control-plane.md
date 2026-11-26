@@ -247,7 +247,7 @@ def test_env_wins_when_only_a_seed_row_exists(monkeypatch, pg_scratch_store):
 
 
 def test_operator_row_wins_over_env(monkeypatch, pg_scratch_store):
-    pg_scratch_store.seed("ROBOTHOR_RIP_7_MODE", "alert", by="operator:philip")
+    pg_scratch_store.seed("ROBOTHOR_RIP_7_MODE", "alert", by="operator:alice")
     monkeypatch.setenv("ROBOTHOR_RIP_7_MODE", "observe")
     assert store.resolve("ROBOTHOR_RIP_7_MODE") == "alert"
 
@@ -260,10 +260,10 @@ def test_db_unreachable_falls_through_to_env(monkeypatch):
 
 
 def test_set_flag_writes_audit_and_notifies(pg_scratch_store):
-    store.set_flag("ROBOTHOR_RBAC_MODE", "enforce", actor="operator:philip", reason="promote")
+    store.set_flag("ROBOTHOR_RBAC_MODE", "enforce", actor="operator:alice", reason="promote")
     rows = pg_scratch_store.audit("ROBOTHOR_RBAC_MODE")
     assert rows and rows[-1]["to_value"] == "enforce"
-    assert rows[-1]["actor"] == "operator:philip"
+    assert rows[-1]["actor"] == "operator:alice"
 ```
 
 **Test-fixture convention (LEARNED IN TASK 1 — follow it exactly):** DB tests

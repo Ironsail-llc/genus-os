@@ -105,9 +105,9 @@ class TestCleanMessageScopeLabel:
 
         with (
             patch("scripts.audit_autonomy_budgets._scan", return_value=[]),
-            patch("sys.argv", ["audit_autonomy_budgets.py", "--tenant", "ironsail-prod"]),
+            patch("sys.argv", ["audit_autonomy_budgets.py", "--tenant", "acme-prod"]),
         ):
             rc = main()
         out = capsys.readouterr().out
         assert rc == 0
-        assert "in tenant 'ironsail-prod'" in out
+        assert "in tenant 'acme-prod'" in out

@@ -1,9 +1,10 @@
 """Tier 1 context budget: enforce max_chars, and measure what it costs.
 
 `max_chars` is written at seed time (blocks.py DEFAULT_BLOCK_SEEDS) and read by
-nothing. Measured on the live table: 130 of 2,492 blocks exceed their own
-declared budget, the largest is 57,051 characters — roughly 14k tokens in a
-single always-loaded block — and 2,092 have never been read even once.
+nothing. Measured on a live instance: a minority of blocks exceed their own
+declared budget, the largest held tens of thousands of characters — roughly
+14k tokens in a single always-loaded block — and most have never been read
+even once.
 
 That is the failure the field has already documented. Claude Code enforces
 200 lines / 25 KB on its always-loaded index and rejects over-budget writes;
@@ -46,7 +47,7 @@ class TestCheckBudget:
         assert check_budget("x" * 100, max_chars=100).over is False
 
     def test_null_max_chars_falls_back_to_a_real_default(self):
-        # 2,492 rows exist and many predate the seed defaults; NULL must not
+        # Many existing rows predate the seed defaults; NULL must not
         # mean "unlimited", which is how a 57k-char block happened.
         v = check_budget("x" * (DEFAULT_MAX_CHARS + 1), max_chars=None)
         assert v.over is True
@@ -195,7 +196,7 @@ class TestWriteBlockRefusesOverflow:
 
     @pytest.mark.integration
     def test_default_off_does_not_change_behaviour(self, monkeypatch):
-        # 2,492 live blocks; a budget that silently turns on is an outage.
+        # Live blocks predate the budget; one that silently turns on is an outage.
         from robothor.constants import DEFAULT_TENANT
         from robothor.db.connection import get_connection
         from robothor.memory.blocks import write_block
@@ -229,7 +230,7 @@ class TestWriteBlockRefusesOverflow:
 class TestPrunedBlocksLeaveTheContext:
     """A prune the read path ignores is decoration.
 
-    1,525 blocks were soft-deleted to reclaim 4.09M characters from the
+    Blocks were soft-deleted to reclaim millions of characters from the
     always-loaded tier. If list_blocks still enumerates them and read_block
     still serves them, not one token was saved and the whole exercise was a
     column update.
