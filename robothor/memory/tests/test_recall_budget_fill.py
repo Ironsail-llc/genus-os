@@ -329,3 +329,55 @@ def test_the_fill_tokenizes_each_row_once(monkeypatch: pytest.MonkeyPatch) -> No
     out = facts._fill_from_pool(pool[:10], pool, 50)
     assert len(out) == 50
     assert calls["n"] <= len(pool) + 10
+
+
+# --------------------------------------------------------------------------- #
+# The top-ranked row is never dropped
+# --------------------------------------------------------------------------- #
+
+
+def test_a_single_row_over_the_cap_comes_back_truncated_and_marked() -> None:
+    """Chat turns, insights and episodes have no length cap: a top-ranked row
+    longer than the cap is kept, cut to the cap with a visible marker."""
+    from robothor.memory.recall import (
+        RECALL_CONTEXT_CHARS,
+        TRUNCATION_MARKER,
+        within_context_cap,
+    )
+
+    kept = within_context_cap([_row(1, RECALL_CONTEXT_CHARS * 2)])
+
+    assert [r["id"] for r in kept] == [1]
+    text = kept[0]["fact_text"]
+    assert len(text) <= RECALL_CONTEXT_CHARS
+    assert text.endswith(TRUNCATION_MARKER)
+
+
+def test_an_all_oversized_result_is_never_empty() -> None:
+    from robothor.memory.recall import RECALL_CONTEXT_CHARS, TRUNCATION_MARKER, within_context_cap
+
+    rows = [_row(i, RECALL_CONTEXT_CHARS + 500) for i in range(1, 4)]
+    kept = within_context_cap(rows)
+
+    assert [r["id"] for r in kept] == [1], "the first, truncated; the rest skipped"
+    assert kept[0]["fact_text"].endswith(TRUNCATION_MARKER)
+    assert rows[0]["fact_text"] == "x" * (RECALL_CONTEXT_CHARS + 500), "the input is untouched"
+
+
+def test_ordinary_packing_is_unchanged() -> None:
+    from robothor.memory.recall import within_context_cap
+
+    rows = [_row(1, 100), _row(2, 3950), *[_row(i, 100) for i in range(3, 33)]]
+    kept = within_context_cap(rows)
+    assert [r["id"] for r in kept] == [1, *range(3, 33)]
+    assert all("[truncated" not in r["fact_text"] for r in kept)
+
+
+def test_the_eval_keeps_an_oversized_first_candidate_too() -> None:
+    from robothor.memory import eval_systems
+    from robothor.memory.recall import TRUNCATION_MARKER
+
+    items = eval_systems.fill_budget([("a", "turn", "y" * 400), ("b", "fact", "z" * 20)], 50)
+    assert [i.id for i in items] == ["a"]
+    assert items[0].text.endswith(TRUNCATION_MARKER)
+    assert items[0].tokens <= 50
