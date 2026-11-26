@@ -57,13 +57,13 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      most of its words. The first pass reads the query in web-search syntax:
      `"quoted words"` match as a phrase, `-word` excludes, and `or` is an
      operator.
-   - `graph` (**off by default**; `include_graph=True`) — graph activation
-     from the entities the query names and the entities the top hits mention,
-     the facts it reaches ranked by what the question means (see
-     [Associative recall](#associative-recall) and
-     [What the graph leg returns](#what-the-graph-leg-returns)). Off because
-     it has not yet passed every stratum: see
-     [Is the graph leg on?](#is-the-graph-leg-on).
+   - `graph` (**on**) — graph activation from the entities the query names
+     and the entities the top hits mention, the facts it reaches ranked by
+     what the question means (see [Associative recall](#associative-recall),
+     [What the graph leg returns](#what-the-graph-leg-returns) and
+     [Is the graph leg on?](#is-the-graph-leg-on)). `include_graph=False`
+     leaves it out, only so the replay's `today` and `new-graph` presets and
+     the evaluation's `recall_no_graph` can measure without it.
    - `entity_expansion` (`expand_entities`; with the graph leg on, only when it
      returned nothing) — facts about entities related to the top hits'
      entities.
@@ -1097,34 +1097,68 @@ walk itself is the database function `memory_activate` (migration
 
 #### Is the graph leg on?
 
-No, not in recall and not in warm-up, unless a caller asks:
-`search_facts(include_graph=True)`, `_build_entity_context(include_graph=True)`.
-`robothor.memory.facts.GRAPH_LEG_DEFAULT` and
-`robothor.engine.warmup.WARMUP_GRAPH_DEFAULT` are `False`. Ranked by the
-meaning of the question the leg passes its retrieval gate (below) and raises
-multi-step answers, but in the answer-and-judge arm it lowered cross-tenant
-answers from 30 to 26 of 40 (4 worse, none better, p = 0.125): for "which
-city is X based in?" a neighbour fact, an employer's headquarters, drew the
-answer to the wrong city. A stratum worse at p < 0.20 blocks a gate.
+Yes, in recall: `search_facts` runs it on every call (no module switch;
+`include_graph=False` exists only for measurement). Warm-up does not, unless a
+caller asks (`_build_entity_context(include_graph=True)`;
+`robothor.engine.warmup.WARMUP_GRAPH_DEFAULT` is `False`): its automatic
+recall ranks what the walk reaches by activation, not by the message, and
+nothing has measured it.
 
-Answer-and-judge, dev split, 40 cases per stratum, 2,048-token budget,
-`recall` (leg on) against `recall_no_graph`, paired per case (McNemar):
-multi-hop reworded 1 to 12 of 40 (11 better, 0 worse, p = 0.001), multi-hop
-3 to 17 (14 / 0, p < 0.001), knowledge update 34 to 36, long tenure 24 to 26,
-point in time 7 to 8, entity confusion, abstention and raw detail level,
-cross-tenant 30 to 26 (0 / 4, p = 0.125); the six hard strata pooled 117 to
-134 of 240 (17 / 0, p < 0.001). Retrieval p50 2.2 s against 1.7 s while the
-model server was answering at the same time.
+The answer-and-judge arm decided it, on the memory evaluation's synthetic
+world: 40 cases per stratum, 2,048-token budget, judge `qwen3:8b` (its
+validation re-run and passed each time), the leg on (`recall_with_graph`)
+against off (`recall_no_graph`), paired per case (McNemar). Production
+agents answer with models far stronger than the local 8B one, so the
+`qwen3:32b` runs are the closer stand-in; the 8B runs are reported beside
+them, not replaced.
 
-Labelling every graph-only row with its relation path (below) did not
-change that: with labels, multi-hop reworded 1 to 14 of 40 (13 / 0, p <
-0.001), multi-hop 3 to 18 (15 / 0), and cross-tenant 31 to 27 (0 / 4, p =
-0.125), the same four questions answered with an employer's city. The labels
-stay, since they did not hurt (against the unlabelled leg: 8 better, 4 worse,
-p = 0.39, within the off arm's own run-to-run spread of 3 / 3).
+| Answer model, split | Off | On | Better / worse | Reworded multi-hop | Cross-tenant | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| `qwen3:32b`, dev | 154 / 360 | 183 | 33 / 4 (p < 0.001) | 1 to 15 (14 / 0) | 28 to 27 (1 / 2) | passes |
+| `qwen3:32b`, held-out | 156 / 360 | 182 | 33 / 7 (p < 0.001) | 1 to 15 (15 / 1) | 28 to 28 (1 / 1) | passes |
+| `qwen3:8b`, dev | 172 / 360 | 202 | 35 / 5 (p < 0.001) | 1 to 14 (13 / 0) | 31 to 27 (0 / 4, p = 0.125) | blocked by cross-tenant |
+| `qwen3:8b`, held-out | 168 / 360 | 194 | 29 / 3 (p < 0.001) | 3 to 14 (11 / 0) | 30 to 30 (1 / 1) | passes |
 
-Retrieval, on the memory evaluation's synthetic world (seed 1, full size, dev
-split, 929 scored cases; the leg off against on, paired in one run, McNemar's
+"Passes" is the repo's rule: a significant pooled gain and no stratum worse
+at p < 0.20. Multi-hop (original wording) went from 0-3 to 14-18 of 40 in
+every run.
+
+**What still fails.** Two "where is X based" questions (dev, cross-tenant)
+are answered with a related entity's city even by `qwen3:32b` with the
+relation path shown; with `qwen3:8b` the dev split lost four such answers.
+The retrieval gate on the held-out split also shows point in time 59 to 53 of
+114 at top 5 (0 / 6, p = 0.03): a reserved graph place can push the right
+employment fact, ranked fourth or fifth, out of a five-row result. It does
+not show in the answers (point in time 13 to 12 and 9 to 8 of 40) or at
+top 10 (64 to 63).
+
+Retrieval on the held-out split (916 cases, leg off against on):
+
+| Stratum | Top 5, off | Top 5, on | Better / worse | Top 10, off | Top 10, on |
+| --- | --- | --- | --- | --- | --- |
+| multi-hop, reworded (114) | 19 | 58 | 41 / 2 (p < 0.001) | 35 | 66 |
+| multi-hop (114) | 21 | 68 | 48 / 1 (p < 0.001) | 33 | 72 |
+| point in time (114) | 59 | 53 | 0 / 6 (p = 0.03) | 64 | 63 |
+| raw detail (127) | 30 | 30 | 0 / 0 | 30 | 30 |
+| entity confusion (123) | 107 | 107 | 2 / 2 | 113 | 113 |
+| long tenure (114) | 92 | 92 | 0 / 0 | 92 | 92 |
+| knowledge update (121) | 113 | 113 | 0 / 0 | 113 | 113 |
+| cross-tenant (89) | 79 | 78 | 3 / 4 | 85 | 85 |
+| all (916) | 520 | 599 | 94 / 15 (p < 0.001) | 565 | 634 |
+
+No context held another tenant's row: every fact and segment either arm
+returned on the held-out split is the primary tenant's.
+
+Labelling every graph-only row with its relation path (below) did not hurt
+(against the unlabelled leg on dev with `qwen3:8b`: 8 better, 4 worse,
+p = 0.39). Taking the graph's places only when the head's evidence about
+the named entity is weak removed the four 8B cross-tenant losses but also
+most of the gain, because the reranker rates the first-hop fact about the
+named person as highly for a multi-step question as for a direct one; it is
+not used.
+
+Retrieval on the dev split (seed 1, full size
+929 scored cases; the leg off against on, paired in one run, McNemar's
 exact test). `multi_hop_paraphrase` asks the multi-hop questions reworded so
 they share no content word with their facts except the names
 ([World](benchmarks/memory/WORLD.md)); it is the stratum that decides, since
@@ -1309,7 +1343,7 @@ the second side found.
 genus memory-replay --tenant <tenant> --from-runs --since 7d
 genus memory-replay --tenant <tenant> --from-chat --sample --seed 3 --limit 40
 genus memory-replay --tenant <tenant> --questions questions.txt --as-person <crm-person-id> \
-    --compare new+graph,new-segments --json --out replay.json --redact
+    --compare new-graph,new-segments --json --out replay.json --redact
 ```
 
 **Questions.** `--from-runs` replays the `query` of every `search_memory` tool
@@ -1342,9 +1376,9 @@ the one place to add another:
 | Preset | Segments | Graph leg |
 | --- | --- | --- |
 | `today` (recall as main serves it) | off | off |
-| `new` (the product default on this tree) | on | `GRAPH_LEG_DEFAULT` |
-| `new+graph` | on | on |
-| `new-segments` | off | `GRAPH_LEG_DEFAULT` |
+| `new` (the product default on this tree) | on | on |
+| `new-graph` | on | off |
+| `new-segments` | off | on |
 
 All four keep the tool's fan-out (entity expansion, insights, episodes) unless
 `MEMORY_NARROW_SEARCH` is set, and all rerank. `--compare A,B` picks two;
