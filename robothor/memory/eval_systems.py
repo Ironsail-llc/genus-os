@@ -34,6 +34,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from robothor.memory.block_budget import _CHARS_PER_TOKEN
 from robothor.memory.block_budget import estimate_tokens as _estimate_tokens
 from robothor.memory.recall import row_text
 
@@ -104,7 +105,13 @@ def fill_budget(
             continue
         seen.add(item_id)
         ranked.append((rank, item_id, kind, text))
-    packed = recall.pack_within(ranked, budget, lambda c: estimate_tokens(c[3]))
+
+    def _cut(c: tuple[int, str, str, str], tokens: int) -> tuple[int, str, str, str]:
+        # A token budget over text: the same characters-per-token estimate.
+        chars = tokens * _CHARS_PER_TOKEN
+        return (c[0], c[1], c[2], recall.truncate_text(c[3], chars))
+
+    packed = recall.pack_within(ranked, budget, lambda c: estimate_tokens(c[3]), _cut)
     return tuple(
         ContextItem(item_id, kind, text, estimate_tokens(text), rank)
         for rank, item_id, kind, text in packed

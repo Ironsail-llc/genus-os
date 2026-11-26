@@ -261,8 +261,8 @@ async def recall(
         fused = head + tail
 
     # Budget cap: the one packing rule (recall.pack_within), then the limit.
-    from robothor.memory.recall import pack_within, row_chars
+    from robothor.memory.recall import pack_within, row_chars, truncate_row
 
-    capped = pack_within(fused, budget_chars, row_chars)[:limit]
+    capped = pack_within(fused, budget_chars, row_chars, truncate_row)[:limit]
 
     return {"query_class": cls, "results": capped}
