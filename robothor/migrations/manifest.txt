@@ -196,3 +196,9 @@ crm/170_room_cronjob_unique.sql
 crm/172_room_tasks_approval.sql
 crm/175_chat_messages_session_id.sql
 crm/176_memory_graph_foundation.sql
+crm/177_memory_segments.sql
+crm/178_memory_graph_activation.sql
+crm/179_memory_graph_keys.sql
+crm/180_memory_fact_utility.sql
+crm/181_memory_fact_scope_readers.sql
+crm/182_memory_graph_analyze.sql

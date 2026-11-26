@@ -563,7 +563,8 @@ async def test_the_previous_entity_and_fact_paths_run_unchanged(migrated) -> Non
     found = await get_entity("alice", tenant_id=TENANT)
     assert found is not None and found["id"] == alice and found["mention_count"] == 2
     assert [r["id"] for r in found["relations"]] == [rel]
-    assert found["scope_kind"] == "shared" and found["embedding"] is None
+    # get_entity names its columns: the 1024-float embedding never reaches the model.
+    assert found["scope_kind"] == "shared" and "embedding" not in found
 
     with migrated.cursor() as cur:
         cur.execute(
@@ -582,3 +583,27 @@ async def test_the_previous_entity_and_fact_paths_run_unchanged(migrated) -> Non
             (rel,),
         )
         assert cur.fetchone() == (True, 1.0, True, None, None)
+
+
+def test_migration_182_analyzes_the_graph_tables_and_applies_twice(scratch_db) -> None:
+    """The graph tables 176 creates and fills (evidence copied from every edge)
+    get planner statistics in the migration chain, not when autovacuum gets to
+    them: the graph walk plans badly without them."""
+    from pathlib import Path
+
+    from robothor.db.migrate import _discover
+
+    entries = [m.migration_id for m in _discover()]
+    (stem,) = [e for e in entries if e.endswith("_memory_graph_analyze")]
+    db, _dsn = scratch_db(through=stem)
+    sql = (Path(__file__).resolve().parents[3] / "crm" / "migrations" / f"{stem}.sql").read_text()
+    with db.cursor() as cur:
+        cur.execute("SELECT pg_stat_clear_snapshot()")
+        cur.execute(
+            "SELECT relname, analyze_count FROM pg_stat_user_tables WHERE relname = ANY(%s)",
+            (["memory_relation_evidence", "memory_mentions", "memory_relations"],),
+        )
+        counts = dict(cur.fetchall())
+        assert set(counts) == {"memory_relation_evidence", "memory_mentions", "memory_relations"}
+        assert all(v >= 1 for v in counts.values()), counts
+        cur.execute(sql)  # idempotent: a second run succeeds

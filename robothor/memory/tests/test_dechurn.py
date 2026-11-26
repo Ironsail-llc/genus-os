@@ -70,3 +70,55 @@ def test_active_fact_load_skips_operator_confirmed_facts() -> None:
     sql = cur2.execute.call_args.args[0]
     assert "is_active = TRUE" in sql
     assert NOT_OPERATOR_CONFIRMED_SQL in sql
+
+
+_OWNER = "person:00000000-0000-0000-0000-000000000001"
+_DOCK = "The Orion Freight dock opens at six"
+
+
+def test_a_private_near_duplicate_never_deactivates_a_shared_fact() -> None:
+    """Near-duplicates are compared within one owner scope only.
+
+    The write path never lets a private fact supersede a shared one. Dechurn
+    deactivating the older shared row in favour of a newer private one would
+    take it away from every reader but the owner.
+    """
+    facts = [
+        {"id": 1, "fact_text": _DOCK, "entities": ["Orion Freight"], "scope_kind": "shared"},
+        {
+            "id": 2,
+            "fact_text": _DOCK,
+            "entities": ["Orion Freight"],
+            "scope_kind": "user",
+            "scope_id": _OWNER,
+        },
+    ]
+    assert cluster_near_dup_losers(facts) == []
+
+
+def test_near_duplicates_in_the_same_private_scope_still_collapse() -> None:
+    facts = [
+        {
+            "id": i,
+            "fact_text": _DOCK,
+            "entities": ["Orion Freight"],
+            "scope_kind": "user",
+            "scope_id": _OWNER,
+        }
+        for i in (1, 2)
+    ]
+    assert cluster_near_dup_losers(facts) == [1]
+
+
+def test_active_fact_load_reads_each_facts_owner_scope() -> None:
+    from unittest.mock import MagicMock
+
+    from robothor.memory.dechurn import _load_active_facts
+
+    cur = MagicMock()
+    cur2 = cur.connection.cursor.return_value
+    cur2.fetchall.return_value = []
+    _load_active_facts(cur, "test-tenant")
+    sql = cur2.execute.call_args.args[0]
+    assert "scope_kind" in sql
+    assert "scope_id" in sql

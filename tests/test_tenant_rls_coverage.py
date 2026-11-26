@@ -99,3 +99,12 @@ def test_no_migration_policies_an_exempt_table() -> None:
         if _policies_inline(sql, table)
     )
     assert not policied, f"exempt tables given tenant_isolation: {policied}"
+
+
+def test_the_conversation_segments_table_is_policied_inline() -> None:
+    by_name = dict(_ordered_migrations())
+    assert "177_memory_segments.sql" in by_name
+    sql = by_name["177_memory_segments.sql"]
+    assert "memory_segments" in _tenant_tables(sql)
+    assert _policies_inline(sql, "memory_segments")
+    assert "FORCE ROW LEVEL SECURITY" in sql

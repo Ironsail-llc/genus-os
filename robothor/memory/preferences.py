@@ -136,6 +136,7 @@ async def extract_preferences_from_facts(
             FROM memory_facts
             WHERE is_active = TRUE
               AND tenant_id = %s
+              AND scope_kind = 'shared'  -- derived for every reader: shared facts only (memory/visibility.py)
               AND created_at >= %s
               AND (category IN ('preference', 'opinion', 'decision', 'personal')
                    OR metadata->>'type' IN ('preference', 'choice'))

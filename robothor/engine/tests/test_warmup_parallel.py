@@ -598,7 +598,10 @@ class _InterpolatingCursor:
         self.statements: list[str] = []
 
     def execute(self, sql: str, params: Any = ()) -> None:
-        self.statements.append(sql % tuple(repr(p) for p in params))
+        if isinstance(params, dict):  # pyformat takes a mapping too: %(name)s
+            self.statements.append(sql % {k: repr(v) for k, v in params.items()})
+        else:
+            self.statements.append(sql % tuple(repr(p) for p in params))
 
     def fetchall(self) -> list[Any]:
         return []
@@ -623,8 +626,20 @@ class TestEntitySqlInterpolates:
         ):
             warmup._build_entity_context("Did Bob update the Example plan?", tenant_id=TENANT)
         assert cur.statements
+        # Graph recall arms and resets its connection's time limit around its
+        # statements: session settings that read no rows and name no tenant.
+        # Only those two exact forms are exempt; every statement that reads
+        # rows — the graph seed lookup included — must carry the tenant.
+        limit = [
+            s
+            for s in cur.statements
+            if s.startswith("SELECT set_config('statement_timeout', '")
+            or s == "RESET statement_timeout"
+        ]
+        assert len(limit) in (0, 2), limit
         for statement in cur.statements:
-            assert TENANT in statement
+            if statement not in limit:
+                assert TENANT in statement
 
     def test_a_failed_entity_lookup_is_logged_at_warning(
         self, db: FakeDB, caplog: pytest.LogCaptureFixture

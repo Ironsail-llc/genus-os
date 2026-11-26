@@ -122,6 +122,7 @@ def select_facts(
         FROM memory_facts
         WHERE is_active = TRUE
           AND length(fact_text) >= 25
+          AND scope_kind = 'shared'  -- projected for every reader (memory/visibility.py)
     """
     params: list[Any] = []
     if tenant_id:

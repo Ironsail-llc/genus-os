@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from robothor.engine.models import AgentConfig
+    from robothor.engine.private_recall import PrivateReader
     from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
@@ -1257,6 +1258,7 @@ class ToolRegistry:
         is_benchmark: bool = False,
         identity: IdentityContext | None = None,
         capability_tier: str = "",
+        private_reader: PrivateReader | None = None,
         trace_id: str = "",
     ) -> dict[str, Any]:
         """Execute a tool and return the result dict.
@@ -1274,6 +1276,9 @@ class ToolRegistry:
             capability_tier: The role capability tier the call runs under.
                 Empty (every ordinary caller) means the run's effective tier;
                 ``tool_call`` passes its caller's through ToolContext.call_kwargs.
+            private_reader: The person the run serves in their own
+                conversation (robothor/engine/private_recall.py), or None —
+                the default for every caller that is not a run's tool turn.
             trace_id: The run's trace id, named on the call's ``event=tool_call``
                 line. Empty outside a traced run (a workflow step).
         """
@@ -1318,6 +1323,7 @@ class ToolRegistry:
                             is_benchmark=is_benchmark,
                             identity=identity,
                             capability_tier=capability_tier,
+                            private_reader=private_reader,
                             trace_id=trace_id,
                         )
             else:
@@ -1335,6 +1341,7 @@ class ToolRegistry:
                     is_benchmark=is_benchmark,
                     identity=identity,
                     capability_tier=capability_tier,
+                    private_reader=private_reader,
                     trace_id=trace_id,
                 )
         except (WorkflowDeadlineError, RuntimeDeadlineError):

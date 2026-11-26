@@ -291,10 +291,24 @@ def _ranked_by_search(query: str, tenant_id: str, active: str, limit: int) -> li
 
     from robothor.memory.facts import search_facts
 
+    # Facts only: this page edits and forgets memory_facts rows, and a
+    # conversation segment's id belongs to another table. The erasure view
+    # reads every owner scope, as the browse arm does: the admin must be able
+    # to find a private fact to forget it. Every route here is behind
+    # ``require_tenant_admin``.
     results = asyncio.run(
-        search_facts(query, limit=limit, active_only=(active == "true"), tenant_id=tenant_id)
+        search_facts(
+            query,
+            limit=limit,
+            active_only=(active == "true"),
+            tenant_id=tenant_id,
+            include_segments=False,
+            admin_erasure_view=True,
+        )
     )
-    return [int(r["id"]) for r in results if r.get("id") is not None]
+    return [
+        int(r["id"]) for r in results if r.get("id") is not None and r.get("kind", "fact") == "fact"
+    ]
 
 
 def _entity_predicate(entity: str | None) -> tuple[str, list[Any]]:
@@ -675,14 +689,23 @@ def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT fact_text, entities, is_active, category, person_id, content_hash "
-            "FROM memory_facts WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            "SELECT fact_text, entities, is_active, category, person_id, content_hash, "
+            "scope_kind, scope_id FROM memory_facts WHERE id = %s AND tenant_id = %s FOR UPDATE",
             (identifier, tenant_id),
         )
         row = cur.fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="no fact with that id")
-        old_text, old_entities, is_active, category, person_id, stored_hash = row
+        (
+            old_text,
+            old_entities,
+            is_active,
+            category,
+            person_id,
+            stored_hash,
+            scope_kind,
+            scope_id,
+        ) = row
         if not is_active:
             # 409, as Forget answers the same staleness: the page's copy of the
             # row is what is wrong, not the request.
@@ -707,8 +730,14 @@ def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -
         refreshed = vector if text_changed else None
         entities = new_entities if new_entities is not None else old_entities
         person = str(person_id) if person_id else None
+        # The row's scope is part of its hash: a private fact stays private.
         new_hash = compute_fact_hash(
-            text, tenant_id=tenant_id, category=category or "", person_id=person
+            text,
+            tenant_id=tenant_id,
+            category=category or "",
+            person_id=person,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
         )
         metadata: dict[str, Any] = {
             "operator_confirmed": {"at": datetime.now(UTC).isoformat(), "by": actor}
@@ -736,6 +765,8 @@ def edit_fact(fact_id: str, request: Request, body: EditRequest | None = None) -
                         tenant_id=tenant_id,
                         category=category or "",
                         person_id=person,
+                        scope_kind=scope_kind,
+                        scope_id=scope_id,
                     ),
                     EDIT_SNAPSHOT_REASON,
                     json.dumps({"fact_text": old_text, "entities": old_entities, "actor": actor}),

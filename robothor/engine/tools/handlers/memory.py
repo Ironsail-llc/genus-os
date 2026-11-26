@@ -203,11 +203,27 @@ async def _search_memory(
     identity = getattr(ctx, "identity", None)
     _scoping_mode = data_scoping_mode()
     _query_scope = scope_for_query(_scoping_mode, identity)
+    # Conversation segments are scoped on EVERY call, whatever the rollout mode:
+    # verbatim conversation is more sensitive than an extracted fact. A private
+    # conversation is read only for the person this run is serving in their
+    # own conversation (ctx.private_reader, decided by the run); never for the
+    # run's principal or identity alone. Workspaces are gated by membership.
+    # The same reader reads private facts and the graph walk's private
+    # evidence (robothor/memory/visibility.py): one answer to "who is reading".
+    private = getattr(ctx, "private_reader", None)
+    reader_person_id = private.person_id if private is not None else None
+    reader_user_id = private.user_id if private is not None else None
+    room_ids = await _reader_room_ids(ctx)
 
-    if is_rip_enabled(15):
-        results, query_class = await _recall_routed(args, ctx, scope=_query_scope)
-    else:
-        results, query_class = await _recall_fallback(args, ctx, scope=_query_scope)
+    recall_path = _recall_routed if is_rip_enabled(15) else _recall_fallback
+    results, query_class = await recall_path(
+        args,
+        ctx,
+        scope=_query_scope,
+        reader_person_id=reader_person_id,
+        reader_user_id=reader_user_id,
+        room_ids=room_ids,
+    )
 
     # Observe runs against the raw rows, which still carry person_id — the
     # formatted output deliberately does not expose it.
@@ -261,8 +277,48 @@ async def _search_memory(
     return formatted
 
 
+async def _reader_room_ids(ctx: ToolContext) -> list[str]:
+    """The workspaces whose conversation the caller may recall.
+
+    Inside a workspace (a room turn's carrier) only that workspace: its output
+    goes to its own members, so no other workspace's conversation may reach
+    it. Otherwise every workspace the served member belongs to, but only when
+    the run serves that member in their own conversation
+    (``ctx.private_reader``): the run's principal alone (a scheduled run as a
+    member) is not a member being served. Empty otherwise. A lookup failure is
+    logged and narrows the result; it never widens it.
+    """
+    from robothor.rooms.run_context import current_room_run
+
+    rooms: set[str] = set()
+    tenant_id = getattr(ctx, "tenant_id", "")
+    run = current_room_run()
+    if run is not None:
+        return [str(run.room_id)] if run.tenant_id == tenant_id else []
+    private = getattr(ctx, "private_reader", None)
+    user_id = private.user_id if private is not None else None
+    if user_id and tenant_id:
+        try:
+            from robothor.rooms import dal as rooms_dal
+
+            summaries = await asyncio.to_thread(rooms_dal.list_rooms_for_user, tenant_id, user_id)
+            rooms.update(str(s.id) for s in summaries)
+        except Exception as e:  # noqa: BLE001 - fewer rooms, never more
+            logger.warning(
+                "search_memory: workspace lookup failed (%s); workspace segments omitted",
+                type(e).__name__,
+            )
+    return sorted(rooms)
+
+
 async def _recall_fallback(
-    args: dict[str, Any], ctx: ToolContext, *, scope: Any = None
+    args: dict[str, Any],
+    ctx: ToolContext,
+    *,
+    scope: Any = None,
+    reader_person_id: str | None = None,
+    room_ids: list[str] | None = None,
+    reader_user_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """Direct search_facts path — returns raw rows plus a query-class label."""
     from robothor.engine.feature_flags import narrow_memory_search_enabled
@@ -283,6 +339,9 @@ async def _recall_fallback(
         include_insights=bool(args.get("include_insights", fan_out)),
         include_episodes=bool(args.get("include_episodes", fan_out)),
         scope=scope,
+        reader_person_id=reader_person_id,
+        reader_user_id=reader_user_id,
+        room_ids=room_ids,
     )
     # classify_query is a pure regex with no I/O, so the label is available on
     # this path too — the output shape stays identical across the flag.
@@ -300,29 +359,75 @@ def _format_results(rows: list[dict[str, Any]], query_class: str) -> dict[str, A
 
     This emits the superset on every call. `id` is included because outcome
     attribution already depends on it and because a caller cannot reason about
-    row identity — scoping, dedup, citation — without it.
+    row identity — scoping, dedup, citation — without it. A row the graph leg
+    found also carries `origin` (who asserted it) and `via` (the entities that
+    connect it to the question), so the agent can weigh it and see why it came.
+
+    A conversation segment (``kind: "segment"``) also says where it came from:
+    its ``topic``, ``source_kind``, ``source_ref`` (the session), the turn
+    range ``start_ref``..``end_ref`` (chat message ids, with ``part`` for a
+    long turn split in pieces) and ``started_at``/``ended_at`` (ISO 8601).
+    Facts keep exactly their shape.
     """
     return {
         "query_class": query_class,
-        "results": [
-            {
-                "id": r.get("id"),
-                "fact": r.get("fact_text") or r.get("insight_text") or r.get("text") or "",
-                "category": r.get("category", "")
-                if isinstance(r.get("category"), str)
-                else (r.get("categories") or [None])[0] or "",
-                "source": r.get("source") or "fact",
-                "confidence": r.get("confidence", 0),
-                "similarity": round(r.get("similarity") or 0, 4),
-                "score": round(r.get("score") or r.get("rrf_score") or 0, 4),
-            }
-            for r in rows
-        ],
+        "results": [{**_graph_labels(r), **_format_row(r), **_segment_fields(r)} for r in rows],
     }
 
 
+def _format_row(r: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": r.get("id"),
+        "fact": r.get("fact_text") or r.get("insight_text") or r.get("text") or "",
+        "category": r.get("category", "")
+        if isinstance(r.get("category"), str)
+        else (r.get("categories") or [None])[0] or "",
+        "source": r.get("source") or "fact",
+        "confidence": r.get("confidence", 0),
+        "similarity": round(r.get("similarity") or 0, 4),
+        "score": round(r.get("score") or r.get("rrf_score") or 0, 4),
+    }
+
+
+def _segment_fields(r: dict[str, Any]) -> dict[str, Any]:
+    if r.get("kind") != "segment":
+        return {}
+
+    def iso(value: Any) -> Any:
+        return value.isoformat() if hasattr(value, "isoformat") else value
+
+    return {
+        "kind": "segment",
+        "topic": r.get("topic"),
+        "source_kind": r.get("source_kind"),
+        "source_ref": r.get("source_ref"),
+        "start_ref": r.get("start_ref"),
+        "end_ref": r.get("end_ref"),
+        "part": r.get("part", 0),
+        "started_at": iso(r.get("started_at")),
+        "ended_at": iso(r.get("ended_at")),
+    }
+
+
+def _graph_labels(r: dict[str, Any]) -> dict[str, Any]:
+    if "graph_path" not in r and "origin" not in r:
+        return {}
+    labels: dict[str, Any] = {}
+    if "origin" in r:
+        labels["origin"] = r["origin"]
+    if r.get("graph_path"):
+        labels["via"] = list(r["graph_path"])
+    return labels
+
+
 async def _recall_routed(
-    args: dict[str, Any], ctx: ToolContext, *, scope: Any = None
+    args: dict[str, Any],
+    ctx: ToolContext,
+    *,
+    scope: Any = None,
+    reader_person_id: str | None = None,
+    room_ids: list[str] | None = None,
+    reader_user_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """RIP 15 path — query-classed routing via robothor.memory.router."""
     from robothor.memory.router import recall
@@ -332,6 +437,9 @@ async def _recall_routed(
         limit=args.get("limit", 10),
         tenant_id=ctx.tenant_id,
         scope=scope,
+        reader_person_id=reader_person_id,
+        reader_user_id=reader_user_id,
+        room_ids=room_ids,
     )
     return out["results"], out["query_class"]
 
@@ -361,13 +469,15 @@ async def _store_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
     # Record the promise, then hand the work off. The row is written first on
     # purpose: a crash during extraction must still leave evidence that a write
-    # was owed, because the caller has already been told it succeeded.
+    # was owed, because the caller has already been told it succeeded. The row
+    # carries the write's origin and scope, so the replay stores it the same way.
     job_id = await enqueue_write(
         content,
         content_type=content_type,
         tenant_id=ctx.tenant_id,
         agent_id=getattr(ctx, "agent_id", None),
         run_id=getattr(ctx, "run_id", None),
+        context=store_memory_context(ctx.tenant_id, content_type),
     )
     if job_id is None:
         # Refused at the boundary — a benchmark run writing outside the sandbox
@@ -419,6 +529,32 @@ async def _memory_write_status(args: dict[str, Any], ctx: ToolContext) -> dict[s
 # instead of being killed at the wall, which is what 15 of 121 calls did.
 REQUEST_PATH_EXTRACT_TIMEOUT = 70.0
 
+# The whole call's budget, inside the same 120s wall. Conflict classification
+# (one short model call, only for a fact with a similar existing one) gets what
+# extraction left of it; past it, a fact is stored as new rather than lost.
+REQUEST_PATH_BUDGET = 105.0
+
+
+def store_memory_context(
+    tenant_id: str, content_type: str, scope: tuple[str, str | None] | None = None
+) -> Any:
+    """The write context of a ``store_memory`` call.
+
+    What the assistant writes to memory is agent-generated (external content it
+    relays stays external). Shared within the tenant, as it always was: the
+    tool never makes a fact private on its own. ``scope`` is for a caller that
+    explicitly asks for a private write (none does yet).
+    """
+    from robothor.memory.write_path import WriteContext
+
+    return WriteContext.for_source(
+        tenant_id=tenant_id,
+        source_channel="",
+        content_type=content_type or "conversation",
+        role="assistant",
+        scope=scope,
+    )
+
 
 async def store_memory_content(
     content: str,
@@ -426,6 +562,7 @@ async def store_memory_content(
     *,
     tenant_id: str = "",
     extract_timeout: float = REQUEST_PATH_EXTRACT_TIMEOUT,
+    scope: tuple[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """Extract facts from content and store them. One implementation, two callers.
 
@@ -434,38 +571,64 @@ async def store_memory_content(
     write through it landed in DEFAULT_TENANT without dedup — and any fix
     applied to one silently missed the other.
 
-    Uses store_facts_batch rather than a per-fact loop. Note this is *not* the
-    latency win it looks like: measured warm, extraction is ~23s and embedding
-    ~0.12s per fact, so batching saves fractions of a second. It is here because
-    it makes the write atomic — the old loop committed each fact on its own
-    connection, so a mid-loop failure left a partial write behind while the
-    caller was told the call had failed.
+    Goes through the one write path (``robothor.memory.write_path``), like every
+    other memory write: one extraction, then per fact the quality gate, conflict
+    handling (so a contradiction of an operator-confirmed fact leaves that fact
+    active), the fact with its origin and scope, its mentions and its relations
+    with evidence. No model call is added beyond conflict classification, which
+    runs only for a fact with a similar existing one and is cut off at
+    ``REQUEST_PATH_BUDGET``. If extraction fails or finds nothing, the raw
+    content is stored rather than dropped (``metadata.extraction =
+    "fallback_raw"``), and a failure is reported.
     """
-    from robothor.memory.facts import extract_facts, store_facts_batch
+    import time
+
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.memory import write_path
 
     if not (content or "").strip():
         return {"error": "content is required: there is nothing to store"}
 
-    facts = await extract_facts(content, timeout=extract_timeout)
-    if not facts:
-        # No facts, or extraction timed out. Storing the raw content keeps the
-        # information rather than dropping it; the metadata tag lets dechurn and
-        # any later reprocessing find these rows.
-        facts = [
-            {
-                "fact_text": content,
-                "category": "personal",
-                "entities": [],
-                "confidence": 0.5,
-                "metadata": {"extraction": "fallback_raw"},
-            }
-        ]
-
-    stored_ids = await store_facts_batch(facts, content, content_type, tenant_id=tenant_id)
-    return {
-        "id": stored_ids[0] if stored_ids else None,
-        "facts_stored": len(stored_ids),
+    started = time.monotonic()
+    context = store_memory_context(tenant_id or DEFAULT_TENANT, content_type, scope)
+    result = await write_path.ingest_text(
+        content,
+        context,
+        extract_timeout=extract_timeout,
+        fallback_on_empty=True,
+        conflict_check=True,
+        deadline=started + REQUEST_PATH_BUDGET,
+    )
+    stored = list(result.get("fact_ids") or [])
+    existing = list(result.get("existing_ids") or [])
+    out: dict[str, Any] = {
+        "id": (stored or existing or [None])[0],
+        "facts_stored": len(stored),
     }
+    for key in (
+        "facts_skipped",
+        "facts_kept_confirmed",
+        "conflict_checks_timed_out",
+        "relations_stored",
+        "relations_private_deferred",
+        "facts_failed",
+        "graph_errors",
+    ):
+        if result.get(key):
+            out[key] = result[key]
+    if existing:
+        out["already_known_ids"] = existing
+    if result.get("extraction_failed"):
+        out["extraction_failed"] = True
+        out["extraction_error"] = result.get("extraction_error")
+    if result.get("facts_failed"):
+        reasons = "; ".join(result.get("errors") or []) or "unknown error"
+        if not stored and not existing:
+            # Nothing was kept: the call failed, and the agent must be told so.
+            out["error"] = f"memory not stored: {reasons}"
+        else:
+            out["warning"] = f"{result['facts_failed']} fact(s) not stored: {reasons}"
+    return out
 
 
 @_handler("record_resolution")

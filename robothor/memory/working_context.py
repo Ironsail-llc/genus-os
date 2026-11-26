@@ -59,6 +59,7 @@ def _recent_facts(cur: Any, tenant_id: str) -> list[dict[str, Any]]:
         SELECT fact_text, category
         FROM memory_facts
         WHERE tenant_id = %s AND is_active AND created_at >= %s
+          AND scope_kind = 'shared'  -- derived for every reader: shared facts only (memory/visibility.py)
           AND importance_score >= 0.6
           AND COALESCE(source_channel, '') <> 'camera'
           AND fact_text NOT ILIKE '%%camera%%'

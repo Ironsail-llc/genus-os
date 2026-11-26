@@ -115,9 +115,13 @@ def _fetch(v2: bool, scope) -> tuple[str, tuple]:
 
         yield _C()
 
+    # Graph activation runs first and falls back to this path when it finds
+    # nothing; it is pinned in test_warmup_graph_activation.py. Here it finds
+    # nothing, so what is recorded is the name-matching path alone.
     with (
         patch.dict("os.environ", {"MEMORY_WARMUP_RECALL_V2": "1" if v2 else "0"}),
         patch("robothor.db.get_connection", _conn),
+        patch("robothor.memory.activation.recall_for_message", return_value=[]),
     ):
         warmup._build_entity_context("Tell Carol about the Example plan", scope=scope)
     assert len(cur.calls) == 1

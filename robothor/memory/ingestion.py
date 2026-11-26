@@ -2,23 +2,23 @@
 Cross-Channel Ingestion Pipeline for Genus OS Memory System.
 
 Accepts content from multiple channels (discord, email, cli, api, telegram)
-and runs it through fact extraction and conflict resolution.
+and stores it through the one write path.
 
 Architecture:
-    Content + channel -> extract_facts -> resolve_and_store (each fact) -> result
+    Content + channel -> origin and scope (write_path.WriteContext)
+        -> write_path.ingest_text: one extraction (facts with typed mentions,
+           relations and event time) -> per fact: quality gate, conflict
+           resolution, mentions, relations with evidence -> result
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
-from robothor.db.connection import get_connection
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.sanitize import sanitize_log
-from robothor.memory.conflicts import resolve_and_store
-from robothor.memory.entities import extract_entities_batch
-from robothor.memory.facts import extract_facts, store_fact
+from robothor.memory import write_path
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,12 @@ async def ingest_content(
     content_type: str,
     metadata: dict[str, Any] | None = None,
     tenant_id: str = "",
+    *,
+    role: str | None = None,
+    read_only_context: str | None = None,
+    scope: tuple[str, str | None] | None = None,
+    origin_cap: str | None = None,
+    fallback_on_failure: bool = True,
 ) -> dict[str, Any]:
     """Ingest content from any channel, extracting and storing facts.
 
@@ -50,76 +56,62 @@ async def ingest_content(
         content: The raw content to ingest.
         source_channel: Channel the content came from (discord, email, etc.).
         content_type: Type of content (conversation, email, decision, etc.).
-        metadata: Optional channel-specific metadata.
+        metadata: Optional channel-specific metadata (``session_key`` names the
+            conversation the content belongs to).
         tenant_id: Tenant the content belongs to. Empty falls through to
             DEFAULT_TENANT, preserving behaviour for callers that never passed
-            one. Every downstream store already accepted a tenant; this was the
-            only place the value was dropped, so content from any tenant was
-            written to the default one.
+            one.
+        role: Who said it (``user``, ``assistant``, ``tool``), when known. It
+            decides the facts' origin (see ``write_path.origin_for``).
+        read_only_context: Background shown to the extraction model and never
+            extracted from (the other side of a conversation).
+        scope: ``(scope_kind, scope_id)`` for a caller that explicitly wants
+            the facts private (``write_path.conversation_scope`` gives a
+            conversation's owner). Absent, they are shared, as they always were.
+        origin_cap: The most trusted origin this content may get, for a caller
+            that is not authenticated (its channel is only a claim).
+        fallback_on_failure: Store the raw content when extraction fails (the
+            default, for content someone submitted to be kept). Background
+            transcript ingest turns it off and retries instead.
 
     Returns:
-        Dict with ingestion results including facts processed.
+        Dict with ingestion results including facts processed, the graph
+        written, and whether extraction failed (the raw content is then stored).
 
     Raises:
         ValueError: If content is empty.
+        MemoryWriteError: If a fact could not be stored (the facts that could
+            be are kept; re-ingesting is safe, the write path deduplicates).
     """
     if not content or not content.strip():
         raise ValueError("Content cannot be empty")
 
+    context = write_path.WriteContext.for_source(
+        tenant_id=tenant_id or DEFAULT_TENANT,
+        source_channel=source_channel,
+        content_type=content_type,
+        role=role,
+        metadata=metadata,
+        scope=scope,
+        origin_cap=origin_cap,
+    )
     logger.info(
-        "Extracting facts from %s content (%d chars) via %s",
+        "Ingesting %s content (%d chars) via %s as %s",
         sanitize_log(content_type),
         len(content),
         sanitize_log(source_channel),
+        context.origin,
     )
-    facts = await extract_facts(content)
-    logger.info("Extracted %d facts", len(facts))
-
-    stored_ids = []
-    skipped = 0
-    kept_confirmed = 0
-
-    for fact in facts:
-        try:
-            result = await resolve_and_store(
-                fact=fact,
-                source_content=content,
-                source_type=content_type,
-                tenant_id=tenant_id,
-            )
-            if result.get("action") == "kept_confirmed":
-                # Overruled by an operator-confirmed fact: stored inactive for
-                # the record, but its entities are the relations the operator
-                # corrected, so it is not a processed fact.
-                kept_confirmed += 1
-                if result.get("new_id"):
-                    _set_source_channel(result["new_id"], source_channel, metadata)
-                logger.info("Kept operator-confirmed fact %s", result.get("existing_id"))
-            elif result.get("new_id"):
-                stored_ids.append(result["new_id"])
-                _set_source_channel(result["new_id"], source_channel, metadata)
-                logger.info("Stored fact %d: %s", result["new_id"], fact["fact_text"][:80])
-            else:
-                skipped += 1
-                logger.info("Skipped fact (dedup): %s", fact["fact_text"][:80])
-        except Exception as e:
-            logger.warning("Conflict resolution failed (%s), storing directly", e)
-            fact_id = await store_fact(fact, content, content_type, metadata, tenant_id=tenant_id)
-            stored_ids.append(fact_id)
-            _set_source_channel(fact_id, source_channel, metadata)
-
-    # Run batch entity extraction on all stored facts
-    entity_results: dict[str, Any] = {"entities_stored": 0, "relations_stored": 0}
-    if stored_ids:
-        try:
-            entity_results = await extract_entities_batch(stored_ids, tenant_id=tenant_id)
-            logger.info(
-                "Entity extraction: %d entities, %d relations",
-                entity_results.get("entities_stored", 0),
-                entity_results.get("relations_stored", 0),
-            )
-        except Exception as e:
-            logger.warning("Entity extraction failed: %s", e)
+    result = await write_path.ingest_text(
+        content,
+        context,
+        read_only_context=read_only_context,
+        fallback_on_failure=fallback_on_failure,
+    )
+    if result.get("facts_failed"):
+        raise write_path.MemoryWriteError(
+            f"{result['facts_failed']} fact(s) not stored: " + "; ".join(result.get("errors") or [])
+        )
 
     # Route verbatim reference values (account ids, phone numbers) to the
     # Knowledge Vault so they survive byte-for-byte. Gated, best-effort (WS-6).
@@ -136,41 +128,26 @@ async def ingest_content(
         except Exception as e:
             logger.warning("Vault auto-populate failed: %s", e)
 
+    fact_ids = list(result.get("fact_ids") or [])
     return {
         "source_channel": source_channel,
         "content_type": content_type,
-        "facts_processed": len(stored_ids),
-        "facts_skipped": skipped,
-        "facts_kept_confirmed": kept_confirmed,
-        "fact_ids": stored_ids,
-        "entities_stored": entity_results.get("entities_stored", 0),
-        "relations_stored": entity_results.get("relations_stored", 0),
+        "origin": context.origin,
+        "scope_kind": context.scope_kind,
+        "facts_processed": int(result.get("facts_processed", len(fact_ids))),
+        "facts_skipped": int(result.get("facts_skipped", 0)),
+        "facts_kept_confirmed": int(result.get("facts_kept_confirmed", 0)),
+        "facts_refused": int(result.get("facts_refused", 0)),
+        "fact_ids": fact_ids,
+        "existing_ids": list(result.get("existing_ids") or []),
+        "mentions_written": int(result.get("mentions_written", 0)),
+        # Kept for callers that log it; mentions are what is written now.
+        "entities_stored": int(result.get("mentions_written", 0)),
+        "relations_stored": int(result.get("relations_stored", 0)),
+        "relations_unresolved": int(result.get("relations_unresolved", 0)),
+        "relations_private_deferred": int(result.get("relations_private_deferred", 0)),
+        "graph_errors": int(result.get("graph_errors", 0)),
+        "extraction_failed": bool(result.get("extraction_failed", False)),
+        "extraction_error": result.get("extraction_error"),
         "vault_stored": vault_stored,
     }
-
-
-def _set_source_channel(
-    fact_id: int, source_channel: str, metadata: dict[str, Any] | None = None
-) -> None:
-    """Update a fact's source_channel and merge metadata."""
-    with get_connection() as conn:
-        cur = conn.cursor()
-        if metadata:
-            cur.execute(
-                """
-                UPDATE memory_facts
-                SET source_channel = %s,
-                    metadata = metadata || %s
-                WHERE id = %s
-                """,
-                (source_channel, json.dumps(metadata), fact_id),
-            )
-        else:
-            cur.execute(
-                """
-                UPDATE memory_facts
-                SET source_channel = %s
-                WHERE id = %s
-                """,
-                (source_channel, fact_id),
-            )

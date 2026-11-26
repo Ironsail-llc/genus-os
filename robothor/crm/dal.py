@@ -99,6 +99,35 @@ def _safe_audit(operation: str, entity_type: str, entity_id: str | None, **kwarg
         logger.warning("Audit call failed (non-fatal): %s", e)
 
 
+def _keep_memory_link(tenant_id: str, kind: str, record_id: str | None) -> None:
+    """Keep the record's memory node linked and named. Never fails the CRM write.
+
+    One cheap upsert after the CRM commit. Writes that bypass the DAL, and any
+    failure here, are caught up by the nightly identity sync.
+    """
+    if not record_id:
+        return
+    try:
+        hooks.sync_crm_record(tenant_id, kind, record_id)
+    except Exception as e:
+        logger.warning(
+            "memory link for %s %s skipped (non-fatal): %s", kind, sanitize_log(record_id), e
+        )
+
+
+def _record_memory_merge(tenant_id: str, kind: str, keeper_id: str, loser_id: str) -> None:
+    """Tell memory identity the loser's node now resolves to the keeper's."""
+    try:
+        hooks.record_crm_merge(tenant_id, kind, keeper_id, loser_id)
+    except Exception as e:
+        logger.warning(
+            "memory merge record for %s %s skipped (non-fatal): %s",
+            kind,
+            sanitize_log(loser_id),
+            e,
+        )
+
+
 # ─── People ──────────────────────────────────────────────────────────────
 
 
@@ -205,6 +234,7 @@ def create_person(
                     "tenant_id": tenant_id,
                 },
             )
+            _keep_memory_link(tenant_id, "person", person_id)
             return person_id
         except Exception as e:
             conn.rollback()
@@ -294,6 +324,7 @@ def update_person(person_id: str, tenant_id: str = DEFAULT_TENANT, **fields: Any
             conn.commit()
             if ok:
                 _safe_audit("update", "person", person_id, details={"fields": list(fields.keys())})
+                _keep_memory_link(tenant_id, "person", person_id)
             return ok
         except Exception as e:
             conn.rollback()
@@ -456,6 +487,7 @@ def merge_people(
                 keeper_id,
                 details={"loser_id": loser_id, "loser_name": loser_name},
             )
+            _record_memory_merge(tenant_id, "person", keeper_id, loser_id)
             return get_person(keeper_id, tenant_id)
 
         except Exception as e:
@@ -543,6 +575,7 @@ def merge_companies(
                 keeper_id,
                 details={"loser_id": loser_id, "loser_name": loser.get("name", "")},
             )
+            _record_memory_merge(tenant_id, "company", keeper_id, loser_id)
             return get_company(keeper_id, tenant_id)
 
         except Exception as e:
@@ -775,6 +808,7 @@ def find_or_create_company(name: str, tenant_id: str = DEFAULT_TENANT) -> str | 
             _safe_audit(
                 "create", "company", company_id, details={"name": name, "via": "find_or_create"}
             )
+            _keep_memory_link(tenant_id, "company", company_id)
             return company_id
         except Exception as e:
             conn.rollback()
@@ -832,6 +866,7 @@ def create_company(
             )
             conn.commit()
             _safe_audit("create", "company", company_id, details={"name": name})
+            _keep_memory_link(tenant_id, "company", company_id)
             return company_id
         except Exception as e:
             conn.rollback()
@@ -893,6 +928,7 @@ def update_company(company_id: str, tenant_id: str = DEFAULT_TENANT, **fields: A
                 _safe_audit(
                     "update", "company", company_id, details={"fields": list(fields.keys())}
                 )
+                _keep_memory_link(tenant_id, "company", company_id)
             return ok
         except Exception as e:
             conn.rollback()
@@ -3938,7 +3974,7 @@ def check_health() -> dict[str, Any]:
 # ─── Owner Identity ──────────────────────────────────────────────────────
 
 
-def get_owner_person(tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
+def get_owner_person(tenant_id: str = DEFAULT_TENANT, *, cur: Any = None) -> dict[str, Any]:
     """Return the ``crm_people`` row for this tenant's operator.
 
     Resolution order:
@@ -3950,48 +3986,57 @@ def get_owner_person(tenant_id: str = DEFAULT_TENANT) -> dict[str, Any]:
     Returns an empty dict (not None) when no operator is configured, so
     ``get_owner_person(...)["id"]`` returns ``None`` rather than raising.
     Callers that need presence should check ``if row.get("id")``.
+
+    ``cur``: a ``RealDictCursor`` the caller already holds, to run the lookup
+    on instead of checking out a second connection.
     """
+    if cur is not None:
+        return _owner_person_on(cur, tenant_id)
     with get_connection() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            """
-            SELECT p.*
-            FROM tenant_users u
-            JOIN crm_people p ON p.id = u.person_id
-            WHERE u.tenant_id = %s
-              AND u.role = 'owner'
-              AND u.person_id IS NOT NULL
-              AND p.deleted_at IS NULL
-              AND p.tenant_id = %s
-            LIMIT 1
-            """,
-            (tenant_id, tenant_id),
-        )
-        row = cur.fetchone()
-        if row:
-            return person_to_dict(row)
+        return _owner_person_on(conn.cursor(cursor_factory=RealDictCursor), tenant_id)
 
-        # Fallback — owner.yaml configured but bootstrap hasn't run yet.
-        from robothor.owner_config import load_owner_config
 
-        config = load_owner_config()
-        if config is None or config.tenant_id != tenant_id:
-            return {"id": None}
+def _owner_person_on(cur: Any, tenant_id: str) -> dict[str, Any]:
+    """The operator lookup of :func:`get_owner_person`, on ``cur``."""
+    cur.execute(
+        """
+        SELECT p.*
+        FROM tenant_users u
+        JOIN crm_people p ON p.id = u.person_id
+        WHERE u.tenant_id = %s
+          AND u.role = 'owner'
+          AND u.person_id IS NOT NULL
+          AND p.deleted_at IS NULL
+          AND p.tenant_id = %s
+        LIMIT 1
+        """,
+        (tenant_id, tenant_id),
+    )
+    row = cur.fetchone()
+    if row:
+        return person_to_dict(row)
 
-        cur.execute(
-            """
-            SELECT p.*
-            FROM crm_people p
-            WHERE p.deleted_at IS NULL
-              AND p.tenant_id = %s
-              AND LOWER(p.email) = %s
-            ORDER BY p.updated_at DESC
-            LIMIT 1
-            """,
-            (tenant_id, config.email),
-        )
-        row = cur.fetchone()
-        return person_to_dict(row) if row else {"id": None}
+    # Fallback — owner.yaml configured but bootstrap hasn't run yet.
+    from robothor.owner_config import load_owner_config
+
+    config = load_owner_config()
+    if config is None or config.tenant_id != tenant_id:
+        return {"id": None}
+
+    cur.execute(
+        """
+        SELECT p.*
+        FROM crm_people p
+        WHERE p.deleted_at IS NULL
+          AND p.tenant_id = %s
+          AND LOWER(p.email) = %s
+        ORDER BY p.updated_at DESC
+        LIMIT 1
+        """,
+        (tenant_id, config.email),
+    )
+    row = cur.fetchone()
+    return person_to_dict(row) if row else {"id": None}
 
 
 def bootstrap_owner_person_links() -> dict[str, Any]:
@@ -4702,6 +4747,7 @@ def get_person_memory(
                    decay_score, created_at, last_accessed
               FROM memory_facts
              WHERE tenant_id = %s AND person_id = %s
+               AND scope_kind = 'shared'  -- derived for every reader: shared facts only (memory/visibility.py)
                AND is_active = TRUE
              ORDER BY importance_score DESC, created_at DESC
              LIMIT %s

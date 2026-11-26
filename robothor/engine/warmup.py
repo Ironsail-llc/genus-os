@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from robothor.engine.models import AgentConfig
+    from robothor.engine.private_recall import PrivateReader
     from robothor.identity import EnrichedIdentity, IdentityContext
     from robothor.identity.scope import DataScope
 
@@ -1068,6 +1069,7 @@ def _interactive_section_builders(
     observe_scope_obj: DataScope | None,
     scope_user_id: str | None,
     accessible_tenant_ids: tuple[str, ...] | None = None,
+    private_reader: PrivateReader | None = None,
 ) -> list[tuple[str, Callable[[], list[str]]]]:
     """The interactive preamble's sections, as named builders in output order.
 
@@ -1170,6 +1172,10 @@ def _interactive_section_builders(
                     scope=enforce_scope,
                     observe_scope_obj=observe_scope_obj,
                     user_id=scope_user_id,
+                    sender_person_id=identity.person_id if identity is not None else None,
+                    reader_person_id=(
+                        private_reader.person_id if private_reader is not None else None
+                    ),
                 )
             except Exception as e:
                 # WARNING, not DEBUG: a failure here empties entity recall
@@ -1228,6 +1234,7 @@ def build_interactive_preamble(
     agent_config: AgentConfig | None = None,
     section_timings: dict[str, float] | None = None,
     accessible_tenant_ids: tuple[str, ...] | None = None,
+    private_reader: PrivateReader | None = None,
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -1257,6 +1264,10 @@ def build_interactive_preamble(
             seconds}`` for each section that ran, for ``record_warmup_steps``.
         accessible_tenant_ids: The run's ``AgentRun.accessible_tenant_ids``.
             The ORGANISATION section names only the child tenants it holds.
+        private_reader: The person this run serves in their own conversation
+            (``robothor.engine.private_recall.private_reader_for_run``): the
+            only reader of private facts and evidence in the entity context.
+            ``None`` (the default): shared memory only, whoever the sender is.
 
     Returns:
         Warmup preamble string, or empty string if nothing to inject.
@@ -1301,6 +1312,7 @@ def build_interactive_preamble(
         observe_scope_obj=_observe_scope,
         scope_user_id=_scope_user_id,
         accessible_tenant_ids=accessible_tenant_ids,
+        private_reader=private_reader,
     )
 
     sections = _run_interactive_sections(
@@ -1322,6 +1334,98 @@ def build_interactive_preamble(
 
 
 MAX_ENTITY_CONTEXT_CHARS = 1000
+
+#: Hard time budget for graph activation in warm-up, in seconds. Past it the
+#: entity context falls back to the name-matching path below. A starting value
+#: until the measured warm-up baseline sets it.
+GRAPH_WARMUP_BUDGET_SECONDS = 0.150
+
+_graph_pool: ThreadPoolExecutor | None = None
+
+
+def _get_graph_pool() -> ThreadPoolExecutor:
+    global _graph_pool
+    with _pool_lock:
+        if _graph_pool is None:
+            _graph_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="warmup-graph")
+        return _graph_pool
+
+
+def _graph_entity_lines(
+    user_message: str,
+    tenant_id: str,
+    exclude_names: set[str] | None,
+    scope: DataScope | None,
+    sender_person_id: str | None,
+    phrases: list[str],
+    *,
+    reader_person_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Connected context from graph activation, within the time budget.
+
+    Automatic recall, so trusted evidence only (operator-confirmed,
+    user-stated, CRM); the operator's own entity is neither seed nor transit;
+    no model call. ``phrases`` are runs of today's name candidates
+    (``_candidate_phrases``). A message with no such phrase, no e-mail or
+    handle and no known sender cannot seed a walk, and costs nothing: no
+    thread hand-off, no connection. Otherwise the walk runs on one read-only
+    connection (no BEGIN or COMMIT) under a server-side ``statement_timeout``
+    set to the time left of the budget (``activation.recall_for_message``), so
+    Postgres stops it at the budget. Nothing is cancelled from this side: a
+    cancel can reach a connection that is already back in the pool and serving
+    another request.
+
+    Returns the facts' payloads, best first, or ``[]`` on a timeout, an error
+    or no result.
+    """
+    from robothor.memory import activation
+
+    if not activation.has_anything_to_link(user_message, phrases, sender_person_id):
+        return []
+
+    import robothor.db
+    from robothor.memory.visibility import served_reader
+
+    restricted = scope is not None and scope.restricted
+    person_id = scope.person_id if restricted and scope is not None else None
+    reader, _ = served_reader(scope, reader_person_id, None)
+    budget = GRAPH_WARMUP_BUDGET_SECONDS
+    deadline = time.monotonic() + budget
+
+    @contextmanager
+    def _read_only_connection() -> Iterator[Any]:
+        with robothor.db.get_connection(read_only=True) as conn:
+            yield conn
+
+    future = _get_graph_pool().submit(
+        contextvars.copy_context().run,
+        lambda: activation.recall_for_message(
+            tenant_id,
+            user_message,
+            sender_person_id=sender_person_id,
+            reader_scope_id=reader,
+            exclude_names=exclude_names,
+            person_restricted=restricted,
+            person_id=person_id,
+            trusted_only=True,
+            phrases=phrases,
+            deadline=deadline,
+            connect=_read_only_connection,
+        ),
+    )
+    try:
+        candidates = future.result(timeout=budget)
+    except TimeoutError:
+        # The worker finishes on its own: the server stops its walk at the
+        # deadline and it resets the limit before returning the connection.
+        future.cancel()
+        logger.info("Warmup graph activation exceeded %d ms; using name matching", budget * 1000)
+        return []
+    except Exception as e:
+        logger.warning("Warmup graph activation failed, using name matching: %s", e)
+        return []
+    return [c.payload for c in candidates]
+
 
 # Words that are never entities (grammar) and capitalized sentence-starters that
 # must not be mistaken for proper nouns.
@@ -1345,6 +1449,20 @@ def _warmup_recall_v2_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def _candidate_word(i: int, cleaned: str, *, lowercase_ok: bool) -> bool:
+    """Whether the ``i``-th word of a message, stripped of punctuation, is a
+    name candidate: capitalized, or (``lowercase_ok``) a lowercase content word
+    of four letters or more. Never a stopword or a word of two letters."""
+    if len(cleaned) <= 2:
+        return False
+    low = cleaned.lower()
+    if low in _ENTITY_STOPWORDS:
+        return False
+    if cleaned[0].isupper() and (i > 0 or low not in _ENTITY_STOPWORDS):
+        return True
+    return lowercase_ok and cleaned.isalpha() and len(cleaned) >= 4
+
+
 def _extract_entity_candidates(user_message: str, *, lowercase_ok: bool) -> list[str]:
     """Ordered candidate entity names from a message (pure, testable).
 
@@ -1359,18 +1477,55 @@ def _extract_entity_candidates(user_message: str, *, lowercase_ok: bool) -> list
     seen: set[str] = set()
     for i, word in enumerate(user_message.split()):
         cleaned = re.sub(r"[^\w]", "", word)
-        if len(cleaned) <= 2:
-            continue
         low = cleaned.lower()
-        if low in _ENTITY_STOPWORDS or low in seen:
+        if low in seen or not _candidate_word(i, cleaned, lowercase_ok=lowercase_ok):
             continue
-        if cleaned[0].isupper() and (i > 0 or low not in _ENTITY_STOPWORDS):
+        if cleaned[0].isupper():
             capitalized.append(cleaned)
-            seen.add(low)
-        elif lowercase_ok and cleaned.isalpha() and len(cleaned) >= 4:
+        else:
             lowercased.append(cleaned)
-            seen.add(low)
+        seen.add(low)
     return capitalized + lowercased
+
+
+def _candidate_phrases(user_message: str, *, lowercase_ok: bool) -> list[str]:
+    """Graph seed phrases from today's name candidates (pure, testable).
+
+    Runs of adjacent candidate words, lower-cased, two to
+    ``activation.MAX_NAME_TOKENS`` words long: "Alice Smith" in "Did Alice
+    Smith sign?". A lone candidate is never a phrase — a single token never
+    resolves to an entity — so a message whose candidates stand alone costs
+    graph recall nothing.
+    """
+    import re
+
+    from robothor.memory.activation import MAX_NAME_TOKENS
+
+    runs: list[list[str]] = [[]]
+    for i, word in enumerate(user_message.split()):
+        # "Alice Smith's" names Alice Smith: drop the possessive, then punctuation.
+        cleaned = re.sub(r"[^\w]", "", re.sub(r"['’]s(?=\W*$)", "", word))
+        if _candidate_word(i, cleaned, lowercase_ok=lowercase_ok):
+            runs[-1].append(cleaned.lower())
+            if word != word.rstrip(".,;:!?"):
+                runs.append([])  # punctuation ends a name
+        elif runs[-1]:
+            runs.append([])
+    out: list[str] = []
+    for run in runs:
+        for size in range(2, MAX_NAME_TOKENS + 1):
+            for j in range(len(run) - size + 1):
+                phrase = " ".join(run[j : j + size])
+                if phrase not in out:
+                    out.append(phrase)
+    return out
+
+
+#: Whether warm-up adds graph-activation lines unless told otherwise. Off, as
+#: ``robothor.memory.facts.GRAPH_LEG_DEFAULT``: on the memory evaluation's world
+#: the graph leg showed no recall benefit, and nothing has measured
+#: one for warm-up.
+WARMUP_GRAPH_DEFAULT = False
 
 
 def _build_entity_context(
@@ -1381,8 +1536,20 @@ def _build_entity_context(
     observe_scope_obj: DataScope | None = None,
     user_id: str | None = None,
     record_access: bool = True,
+    sender_person_id: str | None = None,
+    include_graph: bool | None = None,
+    reader_person_id: str | None = None,
 ) -> str:
     """Extract entities from the user message and pull relevant facts.
+
+    With ``include_graph`` (``None`` reads ``WARMUP_GRAPH_DEFAULT`` at call
+    time: off, as ``facts.GRAPH_LEG_DEFAULT``, since the graph has not shown a
+    recall benefit), connected context comes first from graph activation
+    (``_graph_entity_lines``: trusted evidence only, within
+    ``GRAPH_WARMUP_BUDGET_SECONDS``), then today's name-matched facts fill the
+    rest of the budget, each fact once. On a timeout, an error or an empty
+    graph result — which is every instance whose memory predates origins — the
+    section is exactly what the name-matching path returns.
 
     Args:
         exclude_names: Names to skip during entity search (e.g. the current
@@ -1399,10 +1566,17 @@ def _build_entity_context(
             scope and a would-drop count is logged — never used to alter
             the returned text.
         user_id: Identity's stable id, for the observe-mode log line only.
-        record_access: Count every injected fact as used (``access_count`` and
-            ``last_accessed``, the decay and prune inputs). The write is
-            deferred off the warm-up's critical path and never fails it; pass
-            False for a caller that must have no side effects.
+        record_access: Count every injected name-matched fact as used
+            (``access_count`` and ``last_accessed``, the decay and prune
+            inputs). The write is deferred off the warm-up's critical path and
+            never fails it; pass False for a caller that must have no side
+            effects. Graph lines are not counted, as in ``search_memory``.
+        sender_person_id: The sender's CRM person, when known: its linked
+            entity seeds the graph. Not a reader.
+        reader_person_id: The person the run serves in their own
+            conversation (``robothor.engine.private_recall``), the one reader
+            whose private evidence the walk may cross; a restricted ``scope``
+            keeps it only when it is the scope's person. ``None``: shared only.
 
     Every candidate's facts come from one statement
     (``_fetch_entity_facts_batched``).
@@ -1410,51 +1584,86 @@ def _build_entity_context(
     Budget: max 1000 chars. Stays synchronous (no async search_facts) so it can
     run inside the sync warmup path; recency awareness is done in SQL.
     """
+    from robothor.identity.scope import log_would_drop, rows_dropped_by_scope
+
     v2 = _warmup_recall_v2_enabled()
     candidates = _extract_entity_candidates(user_message, lowercase_ok=v2)
+
+    # Graph lines first; today's name-matched lines fill the rest of the same
+    # budget, so a graph result never hides the facts about the people the
+    # message names. With no graph result the section is exactly today's.
+    lines = ["--- RELEVANT CONTEXT ---"]
+    chars_used = 0
+    shown: set[str] = set()
+    _would_drop = 0
+    injected: list[dict[str, Any]] = []
+
+    if include_graph is None:
+        include_graph = WARMUP_GRAPH_DEFAULT
+    graph_rows = (
+        _graph_entity_lines(
+            user_message,
+            tenant_id,
+            exclude_names,
+            scope,
+            sender_person_id,
+            _candidate_phrases(user_message, lowercase_ok=v2),
+            reader_person_id=reader_person_id,
+        )
+        if include_graph
+        else []
+    )
+    for f in graph_rows:
+        path = f.get("graph_path") or []
+        via = f" [via {' > '.join(path)}]" if f.get("graph_hops") and len(path) > 1 else ""
+        line = f"- {f['fact_text']}{via}"
+        if chars_used + len(line) > MAX_ENTITY_CONTEXT_CHARS:
+            break
+        lines.append(line)
+        chars_used += len(line)
+        shown.add(f["fact_text"])
+    if observe_scope_obj is not None and graph_rows:
+        _would_drop += rows_dropped_by_scope(graph_rows, observe_scope_obj)
 
     if exclude_names:
         excluded = {n.lower() for n in exclude_names if n}
         candidates = [c for c in candidates if c.lower() not in excluded]
 
-    if not candidates:
-        return ""
+    if candidates:
+        from psycopg2.extras import RealDictCursor
 
-    from psycopg2.extras import RealDictCursor
+        from robothor.db import get_connection
 
-    from robothor.db import get_connection
-    from robothor.identity.scope import log_would_drop, rows_dropped_by_scope
+        # Restricted is passed on its own: a restricted caller with no linked
+        # person must still be filtered (to facts about no one), not treated
+        # as unrestricted because its person id is None.
+        restricted = scope is not None and scope.restricted
+        scope_person_id = scope.person_id if restricted and scope is not None else None
 
-    # Restricted is passed on its own: a restricted caller with no linked
-    # person must still be filtered (to facts about no one), not treated as
-    # unrestricted because its person id is None.
-    restricted = scope is not None and scope.restricted
-    scope_person_id = scope.person_id if restricted and scope is not None else None
+        # V2 looks at a few more candidates (lowercase queries are noisier)
+        # and ranks by a recency/importance blend; legacy keeps the
+        # importance-only sort.
+        max_candidates = 5 if v2 else 3
 
-    lines = ["--- RELEVANT CONTEXT ---"]
-    chars_used = 0
-    # V2 looks at a few more candidates (lowercase queries are noisier) and
-    # ranks by a recency/importance blend; legacy keeps the importance-only sort.
-    max_candidates = 5 if v2 else 3
-    _would_drop = 0
-    injected: list[dict[str, Any]] = []
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    with get_connection() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        fetched = _fetch_entity_facts_batched(
-            cur, candidates[:max_candidates], tenant_id, v2, restricted, scope_person_id
-        )
-        for rows in fetched:
-            if observe_scope_obj is not None:
-                _would_drop += rows_dropped_by_scope(rows, observe_scope_obj)
-            for f in rows:
-                line = f"- {f['fact_text']}"
-                if chars_used + len(line) > MAX_ENTITY_CONTEXT_CHARS:
-                    break
-                lines.append(line)
-                chars_used += len(line)
-                injected.append(f)
+            fetched = _fetch_entity_facts_batched(
+                cur, candidates[:max_candidates], tenant_id, v2, restricted, scope_person_id
+            )
+            for rows in fetched:
+                if observe_scope_obj is not None:
+                    _would_drop += rows_dropped_by_scope(rows, observe_scope_obj)
+                for f in rows:
+                    if f["fact_text"] in shown:
+                        continue
+                    line = f"- {f['fact_text']}"
+                    if chars_used + len(line) > MAX_ENTITY_CONTEXT_CHARS:
+                        break
+                    lines.append(line)
+                    chars_used += len(line)
+                    shown.add(f["fact_text"])
+                    injected.append(f)
 
     if record_access and injected:
         _record_injected_facts(injected, tenant_id)
@@ -1546,6 +1755,7 @@ def _fetch_entity_facts_batched(
                 SELECT id, fact_text, category, importance_score, person_id, created_at
                 FROM memory_facts
                 WHERE is_active = TRUE AND c.name = ANY(entities) AND tenant_id = %s
+                  AND scope_kind = 'shared'  -- no reader on this path (migration 181)
                   {scope_clause}
                 ORDER BY importance_score DESC, created_at DESC
                 LIMIT 3

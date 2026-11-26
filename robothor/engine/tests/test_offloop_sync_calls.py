@@ -401,3 +401,81 @@ async def test_a_room_delivery_reads_its_room_off_the_loop(monkeypatch):
     assert receipt.status == "failed:room_unknown_target"
     await probe.settle()
     probe.assert_loop_free()
+
+
+# ── memory/segments.py: conversation segment indexing and search ──────────
+
+
+async def test_segment_indexing_reads_the_conversation_off_the_loop(monkeypatch):
+    from robothor.memory import segments
+
+    probe = SlowProbe(asyncio.get_running_loop(), result=None)
+    monkeypatch.setattr(segments, "_load_conversation", probe)
+
+    assert await segments.index_conversation("agent:main:primary", tenant_id="test-tenant") == 0
+    await probe.settle()
+    probe.assert_loop_free()
+
+
+async def test_segment_indexing_writes_off_the_loop(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from robothor.memory import segments
+
+    at = datetime(2026, 1, 5, 9, 0, tzinfo=UTC)
+    turns = [
+        segments.Turn(ref=1, role="user", text="Where is the bike locker?", at=at),
+        segments.Turn(ref=2, role="assistant", text="By the lift.", at=at + timedelta(minutes=1)),
+    ]
+    conversation = segments._Conversation(
+        session_id=7, person_id=None, resume_from=None, covered_through=None, turns=turns
+    )
+    monkeypatch.setattr(segments, "_load_conversation", lambda *_a, **_kw: conversation)
+    probe = SlowProbe(asyncio.get_running_loop(), result=1)
+    monkeypatch.setattr(segments, "_write_segments", probe)
+
+    async def embed(texts):
+        return [[0.1] * 1024 for _ in texts]
+
+    assert (
+        await segments.index_conversation(
+            "agent:main:primary", tenant_id="test-tenant", embed_batch=embed
+        )
+        == 1
+    )
+    await probe.settle()
+    probe.assert_loop_free()
+
+
+async def test_segment_search_queries_off_the_loop(monkeypatch):
+    from robothor.memory import segments
+
+    probe = SlowProbe(asyncio.get_running_loop(), result=([], []))
+    monkeypatch.setattr(segments, "_query_segments", probe)
+
+    hits = await segments.search_segments(
+        "bike locker", tenant_id="test-tenant", limit=5, query_embedding=[0.1] * 1024
+    )
+    assert hits == []
+    await probe.settle()
+    probe.assert_loop_free()
+
+
+# ── memory: the graph-activation recall leg ───────────────────────────────
+
+
+async def test_the_graph_recall_leg_runs_off_the_loop(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from robothor.memory import activation, facts
+
+    probe = SlowProbe(asyncio.get_running_loop(), result=[])
+    monkeypatch.setattr(activation, "graph_candidates_for_query", probe)
+    monkeypatch.setattr(facts, "_embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr(facts, "_fact_legs", lambda *a, **k: {"vector": [], "keyword": []})
+    monkeypatch.setattr(facts, "GRAPH_LEG_DEFAULT", True)
+
+    results = await facts.search_facts("Alice Smith", tenant_id="test-tenant", use_reranker=False)
+    assert results == []
+    await probe.settle()
+    probe.assert_loop_free()

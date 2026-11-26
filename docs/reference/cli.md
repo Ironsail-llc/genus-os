@@ -28,7 +28,7 @@ Where to start, rather than reading this top to bottom:
 Settings are documented in the [configuration reference](configuration.md),
 not here: a flag belongs to one command, a setting to the whole instance.
 
-40 verbs.
+41 verbs.
 
 ## `genus plugin`
 
@@ -872,6 +872,55 @@ Usage: `genus memory-eval [--suite SUITE] [--tenant TENANT] [--keep] [--json] [-
 | `--report` | `REPORT` | — | Write the JSON report here and a .md summary beside it |
 | `--progress` | `PROGRESS` | — | Append each judged case to this JSONL; rerunning with it resumes |
 | `--record-baseline` | — | off | Also write the report as the recorded world baseline under docs/benchmarks/memory/ |
+
+## `genus memory-identity`
+
+CRM-anchored memory identity: seed, backfill, reverse.
+
+Usage: `genus memory-identity {sync,backfill,reverse}`
+
+### `genus memory-identity sync`
+
+Give every CRM person and company exactly one linked memory node.
+
+Usage: `genus memory-identity sync [--tenant TENANT] [--json] [--dry-run]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant` | `TENANT` | — | Tenant to act on (required) |
+| `--json` | — | off | Output JSON |
+| `--dry-run` | — | off | Report what would change and write nothing |
+
+### `genus memory-identity backfill`
+
+Resolve the names in existing facts into mentions (resumable).
+
+Usage: `genus memory-identity backfill [--tenant TENANT] [--json] [--dry-run] [--resume-from RESUME_FROM] [--batch-size BATCH_SIZE]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant` | `TENANT` | — | Tenant to act on (required) |
+| `--json` | — | off | Output JSON |
+| `--dry-run` | — | off | Report what would change and write nothing |
+| `--resume-from` | `RESUME_FROM` | — | Continue after this fact id (the last_fact_id of a previous run) |
+| `--batch-size` | `BATCH_SIZE` | `500` | Facts per batch, one transaction each |
+
+### `genus memory-identity reverse`
+
+Reverse a resolution decision and re-point its mentions.
+
+Usage: `genus memory-identity reverse [--tenant TENANT] [--json] [--dry-run] [--decision DECISION] [--reason REASON] [--entity ENTITY] [--fact FACT] [--all]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant` | `TENANT` | — | Tenant to act on (required) |
+| `--json` | — | off | Output JSON |
+| `--dry-run` | — | off | Report what would change and write nothing |
+| `--decision` | `DECISION` | — | Decision id to reverse |
+| `--reason` | `REASON` | — | Why the decision was wrong |
+| `--entity` | `ENTITY` | — | Entity id the mentions belong to instead (omit to leave them unresolved) |
+| `--fact` | `FACT` | — | Only the decision's mention on this fact (repeatable); the decision stays live |
+| `--all` | — | off | Every mention the decision carries, and the name from now on (preview with --dry-run) |
 
 ## `genus status`
 

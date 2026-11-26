@@ -30,8 +30,7 @@ async def test_missing_content_is_an_actionable_error(monkeypatch, async_write):
     store = AsyncMock()
     enqueue = AsyncMock()
     with (
-        patch("robothor.memory.facts.extract_facts", new=AsyncMock(return_value=[])),
-        patch("robothor.memory.facts.store_facts_batch", new=store),
+        patch("robothor.memory.write_path.ingest_text", new=store),
         patch("robothor.memory.write_jobs.enqueue_write", new=enqueue),
     ):
         out = await _call({"text": "Alice prefers email.", "content_type": "preference"})
@@ -47,8 +46,7 @@ async def test_blank_content_is_an_error(monkeypatch):
     monkeypatch.delenv("MEMORY_ASYNC_WRITE", raising=False)
     store = AsyncMock()
     with (
-        patch("robothor.memory.facts.extract_facts", new=AsyncMock(return_value=[])),
-        patch("robothor.memory.facts.store_facts_batch", new=store),
+        patch("robothor.memory.write_path.ingest_text", new=store),
     ):
         out = await _call({"content": "   "})
     assert "error" in out
@@ -62,8 +60,7 @@ async def test_the_shared_implementation_refuses_blank_content_too():
 
     store = AsyncMock()
     with (
-        patch("robothor.memory.facts.extract_facts", new=AsyncMock(return_value=[])),
-        patch("robothor.memory.facts.store_facts_batch", new=store),
+        patch("robothor.memory.write_path.ingest_text", new=store),
     ):
         out = await store_memory_content("")
     assert "error" in out
@@ -73,9 +70,8 @@ async def test_the_shared_implementation_refuses_blank_content_too():
 @pytest.mark.asyncio
 async def test_real_content_is_still_stored(monkeypatch):
     monkeypatch.delenv("MEMORY_ASYNC_WRITE", raising=False)
-    with (
-        patch("robothor.memory.facts.extract_facts", new=AsyncMock(return_value=[])),
-        patch("robothor.memory.facts.store_facts_batch", new=AsyncMock(return_value=[41])),
-    ):
+    write = AsyncMock(return_value={"fact_ids": [41], "facts_processed": 1})
+    with patch("robothor.memory.write_path.ingest_text", new=write):
         out = await _call({"content": "Alice prefers email.", "content_type": "preference"})
-    assert out == {"id": 41, "facts_stored": 1}
+    assert out["id"] == 41 and out["facts_stored"] == 1
+    assert write.call_args.args[0] == "Alice prefers email."

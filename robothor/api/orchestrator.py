@@ -485,8 +485,13 @@ async def stats(tenant_id: str = Depends(reading_tenant)) -> dict[str, Any]:
 
 @app.post("/ingest")
 async def ingest_endpoint(req: IngestRequest, tenant_id: str = Depends(writing_tenant)) -> Any:
-    """Ingest content from any channel, into the caller's tenant."""
+    """Ingest content from any channel, into the caller's tenant.
+
+    The channel the caller names is a claim: what this route stores is never
+    trusted above external content.
+    """
     from robothor.db.connection import tenant_scope
+    from robothor.memory.graph_schema import Origin
     from robothor.memory.ingestion import ingest_content
 
     try:
@@ -497,6 +502,7 @@ async def ingest_endpoint(req: IngestRequest, tenant_id: str = Depends(writing_t
                 content_type=req.content_type,
                 metadata=req.metadata,
                 tenant_id=tenant_id,
+                origin_cap=Origin.EXTERNAL,
             )
         return result
     except ValueError as e:

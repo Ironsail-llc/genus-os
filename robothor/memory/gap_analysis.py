@@ -77,6 +77,7 @@ async def find_low_confidence_facts(
             FROM memory_facts
             WHERE is_active = TRUE
               AND confidence < %s
+              AND scope_kind = 'shared'  -- derived for every reader: shared facts only (memory/visibility.py)
               AND tenant_id = %s
             ORDER BY confidence ASC
             LIMIT %s

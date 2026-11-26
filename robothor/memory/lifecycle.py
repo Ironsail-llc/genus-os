@@ -156,52 +156,76 @@ def _apply_consolidation_supersession(new_id: int, source_ids: list[int]) -> Non
             )
 
 
+#: Half-life of the recency term, from the last use.
+RECENCY_HALF_LIFE_HOURS = 72.0
+#: Half-life of the access boost, from the last use. Use fades: one recall long
+#: ago leaves a fact where it would be had it never been recalled.
+ACCESS_BOOST_HALF_LIFE_DAYS = 30.0
+#: A fact last used longer ago than this counts as unused for pruning (three
+#: access-boost half-lives: at most 1/8 of the boost is left).
+PRUNE_RECENT_USE_DAYS = 90
+
+
+def access_boost(access_count: int, *, days_since_use: float) -> float:
+    """``min(ln(1 + count) / 5, 0.3)``, halved every ACCESS_BOOST_HALF_LIFE_DAYS."""
+    if access_count <= 0:
+        return 0.0
+    full = min(math.log(1 + access_count) / 5.0, 0.3)
+    return full * math.pow(0.5, max(days_since_use, 0.0) / ACCESS_BOOST_HALF_LIFE_DAYS)
+
+
 def compute_decay_score(
     last_accessed: datetime,
     access_count: int,
     reinforcement_count: int,
     importance_score: float,
     outcome_failures: int = 0,
+    utility: float | None = None,
 ) -> float:
     """Compute a decay score for a memory fact.
 
-    The score represents how "alive" a memory is. Higher = more relevant.
-    Recent, frequently accessed, reinforced, and important memories score higher.
-    Facts that have been blamed for failed runs take a capped penalty so
-    repeated misattribution retires them faster.
+    The score represents how "alive" a memory is. Higher = more relevant::
+
+        max(recency, 0.4 * importance) + access_boost + reinforcement_boost
+            + utility_decay_term(utility)
+
+    clamped to 0..1. Recency halves every 72 hours since the last use and the
+    access boost every 30 days, so use fades. Utility is one signed, bounded
+    term (``robothor.memory.utility``): positive for facts that helped runs,
+    negative — capped at 0.4, as the failure penalty it replaces was — for
+    facts behind failed runs.
 
     Args:
-        last_accessed: When the memory was last accessed.
-        access_count: Number of times the memory has been accessed.
+        last_accessed: When the memory was last used.
+        access_count: Number of times recall returned the memory.
         reinforcement_count: Number of times the memory was reinforced.
         importance_score: LLM-judged importance (0.0-1.0).
-        outcome_failures: Count of failed runs that consulted this fact.
+        outcome_failures: Failed runs that recalled this fact. Read only when
+            ``utility`` is None (failures alone, no successes).
+        utility: The fact's outcome utility in [-1, 1].
 
     Returns:
         Decay score between 0.0 and 1.0.
     """
+    from robothor.memory.utility import compute_utility, utility_decay_term
+
     now = datetime.now(UTC)
 
     if last_accessed.tzinfo is None:
         last_accessed = last_accessed.replace(tzinfo=UTC)
 
     hours_since = max((now - last_accessed).total_seconds() / 3600, 0)
+    recency = math.pow(0.5, hours_since / RECENCY_HALF_LIFE_HOURS)
 
-    # Exponential decay with half-life of 72 hours (3 days)
-    half_life = 72.0
-    recency = math.exp(-hours_since * math.log(2) / half_life)
-
-    access_boost = min(math.log(1 + access_count) / 5.0, 0.3)
+    use_boost = access_boost(access_count, days_since_use=hours_since / 24.0)
     reinforcement_boost = min(math.log(1 + reinforcement_count) / 5.0, 0.2)
     importance_floor = importance_score * 0.4
 
+    if utility is None:
+        utility = compute_utility(citations=0, failures=outcome_failures)
+
     base = max(recency, importance_floor)
-    score = base + access_boost + reinforcement_boost
-
-    if outcome_failures > 0:
-        from robothor.memory.outcomes import compute_outcome_penalty
-
-        score -= compute_outcome_penalty(outcome_failures)
+    score = base + use_boost + reinforcement_boost + utility_decay_term(utility)
 
     return max(0.0, min(1.0, score))
 
@@ -294,6 +318,8 @@ async def find_consolidation_candidates(
     Returns:
         List of groups, where each group is a list of fact dicts. An
         operator-confirmed fact is never in one: consolidation would retire it.
+        Every fact of a group has the same tenant and the same scope: a
+        consolidated row is never derived across tenants or across readers.
     """
     unconsolidated_filter = "AND consolidated_at IS NULL" if unconsolidated_only else ""
     # WS-2: never feed a consolidation output back into consolidation — that is
@@ -308,7 +334,8 @@ async def find_consolidation_candidates(
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             f"""
-            SELECT id, fact_text, category, entities, embedding
+            SELECT id, fact_text, category, entities, embedding, tenant_id, origin,
+                   scope_kind, scope_id
             FROM memory_facts
             WHERE is_active = TRUE AND embedding IS NOT NULL
               AND tenant_id = %s
@@ -340,19 +367,29 @@ async def find_consolidation_candidates(
             apply_hnsw_session(cur)
             cur.execute(
                 f"""
-                SELECT id, fact_text, category, entities,
+                SELECT id, fact_text, category, entities, tenant_id, origin,
+                       scope_kind, scope_id,
                        1 - (embedding <=> %s::vector) as similarity
                 FROM memory_facts
                 WHERE is_active = TRUE
                   AND embedding IS NOT NULL
                   AND id != %s
                   AND tenant_id = %s
+                  AND scope_kind = %s
+                  AND scope_id IS NOT DISTINCT FROM %s
                   AND {NOT_OPERATOR_CONFIRMED_SQL}
                   {consolidation_filter}
                 ORDER BY embedding <=> %s::vector
                 LIMIT 10
                 """,
-                (fact["embedding"], fact["id"], _tenant, fact["embedding"]),
+                (
+                    fact["embedding"],
+                    fact["id"],
+                    _tenant,
+                    fact.get("scope_kind") or "shared",
+                    fact.get("scope_id"),
+                    fact["embedding"],
+                ),
             )
 
             for similar in cur.fetchall():
@@ -365,6 +402,39 @@ async def find_consolidation_candidates(
             groups.append(group)
 
     return groups
+
+
+async def store_consolidated(group: list[dict[str, Any]], text: str) -> int:
+    """Store the consolidation of ``group`` through the write path and retire the group.
+
+    The new fact takes the group's tenant and scope (every member shares them,
+    see :func:`find_consolidation_candidates`; a mixed group is refused) and the
+    LEAST trusted origin among the members, so consolidating an email with what
+    a person said does not launder the email. It inherits the members' mentions
+    and becomes evidence of every edge they supported; once the members are
+    superseded, those edges' origins are recomputed from what still supports
+    them. Returns the new fact's id, or 0 when nothing was stored.
+    """
+    from robothor.memory.write_path import recompute_derived_edges, write_derived_fact
+
+    consolidated_fact = {
+        "fact_text": text,
+        "category": group[0].get("category", "personal"),
+        "entities": list({e for f in group for e in (f.get("entities") or [])}),
+        "confidence": 0.9,
+    }
+    new_id, edges = await write_derived_fact(
+        consolidated_fact,
+        group,
+        source_content="[consolidated from similar facts]",
+        source_type="consolidation",
+    )
+    if not new_id:
+        return 0
+    # Supersede originals (guarded: importance propagation + chain cap)
+    _apply_consolidation_supersession(new_id, [int(f["id"]) for f in group])
+    await recompute_derived_edges(group[0].get("tenant_id") or "", edges)
+    return new_id
 
 
 async def consolidate_facts(fact_group: list[dict[str, Any]]) -> dict[str, Any]:
@@ -407,13 +477,17 @@ async def prune_low_quality_facts(*, tenant_id: str = "") -> dict[str, Any]:
     """Deactivate one tenant's facts that are low-quality garbage.
 
     Targets:
-        - decay_score < 0.1 AND importance_score < 0.3 AND never recalled
+        - decay_score < 0.1 AND importance_score < 0.3 AND not used recently
         - fact_text < 15 characters (garbage that got in before quality gate)
 
-    "Never recalled" reads the live ``access_count`` (raised whenever the
-    search tool or warm-up returns the fact) and migration 094's
-    ``access_count_shadow`` (history recovered from fact_access_log), so a fact
-    agents use is not retired on age alone.
+    "Not used recently" means never recalled, or last recalled more than
+    PRUNE_RECENT_USE_DAYS ago. Use reads the live ``access_count`` /
+    ``last_accessed`` (raised whenever the search tool or warm-up returns the
+    fact) and migration 094's shadow columns (history recovered from
+    fact_access_log), so a fact agents use is not retired on age alone — and a
+    fact recalled once long ago is not protected forever. Positive utility
+    protects in proportion: it lifts ``decay_score`` by up to 0.3, so a fact
+    that has helped runs stays above the 0.1 line.
 
     Never prunes: decisions, preferences, resolutions (category-protected), or
     an operator-confirmed fact.
@@ -440,7 +514,7 @@ async def prune_low_quality_facts(*, tenant_id: str = "") -> dict[str, Any]:
         )
         short_pruned = cur.fetchall()
 
-        # Prune decayed, unimportant, never-recalled facts
+        # Prune decayed, unimportant facts not used recently enough to matter
         cur.execute(
             f"""
             UPDATE memory_facts SET is_active = false, updated_at = NOW()
@@ -448,12 +522,13 @@ async def prune_low_quality_facts(*, tenant_id: str = "") -> dict[str, Any]:
               AND tenant_id = %s
               AND decay_score < 0.1
               AND importance_score < 0.3
-              AND {_USE_COUNT_SQL} = 0
+              AND ({_USE_COUNT_SQL} = 0
+                   OR {_LAST_USED_SQL} < NOW() - make_interval(days => %s))
               AND category NOT IN ('decision', 'preference', 'resolution')
               AND {NOT_OPERATOR_CONFIRMED_SQL}
             RETURNING id, fact_text
             """,
-            (_tenant,),
+            (_tenant, PRUNE_RECENT_USE_DAYS),
         )
         decay_pruned = cur.fetchall()
 
@@ -551,22 +626,11 @@ async def run_intraday_consolidation(threshold: int = 5, *, tenant_id: str = "")
         )
         for group in groups:
             result = await consolidate_facts(group)
-            if result and result.get("consolidated_text"):
-                from robothor.memory.facts import store_fact
-
-                consolidated_fact = {
-                    "fact_text": result["consolidated_text"],
-                    "category": group[0].get("category", "personal"),
-                    "entities": list({e for f in group for e in (f.get("entities") or [])}),
-                    "confidence": 0.9,
-                }
-                new_id = await store_fact(
-                    consolidated_fact,
-                    source_content="[intra-day consolidation]",
-                    source_type="consolidation",
-                    tenant_id=_tenant,
-                )
-                _apply_consolidation_supersession(new_id, result["source_ids"])
+            if (
+                result
+                and result.get("consolidated_text")
+                and await store_consolidated(group, result["consolidated_text"])
+            ):
                 consolidation_groups += 1
     except Exception as e:
         logger.warning("Intra-day consolidation failed: %s", e)
@@ -626,7 +690,9 @@ async def infer_entity_relationships(
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    "SELECT fact_text FROM memory_facts WHERE id = ANY(%s) AND tenant_id = %s",
+                    # Inferred edges are shared: shared facts only (memory/visibility.py).
+                    "SELECT fact_text FROM memory_facts WHERE id = ANY(%s) AND tenant_id = %s "
+                    "AND scope_kind = 'shared'",
                     (fact_ids[:5], _tenant),
                 )
                 pair["shared_facts_text"] = [row[0] for row in cur.fetchall()]
@@ -674,6 +740,7 @@ async def discover_cross_domain_insights(
             SELECT id, fact_text, category, entities
             FROM memory_facts
             WHERE is_active = TRUE AND created_at >= %s AND tenant_id = %s
+              AND scope_kind = 'shared'  -- derived for every reader: shared facts only (memory/visibility.py)
             ORDER BY created_at DESC
             LIMIT %s
             """,
@@ -1141,27 +1208,47 @@ def _decay_chunk(rows: list[dict[str, Any]]) -> tuple[int, int]:
     datetime and is NOT touched here — see scripts/memory_decay_dryrun.py
     for why the formula itself must stay a single source of truth.
     """
+    from robothor.memory.utility import utility_for_row
+
     updated = 0
     skipped_null = 0
     with get_connection() as conn:
         cur = conn.cursor()
         for fact in rows:
+            utility = utility_for_row(fact)
             if fact["last_accessed"] is None:
                 skipped_null += 1
+                # No decay score to write; touch the row only if utility moved,
+                # or every such row would be rewritten (a dead tuple) nightly.
+                cur.execute(
+                    "UPDATE memory_facts SET utility = %s "
+                    "WHERE id = %s AND utility IS DISTINCT FROM %s",
+                    (utility, fact["id"], utility),
+                )
                 continue
             score = compute_decay_score(
                 last_accessed=fact["last_accessed"],
                 access_count=fact["access_count"],
                 reinforcement_count=fact["reinforcement_count"],
                 importance_score=fact["importance_score"],
-                outcome_failures=fact.get("outcome_failures", 0) or 0,
+                utility=utility,
             )
             cur.execute(
-                "UPDATE memory_facts SET decay_score = %s WHERE id = %s",
-                (score, fact["id"]),
+                "UPDATE memory_facts SET decay_score = %s, utility = %s WHERE id = %s",
+                (score, utility, fact["id"]),
             )
             updated += 1
     return updated, skipped_null
+
+
+def _has_origin_column(cur: Any) -> bool:
+    """Whether ``memory_facts.origin`` exists (it arrives with the graph schema)."""
+    cur.execute(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'memory_facts' "
+        "AND column_name = 'origin'"
+    )
+    return cur.fetchone() is not None
 
 
 def _run_decay_pass_sync(budget_s: float = _DECAY_BUDGET_S, tenant_id: str = "") -> dict[str, int]:
@@ -1180,11 +1267,15 @@ def _run_decay_pass_sync(budget_s: float = _DECAY_BUDGET_S, tenant_id: str = "")
     t_start = time.monotonic()
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        # Outcome counts feed utility; origin, when the column exists, decides
+        # whether the fact may earn positive utility at all.
+        origin = ", origin" if _has_origin_column(cur) else ""
         cur.execute(
             f"""
             SELECT id, {_LAST_USED_SQL} AS last_accessed,
                    {_USE_COUNT_SQL} AS access_count, reinforcement_count,
-                   importance_score, outcome_failures
+                   importance_score, outcome_failures,
+                   outcome_successes, outcome_citations{origin}
             FROM memory_facts
             WHERE is_active = TRUE AND tenant_id = %s
             """,
@@ -1398,23 +1489,8 @@ async def _run_tenant_core_steps(
     # Phase B: Store consolidated facts (needs embeddings)
     for result, group in pending_consolidations:
         try:
-            from robothor.memory.facts import store_fact
-
-            consolidated_fact = {
-                "fact_text": result["consolidated_text"],
-                "category": group[0].get("category", "personal"),
-                "entities": list({e for f in group for e in (f.get("entities") or [])}),
-                "confidence": 0.9,
-            }
-            new_id = await store_fact(
-                consolidated_fact,
-                source_content="[consolidated from similar facts]",
-                source_type="consolidation",
-                tenant_id=tenant_id,
-            )
-            # Supersede originals (guarded: importance propagation + chain cap)
-            _apply_consolidation_supersession(new_id, result["source_ids"])
-            consolidation_groups += 1
+            if await store_consolidated(group, result["consolidated_text"]):
+                consolidation_groups += 1
         except Exception as e:
             logger.warning("Failed to store consolidated fact: %s", e)
 
@@ -1478,6 +1554,59 @@ async def _run_tenant_core_steps(
         "insights": insight_result,
         "relations_inferred": len(inferred_relations),
     }
+
+
+async def _chat_ttl_step(tenant_ids: list[str]) -> dict[str, int]:
+    """Step 10: prune stale chat turns and the conversation segments copying them.
+
+    Per tenant, inside ``tenant_scope(tenant)``, off the loop. Segments use the
+    same window as the turns (``SEGMENT_RETENTION_DAYS`` is no longer than
+    ``CHAT_TURN_TTL_DAYS``), so a verbatim copy never outlives what it copied.
+    Each half is best-effort per tenant: a failure stops neither the other
+    half nor the next tenant.
+    """
+    from robothor.engine import chat_store
+    from robothor.memory import segments
+
+    stats = {"chat_pruned": 0, "segments_pruned": 0}
+    for tid in tenant_ids:
+        try:
+            with tenant_scope(tid):
+                stats["chat_pruned"] += await asyncio.to_thread(
+                    chat_store.cleanup_stale_chat_turns, chat_store.CHAT_TURN_TTL_DAYS, tid
+                )
+        except Exception as e:
+            logger.warning("Chat turn TTL failed for tenant %s: %s", tid, e)
+        try:
+            with tenant_scope(tid):
+                stats["segments_pruned"] += await asyncio.to_thread(
+                    segments.cleanup_stale_segments, segments.SEGMENT_RETENTION_DAYS, tid
+                )
+        except Exception as e:
+            logger.warning("Conversation segment TTL failed for tenant %s: %s", tid, e)
+    return stats
+
+
+async def sync_crm_identity(tenant_ids: list[str]) -> dict[str, int]:
+    """Keep every tenant's CRM people and companies linked to their memory nodes.
+
+    The CRM DAL keeps the link current on each write; this nightly pass catches
+    what bypassed the DAL (imports, direct SQL) and any hook that failed. Each
+    tenant runs inside ``tenant_scope(tenant)``; one failing does not stop the
+    others.
+    """
+    from robothor.memory import identity
+
+    done = failed = 0
+    for tid in tenant_ids:
+        try:
+            with tenant_scope(tid):
+                await asyncio.to_thread(identity.sync_crm_entities, tid)
+            done += 1
+        except Exception as e:
+            failed += 1
+            logger.warning("CRM identity sync failed for tenant %s: %s", tid, e)
+    return {"tenants": done, "failed": failed}
 
 
 async def run_lifecycle_maintenance() -> dict[str, Any]:
@@ -1611,21 +1740,16 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         step_timings["preferences"],
     )
 
-    # Step 10: Chat turn TTL — delete old un-pinned, un-referenced chat turns.
+    # Step 10: Chat turn TTL — delete old un-pinned, un-referenced chat turns,
+    # and the conversation segments that copy them.
     t8 = time.monotonic()
-    chat_pruned = 0
-    try:
-        from robothor.engine.chat_store import cleanup_stale_chat_turns
-
-        for tid in tenant_ids:
-            with tenant_scope(tid):
-                chat_pruned += await asyncio.to_thread(cleanup_stale_chat_turns, 90, tid)
-    except Exception as e:
-        logger.warning("Chat turn TTL failed: %s", e)
+    ttl_stats = await _chat_ttl_step(tenant_ids)
+    chat_pruned = ttl_stats["chat_pruned"]
     step_timings["chat_ttl"] = time.monotonic() - t8
     logger.info(
-        "Step 10 (chat_ttl): %d pruned (%.1fs)",
+        "Step 10 (chat_ttl): %d pruned, %d segments pruned (%.1fs)",
         chat_pruned,
+        ttl_stats["segments_pruned"],
         step_timings["chat_ttl"],
     )
 
@@ -1697,6 +1821,13 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
             step_timings["intent_inference"],
         )
 
+    # Step 14: CRM-anchored identity — every CRM person and company keeps one
+    # linked memory node, whatever wrote the CRM row.
+    t12 = time.monotonic()
+    identity_stats = await sync_crm_identity(tenant_ids)
+    step_timings["crm_identity"] = time.monotonic() - t12
+    logger.info("Step 14 (crm identity): %s (%.1fs)", identity_stats, step_timings["crm_identity"])
+
     total_time = time.monotonic() - t0
     logger.info("Lifecycle maintenance complete in %.1fs: %s", total_time, step_timings)
 
@@ -1713,10 +1844,12 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         "episodes": episode_stats,
         "preferences": preference_stats,
         "chat_turns_pruned": chat_pruned,
+        "segments_pruned": ttl_stats["segments_pruned"],
         "breadcrumbs": breadcrumb_stats,
         "access_log_pruned": access_log_pruned,
         "insights": insight_result,
         "relations_inferred": core["relations_inferred"],
         "intents_proposed": intents_proposed,
+        "crm_identity": identity_stats,
         "step_timings": step_timings,
     }

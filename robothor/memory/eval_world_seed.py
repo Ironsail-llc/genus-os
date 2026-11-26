@@ -75,6 +75,18 @@ WORLD_TABLES: tuple[str, ...] = (
     "crm_tenants",
 )
 
+#: Tables of the graph schema and conversation segments. They hold rows for an
+#: eval tenant whenever they exist: CRM seeding fires identity hooks (entities
+#: and resolution decisions), segments index the seeded chat history, and the
+#: write path records mentions and evidence. Counted and cleaned only where the
+#: schema has them.
+OPTIONAL_WORLD_TABLES: tuple[str, ...] = (
+    "memory_relation_evidence",
+    "memory_mentions",
+    "memory_resolution_decisions",
+    "memory_segments",
+)
+
 #: Strata scored by "the current value ranks first" rather than "in top-k".
 _RANK_FIRST = frozenset({"knowledge_update", "long_tenure"})
 #: Strata retrieval alone cannot score; the answer-and-judge arm does.
@@ -134,6 +146,9 @@ class SeededWorld:
     turn_message_ids: dict[str, int] = field(default_factory=dict)
     #: Database time just before the post-seed ANALYZE.
     seeded_at: datetime | None = None
+    #: The CRM person who owns the primary tenant's world conversations: the
+    #: reader the scored searches run as (see :func:`_seed_graph_and_segments`).
+    reader_person_id: str | None = None
 
 
 async def _default_embed_batch(texts: list[str]) -> list[list[float]]:
@@ -184,6 +199,9 @@ async def seed_world(
             _seed_crm(w, tenant, seeded)
             await _seed_documents(w, tenant, embed, seeded)
             await _seed_chat(w, tenant, embed, seeded)
+            reader = await _seed_graph_and_segments(w, tenant, embed, seeded)
+            if tenant == tenant_id:
+                seeded.reader_person_id = reader
     seeded.seeded_at = _analyze_seeded_tables()
     logger.info(
         "eval world seeded: %d facts, %d entities, %d crm people, %d documents, %d chat sessions",
@@ -218,8 +236,11 @@ def _analyze_seeded_tables() -> datetime:
         cur = conn.cursor()
         cur.execute("SELECT clock_timestamp()")
         started: datetime = cur.fetchone()[0]
-        for table in ANALYZED_TABLES:
-            cur.execute(f"ANALYZE {table}")  # fixed names from ANALYZED_TABLES
+        # The graph and segment tables too, where this schema has them: the
+        # graph walk (``memory_activate``) plans badly on tables autovacuum has
+        # not analysed yet, and a search right after seeding took seconds.
+        for table in (*ANALYZED_TABLES, *_present_optional_tables(cur)):
+            cur.execute(f"ANALYZE {table}")  # fixed names from the two tuples
     return started
 
 
@@ -450,6 +471,103 @@ async def _seed_chat(world: World, tenant: str, embed: EmbedBatch, seeded: Seede
             )
 
 
+#: Window for indexing the world's back-dated conversations into segments.
+_WORLD_RETENTION_DAYS = 36500
+
+
+async def _seed_graph_and_segments(
+    world: World, tenant: str, embed: EmbedBatch, seeded: SeededWorld
+) -> str | None:
+    """Fill the rows the graph and segment recall legs read, where the schema has them.
+
+    * ``memory_facts.origin``: the world fact's origin;
+    * ``memory_mentions``: one per world mention, to the seeded entity;
+    * ``memory_relation_evidence``: each seeded edge's supporting fact;
+    * ``memory_segments``: the world's conversations, indexed with ``embed``
+      and owned by one eval reader person (a world conversation is the
+      reader's own chat, so a search as that reader may recall it).
+
+    No model call. Returns the reader's CRM person id, or None when the schema
+    has no segments table.
+    """
+    from robothor.db.connection import get_connection
+
+    reader: str | None = None
+    with get_connection() as conn:
+        cur = conn.cursor()
+        present = set(_present_optional_tables(cur))
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'memory_facts' AND column_name = 'origin'"
+        )
+        if cur.fetchone() is not None:
+            cur.execute(
+                "UPDATE memory_facts f SET origin = v.origin FROM unnest(%s::int[], %s::text[]) "
+                "AS v(id, origin) WHERE f.id = v.id AND f.tenant_id = %s",
+                (
+                    [seeded.fact_ids[f.id] for f in world.facts],
+                    [f.origin for f in world.facts],
+                    tenant,
+                ),
+            )
+        if "memory_mentions" in present:
+            rows = [
+                (
+                    seeded.fact_ids[f.id],
+                    seeded.entity_ids[m.entity_id],
+                    m.surface,
+                    _ENTITY_TYPES.get(m.entity_id.removeprefix("sh-").split("-", 1)[0], "event"),
+                )
+                for f in world.facts
+                for m in f.mentions
+                if m.entity_id in seeded.entity_ids
+            ]
+            cur.execute(
+                "INSERT INTO memory_mentions (tenant_id, fact_id, entity_id, surface_form, "
+                "entity_type) SELECT %s, fid, eid, sf, et "
+                "FROM unnest(%s::int[], %s::int[], %s::text[], %s::text[]) AS v(fid, eid, sf, et) "
+                "ON CONFLICT DO NOTHING",
+                (
+                    tenant,
+                    [r[0] for r in rows],
+                    [r[1] for r in rows],
+                    [r[2] for r in rows],
+                    [r[3] for r in rows],
+                ),
+            )
+        if "memory_relation_evidence" in present:
+            cur.execute(
+                "INSERT INTO memory_relation_evidence (tenant_id, relation_id, fact_id) "
+                "SELECT tenant_id, id, fact_id FROM memory_relations "
+                "WHERE tenant_id = %s AND fact_id IS NOT NULL ON CONFLICT DO NOTHING",
+                (tenant,),
+            )
+        if "memory_segments" in present and seeded.chat_session_keys:
+            cur.execute(
+                "INSERT INTO crm_people (tenant_id, first_name, last_name) "
+                "VALUES (%s, 'Eval', 'Reader') RETURNING id::text",
+                (tenant,),
+            )
+            reader = str(cur.fetchone()[0])
+            cur.execute(
+                "UPDATE chat_sessions SET person_id = %s::uuid "
+                "WHERE tenant_id = %s AND session_key = ANY(%s)",
+                (reader, tenant, list(seeded.chat_session_keys)),
+            )
+    if reader is not None:
+        from robothor.memory import segments
+
+        async def _embed(texts: list[str]) -> list[list[float] | None]:
+            return list(await embed(texts))
+
+        for key in seeded.chat_session_keys:
+            # World turns carry the world's clock, years back: read them all.
+            await segments.index_conversation(
+                key, tenant_id=tenant, embed_batch=_embed, retention_days=_WORLD_RETENTION_DAYS
+            )
+    return reader
+
+
 # --------------------------------------------------------------------------- #
 # Counting and cleanup
 # --------------------------------------------------------------------------- #
@@ -465,6 +583,10 @@ _COUNT_SQL: dict[str, str] = {
 # Children before parents: relations reference facts and entities, messages
 # reference sessions, chunks reference documents, people reference companies.
 _DELETE_ORDER: tuple[tuple[str, str], ...] = (
+    ("memory_relation_evidence", "DELETE FROM memory_relation_evidence WHERE tenant_id = %s"),
+    ("memory_mentions", "DELETE FROM memory_mentions WHERE tenant_id = %s"),
+    ("memory_resolution_decisions", "DELETE FROM memory_resolution_decisions WHERE tenant_id = %s"),
+    ("memory_segments", "DELETE FROM memory_segments WHERE tenant_id = %s"),
     ("memory_relations", "DELETE FROM memory_relations WHERE tenant_id = %s"),
     ("memory_facts", "DELETE FROM memory_facts WHERE tenant_id = %s"),
     ("memory_entities", "DELETE FROM memory_entities WHERE tenant_id = %s"),
@@ -482,8 +604,17 @@ _DELETE_ORDER: tuple[tuple[str, str], ...] = (
 )
 
 
+def _present_optional_tables(cur: Any) -> tuple[str, ...]:
+    cur.execute(
+        "SELECT c FROM unnest(%s::text[]) c WHERE to_regclass(c) IS NOT NULL",
+        (list(OPTIONAL_WORLD_TABLES),),
+    )
+    present = {r[0] for r in cur.fetchall()}
+    return tuple(t for t in OPTIONAL_WORLD_TABLES if t in present)
+
+
 def world_row_counts(tenant_ids: Sequence[str]) -> dict[str, int]:
-    """Rows each of ``WORLD_TABLES`` holds for the given eval tenants."""
+    """Rows each of ``WORLD_TABLES`` (and each present optional table) holds."""
     tenants = _require_eval_tenants(tenant_ids)
     from robothor.db.connection import get_connection, tenant_scope
 
@@ -491,7 +622,8 @@ def world_row_counts(tenant_ids: Sequence[str]) -> dict[str, int]:
     for tenant in tenants:
         with tenant_scope(tenant), get_connection() as conn:
             cur = conn.cursor()
-            for table in WORLD_TABLES:
+            for table in (*WORLD_TABLES, *_present_optional_tables(cur)):
+                counts.setdefault(table, 0)
                 sql = _COUNT_SQL.get(table, f"SELECT count(*) FROM {table} WHERE tenant_id = %s")  # noqa: S608 — fixed table names
                 cur.execute(sql, (tenant,))
                 counts[table] += int(cur.fetchone()[0])
@@ -513,9 +645,13 @@ def cleanup_world(tenant_ids: Sequence[str]) -> dict[str, int]:
     for tenant in tenants:
         with tenant_scope(tenant), get_connection() as conn:
             cur = conn.cursor()
+            optional = set(OPTIONAL_WORLD_TABLES)
+            present = set(_present_optional_tables(cur))
             for table, sql in _DELETE_ORDER:
+                if table in optional and table not in present:
+                    continue
                 cur.execute(sql, (tenant,))
-                deleted[table] += max(cur.rowcount, 0)
+                deleted[table] = deleted.get(table, 0) + max(cur.rowcount, 0)
             cur.execute("SAVEPOINT eval_world_tenant")
             try:
                 cur.execute("DELETE FROM crm_tenants WHERE id = %s", (tenant,))
@@ -624,14 +760,25 @@ async def run_world(
     cleanup: bool = True,
     embed_batch: EmbedBatch | None = None,
     k: int = 5,
+    include_segments: bool = True,
+    include_graph: bool | None = None,
 ) -> dict[str, Any]:
-    """Seed the world once, score its cases through ``search_facts``, clean up."""
+    """Seed the world once, score its cases through ``search_facts``, clean up.
+
+    Searches run as the world's eval reader, so its conversation segments are
+    recallable. ``include_segments`` / ``include_graph`` switch those legs off
+    for an ON/OFF comparison; a ``search_facts`` without them ignores them.
+    """
     shadow = shadow_tenant_for(tenant_id or "")
     _require_eval_tenants([tenant_id, shadow])
+
+    import inspect
 
     from robothor.db.connection import tenant_scope
     from robothor.memory.eval_world import generate_world, world_cases
     from robothor.memory.facts import search_facts
+
+    accepted = set(inspect.signature(search_facts).parameters)
 
     started = time.perf_counter()
     world = generate_world(seed, size)
@@ -643,15 +790,23 @@ async def run_world(
     seed_s = query_s = 0.0
     try:
         t0 = time.perf_counter()
-        await seed_world(world, tenant_id, shadow_tenant_id=shadow, embed_batch=embed_batch)
+        seeded = await seed_world(
+            world, tenant_id, shadow_tenant_id=shadow, embed_batch=embed_batch
+        )
         seed_s = time.perf_counter() - t0
+        options = {
+            "include_segments": include_segments,
+            "include_graph": include_graph,
+            "reader_person_id": seeded.reader_person_id,
+        }
+        extra: dict[str, Any] = {name: value for name, value in options.items() if name in accepted}
         t0 = time.perf_counter()
         for case in cases:
             if case.stratum in _UNSCORED:
                 results.append(None)
                 continue
             with tenant_scope(tenant_id):
-                found = await search_facts(case.question, limit=k, tenant_id=tenant_id)
+                found = await search_facts(case.question, limit=k, tenant_id=tenant_id, **extra)
             results.append(score_world_case(case, [r.get("fact_text", "") for r in found], k))
         query_s = time.perf_counter() - t0
     finally:
@@ -665,5 +820,12 @@ async def run_world(
     return build_world_report(
         cases,
         results,
-        meta={"seed": seed, "size": size, "split": split, "k": k, "timings": timings},
+        meta={
+            "seed": seed,
+            "size": size,
+            "split": split,
+            "k": k,
+            "timings": timings,
+            "legs": {"segments": include_segments, "graph": include_graph},
+        },
     )

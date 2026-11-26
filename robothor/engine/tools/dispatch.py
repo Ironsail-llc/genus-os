@@ -13,11 +13,13 @@ import httpx
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.capability_tier import current_run_tier
+from robothor.engine.private_recall import current_private_reader
 from robothor.engine.tools.response_failure import http_status_failure, tool_response_failure
 from robothor.engine.wrapped_call import MalformedToolCallError
 
 if TYPE_CHECKING:
     from robothor.config import Config
+    from robothor.engine.private_recall import PrivateReader
     from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
@@ -240,6 +242,11 @@ class ToolContext:
     # user_role, trigger and identity. Read from the run's published toolset
     # (capability_tier.current_run_tier) when the call is dispatched.
     capability_tier: str = ""
+    # The person this run serves in their own one-to-one conversation
+    # (robothor/engine/private_recall.py), or None. The only key to a private
+    # conversation segment: the run's principal (``user_id``) is not one, since
+    # an unattended or workspace run can execute as a member.
+    private_reader: PrivateReader | None = None
     # The run's trace id, "" outside a traced run. Carried so a call made on
     # the caller's behalf (``tool_call``) names the same trace on its log line.
     trace_id: str = ""
@@ -742,6 +749,7 @@ async def _execute_tool(
     is_benchmark: bool = False,
     identity: IdentityContext | None = None,
     capability_tier: str = "",
+    private_reader: PrivateReader | None = None,
     trace_id: str = "",
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
@@ -769,6 +777,9 @@ async def _execute_tool(
         identity=identity,
         # An explicit tier is a caller's (tool_call's call_kwargs); else the run's.
         capability_tier=capability_tier or current_run_tier(),
+        # An explicit reader is a caller's (tool_call's call_kwargs); else the
+        # one the run's tool turn published (robothor/engine/private_recall.py).
+        private_reader=private_reader if private_reader is not None else current_private_reader(),
         trace_id=trace_id,
     )
     # ── A `tenant` argument: may this call act in that tenant? ──

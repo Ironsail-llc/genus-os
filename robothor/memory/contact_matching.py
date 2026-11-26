@@ -78,6 +78,23 @@ def _canonical(part: str) -> str:
     return NICKNAMES.get(part, part)
 
 
+def first_name_variants(name: str) -> frozenset[str]:
+    """Every form of a first name the nickname table links it to, itself included.
+
+    ``"bob"`` and ``"robert"`` both give ``{"bob", "rob", "robert"}``; a name the
+    table does not know gives just itself. Lowercased. Used by the identity
+    resolver to find nickname-variant candidates ("Bob Rivera" for "Robert
+    Rivera"); a variant is a reason to look for supporting context, never a
+    reason to merge on its own.
+    """
+    part = normalize_name(name)
+    if not part:
+        return frozenset()
+    canonical = _canonical(part)
+    nicks = {nick for nick, canon in NICKNAMES.items() if canon == canonical}
+    return frozenset({part, canonical, *nicks})
+
+
 def name_similarity(name_a: str, name_b: str) -> float:
     """Multi-signal name similarity scoring (0.0-1.0).
 
@@ -162,6 +179,11 @@ def find_best_match(
     owner_nicknames: frozenset[str] | set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Find the best matching candidate above threshold.
+
+    Not an identity decision. A bare first name scores 0.8 against any full
+    name that contains it — above the default threshold — so this must never
+    drive an automatic merge; ``robothor.memory.identity`` owns that, and it
+    never merges on a single token.
 
     Args:
         name: The name to match.
