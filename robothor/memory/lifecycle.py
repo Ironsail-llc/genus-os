@@ -290,6 +290,8 @@ async def find_consolidation_candidates(
     Returns:
         List of groups, where each group is a list of fact dicts. An
         operator-confirmed fact is never in one: consolidation would retire it.
+        Every fact of a group has the same tenant and the same scope: a
+        consolidated row is never derived across tenants or across readers.
     """
     unconsolidated_filter = "AND consolidated_at IS NULL" if unconsolidated_only else ""
     # WS-2: never feed a consolidation output back into consolidation — that is
@@ -303,7 +305,8 @@ async def find_consolidation_candidates(
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             f"""
-            SELECT id, fact_text, category, entities, embedding
+            SELECT id, fact_text, category, entities, embedding, tenant_id, origin,
+                   scope_kind, scope_id
             FROM memory_facts
             WHERE is_active = TRUE AND embedding IS NOT NULL
               AND {NOT_OPERATOR_CONFIRMED_SQL}
@@ -333,18 +336,29 @@ async def find_consolidation_candidates(
             apply_hnsw_session(cur)
             cur.execute(
                 f"""
-                SELECT id, fact_text, category, entities,
+                SELECT id, fact_text, category, entities, tenant_id, origin,
+                       scope_kind, scope_id,
                        1 - (embedding <=> %s::vector) as similarity
                 FROM memory_facts
                 WHERE is_active = TRUE
                   AND embedding IS NOT NULL
                   AND id != %s
+                  AND tenant_id = %s
+                  AND scope_kind = %s
+                  AND scope_id IS NOT DISTINCT FROM %s
                   AND {NOT_OPERATOR_CONFIRMED_SQL}
                   {consolidation_filter}
                 ORDER BY embedding <=> %s::vector
                 LIMIT 10
                 """,
-                (fact["embedding"], fact["id"], fact["embedding"]),
+                (
+                    fact["embedding"],
+                    fact["id"],
+                    fact.get("tenant_id"),
+                    fact.get("scope_kind") or "shared",
+                    fact.get("scope_id"),
+                    fact["embedding"],
+                ),
             )
 
             for similar in cur.fetchall():
@@ -357,6 +371,39 @@ async def find_consolidation_candidates(
             groups.append(group)
 
     return groups
+
+
+async def store_consolidated(group: list[dict[str, Any]], text: str) -> int:
+    """Store the consolidation of ``group`` through the write path and retire the group.
+
+    The new fact takes the group's tenant and scope (every member shares them,
+    see :func:`find_consolidation_candidates`; a mixed group is refused) and the
+    LEAST trusted origin among the members, so consolidating an email with what
+    a person said does not launder the email. It inherits the members' mentions
+    and becomes evidence of every edge they supported; once the members are
+    superseded, those edges' origins are recomputed from what still supports
+    them. Returns the new fact's id, or 0 when nothing was stored.
+    """
+    from robothor.memory.write_path import recompute_derived_edges, write_derived_fact
+
+    consolidated_fact = {
+        "fact_text": text,
+        "category": group[0].get("category", "personal"),
+        "entities": list({e for f in group for e in (f.get("entities") or [])}),
+        "confidence": 0.9,
+    }
+    new_id, edges = await write_derived_fact(
+        consolidated_fact,
+        group,
+        source_content="[consolidated from similar facts]",
+        source_type="consolidation",
+    )
+    if not new_id:
+        return 0
+    # Supersede originals (guarded: importance propagation + chain cap)
+    _apply_consolidation_supersession(new_id, [int(f["id"]) for f in group])
+    await recompute_derived_edges(group[0].get("tenant_id") or "", edges)
+    return new_id
 
 
 async def consolidate_facts(fact_group: list[dict[str, Any]]) -> dict[str, Any]:
@@ -525,21 +572,11 @@ async def run_intraday_consolidation(threshold: int = 5) -> dict[str, Any]:
         )
         for group in groups:
             result = await consolidate_facts(group)
-            if result and result.get("consolidated_text"):
-                from robothor.memory.facts import store_fact
-
-                consolidated_fact = {
-                    "fact_text": result["consolidated_text"],
-                    "category": group[0].get("category", "personal"),
-                    "entities": list({e for f in group for e in (f.get("entities") or [])}),
-                    "confidence": 0.9,
-                }
-                new_id = await store_fact(
-                    consolidated_fact,
-                    source_content="[intra-day consolidation]",
-                    source_type="consolidation",
-                )
-                _apply_consolidation_supersession(new_id, result["source_ids"])
+            if (
+                result
+                and result.get("consolidated_text")
+                and await store_consolidated(group, result["consolidated_text"])
+            ):
                 consolidation_groups += 1
     except Exception as e:
         logger.warning("Intra-day consolidation failed: %s", e)
@@ -1100,6 +1137,26 @@ async def _run_decay_step() -> int:
     return result["updated"]
 
 
+async def sync_crm_identity(tenant_ids: list[str]) -> dict[str, int]:
+    """Keep every tenant's CRM people and companies linked to their memory nodes.
+
+    The CRM DAL keeps the link current on each write; this nightly pass catches
+    what bypassed the DAL (imports, direct SQL) and any hook that failed. One
+    tenant failing does not stop the others.
+    """
+    from robothor.memory import identity
+
+    done = failed = 0
+    for tid in tenant_ids:
+        try:
+            await asyncio.to_thread(identity.sync_crm_entities, tid)
+            done += 1
+        except Exception as e:
+            failed += 1
+            logger.warning("CRM identity sync failed for tenant %s: %s", tid, e)
+    return {"tenants": done, "failed": failed}
+
+
 async def run_lifecycle_maintenance() -> dict[str, Any]:
     """Run full lifecycle maintenance on the fact store.
 
@@ -1257,22 +1314,8 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
     # Phase B: Store consolidated facts (needs embeddings)
     for result, group in pending_consolidations:
         try:
-            from robothor.memory.facts import store_fact
-
-            consolidated_fact = {
-                "fact_text": result["consolidated_text"],
-                "category": group[0].get("category", "personal"),
-                "entities": list({e for f in group for e in (f.get("entities") or [])}),
-                "confidence": 0.9,
-            }
-            new_id = await store_fact(
-                consolidated_fact,
-                source_content="[consolidated from similar facts]",
-                source_type="consolidation",
-            )
-            # Supersede originals (guarded: importance propagation + chain cap)
-            _apply_consolidation_supersession(new_id, result["source_ids"])
-            consolidation_groups += 1
+            if await store_consolidated(group, result["consolidated_text"]):
+                consolidation_groups += 1
         except Exception as e:
             logger.warning("Failed to store consolidated fact: %s", e)
 
@@ -1472,6 +1515,13 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
             step_timings["intent_inference"],
         )
 
+    # Step 14: CRM-anchored identity — every CRM person and company keeps one
+    # linked memory node, whatever wrote the CRM row.
+    t12 = time.monotonic()
+    identity_stats = await sync_crm_identity(tenant_ids)
+    step_timings["crm_identity"] = time.monotonic() - t12
+    logger.info("Step 14 (crm identity): %s (%.1fs)", identity_stats, step_timings["crm_identity"])
+
     total_time = time.monotonic() - t0
     logger.info("Lifecycle maintenance complete in %.1fs: %s", total_time, step_timings)
 
@@ -1493,5 +1543,6 @@ async def run_lifecycle_maintenance() -> dict[str, Any]:
         "insights": insight_result,
         "relations_inferred": len(inferred_relations),
         "intents_proposed": intents_proposed,
+        "crm_identity": identity_stats,
         "step_timings": step_timings,
     }

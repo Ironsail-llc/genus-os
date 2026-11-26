@@ -31,23 +31,29 @@ _CONSTANT_VECTOR = [0.1] * 1024
 
 @pytest.fixture
 def _stub_llm(monkeypatch):
-    """Stub only the LLM boundary: extraction and embeddings.
+    """Stub only the LLM boundary: extraction, generation and embeddings.
 
-    Both are external services, not the control under test. The control is
+    All are external services, not the control under test. The control is
     which tenant the row is written to, and no amount of stubbing here can
     make a wrong tenant look right — the assertion reads the database.
-    """
-    from robothor.memory import ingestion
 
-    async def _fake_extract(_content: str, **_kw):
-        return [
-            {
-                "fact_text": "the northern depot runs on a fortnightly schedule",
-                "category": "project",
-                "entities": [],
-                "confidence": 0.9,
-            }
-        ]
+    Extraction is stubbed where the write path calls it
+    (``facts.extract_facts_detailed``), so no model is reached.
+    """
+    from robothor.memory import facts as facts_mod
+    from robothor.memory import generation
+
+    async def _fake_extract(_content: str, *_a, **_kw):
+        return facts_mod.Extraction(
+            [
+                {
+                    "fact_text": "the northern depot runs on a fortnightly schedule",
+                    "category": "project",
+                    "entities": [],
+                    "confidence": 0.9,
+                }
+            ]
+        )
 
     async def _fake_embedding(_text: str):
         return list(_CONSTANT_VECTOR)
@@ -56,14 +62,14 @@ def _stub_llm(monkeypatch):
         return [list(_CONSTANT_VECTOR) for _ in texts]
 
     async def _fake_generate(*_a, **_kw):
-        # Entity extraction and conflict classification both go through
-        # generate(). Returning an empty entity set keeps the ingest path
-        # short; the tenant assertion does not depend on what comes back.
-        return '{"entities": [], "relations": []}'
+        # Conflict classification goes through generate(); "new" keeps the
+        # ingest path short. The tenant assertion does not depend on it.
+        return '{"classification": "new", "reasoning": "stub"}'
 
     from robothor.llm import ollama as llm_client
 
-    monkeypatch.setattr(ingestion, "extract_facts", _fake_extract)
+    monkeypatch.setattr(facts_mod, "extract_facts_detailed", _fake_extract)
+    monkeypatch.setattr(generation, "generate", _fake_generate)
     monkeypatch.setattr(llm_client, "get_embedding_async", _fake_embedding)
     monkeypatch.setattr(llm_client, "get_embeddings_batch_async", _fake_batch)
     monkeypatch.setattr(llm_client, "generate", _fake_generate)

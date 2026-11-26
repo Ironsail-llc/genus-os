@@ -170,7 +170,8 @@ async def promote_hot_breadcrumbs(
     if not hot:
         return {"promoted": 0}
 
-    from robothor.memory.facts import store_fact
+    from robothor.memory import write_path
+    from robothor.memory.graph_schema import Origin
 
     for bc in hot:
         try:
@@ -190,13 +191,23 @@ async def promote_hot_breadcrumbs(
                 "entities": [],
                 "confidence": 0.7,
             }
-            await store_fact(
-                fact,
+            # Through the one write path: an agent's own note, shared as before,
+            # with the known names it contains as mentions.
+            written = await write_path.write_facts(
+                [fact],
                 source_content=json.dumps(content, default=str)[:1000],
-                source_type="breadcrumb",
-                metadata={"breadcrumb_id": bc["id"], "agent_id": bc["agent_id"]},
-                tenant_id=tid,
+                context=write_path.WriteContext(
+                    tenant_id=tid,
+                    source_channel="",
+                    content_type="breadcrumb",
+                    origin=Origin.AGENT_GENERATED,
+                    metadata={"breadcrumb_id": bc["id"], "agent_id": bc["agent_id"]},
+                ),
+                conflict_check=False,
             )
+            if written.get("facts_failed"):
+                # Not stored: keep the breadcrumb, it is promoted next run.
+                raise write_path.MemoryWriteError("; ".join(written.get("errors") or []))
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute("DELETE FROM agent_breadcrumbs WHERE id = %s", (bc["id"],))
