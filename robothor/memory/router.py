@@ -103,7 +103,7 @@ def _normalize_fact(r: dict[str, Any]) -> dict[str, Any]:
     # A row the graph leg found keeps its labels: who asserted it, the path of
     # entities that reached it, and which legs found it (the shared formatter,
     # ``recall.row_text``, labels a row only the graph found).
-    for key in ("origin", "graph_hops", "graph_path", "leg_ranks"):
+    for key in ("origin", "graph_hops", "graph_path", "leg_ranks", "budget_tail"):
         if key in r:
             row[key] = r[key]
     return row
@@ -249,11 +249,16 @@ async def recall(
 
     fused = rrf_fuse(ranked_lists)
 
-    # Temporal queries want the newest matching fact first.
+    # Temporal queries want the newest matching fact first, within the head:
+    # the budget fill's tail rows (unscored, ``budget_tail``) stay behind it in
+    # their fused order, so a newer tail row never pushes the head out.
     if cls == "temporal":
-        fused.sort(
+        head = [r for r in fused if not r.get("budget_tail")]
+        tail = [r for r in fused if r.get("budget_tail")]
+        head.sort(
             key=lambda r: (r.get("created_at") is not None, r.get("created_at")), reverse=True
         )
+        fused = head + tail
 
     # Budget cap: the one packing rule (recall.pack_within), then the limit.
     from robothor.memory.recall import pack_within, row_chars

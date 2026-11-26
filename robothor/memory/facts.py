@@ -1720,6 +1720,9 @@ def _fill_from_pool(
         if _dedup_enabled() and len(_dedupe([*out, row])) == len(out):
             continue
         seen.add(key)
+        # Marked so a later re-sort (the routed path's recency order) keeps it
+        # behind the head.
+        row["budget_tail"] = True
         out.append(row)
     return out
 
