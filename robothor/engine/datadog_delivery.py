@@ -153,16 +153,41 @@ async def send_alert(
     delivery: dict[str, Any] = {"level": level, "route": route, "alert_id": alert_id}
     if alerts._suppressed(alert_id):
         return {"mode": SUPPRESSED, "delivery": {**delivery, "reason": "cooldown"}}
+    error = "not_delivered"
     try:
         sent = await alerts.alert(
             level, title, body, alert_id=alert_id, kind=kind, metadata=metadata
         )
     except Exception as exc:  # noqa: BLE001 - a failed send is recorded, never raised
         logger.warning("Datadog delivery of %s raised (%s)", alert_id, type(exc).__name__)
-        return {"mode": FAILED, "delivery": {**delivery, "error": type(exc).__name__}}
-    if not sent:
-        return {"mode": FAILED, "delivery": {**delivery, "error": "not_delivered"}}
-    return {"mode": DELIVERED, "delivery": delivery}
+        sent, error = False, type(exc).__name__
+    if sent:
+        return {"mode": DELIVERED, "delivery": delivery}
+    if route == "digest" and await _fall_back(level, title, body, alert_id):
+        return {
+            "mode": DELIVERED,
+            "delivery": {**delivery, "route": "page", "fallback_from": "digest"},
+        }
+    return {"mode": FAILED, "delivery": {**delivery, "error": error}}
+
+
+async def _fall_back(level: str, title: str, body: str, alert_id: str) -> bool:
+    """The digest could not be written: try the alert channels a page uses. Never raises.
+
+    The page route (Telegram, then each ``ROBOTHOR_ALERT_FALLBACK_CHANNELS``
+    channel, then the alert webhook) already falls back on its own, so only
+    a digest send comes here.
+    """
+    from robothor.engine import alerts
+
+    try:
+        delivered = await alerts._page(level, title, body, alert_id)
+    except Exception as exc:  # noqa: BLE001 - recorded as a failed delivery
+        logger.warning("Datadog fallback for %s raised (%s)", alert_id, type(exc).__name__)
+        return False
+    if delivered:
+        logger.warning("Datadog alert %s: the digest failed; sent on the alert channels", alert_id)
+    return bool(delivered)
 
 
 # ── the stream handler ──────────────────────────────────────────────
@@ -192,7 +217,7 @@ async def handle_stream_event(
     sending twice. Raises only when the alert could not be recorded, so the
     event goes to the stream's DLQ.
     """
-    from robothor.integrations.datadog.alerts import handle_alert_event
+    from robothor.integrations.datadog.alerts import LOOKUP_FAILED, handle_alert_event
 
     raw = decoded.get("payload", "")
     try:
@@ -218,6 +243,12 @@ async def handle_stream_event(
             # Routed again from the alert's own tags, whatever the envelope
             # says: an org-tagged alert for this very tenant, or (on the root
             # engine only) one with no usable org tag, which is the root's.
+            if routing == f"{LOOKUP_FAILED}{own}":
+                # The tag names this tenant and the root read it when it
+                # handed off; only this engine's read failed. Delivered and
+                # recorded here, never dropped.
+                outcome = await _deliver_here(alert, own, title, redis_client, hooks, message_id)
+                return {**outcome, "tenant": own}
             if tenant != own or not (routing == "org" or root):
                 return {"mode": "refused"}
             return await _deliver_here(alert, own, title, redis_client, hooks, message_id)

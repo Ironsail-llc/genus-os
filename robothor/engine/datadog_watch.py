@@ -880,6 +880,8 @@ class DatadogWatch:
         again (same alert id) by each pass that still sees the condition,
         until it is delivered or the condition ends.
         """
+        from robothor.integrations.datadog.alerts import outcome_reason
+
         target = target or details.get("service") or None
         outcome = await self._deliver(tenant, kind, brief, details)
         mode = outcome["mode"]
@@ -893,6 +895,7 @@ class DatadogWatch:
             "kind": kind,
             **details,
             "mode": mode,
+            **outcome_reason(outcome),
             "delivery": outcome["delivery"],
             # Kept from the records before delivery, for their readers.
             "would_notify": _would_notify(tenant),
