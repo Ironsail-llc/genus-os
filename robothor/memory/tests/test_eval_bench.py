@@ -12,6 +12,7 @@ import hashlib
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -38,8 +39,8 @@ def _turn(role: str, text: str, at: datetime) -> bd.BenchTurn:
 
 
 def _history(hid: str = "h1") -> bd.BenchHistory:
-    t0 = datetime(2023, 5, 20, 2, 21)
-    t1 = datetime(2023, 6, 1, 9, 0)
+    t0 = datetime(2023, 5, 20, 2, 21, tzinfo=UTC)
+    t1 = datetime(2023, 6, 1, 9, 0, tzinfo=UTC)
     s0 = bd.BenchSession(
         "s0",
         t0,
@@ -103,7 +104,9 @@ class TestTenantGuard:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("tenant", [DEFAULT_TENANT, "", EVAL_TENANT])
-    async def test_ingest_refuses_a_non_eval_tenant_before_touching_the_db(self, monkeypatch, tenant):
+    async def test_ingest_refuses_a_non_eval_tenant_before_touching_the_db(
+        self, monkeypatch, tenant
+    ):
         _forbid_db(monkeypatch)
         with pytest.raises(EvalPreconditionError):
             await eb.ingest_history(_history(), tenant, embed_batch=fake_embed_batch)
@@ -134,7 +137,9 @@ class TestTenantGuard:
         from robothor.memory import eval_world_seed as seed
 
         world_calls: list[list[str]] = []
-        monkeypatch.setattr(seed, "cleanup_world", lambda t: world_calls.append(list(t)) or {"memory_facts": 2})
+        monkeypatch.setattr(
+            seed, "cleanup_world", lambda t: world_calls.append(list(t)) or {"memory_facts": 2}
+        )
         extra_sql: list[str] = []
 
         class _Cur:
@@ -170,7 +175,7 @@ class TestTenantGuard:
 
 class TestExchanges:
     def test_user_assistant_pairs_and_lone_turns(self):
-        t = datetime(2023, 1, 1)
+        t = datetime(2023, 1, 1, tzinfo=UTC)
         turns = (
             _turn("assistant", "Hello, how can I help?", t),
             _turn("user", "Tea?", t),
@@ -189,7 +194,7 @@ class TestExchanges:
     def test_extraction_windows_follow_the_product_transcript_cap(self):
         from robothor.memory.conversation_ingest import MAX_TRANSCRIPT_MESSAGES
 
-        t = datetime(2023, 1, 1)
+        t = datetime(2023, 1, 1, tzinfo=UTC)
         turns = tuple(_turn("user" if i % 2 == 0 else "assistant", f"m{i}", t) for i in range(45))
         windows = eb.transcript_windows(turns)
         assert [len(w) for w in windows] == [MAX_TRANSCRIPT_MESSAGES, MAX_TRANSCRIPT_MESSAGES, 5]
@@ -357,13 +362,13 @@ class TestRun:
     async def test_resume_skips_done_questions_without_ingesting_them(self, echo_system, tmp_path):
         progress = str(tmp_path / "p.jsonl")
         log: list[str] = []
-        kwargs: dict[str, Any] = dict(
-            systems=[echo_system],
-            cleanup_fn=lambda _t: {},
-            chat=_FakeChat(),
-            validate_judge=False,
-            progress_path=progress,
-        )
+        kwargs: dict[str, Any] = {
+            "systems": [echo_system],
+            "cleanup_fn": lambda _t: {},
+            "chat": _FakeChat(),
+            "validate_judge": False,
+            "progress_path": progress,
+        }
         await eb.run_benchmark(_bench(1), ingest_fn=_fake_ingest(log), **kwargs)
         assert log == ["ingest h0 " + eb.BENCH_TENANT]
         report = await eb.run_benchmark(_bench(2), ingest_fn=_fake_ingest(log), **kwargs)
@@ -374,18 +379,18 @@ class TestRun:
     @pytest.mark.asyncio
     async def test_a_progress_file_from_other_parameters_is_refused(self, echo_system, tmp_path):
         progress = str(tmp_path / "p.jsonl")
-        base: dict[str, Any] = dict(
-            systems=[echo_system],
-            ingest_fn=_fake_ingest([]),
-            cleanup_fn=lambda _t: {},
-            chat=_FakeChat(),
-            validate_judge=False,
-            progress_path=progress,
-        )
+        base: dict[str, Any] = {
+            "systems": [echo_system],
+            "ingest_fn": _fake_ingest([]),
+            "cleanup_fn": lambda _t: {},
+            "chat": _FakeChat(),
+            "validate_judge": False,
+            "progress_path": progress,
+        }
         await eb.run_benchmark(_bench(1), **base)
         with pytest.raises(ValueError, match="different parameters"):
             await eb.run_benchmark(_bench(1), token_budget=999, **base)
-        header = json.loads(open(progress, encoding="utf-8").readline())
+        header = json.loads(Path(progress).read_text(encoding="utf-8").splitlines()[0])
         assert header["kind"] == "header" and header["benchmark"] == "longmemeval"
 
     def test_markdown_states_models_mode_and_counts(self):
@@ -514,14 +519,14 @@ class TestIngestAndCleanup:
                 "WHERE s.tenant_id = %s ORDER BY m.created_at",
                 (bench_tenant,),
             )
-            stamps = [r[0].astimezone(UTC).replace(tzinfo=None) for r in cur.fetchall()]
+            stamps = [r[0].astimezone(UTC) for r in cur.fetchall()]
             cur.execute(
                 "SELECT min(started_at) FROM memory_segments WHERE tenant_id = %s", (bench_tenant,)
             )
             first_segment = cur.fetchone()[0]
         expected = sorted(t.at for s in history.sessions for t in s.turns)
         assert stamps == expected
-        assert first_segment is not None and first_segment.astimezone(UTC).replace(tzinfo=None) == expected[0]
+        assert first_segment is not None and first_segment.astimezone(UTC) == expected[0]
         assert _rows_by_tenant_table(bench_tenant)
         # Every turn has a date for the answer prompt.
         assert len(result.turn_dates) == 4
@@ -572,7 +577,9 @@ class TestIngestAndCleanup:
                 (bench_tenant, "%Business Administration%"),
             )
             created, valid_from = cur.fetchone()
-        assert created.astimezone(UTC).replace(tzinfo=None) == datetime(2023, 5, 20, 2, 21)
-        assert valid_from is None or valid_from.astimezone(UTC).replace(tzinfo=None) == datetime(2023, 5, 20, 2, 21)
+        assert created.astimezone(UTC) == datetime(2023, 5, 20, 2, 21, tzinfo=UTC)
+        assert valid_from is None or valid_from.astimezone(UTC) == datetime(
+            2023, 5, 20, 2, 21, tzinfo=UTC
+        )
         eb.cleanup_bench(bench_tenant)
         assert _rows_by_tenant_table(bench_tenant) == {}

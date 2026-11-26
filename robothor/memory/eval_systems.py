@@ -11,6 +11,8 @@ stories add plug in the same way.
 Built in:
 
     recall                  the product path: search_facts, budget filled in rank order
+    recall_today            recall as main serves it: facts only (no segments, no graph
+                            leg), the reranked head only (no budget fill)
     recall_budget           the same ranking as the head, then search_facts' unreranked
                             fused order until the budget is full (equal-budget recall)
     keyword_only            Postgres full-text over the seeded facts; no vectors, no reranker
@@ -235,6 +237,42 @@ class RecallSystem:
         with tenant_scope(tenant):
             rows = await search_facts(case.question, limit=_CANDIDATES, tenant_id=tenant, **extra)
         cands = _fact_candidates(rows, world_handle)
+        return _bundle(self.name, fill_budget(cands, token_budget), token_budget, True, started)
+
+
+class RecallTodaySystem:
+    """Recall as main serves it, for a before/after row on the same data.
+
+    Main has no conversation segments, no graph leg and no budget fill, so it
+    returns the reranked head only. This is the same ``search_facts`` with the
+    segment and graph legs off, keeping only the rows the fill did not add
+    (``budget_tail``). It reads extracted facts only: a store with no facts
+    gives it nothing to return.
+    """
+
+    name = "recall_today"
+    equal_budget = True
+
+    async def retrieve(
+        self, case: Case, *, world_handle: WorldHandle, token_budget: int
+    ) -> ContextBundle:
+        from robothor.db.connection import tenant_scope
+        from robothor.memory.facts import search_facts
+
+        started = time.perf_counter()
+        tenant = world_handle.tenant_id
+        reader = getattr(world_handle.seeded, "reader_person_id", None)
+        with tenant_scope(tenant):
+            rows = await search_facts(
+                case.question,
+                limit=_CANDIDATES,
+                tenant_id=tenant,
+                include_segments=False,
+                include_graph=False,
+                reader_person_id=reader,
+            )
+        head = [r for r in rows if not r.get("budget_tail")]
+        cands = _fact_candidates(head, world_handle)
         return _bundle(self.name, fill_budget(cands, token_budget), token_budget, True, started)
 
 
@@ -488,6 +526,7 @@ def _newest_turns(tenant: str) -> list[tuple[int, str, str, str]]:
 _REGISTRY: dict[str, Callable[[], MemorySystem]] = {
     "recall": RecallSystem,
     "recall_budget": RecallBudgetSystem,
+    "recall_today": RecallTodaySystem,
     "recall_no_segments": lambda: RecallSystem(include_segments=False, name="recall_no_segments"),
     "recall_no_graph": lambda: RecallSystem(include_graph=False, name="recall_no_graph"),
     "recall_with_graph": lambda: RecallSystem(include_graph=True, name="recall_with_graph"),

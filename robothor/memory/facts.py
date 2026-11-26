@@ -17,16 +17,18 @@ Dependencies:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import re
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
     from robothor.identity.scope import DataScope
 
@@ -130,6 +132,25 @@ FACT_EXTRACTION_SCHEMA: dict[str, Any] = {
 }
 
 
+#: The date relative dates are read against, when the content was not written
+#: today. Unset, the extraction prompt uses the wall clock.
+_REFERENCE_DATE: ContextVar[str | None] = ContextVar("extraction_reference_date", default=None)
+
+
+@contextlib.contextmanager
+def extraction_reference_date(date: str) -> Iterator[None]:
+    """Extract as if today were ``date`` (ISO), for back-dated history.
+
+    Only a loader of history recorded on another day sets this (the memory
+    evaluation's public benchmarks); every production path keeps the clock.
+    """
+    token = _REFERENCE_DATE.set(date)
+    try:
+        yield
+    finally:
+        _REFERENCE_DATE.reset(token)
+
+
 def build_extraction_prompt(
     content: str, *, context: str | None = None, reference_date: str | None = None
 ) -> str:
@@ -141,7 +162,7 @@ def build_extraction_prompt(
     """
     from datetime import UTC, datetime
 
-    today = reference_date or datetime.now(UTC).date().isoformat()
+    today = reference_date or _REFERENCE_DATE.get() or datetime.now(UTC).date().isoformat()
     background = ""
     if context and context.strip():
         background = f"""

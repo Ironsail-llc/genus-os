@@ -406,7 +406,12 @@ class TestRecallToday:
             calls.append(kwargs)
             return [
                 {"id": 1, "kind": "fact", "fact_text": "Alice works at Example Co."},
-                {"id": 2, "kind": "fact", "fact_text": "Bob lives in Brelford.", "budget_tail": True},
+                {
+                    "id": 2,
+                    "kind": "fact",
+                    "fact_text": "Bob lives in Brelford.",
+                    "budget_tail": True,
+                },
                 {"id": 3, "kind": "fact", "fact_text": "Alice likes tea."},
             ]
 
@@ -420,7 +425,9 @@ class TestRecallToday:
         (today,) = es.make_systems(["recall_today"])
         assert today.name == "recall_today" and today.equal_budget
         bundle = await today.retrieve(
-            SimpleNamespace(question="Where does Alice work?"), world_handle=handle, token_budget=2048
+            SimpleNamespace(question="Where does Alice work?"),
+            world_handle=handle,
+            token_budget=2048,
         )
         assert [i.id for i in bundle.items] == ["f1", "f3"]
         assert calls and all(

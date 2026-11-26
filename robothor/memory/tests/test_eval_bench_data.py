@@ -8,7 +8,7 @@ evaluation code they reproduce (cited in ``eval_bench_data``).
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -36,7 +36,11 @@ def _lme_entry(qid: str, qtype: str, question: str, answer: str) -> dict:
                 {"role": "assistant", "content": "Green tea is mild."},
             ],
             [
-                {"role": "user", "content": "I graduated in Business Administration.", "has_answer": True},
+                {
+                    "role": "user",
+                    "content": "I graduated in Business Administration.",
+                    "has_answer": True,
+                },
                 {"role": "assistant", "content": "Congratulations, Alice!"},
             ],
         ],
@@ -46,11 +50,20 @@ def _lme_entry(qid: str, qtype: str, question: str, answer: str) -> dict:
 @pytest.fixture
 def lme_path(tmp_path):
     data = [
-        _lme_entry("q1", "single-session-user", "What degree did I graduate with?", "Business Administration"),
-        _lme_entry("q2_abs", "multi-session", "What is my dog's name?", "You did not mention a dog."),
+        _lme_entry(
+            "q1",
+            "single-session-user",
+            "What degree did I graduate with?",
+            "Business Administration",
+        ),
+        _lme_entry(
+            "q2_abs", "multi-session", "What is my dog's name?", "You did not mention a dog."
+        ),
         _lme_entry("q3", "temporal-reasoning", "How many days ago did I graduate?", "10 days"),
         _lme_entry("q4", "knowledge-update", "Where do I live now?", "Brelford"),
-        _lme_entry("q5", "single-session-preference", "Suggest a drink.", "The user would prefer tea."),
+        _lme_entry(
+            "q5", "single-session-preference", "Suggest a drink.", "The user would prefer tea."
+        ),
         _lme_entry("q6", "single-session-assistant", "What tea did you call mild?", "Green tea"),
     ]
     path = tmp_path / "longmemeval_s_cleaned.json"
@@ -83,10 +96,30 @@ def locomo_path(tmp_path):
                 ],
             },
             "qa": [
-                {"question": "When did Alice run?", "answer": "7 May 2023", "evidence": ["D1:1"], "category": 2},
-                {"question": "Where did Bob move?", "answer": "Brelford", "evidence": ["D2:1"], "category": 4},
-                {"question": "What do they like?", "answer": "dogs, races", "evidence": [], "category": 1},
-                {"question": "What might Bob study?", "answer": "biology; maybe", "evidence": [], "category": 3},
+                {
+                    "question": "When did Alice run?",
+                    "answer": "7 May 2023",
+                    "evidence": ["D1:1"],
+                    "category": 2,
+                },
+                {
+                    "question": "Where did Bob move?",
+                    "answer": "Brelford",
+                    "evidence": ["D2:1"],
+                    "category": 4,
+                },
+                {
+                    "question": "What do they like?",
+                    "answer": "dogs, races",
+                    "evidence": [],
+                    "category": 1,
+                },
+                {
+                    "question": "What might Bob study?",
+                    "answer": "biology; maybe",
+                    "evidence": [],
+                    "category": 3,
+                },
                 {
                     "question": "What did Bob realise?",
                     "adversarial_answer": "self-care matters",
@@ -114,7 +147,7 @@ class TestLongMemEvalLoading:
         q = bench.questions[0]
         history = bench.histories[q.history_id]
         assert [s.id for s in history.sessions] == ["answer_1", "s-later"]
-        assert history.sessions[0].at == datetime(2023, 5, 20, 2, 21)
+        assert history.sessions[0].at == datetime(2023, 5, 20, 2, 21, tzinfo=UTC)
         assert [t.role for t in history.sessions[0].turns] == ["user", "assistant"]
         # Turns keep their order and carry the session's clock, never later
         # than the next session.
@@ -136,7 +169,9 @@ class TestLongMemEvalLoading:
         assert bd.load_benchmark("longmemeval", oracle).variant == "oracle"
 
     def test_dates(self):
-        assert bd.parse_longmemeval_date("2023/05/20 (Sat) 02:21") == datetime(2023, 5, 20, 2, 21)
+        assert bd.parse_longmemeval_date("2023/05/20 (Sat) 02:21") == datetime(
+            2023, 5, 20, 2, 21, tzinfo=UTC
+        )
 
 
 class TestLoCoMoLoading:
@@ -146,7 +181,7 @@ class TestLoCoMoLoading:
         history = bench.histories["conv-1"]
         assert history.speakers == ("Alice", "Bob")
         s1 = history.sessions[0]
-        assert s1.at == datetime(2023, 5, 8, 13, 56)
+        assert s1.at == datetime(2023, 5, 8, 13, 56, tzinfo=UTC)
         # speaker_a is the user side, speaker_b the other; each line names its speaker.
         assert [t.role for t in s1.turns] == ["user", "assistant"]
         assert s1.turns[0].text == "Alice: I ran a charity race."
@@ -169,8 +204,12 @@ class TestLoCoMoLoading:
         assert sorted(q.category for q in kept) == [1, 2, 3, 4]
 
     def test_dates(self):
-        assert bd.parse_locomo_date("10:37 am on 27 June, 2023") == datetime(2023, 6, 27, 10, 37)
-        assert bd.parse_locomo_date("12:05 am on 1 Jan, 2024") == datetime(2024, 1, 1, 0, 5)
+        assert bd.parse_locomo_date("10:37 am on 27 June, 2023") == datetime(
+            2023, 6, 27, 10, 37, tzinfo=UTC
+        )
+        assert bd.parse_locomo_date("12:05 am on 1 Jan, 2024") == datetime(
+            2024, 1, 1, 0, 5, tzinfo=UTC
+        )
 
     def test_unknown_benchmark_is_refused(self, locomo_path):
         with pytest.raises(ValueError, match="unknown benchmark"):
@@ -322,7 +361,9 @@ class TestAnswerPrompts:
             "I will give you several history chats between you and a user. Please answer the "
             "question based on the relevant chat history.\n\n\nHistory Chats:\n\n"
         )
-        assert prompt.endswith("\n\nCurrent Date: 2023/05/30 (Tue) 23:40\nQuestion: What degree?\nAnswer:")
+        assert prompt.endswith(
+            "\n\nCurrent Date: 2023/05/30 (Tue) 23:40\nQuestion: What degree?\nAnswer:"
+        )
         assert "Session Date: 2023/05/20 (Sat) 02:21" in prompt
         assert "User: I graduated." in prompt
 
@@ -340,7 +381,9 @@ class TestAnswerPrompts:
         text, key = bd.locomo_question_text(q, seed=1)
         assert text.endswith(" Use DATE of CONVERSATION to answer with an approximate date.")
         assert key is None
-        prompt = bd.locomo_answer_prompt(("Alice", "Bob"), [bd.PromptItem("turn", "Alice: hi", "x")], text, q)
+        prompt = bd.locomo_answer_prompt(
+            ("Alice", "Bob"), [bd.PromptItem("turn", "Alice: hi", "x")], text, q
+        )
         assert prompt.startswith("Below is a conversation between two people: Alice and Bob.")
         assert "Based on the above context, write an answer in the form of a short phrase" in prompt
         assert prompt.rstrip().endswith("Short answer:")
@@ -349,7 +392,9 @@ class TestAnswerPrompts:
         bench = bd.load_benchmark("locomo", locomo_path)
         q = bench.questions[4]
         text, key = bd.locomo_question_text(q, seed=1)
-        assert "Select the correct answer: (a)" in text and "Not mentioned in the conversation" in text
+        assert (
+            "Select the correct answer: (a)" in text and "Not mentioned in the conversation" in text
+        )
         assert set(key.values()) == {"Not mentioned in the conversation", "self-care matters"}
         not_mentioned = next(k for k, v in key.items() if v.startswith("Not mentioned"))
         assert bd.locomo_cat5_answer(not_mentioned, key) == "Not mentioned in the conversation"
@@ -371,7 +416,9 @@ class TestLoCoMoScore:
 
     def test_f1_single_answer(self):
         assert bd.locomo_f1_score("Brelford", "Brelford", stem=_identity) == 1.0
-        assert bd.locomo_f1_score("in Brelford town", "Brelford", stem=_identity) == pytest.approx(0.5)
+        assert bd.locomo_f1_score("in Brelford town", "Brelford", stem=_identity) == pytest.approx(
+            0.5
+        )
         assert bd.locomo_f1_score("Paris", "Brelford", stem=_identity) == 0.0
 
     def test_scores_by_category(self, locomo_path):
@@ -384,7 +431,9 @@ class TestLoCoMoScore:
         # Open-domain: only the gold before the first ';'.
         assert bd.locomo_score(open_domain, "biology", stem=_identity) == 1.0
         # Adversarial: right only when the answer says it is not mentioned.
-        assert bd.locomo_score(adversarial, "Not mentioned in the conversation", stem=_identity) == 1.0
+        assert (
+            bd.locomo_score(adversarial, "Not mentioned in the conversation", stem=_identity) == 1.0
+        )
         assert bd.locomo_score(adversarial, "self-care matters", stem=_identity) == 0.0
         assert bd.locomo_score(adversarial, "No information available", stem=_identity) == 1.0
 
