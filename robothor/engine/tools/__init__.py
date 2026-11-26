@@ -11,6 +11,7 @@ from typing import Any
 # ── Core exports ──
 from robothor.engine.tools.constants import (
     CONFIG_TOOLS,
+    DATADOG_TOOLS,
     DEVOPS_METRICS_TOOLS,
     FEDERATION_TOOLS,
     GIT_TOOLS,
@@ -47,6 +48,7 @@ MAX_CONCURRENT_SPAWNS = DEFAULT_MAX_CONCURRENT_SPAWNS
 __all__ = [
     # Constants
     "CONFIG_TOOLS",
+    "DATADOG_TOOLS",
     "DEVOPS_METRICS_TOOLS",
     "FEDERATION_TOOLS",
     "GOAL_TOOLS",

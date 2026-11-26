@@ -497,6 +497,16 @@ only when the scope is `metric_tags: []` and the caller adds no tags. A metric
 name, tag or key containing a space, comma, brace or quote is refused. The time
 window is ISO-8601, `now`, or `now-<n>` with `s`, `m`, `h` or `d`.
 
+### For agents
+
+Agents read logs with `datadog_logs_search` and `datadog_logs_aggregate`
+([Datadog tools](TOOLS.md#datadog-read-only)). They are opt-in: name them in a
+manifest's `tools_opt_in` (or `tools_allowed`). The scope is the tenant the
+run belongs to; a parent tenant's run can pass `tenant` to read a child. Email
+addresses and phone numbers in what comes back are masked, and every call
+writes a `datadog.logs_read` audit row with the query and the row count, never
+the log lines.
+
 ### Doctor
 
 `genus doctor` runs `datadog.reachable`. It skips when the keys are not set,

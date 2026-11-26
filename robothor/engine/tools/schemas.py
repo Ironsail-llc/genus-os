@@ -1867,6 +1867,83 @@ _N8N_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+_DATADOG_WINDOW = {
+    "start": {
+        "type": "string",
+        "description": "Window start: ISO-8601 or Datadog relative such as now-15m, now-1d "
+        "(default now-1h).",
+    },
+    "end": {"type": "string", "description": "Window end, same forms (default now)."},
+}
+_DATADOG_QUERY = {
+    "type": "string",
+    "description": "Datadog log search syntax, e.g. 'status:error service:shop-api' or "
+    "'@http.status_code:>=500'. Empty = every log your organization may read.",
+}
+
+_DATADOG_SCHEMAS: dict[str, dict[str, Any]] = {
+    "datadog_logs_search": {
+        "type": "function",
+        "function": {
+            "name": "datadog_logs_search",
+            "description": (
+                "Search your organization's application and infrastructure logs in Datadog "
+                "(read-only; only your organization's logs are ever searched). Returns log "
+                "lines with timestamp, service, status, host, message, env/version tags, "
+                "trace_id/span_id when the line belongs to a trace, and attributes; personal "
+                "data is masked. Not for what a Genus agent run did: "
+                "use the agent run tools for that."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": _DATADOG_QUERY,
+                    **_DATADOG_WINDOW,
+                    "limit": {"type": "integer", "description": "Rows per page (default 50)."},
+                    "cursor": {
+                        "type": "string",
+                        "description": "next_cursor from the previous page, with the same "
+                        "query and the start/end from that page's window.",
+                    },
+                    "newest_first": {
+                        "type": "boolean",
+                        "description": "Newest log first (default true).",
+                    },
+                },
+            },
+        },
+    },
+    "datadog_logs_aggregate": {
+        "type": "function",
+        "function": {
+            "name": "datadog_logs_aggregate",
+            "description": (
+                "Count your organization's Datadog logs, grouped by facets such as service, "
+                "status or @http.status_code (read-only, scoped to your organization). Use it "
+                "for 'how many errors, from which service' before reading lines."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": _DATADOG_QUERY,
+                    **_DATADOG_WINDOW,
+                    "group_by": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Facets to group by, e.g. ['service', 'status']. Empty = "
+                        "one total.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Groups per facet, largest first (default 25).",
+                    },
+                },
+            },
+        },
+    },
+}
+
+
 _TEAM_SCRATCHPAD_SCHEMAS: dict[str, dict[str, Any]] = {
     "team_scratchpad_read": {
         "type": "function",
@@ -4913,7 +4990,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas.update(_N8N_SCHEMAS)
+    schemas.update(_N8N_SCHEMAS | _DATADOG_SCHEMAS)
 
     schemas["buddy_refresh"] = {
         "type": "function",
