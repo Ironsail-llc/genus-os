@@ -181,3 +181,63 @@ async def test_rerank_unavailable_still_fills_from_the_fused_pool(env: pytest.Mo
     with patch.object(reranker, "rerank_pair", AsyncMock(return_value=0.5)):
         results = await _search(_Cursor(vector=_dense(40), keyword=[]), limit=30)
     assert len(results) == 30
+
+
+# --------------------------------------------------------------------------- #
+# One packing rule, shipped and measured
+# --------------------------------------------------------------------------- #
+
+
+def _row(i: int, chars: int) -> dict[str, Any]:
+    return {"id": i, "kind": "fact", "fact_text": "x" * chars, "category": "event"}
+
+
+def test_an_oversized_row_is_skipped_and_the_cap_keeps_packing() -> None:
+    """A 3,950-character segment in the head must not end the context: the
+    rows after it that fit still go in (the rule the eval measured)."""
+    from robothor.memory.recall import RECALL_CONTEXT_CHARS, within_context_cap
+
+    rows = [_row(1, 100), _row(2, 3950), *[_row(i, 100) for i in range(3, 33)]]
+    kept = within_context_cap(rows)
+
+    ids = [r["id"] for r in kept]
+    assert ids[0] == 1
+    assert 2 not in ids
+    assert len(ids) == 1 + 30, "every 100-character row after the big one fits"
+    assert sum(len(r["fact_text"]) for r in kept) <= RECALL_CONTEXT_CHARS
+
+
+def test_the_eval_packs_with_the_products_rule(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The eval's context is the shipped packing function, not its own copy."""
+    from robothor.memory import eval_systems, recall
+
+    calls: list[Any] = []
+    real = recall.pack_within
+
+    def spy(items: Any, cap: Any, size: Any) -> Any:
+        calls.append(cap)
+        return real(items, cap, size)
+
+    monkeypatch.setattr(recall, "pack_within", spy)
+    items = eval_systems.fill_budget([("a", "fact", "x" * 40), ("b", "fact", "y" * 40)], 15)
+    assert calls == [15]
+    assert [i.id for i in items] == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_the_routed_path_skips_an_oversized_row_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from robothor.memory import router
+
+    rows = [_row(1, 100), _row(2, 3950), *[_row(i, 100) for i in range(3, 13)]]
+
+    async def fake_search(query: str, **kwargs: Any) -> list[dict[str, Any]]:
+        return [dict(r) for r in rows]
+
+    monkeypatch.setattr(facts, "search_facts", fake_search)
+    out = await router.recall("garage locker code", tenant_id="test-tenant", limit=50)
+    ids = [r["id"] for r in out["results"]]
+    assert ids[0] == 1
+    assert 2 not in ids
+    assert 12 in ids
