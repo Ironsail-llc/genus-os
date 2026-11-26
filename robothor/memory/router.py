@@ -249,16 +249,20 @@ async def recall(
 
     fused = rrf_fuse(ranked_lists)
 
-    # Temporal queries want the newest matching fact first, within the head:
-    # the budget fill's tail rows (unscored, ``budget_tail``) stay behind it in
-    # their fused order, so a newer tail row never pushes the head out.
+    # Temporal queries want the newest matching fact first, within the head.
+    # Rows that follow the head stay behind it in their own order, so a newer
+    # one never pushes the head out: a row only the graph leg found, then the
+    # budget fill's tail rows (unscored, ``budget_tail``).
     if cls == "temporal":
-        head = [r for r in fused if not r.get("budget_tail")]
+        from robothor.memory.recall import graph_only
+
+        head = [r for r in fused if not r.get("budget_tail") and not graph_only(r)]
+        related = [r for r in fused if graph_only(r) and not r.get("budget_tail")]
         tail = [r for r in fused if r.get("budget_tail")]
         head.sort(
             key=lambda r: (r.get("created_at") is not None, r.get("created_at")), reverse=True
         )
-        fused = head + tail
+        fused = head + related + tail
 
     # Budget cap: the one packing rule (recall.pack_within), then the limit.
     from robothor.memory.recall import pack_within, row_chars, truncate_row

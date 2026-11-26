@@ -241,6 +241,16 @@ def relevance_from_rank(rank: int, half: int = RANK_RELEVANCE_HALF) -> float:
     return half / (half + max(0, int(rank)))
 
 
+def graph_only(row: Mapping[str, Any]) -> bool:
+    """Whether the graph leg alone found this row.
+
+    Such a row is related to what was asked, not a match for it: it is
+    labelled with its path (:func:`row_text`) and follows the ranked head
+    wherever rows are re-ordered.
+    """
+    return set(row.get("leg_ranks") or {}) == {"graph"}
+
+
 def row_text(row: Mapping[str, Any]) -> str:
     """The text a model reads for a recall row: the one formatter every
     surface that renders rows uses (the engine's ``search_memory`` tool, MCP,
@@ -255,7 +265,7 @@ def row_text(row: Mapping[str, Any]) -> str:
     """
     text = str(row.get("fact_text") or row.get("insight_text") or row.get("text") or "")
     path = [str(n) for n in (row.get("graph_path") or []) if n]
-    if path and set(row.get("leg_ranks") or {}) == {"graph"}:
+    if path and graph_only(row):
         return f"Related via {' → '.join(path)}: {text}"
     return text
 

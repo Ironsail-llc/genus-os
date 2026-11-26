@@ -125,8 +125,10 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    - **Callers.** Every caller of `search_facts` reads the rows it gets,
      except the RIP 15 router (`router.recall`), which re-fuses its stores and
      cuts the result to `limit`: on that path a graph row that follows the
-     head is usually cut. The router's 4,000-character budget and the
-     engine's tool-output cap bound the text either way.
+     head is usually cut. Where the router re-orders the head by recency (a
+     "most recent" question), a row only the graph leg found is left out of
+     that sort and stays after the head. The router's 4,000-character budget
+     and the engine's tool-output cap bound the text either way.
 6. **Budget fill** — the reranker returns only the rows it scored (16), so
    the rest of the fused list follows in fused order, unscored, up to
    `limit` rows in all, skipping near-duplicates of rows already returned.
