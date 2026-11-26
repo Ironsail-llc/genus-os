@@ -64,6 +64,10 @@ class DeepReasonConfig:
         default_factory=lambda: int(os.environ.get("ROBOTHOR_RLM_MAX_DEPTH", "1"))
     )
     workspace: str = ""
+    #: The tenant every memory read in the session acts as. Empty is resolved by
+    #: :func:`robothor.tenancy.acting.resolve_acting_tenant` -- the default
+    #: tenant on a single-tenant deployment, a refusal on any other.
+    tenant_id: str = ""
     log_dir: str = field(
         default_factory=lambda: os.environ.get(
             "ROBOTHOR_RLM_LOG_DIR",
@@ -83,14 +87,30 @@ class DeepReasonConfig:
 # (via asyncio.to_thread) with no event loop.
 
 
-def _make_search_memory_fn() -> Callable[..., str]:
-    """Return a sync wrapper around ``search_facts``."""
+def _as_tenant(tenant_id: str, call: Callable[[], Any]) -> Any:
+    """Run one memory call with its connections bound to ``tenant_id``.
+
+    Naming the tenant in the query is not enough under row-level security: the
+    connection must be bound to it too, or the rows are invisible. The inner
+    model calls these helpers from whatever thread the RLM library uses, so each
+    binds its own scope rather than trusting the caller's context.
+    """
+    from robothor.db.connection import tenant_scope
+
+    with tenant_scope(tenant_id):
+        return call()
+
+
+def _make_search_memory_fn(*, tenant_id: str) -> Callable[..., str]:
+    """Return a sync wrapper around ``search_facts``, bound to ``tenant_id``."""
 
     def search_memory(query: str, limit: int = 10) -> str:
         """Search semantic memory. Returns JSON list of facts."""
         from robothor.memory.facts import search_facts
 
-        results = asyncio.run(search_facts(query, limit=limit))
+        results = _as_tenant(
+            tenant_id, lambda: asyncio.run(search_facts(query, limit=limit, tenant_id=tenant_id))
+        )
         return json.dumps(
             [
                 {
@@ -107,15 +127,15 @@ def _make_search_memory_fn() -> Callable[..., str]:
     return search_memory
 
 
-def _make_get_entity_fn() -> Callable[..., str]:
-    """Return a sync wrapper around ``get_entity``."""
+def _make_get_entity_fn(*, tenant_id: str) -> Callable[..., str]:
+    """Return a sync wrapper around ``get_entity``, bound to ``tenant_id``."""
 
     def get_entity(name: str) -> str:
         """Look up an entity and its relationships in the knowledge graph. Returns JSON."""
         from robothor.memory.entities import get_entity as _get_entity
 
-        result = asyncio.run(_get_entity(name))
-        return json.dumps(result or {"name": name, "found": False}, indent=2)
+        result = _as_tenant(tenant_id, lambda: asyncio.run(_get_entity(name, tenant_id=tenant_id)))
+        return json.dumps(result or {"name": name, "found": False}, indent=2, default=str)
 
     return get_entity
 
@@ -145,8 +165,8 @@ def _make_read_file_fn(workspace: str) -> Callable[..., str]:
     return read_file
 
 
-def _make_memory_block_read_fn() -> Callable[..., str]:
-    """Return a sync wrapper around ``read_block``."""
+def _make_memory_block_read_fn(*, tenant_id: str) -> Callable[..., str]:
+    """Return a sync wrapper around ``read_block``, bound to ``tenant_id``."""
 
     def memory_block_read(block_name: str) -> str:
         """Read a named memory block. Returns JSON."""
@@ -155,7 +175,7 @@ def _make_memory_block_read_fn() -> Callable[..., str]:
 
         if is_hidden_block(block_name):
             return json.dumps({"error": HIDDEN_BLOCK_ERROR})
-        result = read_block(block_name)
+        result = _as_tenant(tenant_id, lambda: read_block(block_name, tenant_id=tenant_id))
         return json.dumps(result, indent=2)
 
     return memory_block_read
@@ -164,8 +184,8 @@ def _make_memory_block_read_fn() -> Callable[..., str]:
 # ─── Context pre-loading ─────────────────────────────────────────────
 
 
-def _load_context_source(src: dict[str, Any], workspace: str) -> str | None:
-    """Pre-load a single context source. Returns formatted string or None."""
+def _load_context_source(src: dict[str, Any], workspace: str, *, tenant_id: str) -> str | None:
+    """Pre-load a single context source as ``tenant_id``. Returns formatted string or None."""
     src_type = src.get("type", "")
 
     if src_type == "memory":
@@ -175,7 +195,9 @@ def _load_context_source(src: dict[str, Any], workspace: str) -> str | None:
             return None
         from robothor.memory.facts import search_facts
 
-        results = asyncio.run(search_facts(query, limit=limit))
+        results = _as_tenant(
+            tenant_id, lambda: asyncio.run(search_facts(query, limit=limit, tenant_id=tenant_id))
+        )
         if not results:
             return None
         lines = [f"## Memory search: {query}"]
@@ -210,7 +232,7 @@ def _load_context_source(src: dict[str, Any], workspace: str) -> str | None:
             return None
         from robothor.memory.blocks import read_block
 
-        result = read_block(block_name)
+        result = _as_tenant(tenant_id, lambda: read_block(block_name, tenant_id=tenant_id))
         if "error" in result:
             return None
         return f"## Memory block: {block_name}\n\n{result.get('content', '')}"
@@ -221,10 +243,12 @@ def _load_context_source(src: dict[str, Any], workspace: str) -> str | None:
             return None
         from robothor.memory.entities import get_entity
 
-        entity: dict[str, Any] | None = asyncio.run(get_entity(name))
+        entity: dict[str, Any] | None = _as_tenant(
+            tenant_id, lambda: asyncio.run(get_entity(name, tenant_id=tenant_id))
+        )
         if not entity:
             return None
-        return f"## Entity: {name}\n\n{json.dumps(entity, indent=2)}"
+        return f"## Entity: {name}\n\n{json.dumps(entity, indent=2, default=str)}"
 
     logger.warning("Unknown context source type: %s", src_type)
     return None
@@ -338,18 +362,18 @@ def _make_exec_fn(workspace: str, agent_id: str = "") -> Callable[..., str]:
     return exec_shell
 
 
-def _build_custom_tools(workspace: str) -> dict[str, dict[str, Any]]:
-    """Build the custom_tools dict for the RLM instance."""
+def _build_custom_tools(workspace: str, *, tenant_id: str) -> dict[str, dict[str, Any]]:
+    """Build the custom_tools dict for the RLM instance; memory reads act as ``tenant_id``."""
     tools = {
         "search_memory": {
-            "tool": _make_search_memory_fn(),
+            "tool": _make_search_memory_fn(tenant_id=tenant_id),
             "description": (
                 "Search semantic memory for facts matching a query. "
                 "Returns JSON list of facts with category, confidence, similarity."
             ),
         },
         "get_entity": {
-            "tool": _make_get_entity_fn(),
+            "tool": _make_get_entity_fn(tenant_id=tenant_id),
             "description": (
                 "Look up an entity (person, org, concept) and its relationships "
                 "in the knowledge graph. Returns JSON."
@@ -363,7 +387,7 @@ def _build_custom_tools(workspace: str) -> dict[str, dict[str, Any]]:
             ),
         },
         "memory_block_read": {
-            "tool": _make_memory_block_read_fn(),
+            "tool": _make_memory_block_read_fn(tenant_id=tenant_id),
             "description": (
                 "Read a named memory block (persistent structured working memory). "
                 "Returns JSON with block_name, content, last_written_at."
@@ -424,6 +448,16 @@ def execute_deep_reason(
 
     workspace = config.workspace
 
+    # 0. The tenant every memory read below acts as. Resolved once, before any
+    # read: a session that cannot name its tenant reads nothing.
+    from robothor.tenancy.acting import TenantRequiredError, resolve_acting_tenant
+
+    try:
+        tenant_id = resolve_acting_tenant(config.tenant_id, surface="deep_reason")
+    except TenantRequiredError as refused:
+        _notify_progress(on_event, "failed")
+        return {"error": str(refused)}
+
     # 1. Pre-load context from sources
     context_parts: list[str] = []
     if context:
@@ -432,7 +466,7 @@ def execute_deep_reason(
     if context_sources:
         for src in context_sources:
             try:
-                loaded = _load_context_source(src, workspace)
+                loaded = _load_context_source(src, workspace, tenant_id=tenant_id)
                 if loaded:
                     context_parts.append(loaded)
             except Exception as e:
@@ -441,7 +475,7 @@ def execute_deep_reason(
     full_context = "\n\n---\n\n".join(context_parts) if context_parts else ""
 
     # 2. Build custom tools
-    custom_tools = _build_custom_tools(workspace)
+    custom_tools = _build_custom_tools(workspace, tenant_id=tenant_id)
 
     # 3. Create log directory
     log_dir = Path(config.log_dir)

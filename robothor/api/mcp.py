@@ -973,6 +973,45 @@ def get_tool_definitions() -> list[dict[str, Any]]:
 
 # ─── Tool Handlers ───────────────────────────────────────────────────
 
+#: The tools that read or write memory. Each acts as the session's tenant.
+_MEMORY_TOOLS = frozenset(
+    {
+        "search_memory",
+        "store_memory",
+        "get_stats",
+        "get_entity",
+        "get_knowledge_gaps",
+        "memory_block_read",
+        "memory_block_write",
+        "memory_block_list",
+        "append_to_block",
+    }
+)
+
+
+async def _session_tenant(arguments: dict[str, Any]) -> str:
+    """The tenant this MCP session acts as. Raises ``TenantRequiredError``.
+
+    An MCP server is one stdio process per client, so its tenant is the one the
+    process runs as: ``ROBOTHOR_TENANT_ID``, then ``ROBOTHOR_DEFAULT_TENANT`` --
+    the same binding its database connections use for row-level security. A
+    process with neither falls to the single-tenant rule in
+    :mod:`robothor.tenancy.acting`. A ``tenant_id`` argument may restate that
+    tenant but never redirect it: the model writes the arguments.
+    """
+    from robothor.db.connection import process_tenant
+    from robothor.tenancy.acting import TenantRequiredError, resolve_acting_tenant
+
+    bound = process_tenant()
+    tenant = bound or await asyncio.to_thread(resolve_acting_tenant, "", surface="mcp")
+    asked = str(arguments.get("tenant_id") or "").strip()
+    if asked and asked != tenant:
+        raise TenantRequiredError(
+            f"mcp: this session acts as tenant {tenant!r}; a tenant_id argument cannot "
+            "redirect it to another tenant."
+        )
+    return tenant
+
 
 async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Handle an MCP tool call and return result."""
@@ -988,14 +1027,22 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
         if bad_id is not None:
             return bad_id
 
-    # ── Memory tools ──
-    # TODO: MCP protocol doesn't carry tenant context yet. All memory calls
-    # use DEFAULT_TENANT fallback until MCP sessions support tenant_id.
+    # ── Memory tools ── each acts as the session's tenant (``_session_tenant``).
+    tenant = ""
+    if name in _MEMORY_TOOLS:
+        from robothor.tenancy.acting import TenantRequiredError
+
+        try:
+            tenant = await _session_tenant(arguments)
+        except TenantRequiredError as refused:
+            return {"error": str(refused)}
 
     if name == "search_memory":
         from robothor.memory.facts import search_facts
 
-        results = await search_facts(arguments.get("query", ""), limit=arguments.get("limit", 10))
+        results = await search_facts(
+            arguments.get("query", ""), limit=arguments.get("limit", 10), tenant_id=tenant
+        )
         return {
             "results": [
                 {
@@ -1019,27 +1066,31 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
         return await store_memory_content(
             arguments.get("content", ""),
             arguments.get("content_type", "conversation"),
-            tenant_id=arguments.get("tenant_id", ""),
+            tenant_id=tenant,
         )
 
     if name == "get_stats":
         from robothor.memory.facts import get_memory_stats
 
-        return get_memory_stats()
+        return get_memory_stats(tenant_id=tenant)
 
     if name == "get_entity":
         from robothor.memory.entities import get_entity
 
         try:
-            result = await get_entity(arguments.get("name", ""))
+            result = await get_entity(arguments.get("name", ""), tenant_id=tenant)
             return result or {"name": arguments.get("name", ""), "found": False}
         except Exception:
             return {"name": arguments.get("name", ""), "found": False}
 
     if name == "get_knowledge_gaps":
+        from robothor.db.connection import tenant_scope
         from robothor.memory.gap_analysis import analyze_knowledge_gaps
 
-        return await analyze_knowledge_gaps()
+        # analyze_knowledge_gaps takes no tenant yet; binding the connections
+        # to the session's tenant is the most this surface can do for it.
+        with tenant_scope(tenant):
+            return await analyze_knowledge_gaps()
 
     # ── Vision proxy tools ──
 
@@ -1140,17 +1191,19 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
     elif name == "memory_block_read":
         from robothor.memory.blocks import read_block
 
-        return read_block(arguments.get("block_name", ""))
+        return read_block(arguments.get("block_name", ""), tenant_id=tenant)
 
     elif name == "memory_block_write":
         from robothor.memory.blocks import write_block
 
-        return write_block(arguments.get("block_name", ""), arguments.get("content", ""))
+        return write_block(
+            arguments.get("block_name", ""), arguments.get("content", ""), tenant_id=tenant
+        )
 
     elif name == "memory_block_list":
         from robothor.memory.blocks import list_blocks
 
-        return list_blocks()
+        return list_blocks(tenant_id=tenant)
 
     # ── CRM interaction ──
 
@@ -1528,6 +1581,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
             block_name=arguments.get("block_name", ""),
             entry=arguments.get("entry", ""),
             max_entries=arguments.get("maxEntries", 20),
+            tenant_id=tenant,
         )
         return {"success": ok, "block_name": arguments.get("block_name", "")}
 

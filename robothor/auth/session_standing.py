@@ -28,6 +28,10 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from robothor.auth.deps import AuthContext
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +78,33 @@ def stands(user_id: str, home_tenant_id: str) -> bool:
             _cache[key] = cached
     _expires, tenant, status = cached
     return tenant == home_tenant_id and status == "active"
+
+
+def refusal(auth: AuthContext) -> tuple[int, str] | None:
+    """Why a verified token may not be honoured right now, as (status, reason), or None.
+
+    A signature proves who minted the token, not that what it says is still
+    true. Two things can stop being true before it expires:
+
+    * the switch was turned off — an ACTING token is honoured only while
+      ``GENUS_TENANT_SWITCH_MODE`` is ``enforce`` (403), so turning it off ends
+      every acting session at once;
+    * the account moved tenant or was disabled — a HUMAN token is honoured
+      only while its account still lives in ``home_tid`` and is active (401;
+      :func:`stands`).
+
+    Shared by every service that verifies these tokens (the bridge, the
+    orchestrator), so they cannot disagree about whether a session stands.
+    Synchronous: the standing lookup may read the database, so an async caller
+    runs this through ``asyncio.to_thread``.
+    """
+    from robothor.auth.runtime import tenant_switch_mode
+
+    if auth.is_acting and tenant_switch_mode() != "enforce":
+        return 403, "tenant switching disabled"
+    if not auth.is_service and not stands(auth.user_id, auth.home_tenant_id):
+        return 401, "session no longer valid"
+    return None
 
 
 def forget(user_id: str) -> None:

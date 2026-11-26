@@ -104,6 +104,12 @@ EXPECTED_TENANT_SCOPE: dict[str, int] = {
     "robothor/engine/federation_responder.py::make_command_handler.handle": 1,
     # Provider keys are the instance's: always the platform tenant's vault.
     "robothor/engine/key_pool.py::_vault_export": 1,
+    # deep_reason's memory helpers, in the run's OWN tenant: DeepReasonConfig.
+    # tenant_id is ctx.tenant_id (deep_reason is in neither cross-tenant
+    # allowlist, so admit refuses a `tenant` argument and ctx is never swapped)
+    # or the deep-mode run's tenant, resolved once by resolve_acting_tenant and
+    # closed over by each helper; the helpers take no tenant argument.
+    "robothor/engine/rlm_tool.py::_as_tenant": 1,
 }
 
 #: ``file::qualified function`` -> calls of target_scope / run_handler / _scope.
