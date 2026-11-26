@@ -284,3 +284,48 @@ async def test_a_temporal_query_keeps_the_head_ahead_of_the_tail(
     assert len(labels) > 10, "the tail still fills after the head"
     assert sorted(labels[:10]) == [f"H{i:03d}" for i in range(1, 11)], labels[:12]
     assert all(lab.startswith("T") for lab in labels[10:])
+
+
+# --------------------------------------------------------------------------- #
+# Bounded work
+# --------------------------------------------------------------------------- #
+
+
+def test_a_named_limit_is_bounded_by_the_fill_rows() -> None:
+    from robothor.memory.recall import RECALL_FILL_ROWS, recall_limit
+
+    assert recall_limit(1000) == RECALL_FILL_ROWS
+    assert recall_limit(5) == 5
+    assert recall_limit(None) == RECALL_FILL_ROWS
+
+
+@pytest.mark.asyncio
+async def test_the_tool_never_asks_recall_for_more_than_the_bound(
+    tool: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from robothor.memory.recall import RECALL_FILL_ROWS
+
+    monkeypatch.delenv("ROBOTHOR_RIP_15_ENABLED", raising=False)
+    await _call({"query": "garage locker code", "limit": 1000})
+    assert tool
+    assert all(int(c["limit"]) <= RECALL_FILL_ROWS for c in tool)
+
+
+def test_the_fill_tokenizes_each_row_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The near-duplicate check is incremental: each kept row's tokens are
+    computed once, not again for every candidate considered."""
+    calls = {"n": 0}
+    real = facts._norm_tokens
+
+    def counting(text: str) -> Any:
+        calls["n"] += 1
+        return real(text)
+
+    monkeypatch.setattr(facts, "_norm_tokens", counting)
+    pool = [
+        {"id": i, "kind": "fact", "fact_text": f"distinct note {i} about subject {i * 7}"}
+        for i in range(60)
+    ]
+    out = facts._fill_from_pool(pool[:10], pool, 50)
+    assert len(out) == 50
+    assert calls["n"] <= len(pool) + 10
