@@ -217,9 +217,12 @@ async def test_the_graph_leg_keeps_its_reserved_places(env: pytest.MonkeyPatch) 
     with patch("robothor.memory.activation.graph_candidates_for_query", return_value=hops):
         results = await _search(cur)
 
+    off = await _search(_Cursor(vector=_dense(20), keyword=[]), include_graph=False)
     ids = [r["id"] for r in results]
-    assert len(results) == 5
-    assert 700 in ids and 701 in ids and 702 not in ids
+    # The five head rows are those of the search without the graph; its two
+    # reserved rows come after them (at most limit + 2 rows).
+    assert ids[:5] == [r["id"] for r in off]
+    assert ids[5:] == [700, 701] and len(results) == 5 + facts.RESERVED_PLACES["graph"]
     row = next(r for r in results if r["id"] == 700)
     assert "graph" in row["leg_ranks"]
     assert row["origin"] == "user_stated"
