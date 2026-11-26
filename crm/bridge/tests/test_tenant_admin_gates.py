@@ -71,6 +71,7 @@ ADMIN_ROUTER_MODULES = (
     "routers.settings",
     "routers.plugins",
     "routers.n8n",
+    "routers.telemetry",
     "routers.agent_tools",
     "routers.secrets",
 )
@@ -177,6 +178,16 @@ ROUTE_CLASSES: dict[tuple[str, str], str] = {
     # ── appliance-wide ──
     ("GET", "/api/doctor"): R,
     ("GET", "/api/telemetry"): R,
+    # The organization's own lines in the shared Datadog account, bounded by
+    # the acting tenant's scope: its admins and auditors read them.
+    ("GET", "/api/telemetry/logs"): TA,
+    ("GET", "/api/telemetry/logs/summary"): TA,
+    ("GET", "/api/telemetry/traces"): TA,
+    ("GET", "/api/telemetry/traces/{trace_id}"): TA,
+    ("GET", "/api/telemetry/monitors"): TA,
+    ("GET", "/api/telemetry/signals"): TA,
+    # Every organization's figures at once: the root operator at home only.
+    ("GET", "/api/telemetry/overview"): R,
     ("GET", "/api/controls"): R,
     ("PATCH", "/api/controls/{name}"): R,
     ("GET", "/api/health/system"): R,

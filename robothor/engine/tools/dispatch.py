@@ -247,6 +247,9 @@ class ToolContext:
     # conversation segment: the run's principal (``user_id``) is not one, since
     # an unattended or workspace run can execute as a member.
     private_reader: PrivateReader | None = None
+    # The run's trace id, "" outside a traced run. Carried so a call made on
+    # the caller's behalf (``tool_call``) names the same trace on its log line.
+    trace_id: str = ""
 
 
 def get_db() -> Any:
@@ -290,6 +293,8 @@ def builtin_handlers() -> dict[str, Any]:
         code_exec,
         config_tools,
         crm,
+        datadog_logs,
+        datadog_more,
         desktop,
         devops_metrics,
         experiment,
@@ -372,6 +377,8 @@ def builtin_handlers() -> dict[str, Any]:
         github_api,
         devops_metrics,
         n8n,
+        datadog_logs,
+        datadog_more,
         identity,
         reports,
         rooms,
@@ -743,6 +750,7 @@ async def _execute_tool(
     identity: IdentityContext | None = None,
     capability_tier: str = "",
     private_reader: PrivateReader | None = None,
+    trace_id: str = "",
 ) -> dict[str, Any]:
     """Route tool call to the correct handler.
 
@@ -772,6 +780,7 @@ async def _execute_tool(
         # An explicit reader is a caller's (tool_call's call_kwargs); else the
         # one the run's tool turn published (robothor/engine/private_recall.py).
         private_reader=private_reader if private_reader is not None else current_private_reader(),
+        trace_id=trace_id,
     )
     # ── A `tenant` argument: may this call act in that tenant? ──
     # Decided against the run's OWN context, before anything is reserved or

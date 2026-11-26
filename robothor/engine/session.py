@@ -198,6 +198,14 @@ EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
         # written by other people and by earlier agent runs.
         "room_read",
         "room_list",
+        # Datadog: log lines, attributes, span resources and monitor names
+        # carry what customers and staff typed.
+        "datadog_logs_search",
+        "datadog_logs_aggregate",
+        "datadog_spans_search",
+        "datadog_trace_get",
+        "datadog_monitors_list",
+        "datadog_metrics_query",
     }
 )
 
@@ -230,6 +238,9 @@ class AgentSession:
     pending_goal_report: str | None = None
     pending_goal_report_tool: str = "report_pursuit_goal"
     goal_report_complete: bool = False
+    #: The run's trace id, set when its TraceContext is created; "" untraced.
+    #: Named on the run's ``event=`` log lines.
+    trace_id: str = ""
 
     def __init__(
         self,
