@@ -5,6 +5,10 @@ A value with no whitespace, quote or ``=`` is written bare; anything else is
 double-quoted with ``"`` and ``\\`` escaped and newlines collapsed, so one line
 never becomes two. An empty or ``None`` value is written as ``-``.
 
+:func:`scope_fields` gives the ``tenant_id`` and ``trace_id`` a line ends with,
+each only when it is known: a line outside any run, or a run with no trace,
+leaves the key out rather than printing ``-``.
+
 :func:`short_reason` turns error text into something safe to log: it is cut to
 a bounded length BEFORE redaction (redacting megabytes of text on the event
 loop is slow), redacted with :func:`robothor.secrets.redaction.redact`, and cut
@@ -20,7 +24,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-__all__ = ["REASON_CHARS", "kv_line", "short_reason"]
+__all__ = ["REASON_CHARS", "kv_line", "scope_fields", "short_reason"]
 
 #: Characters of a reason kept in a log line.
 REASON_CHARS = 200
@@ -48,6 +52,12 @@ def kv_line(event: str, **fields: Any) -> str:
     parts = [f"event={_value(event)}"]
     parts += [f"{key}={_value(value)}" for key, value in fields.items()]
     return " ".join(parts)
+
+
+def scope_fields(tenant_id: Any = "", trace_id: Any = "") -> dict[str, str]:
+    """``{"tenant_id": …, "trace_id": …}`` with each key only when its value is known."""
+    fields = {"tenant_id": str(tenant_id or ""), "trace_id": str(trace_id or "")}
+    return {key: value for key, value in fields.items() if value}
 
 
 def short_reason(text: Any, limit: int = REASON_CHARS) -> str:
