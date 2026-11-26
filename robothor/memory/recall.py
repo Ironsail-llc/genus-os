@@ -66,10 +66,12 @@ RECALL_FILL_ROWS = 50
 def recall_limit(named: Any) -> int:
     """Rows to ask recall for: the caller's limit, else enough to fill the cap.
 
-    A caller that names a limit still gets at most that many rows; one that
-    names none gets up to ``RECALL_FILL_ROWS``, cut by ``within_context_cap``.
+    A caller that names a limit gets at most that many rows; one that names
+    none gets up to ``RECALL_FILL_ROWS``, cut by ``within_context_cap``. A named
+    limit is bounded by ``RECALL_FILL_ROWS`` too: the cap holds no more than
+    that, and the fill's work grows with the limit.
     """
-    return int(named) if named else RECALL_FILL_ROWS
+    return min(int(named), RECALL_FILL_ROWS) if named else RECALL_FILL_ROWS
 
 
 def pack_within(items: Sequence[_T], cap: int | None, size: Callable[[_T], int]) -> list[_T]:

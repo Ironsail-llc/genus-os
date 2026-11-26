@@ -1059,21 +1059,29 @@ def _dedupe(results: list[dict[str, Any]], threshold: float = 0.75) -> list[dict
     kept: list[dict[str, Any]] = []
     kept_tokens: list[frozenset[str]] = []
     for r in results:
-        txt = r.get("fact_text") or r.get("insight_text") or r.get("content") or ""
-        toks = _norm_tokens(txt)
-        is_dup = False
-        for kt in kept_tokens:
-            if not toks or not kt:
-                continue
-            union = len(toks | kt)
-            jac = len(toks & kt) / union if union else 0.0
-            if jac >= threshold or toks <= kt or kt <= toks:
-                is_dup = True
-                break
-        if not is_dup:
+        toks = _row_tokens(r)
+        if not _is_near_duplicate(toks, kept_tokens, threshold):
             kept.append(r)
             kept_tokens.append(toks)
     return kept
+
+
+def _row_tokens(r: dict[str, Any]) -> frozenset[str]:
+    return _norm_tokens(r.get("fact_text") or r.get("insight_text") or r.get("content") or "")
+
+
+def _is_near_duplicate(
+    toks: frozenset[str], kept_tokens: list[frozenset[str]], threshold: float = 0.75
+) -> bool:
+    """``_dedupe``'s test of one row against rows already kept."""
+    for kt in kept_tokens:
+        if not toks or not kt:
+            continue
+        union = len(toks | kt)
+        jac = len(toks & kt) / union if union else 0.0
+        if jac >= threshold or toks <= kt or kt <= toks:
+            return True
+    return False
 
 
 def _assign_relevance(results: list[dict[str, Any]]) -> None:
@@ -1711,14 +1719,21 @@ def _fill_from_pool(
         return head
     out = list(head)
     seen = {(r.get("kind", "fact"), r.get("id")) for r in out}
+    dedup = _dedup_enabled()
+    # Incremental: each kept row is tokenized once (the head is already free
+    # of near-duplicates), so a candidate costs one pass over the kept rows.
+    kept_tokens = [_row_tokens(r) for r in out] if dedup else []
     for row in pool:
         if len(out) >= limit:
             break
         key = (row.get("kind", "fact"), row.get("id"))
         if key in seen or (drop and key in drop):
             continue
-        if _dedup_enabled() and len(_dedupe([*out, row])) == len(out):
-            continue
+        if dedup:
+            toks = _row_tokens(row)
+            if _is_near_duplicate(toks, kept_tokens):
+                continue
+            kept_tokens.append(toks)
         seen.add(key)
         # Marked so a later re-sort (the routed path's recency order) keeps it
         # behind the head.
