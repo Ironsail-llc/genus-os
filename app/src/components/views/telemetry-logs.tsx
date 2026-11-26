@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileText, RefreshCw, Search } from "lucide-react";
+import { FileText, RefreshCw, Search, Waypoints } from "lucide-react";
 
 import { EmptyState } from "@/components/business/empty-state";
 import { ListSkeleton } from "@/components/business/list-skeleton";
 import { PageHeader } from "@/components/business/page-header";
-import { StatusBadge, type Status } from "@/components/business/status-badge";
+import { StatusBadge } from "@/components/business/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -28,6 +28,11 @@ import {
 import { readBridgeReply } from "@/lib/bridge/read-reply";
 import { BRIDGE_UNREACHABLE } from "@/lib/bridge/use-bridge-poll";
 import { isLogSince } from "@/lib/observe/since";
+
+import { NOT_CONNECTED, notConfiguredHint, statusOf, str, timeOf, unavailableText } from "./telemetry-shared";
+
+// Exported from here as they always were; they live with the other tabs' helpers.
+export { NOT_CONNECTED, statusOf, unavailableText };
 
 /**
  * Observe › Logs › Datadog — the organization's own lines in the shared
@@ -61,8 +66,6 @@ export const TELEMETRY_WINDOWS: Array<{ value: string; label: string }> = [
 ];
 const DEFAULT_WINDOW = "1h";
 
-export const NOT_CONNECTED = "Datadog is not connected for this organization yet.";
-
 export interface TelemetryRow {
   id: string;
   timestamp: string;
@@ -72,6 +75,8 @@ export interface TelemetryRow {
   message: string;
   tags: string[];
   attributes: Record<string, unknown>;
+  /** Datadog's reserved trace id of the line, as the bridge reads it; null when none. */
+  trace_id?: string | null;
 }
 
 interface Bucket {
@@ -88,56 +93,6 @@ type ReadState =
   | { kind: "forbidden" }
   | { kind: "error"; message: string };
 
-/** What a Datadog failure means to the person reading, by the bridge's kind. */
-export function unavailableText(kind: string): string {
-  switch (kind) {
-    case "auth":
-      return "Datadog refused this instance's key. An operator needs to check the Datadog API and application keys.";
-    case "rate_limit":
-      return "Datadog is getting too many requests from this instance right now. Try again in a minute.";
-    case "network":
-      return "Datadog could not be reached. Try again in a moment.";
-    case "bad_query":
-      return "Datadog could not run that search. Check the query syntax and try again.";
-    default:
-      return "Datadog answered in a way Genus could not read. Try again in a moment.";
-  }
-}
-
-/** The root operator is told which half is missing; everyone else is not. */
-function notConfiguredHint(reason: string | null): string {
-  if (reason === "keys") {
-    return "The Datadog API and application keys are not set on this instance.";
-  }
-  if (reason === "scope") {
-    return "This organization has no entry in the Datadog scope map (ROBOTHOR_DATADOG_SCOPES).";
-  }
-  return "An operator of this instance connects it. Nothing here is broken.";
-}
-
-/** Datadog's statuses on the five the Helm draws. */
-export function statusOf(status: string): Status {
-  switch (status.toLowerCase()) {
-    case "emergency":
-    case "alert":
-    case "critical":
-    case "error":
-      return "failing";
-    case "warn":
-    case "warning":
-      return "degraded";
-    case "ok":
-    case "success":
-      return "ok";
-    default:
-      return "idle";
-  }
-}
-
-function str(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
 function parseRows(value: unknown): TelemetryRow[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -148,6 +103,7 @@ function parseRows(value: unknown): TelemetryRow[] {
       service: str(row.service),
       status: str(row.status),
       host: str(row.host),
+      trace_id: str(row.trace_id) || null,
       message: str(row.message),
       tags: Array.isArray(row.tags) ? row.tags.filter((t): t is string => typeof t === "string") : [],
       attributes:
@@ -162,20 +118,6 @@ function parseBuckets(value: unknown): Bucket[] {
   return value
     .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
     .map((b) => ({ by: str(b.by) || "(none)", count: typeof b.count === "number" ? b.count : 0 }));
-}
-
-function timeOf(value: string): string {
-  if (!value) return "—";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
 }
 
 function params(query: string, since: string, extra: Record<string, string> = {}): string {
@@ -246,16 +188,65 @@ async function readSummary(url: string): Promise<Bucket[] | null> {
   }
 }
 
+/**
+ * The trace a log line belongs to, when it says: the bridge's `trace_id`
+ * (Datadog's reserved field of the event) first, then the `trace_id` attribute,
+ * Datadog's own `dd.trace_id` (nested or flat), or `trace_id=<hex>` in the
+ * message as the engine's structured lines write it. Digits only, as the
+ * bridge's trace route accepts.
+ */
+export function traceIdOf(row: TelemetryRow): string | null {
+  const attrs = row.attributes;
+  const dd = attrs.dd && typeof attrs.dd === "object" ? (attrs.dd as Record<string, unknown>) : {};
+  for (const value of [row.trace_id, attrs.trace_id, dd.trace_id, attrs["dd.trace_id"]]) {
+    const text = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : "";
+    if (/^[0-9A-Fa-f]{1,40}$/.test(text)) return text;
+  }
+  const match = /\btrace_id=([0-9A-Fa-f]{1,40})\b/.exec(row.message);
+  return match ? match[1] : null;
+}
+
 export interface TelemetryLogsProps {
   visible: boolean;
   /** The source switch, when the page offers more than one source. */
   switcher?: React.ReactNode;
+  /** What the page draws between the header and the search (the summary and tabs). */
+  above?: React.ReactNode;
+  /** A search handed in by a link: prefilled and run, and again whenever it changes. */
+  query?: string;
+  /** The window that search opens on, when the link carries one. */
+  since?: string;
+  /** Opens a trace on the Traces tab; without it a line offers no trace link. */
+  onViewTrace?: (traceId: string) => void;
+  /** Called with Refresh, for what the page reads beside the search. */
+  onRefresh?: () => void;
 }
 
-export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
-  const [draft, setDraft] = useState("");
-  const [query, setQuery] = useState("");
-  const [since, setSince] = useState(DEFAULT_WINDOW);
+export function TelemetryLogs({
+  visible,
+  switcher,
+  above,
+  query: linkedQuery,
+  since: linkedSince,
+  onViewTrace,
+  onRefresh,
+}: TelemetryLogsProps) {
+  const linkedWindow = linkedQuery && linkedSince && isLogSince(linkedSince) ? linkedSince : null;
+  const [draft, setDraft] = useState(linkedQuery ?? "");
+  const [query, setQuery] = useState(linkedQuery ?? "");
+  const [since, setSince] = useState(linkedWindow ?? DEFAULT_WINDOW);
+  // A new search from a link replaces the one on screen, and runs, over the
+  // window the link carries (a run's link opens just before the run started).
+  const link = `${linkedQuery ?? ""}|${linkedSince ?? ""}`;
+  const [seenLink, setSeenLink] = useState(link);
+  if (link !== seenLink) {
+    setSeenLink(link);
+    if (linkedQuery) {
+      setDraft(linkedQuery);
+      setQuery(linkedQuery);
+      if (linkedWindow) setSince(linkedWindow);
+    }
+  }
   const [reloads, setReloads] = useState(0);
 
   // The search on screen, and the one the state below answers. They differ
@@ -368,12 +359,17 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
           variant="outline"
           size="sm"
           data-testid="telemetry-refresh"
-          onClick={() => setReloads((n) => n + 1)}
+          onClick={() => {
+            setReloads((n) => n + 1);
+            onRefresh?.();
+          }}
         >
           <RefreshCw aria-hidden className={loading ? "animate-spin" : undefined} />
           Refresh
         </Button>
       </PageHeader>
+
+      {above}
 
       <form
         data-testid="telemetry-search"
@@ -400,6 +396,11 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
               {w.label}
             </option>
           ))}
+          {TELEMETRY_WINDOWS.some((w) => w.value === since) ? null : (
+            // A window a link brought, such as a run's start: offered so the
+            // picker shows what is being searched, and can be picked again.
+            <option value={since}>Since {timeOf(since)}</option>
+          )}
         </NativeSelect>
         <Button type="submit" size="sm" data-testid="telemetry-submit">
           <Search aria-hidden />
@@ -570,6 +571,21 @@ export function TelemetryLogs({ visible, switcher }: TelemetryLogsProps) {
             <SheetDescription className="break-all font-mono text-[11px]">
               {open ? `${open.timestamp}${open.host ? ` · ${open.host}` : ""}` : ""}
             </SheetDescription>
+            {open && onViewTrace && traceIdOf(open) ? (
+              <button
+                type="button"
+                data-testid="telemetry-view-trace"
+                onClick={() => {
+                  const traceId = traceIdOf(open);
+                  setOpen(null);
+                  if (traceId) onViewTrace(traceId);
+                }}
+                className="inline-flex w-fit items-center gap-1 text-xs text-primary underline-offset-2 hover:underline"
+              >
+                <Waypoints aria-hidden className="size-3.5" />
+                View trace
+              </button>
+            ) : null}
           </SheetHeader>
           {open ? (
             <div className="flex flex-col gap-4 px-4 pb-6 text-xs">

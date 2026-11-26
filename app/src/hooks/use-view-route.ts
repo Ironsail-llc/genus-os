@@ -7,6 +7,7 @@ import {
   type SettingsPageId,
   type ViewId,
 } from "@/components/layout/nav-config";
+import { isLogSince } from "@/lib/observe/since";
 import { isRoomId } from "@/lib/rooms/room-id";
 
 /**
@@ -31,11 +32,25 @@ export interface ViewRoute {
    * for the main conversation, so that route reads exactly as it always has.
    */
   room?: string;
+  /**
+   * A search handed to the Logs page: `?v=logs&q={query}`, the link the run
+   * drawer's "Logs for this run" opens. Absent, the key itself, for every
+   * other route.
+   */
+  query?: string;
+  /**
+   * The window that search opens on (`&since=`), a relative age or an
+   * ISO-8601 timestamp as the bridge reads them: a run's link opens a little
+   * before the run started. Only with a query; absent otherwise.
+   */
+  since?: string;
 }
 
 const VIEW_PARAM = "v";
 const SUB_PARAM = "s";
 const ROOM_PARAM = "room";
+const QUERY_PARAM = "q";
+const SINCE_PARAM = "since";
 
 const viewIds = new Set<string>(ALL_VIEW_IDS);
 const settingsPageIds = new Set<string>(settingsPages.map((p) => p.id));
@@ -73,6 +88,15 @@ export function parseViewRoute(search: string): ViewRoute {
   const rawRoom = params.get(ROOM_PARAM);
   if (view === "chat" && isRoomId(rawRoom)) return { view, settingsPage, room: rawRoom };
 
+  // Only the logs view reads a search, and only a non-empty one.
+  const rawQuery = params.get(QUERY_PARAM);
+  if (view === "logs" && rawQuery) {
+    const rawSince = params.get(SINCE_PARAM);
+    return rawSince && isLogSince(rawSince)
+      ? { view, settingsPage, query: rawQuery, since: rawSince }
+      : { view, settingsPage, query: rawQuery };
+  }
+
   return { view, settingsPage };
 }
 
@@ -95,13 +119,30 @@ export function formatViewRoute(route: ViewRoute, currentSearch = ""): string {
   } else {
     params.delete(ROOM_PARAM);
   }
+  if (route.view === "logs" && route.query) {
+    params.set(QUERY_PARAM, route.query);
+  } else {
+    params.delete(QUERY_PARAM);
+  }
+  if (route.view === "logs" && route.query && route.since) {
+    params.set(SINCE_PARAM, route.since);
+  } else {
+    params.delete(SINCE_PARAM);
+  }
   return `?${params.toString()}`;
+}
+
+/** The link to the Logs page with `query` prefilled and run (over `since`), for an `href`. */
+export function logsLink(query: string, since?: string): string {
+  return formatViewRoute({ view: "logs", settingsPage: DEFAULT_SETTINGS_PAGE, query, since });
 }
 
 export interface ViewRouteApi extends ViewRoute {
   navigate: (view: ViewId, settingsPage?: SettingsPageId) => void;
   /** Open a workspace on the chat view, or (null) go back to the main conversation. */
   openRoom: (roomId: string | null) => void;
+  /** Open the Logs page with `query` prefilled and run, over `since` when given. */
+  openLogs: (query: string, since?: string) => void;
 }
 
 export function useViewRoute(): ViewRouteApi {
@@ -171,5 +212,11 @@ export function useViewRoute(): ViewRouteApi {
     [go]
   );
 
-  return { ...route, navigate, openRoom };
+  const openLogs = useCallback(
+    (query: string, since?: string) =>
+      go({ view: "logs", settingsPage: routeRef.current.settingsPage, query, since }),
+    [go]
+  );
+
+  return { ...route, navigate, openRoom, openLogs };
 }

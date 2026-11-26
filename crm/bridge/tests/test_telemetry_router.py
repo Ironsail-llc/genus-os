@@ -179,6 +179,36 @@ def test_a_tenant_admin_reads_its_own_scope(datadog):
     assert body["rows"][0]["tags"] == ["env:prod", "service:shop-api"]
 
 
+def test_a_row_carries_its_reserved_trace_and_span_ids(datadog):
+    # Datadog files them as reserved top-level fields of the log event.
+    trace = "4bf92f3577b34da6a3ce929d0e0e4736"
+    raw = _search_body()["data"][0]
+    raw["attributes"] = {**raw["attributes"], "trace_id": trace, "span_id": "00f067aa0ba902b7"}
+    datadog.search = _search_body(rows=[raw])
+
+    row = _ok(_client(CHILD_A).get("/api/telemetry/logs"))["rows"][0]
+
+    assert row["trace_id"] == trace
+    assert row["span_id"] == "00f067aa0ba902b7"
+
+
+@pytest.mark.parametrize("value", ["jane@example.com", "abc-123", "a" * 41, "1 OR 2"])
+def test_an_id_that_is_not_hex_or_decimal_is_dropped(value, datadog):
+    # A custom attribute can hold anything the application wrote; only an id
+    # of the shape the trace route accepts is passed on, never free text.
+    raw = _search_body()["data"][0]
+    raw["attributes"] = {
+        **raw["attributes"],
+        "attributes": {"trace_id": value, "span_id": value},
+    }
+    datadog.search = _search_body(rows=[raw])
+
+    row = _ok(_client(CHILD_A).get("/api/telemetry/logs"))["rows"][0]
+
+    assert row["trace_id"] is None
+    assert row["span_id"] is None
+
+
 def test_an_empty_query_reads_the_whole_scope(datadog):
     _ok(_client(CHILD_A).get("/api/telemetry/logs"))
 

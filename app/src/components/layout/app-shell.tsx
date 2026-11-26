@@ -6,7 +6,14 @@ import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
 import { useSession } from "next-auth/react";
 import { Sidebar } from "./sidebar";
 import { MobileTabBar } from "./mobile-tab-bar";
-import { isComingSoonView, viewGroupLabel, viewTitles, type ViewId } from "./nav-config";
+import {
+  isAuditReaderRole,
+  isComingSoonView,
+  viewGroupLabel,
+  viewTitles,
+  type ViewId,
+} from "./nav-config";
+import { runLogsQuery } from "@/lib/observe/run-logs";
 import { ChatPanel } from "@/components/chat-panel";
 import { SurfaceBoundary, withSurfaceBoundary } from "@/components/surface-boundary";
 import { MfaSetupBanner } from "@/components/mfa-setup-banner";
@@ -272,7 +279,16 @@ function AppShellBody() {
   const isMobile = screenSize === "mobile";
 
   // Chat-first on both desktop and mobile; the view round-trips through ?v=.
-  const { view, settingsPage, room: routeRoom, navigate, openRoom } = useViewRoute();
+  const {
+    view,
+    settingsPage,
+    room: routeRoom,
+    query: logsQuery,
+    since: logsSince,
+    navigate,
+    openRoom,
+    openLogs,
+  } = useViewRoute();
 
   // A view mounts the first time it is shown and then stays mounted, hidden by
   // its own `visible` prop, so its state survives switching away. A view never
@@ -538,7 +554,18 @@ function AppShellBody() {
               {mount("marketplace", <MarketplaceView visible={view === "marketplace"} />)}
               {mount("org", <CommandCentreView visible={view === "org"} />)}
               {mount("fleet", <FleetView visible={view === "fleet"} />)}
-              {mount("runs", <RunsView visible={view === "runs"} />)}
+              {mount(
+                "runs",
+                <RunsView
+                  visible={view === "runs"}
+                  // Only a role that may open the Logs page is offered the link.
+                  onOpenLogs={
+                    isAuditReaderRole(role)
+                      ? (runId, since) => openLogs(runLogsQuery(runId), since)
+                      : undefined
+                  }
+                />,
+              )}
               {/*
                 Automations keeps the "workflows" view id: the sidebar, every
                 bookmark and the nav tests all address it by that name, and the
@@ -573,6 +600,9 @@ function AppShellBody() {
                   role={role}
                   roleLoading={roleLoading}
                   rootAtHome={isRootAtHome(session)}
+                  hasChildTenants={hasChildTenants}
+                  query={logsQuery}
+                  since={logsSince}
                 />,
               )}
               {mount("health", <HealthView visible={view === "health"} />)}

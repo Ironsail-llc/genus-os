@@ -37,7 +37,7 @@ request regardless of what the page shows.
 | **Runs** and **Fleet** | What ran, when, what it delivered, which agents are scheduled and which are off | owner, admin |
 | **Memory** | What the instance believes, what a forget would actually do, and corrections | owner, admin |
 | **Audit** | Every audited event, plus the guardrail change log, with a CSV export | owner, admin, **auditor** |
-| **Logs** | The organization's logs in Datadog, and errors by service; for the root operator at home, also a unit's journal (**Server**), redacted | owner, admin, **auditor** (Server: root owner, admin) |
+| **Logs** | The organization's logs, error traces, monitors and recorded Datadog activity; for the root operator at home, also every organization's errors and firing monitors, and a unit's journal (**Server**), redacted | owner, admin, **auditor** (Organizations and Server: root owner, admin) |
 
 **Memory.** Search, an entity filter, and an active/inactive/all switch.
 Browsing pages with a cursor; searching does not, because a relevance ranking
@@ -74,7 +74,11 @@ audit detail cannot become a formula or carry a credential off the box.
 **Logs open on Datadog.** Each organization searches only its own lines in
 the shared account, with personal data masked and every search audited; until
 the keys and the organization's scope are set, the page says Datadog is not
-connected yet. See
+connected yet. Tabs beside the search show the organization's error traces
+(each opens as a tree of its spans), its monitors (firing only by default), and
+the Datadog alerts and watch findings Genus recorded, each marked recorded, not
+sent. A run's drawer links to its log lines, and the root operator at home sees
+every organization's errors and firing monitors above the tabs. See
 [the Logs page](../OBSERVABILITY.md#for-people-the-logs-page).
 
 **The Server source needs journald**, and a container does not have it. Both routes answer

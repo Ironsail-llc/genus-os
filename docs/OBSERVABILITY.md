@@ -543,6 +543,64 @@ What the page says when it has nothing to show:
 | *That search was refused: …* | The query could change what the scope wrapping means (see above). The reason says what to change. |
 | *Nothing in that window* | The search ran and matched no line. |
 
+The Datadog source has four tabs. **Logs** is the search above. The other
+three keep their place when you switch away and back, and none is read until
+you open it:
+
+- **Traces** lists the organization's error spans in the chosen time range:
+  time, service, resource, duration and status. Click one to open its trace in
+  a side sheet, its spans as an indented tree with each span's duration. A
+  trace from another organization, a trace that does not exist and a malformed
+  id all read the same: *This trace was not found in your organization's
+  traces. Datadog keeps only a sample of traces, so most ordinary requests have
+  none.* Retention keeps errors and slow requests more often, so a trace
+  opened from an ordinary log line is often not there. An organization whose
+  scope has no `spans` filter is told *Traces are not shared with this
+  organization.*
+- **Monitors** lists the organization's monitors with a status badge and when
+  each last triggered. **Firing only** is on by default and keeps alert, warn
+  and no data. A muted monitor never counts as firing, here or in the
+  Organizations summary, which matches how the watch counts them. Turn the
+  toggle off to see every monitor, muted ones included. An organization whose scope
+  shares no monitors is told *Monitors are not shared with this organization.*
+- **Activity** lists what Genus recorded for this organization in the last
+  7 days: Datadog monitor alerts that reached it, and the watch's error spikes
+  and lost or restored connections. Each entry says what happened and when,
+  who Genus told or would have told, and the plain text it sent or would have
+  sent. Each entry also carries a label for what became of it:
+
+  | Label | When |
+  |-------|------|
+  | **Sent** | It was delivered. The entry names the route it went by and, for an alert, whether a read-only first-look run was started (or why not). |
+  | **Not sent again: already reported** | An alert for this is already open, it came too soon after the last one, or the Datadog alert already reported it. |
+  | **Could not be sent** | This organization's engine is not running, the hand-off failed, or delivery failed with the error kind shown. |
+  | **Recorded, not sent** | A dry-run record, or one this page does not recognise. The entry shows who Genus would have told and, for an alert, the read-only question it would have asked. |
+
+**View trace.** A log line that carries a trace id shows a **View trace** link
+that opens the Traces tab on that trace. The id is Datadog's reserved
+`trace_id` field of the log event, which the bridge returns with each line
+(with `span_id`); failing that, a `trace_id` or `dd.trace_id` attribute, or
+`trace_id=<hex>` in the message. Most ordinary requests have no kept trace (see
+Traces above), so the link often lands on the not-found sentence.
+
+**Logs for this run.** In Observe › Runs, the run drawer links to the Logs page
+with the search `"run_id=<id>"` filled in and run, since the engine's
+structured lines carry `run_id=<id>`. The search covers the time from five
+minutes before the run started until now, so an older run still shows its
+lines; the range picker shows that start as *Since …*. The link is
+`/?v=logs&q=<query>&since=<timestamp>`, so it can be bookmarked or shared. Only
+roles that can open the Logs page see it.
+
+**Organizations.** The root organization's owner or admin, at home, with child
+organizations, also sees an **Organizations** summary above the tabs: one row
+per organization they can reach, with its error-log count for the last hour and
+its firing monitors, *Not connected* where it has no scope, and *Unavailable*
+with the reason where Datadog failed for it. One organization failing never
+hides the others. It is not shown to a child's admin, to a root admin acting in
+a child, or to an auditor. Each read writes one `telemetry.overview` audit row
+per organization, filed under that organization, so its own admins can see who
+looked.
+
 The root operator at home also gets a **Server** source on the same page: the
 appliance's journald, unchanged (see
 [Operate it](enterprise/07-operate.md#the-observe-pages)).
@@ -556,6 +614,28 @@ ISO-8601 timestamp; `until` defaults to now. Both routes answer `200` with
 `status` `ok`, `not_configured` or `unavailable` (with a `kind`), and `400` with
 the plain reason for a refused query. Each row carries `trace_id` and `span_id`
 when the log event names them, and `null` otherwise.
+
+The other tabs use the same rules: owners, admins and auditors of the acting
+organization, the tenant from the token, never a 500, and one audit row per
+read with counts and no content. Every piece of free text they return (span
+resource and operation names and tags, monitor names, and the titles, briefs,
+prompts and reasons of recorded signals) has credentials redacted and email
+addresses and phone numbers masked, the same as a log line.
+
+| Route | Parameters | Audit event |
+|-------|------------|-------------|
+| `GET /api/telemetry/traces` | `q` (default `status:error`), `since`, `until`, `limit`, `cursor`; `status: no_access` when no spans are shared | `telemetry.traces.read` |
+| `GET /api/telemetry/traces/{trace_id}` | `since` (default `7d`), `until`; `404` when the trace is not in the organization's scope; `status: no_access` when no spans are shared | `telemetry.trace.read` |
+| `GET /api/telemetry/monitors` | `q`, `firing` (default `false`); every page is read; `status: no_access` when no monitors are shared | `telemetry.monitors.read` |
+| `GET /api/telemetry/signals` | `kind` (`alerts` or `watch`, both when omitted), `since` (default `7d`), `limit` | `telemetry.signals.read` |
+| `GET /api/telemetry/overview` | `since` (default `1h`); root owner or admin at home only | `telemetry.overview`, one per organization |
+
+`/signals` reads the `datadog.alert_received` and `datadog.watch_finding`
+events from the audit log for the token's tenant only, through the same query
+the Audit page uses, and returns only what the Activity tab shows. `/overview`
+takes the organizations from the server-side hierarchy, never from the
+request, and reads them a few at a time: per organization one error count, one
+monitor search, and whether it has a scope.
 
 ### Doctor
 

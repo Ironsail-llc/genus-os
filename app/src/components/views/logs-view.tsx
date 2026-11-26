@@ -12,7 +12,7 @@ import { isAuditReaderRole, isOperatorRole } from "@/components/layout/nav-confi
 import { useBridgePoll } from "@/lib/bridge/use-bridge-poll";
 import { isLogSince } from "@/lib/observe/since";
 import { ListSkeleton } from "@/components/business/list-skeleton";
-import { TelemetryLogs } from "@/components/views/telemetry-logs";
+import { TelemetryPage } from "@/components/views/telemetry-page";
 
 /**
  * Observe › Logs — journald, for an operator who is not on the box.
@@ -680,6 +680,16 @@ export interface LogsViewProps {
    * logs only. UX only — `GET /api/logs` is `require_root_operator`.
    */
   rootAtHome?: boolean;
+  /**
+   * The root tenant has child organizations (`useHasChildTenants`). With an
+   * operator role at home, that is who the Organizations summary is for. UX
+   * only — `GET /api/telemetry/overview` is `require_root_operator`.
+   */
+  hasChildTenants?: boolean;
+  /** A Datadog search handed in by a link (`?v=logs&q=`), prefilled and run. */
+  query?: string;
+  /** The window that search opens on (`&since=`). */
+  since?: string;
 }
 
 type Source = "datadog" | "server";
@@ -698,9 +708,19 @@ export function LogsView({
   role,
   roleLoading = false,
   rootAtHome = false,
+  hasChildTenants = false,
+  query,
+  since,
 }: LogsViewProps) {
   const [source, setSource] = useState<Source>("datadog");
+  // A search from a link is a Datadog search: it brings the Datadog source back.
+  const [seenQuery, setSeenQuery] = useState(query);
+  if (query !== seenQuery) {
+    setSeenQuery(query);
+    if (query) setSource("datadog");
+  }
   const serverOffered = isOperatorRole(role) && rootAtHome;
+  const showOrganizations = serverOffered && hasChildTenants;
   const mayRead = isAuditReaderRole(role) || roleLoading;
   const shown: Source = serverOffered ? source : "datadog";
 
@@ -755,7 +775,13 @@ export function LogsView({
   return shown === "server" ? (
     <ServerLogs visible={visible} role={role} roleLoading={roleLoading} switcher={switcher} />
   ) : (
-    <TelemetryLogs visible={visible && !roleLoading} switcher={switcher} />
+    <TelemetryPage
+      visible={visible && !roleLoading}
+      switcher={switcher}
+      showOrganizations={showOrganizations}
+      query={query}
+      since={since}
+    />
   );
 }
 
