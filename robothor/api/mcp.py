@@ -1039,6 +1039,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
 
     if name == "search_memory":
         from robothor.memory.facts import search_facts
+        from robothor.memory.recall import row_text
 
         results = await search_facts(
             arguments.get("query", ""), limit=arguments.get("limit", 10), tenant_id=tenant
@@ -1046,7 +1047,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
         return {
             "results": [
                 {
-                    "fact": r["fact_text"],
+                    "fact": row_text(r),
                     "category": r["category"],
                     "confidence": r["confidence"],
                     "similarity": round(r.get("similarity", 0), 4),

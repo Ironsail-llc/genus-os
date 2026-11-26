@@ -191,13 +191,18 @@ def test_a_relation_path_never_names_an_entity_the_reader_cannot_see(world: Grap
 
     alice_reader, bob_reader = str(uuid.uuid4()), str(uuid.uuid4())
     w = _employer_world(world)
+    # Delta is two hops away either way: through the employer (visible to
+    # all) or, more strongly, through a node private to Bob.
     hidden = world.entity("Pat Hidden", scope_id=bob_reader)
+    delta = world.entity("Delta Example", entity_type="organization")
     world.link(w["alice"], hidden, weight=5.0)
-    world.link(hidden, w["org"], weight=5.0)
+    world.link(hidden, delta, weight=5.0)
+    world.link(w["org"], delta, weight=0.5)
+    far = world.fact("Delta Example is headquartered in Porto city", about=(delta,))
 
     def labels(reader: str) -> list[str]:
         got = _search(reader_scope_id=reader)
-        assert any(int(c.id) == w["hq"] for c in got), "negative control"
+        assert any(int(c.id) == far for c in got), "negative control: the fact is reached"
         return [
             row_text({**c.payload, "leg_ranks": {"graph": 0}})
             + " "

@@ -143,6 +143,25 @@ def relevance_from_rank(rank: int, half: int = RANK_RELEVANCE_HALF) -> float:
     return half / (half + max(0, int(rank)))
 
 
+def row_text(row: Mapping[str, Any]) -> str:
+    """The text a model reads for a recall row: the one formatter every
+    surface that renders rows uses (the engine's ``search_memory`` tool, MCP,
+    deep reason, the memory evaluation's context).
+
+    A row only the graph leg found is about an entity *related* to the one
+    asked about, so it is shown with the walk's path to it: ``Related via
+    Alice Smith → Example Co: Example Co is headquartered in Brelford.`` (the
+    answer model otherwise took an employer's address for the person's). The
+    path is the walk's first-reach path, every node of it visible to the
+    reader. Any row another leg also found keeps its plain text.
+    """
+    text = str(row.get("fact_text") or row.get("insight_text") or row.get("text") or "")
+    path = [str(n) for n in (row.get("graph_path") or []) if n]
+    if path and set(row.get("leg_ranks") or {}) == {"graph"}:
+        return f"Related via {' → '.join(path)}: {text}"
+    return text
+
+
 def _row_key(row: Mapping[str, Any]) -> tuple[Any, Any]:
     return (row.get("kind"), row.get("id"))
 
