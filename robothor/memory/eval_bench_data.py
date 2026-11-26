@@ -314,6 +314,7 @@ def select_questions(
     limit: int | None = None,
     limit_per_type: int | None = None,
     drop_types: Iterable[str] = (),
+    abstention_stratum: bool = False,
 ) -> list[BenchQuestion]:
     """A stratified, deterministic subset.
 
@@ -321,13 +322,15 @@ def select_questions(
     types are taken round robin: ``limit`` questions overall, at most
     ``limit_per_type`` of each. A larger limit extends a smaller one, so a
     resumed run with a bigger limit reuses what it has. The result is in the
-    benchmark's own order.
+    benchmark's own order. With ``abstention_stratum`` the abstention
+    questions are a stratum of their own, with their own quota.
     """
     dropped = set(drop_types)
     by_type: dict[str, list[BenchQuestion]] = {}
     for q in questions:
         if q.question_type not in dropped:
-            by_type.setdefault(q.question_type, []).append(q)
+            stratum = "abstention" if (abstention_stratum and q.abstention) else q.question_type
+            by_type.setdefault(stratum, []).append(q)
     for qs in by_type.values():
         qs.sort(key=_order_key)
         if limit_per_type is not None:

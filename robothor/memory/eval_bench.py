@@ -738,9 +738,7 @@ async def run_benchmark(
         u["cost_usd"] += res.cost_usd or 0.0
 
     def _base(system: str, q: bd.BenchQuestion) -> str:
-        return _key(
-            bench.name, bench.variant, bench.sha256, ingest_mode, token_budget, system, q.id
-        )
+        return context_base(bench, ingest_mode, token_budget, system, q)
 
     by_history: dict[str, list[bd.BenchQuestion]] = {}
     for q in chosen:
@@ -766,6 +764,7 @@ async def run_benchmark(
                 cache.answers.put(
                     akey,
                     {
+                        "model": answer_model,
                         "answer": answer,
                         "answer_ms": answer_ms,
                         "input_tokens": res.input_tokens,
@@ -960,6 +959,160 @@ async def run_benchmark(
         "errors": errors,
         "records": [dataclasses.asdict(r) for r in records],
     }
+
+
+def context_base(
+    bench: bd.Benchmark, ingest_mode: str, token_budget: int, system: str, q: bd.BenchQuestion
+) -> str:
+    """What a context depends on, before the code version."""
+    return _key(bench.name, bench.variant, bench.sha256, ingest_mode, token_budget, system, q.id)
+
+
+#: Dry-run assumptions where no measured value is cached yet.
+ANSWER_OUTPUT_ASSUMED = 80
+REASONING_OUTPUT_ASSUMED = 1500
+JUDGE_OUTPUT_ASSUMED = 2
+
+
+def estimate_run(
+    bench: bd.Benchmark,
+    questions: Sequence[bd.BenchQuestion],
+    *,
+    systems: Sequence[str],
+    answer_models: Sequence[str],
+    judge_model: str,
+    token_budget: int = DEFAULT_TOKEN_BUDGET,
+    ingest_mode: str = "segments",
+    cache_dir: str | None = None,
+    carry_forward: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Tokens and spend per (system, answer model) cell, with nothing ingested or called.
+
+    A cell's answer input is its reader prompt over the cached context when
+    one exists, else over a context filled to ``token_budget``. Output is the
+    mean the cache measured for that model, else an assumption (stated in the
+    result). A cached answer or judgement costs nothing: it is not asked
+    again. Tokens are estimated at four characters each.
+    """
+    from robothor.memory.eval_hosted import cost_usd, is_hosted, is_reasoning, price
+    from robothor.memory.eval_systems import estimate_tokens
+
+    cache = BenchCache(cache_dir)
+    version = code_version()
+    measured: dict[str, list[int]] = {}
+    for row in cache.answers.rows.values() if cache.answers else []:
+        if row.get("model") and row.get("output_tokens") is not None:
+            measured.setdefault(row["model"], []).append(int(row["output_tokens"]))
+
+    def _price(model: str) -> tuple[float, float]:
+        return price(model) if is_hosted(model) else (0.0, 0.0)
+
+    def _cost(model: str, tin: int, tout: int) -> float:
+        return cost_usd(model, tin, tout) if is_hosted(model) else 0.0
+
+    judged = bench.name == "longmemeval"
+    prices = {m.removeprefix("openai/"): list(_price(m)) for m in [*answer_models, judge_model]}
+    cells: list[dict[str, Any]] = []
+    for model in answer_models:
+        out_mean = measured.get(model)
+        answer_out = (
+            round(sum(out_mean) / len(out_mean))
+            if out_mean
+            else ANSWER_OUTPUT_ASSUMED + (REASONING_OUTPUT_ASSUMED if is_reasoning(model) else 0)
+        )
+        for system in systems:
+            c: dict[str, Any] = {
+                "system": system,
+                "answer_model": model,
+                "questions": len(questions),
+                "cached_contexts": 0,
+                "cached_answers": 0,
+                "cached_judgements": 0,
+                "answer_input_tokens": 0,
+                "answer_output_tokens": 0,
+                "judge_input_tokens": 0,
+                "judge_output_tokens": 0,
+            }
+            for q in questions:
+                base = context_base(bench, ingest_mode, token_budget, system, q)
+                ctx = cache.context(base, version, carry_forward=system in carry_forward)
+                if ctx is not None:
+                    c["cached_contexts"] += 1
+                    prompt, _k, _m = answer_prompt(bench, q, _prompt_items(ctx))
+                    ain = estimate_tokens(prompt)
+                    akey = _key(ctx.get("key", ""), model, ANSWER_PROMPT_VERSION)
+                else:
+                    prompt, _k, _m = answer_prompt(bench, q, [])
+                    ain = estimate_tokens(prompt) + token_budget
+                    akey = ""
+                cached = cache.answers.get(akey) if (akey and cache.answers) else None
+                if cached is not None:
+                    c["cached_answers"] += 1
+                else:
+                    c["answer_input_tokens"] += ain
+                    c["answer_output_tokens"] += answer_out
+                if not judged:
+                    continue
+                jkey = _key(akey, judge_model, BENCH_JUDGE_VERSION) if akey else ""
+                if jkey and cache.judgements and cache.judgements.get(jkey) is not None:
+                    c["cached_judgements"] += 1
+                    continue
+                response = cached["answer"] if cached else "x" * (4 * ANSWER_OUTPUT_ASSUMED)
+                c["judge_input_tokens"] += estimate_tokens(bd.longmemeval_judge_prompt(q, response))
+                c["judge_output_tokens"] += JUDGE_OUTPUT_ASSUMED
+            c["answer_cost_usd"] = _cost(model, c["answer_input_tokens"], c["answer_output_tokens"])
+            c["judge_cost_usd"] = _cost(
+                judge_model, c["judge_input_tokens"], c["judge_output_tokens"]
+            )
+            c["cost_usd"] = c["answer_cost_usd"] + c["judge_cost_usd"]
+            c["answer_output_per_question"] = answer_out
+            c["answer_output_measured"] = bool(out_mean)
+            cells.append(c)
+    return {
+        "benchmark": bench.name,
+        "variant": bench.variant,
+        "questions": len(questions),
+        "judge_model": judge_model,
+        "token_budget": token_budget,
+        "prices": prices,
+        "cells": cells,
+        "total_cost_usd": sum(c["cost_usd"] for c in cells),
+        "assumptions": [
+            "tokens estimated at 4 characters each (the repo's estimate_tokens)",
+            f"answer output {ANSWER_OUTPUT_ASSUMED} tokens per question unless measured; "
+            f"a reasoning model adds {REASONING_OUTPUT_ASSUMED} reasoning tokens",
+            f"judge output {JUDGE_OUTPUT_ASSUMED} tokens (the official ceiling is "
+            f"{bd.LONGMEMEVAL_JUDGE_MAX_TOKENS})",
+            "no cached context: the context is assumed filled to the token budget",
+            "prices are list prices per 1M tokens, input / output, in USD",
+        ],
+    }
+
+
+def format_estimate(est: dict[str, Any]) -> str:
+    lines = [
+        f"Dry run: {est['benchmark']} ({est['variant']}), {est['questions']} questions, "
+        f"judge {est['judge_model']}, context budget {est['token_budget']} tokens.",
+        "",
+        "| System | Answer model | Cached ctx / ans / judg | Answer in / out tokens | "
+        "Judge in / out tokens | Spend |",
+        "|---|---|---|---|---|---|",
+    ]
+    lines.extend(
+        f"| {c['system']} | {c['answer_model']} | {c['cached_contexts']} / "
+        f"{c['cached_answers']} / {c['cached_judgements']} | {c['answer_input_tokens']:,} / "
+        f"{c['answer_output_tokens']:,} | {c['judge_input_tokens']:,} / "
+        f"{c['judge_output_tokens']:,} | ${c['cost_usd']:.2f} |"
+        for c in est["cells"]
+    )
+    priced = ", ".join(f"{k} {v[0]} / {v[1]}" for k, v in est["prices"].items())
+    lines += [
+        "",
+        f"Total: ${est['total_cost_usd']:.2f}.",
+        f"Prices (USD per 1M tokens, in / out): {priced}.",
+        "Assumptions: " + "; ".join(est["assumptions"]) + ".",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _default_local_model() -> str:

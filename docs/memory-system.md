@@ -1505,6 +1505,99 @@ an unknown tenant is refused and there is no default.
 people asked, so its first line says so. `--redact` replaces every excerpt and
 question with its id and length.
 
+## Public long-memory benchmarks
+
+`robothor memory-eval --benchmark longmemeval|locomo` scores the memory
+system on the public benchmarks other memory systems publish results for,
+with each benchmark's own reader prompt and its own scoring
+(`robothor/memory/eval_bench_data.py` reproduces them and names the official
+source file of each). The datasets are never committed; download them first:
+
+```bash
+scripts/download_memory_benchmarks.sh ~/memory-benchmarks          # LongMemEval (cleaned) + LoCoMo
+```
+
+| Benchmark | File | Scoring reproduced |
+|---|---|---|
+| LongMemEval (MIT) | `longmemeval_s_cleaned.json` (500 questions, ~50 sessions each), `longmemeval_oracle.json` (evidence sessions only) | `src/evaluation/evaluate_qa.py`: a yes/no judge prompt per question type, `_abs` questions judged as abstention, label = "yes" in the reply; `print_qa_metrics.py`: overall, task-averaged and abstention accuracy |
+| LoCoMo (data CC BY-NC 4.0) | `locomo10.json` (10 conversations) | `task_eval/evaluation.py`: token F1 per category (multi-hop split on commas, open-domain on `;`); category 5 (adversarial) dropped by default, as published comparisons do; `--include-adversarial` keeps it |
+
+Check the LoCoMo licence before running it: it is non-commercial.
+
+**What a run does.** Each history is written into its own eval tenant
+(`memory-eval-bench`, cleaned before and after every history, never any other
+tenant) through the product's write path, at the benchmark's clock: chat turns
+through `save_exchange`, stamped with the session time, then
+`segments.index_conversation`. With `--ingest extract` the conversation's fact
+extraction runs too (`ingestion.ingest_content` per role, the other role
+read-only, in windows of the product's transcript cap) with the session's date
+as the extraction's "today" (`facts.extraction_reference_date`), and every fact
+row written is stamped with the session time. Extraction is the slow part (on
+the local 8B model, about a minute per session), so `segments` is the default
+and every report names the mode. `recall_today` (main's recall: facts only,
+reranked head only) reads extracted facts and returns nothing in `segments`
+mode; compare it only on an `extract` run. Then each system retrieves at
+`--context-tokens` (default: the product's recall cap, 1,000 tokens), the
+answer model answers with the benchmark's reader prompt (LongMemEval's, no
+chain of thought, session dates shown as `Session Date:` lines), and the
+judge scores.
+
+**Ingest once, ask many.** `--bench-dir` caches every context (by benchmark
+file, ingest mode, budget, system, question and the memory package's code
+version), every answer (by context, answer model and prompt version) and every
+judgement (by answer, judge model and judge version). A second answer model
+reuses the contexts without ingesting; a rerun never pays for an answer twice;
+`--carry-forward recall_today` reuses that system's contexts from any earlier
+code version, so a cell whose code did not change is not re-answered and the
+report says it was carried forward. `--progress` makes a run resumable.
+
+**Hosted models.** `--answer-models openai/gpt-5-mini,openai/gpt-4o
+--judge-model openai/gpt-4o-2024-08-06` answers with hosted models (one cell
+per answer model) through litellm; the key and endpoint are read from the
+process environment (`OPENAI_API_KEY`, `OPENAI_API_BASE`) and are written to no
+file. At most four hosted calls are in flight; rate limits back off. Embedding,
+reranking, ingestion and extraction stay local. `--dry-run` ingests and calls
+nothing: it prints the questions, the estimated input and output tokens of the
+answers and the judge per cell, and the spend at the list prices in
+`robothor/memory/eval_hosted.py` (check them before a run); a real run reports
+the provider's token counts and their cost.
+
+**Development and held-out halves.** Every report scores two seeded halves of
+the benchmark (`--split-seed`, default 885, stratified by question type) as
+well as the whole. Diagnose losses on `dev` only (`--half dev`); `held_out` is
+never tuned on, so a gain that holds there is not fitted to the questions.
+
+**Reading the result.** Per system: accuracy overall (question-weighted),
+task-averaged (the mean of the per-type accuracies, which several published
+tables use), per question type, and the abstention questions on their own
+(also counted in their type); the context tokens per question (mean and
+median), retrieval and answer latency; errors, scored as wrong. Before any
+question, a LongMemEval judge is checked on planted responses (each reference
+answer phrased plainly, another question's answer, a plain "not mentioned",
+and a confident answer to an unanswerable question); below 90% on either side
+the run stops. The official repository ships no human-labelled judgements, so
+agreement with the official judge cannot be measured on its own data.
+
+**Comparability.** Published numbers on these benchmarks come from specific
+answer and judge models, and the answer model moves a score more than the
+memory does. LongMemEval's official judge is `gpt-4o-2024-08-06` at
+temperature 0 with at most 10 tokens; any other judge (a local model, say) is a
+deviation and the report names it. State beside every number of ours: the
+answer model, the judge, the context budget, the ingest mode, the subset (and
+its per-type counts), and the dataset file's SHA-256. Compare it only with
+published rows that used the same answer model and the official judge, and
+read it beside the same answer model's full-context and oracle scores
+(`full_context_unbounded` on the oracle file is the reader's own ceiling).
+LongMemEval-S histories (~115k tokens) do not fit a local 32B model's
+context; a full-context row for a hosted model is the published one, not ours.
+On LoCoMo the conversations fit any modern context, so a LoCoMo score means
+little without a full-context row from the same answer model. Many LoCoMo
+comparisons use an LLM judge rather than the official F1; ours is F1.
+
+**Next benchmark.** BEAM (ICLR 2026, conversations of 128K to 10M tokens,
+nugget-scored by an LLM judge) measures memory beyond any context window, which
+LongMemEval-S does not; it is the next one to support.
+
 ## Ingestion Pipeline
 
 The full pipeline: extract facts with their mentions and relations, resolve

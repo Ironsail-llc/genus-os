@@ -42,6 +42,8 @@ def cmd_memory_eval(args: argparse.Namespace) -> int:
     eval sit broken behind row-level security while still looking like an
     ordinary failing test.
     """
+    if getattr(args, "benchmark", None):
+        return _cmd_benchmark(args)
     if getattr(args, "answers", False):
         if not getattr(args, "world", False):
             print("memory-eval cannot run: --answers needs --world")
@@ -224,3 +226,141 @@ def _cmd_answers(args: argparse.Namespace) -> int:
         (BASELINE_DIR / "world-baseline.md").write_text(markdown, encoding="utf-8")
         print(f"recorded baseline under {BASELINE_DIR}")
     return 0
+
+
+#: The world's systems default; a benchmark run without --systems uses its own.
+_WORLD_SYSTEMS = "recall,recall_budget,keyword_only,raw_verbatim,full_context"
+_BENCH_SYSTEMS = "recall_today,recall"
+
+
+def _cmd_benchmark(args: argparse.Namespace) -> int:
+    """A public long-memory benchmark: dry run, or ingest, answer and score.
+
+    One run per answer model (``--answer-models``), all sharing ``--bench-dir``:
+    the first ingests and retrieves, the rest reuse its contexts. Exit 0 when
+    it ran, 3 when it could not.
+    """
+    import json
+
+    from robothor.memory import eval_bench as eb
+    from robothor.memory import eval_bench_data as bd
+    from robothor.memory.eval_systems import make_systems
+    from robothor.memory.recall import RECALL_CONTEXT_CHARS
+
+    path = Path(args.benchmark_path or "")
+    if not args.benchmark_path or not path.is_file():
+        print(
+            f"memory-eval cannot run: benchmark file not found: {path} (see docs/memory-system.md)"
+        )
+        return 3
+    systems_arg = args.systems if args.systems != _WORLD_SYSTEMS else _BENCH_SYSTEMS
+    systems = [s.strip() for s in systems_arg.split(",") if s.strip()]
+    try:
+        make_systems(systems)
+    except ValueError as e:
+        print(f"memory-eval cannot run: {e}")
+        return 3
+    bench = bd.load_benchmark(args.benchmark, path)
+    drop = (
+        () if (args.include_adversarial or args.benchmark != "locomo") else bd.LOCOMO_DEFAULT_DROP
+    )
+    questions = bd.select_questions(
+        bench.questions,
+        limit=args.limit,
+        limit_per_type=args.limit_per_type,
+        drop_types=drop,
+        abstention_stratum=args.abstention_stratum,
+    )
+    split_seed = args.split_seed if args.split_seed is not None else eb.DEFAULT_SPLIT_SEED
+    if args.half != "all":
+        split = eb.dev_split(bench.questions, seed=split_seed)
+        questions = [q for q in questions if split.get(q.id) == args.half]
+    budget = args.context_tokens or RECALL_CONTEXT_CHARS // 4
+    models = [
+        m.strip() for m in (args.answer_models or args.answer_model or "").split(",") if m.strip()
+    ]
+    if not models:
+        from robothor.llm import ollama
+
+        models = [ollama.GENERATION_MODEL]
+    judge = args.judge_model or models[0]
+    carry = [s.strip() for s in args.carry_forward.split(",") if s.strip()]
+    tenant = args.tenant or eb.BENCH_TENANT
+
+    if args.dry_run:
+        try:
+            est = eb.estimate_run(
+                bench,
+                questions,
+                systems=systems,
+                answer_models=models,
+                judge_model=judge,
+                token_budget=budget,
+                ingest_mode=args.ingest,
+                cache_dir=args.bench_dir,
+                carry_forward=carry,
+            )
+        except ValueError as e:
+            print(f"memory-eval cannot run: {e}")
+            return 3
+        print(
+            f"{len(questions)} questions selected: "
+            + ", ".join(f"{t} {n}" for t, n in sorted(_count(questions).items()))
+        )
+        print(eb.format_estimate(est))
+        return 0
+
+    blocked = preflight(tenant)
+    if blocked:
+        print(f"memory-eval cannot run: {blocked}")
+        return exit_code_for(None, blocked)
+    reports = []
+    for model in models:
+        progress = None
+        if args.progress:
+            progress = args.progress if len(models) == 1 else f"{args.progress}.{_slug(model)}"
+        try:
+            report = asyncio.run(
+                eb.run_benchmark(
+                    bench,
+                    systems=systems,
+                    questions=questions,
+                    token_budget=budget,
+                    answer_model=model,
+                    judge_model=judge,
+                    ingest_mode=args.ingest,
+                    tenant_id=tenant,
+                    progress_path=progress,
+                    cache_dir=args.bench_dir,
+                    carry_forward=carry,
+                    concurrency=args.concurrency,
+                    cleanup=not args.keep,
+                    split_seed=split_seed,
+                )
+            )
+        except (EvalPreconditionError, ValueError) as e:
+            print(f"memory-eval cannot run: {e}")
+            return 3
+        reports.append(report)
+        markdown = eb.format_bench_markdown(report)
+        if args.report:
+            out = Path(args.report if len(models) == 1 else f"{args.report}.{_slug(model)}.json")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
+            out.with_suffix(".md").write_text(markdown, encoding="utf-8")
+            print(f"report: {out}")
+        print(markdown)
+    return 0
+
+
+def _count(questions: list) -> dict[str, int]:  # type: ignore[type-arg]
+    out: dict[str, int] = {}
+    for q in questions:
+        out[q.question_type] = out.get(q.question_type, 0) + 1
+    return out
+
+
+def _slug(model: str) -> str:
+    import re
+
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", model)

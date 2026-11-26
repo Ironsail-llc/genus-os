@@ -896,6 +896,82 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Also write the report as the recorded world baseline under docs/benchmarks/memory/",
     )
 
+    memeval_parser.add_argument(
+        "--benchmark",
+        choices=["longmemeval", "locomo"],
+        default=None,
+        help="Run a public long-memory benchmark from --benchmark-path instead of the suite",
+    )
+    memeval_parser.add_argument(
+        "--benchmark-path", default=None, help="Local benchmark file (downloaded, never committed)"
+    )
+    memeval_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="With --benchmark: at most this many questions, stratified by type",
+    )
+    memeval_parser.add_argument(
+        "--limit-per-type",
+        type=int,
+        default=None,
+        help="With --benchmark: at most this many questions per type",
+    )
+    memeval_parser.add_argument(
+        "--abstention-stratum",
+        action="store_true",
+        help="With --benchmark: abstention questions get their own quota in --limit / --limit-per-type",
+    )
+    memeval_parser.add_argument(
+        "--half",
+        choices=["dev", "held_out", "all"],
+        default="all",
+        help="With --benchmark: only the seeded dev half, only the held-out half, or both",
+    )
+    memeval_parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=None,
+        help="With --benchmark: seed of the dev / held-out split",
+    )
+    memeval_parser.add_argument(
+        "--ingest",
+        choices=["segments", "extract"],
+        default="segments",
+        help="With --benchmark: raw chat and segments only, or also the product's fact extraction",
+    )
+    memeval_parser.add_argument(
+        "--context-tokens",
+        type=int,
+        default=None,
+        help="With --benchmark: context budget per question (default: the product's recall cap)",
+    )
+    memeval_parser.add_argument(
+        "--answer-models",
+        default=None,
+        help="With --benchmark: comma-separated answer models, one cell each (openai/<id> is hosted)",
+    )
+    memeval_parser.add_argument(
+        "--bench-dir",
+        default=None,
+        help="With --benchmark: cache of contexts, answers and judgements, reused across runs",
+    )
+    memeval_parser.add_argument(
+        "--carry-forward",
+        default="",
+        help="With --benchmark: systems whose cached contexts from any code version are reused",
+    )
+    memeval_parser.add_argument(
+        "--include-adversarial",
+        action="store_true",
+        help="With --benchmark locomo: keep category 5, which published comparisons drop",
+    )
+    memeval_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --benchmark: print the questions, tokens and spend per cell; ingest and call nothing",
+    )
+
     # memory-replay — read-only dry run: real questions, today's recall vs the new
     from robothor.cli.memory_replay import add_parser as _add_memory_replay
 

@@ -441,3 +441,24 @@ class TestLoCoMoScore:
         nltk = pytest.importorskip("nltk")
         assert nltk is not None
         assert bd.locomo_f1_score("running dogs", "run dog") == 1.0
+
+
+class TestAbstentionStratum:
+    def test_abstention_questions_can_be_their_own_stratum(self, lme_path):
+        bench = bd.load_benchmark("longmemeval", lme_path)
+        picked = bd.select_questions(bench.questions, limit_per_type=1, abstention_stratum=True)
+        # The fixture's only multi-session question is _abs: five types plus abstention.
+        assert len(picked) == 6
+        assert any(q.abstention for q in picked)
+
+    def test_the_abstention_stratum_takes_its_own_quota(self, tmp_path):
+        data = [_lme_entry(f"m{i}", "multi-session", "Q?", "A") for i in range(4)]
+        data += [_lme_entry(f"m{i}_abs", "multi-session", "Q?", "Not said.") for i in range(4)]
+        path = tmp_path / "longmemeval_s_cleaned.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        bench = bd.load_benchmark("longmemeval", path)
+        picked = bd.select_questions(bench.questions, limit_per_type=2, abstention_stratum=True)
+        assert sum(q.abstention for q in picked) == 2
+        assert sum(not q.abstention for q in picked) == 2
+        plain = bd.select_questions(bench.questions, limit_per_type=2)
+        assert len(plain) == 2
