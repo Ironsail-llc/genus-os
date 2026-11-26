@@ -1593,3 +1593,47 @@ def test_a_provisional_node_is_never_tagged_by_a_merge(world: World) -> None:
         "SELECT evidence FROM memory_resolution_decisions WHERE id = %s", (created.decision_id,)
     )
     assert "via_merge" not in evidence and "merge_collapsed" not in evidence
+
+
+# ═══ planner statistics after bulk writes ════════════════════════════════
+
+
+def _analyze_count(world: World, table: str) -> int:
+    """Manual ANALYZE runs only (autovacuum's are counted apart)."""
+    world.q("SELECT pg_stat_clear_snapshot()")
+    return int(
+        world.one("SELECT analyze_count FROM pg_stat_user_tables WHERE relname = %s", (table,)) or 0
+    )
+
+
+def test_a_writing_backfill_refreshes_the_statistics_of_what_it_filled(world: World) -> None:
+    """The graph walk planned without statistics on freshly filled tables and
+    took seconds per call; a backfill that writes mentions analyzes them."""
+    from robothor.memory.identity import backfill_mentions
+
+    _backfill_world(world)
+    before = {t: _analyze_count(world, t) for t in ("memory_mentions", "memory_entities")}
+    report = backfill_mentions(TENANT, dry_run=False)
+    assert report["mentions_written"] > 0
+    for table, count in before.items():
+        assert _analyze_count(world, table) > count, table
+
+
+def test_a_dry_run_backfill_analyzes_nothing(world: World) -> None:
+    from robothor.memory.identity import backfill_mentions
+
+    _backfill_world(world)
+    before = _analyze_count(world, "memory_mentions")
+    backfill_mentions(TENANT, dry_run=True)
+    assert _analyze_count(world, "memory_mentions") == before
+
+
+def test_a_large_crm_sync_refreshes_entity_statistics(world: World, monkeypatch) -> None:
+    from robothor.memory import identity
+
+    monkeypatch.setattr(identity, "SYNC_ANALYZE_MIN_ROWS", 2)
+    for i in range(3):
+        world.person(f"Pat{i}", "Example", f"pat{i}@example.com")
+    before = _analyze_count(world, "memory_entities")
+    identity.sync_crm_entities(TENANT)
+    assert _analyze_count(world, "memory_entities") > before

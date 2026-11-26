@@ -82,6 +82,23 @@ class TestRegistry:
         assert unbounded.equal_budget is False
         assert all(s.equal_budget for s in es.make_systems(["recall", "keyword_only"]))
 
+    def test_recall_variants_switch_the_segment_and_graph_legs_off(self):
+        on, no_seg, no_graph = es.make_systems(["recall", "recall_no_segments", "recall_no_graph"])
+        # "recall" is the product's default: the graph leg as search_facts decides.
+        assert (on.include_segments, on.include_graph) == (True, None)
+        (with_graph,) = es.make_systems(["recall_with_graph"])
+        assert with_graph.include_graph is True
+        assert (no_seg.name, no_seg.include_segments, no_seg.include_graph) == (
+            "recall_no_segments",
+            False,
+            None,
+        )
+        assert (no_graph.name, no_graph.include_segments, no_graph.include_graph) == (
+            "recall_no_graph",
+            True,
+            False,
+        )
+
     def test_unknown_system_is_refused(self):
         with pytest.raises(ValueError, match="unknown system"):
             es.make_systems(["oracle"])
@@ -244,7 +261,10 @@ class TestSystemsOnASeededWorld:
             bundle = await system.retrieve(case, world_handle=seeded, token_budget=800)
             assert bundle.items, system.name
             kinds[system.name] = {i.kind for i in bundle.items}
-        assert kinds["recall"] == {"fact"}
+        # Recall reads the reader's conversation segments too, as the turns
+        # they copy; it never returns a document.
+        assert "fact" in kinds["recall"]
+        assert kinds["recall"] <= {"fact", "turn"}
         assert kinds["keyword_only"] == {"fact"}
         assert kinds["raw_verbatim"] <= {"turn", "document"}
         assert kinds["full_context"] == {"turn"}
@@ -269,6 +289,26 @@ class TestSystemsOnASeededWorld:
             if case.supporting_ids[0] in {i.id for i in bundle.items}:
                 hits += 1
         assert hits >= 1
+
+    @pytest.mark.asyncio
+    async def test_recall_reaches_a_transcript_only_detail_through_its_segment_leg(self, seeded):
+        """Recall searches as the world's reader, so its conversation segments
+        count; a segment is the transcript turn it starts with."""
+        world = seeded.world
+        on, off = es.make_systems(["recall", "recall_no_segments"])
+        cases = [c for c in world.cases if c.stratum == "raw_detail"][:5]
+        hits = {"recall": 0, "recall_no_segments": 0}
+        for system in (on, off):
+            for case in cases:
+                bundle = await system.retrieve(case, world_handle=seeded, token_budget=1500)
+                _check_bundle(bundle, world, 1500)
+                if system is off:
+                    assert {i.kind for i in bundle.items} <= {"fact"}
+                hits[system.name] += any(
+                    case.gold[0].lower() in i.text.lower() for i in bundle.items
+                )
+        assert hits["recall"] >= 1
+        assert hits["recall"] >= hits["recall_no_segments"]
 
     @pytest.mark.asyncio
     async def test_full_context_is_the_newest_history_in_chronological_order(self, seeded):
@@ -311,6 +351,35 @@ class TestRecallAtEqualBudget:
         a = await product.retrieve(case, world_handle=seeded, token_budget=2048)
         b = await budget.retrieve(case, world_handle=seeded, token_budget=2048)
         _check_bundle(b, seeded.world, 2048)
-        assert {i.kind for i in b.items} == {"fact"}
+        # Facts, and the eval reader's conversation turns the segment leg adds.
+        assert {i.kind for i in b.items} <= {"fact", "turn"}
         assert [i.id for i in b.items][: len(a.items)] == [i.id for i in a.items]
         assert b.tokens > a.tokens
+
+
+class TestRecallBudgetReadsAsTheWorldReader:
+    @pytest.mark.asyncio
+    async def test_budget_variant_searches_as_the_eval_reader(self, monkeypatch):
+        """The world's conversations are private to its eval reader; the budget
+        variant must search as that reader, as ``recall`` does, or the two
+        compare different stores."""
+        from types import SimpleNamespace
+
+        calls: list[dict] = []
+
+        async def fake_search(query, **kwargs):
+            calls.append(kwargs)
+            return []
+
+        monkeypatch.setattr("robothor.memory.facts.search_facts", fake_search)
+        handle = SimpleNamespace(
+            tenant_id=EVAL_TENANT,
+            seeded=SimpleNamespace(reader_person_id="p-1"),
+            fact_id=lambda _i: None,
+            turn_id=lambda _i: None,
+        )
+        case = SimpleNamespace(question="Where does Alice work?")
+        (budget,) = es.make_systems(["recall_budget"])
+        await budget.retrieve(case, world_handle=handle, token_budget=2048)
+        assert calls
+        assert all(c.get("reader_person_id") == "p-1" for c in calls)

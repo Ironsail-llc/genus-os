@@ -28,8 +28,9 @@ scope is written only when a caller passes one explicitly (``scope=`` on
 nothing passes it yet). The mechanism is complete and tested: a private fact
 never deduplicates into, reinforces or supersedes a shared one or another
 reader's (scope is in the content hash and bounds the similarity search),
-and consolidation never mixes scopes. :func:`conversation_scope` mirrors the
-conversation-segments rule for the caller that will choose to use it.
+and consolidation never mixes scopes. :func:`conversation_scope` is the
+conversation-segments rule itself (``robothor.memory.segments``), for the caller
+that will choose to use it.
 
 Two deliberate restrictions on PRIVATE (non-shared) facts, both because no
 reader yet filters the graph by the scope of an edge's evidence (``get_entity``
@@ -69,6 +70,7 @@ from robothor.memory.graph_schema import (
     Origin,
     least_trusted,
 )
+from robothor.memory.segments import DEFAULT_MAIN_SESSION_KEY, conversation_scope
 
 logger = logging.getLogger(__name__)
 
@@ -172,43 +174,9 @@ def origin_for(
 # ═══ scope ═══════════════════════════════════════════════════════════════
 
 
-#: The operator's main session key when the engine cannot say (the segments
-#: module's default, repeated so this module does not import the engine).
-DEFAULT_MAIN_SESSION_KEY = "agent:main:primary"
-
-
-def conversation_scope(
-    session_key: str,
-    person_id: str | None,
-    *,
-    owner_person_id: str | None = None,
-    main_session_key: str = DEFAULT_MAIN_SESSION_KEY,
-) -> tuple[str, str | None]:
-    """Who owns a conversation: ``(scope_kind, scope_id)``. NOT applied by default.
-
-    A copy of ``segments.conversation_scope`` (raw-segments branch); the two must
-    become one function when the branches meet. Fails closed: ``shared`` only
-    for a workspace room (``agent:{agent}:room:{id}``); every other conversation
-    is ``user``, owned by its recorded person (``person:{id}``), else the member
-    its webchat key names (``user:{uid}``), else, for the main session, the
-    operator's person; with no owner, ``("user", None)``.
-
-    No writer stores facts under this scope today (facts stay shared, see the
-    module docstring). A caller that opts in passes the result as ``scope=``;
-    ``("user", None)`` cannot be stored as a fact scope and is refused.
-    """
-    from robothor.rooms.keys import parse_room_key
-
-    if parse_room_key(session_key) is not None:
-        return "shared", None
-    if person_id:
-        return "user", f"person:{person_id}"
-    parts = (session_key or "").split(":")
-    if len(parts) == 4 and parts[0] == "agent" and parts[2] == "user" and parts[3]:
-        return "user", f"user:{parts[3]}"
-    if session_key == main_session_key and owner_person_id:
-        return "user", f"person:{owner_person_id}"
-    return "user", None
+# The conversation-owner rule (``conversation_scope``) and the operator's main
+# session key are the segments module's, imported above, so a conversation's
+# facts and its segments always have the same owner.
 
 
 def person_of(scope_kind: str | None, scope_id: str | None) -> str | None:
@@ -872,6 +840,7 @@ __all__ = [
     "normalize_predicate",
     "origin_for",
     "recompute_edge_origins",
+    "DEFAULT_MAIN_SESSION_KEY",
     "conversation_scope",
     "person_of",
     "write_derived_fact",

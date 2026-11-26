@@ -1,7 +1,10 @@
 """search_memory and the graph leg: the reader, the labels, read-only accounting.
 
-The tool passes the caller's person id to recall as the reader whose private
-evidence the graph walk may cross, on both read paths. A row the graph leg
+The tool passes the person the run serves (``ToolContext.private_reader``,
+decided by the run in robothor/engine/private_recall.py) to recall as the
+reader whose private facts and evidence it may read, on both read paths. The
+run's identity alone is not a reader: an unattended or workspace run can
+execute as a member. A row the graph leg
 found comes back labelled with its origin and the path that reached it. A row
 found only by the graph is not logged as fact access: recall stays read-only
 and graph association is not a retrieval the agent asked for by content.
@@ -14,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from robothor.engine.private_recall import PrivateReader
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers import memory as memmod
 from robothor.identity.context import IdentityContext
@@ -28,6 +32,7 @@ IDENTITY = IdentityContext(
     person_id="11111111-1111-1111-1111-111111111111",
     role="owner",
 )
+SERVED = PrivateReader(person_id=IDENTITY.person_id, user_id="acct-1")
 
 GRAPH_ROW: dict[str, Any] = {
     "id": 7,
@@ -61,24 +66,56 @@ def routed_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fallback_path")
-async def test_the_fallback_path_passes_the_reader() -> None:
+async def test_the_fallback_path_passes_the_served_reader() -> None:
     sf = AsyncMock(return_value=[])
+    ctx = ToolContext(tenant_id="test-tenant", identity=IDENTITY, private_reader=SERVED)
     with patch("robothor.memory.facts.search_facts", sf):
-        await memmod.HANDLERS["search_memory"](
-            {"query": "x"}, ToolContext(tenant_id="test-tenant", identity=IDENTITY)
-        )
-    assert sf.call_args.kwargs["reader_scope_id"] == IDENTITY.person_id
+        await memmod.HANDLERS["search_memory"]({"query": "x"}, ctx)
+    assert sf.call_args.kwargs["reader_person_id"] == IDENTITY.person_id
+    assert sf.call_args.kwargs["reader_user_id"] == "acct-1"
+    assert sf.call_args.kwargs.get("reader_scope_id") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fallback_path")
+async def test_the_fallback_path_reads_nothing_private_for_an_unserved_identity() -> None:
+    """An identity without a served person (a cron or workspace run executing
+    as a member) reads shared facts only."""
+    sf = AsyncMock(return_value=[])
+    ctx = ToolContext(tenant_id="test-tenant", identity=IDENTITY)
+    with patch("robothor.memory.facts.search_facts", sf):
+        await memmod.HANDLERS["search_memory"]({"query": "x"}, ctx)
+    kwargs = sf.call_args.kwargs
+    assert kwargs.get("reader_person_id") is None
+    assert kwargs.get("reader_user_id") is None
+    assert kwargs.get("reader_scope_id") is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("routed_path")
-async def test_the_routed_path_passes_the_reader() -> None:
+async def test_the_routed_path_passes_the_served_reader() -> None:
     sf = AsyncMock(return_value=[])
+    ctx = ToolContext(tenant_id="test-tenant", identity=IDENTITY, private_reader=SERVED)
     with patch("robothor.memory.facts.search_facts", sf):
-        await memmod.HANDLERS["search_memory"](
-            {"query": "x"}, ToolContext(tenant_id="test-tenant", identity=IDENTITY)
-        )
-    assert sf.call_args.kwargs["reader_scope_id"] == IDENTITY.person_id
+        await memmod.HANDLERS["search_memory"]({"query": "x"}, ctx)
+    assert sf.call_args.kwargs["reader_person_id"] == IDENTITY.person_id
+    assert sf.call_args.kwargs["reader_user_id"] == "acct-1"
+    assert sf.call_args.kwargs.get("reader_scope_id") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("routed_path")
+async def test_the_routed_path_reads_nothing_private_for_an_unserved_identity() -> None:
+    """An identity without a served person (a cron or workspace run executing
+    as a member) reads shared facts only."""
+    sf = AsyncMock(return_value=[])
+    ctx = ToolContext(tenant_id="test-tenant", identity=IDENTITY)
+    with patch("robothor.memory.facts.search_facts", sf):
+        await memmod.HANDLERS["search_memory"]({"query": "x"}, ctx)
+    kwargs = sf.call_args.kwargs
+    assert kwargs.get("reader_person_id") is None
+    assert kwargs.get("reader_user_id") is None
+    assert kwargs.get("reader_scope_id") is None
 
 
 @pytest.mark.asyncio
@@ -87,7 +124,8 @@ async def test_no_identity_means_no_reader() -> None:
     sf = AsyncMock(return_value=[])
     with patch("robothor.memory.facts.search_facts", sf):
         await memmod.HANDLERS["search_memory"]({"query": "x"}, ToolContext(tenant_id="t"))
-    assert sf.call_args.kwargs["reader_scope_id"] is None
+    assert sf.call_args.kwargs.get("reader_scope_id") is None
+    assert sf.call_args.kwargs.get("reader_person_id") is None
 
 
 @pytest.mark.asyncio

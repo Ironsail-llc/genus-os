@@ -62,6 +62,38 @@ class TestSearchMemoryRecordsAccess:
         assert sorted(kwargs["fact_ids"]) == [11, 12, 13]
 
     @pytest.mark.asyncio
+    async def test_segment_and_graph_only_rows_are_never_recorded_or_logged(self) -> None:
+        """A segment's id and a graph-only row are not memory_facts rows this
+        caller was shown as facts: neither access recording nor the per-run
+        access log (which outcome utility credits) may count them."""
+        from robothor.engine.task_registry import get_task_registry
+        from robothor.engine.tools.handlers import memory as handler
+
+        rows = [
+            {"id": 11, "fact_text": "Alice prefers email.", "kind": "fact", "source": "fact"},
+            {
+                "id": 12,
+                "fact_text": "[user] the locker code",
+                "kind": "segment",
+                "source": "segment",
+            },
+            {"id": 13, "fact_text": "Bob leads billing.", "kind": "fact", "source": "graph"},
+        ]
+        record, log = MagicMock(), MagicMock()
+        ctx = ToolContext(agent_id="main", tenant_id=TENANT, run_id="run-1")
+        with (
+            patch.object(handler, "_recall_fallback", AsyncMock(return_value=(rows, "lookup"))),
+            patch("robothor.engine.feature_flags.is_rip_enabled", return_value=False),
+            patch("robothor.memory.outcomes.record_fact_access", record),
+            patch("robothor.memory.outcomes.log_fact_access", log),
+        ):
+            await handler._search_memory({"query": "billing"}, ctx)
+        await get_task_registry().drain(timeout=5.0)
+
+        assert record.call_args.kwargs["fact_ids"] == [11]
+        assert log.call_args.args[1] == [11]
+
+    @pytest.mark.asyncio
     async def test_a_read_only_caller_records_nothing(self) -> None:
         record = MagicMock()
         with patch("robothor.memory.outcomes.record_fact_access", record):
@@ -253,3 +285,64 @@ class TestRecordingRespectsTheBenchmarkSandbox:
             outcomes.record_fact_access(TENANT)
 
         conn.assert_not_called()
+
+
+class TestATurnThatRecallsNothingWritesNothing:
+    """A turn whose recall returned no fact performs no access write: no task
+    is spawned, no deferred write is queued, no connection is checked out."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rows",
+        [[], [{"id": 99, "insight_text": "Billing slips on Fridays.", "source": "insight"}]],
+        ids=["no-rows", "no-fact-rows"],
+    )
+    async def test_search_memory_with_no_fact_rows(self, rows: list[dict[str, Any]]) -> None:
+        from robothor.engine.tools.handlers import memory as handler
+        from robothor.memory import outcomes
+
+        registry = MagicMock()
+        connect = MagicMock()
+        with (
+            patch.object(handler, "_recall_fallback", AsyncMock(return_value=(rows, "lookup"))),
+            patch("robothor.engine.feature_flags.is_rip_enabled", return_value=False),
+            patch("robothor.engine.task_registry.get_task_registry", return_value=registry),
+            patch.object(outcomes, "get_connection", connect),
+        ):
+            await handler._search_memory({"query": "billing"}, _ctx())
+
+        registry.spawn.assert_not_called()
+        connect.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "message",
+        ["say pong", "Tell Alice about the invoice"],
+        ids=["no-candidates", "candidates-but-no-rows"],
+    )
+    def test_warmup_with_nothing_injected(self, message: str) -> None:
+        from robothor.engine import warmup
+        from robothor.memory import outcomes
+
+        defer = MagicMock()
+        connect = MagicMock()
+        with (
+            patch("robothor.db.get_connection") as fetch_conn,
+            patch.object(warmup, "_defer_write", defer),
+            patch.object(outcomes, "get_connection", connect),
+        ):
+            cur = fetch_conn.return_value.__enter__.return_value.cursor.return_value
+            cur.fetchall.return_value = []
+            assert warmup._build_entity_context(message, tenant_id=TENANT) == ""
+
+        defer.assert_not_called()
+        connect.assert_not_called()
+
+    def test_recording_empty_or_blank_lists_opens_no_connection(self) -> None:
+        from robothor.memory import outcomes
+
+        connect = MagicMock()
+        with patch.object(outcomes, "get_connection", connect):
+            outcomes.record_fact_access(TENANT, fact_ids=[], content_hashes=[])
+            outcomes.record_fact_access(TENANT, fact_ids=[0], content_hashes=[""])
+
+        connect.assert_not_called()

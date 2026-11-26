@@ -93,7 +93,7 @@ class Graph:
                 tenant,
                 list(aliases),
                 "user" if scope_id else "shared",
-                scope_id,
+                _owner(scope_id),
                 crm_person_id,
             ),
         )
@@ -121,7 +121,7 @@ class Graph:
                 tenant,
                 origin,
                 "user" if scope_id else "shared",
-                scope_id,
+                _owner(scope_id),
                 active,
                 importance,
                 person_id,
@@ -173,6 +173,14 @@ class Graph:
         tenant = kw.get("tenant", TENANT)
         support = self.fact(f"link {a}-{b}", tenant=tenant, origin=origin)
         return self.edge(a, b, evidence=(support,), **kw)
+
+
+def _owner(scope_id: str | None) -> str | None:
+    """A row owner in the write path's id space (``person:{id}``): a bare CRM
+    person id given by a test is stored as that person, as the write path does."""
+    from robothor.memory.visibility import normalize_reader
+
+    return (normalize_reader(scope_id) or scope_id) if scope_id else None
 
 
 @pytest.fixture
@@ -629,6 +637,25 @@ def test_a_single_token_name_is_never_a_seed(world: Graph) -> None:
     world.entity("Alice Smith")
     world.entity("Alice")  # even an entity whose whole name is one token
     assert seeds_from_text(TENANT, "Tell Alice about the plan") == []
+
+
+def test_a_full_name_shared_by_two_nodes_is_not_a_seed(world: Graph) -> None:
+    """Seed linking follows identity's read-only lookup: an ambiguous name
+    resolves to no one, so the walk never starts from the wrong person."""
+    from robothor.memory.activation import seeds_from_text
+
+    world.entity("Jordan Lee")
+    world.entity("Jordan Lee", entity_type="organization")
+    assert seeds_from_text(TENANT, "what did Jordan Lee decide?") == []
+
+
+def test_a_private_node_is_never_a_seed_from_text(world: Graph) -> None:
+    """Identity's lookup sees shared nodes only; a node private to one reader
+    must not be found by its name in anyone's question."""
+    from robothor.memory.activation import seeds_from_text
+
+    world.entity("Casey Morgan", scope_id="person:" + str(uuid.uuid4()))
+    assert seeds_from_text(TENANT, "remind me about Casey Morgan") == []
 
 
 def test_an_email_in_the_text_is_a_strong_key(world: Graph) -> None:

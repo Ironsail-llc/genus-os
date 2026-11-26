@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -43,6 +44,12 @@ from robothor.memory.drift import (
 )
 from robothor.memory.recall import Candidate, apply_reserved, fuse, relevance_from_rank
 from robothor.memory.vector_tuning import apply_hnsw_session
+from robothor.memory.visibility import (
+    fact_visibility_sql,
+    graph_reader,
+    readers_for,
+    served_reader,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1327,6 +1334,24 @@ _GRAPH_FIELDS = (
 )
 
 
+#: Time the graph leg of ``search_facts`` may take, enforced by Postgres on
+#: the leg's own connection (``activation.graph_candidates_for_query``). On
+#: timeout the leg returns nothing and the other legs' results stand. Warm-up
+#: has its own, tighter budget (``warmup.GRAPH_WARMUP_BUDGET_SECONDS``).
+GRAPH_LEG_BUDGET_SECONDS = 0.25
+
+#: Whether search_facts runs the graph-activation leg unless told otherwise.
+#: Off: on the memory evaluation's world, dev split, the leg did not
+#: earn its place. Multi-hop top-5 21/126 with it against 20/126 without
+#: (top-10 34 against 37); raw detail 27/110 against 40/110, its candidates
+#: crowding conversation segments out of the reranked head. Reserved places
+#: (2, 1, 0), seed linking (possessives), 10 or 20 facts per entity and a query
+#: rerank of its candidates did not change that. The design's fallback: the
+#: graph serves identity and current state; this leg runs on an explicit
+#: ``include_graph=True``.
+GRAPH_LEG_DEFAULT = False
+
+
 async def _graph_leg(
     query: str,
     legs: dict[str, list[Candidate]],
@@ -1356,6 +1381,7 @@ async def _graph_leg(
             person_restricted=restricted,
             person_id=scope.person_id if restricted and scope is not None else None,
             limit=max(activation.LIMIT, limit),
+            deadline=time.monotonic() + GRAPH_LEG_BUDGET_SECONDS,
             connect=get_connection,
         )
     except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
@@ -1620,8 +1646,10 @@ async def search_facts(
     reader_person_id: str | None = None,
     room_ids: Iterable[str] | None = None,
     reader_user_id: str | None = None,
-    include_graph: bool = True,
+    include_graph: bool | None = None,
     reader_scope_id: str | None = None,
+    *,
+    admin_erasure_view: bool = False,
 ) -> list[dict[str, Any]]:
     """Hybrid recall: named legs fused by RRF, graded rerank, one relevance scale.
 
@@ -1629,8 +1657,9 @@ async def search_facts(
         1. Legs: ``vector`` (HNSW cosine) and ``keyword`` (full text, every
            term, then any term) over memory_facts; ``graph`` (activation
            from the entities the query names and the top hits mention, see
-           robothor/memory/activation.py) unless ``include_graph=False``,
-           with ``entity_expansion`` as its fallback when ``expand_entities``;
+           robothor/memory/activation.py) only when ``include_graph=True``
+           (off by default, ``GRAPH_LEG_DEFAULT``); ``entity_expansion``
+           when ``expand_entities`` and the graph leg found nothing;
            ``segment`` (raw conversation, on by default); ``insight`` /
            ``episode`` / ``chat_turn`` when asked for. Each fact leg fetches
            max(30, limit * 3).
@@ -1648,18 +1677,24 @@ async def search_facts(
         active_only: If True, only return active (non-superseded) facts.
         use_reranker: If True, run reranker on candidates. If None (default),
             honors MEMORY_RERANK_ENABLED env flag (on by default).
-        expand_entities: The graph leg runs (it is on by default anyway),
-            and when it returns nothing the one-hop ``entity_expansion`` leg
-            pulls related entity facts as before.
-        include_graph: Run the graph-activation leg (default True). Its rows
+        expand_entities: Run the one-hop ``entity_expansion`` leg: facts
+            about entities related to the top hits' entities. With
+            ``include_graph`` it runs only when the graph leg returns nothing.
+        include_graph: Run the graph-activation leg. ``None`` (the default)
+            reads ``GRAPH_LEG_DEFAULT`` at call time: off, see its comment for
+            why. Its rows
             carry ``origin`` (NULL reads as ``agent_generated``),
             ``graph_hops`` and ``graph_path``; a row found only by it has
             ``source="graph"``. It walks every origin: this is a deliberate
             search, not automatic recall. Read-only, like every leg.
-        reader_scope_id: The reader's person id. The graph walk crosses only
-            edges with a supporting fact that is shared or scoped to this
-            reader. None: ``scope.person_id`` when a scope is given, else
-            only shared evidence.
+        reader_scope_id: Another id of the reader (``person:{id}``,
+            ``user:{uid}``, ``agent:{id}``, or a bare CRM person id), for a
+            caller outside a run; the engine passes none (its reader is
+            ``reader_person_id`` / ``reader_user_id``). Every fact leg returns
+            shared rows plus rows owned by one of the reader's ids; the graph
+            walk reads as the person, else the user (``visibility.graph_reader``).
+            A restricted ``scope`` only narrows the reader
+            (``visibility.served_reader``).
         scope: Optional "own data + shared" DataScope (Task 5, Unified
             Identity Context). ``None`` (the default — every pre-existing
             caller) is unrestricted. A restricted scope adds
@@ -1670,23 +1705,35 @@ async def search_facts(
             legs cannot filter by person, so a restricted scope leaves them
             out (the router's rule for unscopable stores) — see
             robothor/identity/scope.py. The segment leg can filter by person
-            and stays on, but the scope only narrows its reader: the reader
-            passed is kept only when it is the scope's person (and its user id
-            only when it belongs to that person); a restricted scope never
-            makes anyone a reader.
+            and stays on, read by the same reader as the fact legs, which the
+            scope only narrows: the reader passed is kept only when it is the
+            scope's person (and its user id only when it belongs to that
+            person); a restricted scope never makes anyone a reader.
         include_segments: Fuse a ``segment`` leg of raw conversation
             (``robothor.memory.segments.search_segments``). On by default;
             when on, the ``chat_turn`` leg is not run even if asked for — the
             segment leg covers the same conversation with a keyword leg too.
-        reader_person_id: The reader's own person. Segments private to that
-            person are returned with the shared ones; without it, shared
-            segments only. Applied on every call; under a restricted
-            ``scope`` it is kept only when it is the scope's person.
+        reader_person_id: The person the run serves (``ToolContext.private_reader``,
+            never the run's identity alone). Facts and segments private to
+            that person are returned with the shared ones; without it, shared
+            only. Applied on every call; under a restricted ``scope`` it is
+            kept only when it is the scope's person, and ``reader_user_id``
+            only when that user provably is the same person
+            (``segments.user_belongs_to_person``).
         room_ids: Workspaces the reader can access; a workspace conversation's
             segments are returned only for these.
         reader_user_id: The reader's own user id; a member's webchat
             conversation (``agent:{agent}:user:{uid}``) is theirs. Without a
             reader person or user, no private segment is returned at all.
+        admin_erasure_view: The tenant admin's erasure view: the fact legs
+            read every owner scope, private facts included, so the admin can
+            find a fact to forget it. Keyword-only and off by default. Only the
+            bridge's admin fact search (behind ``require_tenant_admin``) passes
+            it; no agent tool, MCP tool or tool argument reaches it
+            (``robothor/memory/tests/test_erasure_view_reach.py``). The reader
+            arguments do not narrow the fact legs, the graph leg does not run
+            (its walk reads as one reader), and a restricted ``scope`` is
+            refused with ``ValueError``.
 
     Returns:
         Rows ordered best first. Each carries its payload (``fact_text``,
@@ -1694,6 +1741,8 @@ async def search_facts(
         it), ``leg_scores``, ``rrf_score``, ``fused_rank``, ``rerank_score``
         (None when not reranked) and ``relevance`` (0..1). Read-only.
     """
+    if admin_erasure_view and scope is not None and scope.restricted:
+        raise ValueError("the admin erasure view is unrestricted; it takes no restricted scope")
     if use_reranker is None:
         use_reranker = _reranker_enabled_default()
 
@@ -1717,24 +1766,48 @@ async def search_facts(
     if scope is not None and scope.restricted:
         scope_clause = "AND (person_id = %s OR person_id IS NULL)"
         scope_params = (scope.person_id,)
+    # One reader for every leg, facts, segments and the graph walk alike: the
+    # person the run serves (reader_person_id / reader_user_id, from
+    # ToolContext.private_reader). A restricted scope only NARROWS it, never
+    # supplies one: the reader is kept only when its person is the scope's
+    # person, and its user id only when that user provably is the same person;
+    # anything else reads nothing private. See robothor/memory/visibility.py.
+    _tenant = tenant_id or DEFAULT_TENANT
+    reader_person, reader_user = served_reader(scope, reader_person_id, reader_user_id)
+    if scope is not None and scope.restricted and reader_person and reader_user:
+        from robothor.memory.segments import user_belongs_to_person
+
+        if not await asyncio.to_thread(user_belongs_to_person, _tenant, reader_user, reader_person):
+            reader_user = None
+    # Who owns a row (scope_kind / scope_id, written by the write path) is
+    # checked on every call, whatever the rollout mode: shared rows, plus rows
+    # owned by one of the reader's ids. The one exception is the tenant admin's
+    # erasure view, which must see a private fact to forget it.
+    readers = readers_for(
+        scope=scope, person_id=reader_person, user_id=reader_user, extra=reader_scope_id
+    )
+    unscopable_ok = scope_clause == ""
+    if not admin_erasure_view:
+        visible_sql, visible_params = fact_visibility_sql(readers)
+        scope_clause = f"{scope_clause} AND {visible_sql}"
+        scope_params = (*scope_params, *visible_params)
     filters = f"{'AND is_active = TRUE' if active_only else ''} {scope_clause}"
     fetch_min = LEG_FETCH_MIN_WIDE if _rerank_wide_enabled() else LEG_FETCH_MIN
-    _tenant = tenant_id or DEFAULT_TENANT
 
     # Synchronous DB work inside this coroutine is the pre-existing pattern
     # (it blocks the loop for the two leg queries); it is not widened here.
     legs = _fact_legs(query, embedding, _tenant, filters, scope_params, max(fetch_min, limit * 3))
     graph: list[Candidate] = []
-    if include_graph or expand_entities:
-        reader = reader_scope_id or (scope.person_id if scope is not None else None)
+    if include_graph is None:
+        include_graph = GRAPH_LEG_DEFAULT
+    if include_graph and not admin_erasure_view:
         graph = await _graph_leg(
-            query, legs, _tenant, reader_scope_id=reader, scope=scope, limit=limit
+            query, legs, _tenant, reader_scope_id=graph_reader(readers), scope=scope, limit=limit
         )
         if graph:
             legs["graph"] = graph
-    # Nothing writes memory_mentions yet, so on existing data the graph leg is
-    # empty. Until it is not, the one-hop expansion over memory_relations and
-    # the entity names on facts answers as it did before the graph leg.
+    # The one-hop expansion over memory_relations and the entity names on
+    # facts; when the graph leg ran and found something, that replaces it.
     if expand_entities and not graph:
         seed = fuse(legs, weights=LEG_WEIGHTS)
         if seed:
@@ -1743,23 +1816,10 @@ async def search_facts(
             )
     # Insights, episodes and chat turns carry no person_id: a restricted caller
     # would read summaries built from other people's facts. As in the router,
-    # a store that cannot express person scoping is left out, not unfiltered.
-    unscopable_ok = scope_clause == ""
-    # Segments filter by reader themselves, so they stay on. A restricted scope
-    # only NARROWS the reader the caller passed (the person the run serves); it
-    # never supplies one. The reader is kept only when its person is the
-    # scope's person, and its user id only when that user provably is the same
-    # person; anything else reads no private segment.
-    segment_reader, segment_user = reader_person_id, reader_user_id
-    if scope is not None and scope.restricted:
-        from robothor.memory.segments import user_belongs_to_person
-
-        if not segment_reader or str(segment_reader) != str(scope.person_id):
-            segment_reader, segment_user = None, None
-        elif segment_user and not await asyncio.to_thread(
-            user_belongs_to_person, _tenant, segment_user, segment_reader
-        ):
-            segment_user = None
+    # a store that cannot express person scoping is left out, not unfiltered
+    # (``unscopable_ok``, decided above before the owner predicate is added).
+    # Segments filter by reader themselves, so they stay on, read by the same
+    # reader as the fact legs (decided above).
     legs.update(
         await _auxiliary_legs(
             query=query,
@@ -1771,8 +1831,8 @@ async def search_facts(
             include_chat_turns=include_chat_turns and unscopable_ok,
             include_segments=include_segments,
             limit=limit,
-            reader_person_id=segment_reader,
-            reader_user_id=segment_user,
+            reader_person_id=reader_person,
+            reader_user_id=reader_user,
             room_ids=room_ids,
         )
     )

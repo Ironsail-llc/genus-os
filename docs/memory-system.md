@@ -57,12 +57,13 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      most of its words. The first pass reads the query in web-search syntax:
      `"quoted words"` match as a phrase, `-word` excludes, and `or` is an
      operator.
-   - `graph` (on unless `include_graph=False`) — graph activation from the
-     entities the query names and the entities the top hits mention (see
-     [Associative recall](#associative-recall)). Empty until facts have
-     mentions.
-   - `entity_expansion` (`expand_entities`, only when the graph leg returned
-     nothing) — facts about entities related to the top hits' entities.
+   - `graph` (**off by default**; `include_graph=True`) — graph activation
+     from the entities the query names and the entities the top hits mention
+     (see [Associative recall](#associative-recall)). Off because it has not
+     earned its place: see [Is the graph leg on?](#is-the-graph-leg-on).
+   - `entity_expansion` (`expand_entities`; with the graph leg on, only when it
+     returned nothing) — facts about entities related to the top hits'
+     entities.
    - `segment` (`include_segments`, **on by default**) — raw conversation
      segments from `search_segments` (see
      [Conversation segments](#conversation-segments)), kind `segment`. Each
@@ -79,7 +80,8 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      asked for: both read the same conversation, and the segment leg adds a
      keyword leg and the reader rule. `search_chat_turns` itself is unchanged.
      The `segment` leg can filter by person, so it stays on under a restricted
-     scope, and its reader is then the scope's person and nothing else.
+     scope, read by the same reader as the fact legs, which the scope only
+     narrows.
 2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`); each row
    records its rank in every leg that found it (`leg_ranks`).
 3. **Reranker** (Qwen3-Reranker-0.6B, local) — on by default, off with
@@ -117,8 +119,8 @@ every path. `MEMORY_NARROW_SEARCH` is read by the `search_memory` tool, which
 decides the `include_*` arguments.
 
 The `search_memory` tool passes the reader on both paths (direct and RIP 15),
-and the reader of a private conversation is decided by the run, not inferred
-from its principal: `ToolContext.private_reader`
+and the reader of a private conversation or a private fact is decided by the
+run, not inferred from its principal or its identity: `ToolContext.private_reader`
 (`robothor/engine/private_recall.py`), which each tool turn publishes from its run. A run has
 one only when it serves a verified person in their own one-to-one
 conversation: a webchat turn in their own `agent:{agent}:user:{uid}` session
@@ -132,12 +134,16 @@ the run reads shared segments only. This is applied whatever
 workspace alone; otherwise the workspaces of the member the run serves (its
 private reader), and none for a run that serves no one. Callers that name no
 reader — the bridge's `/api/memory/search`, MCP `search_memory`, deep
-reasoning — receive no private conversation. A restricted data scope only narrows
-that reader, never creates one: `search_facts` keeps the reader only when its
-person is the scope's person, and its user id only when that user is the same
-person (an active `user_accounts` row, or a `tenant_users` row, linking them);
-with no reader, or a reader who is someone else, it returns no private
-segment. The Memory page's
+reasoning — receive no private conversation and no private fact. A restricted
+data scope only narrows that reader, never creates one
+(`visibility.served_reader`, applied once to every leg): `search_facts` keeps
+the reader only when its person is the scope's person, and its user id only
+when that user is the same person (an active `user_accounts` row, or a
+`tenant_users` row, linking them); with no reader, or a reader who is someone
+else, it returns no private segment and no private fact. Interactive warm-up
+reads the same way: the runner decides the run's private reader before the
+preamble's worker thread starts, and the graph lines read as that person
+only; the sender seeds the walk but is not a reader. The Memory page's
 fact search (`GET /api/memory/facts?q=`) asks for no segments and keeps only
 `kind == "fact"` rows, because it edits and forgets facts by id. A segment row in the
 tool's output adds `kind`, `topic`, `source_kind`, `source_ref`, `start_ref`,
@@ -156,7 +162,7 @@ tool routes through `robothor/memory/router.py`, which classifies the query
 | `exact_lookup` | Knowledge Vault captions + facts | numbers, ids, addresses |
 | `temporal` | facts + episodes | results recency-reordered (latest first) |
 | `how_to` | procedures + facts | |
-| `who_is` | facts (with the graph leg) | |
+| `who_is` | facts (with the one-hop entity expansion) | |
 | `intent` | standing intents + facts | |
 | `default` | facts + insights | no episode/entity fan-out |
 
@@ -1026,6 +1032,51 @@ call; past the call's 105 s budget a fact is stored as new
 nothing is superseded without a classification. Every database step runs off
 the event loop.
 
+### Who can read a fact
+
+A fact has an owner, `memory_facts.scope_kind` / `scope_id`, written by the
+write path: `shared` (everyone in the tenant), or private to one person
+(`user`, `person:{crm id}`), one member (`user`, `user:{uid}`) or one agent
+(`agent`, `agent:{id}`). The ids are the ones `segments.conversation_scope`
+gives a conversation's owner.
+
+One rule decides who reads it, in `robothor/memory/visibility.py`: a reader
+sees shared facts and the facts owned by one of their own ids. A reader with
+no ids sees shared facts only. The reader is the one conversation segments
+use: the person the run serves (`ToolContext.private_reader`, see above),
+never the run's identity alone. A restricted data scope only narrows it.
+
+The callers pass a person and a member id today, never an agent id, so a fact
+scoped to an agent is read by no caller yet: the rule fails closed.
+
+It is applied in every reader that returns fact text:
+
+- `search_facts`: the vector, keyword and one-hop expansion legs. The graph
+  walk (`memory_activate`) reads as one id, the person's, else the member's
+  (`visibility.graph_reader`); a bare person id is read as `person:{id}`.
+- `entities.get_all_about` and warm-up's name-matched lines (migration
+  `crm/migrations/181_memory_fact_scope_readers.sql` gives
+  `entity_facts_for_candidates` the shared-only rule, same signature).
+- Everything derived for every reader reads shared facts only: insight
+  discovery, episodes, preferences, the working context, intents, gap
+  analysis, the memory projection, `crm.dal.get_person_memory`, and the
+  nightly relation inference (`entities.find_cooccurring_entity_pairs` and
+  the fact text `lifecycle.infer_entity_relationships` prompts with), whose
+  edges every reader sees.
+- De-churn (`robothor/memory/dechurn.py`) compares near-duplicates within one
+  owner scope, so a private fact never deactivates a shared one.
+
+Not filtered: the bridge's admin fact list (`/facts` in
+`crm/bridge/routers/memory_facts.py`), browse and search alike. It is the
+tenant admin's view of what the tenant holds and the place a fact is forgotten
+from, so it shows private facts too. Its search calls
+`search_facts(..., admin_erasure_view=True)`: a keyword-only switch, off by
+default, that drops the owner rule from the fact legs and skips the graph leg.
+Only that route, behind `require_tenant_admin`, passes it; no agent tool, MCP
+tool or tool argument reaches it, which
+`robothor/memory/tests/test_erasure_view_reach.py` checks. Forget acts on a
+private fact like any other.
+
 ### Associative recall
 
 When an agent works on a person, company or task, what is connected to it
@@ -1034,14 +1085,33 @@ the entities it names and spreads activation from them over the graph; the
 walk itself is the database function `memory_activate` (migration
 `crm/migrations/*_memory_graph_activation.sql`).
 
+#### Is the graph leg on?
+
+No, not in recall and not in warm-up, unless a caller asks:
+`search_facts(include_graph=True)`, `_build_entity_context(include_graph=True)`.
+`robothor.memory.facts.GRAPH_LEG_DEFAULT` and
+`robothor.engine.warmup.WARMUP_GRAPH_DEFAULT` are `False`.
+
+The memory evaluation's synthetic world decided it (dev split, top-5 hits):
+multi-hop was 21 of 126 with the leg on and 20 without (34 against 37 at
+top-10), and raw detail fell from 40 to 27 of 110 with it on, because its
+candidates crowd conversation segments out of the reranked head. Reserved
+places (2, 1 or none), reserving only when the question itself names an
+entity, seeding from possessives, 10 or 20 facts per entity, a wider walk and
+reranking the graph's candidates by the question changed none of that. The
+walk does reach the answer of most multi-hop questions, but ranks it by
+activation mass (10th to 48th), which knows nothing of the question. The
+graph keeps serving identity and current state; recall's associative leg
+waits for a design that ranks what the walk reaches by the question.
+
 **It needs mentions.** The walk reads which entities a fact is about from
 `memory_mentions`, and nothing writes that table yet: existing memory links
 facts to entities only by name. Until mentions are written, the graph leg
-returns nothing, and `search_facts` with `expand_entities=True` (the
-`search_memory` tool's default) uses the one-hop `entity_expansion` leg as it
-did before: facts about entities related, through `memory_relations`, to the
-entities its top hits name. The expansion leg runs only when the graph leg
-returned nothing, and keeps one reserved place.
+returns nothing. `search_facts` with `expand_entities=True` (the
+`search_memory` tool's default) runs the one-hop `entity_expansion` leg: facts
+about entities related, through `memory_relations`, to the entities its top
+hits name. With the graph leg on, the expansion runs only when it returned
+nothing; it keeps one reserved place.
 
 **Seeds.** `seeds_from_text` links text to entities without a model call: exact
 full names and aliases, case-insensitively, and e-mail addresses or @handles

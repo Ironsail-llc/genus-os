@@ -57,12 +57,19 @@ def make_fact(db_conn, tenants):
     """Insert a fact and return its id; every fact made here is deleted after."""
     created: list[int] = []
 
-    def _make(text: str, *, tenant: str, entities: list[str] | None = None, active: bool = True):
+    def _make(
+        text: str,
+        *,
+        tenant: str,
+        entities: list[str] | None = None,
+        active: bool = True,
+        scope: tuple[str, str | None] = ("shared", None),
+    ):
         with db_conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO memory_facts (fact_text, category, entities, tenant_id, is_active) "
-                "VALUES (%s, 'fact', %s, %s, %s) RETURNING id",
-                (text, entities or [], tenant, active),
+                "INSERT INTO memory_facts (fact_text, category, entities, tenant_id, is_active, "
+                "scope_kind, scope_id) VALUES (%s, 'fact', %s, %s, %s, %s, %s) RETURNING id",
+                (text, entities or [], tenant, active, scope[0], scope[1]),
             )
             fact_id = int(cur.fetchone()[0])
         db_conn.commit()
@@ -427,6 +434,49 @@ def test_forgetting_another_tenants_fact_is_404_and_changes_nothing(
     resp = controls_client_as_operator.post(f"{FACTS}/{fact_id}/forget", json={"reason": "nosy"})
     assert resp.status_code == 404
     assert _row(db_conn, fact_id)["is_active"] is True
+
+
+#: A fact private to one person, as the write path scopes it.
+PRIVATE = ("user", "person:00000000-0000-0000-0000-0000000000a1")
+
+
+def test_a_query_finds_a_private_fact_so_it_can_be_forgotten(
+    controls_client_as_operator, live_db, make_fact, tenants, monkeypatch
+):
+    """The real search, not a stand-in: an admin erasing a private fact finds
+    it by searching, as browsing already does. Agents never read it."""
+    import httpx
+
+    from robothor.memory import facts
+
+    async def _no_embedding(_text: str):
+        raise httpx.ConnectError("embedding service down in this test")
+
+    monkeypatch.setattr(facts, "_embed_query", _no_embedding)
+    monkeypatch.setenv("MEMORY_RERANK_ENABLED", "0")
+    platform, _ = tenants
+    marker = uuid.uuid4().hex
+    hidden = make_fact(f"Alice's locker combination {marker}", tenant=platform, scope=PRIVATE)
+
+    body = controls_client_as_operator.get(f"{FACTS}?q={marker}&limit=5").json()
+
+    assert hidden in [f["id"] for f in body["facts"]]
+
+
+def test_forget_bounds_a_private_fact(
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn, audit_rows
+):
+    platform, _ = tenants
+    fact_id = make_fact("Alice's locker combination", tenant=platform, scope=PRIVATE)
+
+    preview = controls_client_as_operator.post(f"{FACTS}/{fact_id}/forget/preview")
+    assert preview.status_code == 200
+    resp = controls_client_as_operator.post(
+        f"{FACTS}/{fact_id}/forget", json={"reason": "erasure request"}
+    )
+    assert resp.status_code == 200
+    assert _row(db_conn, fact_id)["is_active"] is False
+    assert [r["event_type"] for r in audit_rows] == ["memory.forget"]
 
 
 def test_forgetting_a_fact_that_does_not_exist_is_404(controls_client_as_operator, live_db):

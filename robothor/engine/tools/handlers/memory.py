@@ -208,6 +208,8 @@ async def _search_memory(
     # conversation is read only for the person this run is serving in their
     # own conversation (ctx.private_reader, decided by the run); never for the
     # run's principal or identity alone. Workspaces are gated by membership.
+    # The same reader reads private facts and the graph walk's private
+    # evidence (robothor/memory/visibility.py): one answer to "who is reading".
     private = getattr(ctx, "private_reader", None)
     reader_person_id = private.person_id if private is not None else None
     reader_user_id = private.user_id if private is not None else None
@@ -340,7 +342,6 @@ async def _recall_fallback(
         reader_person_id=reader_person_id,
         reader_user_id=reader_user_id,
         room_ids=room_ids,
-        reader_scope_id=_reader(ctx),
     )
     # classify_query is a pure regex with no I/O, so the label is available on
     # this path too — the output shape stays identical across the flag.
@@ -439,15 +440,8 @@ async def _recall_routed(
         reader_person_id=reader_person_id,
         reader_user_id=reader_user_id,
         room_ids=room_ids,
-        reader_scope_id=_reader(ctx),
     )
     return out["results"], out["query_class"]
-
-
-def _reader(ctx: ToolContext) -> str | None:
-    """The caller's person id: whose private evidence the graph walk may cross."""
-    identity = getattr(ctx, "identity", None)
-    return getattr(identity, "person_id", None) if identity is not None else None
 
 
 def _argument_error(

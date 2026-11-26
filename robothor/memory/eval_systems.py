@@ -182,31 +182,48 @@ def _turn_text(at: str, role: str, text: str) -> str:
 
 
 class RecallSystem:
-    """The product retrieval path, whatever legs the checked-out code has."""
+    """The product retrieval path, whatever legs the checked-out code has.
 
-    name = "recall"
+    Searches as the world's eval reader (``SeededWorld.reader_person_id``), so
+    the reader's conversation segments are recalled; a segment enters the
+    context as the transcript turn it starts with. ``include_segments`` /
+    ``include_graph`` switch those legs off; a ``search_facts`` without them
+    ignores them.
+    """
+
     equal_budget = True
+
+    def __init__(
+        self,
+        *,
+        include_segments: bool = True,
+        include_graph: bool | None = None,
+        name: str = "recall",
+    ) -> None:
+        self.include_segments = include_segments
+        self.include_graph = include_graph
+        self.name = name
 
     async def retrieve(
         self, case: Case, *, world_handle: WorldHandle, token_budget: int
     ) -> ContextBundle:
+        import inspect
+
         from robothor.db.connection import tenant_scope
         from robothor.memory.facts import search_facts
 
         started = time.perf_counter()
         tenant = world_handle.tenant_id
+        accepted = set(inspect.signature(search_facts).parameters)
+        options: dict[str, Any] = {
+            "include_segments": self.include_segments,
+            "include_graph": self.include_graph,
+            "reader_person_id": getattr(world_handle.seeded, "reader_person_id", None),
+        }
+        extra = {k: v for k, v in options.items() if k in accepted}
         with tenant_scope(tenant):
-            rows = await search_facts(case.question, limit=_CANDIDATES, tenant_id=tenant)
-        cands: list[tuple[str, str, str]] = []
-        for row in rows:
-            fid = world_handle.fact_id(row.get("id", -1))
-            if fid is None:
-                meta = row.get("metadata") or {}
-                if isinstance(meta, str):
-                    meta = json.loads(meta)
-                fid = (meta.get("eval_world") or {}).get("fact_id")
-            if fid:
-                cands.append((fid, "fact", str(row.get("fact_text", ""))))
+            rows = await search_facts(case.question, limit=_CANDIDATES, tenant_id=tenant, **extra)
+        cands = _fact_candidates(rows, world_handle)
         return _bundle(self.name, fill_budget(cands, token_budget), token_budget, True, started)
 
 
@@ -233,10 +250,18 @@ class RecallBudgetSystem:
 
         started = time.perf_counter()
         tenant = world_handle.tenant_id
+        # As ``recall``: the world's conversations are its eval reader's.
+        reader = getattr(world_handle.seeded, "reader_person_id", None)
         with tenant_scope(tenant):
-            head = await search_facts(case.question, limit=_CANDIDATES, tenant_id=tenant)
+            head = await search_facts(
+                case.question, limit=_CANDIDATES, tenant_id=tenant, reader_person_id=reader
+            )
             tail = await search_facts(
-                case.question, limit=_CANDIDATES, tenant_id=tenant, use_reranker=False
+                case.question,
+                limit=_CANDIDATES,
+                tenant_id=tenant,
+                use_reranker=False,
+                reader_person_id=reader,
             )
         cands = _fact_candidates([*head, *tail], world_handle)
         return _bundle(self.name, fill_budget(cands, token_budget), token_budget, True, started)
@@ -245,8 +270,16 @@ class RecallBudgetSystem:
 def _fact_candidates(
     rows: Sequence[dict[str, Any]], world_handle: WorldHandle
 ) -> list[tuple[str, str, str]]:
+    """World ids for ``search_facts`` rows: a fact as its fact, a conversation
+    segment as the transcript turn it starts with (a segment's ``id`` is from
+    another table and is never read as a fact id)."""
     cands: list[tuple[str, str, str]] = []
     for row in rows:
+        if row.get("kind") == "segment":
+            turn = world_handle.turn_id(int(row.get("start_ref") or -1))
+            if turn:
+                cands.append((turn, "turn", str(row.get("fact_text", ""))))
+            continue
         fid = world_handle.fact_id(row.get("id", -1))
         if fid is None:
             meta = row.get("metadata") or {}
@@ -442,6 +475,9 @@ def _newest_turns(tenant: str) -> list[tuple[int, str, str, str]]:
 _REGISTRY: dict[str, Callable[[], MemorySystem]] = {
     "recall": RecallSystem,
     "recall_budget": RecallBudgetSystem,
+    "recall_no_segments": lambda: RecallSystem(include_segments=False, name="recall_no_segments"),
+    "recall_no_graph": lambda: RecallSystem(include_graph=False, name="recall_no_graph"),
+    "recall_with_graph": lambda: RecallSystem(include_graph=True, name="recall_with_graph"),
     "keyword_only": KeywordOnlySystem,
     "raw_verbatim": RawVerbatimSystem,
     "full_context": FullContextSystem,

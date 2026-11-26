@@ -824,6 +824,31 @@ def _name_counts(kind: str, rows: Sequence[Mapping[str, Any]]) -> dict[str, int]
     return counts
 
 
+#: A writing backfill refreshes planner statistics every this many batches,
+#: and once at the end. The graph walk (``memory_activate``) planned without
+#: statistics on freshly filled tables and took seconds per call.
+ANALYZE_EVERY_BATCHES = 20
+#: A CRM sync that creates or links at least this many nodes refreshes the
+#: statistics of ``memory_entities``.
+SYNC_ANALYZE_MIN_ROWS = 500
+#: What a backfill fills.
+_BACKFILL_TABLES = ("memory_mentions", "memory_resolution_decisions", "memory_entities")
+
+
+def analyze_tables(tenant_id: str, tables: Sequence[str]) -> None:
+    """Refresh planner statistics after a bulk write. Best-effort.
+
+    ``ANALYZE`` samples rows and changes no data; a role that does not own a
+    table is told so by a warning, not an error, so this never fails a job.
+    """
+    try:
+        with _cursor(tenant_id) as cur:
+            for table in tables:
+                cur.execute(f"ANALYZE {table}")  # noqa: S608 — fixed table names
+    except Exception as e:  # noqa: BLE001 — statistics must never fail the job
+        logger.warning("identity: ANALYZE of %s failed: %s", ", ".join(tables), e)
+
+
 def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     """Give every live CRM person and company in the tenant exactly one linked node.
 
@@ -872,6 +897,13 @@ def sync_crm_entities(tenant_id: str, *, dry_run: bool = False) -> dict[str, Any
             if not dry_run:
                 record_crm_merge(tenant_id, PERSON, keeper, loser, cur=cur)
             report["merges_recorded"] += 1
+    changed = sum(
+        report[bucket].get(action, 0)
+        for bucket in ("people", "companies")
+        for action in ("created", "linked")
+    )
+    if not dry_run and changed >= SYNC_ANALYZE_MIN_ROWS:
+        analyze_tables(tenant_id, ("memory_entities",))
     return report
 
 
@@ -2360,9 +2392,13 @@ def backfill_mentions(
             report["last_fact_id"] = cursor_id
             report["facts_scanned"] += len(facts)
             report["batches"] += 1
+        if not dry_run and report["batches"] % ANALYZE_EVERY_BATCHES == 0:
+            analyze_tables(tenant_id, _BACKFILL_TABLES)
         if len(facts) < batch_size:
             report["done"] = True
             break
+    if not dry_run and report["mentions_written"]:
+        analyze_tables(tenant_id, _BACKFILL_TABLES)
     return report
 
 
@@ -2449,34 +2485,76 @@ def find_entity(
     person who owns it would disclose what the CRM withholds from restricted
     readers. An email returns ``None``.
     """
+    return find_entities(tenant_id, [surface_form], entity_type, cur=cur).get(surface_form)
+
+
+def find_entities(
+    tenant_id: str,
+    surface_forms: Sequence[str],
+    entity_type: str | None = None,
+    *,
+    cur: Any = None,
+    light: bool = False,
+) -> dict[str, dict[str, Any] | Ambiguity | None]:
+    """:func:`find_entity` for many surface forms, in one lookup. Records nothing.
+
+    Returns each given surface form mapped to its node, an :class:`Ambiguity`,
+    or ``None``, by exactly :func:`find_entity`'s rules. ``light`` returns the
+    lookup's own rows (``id``, ``name``, ``entity_type``, ``aliases``, the CRM
+    links and scope) and saves the statement that fetches every column — for a
+    caller on a statement budget that needs only the id and name.
+    """
     _require_tenant(tenant_id)
-    if is_junk_entity_name(surface_form) or _EMAIL_RE.match(_clean(surface_form)):
-        return None
+    out: dict[str, dict[str, Any] | Ambiguity | None] = dict.fromkeys(surface_forms)
+    wanted = [
+        sf
+        for sf in dict.fromkeys(surface_forms)
+        if sf and not is_junk_entity_name(sf) and not _EMAIL_RE.match(_clean(sf))
+    ]
+    if not wanted:
+        return out
     mtype = _norm_type(entity_type)
     scope = ("shared", None, None)
     with _cursor(tenant_id, cur, read_only=cur is None) as c:
         resolver = _Resolver(c, tenant_id, read_only=True)
-        resolver.prefetch([surface_form])
-        norm = normalize_surface(surface_form)
-        found: set[int] = set()
-        for r in resolver._rows.get(norm, []):
-            if resolver._classify(r, norm) not in ("name", "alias") or not _visible(r, scope):
-                continue
-            if mtype is not None and _norm_type(r["entity_type"]) != mtype:
-                continue
-            eff = resolver.effective(r)
-            if eff is not None and _visible(eff, scope):
-                found.add(int(eff["id"]))
-        ids = sorted(found)
-        rows = [r for r in _public_row(c, tenant_id, ids) if _visible(r, scope)]
-    if not rows:
-        return None
-    if len(rows) == 1:
-        return rows[0]
-    return Ambiguity(surface_form, tuple(rows))
+        resolver.prefetch(wanted)
+        found: dict[str, set[int]] = {}
+        for sf in wanted:
+            norm = normalize_surface(sf)
+            ids: set[int] = set()
+            for r in resolver._rows.get(norm, []):
+                if resolver._classify(r, norm) not in ("name", "alias") or not _visible(r, scope):
+                    continue
+                if mtype is not None and _norm_type(r["entity_type"]) != mtype:
+                    continue
+                eff = resolver.effective(r)
+                if eff is not None and _visible(eff, scope):
+                    ids.add(int(eff["id"]))
+            if ids:
+                found[sf] = ids
+        rows: dict[int, dict[str, Any]] = {}
+        if found and light:
+            for i in set().union(*found.values()):
+                row = resolver._entity.get(i)
+                if row is not None and _visible(row, scope):
+                    rows[i] = {k: v for k, v in row.items() if k not in ("norm", "alias_norms")}
+        elif found:
+            rows = {
+                int(r["id"]): r
+                for r in _public_row(c, tenant_id, sorted(set().union(*found.values())))
+                if _visible(r, scope)
+            }
+    for sf, ids in found.items():
+        hits = [rows[i] for i in sorted(ids) if i in rows]
+        if len(hits) == 1:
+            out[sf] = hits[0]
+        elif hits:
+            out[sf] = Ambiguity(sf, tuple(hits))
+    return out
 
 
 __all__ = [
+    "ANALYZE_EVERY_BATCHES",
     "CONFIDENCE",
     "ENTITY_COLUMNS",
     "EVIDENCE_METHODS",
@@ -2485,10 +2563,13 @@ __all__ = [
     "Candidate",
     "MentionInput",
     "Outcome",
+    "SYNC_ANALYZE_MIN_ROWS",
     "ResolvedMention",
     "StrongHit",
+    "analyze_tables",
     "backfill_mentions",
     "decide",
+    "find_entities",
     "find_entity",
     "normalize_surface",
     "record_crm_merge",

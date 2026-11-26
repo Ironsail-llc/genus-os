@@ -711,6 +711,7 @@ async def index_conversation(
     *,
     tenant_id: str,
     embed_batch: Callable[[list[str]], Awaitable[list[list[float] | None]]] | None = None,
+    retention_days: int = SEGMENT_RETENTION_DAYS,
 ) -> int:
     """Segment one chat session's new turns and store them. Returns rows written.
 
@@ -726,6 +727,10 @@ async def index_conversation(
     retries the same turns. Callers on the request path must not await this
     directly; ``chat_store.save_exchange_async`` schedules it in the background
     and logs any failure.
+
+    ``retention_days`` bounds which turns are read (default: the chat
+    retention). Only a loader of back-dated history (the memory evaluation's
+    synthetic world) passes a longer window; nightly retention still applies.
     """
     if not tenant_id:
         raise ValueError("index_conversation needs a tenant_id")
@@ -736,7 +741,7 @@ async def index_conversation(
         return 0
     _IN_FLIGHT.add(key)
     try:
-        return await _index_conversation(session_key, tenant_id, embed_batch)
+        return await _index_conversation(session_key, tenant_id, embed_batch, retention_days)
     finally:
         _IN_FLIGHT.discard(key)
 
@@ -749,12 +754,13 @@ async def _index_conversation(
     session_key: str,
     tenant_id: str,
     embed_batch: Callable[[list[str]], Awaitable[list[list[float] | None]]] | None,
+    retention_days: int = SEGMENT_RETENTION_DAYS,
 ) -> int:
     conversation = await asyncio.to_thread(
         _load_conversation,
         session_key,
         tenant_id,
-        SEGMENT_RETENTION_DAYS,
+        retention_days,
         SEGMENT_INDEX_MAX_TURNS,
     )
     if conversation is None or not conversation.turns:

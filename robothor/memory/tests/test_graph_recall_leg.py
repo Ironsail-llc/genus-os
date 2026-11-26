@@ -26,7 +26,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from robothor.memory.tests.test_graph_activation import TENANT, Graph, _migration
+from robothor.memory.tests.test_graph_activation import TENANT, Graph
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -42,11 +42,16 @@ def world(scratch_db, monkeypatch) -> Iterator[Graph]:
 
     import robothor.crm.dal
     import robothor.db
+
+    # Recall reads every column the chain adds (utility, origin, scope), so
+    # the database is migrated through the last manifest entry, not only
+    # through the migration this leg introduced.
+    from robothor.db.migrate import _discover
     from robothor.llm import ollama
     from robothor.memory import entities, facts
     from robothor.rag import reranker
 
-    db, dsn = scratch_db(through=_migration())
+    db, dsn = scratch_db(through=list(_discover())[-1].migration_id)
 
     @contextmanager
     def _conn(*_a: Any, **_k: Any) -> Iterator[Any]:
@@ -63,6 +68,9 @@ def world(scratch_db, monkeypatch) -> Iterator[Graph]:
     for module in (robothor.db, facts, entities, robothor.crm.dal):
         monkeypatch.setattr(module, "get_connection", _conn)
     monkeypatch.setattr(facts, "apply_hnsw_session", lambda _cur: None)
+    # The graph leg is off by default (facts.GRAPH_LEG_DEFAULT); these tests
+    # are about the leg, so they run with it on.
+    monkeypatch.setattr(facts, "GRAPH_LEG_DEFAULT", True)
 
     async def _embed(_text: str) -> list[float]:
         return list(_VECTOR)

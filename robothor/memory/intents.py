@@ -329,6 +329,7 @@ async def infer_intents_from_facts(*, tenant_id: str = "", fact_limit: int = 50)
             """
             SELECT fact_text FROM memory_facts
             WHERE tenant_id = %s AND is_active = TRUE
+              AND scope_kind = 'shared'  -- derived for every reader: shared facts only (memory/visibility.py)
             ORDER BY created_at DESC LIMIT %s
             """,
             (resolved_tenant, fact_limit),

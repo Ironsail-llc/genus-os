@@ -130,6 +130,14 @@ def test_the_conversation_owner_rule_mirrors_the_segments_rule_and_fails_closed(
     assert conversation_scope("agent:main:telegram:4242", None) == ("user", None)
 
 
+def test_the_write_path_and_segments_share_one_conversation_owner_rule() -> None:
+    """One function decides who owns a conversation, for segments and facts alike."""
+    from robothor.memory import segments, write_path
+
+    assert write_path.conversation_scope is segments.conversation_scope
+    assert write_path.DEFAULT_MAIN_SESSION_KEY == segments.DEFAULT_MAIN_SESSION_KEY
+
+
 def test_writes_are_shared_unless_a_scope_is_asked_for() -> None:
     from robothor.memory.write_path import WriteContext
 

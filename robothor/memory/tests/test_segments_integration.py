@@ -65,9 +65,14 @@ def test_the_migration_is_in_the_manifest() -> None:
 def pg(scratch_db, monkeypatch):
     db, dsn = scratch_db(through=MIGRATION)
 
+    from robothor.db.connection import _apply_ann_scan_mode
+
     @contextlib.contextmanager
     def connect():
         conn = psycopg2.connect(dsn)
+        # What a pooled checkout does (robothor.db.connection): the iterative
+        # ANN scan is the connection's, not each search's.
+        _apply_ann_scan_mode(conn)
         try:
             yield conn
         finally:

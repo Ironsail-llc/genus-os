@@ -29,11 +29,10 @@ visibility and trust itself:
 Every function here is synchronous and does blocking database I/O: an async
 caller goes through ``asyncio.to_thread``. Nothing here writes.
 
-Seed linking is a small read-only matcher (:func:`seeds_from_text`): exact full
-names and aliases (case-insensitive, never a single token on its own), e-mail
-addresses and @handles as strong keys. The identity work builds a fuller
-read-only resolver; when it lands, :func:`_link_seeds` is the one place to
-swap.
+Seed linking (:func:`seeds_from_text`) is read-only: names and aliases go
+through identity's lookup (``robothor.memory.identity.find_entities``: one
+shared node or nothing; never a single token on its own), and e-mail addresses,
+@handles and the sender's CRM person are strong keys.
 """
 
 from __future__ import annotations
@@ -51,6 +50,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.memory.graph_schema import normalize_origin
 from robothor.memory.recall import Candidate
+from robothor.memory.visibility import normalize_reader
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -86,6 +86,9 @@ MAX_NAME_TOKENS = 4
 MAX_PHRASES = 400
 
 _WORD = re.compile(r"[^\W_]+(?:['’.-][^\W_]+)*", re.UNICODE)
+#: "Alice Smith's manager" is about Alice Smith: a possessive is dropped
+#: before the text is split into words.
+_POSSESSIVE = re.compile(r"(?<=[^\W_])['’]s\b", re.UNICODE)
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 _HANDLE = re.compile(r"(?<![\w@])@[A-Za-z0-9_][A-Za-z0-9_.]{1,63}")
 
@@ -109,9 +112,9 @@ def candidate_phrases(text: str) -> list[str]:
     """Lower-cased word runs of 2..:data:`MAX_NAME_TOKENS` tokens, shortest first.
 
     A single token is never a candidate: a first name alone must not resolve to
-    a person.
+    a person. A possessive (``'s``) is not part of the name it follows.
     """
-    words = [w.lower() for w in _WORD.findall(text or "")]
+    words = [w.lower() for w in _WORD.findall(_POSSESSIVE.sub("", text or ""))]
     out: list[str] = []
     seen: set[str] = set()
     for size in range(2, MAX_NAME_TOKENS + 1):
@@ -155,17 +158,7 @@ def _as_uuid(value: Any) -> str | None:
 
 _LINK_SQL = """
     SELECT id, name, method FROM (
-        SELECT e.id, e.name, 'full_name' AS method, 1 AS pri
-          FROM memory_entities e
-         WHERE e.tenant_id = %(t)s AND lower(e.name) = ANY(%(phrases)s::text[])
-        UNION ALL
-        SELECT e.id, e.name, 'alias', 2
-          FROM memory_entities e
-         WHERE e.tenant_id = %(t)s AND e.aliases <> '{}'
-           AND EXISTS (SELECT 1 FROM unnest(e.aliases) AS a(alias)
-                        WHERE lower(a.alias) = ANY(%(phrases)s::text[]))
-        UNION ALL
-        SELECT e.id, e.name, 'strong_key', 0
+        SELECT e.id, e.name, 'strong_key' AS method, 0 AS pri
           FROM contact_identifiers ci
           JOIN memory_entities e
             ON e.tenant_id = %(t)s
@@ -185,6 +178,29 @@ _LINK_SQL = """
 """
 
 
+def _name_seeds(cur: Any, tenant_id: str, phrases: Sequence[str]) -> list[Seed]:
+    """Entities named by ``phrases``, by identity's read-only lookup.
+
+    ``robothor.memory.identity.find_entities``: an exact name or alias of
+    exactly one shared node (a CRM merge answers as its winner). An ambiguous
+    name, a private node, a first name or nickname alone seed nothing. A
+    single-token phrase is never looked up.
+    """
+    from robothor.memory.identity import find_entities, normalize_surface
+
+    multi = [p for p in dict.fromkeys(phrases) if len(p.split()) >= 2]
+    if not multi:
+        return []
+    seeds: list[Seed] = []
+    for phrase, hit in find_entities(tenant_id, multi, cur=cur, light=True).items():
+        if not isinstance(hit, dict):
+            continue
+        name = str(hit.get("name") or "")
+        method = "full_name" if normalize_surface(name) == normalize_surface(phrase) else "alias"
+        seeds.append(Seed(entity_id=int(hit["id"]), name=name, method=method))
+    return seeds
+
+
 def _link_seeds(
     cur: Any,
     tenant_id: str,
@@ -197,6 +213,8 @@ def _link_seeds(
     """The read-only matcher behind :func:`seeds_from_text`, on an open cursor.
 
     ``phrases`` replaces :func:`candidate_phrases` of ``text`` when given.
+    Order: strong keys (e-mail, @handle, the sender's CRM person), then names
+    (identity's lookup), then ``extra_entity_ids``.
     """
     phrases = list(candidate_phrases(text) if phrases is None else phrases)
     keys = strong_keys(text)
@@ -206,15 +224,24 @@ def _link_seeds(
     sender = _as_uuid(sender_person_id)
     if not (phrases or keys or extra or sender):
         return []
-    cur.execute(
-        _LINK_SQL,
-        {"t": tenant_id, "phrases": phrases, "keys": keys, "sender": sender, "extra": extra},
-    )
+    rows: list[dict[str, Any]] = []
+    if keys or extra or sender:
+        cur.execute(
+            _LINK_SQL,
+            {"t": tenant_id, "keys": keys, "sender": sender, "extra": extra},
+        )
+        rows = list(cur.fetchall())
+    keyed = [r for r in rows if r["method"] == "strong_key"]
+    context = [r for r in rows if r["method"] != "strong_key"]
     seeds: dict[int, Seed] = {}
-    for row in cur.fetchall():
+    for row in keyed:
         eid = int(row["id"])
-        if eid not in seeds:
-            seeds[eid] = Seed(entity_id=eid, name=str(row["name"]), method=str(row["method"]))
+        seeds.setdefault(eid, Seed(entity_id=eid, name=str(row["name"]), method="strong_key"))
+    for seed in _name_seeds(cur, tenant_id, phrases):
+        seeds.setdefault(seed.entity_id, seed)
+    for row in context:
+        eid = int(row["id"])
+        seeds.setdefault(eid, Seed(entity_id=eid, name=str(row["name"]), method=str(row["method"])))
     return list(seeds.values())
 
 
@@ -335,7 +362,9 @@ def _activate_on(
             "t": tenant_id,
             "seeds": [s.entity_id for s in seeds],
             "weights": [float(s.weight) for s in seeds],
-            "reader": reader_scope_id,
+            # The write path's id space: a bare CRM person id (warm-up's
+            # sender) reads as ``person:{id}``; prefixed ids pass unchanged.
+            "reader": normalize_reader(reader_scope_id) or reader_scope_id,
             "hops": clamp_hops(max_hops),
             "fanout": int(fanout),
             "damping": float(damping),
@@ -460,6 +489,7 @@ def graph_candidates_for_query(
     person_restricted: bool = False,
     person_id: str | None = None,
     limit: int = LIMIT,
+    deadline: float | None = None,
     connect: Callable[..., Any] | None = None,
 ) -> list[Candidate]:
     """The ``graph`` leg of ``search_facts``: one connection, read-only.
@@ -472,25 +502,44 @@ def graph_candidates_for_query(
     It runs under a savepoint, so a failure (a statement timeout, a database
     not yet migrated) rolls back only this leg and never aborts a transaction
     the connection shares with the caller.
+
+    ``deadline`` (a ``time.monotonic()`` instant) bounds it on the server, as
+    :func:`recall_for_message` does: ``statement_timeout`` is armed on this
+    connection for the time left, Postgres itself stops the seed lookup and
+    the walk at the deadline (:class:`psycopg2.errors.QueryCanceled` reaches
+    the caller), and it is reset before the connection goes back; a failed
+    reset closes the connection. Nothing is cancelled from outside. A
+    deadline already past returns nothing.
     """
+    if deadline is not None and deadline <= time.monotonic():
+        return []
     with _cursor(connect) as cur:
-        cur.execute("SAVEPOINT memory_graph_leg")
+        armed = False
         try:
-            found = _query_graph(
-                cur,
-                tenant_id,
-                query,
-                seed_fact_ids,
-                reader_scope_id=reader_scope_id,
-                person_restricted=person_restricted,
-                person_id=person_id,
-                limit=limit,
-            )
-        except Exception:
-            cur.execute("ROLLBACK TO SAVEPOINT memory_graph_leg")
-            raise
-        cur.execute("RELEASE SAVEPOINT memory_graph_leg")
-        return found
+            if deadline is not None:
+                left_ms = max(1, int((deadline - time.monotonic()) * 1000))
+                cur.execute("SELECT set_config('statement_timeout', %s, false)", (f"{left_ms}ms",))
+                armed = True
+            cur.execute("SAVEPOINT memory_graph_leg")
+            try:
+                found = _query_graph(
+                    cur,
+                    tenant_id,
+                    query,
+                    seed_fact_ids,
+                    reader_scope_id=reader_scope_id,
+                    person_restricted=person_restricted,
+                    person_id=person_id,
+                    limit=limit,
+                )
+            except Exception:
+                cur.execute("ROLLBACK TO SAVEPOINT memory_graph_leg")
+                raise
+            cur.execute("RELEASE SAVEPOINT memory_graph_leg")
+            return found
+        finally:
+            if armed:
+                _reset_statement_timeout(cur)
 
 
 def _query_graph(

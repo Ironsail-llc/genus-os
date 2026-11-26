@@ -23,6 +23,14 @@ from robothor.memory.recall import Candidate
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+
+@pytest.fixture(autouse=True)
+def _graph_lines_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Warm-up adds graph lines only when asked (WARMUP_GRAPH_DEFAULT is off);
+    every test here is about those lines."""
+    monkeypatch.setattr(warmup, "WARMUP_GRAPH_DEFAULT", True)
+
+
 MESSAGE = "Did Alice Smith sign the logistics agreement?"
 LEGACY_ROWS = [[{"fact_text": "legacy name-matched fact", "category": "x", "person_id": None}]]
 
@@ -161,6 +169,7 @@ class TestGraphSection:
                 exclude_names={"Bob Jones"},
                 scope=scope,
                 sender_person_id="person-1",
+                reader_person_id="person-1",
             )
 
         assert seen["tenant_id"] == "test-tenant"
@@ -169,6 +178,40 @@ class TestGraphSection:
         assert seen["reader_scope_id"] == "person-1"
         assert seen["person_restricted"] is True and seen["person_id"] == "person-1"
         assert seen["exclude_names"] == {"Bob Jones"}
+
+    def test_the_sender_alone_is_not_a_reader(self) -> None:
+        """The sender seeds the walk; only the person the run serves reads
+        private evidence (robothor/engine/private_recall.py)."""
+        seen: dict[str, Any] = {}
+
+        def _capture(tenant_id: str, message: str, **kw: Any) -> list[Candidate]:
+            seen.update(kw)
+            return []
+
+        with _legacy_db(), patch("robothor.memory.activation.recall_for_message", _capture):
+            warmup._build_entity_context(
+                MESSAGE, tenant_id="test-tenant", sender_person_id="person-1"
+            )
+
+        assert seen["sender_person_id"] == "person-1"
+        assert seen["reader_scope_id"] is None
+
+    def test_a_restricted_scope_never_supplies_a_reader(self) -> None:
+        from robothor.identity.scope import DataScope
+
+        seen: dict[str, Any] = {}
+
+        def _capture(tenant_id: str, message: str, **kw: Any) -> list[Candidate]:
+            seen.update(kw)
+            return []
+
+        scope = DataScope(tenant_id="test-tenant", person_id="person-1", restricted=True)
+        with _legacy_db(), patch("robothor.memory.activation.recall_for_message", _capture):
+            warmup._build_entity_context(
+                MESSAGE, tenant_id="test-tenant", scope=scope, sender_person_id="person-1"
+            )
+
+        assert seen["reader_scope_id"] is None
 
     def test_the_interactive_builder_passes_the_senders_person(self) -> None:
         from robothor.identity.context import IdentityContext
@@ -385,8 +428,11 @@ class _Counter:
         self.checkouts.append(record)
 
         class _Cur:
-            def __init__(self, inner: Any) -> None:
+            def __init__(self, inner: Any, conn: Any = None) -> None:
                 self.inner = inner
+                # psycopg2 cursors name their connection; the identity lookup
+                # opens its own cursor on it, which must be counted too.
+                self.connection = conn
 
             def execute(self, sql: str, params: Any = None) -> None:
                 record["executes"] += 1
@@ -400,14 +446,18 @@ class _Counter:
             def fetchone(self) -> Any:
                 return self.inner.fetchone() if self.inner is not None else None
 
+            def close(self) -> None:
+                if self.inner is not None:
+                    self.inner.close()
+
         class _Conn:
             def __init__(self, inner: Any) -> None:
                 self.inner = inner
 
             def cursor(self, cursor_factory: Any = None) -> _Cur:
                 if self.inner is None:
-                    return _Cur(None)
-                return _Cur(self.inner.cursor(cursor_factory=cursor_factory))
+                    return _Cur(None, self)
+                return _Cur(self.inner.cursor(cursor_factory=cursor_factory), self)
 
             def cancel(self) -> None:
                 if self.inner is not None:
@@ -495,6 +545,14 @@ class TestWhatATurnPays:
             "did alice smith sign it", lowercase_ok=True
         )
 
+    def test_a_possessive_seed_phrase_names_the_owner(self) -> None:
+        assert "alice smith" in warmup._candidate_phrases(
+            "What did Alice Smith's manager decide?", lowercase_ok=False
+        )
+        assert "alice smith" in warmup._candidate_phrases(
+            "What did Alice Smith’s manager decide?", lowercase_ok=False
+        )
+
     def test_a_timeout_never_cancels_a_connection_another_request_holds(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -511,25 +569,43 @@ class TestWhatATurnPays:
         cancelled_while: list[str | None] = []
 
         class _Cur:
-            def __init__(self) -> None:
+            def __init__(self, connection: Any = None) -> None:
                 self.last = ""
+                self.connection = connection  # as a psycopg2 cursor names its connection
 
             def execute(self, sql: str, _params: Any = None) -> None:
                 self.last = sql
 
             def fetchall(self) -> list[Any]:
                 if "memory_entities" in self.last:
-                    return [{"id": 1, "name": "Alice Smith", "method": "full_name"}]
+                    # The identity lookup's row for "Alice Smith".
+                    return [
+                        {
+                            "id": 1,
+                            "name": "Alice Smith",
+                            "entity_type": "person",
+                            "aliases": [],
+                            "crm_person_id": None,
+                            "crm_company_id": None,
+                            "scope_kind": "shared",
+                            "scope_id": None,
+                            "norm": "alice smith",
+                            "alias_norms": [],
+                        }
+                    ]
                 return []
 
             def fetchone(self) -> None:
                 return None
 
+            def close(self) -> None:
+                pass
+
         class _Conn:
             holder: str | None = None
 
             def cursor(self, cursor_factory: Any = None) -> _Cur:
-                return _Cur()
+                return _Cur(self)
 
             def cancel(self) -> None:
                 cancelled_while.append(self.holder)
@@ -576,17 +652,37 @@ class TestWhatATurnPays:
         statements: list[str] = []
 
         class _Cur:
+            def __init__(self, conn: Any) -> None:
+                self.connection = conn  # as a psycopg2 cursor names its connection
+
             def execute(self, sql: str, _params: Any = None) -> None:
                 statements.append(sql)
 
             def fetchall(self) -> list[Any]:
                 if "memory_entities" in statements[-1]:
-                    return [{"id": 1, "name": "Alice Smith", "method": "full_name"}]
+                    # The identity lookup's row for "Alice Smith".
+                    return [
+                        {
+                            "id": 1,
+                            "name": "Alice Smith",
+                            "entity_type": "person",
+                            "aliases": [],
+                            "crm_person_id": None,
+                            "crm_company_id": None,
+                            "scope_kind": "shared",
+                            "scope_id": None,
+                            "norm": "alice smith",
+                            "alias_norms": [],
+                        }
+                    ]
                 return []
+
+            def close(self) -> None:
+                pass
 
         class _Conn:
             def cursor(self, cursor_factory: Any = None) -> _Cur:
-                return _Cur()
+                return _Cur(self)
 
         @contextmanager
         def _connect(*_a: Any, **_k: Any):
@@ -804,17 +900,16 @@ def test_a_slow_seed_lookup_is_stopped_by_the_server_within_the_budget(
     world.fact("Bob Jones manages shipping", about=(b,))
     world.fact("Alice signed it", entities=("Alice",))
     marker = "g872_slow_seed_marker"
-    # The marker leads the statement: pg_stat_activity keeps only the first
-    # track_activity_query_size bytes of a query, and the lookup is longer.
-    monkeypatch.setattr(
-        activation,
-        "_LINK_SQL",
-        f"/* {marker} */"
-        + activation._LINK_SQL.replace(
-            "    ORDER BY pri, id",
-            "    WHERE (SELECT count(*) FROM pg_sleep(5)) = 1\n    ORDER BY pri, id",
-        ),
-    )
+    # Names seed through identity's lookup (activation._name_seeds) on the
+    # walk's own cursor; a five-second statement on that cursor stands in for
+    # a slow lookup. The marker leads it so pg_stat_activity shows it.
+    real_name_seeds = activation._name_seeds
+
+    def _slow_name_seeds(cur: Any, tenant_id: str, phrases: Any) -> Any:
+        cur.execute(f"/* {marker} */ SELECT pg_sleep(5)")
+        return real_name_seeds(cur, tenant_id, phrases)
+
+    monkeypatch.setattr(activation, "_name_seeds", _slow_name_seeds)
     walks: list[str] = []
     real_activate = activation._activate_on
 

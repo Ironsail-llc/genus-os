@@ -26,6 +26,13 @@ class TestPhrases:
         assert "acme logistics" in phrases
         assert all(p == p.lower() for p in phrases)
 
+    def test_a_possessive_names_the_owner(self) -> None:
+        """ "Dave Larkwick's manager" is about Dave Larkwick: the possessive must
+        not glue itself to the surname (the world eval's multi-hop questions
+        missed every such seed)."""
+        for text in ("Who does Dave Larkwick's manager report to?", "Who is Dave Larkwick’s lead?"):
+            assert "dave larkwick" in activation.candidate_phrases(text)
+
     def test_phrases_are_bounded(self) -> None:
         long = " ".join(f"word{i}" for i in range(500))
         phrases = activation.candidate_phrases(long)
@@ -83,20 +90,40 @@ class TestOperatorLookup:
         from contextlib import contextmanager
 
         class _Cur:
+            def __init__(self, conn: object) -> None:
+                self.connection = conn  # as a psycopg2 cursor names its connection
+
             def execute(self, sql: str, _params: object = None) -> None:
                 statements.append(sql)
 
             def fetchall(self) -> list[dict[str, object]]:
                 if "memory_entities" in statements[-1]:
-                    return [{"id": 1, "name": "Alice Smith", "method": "full_name"}]
+                    # The identity lookup's row for "Alice Smith".
+                    return [
+                        {
+                            "id": 1,
+                            "name": "Alice Smith",
+                            "entity_type": "person",
+                            "aliases": [],
+                            "crm_person_id": None,
+                            "crm_company_id": None,
+                            "scope_kind": "shared",
+                            "scope_id": None,
+                            "norm": "alice smith",
+                            "alias_norms": [],
+                        }
+                    ]
                 return []
 
             def fetchone(self) -> None:
                 return None
 
+            def close(self) -> None:
+                pass
+
         class _Conn:
             def cursor(self, cursor_factory: object = None) -> _Cur:
-                return _Cur()
+                return _Cur(self)
 
         @contextmanager
         def _connect(*_a: object, **_k: object):
@@ -156,6 +183,10 @@ class TestSlowCheckout:
         statements: list[str] = []
 
         class _Cur:
+            # identity's name lookup opens its own cursor on this connection.
+            def __init__(self, conn: object) -> None:
+                self.connection = conn
+
             def execute(self, sql: str, params: object = None) -> None:
                 statements.append(sql % params if params and "%s" in sql else sql)
 
@@ -165,9 +196,12 @@ class TestSlowCheckout:
             def fetchone(self) -> None:
                 return None
 
+            def close(self) -> None:
+                return None
+
         class _Conn:
             def cursor(self, cursor_factory: object = None) -> _Cur:
-                return _Cur()
+                return _Cur(self)
 
         @contextmanager
         def _slow_checkout(*_a: object, **_k: object):
