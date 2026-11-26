@@ -54,7 +54,7 @@ on-premises, in a private cloud, or in a deliberately configured air gap.
   APIs (via the generic REST-to-MCP connector bridge), and MCP servers attach
   declaratively to a small deterministic engine.
 - **Intelligence layer** — two-tier memory with hybrid search (HNSW vectors +
-  BM25, fused by Reciprocal Rank Fusion); embedding, reranking, and generation
+  full-text keyword search, fused by Reciprocal Rank Fusion); embedding, reranking, and generation
   can be fully local.
 - **Enterprise federation** — Ed25519 signed invites, Hybrid Logical Clocks,
   and NATS JetStream transport connect instances into a peer-to-peer mesh.
