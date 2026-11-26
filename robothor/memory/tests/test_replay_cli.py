@@ -40,7 +40,7 @@ class TestParser:
             "--since", "7d",
             "--limit", "40",
             "--sample", "--seed", "3",
-            "--compare", "new+graph,new-segments",
+            "--compare", "new-graph,new-segments",
             "--json", "--out", str(tmp_path / "r.json"),
             "--redact",
         )  # fmt: skip
@@ -48,7 +48,7 @@ class TestParser:
         assert args.as_person == "11111111-1111-4111-8111-111111111111"
         assert args.as_user == "u1"
         assert (args.since, args.limit, args.sample, args.seed) == ("7d", 40, True, 3)
-        assert args.compare == "new+graph,new-segments"
+        assert args.compare == "new-graph,new-segments"
         assert args.json_output and args.redact
 
     def test_tenant_is_required(self) -> None:

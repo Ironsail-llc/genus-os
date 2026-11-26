@@ -65,9 +65,6 @@ def db(scratch_db, monkeypatch):
     for module in (robothor.db, facts):
         monkeypatch.setattr(module, "get_connection", _connect)
     monkeypatch.setattr(facts, "apply_hnsw_session", lambda _cur: None)
-    # The graph leg is off by default (facts.GRAPH_LEG_DEFAULT); these tests
-    # are about the leg, so they run with it on.
-    monkeypatch.setattr(facts, "GRAPH_LEG_DEFAULT", True)
 
     async def _embed(_t: str, *_a: Any, **_k: Any) -> list[float]:
         return list(_VECTOR)

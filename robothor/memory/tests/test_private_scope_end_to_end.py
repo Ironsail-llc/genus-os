@@ -85,9 +85,6 @@ def db(scratch_db, monkeypatch):
     monkeypatch.setattr(ollama, "get_embeddings_batch_async", _embed_batch)
     monkeypatch.setattr(facts, "_embed_query", _embed)
     monkeypatch.setattr(facts, "apply_hnsw_session", lambda _cur: None)
-    # Privacy is proven with the graph leg on (off by default), the case
-    # with the most ways to reach a private fact.
-    monkeypatch.setattr(facts, "GRAPH_LEG_DEFAULT", True)
     monkeypatch.setenv("MEMORY_RERANK_ENABLED", "0")
     monkeypatch.delenv("ROBOTHOR_DATA_SCOPING", raising=False)
     monkeypatch.delenv("ROBOTHOR_RIP_15_ENABLED", raising=False)

@@ -473,7 +473,6 @@ async def test_the_graph_recall_leg_runs_off_the_loop(monkeypatch):
     monkeypatch.setattr(activation, "graph_candidates_for_query", probe)
     monkeypatch.setattr(facts, "_embed_query", AsyncMock(return_value=None))
     monkeypatch.setattr(facts, "_fact_legs", lambda *a, **k: {"vector": [], "keyword": []})
-    monkeypatch.setattr(facts, "GRAPH_LEG_DEFAULT", True)
 
     results = await facts.search_facts("Alice Smith", tenant_id="test-tenant", use_reranker=False)
     assert results == []

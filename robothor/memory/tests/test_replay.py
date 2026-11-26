@@ -184,7 +184,7 @@ class TestRunOrder:
 
 class TestPresets:
     def test_the_presets_live_in_one_table(self) -> None:
-        assert {"today", "new", "new+graph", "new-segments"} <= set(replay.PRESETS)
+        assert {"today", "new", "new-graph", "new-segments"} <= set(replay.PRESETS)
         assert replay.DEFAULT_COMPARE == ("today", "new")
 
     def test_today_is_recall_as_main_runs_it(self) -> None:
@@ -199,13 +199,13 @@ class TestPresets:
     def test_new_is_the_product_default_on_this_tree(self) -> None:
         kw = replay.preset_kwargs(replay.PRESETS["new"], fan_out=True)
         assert kw["include_segments"] is True
-        assert kw["include_graph"] is None  # search_facts reads GRAPH_LEG_DEFAULT
+        assert kw["include_graph"] is True
 
     def test_variants(self) -> None:
-        graph = replay.preset_kwargs(replay.PRESETS["new+graph"], fan_out=True)
-        assert graph["include_segments"] is True and graph["include_graph"] is True
+        no_graph = replay.preset_kwargs(replay.PRESETS["new-graph"], fan_out=True)
+        assert no_graph["include_segments"] is True and no_graph["include_graph"] is False
         no_seg = replay.preset_kwargs(replay.PRESETS["new-segments"], fan_out=True)
-        assert no_seg["include_segments"] is False and no_seg["include_graph"] is None
+        assert no_seg["include_segments"] is False and no_seg["include_graph"] is True
 
     def test_narrow_search_turns_the_fan_out_off_on_both_sides(self) -> None:
         for name in replay.PRESETS:
@@ -217,24 +217,25 @@ class TestPresets:
         [
             (None, ("today", "new")),
             ("today,new", ("today", "new")),
-            ("new+graph, new-segments", ("new+graph", "new-segments")),
+            ("new-graph, new-segments", ("new-graph", "new-segments")),
         ],
     )
     def test_resolve_compare(self, spec: str | None, expected: tuple[str, str]) -> None:
         assert replay.resolve_compare(spec) == expected
 
-    @pytest.mark.parametrize("spec", ["today", "today,new,new+graph", "today,today", "today,v2"])
+    @pytest.mark.parametrize("spec", ["today", "today,new,new-graph", "today,today", "today,v2"])
     def test_resolve_compare_refuses(self, spec: str) -> None:
         with pytest.raises(ValueError):
             replay.resolve_compare(spec)
 
     async def test_compare_picks_the_two_presets(self) -> None:
         search = FakeSearch()
-        report = await _run(_questions(1), search=search, compare=("new+graph", "new-segments"))
-        assert report["compare"] == ["new+graph", "new-segments"]
-        assert [c["include_graph"] for c in search.calls] == [True, None]
-        assert set(report["questions"][0]["sides"]) == {"new+graph", "new-segments"}
-        assert report["presets"]["new+graph"]["search"]["include_graph"] is True
+        report = await _run(_questions(1), search=search, compare=("new-graph", "new-segments"))
+        assert report["compare"] == ["new-graph", "new-segments"]
+        assert [c["include_graph"] for c in search.calls] == [False, True]
+        assert set(report["questions"][0]["sides"]) == {"new-graph", "new-segments"}
+        assert report["presets"]["new-graph"]["search"]["include_graph"] is False
+        assert report["presets"]["new-segments"]["graph_leg_runs"] is True
 
 
 # --------------------------------------------------------------------------- #
