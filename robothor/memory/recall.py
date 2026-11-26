@@ -59,12 +59,6 @@ RECALL_CONTEXT_CHARS = 4000
 # character cap above normally binds first.
 RECALL_FILL_ROWS = 50
 
-# Score-adaptive truncation of that tail: a row past the reranked head is kept
-# only while its fused score is at least this share of the weakest head row's.
-# The tail continues the head while candidates stay comparable to what the
-# reranker already judged worth returning, and stops where the score falls off.
-TAIL_SCORE_FLOOR = 0.5
-
 
 def recall_limit(named: Any) -> int:
     """Rows to ask recall for: the caller's limit, else enough to fill the cap.

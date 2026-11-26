@@ -106,10 +106,8 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    near-duplicate of a row already returned.
 6. **Budget fill** — the reranker returns only the rows it scored (16), so
    the rest of the fused list follows in fused order, unscored, up to
-   `limit`, skipping near-duplicates of rows already returned, and stops
-   where the fused score falls below `TAIL_SCORE_FLOOR` (0.5) of the weakest
-   head row's (score-adaptive truncation). The reranker still scores only its
-   head, so its cost does not grow. Every row comes from
+   `limit`, skipping near-duplicates of rows already returned. The reranker
+   still scores only its head, so its cost does not grow. Every row comes from
    the same filtered legs, so the tenant, scope, trust and private-reader
    rules are the same for the tail as for the head.
 
