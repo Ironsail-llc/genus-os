@@ -297,6 +297,64 @@ async def test_a_head_held_graph_row_uses_one_of_its_places(env: pytest.MonkeyPa
     assert len(gave_way) == 1, f"only one head row may give way, not {gave_way}"
 
 
+def _two_questions(env: pytest.MonkeyPatch, fail: str) -> MagicMock:
+    """The graph's question differs from the query; the embedding of ``fail``
+    ("query" or "asked") raises a transport error."""
+    import httpx
+
+    from robothor.memory import activation
+
+    query, asked = "Who does Alice Smith work for?", "Who does work for?"
+    env.setattr(activation, "question_for_graph", lambda _t, _q, **_k: asked)
+    broken = query if fail == "query" else asked
+
+    async def embed(text: str) -> list[float]:
+        if text == broken:
+            raise httpx.ConnectError("embedding service down")
+        return [0.1] * 8
+
+    env.setattr(facts, "_embed_query", embed)
+    return MagicMock(return_value=[])
+
+
+@pytest.mark.asyncio
+async def test_a_failed_graph_question_embedding_costs_only_the_graph_leg(
+    env: pytest.MonkeyPatch,
+) -> None:
+    graph = _two_questions(env, fail="asked")
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+    with patch("robothor.memory.activation.graph_candidates_for_query", graph):
+        results = await _search_with_own_embedding(_Cursor(vector=_dense(5), keyword=[]))
+    assert results and not any("degraded" in r for r in results)
+    assert any("vector" in r["leg_ranks"] for r in results), "the dense leg lost its embedding"
+    graph.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_query_embedding_still_degrades_to_keyword_only(
+    env: pytest.MonkeyPatch,
+) -> None:
+    _two_questions(env, fail="query")
+    env.setattr(reranker, "rerank_pair", _scorer({}, default=0.6))
+    keyword = [_row(9, "Alice Smith works for Example Co", kw_score=0.5)]
+    with patch("robothor.memory.activation.graph_candidates_for_query", return_value=[]):
+        results = await _search_with_own_embedding(_Cursor(vector=_dense(5), keyword=keyword))
+    assert [r["id"] for r in results] == [9]
+    assert all(r.get("degraded") for r in results)
+
+
+async def _search_with_own_embedding(cur: _Cursor) -> list[dict[str, Any]]:
+    """As ``_search``, but with the test's own ``facts._embed_query``."""
+    with (
+        patch.object(facts, "get_connection", return_value=_conn(cur)),
+        patch.object(facts, "apply_hnsw_session"),
+    ):
+        return await facts.search_facts(
+            "Who does Alice Smith work for?", tenant_id="test-tenant", limit=5,
+            use_reranker=False, include_graph=True,
+        )  # fmt: skip
+
+
 @pytest.mark.asyncio
 async def test_include_graph_false_runs_no_graph_leg(env: pytest.MonkeyPatch) -> None:
     hops = [_graph_hit(700, "Bob runs the shipping team", 0.9)]
