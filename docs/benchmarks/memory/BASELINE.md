@@ -9,6 +9,10 @@ the first database call.
 | Suite | `memory-eval --suite docs/benchmarks/memory/suite.yaml` | 267 hand-checked and generated cases. Each seeds a few facts, runs `search_facts` and checks whether the gold string is in the top k. Runs nightly in `memory-eval` with `--record` (`robothor-memory-eval.service`) |
 | World | `memory-eval --world [--answers]` | One generated world of about 3,500 facts, CRM rows, documents and transcripts, seeded once into `memory-eval-world` ([WORLD.md](WORLD.md)). Without `--answers` it uses the same substring-in-top-k scoring. With `--answers` a local model answers from each system's context at an equal token budget, and a validated judge grades the answers |
 
+Neither mode replays the questions a real tenant asked. That is
+`memory-replay`, a read-only side-by-side of two recall configurations with no
+score: see [Replaying real questions before a change goes live](../../memory-system.md#replaying-real-questions-before-a-change-goes-live).
+
 Exit codes for the suite: `0` met the floor, `2` ran and fell below it, `3`
 could not run. World mode exits `0` once it has run and `3` if it could not;
 there is no world floor yet. The suite needs `ROBOTHOR_TENANT_ID=memory-eval`
