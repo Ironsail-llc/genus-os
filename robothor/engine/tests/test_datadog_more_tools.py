@@ -400,11 +400,14 @@ def test_monitors_list_sends_the_tenants_monitor_scope_with_the_query(dd, writer
     assert result["scope"] == CHILD_A
 
 
-def test_only_firing_adds_the_alert_warn_and_no_data_filter(dd, writer):
+def test_only_firing_adds_the_alert_warn_and_no_data_filter_unmuted(dd, writer):
+    """Firing means what the Logs page and the watch mean: a muted monitor in
+    alert is someone's decision, not news."""
     _run(MONITORS, {"only_firing": True})
 
     assert dd.params()["query"] == (
-        '(tag:"service:shop-api") AND (status:alert OR status:warn OR status:"no data")'
+        '(tag:"service:shop-api") AND '
+        '((status:alert OR status:warn OR status:"no data") AND muted:false)'
     )
 
 
@@ -413,8 +416,15 @@ def test_only_firing_with_a_query_keeps_both(dd, writer):
 
     assert dd.params()["query"] == (
         '(tag:"service:shop-api") AND '
-        '((team:checkout) AND (status:alert OR status:warn OR status:"no data"))'
+        '((team:checkout) AND ((status:alert OR status:warn OR status:"no data") AND muted:false))'
     )
+
+
+def test_only_firing_is_the_same_filter_the_page_and_the_watch_use():
+    from robothor.engine import datadog_watch
+    from robothor.engine.tools.handlers import datadog_more
+
+    assert datadog_more.FIRING_QUERY == datadog_watch.FIRING_QUERY
 
 
 def test_monitor_rows_carry_status_type_tags_and_last_triggered(dd, writer):

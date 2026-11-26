@@ -201,6 +201,17 @@ def test_invalid_json_is_400(client, published) -> None:
 # ── the engine records it ──────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def datadog_in_use(monkeypatch):
+    """The engine records alerts once the instance uses Datadog (a scope map is set)."""
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_DATADOG_SCOPES", '{"acme-child-a": {"logs": "service:shop-api"}}')
+    reset_settings()
+    yield
+    reset_settings()
+
+
 class FakeRedis:
     def __init__(self) -> None:
         self.keys: dict[str, Any] = {}
@@ -394,6 +405,30 @@ async def test_a_child_engine_does_not_record_the_roots_event(
     )
 
     assert audit.rows == []
+
+
+@pytest.mark.asyncio
+async def test_an_instance_without_datadog_leaves_a_datadog_stream_alone(
+    client, published, audit, no_delivery, engine_config, monkeypatch
+) -> None:
+    """A stream an instance already names ``datadog`` for its own hooks is not
+    taken over: with no scope map there is no record and no dead letter."""
+    from robothor.settings import reset_settings
+
+    _post(client, json.dumps(PAYLOAD).encode(), {HEADER: SECRET})
+    monkeypatch.delenv("ROBOTHOR_DATADOG_SCOPES", raising=False)
+    reset_settings()
+    hooks, _ = _root_hooks(engine_config)
+    redis = FakeRedis()
+    with patch(
+        "robothor.integrations.datadog.alerts.handle_alert_event", new_callable=AsyncMock
+    ) as handled:
+        await hooks._handle_event(STREAM, b"1-0", _envelope(published[0]), redis, "engine")
+
+    handled.assert_not_called()
+    assert audit.rows == []
+    assert redis.added == []
+    assert redis.acked == [(STREAM, "engine", b"1-0")]
 
 
 def test_an_instance_using_datadog_listens_on_the_datadog_stream(monkeypatch) -> None:
