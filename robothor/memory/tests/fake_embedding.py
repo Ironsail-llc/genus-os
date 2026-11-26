@@ -21,6 +21,7 @@ SYNONYMS: tuple[frozenset[str], ...] = (
     frozenset({"city", "town"}),
     frozenset({"boss", "manager", "reports", "reported", "report"}),
     frozenset({"door", "code", "keypad"}),
+    frozenset({"memo", "note"}),
 )
 
 STOPWORDS = frozenset(
@@ -78,6 +79,9 @@ def _dim(word: str) -> int:
 
 
 def fake_embed(text: str) -> list[float]:
+    # A query arrives with the model's instruction in front ("Instruct: ...
+    # Query:..."); like the real model, only what is asked carries meaning.
+    text = (text or "").rsplit("Query:", 1)[-1]
     v = [0.0] * DIMS
     v[DIMS - 1] = 0.05
     for w in re.findall(r"[a-z0-9]+", (text or "").lower()):

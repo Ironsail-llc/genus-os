@@ -307,7 +307,11 @@ def test_the_function_refuses_a_foreign_session_itself(world: Graph) -> None:
     w = _employer_world(world)
     embed_all_facts(world.sql)
     world.sql(
-        "CREATE OR REPLACE FUNCTION memory_activate(text, integer[], double precision[], text, "
+        "DROP FUNCTION memory_activate(text, integer[], double precision[], text, integer, "
+        "integer, double precision, integer[], boolean, integer, integer, boolean, uuid, uuid)"
+    )
+    world.sql(
+        "CREATE FUNCTION memory_activate(text, integer[], double precision[], text, "
         "integer, integer, double precision, integer[], boolean, integer, integer, boolean, uuid, "
         "uuid) RETURNS TABLE (kind text, entity_id integer, entity_name text, score double "
         "precision, hops integer, via_edge_id integer, path_names text[], fact_id integer, "

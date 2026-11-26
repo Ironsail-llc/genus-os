@@ -1365,6 +1365,19 @@ async def _graph_leg(
 
     top = [c.id for c in fuse(legs, weights=LEG_WEIGHTS) if c.kind == "fact"]
     restricted = scope is not None and scope.restricted
+    deadline = time.monotonic() + GRAPH_LEG_BUDGET_SECONDS
+    loop = asyncio.get_running_loop()
+
+    def embed(text: str) -> list[float] | None:
+        # Called on the leg's worker thread: the embedding runs on this event
+        # loop (free while the thread works), within what is left of the budget.
+        future = asyncio.run_coroutine_threadsafe(_embed_query(text), loop)
+        try:
+            return future.result(timeout=max(0.001, deadline - time.monotonic()))
+        except BaseException:
+            future.cancel()
+            raise
+
     try:
         return await asyncio.to_thread(
             activation.graph_candidates_for_query,
@@ -1375,7 +1388,8 @@ async def _graph_leg(
             person_restricted=restricted,
             person_id=scope.person_id if restricted and scope is not None else None,
             limit=max(activation.LIMIT, limit),
-            deadline=time.monotonic() + GRAPH_LEG_BUDGET_SECONDS,
+            deadline=deadline,
+            embed=embed,
             connect=get_connection,
         )
     except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return

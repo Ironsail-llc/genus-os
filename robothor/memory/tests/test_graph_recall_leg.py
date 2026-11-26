@@ -95,6 +95,14 @@ def _scorer(zero: str):
     return fake_pair
 
 
+def _fillers(world: Graph, text: str, n: int = 40, **kw: Any) -> None:
+    """``n`` shared facts closer to the query than anything planted: they fill
+    the vector leg's 30 and the fused head, so a planted fact can reach the
+    results only through the walk (or not at all)."""
+    for i in range(n):
+        world.fact(f"{text} filler {i}", **kw)
+
+
 def _legs_of(rows: list[dict[str, Any]], fact_id: int) -> set[str]:
     """The legs that found ``fact_id`` in ``rows`` (empty if it is not there)."""
     return next((set(r["leg_ranks"]) for r in rows if r["id"] == fact_id), set())
@@ -194,10 +202,11 @@ async def test_the_reader_decides_which_private_evidence_is_walked(
 
     bob_reader = str(uuid.uuid4())
     a, p = world.entity("Alice Smith"), world.entity("Pat Hidden")
-    seed = world.fact("Alice Smith signed the quarterly logistics agreement", about=(a,))
+    world.fact("Alice Smith signed the quarterly logistics agreement", about=(a,))
     secret = world.fact("private support", scope_id=bob_reader)
     world.edge(a, p, evidence=(secret,))
     about_p = world.fact("Pat Hidden keeps the logistics agreement on Elm Street", about=(p,))
+    _fillers(world, "Alice Smith quarterly logistics agreement")
     monkeypatch.setattr(reranker, "rerank_pair", _scorer("Elm Street"))
     query = "Alice Smith quarterly logistics agreement"
 
@@ -206,9 +215,9 @@ async def test_the_reader_decides_which_private_evidence_is_walked(
         query, limit=5, tenant_id=TENANT, use_reranker=True, reader_scope_id=bob_reader
     )
 
-    # Every fact here has an embedding, so the vector leg may return a shared
-    # fact on its own; what is asserted is whether the WALK reached it.
-    assert seed in {r["id"] for r in anonymous}
+    # What is asserted is whether the WALK reached it (the fillers keep it
+    # out of the other legs and out of the top hits that seed the walk).
+    assert anonymous, "negative control: the anonymous search answers"
     assert "graph" not in _legs_of(anonymous, about_p)
     assert "graph" in _legs_of(bob, about_p)
 
@@ -283,7 +292,9 @@ async def test_a_top_hit_the_reader_cannot_see_does_not_seed_the_walk(
     # word and finds the fact below directly; it mentions no one.
     world.fact("zephyr logistics memo template")
     world.link(p, q)
-    about_q = world.fact("Quinn Far files each memo at the depot", about=(q,))
+    # A note is a memo (the fake model's synonym), with no word of the query.
+    about_q = world.fact("Quinn Far files each note at the depot", about=(q,))
+    _fillers(world, "zephyr logistics memo")
     monkeypatch.setattr(reranker, "rerank_pair", _scorer("depot"))
 
     bob = await search_facts(
@@ -313,6 +324,12 @@ async def test_the_one_hop_expansion_answers_on_data_without_mentions(
     world.edge(a, b, legacy_fact=world.fact("support", origin=None))
     world.fact(
         "Hubcorp Example signed the quarterly logistics agreement",
+        origin=None,
+        entities=("Hubcorp Example",),
+    )
+    _fillers(
+        world,
+        "Hubcorp Example quarterly logistics agreement",
         origin=None,
         entities=("Hubcorp Example",),
     )

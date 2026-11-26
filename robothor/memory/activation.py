@@ -75,6 +75,11 @@ DAMPING = 0.7
 FACTS_PER_ENTITY = 3
 #: Facts returned by one activation.
 LIMIT = 20
+#: A search's graph leg returns a reached fact only when its embedding is at
+#: least this similar (cosine) to the question without its names. Set on the
+#: memory evaluation's dev split: it keeps most answers to multi-step
+#: questions while cutting the reached facts that answer nothing.
+GRAPH_MIN_SIMILARITY = 0.35
 
 #: Seed weight of an entity named in the text, and of one mentioned by a top
 #: search hit (a step removed from what was asked).
@@ -186,12 +191,6 @@ def question_without_names(question: str, seeds: Iterable[Seed]) -> str:
         text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()
     return re.sub(r"\s+([?.!,;:])", r"\1", text)
-
-
-def _or_words(text: str) -> str:
-    """The words of ``text`` joined with OR (``websearch_to_tsquery`` syntax)."""
-    words = [w for w in re.findall(r"\w+", text or "") if w.lower() != "or"]
-    return " or ".join(words)
 
 
 @contextmanager
@@ -363,7 +362,7 @@ _ACTIVATE_FOR_QUESTION_SQL = """
           %(t)s, %(seeds)s::int[], %(weights)s::float8[], %(reader)s, %(hops)s,
           %(fanout)s, %(damping)s, %(exclude)s::int[], %(trusted)s, %(limit)s,
           %(per)s, %(restricted)s, %(person)s::uuid, %(owner)s::uuid, %(query)s,
-          %(named)s::int[])
+          %(embedding)s::vector, %(named)s::int[], %(floor)s)
      WHERE kind = 'fact'
 """
 
@@ -496,15 +495,18 @@ def _activate_for_question_on(
     tenant_id: str,
     seeds: Sequence[Seed],
     question: str,
+    query_embedding: Sequence[float] | None,
     **walk: Any,
 ) -> list[Candidate]:
-    if not seeds:
+    if not seeds or query_embedding is None:
         return []
     seeds = list(seeds)[:MAX_SEEDS]
     params = _walk_params(tenant_id, seeds, **walk)
     params.update(
-        query=_or_words(question_without_names(question, seeds)) or None,
+        query=question_without_names(question, seeds),
+        embedding=str([float(x) for x in query_embedding]),
         named=sorted(set(named_in_question(seeds))),
+        floor=GRAPH_MIN_SIMILARITY,
     )
     cur.execute(_ACTIVATE_FOR_QUESTION_SQL, params)
     return _candidates(cur.fetchall())
@@ -576,23 +578,23 @@ def activate_for_question(
     person_restricted: bool = False,
     person_id: str | None = None,
     exclude_crm_person_id: str | None = None,
+    query_embedding: Sequence[float] | None = None,
     connect: Callable[..., Any] | None = None,
 ) -> list[Candidate]:
     """The walk of :func:`activate`, each reached entity's facts chosen and
     scored by ``question`` (``memory_activate_for_question``).
 
-    Relevance is the full-text rank of a fact against the question without
-    the names it links (:func:`question_without_names`), in 0..1 and carried
-    as ``payload["graph_relevance"]``; ``leg_scores["graph"]`` is
-    ``sqrt(activation / strongest) * (0.01 + relevance)``. Only facts that
-    match the question are returned; when nothing is left to match (the
-    question was only a name) every reached fact is, in the walk's order
-    (importance, then recency). Facts that mention
-    an entity the question names (:func:`named_in_question`) are not
-    returned: the other legs find them by name. Tenant,
-    reader, person scope and trust apply exactly as in :func:`activate`.
+    ``query_embedding`` is the embedding of the question without the names
+    it links (:func:`question_without_names`). Relevance is a reached fact's
+    cosine similarity to it, carried as ``payload["graph_relevance"]``; only
+    facts at or above :data:`GRAPH_MIN_SIMILARITY` come back, and
+    ``leg_scores["graph"]`` is ``(activation / strongest) ** 0.25 *
+    relevance``. Without an embedding, or when nothing but names is asked,
+    nothing is returned. Facts that mention an entity the question names
+    (:func:`named_in_question`) are left to the other legs. Tenant, reader,
+    person scope and trust apply exactly as in :func:`activate`.
     """
-    if not seeds:
+    if not seeds or query_embedding is None:
         return []
     with _cursor(connect) as cur:
         return _activate_for_question_on(
@@ -600,6 +602,7 @@ def activate_for_question(
             tenant_id,
             seeds,
             question,
+            query_embedding,
             reader_scope_id=reader_scope_id,
             trusted_only=trusted_only,
             max_hops=max_hops,
@@ -674,9 +677,13 @@ def graph_candidates_for_query(
     person_id: str | None = None,
     limit: int = LIMIT,
     deadline: float | None = None,
+    embed: Callable[[str], Sequence[float] | None] | None = None,
     connect: Callable[..., Any] | None = None,
 ) -> list[Candidate]:
     """The ``graph`` leg of ``search_facts``: one connection, read-only.
+
+    ``embed`` embeds the question without its names (called at most once,
+    on this thread, after the seed lookup); without it nothing is walked.
 
     Seeds are the entities the query names and the entities the top hits of
     the other legs (``seed_fact_ids``) mention. The operator's own entity is
@@ -718,6 +725,7 @@ def graph_candidates_for_query(
                     person_restricted=person_restricted,
                     person_id=person_id,
                     limit=limit,
+                    embed=embed,
                 )
             except Exception:
                 cur.execute("ROLLBACK TO SAVEPOINT memory_graph_leg")
@@ -739,7 +747,10 @@ def _query_graph(
     person_restricted: bool,
     person_id: str | None,
     limit: int,
+    embed: Callable[[str], Sequence[float] | None] | None = None,
 ) -> list[Candidate]:
+    if embed is None:
+        return []
     seeds = _link_seeds(cur, tenant_id, query)
     known = {s.entity_id for s in seeds}
     mentioned = _mentioned_by(
@@ -753,12 +764,23 @@ def _query_graph(
     seeds += [s for s in mentioned if s.entity_id not in known]
     if not seeds:
         return []
+    asked = question_without_names(query, seeds)
+    # Nothing beyond the names (the database function's own rule, asked
+    # first so no embedding is spent on it).
+    cur.execute("SELECT to_tsvector('english', %s) <> ''::tsvector AS asks", (asked,))
+    row = cur.fetchone()
+    if not (row and (row["asks"] if isinstance(row, dict) else row[0])):
+        return []
+    embedding = embed(asked)
+    if embedding is None:
+        return []
     owner = operator_person_id(cur, tenant_id)
     return _activate_for_question_on(
         cur,
         tenant_id,
         seeds,
         query,
+        embedding,
         reader_scope_id=reader_scope_id,
         trusted_only=False,
         max_hops=MAX_HOPS,

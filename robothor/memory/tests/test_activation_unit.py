@@ -82,6 +82,14 @@ def test_hops_are_clamped_before_the_call(hops: int) -> None:
     assert 0 <= activation.clamp_hops(hops) <= activation.HARD_MAX_HOPS
 
 
+#: A question that asks something beyond the name it links, and an embedder.
+_ASKED = "Where does Alice Smith work?"
+
+
+def _embed(_text: str) -> list[float]:
+    return [0.1] * 4
+
+
 class TestOperatorLookup:
     """Without the operator's identity the walk could run through the
     operator's own node, so it does not run."""
@@ -115,8 +123,9 @@ class TestOperatorLookup:
                     ]
                 return []
 
-            def fetchone(self) -> None:
-                return None
+            def fetchone(self) -> dict[str, object] | None:
+                # The "is anything asked beyond the names" check.
+                return {"asks": True} if "to_tsvector" in statements[-1] else None
 
             def close(self) -> None:
                 pass
@@ -141,7 +150,7 @@ class TestOperatorLookup:
         statements: list[str] = []
         with pytest.raises(activation.OperatorUnknownError):
             activation.graph_candidates_for_query(
-                "test-tenant", "Alice Smith", connect=self._connect(statements)
+                "test-tenant", _ASKED, embed=_embed, connect=self._connect(statements)
             )
         assert not any("memory_activate" in s for s in statements)
 
@@ -157,7 +166,7 @@ class TestOperatorLookup:
         monkeypatch.setattr(robothor.crm.dal, "get_owner_person", _owner)
         statements: list[str] = []
         activation.graph_candidates_for_query(
-            "test-tenant", "Alice Smith", connect=self._connect(statements)
+            "test-tenant", _ASKED, embed=_embed, connect=self._connect(statements)
         )
         assert seen["cur"] is not None, "the operator lookup opened its own connection"
         assert any("memory_activate" in s for s in statements)
