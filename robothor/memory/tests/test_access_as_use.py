@@ -156,8 +156,8 @@ class TestPruneReadsRealUse:
         never = _seed(conn, tenant, "Bob mentioned the office plants once.")
 
         record_fact_access(tenant, fact_ids=[recalled])
-        _run_decay_pass_sync()
-        await prune_low_quality_facts()
+        _run_decay_pass_sync(tenant_id=tenant)
+        await prune_low_quality_facts(tenant_id=tenant)
 
         assert _row(conn, recalled)["is_active"] is True
         assert _row(conn, never)["is_active"] is False
@@ -189,8 +189,8 @@ class TestPruneReadsRealUse:
         await get_task_registry().drain(timeout=5.0)
 
         assert [r["id"] for r in out["results"]] == [recalled]
-        _run_decay_pass_sync()
-        await prune_low_quality_facts()
+        _run_decay_pass_sync(tenant_id=tenant)
+        await prune_low_quality_facts(tenant_id=tenant)
         assert _row(conn, recalled)["is_active"] is True
         assert _row(conn, recalled)["access_count"] == 1
         assert _row(conn, never)["is_active"] is False
@@ -218,12 +218,12 @@ class TestPruneReadsRealUse:
             )
         conn.commit()
 
-        _run_decay_pass_sync()
+        _run_decay_pass_sync(tenant_id=tenant)
         with conn.cursor() as cur:
             cur.execute("SELECT decay_score FROM memory_facts WHERE id = %s", (backfilled,))
             decay = float(cur.fetchone()[0])
         conn.commit()
-        await prune_low_quality_facts()
+        await prune_low_quality_facts(tenant_id=tenant)
 
         # 2 days since use, not 400: recency alone is ~0.63.
         assert decay > 0.5
@@ -243,7 +243,7 @@ class TestImportanceSelection:
         _reinforce_fact(fact_id, tenant_id=tenant)
 
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            ids = [r["id"] for r in _select_unscored_facts(cur, limit=10_000)]
+            ids = [r["id"] for r in _select_unscored_facts(cur, tenant, limit=10_000)]
         conn.commit()
         assert fact_id in ids
 
@@ -255,7 +255,7 @@ class TestImportanceSelection:
 
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             _record_importance(cur, fact_id, 0.7)
-            ids = [r["id"] for r in _select_unscored_facts(cur, limit=10_000)]
+            ids = [r["id"] for r in _select_unscored_facts(cur, tenant, limit=10_000)]
         conn.commit()
 
         assert fact_id not in ids
@@ -273,25 +273,25 @@ class TestImportanceSelection:
 
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             _record_importance(cur, fact_id, 0.5)
-            ids = [r["id"] for r in _select_unscored_facts(cur, limit=10_000)]
+            ids = [r["id"] for r in _select_unscored_facts(cur, tenant, limit=10_000)]
         conn.commit()
         assert fact_id in ids
 
 
-def _select_ids(conn: Any) -> list[int]:
+def _select_ids(conn: Any, tenant: str) -> list[int]:
     from robothor.memory.lifecycle import _select_unscored_facts
 
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        ids = [r["id"] for r in _select_unscored_facts(cur, limit=10_000)]
+        ids = [r["id"] for r in _select_unscored_facts(cur, tenant, limit=10_000)]
     conn.commit()
     return ids
 
 
-def _auto_score(conn: Any) -> None:
+def _auto_score(conn: Any, tenant: str) -> None:
     from robothor.memory.lifecycle import _auto_score_old_events
 
     with conn.cursor() as cur:
-        _auto_score_old_events(cur)
+        _auto_score_old_events(cur, tenant)
     conn.commit()
 
 
@@ -323,10 +323,10 @@ class TestImportanceKeepsDeliberateScores:
         fact_id = _seed(conn, tenant, "Alice closed the security review.", importance_score=0.75)
         _reinforce_fact(fact_id, tenant_id=tenant)  # judged 0.75, reinforced to 0.8
 
-        _auto_score(conn)
+        _auto_score(conn, tenant)
 
         assert _row(conn, fact_id)["importance_score"] == pytest.approx(0.8)
-        assert fact_id not in _select_ids(conn)
+        assert fact_id not in _select_ids(conn, tenant)
 
     def test_a_reinforced_resolution_keeps_its_lifted_score(self, facts_db) -> None:
         conn, tenant = facts_db
@@ -339,9 +339,9 @@ class TestImportanceKeepsDeliberateScores:
         )
         _set(conn, fact_id, reinforcement_count=1)
 
-        _auto_score(conn)
+        _auto_score(conn, tenant)
 
-        assert fact_id not in _select_ids(conn)
+        assert fact_id not in _select_ids(conn, tenant)
         assert _row(conn, fact_id)["importance_score"] == pytest.approx(0.85)
 
     def test_a_consolidated_fact_keeps_inherited_importance_after_reinforcement(
@@ -360,9 +360,9 @@ class TestImportanceKeepsDeliberateScores:
         conn.commit()
         _reinforce_fact(merged, tenant_id=tenant)
 
-        _auto_score(conn)
+        _auto_score(conn, tenant)
 
-        assert merged not in _select_ids(conn)
+        assert merged not in _select_ids(conn, tenant)
         assert _row(conn, merged)["importance_score"] == pytest.approx(0.75)
 
     def test_a_reinforced_unjudged_fact_is_judged_and_keeps_its_reinforcement(
@@ -376,11 +376,11 @@ class TestImportanceKeepsDeliberateScores:
         _reinforce_fact(fact_id, tenant_id=tenant)
         _reinforce_fact(fact_id, tenant_id=tenant)  # 0.6, never judged
 
-        assert fact_id in _select_ids(conn)
+        assert fact_id in _select_ids(conn, tenant)
         _judge(conn, fact_id, 0.7)
 
         assert _row(conn, fact_id)["importance_score"] == pytest.approx(0.8)
-        assert fact_id not in _select_ids(conn)
+        assert fact_id not in _select_ids(conn, tenant)
 
     def test_a_reinforced_unjudged_old_event_is_auto_scored_with_its_reinforcement(
         self, facts_db
@@ -392,11 +392,11 @@ class TestImportanceKeepsDeliberateScores:
         plain = _seed(conn, tenant, "Bob attended the offsite.", importance_score=0.5)
         _reinforce_fact(fact_id, tenant_id=tenant)
 
-        _auto_score(conn)
+        _auto_score(conn, tenant)
 
         assert _row(conn, fact_id)["importance_score"] == pytest.approx(0.35)
         assert _row(conn, plain)["importance_score"] == pytest.approx(0.3)
-        ids = _select_ids(conn)
+        ids = _select_ids(conn, tenant)
         assert fact_id not in ids
         assert plain not in ids
 
@@ -412,7 +412,7 @@ class TestImportanceKeepsDeliberateScores:
 
         nights_judged = 0
         for _night in range(3):
-            if fact_id in _select_ids(conn):
+            if fact_id in _select_ids(conn, tenant):
                 nights_judged += 1
                 _judge(conn, fact_id, 0.5)
             _reinforce_fact(fact_id, tenant_id=tenant)

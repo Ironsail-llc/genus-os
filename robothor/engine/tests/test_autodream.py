@@ -212,6 +212,27 @@ class TestQuietHours:
 class TestRunAutodream:
     """Tests for the main run_autodream() orchestrator."""
 
+    @pytest.fixture(autouse=True)
+    def _one_tenant(self):
+        """The light pass runs once per active tenant; these tests use one, and
+        never reach the database or the embedding model to find it."""
+        from robothor.constants import DEFAULT_TENANT
+
+        with (
+            patch(
+                "robothor.engine.autodream.active_tenant_ids",
+                return_value=[DEFAULT_TENANT],
+                create=True,
+            ),
+            patch(
+                "robothor.engine.autodream.store_insight",
+                new_callable=AsyncMock,
+                return_value=1,
+                create=True,
+            ),
+        ):
+            yield
+
     @pytest.mark.asyncio
     @patch("robothor.engine.autodream.release_lock")
     @patch("robothor.engine.autodream.try_acquire_lock", return_value=True)
@@ -248,9 +269,11 @@ class TestRunAutodream:
         assert result["facts_consolidated"] == 2
         assert result["facts_pruned"] == 3
         assert result["insights_discovered"] == 1
-        mock_consol.assert_called_once_with(threshold=3)
-        mock_prune.assert_called_once()
-        mock_insights.assert_called_once_with(hours_back=72)
+        from robothor.constants import DEFAULT_TENANT
+
+        mock_consol.assert_called_once_with(threshold=3, tenant_id=DEFAULT_TENANT)
+        mock_prune.assert_called_once_with(tenant_id=DEFAULT_TENANT)
+        mock_insights.assert_called_once_with(hours_back=72, tenant_id=DEFAULT_TENANT)
         mock_ts.assert_called_once()
         mock_rec.assert_called_once()
 
@@ -310,10 +333,12 @@ class TestRunAutodream:
         mock_lock,
         mock_unlock,
     ):
+        # The shape run_lifecycle_maintenance actually returns: the prune count
+        # is "facts_pruned" and "insights" is a stats dict, not a list.
         mock_maint.return_value = {
             "consolidation_groups": 5,
-            "total_pruned": 10,
-            "insights": [{"insight_text": "a"}, {"insight_text": "b"}],
+            "facts_pruned": 10,
+            "insights": {"discovered": 2, "stored": 2, "deduped": 0},
             "facts_scored": 20,
         }
 
@@ -350,8 +375,8 @@ class TestRunAutodream:
     ):
         mock_maint.return_value = {
             "consolidation_groups": 3,
-            "total_pruned": 7,
-            "insights": [],
+            "facts_pruned": 7,
+            "insights": {"discovered": 0, "stored": 0, "deduped": 0},
             "facts_scored": 15,
         }
 
@@ -469,6 +494,154 @@ class TestRunAutodream:
 
 
 # ── Daemon Loop Integration ─────────────────────────────────────────────────
+
+
+class TestAutodreamTenancy:
+    """Every autoDream step runs once per active tenant, inside that tenant's
+    ``tenant_scope`` — with row-level security on, a step run outside one sees
+    only the process's own tenant and every child tenant goes unmaintained."""
+
+    TENANTS = ["test-tenant-a", "test-tenant-b"]
+
+    @staticmethod
+    def _recorder(calls: list, result):
+        from robothor.db.connection import current_tenant_scope
+
+        def _record(*args, **kwargs):
+            calls.append((kwargs.get("tenant_id"), current_tenant_scope()))
+            return result
+
+        return _record
+
+    @pytest.fixture
+    def harness(self):
+        """Patch the bookkeeping so only the maintenance steps are observed."""
+        with (
+            patch("robothor.engine.autodream.try_acquire_lock", return_value=True),
+            patch("robothor.engine.autodream.release_lock"),
+            patch("robothor.engine.autodream._update_memory_block"),
+            patch("robothor.engine.autodream._record_run"),
+            patch("robothor.engine.autodream._set_last_run_ts"),
+            patch("robothor.engine.autodream._publish_event"),
+            patch("robothor.engine.autodream._is_quiet_hours", return_value=False),
+            patch(
+                "robothor.engine.autodream.active_tenant_ids",
+                return_value=list(self.TENANTS),
+                create=True,
+            ),
+        ):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_light_pass_maintains_every_tenant_and_stores_its_insights(self, harness):
+        consol: list = []
+        prune: list = []
+        discover: list = []
+        stored: list = []
+
+        async def _consol(**kw):
+            return self._recorder(consol, {"skipped": False, "consolidation_groups": 1})(**kw)
+
+        async def _prune(**kw):
+            return self._recorder(prune, {"total_pruned": 2})(**kw)
+
+        async def _discover(**kw):
+            self._recorder(discover, None)(**kw)
+            return [{"insight_text": f"insight for {kw.get('tenant_id')}", "source_fact_ids": [1]}]
+
+        async def _store(insight, **kw):
+            return self._recorder(stored, 7)(**kw)
+
+        with (
+            patch("robothor.engine.autodream.run_intraday_consolidation", _consol),
+            patch("robothor.engine.autodream.prune_low_quality_facts", _prune),
+            patch("robothor.engine.autodream.discover_cross_domain_insights", _discover),
+            patch("robothor.engine.autodream.store_insight", _store, create=True),
+        ):
+            from robothor.engine.autodream import run_autodream
+
+            result = await run_autodream(mode="idle")
+
+        expected = [(t, t) for t in self.TENANTS]
+        assert consol == expected
+        assert prune == expected
+        assert discover == expected
+        assert stored == expected, "discovered insights were not stored per tenant"
+        assert result["facts_consolidated"] == 2
+        assert result["facts_pruned"] == 4
+        assert result["insights_discovered"] == 2
+
+    @pytest.mark.asyncio
+    async def test_working_context_and_preferences_refresh_for_every_tenant(self, harness):
+        wc: list = []
+        prefs: list = []
+
+        async def _prefs(**kw):
+            return self._recorder(prefs, {"new": 1, "reinforced": 0})(**kw)
+
+        with (
+            patch(
+                "robothor.engine.autodream.run_lifecycle_maintenance",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
+                "robothor.memory.working_context.refresh_working_context",
+                self._recorder(wc, {"tasks": 1, "facts": 0, "intents": 0}),
+            ),
+            patch("robothor.memory.preferences.extract_preferences_from_facts", _prefs),
+        ):
+            from robothor.engine.autodream import run_autodream
+
+            await run_autodream(mode="deep")
+
+        expected = [(t, t) for t in self.TENANTS]
+        assert wc == expected
+        assert prefs == expected
+
+    @pytest.mark.asyncio
+    async def test_one_failing_tenant_does_not_stop_the_light_pass_for_the_rest(self, harness):
+        """Tenants run in a fixed order, so a tenant that keeps failing would
+        otherwise cost every tenant after it its maintenance on every pass."""
+        failing = self.TENANTS[0]
+        prune: list = []
+        wc: list = []
+        prefs: list = []
+
+        async def _consol(**kw):
+            if kw.get("tenant_id") == failing:
+                raise RuntimeError("consolidation broke for this tenant")
+            return {"skipped": True}
+
+        async def _prune(**kw):
+            return self._recorder(prune, {"total_pruned": 1})(**kw)
+
+        async def _discover(**kw):
+            return []
+
+        async def _prefs(**kw):
+            return self._recorder(prefs, {"new": 0})(**kw)
+
+        with (
+            patch("robothor.engine.autodream.run_intraday_consolidation", _consol),
+            patch("robothor.engine.autodream.prune_low_quality_facts", _prune),
+            patch("robothor.engine.autodream.discover_cross_domain_insights", _discover),
+            patch(
+                "robothor.memory.working_context.refresh_working_context",
+                self._recorder(wc, {"tasks": 0}),
+            ),
+            patch("robothor.memory.preferences.extract_preferences_from_facts", _prefs),
+        ):
+            from robothor.engine.autodream import run_autodream
+
+            result = await run_autodream(mode="idle")
+
+        others = [(t, t) for t in self.TENANTS if t != failing]
+        assert prune == others, "the tenants after the failing one were not pruned"
+        assert result["facts_pruned"] == len(others)
+        everyone = [(t, t) for t in self.TENANTS]
+        assert wc == everyone, "working_context was skipped after one tenant failed"
+        assert prefs == everyone, "preferences were skipped after one tenant failed"
 
 
 class TestAutodreamLoop:

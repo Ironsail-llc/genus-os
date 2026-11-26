@@ -544,7 +544,7 @@ async def _memory_block_list(args: dict[str, Any], ctx: ToolContext) -> dict[str
 async def _get_knowledge_gaps(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.memory.gap_analysis import analyze_knowledge_gaps
 
-    return await analyze_knowledge_gaps()
+    return await analyze_knowledge_gaps(tenant_id=ctx.tenant_id)
 
 
 @_handler("record_procedure")
