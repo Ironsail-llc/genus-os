@@ -103,10 +103,13 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    there is none — one 0..1 scale for every leg; cosine similarity is not used)
    + recency + importance + access count, with supersession demotion; then
    near-duplicates are dropped.
-5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps its
-   best that many rows, by its own score, in the top `limit` whenever it
-   returned anything: `graph` 2, `entity_expansion` 1. A weaker row of the leg
-   that the head holds anyway does not use up a place.
+5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps at
+   least that many places in the top `limit` whenever it returned anything,
+   chosen by its own score: `graph` 2, `entity_expansion` 1. For the graph leg
+   only (`recall.BEST_ROW_LEGS`) the places hold its best rows: a weaker row
+   of it that the head holds anyway does not use up a place, and a best row
+   the head holds counts. `entity_expansion` keeps the earlier rule (any of
+   its rows in the head holds its place), so the default search is unchanged.
    A related-but-not-similar fact is exactly what a query-document reranker
    discards. Reserved picks take at most `(limit - 1) // 2` places in total
    (none at a `limit` of 1 or 2), never the top result, and never a
@@ -1184,8 +1187,9 @@ function `memory_activate_for_question`, migration
   reserved places for its two best rows by that score; a best row the head
   already holds counts as one of them.
 - **Labelled as related.** Every surface that shows recall rows to a model
-  (the engine's `search_memory` tool, MCP, deep reason, the memory
-  evaluation's context) formats them with `recall.row_text`: a row only the
+  (the engine's `search_memory` tool on both its paths, direct and the RIP 15
+  router, which carries each row's `leg_ranks` for it; MCP; deep reason; the
+  memory evaluation's context) formats them with `recall.row_text`: a row only the
   graph found reads `Related via Alice Smith → Example Co: <fact>`, from the
   walk's own path (every node of it visible to the reader); a row another leg
   also found keeps its text.
