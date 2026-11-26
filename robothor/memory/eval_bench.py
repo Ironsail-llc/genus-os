@@ -247,6 +247,89 @@ def _utc(at: datetime) -> datetime:
     return at if at.tzinfo else at.replace(tzinfo=UTC)
 
 
+#: Attempts at one history's ingestion (cleaned in between) and at one embedding batch.
+INGEST_ATTEMPTS = 3
+EMBED_ATTEMPTS = 3
+
+
+def _embed_backoff(attempt: int) -> float:
+    return float(2**attempt)
+
+
+def validated_embedder(
+    inner: Callable[[list[str]], Awaitable[list[list[float]]]],
+    *,
+    dim: int | None = None,
+    attempts: int = EMBED_ATTEMPTS,
+) -> Callable[[list[str]], Awaitable[list[list[float]]]]:
+    """``inner``, refusing a batch with a missing, empty or wrong-length vector.
+
+    A bad batch is asked again after a back-off; one still bad raises, so a
+    zero-length vector never reaches the write path. ``dim`` is the expected
+    length; unset, the first non-empty vector sets it.
+    """
+    expected: list[int] = [dim] if dim else []
+
+    async def embed(texts: list[str]) -> list[list[float]]:
+        problem = ""
+        for attempt in range(max(1, attempts)):
+            vectors = list(await inner(texts))
+            if not expected:
+                first = next((len(v) for v in vectors if v), 0)
+                if first:
+                    expected.append(first)
+            want = expected[0] if expected else 0
+            bad = [
+                (i, len(v) if v is not None else None)
+                for i, v in enumerate(vectors)
+                if v is None or not want or len(v) != want
+            ]
+            if len(vectors) == len(texts) and not bad:
+                return vectors
+            problem = (
+                f"embedder returned {len(vectors)} vectors for {len(texts)} texts"
+                if len(vectors) != len(texts)
+                else f"embedder returned {bad[0][1] or 0} dimensions for text {bad[0][0]} "
+                f"of {len(texts)} (expected {want or 'a non-empty vector'})"
+            )
+            logger.warning("%s (attempt %d/%d)", problem, attempt + 1, attempts)
+            if attempt + 1 < attempts:
+                await asyncio.sleep(_embed_backoff(attempt))
+        raise RuntimeError(problem)
+
+    return embed
+
+
+async def _ingest_with_retry(
+    ingest: Callable[..., Awaitable[IngestResult]],
+    history: bd.BenchHistory,
+    tenant: str,
+    *,
+    clean: Callable[[str], Any],
+    cleanup: bool,
+    **kwargs: Any,
+) -> IngestResult:
+    """Ingest one history, cleaning and trying again on failure; the last error raises."""
+    last: Exception | None = None
+    for attempt in range(INGEST_ATTEMPTS):
+        if cleanup and attempt:
+            clean(tenant)
+        try:
+            return await ingest(history, tenant, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — retried, then raised
+            last = exc
+            logger.warning(
+                "benchmark ingest of %s failed (attempt %d/%d): %s",
+                history.id,
+                attempt + 1,
+                INGEST_ATTEMPTS,
+                exc,
+                exc_info=attempt + 1 == INGEST_ATTEMPTS,
+            )
+    assert last is not None
+    raise last
+
+
 async def ingest_history(
     history: bd.BenchHistory,
     tenant_id: str = BENCH_TENANT,
@@ -277,7 +360,7 @@ async def ingest_history(
 
     started = time.perf_counter()
     fmt = date_format or (lambda d: d.isoformat())
-    embed = embed_batch or seed._default_embed_batch
+    embed = validated_embedder(embed_batch or seed._default_embed_batch)
 
     async def _embed(texts: list[str]) -> list[list[float] | None]:
         return list(await embed(texts))
@@ -985,6 +1068,18 @@ async def run_benchmark(
         )
 
     answering: list[asyncio.Task[None]] = []
+    excluded: list[dict[str, Any]] = []
+
+    def _exclude(system: str, q: bd.BenchQuestion, reason: str) -> None:
+        """A question whose memory could not be built is not asked and not scored."""
+        excluded.append(
+            {
+                "system": system,
+                "question_id": q.id,
+                "question_type": q.question_type,
+                "reason": reason[:300],
+            }
+        )
 
     async def _finish(system: str, q: bd.BenchQuestion, ctx: dict[str, Any]) -> None:
         try:
@@ -1018,9 +1113,12 @@ async def run_benchmark(
             if cleanup:
                 clean(tenant)
             try:
-                ing = await ingest(
+                ing = await _ingest_with_retry(
+                    ingest,
                     bench.histories[hid],
                     tenant,
+                    clean=clean,
+                    cleanup=cleanup,
                     mode=ingest_mode,
                     embed_batch=embed_batch,
                     embed_turns=any(s.name == "raw_verbatim" for s, _ in need),
@@ -1050,17 +1148,17 @@ async def run_benchmark(
                 for s, q in need:
                     try:
                         bundle = await s.retrieve(q, world_handle=handle, token_budget=token_budget)
-                    except Exception as exc:  # noqa: BLE001 — recorded, never hidden
-                        records.append(_error(s.name, q, exc))
+                    except Exception as exc:  # noqa: BLE001 — excluded and counted, never scored
+                        _exclude(s.name, q, f"retrieval failed: {type(exc).__name__}: {exc}")
                         continue
                     row = _bundle_to_row(bundle, ing.turn_dates)
                     cache.put_context(_base(s.name, q), version, row)
                     row = {"key": _key(_base(s.name, q), version), "version": version, **row}
                     contexts[(s.name, q.id)] = row
-            except Exception as exc:  # noqa: BLE001 — every pending question records it
+            except Exception as exc:  # noqa: BLE001 — excluded and counted, never scored
                 logger.warning("benchmark ingest failed for %s: %s", hid, exc)
                 for s, q in need:
-                    records.append(_error(s.name, q, exc))
+                    _exclude(s.name, q, f"ingest failed: {type(exc).__name__}: {exc}")
             finally:
                 if cleanup:
                     clean(tenant)
@@ -1112,6 +1210,7 @@ async def run_benchmark(
                 h: sum(1 for q in chosen if split.get(q.id) == h) for h in ("dev", "held_out")
             },
             "resumed": resumed,
+            "excluded_questions": len({e["question_id"] for e in excluded}),
             "progress_path": progress_path,
             "cache_dir": cache_dir,
         },
@@ -1122,6 +1221,7 @@ async def run_benchmark(
         "ingests": ingests,
         "timings": {"total_s": round(time.perf_counter() - started, 2)},
         "errors": errors,
+        "excluded": excluded,
         "records": [dataclasses.asdict(r) for r in records],
     }
 
@@ -1162,7 +1262,14 @@ async def prefill_contexts(
     by_history: dict[str, list[bd.BenchQuestion]] = {}
     for q in questions:
         by_history.setdefault(q.history_id, []).append(q)
-    stats = {"histories": len(by_history), "ingested": 0, "contexts": 0, "cached": 0, "errors": 0}
+    stats = {
+        "histories": len(by_history),
+        "ingested": 0,
+        "contexts": 0,
+        "cached": 0,
+        "errors": 0,
+        "failed_histories": 0,
+    }
     for hid, qs in by_history.items():
         need = [
             (s, q, b)
@@ -1182,9 +1289,12 @@ async def prefill_contexts(
         if cleanup:
             clean(tenant)
         try:
-            ing = await ingest(
+            ing = await _ingest_with_retry(
+                ingest,
                 bench.histories[hid],
                 tenant,
+                clean=clean,
+                cleanup=cleanup,
                 mode=ingest_mode,
                 embed_batch=embed_batch,
                 embed_turns=any(s.name == "raw_verbatim" for s, _q, _b in need),
@@ -1212,6 +1322,7 @@ async def prefill_contexts(
         except Exception as exc:  # noqa: BLE001 — counted; the run retries it
             logger.warning("prefill ingest failed for %s: %s", hid, exc)
             stats["errors"] += 1
+            stats["failed_histories"] += 1
         finally:
             if cleanup:
                 clean(tenant)
@@ -1490,6 +1601,14 @@ def format_bench_markdown(report: dict[str, Any]) -> str:
         "named above is not that model. Full context, subset size and context budget are stated "
         "beside every number; compare only rows with the same answer model and judge.",
     ]
+    if report.get("excluded"):
+        ids = sorted({e["question_id"] for e in report["excluded"]})
+        lines += [
+            "",
+            f"Excluded (not asked, not scored): {len(ids)} question(s) whose memory could not be "
+            "built (failed ingest or retrieval, after retries); they are in no number above. "
+            "See `excluded` in the JSON.",
+        ]
     if report.get("errors"):
         lines += ["", f"Errors: {len(report['errors'])} (scored as wrong; see the JSON)."]
     return "\n".join(lines) + "\n"

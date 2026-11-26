@@ -342,9 +342,11 @@ class TestRun:
             chat=_FakeChat(),
             validate_judge=False,
         )
-        assert log == ["cleanup", "cleanup"]
-        assert report["systems"][echo_system]["overall"]["errors"] == 1
-        assert report["errors"]
+        # Before the first attempt, between the retries, and after the last.
+        assert log == ["cleanup"] * (eb.INGEST_ATTEMPTS + 1)
+        # A history that never ingested is excluded and counted, not scored.
+        assert report["systems"] == {}
+        assert [e["question_id"] for e in report["excluded"]] == ["q0"]
 
     @pytest.mark.asyncio
     async def test_a_wrong_answer_is_scored_wrong(self, echo_system):
