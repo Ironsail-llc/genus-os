@@ -196,7 +196,10 @@ def apply_reserved(
         if want <= 0:
             continue
         # The places are for the leg's best rows by its own score; a weaker
-        # row of the leg that the head holds anyway does not use one up.
+        # row of the leg that the head holds anyway does not use one up, and
+        # a best row the head holds counts (``exclude`` keeps out only rows
+        # that would come in from outside the head).
+        in_head = {_row_key(r) for r in out}
         best = {
             _row_key(r)
             for r in sorted(
@@ -204,7 +207,7 @@ def apply_reserved(
                     r
                     for r in pool
                     if leg in (r.get("leg_ranks") or {})
-                    and not (exclude is not None and exclude(r))
+                    and (_row_key(r) in in_head or not (exclude is not None and exclude(r)))
                 ),
                 key=_leg_order(leg),
             )[:want]
