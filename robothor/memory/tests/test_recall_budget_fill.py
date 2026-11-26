@@ -241,3 +241,46 @@ async def test_the_routed_path_skips_an_oversized_row_too(
     assert ids[0] == 1
     assert 2 not in ids
     assert 12 in ids
+
+
+@pytest.mark.asyncio
+async def test_a_temporal_query_keeps_the_head_ahead_of_the_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The routed path re-sorts temporal queries by recency. Only the head may
+    be re-sorted: newer unscored tail rows must not push the reranked head
+    out of the context or ahead of it. Through search_memory's routed path."""
+    from datetime import UTC, datetime, timedelta
+
+    from robothor.memory import router
+    from robothor.memory.facts import _fill_from_pool
+
+    old, new = datetime(2020, 1, 1, tzinfo=UTC), datetime(2026, 1, 1, tzinfo=UTC)
+
+    def _dated(i: int, when: datetime) -> dict[str, Any]:
+        return {
+            "id": i,
+            "kind": "fact",
+            "fact_text": f"H{i:03d} " + "x" * 145 if i <= 10 else f"T{i:03d} " + "x" * 145,
+            "category": "event",
+            "confidence": 0.9,
+            "created_at": when,
+        }
+
+    head = [dict(_dated(i, old + timedelta(days=i)), rerank_score=0.9) for i in range(1, 11)]
+    tail = [_dated(i, new + timedelta(days=i)) for i in range(11, 51)]
+
+    async def fake_search(query: str, **kwargs: Any) -> list[dict[str, Any]]:
+        pool = [dict(r) for r in head] + [dict(r) for r in tail]
+        return _fill_from_pool(pool[:10], pool, int(kwargs.get("limit") or 50))
+
+    monkeypatch.setattr(facts, "search_facts", fake_search)
+    monkeypatch.setenv("ROBOTHOR_RIP_15_ENABLED", "1")
+    query = "what is the latest garage locker code"
+    assert router.classify_query(query) == "temporal"
+    out = await _call({"query": query})
+
+    labels = [r["fact"][:4] for r in out["results"]]
+    assert len(labels) > 10, "the tail still fills after the head"
+    assert sorted(labels[:10]) == [f"H{i:03d}" for i in range(1, 11)], labels[:12]
+    assert all(lab.startswith("T") for lab in labels[10:])
