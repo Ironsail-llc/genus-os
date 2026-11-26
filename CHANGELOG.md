@@ -1,3 +1,9 @@
+## [1.140.0](https://github.com/Ironsail-llc/genus-os/compare/v1.139.0...v1.140.0) (2026-11-26)
+
+### Features
+
+* **engine:** deliver datadog findings and alerts per tenant (GEN-899) ([#943](https://github.com/Ironsail-llc/genus-os/issues/943)) ([6ad5dae](https://github.com/Ironsail-llc/genus-os/commit/6ad5daea3567eeb64034ea6d39ba7687b0d86d4b))
+
 ## [1.139.0](https://github.com/Ironsail-llc/genus-os/compare/v1.138.3...v1.139.0) (2026-11-26)
 
 ### Features
