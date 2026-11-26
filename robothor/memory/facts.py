@@ -24,6 +24,8 @@ import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from robothor.identity.scope import DataScope
 
 import httpx
@@ -38,6 +40,7 @@ from robothor.memory.drift import (
     compute_fact_hash,
     evaluate_drift,
 )
+from robothor.memory.recall import Candidate, apply_reserved, fuse, relevance_from_rank
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 logger = logging.getLogger(__name__)
@@ -655,7 +658,7 @@ async def search_insights(
         List of matching insight dictionaries sorted by similarity.
     """
     try:
-        embedding = await llm_client.get_embedding_async(query)
+        embedding = await _embed_query(query)
     except httpx.HTTPError as e:
         # Insight search is vector-only: without an embedding there is no
         # keyword leg to fall back to. Degrade to no insights rather than
@@ -728,8 +731,10 @@ def _rerank_wide_enabled() -> bool:
     Default OFF (observe). When off, the cross-encoder truncates to `limit`
     *before* the recency/importance blend runs, so a fresh, high-importance,
     on-topic fact the 0.6B reranker drops can never be rescued. When on, rerank
-    keeps ``max(limit*4, 24)`` survivors — each carrying its yes/no verdict — and
-    the blend does the final cut, with a small bonus for ``rerank_relevant=yes``.
+    keeps ``max(limit*4, 24)`` survivors (bounded by the reranker's candidate
+    cap) and the blend does the final cut, with a small bonus for
+    ``rerank_relevant=yes`` (a graded score of at least 0.5). It also widens
+    each fact leg's fetch to ``LEG_FETCH_MIN_WIDE``.
     """
     raw = os.environ.get("MEMORY_RERANK_WIDE", "0").strip().lower()
     return raw not in ("0", "false", "no", "off")
@@ -741,7 +746,11 @@ def _episode_merge_enabled() -> bool:
     Default OFF. The reranker branch used to return before the
     include_episodes / second include_insights append, so the (only populated)
     episode store was invisible whenever the reranker was on (the prod default).
-    When on, both the reranked and fallback paths share ``_append_auxiliary``.
+
+    ``search_facts`` no longer reads this flag: the auxiliary stores are fusion
+    legs (``_auxiliary_legs``) on the single ranking path, so ``include_*``
+    alone decides whether they take part, reranked or not. The reader stays
+    until the flag's removal story retires it with the other memory flags.
     """
     raw = os.environ.get("MEMORY_EPISODE_MERGE", "0").strip().lower()
     return raw not in ("0", "false", "no", "off")
@@ -798,13 +807,30 @@ def _dedupe(results: list[dict[str, Any]], threshold: float = 0.75) -> list[dict
     return kept
 
 
+def _assign_relevance(results: list[dict[str, Any]]) -> None:
+    """Set ``relevance`` (0..1) on every row: one scale for every leg.
+
+    The reranker's graded score when the row has one, else a function of its
+    fused rank (``fused_rank``, or its position when absent). Cosine
+    similarity is never used: only the dense leg has it, so mixing it in put
+    dense and keyword-only hits on two different scales.
+    """
+    for i, r in enumerate(results):
+        score = r.get("rerank_score")
+        if score is None:
+            rank = r.get("fused_rank")
+            score = relevance_from_rank(i if rank is None else int(rank))
+        r["relevance"] = float(score)
+
+
 def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     """Unified-score re-rank (relevance + recency + importance + access), then dedupe.
 
     Per live feedback, recency is weighted heavily (operator wants the freshest
     of several relevant hits surfaced first) while relevance stays the largest
     single signal so on-topic hits keep the top. Near-duplicates are then
-    collapsed so the first few results are distinct.
+    collapsed so the first few results are distinct. Relevance is the single
+    scale set by ``_assign_relevance``.
     """
     coherence_on = _temporal_coherence_enabled()
     # When the wide-rerank pool is in use, the candidate list mixes cross-encoder
@@ -832,9 +858,9 @@ def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any
                     inferred_superseded.add(id(r))
                     break
 
-    for i, r in enumerate(results):
-        rel = r.get("similarity")
-        rel = (1.0 - i / (len(results) or 1)) if rel is None else float(rel)
+    _assign_relevance(results)
+    for r in results:
+        rel = float(r["relevance"])
         imp = r.get("importance_score")
         imp = 0.5 if imp is None else float(imp)
         age_s = r.get("age_seconds")
@@ -859,8 +885,253 @@ def _blend_rank(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any
     return ranked[:limit]
 
 
-async def _append_auxiliary(
-    result: list[dict[str, Any]],
+# ── Recall ranking ──────────────────────────────────────────────────────────
+# Every leg returns Candidates (robothor/memory/recall.py); one fusion, one
+# reranker pass, one relevance scale in the blend, then reserved places.
+
+# Rows each fact leg fetches: max(LEG_FETCH_MIN, limit * 3).
+LEG_FETCH_MIN = 30
+LEG_FETCH_MIN_WIDE = 45
+
+# RRF weight per leg (unlisted legs count 1.0). The two fan-out legs that were
+# previously appended at a fixed low score enter at half weight: they still
+# reach the reranker when their best rows are near the head, without displacing
+# the primary legs' top ranks.
+LEG_WEIGHTS: dict[str, float] = {"entity_expansion": 0.5, "chat_turn": 0.5}
+
+# Places in the final top-k a leg keeps whenever it returned anything (see
+# recall.apply_reserved). Graph-derived facts are related to the query, not
+# similar to it, so a query-document reranker would otherwise always drop
+# them. "graph" is reserved for the graph-activation leg.
+RESERVED_PLACES: dict[str, int] = {"graph": 2, "entity_expansion": 1}
+
+_AUX_LIMITS = {"insight": 3, "episode": 3, "chat_turn": 5}
+
+# Conversation segments fetched for fusion: at least this many, else the limit.
+SEGMENT_LEG_MIN = 5
+
+
+async def _embed_query(query: str) -> list[float]:
+    """Embed a retrieval query with the model's query instruction."""
+    return await llm_client.get_embedding_async(llm_client.format_embedding_query(query))
+
+
+def _fact_candidates(rows: list[dict[str, Any]], leg: str, score_key: str) -> list[Candidate]:
+    out: list[Candidate] = []
+    for r in rows:
+        score = r.get(score_key)
+        out.append(
+            Candidate(
+                id=r["id"],
+                kind="fact",
+                text=r.get("fact_text") or "",
+                similarity=r.get("similarity"),
+                leg_scores={leg: float(score)} if score is not None else {},
+                payload=r,
+            )
+        )
+    return out
+
+
+_FACT_COLUMNS = """id, fact_text, category, entities, confidence, source_type,
+                   metadata, created_at, importance_score, access_count, superseded_by,
+                   person_id,
+                   EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds"""
+
+
+def _or_query(query: str) -> str:
+    """The query's words joined with OR, in websearch_to_tsquery syntax.
+
+    Empty for a single word: the OR form would be the AND form again.
+    """
+    words = [w for w in re.findall(r"\w+", query or "") if w.lower() != "or"]
+    return " or ".join(words) if len(words) > 1 else ""
+
+
+def _keyword_rows(
+    cur: Any,
+    query: str,
+    tenant: str,
+    filters: str,
+    filter_params: tuple[Any, ...],
+    fetch_limit: int,
+) -> list[dict[str, Any]]:
+    """Full-text leg: every term first, any term when that finds nothing.
+
+    ``websearch_to_tsquery`` never raises on user text. Scored by
+    ``ts_rank_cd`` with normalisation 1|32: divided by 1 + log(document
+    length), then mapped into 0..1 by rank / (rank + 1).
+    """
+    sql = f"""
+        SELECT {_FACT_COLUMNS},
+               ts_rank_cd(tsv, websearch_to_tsquery('english', %s), 33) as keyword_score
+        FROM memory_facts
+        WHERE tsv @@ websearch_to_tsquery('english', %s) AND tenant_id = %s {filters}
+        ORDER BY keyword_score DESC
+        LIMIT %s
+        """
+    for text in (query, _or_query(query)):
+        if not text.strip():
+            continue
+        cur.execute(sql, (text, text, tenant, *filter_params, fetch_limit))
+        rows = [dict(r) for r in cur.fetchall()]
+        if rows:
+            for r in rows:
+                r.setdefault("bm25_score", r.get("keyword_score"))
+            return rows
+    return []
+
+
+def _fact_legs(
+    query: str,
+    embedding: list[float] | None,
+    tenant: str,
+    filters: str,
+    filter_params: tuple[Any, ...],
+    fetch_limit: int,
+) -> dict[str, list[Candidate]]:
+    """The vector and keyword legs over memory_facts, in one transaction."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        # ef_search, plus iterative scan where pgvector supports it, so a
+        # narrow tenant/person filter still fills the LIMIT.
+        apply_hnsw_session(cur)
+        vector_rows: list[dict[str, Any]] = []
+        if embedding is not None:
+            cur.execute(
+                f"""
+                SELECT {_FACT_COLUMNS},
+                       1 - (embedding <=> %s::vector) as similarity
+                FROM memory_facts
+                WHERE embedding IS NOT NULL AND tenant_id = %s {filters}
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+                """,
+                (embedding, tenant, *filter_params, embedding, fetch_limit),
+            )
+            vector_rows = [dict(r) for r in cur.fetchall()]
+        keyword_rows = _keyword_rows(cur, query, tenant, filters, filter_params, fetch_limit)
+    return {
+        "vector": _fact_candidates(vector_rows, "vector", "similarity"),
+        "keyword": _fact_candidates(keyword_rows, "keyword", "keyword_score"),
+    }
+
+
+async def _entity_expansion_leg(
+    seed: list[Candidate],
+    tenant: str,
+    scope_clause: str,
+    scope_params: tuple[Any, ...],
+) -> list[Candidate]:
+    """Facts about entities related to the top hits' entities (best-effort)."""
+    out: list[Candidate] = []
+    try:
+        from robothor.memory.entities import get_entity
+
+        mentioned: set[str] = set()
+        for c in seed[:5]:
+            mentioned.update(c.payload.get("entities") or [])
+        exclude = {c.id for c in seed if c.kind == "fact"}
+        for entity_name in list(mentioned)[:3]:
+            entity = await get_entity(entity_name, tenant_id=tenant)
+            for rel in (entity or {}).get("relations", [])[:3]:
+                # get_entity aliases the far end as target_name (outgoing) or
+                # source_name (incoming); bare keys are a fallback for a flatter
+                # shape. Reading only the bare keys once disabled this silently.
+                related = (
+                    rel.get("target_name")
+                    or rel.get("source_name")
+                    or rel.get("target")
+                    or rel.get("source")
+                    or ""
+                )
+                if not related:
+                    continue
+                with get_connection() as conn:
+                    cur = conn.cursor(cursor_factory=RealDictCursor)
+                    cur.execute(
+                        f"""
+                        SELECT id, fact_text, category, entities, confidence,
+                               source_type, metadata, created_at, importance_score,
+                               person_id
+                        FROM memory_facts
+                        WHERE is_active = TRUE AND tenant_id = %s
+                          AND %s = ANY(entities)
+                          AND importance_score > 0.5
+                          AND id != ALL(%s)
+                          {scope_clause}
+                        ORDER BY importance_score DESC, created_at DESC
+                        LIMIT 2
+                        """,
+                        (tenant, related, list(exclude), *scope_params),
+                    )
+                    rows = [dict(r) for r in cur.fetchall()]
+                for r in rows:
+                    r["source"] = "entity_expansion"
+                    exclude.add(r["id"])
+                out.extend(_fact_candidates(rows, "entity_expansion", "importance_score"))
+    except Exception:
+        # Best-effort by design — a graph miss must not fail the search. But it
+        # stays *logged*: a bare `pass` here once hid a key-name mismatch that
+        # disabled expansion entirely.
+        logger.debug("entity expansion failed (best-effort)", exc_info=True)
+    return out
+
+
+def _aux_candidates(rows: list[dict[str, Any]], kind: str, text_key: str) -> list[Candidate]:
+    return [
+        Candidate(
+            id=r.get("id"),
+            kind=kind,
+            text=r.get(text_key) or "",
+            similarity=r.get("similarity"),
+            leg_scores={kind: float(r["similarity"])} if r.get("similarity") is not None else {},
+            payload=r,
+        )
+        for r in rows
+    ]
+
+
+def _segment_candidates(hits: list[dict[str, Any]], query: str) -> list[Candidate]:
+    """Conversation segments as candidates of kind ``segment``.
+
+    The reranker reads a bounded excerpt (``Candidate.text`` becomes the row's
+    ``content``); the row keeps the whole verbatim text as ``fact_text`` so
+    the tool output and the eval scorers see all of it. ``age_seconds`` is from
+    the segment's last turn, so the blend's recency treats it like a fact's.
+    """
+    from datetime import UTC, datetime
+
+    from robothor.memory.segments import rerank_excerpt
+
+    now = datetime.now(UTC)
+    out: list[Candidate] = []
+    for h in hits:
+        ended = h.get("ended_at")
+        # A keyword-only hit has no cosine. Leave the key out rather than send
+        # None: callers format rows with round(r.get("similarity", 0), 4).
+        hit = {k: v for k, v in h.items() if not (k == "similarity" and v is None)}
+        payload = {
+            **hit,
+            "fact_text": h["text"],
+            "category": "segment",
+            "confidence": 0.5,
+            "age_seconds": (now - ended).total_seconds() if ended is not None else None,
+        }
+        out.append(
+            Candidate(
+                id=h["id"],
+                kind="segment",
+                text=rerank_excerpt(h["text"], query),
+                similarity=h.get("similarity"),
+                leg_scores={"segment": float(h.get("rrf_score") or 0.0)},
+                payload=payload,
+            )
+        )
+    return out
+
+
+async def _auxiliary_legs(
     *,
     query: str,
     embedding: list[float] | None,
@@ -869,23 +1140,56 @@ async def _append_auxiliary(
     include_insights: bool,
     include_episodes: bool,
     include_chat_turns: bool,
-) -> list[dict[str, Any]]:
-    """Append cross-domain insights, episodic summaries, and verbatim chat turns.
+    include_segments: bool = False,
+    limit: int = 10,
+    reader_person_id: str | None = None,
+    room_ids: Iterable[str] | None = None,
+    reader_user_id: str | None = None,
+) -> dict[str, list[Candidate]]:
+    """Insights, episode summaries, conversation segments and chat turns, as legs.
 
-    Each leg is best-effort. Shared by the reranker and fallback paths so the
-    populated episode store is no longer dropped on the reranked path (WS-1.3).
+    Each leg is best-effort: a failure is a WARNING naming the leg, and the
+    other legs still rank. They used to be appended after ranking (and the
+    episode leg dropped whenever the reranker ran); they are now fused and
+    reranked with the facts.
+
+    The ``segment`` leg (dense + keyword over ``memory_segments``) supersedes
+    the dense-only ``chat_turn`` leg: when segments are on, chat turns are not
+    searched for the same query, so one conversation is not returned twice
+    in two shapes. ``reader_person_id`` / ``room_ids`` decide which segments
+    the reader may see (``robothor.memory.segments._filters``).
     """
+    legs: dict[str, list[Candidate]] = {}
+    if include_segments:
+        try:
+            from robothor.memory.segments import search_segments
+
+            hits = await search_segments(
+                query,
+                tenant_id=_tenant,
+                limit=max(SEGMENT_LEG_MIN, limit),
+                reader_person_id=reader_person_id,
+                reader_user_id=reader_user_id,
+                room_ids=room_ids,
+                query_embedding=embedding,
+                embed_missing=False,
+            )
+            legs["segment"] = _segment_candidates(hits, query)
+        except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
+            logger.warning("search_facts: segment leg failed: %s: %s", type(e).__name__, e)
+        include_chat_turns = False
     if include_insights:
         try:
-            insights = await search_insights(query, limit=3, tenant_id=tenant_id)
-            result.extend(insights)
+            rows = await search_insights(query, limit=_AUX_LIMITS["insight"], tenant_id=tenant_id)
+            legs["insight"] = _aux_candidates(rows, "insight", "insight_text")
         except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
             logger.warning("search_facts: insight leg failed: %s: %s", type(e).__name__, e)
     if include_episodes:
         try:
             from robothor.memory.episodes import search_episodes
 
-            result.extend(await search_episodes(query, limit=3, tenant_id=tenant_id))
+            rows = await search_episodes(query, limit=_AUX_LIMITS["episode"], tenant_id=tenant_id)
+            legs["episode"] = _aux_candidates(rows, "episode", "fact_text")
         except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
             logger.warning("search_facts: episode leg failed: %s: %s", type(e).__name__, e)
     if include_chat_turns and embedding is not None:
@@ -893,17 +1197,54 @@ async def _append_auxiliary(
             from robothor.engine.chat_store import search_chat_turns
 
             turns = await asyncio.to_thread(
-                search_chat_turns, embedding, limit=5, tenant_id=_tenant
+                search_chat_turns, embedding, limit=_AUX_LIMITS["chat_turn"], tenant_id=_tenant
             )
             for t in turns:
                 t["fact_text"] = f"[{t['role']}] {t['content']}"
                 t["category"] = "chat_turn"
                 t["confidence"] = 0.5
-                t["rrf_score"] = 0.3 * float(t.get("similarity", 0))
-            result.extend(turns)
+                t.setdefault("source", "chat_turn")
+            legs["chat_turn"] = _aux_candidates(turns, "chat_turn", "fact_text")
         except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
             logger.warning("search_facts: chat turn leg failed: %s: %s", type(e).__name__, e)
-    return result
+    return legs
+
+
+async def _rank_pool(
+    query: str, pool: list[dict[str, Any]], limit: int, use_reranker: bool
+) -> list[dict[str, Any]]:
+    """Rerank (graded) and blend the fused pool; fused order on reranker failure."""
+    blend = _rank_blend_enabled()
+    if use_reranker and pool:
+        try:
+            import time
+
+            from robothor.rag.reranker import rerank_with_fallback
+
+            t0 = time.time()
+            # WS-1: with MEMORY_RERANK_WIDE the reranker keeps a wider survivor
+            # pool and the blend makes the final cut.
+            rerank_topk = max(limit * 4, 24) if _rerank_wide_enabled() else limit
+            reranked: list[dict[str, Any]] = await rerank_with_fallback(
+                query, pool, top_k=rerank_topk
+            )
+            logger.info(
+                "search_facts rerank: %d candidates → %d survivors (top_k=%d) in %dms",
+                len(pool),
+                len(reranked),
+                rerank_topk,
+                int((time.time() - t0) * 1000),
+            )
+            if blend:
+                return _blend_rank(reranked, limit)
+            _assign_relevance(reranked)
+            return reranked[:limit]
+        except Exception as e:
+            logger.warning("search_facts rerank failed, falling back: %s", e)
+    if blend:
+        return _blend_rank(pool, limit)
+    _assign_relevance(pool)
+    return pool[:limit]
 
 
 async def search_facts(
@@ -917,48 +1258,78 @@ async def search_facts(
     include_chat_turns: bool = False,
     tenant_id: str = "",
     scope: DataScope | None = None,
+    include_segments: bool = True,
+    reader_person_id: str | None = None,
+    room_ids: Iterable[str] | None = None,
+    reader_user_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Hybrid search: vector similarity + BM25 keyword matching with RRF fusion.
+    """Hybrid recall: named legs fused by RRF, graded rerank, one relevance scale.
 
-    Pipeline:
-        1. Vector search: top 30 by cosine similarity (semantic)
-        2. BM25 search: top 30 by ts_rank (keyword)
-        3. Reciprocal Rank Fusion: score = 1/(60+rank_vector) + 1/(60+rank_bm25)
-        4. Optional: entity-graph expansion for associated facts
-        5. Optional: reranker (cross-encoder) for precision
+    Pipeline (contract in robothor/memory/recall.py):
+        1. Legs: ``vector`` (HNSW cosine) and ``keyword`` (full text, every
+           term, then any term) over memory_facts; ``entity_expansion`` when
+           ``expand_entities``; ``segment`` (raw conversation, on by default);
+           ``insight`` / ``episode`` / ``chat_turn`` when asked for. Each fact
+           leg fetches max(30, limit * 3).
+        2. ``fuse`` — reciprocal rank fusion, k=60, ``LEG_WEIGHTS``.
+        3. Reranker (on by default; ``MEMORY_RERANK_ENABLED``) scores the head
+           of the fused list on 0..1 and orders by that score; on any error the
+           fused order stands.
+        4. Blend — relevance (rerank score, else from fused rank) + recency +
+           importance + access, supersession demotion; near-duplicates dropped.
+        5. ``RESERVED_PLACES`` — a leg keeps its reserved places in the top-k.
 
     Args:
         query: Search query text.
-        limit: Maximum number of results.
+        limit: Maximum number of results (all legs share it).
         active_only: If True, only return active (non-superseded) facts.
         use_reranker: If True, run reranker on candidates. If None (default),
             honors MEMORY_RERANK_ENABLED env flag (on by default).
         expand_entities: If True, pull related entity facts.
         scope: Optional "own data + shared" DataScope (Task 5, Unified
             Identity Context). ``None`` (the default — every pre-existing
-            caller) is unrestricted, byte-identical to pre-Task-5 SQL. A
-            restricted scope adds ``(person_id = %s OR person_id IS NULL)``
-            to both candidate-generating queries below, AND to the
-            entity-graph expansion query (``expand_entities=True`` — it
-            queries the same ``memory_facts`` table and must not be able to
-            pull in another person's facts through the expansion fan-out).
-            Other auxiliary paths (insights, episodes, chat-turn merge in
-            ``_append_auxiliary``) are unaffected — see
-            robothor/identity/scope.py and the Task 5 report for the
-            documented rationale.
+            caller) is unrestricted. A restricted scope adds
+            ``(person_id = %s OR person_id IS NULL)`` to both fact legs AND to
+            the entity-graph expansion query (it reads the same
+            ``memory_facts`` table and must not pull in another person's
+            facts through the fan-out). The insight, episode and chat-turn
+            legs cannot filter by person, so a restricted scope leaves them
+            out (the router's rule for unscopable stores) — see
+            robothor/identity/scope.py. The segment leg can filter by person
+            and stays on, but the scope only narrows its reader: the reader
+            passed is kept only when it is the scope's person (and its user id
+            only when it belongs to that person); a restricted scope never
+            makes anyone a reader.
+        include_segments: Fuse a ``segment`` leg of raw conversation
+            (``robothor.memory.segments.search_segments``). On by default;
+            when on, the ``chat_turn`` leg is not run even if asked for — the
+            segment leg covers the same conversation with a keyword leg too.
+        reader_person_id: The reader's own person. Segments private to that
+            person are returned with the shared ones; without it, shared
+            segments only. Applied on every call; under a restricted
+            ``scope`` it is kept only when it is the scope's person.
+        room_ids: Workspaces the reader can access; a workspace conversation's
+            segments are returned only for these.
+        reader_user_id: The reader's own user id; a member's webchat
+            conversation (``agent:{agent}:user:{uid}``) is theirs. Without a
+            reader person or user, no private segment is returned at all.
 
     Returns:
-        List of matching fact dictionaries sorted by relevance.
+        Rows ordered best first. Each carries its payload (``fact_text``,
+        ``category`` …) plus ``kind``, ``leg_ranks`` (rank per leg that found
+        it), ``leg_scores``, ``rrf_score``, ``fused_rank``, ``rerank_score``
+        (None when not reranked) and ``relevance`` (0..1). Read-only.
     """
     if use_reranker is None:
         use_reranker = _reranker_enabled_default()
 
     # Hybrid search treats the embedding as one leg, not a prerequisite: when
     # the embedding service is down (GPU wedge, post-boot model load), degrade
-    # to the BM25 keyword leg instead of failing the whole memory read path.
+    # to the keyword leg instead of failing the whole memory read path.
     degraded: str | None = None
+    embedding: list[float] | None
     try:
-        embedding = await llm_client.get_embedding_async(query)
+        embedding = await _embed_query(query)
     except httpx.HTTPError as embed_exc:
         logger.warning(
             "search_facts: embedding fetch failed (%s) — degrading to keyword-only search",
@@ -967,228 +1338,77 @@ async def search_facts(
         embedding = None
         degraded = "keyword-only (embedding service unavailable)"
 
-    def _mark_degraded(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if degraded is not None:
-            for r in rows:
-                r["degraded"] = degraded
-        return rows
-
-    active_clause = "AND is_active = TRUE" if active_only else ""
     scope_clause = ""
     scope_params: tuple[Any, ...] = ()
     if scope is not None and scope.restricted:
         scope_clause = "AND (person_id = %s OR person_id IS NULL)"
         scope_params = (scope.person_id,)
-    # WS-1.4: modestly widen the candidate pool when the wide-rerank path is on,
-    # giving the blend more headroom. Kept conservative because the cross-encoder
-    # scores every candidate (per-candidate Ollama cost).
-    fetch_limit = max(45, limit * 3) if _rerank_wide_enabled() else max(30, limit * 3)
+    filters = f"{'AND is_active = TRUE' if active_only else ''} {scope_clause}"
+    fetch_min = LEG_FETCH_MIN_WIDE if _rerank_wide_enabled() else LEG_FETCH_MIN
     _tenant = tenant_id or DEFAULT_TENANT
 
-    with get_connection() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # Widen the HNSW candidate budget for this txn so the active-row filter
-        # has headroom. Live build is pgvector 0.8.2 with a partial active index
-        # (migrations 073/074) + optional iterative_scan; see apply_hnsw_session.
-        apply_hnsw_session(cur)
-
-        # Vector search — also pull the ranking signals (importance/recency/access).
-        # Skipped entirely when the embedding fetch degraded: BM25 carries the search.
-        vector_results: list[dict[str, Any]] = []
-        if embedding is not None:
-            cur.execute(
-                f"""
-                SELECT id, fact_text, category, entities, confidence, source_type,
-                       metadata, created_at, importance_score, access_count, superseded_by,
-                       person_id,
-                       EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
-                       1 - (embedding <=> %s::vector) as similarity
-                FROM memory_facts
-                WHERE embedding IS NOT NULL AND tenant_id = %s {active_clause} {scope_clause}
-                ORDER BY embedding <=> %s::vector
-                LIMIT %s
-                """,
-                (embedding, _tenant, *scope_params, embedding, fetch_limit),
+    # Synchronous DB work inside this coroutine is the pre-existing pattern
+    # (it blocks the loop for the two leg queries); it is not widened here.
+    legs = _fact_legs(query, embedding, _tenant, filters, scope_params, max(fetch_min, limit * 3))
+    if expand_entities:
+        seed = fuse(legs, weights=LEG_WEIGHTS)
+        if seed:
+            legs["entity_expansion"] = await _entity_expansion_leg(
+                seed, _tenant, scope_clause, scope_params
             )
-            vector_results = [dict(r) for r in cur.fetchall()]
+    # Insights, episodes and chat turns carry no person_id: a restricted caller
+    # would read summaries built from other people's facts. As in the router,
+    # a store that cannot express person scoping is left out, not unfiltered.
+    unscopable_ok = scope_clause == ""
+    # Segments filter by reader themselves, so they stay on. A restricted scope
+    # only NARROWS the reader the caller passed (the person the run serves); it
+    # never supplies one. The reader is kept only when its person is the
+    # scope's person, and its user id only when that user provably is the same
+    # person; anything else reads no private segment.
+    segment_reader, segment_user = reader_person_id, reader_user_id
+    if scope is not None and scope.restricted:
+        from robothor.memory.segments import user_belongs_to_person
 
-        # BM25 keyword search
-        cur.execute(
-            f"""
-            SELECT id, fact_text, category, entities, confidence, source_type,
-                   metadata, created_at, importance_score, access_count, superseded_by,
-                   person_id,
-                   EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds,
-                   ts_rank(tsv, plainto_tsquery('english', %s)) as bm25_score
-            FROM memory_facts
-            WHERE tsv @@ plainto_tsquery('english', %s) AND tenant_id = %s
-              {active_clause} {scope_clause}
-            ORDER BY ts_rank(tsv, plainto_tsquery('english', %s)) DESC
-            LIMIT %s
-            """,
-            (query, query, _tenant, *scope_params, query, fetch_limit),
-        )
-        bm25_results = [dict(r) for r in cur.fetchall()]
-
-    # Reciprocal Rank Fusion
-    vector_ranks = {r["id"]: rank for rank, r in enumerate(vector_results)}
-    bm25_ranks = {r["id"]: rank for rank, r in enumerate(bm25_results)}
-
-    all_ids = set(vector_ranks.keys()) | set(bm25_ranks.keys())
-    all_results_by_id: dict[int, dict[str, Any]] = {}
-    for r in vector_results + bm25_results:
-        if r["id"] not in all_results_by_id:
-            all_results_by_id[r["id"]] = r
-
-    k = 60  # RRF constant
-    rrf_scores: dict[int, float] = {}
-    for fact_id in all_ids:
-        score = 0.0
-        if fact_id in vector_ranks:
-            score += 1.0 / (k + vector_ranks[fact_id])
-        if fact_id in bm25_ranks:
-            score += 1.0 / (k + bm25_ranks[fact_id])
-        rrf_scores[fact_id] = score
-
-    sorted_ids = sorted(rrf_scores, key=lambda k: rrf_scores[k], reverse=True)
-    candidates = []
-    for fact_id in sorted_ids:
-        r = all_results_by_id[fact_id]
-        r["rrf_score"] = round(rrf_scores[fact_id], 6)
-        candidates.append(r)
-
-    # Entity-graph expansion (best-effort)
-    if expand_entities and candidates:
-        try:
-            from robothor.memory.entities import get_entity
-
-            mentioned_entities: set[str] = set()
-            for r in candidates[:5]:
-                for e in r.get("entities") or []:
-                    mentioned_entities.add(e)
-
-            expansion_ids = {r["id"] for r in candidates}
-            for entity_name in list(mentioned_entities)[:3]:
-                entity = await get_entity(entity_name, tenant_id=_tenant)
-                if entity and entity.get("relations"):
-                    for rel in entity["relations"][:3]:
-                        # get_entity builds relations with `SELECT r.*, e.name
-                        # AS target_name` (outgoing) / `AS source_name`
-                        # (incoming) — memory_relations itself has no `target`
-                        # or `source` column. Reading the bare keys meant
-                        # related_name was always empty and this entire
-                        # expansion branch was unreachable, silently, because
-                        # the block is best-effort. Bare keys are kept last as
-                        # a fallback in case a caller hands us a flatter shape.
-                        related_name = (
-                            rel.get("target_name")
-                            or rel.get("source_name")
-                            or rel.get("target")
-                            or rel.get("source")
-                            or ""
-                        )
-                        if related_name:
-                            with get_connection() as conn:
-                                cur = conn.cursor(cursor_factory=RealDictCursor)
-                                cur.execute(
-                                    f"""
-                                    SELECT id, fact_text, category, entities, confidence,
-                                           source_type, metadata, created_at, importance_score,
-                                           person_id
-                                    FROM memory_facts
-                                    WHERE is_active = TRUE AND tenant_id = %s
-                                      AND %s = ANY(entities)
-                                      AND importance_score > 0.5
-                                      AND id != ALL(%s)
-                                      {scope_clause}
-                                    ORDER BY importance_score DESC, created_at DESC
-                                    LIMIT 2
-                                    """,
-                                    (_tenant, related_name, list(expansion_ids), *scope_params),
-                                )
-                                for r in cur.fetchall():
-                                    r = dict(r)
-                                    r["rrf_score"] = 0.005
-                                    r["source"] = "entity_expansion"
-                                    candidates.append(r)
-                                    expansion_ids.add(r["id"])
-        except Exception:
-            # Best-effort by design — a graph miss must not fail the search.
-            # But it stays *logged*: a bare `pass` here is what let a key-name
-            # mismatch disable expansion entirely without a single symptom.
-            logger.debug("entity expansion failed (best-effort)", exc_info=True)
-
-    # Optional reranker pass
-    if use_reranker and candidates:
-        try:
-            import time
-
-            from robothor.rag.reranker import rerank_with_fallback
-
-            for c in candidates:
-                c["content"] = c.get("fact_text", "")
-            t0 = time.time()
-            # WS-1: decouple the reranker survivor pool from the final limit so
-            # the blend can rescue a fresh/high-importance fact the cross-encoder
-            # under-scores. When off, behaviour is unchanged (truncate to limit).
-            rerank_topk = max(limit * 4, 24) if _rerank_wide_enabled() else limit
-            reranked: list[dict[str, Any]] = await rerank_with_fallback(
-                query, candidates, top_k=rerank_topk
-            )
-            logger.info(
-                "search_facts rerank: %d candidates → %d survivors (top_k=%d) in %dms",
-                len(candidates),
-                len(reranked),
-                rerank_topk,
-                int((time.time() - t0) * 1000),
-            )
-            # Unified-score re-rank: relevance-dominant, with importance/recency/
-            # access as tie-breakers (surfaces the most recent of equally-relevant hits).
-            if _rank_blend_enabled():
-                reranked = _blend_rank(reranked, limit)
-            else:
-                reranked = reranked[:limit]
-            if _episode_merge_enabled():
-                reranked = await _append_auxiliary(
-                    reranked,
-                    query=query,
-                    embedding=embedding,
-                    tenant_id=tenant_id,
-                    _tenant=_tenant,
-                    include_insights=include_insights,
-                    include_episodes=include_episodes,
-                    include_chat_turns=include_chat_turns,
-                )
-            elif include_insights:
-                # Legacy reranked-path behaviour (flag off): insights only.
-                reranked = await _append_auxiliary(
-                    reranked,
-                    query=query,
-                    embedding=embedding,
-                    tenant_id=tenant_id,
-                    _tenant=_tenant,
-                    include_insights=True,
-                    include_episodes=False,
-                    include_chat_turns=False,
-                )
-            return _mark_degraded(reranked)
-        except Exception as e:
-            logger.warning("search_facts rerank failed, falling back: %s", e)
-
-    result = _blend_rank(candidates, limit) if _rank_blend_enabled() else candidates[:limit]
-    return _mark_degraded(
-        await _append_auxiliary(
-            result,
+        if not segment_reader or str(segment_reader) != str(scope.person_id):
+            segment_reader, segment_user = None, None
+        elif segment_user and not await asyncio.to_thread(
+            user_belongs_to_person, _tenant, segment_user, segment_reader
+        ):
+            segment_user = None
+    legs.update(
+        await _auxiliary_legs(
             query=query,
             embedding=embedding,
             tenant_id=tenant_id,
             _tenant=_tenant,
-            include_insights=include_insights,
-            include_episodes=include_episodes,
-            include_chat_turns=include_chat_turns,
+            include_insights=include_insights and unscopable_ok,
+            include_episodes=include_episodes and unscopable_ok,
+            include_chat_turns=include_chat_turns and unscopable_ok,
+            include_segments=include_segments,
+            limit=limit,
+            reader_person_id=segment_reader,
+            reader_user_id=segment_user,
+            room_ids=room_ids,
         )
     )
+
+    pool = [c.to_row() for c in fuse(legs, weights=LEG_WEIGHTS)]
+    ranked = await _rank_pool(query, pool, limit, use_reranker)
+    head = ranked[:limit]
+
+    def _duplicates_head(row: dict[str, Any]) -> bool:
+        # The blend already dropped near-duplicates; a reserved pick must not
+        # bring one back. _dedupe keeps earlier rows, so a dup leaves it short.
+        return _dedup_enabled() and len(_dedupe([*head, row])) == len(head)
+
+    result = apply_reserved(ranked, pool, limit, RESERVED_PLACES, exclude=_duplicates_head)
+    for r in result:
+        if "relevance" not in r:  # a reserved pick the blend never saw
+            _assign_relevance([r])
+    if degraded is not None:
+        for r in result:
+            r["degraded"] = degraded
+    return result
 
 
 def get_memory_stats(tenant_id: str = "") -> dict[str, Any]:

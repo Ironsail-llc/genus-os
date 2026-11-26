@@ -605,6 +605,45 @@ async def get_embedding_async(
     raise last_error  # type: ignore[misc]
 
 
+# Query-side instruction for retrieval embeddings. The Qwen3-Embedding model
+# card (huggingface.co/Qwen/Qwen3-Embedding-0.6B) formats every QUERY as
+# ``Instruct: {task}\nQuery:{query}`` and embeds documents with no instruction,
+# noting that omitting it costs ~1-5% retrieval quality. Documents stay bare
+# here, so vectors already stored never need re-embedding. Models not listed
+# get the query as-is.
+MEMORY_QUERY_TASK = (
+    "Given a question or topic, retrieve stored memories (facts, notes and "
+    "conversation excerpts) that answer or inform it"
+)
+_QUERY_FORMATS: tuple[tuple[str, str], ...] = (
+    ("qwen3-embedding", "Instruct: {task}\nQuery:{query}"),
+)
+
+
+def format_embedding_query(query: str, model: str | None = None) -> str:
+    """The text to embed for a retrieval QUERY with ``model`` (default: configured)."""
+    name = (model or _embedding_model()).lower()
+    for family, template in _QUERY_FORMATS:
+        if family in name:
+            return template.format(task=MEMORY_QUERY_TASK, query=query)
+    return query
+
+
+async def get_query_embedding_async(
+    query: str, model: str | None = None, max_retries: int = EMBED_MAX_ATTEMPTS
+) -> list[float]:
+    """Embed a retrieval query, with the model's query instruction (documents: use
+    ``get_embedding_async``)."""
+    # Defaults are not forwarded, so a test double with a one-argument
+    # signature standing in for get_embedding_async keeps working.
+    kwargs: dict[str, Any] = {}
+    if model is not None:
+        kwargs["model"] = model
+    if max_retries != EMBED_MAX_ATTEMPTS:
+        kwargs["max_retries"] = max_retries
+    return await get_embedding_async(format_embedding_query(query, model), **kwargs)
+
+
 async def get_embeddings_batch_async(
     texts: list[str],
     model: str | None = None,

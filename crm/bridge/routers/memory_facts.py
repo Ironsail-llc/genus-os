@@ -291,10 +291,20 @@ def _ranked_by_search(query: str, tenant_id: str, active: str, limit: int) -> li
 
     from robothor.memory.facts import search_facts
 
+    # Facts only: this page edits and forgets memory_facts rows, and a
+    # conversation segment's id belongs to another table.
     results = asyncio.run(
-        search_facts(query, limit=limit, active_only=(active == "true"), tenant_id=tenant_id)
+        search_facts(
+            query,
+            limit=limit,
+            active_only=(active == "true"),
+            tenant_id=tenant_id,
+            include_segments=False,
+        )
     )
-    return [int(r["id"]) for r in results if r.get("id") is not None]
+    return [
+        int(r["id"]) for r in results if r.get("id") is not None and r.get("kind", "fact") == "fact"
+    ]
 
 
 def _entity_predicate(entity: str | None) -> tuple[str, list[Any]]:

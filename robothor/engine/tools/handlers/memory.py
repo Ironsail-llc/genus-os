@@ -162,11 +162,25 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     identity = getattr(ctx, "identity", None)
     _scoping_mode = data_scoping_mode()
     _query_scope = scope_for_query(_scoping_mode, identity)
+    # Conversation segments are scoped on EVERY call, whatever the rollout mode:
+    # verbatim conversation is more sensitive than an extracted fact. A private
+    # conversation is read only for the person this run is serving in their
+    # own conversation (ctx.private_reader, decided by the run); never for the
+    # run's principal or identity alone. Workspaces are gated by membership.
+    private = getattr(ctx, "private_reader", None)
+    reader_person_id = private.person_id if private is not None else None
+    reader_user_id = private.user_id if private is not None else None
+    room_ids = await _reader_room_ids(ctx)
 
-    if is_rip_enabled(15):
-        results, query_class = await _recall_routed(args, ctx, scope=_query_scope)
-    else:
-        results, query_class = await _recall_fallback(args, ctx, scope=_query_scope)
+    recall_path = _recall_routed if is_rip_enabled(15) else _recall_fallback
+    results, query_class = await recall_path(
+        args,
+        ctx,
+        scope=_query_scope,
+        reader_person_id=reader_person_id,
+        reader_user_id=reader_user_id,
+        room_ids=room_ids,
+    )
 
     # Observe runs against the raw rows, which still carry person_id — the
     # formatted output deliberately does not expose it.
@@ -221,8 +235,48 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     return formatted
 
 
+async def _reader_room_ids(ctx: ToolContext) -> list[str]:
+    """The workspaces whose conversation the caller may recall.
+
+    Inside a workspace (a room turn's carrier) only that workspace: its output
+    goes to its own members, so no other workspace's conversation may reach
+    it. Otherwise every workspace the served member belongs to, but only when
+    the run serves that member in their own conversation
+    (``ctx.private_reader``): the run's principal alone (a scheduled run as a
+    member) is not a member being served. Empty otherwise. A lookup failure is
+    logged and narrows the result; it never widens it.
+    """
+    from robothor.rooms.run_context import current_room_run
+
+    rooms: set[str] = set()
+    tenant_id = getattr(ctx, "tenant_id", "")
+    run = current_room_run()
+    if run is not None:
+        return [str(run.room_id)] if run.tenant_id == tenant_id else []
+    private = getattr(ctx, "private_reader", None)
+    user_id = private.user_id if private is not None else None
+    if user_id and tenant_id:
+        try:
+            from robothor.rooms import dal as rooms_dal
+
+            summaries = await asyncio.to_thread(rooms_dal.list_rooms_for_user, tenant_id, user_id)
+            rooms.update(str(s.id) for s in summaries)
+        except Exception as e:  # noqa: BLE001 - fewer rooms, never more
+            logger.warning(
+                "search_memory: workspace lookup failed (%s); workspace segments omitted",
+                type(e).__name__,
+            )
+    return sorted(rooms)
+
+
 async def _recall_fallback(
-    args: dict[str, Any], ctx: ToolContext, *, scope: Any = None
+    args: dict[str, Any],
+    ctx: ToolContext,
+    *,
+    scope: Any = None,
+    reader_person_id: str | None = None,
+    room_ids: list[str] | None = None,
+    reader_user_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """Direct search_facts path — returns raw rows plus a query-class label."""
     from robothor.engine.feature_flags import narrow_memory_search_enabled
@@ -243,6 +297,9 @@ async def _recall_fallback(
         include_insights=bool(args.get("include_insights", fan_out)),
         include_episodes=bool(args.get("include_episodes", fan_out)),
         scope=scope,
+        reader_person_id=reader_person_id,
+        reader_user_id=reader_user_id,
+        room_ids=room_ids,
     )
     # classify_query is a pure regex with no I/O, so the label is available on
     # this path too — the output shape stays identical across the flag.
@@ -261,28 +318,61 @@ def _format_results(rows: list[dict[str, Any]], query_class: str) -> dict[str, A
     This emits the superset on every call. `id` is included because outcome
     attribution already depends on it and because a caller cannot reason about
     row identity — scoping, dedup, citation — without it.
+
+    A conversation segment (``kind: "segment"``) also says where it came from:
+    its ``topic``, ``source_kind``, ``source_ref`` (the session), the turn
+    range ``start_ref``..``end_ref`` (chat message ids, with ``part`` for a
+    long turn split in pieces) and ``started_at``/``ended_at`` (ISO 8601).
+    Facts keep exactly their shape.
     """
     return {
         "query_class": query_class,
-        "results": [
-            {
-                "id": r.get("id"),
-                "fact": r.get("fact_text") or r.get("insight_text") or r.get("text") or "",
-                "category": r.get("category", "")
-                if isinstance(r.get("category"), str)
-                else (r.get("categories") or [None])[0] or "",
-                "source": r.get("source") or "fact",
-                "confidence": r.get("confidence", 0),
-                "similarity": round(r.get("similarity") or 0, 4),
-                "score": round(r.get("score") or r.get("rrf_score") or 0, 4),
-            }
-            for r in rows
-        ],
+        "results": [{**_format_row(r), **_segment_fields(r)} for r in rows],
+    }
+
+
+def _format_row(r: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": r.get("id"),
+        "fact": r.get("fact_text") or r.get("insight_text") or r.get("text") or "",
+        "category": r.get("category", "")
+        if isinstance(r.get("category"), str)
+        else (r.get("categories") or [None])[0] or "",
+        "source": r.get("source") or "fact",
+        "confidence": r.get("confidence", 0),
+        "similarity": round(r.get("similarity") or 0, 4),
+        "score": round(r.get("score") or r.get("rrf_score") or 0, 4),
+    }
+
+
+def _segment_fields(r: dict[str, Any]) -> dict[str, Any]:
+    if r.get("kind") != "segment":
+        return {}
+
+    def iso(value: Any) -> Any:
+        return value.isoformat() if hasattr(value, "isoformat") else value
+
+    return {
+        "kind": "segment",
+        "topic": r.get("topic"),
+        "source_kind": r.get("source_kind"),
+        "source_ref": r.get("source_ref"),
+        "start_ref": r.get("start_ref"),
+        "end_ref": r.get("end_ref"),
+        "part": r.get("part", 0),
+        "started_at": iso(r.get("started_at")),
+        "ended_at": iso(r.get("ended_at")),
     }
 
 
 async def _recall_routed(
-    args: dict[str, Any], ctx: ToolContext, *, scope: Any = None
+    args: dict[str, Any],
+    ctx: ToolContext,
+    *,
+    scope: Any = None,
+    reader_person_id: str | None = None,
+    room_ids: list[str] | None = None,
+    reader_user_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """RIP 15 path — query-classed routing via robothor.memory.router."""
     from robothor.memory.router import recall
@@ -292,6 +382,9 @@ async def _recall_routed(
         limit=args.get("limit", 10),
         tenant_id=ctx.tenant_id,
         scope=scope,
+        reader_person_id=reader_person_id,
+        reader_user_id=reader_user_id,
+        room_ids=room_ids,
     )
     return out["results"], out["query_class"]
 
