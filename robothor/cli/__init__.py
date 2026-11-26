@@ -803,7 +803,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to the eval suite YAML",
     )
     memeval_parser.add_argument(
-        "--tenant", default=None, help="Isolated eval tenant (default: memory-eval)"
+        "--tenant",
+        default=None,
+        help="Isolated eval tenant (default: memory-eval; memory-eval-world with --world)",
     )
     memeval_parser.add_argument(
         "--keep", action="store_true", help="Skip cleanup of seeded facts (debugging)"
@@ -820,6 +822,29 @@ def _build_parser() -> argparse.ArgumentParser:
         "--triggered-by",
         default="manual",
         help="Provenance recorded alongside the result (e.g. cron)",
+    )
+    memeval_parser.add_argument(
+        "--world",
+        action="store_true",
+        help="Run the generated synthetic world instead of the suite file",
+    )
+    memeval_parser.add_argument(
+        "--world-seed",
+        type=int,
+        default=1,
+        help="Seed for the synthetic world (same seed, same world)",
+    )
+    memeval_parser.add_argument(
+        "--world-size",
+        choices=["small", "full"],
+        default="full",
+        help="Synthetic world size",
+    )
+    memeval_parser.add_argument(
+        "--split",
+        choices=["dev", "held_out", "all"],
+        default="dev",
+        help="Which world cases to score",
     )
 
     # status
