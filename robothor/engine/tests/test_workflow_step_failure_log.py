@@ -81,3 +81,30 @@ def test_a_completed_step_logs_no_failure(monkeypatch, caplog) -> None:
         WorkflowStepResult(step_id="fetch", status=WorkflowStepStatus.COMPLETED),
     )
     assert not _step_lines(caplog)
+
+
+def test_a_failed_step_names_its_tenant_and_no_trace(monkeypatch, caplog) -> None:
+    """A workflow run has no trace of its own, so the key is left out, not faked."""
+    caplog.set_level(logging.INFO)
+
+    def _no_db(*_a, **_k):
+        raise RuntimeError("no database in this test")
+
+    monkeypatch.setattr("robothor.db.connection.get_connection", _no_db)
+    engine = WorkflowEngine.__new__(WorkflowEngine)
+    run = WorkflowRun(id="wr-1", workflow_id="example-flow", tenant_id="acme-child-a")
+    engine._persist_step(
+        run,
+        WorkflowStepResult(
+            step_id="fetch",
+            step_type=WorkflowStepType.TOOL,
+            status=WorkflowStepStatus.FAILED,
+            tool_name="example_tool",
+            error_message="the remote service answered 503",
+            duration_ms=42,
+        ),
+    )
+    (line,) = _step_lines(caplog)
+    text = line.getMessage()
+    assert text.endswith(" tenant_id=acme-child-a")
+    assert "trace_id=" not in text

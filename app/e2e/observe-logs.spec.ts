@@ -40,6 +40,11 @@ async function setupShell(page: Page) {
     json(route, {
       user: { name: "Operator", email: "operator@example.com" },
       role: "owner",
+      // The root operator at home: the only session the journald "Server"
+      // source is offered to. The page opens on Datadog for everyone.
+      tenantId: "acme-parent",
+      homeTenantId: "acme-parent",
+      rootTenantId: "acme-parent",
       expires: "2099-01-01T00:00:00.000Z",
     })
   );
@@ -61,6 +66,12 @@ async function setupShell(page: Page) {
   );
 }
 
+/** The Logs page, on its journald "Server" source. */
+async function openServerLogs(page: Page) {
+  await page.goto(LOGS_URL, { waitUntil: "networkidle" });
+  await page.locator('[data-testid="logs-source-server"]').click();
+}
+
 async function setupJournald(page: Page): Promise<string[]> {
   const reads: string[] = [];
   await setupShell(page);
@@ -75,7 +86,7 @@ async function setupJournald(page: Page): Promise<string[]> {
 test.describe("Observe › Logs", () => {
   test("reads a unit, badges by priority, and filters", async ({ page }) => {
     const reads = await setupJournald(page);
-    await page.goto(LOGS_URL, { waitUntil: "networkidle" });
+    await openServerLogs(page);
 
     await expect(page.locator('[data-testid="logs-view"]')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[data-testid="logs-pane"]')).toContainText("run failed: timeout");
@@ -126,7 +137,7 @@ test.describe("Observe › Logs", () => {
       return json(route, { detail: "unit must be one of the installed units" }, 422);
     });
 
-    await page.goto(LOGS_URL, { waitUntil: "networkidle" });
+    await openServerLogs(page);
     await expect(page.locator('[data-testid="logs-view"]')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[data-testid="logs-unavailable"]')).toContainText(hint);
     await expect(page.locator('[data-testid="logs-unavailable"]')).toContainText(reason);
@@ -149,7 +160,7 @@ test.describe("Observe › Logs", () => {
   test("keeps the controls and the pane usable on a 390 px screen", async ({ page }) => {
     await setupJournald(page);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(LOGS_URL, { waitUntil: "networkidle" });
+    await openServerLogs(page);
 
     await expect(page.locator('[data-testid="logs-view"]')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[data-testid="logs-unit"]')).toBeVisible();

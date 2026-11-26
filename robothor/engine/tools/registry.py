@@ -1259,6 +1259,7 @@ class ToolRegistry:
         identity: IdentityContext | None = None,
         capability_tier: str = "",
         private_reader: PrivateReader | None = None,
+        trace_id: str = "",
     ) -> dict[str, Any]:
         """Execute a tool and return the result dict.
 
@@ -1278,6 +1279,8 @@ class ToolRegistry:
             private_reader: The person the run serves in their own
                 conversation (robothor/engine/private_recall.py), or None —
                 the default for every caller that is not a run's tool turn.
+            trace_id: The run's trace id, named on the call's ``event=tool_call``
+                line. Empty outside a traced run (a workflow step).
         """
         # Match supplied argument names to this tool's declared parameters,
         # ignoring case and underscores. 82 tools are snake_case and 26 are
@@ -1321,6 +1324,7 @@ class ToolRegistry:
                             identity=identity,
                             capability_tier=capability_tier,
                             private_reader=private_reader,
+                            trace_id=trace_id,
                         )
             else:
                 return await _execute_tool(
@@ -1338,6 +1342,7 @@ class ToolRegistry:
                     identity=identity,
                     capability_tier=capability_tier,
                     private_reader=private_reader,
+                    trace_id=trace_id,
                 )
         except (WorkflowDeadlineError, RuntimeDeadlineError):
             # NOT this tool's timeout. `spawn_agent` runs a child

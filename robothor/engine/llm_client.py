@@ -1896,6 +1896,8 @@ class LLMClient:
             agent_id=str(getattr(session.run, "agent_id", "") or ""),
             run_id=str(getattr(session.run, "id", "") or ""),
             streamed=bool(on_content or on_stream_event),
+            tenant_id=str(getattr(session.run, "tenant_id", "") or ""),
+            trace_id=str(getattr(session, "trace_id", "") or ""),
         )
         format_token = _response_format_var.set(
             "json_object"

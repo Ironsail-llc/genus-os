@@ -143,11 +143,13 @@ describe("role gating", () => {
     }
   });
 
-  it("shows an auditor Audit, and neither Memory nor Logs", () => {
+  it("shows an auditor Audit and Logs, and not Memory", () => {
     const items = observeItems("auditor");
     expect(items).toContain("audit");
     expect(items).not.toContain("memory");
-    expect(items).not.toContain("logs");
+    // Logs is the organization's Datadog search, an audit-reader screen; the
+    // journald source inside it stays the root operator's.
+    expect(items).toContain("logs");
     // The screens an auditor shared with everyone before are still there.
     expect(items).toContain("runs");
   });

@@ -230,8 +230,7 @@ class RunToolProxy:
         from robothor.engine.runner import _resolve_tool_timeout
         from robothor.engine.tool_outcome import error_text
 
-        req = self._req
-        session = req.session
+        req, session = self._req, self._req.session
         position = self.calls_made - 1
         tc = _SyntheticCall(f"code_{uuid.uuid4().hex[:16]}")
 
@@ -279,6 +278,7 @@ class RunToolProxy:
             task_author_override=req.agent_config.task_author_override,
             is_benchmark=session.run.is_benchmark,
             identity=getattr(session, "identity", None),
+            trace_id=getattr(session, "trace_id", ""),
         )
         elapsed_ms = int((asyncio.get_running_loop().time() - started) * 1000)
 

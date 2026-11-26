@@ -3947,6 +3947,45 @@ class IntegrationSettings(SettingsGroup):
         "https:// (http:// only for localhost), because the API key travels in every request.",
         since="unreleased",
     )
+    datadog_api_key: str = declare(
+        "",
+        "ROBOTHOR_DATADOG_API_KEY",
+        "The Datadog API key Genus reads the shared Datadog account with, sent as DD-API-KEY. "
+        "One key for the whole instance, resolved vault-first from the root tenant: every "
+        "tenant's reads go through it, bounded by that tenant's entry in "
+        "ROBOTHOR_DATADOG_SCOPES. Use a key of a read-only service account.",
+        secret=True,
+        since="unreleased",
+    )
+    datadog_app_key: str = declare(
+        "",
+        "ROBOTHOR_DATADOG_APP_KEY",
+        "The Datadog application key paired with ROBOTHOR_DATADOG_API_KEY, sent as "
+        "DD-APPLICATION-KEY. Instance-wide and resolved vault-first like the API key; give it "
+        "read scopes only.",
+        secret=True,
+        since="unreleased",
+    )
+    datadog_site: str = declare(
+        "datadoghq.com",
+        "ROBOTHOR_DATADOG_SITE",
+        "The Datadog site the account lives on: datadoghq.com, us3.datadoghq.com, "
+        "us5.datadoghq.com, datadoghq.eu, ap1.datadoghq.com, ap2.datadoghq.com, ddog-gov.com "
+        "or us2.ddog-gov.com. Anything else reads as not configured, so the keys are never "
+        "sent to another host.",
+        since="unreleased",
+    )
+    datadog_scopes: str = declare(
+        "",
+        "ROBOTHOR_DATADOG_SCOPES",
+        'JSON object mapping a tenant id to what it may read, e.g. {"acme-child-a": {"logs": '
+        '"service:shop-api", "spans": "service:shop-api", "monitors": "team:shop", '
+        '"metric_tags": ["service:shop-api"]}}. Every query is ANDed with the filter; "*" '
+        "means everything. Every part is opt-in: a missing spans, monitors or metric_tags "
+        "means no access to it (the logs filter is never reused for spans). A tenant with no "
+        "entry, a blank logs filter or a malformed entry is refused.",
+        since="unreleased",
+    )
 
 
 class GenusSettings(BaseSettings):

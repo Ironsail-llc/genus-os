@@ -57,6 +57,7 @@ RUN_CONTEXT: dict[str, Any] = {
     # The person the run serves in their own conversation: a wrapped recall
     # must read private conversation exactly as the direct call would.
     "private_reader": PrivateReader("11111111-1111-4111-8111-111111111111", "user-1"),
+    "trace_id": "0af7651916cd43dd8448eb211c80319c",
 }
 
 

@@ -220,3 +220,42 @@ describe("RunDetailDrawer", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("RunDetailDrawer: logs for this run", () => {
+  it("links to the Logs page filtered to the run when the page may open logs", async () => {
+    mockDetail({ run: RUN, steps: STEPS, guardrail_events: [] });
+    const onOpenLogs = vi.fn();
+    render(<RunDetailDrawer runId="r1" onClose={() => {}} onOpenLogs={onOpenLogs} />);
+
+    await screen.findByTestId("run-detail-header");
+    const link = screen.getByTestId("run-detail-logs-link");
+    expect(link.textContent).toMatch(/Logs for this run/);
+    // The window opens a little before the run started, so its lines are in it
+    // however old the run is.
+    const since = "2099-01-01T08:55:00.000Z";
+    const href = new URLSearchParams(link.getAttribute("href")!.slice(1));
+    expect(href.get("v")).toBe("logs");
+    expect(href.get("q")).toBe('"run_id=r1"');
+    expect(href.get("since")).toBe(since);
+    fireEvent.click(link);
+    expect(onOpenLogs).toHaveBeenCalledWith("r1", since);
+  });
+
+  it("opens on the last 7 days while the run's start is not known yet", () => {
+    vi.spyOn(global, "fetch").mockReturnValue(new Promise(() => {}));
+    const onOpenLogs = vi.fn();
+    render(<RunDetailDrawer runId="r1" onClose={() => {}} onOpenLogs={onOpenLogs} />);
+
+    fireEvent.click(screen.getByTestId("run-detail-logs-link"));
+
+    expect(onOpenLogs).toHaveBeenCalledWith("r1", "7d");
+  });
+
+  it("offers no link to a role that cannot open the Logs page", async () => {
+    mockDetail({ run: RUN, steps: STEPS, guardrail_events: [] });
+    render(<RunDetailDrawer runId="r1" onClose={() => {}} />);
+
+    await screen.findByTestId("run-detail-header");
+    expect(screen.queryByTestId("run-detail-logs-link")).toBeNull();
+  });
+});
