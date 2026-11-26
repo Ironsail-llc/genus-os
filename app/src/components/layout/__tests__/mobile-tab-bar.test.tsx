@@ -87,12 +87,12 @@ describe("MobileTabBar", () => {
     expect(onNavigate).toHaveBeenCalledWith("memory", undefined);
   });
 
-  it("hides Memory and Logs from an auditor, and keeps Audit", () => {
+  it("hides Memory from an auditor, and keeps Audit and Logs", () => {
     renderBar({ role: "auditor" });
     fireEvent.click(screen.getByTestId("mobile-tab-more"));
     expect(screen.getByTestId("more-nav-audit")).toBeTruthy();
     expect(screen.queryByTestId("more-nav-memory")).toBeNull();
-    expect(screen.queryByTestId("more-nav-logs")).toBeNull();
+    expect(screen.getByTestId("more-nav-logs")).toBeTruthy();
   });
 
   it("hides Settings in the sheet from non-operator roles", () => {

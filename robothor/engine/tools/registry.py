@@ -1257,6 +1257,7 @@ class ToolRegistry:
         is_benchmark: bool = False,
         identity: IdentityContext | None = None,
         capability_tier: str = "",
+        trace_id: str = "",
     ) -> dict[str, Any]:
         """Execute a tool and return the result dict.
 
@@ -1273,6 +1274,8 @@ class ToolRegistry:
             capability_tier: The role capability tier the call runs under.
                 Empty (every ordinary caller) means the run's effective tier;
                 ``tool_call`` passes its caller's through ToolContext.call_kwargs.
+            trace_id: The run's trace id, named on the call's ``event=tool_call``
+                line. Empty outside a traced run (a workflow step).
         """
         # Match supplied argument names to this tool's declared parameters,
         # ignoring case and underscores. 82 tools are snake_case and 26 are
@@ -1315,6 +1318,7 @@ class ToolRegistry:
                             is_benchmark=is_benchmark,
                             identity=identity,
                             capability_tier=capability_tier,
+                            trace_id=trace_id,
                         )
             else:
                 return await _execute_tool(
@@ -1331,6 +1335,7 @@ class ToolRegistry:
                     is_benchmark=is_benchmark,
                     identity=identity,
                     capability_tier=capability_tier,
+                    trace_id=trace_id,
                 )
         except (WorkflowDeadlineError, RuntimeDeadlineError):
             # NOT this tool's timeout. `spawn_agent` runs a child

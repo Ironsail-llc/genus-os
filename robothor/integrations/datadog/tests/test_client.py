@@ -14,10 +14,18 @@ from robothor.integrations.datadog.client import (
     DatadogClient,
     DatadogError,
     LogPage,
+    MetricSeries,
+    MonitorPage,
+    SpanPage,
     async_client_from_settings,
     client_from_settings,
 )
-from robothor.integrations.datadog.scope import DatadogScope, ScopeError
+from robothor.integrations.datadog.scope import (
+    NO_ACCESS_QUERY,
+    NO_ACCESS_TAG,
+    DatadogScope,
+    ScopeError,
+)
 
 API_KEY = "dd-api-key-0123456789abcdef"
 APP_KEY = "dd-app-key-fedcba9876543210"
@@ -243,6 +251,419 @@ def _assert_clean(exc: DatadogError) -> None:
         assert API_KEY not in text and APP_KEY not in text
         assert "datadoghq" not in text and "http" not in text.lower().replace("(http ", "")
         assert "vendor" not in text
+
+
+# ── spans, traces, monitors, metrics: each bounded by its own part ──────────
+
+ROOT = DatadogScope("acme-parent", "*", "*", "*", ())
+NO_ACCESS = DatadogScope(
+    "acme-child-b", "service:clinic-app", "service:clinic-app", NO_ACCESS_QUERY, (NO_ACCESS_TAG,)
+)
+SPAN_BODY = {
+    "data": [
+        {
+            "id": "s1",
+            "attributes": {
+                "trace_id": "abc123",
+                "span_id": "1",
+                "service": "shop-api",
+                "custom": {"duration": 5000},
+            },
+        }
+    ],
+    "meta": {"page": {"after": "s2"}},
+}
+SPAN_AGG_BODY = {"data": [{"attributes": {"by": {"service": "shop-api"}, "compute": {"c0": 7}}}]}
+MONITOR_BODY = {
+    "monitors": [{"id": 9, "name": "errors", "status": "Alert", "tags": ["team:shop"]}],
+    "metadata": {"total_count": 1, "page": 0, "page_count": 1},
+}
+METRIC_BODY = {
+    "status": "ok",
+    "series": [
+        {"metric": "m", "scope": "service:shop-api", "pointlist": [[1000, 2.0], [2000, None]]}
+    ],
+}
+
+
+def _attrs(rec: Recorder, n: int = 0) -> dict:
+    return rec.sent(n)["data"]["attributes"]
+
+
+def _params(rec: Recorder, n: int = 0) -> dict[str, str]:
+    return dict(rec.requests[n].url.params)
+
+
+def test_search_spans_sends_the_composed_query() -> None:
+    rec = Recorder(body=SPAN_BODY)
+    page = _sync(rec).search_spans(SCOPE, "status:error", start="now-1h", end="now", limit=10)
+    assert isinstance(page, SpanPage) and page.next_cursor == "s2"
+    assert page.rows[0].trace_id == "abc123" and page.rows[0].duration_ns == 5000
+    request = rec.requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == "https://api.datadoghq.com/api/v2/spans/events/search"
+    assert request.headers["DD-API-KEY"] == API_KEY
+    attrs = _attrs(rec)
+    assert attrs["filter"] == {
+        "query": "(service:shop-api) AND (status:error)",
+        "from": "now-1h",
+        "to": "now",
+    }
+    assert attrs["page"] == {"limit": 10}
+
+
+def test_spans_are_bounded_by_the_spans_filter_not_the_logs_one() -> None:
+    rec = Recorder(body=SPAN_BODY)
+    scope = DatadogScope("acme-child-a", "service:shop-api", "service:shop-api env:prod", "*", ())
+    _sync(rec).search_spans(scope, "", start="now-1h", end="now")
+    assert _attrs(rec)["filter"]["query"] == "service:shop-api env:prod"
+
+
+def test_aggregate_spans_sends_the_composed_query() -> None:
+    rec = Recorder(body=SPAN_AGG_BODY)
+    buckets = _sync(rec).aggregate_spans(
+        SCOPE, "status:error", start="now-1h", end="now", group_by=["service"]
+    )
+    assert buckets == (Bucket(by={"service": "shop-api"}, count=7),)
+    assert str(rec.requests[0].url) == "https://api.datadoghq.com/api/v2/spans/analytics/aggregate"
+    assert _attrs(rec)["filter"]["query"] == "(service:shop-api) AND (status:error)"
+
+
+def test_get_trace_is_a_scoped_span_search_for_the_trace() -> None:
+    rec = Recorder(body=SPAN_BODY)
+    spans = _sync(rec).get_trace(SCOPE, "abc123", start="now-1d", end="now")
+    assert spans and spans[0].trace_id == "abc123"
+    assert str(rec.requests[0].url) == "https://api.datadoghq.com/api/v2/spans/events/search"
+    attrs = _attrs(rec)
+    assert attrs["filter"]["query"] == "(service:shop-api) AND (trace_id:abc123)"
+    assert attrs["page"]["limit"] == 200
+    assert attrs["sort"] == "timestamp"
+
+
+def test_a_trace_from_another_tenant_reads_as_empty() -> None:
+    rec = Recorder(body={"data": [], "meta": {}})
+    assert _sync(rec).get_trace(SCOPE, "abc123", start="now-1d", end="now") == ()
+    assert len(rec.requests) == 1
+
+
+@pytest.mark.parametrize("trace_id", ["abc) OR (service:other", "abc OR *", "", "trace_id:1"])
+def test_a_malformed_trace_id_makes_no_request(trace_id) -> None:
+    rec = Recorder(body=SPAN_BODY)
+    with pytest.raises(ScopeError):
+        _sync(rec).get_trace(SCOPE, trace_id, start="now-1d", end="now")
+    assert rec.requests == []
+
+
+def test_search_monitors_sends_the_composed_query() -> None:
+    rec = Recorder(body=MONITOR_BODY)
+    page = _sync(rec).search_monitors(SCOPE, "status:alert", limit=20, page=1)
+    assert isinstance(page, MonitorPage) and page.total_count == 1
+    assert page.rows[0].id == "9" and page.rows[0].status == "Alert"
+    request = rec.requests[0]
+    assert request.method == "GET"
+    assert request.url.path == "/api/v1/monitor/search"
+    assert request.url.host == "api.datadoghq.com"
+    assert _params(rec) == {
+        "query": "(team:shop) AND (status:alert)",
+        "page": "1",
+        "per_page": "20",
+    }
+    assert request.headers["DD-APPLICATION-KEY"] == APP_KEY
+
+
+def test_search_monitors_with_no_query_sends_the_scope_alone() -> None:
+    rec = Recorder(body=MONITOR_BODY)
+    _sync(rec).search_monitors(SCOPE)
+    assert _params(rec)["query"] == "team:shop"
+
+
+def test_query_metric_sends_the_built_query_and_epoch_window() -> None:
+    rec = Recorder(body=METRIC_BODY)
+    series = _sync(rec).query_metric(
+        SCOPE,
+        "trace.http.request.hits",
+        aggregator="sum",
+        tags=("env:prod",),
+        group_by=("resource_name",),
+        start="2026-11-25T09:00:00Z",
+        end="2026-11-25T10:00:00Z",
+        as_count=True,
+    )
+    assert series == (
+        MetricSeries(metric="m", scope="service:shop-api", tags=(), points=((1000, 2.0),)),
+    )
+    request = rec.requests[0]
+    assert request.method == "GET" and request.url.path == "/api/v1/query"
+    assert _params(rec) == {
+        "from": "1795597200",
+        "to": "1795600800",
+        "query": "sum:trace.http.request.hits{service:shop-api,env:prod} by {resource_name}"
+        ".as_count()",
+    }
+
+
+def test_query_metric_resolves_a_relative_window() -> None:
+    rec = Recorder(body=METRIC_BODY)
+    _sync(rec).query_metric(SCOPE, "m", start="now-1h", end="now")
+    params = _params(rec)
+    assert int(params["to"]) - int(params["from"]) == 3600
+    assert params["query"] == "avg:m{service:shop-api}"
+
+
+@pytest.mark.parametrize("start", ["yesterday", "now-1w", "1h"])
+def test_query_metric_with_a_bad_window_is_bad_query_and_sends_nothing(start) -> None:
+    rec = Recorder(body=METRIC_BODY)
+    with pytest.raises(DatadogError) as caught:
+        _sync(rec).query_metric(SCOPE, "m", start=start, end="now")
+    assert caught.value.kind == "bad_query"
+    assert rec.requests == []
+    _assert_clean(caught.value)
+
+
+def test_a_metric_error_status_in_a_200_body_is_bad_query() -> None:
+    rec = Recorder(body={"status": "error", "error": f"Error parsing query {API_KEY}"})
+    with pytest.raises(DatadogError) as caught:
+        _sync(rec).query_metric(SCOPE, "m", start="now-1h", end="now")
+    assert caught.value.kind == "bad_query"
+    _assert_clean(caught.value)
+
+
+def test_the_scope_tags_are_present_whatever_the_caller_passes() -> None:
+    rec = Recorder(body=METRIC_BODY)
+    client = _sync(rec)
+    for tags in [(), ("service:clinic-app",), ("env:prod", "host:web-1")]:
+        client.query_metric(SCOPE, "m", tags=tags, start="now-1h", end="now")
+    for n in range(3):
+        assert _params(rec, n)["query"].startswith("avg:m{service:shop-api")
+
+
+@pytest.mark.parametrize(
+    ("metric", "tags", "group_by"),
+    [
+        ("m}", (), ()),
+        ("m{*},avg:other", (), ()),
+        ("m", ("host:a}",), ()),
+        ("m", ("host:a,service:other",), ()),
+        ("m", ("host:a OR service:b",), ()),
+        ("m", ('host:"a"',), ()),
+        ("m", (), ("host}",)),
+        ("m", (), ("host,env",)),
+        ("m", (), ("host env",)),
+    ],
+)
+def test_a_metric_injection_makes_no_request(metric, tags, group_by) -> None:
+    rec = Recorder(body=METRIC_BODY)
+    with pytest.raises(ScopeError):
+        _sync(rec).query_metric(
+            SCOPE, metric, tags=tags, group_by=group_by, start="now-1h", end="now"
+        )
+    assert rec.requests == []
+
+
+# ── refusals and no access send nothing ─────────────────────────────────────
+
+
+def test_a_refused_query_makes_no_request_on_any_new_path() -> None:
+    rec = Recorder(body=SPAN_BODY)
+    client = _sync(rec)
+    with pytest.raises(ScopeError):
+        client.search_spans(SCOPE, ") OR (*", start="now-1h", end="now")
+    with pytest.raises(ScopeError):
+        client.aggregate_spans(SCOPE, '"open', start="now-1h", end="now", group_by=[])
+    with pytest.raises(ScopeError):
+        client.search_monitors(SCOPE, "*) OR (team:other")
+    assert rec.requests == []
+
+
+def test_a_no_access_monitor_or_metric_scope_makes_no_request() -> None:
+    rec = Recorder(body=MONITOR_BODY)
+    client = _sync(rec)
+    with pytest.raises(ScopeError):
+        client.search_monitors(NO_ACCESS, "status:alert")
+    with pytest.raises(ScopeError):
+        client.search_monitors(NO_ACCESS)
+    with pytest.raises(ScopeError):
+        client.query_metric(NO_ACCESS, "m", start="now-1h", end="now")
+    with pytest.raises(ScopeError):
+        client.query_metric(NO_ACCESS, "m", tags=("service:clinic-app",), start="now", end="now")
+    assert rec.requests == []
+
+
+def test_a_no_access_spans_scope_makes_no_request() -> None:
+    rec = Recorder(body=SPAN_BODY)
+    blocked = DatadogScope("acme-child-b", "*", NO_ACCESS_QUERY, NO_ACCESS_QUERY, (NO_ACCESS_TAG,))
+    client = _sync(rec)
+    with pytest.raises(ScopeError):
+        client.search_spans(blocked, "", start="now-1h", end="now")
+    with pytest.raises(ScopeError):
+        client.get_trace(blocked, "abc123", start="now-1h", end="now")
+    assert rec.requests == []
+
+
+def test_a_declared_entry_without_spans_reads_no_spans(monkeypatch) -> None:
+    """The logs filter is never reused for spans: no ``spans`` key is no access."""
+    from robothor.integrations.datadog.scope import scope_for
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_DATADOG_SCOPES", json.dumps({"acme-child-a": {"logs": "*"}}))
+    reset_settings()
+    try:
+        scope = scope_for("acme-child-a")
+    finally:
+        reset_settings()
+    assert scope is not None
+    rec = Recorder(body=SPAN_BODY)
+    client = _sync(rec)
+    with pytest.raises(ScopeError):
+        client.search_spans(scope, "", start="now-1h", end="now")
+    with pytest.raises(ScopeError):
+        client.aggregate_spans(scope, "", start="now-1h", end="now", group_by=["service"])
+    with pytest.raises(ScopeError):
+        client.get_trace(scope, "abc123", start="now-1h", end="now")
+    assert rec.requests == []
+
+
+# ── the root scope passes the caller's query through ───────────────────────
+
+
+def test_the_root_scope_passes_each_query_through() -> None:
+    rec = Recorder(body={})
+    client = _sync(rec)
+    client.search_spans(ROOT, "service:clinic-app", start="now-1h", end="now")
+    client.aggregate_spans(ROOT, "service:clinic-app", start="now-1h", end="now", group_by=[])
+    client.get_trace(ROOT, "abc123", start="now-1h", end="now")
+    client.search_monitors(ROOT, "status:alert")
+    client.query_metric(ROOT, "m", tags=("host:web-1",), start="now-1h", end="now")
+    client.query_metric(ROOT, "m", start="now-1h", end="now")
+    assert _attrs(rec, 0)["filter"]["query"] == "service:clinic-app"
+    assert _attrs(rec, 1)["filter"]["query"] == "service:clinic-app"
+    assert _attrs(rec, 2)["filter"]["query"] == "trace_id:abc123"
+    assert _params(rec, 3)["query"] == "status:alert"
+    assert _params(rec, 4)["query"] == "avg:m{host:web-1}"
+    assert _params(rec, 5)["query"] == "avg:m{*}"
+
+
+def test_the_root_scope_with_no_monitor_query_lists_every_monitor() -> None:
+    rec = Recorder(body=MONITOR_BODY)
+    _sync(rec).search_monitors(ROOT)
+    assert _params(rec)["query"] == ""
+
+
+# ── errors and odd bodies on the new paths ──────────────────────────────────
+
+_CALLS = [
+    lambda c: c.search_spans(SCOPE, "", start="now-1h", end="now"),
+    lambda c: c.aggregate_spans(SCOPE, "", start="now-1h", end="now", group_by=["service"]),
+    lambda c: c.get_trace(SCOPE, "abc123", start="now-1h", end="now"),
+    lambda c: c.search_monitors(SCOPE),
+    lambda c: c.query_metric(SCOPE, "m", start="now-1h", end="now"),
+]
+
+
+@pytest.mark.parametrize("call", _CALLS)
+@pytest.mark.parametrize(
+    ("status", "kind"), [(400, "bad_query"), (403, "auth"), (429, "rate_limit"), (502, "network")]
+)
+def test_each_new_path_maps_errors_to_kinds(call, status, kind) -> None:
+    with pytest.raises(DatadogError) as caught:
+        call(_sync(Recorder(status=status, body={"errors": [f"vendor {API_KEY}"]})))
+    assert (caught.value.kind, caught.value.status) == (kind, status)
+    _assert_clean(caught.value)
+
+
+@pytest.mark.parametrize("call", _CALLS)
+def test_each_new_path_turns_a_transport_failure_into_network(call) -> None:
+    with pytest.raises(DatadogError) as caught:
+        call(_sync(Recorder(exc=httpx.ConnectError(f"to https://api.datadoghq.com {API_KEY}"))))
+    assert caught.value.kind == "network" and caught.value.__suppress_context__
+    _assert_clean(caught.value)
+
+
+@pytest.mark.parametrize("call", _CALLS)
+def test_each_new_path_reads_an_empty_body_as_empty(call) -> None:
+    result = call(_sync(Recorder(body={})))
+    if isinstance(result, SpanPage):
+        assert result == SpanPage(rows=(), next_cursor=None)
+    elif isinstance(result, MonitorPage):
+        assert result.rows == () and result.total_count == 0
+    else:
+        assert result == ()
+
+
+# ── the async client, the same paths ────────────────────────────────────────
+
+
+async def test_async_new_paths_send_the_bounded_queries() -> None:
+    rec = Recorder(body={})
+    client = _async(rec)
+    await client.search_spans(SCOPE, "status:error", start="now-1h", end="now")
+    await client.aggregate_spans(SCOPE, "status:error", start="now-1h", end="now", group_by=[])
+    await client.get_trace(SCOPE, "abc123", start="now-1h", end="now")
+    await client.search_monitors(SCOPE, "status:alert")
+    await client.query_metric(SCOPE, "m", tags=("env:prod",), start="now-1h", end="now")
+    assert _attrs(rec, 0)["filter"]["query"] == "(service:shop-api) AND (status:error)"
+    assert _attrs(rec, 1)["filter"]["query"] == "(service:shop-api) AND (status:error)"
+    assert _attrs(rec, 2)["filter"]["query"] == "(service:shop-api) AND (trace_id:abc123)"
+    assert _params(rec, 3)["query"] == "(team:shop) AND (status:alert)"
+    assert _params(rec, 4)["query"] == "avg:m{service:shop-api,env:prod}"
+    assert rec.requests[4].headers["DD-API-KEY"] == API_KEY
+
+
+async def test_async_new_paths_parse_their_bodies() -> None:
+    assert (
+        await _async(Recorder(body=SPAN_BODY)).search_spans(SCOPE, "", start="now-1h", end="now")
+    ).next_cursor == "s2"
+    buckets = await _async(Recorder(body=SPAN_AGG_BODY)).aggregate_spans(
+        SCOPE, "", start="now-1h", end="now", group_by=["service"]
+    )
+    assert buckets[0].count == 7
+    trace = await _async(Recorder(body=SPAN_BODY)).get_trace(
+        SCOPE, "abc123", start="now-1h", end="now"
+    )
+    assert trace[0].span_id == "1"
+    monitors = await _async(Recorder(body=MONITOR_BODY)).search_monitors(SCOPE)
+    assert monitors.rows[0].name == "errors"
+    series = await _async(Recorder(body=METRIC_BODY)).query_metric(
+        SCOPE, "m", start="now-1h", end="now"
+    )
+    assert series[0].points == ((1000, 2.0),)
+
+
+async def test_async_refusals_and_no_access_send_nothing() -> None:
+    rec = Recorder(body={})
+    client = _async(rec)
+    with pytest.raises(ScopeError):
+        await client.search_spans(SCOPE, ") OR (*", start="now-1h", end="now")
+    with pytest.raises(ScopeError):
+        await client.aggregate_spans(SCOPE, "(", start="now-1h", end="now", group_by=[])
+    with pytest.raises(ScopeError):
+        await client.get_trace(SCOPE, "abc OR *", start="now-1h", end="now")
+    with pytest.raises(ScopeError):
+        await client.search_monitors(NO_ACCESS)
+    with pytest.raises(ScopeError):
+        await client.query_metric(NO_ACCESS, "m", start="now-1h", end="now")
+    with pytest.raises(ScopeError):
+        await client.query_metric(SCOPE, "m", tags=("a}",), start="now-1h", end="now")
+    with pytest.raises(DatadogError) as caught:
+        await client.query_metric(SCOPE, "m", start="later", end="now")
+    assert caught.value.kind == "bad_query"
+    assert rec.requests == []
+
+
+async def test_async_new_paths_map_errors() -> None:
+    with pytest.raises(DatadogError) as caught:
+        await _async(Recorder(status=429)).search_monitors(SCOPE)
+    assert caught.value.kind == "rate_limit"
+    with pytest.raises(DatadogError) as caught:
+        await _async(Recorder(exc=httpx.ReadTimeout("t"))).query_metric(
+            SCOPE, "m", start="now-1h", end="now"
+        )
+    assert caught.value.kind == "network"
+    with pytest.raises(DatadogError) as caught:
+        await _async(Recorder(body={"status": "error"})).query_metric(
+            SCOPE, "m", start="now-1h", end="now"
+        )
+    assert caught.value.kind == "bad_query"
 
 
 # ── keys and sites ──────────────────────────────────────────────────────────

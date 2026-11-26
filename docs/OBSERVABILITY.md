@@ -37,7 +37,9 @@ Per `llm_call` span (GenAI conventions):
 - `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
 - `gen_ai.response.finish_reasons`
 
-Resource attributes: `service.name=robothor-engine`, `agent.id`, merged with the
+Resource attributes: `service.name=robothor-engine`, `agent.id`, `run.id` (the
+run's id, the `run_id` of its log lines) and `tenant.id` (the tenant the run
+belongs to, left out when unknown), merged with the
 standard OpenTelemetry environment: `OTEL_RESOURCE_ATTRIBUTES` (comma-separated
 `key=value`, values percent-decoded, e.g.
 `deployment.environment=staging,service.namespace=example`) overrides those
@@ -74,18 +76,32 @@ credentials, email addresses and phone numbers replaced (`<redacted>`, `<email>`
 `<phone>`), then is cut to 200 characters. `genus engine failures` scrubs its
 error text the same way when it prints it; the stored rows are unchanged.
 
+Every line ends with `tenant_id=<id>` and `trace_id=<hex>` when they are known,
+so a run's lines can be told apart by tenant in a log service several tenants
+share, and joined to the run's trace (the same 32-hex `trace_id` the OTLP export
+sends; a sub-agent's lines carry its parent's). A key that is not known is left
+out, never printed as `-`:
+
+| Event | `tenant_id` | `trace_id` |
+|---|---|---|
+| `tool_call` | the calling run's tenant; absent for a call made outside a run | the run's trace; absent for a workflow tool step (a workflow run has no trace) |
+| `llm_call` | the run's tenant | the run's trace; absent for a model call made before the run's trace exists, or outside a run |
+| `run_end` | the run's tenant | the run's trace; absent for a run that ended before its trace was created |
+| `workflow_step_failed` | the workflow run's tenant | always absent: a workflow run has no trace |
+| `alert` | present only when the run that raised it passed it (the runaway-token hard cap, a rejected run recording, a failed or approval-blocked workflow); absent for a detector or any alert raised outside a run | present only for an alert raised inside a traced run (the runaway-token hard cap) |
+
 | Event | Logger | Level | Fields |
 |---|---|---|---|
-| `tool_call` | `robothor.engine.tool_calls` | INFO when `outcome=ok`, WARNING otherwise | `tool`, `agent` (or `workflow` for a workflow step), `run_id`, `outcome` (`ok`, `error`, `refused`, `denied`, `timeout`, `cancelled`), `error_type`, `duration_ms`, `reason` |
-| `llm_call` | `robothor.engine.llm_calls` | INFO on `outcome=success`, WARNING otherwise | `agent`, `run_id`, `model`, `outcome`, `error_type` (on a failure), `input_tokens`, `output_tokens`, `cached_tokens`, `finish_reason`, `latency_ms`, `streamed`, `attempt` (1-based, within one dispatch), `fallback` (0 for the first model in the chain), and `estimated=true` when the provider reported no usage and the input count is the engine's estimate |
-| `run_end` | `robothor.engine.runs` | INFO when `outcome=completed`, WARNING otherwise | `agent`, `run_id`, `trigger`, `outcome` (`completed`, `error`, `cap`, `timeout`, `cancelled`), `duration_ms`, `iterations`, `input_tokens`, `output_tokens`, `total_tokens` |
-| `workflow_step_failed` | `robothor.engine.workflow` | WARNING | `workflow`, `run_id`, `step`, `step_type`, `tool`, `duration_ms`, `reason` |
-| `alert` | `robothor.engine.alerts` | ERROR (INFO for benchmark traffic) | `kind`, `severity`, `subject`, `alert_id` — see `docs/runbooks/PAGING.md` (repository only) |
+| `tool_call` | `robothor.engine.tool_calls` | INFO when `outcome=ok`, WARNING otherwise | `tool`, `agent` (or `workflow` for a workflow step), `run_id`, `outcome` (`ok`, `error`, `refused`, `denied`, `timeout`, `cancelled`), `error_type`, `duration_ms`, `reason`, `tenant_id`, `trace_id` |
+| `llm_call` | `robothor.engine.llm_calls` | INFO on `outcome=success`, WARNING otherwise | `agent`, `run_id`, `model`, `outcome`, `error_type` (on a failure), `input_tokens`, `output_tokens`, `cached_tokens`, `finish_reason`, `latency_ms`, `streamed`, `attempt` (1-based, within one dispatch), `fallback` (0 for the first model in the chain), `estimated=true` when the provider reported no usage and the input count is the engine's estimate, `tenant_id`, `trace_id` |
+| `run_end` | `robothor.engine.runs` | INFO when `outcome=completed`, WARNING otherwise | `agent`, `run_id`, `trigger`, `outcome` (`completed`, `error`, `cap`, `timeout`, `cancelled`), `duration_ms`, `iterations`, `input_tokens`, `output_tokens`, `total_tokens`, `tenant_id`, `trace_id` |
+| `workflow_step_failed` | `robothor.engine.workflow` | WARNING | `workflow`, `run_id`, `step`, `step_type`, `tool`, `duration_ms`, `reason`, `tenant_id` |
+| `alert` | `robothor.engine.alerts` | ERROR (INFO for benchmark traffic) | `kind`, `severity`, `subject`, `alert_id`, `tenant_id`, `trace_id` — see `docs/runbooks/PAGING.md` (repository only) |
 
 ```text
-event=tool_call tool=example_tool agent=example-agent run_id=9b1c… outcome=denied error_type=role.rbac duration_ms=4 reason="Your role here is 'viewer', which may not use 'example_tool'"
-event=llm_call agent=example-agent run_id=9b1c… model=openai/gpt-6-luna outcome=error_403 error_type=PermissionDeniedError latency_ms=231 streamed=false attempt=1 fallback=0
-event=run_end agent=example-agent run_id=9b1c… trigger=telegram outcome=completed duration_ms=4321 iterations=3 input_tokens=9000 output_tokens=400 total_tokens=9400
+event=tool_call tool=example_tool agent=example-agent run_id=9b1c… outcome=denied error_type=role.rbac duration_ms=4 reason="Your role here is 'viewer', which may not use 'example_tool'" tenant_id=acme-child-a trace_id=0af76519…
+event=llm_call agent=example-agent run_id=9b1c… model=openai/gpt-6-luna outcome=error_403 error_type=PermissionDeniedError latency_ms=231 streamed=false attempt=1 fallback=0 tenant_id=acme-child-a trace_id=0af76519…
+event=run_end agent=example-agent run_id=9b1c… trigger=telegram outcome=completed duration_ms=4321 iterations=3 input_tokens=9000 output_tokens=400 total_tokens=9400 tenant_id=acme-child-a trace_id=0af76519…
 ```
 
 `denied` is a role or allowlist gate; `refused` is any other engine gate, or a
@@ -137,7 +153,9 @@ deduped in-process (1h for fast signals, 24h for the sustained-outage ones).
 | `stuck_workflow_detector` | 10 min | `workflow_runs` running past timeout + grace |
 | `workflow_failure_streak_detector` | 10 min | the same workflow's last 3 terminal runs all failed |
 
-Disable all of them with `ROBOTHOR_DETECTORS_ENABLED=0`.
+Disable all of them with `ROBOTHOR_DETECTORS_ENABLED=0`. The Datadog watch
+runs on the 5-minute tick too, in its own module: see
+[Genus watches Datadog](#genus-watches-datadog).
 
 `tool_degradation_detector`, `tool_outage_detector`, and `tracking.get_tool_stats`
 all exclude rows the benchmark sandbox refused (`error_type='sandbox_denied'`,
@@ -445,7 +463,7 @@ through it, with its tenant's filter applied.
   "acme-child-b": {
     "logs": "service:clinic-app",
     "spans": "service:clinic-app env:prod",
-    "monitors": "team:clinic",
+    "monitors": "tag:\"team:clinic\"",
     "metric_tags": ["service:clinic-app"]
   }
 }
@@ -470,6 +488,173 @@ breaks, or more than 4000 characters. Brackets inside a double-quoted phrase are
 literal. The refusal is one plain sentence the caller can act on, for instance
 to put text containing an apostrophe in double quotes.
 
+### What each part of the scope bounds
+
+| Part | Bounds | How |
+|------|--------|-----|
+| `logs` | Log search and log counts | `(<logs>) AND (<caller query>)` |
+| `spans` | Span search, span counts and single traces | `(<spans>) AND (<caller query>)` |
+| `monitors` | Monitor search | `(<monitors>) AND (<caller query>)`, in monitor search syntax (`tag:"team:shop"`, `status:alert`, free text) |
+| `metric_tags` | Metric queries | The tags lead the metric's tag filter, ANDed with the caller's |
+
+The bracket and quote rules above apply to the `monitors` filter and to a
+caller's monitor query as well. A tenant with no `spans` or `monitors` filter,
+or no `metric_tags`, is refused that kind of read before anything is sent; it
+never gets a query that merely matches nothing.
+
+**A trace from another tenant reads as not found.** Datadog has no way to fetch
+a trace by id inside a filter, so Genus searches the tenant's spans for
+`trace_id:<id>`. A trace outside the tenant's `spans` filter matches no span.
+The id must be hex or decimal digits, so it cannot carry search syntax.
+
+**Metric queries are built from parts, never from query text.** The caller
+names a metric, an aggregator (`avg`, `sum`, `min` or `max`), optional tags,
+optional group-by keys, and whether to count. Genus builds
+`<aggregator>:<metric>{<scope tags>,<caller tags>} by {<keys>}`, using `{*}`
+only when the scope is `metric_tags: []` and the caller adds no tags. A metric
+name, tag or key containing a space, comma, brace or quote is refused. The time
+window is ISO-8601, `now`, or `now-<n>` with `s`, `m`, `h` or `d`.
+
+### For agents
+
+Agents read logs with `datadog_logs_search` and `datadog_logs_aggregate`,
+spans with `datadog_spans_search`, one trace with `datadog_trace_get`,
+monitors with `datadog_monitors_list` and metrics with `datadog_metrics_query`
+([Datadog tools](TOOLS.md#datadog-read-only)). They are opt-in: name them in a
+manifest's `tools_opt_in` (or `tools_allowed`). The scope is the tenant the
+run belongs to; a parent tenant's run can pass `tenant` to read a child. Email
+addresses and phone numbers in what comes back are masked, and every call
+writes an audit row (`datadog.logs_read`, `datadog.spans_read`,
+`datadog.trace_read`, `datadog.monitors_read`, `datadog.metrics_read`) with the
+query and the counts, never the log lines, spans or monitor text.
+
+### For people: the Logs page
+
+**Observe › Logs** searches the organization's own logs in the shared account.
+Owners, admins and auditors of the organization the session acts in can open
+it; a member or viewer is not offered it, and the bridge refuses them anyway. A
+root admin who switched into a child organization sees that child's logs.
+
+- **Search** takes a Datadog log query, such as `status:error service:shop-api`,
+  and runs when you press Enter or **Search**, not while you type. The time
+  range (last 15 minutes to last 7 days, default the last hour) applies at once.
+- **Errors by service** above the table counts the `status:error` lines that
+  match the search in the same window.
+- **The table** shows time, service, status and message, 50 lines at a time;
+  **Load more** fetches the next page. Click a line for its host, tags and
+  attributes.
+- Credentials (by the same redactor as the journald source), email addresses
+  and phone numbers in a line are masked before it leaves the bridge, and in the
+  query before it is audited. A value under a credential name (an attribute such
+  as `password` or `usr.api_key`, a `password:` tag, a summary grouped by such a
+  facet) is replaced whatever its shape. Every search writes one audit row (`telemetry.logs.read` or
+  `telemetry.logs.summary`): who, which organization, the masked query cut to
+  200 characters, the window, the outcome and how many rows. It never stores
+  the text of a line.
+
+What the page says when it has nothing to show:
+
+| State | Meaning |
+|-------|---------|
+| *Datadog is not connected for this organization yet.* | The keys are not set, or this organization has no scope entry. Only the root operator at home is told which. |
+| *Datadog is unavailable right now.* | Datadog refused the key, rate-limited the account, or could not be reached. The page names which in plain words, never with Datadog's reply. |
+| *That search was refused: …* | The query could change what the scope wrapping means (see above). The reason says what to change. |
+| *Nothing in that window* | The search ran and matched no line. |
+
+The Datadog source has four tabs. **Logs** is the search above. The other
+three keep their place when you switch away and back, and none is read until
+you open it:
+
+- **Traces** lists the organization's error spans in the chosen time range:
+  time, service, resource, duration and status. Click one to open its trace in
+  a side sheet, its spans as an indented tree with each span's duration. A
+  trace from another organization, a trace that does not exist and a malformed
+  id all read the same: *This trace was not found in your organization's
+  traces. Datadog keeps only a sample of traces, so most ordinary requests have
+  none.* Retention keeps errors and slow requests more often, so a trace
+  opened from an ordinary log line is often not there. An organization whose
+  scope has no `spans` filter is told *Traces are not shared with this
+  organization.*
+- **Monitors** lists the organization's monitors with a status badge and when
+  each last triggered. **Firing only** is on by default and keeps alert, warn
+  and no data. A muted monitor never counts as firing, here or in the
+  Organizations summary, which matches how the watch counts them. Turn the
+  toggle off to see every monitor, muted ones included. An organization whose scope
+  shares no monitors is told *Monitors are not shared with this organization.*
+- **Activity** lists what Genus recorded for this organization in the last
+  7 days: Datadog monitor alerts that reached it, and the watch's error spikes
+  and lost or restored connections. Each entry says what happened and when,
+  who Genus told or would have told, and the plain text it sent or would have
+  sent. Each entry also carries a label for what became of it:
+
+  | Label | When |
+  |-------|------|
+  | **Sent** | It was delivered. The entry names the route it went by and, for an alert, whether a read-only first-look run was started (or why not). |
+  | **Not sent again: already reported** | An alert for this is already open, it came too soon after the last one, or the Datadog alert already reported it. |
+  | **Could not be sent** | This organization's engine is not running, the hand-off failed, or delivery failed with the error kind shown. |
+  | **Recorded, not sent** | A dry-run record, or one this page does not recognise. The entry shows who Genus would have told and, for an alert, the read-only question it would have asked. |
+
+**View trace.** A log line that carries a trace id shows a **View trace** link
+that opens the Traces tab on that trace. The id is Datadog's reserved
+`trace_id` field of the log event, which the bridge returns with each line
+(with `span_id`); failing that, a `trace_id` or `dd.trace_id` attribute, or
+`trace_id=<hex>` in the message. Most ordinary requests have no kept trace (see
+Traces above), so the link often lands on the not-found sentence.
+
+**Logs for this run.** In Observe › Runs, the run drawer links to the Logs page
+with the search `"run_id=<id>"` filled in and run, since the engine's
+structured lines carry `run_id=<id>`. The search covers the time from five
+minutes before the run started until now, so an older run still shows its
+lines; the range picker shows that start as *Since …*. The link is
+`/?v=logs&q=<query>&since=<timestamp>`, so it can be bookmarked or shared. Only
+roles that can open the Logs page see it.
+
+**Organizations.** The root organization's owner or admin, at home, with child
+organizations, also sees an **Organizations** summary above the tabs: one row
+per organization they can reach, with its error-log count for the last hour and
+its firing monitors, *Not connected* where it has no scope, and *Unavailable*
+with the reason where Datadog failed for it. One organization failing never
+hides the others. It is not shown to a child's admin, to a root admin acting in
+a child, or to an auditor. Each read writes one `telemetry.overview` audit row
+per organization, filed under that organization, so its own admins can see who
+looked.
+
+The root operator at home also gets a **Server** source on the same page: the
+appliance's journald, unchanged (see
+[Operate it](enterprise/07-operate.md#the-observe-pages)).
+
+The bridge routes behind the page are `GET /api/telemetry/logs`
+(`q`, `since`, `until`, `limit`, `cursor`) and `GET /api/telemetry/logs/summary`
+(`q`, `since`, `until`, `group_by`, default `service`; `errors`, default
+`true`). The tenant always comes from the session's token, never from a
+parameter. `since` and `until` take a relative age (`30m`, `1h`, `7d`) or an
+ISO-8601 timestamp; `until` defaults to now. Both routes answer `200` with
+`status` `ok`, `not_configured` or `unavailable` (with a `kind`), and `400` with
+the plain reason for a refused query. Each row carries `trace_id` and `span_id`
+when the log event names them, and `null` otherwise.
+
+The other tabs use the same rules: owners, admins and auditors of the acting
+organization, the tenant from the token, never a 500, and one audit row per
+read with counts and no content. Every piece of free text they return (span
+resource and operation names and tags, monitor names, and the titles, briefs,
+prompts and reasons of recorded signals) has credentials redacted and email
+addresses and phone numbers masked, the same as a log line.
+
+| Route | Parameters | Audit event |
+|-------|------------|-------------|
+| `GET /api/telemetry/traces` | `q` (default `status:error`), `since`, `until`, `limit`, `cursor`; `status: no_access` when no spans are shared | `telemetry.traces.read` |
+| `GET /api/telemetry/traces/{trace_id}` | `since` (default `7d`), `until`; `404` when the trace is not in the organization's scope; `status: no_access` when no spans are shared | `telemetry.trace.read` |
+| `GET /api/telemetry/monitors` | `q`, `firing` (default `false`); every page is read; `status: no_access` when no monitors are shared | `telemetry.monitors.read` |
+| `GET /api/telemetry/signals` | `kind` (`alerts` or `watch`, both when omitted), `since` (default `7d`), `limit` | `telemetry.signals.read` |
+| `GET /api/telemetry/overview` | `since` (default `1h`); root owner or admin at home only | `telemetry.overview`, one per organization |
+
+`/signals` reads the `datadog.alert_received` and `datadog.watch_finding`
+events from the audit log for the token's tenant only, through the same query
+the Audit page uses, and returns only what the Activity tab shows. `/overview`
+takes the organizations from the server-side hierarchy, never from the
+request, and reads them a few at a time: per organization one error count, one
+monitor search, and whether it has a scope.
+
 ### Doctor
 
 `genus doctor` runs `datadog.reachable`. It skips when the keys are not set,
@@ -486,7 +671,261 @@ acme-child-a`), because an entry with only `logs` reads no traces.
 
 A log row's `trace_id` and `span_id` keep only an id-shaped value: 1 to 40 hex
 or decimal digits, in lowercase. Anything else becomes empty, because the
-fallbacks read custom attributes, which can hold free text.
+fallbacks read custom attributes, which can hold free text. A span row's
+`trace_id`, `span_id` and `parent_id` follow the same rule.
+
+### Datadog alerts into Genus
+
+When a monitor in the shared account changes state (alert, warn, no data,
+recovered), Datadog can call Genus. Genus works out which tenant the monitor
+belongs to and records the alert there, together with who it would notify and
+the read-only triage run it would start. **This is a dry run for now:** the
+alert is recorded and visible, nobody is notified and no run starts.
+
+**1. The webhook channel.** Add a channel to the webhook receiver's channels
+(`docs/webhooks.yaml`, a `docs/webhooks.d/` drop-in (both instance files), or the chart's
+`hooks.channels`; see [Webhook ingress](event-bus.md#webhook-ingress)). The
+stream must be `datadog`:
+
+```yaml
+channels:
+  datadog:
+    stream: datadog
+    secret_env: DATADOG_WEBHOOK_SECRET
+    signature_scheme: header_secret
+    signature_header: X-Genus-Webhook-Secret
+    event_type_prefix: datadog.alert
+```
+
+Datadog cannot sign a webhook body, so the `header_secret` scheme checks a
+shared secret that Datadog sends in a custom header. The comparison runs in
+constant time. Generate a long random value and put it in the receiver's
+environment under the `secret_env` name. A wrong or missing header gets
+`401`. The receiver logs one warning naming the channel and the reason
+(`secret mismatch` or `missing secret header`), and never logs the value
+sent. Nothing is published or recorded. If the variable is not set, every
+delivery gets `503`.
+
+**2. The Datadog webhook.** In Datadog's Webhooks integration, add a webhook
+whose URL is the receiver's public address followed by `/api/webhooks/datadog`.
+Set **Custom Headers** to
+`{"X-Genus-Webhook-Secret": "<the secret>"}`, and set the **Payload** to:
+
+```json
+{
+  "monitor_id": "$ALERT_ID",
+  "event_id": "$ID",
+  "title": "$ALERT_TITLE",
+  "transition": "$ALERT_TRANSITION",
+  "status": "$ALERT_STATUS",
+  "priority": "$ALERT_PRIORITY",
+  "query": "$ALERT_QUERY",
+  "tags": "$TAGS",
+  "link": "$LINK",
+  "date": "$DATE",
+  "hostname": "$HOSTNAME"
+}
+```
+
+Then mention the webhook (`@webhook-<its name>`) in each monitor's message.
+Genus parses the body defensively. A missing field is read as empty, a body
+that is valid JSON but not an object is recorded with empty fields, and a
+body that is not JSON gets `400`. `tags` may be the comma-separated `$TAGS`
+string or a JSON list. `monitor_id` falls back to an `alert_id` field.
+
+**3. The `org:` tag decides the tenant.** Tag each monitor with
+`org:<tenant id>`. Only the tags are read for tenancy, never any other
+field.
+
+| Tags | Recorded in | `routing` |
+|------|-------------|-----------|
+| `org:` names an active tenant | that tenant | `org` |
+| no `org:` tag | the root tenant (`ROBOTHOR_DEFAULT_TENANT`) | `untagged` |
+| `org:` names no active tenant | the root tenant | `unknown_org:<value>` |
+| two different `org:` tags | the root tenant | `ambiguous_org:<a>,<b>` |
+
+`$TAGS` also carries the tags of the group that triggered a multi-alert
+monitor. Keep `org:` off your hosts and services, so that only the monitor
+sets it.
+
+**4. What a dry run records.** The engine reads the `datadog` stream once
+`ROBOTHOR_DATADOG_SCOPES` is set, and records nothing from it before then: a
+manifest's own hook on a stream named `datadog` is left as it was. For each
+transition it writes one audit
+event, `datadog.alert_received`, in the routed tenant. The event has category
+`datadog`, actor `datadog` and target `datadog_monitor:<monitor id>`, and its
+details hold:
+
+- `monitor_id`, `event_id`, `title`, `transition`, `datadog_transition`,
+  `status`, `priority`, `tags`, `link`, `date`. `transition` is normalised
+  (`triggered`, `re_triggered`, `warn`, `no_data`, `recovered`, ...).
+  `datadog_transition` is the value Datadog sent. Email addresses and phone
+  numbers in the title and tags are masked.
+- `routing`, from the table above, and `mode: "dry_run"`.
+- `would_notify`: where the normal alerts path would deliver an alert at this
+  level. `triggered` and `re_triggered` are `critical` and would page the
+  instance operator on Telegram and then each `ROBOTHOR_ALERT_FALLBACK_CHANNELS`
+  channel (names only, never their targets). Warn and no-data transitions are
+  `warning`, recoveries are `info`, and both would go to the main agent's
+  `alert_digest` inbox.
+- `would_run`: the triage run. It names the tenant and the agent (this
+  engine's main agent when the alert is its own tenant's, otherwise `null`,
+  because another tenant's engine names its own main agent). It is marked
+  `read_only: true` and carries a fixed prompt that names the monitor and asks
+  for a read-only look at the tenant's logs with the Datadog log tools.
+
+A recovery changes nothing in place. It is its own event with
+`transition: recovered` and the same `monitor_id`, so you can pair it with
+the trigger. Datadog retries webhooks, so the same notification (`event_id`,
+monitor, transition and date) is recorded once. Each group of a multi-alert
+monitor has its own `event_id`, so each is recorded. Without `event_id` and
+`date`, one record is kept per monitor and transition. Each copy first
+claims a Redis key with `SET NX` and a pending life of 120 seconds. The
+claim's value is the stream entry being handled. A copy that finds a claim
+made by a different stream entry, or a key already marked `done`, is a
+duplicate, even when both are handled at the same moment. A Datadog retry is
+always a different entry. Next the audit event is written. Then the key is
+set to `done` for 24 hours. When the write fails, the claim is deleted so a
+retry can record the alert, and the event goes to
+`robothor:events:datadog:dlq`. If the engine dies after the claim and before
+the write, the consumer group redelivers the same entry, which finds its own
+claim and records the alert. So a crash loses nothing. A crash after the
+write and before the key is set to `done` can record the alert once more:
+straight away when the engine redelivers the same entry, or when another copy
+arrives after the pending window. If Redis cannot be reached, the
+alert is still recorded.
+
+Each recorded alert also writes one log line with no title or body:
+`event=datadog_alert tenant=<tenant> monitor_id=<id> transition=<transition> mode=dry_run routing=<routing>`.
+
+To see the records, open the Helm's audit log, or call the bridge's
+`GET /api/audit/events?event_type=datadog.alert_received`. Both read
+`robothor.audit.logger.query_log`, filtered to the tenants the caller may see.
+
+**5. Recorded, not delivered.** Recording is the only thing this does, and
+there is no setting that changes it. Every record and log line says
+`mode: dry_run` so you can tell it apart from delivered alerts. Delivery
+arrives in a later release as its own change.
+
+### Genus watches Datadog
+
+`robothor/engine/datadog_watch.py` runs four read-only observers from the
+watchdog, every 5 minutes beside the failure-mode detectors. Each pass runs as
+a background task, so a slow Datadog never holds the watchdog loop, and a tick
+that finds the previous pass still running skips. They only flag: nothing they
+find stops, pauses or limits anything, and today nothing they find is sent to
+anyone. Findings are recorded; delivery comes in a later release.
+
+| Observer | Looks at | Finds |
+|----------|----------|-------|
+| Error spike | `status:error` log counts per service, inside the tenant's `logs` scope | a service whose errors in the latest 15 minutes are well above its own last two hours |
+| Silent service | every log line counted per service, inside the tenant's `logs` scope | a service that logged steadily for two hours and logged nothing in the latest 15 minutes (`service_silent`); its next line is `service_resumed` |
+| Firing monitors | the monitors inside the tenant's `monitors` scope in Alert, Warn or No Data, and not muted | a monitor that starts firing or changes status (`monitor_firing`), and one recorded that stops (`monitor_recovered`) |
+| Connection lost | the API key check (`/api/v1/validate`), an application key probe (a one-row log search that matches nothing), and the watch's own reads | Datadog rejecting either key, or unreachable, on 3 checks in a row; the first good check after that is `connection_restored` |
+
+**The spike rule.** The current window is the latest complete 15-minute slot
+that ended at least 2 minutes ago; the baseline is the 8 slots before it. A
+service fires when its current count is at least 20 **and** above both 3× its
+baseline median and the median plus 5 robust deviations (scaled median
+absolute deviation), so a noisy service needs a bigger jump than a steady one.
+A service whose baseline median is zero (new, silent, or a stray error or two)
+fires only at 100, so there is no jump between "silent" and "one stray error".
+No per-service tuning.
+
+**The silence rule.** The same slots, counting every line rather than errors.
+A service is silent when the current slot holds no lines from it **and** it
+logged in every one of the 8 slots before **and** its median over those slots
+is at least 15 lines (one a minute), so a service that logs every minute is
+watched. The floor keeps a service that logs only now and then (a heartbeat
+every quarter of an hour, say) from counting one late line as a silence; the
+"every slot" condition keeps a service with gaps (a nightly job), or a new one
+without two hours of history, out. A silence is
+recorded once; `service_resumed` is recorded when the service logs again, and
+names the slot it went quiet in. Logs that carry no service tag are never a
+silent service. If a tenant logs from 1000 or more services in one slot (one
+page of groups), silence is not judged for it, because a service missing from
+a full page may simply not fit; one log line says so.
+
+**The monitor rule.** Every pass lists the tenant's monitors that are firing:
+the search is `(<monitors scope>) AND ((status:alert OR status:warn OR
+status:"no data") AND muted:false)`, read page by page (100 per page) until the
+last. A muted monitor, muted by hand or by a scheduled downtime, is left out,
+because Datadog holds back its own notification for it. A monitor is recorded
+when it starts firing, and again only when it changes status while firing (Warn
+to Alert, say) or after it recovers and fires again. One that was recorded and
+is no longer in the list is `monitor_recovered`, whether it stopped firing or
+was muted (the brief says "no longer firing, or has been muted"). A read that fails records no
+recovery: the next good read decides. A tenant whose `monitors` scope is
+missing or "no access" skips this observer only (one log line per process) and
+its logs are still watched. A key without monitor read permission is not a lost
+link: the monitor watch skips that pass and the log observers carry on. The
+brief names the monitor (email addresses and phone numbers in the name are
+replaced), its status, and how long since it last triggered.
+
+Receiving Datadog's own notifications through a Genus webhook is a separate
+change, which records each one as `datadog.alert_received`. Once it is in
+place, this observer is the safety net for monitors that are not wired to that
+webhook, so a monitor that is wired appears in both records. The two are not
+de-duplicated.
+
+**Calls per pass.** Each settled slot is read once and kept, per series. A
+tenant costs 18 aggregate calls on the first pass after a restart (9 slots for
+errors, 9 for every line) and then two per new slot (about two every 15
+minutes), plus one monitor search per 100 firing monitors on every pass (one
+when none fire). The root engine adds the two key checks per pass.
+
+**Where it runs.** Each engine watches its own tenant (`ROBOTHOR_TENANT_ID`), so
+every tenant with an engine is covered once. A service inside two tenants'
+scopes (a parent scoped `*` sees its children's services) is watched by both,
+and a spike there is one finding in each. The engine whose tenant has no parent in
+`crm_tenants` also owns the connection check, so a lost key is one finding, not
+one per engine. With HA leader election only the scheduler leader watches. The
+watch does nothing while `ROBOTHOR_DATADOG_SCOPES` is empty, or while the keys
+are unset (one log line says so), and a tenant with no scope entry is skipped
+with one log line per process. `ROBOTHOR_DETECTORS_ENABLED=0` stops it with the
+other detectors.
+
+**Where findings appear.** Each finding is one `datadog.watch_finding` audit
+event in the tenant it concerns (the connection findings in the root tenant)
+with `kind` (`error_spike`, `service_silent`, `service_resumed`,
+`monitor_firing`, `monitor_recovered`, `connection_lost`,
+`connection_restored`), `service`, `current`, `baseline`, `window`, `mode`,
+`would_notify` and `brief`, the two or three sentences that would be sent. A
+monitor finding carries `monitor` (`id`, `name`, `type`, `status`,
+`previous_status`) in place of the counts, and the audit target
+`monitor:<id>`. Briefs and events carry counts, service names and monitor
+names only, never a log message or a monitor's notification text. Each finding also writes one log
+line:
+
+```
+event=datadog_watch tenant=acme-child-a kind=error_spike service=shop-api mode=dry_run
+```
+
+`mode` is always `dry_run`: nothing is delivered, and the marker tells these
+records apart from delivered ones once delivery ships. `would_notify` names
+where the normal alerts path would put the brief (the main agent's alert
+digest in that tenant). There is no setting for it.
+
+Each observer runs on its own for each tenant: one failing (a Datadog error, a
+malformed scope) never stops another observer or another tenant.
+
+A continuing spike is recorded once an hour per service. A lost link is
+recorded once, until it is restored. All of this state lives in the engine
+process, so a restart forgets it:
+
+- a restart while the link is down records the loss again after 3 more failed
+  checks, and one just as the link comes back records no `connection_restored`;
+- every monitor still firing is recorded again on the first pass after a
+  restart, and a monitor that recovered while the engine was down gets no
+  `monitor_recovered`;
+- a service silent across a restart is not recorded again (its baseline now
+  holds the silent slots), and gets no `service_resumed` when it comes back.
+
+**Is it running?** Look for `event=datadog_watch` lines, or for
+`datadog.watch_finding` rows in the audit log. If there are none, check that
+`ROBOTHOR_DATADOG_SCOPES` has an entry for the engine's tenant and that
+`genus doctor --only datadog.reachable` passes. A `datadog watch: not running`
+line names the reason.
 
 ## Notes
 

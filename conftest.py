@@ -209,6 +209,24 @@ def _isolate_shared_key_pools():
 
 
 @pytest.fixture(autouse=True)
+def _fresh_known_values():
+    """Never let one test's stored credential be redacted in the next.
+
+    ``vault_set`` registers what it stores with the process-wide redactor
+    (``robothor.secrets.redaction``), which is right in a daemon and leaks in a
+    suite: a test that stores a sample key and does not forget it leaves that
+    key redacted for every later test in the process, and a test asserting the
+    key is NOT registered then fails in whatever order puts it second. Reset on
+    both sides of every test.
+    """
+    from robothor.secrets.redaction import forget_known_values
+
+    forget_known_values()
+    yield
+    forget_known_values()
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_owner_config(monkeypatch, tmp_path):
     """Never let this machine's real operator identity reach a platform test.
 
