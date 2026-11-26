@@ -815,6 +815,35 @@ def question_for_graph(
     return asked
 
 
+def facts_about_named(
+    tenant_id: str,
+    query: str,
+    fact_ids: Iterable[int],
+    *,
+    connect: Callable[..., Any] | None = None,
+) -> set[int]:
+    """Which of ``fact_ids`` mention an entity ``query`` itself names (name,
+    alias, e-mail or handle; :func:`named_in_question`), by ``memory_mentions``.
+
+    Read-only, one connection, tenant-scoped; nothing for a query that names
+    no one. The search uses it to tell whether its head already holds
+    evidence about who was asked.
+    """
+    ids = sorted({int(i) for i in fact_ids})
+    if not ids:
+        return set()
+    with _cursor(connect) as cur:
+        named = named_in_question(_link_seeds(cur, tenant_id, query))
+        if not named:
+            return set()
+        cur.execute(
+            "SELECT DISTINCT fact_id FROM memory_mentions "
+            "WHERE tenant_id = %s AND entity_id = ANY(%s::int[]) AND fact_id = ANY(%s::int[])",
+            (tenant_id, sorted(set(named)), ids),
+        )
+        return {int(r["fact_id"] if isinstance(r, dict) else r[0]) for r in cur.fetchall()}
+
+
 def has_anything_to_link(
     message: str, phrases: Sequence[str] | None, sender_person_id: str | None
 ) -> bool:

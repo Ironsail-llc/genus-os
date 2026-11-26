@@ -1405,6 +1405,49 @@ async def _graph_leg(
         return []
 
 
+#: The graph's reserved places stay unused when the reranked head already
+#: holds strong evidence about an entity the question names: a head row that
+#: mentions it with a reranker score at or above DIRECT_EVIDENCE_RERANK, or,
+#: when the reranker did not score the head, a dense similarity at or above
+#: DIRECT_EVIDENCE_SIMILARITY. A multi-step question has no such row (no fact
+#: about the named person answers it), so the graph comes in; "where is X
+#: based" has one, and a related entity's fact would only compete with it.
+#: Chosen once on the memory evaluation's dev split, from the best such score
+#: per case with the graph on: the four cross-tenant questions the graph cost
+#: scored 0.888-0.994 (reranker) and 0.642-0.771 (similarity), so the
+#: thresholds sit below the lowest of them, by 0.038 and 0.042. The same
+#: distributions show multi-step questions scoring as high (median 0.987),
+#: so this keeps the graph out of most of those too.
+DIRECT_EVIDENCE_RERANK = 0.85
+DIRECT_EVIDENCE_SIMILARITY = 0.6
+
+
+async def _direct_evidence_is_strong(tenant: str, query: str, head: list[dict[str, Any]]) -> bool:
+    """Whether ``head`` holds a strong row about an entity ``query`` names.
+
+    Best-effort: a failed lookup answers False, which leaves the graph its
+    places as before.
+    """
+    from robothor.memory import activation
+
+    fact_ids = [r["id"] for r in head if r.get("kind") == "fact" and r.get("id") is not None]
+    try:
+        linked = await asyncio.to_thread(
+            activation.facts_about_named, tenant, query, fact_ids, connect=get_connection
+        )
+    except Exception as e:  # noqa: BLE001 - best-effort; the graph keeps its places
+        logger.warning("search_facts: direct evidence check failed: %s: %s", type(e).__name__, e)
+        return False
+    rows = [r for r in head if r.get("kind") == "fact" and r.get("id") in linked]
+    if not rows:
+        return False
+    if any(r.get("rerank_score") is not None for r in head):
+        scores = [r["rerank_score"] for r in rows if r.get("rerank_score") is not None]
+        return bool(scores) and max(scores) >= DIRECT_EVIDENCE_RERANK
+    sims = [float(r["similarity"]) for r in rows if r.get("similarity") is not None]
+    return bool(sims) and max(sims) >= DIRECT_EVIDENCE_SIMILARITY
+
+
 async def _question_for_graph(tenant: str, query: str) -> str | None:
     """The query without the names it links, or None when nothing else is
     asked (or the lookup failed): best-effort, like the leg itself."""
@@ -1914,7 +1957,10 @@ async def search_facts(
         # earlier rows, so a row it drops from the end duplicates the head.
         return _dedup_enabled() and len(_dedupe([*unique_head, row])) == len(unique_head)
 
-    result = apply_reserved(ranked, pool, limit, RESERVED_PLACES, exclude=_duplicates_head)
+    reserved = RESERVED_PLACES
+    if graph and await _direct_evidence_is_strong(_tenant, query, ranked[:limit]):
+        reserved = {leg: n for leg, n in RESERVED_PLACES.items() if leg != "graph"}
+    result = apply_reserved(ranked, pool, limit, reserved, exclude=_duplicates_head)
     for r in result:
         if "relevance" not in r:  # a reserved pick the blend never saw
             _assign_relevance([r])

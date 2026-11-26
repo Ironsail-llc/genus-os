@@ -312,7 +312,9 @@ async def test_without_the_reranker_the_dense_similarity_decides(
     the strength, against its own threshold."""
     sim = facts.DIRECT_EVIDENCE_SIMILARITY + delta
     direct = _row(1, "Alice keeps the passport in the blue folder", similarity=sim)
-    cur = _Cursor(vector=[direct, *_dense(20)[1:]], keyword=[])
+    # Every other dense row is less similar, so the direct row leads the head.
+    others = [{**r, "similarity": 0.3 - r["id"] / 1000} for r in _dense(20)[1:]]
+    cur = _Cursor(vector=[direct, *others], keyword=[])
     _direct(env, named={1})
 
     with patch("robothor.memory.activation.graph_candidates_for_query", return_value=_hops()):

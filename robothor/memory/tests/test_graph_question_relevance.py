@@ -225,7 +225,11 @@ def test_facts_about_named_finds_the_head_rows_about_the_named_entity(world: Gra
     other_alice = world.entity("Alice Smith", tenant=OTHER)
     theirs = world.fact("Alice Smith of the other tenant", about=(other_alice,), tenant=OTHER)
     # A mention row of the other tenant pointing at one of my facts.
-    world.mention(w["hq"], other_alice, tenant=OTHER)
+    world.sql(
+        "INSERT INTO memory_mentions (tenant_id, fact_id, entity_id, surface_form) "
+        "VALUES (%s, %s, %s, 'other tenant')",
+        (OTHER, w["hq"], other_alice),
+    )
     ids = [about_alice, w["hq"], theirs, *w["noise"]]
 
     assert facts_about_named(TENANT, QUESTION, ids, connect=world.connect) == {about_alice}
