@@ -1780,7 +1780,9 @@ async def search_facts(
            fused order stands.
         4. Blend — relevance (rerank score, else from fused rank) + recency +
            importance + access, supersession demotion; near-duplicates dropped.
-        5. ``RESERVED_PLACES`` — a leg keeps its reserved places in the top-k.
+        5. ``RESERVED_PLACES`` — a leg keeps its reserved places; the graph's
+           rows are added after the top-k, every other leg's take its last
+           places.
 
     Args:
         query: Search query text.
@@ -1847,7 +1849,15 @@ async def search_facts(
             refused with ``ValueError``.
 
     Returns:
-        Rows ordered best first. Each carries its payload (``fact_text``,
+        Rows ordered best first: the ranked head, at most ``limit`` rows, then,
+        with ``include_graph=True``, up to ``RESERVED_PLACES["graph"]`` (2)
+        rows only the graph leg found, which never take a head row's place. So
+        a call returns at most ``limit + 2`` rows; the head is the ranked top
+        ``limit``, and graph rows never take one of its places (when it is
+        shorter than ``limit``, the graph's rows follow it directly). The
+        graph's candidates are in the pool the head is ranked from, so the head
+        is not guaranteed identical to a call without the graph, though in
+        measurement it almost always is. Each carries its payload (``fact_text``,
         ``category`` …) plus ``kind``, ``leg_ranks`` (rank per leg that found
         it), ``leg_scores``, ``rrf_score``, ``fused_rank``, ``rerank_score``
         (None when not reranked) and ``relevance`` (0..1). Read-only.

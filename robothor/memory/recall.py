@@ -274,10 +274,10 @@ def _leg_order(leg: str) -> Callable[[Mapping[str, Any]], tuple[float, int]]:
 
 
 #: Legs whose reserved places hold their best rows by their own score: a
-#: weaker row of the leg that the head holds anyway does not use a place, and
-#: a best row the head holds counts. Only the graph leg (off by default); every
-#: other reserved leg keeps the earlier rule, so the default search is
-#: unchanged.
+#: weaker row of the leg that the head holds anyway does not use a place, a
+#: best row the head holds counts, and the rest are added after the head
+#: without evicting any of it. Only the graph leg; every other reserved leg
+#: keeps the earlier rule (its picks take the head's last places).
 BEST_ROW_LEGS: frozenset[str] = frozenset({"graph"})
 
 
@@ -333,17 +333,22 @@ def apply_reserved(
     rank), and they replace the lowest-ranked rows that do not themselves hold
     a reserved place. A leg in :data:`BEST_ROW_LEGS` (the graph) keeps its
     best ``n`` rows instead: another of its rows that the head holds anyway
-    uses up no place. Reserved picks go at the end of the list — they are
+    uses up no place, and the missing ones are added *after* the head,
+    evicting nothing. The result is then up to ``limit`` + that leg's ``n``
+    rows long, and its first ``limit`` rows are ``ranked[:limit]`` exactly. Reserved picks go at the end of the list — they are
     guaranteed a place, not a position. A leg with no candidates reserves
     nothing, and a pool row for which ``exclude(row)`` is true is never picked
     (``search_facts`` uses it to keep out near-duplicates of ranked rows).
 
-    Picks take at most :func:`max_reserved_picks` places in total, so the
-    ranked head always keeps the majority: no picks at ``limit`` 1 or 2.
+    Picks of the other legs take at most :func:`max_reserved_picks` places in
+    total, so the ranked head always keeps the majority: no such picks at
+    ``limit`` 1 or 2.
     """
     out = list(ranked[:limit])
     protected: set[tuple[Any, Any]] = set()
     picks: list[dict[str, Any]] = []
+    # The graph's rows (BEST_ROW_LEGS) go after the head and evict nothing.
+    appended: list[dict[str, Any]] = []
     budget = max_reserved_picks(limit)
     for leg, want in reserved.items():
         if want <= 0:
@@ -355,10 +360,13 @@ def apply_reserved(
             have = [r for r in out if leg in (r.get("leg_ranks") or {})][:want]
             need_total = want
         protected.update(_row_key(r) for r in have)
-        need = min(need_total - len(have), budget - len(picks))
+        if leg in BEST_ROW_LEGS:
+            need = need_total - len(have)
+        else:
+            need = min(need_total - len(have), budget - len(picks))
         if need <= 0:
             continue
-        taken = {_row_key(r) for r in out} | {_row_key(r) for r in picks}
+        taken = {_row_key(r) for r in (*out, *picks, *appended)}
         extra = sorted(
             (
                 r
@@ -372,7 +380,7 @@ def apply_reserved(
         for r in extra:
             r["reserved_leg"] = leg
             protected.add(_row_key(r))
-        picks.extend(extra)
+        (appended if leg in BEST_ROW_LEGS else picks).extend(extra)
 
     for pick in picks:
         while len(out) + 1 > limit:
@@ -387,4 +395,4 @@ def apply_reserved(
             out.pop(victim)
         if len(out) < limit:
             out.append(pick)
-    return out
+    return [*out, *appended]

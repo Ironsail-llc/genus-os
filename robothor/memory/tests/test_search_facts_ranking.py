@@ -220,9 +220,12 @@ async def test_the_graph_leg_keeps_its_reserved_places(env: pytest.MonkeyPatch) 
     with patch("robothor.memory.activation.graph_candidates_for_query", return_value=hops):
         results = await _search(cur)
 
+    off = await _search(_Cursor(vector=_dense(20), keyword=[]), include_graph=False)
     ids = [r["id"] for r in results]
-    assert len(results) == 5
-    assert 700 in ids and 701 in ids and 702 not in ids
+    # The five head rows are those of the search without the graph; its two
+    # reserved rows come after them (at most limit + 2 rows).
+    assert ids[:5] == [r["id"] for r in off]
+    assert ids[5:] == [700, 701] and len(results) == 5 + facts.RESERVED_PLACES["graph"]
     row = next(r for r in results if r["id"] == 700)
     assert "graph" in row["leg_ranks"]
     assert row["origin"] == "user_stated"
@@ -276,7 +279,7 @@ async def test_the_graph_leg_never_moves_rows_into_the_reranked_head(
 @pytest.mark.asyncio
 async def test_a_head_held_graph_row_uses_one_of_its_places(env: pytest.MonkeyPatch) -> None:
     """With the real near-duplicate exclude: the graph's best row is already
-    in the head, so only one more graph row may take a reserved place."""
+    in the head, so only one more graph row is added, after the head."""
     env.delenv("MEMORY_DEDUP", raising=False)
     dense = _dense(20)
     hops = [
@@ -292,9 +295,8 @@ async def test_a_head_held_graph_row_uses_one_of_its_places(env: pytest.MonkeyPa
 
     ids = [r["id"] for r in results]
     assert dense[0]["id"] in ids
-    assert 700 in ids and 701 not in ids, ids
-    gave_way = {r["id"] for r in off} - set(ids)
-    assert len(gave_way) == 1, f"only one head row may give way, not {gave_way}"
+    assert ids[:5] == [r["id"] for r in off], "no head row gives way"
+    assert ids[5:] == [700], ids
 
 
 def _two_questions(env: pytest.MonkeyPatch, fail: str) -> MagicMock:
