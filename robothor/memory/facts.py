@@ -1793,14 +1793,15 @@ async def search_facts(
     asked_embedding: list[float] | None = None
     degraded: str | None = None
     embedding: list[float] | None
+    # The graph's question is embedded beside the query, and its failure costs
+    # only the graph leg: the dense leg keeps its own embedding.
+    asked_task = (
+        asyncio.ensure_future(_embed_query(asked)) if asked is not None and asked != query else None
+    )
     try:
-        if asked is not None and asked != query:
-            embedding, asked_embedding = await asyncio.gather(
-                _embed_query(query), _embed_query(asked)
-            )
-        else:
-            embedding = await _embed_query(query)
-            asked_embedding = embedding if asked is not None else None
+        embedding = await _embed_query(query)
+        if asked is not None and asked_task is None:
+            asked_embedding = embedding
     except httpx.HTTPError as embed_exc:
         logger.warning(
             "search_facts: embedding fetch failed (%s) — degrading to keyword-only search",
@@ -1808,6 +1809,18 @@ async def search_facts(
         )
         embedding = None
         degraded = "keyword-only (embedding service unavailable)"
+    except BaseException:
+        if asked_task is not None:
+            asked_task.cancel()
+        raise
+    if asked_task is not None:
+        try:
+            asked_embedding = await asked_task
+        except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
+            logger.warning(
+                "search_facts: graph question embedding failed: %s: %s", type(e).__name__, e
+            )
+            asked_embedding = None
 
     scope_clause = ""
     scope_params: tuple[Any, ...] = ()
