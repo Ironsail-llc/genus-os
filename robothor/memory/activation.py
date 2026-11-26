@@ -93,7 +93,17 @@ _WORD = re.compile(r"[^\W_]+(?:['’.-][^\W_]+)*", re.UNICODE)
 #: "Alice Smith's manager" is about Alice Smith: a possessive is dropped
 #: before the text is split into words.
 _POSSESSIVE = re.compile(r"(?<=[^\W_])['’]s\b", re.UNICODE)
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+#: Linear by construction: a match starts only where a run of address
+#: characters starts, and every part is bounded (local part 64, labels 63,
+#: at most 8 of them). The unbounded form backtracked quadratically on a long
+#: run with no "@" (200,000 characters: 37 s inside the leg's budget).
+_EMAIL = re.compile(
+    r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@(?:[A-Za-z0-9-]{1,63}\.){1,8}[A-Za-z]{2,24}"
+    r"(?![A-Za-z])"
+)
+#: Seed linking reads at most this much of a text (names and keys are looked
+#: for near where a message starts; a pasted document is not a question).
+MAX_LINK_CHARS = 20_000
 _HANDLE = re.compile(r"(?<![\w@])@[A-Za-z0-9_][A-Za-z0-9_.]{1,63}")
 
 
@@ -124,7 +134,7 @@ def candidate_phrases(text: str) -> list[str]:
     A single token is never a candidate: a first name alone must not resolve to
     a person. A possessive (``'s``) is not part of the name it follows.
     """
-    words = [w.lower() for w in _WORD.findall(_POSSESSIVE.sub("", text or ""))]
+    words = [w.lower() for w in _WORD.findall(_POSSESSIVE.sub("", (text or "")[:MAX_LINK_CHARS]))]
     out: list[str] = []
     seen: set[str] = set()
     for size in range(2, MAX_NAME_TOKENS + 1):
@@ -141,7 +151,8 @@ def candidate_phrases(text: str) -> list[str]:
 def strong_keys(text: str) -> list[str]:
     """E-mail addresses and @handles in ``text``, lower-cased, in order."""
     out: list[str] = []
-    for match in [*_EMAIL.findall(text or ""), *_HANDLE.findall(text or "")]:
+    text = (text or "")[:MAX_LINK_CHARS]
+    for match in [*_EMAIL.findall(text), *_HANDLE.findall(text)]:
         key = match.lower().rstrip(".")
         if key not in out:
             out.append(key)
