@@ -1081,6 +1081,10 @@ class MoveReport:
     #: The company the moved contact was linked to, when that company stays
     #: in another tenant: the link is cleared rather than left cross-tenant.
     company_unlinked: str | None = None
+    #: ``table.column`` -> rows outside the target whose link to the moved
+    #: contact was cleared (a dry run counts them), e.g. a memory entity's
+    #: ``crm_person_id``. Only the non-zero ones.
+    links_cleared: dict[str, int] = dataclass_field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1101,16 +1105,19 @@ _PERSON_REFS_MOVED_WITH_ACCOUNT: dict[str, str | None] = {
     "face_identities": "user_account_id IS DISTINCT FROM %(uid)s::uuid",
 }
 
+#: Links onto ``crm_people`` from rows that stay with their tenant when the
+#: contact moves, and are derived pointers rather than CRM history: they are
+#: cleared by the move instead of refusing it, so nothing points across
+#: tenants. (``contact_identifiers.memory_entity_id`` is the mirror image,
+#: cleared in :func:`move_account` itself.) Applied only where the catalog has
+#: the foreign key, so a database before the memory graph migration is fine.
+_PERSON_LINKS_CLEARED_ON_MOVE: frozenset[tuple[str, str]] = frozenset(
+    {("memory_entities", "crm_person_id")}
+)
 
-def _person_history(cur: Any, person_id: str, source: str, user_id: str) -> dict[str, int]:
-    """Rows in the source tenant that reference the account's CRM contact.
 
-    Found from the catalog, not a hand-kept list: every single-column foreign
-    key onto ``crm_people`` in a table with a ``tenant_id``. A table added
-    later is covered without anyone remembering this function.
-    """
-    from psycopg2 import sql
-
+def _person_refs(cur: Any) -> list[tuple[str, str]]:
+    """Every single-column foreign key onto ``crm_people`` from a tenant table."""
     cur.execute(
         """SELECT cl.relname AS tbl, a.attname AS col
            FROM pg_constraint c
@@ -1124,7 +1131,56 @@ def _person_history(cur: Any, person_id: str, source: str, user_id: str) -> dict
                            AND NOT t.attisdropped)
            ORDER BY cl.relname, a.attname"""
     )
-    refs = [(r["tbl"], r["col"]) for r in cur.fetchall()]
+    return [(r["tbl"], r["col"]) for r in cur.fetchall()]
+
+
+def _person_links(cur: Any, person_id: str, to_tenant: str, *, clear: bool) -> dict[str, int]:
+    """Links in :data:`_PERSON_LINKS_CLEARED_ON_MOVE` onto the moving contact
+    from any tenant but the target: cleared (``clear``) or only counted.
+
+    Returns ``table.column`` -> rows, non-zero ones only.
+    """
+    from psycopg2 import sql
+
+    found: dict[str, int] = {}
+    for table, column in _person_refs(cur):
+        if (table, column) not in _PERSON_LINKS_CLEARED_ON_MOVE:
+            continue
+        where = sql.SQL("WHERE {} = %(person)s AND tenant_id <> %(target)s").format(
+            sql.Identifier(column)
+        )
+        params = {"person": person_id, "target": to_tenant}
+        if clear:
+            cur.execute(
+                sql.SQL("UPDATE {} SET {} = NULL ").format(
+                    sql.Identifier(table), sql.Identifier(column)
+                )
+                + where,
+                params,
+            )
+            n = int(cur.rowcount or 0)
+        else:
+            cur.execute(
+                sql.SQL("SELECT COUNT(*) AS n FROM {} ").format(sql.Identifier(table)) + where,
+                params,
+            )
+            n = int(cur.fetchone()["n"])
+        if n:
+            found[f"{table}.{column}"] = n
+    return found
+
+
+def _person_history(cur: Any, person_id: str, source: str, user_id: str) -> dict[str, int]:
+    """Rows in the source tenant that reference the account's CRM contact.
+
+    Found from the catalog, not a hand-kept list: every single-column foreign
+    key onto ``crm_people`` in a table with a ``tenant_id``. A table added
+    later is covered without anyone remembering this function. Links in
+    :data:`_PERSON_LINKS_CLEARED_ON_MOVE` are not history: the move clears them.
+    """
+    from psycopg2 import sql
+
+    refs = [ref for ref in _person_refs(cur) if ref not in _PERSON_LINKS_CLEARED_ON_MOVE]
     history: dict[str, int] = {}
     for table, column in refs:
         query = sql.SQL(
@@ -1384,6 +1440,8 @@ def move_account(
                     report.counts[table] = int(cur.fetchone()["n"])
                 if detach:
                     report.counts["crm_people"] = 1  # the fresh contact it would create
+                if old_person and not detach:
+                    report.links_cleared = _person_links(cur, old_person, to_tenant, clear=False)
                 conn.rollback()
                 return report
 
@@ -1425,6 +1483,11 @@ def move_account(
                         (to_tenant, *params),
                     )
                 report.counts[table] = int(cur.rowcount or 0)
+
+            if old_person and not detach:
+                # A memory entity about the contact stays with its tenant's
+                # memory; its link to the contact that just moved is cleared.
+                report.links_cleared = _person_links(cur, old_person, to_tenant, clear=True)
 
             if detach:
                 report.new_person_id = _detach_person(
