@@ -1631,8 +1631,39 @@ async def _rank_pool(
     return pool[:limit]
 
 
+async def _confusable_tail(
+    query: str,
+    tenant_id: str,
+    head: list[dict[str, Any]],
+    pool: list[dict[str, Any]],
+    limit: int,
+) -> set[tuple[str, Any]]:
+    """Tail rows about a different person sharing a name with a named one.
+
+    Only when there is a tail to fill. Off the loop. On a failure the tail is
+    the unfiltered one (every row of it already passed the reader's
+    visibility), and the failure is logged.
+    """
+    if len(head) >= limit:
+        return set()
+    held = {(r.get("kind", "fact"), r.get("id")) for r in head}
+    tail = [r for r in pool if (r.get("kind", "fact"), r.get("id")) not in held]
+    if not tail:
+        return set()
+    from robothor.memory.tail_entities import confusable_tail_keys
+
+    try:
+        return await asyncio.to_thread(confusable_tail_keys, tenant_id, query, tail)
+    except Exception as e:  # noqa: BLE001 - the tail stays as filtered as the head
+        logger.warning("search_facts: entity-aware tail failed: %s: %s", type(e).__name__, e)
+        return set()
+
+
 def _fill_from_pool(
-    head: list[dict[str, Any]], pool: list[dict[str, Any]], limit: int
+    head: list[dict[str, Any]],
+    pool: list[dict[str, Any]],
+    limit: int,
+    drop: set[tuple[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """The reranked head, then the rest of the fused pool in fused order, to ``limit``.
 
@@ -1640,9 +1671,11 @@ def _fill_from_pool(
     (``RERANK_MAX_CANDIDATES``) and returns what it scored, so a caller asking
     for more rows than that used to get the head alone. The rest of the pool
     follows in fused order, unscored (``rerank_score`` None, relevance from its
-    fused rank), skipping a row already returned or a near-duplicate of one.
-    Every pool row came through the same filtered legs, so the tail obeys the
-    same tenant, scope, trust and reader rules as the head.
+    fused rank), skipping a row already returned, a near-duplicate of one, or
+    one in ``drop`` (``tail_entities.confusable_tail_keys``: a row about a
+    different person sharing a name with one the question names). Every pool
+    row came through the same filtered legs, so the tail obeys the same
+    tenant, scope, trust and reader rules as the head.
     """
     if len(head) >= limit:
         return head
@@ -1652,7 +1685,7 @@ def _fill_from_pool(
         if len(out) >= limit:
             break
         key = (row.get("kind", "fact"), row.get("id"))
-        if key in seen:
+        if key in seen or (drop and key in drop):
             continue
         if _dedup_enabled() and len(_dedupe([*out, row])) == len(out):
             continue
@@ -1880,7 +1913,9 @@ async def search_facts(
         return _dedup_enabled() and len(_dedupe([*unique_head, row])) == len(unique_head)
 
     result = apply_reserved(ranked, pool, limit, RESERVED_PLACES, exclude=_duplicates_head)
-    result = _fill_from_pool(result, pool, limit)
+    result = _fill_from_pool(
+        result, pool, limit, await _confusable_tail(query, _tenant, result, pool, limit)
+    )
     for r in result:
         if "relevance" not in r:  # a reserved pick or a tail row the blend never saw
             _assign_relevance([r])
