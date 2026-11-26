@@ -921,6 +921,36 @@ def test_a_record_that_was_not_sent_carries_its_mode_and_reason(mode, reason, au
         assert signal["reason"] == reason
 
 
+@pytest.mark.parametrize(
+    ("mode", "delivery", "reason"),
+    [
+        ("suppressed", {"level": "warning", "reason": "episode_open"}, "episode_open"),
+        ("delivery_failed", {"reason": "no_engine", "tenant": CHILD_A}, "no_engine"),
+        ("delivery_failed", {"level": "warning", "error": "not_delivered"}, "not_delivered"),
+    ],
+)
+def test_the_reason_the_engine_writes_is_the_reason_shown(mode, delivery, reason, audit_log):
+    """A record as the engine's alert intake writes it, read back by this router."""
+    from robothor.integrations.datadog import alerts as dd
+
+    written: list[dict[str, Any]] = []
+
+    def log_event(*args: Any, **kw: Any) -> dict[str, Any]:
+        written.append(kw["details"])
+        return {"id": 1}
+
+    alert = dd.parse_alert(
+        {"monitor_id": "1234", "transition": "Triggered", "tags": f"org:{CHILD_A}"}
+    )
+    with patch("robothor.audit.logger.log_event", side_effect=log_event):
+        dd._record(alert, CHILD_A, "org", "Checkout errors", {"mode": mode, "delivery": delivery})
+
+    (details,) = written
+    signal = _one(audit_log, "alerts", _alert_event(**details))
+    assert signal["mode"] == mode
+    assert signal["reason"] == reason
+
+
 def test_a_delivered_alert_reads_its_delivery_and_triage(audit_log):
     alert = _one(
         audit_log,
