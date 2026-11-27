@@ -155,3 +155,160 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content: {name: GENUS_TENANT_SWITCH_ALLOW_INERT_RLS, value: "false"}
+
+  # ─── Remote tools: a parent's agent calling a child company's tools ────────
+  # The bridge forwards each call and every engine admits it, so one mode and
+  # one attestation list reach all of them, beside the switch mode.
+  - it: renders remote tools as full by default on the root engine
+    template: engine/workload.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_TOOLS, value: full}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS}
+          any: true
+
+  - it: renders remote tools as full by default on the bridge
+    template: bridge/workload.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_TOOLS, value: full}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS}
+          any: true
+
+  - it: renders each remote tools mode as given (off)
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.remoteTools: "off"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_TOOLS, value: "off"}
+
+  - it: renders each remote tools mode as given (read)
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.remoteTools: read
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_TOOLS, value: read}
+
+  - it: renders each remote tools mode as given (dry_run)
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.remoteTools: dry_run
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_TOOLS, value: dry_run}
+
+  - it: an empty remote tools mode renders nothing, leaving the code's default
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.remoteTools: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_TOOLS}
+          any: true
+
+  - it: every tenant cell reads the remote tools mode and attestations
+    template: engine/tenants.yaml
+    set:
+      tenancy.remoteTools: read
+      tenancy.remoteAttestations: [baa, soc2]
+      tenants:
+        - id: acme-child-a
+        - id: acme-child-b
+    documentSelector:
+      path: kind
+      value: Deployment
+      matchMany: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_TOOLS, value: read}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS, value: "baa,soc2"}
+
+  - it: the bridge gets the attestations comma-joined
+    template: bridge/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.remoteAttestations: [baa, soc2]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS, value: "baa,soc2"}
+
+  - it: the root engine gets the attestations comma-joined
+    template: engine/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.remoteAttestations: [baa]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS, value: baa}
+
+  - it: the orchestrator never gets the remote tools settings
+    template: orchestrator/workload.yaml
+    documentIndex: 0
+    set:
+      tenancy.remoteAttestations: [baa]
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_TOOLS}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_ATTESTATIONS}
+          any: true
+
+  - it: a cell's own env still wins over the remote tools mode
+    template: engine/tenants.yaml
+    set:
+      tenancy.remoteTools: full
+      tenants:
+        - id: acme-child-a
+          env:
+            GENUS_ORG_REMOTE_TOOLS: "off"
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GENUS_ORG_REMOTE_TOOLS, value: "off"}
+
+  # The code reads an unknown mode as `off`; a typo would silently stop every
+  # remote call, so it fails here instead.
+  - it: rejects an unknown remote tools mode
+    template: engine/workload.yaml
+    set:
+      tenancy.remoteTools: dryrun
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenancy.remoteTools must be one of off, read, dry_run, full"
+
+  - it: rejects an attestation that is not a lowercase token
+    template: engine/workload.yaml
+    set:
+      tenancy.remoteAttestations: [BAA]
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenancy.remoteAttestations"
