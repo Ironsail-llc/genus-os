@@ -88,11 +88,16 @@ class TestAnOpenConflict:
 
 
 class TestThePlacedRow:
-    def test_an_earlier_row_has_the_full_row_shape_with_null_scores(self):
+    def test_an_earlier_row_has_the_full_row_shape_with_zero_scores(self):
+        # Callers format rows with round(r.get("similarity", 0), 4): a score
+        # key is a number, never None (rerank_score keeps its documented None,
+        # "not reranked").
         cur, old = _pair()
         assert set(cur) - {"metadata"} <= set(old)
-        for key in ("similarity", "rerank_score", "rrf_score", "fused_rank"):
-            assert old[key] is None
+        assert old["similarity"] == 0.0 and old["rrf_score"] == 0.0
+        assert old["rerank_score"] is None
+        assert old["fused_rank"] == cur["fused_rank"]
+        assert round(old.get("similarity", 0), 4) == 0.0
         assert old["leg_scores"] == {}
         assert old["leg_ranks"] == cur["leg_ranks"]
         assert old["earlier_of"] == 2
@@ -128,6 +133,52 @@ class TestThePlacedRow:
             earlier={2: [_old(1, "Bob prefers tea over coffee.", 2)]},
         )
         assert [r["id"] for r in rows] == [2, 1]
+
+
+class TestEveryCallerOfSearchFacts:
+    """Each consumer of search_facts rows must take an earlier row: the RAG
+    pipeline's compat wrapper and its context formatter, deep reason, and the
+    nightly preference drift check."""
+
+    def test_the_rag_wrapper_labels_and_formats_an_earlier_row(self):
+        from robothor.memory import facts
+        from robothor.rag.context import format_merged_context
+
+        with patch.object(facts, "search_facts", AsyncMock(return_value=_pair())):
+            rows = facts.search_facts_compat("Where does Alice live?")
+        assert [r["id"] for r in rows] == [2, 1]
+        assert rows[1]["content"].startswith("Earlier value, replaced 2026-05-01: ")
+        assert all(isinstance(r["similarity"], float) for r in rows)
+        context = format_merged_context(rows, [])
+        assert "Earlier value, replaced 2026-05-01: Alice lives in Boston." in context
+
+    def test_deep_reason_search_memory_takes_an_earlier_row(self, monkeypatch):
+        import json as _json
+
+        from robothor.engine import rlm_tool
+
+        monkeypatch.setattr("robothor.memory.facts.search_facts", AsyncMock(return_value=_pair()))
+        monkeypatch.setattr(rlm_tool, "_as_tenant", lambda _t, call: call())
+        out = _json.loads(rlm_tool._make_search_memory_fn(tenant_id="test-tenant")("Alice"))
+        assert out[1]["fact"].startswith("Earlier value, replaced 2026-05-01: ")
+        assert out[1]["similarity"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_the_drift_check_takes_an_earlier_row(self, monkeypatch):
+        from robothor.memory import preferences
+
+        rows = _pair()
+        for r in rows:
+            r["created_at"] = _NOW
+        monkeypatch.setattr("robothor.memory.facts.search_facts", AsyncMock(return_value=rows))
+        prefs = [{"preference": "Alice lives in Boston", "last_confirmed": "2026-01-01"}]
+        monkeypatch.setattr(preferences, "_load_preferences", lambda _t: prefs)
+        saved: list[Any] = []
+        monkeypatch.setattr(preferences, "_save_preferences", lambda p, _t: saved.append(p))
+        out = await preferences.detect_drift("test-tenant")
+        assert out["checked"] == 1
+        # Only the current row counts as evidence; the earlier value never does.
+        assert prefs[0].get("stale_evidence_fact_ids") == [2]
 
 
 class TestPacking:
