@@ -597,9 +597,9 @@ class TestTheDecisionTable:
 
     @pytest.mark.parametrize(
         ("wording", "old_dated", "action"),
-        [(True, False, "close"), (False, False, "unresolved"), (True, True, "unresolved")],
+        [(True, False, "unresolved"), (False, False, "unresolved"), (True, True, "unresolved")],
     )
-    def test_a_worded_change_dated_before_an_undated_value_was_recorded(
+    def test_a_change_dated_before_an_undated_value_was_recorded_never_closes(
         self, wording, old_dated, action
     ):
         assert (
@@ -843,20 +843,27 @@ class TestNoModelFreeClose:
 
 class TestEventTime:
     @pytest.mark.asyncio
-    async def test_an_undated_current_value_and_an_older_dated_change(self, monkeypatch):
-        # The judge is told the new event predates the existing record. Its
-        # "earlier" files the new fact as history; its "changed" closes only
-        # with change wording in the new text ("moved"), else both stay.
+    async def test_an_undated_current_value_is_never_closed_by_an_older_dated_change(
+        self, monkeypatch
+    ):
+        # "Moved to Denver in 2019" against an undated "lives in Boston":
+        # Boston stays current whatever the judge says and whatever the
+        # wording. "earlier" files the new fact as history; anything else keeps
+        # both, with the conflict recorded.
         s = _Store(monkeypatch, slot_rows=[_row(7, "Alice lives in Boston.")], outcome="earlier")
         out = await s("Alice moved to Denver in 2019.", event_time="2019-06-01")
         assert out["action"] == "stored_history" and s.closed() == []
-        s = _Store(monkeypatch, slot_rows=[_row(7, "Alice lives in Boston.")], outcome="changed")
-        out = await s("Alice lives in Denver.", event_time="2019-06-01")
-        assert out["action"] == "stored" and s.closed() == []
-        assert s.actions() == ["conflict_unresolved"]
-        s = _Store(monkeypatch, slot_rows=[_row(7, "Alice lives in Boston.")], outcome="changed")
-        out = await s("Alice moved to Denver.", event_time="2026-11-15")
-        assert out["action"] == "superseded"
+        for text, when in (
+            ("Alice moved to Denver in 2019.", "2019-06-01"),
+            ("Alice moved to Denver.", "2026-11-15"),
+            ("Alice lives in Denver.", "2019-06-01"),
+        ):
+            s = _Store(
+                monkeypatch, slot_rows=[_row(7, "Alice lives in Boston.")], outcome="changed"
+            )
+            out = await s(text, event_time=when)
+            assert out["action"] == "stored" and s.closed() == [], text
+            assert s.actions() == ["conflict_unresolved"]
 
     @pytest.mark.asyncio
     async def test_a_bad_future_date_on_the_old_value_is_ignored(self, monkeypatch):
