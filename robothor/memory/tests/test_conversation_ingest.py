@@ -56,6 +56,8 @@ class Store:
         self.loads = 0
         self.claimed_by: str | None = None
         self.claims_refused = False
+        self.lease_lost = False
+        self.renewals = 0
         self.released = 0
         self.reowned: list[Any] = []
         self.fresh_from: int | None = None  # refs from here on are "just written"
@@ -94,6 +96,15 @@ class Store:
         assert token == self.claimed_by
         self.failures += 1
         return self.failures
+
+    def renew(self, session_key: str, tenant_id: str, token: str) -> bool:
+        self._seen()
+        self.renewals += 1
+        return self.claimed_by == token and not self.lease_lost
+
+    def newest(self, session_key: str, tenant_id: str) -> int:
+        self._seen()
+        return max((t.ref for t in self.turns), default=0)
 
     def release(self, session_key: str, tenant_id: str, token: str) -> None:
         self._seen()
@@ -197,6 +208,8 @@ async def _run(
         patch.object(ci, "_advance", side_effect=store.advance),
         patch.object(ci, "_fail", side_effect=store.fail),
         patch.object(ci, "_release", side_effect=store.release),
+        patch.object(ci, "_renew", side_effect=store.renew, create=True),
+        patch.object(ci, "_newest_ref", side_effect=store.newest, create=True),
         patch.object(ci, "_record_skip", side_effect=store.skip, create=True),
         patch.object(ci, "_reown", side_effect=store.reown, create=True),
         patch.object(ci, "_schedule", side_effect=lambda delay, fn: later.append((delay, fn))),
@@ -234,6 +247,8 @@ async def _run_with(store: Store, model: Model, fn: Any) -> None:
         patch.object(ci, "_advance", side_effect=store.advance),
         patch.object(ci, "_fail", side_effect=store.fail),
         patch.object(ci, "_release", side_effect=store.release),
+        patch.object(ci, "_renew", side_effect=store.renew, create=True),
+        patch.object(ci, "_newest_ref", side_effect=store.newest, create=True),
         patch.object(ci, "_record_skip", side_effect=store.skip),
         patch.object(ci, "_reown", side_effect=store.reown, create=True),
         patch.object(ci, "_schedule", side_effect=lambda delay, f: None),
@@ -721,3 +736,35 @@ async def test_only_an_answer_the_model_gave_counts_toward_skipping() -> None:
     store = Store(_stored(2), scope=("user", f"person:{ALICE}"))
     await _run(store, Model(fail=True))  # it answered, but not in the shape asked for
     assert store.failures == 1
+
+
+# ═══ the lease is renewed while a run works, and handed off cleanly ══════
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_lost_its_lease_writes_nothing_more() -> None:
+    store = Store(_stored(4), scope=("user", f"person:{ALICE}"))
+    store.lease_lost = True  # another run took over while this one extracted
+    out, write = await _run(store, Model())
+    assert store.renewals >= 1
+    write.assert_not_awaited()
+    assert store.watermark == 0 and out is None
+
+
+@pytest.mark.asyncio
+async def test_turns_stored_while_a_run_works_are_handed_to_a_follow_up() -> None:
+    store = Store(_stored(2), scope=("user", f"person:{ALICE}"))
+
+    class Arriving(Model):
+        async def generate(self, prompt: str, **kw: Any) -> str:
+            if len(store.turns) == 2:
+                store.turns += _stored(2, first_ref=3)  # the next exchange is saved meanwhile
+            return await super().generate(prompt, **kw)
+
+    later: list[Any] = []
+    await _run(store, Arriving(), history=[], scheduled=later)
+    assert store.watermark == 2 and len(later) == 1
+
+
+def test_a_waiter_outlasts_a_lease() -> None:
+    assert ci.CLAIM_RETRY_SECONDS * ci.MAX_FOLLOW_UPS > ci.CLAIM_LEASE_SECONDS
