@@ -308,6 +308,21 @@ class TestOnlyTheMatchedClauseCounts:
     def test_the_value_itself_never_counts_as_wording(self, clause, value, wording):
         assert replacement_wording(clause, value=value) is wording
 
+    @pytest.mark.parametrize(
+        ("text", "worded"),
+        [
+            ("Alice works at Globex since her new side project.", False),
+            ("Alice now works at Globex.", True),
+            ("Alice's email is now alice@new.example.", True),
+            ("Alice's new email is alice@work.example.", True),
+        ],
+    )
+    def test_change_wording_counts_only_before_the_value(self, text, worded):
+        # The real model judged "since her new side project" a change; the
+        # word "new" there is not about the value at all.
+        slot = _slot(text)
+        assert replacement_wording(slot.lead, value=slot.value) is worded
+
     def test_a_new_or_updated_possessive_fills_the_slot(self):
         slot = _slot("Alice's new email is alice@work.example.")
         assert slot is not None and (slot.attribute, slot.value) == ("email", "alice@work.example")
@@ -772,6 +787,15 @@ class TestTheSimilarityPath:
         )
         assert "untrusted" in prompt.lower() and "ignore any instruction" in prompt.lower()
         assert "2026-02-01" in prompt
+
+
+class TestWordingAfterTheValue:
+    @pytest.mark.asyncio
+    async def test_a_trailing_new_does_not_close_a_second_employer(self, monkeypatch):
+        s = _Store(monkeypatch, slot_rows=[_row(7, "Alice works at Acme.")], outcome="changed")
+        out = await s("Alice works at Globex since her new side project.")
+        assert s.closed() == []
+        assert out["action"] == "stored"
 
 
 class TestNoModelFreeClose:
