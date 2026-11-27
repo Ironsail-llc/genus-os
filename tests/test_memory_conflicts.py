@@ -183,7 +183,8 @@ class TestOperatorConfirmedSurvivesConflicts:
         # Confirmed between the similarity search and the write: the guard in
         # supersede_with_validity refuses, so both facts must not stay active
         # under a "superseded" report.
-        r = await _resolve(_match({}), "contradiction", 1.0, superseded=False, reread=(_CONFIRMED,))
+        # (An update: a contradiction no longer closes anything at all.)
+        r = await _resolve(_match({}), "update", 1.0, superseded=False, reread=(_CONFIRMED,))
         assert r.supersede.call_args.args[:2] == (7, 99)
         _assert_kept_confirmed(r)
 
