@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
-WORLD_SCHEMA_VERSION = 1
+WORLD_SCHEMA_VERSION = 2
 
 #: Where a fact's knowledge came from. Outcome learning and poisoning
 #: defences weigh these differently, so every fact carries exactly one.
@@ -71,6 +71,10 @@ STRATA: tuple[str, ...] = (
     # its supporting facts except the names (the originals share their one
     # rare word with the second-hop fact). Same pairs, gold and split.
     "multi_hop_paraphrase",
+    # Answers said only in multi-session conversations written for it: a
+    # detail deep in a long message, one changed in a later session, one that
+    # needs three sessions. Last, so the others keep their order and cases.
+    "conversation_recall",
 )
 
 #: Rewordings of the multi-hop questions, by kind; one is chosen per case by a
@@ -244,6 +248,8 @@ class WorldSize:
     shadow_organisations: int
     shadow_locations: int
     max_cases_per_stratum: int
+    #: Conversations of the ``conversation_recall`` stratum (four cases each).
+    recall_conversations: int = 0
 
 
 WORLD_SIZES: dict[str, WorldSize] = {
@@ -264,6 +270,7 @@ WORLD_SIZES: dict[str, WorldSize] = {
         shadow_organisations=4,
         shadow_locations=4,
         max_cases_per_stratum=40,
+        recall_conversations=6,
     ),
     "full": WorldSize(
         name="full",
@@ -282,6 +289,7 @@ WORLD_SIZES: dict[str, WorldSize] = {
         shadow_organisations=10,
         shadow_locations=6,
         max_cases_per_stratum=240,
+        recall_conversations=40,
     ),
 }
 
@@ -503,6 +511,26 @@ class RawDetail:
 
 
 @dataclass(frozen=True)
+class ConversationRecall:
+    """A ``conversation_recall`` question and what answers it, in one conversation.
+
+    ``id`` is the case id without the stratum (``cvr-01:far``); ``kind`` is
+    ``near`` / ``far`` (a detail in a long message, beside the question's
+    words or far from them), ``update`` (changed in a later session) or
+    ``multi_session`` (three sessions). ``rivals`` are wrong answers the
+    conversation also states: the superseded value, the other two suppliers.
+    """
+
+    id: str
+    conversation_id: str
+    kind: str
+    question: str
+    gold: tuple[str, ...]
+    rivals: tuple[str, ...]
+    turn_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class PlantedClaim:
     """A false relation asserted by an untrusted document."""
 
@@ -564,6 +592,8 @@ class World:
     cases: tuple[Case, ...]
     #: The second tenant's world (shares some person names, nothing else).
     shadow: World | None = None
+    #: What the ``conversation_recall`` conversations answer (primary only).
+    conversation_recall: tuple[ConversationRecall, ...] = ()
 
 
 # --------------------------------------------------------------------------- #
@@ -663,8 +693,17 @@ def generate_world(seed: int, size: str | WorldSize = "full") -> World:
     ).build()
 
     cases = _CaseBuilder(primary, shadow, spec.max_cases_per_stratum).build()
+    # Its own random stream, built after everything else: the rest of the
+    # world, and every other stratum's cases, are what they were without it.
+    recall_convs, recall = _conversation_recall(
+        random.Random(seed * 1_000_033 + 911), spec.recall_conversations
+    )
+    cases += _recall_cases(recall, spec.max_cases_per_stratum)
+    built = primary.world(seed, spec.name, cases=())
     return dataclasses.replace(
-        primary.world(seed, spec.name, cases=()),
+        built,
+        conversations=built.conversations + recall_convs,
+        conversation_recall=recall,
         cases=tuple(cases),
         shadow=shadow.world(seed, spec.name, cases=()),
     )
@@ -1960,6 +1999,229 @@ class _CaseBuilder:
                         p.id,
                         forbidden=(surface,),
                     )
+
+
+# --------------------------------------------------------------------------- #
+# conversation_recall: answers said only in long, multi-session conversations
+# --------------------------------------------------------------------------- #
+
+#: Shops whose fit-out the operator talks through with the assistant. No word
+#: here is a world name; none is a word another stratum's questions use.
+_ACCOUNT_A = (
+    "Copper", "Meadow", "Granite", "Juniper", "Saffron",
+    "Harbour", "Bramble", "Thistle", "Marigold", "Pebble",
+)  # fmt: skip
+_ACCOUNT_B = ("Bakery", "Dental", "Garage", "Florists", "Printers", "Cycles", "Cafe", "Bookshop")
+_SUPPLIER_A = (
+    "Abbot", "Cobble", "Dimple", "Fennel", "Gusset", "Hobble",
+    "Inkle", "Jumble", "Lintel", "Mantle", "Nettle", "Pippin",
+)  # fmt: skip
+_SUPPLIER_B = (
+    "Fixtures", "Joinery", "Shopfitters", "Racking", "Interiors",
+    "Carpentry", "Fittings", "Storage", "Benchworks", "Cabinets",
+)  # fmt: skip
+
+#: Sentences of a pasted site note. They name no shop and share no word with
+#: any question of the stratum, so a far answer is far from every question word.
+_NOTE_FILLER = (
+    "The joiners want the back wall cleared by Wednesday evening so they can start first thing the next morning.",
+    "The electrician is coming back to move two of the sockets behind the counter, which should take about an hour.",
+    "We agreed to keep the old tiled floor in the front area and only sand and seal the boards at the back.",
+    "The window vinyls are printed and just need a dry day before anyone tries to put them up.",
+    "Someone needs to check whether the extractor fan in the back room is loud enough to bother the neighbours upstairs.",
+    "The painters prefer to do the ceiling before anything else goes in, so the counter delivery may have to wait.",
+    "The till system arrives in two boxes and the installer says the network cable has to be in place first.",
+    "We still owe the plumber for the second visit, and he has asked for a bank transfer rather than a cheque.",
+    "The fire extinguishers have to be serviced and tagged before the inspection later in the week.",
+    "There is a damp patch near the skirting that the landlord has promised to look at before the opening weekend.",
+    "The new lights are much warmer than the old ones, which everyone prefers, though two fittings arrived cracked.",
+    "Bins go out on Tuesday nights, and the council has asked us not to leave cardboard flat on the pavement.",
+    "The sign writer needs the final wording by the end of the week or the slot moves to the following one.",
+    "Wi-fi in the back is patchy, so a second access point near the stockroom would help the card reader.",
+    "The cleaning crew will come in after the builders finish and do a deep clean of every surface.",
+    "A neighbour asked whether the scaffolding can come down before their own builders arrive on Monday.",
+    "The insurance renewal needs photos of the finished interior, so nobody should rush the last coat of paint.",
+    "The van hire is booked for a whole day, which gives enough time to take the old fittings to the tip.",
+    "The fridge and microwave for the staff room can come from the old premises rather than being bought new.",
+    "The opening hours on the website still show the old times and need changing before the launch.",
+    "Two of the stools wobble badly, and the maker has offered to swap them at no extra cost.",
+    "The alarm installer wants a list of key holders with phone numbers before he finishes the setup.",
+    "We are still waiting on the landlord's signature for the new lease clause about the back room.",
+    "A local photographer has offered to take pictures on the first morning in exchange for a mention online.",
+)  # fmt: skip
+_SHORT_ASKS = (
+    "Quick check on {acct}: is the snagging list up to date?",
+    "Can you remind me what is still open for {acct}?",
+    "Anything new from the builders at {acct} today?",
+    "Can you draft a short note to the landlord about the {acct} works?",
+    "What did we agree about the {acct} opening weekend?",
+    "Is the {acct} insurance renewal sorted yet?",
+)
+
+
+def _conversation_recall(
+    rng: random.Random, n: int
+) -> tuple[tuple[Conversation, ...], tuple[ConversationRecall, ...]]:
+    """``n`` conversations of four sessions each, and their four questions.
+
+    Each session is one long pasted note (well over 1,200 characters) and
+    three short exchanges. Session 1 states the dock door and one shelving
+    price; session 2 an order reference (beside the question's words) and a
+    second price; session 3 a gate code more than 1,200 characters after the
+    words that ask for it; session 4 the changed dock door and the third
+    price. Nothing here becomes a fact: the answers exist only as conversation.
+    """
+    accounts = [f"{a} {b}" for a in _ACCOUNT_A for b in _ACCOUNT_B]
+    suppliers = [f"{a} {b}" for a in _SUPPLIER_A for b in _SUPPLIER_B]
+    rng.shuffle(accounts)
+    rng.shuffle(suppliers)
+    codes = rng.sample(range(1000, 10000), n)
+    refs = rng.sample(range(10000, 100000), n)
+    convs: list[Conversation] = []
+    recall: list[ConversationRecall] = []
+    for k in range(n):
+        acct, cid = accounts[k], f"cvr-{k + 1:02d}"
+        old_door, new_door = rng.randint(1, 19), rng.randint(20, 39)
+        trio = tuple(suppliers[3 * k : 3 * k + 3])
+        prices = rng.sample(range(320, 480), 3)
+        code = f"{codes[k]}-{rng.choice('BCDFGHJKLMNPRSTVWXZ')}"
+        ref = f"PO-{refs[k]}"
+        start = date(2025, 1, 6) + timedelta(days=rng.randrange(240))
+        dates = [start]
+        for _ in range(3):
+            dates.append(dates[-1] + timedelta(days=rng.randint(9, 30)))
+
+        def note(planted: list[str], acct: str = acct) -> str:
+            body = rng.sample(_NOTE_FILLER, 11)
+            for sentence in planted:
+                body.insert(rng.randint(3, len(body)), sentence)
+            return " ".join([f"My notes from today's visit to {acct}:", *body])
+
+        price = [f"{p * 10:,}" for p in prices]
+        notes = [
+            note(
+                [
+                    f"For now, deliveries for {acct} should come to dock door {old_door}, "
+                    "because the other entrances belong to the restaurant.",
+                    f"{trio[0]} sent their shelving price for {acct}: {price[0]} pounds, fitted.",
+                ]
+            ),
+            note(
+                [
+                    # The value sits between the words that ask for it.
+                    f"The order reference {ref} belongs to the {acct} spring catalogue; "
+                    "put it on every invoice that goes out.",
+                    f"{trio[1]} came back with a shelving price for {acct} of {price[1]} pounds, "
+                    "fitted.",
+                ]
+            ),
+            " ".join(
+                [
+                    f"Notes from this morning's walk-round of the {acct} loading yard, mostly "
+                    "about the gate code that keeps failing:",
+                    *rng.sample(_NOTE_FILLER, 13),
+                    f"In the end the site supervisor texted it over: {code}, and it changes on "
+                    "the first of every month.",
+                ]
+            ),
+            note(
+                [
+                    f"Change of plan on deliveries for {acct}: from this week they go to dock "
+                    f"door {new_door}, not dock door {old_door}, since the old entrance is being "
+                    "bricked up.",
+                    f"The last shelving price for {acct} is in from {trio[2]}: {price[2]} pounds, "
+                    "fitted.",
+                ]
+            ),
+        ]
+        sessions: list[ChatSession] = []
+        note_turns: list[str] = []
+        for s_ix, (when, text) in enumerate(zip(dates, notes, strict=True)):
+            sid = f"{cid}/s{s_ix + 1:03d}"
+            pairs = [
+                (
+                    rng.choice(_SHORT_ASKS).format(acct=acct),
+                    "From your notes: " + " ".join(rng.sample(_NOTE_FILLER, 2)),
+                )
+                for _ in range(3)
+            ]
+            # The gate code note ends its session and its reply names no shop,
+            # so no question word follows the far answer.
+            far = s_ix == 2
+            at = 3 if far else rng.randint(0, 3)
+            ack = "Thanks, I have filed those notes." if far else f"Thanks, filed under {acct}."
+            pairs.insert(at, (text, ack))
+            turns: list[Turn] = []
+            for user, assistant in pairs:
+                for role, said in (("user", user), ("assistant", assistant)):
+                    minute = len(turns)
+                    stamp = f"{when.isoformat()}T10:{minute:02d}:00+00:00"
+                    turns.append(Turn(f"{sid}/t{minute + 1:03d}", role, said, stamp))
+            note_turns.append(turns[2 * at].id)
+            sessions.append(ChatSession(sid, when.isoformat(), tuple(turns)))
+        convs.append(Conversation(cid, f"{acct} fit-out", tuple(sessions)))
+        lowest = min(range(3), key=lambda i: prices[i])
+        quote_turns = (note_turns[0], note_turns[1], note_turns[3])
+        recall += [
+            ConversationRecall(
+                f"{cid}:near",
+                cid,
+                "near",
+                f"What is the order reference for the {acct} spring catalogue?",
+                (ref,),
+                (),
+                (note_turns[1],),
+            ),
+            ConversationRecall(
+                f"{cid}:far",
+                cid,
+                "far",
+                f"What is the gate code for the {acct} loading yard?",
+                (code,),
+                (),
+                (note_turns[2],),
+            ),
+            ConversationRecall(
+                f"{cid}:update",
+                cid,
+                "update",
+                f"Which dock door do deliveries for {acct} go to now?",
+                (f"dock door {new_door}", f"door {new_door}"),
+                (f"dock door {old_door}",),
+                (note_turns[3],),
+            ),
+            ConversationRecall(
+                f"{cid}:multi_session",
+                cid,
+                "multi_session",
+                f"Of the three shelving prices for {acct}, which supplier was the lowest?",
+                (trio[lowest],),
+                tuple(trio[i] for i in range(3) if i != lowest),
+                quote_turns,
+            ),
+        ]
+    return tuple(convs), tuple(recall)
+
+
+def _recall_cases(recall: tuple[ConversationRecall, ...], cap: int) -> list[Case]:
+    """The ``conversation_recall`` cases, capped as every stratum is."""
+    stratum = "conversation_recall"
+    cases = [
+        Case(
+            id=f"{stratum}:{r.id}",
+            stratum=stratum,
+            question=r.question,
+            gold=r.gold,
+            supporting_ids=r.turn_ids,
+            as_of=None,
+            split=split_for(f"{stratum}:{r.id}"),
+            subject_id=r.conversation_id,
+        )
+        for r in recall
+    ]
+    if len(cases) > cap:
+        cases = sorted(cases, key=lambda c: hashlib.sha256(c.id.encode()).hexdigest())[:cap]
+    return sorted(cases, key=lambda c: c.id)
 
 
 __all__ = [
