@@ -342,3 +342,53 @@ def test_a_consolidation_of_one_owners_facts_moves_and_a_mixed_one_is_reported(
     rescope_conversation_facts(TENANT, apply=True)
     assert _scope(world, later) == ("user", ALICE_P)  # followed through the chain
     assert _scope(world, mixed) == ("shared", None)  # it also holds a shared note
+
+
+def _superseding(world: World, text: str, old: int, *, source: str, origin: str | None) -> int:
+    """A shared fact from another source that superseded or overruled ``old``."""
+    new = int(
+        world.db.one(
+            "INSERT INTO memory_facts (fact_text, category, tenant_id, source_type, origin, "
+            "content_hash) VALUES (%s, 'personal', %s, %s, %s, md5(%s)) RETURNING id",
+            (text, TENANT, source, origin, text),
+        )
+    )
+    world.db.q(
+        "UPDATE memory_facts SET is_active = FALSE, superseded_by = %s WHERE id = %s", (new, old)
+    )
+    return new
+
+
+def test_only_consolidations_are_followed_never_a_fact_that_superseded_one(
+    world: World,
+) -> None:
+    from robothor.memory.conversation_backfill import rescope_conversation_facts
+
+    store_chat(world.db, "telegram:4242", [("user", "hi")], person=ALICE)
+    a = _old_fact(world, "Reader Person lives in Paris.", "telegram:4242")
+    b = _old_fact(world, "Reader Person prefers email.", "telegram:4242")
+    email = _superseding(
+        world, "Reader Person lives in Berlin.", a, source="email", origin="external"
+    )
+    kept = _superseding(
+        world, "Reader Person prefers phone.", b, source="note", origin="operator_confirmed"
+    )
+    report = rescope_conversation_facts(TENANT, apply=True)
+    assert _scope(world, a) == ("user", ALICE_P) and _scope(world, b) == ("user", ALICE_P)
+    assert _scope(world, email) == ("shared", None)  # an independent fact keeps its scope
+    assert _scope(world, kept) == ("shared", None)  # an operator-confirmed one too
+    assert report["consolidated_rescoped"] == 0
+
+
+def test_a_consolidation_split_across_batches_is_counted_once(world: World) -> None:
+    from robothor.memory.conversation_backfill import rescope_conversation_facts
+
+    store_chat(world.db, "telegram:4242", [("user", "hi")], person=ALICE)
+    a = _old_fact(world, "Reader Person prefers dark roast.", "telegram:4242")
+    b = _old_fact(world, "Reader Person drinks it black.", "telegram:4242")
+    both = _consolidated(world, "Reader Person takes dark roast, black.", [a, b])
+    for apply in (False, True):
+        report = rescope_conversation_facts(TENANT, apply=apply, batch=1)
+        assert report["consolidated_rescoped"] == 1
+        assert report["consolidated_left_shared"] == 0
+    assert _scope(world, both) == ("user", ALICE_P)
