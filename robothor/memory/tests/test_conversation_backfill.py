@@ -392,3 +392,21 @@ def test_a_consolidation_split_across_batches_is_counted_once(world: World) -> N
         assert report["consolidated_rescoped"] == 1
         assert report["consolidated_left_shared"] == 0
     assert _scope(world, both) == ("user", ALICE_P)
+
+
+def test_a_consolidation_reached_again_through_a_nested_one_is_judged_again(
+    world: World,
+) -> None:
+    """C holds old fact a and consolidation D (which holds old fact x), reached
+    through paths of different depths: C must move once D has."""
+    from robothor.memory.conversation_backfill import rescope_conversation_facts
+
+    store_chat(world.db, "telegram:4242", [("user", "hi")], person=ALICE)
+    a = _old_fact(world, "Reader Person prefers dark roast.", "telegram:4242")
+    x = _old_fact(world, "Reader Person drinks it black.", "telegram:4242")
+    d1 = _consolidated(world, "Reader Person drinks black coffee.", [x])
+    d = _consolidated(world, "Reader Person drinks black coffee daily.", [d1])
+    c = _consolidated(world, "Reader Person takes dark roast, black, daily.", [a, d])
+    report = rescope_conversation_facts(TENANT, apply=True)
+    assert _scope(world, c) == ("user", ALICE_P)
+    assert report["consolidated_left_shared"] == 0
