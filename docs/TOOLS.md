@@ -2458,6 +2458,15 @@ for what the agent can do, a fail naming the gate and the unlock for what it
 cannot. Not a verdict on the instance; it is where to look when an agent says it
 cannot do something the person expected. `--agent <id>` reports one agent.
 
+**`capabilities.remote_tools`** (recommended) — when `GENUS_ORG_REMOTE_TOOLS` is
+not `off` and the tenant has child tenants, fails for each agent that uses the
+remote tools (`main`, and any agent granted `org_tools`, `org_tool_read` or
+`org_tool_write`) which the bridge's `agent_capabilities.json` lists without
+`"GET /api/org/remote/*"` and `"POST /api/org/remote/call"` in its
+`bridge_endpoints`, naming the file and the patterns to add. An agent the file
+does not list passes: the remote routes are authorised by the `org:remote`
+scope.
+
 ### Autonomy first
 
 Genus OS runs agents **autonomously**. That is the default and the design: an
