@@ -147,3 +147,27 @@ async def test_an_out_of_credit_429_rotates_instead_of_backing_off(
     await eh.hosted_chat([{"role": "user", "content": "q"}], model="openai/gpt-4o")
     first, second = litellm_calls.calls
     assert first["api_key"] != second["api_key"], "the spent key is retired"
+
+
+@pytest.mark.asyncio
+async def test_out_of_credit_with_no_pooled_key_raises_without_back_off(litellm_calls, monkeypatch):
+    from robothor.engine import key_pool
+
+    for name in ("OPENAI_API_KEY", "OPENAI_API_KEY_2"):
+        monkeypatch.delenv(name, raising=False)
+    key_pool.reset_shared_pools()
+    slept: list[float] = []
+
+    async def _sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(eh, "_sleep", _sleep)
+    litellm_calls.replies.append(
+        _OutOfCreditError("You exceeded your current quota (insufficient_quota)")
+    )
+    try:
+        with pytest.raises(_OutOfCreditError):
+            await eh.hosted_chat([{"role": "user", "content": "q"}], model="openai/gpt-4o")
+    finally:
+        key_pool.reset_shared_pools()
+    assert slept == [] and len(litellm_calls.calls) == 1, "a spent account is not retried"
