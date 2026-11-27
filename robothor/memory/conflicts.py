@@ -446,7 +446,12 @@ def fact_slot(fact: Mapping[str, Any], *, owner: str | None = None) -> FactSlot 
     mention_entities = list(fact.get("mention_entities") or [])
     slot = _slot_from_relations(fact.get("relations") or [], mention_entities)
     if slot is not None:
-        return replace(slot, clause=clause, directive=directive, lead=clause)
+        # The words before the value, as for a frame; none when the value is
+        # not in the text (nothing then says it replaced another).
+        at = clause.lower().find(slot.value.lower())
+        return replace(
+            slot, clause=clause, directive=directive, lead=clause[:at] if at >= 0 else ""
+        )
     for attribute, pattern in _FRAMES:
         m = pattern.match(clause)
         if not m:
