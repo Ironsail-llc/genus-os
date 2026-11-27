@@ -347,6 +347,9 @@ class FactSlot:
     clause: str = ""
     #: The fact's text reads like an instruction to a classifier.
     directive: bool = False
+    #: The clause up to where the value starts: the only words that may say
+    #: the value replaced another ("Alice's email is now ...").
+    lead: str = ""
 
     @property
     def cardinality(self) -> str:
@@ -370,9 +373,7 @@ class FactSlot:
 
     def with_entity_ids(self, ids: Iterable[int]) -> FactSlot:
         keys = self.subject_keys | {f"entity:{int(i)}" for i in ids}
-        return FactSlot(
-            frozenset(keys), self.attribute, self.value, self.source, self.clause, self.directive
-        )
+        return replace(self, subject_keys=frozenset(keys))
 
     @property
     def owner(self) -> str:
@@ -445,7 +446,7 @@ def fact_slot(fact: Mapping[str, Any], *, owner: str | None = None) -> FactSlot 
     mention_entities = list(fact.get("mention_entities") or [])
     slot = _slot_from_relations(fact.get("relations") or [], mention_entities)
     if slot is not None:
-        return replace(slot, clause=clause, directive=directive)
+        return replace(slot, clause=clause, directive=directive, lead=clause)
     for attribute, pattern in _FRAMES:
         m = pattern.match(clause)
         if not m:
@@ -467,7 +468,14 @@ def fact_slot(fact: Mapping[str, Any], *, owner: str | None = None) -> FactSlot 
             if not other:
                 return None
             attribute = "prefers:" + "|".join(sorted((value, other)))
-        return FactSlot(keys, attribute, value, clause=clause, directive=directive)
+        return FactSlot(
+            keys,
+            attribute,
+            value,
+            clause=clause,
+            directive=directive,
+            lead=clause[: m.start("val")],
+        )
     return None
 
 
@@ -1496,7 +1504,7 @@ async def _decide_slot(
     # Each candidate's action from the judge: close, history, keep, skip, or
     # unresolved. A pair is asked once per stored fact, and in all at most
     # SLOT_CLASSIFY_TOTAL times; an unasked pair is left alone.
-    wording = replacement_wording(new_slot.clause, value=new_slot.value)
+    wording = replacement_wording(new_slot.lead, value=new_slot.value)
     today = datetime.now(UTC).date().isoformat()
     judged: list[tuple[dict[str, Any], str, str, str | None]] = []
     asked = 0
@@ -1870,7 +1878,7 @@ async def _rejudge(
         action = slot_action(
             outcome,
             new_slot.cardinality,
-            replacement_wording=replacement_wording(new_slot.clause, value=new_slot.value),
+            replacement_wording=replacement_wording(new_slot.lead, value=new_slot.value),
             order=_time_order(row.get("event_time"), partner),
             old_dated=old_event is not None and (old_recorded is None or old_event <= old_recorded),
         )

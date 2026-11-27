@@ -132,7 +132,7 @@ async def test_no_compatible_pair_is_closed() -> None:
             action = slot_action(
                 verdict.get("outcome"),
                 new_slot.cardinality,
-                replacement_wording=replacement_wording(new_slot.clause, value=new_slot.value),
+                replacement_wording=replacement_wording(new_slot.lead, value=new_slot.value),
                 order="earlier" if new_event else "later",
                 old_dated=False,
             )
