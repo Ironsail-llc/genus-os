@@ -584,6 +584,7 @@ class TelegramBot(
                     user_message_id=user_message_id,
                     reply_ctx=reply_ctx,
                     attachments=self._live_attachments(inbox, attachments),
+                    sender_telegram_id=(_user or {}).get("telegram_user_id"),
                 )
 
                 sent_messages: list[Any] = await early.result_or(run)

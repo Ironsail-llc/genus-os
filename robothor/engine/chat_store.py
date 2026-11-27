@@ -128,6 +128,7 @@ def build_user_extras(
     user_message_id: str | None = None,
     reply_ctx: dict[str, Any] | None = None,
     attachments: list[dict[str, Any]] | None = None,
+    sender_telegram_id: str | None = None,
 ) -> dict[str, Any] | None:
     """The additive JSONB fields recorded on one inbound user turn, or None.
 
@@ -143,7 +144,7 @@ def build_user_extras(
     ``telegram.py`` was two lines over its cap — and this is where it belonged
     anyway. A second inbound channel would otherwise have grown its own copy.)
     """
-    if not (user_message_id or reply_ctx or attachments):
+    if not (user_message_id or reply_ctx or attachments or sender_telegram_id):
         return None
     extras: dict[str, Any] = {}
     if attachments:
@@ -153,6 +154,10 @@ def build_user_extras(
         extras["attachments"] = list(attachments)
     if user_message_id:
         extras["telegram_message_id"] = user_message_id
+    if sender_telegram_id:
+        # Who sent it: conversation memory takes a turn as the chat owner's
+        # own words only when its sender is proven to be the owner.
+        extras["sender_telegram_id"] = str(sender_telegram_id)
     if reply_ctx:
         extras["replies_to"] = {
             "platform_message_id": str(reply_ctx.get("platform_message_id", "")),
@@ -161,6 +166,13 @@ def build_user_extras(
             "chat_message_id": reply_ctx.get("chat_message_id"),
         }
     return extras
+
+
+def with_sender(extras: dict[str, Any] | None, *, user_id: Any) -> dict[str, Any] | None:
+    """A webchat user turn's extras with its authenticated member (``sender_user_id``)."""
+    if not user_id:
+        return extras
+    return {**(extras or {}), "sender_user_id": str(user_id)}
 
 
 @contextlib.contextmanager

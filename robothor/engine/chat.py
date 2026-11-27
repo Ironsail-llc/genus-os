@@ -78,6 +78,7 @@ from robothor.engine.chat_store import (
     save_exchange_async,
     save_message_async,
     save_plan_state_async,
+    with_sender,
 )
 
 # Re-exported on purpose: chat_restore calls it through this module, so tests
@@ -460,7 +461,10 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                     channel="webchat",
                     model_override=session.model_override,
                     tenant_id=auth.tenant_id,
-                    user_extras=target.author(auth, name, attached.extras),
+                    user_extras=with_sender(
+                        target.author(auth, name, attached.extras),
+                        user_id=getattr(auth, "user_id", None),
+                    ),
                     user_at=received_at,
                 )
                 if target.room is None:

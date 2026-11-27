@@ -202,45 +202,69 @@ def _turn(
     )
 
 
-_TELEGRAM_PRIVATE = re.compile(r"telegram:\d+")
+_TELEGRAM_CHAT = re.compile(r"telegram:(\d+)")
 
 
-def one_to_one(session_key: str, person_id: str | None, main_session_key: str) -> bool:
-    """Whether a session has a single human sender by construction.
+def _owner_telegram_chat() -> str:
+    """The operator's default Telegram chat id (empty when none is configured)."""
+    try:
+        from robothor.engine.config import _default_chat_id
 
-    The operator's main session, a member's own webchat session
-    (``agent:{agent}:user:{uid}``), a private Telegram chat (a positive chat
-    id), or a session the CRM routed to one person. A Telegram group (a
-    negative chat id) and anything unrecognised are not.
-    """
-    if session_key == main_session_key:
-        return True
-    parts = session_key.split(":")
-    if len(parts) == 4 and parts[0] == "agent" and parts[2] == "user" and parts[3]:
-        return True
-    if session_key.startswith("telegram:"):
-        return _TELEGRAM_PRIVATE.fullmatch(session_key) is not None
-    return person_id is not None
+        return str(_default_chat_id() or "")
+    except Exception:  # no engine configuration: no Telegram owner
+        return ""
+
+
+def _per_user_sessions_on() -> bool:
+    """Whether webchat members each get their own session (so only the owner
+    role reaches the main session)."""
+    try:
+        from robothor.engine.feature_flags import per_user_sessions_mode
+
+        return per_user_sessions_mode() == "enforce"
+    except Exception:
+        return False
 
 
 class _Authors:
     """Decides, per stored user turn, whether the conversation's owner wrote it.
 
-    A turn naming its author (``author_user_id``, as webchat records it) is the
-    owner's when that member is the owner (the scope's member, or a member
-    linked to the scope's person). A turn naming only a display name is someone
-    else's. A turn naming no author is the owner's only when the session has a
-    single human sender by construction (:func:`one_to_one`) and no turn seen
-    names another author: once someone else speaks, an unmarked turn could be
-    anyone's.
+    Only by construction, from who the turn records as its sender, never by
+    assumption:
+
+    * a Telegram turn (``sender_telegram_id``) is the owner's when the session
+      is a direct chat and the sender is that chat's own person: a private chat
+      ``telegram:{id}`` (a positive id) whose sender is ``{id}``, or the main
+      session whose default chat is direct and whose sender is that chat;
+    * a webchat turn (``sender_user_id``, or ``author_user_id`` in a room) is the
+      owner's when that member is the owner (the scope's member, or a member
+      linked to the scope's person), or when it is in a main session that has a
+      single sender by construction: its default chat is direct and members
+      have their own sessions, so only the owner reaches it;
+    * a turn naming only a display name is someone else's;
+    * a turn recording no sender is the owner's only in a member's own session
+      (``agent:{agent}:user:{uid}``, one sender by construction). Anywhere else
+      (a Telegram turn stored without its sender, a group) it could be anyone's.
     """
 
-    def __init__(self, tenant_id: str, scope_id: str | None, single_sender: bool) -> None:
+    def __init__(self, tenant_id: str, scope_id: str | None, session_key: str, main: str) -> None:
         self.tenant = tenant_id
         self.scope_id = scope_id
-        self.single_sender = single_sender
         self._members: dict[str, bool] = {}
-        self.foreign_seen = False
+        parts = session_key.split(":")
+        self.member_key = (
+            len(parts) == 4 and parts[0] == "agent" and parts[2] == "user" and bool(parts[3])
+        )
+        self.direct_chat: str | None = None
+        self.main_single_sender = False
+        private = _TELEGRAM_CHAT.fullmatch(session_key)
+        if private:
+            self.direct_chat = private.group(1)
+        elif session_key == main:
+            chat = _owner_telegram_chat()
+            if chat.isdigit():
+                self.direct_chat = chat
+                self.main_single_sender = _per_user_sessions_on()
 
     def _member_is_owner(self, uid: str) -> bool:
         if uid not in self._members:
@@ -253,23 +277,16 @@ class _Authors:
             self._members[uid] = owner
         return self._members[uid]
 
-    def note(self, message: dict[str, Any]) -> None:
-        """See one stored message before any is judged."""
-        if message.get("role") != "user":
-            return
-        uid = message.get("author_user_id")
-        if uid:
-            self.foreign_seen = self.foreign_seen or not self._member_is_owner(str(uid))
-        elif message.get("author_display_name"):
-            self.foreign_seen = True
-
     def is_owner(self, message: dict[str, Any]) -> bool:
-        uid = message.get("author_user_id")
+        telegram = message.get("sender_telegram_id")
+        if telegram:
+            return self.direct_chat is not None and str(telegram) == self.direct_chat
+        uid = message.get("sender_user_id") or message.get("author_user_id")
         if uid:
-            return self._member_is_owner(str(uid))
+            return self.main_single_sender or self._member_is_owner(str(uid))
         if message.get("author_display_name"):
             return False
-        return self.single_sender and not self.foreign_seen
+        return self.member_key
 
 
 def _load_conversation(
@@ -328,11 +345,7 @@ def _load_conversation(
         last_rows = list(cur.fetchall())
     person_id = str(session["person_id"]) if session["person_id"] else None
     kind, sid = session_scope(tenant_id, session_key, person_id)
-    authors = _Authors(
-        tenant_id, sid, one_to_one(session_key, person_id, segments._main_session_key())
-    )
-    for row in (*before, *late_rows, *new, *last_rows):
-        authors.note(_message(row))
+    authors = _Authors(tenant_id, sid, session_key, segments._main_session_key())
     zone = _local_zone()
 
     def turns_of(rows: list[Any]) -> list[ConversationTurn]:
