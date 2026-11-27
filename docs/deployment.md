@@ -1351,9 +1351,7 @@ Each child company's card also carries a **Connected** block, read from
 `GET /api/org/connections` at the same moments as the figures: the company's
 plugins with their versions, their connection checks counted as ok, warn and
 fail with the failing ones named, and how many of its tools a parent's agent
-may use remotely, split into reads and writes. The header names the
-remote-tools mode once for the page (off, read only, dry run or full; the
-chart's `tenancy.remoteTools`). A company whose connections could not be read
+may use remotely, split into reads and writes. A company whose connections could not be read
 says so in one quiet line. Against a bridge without that route the cards read
 exactly as before, with no error.
 

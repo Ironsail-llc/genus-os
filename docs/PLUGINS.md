@@ -479,9 +479,8 @@ scan result) and blocks a malformed one: a key other than `read` and `write`,
 a tool named for both, or a tool the manifest does not declare as its own.
 Without it, the payload alone decides.
 
-What the child tenant's engine checks before the tool runs, in order: the
-remote-tools mode (`GENUS_ORG_REMOTE_TOOLS`), that the tool is declared and
-for that access, who is asking (an owner or admin of the parent, and an owner
+What the child tenant's engine checks before the tool runs, in order: that
+the tool is declared and for that access, who is asking (an owner or admin of the parent, and an owner
 for a write; or, with no person, the parent's child-data grant and the
 `parent_agent` role, reads only), the attestations, and the arguments against
 the tool's own schema. A write needs a request id and runs at most once for

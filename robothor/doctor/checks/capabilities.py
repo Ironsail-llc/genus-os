@@ -115,14 +115,12 @@ _REMOTE_TOOLS = ("org_tools", "org_tool_read", "org_tool_write")
 _GRANT_KEYS = ("tools_allowed", "tools_eager", "tools_opt_in")
 
 
-def _remote_facts(directory: Any) -> tuple[str, bool, list[str]]:
-    """``(mode, has children, agents that use remote tools)``. Blocking."""
-    from robothor.auth.runtime import org_remote_tools_mode
+def _remote_facts(directory: Any) -> tuple[bool, list[str]]:
+    """``(has children, agents that use remote tools)``. Blocking."""
     from robothor.doctor.checks.tools import _scan_manifests
     from robothor.engine.config import EngineConfig
     from robothor.engine.permissions import resolve_accessible_tenants
 
-    mode = org_remote_tools_mode()
     tenant = EngineConfig.from_env().tenant_id
     children = len(resolve_accessible_tenants(tenant, "owner")) > 1
     agents = {"main"}
@@ -130,7 +128,7 @@ def _remote_facts(directory: Any) -> tuple[str, bool, list[str]]:
         granted = {str(t) for key in _GRANT_KEYS for t in manifest.get(key) or ()}
         if granted & set(_REMOTE_TOOLS):
             agents.add(str(manifest.get("id")))
-    return mode, children, sorted(agents)
+    return children, sorted(agents)
 
 
 async def _remote_tools_reach(ctx: DoctorContext) -> list[Result]:
@@ -142,15 +140,12 @@ async def _remote_tools_reach(ctx: DoctorContext) -> list[Result]:
     403. Add the patterns the detail names to that agent's entry and restart
     the bridge, which reads the file only at start. An agent the file does not
     list needs nothing: the routes are authorised by the org:remote scope.
-    Skipped when remote tools are off or this tenant has no child tenants.
+    Skipped when this tenant has no child tenants.
     """
     from robothor.doctor.checks.tools import _manifest_dir
     from robothor.events.capabilities import manifest_path, missing_remote_endpoints
-    from robothor.tenancy.remote_contract import MODE_OFF
 
-    mode, children, agents = await ctx.run_blocking(_remote_facts, _manifest_dir(ctx))
-    if mode == MODE_OFF:
-        return [skip("remote tools are off (GENUS_ORG_REMOTE_TOOLS=off)")]
+    children, agents = await ctx.run_blocking(_remote_facts, _manifest_dir(ctx))
     if not children:
         return [skip("this tenant has no child tenants")]
     path = manifest_path()

@@ -113,35 +113,6 @@ def tenant_switch_mode() -> str:
     return mode if mode in TENANT_SWITCH_MODES else "off"
 
 
-#: The governed flag for remote tools; ``robothor.tenancy.remote_contract`` holds its rungs.
-ORG_REMOTE_TOOLS_FLAG = "GENUS_ORG_REMOTE_TOOLS"
-
-
-def org_remote_tools_mode() -> str:
-    """``off`` | ``read`` | ``dry_run`` | ``full``: how far remote tools may go.
-
-    Governed: an operator-written flag-store row wins over the environment,
-    which wins over the declared default (``full``). A value outside the four
-    rungs reads as ``off`` and is logged, so a typo never opens anything.
-    """
-    from robothor.flags import store
-    from robothor.settings import get_settings
-    from robothor.tenancy.remote_contract import REMOTE_MODES, normalise_mode
-
-    raw = store.resolve(ORG_REMOTE_TOOLS_FLAG)
-    if raw is None:
-        raw = get_settings().auth.org_remote_tools
-    mode = normalise_mode(raw)
-    if (raw or "").strip() and (raw or "").strip() not in REMOTE_MODES:
-        logger.warning(
-            "%s=%r is not one of %s; remote tools are off.",
-            ORG_REMOTE_TOOLS_FLAG,
-            raw,
-            "/".join(REMOTE_MODES),
-        )
-    return mode
-
-
 def org_remote_attestations() -> frozenset[str]:
     """The attestation tokens this deployment presents on remote calls.
 

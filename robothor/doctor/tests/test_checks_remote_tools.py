@@ -44,7 +44,6 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(workspace / "docs" / "agents"))
     monkeypatch.setenv("ROBOTHOR_TENANT_ID", PARENT)
     monkeypatch.setenv("ROBOTHOR_CAPABILITIES_MANIFEST", str(workspace / "caps.json"))
-    monkeypatch.setenv("GENUS_ORG_REMOTE_TOOLS", "full")
     reset_settings()
     capabilities.reset()
     yield workspace
@@ -125,18 +124,5 @@ async def test_skipped_without_children(instance) -> None:
     _caps(instance, {"main": {"tools": [], "bridge_endpoints": []}})
 
     (row,) = await _rows(children=False)
-
-    assert row.status == "skip"
-
-
-@pytest.mark.asyncio
-async def test_skipped_when_remote_tools_are_off(instance, monkeypatch) -> None:
-    from robothor.settings import reset_settings
-
-    monkeypatch.setenv("GENUS_ORG_REMOTE_TOOLS", "off")
-    reset_settings()
-    _caps(instance, {"main": {"tools": [], "bridge_endpoints": []}})
-
-    (row,) = await _rows()
 
     assert row.status == "skip"

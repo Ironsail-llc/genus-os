@@ -2,7 +2,7 @@
 
 The target engine's three routes under ``/api/admin/remote-tools``. The bridge
 is the only caller; it forwards what the parent's engine asked for, and this
-engine believes none of it beyond what it re-derives: the mode, the plugin's
+engine believes none of it beyond what it re-derives: the plugin's
 declaration, the person's standing (``acting_role``) or the parent's grant
 (``parent_agent_grant``), the attestations the declaration requires, the
 arguments against the tool's own schema. A write needs an owner and a request
@@ -243,7 +243,7 @@ def world(monkeypatch) -> Any:
         CAROL: {"id": CAROL, "tenant_id": PARENT, "role": "member", "status": "active"},
     }
     tree = {PARENT: (PARENT, CHILD), OTHER: (OTHER,), CHILD: (CHILD,)}
-    state: dict[str, Any] = {"mode": rc.MODE_FULL, "grant": {PARENT: True}}
+    state: dict[str, Any] = {"grant": {PARENT: True}}
     # (pattern, access, tenant) per role, as role_permissions holds them.
     rules: dict[str, list[tuple[str, str, str]]] = {
         "owner": [("*", "allow", "__default__")],
@@ -271,7 +271,6 @@ def world(monkeypatch) -> Any:
     monkeypatch.setattr(
         "robothor.crm.dal.tenant_child_data_access", lambda t: bool(state["grant"].get(t))
     )
-    monkeypatch.setattr("robothor.auth.runtime.org_remote_tools_mode", lambda: state["mode"])
     monkeypatch.setattr("robothor.engine.event_writer.get_event_writer", lambda: writer)
     monkeypatch.setattr("robothor.goals.runtime.admit_tool", lambda *a, **k: None)
     monkeypatch.setattr(remote_tools, "claim_request", ledger.claim)
@@ -382,48 +381,10 @@ async def test_only_the_bridge_may_call(world, auth, method, path) -> None:
     assert world.handlers.calls == []
 
 
-# ── the mode ─────────────────────────────────────────────────────────────────
+# ── a write ──────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    ("method", "path"),
-    [
-        ("GET", "/api/admin/remote-tools"),
-        ("GET", "/api/admin/remote-tools/acme_lookup"),
-        ("POST", "/api/admin/remote-tools/call"),
-    ],
-)
-async def test_off_refuses_everything(world, method, path) -> None:
-    world.state["mode"] = rc.MODE_OFF
-    kw = {"json": _body()} if method == "POST" else {}
-
-    _refusal(await _request(method, path, **kw), 403, rc.ERR_TOOLS_OFF)
-    assert world.handlers.calls == []
-
-
-async def test_read_mode_allows_reads_and_refuses_writes(world) -> None:
-    world.state["mode"] = rc.MODE_READ
-
-    assert (await _call(**_body())).status_code == 200
-    _refusal(await _call(**_write()), 403, rc.ERR_WRITE_FORBIDDEN)
-    assert [c[0] for c in world.handlers.calls] == ["acme_lookup"]
-
-
-async def test_dry_run_mode_forces_every_write_to_a_dry_run(world) -> None:
-    world.state["mode"] = rc.MODE_DRY_RUN
-
-    answer = await _call(**_write())
-
-    assert answer.status_code == 200, answer.text
-    payload = answer.json()
-    assert payload["outcome"] == rc.OUTCOME_DRY_RUN
-    assert payload["would"] == {"tool": "acme_update", "args": {"id": 7, "note": SECRET}}
-    assert payload["result"] is None
-    assert world.handlers.calls == []
-    assert world.ledger.rows == {}  # nothing reserved either
-
-
-async def test_full_mode_runs_a_write(world) -> None:
+async def test_a_write_runs(world) -> None:
     answer = await _call(**_write())
 
     assert answer.status_code == 200, answer.text
@@ -704,7 +665,7 @@ async def test_the_catalogue_lists_the_declared_tools_plugins_and_checks(world) 
     assert answer.status_code == 200, answer.text
     payload = answer.json()
     assert payload["tenant_id"] == CHILD
-    assert payload["mode"] == rc.MODE_FULL
+    assert "mode" not in payload
     assert payload["as_of"].endswith("Z")
     assert {"name": "acme-tools", "version": "1.2.3", "enabled": True} in payload["plugins"]
     tools = {tool["name"]: tool for tool in payload["tools"]}

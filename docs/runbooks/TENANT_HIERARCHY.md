@@ -163,20 +163,47 @@ same catalogue and each plugin's health to the parent's owner or admin.
 What has to be in place:
 
 1. The child's plugin declares the tool remote, and is enabled in the child.
-2. `GENUS_ORG_REMOTE_TOOLS` is `read`, `dry_run` or `full` on the parent's
-   engine, the bridge and the child's engine (the flag ladder is in
-   [GUARDRAIL_FLIPS.md](GUARDRAIL_FLIPS.md)).
-3. If the tool requires an attestation, the bridge's
+2. If the tool requires an attestation, the bridge's
    `GENUS_ORG_REMOTE_ATTESTATIONS` lists it. The bridge presents its own
    value; a request cannot claim one.
-4. Nothing, on a fresh install, at the bridge's capabilities manifest. The
+3. Nothing, on a fresh install, at the bridge's capabilities manifest. The
    engine's token for these routes carries the `org:remote` scope, which only
    the remote tools mint, and the bridge authorises the routes by that scope.
    An instance whose `agent_capabilities.json` **lists** the agent must also
    list the two remote patterns for it (below).
-5. For unattended reads only: the child grants `parent_agent` on that tool.
+4. For unattended reads only: the child grants `parent_agent` on that tool.
    The role has no permission rows by default, so it is denied everything
    until granted.
+
+There is no mode or flag for remote tools: they are the only code path, and
+what a child offers is decided by its plugin's `remote` declaration (a tool
+not declared is never callable from a parent) and its own roles. To stop or
+narrow them without a release:
+
+- **Unattended reads:** delete the child's `parent_agent` allow rows
+  (`DELETE FROM role_permissions WHERE tenant_id = '<child>' AND role =
+  'parent_agent' AND access = 'allow'`, or one `tool_pattern`). The role falls
+  back to its deny-all.
+- **One tool, for everyone:** add a tenant-scoped deny row in the child for
+  the roles a parent's caller runs as (`owner`, `admin`, `parent_agent`) on
+  that tool ([Service roles](SERVICE_ROLES.md#roles-available)). A tenant row
+  is evaluated before the `__default__` rows, so the call is refused
+  (`remote_not_permitted`); it also binds the child's own people in those
+  roles.
+- **One connector:** disable the plugin in the child
+  (`genus plugin disable <name>`, or Settings › Plugins while acting in the
+  child), or use the plugin's own switch where it has one. Its tools leave
+  the child's catalogue.
+- **Every unattended read from a parent:** clear the parent's
+  `crm_tenants.child_data_access`
+  ([the unattended grant](#agents-in-a-parent-tenant)). People in chat are
+  unaffected; they are bounded by their own role in the parent.
+- **The feature itself:** `git revert` the change and roll out the release.
+
+A plugin author narrows what is exposed by changing the `remote` declaration
+([Plugins](../PLUGINS.md)); a write declared there can always be previewed
+with `org_tool_write`'s `dry_run: true`, which passes every check, is audited
+on both sides and executes nothing.
 
 **An instance with its own capabilities manifest.** The bridge reads
 `agent_capabilities.json` from `ROBOTHOR_CAPABILITIES_MANIFEST`, else

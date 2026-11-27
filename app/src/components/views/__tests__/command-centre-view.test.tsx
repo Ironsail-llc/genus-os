@@ -149,7 +149,6 @@ function connections(tenants: unknown[], extra: Record<string, unknown> = {}) {
   return {
     as_of: "2026-11-18T12:00:00+00:00",
     home_tenant_id: "acme-parent",
-    mode: "full",
     tenants,
     ...extra,
   };
@@ -442,18 +441,6 @@ describe("CommandCentreView", () => {
       expect(within(card).getByTestId("runs-24h").textContent).toContain("10");
     });
 
-    it("names the remote-tools mode once for the page, in plain words", async () => {
-      routeFetch({
-        [OVERVIEW_URL]: () => jsonResponse(overview([PARENT, CHILD_A])),
-        [CONNECTIONS_URL]: () => jsonResponse(connections([CONNECTIONS_A], { mode: "dry_run" })),
-      });
-
-      render(<CommandCentreView visible />);
-
-      expect((await screen.findByTestId("org-remote-mode")).textContent).toContain("dry run");
-      expect(screen.getAllByTestId("org-remote-mode")).toHaveLength(1);
-    });
-
     it("says quietly that a company's connections could not be read", async () => {
       routeFetch({
         [OVERVIEW_URL]: () => jsonResponse(overview([PARENT, CHILD_A, CHILD_B_ERROR])),
@@ -511,7 +498,6 @@ describe("CommandCentreView", () => {
       const card = await screen.findByTestId("company-card-acme-child-a");
       expect(within(card).getByTestId("runs-24h")).toBeTruthy();
       expect(screen.queryByTestId("connected")).toBeNull();
-      expect(screen.queryByTestId("org-remote-mode")).toBeNull();
       expect(screen.queryByTestId("org-error")).toBeNull();
     });
 

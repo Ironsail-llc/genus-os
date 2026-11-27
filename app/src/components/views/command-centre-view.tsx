@@ -43,7 +43,6 @@ import {
   failureReasonLabel,
   formatCost,
   formatRate,
-  remoteToolsModeLabel,
   sortCompanies,
   statusLabel,
   summariseChecks,
@@ -110,7 +109,6 @@ async function fetchConnections(signal: AbortSignal): Promise<OrgConnections | n
     return {
       as_of: typeof reply.as_of === "string" ? reply.as_of : "",
       home_tenant_id: reply.home_tenant_id,
-      mode: typeof reply.mode === "string" ? reply.mode : "",
       tenants: reply.tenants.filter((t) => t && typeof t.tenant_id === "string"),
     };
   } catch (err) {
@@ -436,7 +434,6 @@ export function CommandCentreView({
   const loading = (overview.isFetching && !data) || (visible && connections.isPending);
   const reading = overview.isFetching || connections.isFetching;
   const connected = connectionsByTenant(connections.data);
-  const remoteMode = connections.data?.mode;
   const error = overview.error instanceof OverviewRefused ? overview.error.message : null;
   const companies = data ? sortCompanies(data.tenants) : [];
   const home = data?.home_tenant_id;
@@ -464,11 +461,6 @@ export function CommandCentreView({
             : undefined
         }
       >
-        {data && !loading && remoteMode && (
-          <span data-testid="org-remote-mode" className="text-xs text-muted-foreground">
-            Remote tools: {remoteToolsModeLabel(remoteMode)}
-          </span>
-        )}
         {data?.as_of && (
           <span className="text-xs text-muted-foreground">
             As of{" "}

@@ -114,12 +114,6 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
     # no `try`: a governed flag with no source took the whole Controls page
     # down with a KeyError, not just its own row.
     "ROBOTHOR_CALENDAR_SEND_UPDATES": EvidenceSource("calendar_event", "1 = 1"),
-    # Not a guardrail ladder: the rung says how far remote tools may go. Its
-    # evidence is the target-side audit row every remote call writes, refusals
-    # included, so a quiet count means nobody called, not that the gate is open.
-    "GENUS_ORG_REMOTE_TOOLS": EvidenceSource(
-        "audit_log", "event_type = 'agent.remote_tool_call'", time_column="timestamp"
-    ),
     "ROBOTHOR_RIP_7_MODE": EvidenceSource(
         "memory_facts_audit",
         "reason = 'pre_update_drift_detected'",

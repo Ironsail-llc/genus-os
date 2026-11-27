@@ -146,20 +146,7 @@ export interface CompanyConnections {
 export interface OrgConnections {
   as_of: string;
   home_tenant_id?: string;
-  mode: string;
   tenants: CompanyConnections[];
-}
-
-const REMOTE_MODE_LABELS: Record<string, string> = {
-  off: "off",
-  read: "read only",
-  dry_run: "dry run",
-  full: "full",
-};
-
-/** The remote-tools mode in words; an unknown one as itself, never as `full`. */
-export function remoteToolsModeLabel(mode: string): string {
-  return REMOTE_MODE_LABELS[mode] ?? mode.replace(/_/g, " ");
 }
 
 export interface CheckSummary {

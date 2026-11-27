@@ -1009,7 +1009,6 @@ the reply.
 |-------|---------|
 | `as_of` | When the reply was assembled. |
 | `home_tenant_id` | The caller's tenant. |
-| `mode` | The bridge's `GENUS_ORG_REMOTE_TOOLS`. At `off` no engine is asked and every entry is `status: "error"`. |
 | `tenants` | One entry per descendant: `tenant_id`, `display_name`, `status` (`ok` or `error`), `error` (null when `ok`), and the engine's `plugins` (name, version, enabled), `tools` (name, plugin, `read` or `write`, attestations, short description) and `checks` (the plugins' doctor checks: name, status, short detail). |
 
 Each descendant asked writes an `org.connections` audit row filed under it.

@@ -434,7 +434,7 @@ UNATTENDED_CROSS_TENANT_WRITES: frozenset[str] = frozenset({"create_task", "send
 # A child company's OWN tools, run in its engine through the bridge
 # (handlers/org_remote.py). Not on the lists above: they take `tenant` in their
 # own schema, admit the call themselves, and never run under tenant_scope.
-ORG_REMOTE_TOOLS: frozenset[str] = frozenset({"org_tools", "org_tool_read", "org_tool_write"})
+ORG_REMOTE_TOOL_NAMES: frozenset[str] = frozenset({"org_tools", "org_tool_read", "org_tool_write"})
 
 # Read-only tools for plan mode — tools with no side effects.
 READONLY_TOOLS: frozenset[str] = frozenset(

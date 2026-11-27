@@ -10,15 +10,13 @@ They take ``tenant`` in their own schema, so the engine's generic ``tenant``
 handling (``cross_tenant.admit``) passes them, and :func:`_admit` decides
 instead, with the same helpers and in this order:
 
-1. the mode (``GENUS_ORG_REMOTE_TOOLS``): ``off`` refuses all three, ``read``
-   refuses the write;
-2. the shape of ``tenant`` (a malformed one reads as unreachable);
-3. a live, top-level, non-benchmark run;
-4. a tenant this run may reach (``ctx.accessible_tenant_ids``) that is not its
+1. the shape of ``tenant`` (a malformed one reads as unreachable);
+2. a live, top-level, non-benchmark run;
+3. a tenant this run may reach (``ctx.accessible_tenant_ids``) that is not its
    own -- an unknown and a forbidden tenant get the same sentence;
-5. a write: an attended run by the verified owner. An unattended run never
+4. a write: an attended run by the verified owner. An unattended run never
    writes;
-6. ``dry_run``: a real boolean.
+5. ``dry_run``: a real boolean.
 
 The bridge and the child check again; nothing here is trusted beyond this
 engine. Every outcome writes one ``agent.cross_tenant_call`` row under the
@@ -43,12 +41,8 @@ from robothor.tenancy.remote_contract import (
     ACCESS_WRITE,
     ERR_OUTCOME_UNKNOWN,
     ERR_TIMEOUT,
-    ERR_TOOLS_OFF,
     ERR_WRITE_FORBIDDEN,
     HOME_TIMEOUT_S,
-    MODE_DRY_RUN,
-    MODE_OFF,
-    MODE_READ,
     OUTCOME_DRY_RUN,
     OUTCOME_ERROR,
     OUTCOME_REPLAYED,
@@ -157,7 +151,7 @@ def _requested_by(ctx: ToolContext) -> str | None:
     return str(account) if account else None
 
 
-def _admit(name: str, args: dict[str, Any], ctx: ToolContext, access: str, mode: str) -> str:
+def _admit(name: str, args: dict[str, Any], ctx: ToolContext, access: str) -> str:
     """The target tenant ("" for the catalogue of every company), or raise a refusal."""
     from robothor.engine.tools.cross_tenant import (
         MAX_TENANT_ID,
@@ -168,26 +162,7 @@ def _admit(name: str, args: dict[str, Any], ctx: ToolContext, access: str, mode:
 
     raw = args.get("tenant")
     shown = str(raw)[:MAX_TENANT_ID] if raw is not None else ""
-    # 1. The mode.
-    if mode == MODE_OFF:
-        raise _refuse(
-            shown,
-            "Remote tools are turned off on this deployment.",
-            gate="flag",
-            gate_name="GENUS_ORG_REMOTE_TOOLS",
-            unlock="An operator sets GENUS_ORG_REMOTE_TOOLS to read, dry_run or full.",
-            code=ERR_TOOLS_OFF,
-        )
-    if access == ACCESS_WRITE and mode == MODE_READ:
-        raise _refuse(
-            shown,
-            "Remote tools are read-only on this deployment; nothing was changed.",
-            gate="flag",
-            gate_name="GENUS_ORG_REMOTE_TOOLS",
-            unlock="An operator sets GENUS_ORG_REMOTE_TOOLS to dry_run or full.",
-            code=ERR_WRITE_FORBIDDEN,
-        )
-    # 2. The shape of the target.
+    # 1. The shape of the target.
     unreachable = {
         "gate": "role",
         "gate_name": "cross_tenant_reach",
@@ -223,7 +198,7 @@ def _admit(name: str, args: dict[str, Any], ctx: ToolContext, access: str, mode:
             gate_name="remote_tool_arguments",
             unlock="Call org_tools with `tenant` and `tool` to see its parameters.",
         )
-    # 3. A top-level run.
+    # 2. A top-level run.
     if not is_top_level_run(ctx):
         raise _refuse(
             target,
@@ -233,7 +208,7 @@ def _admit(name: str, args: dict[str, Any], ctx: ToolContext, access: str, mode:
             gate_name="cross_tenant_top_level",
             unlock="Report back and let the top-level run make this call.",
         )
-    # 4. A reachable company other than this one.
+    # 3. A reachable company other than this one.
     if target and target == ctx.tenant_id:
         raise _refuse(
             target,
@@ -244,7 +219,7 @@ def _admit(name: str, args: dict[str, Any], ctx: ToolContext, access: str, mode:
         )
     if target and target not in ctx.accessible_tenant_ids:
         raise _refuse(target, UNREACHABLE, **unreachable)
-    # 5. A write: the verified owner, in person.
+    # 4. A write: the verified owner, in person.
     if access == ACCESS_WRITE:
         from robothor.engine.owner_gate import is_verified_owner
 
@@ -269,7 +244,7 @@ def _admit(name: str, args: dict[str, Any], ctx: ToolContext, access: str, mode:
                 ),
                 code=ERR_WRITE_FORBIDDEN,
             )
-        # 6. A real boolean.
+        # 5. A real boolean.
         if "dry_run" in args and not isinstance(args["dry_run"], bool):
             from robothor.engine.tools.cross_tenant import _bad_dry_run
 
@@ -385,23 +360,15 @@ def _request_id() -> str:
     return uuid.uuid4().hex
 
 
-async def _mode() -> str:
-    """The mode, read off the loop: the flag store may read the database."""
-    from robothor.auth.runtime import org_remote_tools_mode
-
-    return await asyncio.to_thread(org_remote_tools_mode)
-
-
 async def _call(name: str, args: dict[str, Any], ctx: ToolContext, access: str) -> dict[str, Any]:
     remote = _remote_name(args)
-    mode = await _mode()
     try:
-        target = _admit(name, args, ctx, access, mode)
+        target = _admit(name, args, ctx, access)
     except _RefusalError as refused:
         _audit(name, ctx, refused.target, "denied", remote, reason=str(refused.result["error"]))
         return refused.result
 
-    dry_run = access == ACCESS_WRITE and (args.get("dry_run") is True or mode == MODE_DRY_RUN)
+    dry_run = access == ACCESS_WRITE and args.get("dry_run") is True
     body = {
         "tenant": target,
         "tool": args["tool"],
@@ -475,7 +442,7 @@ async def _org_tools(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     remote = _remote_name(args)
     try:
-        target = _admit(CATALOGUE_TOOL, args, ctx, ACCESS_READ, await _mode())
+        target = _admit(CATALOGUE_TOOL, args, ctx, ACCESS_READ)
     except _RefusalError as refused:
         _audit(
             CATALOGUE_TOOL,

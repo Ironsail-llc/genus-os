@@ -311,24 +311,21 @@ all.
 
 **Remote tools.** A parent tenant's agent can use the tools a child company's
 plugins declare remote: the bridge forwards each call and the child's engine
-admits it. One mode and one attestation list govern that, read by the bridge
-and every engine, so the chart renders them on the bridge, the root engine and
-every cell, beside the switch mode. A component's own `env`, or a cell's
-`env`, still wins, and a value in the flag store wins over all of them.
+admits it. There is no mode to set; what a child offers is its plugins'
+`remote` declarations, its per-tool grants and its roles. One attestation list
+is read by the bridge and every engine, so the chart renders it on the bridge,
+the root engine and every cell, beside the switch mode. A component's own
+`env`, or a cell's `env`, still wins.
 
 | Value | Renders | Default |
 |-------|---------|---------|
-| `tenancy.remoteTools` | `GENUS_ORG_REMOTE_TOOLS`: `off`, `read`, `dry_run` or `full` | `full`; `""` renders nothing and the code's default (`full`) applies |
 | `tenancy.remoteAttestations` | `GENUS_ORG_REMOTE_ATTESTATIONS`, the list comma-joined | `[]`, which renders nothing (no attestations) |
 
-`off` refuses every remote call, `read` allows reads and refuses writes,
-`dry_run` allows reads and turns every write into a dry run, and `full` allows
-both. Any other mode fails at template time, because the code would read it as
-`off` and silently stop every remote call. Attestations are lowercase tokens
-(a letter, then letters, digits or `_`, at most 32 characters) naming what
-this deployment attests for the parent side, such as a signed agreement a
-child company's tool requires; any other entry fails at template time. The
-bridge's own list is the one presented to the child.
+Attestations are lowercase tokens (a letter, then letters, digits or `_`, at
+most 32 characters) naming what this deployment attests for the parent side,
+such as a signed agreement a child company's tool requires; any other entry
+fails at template time. The bridge's own list is the one presented to the
+child.
 
 **Shared vault key.** Credentials in the vault are encrypted with one master
 key, and a credential the bridge stores while acting in a child tenant is read

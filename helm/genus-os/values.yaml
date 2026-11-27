@@ -549,13 +549,6 @@ tenancy:
   # row-level security is inert. Unset: not set (false). A deliberate escape
   # hatch; see the setting's description before turning it on.
   # allowInertRls: false
-  # GENUS_ORG_REMOTE_TOOLS: off | read | dry_run | full. Whether a parent
-  # tenant's agent may use the tools a child company's plugins declare remote:
-  # `off` refuses every call, `read` allows reads only, `dry_run` allows reads
-  # and turns every write into a dry run, `full` allows both. Any other value
-  # fails the render. Empty: not set (the code's default, full). A flag set in
-  # the flag store still wins over this.
-  remoteTools: full
   # GENUS_ORG_REMOTE_ATTESTATIONS: what this deployment attests for the parent
   # side (lowercase tokens, rendered comma-joined), presented by the bridge to
   # a child company whose tool requires one. Empty: not set (none).
