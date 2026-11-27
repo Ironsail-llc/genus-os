@@ -753,9 +753,8 @@ class TestTheSweepMovesOn:
         assert len(asked[0] | asked[1]) == len(pairs)
 
     async def test_a_mark_whose_other_side_is_gone_is_cleared(self, tenants, verdict):
-        from robothor.memory.conflicts import sweep_open_conflicts
-
         from robothor.db.connection import get_connection
+        from robothor.memory.conflicts import sweep_open_conflicts
 
         ((old, new),) = await self._open_pairs(verdict, 1)
         # One side closed by something else since (a store-time change, a

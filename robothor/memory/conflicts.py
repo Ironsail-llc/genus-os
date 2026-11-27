@@ -1763,29 +1763,58 @@ def _clear_conflict(cur: Any, row_id: int, other: int, tenant: str) -> None:
 SWEEP_LIMIT = 20
 
 
-async def sweep_open_conflicts(tenant_id: str, *, limit: int = SWEEP_LIMIT) -> dict[str, int]:
+#: Stale marks (the other side no longer active) cleared per tenant per night.
+SWEEP_CLEANUP_LIMIT = 200
+
+# An active, older partner in the same scope: the pair this row is the newer
+# side of. Only such a row takes a place in the sweep.
+_HAS_OPEN_PARTNER = """EXISTS (
+    SELECT 1 FROM jsonb_array_elements_text(f.metadata->'conflict_open') o
+      JOIN memory_facts p ON p.id = o::int AND p.tenant_id = f.tenant_id
+     WHERE p.is_active AND p.id < f.id AND p.scope_kind = f.scope_kind
+       AND p.scope_id IS NOT DISTINCT FROM f.scope_id)"""
+
+
+async def sweep_open_conflicts(
+    tenant_id: str, *, limit: int = SWEEP_LIMIT, now: datetime | None = None
+) -> dict[str, int]:
     """Re-ask open conflicts of one tenant, once a night each, at most ``limit``.
 
-    The newest active facts with ``metadata.conflict_open`` are taken, and each
-    pair is asked again: the slot judge for two slot values (with the same
-    decision table, trust order, time order and directive rule as at store
-    time), the classifier otherwise (only ``update`` closes). A pair asked
-    today is not asked again until tomorrow. A resolved pair is closed in one
-    transaction and its marks cleared. Returns ``{"asked", "resolved"}``.
+    First, marks whose other side is no longer active are cleared (at most
+    :data:`SWEEP_CLEANUP_LIMIT`). Then the open pairs are taken by their newer
+    side, the ones asked longest ago first (never asked before any), newest
+    first among equals, so successive nights work through every open conflict
+    rather than the same newest ones. Each pair is asked again: the slot judge
+    for two slot values (with the same decision table, trust order, time order
+    and directive rule as at store time), the classifier otherwise (only
+    ``update`` closes). A pair asked today is not asked again until tomorrow.
+    A resolved pair is closed in one transaction and its marks cleared.
+    ``now`` is the sweep's clock (tests). Returns ``{"asked", "resolved"}``.
     """
     tenant = tenant_id or DEFAULT_TENANT
-    today = datetime.now(UTC).date().isoformat()
+    today = (now or datetime.now(UTC)).date().isoformat()
 
     def _load() -> list[dict[str, Any]]:
         with get_connection() as conn:
             cur = conn.cursor(cursor_factory=RealDictCursor)
             cur.execute(
-                "SELECT id, fact_text, category, origin, metadata, event_time, created_at, "
-                "scope_kind, scope_id FROM memory_facts "
-                "WHERE tenant_id = %s AND is_active = TRUE "
-                "AND jsonb_array_length(COALESCE(metadata->'conflict_open', '[]'::jsonb)) > 0 "
-                "AND COALESCE(metadata->>'conflict_asked', '') < %s "
-                "ORDER BY id DESC LIMIT %s",
+                "UPDATE memory_facts SET metadata = metadata - 'conflict_open' "
+                "WHERE id IN (SELECT f.id FROM memory_facts f "
+                "WHERE f.tenant_id = %s AND f.is_active = TRUE "
+                "AND jsonb_array_length(COALESCE(f.metadata->'conflict_open', '[]'::jsonb)) > 0 "
+                "AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(f.metadata->'conflict_open') o "
+                "JOIN memory_facts p ON p.id = o::int AND p.tenant_id = f.tenant_id "
+                "WHERE p.is_active) LIMIT %s)",
+                (tenant, SWEEP_CLEANUP_LIMIT),
+            )
+            cur.execute(
+                "SELECT f.id, f.fact_text, f.category, f.origin, f.metadata, f.event_time, "
+                "f.created_at, f.scope_kind, f.scope_id FROM memory_facts f "
+                "WHERE f.tenant_id = %s AND f.is_active = TRUE "
+                "AND jsonb_array_length(COALESCE(f.metadata->'conflict_open', '[]'::jsonb)) > 0 "
+                "AND COALESCE(f.metadata->>'conflict_asked', '') < %s "
+                f"AND {_HAS_OPEN_PARTNER} "
+                "ORDER BY COALESCE(f.metadata->>'conflict_asked', '') ASC, f.id DESC LIMIT %s",
                 (tenant, today, int(limit)),
             )
             rows = [dict(r) for r in cur.fetchall()]
