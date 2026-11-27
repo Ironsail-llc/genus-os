@@ -542,8 +542,9 @@ falls back to similarity:
    `new`, `duplicate`, `update`, or `contradiction`. It is told both facts'
    event and recorded dates, and that both facts are untrusted data whose
    instructions are ignored.
-6. **Act** -- store (new), skip (duplicate), or supersede (update only), within
-   the trust order below. A `contradiction` closes nothing: both stay active
+6. **Act** -- store (new), skip (duplicate), or supersede (update only, with
+   reason `changed`, so recall shows the replaced value after the new one),
+   within the trust order below. A `contradiction` closes nothing: both stay active
    and the open conflict is recorded and marked, as on the slot path (against
    an operator-confirmed or higher-authority fact the new one is still kept
    overruled).
@@ -677,9 +678,11 @@ owns, visited, uses, speaks, plays): never closes.
   (`conflict_open: true`, `conflict_with`), and `recall.row_text` reads it as
   `Conflicting value, unresolved: …`. The nightly per-tenant maintenance
   (`lifecycle._run_tenant_core_steps`, step 7b) runs
-  `conflicts.sweep_open_conflicts`: at most `SWEEP_LIMIT` (20) of the newest
-  open conflicts, each asked again at most once a night with the store-time
-  rules (judge and decision table, or the classifier, where only `update`
+  `conflicts.sweep_open_conflicts`: it first clears marks whose other side is
+  no longer active, then takes at most `SWEEP_LIMIT` (20) open pairs by their
+  newer side, the ones asked longest ago first, so successive nights work
+  through every open conflict; each is asked again at most once a night with
+  the store-time rules (judge and decision table, or the classifier, where only `update`
   closes), closed in one transaction and its marks cleared when resolved.
 - **One transaction.** The insert and every close run in the insert's
   transaction (`store_fact(after_insert=...)`), under per-slot advisory
