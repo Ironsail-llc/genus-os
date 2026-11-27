@@ -67,7 +67,19 @@ def test_the_tool_path_versions_the_parity_cell_only(repo, rel):
     assert eb.context_version("recall", repo_root=repo) == harness
 
 
-@pytest.mark.parametrize("flag", ["MEMORY_NARROW_SEARCH", "ROBOTHOR_RERANKER_MODEL"])
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "MEMORY_NARROW_SEARCH",
+        "ROBOTHOR_RERANKER_MODEL",
+        # The panic switch turns routed recall off; the HNSW knobs change the
+        # vector legs' candidate pool.
+        "ROBOTHOR_DISABLE_ALL_RIPS",
+        "MEMORY_HNSW_EF_SEARCH",
+        "MEMORY_HNSW_ITERATIVE",
+        "MEMORY_HNSW_MAX_SCAN_TUPLES",
+    ],
+)
 def test_a_flag_change_misses_the_cache(repo, monkeypatch, flag):
     monkeypatch.delenv(flag, raising=False)
     before = {s: eb.context_version(s, repo_root=repo) for s in ("recall", "search_memory_tool")}

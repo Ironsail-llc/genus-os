@@ -86,3 +86,29 @@ def test_the_cli_refuses_it_with_exit_3(tmp_path, capsys):
     )
     assert cmd_memory_eval(args) == 3
     assert "LoCoMo" in capsys.readouterr().out
+
+
+def test_a_multi_cell_run_is_refused_before_the_database_is_touched(tmp_path, capsys, monkeypatch):
+    from robothor.cli import _build_parser, memory_eval
+
+    _locomo(tmp_path)
+    monkeypatch.setattr(
+        memory_eval, "preflight", lambda *_a: pytest.fail("refused before preflight")
+    )
+    args = _build_parser().parse_args(
+        [
+            "memory-eval",
+            "--benchmark",
+            "locomo",
+            "--benchmark-path",
+            str(tmp_path / "locomo10.json"),
+            "--systems",
+            "search_memory_tool",
+            "--context-tokens",
+            "1000,4000",
+            "--bench-dir",
+            str(tmp_path / "cache"),
+        ]
+    )
+    assert memory_eval.cmd_memory_eval(args) == 3
+    assert "cannot run" in capsys.readouterr().out
