@@ -1,8 +1,8 @@
 """The recall-leg contract: any number of named legs, one fusion, reserved places.
 
 A recall leg is anything that turns a query into a ranked list of
-``Candidate`` objects — the vector and keyword legs over facts, the dense and
-keyword legs over conversation segments, graph activation. ``fuse`` merges them by
+``Candidate`` objects — the vector and keyword legs over facts, conversation
+segments, graph activation. ``fuse`` merges them by
 reciprocal rank, and ``apply_reserved`` guarantees a leg a number of places in
 the final top-k. The second matters because a multi-hop (graph) fact is by
 definition not similar to the query, so a query-document reranker will

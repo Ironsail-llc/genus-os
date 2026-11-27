@@ -1213,18 +1213,8 @@ LEG_FETCH_MIN_WIDE = 45
 # the fused order: it reaches through what the other legs found, and lifting
 # those rows into the reranker's head pushed the right fact out on the memory
 # evaluation's world (point in time 73 to 60 of 126). It contributes through
-# its reserved places, which hold its best rows by its own score. The two
-# conversation-segment legs count half each: a segment both found scores what
-# the single pre-fused segment leg gave it, so the default ranking holds
-# (full weight put segments in half the reranker's head and pushed facts out
-# of the context on the memory evaluation's world).
-LEG_WEIGHTS: dict[str, float] = {
-    "graph": 0.0,
-    "entity_expansion": 0.5,
-    "chat_turn": 0.5,
-    "segment_dense": 0.5,
-    "segment_keyword": 0.5,
-}
+# its reserved places, which hold its best rows by its own score.
+LEG_WEIGHTS: dict[str, float] = {"graph": 0.0, "entity_expansion": 0.5, "chat_turn": 0.5}
 
 # Places in the final top-k a leg keeps whenever it returned anything (see
 # recall.apply_reserved). Graph-derived facts are related to the query, not
@@ -1533,15 +1523,8 @@ def _aux_candidates(rows: list[dict[str, Any]], kind: str, text_key: str) -> lis
     ]
 
 
-def _segment_legs(
-    dense: list[dict[str, Any]], keyword: list[dict[str, Any]], query: str
-) -> dict[str, list[Candidate]]:
-    """Conversation segments as two legs of kind ``segment``, as facts are.
-
-    ``segment_dense`` is the segment store's dense leg in cosine order,
-    ``segment_keyword`` its keyword leg in ``ts_rank_cd`` order. Each enters
-    fusion on its own, so a segment both found earns the credit a fact both
-    fact legs found does (one pre-fused leg capped it at half of that).
+def _segment_candidates(hits: list[dict[str, Any]], query: str) -> list[Candidate]:
+    """Conversation segments as candidates of kind ``segment``.
 
     The reranker reads a bounded excerpt (``Candidate.text`` becomes the row's
     ``content``); the row keeps the whole verbatim text as ``fact_text`` so
@@ -1553,41 +1536,30 @@ def _segment_legs(
     from robothor.memory.segments import rerank_excerpt
 
     now = datetime.now(UTC)
-    built: dict[int, tuple[str, dict[str, Any]]] = {}
-
-    def candidate(h: dict[str, Any], leg: str, score_key: str) -> Candidate:
-        if h["id"] not in built:
-            ended = h.get("ended_at")
-            # A keyword-only hit has no cosine. Leave the key out rather than
-            # send None: callers format rows with round(r.get("similarity", 0), 4).
-            hit = {k: v for k, v in h.items() if not (k == "similarity" and v is None)}
-            payload = {
-                **hit,
-                "fact_text": h["text"],
-                "category": "segment",
-                "confidence": 0.5,
-                "age_seconds": (now - ended).total_seconds() if ended is not None else None,
-            }
-            built[h["id"]] = (rerank_excerpt(h["text"], query), payload)
-        text, payload = built[h["id"]]
-        score = h.get(score_key)
-        return Candidate(
-            id=h["id"],
-            kind="segment",
-            text=text,
-            similarity=h.get("similarity"),
-            leg_scores={leg: float(score)} if score is not None else {},
-            payload=payload,
+    out: list[Candidate] = []
+    for h in hits:
+        ended = h.get("ended_at")
+        # A keyword-only hit has no cosine. Leave the key out rather than send
+        # None: callers format rows with round(r.get("similarity", 0), 4).
+        hit = {k: v for k, v in h.items() if not (k == "similarity" and v is None)}
+        payload = {
+            **hit,
+            "fact_text": h["text"],
+            "category": "segment",
+            "confidence": 0.5,
+            "age_seconds": (now - ended).total_seconds() if ended is not None else None,
+        }
+        out.append(
+            Candidate(
+                id=h["id"],
+                kind="segment",
+                text=rerank_excerpt(h["text"], query),
+                similarity=h.get("similarity"),
+                leg_scores={"segment": float(h.get("rrf_score") or 0.0)},
+                payload=payload,
+            )
         )
-
-    return {
-        "segment_dense": [candidate(h, "segment_dense", "similarity") for h in dense],
-        "segment_keyword": [candidate(h, "segment_keyword", "keyword_rank") for h in keyword],
-    }
-
-
-#: The two legs conversation segments enter fusion as (``_segment_legs``).
-SEGMENT_LEGS = ("segment_dense", "segment_keyword")
+    return out
 
 
 async def _auxiliary_legs(
@@ -1612,8 +1584,7 @@ async def _auxiliary_legs(
     episode leg dropped whenever the reranker ran); they are now fused and
     reranked with the facts.
 
-    The segment legs (``segment_dense`` and ``segment_keyword`` over
-    ``memory_segments``, :data:`SEGMENT_LEGS`) supersede
+    The ``segment`` leg (dense + keyword over ``memory_segments``) supersedes
     the dense-only ``chat_turn`` leg: when segments are on, chat turns are not
     searched for the same query, so one conversation is not returned twice
     in two shapes. ``reader_person_id`` / ``room_ids`` decide which segments
@@ -1622,9 +1593,9 @@ async def _auxiliary_legs(
     legs: dict[str, list[Candidate]] = {}
     if include_segments:
         try:
-            from robothor.memory.segments import search_segment_legs
+            from robothor.memory.segments import search_segments
 
-            dense, keyword = await search_segment_legs(
+            hits = await search_segments(
                 query,
                 tenant_id=_tenant,
                 limit=max(SEGMENT_LEG_MIN, limit),
@@ -1634,7 +1605,7 @@ async def _auxiliary_legs(
                 query_embedding=embedding,
                 embed_missing=False,
             )
-            legs.update(_segment_legs(dense, keyword, query))
+            legs["segment"] = _segment_candidates(hits, query)
         except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
             logger.warning("search_facts: segment leg failed: %s: %s", type(e).__name__, e)
         include_chat_turns = False
@@ -1854,8 +1825,7 @@ async def search_facts(
            robothor/memory/activation.py) only when ``include_graph=True``
            (off by default, ``GRAPH_LEG_DEFAULT``); ``entity_expansion``
            when ``expand_entities`` and the graph leg found nothing;
-           ``segment_dense`` and ``segment_keyword`` (raw conversation, on
-           by default, two legs like the facts'); ``insight`` /
+           ``segment`` (raw conversation, on by default); ``insight`` /
            ``episode`` / ``chat_turn`` when asked for. Each fact leg fetches
            max(30, limit * 3).
         2. ``fuse`` — reciprocal rank fusion, k=60, ``LEG_WEIGHTS``.
@@ -1902,15 +1872,15 @@ async def search_facts(
             another person's facts through the fan-out). The insight, episode and chat-turn
             legs cannot filter by person, so a restricted scope leaves them
             out (the router's rule for unscopable stores) — see
-            robothor/identity/scope.py. The segment legs can filter by person
+            robothor/identity/scope.py. The segment leg can filter by person
             and stays on, read by the same reader as the fact legs, which the
             scope only narrows: the reader passed is kept only when it is the
             scope's person (and its user id only when it belongs to that
             person); a restricted scope never makes anyone a reader.
-        include_segments: Fuse the two segment legs of raw conversation
-            (``robothor.memory.segments.search_segment_legs``). On by default;
+        include_segments: Fuse a ``segment`` leg of raw conversation
+            (``robothor.memory.segments.search_segments``). On by default;
             when on, the ``chat_turn`` leg is not run even if asked for — the
-            segment legs cover the same conversation with a keyword leg too.
+            segment leg covers the same conversation with a keyword leg too.
         reader_person_id: The person the run serves (``ToolContext.private_reader``,
             never the run's identity alone). Facts and segments private to
             that person are returned with the shared ones; without it, shared

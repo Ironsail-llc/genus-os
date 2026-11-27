@@ -17,9 +17,7 @@ Three parts:
   Idempotent and incremental. Scheduled in the background by
   ``chat_store.save_exchange_async`` once a turn is committed.
 - :func:`search_segments` — dense + keyword search fused by reciprocal rank
-  (``robothor.memory.fusion``), always scoped to one tenant;
-  :func:`search_segment_legs` returns the same two legs unfused, for
-  ``search_facts`` to fuse beside the fact legs.
+  (``robothor.memory.fusion``), always scoped to one tenant.
 
 Text is redacted (``robothor.secrets.redaction.redact``) before it is
 segmented, so neither the stored row nor the embedding request carries a
@@ -943,11 +941,9 @@ def _hit(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _leg_hits(
-    dense: list[dict[str, Any]], keyword: list[dict[str, Any]]
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Both legs as hits, best first. A hit both legs found is one dict in
-    both lists, carrying its ``similarity`` and its ``keyword_rank``."""
+def _fuse(
+    dense: list[dict[str, Any]], keyword: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
     hits: dict[int, dict[str, Any]] = {}
     for row in dense:
         hit = hits.setdefault(int(row["id"]), _hit(row))
@@ -955,13 +951,11 @@ def _leg_hits(
     for row in keyword:
         hit = hits.setdefault(int(row["id"]), _hit(row))
         hit["keyword_rank"] = round(float(row["keyword_rank"]), 6)
-    return [hits[int(r["id"])] for r in dense], [hits[int(r["id"])] for r in keyword]
-
-
-def _fuse(
-    dense: list[dict[str, Any]], keyword: list[dict[str, Any]], limit: int
-) -> list[dict[str, Any]]:
-    return rrf_fuse(list(_leg_hits(dense, keyword)), key=lambda h: h["id"])[:limit]
+    ranked = [
+        [hits[int(r["id"])] for r in dense],
+        [hits[int(r["id"])] for r in keyword],
+    ]
+    return rrf_fuse(ranked, key=lambda h: h["id"])[:limit]
 
 
 async def _embed_query(query: str) -> list[float]:
@@ -1034,77 +1028,6 @@ async def search_segments(
         raise ValueError("search_segments needs a tenant_id")
     if limit <= 0:
         return []
-    dense, keyword = await _search_rows(
-        query,
-        tenant_id=tenant_id,
-        limit=limit,
-        reader_person_id=reader_person_id,
-        reader_user_id=reader_user_id,
-        since=since,
-        until=until,
-        query_embedding=query_embedding,
-        room_ids=room_ids,
-        embed_missing=embed_missing,
-    )
-    return _fuse(dense, keyword, limit)
-
-
-async def search_segment_legs(
-    query: str,
-    *,
-    tenant_id: str,
-    limit: int = 10,
-    reader_person_id: str | None = None,
-    since: datetime | None = None,
-    until: datetime | None = None,
-    query_embedding: Sequence[float] | None = None,
-    room_ids: Iterable[str] | None = None,
-    embed_missing: bool = True,
-    reader_user_id: str | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """:func:`search_segments` before its fusion: ``(dense, keyword)``.
-
-    The same two queries under the same visibility rule and arguments, each
-    leg's hits best first and cut to ``limit``, for a caller that fuses the
-    legs itself. ``search_facts`` does: a segment then enters its fusion as
-    two legs, as a fact does, and one both legs found earns the same credit
-    as a fact both fact legs found. Hits have the :func:`search_segments`
-    shape; ``rrf_score`` stays 0.0.
-    """
-    if not tenant_id:
-        raise ValueError("search_segments needs a tenant_id")
-    if limit <= 0:
-        return [], []
-    dense, keyword = await _search_rows(
-        query,
-        tenant_id=tenant_id,
-        limit=limit,
-        reader_person_id=reader_person_id,
-        reader_user_id=reader_user_id,
-        since=since,
-        until=until,
-        query_embedding=query_embedding,
-        room_ids=room_ids,
-        embed_missing=embed_missing,
-    )
-    dense_hits, keyword_hits = _leg_hits(dense, keyword)
-    return dense_hits[:limit], keyword_hits[:limit]
-
-
-async def _search_rows(
-    query: str,
-    *,
-    tenant_id: str,
-    limit: int,
-    reader_person_id: str | None,
-    reader_user_id: str | None,
-    since: datetime | None,
-    until: datetime | None,
-    query_embedding: Sequence[float] | None,
-    room_ids: Iterable[str] | None,
-    embed_missing: bool,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """The two segment queries under the reader's visibility rule."""
     embedding = query_embedding
     if embedding is None and embed_missing:
         try:
@@ -1130,4 +1053,4 @@ async def _search_rows(
         where=where,
         params=params,
     )
-    return dense, keyword
+    return _fuse(dense, keyword, limit)
