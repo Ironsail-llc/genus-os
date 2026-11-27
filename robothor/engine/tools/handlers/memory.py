@@ -7,7 +7,7 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from robothor.constants import SANDBOX_DENIAL_PREFIX
-from robothor.memory.recall import row_text
+from robothor.memory.recall import row_text, superseded_fields
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -392,6 +392,7 @@ def _format_results(rows: list[dict[str, Any]], query_class: str) -> dict[str, A
 
 def _format_row(r: dict[str, Any]) -> dict[str, Any]:
     return {
+        **superseded_fields(r),
         "id": r.get("id"),
         "fact": row_text(r),
         "category": r.get("category", "")

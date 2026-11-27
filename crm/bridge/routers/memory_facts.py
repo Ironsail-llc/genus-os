@@ -488,13 +488,24 @@ def preview_forget(fact_id: str, request: Request) -> dict[str, Any]:
                 (tenant_id, needle),
             )
             blocks = [row[0] for row in cur.fetchall()]
+        cur.execute(
+            "SELECT COALESCE(metadata->'forgotten', 'null'::jsonb) <> 'null'::jsonb "
+            "FROM memory_facts WHERE id = %s AND tenant_id = %s",
+            (identifier, tenant_id),
+        )
+        marked = cur.fetchone()
+        forgotten = bool(marked and marked[0])
 
-    already_inactive = not fact["is_active"]
+    # A value since replaced is inactive but still shown after its current
+    # value, so a forget still acts on it (once): the preview says so.
+    replaced = not fact["is_active"] and fact["superseded_by"] is not None and not forgotten
+    already_inactive = not fact["is_active"] and not replaced
     return {
         "fact": fact,
         # Only ever this fact. Rule 2 in the module header — and the write path
         # asserts the same list, so the two cannot drift.
         "would_deactivate": [] if already_inactive else [fact["id"]],
+        "replaced": replaced,
         "references": {
             "entities": fact["entities"],
             "episodes": episodes,
@@ -529,20 +540,28 @@ def forget_fact(
         # decision. Two concurrent clicks would otherwise both read active, both
         # write, and both report success — with two audit rows for one act.
         cur.execute(
-            "SELECT is_active FROM memory_facts WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            "SELECT is_active, superseded_by IS NOT NULL, "
+            "COALESCE(metadata->'forgotten', 'null'::jsonb) <> 'null'::jsonb "
+            "FROM memory_facts WHERE id = %s AND tenant_id = %s FOR UPDATE",
             (identifier, tenant_id),
         )
         row = cur.fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="no fact with that id")
-        if not row[0]:
+        is_active, replaced, forgotten = row[0], bool(row[1]), bool(row[2])
+        # A value since replaced is inactive but still shown, after the value
+        # that replaced it, so it can still be forgotten, once. Its validity
+        # bound (when it stopped being true) stays as it was.
+        if forgotten or (not is_active and not replaced):
             raise HTTPException(
                 status_code=409,
                 detail="that fact is already inactive; there is nothing left to forget.",
             )
         cur.execute(
-            "UPDATE memory_facts SET is_active = false, valid_to = now(), updated_at = now() "
-            "WHERE id = %s AND tenant_id = %s",
+            "UPDATE memory_facts SET is_active = false, valid_to = COALESCE(valid_to, now()), "
+            "metadata = COALESCE(metadata, '{}'::jsonb) "
+            "|| jsonb_build_object('forgotten', jsonb_build_object('at', now())), "
+            "updated_at = now() WHERE id = %s AND tenant_id = %s",
             (identifier, tenant_id),
         )
         fact = _load(cur, identifier, tenant_id)

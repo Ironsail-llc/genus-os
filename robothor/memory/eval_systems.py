@@ -86,9 +86,15 @@ class ContextBundle:
 
 
 def fill_budget(
-    candidates: Sequence[tuple[str, str, str]], budget: int | None
+    candidates: Sequence[tuple[str, ...]], budget: int | None
 ) -> tuple[ContextItem, ...]:
     """Take ``(id, kind, text)`` candidates best first until the budget is full.
+
+    A candidate may carry a fourth item, the id of the candidate it follows:
+    an earlier value of a fact, packed as the tool packs it
+    (``recall.split_earlier`` / ``attach_earlier``): after the ranked
+    candidates, directly after its fact, only when that fact was kept and the
+    rest of the budget holds it.
 
     Packed by the product's own rule, ``robothor.memory.recall.pack_within``
     (a candidate that does not fit is skipped and a later, smaller one may
@@ -99,22 +105,32 @@ def fill_budget(
     from robothor.memory import recall
 
     seen: set[str] = set()
-    ranked: list[tuple[int, str, str, str]] = []
-    for rank, (item_id, kind, text) in enumerate(candidates, start=1):
+    rows: list[dict[str, Any]] = []
+    for rank, cand in enumerate(candidates, start=1):
+        item_id, kind, text = cand[0], cand[1], cand[2]
         if item_id in seen:
             continue
         seen.add(item_id)
-        ranked.append((rank, item_id, kind, text))
+        after = cand[3] if len(cand) > 3 else None
+        rows.append({"rank": rank, "id": item_id, "kind": kind, "fact_text": text,
+                     "earlier_of": after})  # fmt: skip
 
-    def _cut(c: tuple[int, str, str, str], tokens: int) -> tuple[int, str, str, str]:
+    def _tokens(row: dict[str, Any]) -> int:
+        return estimate_tokens(str(row["fact_text"]))
+
+    def _cut(row: dict[str, Any], tokens: int) -> dict[str, Any]:
         # A token budget over text: the same characters-per-token estimate.
-        chars = tokens * _CHARS_PER_TOKEN
-        return (c[0], c[1], c[2], recall.truncate_text(c[3], chars))
+        return {
+            **row,
+            "fact_text": recall.truncate_text(row["fact_text"], tokens * _CHARS_PER_TOKEN),
+        }
 
-    packed = recall.pack_within(ranked, budget, lambda c: estimate_tokens(c[3]), _cut)
+    ranked, earlier = recall.split_earlier(rows)
+    packed = recall.pack_within(ranked, budget, _tokens, _cut)
+    room = None if budget is None else max(0, budget - sum(_tokens(r) for r in packed))
+    packed = recall.attach_earlier(packed, earlier, room=room, size=_tokens)
     return tuple(
-        ContextItem(item_id, kind, text, estimate_tokens(text), rank)
-        for rank, item_id, kind, text in packed
+        ContextItem(r["id"], r["kind"], r["fact_text"], _tokens(r), r["rank"]) for r in packed
     )
 
 
@@ -280,11 +296,12 @@ class RecallBudgetSystem:
 
 def _fact_candidates(
     rows: Sequence[dict[str, Any]], world_handle: WorldHandle
-) -> list[tuple[str, str, str]]:
+) -> list[tuple[str, ...]]:
     """World ids for ``search_facts`` rows: a fact as its fact, a conversation
     segment as the transcript turn it starts with (a segment's ``id`` is from
     another table and is never read as a fact id)."""
-    cands: list[tuple[str, str, str]] = []
+    cands: list[tuple[str, ...]] = []
+    world_of: dict[Any, str] = {}
     for row in rows:
         if row.get("kind") == "segment":
             turn = world_handle.turn_id(int(row.get("start_ref") or -1))
@@ -298,8 +315,15 @@ def _fact_candidates(
                 meta = json.loads(meta)
             fid = (meta.get("eval_world") or {}).get("fact_id")
         if fid:
+            world_of[row.get("id")] = fid
             # As the model would read it in production (a graph-only row
-            # names the path that relates it to the question).
+            # names the path that relates it to the question, an earlier
+            # value says so and follows the fact that replaced it).
+            follows = world_of.get(row.get("earlier_of"))
+            if row.get("earlier_of") is not None:
+                if follows:
+                    cands.append((fid, "fact", row_text(row), follows))
+                continue
             cands.append((fid, "fact", row_text(row)))
     return cands
 

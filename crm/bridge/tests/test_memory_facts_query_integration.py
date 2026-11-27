@@ -426,6 +426,53 @@ def test_the_second_forget_is_a_409(controls_client_as_operator, live_db, make_f
     assert again.json()["detail"].strip().endswith(".")
 
 
+def test_a_replaced_value_can_still_be_forgotten_once(
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+):
+    """Recall shows a replaced value after the current one, so the operator
+    must be able to forget it; the forget keeps its validity bound and marks
+    it, and a second forget is still a 409."""
+    platform, _ = tenants
+    current = make_fact("Alice moved to Denver", tenant=platform)
+    earlier = make_fact("Alice lives in Boston", tenant=platform, active=False)
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE memory_facts SET superseded_by = %s, valid_to = now() - interval '1 day' "
+            "WHERE id = %s",
+            (current, earlier),
+        )
+    db_conn.commit()
+    before = _row(db_conn, earlier)["valid_to"]
+
+    resp = controls_client_as_operator.post(f"{FACTS}/{earlier}/forget", json={"reason": "wrong"})
+    assert resp.status_code == 200
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT metadata, valid_to FROM memory_facts WHERE id = %s", (earlier,))
+        metadata, valid_to = cur.fetchone()
+    assert metadata.get("forgotten")
+    assert valid_to == before
+    assert _row(db_conn, current)["is_active"] is True
+    again = controls_client_as_operator.post(
+        f"{FACTS}/{earlier}/forget", json={"reason": "forget it again"}
+    )
+    assert again.status_code == 409
+
+
+def test_the_preview_lists_a_replaced_value_it_would_forget(
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+):
+    platform, _ = tenants
+    current = make_fact("Alice moved to Denver", tenant=platform)
+    earlier = make_fact("Alice lives in Boston", tenant=platform, active=False)
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE memory_facts SET superseded_by = %s WHERE id = %s", (current, earlier))
+    db_conn.commit()
+    body = controls_client_as_operator.post(f"{FACTS}/{earlier}/forget/preview").json()
+    assert body["would_deactivate"] == [earlier]
+    assert body["already_inactive"] is False
+    assert body["replaced"] is True
+
+
 def test_forgetting_another_tenants_fact_is_404_and_changes_nothing(
     controls_client_as_operator, live_db, make_fact, tenants, db_conn
 ):

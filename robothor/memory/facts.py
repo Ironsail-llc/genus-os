@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
 
     from robothor.identity.scope import DataScope
 
@@ -572,6 +572,7 @@ async def store_fact(
     scope_id: str | None = None,
     source_channel: str | None = None,
     embedding: list[float] | None = None,
+    after_insert: Callable[[Any, int], None] | None = None,
 ) -> int:
     """Store a fact with its embedding in the database.
 
@@ -592,6 +593,10 @@ async def store_fact(
             deduplicates into anyone else's.
         source_channel: Where the content came from.
         embedding: A vector already computed for ``fact_text``, to save a call.
+        after_insert: Called with the insert's cursor and the row's id inside
+            the insert's transaction, before it commits (conflict resolution
+            closes the values a fact replaces there, so the two never part).
+            If it raises, the insert is rolled back and the error propagates.
 
     Returns:
         The database ID of the stored fact, or 0 if the quality gate refused it
@@ -642,8 +647,9 @@ async def store_fact(
 
     def _insert() -> int:
         with get_connection() as conn:
-            return _insert_fact(
-                conn.cursor(),
+            cur = conn.cursor()
+            fid = _insert_fact(
+                cur,
                 (
                     fact["fact_text"],
                     fact["category"],
@@ -667,6 +673,9 @@ async def store_fact(
                 content_hash=content_hash,
                 sql=_INSERT_FACT_FULL_SQL,
             )
+            if after_insert is not None and fid:
+                after_insert(cur, fid)
+            return fid
 
     # Off the event loop: the write path reaches this from the engine's loop.
     fact_id = await asyncio.to_thread(_insert)
@@ -1742,6 +1751,120 @@ def _fill_from_pool(
     return out
 
 
+#: Most links followed from a closed row to the value now current.
+_CURRENT_HOPS = 3
+
+
+async def _with_earlier_values(
+    result: list[dict[str, Any]],
+    tenant: str,
+    scope_clause: str,
+    scope_params: tuple[Any, ...],
+) -> list[dict[str, Any]]:
+    """Recall rows with each changed value's earlier row after its current one.
+
+    Reads only when a row carries supersession (``metadata.supersedes`` on a
+    current row, ``superseded_by`` on a closed one), by primary key, in
+    ``tenant`` and through the caller's ``scope_clause`` (the same reader and
+    scope rules as the legs). At most ``bitemporal.MAX_EARLIER_ROWS`` earlier
+    rows are added. See ``bitemporal.place_superseded`` for the order.
+    """
+    from robothor.memory.bitemporal import MAX_EARLIER_ROWS, earlier_ids, place_superseded
+
+    facts = [r for r in result if r.get("kind", "fact") == "fact"]
+    present = {r.get("id") for r in facts}
+    wanted: list[int] = []
+    for r in facts:
+        if r.get("superseded_by") is None:
+            wanted += [i for i in earlier_ids(r) if i not in present and i not in wanted]
+    wanted = wanted[:MAX_EARLIER_ROWS]
+    closed = [r for r in facts if r.get("superseded_by") is not None]
+    missing = {int(r["id"]): int(r["superseded_by"]) for r in closed}
+    missing = {k: v for k, v in missing.items() if v not in present}
+    disputed = {
+        int(r["id"]): [int(o) for o in (r.get("metadata") or {}).get("conflict_open", [])]
+        for r in facts
+        if r.get("superseded_by") is None
+        and isinstance(r.get("metadata"), dict)
+        and r["metadata"].get("conflict_open")
+    }
+    if not wanted and not closed and not disputed:
+        return result
+
+    sql = (
+        f"SELECT {_FACT_COLUMNS}, valid_to, is_active FROM memory_facts "  # noqa: S608 - fixed
+        f"WHERE tenant_id = %s AND id = ANY(%s) {scope_clause} "
+        # An operator's forget is final: a forgotten value is never shown again.
+        "AND COALESCE(metadata->'forgotten', 'null'::jsonb) = 'null'::jsonb"
+    )
+    closed_ids = [int(r["id"]) for r in closed]
+
+    def _fetch() -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]]]:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            if closed_ids:
+                # When each closed row was closed; the legs do not select it.
+                cur.execute(
+                    "SELECT id, valid_to FROM memory_facts WHERE tenant_id = %s AND id = ANY(%s)",
+                    (tenant, closed_ids),
+                )
+                ends = {int(r["id"]): r["valid_to"] for r in cur.fetchall()}
+                for r in closed:
+                    r["valid_to"] = ends.get(int(r["id"]))
+            old_rows: list[dict[str, Any]] = []
+            if wanted:
+                cur.execute(sql, (tenant, wanted, *scope_params))
+                old_rows = [dict(r) for r in cur.fetchall() if r["superseded_by"] is not None]
+            rivals = sorted({o for others in disputed.values() for o in others})
+            if rivals:
+                # Which of the other sides of an open conflict are still current
+                # and visible to this reader.
+                cur.execute(sql, (tenant, rivals, *scope_params))
+                live = {int(r["id"]) for r in cur.fetchall() if r["is_active"]}
+                for r in facts:
+                    others = [o for o in disputed.get(int(r["id"]), []) if o in live]
+                    if others:
+                        r["conflict_open"] = True
+                        r["conflict_with"] = others[0]
+            heads: dict[int, dict[str, Any]] = {}
+            pending = dict(missing)  # closed id -> the id to look at next
+            for _ in range(_CURRENT_HOPS):
+                if not pending:
+                    break
+                cur.execute(sql, (tenant, list(set(pending.values())), *scope_params))
+                found = {int(r["id"]): dict(r) for r in cur.fetchall()}
+                nxt: dict[int, int] = {}
+                for old_id, look in pending.items():
+                    row = found.get(look)
+                    if row is None:
+                        continue
+                    if row["is_active"]:
+                        heads[old_id] = row
+                    elif row.get("superseded_by") is not None:
+                        nxt[old_id] = int(row["superseded_by"])
+                pending = nxt
+            return old_rows, heads
+
+    try:
+        old_rows, heads = await asyncio.to_thread(_fetch)
+    except Exception as e:  # noqa: BLE001 - the ranked rows still return
+        logger.warning("search_facts: earlier values not read: %s: %s", type(e).__name__, e)
+        return result
+    by_id = {r.get("id"): r for r in result}
+    earlier: dict[int, list[dict[str, Any]]] = {}
+    for row in old_rows:
+        row.pop("is_active", None)
+        row["kind"] = "fact"
+        earlier.setdefault(int(row["superseded_by"]), []).append(row)
+    current: dict[int, dict[str, Any]] = {}
+    for old_id, row in heads.items():
+        row.pop("is_active", None)
+        row["kind"] = "fact"
+        row["relevance"] = by_id.get(old_id, {}).get("relevance")
+        current[old_id] = row
+    return place_superseded(result, earlier=earlier, current=current)
+
+
 async def search_facts(
     query: str,
     limit: int = 10,
@@ -1779,15 +1902,21 @@ async def search_facts(
            of the fused list on 0..1 and orders by that score; on any error the
            fused order stands.
         4. Blend — relevance (rerank score, else from fused rank) + recency +
-           importance + access, supersession demotion; near-duplicates dropped.
+           importance + utility; near-duplicates dropped. (Supersession
+           demotion here is off by default and for decisions only.)
         5. ``RESERVED_PLACES`` — a leg keeps its reserved places; the graph's
            rows are added after the top-k, every other leg's take its last
            places.
+        6. Changed values (``_with_earlier_values``): a closed row follows the
+           row that replaced it, labelled ``superseded``.
 
     Args:
         query: Search query text.
         limit: Maximum number of results (all legs share it).
-        active_only: If True, only return active (non-superseded) facts.
+        active_only: If True, rank active facts only; a current row that
+            replaced a value is still followed by that earlier row (labelled
+            ``superseded``, at most ``bitemporal.MAX_EARLIER_ROWS``). If False,
+            inactive rows rank too, and a closed one never ahead of its current.
         use_reranker: If True, run reranker on candidates. If None (default),
             honors MEMORY_RERANK_ENABLED env flag (on by default).
         expand_entities: Run the one-hop ``entity_expansion`` leg: facts
@@ -2018,6 +2147,9 @@ async def search_facts(
     for r in result:
         if "relevance" not in r:  # a reserved pick or a tail row the blend never saw
             _assign_relevance([r])
+    # A changed value: the current row first, the one it replaced after it,
+    # labelled; a closed row never outranks its current one.
+    result = await _with_earlier_values(result, _tenant, scope_clause, scope_params)
     if degraded is not None:
         for r in result:
             r["degraded"] = degraded
@@ -2107,14 +2239,18 @@ def search_facts_compat(
     """
     import asyncio
 
+    from robothor.memory.recall import row_text
+
     results = asyncio.run(search_facts(query, limit=limit, tenant_id=tenant_id))
     compat_results = [
         {
             **r,
-            "content": r.get("fact_text", ""),
+            # As the model reads it: an earlier value or an open conflict is
+            # labelled, never shown as a plain current memory.
+            "content": row_text(r) if r.get("fact_text") else "",
             "content_type": r.get("source_type", "unknown"),
             "tier": "facts",
-            "similarity": r.get("rrf_score", 0.0),
+            "similarity": r.get("rrf_score") or 0.0,
         }
         for r in results
     ]

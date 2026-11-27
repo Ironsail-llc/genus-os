@@ -1543,7 +1543,20 @@ async def _run_tenant_core_steps(
         time.monotonic() - t5,
     )
 
+    # Step 7b: open value conflicts, re-asked once a night (bounded)
+    t6 = time.monotonic()
+    conflicts_swept: dict[str, int] = {"asked": 0, "resolved": 0}
+    try:
+        from robothor.memory.conflicts import sweep_open_conflicts
+
+        conflicts_swept = await sweep_open_conflicts(tenant_id)
+    except Exception as e:
+        logger.warning("Open-conflict sweep failed: %s", e)
+    _add_timing(step_timings, "open_conflicts", time.monotonic() - t6)
+    logger.info("Step 7b (open conflicts) [%s]: %s", tenant_id, conflicts_swept)
+
     return {
+        "conflicts_swept": conflicts_swept,
         "facts_scored": facts_scored,
         "auto_scored": auto_scored,
         "facts_skipped_budget": facts_skipped_budget,
