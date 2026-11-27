@@ -80,6 +80,9 @@ BACKLOG_DELAY_SECONDS = 1.0
 
 #: Watermark (``ingested_items``): see "the watermark row" below.
 _WATERMARK_SOURCE = "conversation_facts"
+#: The rows the previous conversation ingest wrote (a tail hash, and an opt-in
+#: message-count watermark). A conversation with one starts past what it saw.
+_OLD_PATH_SOURCES = ("conversation_session", "conversation_session_watermark")
 #: How long a claim on a conversation lasts if its run never releases it.
 CLAIM_LEASE_SECONDS = 900
 #: When a run finds the conversation claimed, how soon it looks again.
@@ -798,15 +801,31 @@ def _mutate(
     """Apply ``change(state, now)`` to the conversation's row, locked; the new state.
 
     ``change`` returns ``None`` to leave the row as it is (and get ``None``).
-    The row is created, at ``through = 0``, when the conversation has none.
+    A conversation with no row gets one: ``through`` is the last message the
+    previous conversation ingest had seen (its ``ingested_at``), else 0.
     """
     with get_connection() as conn:
         cur = conn.cursor()
+        # A new row starts where the old (pre-watermark) path left the
+        # conversation: what it had ingested is not extracted a second time.
         cur.execute(
             "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, "
-            "fact_ids, ingested_at) VALUES (%s, %s, %s, %s, '{}', NOW()) "
+            "fact_ids, ingested_at) SELECT %s, %s, %s, COALESCE(("
+            "SELECT max(m.id) FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id "
+            "WHERE s.tenant_id = %s AND s.session_key = %s AND m.created_at <= ("
+            "SELECT max(o.ingested_at) FROM ingested_items o WHERE o.tenant_id = %s "
+            "AND o.item_id = %s AND o.source_name = ANY(%s))), 0)::text || '|0|||', '{}', NOW() "
             "ON CONFLICT (tenant_id, source_name, item_id) DO NOTHING",
-            (tenant_id, _WATERMARK_SOURCE, session_key, _State().encode()),
+            (
+                tenant_id,
+                _WATERMARK_SOURCE,
+                session_key,
+                tenant_id,
+                session_key,
+                tenant_id,
+                session_key,
+                list(_OLD_PATH_SOURCES),
+            ),
         )
         cur.execute(
             "SELECT content_hash, extract(epoch FROM now())::bigint FROM ingested_items "
