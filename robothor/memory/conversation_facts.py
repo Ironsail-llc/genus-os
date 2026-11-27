@@ -33,8 +33,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from robothor.memory import generation
 from robothor.memory.facts import (
@@ -47,7 +46,10 @@ from robothor.memory.facts import (
     _relations,
     passes_quality_filter,
 )
-from robothor.memory.relative_dates import resolve_relative_date
+from robothor.memory.relative_dates import relative_days
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +202,8 @@ What to keep:
 How to write each fact:
 - One complete, self-contained sentence. A first-person statement by the user is
   a fact about "the user" ("The user prefers dark roast coffee."), with
-  about_user true. It needs no other named entity.
+  about_user true. It needs no other named entity. Write a relative date in the
+  sentence as the absolute date it means ("on 2023-05-19", not "yesterday").
 - speaker: who said it, "user" or "assistant". A suggestion, recommendation or
   claim made by the assistant is the assistant's, even when it is about the
   user; never present it as something the user said.
@@ -209,7 +212,9 @@ How to write each fact:
 - event_time: when the thing happened or will happen, as an ISO date
   (YYYY-MM-DD) or date-time. Resolve relative dates ("yesterday", "last
   Tuesday", "in two weeks") against the timestamp of the turn that says them,
-  never against any other date. null when the conversation does not say.
+  never against any other date. It is when the thing happens, and
+  not when it was said: null for a suggestion, a standing preference, or when
+  the conversation does not say.
 - mentions: every specific name the fact mentions, as written in the fact, with
   its type (person, project, organization, technology, location, event).
   "the user" is not a mention.
@@ -249,38 +254,25 @@ def _cites_context_only(item: dict[str, Any], offset: int) -> bool:
     return bool(nums) and all(1 <= n <= offset for n in nums)
 
 
-#: A model date this close to now, for a turn older than this, was counted from
-#: today rather than from the turn (the mistake the turn timestamps are for).
-_NOW_WINDOW = timedelta(days=7)
-
-
 def _dated(model_time: str | None, cited: list[ConversationTurn]) -> str | None:
-    """The fact's event time, with a relative date counted from its turn.
+    """The fact's event time, with a relative date counted from its own turn.
 
-    The cited turns' relative expressions (:func:`resolve_relative_date`, each
-    from its own turn's time) fill an empty event time, and replace one the
-    model evidently counted from today: within a week of now, for a turn more
-    than a week old. Turns naming two different days change nothing.
+    When the cited turns name exactly one day (:func:`relative_days`, each
+    counted from its own turn's time), that day is the event time: it fills an
+    empty one and replaces the model's, which miscounts weekdays and spans and
+    may count from today. A day named only as "today" fills an empty event time
+    and nothing more ("today I booked a trip for next month" is not dated
+    today). Turns naming two different days leave the model's answer alone.
     """
-    days = {d for t in cited if (d := resolve_relative_date(t.text, t.at)) is not None}
-    if len(days) != 1:
+    every = {d for t in cited for d in relative_days(t.text, t.at)}
+    if len(every) != 1:
         return model_time
-    (resolved,) = days
+    (day,) = every
     if model_time is None:
-        return resolved.isoformat()
-    now = datetime.now(UTC)
-    said = max((t.at for t in cited if t.at is not None), default=None)
-    try:
-        model_day = date.fromisoformat(model_time[:10])
-    except ValueError:
-        return model_time
-    if (
-        said is not None
-        and now - said > _NOW_WINDOW
-        and abs(model_day - now.date()) <= _NOW_WINDOW
-        and model_day != resolved
-    ):
-        return resolved.isoformat()
+        return day.isoformat()
+    exact = {d for t in cited for d in relative_days(t.text, t.at, include_today=False)}
+    if exact == every:
+        return day.isoformat()
     return model_time
 
 

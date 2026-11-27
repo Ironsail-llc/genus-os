@@ -7,6 +7,9 @@ last or next <weekday>, the day before yesterday). Vague spans ("last week",
 "next month", "recently") name no day and resolve to nothing. When a text names
 two different days, it is not known which one a fact is about, so nothing is
 returned either. Deterministic; no model call.
+
+:func:`relative_days` gives every day named, for a caller that weighs them
+itself (conversation extraction: ``conversation_facts._dated``).
 """
 
 from __future__ import annotations
@@ -71,22 +74,37 @@ def _resolve(kind: str, match: re.Match[str], day: date) -> date:
     return day + timedelta(days=ahead)
 
 
+#: The kind of "today", "tonight", "this morning": it frames a turn more often
+#: than it dates the thing a fact is about.
+_TODAY = "fixed:0"
+
+
+def relative_days(text: str, at: datetime | None, *, include_today: bool = True) -> set[date]:
+    """Every day the relative expressions in ``text`` name, counted from ``at``.
+
+    ``include_today=False`` leaves out "today" and its kind.
+    """
+    if at is None or not text:
+        return set()
+    day = at.date()
+    rest = text.lower()
+    found: set[date] = set()
+    for pattern, kind in _PATTERNS:
+        if include_today or kind != _TODAY:
+            for match in pattern.finditer(rest):
+                found.add(_resolve(kind, match, day))
+        rest = pattern.sub(lambda m: " " * len(m.group(0)), rest)
+    return found
+
+
 def resolve_relative_date(text: str, at: datetime | None) -> date | None:
     """The one day the relative expressions in ``text`` name, counted from ``at``.
 
     ``None`` when ``at`` is unknown, when the text names no exact day, or when
     it names more than one.
     """
-    if at is None or not text:
-        return None
-    day = at.date()
-    rest = text.lower()
-    found: set[date] = set()
-    for pattern, kind in _PATTERNS:
-        for match in pattern.finditer(rest):
-            found.add(_resolve(kind, match, day))
-        rest = pattern.sub(lambda m: " " * len(m.group(0)), rest)
+    found = relative_days(text, at)
     return found.pop() if len(found) == 1 else None
 
 
-__all__ = ["resolve_relative_date"]
+__all__ = ["relative_days", "resolve_relative_date"]
