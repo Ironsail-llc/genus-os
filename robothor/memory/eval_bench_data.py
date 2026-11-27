@@ -91,6 +91,9 @@ class BenchQuestion:
     category: int | None = None
     #: The sessions holding the answer (LongMemEval ``answer_session_ids``).
     evidence_sessions: tuple[str, ...] = ()
+    #: The text of every turn marked as holding the answer (LongMemEval
+    #: ``has_answer``), in history order.
+    evidence_turns: tuple[str, ...] = ()
 
     @property
     def stratum(self) -> str:
@@ -128,6 +131,11 @@ class BenchRecord:
     #: Share of the question's evidence sessions in the context sent; None
     #: when there is none to find (an abstention question).
     evidence_recall: float | None = None
+    #: Share of the question's answer-bearing turns whose text reached the
+    #: context sent; None when none are labelled (or an abstention question).
+    answer_turn_recall: float | None = None
+    #: Every answer-bearing turn reached the context; None when not measured.
+    answer_turns_complete: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -212,6 +220,15 @@ def load_longmemeval(path: str | Path) -> Benchmark:
         # anyway (stable), since knowledge updates depend on it.
         sessions.sort(key=lambda s: s.at)
         histories[qid] = BenchHistory(qid, tuple(sessions))
+        answer_turns = tuple(
+            str(t.get("content") or "")
+            for s in sorted(
+                zip(entry["haystack_dates"], entry["haystack_sessions"], strict=True),
+                key=lambda pair: parse_longmemeval_date(pair[0]),
+            )
+            for t in s[1]
+            if t.get("has_answer")
+        )
         questions.append(
             BenchQuestion(
                 id=qid,
@@ -223,6 +240,7 @@ def load_longmemeval(path: str | Path) -> Benchmark:
                 # evaluate_qa.py: abstention='_abs' in entry['question_id'].
                 abstention="_abs" in qid,
                 evidence_sessions=tuple(str(x) for x in entry.get("answer_session_ids") or ()),
+                evidence_turns=answer_turns,
             )
         )
     return Benchmark(
@@ -702,6 +720,34 @@ def _percentile(values: Sequence[float], pct: float) -> float:
     return float(percentile(list(values), pct))
 
 
+#: The three causes a wrong answer is put down to (:func:`loss_bucket`).
+LOSS_BUCKETS: tuple[str, ...] = (
+    "answer_turns_absent",
+    "answer_turns_present_answer_wrong",
+    "abstention",
+)
+
+
+def loss_bucket(rec: BenchRecord) -> str | None:
+    """Why a wrong answer was wrong, at the level of the answer-bearing turns.
+
+    ``abstention``: an unanswerable question answered anyway.
+    ``answer_turns_present_answer_wrong``: every labelled answer turn was in
+    the context; the answer step is at fault. ``answer_turns_absent``: some
+    answer turn was not delivered (never retrieved, excerpted or packed
+    away), whatever the session-level count says. A record with no turn
+    measurement falls back to its session-level evidence. None when right.
+    """
+    if rec.score >= 1.0:
+        return None
+    if rec.abstention:
+        return "abstention"
+    complete = rec.answer_turns_complete
+    if complete is None:
+        complete = rec.evidence_recall is not None and rec.evidence_recall >= 1.0
+    return "answer_turns_present_answer_wrong" if complete else "answer_turns_absent"
+
+
 def _block(recs: Sequence[BenchRecord]) -> dict[str, Any]:
     n = len(recs)
     correct = sum(r.score for r in recs)
@@ -710,6 +756,12 @@ def _block(recs: Sequence[BenchRecord]) -> dict[str, Any]:
     lo, hi = wilson_interval(round(correct), n) if n else (0.0, 0.0)
     found = [r.evidence_recall for r in recs if r.evidence_recall is not None]
     wrong = [r for r in recs if r.score < 1.0 and r.evidence_recall is not None]
+    turns = [r.answer_turn_recall for r in recs if r.answer_turn_recall is not None]
+    losses = dict.fromkeys(LOSS_BUCKETS, 0)
+    for r in recs:
+        bucket = loss_bucket(r)
+        if bucket:
+            losses[bucket] += 1
     return {
         "n": n,
         "accuracy": (correct / n) if n else 0.0,
@@ -718,6 +770,10 @@ def _block(recs: Sequence[BenchRecord]) -> dict[str, Any]:
         "evidence_complete": sum(1 for x in found if x >= 1.0),
         "wrong_with_evidence": sum(1 for r in wrong if (r.evidence_recall or 0.0) >= 1.0),
         "wrong_missing_evidence": sum(1 for r in wrong if (r.evidence_recall or 0.0) < 1.0),
+        "answer_turn_n": len(turns),
+        "answer_turn_recall": (sum(turns) / len(turns)) if turns else None,
+        "answer_turns_complete": sum(1 for r in recs if r.answer_turns_complete),
+        "losses": losses,
         "wilson": [lo, hi],
         "errors": sum(1 for r in recs if r.error),
         "mean_tokens": (sum(r.tokens for r in recs) / n) if n else 0.0,

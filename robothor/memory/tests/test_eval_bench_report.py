@@ -33,7 +33,7 @@ def test_markdown_states_the_segments_caveat_and_evidence_recall():
     }
     md = eb.format_bench_markdown(report)
     assert "extracted facts are absent" in md
-    assert "Evidence recall" in md and "50.0%" in md
+    assert "Session evidence" in md and "50.0%" in md
     assert "missing evidence 1" in md
 
 

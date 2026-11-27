@@ -49,7 +49,10 @@ def test_a_turn_whose_text_was_delivered_counts():
 def test_a_session_present_without_its_answer_turn_does_not_count():
     # The excerpt kept the sentence that matches the question, not the value.
     items = [
-        {"id": "s1#0u", "text": "User: By the way, I recently upgraded my laptop's RAM … it's fast."}
+        {
+            "id": "s1#0u",
+            "text": "User: By the way, I recently upgraded my laptop's RAM … it's fast.",
+        }
     ]
     q = _q(_ANSWER_TURN)
     assert eb.evidence_recall(q, items) == 1.0, "session-level evidence says present"

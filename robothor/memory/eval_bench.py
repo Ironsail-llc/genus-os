@@ -36,6 +36,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -811,6 +812,61 @@ def evidence_recall(q: bd.BenchQuestion, items: Sequence[dict[str, Any]]) -> flo
     return len(want & present) / len(want)
 
 
+#: Word n-gram length for turn presence, and the share of a turn's n-grams
+#: that must appear in the context for the turn to count as delivered.
+TURN_NGRAM = 6
+TURN_PRESENT_COVERAGE = 0.5
+
+_WORDS = re.compile(r"[a-z0-9]+")
+
+
+def _ngrams(words: Sequence[str], n: int) -> set[tuple[str, ...]]:
+    if len(words) < n:
+        return {tuple(words)} if words else set()
+    return {tuple(words[i : i + n]) for i in range(len(words) - n + 1)}
+
+
+def turn_coverage(turn: str, context_words: Sequence[str]) -> float:
+    """Share of ``turn``'s word ``TURN_NGRAM``-grams found in the context's words.
+
+    Words are lower-cased runs of letters and digits, so case, punctuation,
+    role prefixes and line breaks do not decide presence. A turn shorter
+    than the n-gram is one gram: present only whole.
+    """
+    grams = _ngrams(_WORDS.findall(turn.lower()), TURN_NGRAM)
+    if not grams:
+        return 1.0
+    n = min(TURN_NGRAM, max(len(g) for g in grams))
+    have = _ngrams(list(context_words), n)
+    return sum(1 for g in grams if g in have) / len(grams)
+
+
+@dataclass(frozen=True)
+class TurnEvidence:
+    """The answer-bearing turns a context delivered (None: not measured)."""
+
+    recall: float | None
+    complete: bool | None
+    coverage: tuple[float, ...] = ()
+
+
+def answer_turn_evidence(q: bd.BenchQuestion, items: Sequence[dict[str, Any]]) -> TurnEvidence:
+    """Share of ``q``'s labelled answer turns whose text is in the context sent.
+
+    A turn counts when at least ``TURN_PRESENT_COVERAGE`` of its word
+    n-grams appear in the delivered text (after excerpting and packing), so
+    a session that is present only as an excerpt without the answer does not
+    count. Not measured for an abstention question or one with no labelled
+    turn.
+    """
+    if q.abstention or not q.evidence_turns:
+        return TurnEvidence(None, None)
+    words = _WORDS.findall("\n".join(str(i.get("text") or "") for i in items).lower())
+    cov = tuple(turn_coverage(t, words) for t in q.evidence_turns)
+    present = [c >= TURN_PRESENT_COVERAGE for c in cov]
+    return TurnEvidence(sum(present) / len(present), all(present), cov)
+
+
 def dev_split(questions: Sequence[bd.BenchQuestion], *, seed: int) -> dict[str, str]:
     """A recorded, stratified half: ``dev`` to diagnose losses, ``held_out`` never tuned on.
 
@@ -1038,6 +1094,7 @@ async def run_benchmark(
                         },
                     )
             score = 1.0 if bd.longmemeval_label(judge_output) else 0.0
+        turns = answer_turn_evidence(q, ctx["items"])
         return bd.BenchRecord(
             system=system,
             question_id=q.id,
@@ -1051,6 +1108,8 @@ async def run_benchmark(
             answer=answer,
             judge_output=judge_output,
             evidence_recall=evidence_recall(q, ctx["items"]),
+            answer_turn_recall=turns.recall,
+            answer_turns_complete=turns.complete,
         )
 
     def _error(system: str, q: bd.BenchQuestion, exc: Exception) -> bd.BenchRecord:
@@ -1518,6 +1577,11 @@ def _pct(x: Any) -> str:
     return "–" if x is None else f"{float(x):.1%}"
 
 
+def _complete(b: dict[str, Any]) -> str:
+    n = b.get("answer_turn_n") or 0
+    return f"{b.get('answer_turns_complete', 0)} / {n}" if n else "–"
+
+
 def format_bench_markdown(report: dict[str, Any]) -> str:
     p = report.get("params", {})
     metric = "mean token F1" if p.get("benchmark") == "locomo" else "judge accuracy"
@@ -1542,8 +1606,9 @@ def format_bench_markdown(report: dict[str, Any]) -> str:
         )
     lines += [
         "",
-        "| System | Type | n | Score [95% CI] | Evidence recall | Errors | Tokens (mean / median) | Retrieval p50 / p95 ms | Answer p50 ms |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| System | Type | n | Score [95% CI] | Answer-turn evidence | All answer turns | "
+        "Session evidence | Errors | Tokens (mean / median) | Retrieval p50 / p95 ms | Answer p50 ms |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for system, m in (report.get("systems") or {}).items():
         rows = [*m.get("by_type", {}).items(), ("all", m["overall"])]
@@ -1553,16 +1618,25 @@ def format_bench_markdown(report: dict[str, Any]) -> str:
             lo, hi = b.get("wilson", (0.0, 0.0))
             lines.append(
                 f"| {system} | {name} | {b.get('n')} | {_pct(b.get('accuracy'))} [{lo:.0%}–{hi:.0%}] | "
+                f"{_pct(b.get('answer_turn_recall'))} | "
+                f"{_complete(b)} | "
                 f"{_pct(b.get('evidence_recall'))} | "
                 f"{b.get('errors', 0)} | {b.get('mean_tokens', 0):.0f} / {b.get('median_tokens', 0):.0f} | "
                 f"{b.get('retrieval_p50_ms', 0):.0f} / {b.get('retrieval_p95_ms', 0):.0f} | "
                 f"{b.get('answer_p50_ms', 0):.0f} |"
             )
-        lines.append(f"| {system} | task-averaged | | {_pct(m.get('task_averaged'))} | | | | | |")
-        ov = m["overall"]
         lines.append(
-            f"| {system} | losses | | wrong with all evidence in context {ov.get('wrong_with_evidence', 0)} "
-            f"(answer model); missing evidence {ov.get('wrong_missing_evidence', 0)} (retrieval) | | | | | |"
+            f"| {system} | task-averaged | | {_pct(m.get('task_averaged'))} | | | | | | | |"
+        )
+        ov = m["overall"]
+        lo_ = ov.get("losses") or {}
+        lines.append(
+            f"| {system} | losses | | answer turns absent {lo_.get('answer_turns_absent', 0)} "
+            f"(retrieval or packing); answer turns present, answer wrong "
+            f"{lo_.get('answer_turns_present_answer_wrong', 0)} (answer step); "
+            f"abstention {lo_.get('abstention', 0)} | | | "
+            f"session level: all sessions present {ov.get('wrong_with_evidence', 0)}, "
+            f"missing evidence {ov.get('wrong_missing_evidence', 0)} | | | | |"
         )
     halves = report.get("by_split") or {}
     if any(halves.values()):
