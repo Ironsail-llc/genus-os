@@ -157,7 +157,7 @@ async def _run_checks() -> list[dict[str, Any]]:
     if not checks:
         return []
     report = await runner.run(
-        DoctorContext(offline=True, total_timeout_s=30.0), checks=list(checks)
+        DoctorContext(offline=True, total_timeout_s=float(rc.CHECKS_BUDGET_S)), checks=list(checks)
     )
     return [
         {

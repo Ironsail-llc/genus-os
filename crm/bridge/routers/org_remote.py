@@ -40,6 +40,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from robothor.tenancy import remote_contract as rc
 from robothor.tenancy.remote_contract import (
     ACCESS_VALUES,
     ACCESS_WRITE,
@@ -60,7 +61,7 @@ router = APIRouter(prefix="/api/org", tags=["org"])
 #: Each company's answer on the connections page. The page waits for this
 #: route on first load, so a slow or dead engine is an error entry after this
 #: long, never a held response. (The 165 s budget is for a CALL only.)
-CONNECTIONS_TIMEOUT_S = 10
+CONNECTIONS_TIMEOUT_S = rc.CONNECTIONS_TIMEOUT_S
 
 _LIST_PATH = "/api/admin/remote-tools"
 _CALL_PATH = "/api/admin/remote-tools/call"

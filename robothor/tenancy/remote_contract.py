@@ -88,6 +88,8 @@ TARGET_TIMEOUT_S = 150  # the target engine's own execution budget
 BRIDGE_TIMEOUT_S = 165  # bridge -> target
 HOME_TIMEOUT_S = 180  # home engine -> bridge
 CHECK_CACHE_TTL_S = 60  # catalogue doctor-check cache
+CONNECTIONS_TIMEOUT_S = 10  # the connections page's wait for each company's catalogue
+CHECKS_BUDGET_S = 8  # the catalogue's plugin checks, inside CONNECTIONS_TIMEOUT_S
 DESCRIPTION_MAX_CHARS = 200  # catalogue description trim
 NOTES_MAX_CHARS = 600  # a declaration's notes
 
