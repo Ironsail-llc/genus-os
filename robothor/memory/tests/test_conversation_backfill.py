@@ -123,3 +123,86 @@ def test_the_job_is_not_run_by_anything_automatically() -> None:
         and "rescope_conversation_facts" in p.read_text()
     ]
     assert callers == []
+
+
+# ═══ duplicates within a batch, and the graph left behind ════════════════
+
+
+def _hashed_old_fact(world: World, text: str, key: str, person: str | None) -> int:
+    from robothor.memory.drift import compute_fact_hash
+
+    digest = compute_fact_hash(text, tenant_id=TENANT, category="personal", person_id=person)
+    return int(
+        world.db.one(
+            "INSERT INTO memory_facts (fact_text, category, tenant_id, source_type, metadata, "
+            "person_id, content_hash) VALUES (%s, 'personal', %s, 'conversation', "
+            "jsonb_build_object('session_key', %s::text), %s, %s) RETURNING id",
+            (text, TENANT, key, person, digest),
+        )
+    )
+
+
+def test_two_shared_copies_that_meet_in_one_scope_keep_the_oldest(world: World) -> None:
+    from robothor.memory.conversation_backfill import rescope_conversation_facts
+
+    store_chat(world.db, "telegram:4242", [("user", "hi")], person=ALICE)
+    first = _hashed_old_fact(world, "The operator prefers dark roast.", "telegram:4242", None)
+    second = _hashed_old_fact(world, "The operator prefers dark roast.", "telegram:4242", ALICE)
+    report = rescope_conversation_facts(TENANT, apply=True)
+    assert report["rescoped"] == 1 and report["retired_duplicates"] == 1
+    rows = {f["id"]: f for f in world.db.facts()}
+    assert rows[first]["is_active"] and rows[first]["scope_id"] == ALICE_P
+    assert not rows[second]["is_active"] and rows[second]["superseded_by"] == first
+    assert rescope_conversation_facts(TENANT, apply=True)["examined"] == 0  # the cursor moved
+
+
+@pytest.mark.asyncio
+async def test_a_rescoped_facts_edges_and_nodes_stop_being_public(world: World) -> None:
+    from robothor.memory.conversation_backfill import rescope_conversation_facts
+
+    store_chat(world.db, "telegram:4242", [("user", "hi")], person=ALICE)
+    world.model.on(
+        "OLD1",
+        wp.fact(
+            "Dana Reyes treats Reader Person at Northside Oncology Clinic.",
+            [("Dana Reyes", "person"), ("Northside Oncology Clinic", "organization")],
+            [("Dana Reyes", "works at", "Northside Oncology Clinic")],
+        ),
+    )
+    world.model.on(
+        "PUB",
+        wp.fact(
+            "Dana Reyes presented at the staff meeting.",
+            [("Dana Reyes", "person")],
+        ),
+    )
+    await wp._ingest(
+        "OLD1 text", "telegram", "conversation", role="user",
+        metadata={"session_key": "telegram:4242"},
+    )  # fmt: skip
+    await wp._ingest("PUB notes", "api", "note")  # a shared fact still names Dana Reyes
+    old = world.db.fact_id("Dana Reyes treats Reader Person at Northside Oncology Clinic.")
+    assert world.db.edges()
+
+    dry = rescope_conversation_facts(TENANT)
+    assert dry["edges_removed"] == 1 and dry["nodes_removed"] == 1
+    assert world.db.edges()  # a dry run changes nothing
+
+    report = rescope_conversation_facts(TENANT, apply=True)
+    assert report["rescoped"] == 1
+    assert world.db.edges() == []
+    assert world.db.q("SELECT count(*) FROM memory_relation_evidence")[0][0] == 0
+    names = {r[0] for r in world.db.q("SELECT name FROM memory_entities")}
+    assert "Dana Reyes" in names  # still named by a shared fact
+    assert "Northside Oncology Clinic" not in names  # minted from the now-private fact alone
+    (row,) = [f for f in world.db.facts() if f["id"] == old]
+    assert row["metadata"]["graph_pending_relations"] == [
+        {"source": "Dana Reyes", "relation": "works at", "target": "Northside Oncology Clinic"}
+    ]
+    assert (
+        world.db.q(
+            "SELECT count(*) FROM memory_resolution_decisions "
+            "WHERE surface_form = 'Northside Oncology Clinic'"
+        )[0][0]
+        == 0
+    )
