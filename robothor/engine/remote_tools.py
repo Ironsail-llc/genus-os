@@ -122,10 +122,12 @@ async def _declared(tool: str) -> tuple[dict[str, Any], dict[str, Any]]:
     return declared, function
 
 
-def _mode_open() -> str:
+async def _mode_open() -> str:
+    """The mode, refused when ``off``. Read off the loop: the flag store may
+    read the database."""
     from robothor.auth import runtime
 
-    mode = runtime.org_remote_tools_mode()
+    mode = await asyncio.to_thread(runtime.org_remote_tools_mode)
     if mode == rc.MODE_OFF:
         raise Refused(403, rc.ERR_TOOLS_OFF)
     return mode
@@ -206,7 +208,7 @@ async def _plugins_and_checks() -> tuple[list[dict[str, Any]], list[dict[str, An
 
 async def catalogue(tenant_id: str) -> dict[str, Any]:
     """``GET /api/admin/remote-tools``: what this tenant offers its parent."""
-    mode = _mode_open()
+    mode = await _mode_open()
     declared = await asyncio.to_thread(declarations)
     tools: list[dict[str, Any]] = []
     for name in sorted(declared):
@@ -236,7 +238,7 @@ async def catalogue(tenant_id: str) -> dict[str, Any]:
 
 async def describe(tool: str) -> dict[str, Any]:
     """``GET /api/admin/remote-tools/{tool}``: one tool's declaration and schema."""
-    _mode_open()
+    await _mode_open()
     spec, function = await _declared(tool)
     return {
         "name": tool,
@@ -505,7 +507,7 @@ async def _execute(
     seen: dict[str, Any],
 ) -> tuple[int, dict[str, Any]]:
     # 2. the mode
-    mode = _mode_open()
+    mode = await _mode_open()
     write = access == rc.ACCESS_WRITE
     if write and mode == rc.MODE_READ:
         raise Refused(403, rc.ERR_WRITE_FORBIDDEN)
