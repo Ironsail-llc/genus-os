@@ -347,6 +347,16 @@ def _failure(status: int, answer: Any, *, write: bool) -> tuple[dict[str, Any], 
             result["outcome_unknown"] = True
         return result, "error"
     body = answer if isinstance(answer, dict) else {}
+    if "message" not in body and status in (401, 403):
+        # The bridge's own gate (auth, scope, capabilities manifest): its
+        # sentence says what to fix, and it is no remote refusal code.
+        reason = str(body.get("error") or f"HTTP {status}")
+        return {
+            "error": f"The bridge refused the call: {reason}",
+            "error_code": None,
+            "remote_status": status,
+            "retryable": False,
+        }, "denied"
     code = str(body.get("error") or "")
     message = str(body.get("message") or code or f"HTTP {status}")
     result = {
