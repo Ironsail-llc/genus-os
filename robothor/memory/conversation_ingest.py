@@ -26,6 +26,7 @@ the next run; nothing is stored as a raw transcript.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -51,9 +52,13 @@ logger = logging.getLogger(__name__)
 
 #: Most turns in one extraction window (the old trailing window's size).
 WINDOW_MAX_TURNS = 20
-#: Most characters of turn text in one window; a single longer turn is a
-#: window of its own, never clipped.
+#: Most characters of turn text in one window. A single longer turn is a window
+#: of its own, and the model reads only this much of it (``_clipped``).
 WINDOW_MAX_CHARS = 12_000
+#: Runs in a row that may fail to extract the same window before it is skipped.
+MAX_WINDOW_FAILURES = 3
+#: Where a skipped window is recorded (``ingested_items``), one row per window.
+_SKIPPED_SOURCE = "conversation_facts_skipped"
 #: Turns before a window shown to the model as read-only context.
 CONTEXT_TURNS = 4
 #: Most windows one run extracts, so a long backlog (a conversation older than
@@ -211,9 +216,17 @@ async def _load_when_stored(
     return conv
 
 
-def windows(turns: list[ConversationTurn]) -> list[list[ConversationTurn]]:
+def windows(
+    turns: list[ConversationTurn], *, first_end: int | None = None
+) -> list[list[ConversationTurn]]:
     """Consecutive runs of at most :data:`WINDOW_MAX_TURNS` turns and
-    :data:`WINDOW_MAX_CHARS` characters, in order."""
+    :data:`WINDOW_MAX_CHARS` characters, in order. ``first_end`` closes the
+    first window after that message id (the window that failed before)."""
+    if first_end is not None:
+        head = [t for t in turns if t.ref <= first_end]
+        if head:
+            first = windows(head)[0]
+            return [first, *windows(turns[len(first) :])]
     out: list[list[ConversationTurn]] = []
     current: list[ConversationTurn] = []
     chars = 0
@@ -226,6 +239,16 @@ def windows(turns: list[ConversationTurn]) -> list[list[ConversationTurn]]:
     if current:
         out.append(current)
     return out
+
+
+def _clipped(turn: ConversationTurn) -> ConversationTurn:
+    """The turn as the model reads it: at most :data:`WINDOW_MAX_CHARS` of its
+    text, with a marker saying how much was left out. Stored turns are untouched."""
+    if len(turn.text) <= WINDOW_MAX_CHARS:
+        return turn
+    hidden = len(turn.text) - WINDOW_MAX_CHARS
+    text = f"{turn.text[:WINDOW_MAX_CHARS]}\n[… {hidden} more characters not shown]"
+    return dataclasses.replace(turn, text=text)
 
 
 _MODE_KEYS = ("speaker_role", "about_user", "kind", "turn_refs", "mentioned_at")
@@ -468,12 +491,18 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
     metadata = {"session_key": key, "agent_id": run.agent_id, "run_id": run.run_id}
     skip_generated = _ingest_skip_generated_enabled()
     seen = list(conv.context)
-    result: dict[str, Any] = {"fact_ids": [], "llm_calls": 0, "windows": 0, "turns_covered": 0}
-    all_windows = windows(conv.turns)
+    result: dict[str, Any] = {
+        "fact_ids": [],
+        "llm_calls": 0,
+        "windows": 0,
+        "windows_skipped": 0,
+        "turns_covered": 0,
+    }
+    all_windows = windows(conv.turns, first_end=mark.failed_end)
     for window in all_windows[:MAX_WINDOWS_PER_RUN]:
         last_ref = window[-1].ref
         kept = [
-            t
+            _clipped(t)
             for t in window
             if not (skip_generated and t.role == "assistant" and _is_generated_briefing(t.text))
         ]
@@ -482,12 +511,35 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
             extraction = await extract_conversation_facts(kept, context=context)
             result["llm_calls"] += 1
             if extraction.error is not None:
+                failures = await asyncio.to_thread(_fail, key, tenant, mark.token, last_ref)
+                if failures < MAX_WINDOW_FAILURES:
+                    logger.warning(
+                        "Conversation extraction failed for %s (%s, %d of %d); will retry",
+                        sanitize_log(key),
+                        extraction.error,
+                        failures,
+                        MAX_WINDOW_FAILURES,
+                    )
+                    return _done(result)
+                # It never extracts: pass over it, so the rest of the conversation
+                # is not held behind it, and say so.
                 logger.warning(
-                    "Conversation extraction failed for %s (%s); will retry",
+                    "Conversation %s: skipping turns %d-%d after %d failed extractions (%s)",
                     sanitize_log(key),
+                    window[0].ref,
+                    last_ref,
+                    failures,
                     extraction.error,
                 )
-                return _done(result)
+                await asyncio.to_thread(
+                    _record_skip, key, tenant, window[0].ref, last_ref, str(extraction.error)
+                )
+                await asyncio.to_thread(
+                    _advance, key, tenant, mark.token, last_ref, list(result["fact_ids"])
+                )
+                result["windows_skipped"] += 1
+                seen.extend(window)
+                continue
             part = await _write_window(
                 extraction.facts,
                 kept,
@@ -523,7 +575,7 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
 
 def _done(result: dict[str, Any]) -> dict[str, Any] | None:
     """What a run that stopped early returns: what it completed, else None."""
-    return result if result["windows"] else None
+    return result if result["windows"] or result["windows_skipped"] else None
 
 
 # ═══ the watermark row ═══════════════════════════════════════════════════
@@ -545,6 +597,8 @@ class Watermark:
     through: int
     failures: int
     token: str
+    #: The end of the window that failed, while it keeps failing.
+    failed_end: int | None = None
 
 
 def _state(raw: Any) -> dict[str, Any]:
@@ -583,7 +637,13 @@ def _claim(session_key: str, tenant_id: str) -> Watermark | None:
     if row is None:
         return None
     state = _state(row[0])
-    return Watermark(int(state.get("through") or 0), int(state.get("failures") or 0), token)
+    failed_end = state.get("failed_end")
+    return Watermark(
+        int(state.get("through") or 0),
+        int(state.get("failures") or 0),
+        token,
+        int(failed_end) if failed_end is not None else None,
+    )
 
 
 def _update(
@@ -610,23 +670,41 @@ def _advance(
         session_key,
         tenant_id,
         token,
-        "content_hash = (content_hash::jsonb || jsonb_build_object('through', %s::bigint, "
-        "'failures', 0))::text, fact_ids = %s, ingested_at = NOW()",
+        "content_hash = ((content_hash::jsonb - 'failed_end') || jsonb_build_object("
+        "'through', %s::bigint, 'failures', 0))::text, fact_ids = %s, ingested_at = NOW()",
         (through, list(fact_ids)),
     )
 
 
-def _fail(session_key: str, tenant_id: str, token: str) -> int:
-    """Count one more run that could not extract the next window; the new count."""
+def _fail(session_key: str, tenant_id: str, token: str, window_end: int) -> int:
+    """Count one more run that could not extract the next window; the new count.
+
+    The first failure pins the window's end (``failed_end``), so the turns that
+    arrive later are not folded into the window that fails.
+    """
     state = _update(
         session_key,
         tenant_id,
         token,
         "content_hash = (content_hash::jsonb || jsonb_build_object('failures', "
-        "COALESCE((content_hash::jsonb->>'failures')::int, 0) + 1))::text",
-        (),
+        "COALESCE((content_hash::jsonb->>'failures')::int, 0) + 1, 'failed_end', "
+        "COALESCE((content_hash::jsonb->>'failed_end')::bigint, %s::bigint)))::text",
+        (window_end,),
     )
     return int((state or {}).get("failures") or 0)
+
+
+def _record_skip(session_key: str, tenant_id: str, start: int, end: int, reason: str) -> None:
+    """Record a window passed over unextracted, so it can be found and retried."""
+    with get_connection() as conn:
+        conn.cursor().execute(
+            "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, "
+            "fact_ids, ingested_at) VALUES (%s, %s, %s, %s, '{}', NOW()) "
+            "ON CONFLICT (tenant_id, source_name, item_id) DO UPDATE "
+            "SET content_hash = EXCLUDED.content_hash, ingested_at = NOW()",
+            (tenant_id, _SKIPPED_SOURCE, f"{session_key}#{start}-{end}", reason[:200]),
+        )
+        conn.commit()
 
 
 def _release(session_key: str, tenant_id: str, token: str) -> None:

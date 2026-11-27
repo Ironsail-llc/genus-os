@@ -50,6 +50,7 @@ class Store:
         self.scope = scope
         self.watermark = 0
         self.failures = 0
+        self.failed_end: int | None = None
         self.recorded: list[tuple[str, list[int]]] = []
         self.skipped: list[tuple[int, int]] = []
         self.loads = 0
@@ -69,7 +70,12 @@ class Store:
         if self.claims_refused or self.claimed_by is not None:
             return None
         self.claimed_by = "token-1"
-        return ci.Watermark(through=self.watermark, failures=self.failures, token="token-1")
+        return ci.Watermark(
+            through=self.watermark,
+            failures=self.failures,
+            token="token-1",
+            failed_end=self.failed_end,
+        )
 
     def advance(
         self, session_key: str, tenant_id: str, token: str, through: int, fact_ids: list[int]
@@ -78,9 +84,12 @@ class Store:
         assert token == self.claimed_by and tenant_id == TENANT
         self.watermark = through
         self.failures = 0
+        self.failed_end = None
         self.recorded.append((str(through), list(fact_ids)))
 
-    def fail(self, session_key: str, tenant_id: str, token: str) -> int:
+    def fail(self, session_key: str, tenant_id: str, token: str, end: int) -> int:
+        if self.failed_end is None:
+            self.failed_end = end
         self._seen()
         assert token == self.claimed_by
         self.failures += 1
