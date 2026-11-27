@@ -798,3 +798,37 @@ def test_any_overlap_with_a_relayed_span_makes_a_fact_external(
         _user_turn(text),
     )
     assert fact["speaker_role"] == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "quote", "phrase", "model_said", "expected"),
+    [
+        # The phrase dates another clause than the fact's own: left alone.
+        (
+            "I met Sam on Tuesday and yesterday I met Bob.",
+            "met Sam",
+            "yesterday",
+            "2026-11-24",
+            "2026-11-24",
+        ),
+        # In the fact's own clause, a near miscount is corrected.
+        ("My surgery was last Tuesday.", "My surgery", "last Tuesday", "2026-11-23", "2026-11-24"),
+    ],
+)
+def test_a_date_phrase_corrects_only_within_the_facts_own_clause(
+    text: str, quote: str, phrase: str, model_said: str, expected: str
+) -> None:
+    at = FRI if "Sam" in text else WED
+    (fact,) = parse_conversation_response(
+        _answer(
+            _fact(
+                "The user did something.",
+                [1],
+                quote=quote,
+                event_time=model_said,
+                date_phrase=phrase,
+            )
+        ),
+        _said(text, at),
+    )
+    assert fact["event_time"] == expected

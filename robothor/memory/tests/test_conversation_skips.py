@@ -82,3 +82,24 @@ async def test_a_window_that_still_fails_stays_listed(world: World, monkeypatch:
     report = await retry_skipped(TENANT, apply=True)
     assert report["retried"] == 0 and report["still_failing"] == 1
     assert len(_skips(world)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_retry_that_loses_its_lease_writes_nothing(world: World, monkeypatch: Any) -> None:
+    from robothor.memory import conversation_ingest as ci
+    from robothor.memory.conversation_skips import retry_skipped
+
+    world.model.on_turn("tea", turn_fact("The user prefers tea.", about_user=True))
+    turns = [("user", "I prefer tea.", {"sender_telegram_id": "4242"}), ("assistant", "ok")]
+    ids = store_chat(world.db, "telegram:4242", turns, person=ALICE)
+    _skip(world, "telegram:4242", ids[0], ids[1])
+    renewed: list[str] = []
+
+    def lost(key: str, tenant: str, token: str) -> bool:
+        renewed.append(token)
+        return False
+
+    monkeypatch.setattr(ci, "_renew", lost)
+    report = await retry_skipped(TENANT, apply=True)
+    assert renewed and report["still_failing"] == 1
+    assert world.db.facts() == [] and len(_skips(world)) == 1

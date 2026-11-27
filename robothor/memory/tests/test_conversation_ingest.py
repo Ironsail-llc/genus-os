@@ -58,6 +58,8 @@ class Store:
         self.claims_refused = False
         self.lease_lost = False
         self.renewals = 0
+        self.late: list[ConversationTurn] = []
+        self.covered: list[int] = []
         self.released = 0
         self.reowned: list[Any] = []
         self.fresh_from: int | None = None  # refs from here on are "just written"
@@ -84,7 +86,9 @@ class Store:
     ) -> None:
         self._seen()
         assert token == self.claimed_by and tenant_id == TENANT
-        self.watermark = through
+        self.covered += list(fact_ids)
+        self.late = [t for t in self.late if t.ref not in fact_ids]
+        self.watermark = max(self.watermark, through)
         self.failures = 0
         self.failed_end = None
         self.recorded.append((str(through), list(fact_ids)))
@@ -151,6 +155,8 @@ class Store:
             held_from=held,
             more=len(rows) > limit,
             refs=[t.ref for t in new],
+            late=list(self.late),
+            late_refs=[t.ref for t in self.late],
         )
 
 
@@ -789,3 +795,13 @@ async def test_held_turns_whose_follow_up_was_lost_are_taken_by_the_next_run() -
     store.fresh_from = None  # later: the next exchange, or any run of this conversation
     await _run(store, model)
     assert store.watermark == 4
+
+
+@pytest.mark.asyncio
+async def test_a_late_turn_that_keeps_failing_ends_as_a_recorded_skip() -> None:
+    store = Store(_stored(4), scope=("user", f"person:{ALICE}"))
+    store.watermark = 4
+    store.late = [_turn(2, "user", "POISON late turn")]
+    await _run(store, PoisonModel())
+    assert store.skipped == [(2, 2)]
+    assert 2 in store.covered and store.late == []  # recorded, never looked for again
