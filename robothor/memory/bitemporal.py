@@ -149,6 +149,10 @@ def supersede_with_validity(
     the two was always wrong and the bound is a guess about which. Acting on
     that difference (e.g. keeping both and flagging for review) needs the error
     rate the decisions table is now collecting, so it is not attempted yet.
+
+    ``reason`` (``"changed"`` for a same-slot value change) is written to the
+    old row's ``metadata.superseded_reason``, and the old id appended to the
+    new row's ``metadata.supersedes``, in the same transaction.
     """
     tenant = tenant_id or DEFAULT_TENANT
     with get_connection() as conn:
@@ -187,6 +191,21 @@ def supersede_with_validity(
             """,
             (new_id, tenant),
         )
+        if reason:
+            # Why it closed, on the old row; which rows it closed, on the new
+            # one, so a read can show the earlier value next to the current.
+            cur.execute(
+                "UPDATE memory_facts SET metadata = COALESCE(metadata, '{}'::jsonb) "
+                "|| jsonb_build_object('superseded_reason', %s::text) "
+                "WHERE id = %s AND tenant_id = %s",
+                (reason, old_id, tenant),
+            )
+            cur.execute(
+                "UPDATE memory_facts SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), "
+                "'{supersedes}', COALESCE(metadata->'supersedes', '[]'::jsonb) || to_jsonb(%s::int)) "
+                "WHERE id = %s AND tenant_id = %s",
+                (old_id, new_id, tenant),
+            )
         conn.commit()
     logger.debug(
         "supersede_with_validity: %s -> %s (%s) for %s", old_id, new_id, classification, tenant

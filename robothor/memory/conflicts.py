@@ -448,8 +448,63 @@ async def find_slot_candidates(
     scope_id: str | None = None,
     limit: int = SLOT_CANDIDATE_LIMIT,
 ) -> tuple[list[int], list[dict[str, Any]]]:
-    """Active facts that may fill ``slot``, and the entity ids its subject resolves to."""
-    return [], []
+    """Active facts that may fill ``slot``, and the entity ids its subject resolves to.
+
+    One statement, bounded by indexes, never a scan: the subject's name
+    through ``lower_entities(entities)`` (GIN, migration 109), and the
+    entities of that name (``memory_entities (tenant_id, lower(name))``)
+    through ``memory_mentions (tenant_id, entity_id)``, so a fact that named the
+    same entity another way is found too. Newest first, at most ``limit``.
+    Only the fact's own tenant and exactly its scope are read, as in
+    :func:`find_similar_facts`. Each row carries ``mention_entities``
+    (``[{surface_form, entity_id}]``) for :func:`fact_slot`.
+    """
+    name = slot.subject_name
+    if not name:
+        return [], []
+    tenant = tenant_id or DEFAULT_TENANT
+    kind = scope_kind or "shared"
+    sid = None if kind == "shared" else scope_id
+
+    def _query() -> tuple[list[int], list[dict[str, Any]]]:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                WITH subj AS (
+                    SELECT id FROM memory_entities
+                     WHERE tenant_id = %(t)s AND lower(name) = %(name)s
+                ), cand AS (
+                    SELECT id FROM memory_facts
+                     WHERE tenant_id = %(t)s AND lower_entities(entities) && ARRAY[%(name)s]::text[]
+                    UNION
+                    SELECT m.fact_id FROM memory_mentions m
+                     WHERE m.tenant_id = %(t)s AND m.entity_id IN (SELECT id FROM subj)
+                ), hits AS (
+                    SELECT f.id, f.fact_text, f.category, f.entities, f.origin, f.metadata,
+                           COALESCE((SELECT json_agg(json_build_object(
+                                        'surface_form', m.surface_form, 'entity_id', m.entity_id))
+                                       FROM memory_mentions m
+                                      WHERE m.fact_id = f.id AND m.entity_id IS NOT NULL),
+                                    '[]'::json) AS mention_entities
+                      FROM memory_facts f JOIN cand c ON c.id = f.id
+                     WHERE f.tenant_id = %(t)s AND f.is_active = TRUE
+                       AND f.scope_kind = %(kind)s AND f.scope_id IS NOT DISTINCT FROM %(sid)s
+                     ORDER BY f.id DESC
+                     LIMIT %(limit)s
+                )
+                SELECT (SELECT COALESCE(array_agg(id), '{}') FROM subj),
+                       (SELECT COALESCE(json_agg(h), '[]'::json) FROM hits h)
+                """,
+                {"t": tenant, "name": name, "kind": kind, "sid": sid, "limit": int(limit)},
+            )
+            row = cur.fetchone()
+        if not row:
+            return [], []
+        ids, hits = row
+        return [int(i) for i in ids or []], list(hits or [])
+
+    return await asyncio.to_thread(_query)
 
 
 def build_classification_prompt(new_fact: str, existing_fact: str) -> str:
