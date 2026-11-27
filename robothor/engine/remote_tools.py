@@ -130,13 +130,41 @@ async def _declared(tool: str) -> tuple[dict[str, Any], dict[str, Any]]:
 #: Absolute-looking paths in a check's detail: where an instance keeps its
 #: files is not a fact another tenant gets.
 _PATH_RE = re.compile(r"(?:[A-Za-z]:)?(?:[\\/][^\s\\/'\"]+){2,}[\\/]?")
+#: A URL in a check's detail. Its scheme, host, port and path are kept; its
+#: credentials (``user:pass@``), query and fragment are dropped.
+_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>]+")
 _DETAIL_MAX = 200
 
 
+def _bare_url(match: re.Match[str]) -> str:
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(match.group(0))
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        return "<url>"
+    return f"{parts.scheme}://{host}{port}{parts.path}"
+
+
 def _clean(text: str) -> str:
+    """A check's detail as another tenant may read it: secrets redacted,
+    filesystem paths replaced, URLs kept without credentials or query."""
     from robothor.secrets.redaction import redact
 
-    return _PATH_RE.sub("<path>", redact(str(text or "")[:4096]))[:_DETAIL_MAX]
+    urls: list[str] = []
+
+    def hold(match: re.Match[str]) -> str:
+        urls.append(redact(_bare_url(match)))
+        return f"\x00{len(urls) - 1}\x00"
+
+    # URLs first: the redactor rewrites a URL's credentials in place, which
+    # would leave the URL unrecognisable to the path scrubber.
+    held = redact(_URL_RE.sub(hold, str(text or "")[:4096]))
+    scrubbed = _PATH_RE.sub("<path>", held)
+    restored = re.sub("\x00(\\d+)\x00", lambda m: urls[int(m.group(1))], scrubbed)
+    return restored[:_DETAIL_MAX]
 
 
 def _check_status(severity: str, status: str) -> str:
@@ -449,6 +477,27 @@ def _rbac_denied(result: dict[str, Any]) -> bool:
     return bool(result.get("refused")) and result.get("gate") == "role"
 
 
+def _refused_before_running(result: dict[str, Any]) -> bool:
+    """A control declined the call (the engine's refusal marker): nothing ran."""
+    return result.get("refused") is True
+
+
+def _outcome_unknown(result: dict[str, Any]) -> bool:
+    """A write's result that cannot say whether the remote system changed.
+
+    The tool's own signal (``outcome_unknown``, as the effect ledger reads it),
+    a crash the dispatcher caught (``tool_crashed``), or any other error that
+    is not a control's refusal: a write that failed may have acted first.
+    """
+    if _refused_before_running(result):
+        return False
+    return (
+        result.get("outcome_unknown") is True
+        or result.get("tool_crashed") is True
+        or "error" in result
+    )
+
+
 async def execute(tenant_id: str, body: Any) -> tuple[int, dict[str, Any]]:
     """``POST /api/admin/remote-tools/call``, after the caller check.
 
@@ -490,6 +539,8 @@ async def execute(tenant_id: str, body: Any) -> tuple[int, dict[str, Any]]:
         )
     except Refused as refused:
         return audited(refused.status, refused.body(), refused.code)
+    if payload.get("outcome_unknown") is True:
+        return audited(status, payload, rc.ERR_OUTCOME_UNKNOWN)
     return audited(status, payload, str(payload.get("outcome") or payload.get("error")))
 
 
@@ -541,17 +592,35 @@ async def _execute(
         if replay is not None:
             return replay
     # 8. the normal dispatch, confined to this tenant
-    status, payload = await _dispatch(
+    status, payload, settle = await _dispatch(
         tenant_id, tool, args, home, agent_id, user_id, role, request_id, write=write
     )
     if write and request_id:
-        try:
+        await _settle(tenant_id, request_id, settle, status, payload)
+    return status, payload
+
+
+async def _settle(
+    tenant_id: str, request_id: str, settle: str, status: int, payload: dict[str, Any]
+) -> None:
+    """What a write's claim becomes: ``done`` with its answer, released (a
+    control refused it, nothing ran), or kept ``running`` (outcome unknown, so
+    a replay is a 409 and the write is never run again)."""
+    if settle == _KEEP:
+        return
+    try:
+        if settle == _RELEASE:
+            await asyncio.to_thread(release_request, tenant_id, request_id)
+        else:
             await asyncio.to_thread(
                 finish_request, tenant_id, request_id, {"status": status, "body": payload}
             )
-        except Exception:  # noqa: BLE001 - the claim stays running: never re-run
-            logger.warning("remote tool request could not be marked done", exc_info=True)
-    return status, payload
+    except Exception:  # noqa: BLE001 - the claim stays running: a 409 later, never a re-run
+        logger.warning("remote tool request claim could not be settled", exc_info=True)
+
+
+#: How :func:`_dispatch` says to settle a write's claim.
+_DONE, _RELEASE, _KEEP = "done", "release", "keep"
 
 
 async def _claim(
@@ -596,7 +665,8 @@ async def _dispatch(
     request_id: str | None,
     *,
     write: bool,
-) -> tuple[int, dict[str, Any]]:
+) -> tuple[int, dict[str, Any], str]:
+    """``(status, answer, how to settle a write's claim)``."""
     from robothor.engine.tools.registry import get_registry
 
     try:
@@ -630,9 +700,15 @@ async def _dispatch(
     except (TypeError, ValueError):
         size = rc.REMOTE_RESULT_MAX_BYTES + 1
     outcome = rc.OUTCOME_ERROR if "error" in result else rc.OUTCOME_OK
+    settle = _DONE
+    unknown = False
+    if write and _refused_before_running(result):
+        settle = _RELEASE  # a control refused it: a retry may run once lifted
+    elif write and _outcome_unknown(result):
+        settle, unknown = _KEEP, True
     if size > rc.REMOTE_RESULT_MAX_BYTES:
         if not write:
-            return 413, refusal_body(rc.ERR_TOO_LARGE)
+            return 413, refusal_body(rc.ERR_TOO_LARGE), settle
         # A write has acted: it is answered as done, its result withheld,
         # never as a refusal a caller would retry.
         answer = _answer(outcome, request_id, tool, None)
@@ -641,5 +717,8 @@ async def _dispatch(
             "bytes": size,
             "max_bytes": rc.REMOTE_RESULT_MAX_BYTES,
         }
-        return 200, answer
-    return 200, _answer(outcome, request_id, tool, result)
+    else:
+        answer = _answer(outcome, request_id, tool, result)
+    if unknown:
+        answer["outcome_unknown"] = True
+    return 200, answer, settle

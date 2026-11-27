@@ -404,11 +404,28 @@ async def _call(name: str, args: dict[str, Any], ctx: ToolContext, access: str) 
             f"'{args['tool']}' ran in that company, but its result was too large to "
             "return here. Do not run it again; check the outcome in that company."
         )
+    unknown = access == ACCESS_WRITE and answer.get("outcome_unknown") is True
     if outcome == OUTCOME_ERROR:
         inner = answer.get("result")
         detail = inner.get("error") if isinstance(inner, dict) else None
         result["error"] = f"'{args['tool']}' reported an error: {detail or 'see result'}"
-    audit_outcome = {OUTCOME_ERROR: "error", OUTCOME_REPLAYED: "replay"}.get(outcome, "ok")
+    if unknown:
+        # The write may have acted before it failed. Said in so many words,
+        # and marked so the effect ledger fences an identical call rather
+        # than run it again.
+        result["error"] = (
+            f"{result.get('error') or 'The write did not report its outcome.'} "
+            "That company's system may or may not have changed: check there before "
+            "trying again."
+        )
+        result["error_code"] = ERR_OUTCOME_UNKNOWN
+        result["outcome_unknown"] = True
+        result["retryable"] = False
+    audit_outcome = (
+        "unknown"
+        if unknown
+        else {OUTCOME_ERROR: "error", OUTCOME_REPLAYED: "replay"}.get(outcome, "ok")
+    )
     _audit(
         name,
         ctx,
