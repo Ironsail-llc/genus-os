@@ -323,6 +323,22 @@ class TestOnlyTheMatchedClauseCounts:
         slot = _slot(text)
         assert replacement_wording(slot.lead, value=slot.value) is worded
 
+    @pytest.mark.parametrize(
+        ("text", "worded"),
+        [
+            ("Alice works at Globex since her new side project.", False),
+            ("Alice now works at Globex.", True),
+            ("Alice joined Globex as a contractor.", False),
+        ],
+    )
+    def test_a_relation_slot_reads_wording_only_before_the_value_too(self, text, worded):
+        # The write path hands extraction's relations on: the relation slot
+        # wins over the frame, so it must keep the same rule.
+        rel = [{"source": "Alice", "relation": "works at", "target": "Globex"}]
+        slot = fact_slot({"fact_text": text, "relations": rel})
+        assert slot is not None and slot.source == "relation"
+        assert replacement_wording(slot.lead, value=slot.value) is worded
+
     def test_a_new_or_updated_possessive_fills_the_slot(self):
         slot = _slot("Alice's new email is alice@work.example.")
         assert slot is not None and (slot.attribute, slot.value) == ("email", "alice@work.example")
@@ -794,6 +810,18 @@ class TestWordingAfterTheValue:
     async def test_a_trailing_new_does_not_close_a_second_employer(self, monkeypatch):
         s = _Store(monkeypatch, slot_rows=[_row(7, "Alice works at Acme.")], outcome="changed")
         out = await s("Alice works at Globex since her new side project.")
+        assert s.closed() == []
+        assert out["action"] == "stored"
+
+
+class TestWordingAfterTheValueOnTheWritePath:
+    @pytest.mark.asyncio
+    async def test_a_trailing_new_with_a_relation_does_not_close(self, monkeypatch):
+        s = _Store(monkeypatch, slot_rows=[_row(7, "Alice works at Acme.")], outcome="changed")
+        out = await s(
+            "Alice works at Globex since her new side project.",
+            relations=[{"source": "Alice", "relation": "works at", "target": "Globex"}],
+        )
         assert s.closed() == []
         assert out["action"] == "stored"
 
