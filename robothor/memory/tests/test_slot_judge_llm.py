@@ -3,7 +3,8 @@
 ``conflicts.judge_slot_change`` decides whether a new value replaces an old
 one. Only ``changed`` closes a fact (``conflicts.slot_action``), so the
 property that matters is that no pair labelled as compatible (both can be
-true) is judged ``changed``. Exact outputs are not asserted. Runs only under
+true) ends with a close once the judge's answer goes through the decision
+table. Exact outputs are not asserted. Runs only under
 ``-m llm`` against a local model; prints the confusion table.
 """
 
@@ -37,9 +38,9 @@ CASES = [
 
 @pytest.mark.timeout(600)
 async def test_no_compatible_pair_is_judged_changed() -> None:
-    from robothor.memory.conflicts import judge_slot_change
+    from robothor.memory.conflicts import judge_slot_change, replacement_wording, slot_action
 
-    table: Counter[tuple[str, str]] = Counter()
+    table: Counter[tuple[str, str, str]] = Counter()
     wrong: list[tuple[str, str, str]] = []
     for old, new, attribute, several, new_event, label in CASES:
         verdict = await judge_slot_change(
@@ -54,11 +55,19 @@ async def test_no_compatible_pair_is_judged_changed() -> None:
             new_origin="user_stated",
             old_origin="user_stated",
         )
-        outcome = verdict.get("outcome") or "unavailable"
-        table[(label, outcome)] += 1
-        if label == "keep" and outcome == "changed":
+        outcome = verdict.get("outcome")
+        # What the product does with the answer: only "close" ends a fact.
+        action = slot_action(
+            outcome,
+            "several" if several else "single",
+            replacement_wording=replacement_wording(new),
+            order="earlier" if new_event else "later",
+        )
+        table[(label, outcome or "unavailable", action)] += 1
+        print(f"{label:6} {outcome or 'unavailable':11} {action:10} | {old} -> {new}")
+        if label == "keep" and action == "close":
             wrong.append((old, new, verdict.get("reasoning", "")))
-    print("\nlabel   outcome      count")
-    for (label, outcome), n in sorted(table.items()):
-        print(f"{label:7} {outcome:12} {n}")
+    print("\nlabel   judge        action     count")
+    for (label, outcome, action), n in sorted(table.items()):
+        print(f"{label:7} {outcome:12} {action:10} {n}")
     assert not wrong, wrong

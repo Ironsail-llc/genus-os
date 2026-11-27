@@ -153,6 +153,21 @@ class TestCompareSlots:
             "change"
         )
 
+    def test_where_someone_is_based_is_not_where_they_live(self):
+        # A work base and a home are two slots (the real model called
+        # "lives in Boston" -> "is based in London" a change).
+        assert compare_slots(
+            _slot("Alice is based in London."), _slot("Alice lives in Boston.")
+        ) == ("unrelated")
+        based = fact_slot(
+            {
+                "fact_text": "Alice is based in London.",
+                "relations": [{"source": "Alice", "relation": "based in", "target": "London"}],
+            }
+        )
+        assert based is not None and based.attribute == "base"
+        assert based.cardinality == "several"
+
     def test_a_missing_slot_is_unrelated(self):
         assert compare_slots(None, _slot("Alice lives in Boston.")) == "unrelated"
         assert compare_slots(_slot("Alice lives in Boston."), None) == "unrelated"
