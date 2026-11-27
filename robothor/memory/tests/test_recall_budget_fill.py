@@ -194,16 +194,17 @@ def _row(i: int, chars: int) -> dict[str, Any]:
 
 def test_an_oversized_row_is_skipped_and_the_cap_keeps_packing() -> None:
     """A 3,950-character segment in the head must not end the context: the
-    rows after it that fit still go in (the rule the eval measured)."""
-    from robothor.memory.recall import RECALL_CONTEXT_CHARS, within_context_cap
+    rows after it that fit still go in whole (the rule the eval measured), and
+    the big one is cut to the room they leave (``test_recall_packing.py``)."""
+    from robothor.memory.recall import RECALL_CONTEXT_CHARS, TRUNCATION_MARKER, within_context_cap
 
     rows = [_row(1, 100), _row(2, 3950), *[_row(i, 100) for i in range(3, 33)]]
     kept = within_context_cap(rows)
 
     ids = [r["id"] for r in kept]
     assert ids[0] == 1
-    assert 2 not in ids
-    assert len(ids) == 1 + 30, "every 100-character row after the big one fits"
+    assert [i for i in ids if i != 2] == [1, *range(3, 33)], "every 100-character row fits"
+    assert next(r for r in kept if r["id"] == 2)["fact_text"].endswith(TRUNCATION_MARKER)
     assert sum(len(r["fact_text"]) for r in kept) <= RECALL_CONTEXT_CHARS
 
 
@@ -229,6 +230,7 @@ async def test_the_routed_path_skips_an_oversized_row_too(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from robothor.memory import router
+    from robothor.memory.recall import TRUNCATION_MARKER
 
     rows = [_row(1, 100), _row(2, 3950), *[_row(i, 100) for i in range(3, 13)]]
 
@@ -239,8 +241,9 @@ async def test_the_routed_path_skips_an_oversized_row_too(
     out = await router.recall("garage locker code", tenant_id="test-tenant", limit=50)
     ids = [r["id"] for r in out["results"]]
     assert ids[0] == 1
-    assert 2 not in ids
     assert 12 in ids
+    big = next(r for r in out["results"] if r["id"] == 2)
+    assert big["text"].endswith(TRUNCATION_MARKER), "cut to the room left, not whole"
 
 
 @pytest.mark.asyncio
@@ -367,9 +370,9 @@ def test_an_all_oversized_result_is_never_empty() -> None:
 def test_ordinary_packing_is_unchanged() -> None:
     from robothor.memory.recall import within_context_cap
 
-    rows = [_row(1, 100), _row(2, 3950), *[_row(i, 100) for i in range(3, 33)]]
+    rows = [_row(i, 100) for i in range(1, 33)]
     kept = within_context_cap(rows)
-    assert [r["id"] for r in kept] == [1, *range(3, 33)]
+    assert [r["id"] for r in kept] == list(range(1, 33))
     assert all("[truncated" not in r["fact_text"] for r in kept)
 
 
