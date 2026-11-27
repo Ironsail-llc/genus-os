@@ -19,7 +19,10 @@ exchange as it happened:
   when the model says so AND every number it cites is a user turn of the
   window. A fact citing an assistant turn, a context turn or a number that
   points nowhere is the assistant's (``agent_generated``); one citing no window
-  turn at all is dropped. Assistant text never becomes a user-stated fact;
+  turn at all is dropped. A fact citing a user turn written by someone other
+  than the owner, or one relaying someone else's words (a paste, a quotation,
+  a forwarded message: :func:`is_relayed`), is ``external``. Assistant text
+  never becomes a user-stated fact;
 * each fact keeps the chat message ids it came from (``turn_refs``) and when it
   was said (``mentioned_at``), so it can be linked back to its source turns;
 * the model dates each fact and quotes the phrase it dated from; a relative
@@ -35,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
@@ -139,14 +143,20 @@ CONVERSATION_EXTRACTION_SCHEMA: dict[str, Any] = {
 
 @dataclass(frozen=True)
 class ConversationTurn:
-    """One stored turn. ``ref`` is its ``chat_messages.id``; ``speaker`` labels a
-    room turn with its author (a one-to-one turn is just User or Assistant)."""
+    """One stored turn. ``ref`` is its ``chat_messages.id``.
+
+    ``author_is_owner`` is False for a user turn written by someone other than
+    the conversation's owner (a guest in a shared chat, an unknown sender):
+    the turn is labelled with ``speaker`` (its author's name) or as another
+    person, and what it says is never the owner's own statement.
+    """
 
     ref: int
     role: str
     text: str
     at: datetime | None = None
     speaker: str | None = None
+    author_is_owner: bool = True
 
 
 def _stamp(at: datetime | None) -> str:
@@ -157,9 +167,39 @@ def _stamp(at: datetime | None) -> str:
 
 def _label(turn: ConversationTurn) -> str:
     base = _ROLE_LABELS.get(turn.role, turn.role.title())
-    if turn.role == "user" and turn.speaker:
-        return f"{base} ({turn.speaker})"
+    if turn.role == "user" and not turn.author_is_owner:
+        return f"{base} ({turn.speaker or 'another person'})"
     return base
+
+
+# ── relayed text ────────────────────────────────────────────────────────────
+# A user turn that carries someone else's words (a pasted email, a forwarded
+# message, a quotation) is the user relaying, not stating: what it says about
+# third parties, or about the user, is the other author's claim. Recognised
+# only when the turn marks it; a paste with no marker reads as the user's own.
+
+_RELAY_LINE = re.compile(
+    r"^\s*(>|```|(from|to|cc|subject|sent|date)\s*:|-{3,}\s*(original|forwarded)"
+    r"|begin forwarded message)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_RELAY_LEAD = re.compile(
+    r"\b(here'?s|here\s+is|below\s+is|this\s+is|i\s+got|i\s+received|forwarding|forwarded"
+    r"|i'?m\s+pasting|pasting|pasted|copied|copy\s+of)\b[^\n]{0,40}?"
+    r"\b(e-?mail|message|text|letter|post|article|note|thread|reply|response|chat)\b[^\n]*:\s*$"
+    r"|\b(wrote|writes|says|said)\s*:\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def is_relayed(text: str) -> bool:
+    """Whether a turn marks part of itself as someone else's words.
+
+    Markers: quoted lines (``>``), a code fence, email header lines (From:,
+    To:, Subject:, Sent:, Date:), a forwarded or original-message separator, or
+    a line introducing a paste ("here's an email I got:", "she wrote:").
+    """
+    return bool(_RELAY_LINE.search(text) or _RELAY_LEAD.search(text))
 
 
 #: What opens each continuation line of a turn's text. A turn's own text can
@@ -227,7 +267,9 @@ How to write each fact:
   sentence as the absolute date it means ("on 2023-05-19", not "yesterday").
 - speaker: who said it, "user" or "assistant". A suggestion, recommendation or
   claim made by the assistant is the assistant's, even when it is about the
-  user; never present it as something the user said.
+  user; never present it as something the user said. A user turn labelled with
+  a name in brackets, or as another person, was said by that person, not by the
+  user: write its facts about them by name, with about_user false.
 - turns: the numbers of the new turns the fact comes from.
 - kind: preference, possession, plan, state, event, recommendation or other.
 - event_time: when the thing happened or will happen, as an ISO date
@@ -346,8 +388,9 @@ def parse_conversation_response(
     Every fact carries the write path's keys (``fact_text``, ``category``,
     ``confidence``, ``mentions``, ``relations``, ``event_time``, ``entities``)
     and this mode's: ``speaker_role`` (``user`` only when the model says so and
-    every number it cites is a user turn inside the window, else
-    ``assistant``), ``about_user``, ``kind``, ``turn_refs`` (the chat message
+    every number it cites is a user turn inside the window; ``external`` when
+    any cited user turn is someone else's or relays someone else's words
+    (:func:`is_relayed`); else ``assistant``), ``about_user``, ``kind``, ``turn_refs`` (the chat message
     ids of the window turns it cites) and ``mentioned_at``. A fact citing no
     window turn (only context turns, which were extracted before, or numbers
     that point nowhere) is dropped. The default quality filters apply, except
@@ -363,7 +406,12 @@ def parse_conversation_response(
         if not cites.positions:
             continue  # no window turn: extracted before, or linked to nothing
         cited = [window[p] for p in cites.positions]
-        user_said_it = item.get("speaker") == "user" and cites.all_user
+        if any(t.role == "user" and (not t.author_is_owner or is_relayed(t.text)) for t in cited):
+            speaker_role = "external"  # someone else's words, whoever relayed them
+        elif item.get("speaker") == "user" and cites.all_user:
+            speaker_role = "user"
+        else:
+            speaker_role = "assistant"
         category = str(item.get("category", "personal")).lower().strip()
         if category not in VALID_CATEGORIES:
             category = "personal"
@@ -384,7 +432,7 @@ def parse_conversation_response(
             "mentions": mentions,
             "relations": _relations(item),
             "event_time": event_time,
-            "speaker_role": "user" if user_said_it else "assistant",
+            "speaker_role": speaker_role,
             "about_user": item.get("about_user") is True,
             "kind": kind,
             "turn_refs": sorted(t.ref for t in cited),
