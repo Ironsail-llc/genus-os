@@ -426,6 +426,76 @@ PLUGIN = {
 As with `read_only`, a plugin declares this only for tools it provides; a
 declaration naming another tool, or a malformed one, refuses the plugin.
 
+## A tool a parent tenant may run here
+
+In a tenant hierarchy, a parent tenant's agent can run some of a child
+tenant's plugin tools in that child (a remote tool). Nothing is remote unless
+the plugin that provides the tool says so, in its `genus.tools` payload beside
+`read_only` and `effects`:
+
+```python
+# acme_tools/__init__.py
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "handlers": {"acme_lookup": acme_lookup, "acme_update": acme_update},
+    "read_only": ["acme_lookup"],
+    "remote": {
+        "acme_lookup": {
+            "access": "read",
+            "notes": "Find one record by its reference; use it before acme_update.",
+        },
+        "acme_update": {"access": "write", "attestations": ["baa"]},
+    },
+}
+```
+
+- **`access`** (required): `read` or `write`. A `read` must be a tool this
+  plugin also lists in `read_only`.
+- **`attestations`** (optional, default none): tokens matching
+  `^[a-z][a-z0-9_]{0,31}$`. The parent's deployment must attest every one
+  (`GENUS_ORG_REMOTE_ATTESTATIONS` on the bridge) before the call runs; the
+  refusal names the first missing token.
+- **`notes`** (optional, at most 600 characters): when to use the tool. The
+  parent's agent reads it with the tool's schema.
+
+The rules are `read_only`'s: a plugin offers only tools it provides. A
+foreign tool, an unknown key, a bad `access`, a `read` outside `read_only`, a
+malformed token or notes over the limit refuse the whole plugin, and the
+reason names the tool.
+
+The manifest may mirror the declaration (a dict, never a list):
+
+```yaml
+# acme_tools/genus-plugin.yaml
+handlers: [acme_lookup, acme_update]
+remote_tools:
+  read: [acme_lookup]
+  write: [acme_update]
+```
+
+When the manifest has `remote_tools`, the loader refuses a payload whose read
+and write sets differ from it, and the scan reports it (`remote_tools` in the
+scan result) and blocks a malformed one: a key other than `read` and `write`,
+a tool named for both, or a tool the manifest does not declare as its own.
+Without it, the payload alone decides.
+
+What the child tenant's engine checks before the tool runs, in order: the
+remote-tools mode (`GENUS_ORG_REMOTE_TOOLS`), that the tool is declared and
+for that access, who is asking (an owner or admin of the parent, and an owner
+for a write; or, with no person, the parent's child-data grant and the
+`parent_agent` role, reads only), the attestations, and the arguments against
+the tool's own schema. A write needs a request id and runs at most once for
+it. The call then goes through the normal dispatch in the child tenant, so
+the role's permission rows, kill switches and your own audit apply as they do
+for any call. `parent_agent` is denied everything until the child grants it a
+tool ([Service roles](runbooks/SERVICE_ROLES.md#roles-available)). Your tool
+receives a `ctx` whose `tenant_id` is the child, whose `user_id` is the person
+(empty for `parent_agent`), and whose `agent_id` is `remote:<parent>:<agent>`.
+
+The engine routes are in [System architecture](SYSTEM_ARCHITECTURE.md); each
+call is audited in the child as `agent.remote_tool_call`, with a digest of the
+arguments and never the arguments or the result.
+
 ## An operator command
 
 ```python
