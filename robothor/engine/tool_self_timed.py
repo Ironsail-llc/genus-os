@@ -37,6 +37,7 @@ def self_timed_ceiling(tool_name: str) -> int:
         from robothor.engine.tools.handlers.claude_code import _MAX_WAIT
         from robothor.engine.tools.handlers.filesystem import MAX_EXEC_TIMEOUT
         from robothor.pr_review.worker import DEADLINE_SECONDS as PR_REVIEW_WORK_DEADLINE
+        from robothor.tenancy.remote_contract import HOME_TIMEOUT_S
 
         _self_timed_ceilings.update(
             {
@@ -47,6 +48,10 @@ def self_timed_ceiling(tool_name: str) -> int:
                 # Takes no new review after 45 min and returns by its own
                 # deadline, inside the pr-review-run workflow's 3300 s step.
                 "pr_review_work": PR_REVIEW_WORK_DEADLINE + SELF_TIMED_GRACE_SECONDS,
+                # A remote call waits up to HOME_TIMEOUT_S on the bridge, which
+                # waits on the child's engine (handlers/org_remote.py).
+                "org_tool_read": HOME_TIMEOUT_S + SELF_TIMED_GRACE_SECONDS,
+                "org_tool_write": HOME_TIMEOUT_S + SELF_TIMED_GRACE_SECONDS,
                 "execute_code": (
                     MAX_TIMEOUT_SECONDS + int(DRAIN_GRACE_SECONDS) + SELF_TIMED_GRACE_SECONDS
                 ),

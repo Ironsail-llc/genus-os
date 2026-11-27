@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
     from robothor.auth.deps import AuthContext
 from robothor.events.capabilities import check_endpoint_access, load_capabilities
+from robothor.tenancy.remote_contract import SCOPE_ORG_REMOTE
 
 # Load the agent capabilities manifest once at import time
 load_capabilities()
@@ -452,6 +453,7 @@ def _bridge_bind_host() -> str:
 
 
 _ACCESSIBLE_TENANTS_PATH = "/api/tenants/accessible"
+_ORG_REMOTE_PREFIX = "/api/org/remote/"
 
 
 #: Two workspace writes touch only the CALLER's own member row -- ``POST
@@ -520,6 +522,13 @@ def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | No
     # administrator.
     if path.startswith("/api/vault/"):
         return _privileged_access_denial(auth, "vault:read", "vault access not authorized")
+
+    # An engine calling a descendant's tool for its agent (routers/org_remote.py).
+    # Never a person, whatever their role: the dashboard reads /api/org/connections.
+    if path.startswith(_ORG_REMOTE_PREFIX) and not (
+        auth.is_service and auth.has_scope(SCOPE_ORG_REMOTE)
+    ):
+        return "remote tool access not authorized"
 
     integration_scope = _integration_scope(method, path)
     if integration_scope:

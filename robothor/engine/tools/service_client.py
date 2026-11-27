@@ -56,9 +56,9 @@ class _BreakerState:
 
 _breakers: dict[str, _BreakerState] = {}
 
-# (service_id, tenant_id, scopes) -> (token, expires_at). Keyed by service_id
-# too so one agent's cached identity is never reused for another agent.
-_bridge_token_cache: dict[tuple[str, str, tuple[str, ...]], tuple[str, float]] = {}
+# (service_id, tenant_id, scopes, agent_id) -> (token, expires_at). Keyed by
+# service_id too so one agent's cached identity is never reused for another agent.
+_bridge_token_cache: dict[tuple[str, str, tuple[str, ...], str | None], tuple[str, float]] = {}
 
 
 def reset_circuit_breakers() -> None:
@@ -208,13 +208,16 @@ def bridge_headers(
     tenant_id: str,
     *,
     scopes: tuple[str, ...] = BRIDGE_SCOPES,
+    agent_id: str | None = None,
 ) -> dict[str, str]:
     """Authorization header for engine→bridge calls, with token caching.
 
     Mints via ``issue_service_token`` (shared HS256 key — env or DB vault) and
-    caches per (service_id, tenant, scopes) until ~60s before expiry.
+    caches per (service_id, tenant, scopes, agent) until ~60s before expiry.
+    ``agent_id`` names the agent the bridge's capability check sees; unset, it
+    is ``service_id``, as it always was.
     """
-    key = (service_id, tenant_id, scopes)
+    key = (service_id, tenant_id, scopes, agent_id)
     now = time.time()
     cached = _bridge_token_cache.get(key)
     if cached is not None and now < cached[1]:
@@ -227,6 +230,7 @@ def bridge_headers(
         tenant_id,
         audience=BRIDGE_AUDIENCE,
         scopes=scopes,
+        agent_id=agent_id,
     )
     _bridge_token_cache[key] = (token, now + SERVICE_TTL_SECONDS - _TOKEN_EXPIRY_MARGIN_SECONDS)
     return {"Authorization": f"Bearer {token}"}

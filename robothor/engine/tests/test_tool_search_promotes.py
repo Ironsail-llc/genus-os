@@ -214,7 +214,8 @@ class TestARunWithoutSearchesIsUnchanged:
         )
 
         assert len(seen) == 2
-        assert [len(s) for s in seen] == [35, 35]
+        # 35 until org_tools and org_tool_read joined CORE_TOOLS.
+        assert [len(s) for s in seen] == [37, 37]
         assert _by_name(seen[0]) == _by_name(seen[1])
 
 

@@ -181,20 +181,28 @@ def _grant_triggers() -> frozenset[Any]:
 UNATTENDED_GRANT_TRIGGERS = _grant_triggers()
 
 
+def is_attended(run: Any, identity: Any) -> bool:
+    """A verified person, on a trigger a person starts: the run acts for them.
+
+    Everything else -- scheduled and system work, a sub-agent, an unverified
+    caller -- is unattended, whatever identity it carries for attribution.
+    """
+    from robothor.engine.runner import _SYSTEM_TRIGGER_TYPES
+
+    return (
+        identity is not None
+        and bool(getattr(identity, "verified", False))
+        and getattr(run, "trigger_type", None) not in _SYSTEM_TRIGGER_TYPES
+    )
+
+
 def _accessible_tenants(run: Any, tenant_id: str, identity: Any) -> tuple[str, ...]:
     from robothor.engine.permissions import resolve_accessible_tenants
 
     own = (tenant_id,)
     if confined_to_own_tenant(run):
         return own
-    from robothor.engine.runner import _SYSTEM_TRIGGER_TYPES
-
-    attended = (
-        identity is not None
-        and bool(getattr(identity, "verified", False))
-        and getattr(run, "trigger_type", None) not in _SYSTEM_TRIGGER_TYPES
-    )
-    if attended:
+    if is_attended(run, identity):
         # The verified identity is the authority; the run's role only narrows
         # it. An identity resolved in another tenant vouches for nothing here.
         if getattr(identity, "tenant_id", None) != tenant_id:

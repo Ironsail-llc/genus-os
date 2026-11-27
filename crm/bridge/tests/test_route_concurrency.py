@@ -72,6 +72,12 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         # blocking parts they still own (the psycopg2 vault write, the
         # _defaults.yaml read-modify-write) go through asyncio.to_thread
         # inside the handler rather than making the route synchronous.
+        # Remote tools await other tenants' engines over HTTP, concurrently on
+        # the connections page; their blocking reads (hierarchy, acting role,
+        # child data access, tenant names) go through asyncio.to_thread.
+        ("GET", "/api/org/connections"),
+        ("GET", "/api/org/remote/catalogue"),
+        ("POST", "/api/org/remote/call"),
         ("GET", "/api/providers"),
         ("GET", "/api/models"),
         ("PUT", "/api/providers/{provider_id}/keys/{position}"),

@@ -26,7 +26,10 @@ runs nothing: neither a real write nor a preview is guessed from it.
 
 A tool that declares ``tenant`` in its OWN schema -- an external MCP server's
 or a plugin's -- is none of this module's business: its ``tenant`` and
-``dry_run`` reach it untouched (:func:`_argument_owner`).
+``dry_run`` reach it untouched (:func:`_argument_owner`). Nor are the remote
+tools (``ORG_REMOTE_TOOLS``, ``handlers/org_remote.py``): they reach a child's
+OWN tools through the bridge, admit the call themselves with the helpers here,
+and never run under ``tenant_scope``; a replay of one is still audited.
 
 Then :func:`run_handler` strips the argument and runs the handler inside
 ``tenant_scope(target)`` with a copy of the context whose ``tenant_id`` is the
@@ -168,8 +171,10 @@ def audit_answered(name: str, args: dict[str, Any], ctx: ToolContext, outcome: s
     target = _tenant_target(args.get(TENANT_ARG))
     if not target or target == ctx.tenant_id:
         return
-    if _argument_owner(name) == "tool":
+    owner = _argument_owner(name)
+    if owner == "tool":
         return
+    remote = args.get("tool") if owner == "remote" else None
     audit_cross_tenant(
         home_tenant=ctx.tenant_id,
         target_tenant=target,
@@ -177,6 +182,7 @@ def audit_answered(name: str, args: dict[str, Any], ctx: ToolContext, outcome: s
         agent_id=ctx.agent_id,
         tool=name,
         outcome=outcome,
+        remote_tool=remote if isinstance(remote, str) else None,
     )
 
 
@@ -194,7 +200,9 @@ def _bad_dry_run(name: str) -> dict[str, Any]:
 def _argument_owner(name: str) -> str | None:
     """Who gives ``tenant`` and ``dry_run`` their meaning on a call to ``name``.
 
-    ``"engine"``: an allowlisted built-in; :func:`admit` reads them. ``"tool"``:
+    ``"engine"``: an allowlisted built-in; :func:`admit` reads them.
+    ``"remote"``: a remote tool (``ORG_REMOTE_TOOLS``); its handler admits the
+    call with this module's helpers and :func:`admit` passes it. ``"tool"``:
     the tool's OWN registered schema declares ``tenant`` -- an external MCP
     server's tool or a plugin's -- so both reach it untouched, never refused,
     stripped or audited as a crossing. ``stamp_tenant_arguments`` adds the
@@ -204,12 +212,18 @@ def _argument_owner(name: str) -> str | None:
     the handler would ignore it and answer about the home tenant.
     """
     from robothor.engine.tools import get_registry
-    from robothor.engine.tools.constants import CROSS_TENANT_READS, CROSS_TENANT_WRITES
+    from robothor.engine.tools.constants import (
+        CROSS_TENANT_READS,
+        CROSS_TENANT_WRITES,
+        ORG_REMOTE_TOOLS,
+    )
 
     registry = get_registry()
     adapter = registry.get_adapter_route(name) is not None
     if not adapter and name in CROSS_TENANT_READS | CROSS_TENANT_WRITES:
         return "engine"
+    if not adapter and name in ORG_REMOTE_TOOLS:
+        return "remote"
     if TENANT_ARG in registry.declared_parameters(name):
         return "tool"
     return None
@@ -230,7 +244,7 @@ def admit(name: str, args: dict[str, Any], ctx: ToolContext) -> Crossing | dict[
     if TENANT_ARG not in args and DRY_RUN_ARG not in args:
         return None
     owner = _argument_owner(name)
-    if owner == "tool":
+    if owner in ("tool", "remote"):
         return None
     target = _tenant_target(args.get(TENANT_ARG))
     if target is None:
@@ -559,12 +573,15 @@ def audit_cross_tenant(
     outcome: str,
     dry_run: bool = False,
     reason: str = "",
+    remote_tool: str | None = None,
 ) -> None:
     """One ``audit_log`` row for a call that reached (or tried to reach) another tenant.
 
     Written under the HOME tenant, the one whose agent acted, with the target
-    named in ``target`` and ``details``. Queued to the engine's event writer,
-    like every tool-call audit row (``dispatch._audit_tool_call``). Never raises.
+    named in ``target`` and ``details``. ``remote_tool``: the child's own tool a
+    remote call named (``handlers/org_remote.py``). Queued to the engine's
+    event writer, like every tool-call audit row (``dispatch._audit_tool_call``).
+    Never raises.
     """
     try:
         from robothor.audit.logger import log_event
@@ -581,6 +598,8 @@ def audit_cross_tenant(
         }
         if reason:
             details["reason"] = redact(reason[:4096])[:300]
+        if remote_tool:
+            details["remote_tool"] = remote_tool[:128]
         get_event_writer().submit(
             log_event,
             event_type=CROSS_TENANT_EVENT,

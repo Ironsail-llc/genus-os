@@ -95,6 +95,14 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
         "/api/auth/sso|refresh|logout and _authorization_denial() returns None for "
         "/api/auth/*; requiring an operator session to *create* a session is circular."
     ),
+    "/api/org/remote": (
+        "Engine-to-engine remote tool calls, never a person: _authorization_denial() "
+        "refuses any caller that is not a service token carrying org:remote, and "
+        "routers/org_remote.py repeats that check, takes the home tenant from the "
+        "token, requires the target to be a descendant, an acting owner for a write "
+        "and the parent's child data access for a person-less read. Covered by "
+        "crm/bridge/tests/test_org_remote.py."
+    ),
     "/api/people": (
         "Tenant CRM data written by member sessions and agent tokens — "
         "_authorization_denial() requires the bridge:write scope and BridgeMiddleware "

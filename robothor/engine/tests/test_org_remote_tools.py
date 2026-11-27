@@ -82,9 +82,12 @@ class _Bridge:
         self.answer: tuple[int, Any] | None = None
         self.per_tenant: dict[str, tuple[int, Any]] = {}
         self.raise_exc: Exception | None = None
+        self.observers: list[Any] = []  # called with each request, before it is answered
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
+        for observe in self.observers:
+            observe(request)
         if self.raise_exc is not None:
             raise self.raise_exc
         tenant = request.url.params.get("tenant") or self.body(request).get("tenant")
@@ -93,23 +96,29 @@ class _Bridge:
         elif self.answer is not None:
             status, body = self.answer
         elif request.url.path.endswith("/catalogue"):
-            status, body = 200, {
-                "tenant_id": tenant,
-                "mode": "full",
-                "plugins": [{"name": "example-plugin", "version": "1.0.0", "enabled": True}],
-                "tools": [{"name": "example_read", "access": "read", "description": "d"}],
-                "checks": [],
-            }
+            status, body = (
+                200,
+                {
+                    "tenant_id": tenant,
+                    "mode": "full",
+                    "plugins": [{"name": "example-plugin", "version": "1.0.0", "enabled": True}],
+                    "tools": [{"name": "example_read", "access": "read", "description": "d"}],
+                    "checks": [],
+                },
+            )
         else:
             sent = self.body(request)
             outcome = "dry_run" if sent.get("dry_run") else "ok"
-            status, body = 200, {
-                "outcome": outcome,
-                "request_id": sent.get("request_id"),
-                "tool": sent.get("tool"),
-                "result": {"rows": 3},
-                "would": None,
-            }
+            status, body = (
+                200,
+                {
+                    "outcome": outcome,
+                    "request_id": sent.get("request_id"),
+                    "tool": sent.get("tool"),
+                    "result": {"rows": 3},
+                    "would": None,
+                },
+            )
         return httpx.Response(status, json=body)
 
     @staticmethod
@@ -227,13 +236,7 @@ def test_a_read_runs_in_the_home_tenant_and_reaches_the_child_through_the_bridge
     from robothor.db.connection import current_tenant_scope
 
     seen: list[Any] = []
-    original = env.bridge.handle
-
-    def handle(request):
-        seen.append(current_tenant_scope())
-        return original(request)
-
-    env.bridge.handle = handle  # type: ignore[method-assign]
+    env.bridge.observers.append(lambda request: seen.append(current_tenant_scope()))
     result = _call("org_tool_read", _read())
 
     assert "error" not in result, result
@@ -272,13 +275,7 @@ def test_a_read_sends_the_contract_body_with_a_scoped_engine_token(env):
 
 def test_the_request_carries_the_home_timeout(env):
     seen: list[Any] = []
-    original = env.bridge.handle
-
-    def handle(request):
-        seen.append(request.extensions.get("timeout"))
-        return original(request)
-
-    env.bridge.handle = handle  # type: ignore[method-assign]
+    env.bridge.observers.append(lambda request: seen.append(request.extensions.get("timeout")))
     _call("org_tool_read", _read())
 
     assert seen and seen[0]["read"] == HOME_TIMEOUT_S
@@ -294,8 +291,11 @@ def test_an_unattended_read_names_no_person(env):
 
 
 def test_a_person_without_an_account_id_is_not_sent_as_one(env):
-    # A verified admin with no account id: nothing to name, so nobody is named.
-    _call("org_tool_read", _read(), identity=ADMIN, user_id="bob", user_role="admin")
+    # A verified chat-app identity linked to no account: nobody to name.
+    unlinked = IdentityContext(
+        tenant_id=PARENT, channel="telegram", identifier="4242", verified=True, role="admin"
+    )
+    _call("org_tool_read", _read(), identity=unlinked, user_id="bob", user_role="admin")
 
     assert env.bridge.body(env.bridge.calls[0])["requested_by"] is None
 
@@ -725,10 +725,10 @@ def test_main_holds_the_two_reads_without_searching():
     import yaml
 
     root = Path(__file__).resolve().parents[3]
-    manifest = yaml.safe_load(
-        (root / "templates/agents/core/main/manifest.template.yaml").read_text()
-    )
-    assert {"org_tools", "org_tool_read"} <= set(manifest["tools_eager"])
-    assert "org_tool_write" not in manifest["tools_eager"]
+    # The template carries `{{ placeholders }}`: take the one block this is about.
+    text = (root / "templates/agents/core/main/manifest.template.yaml").read_text()
+    eager = yaml.safe_load(text.split("\ntools_eager:\n", 1)[1].split("\n\n", 1)[0])
+    assert {"org_tools", "org_tool_read"} <= set(eager)
+    assert "org_tool_write" not in eager
     text = (root / "templates/agents/core/main/instructions.template.md").read_text()
     assert "org_tool_read" in text and "org_tool_write" in text
