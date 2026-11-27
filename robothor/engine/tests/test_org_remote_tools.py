@@ -690,13 +690,15 @@ def test_registered_with_schemas_that_declare_tenant():
     assert "dry_run" not in schemas["org_tool_read"]["function"]["parameters"]["properties"]
 
 
-def test_the_two_reads_are_read_only_and_core_and_the_write_is_neither():
+def test_the_two_reads_are_read_only_and_none_is_core():
     from robothor.engine.tools.constants import CORE_TOOLS, READONLY_TOOLS
 
     for name in ("org_tools", "org_tool_read"):
-        assert name in READONLY_TOOLS and name in CORE_TOOLS
+        assert name in READONLY_TOOLS
     assert "org_tool_write" not in READONLY_TOOLS
-    assert "org_tool_write" not in CORE_TOOLS
+    # Offered up front only to a run that reaches a child
+    # (test_org_remote_tools_discoverable.py).
+    assert not set(TOOLS) & CORE_TOOLS
 
 
 def test_not_on_the_generic_cross_tenant_allowlists():
@@ -729,21 +731,6 @@ def test_each_has_a_search_hint():
 
     for name in TOOLS:
         assert TOOL_HINTS[name].keywords
-
-
-def test_main_holds_the_two_reads_without_searching():
-    from pathlib import Path
-
-    import yaml
-
-    root = Path(__file__).resolve().parents[3]
-    # The template carries `{{ placeholders }}`: take the one block this is about.
-    text = (root / "templates/agents/core/main/manifest.template.yaml").read_text()
-    eager = yaml.safe_load(text.split("\ntools_eager:\n", 1)[1].split("\n\n", 1)[0])
-    assert {"org_tools", "org_tool_read"} <= set(eager)
-    assert "org_tool_write" not in eager
-    text = (root / "templates/agents/core/main/instructions.template.md").read_text()
-    assert "org_tool_read" in text and "org_tool_write" in text
 
 
 def test_a_bridge_refusal_says_what_to_fix_and_is_not_a_target_code(env):
