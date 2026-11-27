@@ -88,6 +88,10 @@ class _Handlers:
         self.calls.append(("acme_big", args, ctx))
         return {"blob": "x" * (rc.REMOTE_RESULT_MAX_BYTES + 10)}
 
+    async def big_write(self, args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
+        self.calls.append(("acme_export", args, ctx))
+        return {"exported": True, "blob": "x" * (rc.REMOTE_RESULT_MAX_BYTES + 10)}
+
     async def slow(self, args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         self.calls.append(("acme_slow", args, ctx))
         await asyncio.sleep(5)
@@ -138,6 +142,7 @@ def _entry_points(handlers: _Handlers) -> list[_EP]:
             "acme_lookup": handlers.lookup,
             "acme_update": handlers.update,
             "acme_big": handlers.big,
+            "acme_export": handlers.big_write,
             "acme_slow": handlers.slow,
             "acme_fails": handlers.fails,
             "acme_plain": handlers.plain,
@@ -147,6 +152,7 @@ def _entry_points(handlers: _Handlers) -> list[_EP]:
             "acme_lookup": {"access": "read", "notes": "Use it to find one record."},
             "acme_update": {"access": "write", "attestations": ["baa"]},
             "acme_big": {"access": "read"},
+            "acme_export": {"access": "write"},
             "acme_slow": {"access": "read"},
             "acme_fails": {"access": "read"},
         },
@@ -207,16 +213,29 @@ class _Ledger:
 
     def __init__(self) -> None:
         self.rows: dict[tuple[str, str], dict[str, Any]] = {}
+        self.claims: list[tuple[str, str]] = []
 
-    def claim(self, tenant_id: str, request_id: str) -> dict[str, Any] | None:
+    def claim(
+        self, tenant_id: str, request_id: str, tool: str = "", args_digest: str = ""
+    ) -> dict[str, Any] | None:
         key = (tenant_id, request_id)
+        self.claims.append(key)
         if key in self.rows:
             return dict(self.rows[key])
-        self.rows[key] = {"state": "running", "result": None}
+        self.rows[key] = {
+            "state": "running",
+            "result": None,
+            "tool": tool,
+            "args_digest": args_digest,
+        }
         return None
 
     def finish(self, tenant_id: str, request_id: str, result: dict[str, Any]) -> None:
-        self.rows[(tenant_id, request_id)] = {"state": "done", "result": result}
+        self.rows[(tenant_id, request_id)] = {
+            **self.rows.get((tenant_id, request_id), {}),
+            "state": "done",
+            "result": result,
+        }
 
     def release(self, tenant_id: str, request_id: str) -> None:
         self.rows.pop((tenant_id, request_id), None)
@@ -578,6 +597,61 @@ async def test_a_same_request_id_in_another_tenant_is_not_a_replay(world) -> Non
     assert (await _call(**_write())).json()["outcome"] == rc.OUTCOME_OK
 
 
+async def test_a_replay_with_other_arguments_is_refused_not_answered(world) -> None:
+    first = await _call(**_write())
+    other = await _call(**_write(args={"id": 8, "note": "different"}))
+
+    assert first.json()["outcome"] == rc.OUTCOME_OK
+    payload = _refusal(other, 409, rc.ERR_REQUEST_MISMATCH)
+    assert RESULT_SECRET not in repr(payload)
+    assert [c[0] for c in world.handlers.calls] == ["acme_update"]
+
+
+async def test_a_replay_for_another_tool_is_refused_not_answered(world) -> None:
+    await _call(**_write())
+    other = await _call(**_write(tool="acme_export", args={}, attestations=[]))
+
+    payload = _refusal(other, 409, rc.ERR_REQUEST_MISMATCH)
+    assert RESULT_SECRET not in repr(payload)
+    assert [c[0] for c in world.handlers.calls] == ["acme_update"]
+
+
+async def test_the_ledger_row_records_the_tool_and_the_argument_digest(world) -> None:
+    await _call(**_write())
+
+    row = world.ledger.rows[(CHILD, "req-1")]
+    assert row["tool"] == "acme_update"
+    assert row["args_digest"] == rc.args_digest({"id": 7, "note": SECRET})
+
+
+async def test_a_read_ignores_its_request_id(world) -> None:
+    world.ledger.rows[(CHILD, "req-1")] = {
+        "state": "done",
+        "result": {"status": 200, "body": {"outcome": "ok", "result": {"other": "call"}}},
+        "tool": "acme_lookup",
+        "args_digest": rc.args_digest({"query": SECRET}),
+    }
+
+    answer = await _call(**_body(request_id="req-1"))
+
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["outcome"] == rc.OUTCOME_OK
+    assert answer.json()["request_id"] is None
+    assert answer.json()["result"] == {"record": {"id": 7, "note": RESULT_SECRET}}
+    assert world.ledger.claims == []
+    [row] = _audits(world)
+    assert row["details"]["request_id"] is None
+
+
+async def test_an_rbac_denied_read_never_releases_a_write_claim(world) -> None:
+    world.ledger.rows[(CHILD, "req-9")] = {"state": "running", "result": None}
+
+    answer = await _call(**_body(requested_by=None, request_id="req-9"))
+
+    _refusal(answer, 403, rc.ERR_NOT_PERMITTED)
+    assert world.ledger.rows[(CHILD, "req-9")]["state"] == "running"
+
+
 async def test_an_rbac_denied_write_is_released_so_a_retry_can_run(world) -> None:
     world.rules["owner"] = [("acme_update", "deny", CHILD), ("*", "allow", "__default__")]
 
@@ -601,6 +675,32 @@ async def test_a_result_over_the_cap_is_refused_not_truncated(world) -> None:
 
     _refusal(answer, 413, rc.ERR_TOO_LARGE)
     assert "blob" not in answer.text
+
+
+async def test_a_write_over_the_cap_ran_and_says_so_with_its_result_withheld(world) -> None:
+    answer = await _call(**_write(tool="acme_export", args={}, attestations=[]))
+
+    assert answer.status_code == 200, answer.text
+    payload = answer.json()
+    assert payload["outcome"] == rc.OUTCOME_OK
+    assert payload["result"] is None
+    withheld = payload["result_withheld"]
+    assert withheld["reason"] == "too_large"
+    assert withheld["max_bytes"] == rc.REMOTE_RESULT_MAX_BYTES
+    assert withheld["bytes"] > rc.REMOTE_RESULT_MAX_BYTES
+    assert "blob" not in answer.text
+    assert [c[0] for c in world.handlers.calls] == ["acme_export"]
+
+
+async def test_a_write_over_the_cap_replays_the_withheld_answer_and_never_reruns(world) -> None:
+    first = await _call(**_write(tool="acme_export", args={}, attestations=[]))
+    second = await _call(**_write(tool="acme_export", args={}, attestations=[]))
+
+    assert second.status_code == 200, second.text
+    assert second.json()["outcome"] == rc.OUTCOME_REPLAYED
+    assert second.json()["result"] is None
+    assert second.json()["result_withheld"] == first.json()["result_withheld"]
+    assert [c[0] for c in world.handlers.calls] == ["acme_export"]
 
 
 async def test_a_call_that_runs_out_of_time_says_so(world, monkeypatch) -> None:
@@ -669,7 +769,14 @@ async def test_the_catalogue_lists_the_declared_tools_plugins_and_checks(world) 
     assert payload["as_of"].endswith("Z")
     assert {"name": "acme-tools", "version": "1.2.3", "enabled": True} in payload["plugins"]
     tools = {tool["name"]: tool for tool in payload["tools"]}
-    assert set(tools) == {"acme_lookup", "acme_update", "acme_big", "acme_slow", "acme_fails"}
+    assert set(tools) == {
+        "acme_lookup",
+        "acme_update",
+        "acme_big",
+        "acme_export",
+        "acme_slow",
+        "acme_fails",
+    }
     assert tools["acme_lookup"] == {
         "name": "acme_lookup",
         "plugin": "acme-tools",

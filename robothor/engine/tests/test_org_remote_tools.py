@@ -613,6 +613,66 @@ def test_a_replay_from_the_ledger_does_not_call_again_and_is_audited(env, ledger
     )
 
 
+_WITHHELD = {"reason": "too_large", "bytes": 300000, "max_bytes": 262144}
+
+
+def _withheld_answer() -> tuple[int, dict[str, Any]]:
+    return (
+        200,
+        {
+            "outcome": "ok",
+            "request_id": "eff-1",
+            "tool": "example_write",
+            "result": None,
+            "would": None,
+            "result_withheld": dict(_WITHHELD),
+        },
+    )
+
+
+def test_a_write_whose_result_was_too_large_is_reported_as_done(env):
+    env.bridge.answer = _withheld_answer()
+
+    result = _call("org_tool_write", _write())
+
+    assert "error" not in result
+    assert result["outcome"] == "ok"
+    assert result["result"] is None
+    assert result["result_withheld"] == _WITHHELD
+    assert "too large" in result["note"]
+    assert "outcome_unknown" not in result
+    (row,) = _rows(env)
+    assert row["outcome"] == "ok"
+
+
+def test_a_too_large_write_is_recorded_so_a_retry_replays_it(env, ledger):
+    env.bridge.answer = _withheld_answer()
+    recorded: list[dict[str, Any]] = []
+
+    def _record(context, effect_id, run_id, result):
+        recorded.append(result)
+        ledger.record = {
+            "state": "finished",
+            "id": effect_id,
+            "resolution": {"source": "tool_response", "result": result},
+        }
+        return True
+
+    with (
+        patch("robothor.engine.runtime.effect_results.record", side_effect=_record),
+        patch("robothor.engine.runtime.effects.finish", return_value=True) as finish,
+    ):
+        first = _call("org_tool_write", _write())
+        second = _call("org_tool_write", _write())
+
+    assert first["outcome"] == "ok"
+    assert len(recorded) == 1
+    finish.assert_not_called()  # done and cached, never uncertain
+    assert len(env.bridge.calls) == 1
+    assert second["recovered"] is True
+    assert second["result_withheld"] == _WITHHELD
+
+
 # ── Registration ────────────────────────────────────────────────────────────
 
 

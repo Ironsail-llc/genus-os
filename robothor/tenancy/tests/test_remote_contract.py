@@ -23,6 +23,7 @@ def test_every_refusal_code_in_the_contract():
                 "remote_attestation_missing",
                 "remote_bad_arguments",
                 "remote_outcome_unknown",
+                "remote_request_mismatch",
                 "remote_too_large",
                 "remote_timeout",
             }
@@ -30,6 +31,7 @@ def test_every_refusal_code_in_the_contract():
         == rc.ERROR_CODES
     )
     assert rc.ERR_TIMEOUT == "remote_timeout"
+    assert rc.ERR_REQUEST_MISMATCH == "remote_request_mismatch"
 
 
 def test_outcomes_access_and_names():
