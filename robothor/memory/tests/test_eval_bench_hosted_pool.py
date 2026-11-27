@@ -104,3 +104,46 @@ async def test_no_key_reaches_a_report_or_a_cache_file(pool, litellm_calls, tmp_
     written.append(eb.format_bench_markdown(report))
     for text in written:
         assert KEY_1 not in text and KEY_2 not in text
+
+
+class _ModelRefusedError(Exception):
+    """A 403: this key may not use this model; the key itself is fine."""
+
+    status_code = 403
+
+
+class _OutOfCreditError(Exception):
+    """OpenAI's out-of-credit answer: a 429 that is not a rate limit."""
+
+    status_code = 429
+
+
+@pytest.mark.asyncio
+async def test_a_model_specific_refusal_keeps_the_key(pool, litellm_calls):
+    litellm_calls.replies.append(_ModelRefusedError("model not available for this org"))
+    with pytest.raises(_ModelRefusedError):
+        await eh.hosted_chat([{"role": "user", "content": "q"}], model="openai/gpt-4o")
+    await eh.hosted_chat([{"role": "user", "content": "q"}], model="openai/gpt-4o")
+    first, second = litellm_calls.calls
+    assert first["api_key"] == second["api_key"], "a 403 is the model's, not the key's"
+
+
+@pytest.mark.asyncio
+async def test_an_out_of_credit_429_rotates_instead_of_backing_off(
+    pool, litellm_calls, monkeypatch
+):
+    slept: list[float] = []
+
+    async def _sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(eh, "_sleep", _sleep)
+    litellm_calls.replies.append(
+        _OutOfCreditError("You exceeded your current quota (insufficient_quota)")
+    )
+    with pytest.raises(_OutOfCreditError):
+        await eh.hosted_chat([{"role": "user", "content": "q"}], model="openai/gpt-4o")
+    assert slept == [], "no back-off: waiting does not refill a spent account"
+    await eh.hosted_chat([{"role": "user", "content": "q"}], model="openai/gpt-4o")
+    first, second = litellm_calls.calls
+    assert first["api_key"] != second["api_key"], "the spent key is retired"
