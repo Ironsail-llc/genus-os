@@ -1357,10 +1357,10 @@ only for turns no earlier run extracted.
 
 | Exchanges | Calls before | Input tokens before | Calls now | Input tokens now |
 |---|---|---|---|---|
-| 1 | 0 (skipped) | 0 | 1 | ~930 |
-| 2 | 2 | ~1,700 | 2 | ~2,100 |
-| 10 | 18 | ~29,800 | 10 | ~13,300 |
-| 40 | 78 | ~177,600 | 40 | ~55,400 |
+| 1 | 0 (skipped) | 0 | 1 | ~960 |
+| 2 | 2 | ~1,700 | 2 | ~2,200 |
+| 10 | 18 | ~29,800 | 10 | ~13,600 |
+| 40 | 78 | ~177,600 | 40 | ~56,500 |
 
 ### Who can read a fact
 
