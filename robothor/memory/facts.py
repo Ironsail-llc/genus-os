@@ -1245,7 +1245,7 @@ def _fact_candidates(rows: list[dict[str, Any]], leg: str, score_key: str) -> li
 
 _FACT_COLUMNS = """id, fact_text, category, entities, confidence, source_type,
                    metadata, created_at, importance_score, access_count, superseded_by,
-                   valid_to, person_id, utility,
+                   person_id, utility,
                    EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds"""
 
 
@@ -1774,17 +1774,25 @@ async def _with_earlier_values(
     missing = {k: v for k, v in missing.items() if v not in present}
     if not wanted and not closed:
         return result
-    if not wanted and not missing:
-        return place_superseded(result)
 
     sql = (
-        f"SELECT {_FACT_COLUMNS}, is_active FROM memory_facts "  # noqa: S608 - fixed fragments
+        f"SELECT {_FACT_COLUMNS}, valid_to, is_active FROM memory_facts "  # noqa: S608 - fixed
         f"WHERE tenant_id = %s AND id = ANY(%s) {scope_clause}"
     )
+    closed_ids = [int(r["id"]) for r in closed]
 
     def _fetch() -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]]]:
         with get_connection() as conn:
             cur = conn.cursor(cursor_factory=RealDictCursor)
+            if closed_ids:
+                # When each closed row was closed; the legs do not select it.
+                cur.execute(
+                    "SELECT id, valid_to FROM memory_facts WHERE tenant_id = %s AND id = ANY(%s)",
+                    (tenant, closed_ids),
+                )
+                ends = {int(r["id"]): r["valid_to"] for r in cur.fetchall()}
+                for r in closed:
+                    r["valid_to"] = ends.get(int(r["id"]))
             old_rows: list[dict[str, Any]] = []
             if wanted:
                 cur.execute(sql, (tenant, wanted, *scope_params))
@@ -1865,15 +1873,21 @@ async def search_facts(
            of the fused list on 0..1 and orders by that score; on any error the
            fused order stands.
         4. Blend — relevance (rerank score, else from fused rank) + recency +
-           importance + access, supersession demotion; near-duplicates dropped.
+           importance + utility; near-duplicates dropped. (Supersession
+           demotion here is off by default and for decisions only.)
         5. ``RESERVED_PLACES`` — a leg keeps its reserved places; the graph's
            rows are added after the top-k, every other leg's take its last
            places.
+        6. Changed values (``_with_earlier_values``): a closed row follows the
+           row that replaced it, labelled ``superseded``.
 
     Args:
         query: Search query text.
         limit: Maximum number of results (all legs share it).
-        active_only: If True, only return active (non-superseded) facts.
+        active_only: If True, rank active facts only; a current row that
+            replaced a value is still followed by that earlier row (labelled
+            ``superseded``, at most ``bitemporal.MAX_EARLIER_ROWS``). If False,
+            inactive rows rank too, and a closed one never ahead of its current.
         use_reranker: If True, run reranker on candidates. If None (default),
             honors MEMORY_RERANK_ENABLED env flag (on by default).
         expand_entities: Run the one-hop ``entity_expansion`` leg: facts
