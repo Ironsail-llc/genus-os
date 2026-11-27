@@ -22,9 +22,10 @@ What it does, per tenant, for each shared fact the old ingest wrote
 * each re-scoped fact leaves the shared graph, as a private write never enters
   it: its evidence rows go and its relations are kept on it
   (``metadata.graph_pending_relations``); an edge left with no evidence is
-  deleted; a node nothing shared names any more (not CRM-linked, no contact
-  identifier, no shared mention, no edge) is removed with its private mentions
-  and its decisions.
+  deleted; a node nothing else names (not CRM-linked, no contact identifier,
+  no edge, no other fact's mention of any owner, no shared fact's ``entities``)
+  is removed with these facts' mentions of it and its decisions; nodes kept
+  because another fact still names them are counted.
 
 Dry run by default: it does the work in one transaction and rolls it back, so
 its report (facts, duplicates, edges, nodes) is what applying would change.
@@ -211,14 +212,24 @@ def _unpublish_graph(cur: Any, tenant_id: str, fact_ids: list[int]) -> dict[str,
     Each fact's evidence rows go and its relations are parked on it
     (``metadata.graph_pending_relations``, as a private write keeps them); an
     edge left with no evidence is deleted, and a kept edge's origin is
-    recomputed. A node is removed when nothing shared names it any more: not
-    linked to the CRM or a contact identifier, no shared fact's mention, no
-    edge. Its private mentions and its resolution decisions go with it (a
-    private write records an unresolved name nowhere but on the fact).
+    recomputed. A node is removed when nothing but these facts names it: not
+    linked to the CRM or a contact identifier, no edge, no mention from any
+    other fact (shared, or any person's private one), and no active shared
+    fact naming it in its ``entities`` column. Nodes kept for those last two
+    reasons are counted (``nodes_kept_by_other_facts``,
+    ``nodes_kept_by_entities``). A removed node's mentions by these facts and
+    its resolution decisions go with it (a private write records an unresolved
+    name nowhere but on the fact).
     """
     from robothor.memory.write_path import recompute_edge_origins
 
-    out = {"evidence_removed": 0, "edges_removed": 0, "nodes_removed": 0}
+    out = {
+        "evidence_removed": 0,
+        "edges_removed": 0,
+        "nodes_removed": 0,
+        "nodes_kept_by_other_facts": 0,
+        "nodes_kept_by_entities": 0,
+    }
     if not fact_ids:
         return out
     cur.execute(
@@ -273,18 +284,36 @@ def _unpublish_graph(cur: Any, tenant_id: str, fact_ids: list[int]) -> dict[str,
     )
     candidates = sorted(endpoints | {int(r[0]) for r in cur.fetchall()})
     cur.execute(
-        "SELECT n.id FROM memory_entities n WHERE n.tenant_id = %s AND n.id = ANY(%s) "
+        "SELECT n.id, "
+        "EXISTS (SELECT 1 FROM memory_mentions m WHERE m.entity_id = n.id "
+        "AND NOT (m.fact_id = ANY(%s))), "
+        "EXISTS (SELECT 1 FROM memory_facts f WHERE f.tenant_id = n.tenant_id "
+        "AND f.is_active AND f.scope_kind = 'shared' AND NOT (f.id = ANY(%s)) "
+        "AND lower(n.name) = ANY(SELECT lower(x) FROM unnest(f.entities) x)) "
+        "FROM memory_entities n WHERE n.tenant_id = %s AND n.id = ANY(%s) "
         "AND n.crm_person_id IS NULL AND n.crm_company_id IS NULL "
         "AND NOT EXISTS (SELECT 1 FROM contact_identifiers c WHERE c.memory_entity_id = n.id) "
-        "AND NOT EXISTS (SELECT 1 FROM memory_mentions m JOIN memory_facts f ON f.id = m.fact_id "
-        "WHERE m.entity_id = n.id AND f.scope_kind = 'shared') "
         "AND NOT EXISTS (SELECT 1 FROM memory_relations r "
         "WHERE r.source_entity_id = n.id OR r.target_entity_id = n.id)",
-        (tenant_id, candidates),
+        (fact_ids, fact_ids, tenant_id, candidates),
     )
-    gone = [int(r[0]) for r in cur.fetchall()]
+    gone: list[int] = []
+    for node, other_facts, named in cur.fetchall():
+        if other_facts:
+            # Another fact (shared, or any person's private one) still resolves
+            # to it: left as it is, and reported.
+            out["nodes_kept_by_other_facts"] += 1
+        elif named:
+            # A shared fact names it only in its entities column (written
+            # before mentions existed): still a shared name.
+            out["nodes_kept_by_entities"] += 1
+        else:
+            gone.append(int(node))
     if gone:
-        cur.execute("DELETE FROM memory_mentions WHERE entity_id = ANY(%s)", (gone,))
+        cur.execute(
+            "DELETE FROM memory_mentions WHERE entity_id = ANY(%s) AND fact_id = ANY(%s)",
+            (gone, fact_ids),
+        )
         cur.execute(
             "DELETE FROM memory_resolution_decisions WHERE resolved_entity_id = ANY(%s)", (gone,)
         )
