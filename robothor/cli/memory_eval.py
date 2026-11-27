@@ -263,6 +263,12 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
         print(f"memory-eval cannot run: {e}")
         return 3
     bench = bd.load_benchmark(args.benchmark, path)
+    try:
+        # Before preflight and before any cell: every path refuses the same way.
+        eb.require_parity_supported(bench, systems)
+    except ValueError as e:
+        print(f"memory-eval cannot run: {e}")
+        return 3
     drop = (
         () if (args.include_adversarial or args.benchmark != "locomo") else bd.LOCOMO_DEFAULT_DROP
     )

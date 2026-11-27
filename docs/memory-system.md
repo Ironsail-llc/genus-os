@@ -1644,7 +1644,8 @@ recency scored against the wall clock). The `recall` family stays for
 comparability with earlier runs: it calls `search_facts` directly at the
 harness budget, a 60-row limit, fan-out off and 36,500-day retention, none of
 which the product can produce. The report also records the memory flags of
-the process (`MEMORY_NARROW_SEARCH`, `MEMORY_RERANK_*`, RIP 15 and others).
+the process (`MEMORY_NARROW_SEARCH`, `MEMORY_RERANK_*`, `MEMORY_HNSW_*`, RIP 15,
+the RIP panic switch and others).
 
 **Bounds.** `evidence_only` hands the answer model only the question's
 evidence sessions, whole, oldest first: the ceiling of the answering step (a
