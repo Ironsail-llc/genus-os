@@ -1553,8 +1553,11 @@ chain of thought, session dates shown as `Session Date:` lines), and the
 judge scores.
 
 **Ingest once, ask many.** `--bench-dir` caches every context (by benchmark
-file, ingest mode, budget, system, question and the memory package's code
-version), every answer (by context, answer model and prompt version) and every
+file, ingest mode, budget, system, question and a context version that covers
+everything that decides retrieval: the memory package, `eval_systems.py`,
+`robothor/rag/`, the memory flags of the process (`PRODUCT_FLAG_ENV`), and for
+the parity cell the `search_memory` handler and the code that builds the tool
+message; scoring and report edits keep contexts), every answer (by context, answer model and prompt version) and every
 judgement (by answer, judge model and judge version). A second answer model
 reuses the contexts without ingesting; a rerun never pays for an answer twice;
 `--carry-forward recall_today` reuses that system's contexts from any earlier
@@ -1620,7 +1623,10 @@ and a confident answer to an unanswerable question); below 90% on either side
 the run stops. The official repository ships no human-labelled judgements, so
 agreement with the official judge cannot be measured on its own data.
 
-**Product parity and harness cells.** Every report has a cells table: each
+**Product parity and harness cells.** (LongMemEval only: LoCoMo questions have
+no date to run retention as of and their reader prompt is LoCoMo's own, so a
+LoCoMo run with `search_memory_tool` is refused before anything runs.) Every
+report has a cells table: each
 system is **product-parity** or **harness-only**, with every setting where it
 differs from the product. `search_memory_tool` is the parity cell: it calls the
 `search_memory` tool handler with the query alone (the tool's own limit,

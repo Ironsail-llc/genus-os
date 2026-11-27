@@ -593,6 +593,62 @@ def code_version(root: Path | None = None) -> str:
     return h.hexdigest()[:12]
 
 
+#: Beyond the memory package, the files that decide what a system retrieves
+#: (``context_version``), by glob from the repository root. The scoring and
+#: report files (``eval_bench*.py``, ``eval_hosted.py``) are not among them.
+RETRIEVAL_FILES: tuple[str, ...] = ("robothor/memory/eval_systems.py", "robothor/rag/*.py")
+#: And for the product-parity cell, the tool handler and what builds the
+#: tool message the answer model reads.
+PARITY_FILES: tuple[str, ...] = (
+    "robothor/engine/tools/handlers/memory.py",
+    "robothor/engine/session.py",
+    "robothor/engine/untrusted.py",
+    "robothor/secrets/redaction.py",
+)
+PARITY_SYSTEMS: frozenset[str] = frozenset({"search_memory_tool"})
+
+
+def context_version(system: str, *, repo_root: Path | None = None) -> str:
+    """The version a system's cached context belongs to.
+
+    It covers the memory package (:func:`code_version`), the retrieval files
+    (:data:`RETRIEVAL_FILES`), for the parity cell the tool path
+    (:data:`PARITY_FILES`), and the memory flags of this process
+    (:data:`PRODUCT_FLAG_ENV`), so a context is reused only when none of
+    what retrieved it changed. ``--carry-forward`` reuses one across versions
+    on purpose.
+    """
+    import os
+
+    root = repo_root if repo_root is not None else Path(__file__).resolve().parents[2]
+    memory = code_version() if repo_root is None else code_version(root / "robothor" / "memory")
+    h = hashlib.sha256(memory.encode())
+    patterns = RETRIEVAL_FILES + (PARITY_FILES if system in PARITY_SYSTEMS else ())
+    for pattern in patterns:
+        for path in sorted(root.glob(pattern)):
+            if path.is_file():
+                h.update(str(path.relative_to(root)).encode())
+                h.update(path.read_bytes())
+    flags = {k: os.environ.get(k) for k in PRODUCT_FLAG_ENV}
+    h.update(json.dumps(flags, sort_keys=True).encode())
+    return h.hexdigest()[:12]
+
+
+def require_parity_supported(bench: bd.Benchmark, systems: Sequence[str]) -> None:
+    """Refuse the product-parity cell on a benchmark where it cannot be parity.
+
+    It runs the product's retention as of the question's date and hands the
+    model the tool message inside LongMemEval's reader prompt; LoCoMo has no
+    question dates and its own reader layout.
+    """
+    if bench.name != "longmemeval" and PARITY_SYSTEMS & set(systems):
+        raise ValueError(
+            "search_memory_tool (product parity) runs on LongMemEval only: LoCoMo questions "
+            "have no date to run retention as of, and LoCoMo's reader prompt is its own "
+            "layout, not the tool message"
+        )
+
+
 class _Jsonl:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -1121,6 +1177,7 @@ async def run_benchmark(
     if ingest_mode not in INGEST_MODES:
         raise ValueError(f"unknown ingest mode {ingest_mode!r}")
     names = list(systems)
+    require_parity_supported(bench, names)
     built = make_systems(names)
     chosen = list(questions if questions is not None else bench.questions)
     answer_model = answer_model or _default_local_model()
@@ -1133,7 +1190,7 @@ async def run_benchmark(
     extraction_store = (
         ExtractionStore(cache_dir, model=_extraction_model()) if ingest_mode == "extract" else None
     )
-    version = code_version()
+    versions = {s.name: context_version(s.name) for s in built}
     split = dev_split(bench.questions, seed=split_seed)
 
     started = time.perf_counter()
@@ -1320,6 +1377,7 @@ async def run_benchmark(
         contexts: dict[tuple[str, str], dict[str, Any]] = {}
         need: list[tuple[Any, bd.BenchQuestion]] = []
         for s, q in pending:
+            version = versions[s.name]
             row = cache.context(_base(s.name, q), version, carry_forward=s.name in carry_forward)
             if row is None and not getattr(s, "needs_ingest", True):
                 row = _bound_row(s, bench, q)
@@ -1375,6 +1433,7 @@ async def run_benchmark(
                         _exclude(s.name, q, f"retrieval failed: {type(exc).__name__}: {exc}")
                         continue
                     row = {**_bundle_to_row(bundle, ing.turn_dates), "reranker": rr}
+                    version = versions[s.name]
                     cache.put_context(_base(s.name, q), version, row)
                     row = {"key": _key(_base(s.name, q), version), "version": version, **row}
                     contexts[(s.name, q.id)] = row
@@ -1428,7 +1487,8 @@ async def run_benchmark(
             "metric": "judge_accuracy" if bench.name == "longmemeval" else "token_f1",
             "cells": {n: cell_mode(n, token_budget, ingest_mode) for n in names},
             "product_flags": product_flags(),
-            "code_version": version,
+            "code_version": code_version(),
+            "context_versions": versions,
             "carried_forward": carried,
             "split_seed": split_seed,
             "split_counts": {
@@ -1475,6 +1535,7 @@ async def prefill_contexts(
     (tenant,) = _require_eval_tenants([tenant_id])
     if not cache_dir:
         raise ValueError("prefill_contexts needs a cache_dir")
+    require_parity_supported(bench, list(systems))
     built = make_systems(list(systems))
     ingest = ingest_fn or ingest_history
     clean = cleanup_fn or cleanup_bench
@@ -1482,7 +1543,7 @@ async def prefill_contexts(
     store = (
         ExtractionStore(cache_dir, model=_extraction_model()) if ingest_mode == "extract" else None
     )
-    version = code_version()
+    versions = {s.name: context_version(s.name) for s in built}
     fmt = session_date_format(bench.name)
     by_history: dict[str, list[bd.BenchQuestion]] = {}
     for q in questions:
@@ -1504,7 +1565,7 @@ async def prefill_contexts(
             for b in token_budgets
             if cache.context(
                 context_base(bench, ingest_mode, b, s.name, q),
-                version,
+                versions[s.name],
                 carry_forward=s.name in carry_forward,
             )
             is None
@@ -1543,7 +1604,7 @@ async def prefill_contexts(
                     continue
                 cache.put_context(
                     context_base(bench, ingest_mode, b, s.name, q),
-                    version,
+                    versions[s.name],
                     {**_bundle_to_row(bundle, ing.turn_dates), "reranker": rr},
                 )
                 stats["contexts"] += 1
@@ -1560,6 +1621,7 @@ async def prefill_contexts(
 #: Process flags that change what the tool returns; read per process.
 PRODUCT_FLAG_ENV: tuple[str, ...] = (
     "MEMORY_NARROW_SEARCH",
+    "ROBOTHOR_RERANKER_MODEL",
     "MEMORY_RERANK_ENABLED",
     "MEMORY_RERANK_WIDE",
     "MEMORY_RERANK_MAX_CANDIDATES",
@@ -1686,7 +1748,8 @@ def rescore_report(
     """
     p = dict(report.get("params") or {})
     cache = BenchCache(cache_dir or p.get("cache_dir"))
-    version = str(p.get("code_version") or "")
+    versions = dict(p.get("context_versions") or {})
+    legacy_version = str(p.get("code_version") or "")
     model = str(p.get("answer_model") or "")
     questions = {q.id: q for q in bench.questions}
     fields = {f.name for f in dataclasses.fields(bd.BenchRecord)}
@@ -1704,6 +1767,7 @@ def rescore_report(
             base = context_base(
                 bench, str(p.get("ingest_mode")), int(p.get("token_budget") or 0), raw["system"], q
             )
+            version = str(versions.get(raw["system"]) or legacy_version)
             ctx = cache.context(base, version, carry_forward=True)
         linked = False
         if ctx is None:
@@ -1793,9 +1857,10 @@ def estimate_run(
     from robothor.memory.eval_hosted import cost_usd, is_hosted, is_reasoning, price
     from robothor.memory.eval_systems import estimate_tokens
 
+    require_parity_supported(bench, list(systems))
     cache = BenchCache(cache_dir)
-    version = code_version()
     built = {s.name: s for s in make_systems(list(systems))}
+    versions = {name: context_version(name) for name in built}
     measured: dict[str, list[int]] = {}
     for row in cache.answers.rows.values() if cache.answers else []:
         if row.get("model") and row.get("output_tokens") is not None:
@@ -1833,6 +1898,7 @@ def estimate_run(
             }
             for q in questions:
                 base = context_base(bench, ingest_mode, token_budget, system, q)
+                version = versions[system]
                 ctx = cache.context(base, version, carry_forward=system in carry_forward)
                 if ctx is None and not getattr(built[system], "needs_ingest", True):
                     # Built from the benchmark: its real size, nothing retrieved.
