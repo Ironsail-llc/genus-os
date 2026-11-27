@@ -367,7 +367,7 @@ def test_an_empty_event_time_is_never_filled() -> None:
     ("text", "phrase", "model_said", "expected"),
     [
         ("I switched to an iPhone last Tuesday.", "last Tuesday", "2023-05-15", "2023-05-16"),
-        ("I'm flying to Rome in two weeks.", "in two weeks", "2023-05-27", "2023-06-03"),
+        ("I'm flying to Rome in two weeks.", "in two weeks", "2023-06-01", "2023-06-03"),
     ],
 )
 def test_a_miscounted_date_is_corrected_from_the_phrase_it_came_from(
@@ -701,3 +701,71 @@ def test_the_schema_asks_for_the_supporting_quote() -> None:
     item = CONVERSATION_EXTRACTION_SCHEMA["properties"]["facts"]["items"]
     assert "quote" in item["required"]
     assert "quote" in build_conversation_prompt(_turns()).lower()
+
+
+# ═══ a correction stays small, and never beats a date the speaker gave ═══
+
+WED = datetime(2026, 11, 25, 15, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("title", "text", "at", "phrase", "model_said", "expected"),
+    [
+        (
+            "the speaker gave the date",
+            "I met Sam on 2026-11-22 and yesterday I met Bob.",
+            FRI,
+            "yesterday",
+            "2026-11-22",
+            "2026-11-22",
+        ),
+        (
+            "the speaker gave it in words",
+            "I met Sam on November 22 and yesterday I met Bob.",
+            FRI,
+            "yesterday",
+            "2026-11-22",
+            "2026-11-22",
+        ),
+        (
+            "a week apart is not a miscount",
+            "We flew three weeks ago... no, we flew 2 weeks ago.",
+            FRI,
+            "three weeks ago",
+            "2026-11-13",
+            "2026-11-13",
+        ),
+        (
+            "a week apart on 'last Tuesday' is ambiguous",
+            "My surgery was last Tuesday.",
+            WED,
+            "last Tuesday",
+            "2026-11-17",
+            "2026-11-17",
+        ),
+        (
+            "a near miscount is corrected",
+            "My surgery was last Tuesday.",
+            WED,
+            "last Tuesday",
+            "2026-11-23",
+            "2026-11-24",
+        ),
+    ],
+)
+def test_the_computed_date_corrects_only_a_near_miscount_the_speaker_did_not_give(
+    title: str, text: str, at: datetime, phrase: str, model_said: str, expected: str
+) -> None:
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user did something.", [1], event_time=model_said, date_phrase=phrase)),
+        _said(text, at),
+    )
+    assert fact["event_time"] == expected, title
+
+
+def test_last_weekday_is_the_most_recent_such_day_before_today() -> None:
+    from robothor.memory.relative_dates import relative_days
+
+    assert [d.isoformat() for d in relative_days("last Tuesday", WED)] == ["2026-11-24"]
+    tue = datetime(2026, 11, 24, 15, 0, tzinfo=UTC)
+    assert [d.isoformat() for d in relative_days("last Tuesday", tue)] == ["2026-11-17"]
