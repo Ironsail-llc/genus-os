@@ -115,6 +115,19 @@ async def _write(text: str, *, tenant: str = TENANT, **kw: Any) -> dict[str, Any
     from robothor.memory.conflicts import resolve_and_store
     from robothor.memory.facts import parse_extraction_response
 
+    if kw.get("names") == []:
+        # A first-person fact names no entity, which extraction would refuse:
+        # written as the write path hands it on.
+        kw.pop("names")
+        bare = {
+            "fact_text": text,
+            "category": kw.pop("category", "personal"),
+            "entities": [],
+            "confidence": 0.9,
+            "relations": kw.pop("relations", []),
+        }
+        kw.setdefault("embedding", _vec(next(_counter)))
+        return await resolve_and_store(bare, "src", "conversation", tenant_id=tenant, **kw)
     parsed = parse_extraction_response(
         json.dumps(
             {

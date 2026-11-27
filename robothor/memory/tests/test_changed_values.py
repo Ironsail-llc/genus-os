@@ -516,6 +516,7 @@ class _Store:
         monkeypatch.setattr(cf, "record_conflict_decision", self.record)
         monkeypatch.setattr(cf, "_slot_newcomers", self.recheck)
         monkeypatch.setattr(cf, "_find_overruled", self.overruled_before)
+        monkeypatch.setattr(cf, "_mark_conflicts", MagicMock(), raising=False)
         monkeypatch.setattr(cf, "_reinforce_fact", lambda fid, **_k: self.reinforced.append(fid))
 
     async def __call__(self, text: str, **kw: Any) -> dict[str, Any]:
@@ -818,12 +819,20 @@ class TestNoModelFreeClose:
 
 class TestEventTime:
     @pytest.mark.asyncio
-    async def test_an_undated_current_value_is_not_closed_by_an_old_dated_one(self, monkeypatch):
-        s = _Store(monkeypatch, slot_rows=[_row(7, "Alice lives in Boston.")])
+    async def test_an_undated_current_value_and_an_older_dated_change(self, monkeypatch):
+        # The judge is told the new event predates the existing record. Its
+        # "earlier" files the new fact as history; its "changed" closes only
+        # with change wording in the new text ("moved"), else both stay.
+        s = _Store(monkeypatch, slot_rows=[_row(7, "Alice lives in Boston.")], outcome="earlier")
         out = await s("Alice moved to Denver in 2019.", event_time="2019-06-01")
-        assert s.closed() == []
-        assert out["action"] == "stored"
+        assert out["action"] == "stored_history" and s.closed() == []
+        s = _Store(monkeypatch, slot_rows=[_row(7, "Alice lives in Boston.")], outcome="changed")
+        out = await s("Alice lives in Denver.", event_time="2019-06-01")
+        assert out["action"] == "stored" and s.closed() == []
         assert s.actions() == ["conflict_unresolved"]
+        s = _Store(monkeypatch, slot_rows=[_row(7, "Alice lives in Boston.")], outcome="changed")
+        out = await s("Alice moved to Denver.", event_time="2026-11-15")
+        assert out["action"] == "superseded"
 
     @pytest.mark.asyncio
     async def test_a_bad_future_date_on_the_old_value_is_ignored(self, monkeypatch):

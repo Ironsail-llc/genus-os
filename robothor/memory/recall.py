@@ -320,6 +320,10 @@ def row_text(row: Mapping[str, Any]) -> str:
     2026-05-01: Alice lives in Boston.``
     """
     text = str(row.get("fact_text") or row.get("insight_text") or row.get("text") or "")
+    if row.get("conflict_open") and not row.get("superseded"):
+        # Another current value of the same slot disagrees and nothing has
+        # decided between them (conflicts._mark_conflicts): said so.
+        return f"Conflicting value, unresolved: {text}"
     if row.get("superseded"):
         # A value since replaced (bitemporal.place_superseded): said so, with
         # when, so it is never read as the current one.
@@ -332,12 +336,15 @@ def row_text(row: Mapping[str, Any]) -> str:
 
 
 def superseded_fields(row: Mapping[str, Any]) -> dict[str, Any]:
-    """A replaced value's label fields for an output row; empty for any other row.
+    """A replaced value's label fields for an output row (or, for a value in an
+    open conflict, ``conflict_open`` and ``conflict_with``); empty otherwise.
 
     ``superseded`` (True), ``superseded_at`` (ISO), ``superseded_reason``
     (``changed``, ``contradicted``, ``earlier`` or None) and ``superseded_by``
     (the row that replaced it).
     """
+    if row.get("conflict_open") and not row.get("superseded"):
+        return {"conflict_open": True, "conflict_with": row.get("conflict_with")}
     if not row.get("superseded"):
         return {}
     at = row.get("superseded_at")

@@ -1781,7 +1781,14 @@ async def _with_earlier_values(
     closed = [r for r in facts if r.get("superseded_by") is not None]
     missing = {int(r["id"]): int(r["superseded_by"]) for r in closed}
     missing = {k: v for k, v in missing.items() if v not in present}
-    if not wanted and not closed:
+    disputed = {
+        int(r["id"]): [int(o) for o in (r.get("metadata") or {}).get("conflict_open", [])]
+        for r in facts
+        if r.get("superseded_by") is None
+        and isinstance(r.get("metadata"), dict)
+        and r["metadata"].get("conflict_open")
+    }
+    if not wanted and not closed and not disputed:
         return result
 
     sql = (
@@ -1808,6 +1815,17 @@ async def _with_earlier_values(
             if wanted:
                 cur.execute(sql, (tenant, wanted, *scope_params))
                 old_rows = [dict(r) for r in cur.fetchall() if r["superseded_by"] is not None]
+            rivals = sorted({o for others in disputed.values() for o in others})
+            if rivals:
+                # Which of the other sides of an open conflict are still current
+                # and visible to this reader.
+                cur.execute(sql, (tenant, rivals, *scope_params))
+                live = {int(r["id"]) for r in cur.fetchall() if r["is_active"]}
+                for r in facts:
+                    others = [o for o in disputed.get(int(r["id"]), []) if o in live]
+                    if others:
+                        r["conflict_open"] = True
+                        r["conflict_with"] = others[0]
             heads: dict[int, dict[str, Any]] = {}
             pending = dict(missing)  # closed id -> the id to look at next
             for _ in range(_CURRENT_HOPS):

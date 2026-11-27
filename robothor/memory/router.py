@@ -115,6 +115,8 @@ def _normalize_fact(r: dict[str, Any]) -> dict[str, Any]:
         "superseded_reason",
         "superseded_by",
         "earlier_of",
+        "conflict_open",
+        "conflict_with",
     ):
         if key in r:
             row[key] = r[key]
