@@ -19,6 +19,10 @@ What it does, per tenant, for each shared fact the old ingest wrote
   retire, never a duplicate key);
 * a workspace room, a conversation with no known owner, or one whose session is
   gone: left shared, and counted by reason;
+* a row consolidation built from moved facts moves too when all its members
+  sit in one owner's scope (followed through consolidations of consolidations);
+  one built from mixed members stays shared and is counted
+  (``consolidated_left_shared``);
 * each re-scoped fact leaves the shared graph, as a private write never enters
   it: its evidence rows go and its relations are kept on it
   (``metadata.graph_pending_relations``); an edge left with no evidence is
@@ -85,7 +89,13 @@ def rescope_conversation_facts(
     every batch in one transaction and rolls it all back, cursor included: its
     totals are what applying would change, and it can be repeated.
     """
-    totals: dict[str, Any] = {"examined": 0, "rescoped": 0, "retired_duplicates": 0}
+    totals: dict[str, Any] = {
+        "examined": 0,
+        "rescoped": 0,
+        "retired_duplicates": 0,
+        "consolidated_rescoped": 0,
+        "consolidated_left_shared": 0,
+    }
     by_owner: Counter[str] = Counter()
     left: Counter[str] = Counter()
     graph_totals: Counter[str] = Counter()
@@ -100,6 +110,8 @@ def rescope_conversation_facts(
             totals["examined"] += part["examined"]
             totals["rescoped"] += part["rescoped"]
             totals["retired_duplicates"] += part["retired"]
+            totals["consolidated_rescoped"] += part["consolidated_rescoped"]
+            totals["consolidated_left_shared"] += part["consolidated_left_shared"]
             by_owner.update(part["by_owner"])
             left.update(part["left"])
             graph_totals.update(part["graph"])
@@ -123,6 +135,8 @@ def rescope_conversation_facts(
         "more": more,
         "rescoped": totals["rescoped"] if apply else 0,
         "retired_duplicates": totals["retired_duplicates"],
+        "consolidated_rescoped": totals["consolidated_rescoped"],
+        "consolidated_left_shared": totals["consolidated_left_shared"],
         **{k: graph_totals.get(k, 0) for k in _GRAPH_KEYS},
     }
     logger.info(
@@ -182,7 +196,10 @@ def _one_batch(cur: Any, tenant_id: str, after: int, batch: int) -> dict[str, An
     for sid, group in targets.items():
         moved, dropped = _rescope(cur, tenant_id, sid, group)
         rescoped, retired = rescoped + moved, retired + dropped
-    graph = _unpublish_graph(cur, tenant_id, [i for g in targets.values() for i in g])
+    moved_ids = [i for g in targets.values() for i in g]
+    graph = Counter(_unpublish_graph(cur, tenant_id, moved_ids))
+    consolidated = _follow_consolidations(cur, tenant_id, moved_ids)
+    graph.update(consolidated.pop("graph"))
     last_id = int(rows[-1][0]) if rows else None
     if last_id is not None:
         cur.execute(
@@ -201,7 +218,63 @@ def _one_batch(cur: Any, tenant_id: str, after: int, batch: int) -> dict[str, An
         "rescoped": rescoped,
         "retired": retired,
         "graph": graph,
+        **consolidated,
     }
+
+
+def _follow_consolidations(cur: Any, tenant_id: str, moved: list[int]) -> dict[str, Any]:
+    """Re-scope what consolidation built from facts this batch moved.
+
+    Consolidation merges similar shared facts into a new shared row and retires
+    the members into it (``superseded_by``), so a moved fact's content may live
+    on, shared, in that row. Following ``superseded_by`` outward (a
+    consolidated row may itself have been consolidated): a row whose members
+    all sit in one owner's scope moves to it, and leaves the graph, like any
+    moved fact; one whose members are mixed stays shared. Counts the readable
+    (active) rows of each kind.
+    """
+    out: dict[str, Any] = {
+        "consolidated_rescoped": 0,
+        "consolidated_left_shared": 0,
+        "graph": Counter(),
+    }
+    seen, frontier = set(moved), list(moved)
+    while frontier:
+        cur.execute(
+            "SELECT DISTINCT superseded_by FROM memory_facts WHERE tenant_id = %s "
+            "AND id = ANY(%s) AND superseded_by IS NOT NULL",
+            (tenant_id, frontier),
+        )
+        successors = [int(r[0]) for r in cur.fetchall() if int(r[0]) not in seen]
+        seen.update(successors)
+        frontier = []
+        for row_id in successors:
+            cur.execute(
+                "SELECT scope_kind, is_active FROM memory_facts WHERE id = %s AND tenant_id = %s",
+                (row_id, tenant_id),
+            )
+            found = cur.fetchone()
+            if found is None:
+                continue
+            kind, active = found
+            if kind != "shared":
+                frontier.append(row_id)  # already private: look further along
+                continue
+            cur.execute(
+                "SELECT DISTINCT scope_kind, scope_id FROM memory_facts "
+                "WHERE tenant_id = %s AND superseded_by = %s",
+                (tenant_id, row_id),
+            )
+            scopes = {(k, sid) for k, sid in cur.fetchall()}
+            if len(scopes) == 1 and next(iter(scopes))[0] == "user":
+                ((_kind, sid),) = scopes
+                _rescope(cur, tenant_id, str(sid), [row_id])
+                out["graph"].update(_unpublish_graph(cur, tenant_id, [row_id]))
+                out["consolidated_rescoped"] += 1 if active else 0
+                frontier.append(row_id)
+            elif active:
+                out["consolidated_left_shared"] += 1
+    return out
 
 
 _GRAPH_KEYS = (
