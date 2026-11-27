@@ -88,8 +88,9 @@ _WATERMARK_SOURCE = "conversation_facts"
 #: The rows the previous conversation ingest wrote (a tail hash, and an opt-in
 #: message-count watermark). A conversation with one starts past what it saw.
 _OLD_PATH_SOURCES = ("conversation_session", "conversation_session_watermark")
-#: How long a claim on a conversation lasts if its run never releases it.
-CLAIM_LEASE_SECONDS = 900
+#: How long a claim on a conversation lasts unless renewed; a run renews it
+#: after every window's extraction (``_renew``) and stops writing if it cannot.
+CLAIM_LEASE_SECONDS = 300
 #: When a run finds the conversation claimed, how soon it looks again.
 CLAIM_RETRY_SECONDS = 30.0
 #: Most follow-up runs one exchange can lead to (see ``_Run.again``).
@@ -670,6 +671,14 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
             context = seen[-CONTEXT_TURNS:]
             extraction = await extract_conversation_facts(kept, context=context)
             result["llm_calls"] += 1
+            if not await asyncio.to_thread(_renew, key, tenant, mark.token):
+                # The lease lapsed while the model worked and another run may
+                # have the conversation now: write nothing more.
+                logger.warning(
+                    "Conversation %s: lost the claim during extraction; stopping",
+                    sanitize_log(key),
+                )
+                return _done(result)
             if extraction.error is not None and extraction.error not in ANSWERED_ERRORS:
                 # The model server did not answer (unreachable, timed out,
                 # errored): nothing is wrong with these turns. Never counted,
@@ -739,6 +748,11 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
         result["turns_covered"] += len(window)
         seen.extend(window)
 
+    # Hand off: turns stored while this run worked (another exchange, whose
+    # own run found the conversation claimed) are picked up by a follow-up.
+    newest = await asyncio.to_thread(_newest_ref, key, tenant)
+    if later is None and newest > max(conv.scanned_through or 0, mark.through):
+        later = HOLD_SECONDS + 1
     if later is not None:
         run.again(later)
     logger.info(
@@ -948,6 +962,30 @@ def _fail(session_key: str, tenant_id: str, token: str, window_end: int) -> int:
 
     state = _mutate(session_key, tenant_id, _owned(token, change))
     return state.failures if state is not None else 0
+
+
+def _renew(session_key: str, tenant_id: str, token: str) -> bool:
+    """Extend this run's claim; False when it is no longer this run's."""
+
+    def extend(state: _State, now: int) -> _State | None:
+        if state.claim != token:
+            return None
+        state.claimed_until = now + CLAIM_LEASE_SECONDS
+        return state
+
+    return _mutate(session_key, tenant_id, extend) is not None
+
+
+def _newest_ref(session_key: str, tenant_id: str) -> int:
+    """The conversation's highest stored message id (0 for none)."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COALESCE(max(m.id), 0) FROM chat_messages m JOIN chat_sessions s "
+            "ON s.id = m.session_id WHERE s.tenant_id = %s AND s.session_key = %s",
+            (tenant_id, session_key),
+        )
+        return int(cur.fetchone()[0])
 
 
 def _release(session_key: str, tenant_id: str, token: str) -> None:
