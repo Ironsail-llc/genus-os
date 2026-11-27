@@ -529,20 +529,28 @@ def forget_fact(
         # decision. Two concurrent clicks would otherwise both read active, both
         # write, and both report success — with two audit rows for one act.
         cur.execute(
-            "SELECT is_active FROM memory_facts WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            "SELECT is_active, superseded_by IS NOT NULL, "
+            "COALESCE(metadata->'forgotten', 'null'::jsonb) <> 'null'::jsonb "
+            "FROM memory_facts WHERE id = %s AND tenant_id = %s FOR UPDATE",
             (identifier, tenant_id),
         )
         row = cur.fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="no fact with that id")
-        if not row[0]:
+        is_active, replaced, forgotten = row[0], bool(row[1]), bool(row[2])
+        # A value since replaced is inactive but still shown, after the value
+        # that replaced it, so it can still be forgotten, once. Its validity
+        # bound (when it stopped being true) stays as it was.
+        if forgotten or (not is_active and not replaced):
             raise HTTPException(
                 status_code=409,
                 detail="that fact is already inactive; there is nothing left to forget.",
             )
         cur.execute(
-            "UPDATE memory_facts SET is_active = false, valid_to = now(), updated_at = now() "
-            "WHERE id = %s AND tenant_id = %s",
+            "UPDATE memory_facts SET is_active = false, valid_to = COALESCE(valid_to, now()), "
+            "metadata = COALESCE(metadata, '{}'::jsonb) "
+            "|| jsonb_build_object('forgotten', jsonb_build_object('at', now())), "
+            "updated_at = now() WHERE id = %s AND tenant_id = %s",
             (identifier, tenant_id),
         )
         fact = _load(cur, identifier, tenant_id)

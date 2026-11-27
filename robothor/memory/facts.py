@@ -1786,7 +1786,9 @@ async def _with_earlier_values(
 
     sql = (
         f"SELECT {_FACT_COLUMNS}, valid_to, is_active FROM memory_facts "  # noqa: S608 - fixed
-        f"WHERE tenant_id = %s AND id = ANY(%s) {scope_clause}"
+        f"WHERE tenant_id = %s AND id = ANY(%s) {scope_clause} "
+        # An operator's forget is final: a forgotten value is never shown again.
+        "AND COALESCE(metadata->'forgotten', 'null'::jsonb) = 'null'::jsonb"
     )
     closed_ids = [int(r["id"]) for r in closed]
 

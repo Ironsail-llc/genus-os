@@ -452,7 +452,9 @@ def test_a_replaced_value_can_still_be_forgotten_once(
     assert metadata.get("forgotten")
     assert valid_to == before
     assert _row(db_conn, current)["is_active"] is True
-    again = controls_client_as_operator.post(f"{FACTS}/{earlier}/forget", json={"reason": "x"})
+    again = controls_client_as_operator.post(
+        f"{FACTS}/{earlier}/forget", json={"reason": "forget it again"}
+    )
     assert again.status_code == 409
 
 
