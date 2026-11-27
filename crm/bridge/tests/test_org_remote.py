@@ -582,3 +582,17 @@ def test_a_slow_company_does_not_hold_the_page(engine, monkeypatch):
     assert by_id[CHILD_A]["status"] == "ok"
     assert by_id[CHILD_B]["status"] == "error"
     assert ROOT not in by_id
+
+
+def test_a_write_with_an_unknown_outcome_is_audited_as_unknown(engine, audit_rows):
+    engine.answers[CHILD_A] = (
+        200,
+        {"outcome": "error", "result": {"error": "dropped"}, "outcome_unknown": True},
+    )
+
+    response = _engine_client().post(CALL, json=_body(access="write", request_id="eff-1"))
+
+    assert response.status_code == 200
+    assert response.json()["outcome_unknown"] is True
+    (row,) = [r for r in audit_rows if r["event_type"] == "org.remote_call"]
+    assert row["status"] == "unknown"
