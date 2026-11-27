@@ -19,10 +19,13 @@ What it does, per tenant, for each shared fact the old ingest wrote
   retire, never a duplicate key);
 * a workspace room, a conversation with no known owner, or one whose session is
   gone: left shared, and counted by reason;
-* a row consolidation built from moved facts moves too when all its members
-  sit in one owner's scope (followed through consolidations of consolidations);
-  one built from mixed members stays shared and is counted
-  (``consolidated_left_shared``);
+* a row consolidation built from moved facts (``source_type =
+  'consolidation'``, never an operator-confirmed one) moves too when all its
+  members sit in one owner's scope, followed through consolidations of
+  consolidations; one built from mixed members stays shared and is counted
+  once (``consolidated_left_shared``). A fact that merely superseded a moved
+  one (a later update from any source, an operator-confirmed overrule) is an
+  independent fact and keeps its own scope;
 * each re-scoped fact leaves the shared graph, as a private write never enters
   it: its evidence rows go and its relations are kept on it
   (``metadata.graph_pending_relations``); an edge left with no evidence is
@@ -89,13 +92,9 @@ def rescope_conversation_facts(
     every batch in one transaction and rolls it all back, cursor included: its
     totals are what applying would change, and it can be repeated.
     """
-    totals: dict[str, Any] = {
-        "examined": 0,
-        "rescoped": 0,
-        "retired_duplicates": 0,
-        "consolidated_rescoped": 0,
-        "consolidated_left_shared": 0,
-    }
+    totals: dict[str, Any] = {"examined": 0, "rescoped": 0, "retired_duplicates": 0}
+    consolidated_moved: set[int] = set()
+    consolidated_mixed: set[int] = set()
     by_owner: Counter[str] = Counter()
     left: Counter[str] = Counter()
     graph_totals: Counter[str] = Counter()
@@ -110,8 +109,8 @@ def rescope_conversation_facts(
             totals["examined"] += part["examined"]
             totals["rescoped"] += part["rescoped"]
             totals["retired_duplicates"] += part["retired"]
-            totals["consolidated_rescoped"] += part["consolidated_rescoped"]
-            totals["consolidated_left_shared"] += part["consolidated_left_shared"]
+            consolidated_moved |= part["moved"]
+            consolidated_mixed |= part["mixed"]
             by_owner.update(part["by_owner"])
             left.update(part["left"])
             graph_totals.update(part["graph"])
@@ -122,6 +121,9 @@ def rescope_conversation_facts(
                 conn.commit()
             if not more or (max_batches is not None and batches >= max_batches):
                 break
+        # A consolidation whose members fell in different batches looks mixed
+        # until its last member moves: count only what is still shared now.
+        left_shared = _still_shared(cur, tenant_id, consolidated_mixed - consolidated_moved)
         if not apply:
             conn.rollback()
     report: dict[str, Any] = {
@@ -135,8 +137,8 @@ def rescope_conversation_facts(
         "more": more,
         "rescoped": totals["rescoped"] if apply else 0,
         "retired_duplicates": totals["retired_duplicates"],
-        "consolidated_rescoped": totals["consolidated_rescoped"],
-        "consolidated_left_shared": totals["consolidated_left_shared"],
+        "consolidated_rescoped": len(consolidated_moved),
+        "consolidated_left_shared": left_shared,
         **{k: graph_totals.get(k, 0) for k in _GRAPH_KEYS},
     }
     logger.info(
@@ -151,6 +153,17 @@ def rescope_conversation_facts(
         report["nodes_removed"],
     )
     return report
+
+
+def _still_shared(cur: Any, tenant_id: str, ids: set[int]) -> int:
+    if not ids:
+        return 0
+    cur.execute(
+        "SELECT count(*) FROM memory_facts WHERE tenant_id = %s AND id = ANY(%s) "
+        "AND is_active AND scope_kind = 'shared'",
+        (tenant_id, sorted(ids)),
+    )
+    return int(cur.fetchone()[0])
 
 
 def _saved_cursor(cur: Any, tenant_id: str) -> int:
@@ -225,38 +238,33 @@ def _one_batch(cur: Any, tenant_id: str, after: int, batch: int) -> dict[str, An
 def _follow_consolidations(cur: Any, tenant_id: str, moved: list[int]) -> dict[str, Any]:
     """Re-scope what consolidation built from facts this batch moved.
 
-    Consolidation merges similar shared facts into a new shared row and retires
-    the members into it (``superseded_by``), so a moved fact's content may live
-    on, shared, in that row. Following ``superseded_by`` outward (a
-    consolidated row may itself have been consolidated): a row whose members
-    all sit in one owner's scope moves to it, and leaves the graph, like any
-    moved fact; one whose members are mixed stays shared. Counts the readable
-    (active) rows of each kind.
+    Consolidation merges similar shared facts into a new shared row
+    (``source_type = 'consolidation'``) and retires the members into it
+    (``superseded_by``), so a moved fact's content may live on, shared, in
+    that row. Only such rows are followed, outward through consolidations of
+    consolidations: ``superseded_by`` is also set when a later fact from any
+    source updates an earlier one, or when an operator-confirmed fact overrules
+    it, and those are independent facts that keep their own scope. A
+    consolidation (never an operator-confirmed one) whose members all sit in
+    one owner's scope moves to it and leaves the graph, like any moved fact.
+    Returns the ids moved and the active ids left shared because their members
+    are mixed (the caller counts them once, across batches).
     """
-    out: dict[str, Any] = {
-        "consolidated_rescoped": 0,
-        "consolidated_left_shared": 0,
-        "graph": Counter(),
-    }
+    out: dict[str, Any] = {"moved": set(), "mixed": set(), "graph": Counter()}
     seen, frontier = set(moved), list(moved)
     while frontier:
         cur.execute(
-            "SELECT DISTINCT superseded_by FROM memory_facts WHERE tenant_id = %s "
-            "AND id = ANY(%s) AND superseded_by IS NOT NULL",
+            "SELECT DISTINCT s.id, s.scope_kind, s.is_active FROM memory_facts f "
+            "JOIN memory_facts s ON s.id = f.superseded_by AND s.tenant_id = f.tenant_id "
+            "WHERE f.tenant_id = %s AND f.id = ANY(%s) AND s.source_type = 'consolidation' "
+            "AND COALESCE(s.origin, '') <> 'operator_confirmed' "
+            "AND NOT (COALESCE(s.metadata, '{}'::jsonb) ? 'operator_confirmed')",
             (tenant_id, frontier),
         )
-        successors = [int(r[0]) for r in cur.fetchall() if int(r[0]) not in seen]
-        seen.update(successors)
+        successors = [(int(i), k, a) for i, k, a in cur.fetchall() if int(i) not in seen]
+        seen.update(i for i, _k, _a in successors)
         frontier = []
-        for row_id in successors:
-            cur.execute(
-                "SELECT scope_kind, is_active FROM memory_facts WHERE id = %s AND tenant_id = %s",
-                (row_id, tenant_id),
-            )
-            found = cur.fetchone()
-            if found is None:
-                continue
-            kind, active = found
+        for row_id, kind, active in successors:
             if kind != "shared":
                 frontier.append(row_id)  # already private: look further along
                 continue
@@ -270,10 +278,11 @@ def _follow_consolidations(cur: Any, tenant_id: str, moved: list[int]) -> dict[s
                 ((_kind, sid),) = scopes
                 _rescope(cur, tenant_id, str(sid), [row_id])
                 out["graph"].update(_unpublish_graph(cur, tenant_id, [row_id]))
-                out["consolidated_rescoped"] += 1 if active else 0
+                if active:
+                    out["moved"].add(row_id)
                 frontier.append(row_id)
             elif active:
-                out["consolidated_left_shared"] += 1
+                out["mixed"].add(row_id)
     return out
 
 

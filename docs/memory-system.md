@@ -1346,7 +1346,10 @@ resuming where an interrupted run stopped (`--batch`, `--restart`). Copies that 
 text keep the oldest. A row consolidation built from moved facts moves with
 them when all its members sit in one owner's scope (followed through
 consolidations of consolidations); one with mixed members stays shared and is
-counted (`consolidated_left_shared`). Each moved fact leaves the shared graph as a private
+counted once (`consolidated_left_shared`). Only rows consolidation wrote are
+followed, never an operator-confirmed one: a fact that merely superseded a
+moved one (a later update from any source, an operator's overrule) is an
+independent fact and keeps its own scope. Each moved fact leaves the shared graph as a private
 write never enters it: its evidence rows go and its relations are kept on it
 (`metadata.graph_pending_relations`), an edge left with no evidence is deleted,
 and a node nothing else names (not CRM-linked, no contact identifier, no edge,
