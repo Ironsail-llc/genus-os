@@ -67,7 +67,19 @@ def tenants():
 
 
 class _Verdict:
-    """The classifier, mocked: every pair it is asked about gets ``kind``."""
+    """The classifier and the slot judge, mocked: every pair gets ``kind``.
+
+    ``kind`` is a classifier answer (update, new, duplicate, contradiction),
+    ``earlier``, or ``unavailable``; the judge hears it as its own outcome.
+    """
+
+    _OUTCOME = {
+        "update": "changed",
+        "new": "coexist",
+        "duplicate": "same",
+        "contradiction": "conflict",
+        "earlier": "earlier",
+    }
 
     def __init__(self) -> None:
         self.kind = "update"
@@ -79,6 +91,12 @@ class _Verdict:
             return {"classification": "new", "reasoning": "down", "unavailable": True}
         return {"classification": self.kind, "reasoning": "mocked"}
 
+    async def judge(self, new: str, old: str, **_context: Any) -> dict[str, Any]:
+        self.calls.append((new, old))
+        if self.kind == "unavailable":
+            return {"outcome": None, "reasoning": "down", "unavailable": True}
+        return {"outcome": self._OUTCOME[self.kind], "reasoning": "mocked"}
+
 
 @pytest.fixture(autouse=True)
 def verdict(monkeypatch):
@@ -86,6 +104,7 @@ def verdict(monkeypatch):
 
     v = _Verdict()
     monkeypatch.setattr(cf, "classify_relationship", v)
+    monkeypatch.setattr(cf, "judge_slot_change", v.judge)
     return v
 
 
@@ -381,7 +400,8 @@ class TestNothingTrueIsClosed:
         await _write("She lives in Denver.", names=["Dana"], embedding=_vec(800))
         assert _rows()[first["new_id"]]["is_active"] is True
 
-    async def test_an_older_event_becomes_the_earlier_value(self, tenants):
+    async def test_an_older_event_becomes_the_earlier_value(self, tenants, verdict):
+        verdict.kind = "earlier"
         first = await _write("Alice lives in Boston.", event_time="2026-11-01")
         out = await _write("Alice moved to Denver in 2019.", event_time="2019-06-01")
         assert out["action"] == "stored_history"
@@ -456,9 +476,9 @@ class TestBusySubject:
 
 
 class TestDeterministicEndToEnd:
-    async def test_resolved_predicate_subject_and_value_close_without_the_model(
-        self, tenants, verdict
-    ):
+    async def test_a_resolved_different_value_still_asks_the_judge(self, tenants, verdict):
+        """Resolved entities never close a fact on their own (containment, two
+        nodes for one place, a second value all look like a change)."""
         from robothor.db.connection import get_connection
 
         rel = [{"source": "Alice", "relation": "lives in", "target": "Boston"}]
@@ -496,8 +516,8 @@ class TestDeterministicEndToEnd:
             relations=[{"source": "Alice", "relation": "moved to", "target": "Denver"}],
             origin="agent_generated",
         )
-        assert out["action"] == "superseded"
-        assert verdict.calls == []
+        assert len(verdict.calls) == 1
+        assert out["action"] == "superseded"  # the judge (mocked) said changed
 
 
 class TestConcurrency:
