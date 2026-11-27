@@ -1,11 +1,13 @@
 """Conversation segments compete with facts on equal terms in fusion.
 
-A fact enters fusion as two legs (``vector`` and ``keyword``). A segment used
-to enter as one leg whose own dense and keyword fusion had already happened,
-so any fact found by both fact legs in their top 60 outranked the best
-segment: with many facts about the person a question names, the segment that
-holds the answer sat at fused rank 61, past the reranker's head, and never
-came back. These tests seed exactly that world.
+A fact enters fusion as two legs (``vector`` and ``keyword``); a segment as
+two legs of half weight (``segment_dense``, ``segment_keyword``), so one both
+found scores what the single pre-fused segment leg gave it and the default
+ranking is unchanged. Any fact found by both fact legs in their top 60 still
+outranks the best segment: with many facts about the subject a question
+names, the segment holding the answer used to sit past the reranker's head
+and never come back. So when that head holds no segment at all, the best
+segment is judged beside it, and kept only when judged relevant.
 
 Same fake fact database and reranker as ``test_search_facts_ranking.py``; the
 segment store answers from its own fake cursor.
@@ -112,65 +114,112 @@ def _scored(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [r for r in rows if r.get("kind") == "segment"]
 
 
-@pytest.mark.asyncio
-async def test_a_segment_found_by_both_its_legs_is_not_buried_by_two_leg_facts(
-    env: pytest.MonkeyPatch,
-) -> None:
-    """100 facts found by both fact legs, one answer segment found by both
-    segment legs: the segment reaches the reranker and comes back."""
-    answer = _segment_row(9001, ANSWER)
-    seg_cur = _SegmentCursor(
-        dense=[dict(answer, similarity=0.7)], keyword=[dict(answer, keyword_rank=0.4)]
-    )
-    with patch.object(reranker, "rerank_pair", _scorer({"4417": 0.95})):
-        rows = await _search_with_segments(_two_leg_facts(), seg_cur, limit=10)
+def _recording(scores: dict[str, float]) -> tuple[list[str], Any]:
+    seen: list[str] = []
+    inner = _scorer(scores)
 
-    hits = _scored(rows)
-    assert hits, [r.get("kind") for r in rows]
-    assert "4417" in hits[0]["fact_text"]
-    assert hits[0]["rerank_score"] is not None, "the reranker scored it"
-    assert rows[0]["kind"] == "segment", "scored highest, it ranks first"
-
-
-@pytest.mark.asyncio
-async def test_a_segment_carries_its_rank_in_each_of_its_legs(env: pytest.MonkeyPatch) -> None:
-    """A segment found by both of its legs gets credit from each, like a fact."""
-    answer = _segment_row(9001, ANSWER)
-    seg_cur = _SegmentCursor(
-        dense=[dict(answer, similarity=0.7)], keyword=[dict(answer, keyword_rank=0.4)]
-    )
-    with patch.object(reranker, "rerank_pair", _scorer({"4417": 0.95})):
-        rows = await _search_with_segments(_two_leg_facts(), seg_cur, limit=10)
-
-    hit = _scored(rows)[0]
-    assert len(hit["leg_ranks"]) == 2, hit["leg_ranks"]
-    assert set(hit["leg_ranks"].values()) == {0}
-    # A fact first in both fact legs scores 2 / RRF_K; so does this segment.
-    assert hit["rrf_score"] == pytest.approx(2 / RRF_K, abs=1e-6)
-
-
-@pytest.mark.asyncio
-async def test_the_reranker_head_holds_a_segment_that_ranks_first_on_one_leg(
-    env: pytest.MonkeyPatch,
-) -> None:
-    """Found only by the dense segment leg, the answer still fuses below every
-    two-leg fact; the reranker's head must still hold it, or it is never
-    scored."""
-    answer = _segment_row(9001, ANSWER)
-    seg_cur = _SegmentCursor(dense=[dict(answer, similarity=0.7)], keyword=[])
-    scored_docs: list[str] = []
-    inner = _scorer({"4417": 0.95})
-
-    async def recording(client: Any, query: str, doc: str) -> float:
-        scored_docs.append(doc)
+    async def pair(client: Any, query: str, doc: str) -> float:
+        seen.append(doc)
         return await inner(client, query, doc)
 
-    with patch.object(reranker, "rerank_pair", recording):
+    return seen, pair
+
+
+def _both_legs(*rows: dict[str, Any]) -> _SegmentCursor:
+    return _SegmentCursor(
+        dense=[dict(r, similarity=0.7 - i / 100) for i, r in enumerate(rows)],
+        keyword=[dict(r, keyword_rank=0.4 - i / 100) for i, r in enumerate(rows)],
+    )
+
+
+def _keys(rows: list[dict[str, Any]]) -> list[tuple[str, Any]]:
+    return [(r["kind"], r["id"]) for r in rows]
+
+
+@pytest.mark.asyncio
+async def test_an_answer_segment_buried_under_two_leg_facts_is_returned_when_relevant(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """100 facts found by both fact legs fill the reranker's head; the best
+    segment is judged beside them and, judged relevant, comes back first."""
+    seg_cur = _both_legs(_segment_row(9001, ANSWER))
+    seen, pair = _recording({"4417": 0.95})
+    with patch.object(reranker, "rerank_pair", pair):
         rows = await _search_with_segments(_two_leg_facts(), seg_cur, limit=10)
 
-    assert len(scored_docs) == reranker.RERANK_MAX_CANDIDATES
-    assert any("4417" in d for d in scored_docs), "the segment was in the scored head"
+    assert any("4417" in d for d in seen), "the reranker judged the segment"
+    hits = _scored(rows)
+    assert hits and "4417" in hits[0]["fact_text"], [r.get("kind") for r in rows]
+    assert hits[0]["rerank_score"] == pytest.approx(0.95)
     assert rows[0]["kind"] == "segment"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [10, 30])
+async def test_an_irrelevant_segment_displaces_nothing(env: pytest.MonkeyPatch, limit: int) -> None:
+    """Judged below the relevance line, the segment leaves the result exactly
+    as it is without it: the same rows, in the same order, scored alike."""
+    seg_cur = _both_legs(_segment_row(9001, "User: what did we have for lunch?\nAssistant: Soup."))
+    scores = {"Alice note 3:": 0.9, "Alice note 7:": 0.7, "lunch": 0.1}
+    with patch.object(reranker, "rerank_pair", _scorer(scores)):
+        with_segment = await _search_with_segments(_two_leg_facts(), seg_cur, limit=limit)
+        without = await _search_with_segments(
+            _two_leg_facts(), _SegmentCursor(dense=[], keyword=[]), limit=limit
+        )
+
+    assert _keys(with_segment) == _keys(without)
+    assert [r.get("rerank_score") for r in with_segment] == [r.get("rerank_score") for r in without]
+
+
+@pytest.mark.asyncio
+async def test_a_segment_both_its_legs_found_scores_what_the_one_leg_gave(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Each segment leg counts half: first in both, a segment fuses at 1/RRF_K,
+    what the single pre-fused segment leg gave it, so default ranking holds."""
+    seg_cur = _both_legs(_segment_row(9001, ANSWER))
+    with patch.object(reranker, "rerank_pair", _scorer({"4417": 0.95})):
+        rows = await _search_with_segments(_two_leg_facts(5), seg_cur, limit=10)
+
+    hit = _scored(rows)[0]
+    assert set(hit["leg_ranks"]) == {"segment_dense", "segment_keyword"}
+    assert hit["rrf_score"] == pytest.approx(1 / RRF_K, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_no_extra_pair_when_the_head_already_holds_a_segment(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Facts one leg found fuse below a two-leg segment, which is then in the
+    head on its own: the reranker scores exactly its usual head."""
+    facts = [
+        _row(i, f"Alice note {i}: item {i * 7} was filed", similarity=0.9 - i / 1000)
+        for i in range(1, 101)
+    ]
+    seg_cur = _both_legs(_segment_row(9001, ANSWER))
+    seen, pair = _recording({"4417": 0.95})
+    with patch.object(reranker, "rerank_pair", pair):
+        rows = await _search_with_segments(_Cursor(vector=facts, keyword=[]), seg_cur, limit=10)
+
+    assert len(seen) == reranker.RERANK_MAX_CANDIDATES
+    assert rows[0]["kind"] == "segment"
+
+
+@pytest.mark.asyncio
+async def test_only_the_best_segment_is_judged_beside_a_head_of_facts(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """One more pair, for the segment its own legs rank first; the next
+    segment is not judged."""
+    best = _segment_row(9001, ANSWER)
+    other = _segment_row(9002, "User: Bob's bike is blue.\nAssistant: Noted.")
+    seen, pair = _recording({"4417": 0.95})
+    with patch.object(reranker, "rerank_pair", pair):
+        await _search_with_segments(_two_leg_facts(), _both_legs(best, other), limit=10)
+
+    assert len(seen) == reranker.RERANK_MAX_CANDIDATES + 1
+    assert any("4417" in d for d in seen)
+    assert not any("bike is blue" in d for d in seen)
 
 
 @pytest.mark.asyncio
