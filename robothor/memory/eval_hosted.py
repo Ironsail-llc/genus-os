@@ -9,7 +9,8 @@ labelled with one model and answered by another.
 The key comes from the shared credential pool
 (``robothor.engine.key_pool.api_key_for_model``: ``OPENAI_API_KEY``, then
 ``OPENAI_API_KEY_2`` …), as every other provider call takes it; a key the
-provider rejects (401, 402, 403) is retired there, so the next call rotates.
+provider rejects (out of credit, or a 401, by the engine's rules) is retired
+there, so the next call rotates.
 With no pooled key litellm resolves the environment itself. The endpoint
 comes from ``OPENAI_API_BASE`` (or ``OPENAI_BASE_URL``) when set, since a key
 can be bound to a regional endpoint. Neither appears in a log, a report or a
@@ -106,22 +107,33 @@ def _is_rate_limit(exc: Exception) -> bool:
     return status in (429, 500, 502, 503, 504)
 
 
-#: Provider statuses that mean this credential is spent or refused.
-_REJECTED = (401, 402, 403)
+def _retire_if_credential_failure(model: str, key: str, exc: Exception) -> bool:
+    """Retire ``key`` when the provider rejected the credential; True if it did.
 
-
-def _retire(model: str, key: str, exc: Exception) -> None:
-    """Take a rejected key out of rotation, classified as the engine does."""
+    The engine's own rules (``llm_client``): out of credit (a 402, or the
+    provider's credit wording, which OpenAI sends as a 429) or an auth
+    failure (401 only). A 403 is model-specific ("this key may not use this
+    model") and keeps the key.
+    """
     from robothor.engine.key_pool import Retirement, retire_for_model
+    from robothor.engine.llm_client import (
+        is_auth_failure,
+        is_credit_exhausted,
+        is_periodic_quota_exhausted,
+    )
 
-    detail = str(exc).lower()
-    if any(m in detail for m in ("weekly limit", "daily limit", "monthly limit")):
-        reason = Retirement.QUOTA_EXHAUSTED_PERIODIC
-    elif getattr(exc, "status_code", None) == 401:
+    if is_credit_exhausted(exc):
+        reason = (
+            Retirement.QUOTA_EXHAUSTED_PERIODIC
+            if is_periodic_quota_exhausted(exc)
+            else Retirement.CREDIT_EXHAUSTED
+        )
+    elif is_auth_failure(exc):
         reason = Retirement.AUTH_FAILED
     else:
-        reason = Retirement.CREDIT_EXHAUSTED
+        return False
     retire_for_model(model, key, reason)
+    return True
 
 
 async def hosted_chat(
@@ -168,8 +180,9 @@ async def hosted_chat(
             break
         except Exception as exc:
             attempt += 1
-            if key is not None and getattr(exc, "status_code", None) in _REJECTED:
-                _retire(model, key, exc)
+            # A spent or rejected key is retired and raised at once: waiting
+            # does not refill an account, and the next call rotates.
+            if key is not None and _retire_if_credential_failure(model, key, exc):
                 raise
             if attempt >= _MAX_ATTEMPTS or not _is_rate_limit(exc):
                 raise
