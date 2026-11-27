@@ -348,3 +348,27 @@ async def test_a_conversation_the_old_path_never_saw_is_extracted_whole(world: W
     store_chat(world.db, key, turns, person=ALICE)
     await _ingest(key, turns)
     assert {f["fact_text"] for f in world.db.facts()} == {"The user prefers dark roast coffee."}
+
+
+@pytest.mark.asyncio
+async def test_the_old_paths_row_under_the_default_tenant_counts_too(world: World) -> None:
+    """The previous ingest recorded its dedup row without a tenant, so under the default."""
+    from robothor.constants import DEFAULT_TENANT
+
+    world.model.on_turn(
+        "dark roast", turn_fact("The user prefers dark roast coffee.", about_user=True)
+    )
+    world.db.q(
+        "INSERT INTO crm_tenants (id, display_name) VALUES (%s, 'Default') ON CONFLICT DO NOTHING",
+        (DEFAULT_TENANT,),
+    )
+    key = "telegram:4242"
+    turns = [("user", "I always go for dark roast."), ("assistant", "Noted.")]
+    store_chat(world.db, key, turns, person=ALICE)
+    world.db.q(
+        "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, ingested_at) "
+        "VALUES (%s, 'conversation_session', %s, 'old-hash', '2023-05-20T10:00:00Z')",
+        (DEFAULT_TENANT, key),
+    )
+    await _ingest(key, turns)
+    assert world.db.facts() == []
