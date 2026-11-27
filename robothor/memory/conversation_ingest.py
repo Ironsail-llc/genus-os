@@ -82,6 +82,15 @@ MAX_WINDOWS_PER_RUN = 5
 HOLD_SECONDS = 5.0
 #: How soon a follow-up run continues a backlog longer than one run's windows.
 BACKLOG_DELAY_SECONDS = 1.0
+#: A row below the watermark written this recently that no run extracted is
+#: late (its writer committed after a later id was extracted): it is extracted
+#: on its own. Older rows below the watermark are never revisited.
+LATE_WINDOW_SECONDS = 15 * 60
+#: Most recent message ids the watermark row keeps to tell late rows apart.
+RECENT_KEEP = 400
+#: ``ingested_items.fact_ids`` is ``integer[]``: ids past it are not kept, and
+#: rows with such ids cannot be recognised as late.
+_INT4 = 2**31
 
 #: Watermark (``ingested_items``): see "the watermark row" below.
 _WATERMARK_SOURCE = "conversation_facts"
@@ -141,6 +150,11 @@ class StoredConversation:
     held_from: int | None = None
     #: More turns are stored past those loaded.
     more: bool = False
+    #: Every message id loaded past the watermark (turns or not).
+    refs: list[int] = field(default_factory=list)
+    #: Late turns (below the watermark, never extracted) and all late row ids.
+    late: list[ConversationTurn] = field(default_factory=list)
+    late_refs: list[int] = field(default_factory=list)
     #: The highest message id read past the watermark, turn or not (a run of
     #: system rows moves the watermark too, so the next run starts past it).
     scanned_through: int | None = None
@@ -259,7 +273,12 @@ class _Authors:
 
 
 def _load_conversation(
-    session_key: str, tenant_id: str, after_ref: int, limit: int, until: int | None = None
+    session_key: str,
+    tenant_id: str,
+    after_ref: int,
+    limit: int,
+    until: int | None = None,
+    recent: tuple[int, ...] | list[int] = (),
 ) -> StoredConversation | None:
     """Read one session's turns past ``after_ref`` (sync; run in a worker thread).
 
@@ -289,6 +308,17 @@ def _load_conversation(
         new = list(cur.fetchall())
         more = len(new) > limit
         new = new[:limit]
+        # Late rows: below the watermark, recent, past the hold, and not among
+        # the ids a run extracted.
+        late_rows: list[Any] = []
+        if until is None and after_ref:
+            cur.execute(
+                cols + "AND id <= %s AND created_at > now() - make_interval(secs => %s) "
+                "AND created_at <= now() - make_interval(secs => %s) "
+                "AND NOT (id = ANY(%s)) ORDER BY id",
+                (session["id"], after_ref, LATE_WINDOW_SECONDS, HOLD_SECONDS, list(recent)),
+            )
+            late_rows = list(cur.fetchall())
         cur.execute(
             cols + "AND id <= %s ORDER BY id DESC LIMIT %s",
             (session["id"], after_ref, CONTEXT_TURNS * 3),
@@ -301,7 +331,7 @@ def _load_conversation(
     authors = _Authors(
         tenant_id, sid, one_to_one(session_key, person_id, segments._main_session_key())
     )
-    for row in (*before, *new, *last_rows):
+    for row in (*before, *late_rows, *new, *last_rows):
         authors.note(_message(row))
     zone = _local_zone()
 
@@ -319,6 +349,9 @@ def _load_conversation(
         scanned_through=int(new[-1]["id"]) if new else None,
         held_from=held_from([(int(r["id"]), _role(r), bool(r["fresh"])) for r in new]),
         more=more,
+        refs=[int(r["id"]) for r in new],
+        late=turns_of(late_rows),
+        late_refs=[int(r["id"]) for r in late_rows],
     )
 
 
@@ -624,7 +657,12 @@ async def _ingest(run: _Run) -> dict[str, Any] | None:
 async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
     key, tenant = run.session_key, run.tenant
     conv = await asyncio.to_thread(
-        _load_conversation, key, tenant, mark.through, WINDOW_MAX_TURNS * MAX_WINDOWS_PER_RUN
+        _load_conversation,
+        key,
+        tenant,
+        mark.through,
+        WINDOW_MAX_TURNS * MAX_WINDOWS_PER_RUN,
+        recent=mark.recent,
     )
     expected = _expected_tail(run.history)
     if conv is None:
@@ -633,13 +671,19 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
         return None
     later = _follow_up_delay(conv, expected)
     turns = [t for t in conv.turns if conv.held_from is None or t.ref < conv.held_from]
-    if not turns:
+    if not turns and not conv.late:
+        if conv.late_refs:
+            await asyncio.to_thread(
+                _advance, key, tenant, mark.token, mark.through, list(conv.late_refs)
+            )
         if (
             conv.held_from is None
             and conv.scanned_through is not None
             and conv.scanned_through > mark.through
         ):
-            await asyncio.to_thread(_advance, key, tenant, mark.token, conv.scanned_through, [])
+            await asyncio.to_thread(
+                _advance, key, tenant, mark.token, conv.scanned_through, list(conv.refs)
+            )
         if later is not None:
             run.again(later)
         return None
@@ -647,105 +691,37 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
     if owner.scope[1] != placeholder_scope_id(key):
         await asyncio.to_thread(_reown, key, tenant, owner)
 
-    metadata = {"session_key": key, "agent_id": run.agent_id, "run_id": run.run_id}
-    skip_generated = _ingest_skip_generated_enabled()
+    job = _Job(
+        run,
+        mark,
+        owner,
+        {"session_key": key, "agent_id": run.agent_id, "run_id": run.run_id},
+        _ingest_skip_generated_enabled(),
+    )
+    # Late turns first: below the watermark, written by a writer that committed
+    # after a later id was extracted. Extracted once each; they are never
+    # skipped (they stop being late after LATE_WINDOW_SECONDS).
+    for window in windows(conv.late):
+        if await job.window(window, [], late=True) != "done":
+            return _done(job.result)
+    if conv.late_refs:
+        await asyncio.to_thread(
+            _advance, key, tenant, mark.token, mark.through, list(conv.late_refs)
+        )
+
     seen = list(conv.context)
-    result: dict[str, Any] = {
-        "fact_ids": [],
-        "llm_calls": 0,
-        "windows": 0,
-        "windows_skipped": 0,
-        "turns_covered": 0,
-    }
     all_windows = windows(turns, first_end=mark.failed_end)
     if len(all_windows) > MAX_WINDOWS_PER_RUN:
         later = min(later or BACKLOG_DELAY_SECONDS, BACKLOG_DELAY_SECONDS)
     for window in all_windows[:MAX_WINDOWS_PER_RUN]:
-        last_ref = window[-1].ref
-        kept = [
-            _clipped(t)
-            for t in window
-            if not (skip_generated and t.role == "assistant" and _is_generated_briefing(t.text))
-        ]
-        if kept:
-            context = seen[-CONTEXT_TURNS:]
-            extraction = await extract_conversation_facts(kept, context=context)
-            result["llm_calls"] += 1
-            if not await asyncio.to_thread(_renew, key, tenant, mark.token):
-                # The lease lapsed while the model worked and another run may
-                # have the conversation now: write nothing more.
-                logger.warning(
-                    "Conversation %s: lost the claim during extraction; stopping",
-                    sanitize_log(key),
-                )
-                return _done(result)
-            if extraction.error is not None and extraction.error not in ANSWERED_ERRORS:
-                # The model server did not answer (unreachable, timed out,
-                # errored): nothing is wrong with these turns. Never counted,
-                # never skipped; the next run tries again.
-                logger.warning(
-                    "Conversation extraction for %s did not reach the model (%s); will retry",
-                    sanitize_log(key),
-                    extraction.error,
-                )
-                return _done(result)
-            if extraction.error is not None:
-                failures = await asyncio.to_thread(_fail, key, tenant, mark.token, last_ref)
-                if failures < MAX_WINDOW_FAILURES:
-                    logger.warning(
-                        "Conversation extraction failed for %s (%s, %d of %d); will retry",
-                        sanitize_log(key),
-                        extraction.error,
-                        failures,
-                        MAX_WINDOW_FAILURES,
-                    )
-                    return _done(result)
-                # It never extracts: pass over it, so the rest of the conversation
-                # is not held behind it, and say so.
-                logger.warning(
-                    "Conversation %s: skipping turns %d-%d after %d failed extractions (%s)",
-                    sanitize_log(key),
-                    window[0].ref,
-                    last_ref,
-                    failures,
-                    extraction.error,
-                )
-                total = await asyncio.to_thread(
-                    _record_skip, key, tenant, window[0].ref, last_ref, str(extraction.error)
-                )
-                logger.warning(
-                    "Conversation ingest: %s skipped window(s) in this tenant; "
-                    "python -m robothor.memory.conversation_skips lists and retries them",
-                    total,
-                )
-                await asyncio.to_thread(
-                    _advance, key, tenant, mark.token, last_ref, list(result["fact_ids"])
-                )
-                result["windows_skipped"] += 1
-                seen.extend(window)
-                continue
-            part = await _write_window(
-                extraction.facts,
-                kept,
-                session_key=key,
-                tenant_id=tenant,
-                trigger_type=run.trigger_type,
-                metadata=metadata,
-                owner=owner,
-            )
-            if part.get("facts_failed"):
-                logger.warning(
-                    "Conversation facts not stored for %s (%s); will retry",
-                    sanitize_log(key),
-                    "; ".join(part.get("errors") or []),
-                )
-                return _done(result)
-            result = _merge(result, part)
-        await asyncio.to_thread(
-            _advance, key, tenant, mark.token, last_ref, list(result.get("fact_ids") or [])
-        )
-        result["windows"] += 1
-        result["turns_covered"] += len(window)
+        outcome = await job.window(window, seen[-CONTEXT_TURNS:])
+        if outcome == "stop":
+            return _done(job.result)
+        covered = [r for r in conv.refs if r <= window[-1].ref]
+        await asyncio.to_thread(_advance, key, tenant, mark.token, window[-1].ref, covered)
+        if outcome == "done":
+            job.result["windows"] += 1
+            job.result["turns_covered"] += len(window)
         seen.extend(window)
 
     # Hand off: turns stored while this run worked (another exchange, whose
@@ -758,10 +734,116 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
     logger.info(
         "Ingested conversation session %s: %d windows, %d facts",
         sanitize_log(key),
-        result["windows"],
-        len(result["fact_ids"]),
+        job.result["windows"],
+        len(job.result["fact_ids"]),
     )
-    return result
+    return job.result
+
+
+@dataclass
+class _Job:
+    """One run's extraction of a conversation's windows."""
+
+    run: _Run
+    mark: Watermark
+    owner: Owner
+    metadata: dict[str, Any]
+    skip_generated: bool
+    result: dict[str, Any] = field(
+        default_factory=lambda: {
+            "fact_ids": [],
+            "llm_calls": 0,
+            "windows": 0,
+            "windows_skipped": 0,
+            "turns_covered": 0,
+        }
+    )
+
+    async def window(
+        self, window: list[ConversationTurn], context: list[ConversationTurn], *, late: bool = False
+    ) -> str:
+        """Extract and write one window: ``done``, ``skipped`` (passed over) or ``stop``."""
+        key, tenant, token = self.run.session_key, self.run.tenant, self.mark.token
+        last_ref = window[-1].ref
+        kept = [
+            _clipped(t)
+            for t in window
+            if not (
+                self.skip_generated and t.role == "assistant" and _is_generated_briefing(t.text)
+            )
+        ]
+        if not kept:
+            return "done"
+        extraction = await extract_conversation_facts(kept, context=context)
+        self.result["llm_calls"] += 1
+        if not await asyncio.to_thread(_renew, key, tenant, token):
+            # The lease lapsed while the model worked and another run may have
+            # the conversation now: write nothing more.
+            logger.warning(
+                "Conversation %s: lost the claim during extraction; stopping", sanitize_log(key)
+            )
+            return "stop"
+        if extraction.error is not None and (late or extraction.error not in ANSWERED_ERRORS):
+            # The model server did not answer (unreachable, timed out, errored),
+            # or late turns failed: nothing is counted or skipped; the next run
+            # tries again.
+            logger.warning(
+                "Conversation extraction for %s did not complete (%s); will retry",
+                sanitize_log(key),
+                extraction.error,
+            )
+            return "stop"
+        if extraction.error is not None:
+            failures = await asyncio.to_thread(_fail, key, tenant, token, last_ref)
+            if failures < MAX_WINDOW_FAILURES:
+                logger.warning(
+                    "Conversation extraction failed for %s (%s, %d of %d); will retry",
+                    sanitize_log(key),
+                    extraction.error,
+                    failures,
+                    MAX_WINDOW_FAILURES,
+                )
+                return "stop"
+            # It never extracts: pass over it, so the rest of the conversation is
+            # not held behind it, and say so.
+            logger.warning(
+                "Conversation %s: skipping turns %d-%d after %d failed extractions (%s)",
+                sanitize_log(key),
+                window[0].ref,
+                last_ref,
+                failures,
+                extraction.error,
+            )
+            total = await asyncio.to_thread(
+                _record_skip, key, tenant, window[0].ref, last_ref, str(extraction.error)
+            )
+            logger.warning(
+                "Conversation ingest: %s skipped window(s) in this tenant; "
+                "python -m robothor.memory.conversation_skips lists and retries them",
+                total,
+            )
+            self.result["windows_skipped"] += 1
+            return "skipped"
+        part = await _write_window(
+            extraction.facts,
+            kept,
+            session_key=key,
+            tenant_id=tenant,
+            trigger_type=self.run.trigger_type,
+            metadata=self.metadata,
+            owner=self.owner,
+        )
+        if part.get("facts_failed"):
+            logger.warning(
+                "Conversation facts not stored for %s (%s); will retry",
+                sanitize_log(key),
+                "; ".join(part.get("errors") or []),
+            )
+            return "stop"
+        self.result = _merge(self.result, part)
+        if late:
+            self.result["late_turns"] = self.result.get("late_turns", 0) + len(window)
+        return "done"
 
 
 def _follow_up_delay(conv: StoredConversation, expected: str | None) -> float | None:
@@ -805,6 +887,8 @@ class Watermark:
     token: str
     #: The end of the window that failed, while it keeps failing.
     failed_end: int | None = None
+    #: Message ids recently extracted (see ``_State.recent``).
+    recent: tuple[int, ...] = ()
 
 
 @dataclass
@@ -814,6 +898,10 @@ class _State:
     failed_end: int | None = None
     claim: str | None = None
     claimed_until: int | None = None
+    #: Message ids recently extracted (or passed over), kept in the row's
+    #: ``fact_ids`` column: a row below the watermark that is not among them
+    #: and is recent is a late row (see the loader).
+    recent: list[int] = field(default_factory=list)
 
     @classmethod
     def parse(cls, raw: str | None) -> _State | None:
@@ -876,12 +964,15 @@ def _mutate(
             ),
         )
         cur.execute(
-            "SELECT content_hash, extract(epoch FROM now())::bigint FROM ingested_items "
+            "SELECT content_hash, extract(epoch FROM now())::bigint, fact_ids "
+            "FROM ingested_items "
             "WHERE tenant_id = %s AND source_name = %s AND item_id = %s FOR UPDATE",
             (tenant_id, _WATERMARK_SOURCE, session_key),
         )
-        raw, now = cur.fetchone()
+        raw, now, recent = cur.fetchone()
         state = _State.parse(raw)
+        if state is not None:
+            state.recent = [int(i) for i in recent or []]
         if state is None:
             # Never restart from zero: that would extract the whole history
             # again. Start at the conversation's current end, and say so.
@@ -891,23 +982,39 @@ def _mutate(
                 (tenant_id, session_key),
             )
             state = _State(through=int(cur.fetchone()[0]))
+            state.recent = _recent_ids(cur, tenant_id, session_key, state.through)
             logger.error(
                 "Conversation %s: malformed watermark %r; starting at its current end (%d)",
                 sanitize_log(session_key),
                 sanitize_log(str(raw))[:80],
                 state.through,
             )
-        repaired = state.encode() != raw
+        if not state.recent and state.through and not recent:
+            # A row created now, or one that never kept recent ids: what lies
+            # below its watermark is not late, it was there before.
+            state.recent = _recent_ids(cur, tenant_id, session_key, state.through)
+        repaired = state.encode() != raw or state.recent != [int(i) for i in recent or []]
         new = change(state, int(now))
         write = new if new is not None else (state if repaired else None)
         if write is not None:
             cur.execute(
-                "UPDATE ingested_items SET content_hash = %s, ingested_at = NOW() "
+                "UPDATE ingested_items SET content_hash = %s, fact_ids = %s, ingested_at = NOW() "
                 "WHERE tenant_id = %s AND source_name = %s AND item_id = %s",
-                (write.encode(), tenant_id, _WATERMARK_SOURCE, session_key),
+                (write.encode(), write.recent, tenant_id, _WATERMARK_SOURCE, session_key),
             )
         conn.commit()
     return new
+
+
+def _recent_ids(cur: Any, tenant_id: str, session_key: str, through: int) -> list[int]:
+    """The conversation's message ids up to ``through`` within the late window."""
+    cur.execute(
+        "SELECT m.id FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id "
+        "WHERE s.tenant_id = %s AND s.session_key = %s AND m.id <= %s "
+        "AND m.created_at > now() - make_interval(secs => %s) ORDER BY m.id DESC LIMIT %s",
+        (tenant_id, session_key, through, LATE_WINDOW_SECONDS, RECENT_KEEP),
+    )
+    return sorted(int(r[0]) for r in cur.fetchall() if int(r[0]) < _INT4)
 
 
 def _claim(session_key: str, tenant_id: str) -> Watermark | None:
@@ -923,7 +1030,7 @@ def _claim(session_key: str, tenant_id: str) -> Watermark | None:
     state = _mutate(session_key, tenant_id, take)
     if state is None:
         return None
-    return Watermark(state.through, state.failures, token, state.failed_end)
+    return Watermark(state.through, state.failures, token, state.failed_end, tuple(state.recent))
 
 
 def _owned(token: str, change: Callable[[_State], None]) -> Callable[[_State, int], _State | None]:
@@ -937,14 +1044,20 @@ def _owned(token: str, change: Callable[[_State], None]) -> Callable[[_State, in
 
 
 def _advance(
-    session_key: str, tenant_id: str, token: str, through: int, fact_ids: list[int]
+    session_key: str, tenant_id: str, token: str, through: int, covered: list[int]
 ) -> None:
-    """Move the watermark (and clear the failure count) under this run's claim."""
+    """Move the watermark (and clear the failure count) under this run's claim.
+
+    ``covered`` are the message ids this step extracted or passed over; they
+    join the recent ids, so they are never taken for late rows.
+    """
 
     def change(state: _State) -> None:
-        state.through, state.failures, state.failed_end = through, 0, None
+        state.through = max(state.through, through)
+        state.failures, state.failed_end = 0, None
+        ids = set(state.recent) | {int(c) for c in covered if int(c) < _INT4}
+        state.recent = sorted(ids)[-RECENT_KEEP:]
 
-    del fact_ids  # the facts carry their own link to the turns
     _mutate(session_key, tenant_id, _owned(token, change))
 
 

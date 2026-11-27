@@ -123,7 +123,13 @@ class Store:
         return 0
 
     def load(
-        self, session_key: str, tenant_id: str, after_ref: int, limit: int
+        self,
+        session_key: str,
+        tenant_id: str,
+        after_ref: int,
+        limit: int,
+        until: int | None = None,
+        recent: Any = (),
     ) -> ci.StoredConversation | None:
         self._seen()
         self.loads += 1
@@ -144,6 +150,7 @@ class Store:
             tail_text=self.turns[-1].text if self.turns else None,
             held_from=held,
             more=len(rows) > limit,
+            refs=[t.ref for t in new],
         )
 
 
@@ -388,7 +395,7 @@ async def test_a_fact_that_could_not_be_stored_leaves_the_watermark() -> None:
 @pytest.mark.asyncio
 async def test_a_session_nobody_stored_is_not_extracted() -> None:
     store = Store([], scope=("user", f"person:{ALICE}"))
-    store.load = lambda *a: None  # type: ignore[method-assign]
+    store.load = lambda *a, **kw: None  # type: ignore[method-assign]
     model = Model()
     out, _ = await _run(store, model, history=[{"role": "user", "content": "hi"}])
     assert out is None and model.prompts == []
@@ -563,8 +570,8 @@ async def test_rows_with_no_turn_to_extract_still_move_the_watermark() -> None:
     store = Store([], scope=("user", f"person:{ALICE}"))
     real = store.load
 
-    def only_system_rows(*a: Any) -> Any:
-        conv = real(*a)
+    def only_system_rows(*a: Any, **kw: Any) -> Any:
+        conv = real(*a, **kw)
         conv.scanned_through = 30  # thirty system rows, nothing to extract
         return conv
 
