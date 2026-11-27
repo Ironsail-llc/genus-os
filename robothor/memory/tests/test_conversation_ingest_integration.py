@@ -616,3 +616,56 @@ async def test_late_work_per_run_is_capped(world: World, monkeypatch: Any) -> No
     )[0]
     assert len([i for i in raw if 100 <= i < 110]) == 4  # four taken this run
     assert world.model.calls.count("extract_conversation") == before + 1
+
+
+# ═══ the watermark outlives retention, and a lost one never restarts at 0 ═
+
+
+def test_retention_keeps_conversation_watermarks_and_skips(world: World, monkeypatch: Any) -> None:
+    from robothor.db import connection
+    from robothor.engine import retention
+    from robothor.memory import write_path
+
+    monkeypatch.setattr(connection, "get_connection", write_path.get_connection)
+    for source in (
+        "conversation_facts",
+        "conversation_facts_skipped",
+        "conversation_facts_backfill",
+        "email",
+    ):
+        world.db.q(
+            "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, "
+            "ingested_at) VALUES (%s, %s, 'x', 'h', now() - interval '200 days')",
+            (TENANT, source),
+        )
+    policy = retention.RETENTION_POLICY["ingested_items"]
+    retention._cleanup_table(
+        "ingested_items",
+        days=policy["days"],
+        timestamp_col=policy["timestamp_col"],
+        extra_where=policy.get("extra_where"),
+    )
+    left = {r[0] for r in world.db.q("SELECT source_name FROM ingested_items")}
+    assert left == {
+        "conversation_facts",
+        "conversation_facts_skipped",
+        "conversation_facts_backfill",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_with_no_row_starts_past_turns_older_than_retention(
+    world: World,
+) -> None:
+    world.model.on_turn(
+        "dark roast", turn_fact("The user prefers dark roast coffee.", about_user=True)
+    )
+    world.model.on_turn("road bike", turn_fact("The user owns a red road bike.", about_user=True))
+    sid = _session(world, "telegram:4242")
+    day = 24 * 3600
+    _put(world, sid, 1, "user", "I always go for dark roast.", 120 * day)  # kept only
+    _put(world, sid, 2, "assistant", "Noted.", 120 * day)  # because an old fact quoted it
+    _put(world, sid, 3, "user", "I have a red road bike.", 60)
+    _put(world, sid, 4, "assistant", "Nice.", 60)
+    await _ingest("telegram:4242", [])
+    assert {f["fact_text"] for f in world.db.facts()} == {"The user owns a red road bike."}
