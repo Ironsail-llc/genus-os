@@ -411,6 +411,11 @@ class Owner:
         }
 
 
+def placeholder_scope_id(session_key: str) -> str:
+    """The owner id of a conversation nobody is known to own: held by no reader."""
+    return f"conversation:{session_key}"
+
+
 def owner_of(conv: StoredConversation, session_key: str) -> Owner:
     """The conversation's own scope, exactly as its segments are scoped.
 
@@ -422,7 +427,7 @@ def owner_of(conv: StoredConversation, session_key: str) -> Owner:
     """
     from robothor.memory.write_path import person_of
 
-    sid = conv.scope_id or f"conversation:{session_key}"
+    sid = conv.scope_id or placeholder_scope_id(session_key)
     return Owner(("user", sid), person_of("user", sid), session_key)
 
 
@@ -626,6 +631,8 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
             run.again(later)
         return None
     owner = owner_of(conv, key)
+    if owner.scope[1] != placeholder_scope_id(key):
+        await asyncio.to_thread(_reown, key, tenant, owner)
 
     metadata = {"session_key": key, "agent_id": run.agent_id, "run_id": run.run_id}
     skip_generated = _ingest_skip_generated_enabled()
@@ -892,3 +899,72 @@ def _record_skip(session_key: str, tenant_id: str, start: int, end: int, reason:
             (tenant_id, _SKIPPED_SOURCE, f"{session_key}#{start}-{end}", reason[:64]),
         )
         conn.commit()
+
+
+# ═══ re-owning a conversation's placeholder facts ════════════════════════
+
+#: ``drift.compute_fact_hash`` of a fact re-scoped to ``user`` / ``%s``, in SQL.
+_SCOPED_HASH_SQL = (
+    "encode(sha256(convert_to(COALESCE(fact_text, '') || '|' || COALESCE(tenant_id, '') "
+    "|| '|' || COALESCE(category, '') || '|scope:user:' || %s, 'UTF8')), 'hex')"
+)
+
+
+def _reown(session_key: str, tenant_id: str, owner: Owner) -> int:
+    """Give a conversation's placeholder-owned facts to its now-known owner.
+
+    Facts written while nobody was known to own the conversation (scope
+    ``conversation:{session_key}``, readable by no one) take the owner's scope,
+    hash and person, in one transaction, for this tenant only. A fact about the
+    speaker gets the owner as its subject and, for a CRM person, its ``the user``
+    mention anchored to that person's node. A re-owned fact the owner already
+    holds is retired in favour of the one they have. Returns the facts re-owned.
+    """
+    from robothor.db.connection import tenant_scope
+    from robothor.memory.identity import MentionInput, resolve_mentions, write_mentions
+
+    old, new = placeholder_scope_id(session_key), owner.scope[1]
+    subject = json.dumps(owner.subject())
+    with tenant_scope(tenant_id), get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE memory_facts f SET is_active = FALSE, superseded_by = k.id "
+            "FROM memory_facts k WHERE f.tenant_id = %s AND f.scope_kind = 'user' "
+            "AND f.scope_id = %s AND f.is_active AND k.tenant_id = f.tenant_id AND k.is_active "
+            "AND k.id <> f.id AND k.content_hash = encode(sha256(convert_to("
+            "COALESCE(f.fact_text, '') || '|' || COALESCE(f.tenant_id, '') || '|' "
+            "|| COALESCE(f.category, '') || '|scope:user:' || %s, 'UTF8')), 'hex')",
+            (tenant_id, old, new),
+        )
+        cur.execute(
+            "UPDATE memory_facts SET scope_id = %s, content_hash = " + _SCOPED_HASH_SQL + ", "
+            "person_id = (SELECT p.id FROM crm_people p WHERE p.id::text = %s "
+            "AND p.tenant_id = %s), "
+            "metadata = CASE WHEN metadata->'subject'->>'kind' = 'conversation_participant' "
+            "THEN jsonb_set(metadata, '{subject}', %s::jsonb) ELSE metadata END "
+            "WHERE tenant_id = %s AND scope_kind = 'user' AND scope_id = %s "
+            "RETURNING id, metadata->'subject'->>'kind' = 'person'",
+            (new, new, owner.person_id or "", tenant_id, subject, tenant_id, old),
+        )
+        rows = cur.fetchall()
+        if owner.person_id:
+            context = {"scope_kind": "user", "scope_id": new, "person_id": owner.person_id}
+            for fact_id, about_owner in rows:
+                if not about_owner:
+                    continue
+                mention = [
+                    MentionInput(
+                        "the user",
+                        "person",
+                        strong_keys={"crm_person_id": owner.person_id},
+                        context=context,
+                    )
+                ]
+                resolved = resolve_mentions(tenant_id, mention, cur=cur, create=False)
+                write_mentions(tenant_id, int(fact_id), mention, resolved, cur=cur)
+        conn.commit()
+    if rows:
+        logger.info(
+            "Conversation %s: %d placeholder facts re-owned", sanitize_log(session_key), len(rows)
+        )
+    return len(rows)
