@@ -360,3 +360,66 @@ class TestReinforceGuard:
         out = await s("Bob leads the Helios project.")
         assert out["action"] != "reinforced"
         s.classify.assert_awaited_once()
+
+
+# ── Read time ───────────────────────────────────────────────────────────────
+
+from datetime import UTC, datetime  # noqa: E402
+
+from robothor.memory.bitemporal import place_superseded  # noqa: E402
+
+_WHEN = datetime(2026, 5, 1, tzinfo=UTC)
+
+
+def _cur(fid: int, text: str, **kw: Any) -> dict[str, Any]:
+    return {"id": fid, "kind": "fact", "fact_text": text, "superseded_by": None, **kw}
+
+
+def _old(fid: int, text: str, by: int) -> dict[str, Any]:
+    return {
+        "id": fid,
+        "kind": "fact",
+        "fact_text": text,
+        "superseded_by": by,
+        "valid_to": _WHEN,
+        "metadata": {"superseded_reason": "changed"},
+    }
+
+
+class TestPlaceSuperseded:
+    def test_the_earlier_value_follows_the_current_one_labelled(self):
+        rows = [_cur(2, "Alice moved to Denver.", relevance=0.9), _cur(5, "Other fact.")]
+        out = place_superseded(rows, earlier={2: [_old(1, "Alice lives in Boston.", 2)]})
+        assert [r["id"] for r in out] == [2, 1, 5]
+        old = out[1]
+        assert old["superseded"] is True
+        assert old["superseded_at"] == _WHEN.isoformat()
+        assert old["superseded_reason"] == "changed"
+        assert old["superseded_by"] == 2
+        assert old["relevance"] <= 0.9
+        assert "superseded" not in out[0] or out[0]["superseded"] is False
+
+    def test_a_superseded_row_never_outranks_its_current_row(self):
+        rows = [_old(1, "Alice lives in Boston.", 2), _cur(5, "Other."), _cur(2, "Alice moved.")]
+        out = place_superseded(rows)
+        assert [r["id"] for r in out] == [5, 2, 1]
+
+    def test_a_missing_current_row_is_brought_in_ahead_of_the_old_one(self):
+        rows = [_old(1, "Alice lives in Boston.", 2), _cur(5, "Other.")]
+        out = place_superseded(rows, current={1: _cur(2, "Alice moved to Denver.")})
+        assert [r["id"] for r in out] == [2, 1, 5]
+        assert out[1]["superseded"] is True
+
+    def test_an_old_row_without_a_visible_current_is_still_labelled(self):
+        out = place_superseded([_old(1, "Alice lives in Boston.", 2)])
+        assert [r["id"] for r in out] == [1]
+        assert out[0]["superseded"] is True
+
+    def test_rows_without_supersession_are_untouched(self):
+        rows = [_cur(1, "A."), _cur(2, "B.")]
+        assert place_superseded(rows) == rows
+
+    def test_an_earlier_row_already_present_is_not_repeated(self):
+        rows = [_cur(2, "Alice moved."), _old(1, "Alice lives in Boston.", 2)]
+        out = place_superseded(rows, earlier={2: [_old(1, "Alice lives in Boston.", 2)]})
+        assert [r["id"] for r in out] == [2, 1]

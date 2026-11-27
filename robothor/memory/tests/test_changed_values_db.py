@@ -38,6 +38,11 @@ def tenants():
     def _wipe() -> None:
         with get_connection() as conn:
             cur = conn.cursor()
+            # A test may point one tenant's row at another's; unlink first.
+            cur.execute(
+                "UPDATE memory_facts SET superseded_by = NULL WHERE tenant_id IN (%s, %s)",
+                (TENANT, OTHER_TENANT),
+            )
             for t in (TENANT, OTHER_TENANT):
                 cur.execute("DELETE FROM memory_conflict_decisions WHERE tenant_id = %s", (t,))
                 cur.execute("DELETE FROM memory_mentions WHERE tenant_id = %s", (t,))
@@ -243,3 +248,75 @@ class TestBoundedLookup:
         slot = fact_slot({"fact_text": "Alice lives in Denver."})
         _ids, rows = await find_slot_candidates(slot, tenant_id=TENANT, limit=10)
         assert len(rows) == 10
+
+
+class TestRecall:
+    """search_facts, keyword and dense legs only, the query vector patched."""
+
+    async def _search(self, monkeypatch, vector_of: int, **kw: Any) -> list[dict[str, Any]]:
+        import robothor.memory.facts as facts
+
+        async def _embed(_q: str) -> list[float]:
+            return _vec(vector_of)
+
+        monkeypatch.setattr(facts, "_embed_query", _embed)
+        return await facts.search_facts(
+            "Where does Alice live?",
+            limit=5,
+            use_reranker=False,
+            include_segments=False,
+            tenant_id=TENANT,
+            **kw,
+        )
+
+    async def _boston_then_denver(self) -> tuple[int, int, int, int]:
+        global _counter
+        _counter = iter(range(500, 10_000))
+        first = await _write("Alice lives in Boston.")
+        second = await _write("Alice moved to Denver.", names=["Alice", "Denver"])
+        assert second["action"] == "superseded"
+        return first["new_id"], 500, second["new_id"], 501
+
+    async def test_default_recall_puts_the_current_value_first_and_labels_the_old(
+        self, tenants, monkeypatch
+    ):
+        old_id, _old_vec, new_id, new_vec = await self._boston_then_denver()
+        rows = await self._search(monkeypatch, new_vec)
+        ids = [r["id"] for r in rows]
+        assert new_id in ids and old_id in ids
+        assert ids.index(new_id) < ids.index(old_id)
+        old = rows[ids.index(old_id)]
+        assert old["superseded"] is True
+        assert old["superseded_reason"] == "changed"
+        assert old["superseded_by"] == new_id
+        assert old["superseded_at"]
+        assert not rows[ids.index(new_id)].get("superseded")
+
+    async def test_history_recall_never_ranks_the_old_value_first(self, tenants, monkeypatch):
+        old_id, old_vec, new_id, _new_vec = await self._boston_then_denver()
+        rows = await self._search(monkeypatch, old_vec, active_only=False)
+        ids = [r["id"] for r in rows]
+        assert ids.index(new_id) < ids.index(old_id)
+
+    async def test_an_earlier_row_of_another_tenant_is_never_read(self, tenants, monkeypatch):
+        from robothor.db.connection import get_connection
+
+        theirs = await _write("Alice lives in Boston.", tenant=OTHER_TENANT)
+        global _counter
+        _counter = iter(range(700, 10_000))
+        mine = await _write("Alice moved to Denver.", names=["Alice", "Denver"])
+        with get_connection() as conn:
+            cur = conn.cursor()
+            # A forged pointer: the read must still stay in the reader's tenant.
+            cur.execute(
+                "UPDATE memory_facts SET metadata = jsonb_build_object('supersedes', "
+                "jsonb_build_array(%s::int)) WHERE id = %s",
+                (theirs["new_id"], mine["new_id"]),
+            )
+            cur.execute(
+                "UPDATE memory_facts SET superseded_by = %s WHERE id = %s",
+                (mine["new_id"], theirs["new_id"]),
+            )
+            conn.commit()
+        rows = await self._search(monkeypatch, 700)
+        assert theirs["new_id"] not in [r["id"] for r in rows]
