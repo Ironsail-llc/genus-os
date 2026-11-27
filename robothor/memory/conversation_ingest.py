@@ -82,12 +82,13 @@ MAX_WINDOWS_PER_RUN = 5
 HOLD_SECONDS = 5.0
 #: How soon a follow-up run continues a backlog longer than one run's windows.
 BACKLOG_DELAY_SECONDS = 1.0
-#: A row below the watermark written this recently that no run extracted is
-#: late (its writer committed after a later id was extracted): it is extracted
-#: on its own. Older rows below the watermark are never revisited.
-LATE_WINDOW_SECONDS = 15 * 60
 #: Most recent message ids the watermark row keeps to tell late rows apart.
+#: A row is late when its id is above the smallest id kept (the "floor") and
+#: at or below the watermark, and it is not among the kept ids: a writer
+#: committed it after a later id was extracted. Below the floor nothing is late.
 RECENT_KEEP = 400
+#: Most late rows one run takes; the rest wait for the next run.
+LATE_MAX_PER_RUN = 40
 #: ``ingested_items.fact_ids`` is ``integer[]``: ids past it are not kept, and
 #: rows with such ids cannot be recognised as late.
 _INT4 = 2**31
@@ -325,15 +326,25 @@ def _load_conversation(
         new = list(cur.fetchall())
         more = len(new) > limit
         new = new[:limit]
-        # Late rows: below the watermark, recent, past the hold, and not among
-        # the ids a run extracted.
+        # Late rows: above the floor (the smallest id remembered), at or below
+        # the watermark, past the hold, not among the ids remembered, and small
+        # enough for the list to remember. With nothing remembered, nothing is late.
         late_rows: list[Any] = []
-        if until is None and after_ref:
+        kept = [int(i) for i in recent if int(i) < _INT4]
+        if until is None and after_ref and kept:
             cur.execute(
-                cols + "AND id <= %s AND created_at > now() - make_interval(secs => %s) "
+                cols + "AND id > %s AND id <= %s AND id < %s "
                 "AND created_at <= now() - make_interval(secs => %s) "
-                "AND NOT (id = ANY(%s)) ORDER BY id",
-                (session["id"], after_ref, LATE_WINDOW_SECONDS, HOLD_SECONDS, list(recent)),
+                "AND NOT (id = ANY(%s)) ORDER BY id LIMIT %s",
+                (
+                    session["id"],
+                    min(kept),
+                    after_ref,
+                    _INT4,
+                    HOLD_SECONDS,
+                    kept,
+                    LATE_MAX_PER_RUN,
+                ),
             )
             late_rows = list(cur.fetchall())
         cur.execute(
@@ -712,8 +723,7 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
         _ingest_skip_generated_enabled(),
     )
     # Late turns first: below the watermark, written by a writer that committed
-    # after a later id was extracted. Extracted once each; they are never
-    # skipped (they stop being late after LATE_WINDOW_SECONDS).
+    # after a later id was extracted (at most LATE_MAX_PER_RUN a run).
     for window in windows(conv.late):
         if await job.window(window, [], late=True) != "done":
             return _done(job.result)
@@ -1020,14 +1030,10 @@ def _mutate(
 
 
 def _recent_ids(cur: Any, tenant_id: str, session_key: str, through: int) -> list[int]:
-    """The conversation's message ids up to ``through`` within the late window."""
-    cur.execute(
-        "SELECT m.id FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id "
-        "WHERE s.tenant_id = %s AND s.session_key = %s AND m.id <= %s "
-        "AND m.created_at > now() - make_interval(secs => %s) ORDER BY m.id DESC LIMIT %s",
-        (tenant_id, session_key, through, LATE_WINDOW_SECONDS, RECENT_KEEP),
-    )
-    return sorted(int(r[0]) for r in cur.fetchall() if int(r[0]) < _INT4)
+    """What a row starts remembering: its watermark, as the floor, so nothing
+    below it is late (it was there before)."""
+    del cur, tenant_id, session_key
+    return [through] if 0 <= through < _INT4 else []
 
 
 def _claim(session_key: str, tenant_id: str) -> Watermark | None:
@@ -1066,10 +1072,13 @@ def _advance(
     """
 
     def change(state: _State) -> None:
+        # The watermark being left is remembered too, as the floor: anything
+        # between it and the new one that this step did not cover is late.
+        floor = {state.through} if state.through < _INT4 else set()
+        ids = set(state.recent) | floor | {int(c) for c in covered if int(c) < _INT4}
+        state.recent = sorted(ids)[-RECENT_KEEP:]
         state.through = max(state.through, through)
         state.failures, state.failed_end = 0, None
-        ids = set(state.recent) | {int(c) for c in covered if int(c) < _INT4}
-        state.recent = sorted(ids)[-RECENT_KEEP:]
 
     _mutate(session_key, tenant_id, _owned(token, change))
 
