@@ -34,7 +34,7 @@ _D2 = "2023/05/26 (Fri) 07:31"
 
 def test_fragments_of_one_session_are_one_session():
     row = _row(
-        ("s1#4u", "User: I bought three tops.", _D1),
+        ("s1#4u", "User: Bob packed two umbrellas.", _D1),
         ("s2#0u", "User: Tea is fine.", _D2),
         ("s1#0u", "User: Hello there.", _D1),
     )
@@ -42,8 +42,8 @@ def test_fragments_of_one_session_are_one_session():
     assert text.count("### Session") == 2
     assert text.count(f"Session Date: {_D1}") == 1
     # Within the session the fragments read in conversation order.
-    assert text.index("Hello there") < text.index("three tops")
-    assert text.index("### Session 1:") < text.index("three tops") < text.index("### Session 2:")
+    assert text.index("Hello there") < text.index("two umbrellas")
+    assert text.index("### Session 1:") < text.index("two umbrellas") < text.index("### Session 2:")
 
 
 def test_the_reader_prompt_takes_its_context_from_the_eval_renderer(monkeypatch):
@@ -78,7 +78,7 @@ class _MetaSystem:
 
     async def retrieve(self, case, *, world_handle, token_budget):
         item = es.ContextItem(
-            "s0#0u", "turn", "User: I graduated.", 5, 1, {"source_ref": "bench:h:s0"}
+            "s0#0u", "turn", "User: I took up the cello.", 5, 1, {"source_ref": "bench:h:s0"}
         )
         return es.ContextBundle(self.name, (item,), token_budget, True, False, 1.0)
 

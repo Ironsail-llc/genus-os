@@ -24,7 +24,7 @@ _TOOL_RESULT = {
     "results": [
         {
             "id": 7,
-            "fact": 'User: I graduated in Business Administration. "Quoted"',
+            "fact": 'User: I took up the cello. "Quoted"',
             "kind": "segment",
             "start_ref": 101,
             "source_ref": "bench:h0:s0",

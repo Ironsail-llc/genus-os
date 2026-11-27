@@ -27,7 +27,9 @@ class _Cut:
     async def retrieve(self, case, *, world_handle, token_budget):
         return es.ContextBundle(
             system=self.name,
-            items=es.fill_budget([("answer_1#0u", "turn", "User: I graduated.")], token_budget),
+            items=es.fill_budget(
+                [("answer_1#0u", "turn", "User: I started a new hobby.")], token_budget
+            ),
             budget=token_budget,
             equal_budget=True,
             abstained=False,

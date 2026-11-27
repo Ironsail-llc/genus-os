@@ -17,7 +17,7 @@ from robothor.memory import eval_bench_data as bd
 from robothor.memory.tests.test_eval_bench import _fake_ingest, _FakeChat
 from robothor.memory.tests.test_eval_bench_data import _lme_entry
 
-_ANSWER_TURN = "Before the RAM upgrade to 16GB, I was getting around six hours of battery life."
+_ANSWER_TURN = "After the repair, the office kettle in Brelford boils in ninety seconds flat."
 
 
 def _q(*turns: str, abstention: bool = False) -> bd.BenchQuestion:
@@ -25,8 +25,8 @@ def _q(*turns: str, abstention: bool = False) -> bd.BenchQuestion:
         "q_abs" if abstention else "q",
         "h",
         "single-session-user",
-        "How much RAM did I upgrade my laptop to?",
-        "16GB",
+        "How fast does the office kettle boil now?",
+        "ninety seconds",
         abstention=abstention,
         evidence_sessions=("s1",),
         evidence_turns=tuple(turns),
@@ -37,7 +37,7 @@ def test_loading_keeps_the_answer_bearing_turns(tmp_path):
     path = tmp_path / "longmemeval_s_cleaned.json"
     path.write_text(json.dumps([_lme_entry("q1", "single-session-user", "Q?", "A")]))
     (q,) = bd.load_benchmark("longmemeval", path).questions
-    assert q.evidence_turns == ("I graduated in Business Administration.",)
+    assert q.evidence_turns == ("I took up the cello.",)
 
 
 def test_a_turn_whose_text_was_delivered_counts():
@@ -51,7 +51,7 @@ def test_a_session_present_without_its_answer_turn_does_not_count():
     items = [
         {
             "id": "s1#0u",
-            "text": "User: By the way, I recently upgraded my laptop's RAM … it's fast.",
+            "text": "User: By the way, the office kettle was repaired … it is quick now.",
         }
     ]
     q = _q(_ANSWER_TURN)
@@ -61,7 +61,7 @@ def test_a_session_present_without_its_answer_turn_does_not_count():
 
 
 def test_turn_recall_is_the_share_of_answer_turns_delivered():
-    other = "I also subscribe to Architectural Digest and The New Yorker every month."
+    other = "Bob also orders oat milk and green tea for the office every Monday."
     items = [{"id": "s1#0u", "text": _ANSWER_TURN}]
     ev = eb.answer_turn_evidence(_q(_ANSWER_TURN, other), items)
     assert ev.recall == pytest.approx(0.5) and ev.complete is False
@@ -137,7 +137,9 @@ class _CutSystem:
 
         return es.ContextBundle(
             system=self.name,
-            items=es.fill_budget([("answer_1#0u", "turn", "User: I graduated.")], token_budget),
+            items=es.fill_budget(
+                [("answer_1#0u", "turn", "User: I started a new hobby.")], token_budget
+            ),
             budget=token_budget,
             equal_budget=True,
             abstained=False,

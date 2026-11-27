@@ -45,7 +45,7 @@ def _history(hid: str = "h1") -> bd.BenchHistory:
         "s0",
         t0,
         (
-            _turn("user", "I graduated in Business Administration last week.", t0),
+            _turn("user", "I took up the cello last week.", t0),
             _turn("assistant", "Congratulations, Alice!", t0 + timedelta(seconds=30)),
         ),
     )
@@ -67,8 +67,8 @@ def _bench(n: int = 2) -> bd.Benchmark:
             id=f"q{i}",
             history_id=f"h{i}",
             question_type="single-session-user",
-            question="What degree did I graduate with?",
-            answer="Business Administration",
+            question="Which instrument did I take up?",
+            answer="the cello",
             as_of="2023/06/02 (Fri) 10:00",
         )
         for i in range(n)
@@ -231,7 +231,7 @@ class TestExtractMode:
         assert all(s["today"] == "2023-05-20" for s in seen)
         assert all(s["tenant"] == eb.BENCH_TENANT for s in seen)
         assert all(s["fallback"] is False and s["content_type"] == "conversation" for s in seen)
-        assert "Business Administration" in seen[0]["content"]
+        assert "the cello" in seen[0]["content"]
         assert "Congratulations" in seen[0]["context"]
         assert stats["windows"] == 1 and stats["failed"] == 0
 
@@ -244,7 +244,7 @@ class TestExtractMode:
 class _FakeChat:
     """Answers with the gold; the judge says yes when the response holds the answer."""
 
-    def __init__(self, answer: str = "You graduated in Business Administration.") -> None:
+    def __init__(self, answer: str = "You took up the cello.") -> None:
         self.answer = answer
         self.calls: list[str] = []
 
@@ -265,7 +265,7 @@ class _EchoSystem:
     async def retrieve(self, case, *, world_handle, token_budget):
         return es.ContextBundle(
             system=self.name,
-            items=es.fill_budget([("t1", "turn", "User: I graduated.")], token_budget),
+            items=es.fill_budget([("t1", "turn", "User: I took up the cello.")], token_budget),
             budget=token_budget,
             equal_budget=True,
             abstained=False,
@@ -544,11 +544,11 @@ class TestIngestAndCleanup:
         from robothor.memory import facts
 
         async def fake_extract(content, max_retries=3, *, timeout=180.0, context=None):
-            if "Business Administration" in content:
+            if "the cello" in content:
                 return facts.Extraction(
                     [
                         {
-                            "fact_text": "Alice graduated in Business Administration.",
+                            "fact_text": "Alice took up the cello.",
                             "category": "personal",
                             "confidence": 0.9,
                             "entities": ["Alice"],
@@ -576,7 +576,7 @@ class TestIngestAndCleanup:
             cur.execute(
                 "SELECT created_at, valid_from FROM memory_facts WHERE tenant_id = %s "
                 "AND fact_text LIKE %s",
-                (bench_tenant, "%Business Administration%"),
+                (bench_tenant, "%the cello%"),
             )
             created, valid_from = cur.fetchone()
         assert created.astimezone(UTC) == datetime(2023, 5, 20, 2, 21, tzinfo=UTC)

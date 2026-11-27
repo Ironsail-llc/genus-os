@@ -38,7 +38,7 @@ def _lme_entry(qid: str, qtype: str, question: str, answer: str) -> dict:
             [
                 {
                     "role": "user",
-                    "content": "I graduated in Business Administration.",
+                    "content": "I took up the cello.",
                     "has_answer": True,
                 },
                 {"role": "assistant", "content": "Congratulations, Alice!"},
@@ -53,13 +53,15 @@ def lme_path(tmp_path):
         _lme_entry(
             "q1",
             "single-session-user",
-            "What degree did I graduate with?",
-            "Business Administration",
+            "Which instrument did I take up?",
+            "the cello",
         ),
         _lme_entry(
             "q2_abs", "multi-session", "What is my dog's name?", "You did not mention a dog."
         ),
-        _lme_entry("q3", "temporal-reasoning", "How many days ago did I graduate?", "10 days"),
+        _lme_entry(
+            "q3", "temporal-reasoning", "How many days ago did I take up the cello?", "10 days"
+        ),
         _lme_entry("q4", "knowledge-update", "Where do I live now?", "Brelford"),
         _lme_entry(
             "q5", "single-session-preference", "Suggest a drink.", "The user would prefer tea."
@@ -159,7 +161,7 @@ class TestLongMemEvalLoading:
         bench = bd.load_benchmark("longmemeval", lme_path)
         by_id = {q.id: q for q in bench.questions}
         assert by_id["q1"].question_type == "single-session-user"
-        assert by_id["q1"].answer == "Business Administration"
+        assert by_id["q1"].answer == "the cello"
         assert by_id["q1"].as_of == "2023/05/30 (Tue) 23:40"
         assert by_id["q2_abs"].abstention and not by_id["q1"].abstention
 
@@ -243,15 +245,15 @@ class TestLongMemEvalJudge:
 
     def test_standard_prompt_is_the_official_text(self, lme_path):
         q = self._q(lme_path, "q1")
-        prompt = bd.longmemeval_judge_prompt(q, "You graduated in Business Administration.")
+        prompt = bd.longmemeval_judge_prompt(q, "You took up the cello.")
         assert prompt == (
             "I will give you a question, a correct answer, and a response from a model. "
             "Please answer yes if the response contains the correct answer. Otherwise, answer no. "
             "If the response is equivalent to the correct answer or contains all the intermediate "
             "steps to get the correct answer, you should also answer yes. If the response only "
             "contains a subset of the information required by the answer, answer no. \n\n"
-            "Question: What degree did I graduate with?\n\nCorrect Answer: Business Administration"
-            "\n\nModel Response: You graduated in Business Administration.\n\n"
+            "Question: Which instrument did I take up?\n\nCorrect Answer: the cello"
+            "\n\nModel Response: You took up the cello.\n\n"
             "Is the model response correct? Answer yes or no only."
         )
 
@@ -355,7 +357,7 @@ class TestPlantedJudgeAnswers:
 
 class TestAnswerPrompts:
     def test_longmemeval_reader_prompt_is_the_official_template(self):
-        items = [bd.PromptItem("turn", "User: I graduated.", "2023/05/20 (Sat) 02:21")]
+        items = [bd.PromptItem("turn", "User: I took up the cello.", "2023/05/20 (Sat) 02:21")]
         prompt = bd.longmemeval_answer_prompt("What degree?", "2023/05/30 (Tue) 23:40", items)
         assert prompt.startswith(
             "I will give you several history chats between you and a user. Please answer the "
@@ -365,7 +367,7 @@ class TestAnswerPrompts:
             "\n\nCurrent Date: 2023/05/30 (Tue) 23:40\nQuestion: What degree?\nAnswer:"
         )
         assert "Session Date: 2023/05/20 (Sat) 02:21" in prompt
-        assert "User: I graduated." in prompt
+        assert "User: I took up the cello." in prompt
 
     def test_facts_get_the_official_facts_template(self):
         facts_only = [bd.PromptItem("fact", "Alice graduated.", None)]

@@ -30,7 +30,7 @@ def _system(outcome: str | None, name: str | None = None):
                 reranker._STATS[outcome] += 1
             return es.ContextBundle(
                 self.name,
-                es.fill_budget([("s0#0u", "turn", "User: I graduated.")], token_budget),
+                es.fill_budget([("s0#0u", "turn", "User: I took up the cello.")], token_budget),
                 token_budget,
                 True,
                 False,

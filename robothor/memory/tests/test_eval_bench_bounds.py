@@ -21,7 +21,7 @@ from robothor.memory.tests.test_eval_bench_data import _lme_entry
 
 
 def _bench(tmp_path) -> bd.Benchmark:
-    entry = _lme_entry("q1", "single-session-user", "What degree did I graduate with?", "BA")
+    entry = _lme_entry("q1", "single-session-user", "Which instrument did I take up?", "BA")
     entry["haystack_dates"].append("2023/05/19 (Fri) 09:00")
     entry["haystack_session_ids"].append("s-early")
     entry["haystack_sessions"].append(
@@ -38,9 +38,7 @@ def test_evidence_only_is_the_evidence_sessions_whole_in_date_order(tmp_path):
     bundle = es.make_systems(["evidence_only"])[0].from_benchmark(bench, q)
     assert [i.id.split("#")[0] for i in bundle.items] == ["answer_1"]
     (item,) = bundle.items
-    assert item.text == (
-        "User: I graduated in Business Administration.\nAssistant: Congratulations, Alice!"
-    )
+    assert item.text == ("User: I took up the cello.\nAssistant: Congratulations, Alice!")
     assert item.meta["date"] == "2023/05/20 (Sat) 02:21"
     assert bundle.equal_budget is False
 
@@ -62,7 +60,7 @@ async def test_a_bound_runs_with_no_ingest_and_no_database(tmp_path, monkeypatch
     async def _no_ingest(*_a, **_k):
         raise AssertionError("a bound ingests nothing")
 
-    chat = _FakeChat("You graduated in Business Administration.")
+    chat = _FakeChat("You took up the cello.")
     report = await eb.run_benchmark(
         _bench(tmp_path),
         systems=["evidence_only"],
