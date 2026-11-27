@@ -826,9 +826,12 @@ class _Job:
             # A late turn the model answered unusably, or that timed out:
             # recorded as skipped at once (it is out of order already, and the
             # skips command retries it), never left to vanish.
-            total = await asyncio.to_thread(
-                _record_skip, key, tenant, window[0].ref, last_ref, str(extraction.error)
-            )
+            # One row per turn: late turns are scattered between extracted
+            # ones, and a retry must extract only them.
+            for turn in window:
+                total = await asyncio.to_thread(
+                    _record_skip, key, tenant, turn.ref, turn.ref, str(error)
+                )
             logger.warning(
                 "Conversation %s: skipping late turns %d-%d (%s); %s skipped window(s) in "
                 "this tenant, see python -m robothor.memory.conversation_skips",
