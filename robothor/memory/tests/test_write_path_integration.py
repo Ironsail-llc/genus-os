@@ -51,6 +51,8 @@ BOB = "6f1c1b7e-0000-4000-8000-000000000002"
 ALICE_P = f"person:{ALICE}"
 BOB_P = f"person:{BOB}"
 DIM = 1024
+#: A webchat member's own conversation (``chat.derive_user_session_key``).
+KEY = "agent:main:user:member-1"
 
 _TABLES = (
     "memory_mentions",
@@ -66,6 +68,9 @@ _TABLES = (
     "contact_identifiers",
     "crm_people",
     "crm_companies",
+    "chat_messages",
+    "chat_sessions",
+    "ingested_items",
 )
 
 
@@ -232,22 +237,93 @@ def fact(text: str, mentions=(), relations=(), **kw: Any) -> dict[str, Any]:
     }
 
 
+def turn_fact(text: str, mentions=(), relations=(), **kw: Any) -> dict[str, Any]:
+    """A conversation-mode fact (its turn and speaker are filled in by the fake)."""
+    return {
+        **fact(text, mentions, relations, **kw),
+        "kind": kw.get("kind", "other"),
+        "date_phrase": kw.get("date_phrase"),
+        "quote": kw.get("quote"),
+        "about_user": kw.get("about_user", False),
+    }
+
+
+def store_chat(
+    db: DB,
+    key: str,
+    turns: list[tuple[Any, ...]],
+    *,
+    person: str | None = None,
+    tenant: str = TENANT,
+    at: str | None = None,
+) -> list[int]:
+    """A stored conversation, as chat_store writes it; returns the message ids.
+
+    Each turn is ``(role, content)`` or ``(role, content, extras)``, the extras
+    merged into the stored message as chat_store merges them. Turns are a
+    minute apart from ``at`` (an ISO time), by default an hour ago: recent
+    enough to be within the chat retention, old enough to be past the hold.
+    """
+    sid = db.one(
+        "INSERT INTO chat_sessions (tenant_id, session_key, channel, person_id) "
+        "VALUES (%s, %s, 'webchat', %s) ON CONFLICT (tenant_id, session_key) "
+        "DO UPDATE SET last_active_at = NOW() RETURNING id",
+        (tenant, key, person),
+    )
+    return [
+        int(db.one(
+            "INSERT INTO chat_messages (session_id, message, created_at) "
+            "VALUES (%s, %s::jsonb, COALESCE(%s::timestamptz, now() - interval '1 hour') "
+            "+ %s * interval '1 minute') RETURNING id",
+            (sid, json.dumps({"role": t[0], "content": t[1], **(t[2] if len(t) > 2 else {})}), at, i),
+        ))
+        for i, t in enumerate(turns)
+    ]  # fmt: skip
+
+
 class Model:
     """Scripted extraction (by a marker found in the content) and classification."""
 
     def __init__(self) -> None:
         self.extractions: list[tuple[str, Any]] = []
+        self.turn_extractions: list[tuple[str, list[dict[str, Any]]]] = []
         self.classifications: list[str] = []
         self.calls: list[str] = []
 
     def on(self, marker: str, *facts: dict[str, Any], raw: str | None = None) -> None:
         self.extractions.append((marker, raw if raw is not None else {"facts": list(facts)}))
 
+    def on_turn(self, marker: str, *facts: dict[str, Any]) -> None:
+        """Conversation mode: the facts of the new turn whose text holds ``marker``,
+        each citing that turn and said by its speaker."""
+        self.turn_extractions.append((marker, list(facts)))
+
+    def _conversation(self, prompt: str) -> str:
+        import re
+
+        from robothor.memory.conversation_facts import CONVERSATION_EXTRACTION_SCHEMA
+
+        self.calls.append("extract_conversation")
+        new = prompt[prompt.index("New turns:") :]
+        out = []
+        for number, label, text in re.findall(
+            r"^\[(\d+)\] .*? (User|Assistant)[^:]*: (.*)$", new, re.MULTILINE
+        ):
+            for marker, facts in self.turn_extractions:
+                if marker in text:
+                    out += [{**f, "turns": [int(number)], "speaker": label.lower()} for f in facts]
+        answer = {"facts": out}
+        jsonschema.validate(answer, CONVERSATION_EXTRACTION_SCHEMA)
+        return json.dumps(answer)
+
     async def generate(self, prompt: str, system: str | None = None, **kw: Any) -> str:
         from robothor.memory.conflicts import CLASSIFICATION_SCHEMA
+        from robothor.memory.conversation_facts import CONVERSATION_EXTRACTION_SCHEMA
         from robothor.memory.facts import FACT_EXTRACTION_SCHEMA
 
         fmt = kw.get("format")
+        if fmt == CONVERSATION_EXTRACTION_SCHEMA:
+            return self._conversation(prompt)
         if fmt == FACT_EXTRACTION_SCHEMA:
             self.calls.append("extract")
             content = prompt.rsplit("Content:\n", 1)[-1]
@@ -315,6 +391,9 @@ def world(database: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
         "robothor.memory.quality",
         "robothor.memory.ingest_state",
         "robothor.memory.conversation_ingest",
+        "robothor.memory.conversation_backfill",
+        "robothor.memory.conversation_skips",
+        "robothor.memory.segments",
         "robothor.crm.dal",
     ):
         try:
@@ -457,52 +536,106 @@ async def test_an_assistant_turn_paraphrasing_external_content_is_agent_generate
 ) -> None:
     from robothor.memory.conversation_ingest import ingest_conversation_session
 
-    world.model.on(
+    world.model.on_turn(
         "ASST-3",
-        fact("Carol Diaz became CFO of Globex Corporation.",
-             [("Carol Diaz", "person"), ("Globex Corporation", "organization")],
-             [("Carol Diaz", "is CFO of", "Globex Corporation")]),
+        turn_fact("Carol Diaz became CFO of Globex Corporation.",
+                  [("Carol Diaz", "person"), ("Globex Corporation", "organization")],
+                  [("Carol Diaz", "is CFO of", "Globex Corporation")]),
     )  # fmt: skip
-    history = [
-        {"role": "user", "content": "anything new in my inbox?"},
-        {"role": "assistant", "content": "ASST-3 The email says Carol Diaz is now CFO at Globex."},
-        {"role": "user", "content": "ok thanks"},
-        {"role": "assistant", "content": "You're welcome."},
+    turns = [
+        ("user", "anything new in my inbox?"),
+        ("assistant", "ASST-3 The email says Carol Diaz is now CFO at Globex."),
+        ("user", "ok thanks"),
+        ("assistant", "You're welcome."),
     ]
-    await ingest_conversation_session(
-        "agent:main:webchat:abc", history, "main", "webchat", "run-1", TENANT
-    )
+    store_chat(world.db, KEY, turns)
+    history = [{"role": r, "content": c} for r, c in turns]
+    await ingest_conversation_session(KEY, history, "main", "webchat", "run-1", TENANT)
     (row,) = world.db.facts()
     assert row["origin"] == Origin.AGENT_GENERATED
-    (edge,) = world.db.edges()
-    assert edge["origin"] == Origin.AGENT_GENERATED
+    # The member's conversation is private, so the edge waits on the fact.
+    assert (row["scope_kind"], row["scope_id"]) == ("user", "user:member-1")
+    assert world.db.edges() == []
+    assert row["metadata"]["graph_pending_relations"]
 
 
 @pytest.mark.asyncio
 async def test_user_turns_of_a_conversation_are_user_stated(world: World) -> None:
     from robothor.memory.conversation_ingest import ingest_conversation_session
 
-    world.model.on("USER-T", fact("Dana Reyes manages Project Atlas.",
-                                  [("Dana Reyes", "person"), ("Project Atlas", "project")],
-                                  [("Dana Reyes", "manages", "Project Atlas")]))  # fmt: skip
-    world.model.on("ASST-T", fact("Project Atlas launches in June.",
-                                  [("Project Atlas", "project")]))  # fmt: skip
-    history = [
-        {"role": "user", "content": "USER-T Dana Reyes manages Project Atlas now."},
-        {"role": "assistant", "content": "ASST-T Got it; Atlas launches in June per the plan."},
-        {"role": "user", "content": "yes"},
-        {"role": "assistant", "content": "ok"},
+    world.model.on_turn("USER-T", turn_fact("Dana Reyes manages Project Atlas.",
+                                            [("Dana Reyes", "person"), ("Project Atlas", "project")],
+                                            [("Dana Reyes", "manages", "Project Atlas")]))  # fmt: skip
+    world.model.on_turn("ASST-T", turn_fact("Project Atlas launches in June.",
+                                            [("Project Atlas", "project")]))  # fmt: skip
+    turns = [
+        ("user", "USER-T Dana Reyes manages Project Atlas now."),
+        ("assistant", "ASST-T Got it; Atlas launches in June per the plan."),
+        ("user", "yes"),
+        ("assistant", "ok"),
     ]
-    await ingest_conversation_session(
-        "agent:main:webchat:abc", history, "main", "webchat", "run-1", TENANT
-    )
+    store_chat(world.db, KEY, turns)
+    history = [{"role": r, "content": c} for r, c in turns]
+    await ingest_conversation_session(KEY, history, "main", "webchat", "run-1", TENANT)
     origin = {f["fact_text"]: f["origin"] for f in world.db.facts()}
     assert origin == {
         "Dana Reyes manages Project Atlas.": Origin.USER_STATED,
         "Project Atlas launches in June.": Origin.AGENT_GENERATED,
     }
-    (edge,) = world.db.edges()
-    assert edge["origin"] == Origin.USER_STATED
+    assert world.model.calls.count("extract_conversation") == 1
+    assert world.db.edges() == []  # private facts write no edge
+
+
+# ═══ what a person says about themselves is a fact about them ════════════
+
+
+@pytest.mark.asyncio
+async def test_a_stated_preference_with_no_named_entity_is_a_fact_about_that_person(
+    world: World,
+) -> None:
+    """Given a user turn stating a preference with no named entity, when the
+    conversation is ingested, then a fact about that person exists, linked to the turn."""
+    from robothor.memory.conversation_ingest import ingest_conversation_session
+    from robothor.memory.visibility import fact_visibility_sql
+
+    world.model.on_turn(
+        "dark roast",
+        turn_fact("The user prefers dark roast coffee.", category="preference",
+                  kind="preference", about_user=True),
+    )  # fmt: skip
+    turns = [
+        ("user", "I always go for dark roast.", {"sender_telegram_id": "4242"}),
+        ("assistant", "Noted, dark roast it is."),
+    ]
+    key = "telegram:4242"
+    ids = store_chat(world.db, key, turns, person=ALICE)
+    history = [{"role": t[0], "content": t[1]} for t in turns]
+    await ingest_conversation_session(key, history, "main", "telegram", "run-1", TENANT)
+
+    rows = [f for f in world.db.facts() if f["fact_text"] == "The user prefers dark roast coffee."]
+    assert len(rows) == 1  # the assistant's echo of it is the same fact, written once
+    (row,) = rows
+    assert row["origin"] == Origin.USER_STATED
+    assert (row["scope_kind"], row["scope_id"], row["person_id"]) == ("user", ALICE_P, ALICE)
+    source = row["metadata"]["source"]
+    assert source["ref"] == key and ids[0] in source["turn_refs"]
+    # Anchored to the person's own node, through the CRM.
+    anchored = [m for m in world.db.mentions(row["id"]) if m[2] is not None]
+    assert anchored
+    crm = world.db.one("SELECT crm_person_id::text FROM memory_entities WHERE id = %s",
+                       (anchored[0][2],))  # fmt: skip
+    assert crm == ALICE
+    # Alice reads it; a reader with no ids, or another person, does not.
+    for readers, seen in (([ALICE_P], 1), ([], 0), ([BOB_P], 0)):
+        pred, params = fact_visibility_sql(readers)
+        n = world.db.one(
+            f"SELECT count(*) FROM memory_facts WHERE id = %s AND {pred}", (row["id"], *params)
+        )
+        assert n == seen
+    # Ingesting again extracts nothing more.
+    calls = world.model.calls.count("extract_conversation")
+    await ingest_conversation_session(key, history, "main", "telegram", "run-2", TENANT)
+    assert world.model.calls.count("extract_conversation") == calls
 
 
 # ═══ acceptance (iv): extraction failure stores the raw content ══════════
@@ -674,14 +807,40 @@ async def test_private_facts_write_mentions_but_no_edges_or_new_nodes(world: Wor
     fid = world.db.fact_id("Alice Moreno is interviewing at Northwind Traders.")
     mentions = {m[0]: m[2] for m in world.db.mentions(fid)}
     assert mentions["Alice Moreno"] == alice and mentions["Northwind Traders"] == org
-    # No shared node is minted from a private fact's text ...
-    assert mentions["Hidden Project Zeta"] is None
+    # No shared node is minted from a private fact's text, and the name it
+    # could not resolve is recorded nowhere outside the fact itself: neither
+    # memory_mentions nor memory_resolution_decisions has an owner scope.
+    assert "Hidden Project Zeta" not in mentions
     assert (
         world.db.one("SELECT count(*) FROM memory_entities WHERE name = 'Hidden Project Zeta'") == 0
     )
+    assert (
+        world.db.one(
+            "SELECT count(*) FROM memory_resolution_decisions "
+            "WHERE surface_form = 'Hidden Project Zeta'"
+        )
+        == 0
+    )
+    # A decision that did resolve says whose private write it served.
+    scopes = world.db.q(
+        "SELECT evidence->'scope' FROM memory_resolution_decisions WHERE surface_form = %s",
+        ("Alice Moreno",),
+    )
+    assert scopes and all(r[0] == {"scope_kind": "user", "scope_id": ALICE_P} for r in scopes)
     # ... and no edge exists that today's readers would show to everyone.
     assert world.db.edges() == []
     assert out["relations_private_deferred"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_shared_facts_unresolved_name_is_still_recorded(world: World) -> None:
+    world.model.on("SHARED-U", fact("Dana Reyes joined.", [("Dana Reyes", "person")]))
+    world.db.entity("Dana Reyes")
+    world.db.entity("Dana Reyes", "organization")  # two candidates of mixed type
+    await _ingest("SHARED-U the team update")
+    assert world.db.one(
+        "SELECT count(*) FROM memory_resolution_decisions WHERE surface_form = 'Dana Reyes'"
+    )
 
 
 # ═══ consolidation ═══════════════════════════════════════════════════════
@@ -827,7 +986,10 @@ async def test_a_write_job_produces_mentions_and_keeps_its_scope(world: World) -
     assert await process_write_job(job) is True
     (row,) = world.db.facts()
     assert (row["scope_kind"], row["scope_id"], row["person_id"]) == ("user", ALICE_P, ALICE)
-    assert {m[0] for m in world.db.mentions(row["id"])} == {"Alice Moreno", "Initech Systems"}
+    # Neither name has a node, and a private write records an unresolved name
+    # only on the fact itself (mentions and decisions have no owner scope).
+    assert world.db.mentions(row["id"]) == []
+    assert set(row["entities"]) == {"Alice Moreno", "Initech Systems"}
 
 
 # ═══ tenant isolation ════════════════════════════════════════════════════

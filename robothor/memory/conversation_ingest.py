@@ -1,48 +1,121 @@
 """
 Conversation Session Ingestion for Genus OS Memory System.
 
-Ingests Telegram and webchat conversation sessions into the memory pipeline
-so that interactive exchanges compound into the knowledge graph (facts + entities).
+Turns what is said in Telegram and webchat conversations into facts, so that
+interactive exchanges compound into memory. Called fire-and-forget after each
+agent run in telegram.py / chat.py.
 
-Called fire-and-forget after each agent run in telegram.py / chat.py.
+The source is the stored conversation (``chat_sessions`` / ``chat_messages``),
+not the in-memory history: it has every turn, each with its message id and the
+time it was said, and the person the session belongs to. The in-memory history
+is used only to tell whether the turn that triggered this run is stored yet.
 
 Architecture:
-    Session history -> dedup check -> split by role -> ingest_content() once per
-    role (user turns are user-stated, assistant turns agent-generated; the other
-    role is read-only context) -> record
+    claim the conversation's watermark row (a lease: one run at a time, across
+    engine processes) -> stored turns past the watermark, except those written
+    in the last few seconds -> windows of consecutive turns (user and assistant
+    interleaved) -> one conversation-mode extraction per window
+    (``robothor.memory.conversation_facts``), the turns before it shown
+    read-only -> each fact written through the write path with its speaker's
+    origin and a link to its source turns -> watermark moves to the window's
+    last message id -> release; a follow-up run is scheduled for turns held
+    back, not stored yet, or past this run's five windows
+
+Each window is extracted once. A failed extraction, or a fact that could not be
+stored, leaves the watermark where it was, so the same turns are extracted on
+the next run; a window that fails three runs in a row is recorded as skipped
+and passed over. Nothing is stored as a raw transcript. Every database call
+runs off the event loop.
 """
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
+import json
 import logging
 import os
-from typing import Any
+import re
+import uuid
+from dataclasses import dataclass, field
+from datetime import UTC, tzinfo
+from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from psycopg2.extras import RealDictCursor
+
+from robothor.constants import DEFAULT_TENANT, platform_timezone
+from robothor.db.connection import get_connection
+from robothor.engine.chat_store import CHAT_TURN_TTL_DAYS
 from robothor.engine.sanitize import sanitize_log
-from robothor.memory.ingest_state import (
-    content_hash,
-    get_ingested_count,
-    is_already_ingested,
-    record_ingested,
+from robothor.memory.conversation_facts import (
+    ConversationTurn,
+    extract_conversation_facts,
 )
-from robothor.memory.ingestion import ingest_content
+from robothor.memory.graph_schema import Origin
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
-# Minimum number of messages in session history to trigger ingestion.
-MIN_HISTORY_THRESHOLD = 4
+#: Most turns in one extraction window (the old trailing window's size).
+WINDOW_MAX_TURNS = 20
+#: Most characters of turn text in one window. A single longer turn is a window
+#: of its own, and the model reads only this much of it (``_clipped``).
+WINDOW_MAX_CHARS = 12_000
+#: Answered failures in a row on the same window before it is skipped.
+MAX_WINDOW_FAILURES = 3
+#: Extraction errors that mean the model answered, just not usefully: empty, cut
+#: short (``finish_reason=length``), or not the JSON asked for.
+ANSWERED_ERRORS = frozenset({"unparseable", "empty", "truncated"})
+#: Extraction errors that mean the window took too long. They count at half
+#: weight: a window that always times out is skipped after twice as many runs.
+TIMEOUT_ERRORS = frozenset({"timeout"})
+#: Failure points per run, and the points at which a window is skipped. A
+#: transport or server error scores nothing and never moves the watermark.
+ANSWERED_POINTS = 2
+TIMEOUT_POINTS = 1
+SKIP_POINTS = ANSWERED_POINTS * MAX_WINDOW_FAILURES
+#: Where a skipped window is recorded (``ingested_items``), one row per window.
+_SKIPPED_SOURCE = "conversation_facts_skipped"
+#: Turns before a window shown to the model as read-only context.
+CONTEXT_TURNS = 4
+#: Most windows one run extracts, so a long backlog (a conversation older than
+#: this feature) is covered over several runs instead of one burst.
+MAX_WINDOWS_PER_RUN = 5
+#: Rows written more recently than this are left for a follow-up run (see
+#: ``held_from``), which is scheduled a little after they come of age.
+HOLD_SECONDS = 5.0
+#: How soon a follow-up run continues a backlog longer than one run's windows.
+BACKLOG_DELAY_SECONDS = 1.0
+#: Most recent message ids the watermark row keeps to tell late rows apart.
+#: A row is late when its id is above the smallest id kept (the "floor") and
+#: at or below the watermark, and it is not among the kept ids: a writer
+#: committed it after a later id was extracted. Below the floor nothing is late.
+RECENT_KEEP = 400
+#: Most late rows one run takes; the rest wait for the next run.
+LATE_MAX_PER_RUN = 40
+#: ``ingested_items.fact_ids`` is ``integer[]``: ids past it are not kept, and
+#: rows with such ids cannot be recognised as late.
+_INT4 = 2**31
 
-# Maximum messages to include in the transcript sent to the LLM for extraction.
-MAX_TRANSCRIPT_MESSAGES = 20
-
-# Dedup source name used in ingested_items table.
-_DEDUP_SOURCE = "conversation_session"
-# Per-session message-count watermark (incremental path only).
-_WATERMARK_SOURCE = "conversation_session_watermark"
+#: Watermark (``ingested_items``): see "the watermark row" below.
+_WATERMARK_SOURCE = "conversation_facts"
+#: The rows the previous conversation ingest wrote (a tail hash, and an opt-in
+#: message-count watermark). A conversation with one starts past what it saw.
+_OLD_PATH_SOURCES = ("conversation_session", "conversation_session_watermark")
+#: How long a claim on a conversation lasts unless renewed; a run renews it
+#: after every window's extraction (``_renew``) and stops writing if it cannot.
+CLAIM_LEASE_SECONDS = 300
+#: When a run finds the conversation claimed, how soon it looks again.
+CLAIM_RETRY_SECONDS = 30.0
+#: Most follow-up runs one exchange can lead to (see ``_Run.again``).
+MAX_FOLLOW_UPS = 20
 
 # Heuristic markers for an agent's OWN scheduled output (briefings/summaries).
 # Re-ingesting these mistakes the agent re-reporting an event for the event
-# recurring — the dominant churn driver. Names are generic feature labels.
+# recurring. Names are generic feature labels.
 _GENERATED_MARKERS = (
     "morning briefing",
     "evening wind-down",
@@ -53,9 +126,11 @@ _GENERATED_MARKERS = (
 
 
 def _ingest_skip_generated_enabled() -> bool:
-    """WS-3: skip re-ingesting agent-emitted briefings and extract only NEW turns
-    per session (incremental). Default OFF. When on, both reduce the churn where
-    the same event is re-extracted from the agent's own repeated output."""
+    """Leave the agent's own briefings out of extraction (``MEMORY_INGEST_SKIP_GENERATED``).
+
+    Default off. Every window is extracted once whatever this says; the flag
+    only drops assistant turns that look like a scheduled briefing.
+    """
     raw = os.environ.get("MEMORY_INGEST_SKIP_GENERATED", "0").strip().lower()
     return raw not in ("0", "false", "no", "off")
 
@@ -66,55 +141,404 @@ def _is_generated_briefing(content: str) -> bool:
     return any(m in head for m in _GENERATED_MARKERS)
 
 
-def format_transcript(history: list[dict[str, Any]], *, skip_generated: bool = False) -> str:
-    """Format session history as a readable transcript for fact extraction.
+@dataclass
+class StoredConversation:
+    """One session as stored: the turns past the watermark (oldest first, at
+    most the run's limit), up to :data:`CONTEXT_TURNS` turns before them, who
+    may read it (``segments.session_scope``), whether it is a workspace room,
+    and the text of its last stored turn."""
 
-    Filters out system messages. Truncates to the most recent
-    MAX_TRANSCRIPT_MESSAGES entries to bound LLM context usage. When
-    ``skip_generated`` is set, assistant turns that are the agent's own
-    briefing/summary are dropped so they are not re-extracted as fresh events.
+    turns: list[ConversationTurn] = field(default_factory=list)
+    context: list[ConversationTurn] = field(default_factory=list)
+    scope_kind: str = "user"
+    scope_id: str | None = None
+    is_room: bool = False
+    tail_text: str | None = None
+    #: The first message id held back from this run (see the loader), if any.
+    held_from: int | None = None
+    #: More turns are stored past those loaded.
+    more: bool = False
+    #: Every message id loaded past the watermark (turns or not).
+    refs: list[int] = field(default_factory=list)
+    #: Late turns (below the watermark, never extracted) and all late row ids.
+    late: list[ConversationTurn] = field(default_factory=list)
+    late_refs: list[int] = field(default_factory=list)
+    #: The highest message id read past the watermark, turn or not (a run of
+    #: system rows moves the watermark too, so the next run starts past it).
+    scanned_through: int | None = None
+
+
+def _message(row: dict[str, Any]) -> dict[str, Any]:
+    raw = row["message"]
+    message = raw if isinstance(raw, dict) else json.loads(raw)
+    return message if isinstance(message, dict) else {}
+
+
+def _local_zone() -> tzinfo:
+    """The instance's timezone (``ROBOTHOR_TIMEZONE``), or UTC if it is not a zone.
+
+    No per-person timezone is stored, so a conversation is read in the
+    instance's: what "yesterday" means for its operator.
     """
-    messages = [m for m in history if m.get("role") in ("user", "assistant")]
-
-    if len(messages) > MAX_TRANSCRIPT_MESSAGES:
-        messages = messages[-MAX_TRANSCRIPT_MESSAGES:]
-
-    lines = []
-    for msg in messages:
-        content = msg.get("content", "")
-        if not content:
-            continue
-        if skip_generated and msg["role"] == "assistant" and _is_generated_briefing(content):
-            continue
-        role = "User" if msg["role"] == "user" else "Assistant"
-        lines.append(f"{role}: {content}")
-    return "\n".join(lines)
+    try:
+        return ZoneInfo(platform_timezone())
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.debug("conversation ingest: timezone not found; reading turns in UTC")
+        return UTC
 
 
-def role_transcripts(
-    history: list[dict[str, Any]], *, skip_generated: bool = False
-) -> dict[str, str]:
-    """The last MAX_TRANSCRIPT_MESSAGES turns, split by who said them.
+def _turn(
+    row: dict[str, Any], is_owner: Callable[[dict[str, Any]], bool], zone: tzinfo
+) -> ConversationTurn | None:
+    from robothor.secrets.redaction import redact
 
-    ``{"user": ..., "assistant": ...}``, each in :func:`format_transcript`'s
-    line format and order. Extraction runs once per role so a fact's origin is
-    its speaker's.
+    message = _message(row)
+    role = message.get("role")
+    content = message.get("content")
+    if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+        return None
+    owner = role != "user" or is_owner(message)
+    speaker = message.get("author_display_name") if not owner else None
+    at = row["created_at"]
+    return ConversationTurn(
+        ref=int(row["id"]),
+        role=role,
+        text=redact(content),
+        at=at.astimezone(zone) if at is not None else None,
+        speaker=str(speaker) if speaker else None,
+        author_is_owner=owner,
+    )
+
+
+_TELEGRAM_CHAT = re.compile(r"telegram:(\d+)")
+
+
+def _owner_telegram_chat() -> str:
+    """The operator's default Telegram chat id (empty when none is configured)."""
+    try:
+        from robothor.engine.config import _default_chat_id
+
+        return str(_default_chat_id() or "")
+    except Exception:  # no engine configuration: no Telegram owner
+        return ""
+
+
+def _per_user_sessions_on() -> bool:
+    """Whether webchat members each get their own session (so only the owner
+    role reaches the main session)."""
+    try:
+        from robothor.engine.feature_flags import per_user_sessions_mode
+
+        return per_user_sessions_mode() == "enforce"
+    except Exception:
+        return False
+
+
+class _Authors:
+    """Decides, per stored user turn, whether the conversation's owner wrote it.
+
+    Only by construction, from who the turn records as its sender, never by
+    assumption:
+
+    * a Telegram turn (``sender_telegram_id``) is the owner's when the session
+      is a direct chat and the sender is that chat's own person: a private chat
+      ``telegram:{id}`` (a positive id) whose sender is ``{id}``, or the main
+      session whose default chat is direct and whose sender is that chat;
+    * a webchat turn (``sender_user_id``, or ``author_user_id`` in a room) is the
+      owner's when that member is the owner (the scope's member, or a member
+      linked to the scope's person), or when it is in a main session that has a
+      single sender by construction: its default chat is direct and members
+      have their own sessions, so only the owner reaches it;
+    * a turn naming only a display name is someone else's;
+    * a turn recording no sender is the owner's only in a member's own session
+      (``agent:{agent}:user:{uid}``, one sender by construction). Anywhere else
+      (a Telegram turn stored without its sender, a group) it could be anyone's.
     """
-    messages = [m for m in history if m.get("role") in ("user", "assistant")]
-    if len(messages) > MAX_TRANSCRIPT_MESSAGES:
-        messages = messages[-MAX_TRANSCRIPT_MESSAGES:]
-    return {
-        role: format_transcript(
-            [m for m in messages if m["role"] == role], skip_generated=skip_generated
+
+    def __init__(self, tenant_id: str, scope_id: str | None, session_key: str, main: str) -> None:
+        self.tenant = tenant_id
+        self.scope_id = scope_id
+        self._members: dict[str, bool] = {}
+        parts = session_key.split(":")
+        self.member_key = (
+            len(parts) == 4 and parts[0] == "agent" and parts[2] == "user" and bool(parts[3])
         )
-        for role in ("user", "assistant")
+        self.direct_chat: str | None = None
+        self.main_single_sender = False
+        private = _TELEGRAM_CHAT.fullmatch(session_key)
+        if private:
+            self.direct_chat = private.group(1)
+        elif session_key == main:
+            chat = _owner_telegram_chat()
+            if chat.isdigit():
+                self.direct_chat = chat
+                self.main_single_sender = _per_user_sessions_on()
+
+    def _member_is_owner(self, uid: str) -> bool:
+        if uid not in self._members:
+            from robothor.memory.segments import user_belongs_to_person
+
+            sid = self.scope_id or ""
+            owner = sid == f"user:{uid}"
+            if not owner and sid.startswith("person:"):
+                owner = user_belongs_to_person(self.tenant, uid, sid.split(":", 1)[1])
+            self._members[uid] = owner
+        return self._members[uid]
+
+    def is_owner(self, message: dict[str, Any]) -> bool:
+        telegram = message.get("sender_telegram_id")
+        if telegram:
+            return self.direct_chat is not None and str(telegram) == self.direct_chat
+        uid = message.get("sender_user_id") or message.get("author_user_id")
+        if uid:
+            return self.main_single_sender or self._member_is_owner(str(uid))
+        if message.get("author_display_name"):
+            return False
+        return self.member_key
+
+
+def _load_conversation(
+    session_key: str,
+    tenant_id: str,
+    after_ref: int,
+    limit: int,
+    until: int | None = None,
+    recent: tuple[int, ...] | list[int] = (),
+) -> StoredConversation | None:
+    """Read one session's turns past ``after_ref`` (sync; run in a worker thread).
+
+    ``until`` stops at that message id (a skipped window being retried).
+    """
+    from robothor.memory import segments
+    from robothor.memory.segments import session_scope
+    from robothor.rooms.keys import parse_room_key
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT id, person_id FROM chat_sessions WHERE tenant_id = %s AND session_key = %s",
+            (tenant_id, session_key),
+        )
+        session = cur.fetchone()
+        if session is None:
+            return None
+        cols = "SELECT id, message, created_at FROM chat_messages WHERE session_id = %s "
+        cur.execute(
+            "SELECT id, message, created_at, "
+            "created_at > now() - make_interval(secs => %s) AS fresh "
+            "FROM chat_messages WHERE session_id = %s AND id > %s AND id <= %s "
+            "ORDER BY id LIMIT %s",
+            (HOLD_SECONDS, session["id"], after_ref, until or 2**62, limit + 1),
+        )
+        new = list(cur.fetchall())
+        more = len(new) > limit
+        new = new[:limit]
+        # Late rows: above the floor (the smallest id remembered), at or below
+        # the watermark, past the hold, not among the ids remembered, and small
+        # enough for the list to remember. With nothing remembered, nothing is late.
+        late_rows: list[Any] = []
+        kept = [int(i) for i in recent if int(i) < _INT4]
+        if until is None and after_ref and kept:
+            cur.execute(
+                cols + "AND id > %s AND id <= %s AND id < %s "
+                "AND created_at <= now() - make_interval(secs => %s) "
+                "AND NOT (id = ANY(%s)) ORDER BY id LIMIT %s",
+                (
+                    session["id"],
+                    min(kept),
+                    after_ref,
+                    _INT4,
+                    HOLD_SECONDS,
+                    kept,
+                    LATE_MAX_PER_RUN,
+                ),
+            )
+            late_rows = list(cur.fetchall())
+        cur.execute(
+            cols + "AND id <= %s ORDER BY id DESC LIMIT %s",
+            (session["id"], after_ref, CONTEXT_TURNS * 3),
+        )
+        before = list(reversed(cur.fetchall()))
+        cur.execute(cols + "ORDER BY id DESC LIMIT 8", (session["id"],))
+        last_rows = list(cur.fetchall())
+    person_id = str(session["person_id"]) if session["person_id"] else None
+    kind, sid = session_scope(tenant_id, session_key, person_id)
+    authors = _Authors(tenant_id, sid, session_key, segments._main_session_key())
+    zone = _local_zone()
+
+    def turns_of(rows: list[Any]) -> list[ConversationTurn]:
+        return [t for t in (_turn(r, authors.is_owner, zone) for r in rows) if t is not None]
+
+    last = turns_of(last_rows)
+    return StoredConversation(
+        turns=turns_of(new),
+        context=turns_of(before)[-CONTEXT_TURNS:],
+        scope_kind=kind,
+        scope_id=sid,
+        is_room=parse_room_key(session_key) is not None,
+        tail_text=last[0].text if last else None,
+        scanned_through=int(new[-1]["id"]) if new else None,
+        held_from=held_from([(int(r["id"]), _role(r), bool(r["fresh"])) for r in new]),
+        more=more,
+        refs=[int(r["id"]) for r in new],
+        late=turns_of(late_rows),
+        late_refs=[int(r["id"]) for r in late_rows],
+    )
+
+
+def _role(row: dict[str, Any]) -> str | None:
+    role = _message(row).get("role")
+    return str(role) if role else None
+
+
+def held_from(rows: list[tuple[int, str | None, bool]]) -> int | None:
+    """The first message id this run must not extract yet, from ``(id, role, fresh)``.
+
+    A row written in the last :data:`HOLD_SECONDS` may have a lower id still
+    uncommitted beside it (two writers on one session): extracting it now would
+    move the watermark past that row for good. So the first fresh row and
+    everything after it wait for a follow-up run. A fresh assistant reply holds
+    back the user turn it answers with it (the user turn is stamped with its
+    arrival time, so it can look old).
+    """
+    for i, (ref, role, fresh) in enumerate(rows):
+        if fresh:
+            if i > 0 and role == "assistant" and rows[i - 1][1] == "user":
+                return rows[i - 1][0]
+            return ref
+    return None
+
+
+def _expected_tail(history: list[dict[str, Any]]) -> str | None:
+    from robothor.secrets.redaction import redact
+
+    for m in reversed(history):
+        content = m.get("content")
+        if m.get("role") in ("user", "assistant") and isinstance(content, str) and content.strip():
+            return redact(content).strip()
+    return None
+
+
+def windows(
+    turns: list[ConversationTurn], *, first_end: int | None = None
+) -> list[list[ConversationTurn]]:
+    """Consecutive runs of at most :data:`WINDOW_MAX_TURNS` turns and
+    :data:`WINDOW_MAX_CHARS` characters, in order. ``first_end`` closes the
+    first window after that message id (the window that failed before)."""
+    if first_end is not None:
+        head = [t for t in turns if t.ref <= first_end]
+        if head:
+            first = windows(head)[0]
+            return [first, *windows(turns[len(first) :])]
+    out: list[list[ConversationTurn]] = []
+    current: list[ConversationTurn] = []
+    chars = 0
+    for t in turns:
+        if current and (len(current) >= WINDOW_MAX_TURNS or chars + len(t.text) > WINDOW_MAX_CHARS):
+            out.append(current)
+            current, chars = [], 0
+        current.append(t)
+        chars += len(t.text)
+    if current:
+        out.append(current)
+    return out
+
+
+def _clipped(turn: ConversationTurn) -> ConversationTurn:
+    """The turn as the model reads it: at most :data:`WINDOW_MAX_CHARS` of its
+    text, with a marker saying how much was left out. Stored turns are untouched."""
+    if len(turn.text) <= WINDOW_MAX_CHARS:
+        return turn
+    hidden = len(turn.text) - WINDOW_MAX_CHARS
+    text = f"{turn.text[:WINDOW_MAX_CHARS]}\n[… {hidden} more characters not shown]"
+    return dataclasses.replace(turn, text=text)
+
+
+_MODE_KEYS = ("speaker_role", "about_user", "kind", "turn_refs", "mentioned_at")
+
+
+#: The label of the speaker of a conversation nobody is known to own.
+PARTICIPANT_LABEL = "Conversation participant (not linked to a person)"
+
+
+@dataclass(frozen=True)
+class Owner:
+    """Who a conversation's facts belong to: the write scope, and what "the user"
+    in them is anchored to.
+
+    ``person_id`` is the CRM person the conversation belongs to (its recorded
+    person, or the operator for the main session: ``segments.session_scope``).
+    Without one, "the user" is a placeholder subject scoped to this
+    conversation (``metadata.subject``), never a node: a private fact may not
+    create one (``write_path``), and nothing is guessed from a name.
+    """
+
+    scope: tuple[str, str]
+    person_id: str | None
+    session_key: str
+
+    def subject(self) -> dict[str, Any]:
+        if self.person_id:
+            return {"kind": "person", "person_id": self.person_id}
+        return {
+            "kind": "conversation_participant",
+            "label": PARTICIPANT_LABEL,
+            "conversation_ref": self.session_key,
+            "owner": self.scope[1],
+        }
+
+
+def placeholder_scope_id(session_key: str) -> str:
+    """The owner id of a conversation nobody is known to own: held by no reader."""
+    return f"conversation:{session_key}"
+
+
+def owner_of(conv: StoredConversation, session_key: str) -> Owner:
+    """The conversation's own scope, exactly as its segments are scoped.
+
+    A conversation with no known owner is ``("user", None)`` for its segments:
+    readable by no one. A fact needs an owner id, so it gets
+    ``conversation:{session_key}``, which no reader ever holds (reader ids are
+    ``person:``, ``user:`` and ``agent:``): kept, and readable by no one, the
+    same.
+    """
+    from robothor.memory.write_path import person_of
+
+    sid = conv.scope_id or placeholder_scope_id(session_key)
+    return Owner(("user", sid), person_of("user", sid), session_key)
+
+
+def _prepared(fact: dict[str, Any], session_key: str, owner: Owner) -> dict[str, Any]:
+    """An extracted fact as the write path takes it, its source turns in its metadata.
+
+    A fact about the speaker gets the owner as its subject, and, when the owner
+    is a CRM person, a ``the user`` mention anchored to that person's node.
+    """
+    refs = list(fact["turn_refs"])
+    out = {k: v for k, v in fact.items() if k not in _MODE_KEYS}
+    metadata: dict[str, Any] = {
+        "extraction": "conversation",
+        "conversation_kind": fact["kind"],
+        "source": {
+            "kind": "conversation",
+            "ref": session_key,
+            "start_ref": min(refs),
+            "end_ref": max(refs),
+            "turn_refs": refs,
+            "mentioned_at": fact["mentioned_at"],
+        },
     }
+    if fact["about_user"] and fact["speaker_role"] == "user":
+        metadata["subject"] = owner.subject()
+        if owner.person_id:
+            anchor = {"surface_form": "the user", "entity_type": "person"}
+            out["mentions"] = [{**anchor, "crm_person_id": owner.person_id}, *fact["mentions"]]
+    out["metadata"] = metadata
+    return out
 
 
 def _merge(total: dict[str, Any], part: dict[str, Any]) -> dict[str, Any]:
-    """Two per-role ingest results as one: ids joined, counts added."""
-    if not total:
-        return dict(part)
+    """Two write results as one: ids joined, counts added."""
     out = dict(total)
     for key, value in part.items():
         if isinstance(value, bool):
@@ -123,21 +547,46 @@ def _merge(total: dict[str, Any], part: dict[str, Any]) -> dict[str, Any]:
             out[key] = int(out.get(key) or 0) + value
         elif isinstance(value, list):
             out[key] = list(out.get(key) or []) + value
-        elif out.get(key) is None:
-            out[key] = value
     return out
 
 
-def _compute_session_hash(session_key: str, history: list[dict[str, Any]]) -> str:
-    """Compute a deterministic hash for dedup."""
-    tail = ""
-    if history:
-        tail = (history[-1].get("content") or "")[:200]
+async def _write_window(
+    facts: list[dict[str, Any]],
+    window: list[ConversationTurn],
+    *,
+    session_key: str,
+    tenant_id: str,
+    trigger_type: str,
+    metadata: dict[str, Any],
+    owner: Owner,
+) -> dict[str, Any]:
+    """Write one window's facts, grouped by speaker so each gets its origin, all
+    in the conversation's own scope."""
+    from robothor.memory import write_path
 
-    return content_hash(
-        {"key": session_key, "n": str(len(history)), "tail": tail},
-        ["key", "n", "tail"],
-    )
+    # A reference, never the turns themselves: the turns stay in chat_messages
+    # (with their own retention), and no raw transcript is stored with a fact.
+    source_content = f"conversation:{session_key}#{window[0].ref}-{window[-1].ref}"
+    result: dict[str, Any] = {}
+    for speaker in ("user", "assistant", "external"):
+        group = [_prepared(f, session_key, owner) for f in facts if f["speaker_role"] == speaker]
+        if not group:
+            continue
+        # Someone else's words, relayed in a user turn or said by a guest: they
+        # reached us through the chat, so they are external, never user-stated.
+        external = speaker == "external"
+        context = write_path.WriteContext.for_source(
+            tenant_id=tenant_id,
+            source_channel=trigger_type,
+            content_type="conversation",
+            role="user" if external else speaker,
+            metadata=metadata,
+            scope=owner.scope,
+            origin_cap=Origin.EXTERNAL if external else None,
+        )
+        part = await write_path.write_facts(group, source_content=source_content, context=context)
+        result = _merge(result, part)
+    return result
 
 
 async def ingest_conversation_session(
@@ -147,100 +596,666 @@ async def ingest_conversation_session(
     trigger_type: str,
     run_id: str,
     tenant_id: str = "",
+    *,
+    attempt: int = 0,
 ) -> dict[str, Any] | None:
-    """Ingest a conversation session into the memory pipeline.
+    """Extract the conversation's turns not yet extracted; never raises.
 
-    Called fire-and-forget after each interactive agent run.
+    Returns the merged write result with ``llm_calls``, ``windows`` and
+    ``turns_covered``, or ``None`` when nothing was extracted (nothing new, the
+    session is not stored, or extraction or storage failed — those turns are
+    retried by the next run). ``attempt`` counts the follow-up runs this one
+    was scheduled by (:func:`_schedule`).
     """
+    from robothor.rooms.keys import parse_room_key
+
+    if parse_room_key(session_key) is not None:
+        # A workspace's segments are read only by its members, but a fact has
+        # no room scope: written shared, it would reach every reader in the
+        # tenant. Until facts can carry a room's scope, rooms are not extracted,
+        # and nothing about them is read or written here.
+        return None
+    tenant = tenant_id or DEFAULT_TENANT
+    run = _Run(session_key, history, agent_id, trigger_type, run_id, tenant, attempt)
     try:
-        if len(history) < MIN_HISTORY_THRESHOLD:
-            return None
-
-        incremental = _ingest_skip_generated_enabled()
-        tid = tenant_id or None
-        hash_val = ""
-
-        if incremental:
-            # Extract only the turns added since this session was last ingested,
-            # dropping the agent's own briefings — instead of re-extracting the
-            # trailing 20 messages every turn (the {n, tail} hash never matched a
-            # growing session, so the same tail was re-ingested repeatedly).
-            last_n = get_ingested_count(_WATERMARK_SOURCE, session_key, tenant_id=tid)
-            window = history[last_n:] if 0 < last_n < len(history) else history
-            new_msgs = [m for m in window if m.get("role") in ("user", "assistant")]
-            if len(new_msgs) < 2:
-                record_ingested(_WATERMARK_SOURCE, session_key, str(len(history)), tenant_id=tid)
-                return None
-            turns = role_transcripts(window, skip_generated=True)
-        else:
-            hash_val = _compute_session_hash(session_key, history)
-            if is_already_ingested(_DEDUP_SOURCE, session_key, hash_val):
-                logger.debug(
-                    "Session %s already ingested (hash match), skipping",
-                    sanitize_log(session_key),
-                )
-                return None
-            turns = role_transcripts(history)
-
-        if not any(t.strip() for t in turns.values()):
-            if incremental:
-                record_ingested(_WATERMARK_SOURCE, session_key, str(len(history)), tenant_id=tid)
-            return None
-
-        metadata = {
-            "session_key": session_key,
-            "agent_id": agent_id,
-            "run_id": run_id,
-            "message_count": len(history),
-        }
-        # Extracted per role, so each fact's origin is who said it: a person's
-        # turns are user-stated, the assistant's agent-generated (even when they
-        # paraphrase an email). The other side is shown only as read-only context.
-        result: dict[str, Any] = {}
-        for role, other in (("user", "assistant"), ("assistant", "user")):
-            if not turns[role].strip():
-                continue
-            part = await ingest_content(
-                content=turns[role],
-                source_channel=trigger_type,
-                content_type="conversation",
-                metadata=metadata,
-                # Without this the watermarks were tenant-correct while the facts
-                # they tracked were written to DEFAULT_TENANT.
-                tenant_id=tenant_id,
-                role=role,
-                read_only_context=turns[other] or None,
-                # A transcript nobody asked to keep is not stored as one blob
-                # when extraction fails; the watermark stays put and the turns
-                # are extracted again on the next run.
-                fallback_on_failure=False,
-            )
-            result = _merge(result, part)
-        if result.get("extraction_failed"):
-            logger.warning(
-                "Conversation extraction failed for %s (%s); will retry",
-                sanitize_log(session_key),
-                result.get("extraction_error"),
-            )
-            return None
-
-        if incremental:
-            record_ingested(
-                _WATERMARK_SOURCE, session_key, str(len(history)), result.get("fact_ids", []), tid
-            )
-        else:
-            record_ingested(_DEDUP_SOURCE, session_key, hash_val, result.get("fact_ids", []))
-
-        logger.info(
-            "Ingested conversation session %s: %d facts, %d entities",
-            sanitize_log(session_key),
-            result.get("facts_processed", 0),
-            result.get("entities_stored", 0),
-        )
-        return result
-
+        return await _ingest(run)
     except Exception:
         logger.warning(
             "Conversation ingestion failed for %s", sanitize_log(session_key), exc_info=True
         )
         return None
+
+
+@dataclass(frozen=True)
+class _Run:
+    session_key: str
+    history: list[dict[str, Any]]
+    agent_id: str
+    trigger_type: str
+    run_id: str
+    tenant: str
+    attempt: int
+
+    def again(self, delay: float) -> None:
+        """Schedule a follow-up run of this conversation (bounded)."""
+        if self.attempt >= MAX_FOLLOW_UPS:
+            logger.info(
+                "Conversation %s: follow-up limit reached; the next exchange continues it",
+                sanitize_log(self.session_key),
+            )
+            return
+
+        async def follow_up() -> None:
+            await ingest_conversation_session(
+                self.session_key,
+                [],
+                self.agent_id,
+                self.trigger_type,
+                self.run_id,
+                self.tenant,
+                attempt=self.attempt + 1,
+            )
+
+        _schedule(delay, follow_up)
+
+
+def _schedule(delay: float, fn: Callable[[], Awaitable[None]]) -> None:
+    """Run ``fn`` after ``delay`` seconds, in the background (the task registry)."""
+    from robothor.engine.task_registry import get_task_registry
+
+    async def later() -> None:
+        await asyncio.sleep(delay)
+        await fn()
+
+    get_task_registry().spawn(later(), name="conv-ingest-follow-up")
+
+
+async def _ingest(run: _Run) -> dict[str, Any] | None:
+    key, tenant = run.session_key, run.tenant
+    mark = await asyncio.to_thread(_claim, key, tenant)
+    if mark is None:
+        # Another run (in this process or another engine) holds the
+        # conversation. It may have read the turns before this exchange was
+        # stored, so look again once it is likely done.
+        run.again(CLAIM_RETRY_SECONDS)
+        return None
+    try:
+        return await _extract(run, mark)
+    finally:
+        await asyncio.to_thread(_release, key, tenant, mark.token)
+
+
+async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
+    key, tenant = run.session_key, run.tenant
+    conv = await asyncio.to_thread(
+        _load_conversation,
+        key,
+        tenant,
+        mark.through,
+        WINDOW_MAX_TURNS * MAX_WINDOWS_PER_RUN,
+        recent=mark.recent,
+    )
+    expected = _expected_tail(run.history)
+    if conv is None:
+        if expected is not None:
+            run.again(HOLD_SECONDS + 1)  # the save may not have committed yet
+        return None
+    later = _follow_up_delay(conv, expected)
+    turns = [t for t in conv.turns if conv.held_from is None or t.ref < conv.held_from]
+    if not turns and not conv.late:
+        if conv.late_refs:
+            await asyncio.to_thread(
+                _advance, key, tenant, mark.token, mark.through, list(conv.late_refs)
+            )
+        if (
+            conv.held_from is None
+            and conv.scanned_through is not None
+            and conv.scanned_through > mark.through
+        ):
+            await asyncio.to_thread(
+                _advance, key, tenant, mark.token, conv.scanned_through, list(conv.refs)
+            )
+        if later is not None:
+            run.again(later)
+        return None
+    owner = owner_of(conv, key)
+    if owner.scope[1] != placeholder_scope_id(key):
+        await asyncio.to_thread(_reown, key, tenant, owner)
+
+    job = _Job(
+        run,
+        mark,
+        owner,
+        {"session_key": key, "agent_id": run.agent_id, "run_id": run.run_id},
+        _ingest_skip_generated_enabled(),
+    )
+    # Late turns first: below the watermark, written by a writer that committed
+    # after a later id was extracted (at most LATE_MAX_PER_RUN a run).
+    for window in windows(conv.late):
+        if await job.window(window, [], late=True) == "stop":
+            return _done(job.result)
+    if conv.late_refs:
+        await asyncio.to_thread(
+            _advance, key, tenant, mark.token, mark.through, list(conv.late_refs)
+        )
+
+    seen = list(conv.context)
+    all_windows = windows(turns, first_end=mark.failed_end)
+    if len(all_windows) > MAX_WINDOWS_PER_RUN:
+        later = min(later or BACKLOG_DELAY_SECONDS, BACKLOG_DELAY_SECONDS)
+    for window in all_windows[:MAX_WINDOWS_PER_RUN]:
+        outcome = await job.window(window, seen[-CONTEXT_TURNS:])
+        if outcome == "stop":
+            return _done(job.result)
+        covered = [r for r in conv.refs if r <= window[-1].ref]
+        await asyncio.to_thread(_advance, key, tenant, mark.token, window[-1].ref, covered)
+        if outcome == "done":
+            job.result["windows"] += 1
+            job.result["turns_covered"] += len(window)
+        seen.extend(window)
+
+    # Hand off: turns stored while this run worked (another exchange, whose
+    # own run found the conversation claimed) are picked up by a follow-up.
+    newest = await asyncio.to_thread(_newest_ref, key, tenant)
+    if later is None and newest > max(conv.scanned_through or 0, mark.through):
+        later = HOLD_SECONDS + 1
+    if later is not None:
+        run.again(later)
+    logger.info(
+        "Ingested conversation session %s: %d windows, %d facts",
+        sanitize_log(key),
+        job.result["windows"],
+        len(job.result["fact_ids"]),
+    )
+    return job.result
+
+
+@dataclass
+class _Job:
+    """One run's extraction of a conversation's windows."""
+
+    run: _Run
+    mark: Watermark
+    owner: Owner
+    metadata: dict[str, Any]
+    skip_generated: bool
+    result: dict[str, Any] = field(
+        default_factory=lambda: {
+            "fact_ids": [],
+            "llm_calls": 0,
+            "windows": 0,
+            "windows_skipped": 0,
+            "turns_covered": 0,
+        }
+    )
+
+    async def window(
+        self, window: list[ConversationTurn], context: list[ConversationTurn], *, late: bool = False
+    ) -> str:
+        """Extract and write one window: ``done``, ``skipped`` (passed over) or ``stop``."""
+        key, tenant, token = self.run.session_key, self.run.tenant, self.mark.token
+        last_ref = window[-1].ref
+        kept = [
+            _clipped(t)
+            for t in window
+            if not (
+                self.skip_generated and t.role == "assistant" and _is_generated_briefing(t.text)
+            )
+        ]
+        if not kept:
+            return "done"
+        extraction = await extract_conversation_facts(kept, context=context)
+        self.result["llm_calls"] += 1
+        if not await asyncio.to_thread(_renew, key, tenant, token):
+            # The lease lapsed while the model worked and another run may have
+            # the conversation now: write nothing more.
+            logger.warning(
+                "Conversation %s: lost the claim during extraction; stopping", sanitize_log(key)
+            )
+            return "stop"
+        error = extraction.error
+        if error is not None and error not in ANSWERED_ERRORS | TIMEOUT_ERRORS:
+            # The model server did not answer (unreachable, errored): nothing is
+            # counted or skipped; the next run tries again.
+            logger.warning(
+                "Conversation extraction for %s did not reach the model (%s); will retry",
+                sanitize_log(key),
+                extraction.error,
+            )
+            return "stop"
+        if error is not None and late:
+            # A late turn the model answered unusably, or that timed out:
+            # recorded as skipped at once (it is out of order already, and the
+            # skips command retries it), never left to vanish.
+            # One row per turn: late turns are scattered between extracted
+            # ones, and a retry must extract only them.
+            for turn in window:
+                total = await asyncio.to_thread(
+                    _record_skip, key, tenant, turn.ref, turn.ref, str(error)
+                )
+            logger.warning(
+                "Conversation %s: skipping late turns %d-%d (%s); %s skipped window(s) in "
+                "this tenant, see python -m robothor.memory.conversation_skips",
+                sanitize_log(key),
+                window[0].ref,
+                last_ref,
+                extraction.error,
+                total,
+            )
+            self.result["windows_skipped"] += 1
+            return "skipped"
+        if error is not None:
+            points = TIMEOUT_POINTS if error in TIMEOUT_ERRORS else ANSWERED_POINTS
+            failures = await asyncio.to_thread(_fail, key, tenant, token, last_ref, points)
+            if failures < SKIP_POINTS:
+                logger.warning(
+                    "Conversation extraction failed for %s (%s, %d of %d points); will retry",
+                    sanitize_log(key),
+                    error,
+                    failures,
+                    SKIP_POINTS,
+                )
+                return "stop"
+            # It never extracts: pass over it, so the rest of the conversation is
+            # not held behind it, and say so.
+            logger.warning(
+                "Conversation %s: skipping turns %d-%d after %d failed extractions (%s)",
+                sanitize_log(key),
+                window[0].ref,
+                last_ref,
+                failures,
+                extraction.error,
+            )
+            total = await asyncio.to_thread(
+                _record_skip, key, tenant, window[0].ref, last_ref, str(extraction.error)
+            )
+            logger.warning(
+                "Conversation ingest: %s skipped window(s) in this tenant; "
+                "python -m robothor.memory.conversation_skips lists and retries them",
+                total,
+            )
+            self.result["windows_skipped"] += 1
+            return "skipped"
+        part = await _write_window(
+            extraction.facts,
+            kept,
+            session_key=key,
+            tenant_id=tenant,
+            trigger_type=self.run.trigger_type,
+            metadata=self.metadata,
+            owner=self.owner,
+        )
+        if part.get("facts_failed"):
+            logger.warning(
+                "Conversation facts not stored for %s (%s); will retry",
+                sanitize_log(key),
+                "; ".join(part.get("errors") or []),
+            )
+            return "stop"
+        self.result = _merge(self.result, part)
+        if late:
+            self.result["late_turns"] = self.result.get("late_turns", 0) + len(window)
+        return "done"
+
+
+def _follow_up_delay(conv: StoredConversation, expected: str | None) -> float | None:
+    """When a follow-up run is needed, how soon: held-back rows and a triggering
+    turn not stored yet wait until they come of age; a backlog goes on shortly."""
+    if conv.held_from is not None or (
+        expected is not None and (conv.tail_text or "").strip() != expected
+    ):
+        return HOLD_SECONDS + 1
+    if conv.more:
+        return BACKLOG_DELAY_SECONDS
+    return None
+
+
+def _done(result: dict[str, Any]) -> dict[str, Any] | None:
+    """What a run that stopped early returns: what it completed, else None."""
+    return result if result["windows"] or result["windows_skipped"] else None
+
+
+# ═══ the watermark row ═══════════════════════════════════════════════════
+#
+# One ``ingested_items`` row per conversation (``source_name`` =
+# :data:`_WATERMARK_SOURCE`, ``item_id`` = the session key). Its
+# ``content_hash`` (a 64-character column) holds the state as
+# ``through|failures|failed_end|claim|claimed_until``: the last
+# ``chat_messages.id`` extracted, how many runs in a row could not extract the
+# next window, that window's end while it keeps failing, and, while a run works
+# on the conversation, its claim token and when the claim lapses (epoch
+# seconds). Every change is a read-modify-write under ``SELECT … FOR UPDATE``,
+# so two engine processes never hold one conversation and never extract the
+# same window twice; a claim lapses after :data:`CLAIM_LEASE_SECONDS` if its run
+# died. All of this is synchronous: callers run it off the event loop.
+
+
+@dataclass(frozen=True)
+class Watermark:
+    """The claimed state of one conversation."""
+
+    through: int
+    failures: int
+    token: str
+    #: The end of the window that failed, while it keeps failing.
+    failed_end: int | None = None
+    #: Message ids recently extracted (see ``_State.recent``).
+    recent: tuple[int, ...] = ()
+
+
+@dataclass
+class _State:
+    through: int = 0
+    failures: int = 0
+    failed_end: int | None = None
+    claim: str | None = None
+    claimed_until: int | None = None
+    #: Message ids recently extracted (or passed over), kept in the row's
+    #: ``fact_ids`` column: a row below the watermark that is not among them
+    #: and is recent is a late row (see the loader).
+    recent: list[int] = field(default_factory=list)
+
+    @classmethod
+    def parse(cls, raw: str | None) -> _State | None:
+        """The state, or ``None`` when the row does not hold a well-formed one."""
+        parts = (raw or "").split("|")
+        if len(parts) != 5:
+            return None
+        through, failures, failed_end, claim, until = parts
+        numbers = (through, failures, failed_end, until)
+        if not through or not failures or claim and not claim.isalnum():
+            return None
+        if any(v and (not v.isdigit() or len(v) > 19) for v in numbers):
+            return None
+        return cls(
+            int(through),
+            int(failures),
+            int(failed_end) if failed_end else None,
+            claim or None,
+            int(until) if until else None,
+        )
+
+    def encode(self) -> str:
+        fields = (self.through, self.failures, self.failed_end, self.claim, self.claimed_until)
+        return "|".join("" if v is None else str(v) for v in fields)
+
+
+def _mutate(
+    session_key: str, tenant_id: str, change: Callable[[_State, int], _State | None]
+) -> _State | None:
+    """Apply ``change(state, now)`` to the conversation's row, locked; the new state.
+
+    ``change`` returns ``None`` to leave the row as it is (and get ``None``).
+    A conversation with no row gets one: ``through`` is the last message the
+    previous conversation ingest had seen (its ``ingested_at``), else 0.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        # A new row starts where the old (pre-watermark) path left the
+        # conversation, and in any case past every turn older than the chat
+        # retention: such a turn is still stored only because an old fact
+        # quotes it, so it was extracted before. History is never redone.
+        cur.execute(
+            "WITH m AS (SELECT m.id, m.created_at FROM chat_messages m "
+            "JOIN chat_sessions s ON s.id = m.session_id "
+            "WHERE s.tenant_id = %s AND s.session_key = %s) "
+            "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, "
+            "fact_ids, ingested_at) SELECT %s, %s, %s, GREATEST("
+            "COALESCE((SELECT max(m.id) FROM m WHERE m.created_at <= ("
+            "SELECT max(o.ingested_at) FROM ingested_items o WHERE o.tenant_id IN (%s, %s) "
+            "AND o.item_id = %s AND o.source_name = ANY(%s))), 0), "
+            "COALESCE((SELECT max(m.id) FROM m WHERE m.created_at < "
+            "now() - make_interval(days => %s)), 0))::text || '|0|||', '{}', NOW() "
+            "ON CONFLICT (tenant_id, source_name, item_id) DO NOTHING",
+            (
+                tenant_id,
+                session_key,
+                tenant_id,
+                _WATERMARK_SOURCE,
+                session_key,
+                tenant_id,
+                # The previous ingest wrote its tail-hash row without a tenant,
+                # so under the default one, whatever tenant the chat was in.
+                DEFAULT_TENANT,
+                session_key,
+                list(_OLD_PATH_SOURCES),
+                CHAT_TURN_TTL_DAYS,
+            ),
+        )
+        cur.execute(
+            "SELECT content_hash, extract(epoch FROM now())::bigint, fact_ids "
+            "FROM ingested_items "
+            "WHERE tenant_id = %s AND source_name = %s AND item_id = %s FOR UPDATE",
+            (tenant_id, _WATERMARK_SOURCE, session_key),
+        )
+        raw, now, recent = cur.fetchone()
+        state = _State.parse(raw)
+        if state is not None:
+            state.recent = [int(i) for i in recent or []]
+        if state is None:
+            # Never restart from zero: that would extract the whole history
+            # again. Start at the conversation's current end, and say so.
+            cur.execute(
+                "SELECT COALESCE(max(m.id), 0) FROM chat_messages m JOIN chat_sessions s "
+                "ON s.id = m.session_id WHERE s.tenant_id = %s AND s.session_key = %s",
+                (tenant_id, session_key),
+            )
+            state = _State(through=int(cur.fetchone()[0]))
+            state.recent = _recent_ids(cur, tenant_id, session_key, state.through)
+            logger.error(
+                "Conversation %s: malformed watermark %r; starting at its current end (%d)",
+                sanitize_log(session_key),
+                sanitize_log(str(raw))[:80],
+                state.through,
+            )
+        if not state.recent and state.through and not recent:
+            # A row created now, or one that never kept recent ids: what lies
+            # below its watermark is not late, it was there before.
+            state.recent = _recent_ids(cur, tenant_id, session_key, state.through)
+        repaired = state.encode() != raw or state.recent != [int(i) for i in recent or []]
+        new = change(state, int(now))
+        write = new if new is not None else (state if repaired else None)
+        if write is not None:
+            cur.execute(
+                "UPDATE ingested_items SET content_hash = %s, fact_ids = %s, ingested_at = NOW() "
+                "WHERE tenant_id = %s AND source_name = %s AND item_id = %s",
+                (write.encode(), write.recent, tenant_id, _WATERMARK_SOURCE, session_key),
+            )
+        conn.commit()
+    return new
+
+
+def _recent_ids(cur: Any, tenant_id: str, session_key: str, through: int) -> list[int]:
+    """What a row starts remembering: its watermark, as the floor, so nothing
+    below it is late (it was there before)."""
+    del cur, tenant_id, session_key
+    return [through] if 0 <= through < _INT4 else []
+
+
+def _claim(session_key: str, tenant_id: str) -> Watermark | None:
+    """Claim the conversation for this run, or ``None`` if another run holds it."""
+    token = uuid.uuid4().hex[:10]
+
+    def take(state: _State, now: int) -> _State | None:
+        if state.claim and (state.claimed_until or 0) > now:
+            return None
+        state.claim, state.claimed_until = token, now + CLAIM_LEASE_SECONDS
+        return state
+
+    state = _mutate(session_key, tenant_id, take)
+    if state is None:
+        return None
+    return Watermark(state.through, state.failures, token, state.failed_end, tuple(state.recent))
+
+
+def _owned(token: str, change: Callable[[_State], None]) -> Callable[[_State, int], _State | None]:
+    def apply(state: _State, _now: int) -> _State | None:
+        if state.claim != token:
+            return None  # the claim lapsed and another run took it: change nothing
+        change(state)
+        return state
+
+    return apply
+
+
+def _advance(
+    session_key: str, tenant_id: str, token: str, through: int, covered: list[int]
+) -> None:
+    """Move the watermark (and clear the failure count) under this run's claim.
+
+    ``covered`` are the message ids this step extracted or passed over; they
+    join the recent ids, so they are never taken for late rows.
+    """
+
+    def change(state: _State) -> None:
+        # The watermark being left is remembered too, as the floor: anything
+        # between it and the new one that this step did not cover is late.
+        floor = {state.through} if state.through < _INT4 else set()
+        ids = set(state.recent) | floor | {int(c) for c in covered if int(c) < _INT4}
+        state.recent = sorted(ids)[-RECENT_KEEP:]
+        state.through = max(state.through, through)
+        state.failures, state.failed_end = 0, None
+
+    _mutate(session_key, tenant_id, _owned(token, change))
+
+
+def _fail(session_key: str, tenant_id: str, token: str, window_end: int, points: int) -> int:
+    """Add ``points`` for one more run that could not extract the next window;
+    the new total.
+
+    The first failure pins the window's end (``failed_end``), so the turns that
+    arrive later are not folded into the window that fails.
+    """
+
+    def change(state: _State) -> None:
+        state.failures += points
+        if state.failed_end is None:
+            state.failed_end = window_end
+
+    state = _mutate(session_key, tenant_id, _owned(token, change))
+    return state.failures if state is not None else 0
+
+
+def _renew(session_key: str, tenant_id: str, token: str) -> bool:
+    """Extend this run's claim; False when it is no longer this run's."""
+
+    def extend(state: _State, now: int) -> _State | None:
+        if state.claim != token:
+            return None
+        state.claimed_until = now + CLAIM_LEASE_SECONDS
+        return state
+
+    return _mutate(session_key, tenant_id, extend) is not None
+
+
+def _newest_ref(session_key: str, tenant_id: str) -> int:
+    """The conversation's highest stored message id (0 for none)."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COALESCE(max(m.id), 0) FROM chat_messages m JOIN chat_sessions s "
+            "ON s.id = m.session_id WHERE s.tenant_id = %s AND s.session_key = %s",
+            (tenant_id, session_key),
+        )
+        return int(cur.fetchone()[0])
+
+
+def _release(session_key: str, tenant_id: str, token: str) -> None:
+    """Give the conversation back (only this run's own claim)."""
+
+    def change(state: _State) -> None:
+        state.claim, state.claimed_until = None, None
+
+    _mutate(session_key, tenant_id, _owned(token, change))
+
+
+def _record_skip(session_key: str, tenant_id: str, start: int, end: int, reason: str) -> int:
+    """Record a window passed over unextracted; the tenant's skipped windows now.
+
+    ``python -m robothor.memory.conversation_skips`` lists and retries them.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, "
+            "fact_ids, ingested_at) VALUES (%s, %s, %s, %s, '{}', NOW()) "
+            "ON CONFLICT (tenant_id, source_name, item_id) DO UPDATE "
+            "SET content_hash = EXCLUDED.content_hash, ingested_at = NOW()",
+            (tenant_id, _SKIPPED_SOURCE, f"{session_key}#{start}-{end}", reason[:64]),
+        )
+        cur.execute(
+            "SELECT count(*) FROM ingested_items WHERE tenant_id = %s AND source_name = %s",
+            (tenant_id, _SKIPPED_SOURCE),
+        )
+        total = int(cur.fetchone()[0])
+        conn.commit()
+    return total
+
+
+# ═══ re-owning a conversation's placeholder facts ════════════════════════
+
+#: ``drift.compute_fact_hash`` of a fact re-scoped to ``user`` / ``%s``, in SQL.
+_SCOPED_HASH_SQL = (
+    "encode(sha256(convert_to(COALESCE(fact_text, '') || '|' || COALESCE(tenant_id, '') "
+    "|| '|' || COALESCE(category, '') || '|scope:user:' || %s, 'UTF8')), 'hex')"
+)
+
+
+def _reown(session_key: str, tenant_id: str, owner: Owner) -> int:
+    """Give a conversation's placeholder-owned facts to its now-known owner.
+
+    Facts written while nobody was known to own the conversation (scope
+    ``conversation:{session_key}``, readable by no one) take the owner's scope,
+    hash and person, in one transaction, for this tenant only. A fact about the
+    speaker gets the owner as its subject and, for a CRM person, its ``the user``
+    mention anchored to that person's node. A re-owned fact the owner already
+    holds is retired in favour of the one they have. Returns the facts re-owned.
+    """
+    from robothor.db.connection import tenant_scope
+    from robothor.memory.identity import MentionInput, resolve_mentions, write_mentions
+
+    old, new = placeholder_scope_id(session_key), owner.scope[1]
+    subject = json.dumps(owner.subject())
+    with tenant_scope(tenant_id), get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE memory_facts f SET is_active = FALSE, superseded_by = k.id "
+            "FROM memory_facts k WHERE f.tenant_id = %s AND f.scope_kind = 'user' "
+            "AND f.scope_id = %s AND f.is_active AND k.tenant_id = f.tenant_id AND k.is_active "
+            "AND k.id <> f.id AND k.content_hash = encode(sha256(convert_to("
+            "COALESCE(f.fact_text, '') || '|' || COALESCE(f.tenant_id, '') || '|' "
+            "|| COALESCE(f.category, '') || '|scope:user:' || %s, 'UTF8')), 'hex')",
+            (tenant_id, old, new),
+        )
+        cur.execute(
+            "UPDATE memory_facts SET scope_id = %s, content_hash = " + _SCOPED_HASH_SQL + ", "
+            "person_id = (SELECT p.id FROM crm_people p WHERE p.id::text = %s "
+            "AND p.tenant_id = %s), "
+            "metadata = CASE WHEN metadata->'subject'->>'kind' = 'conversation_participant' "
+            "THEN jsonb_set(metadata, '{subject}', %s::jsonb) ELSE metadata END "
+            "WHERE tenant_id = %s AND scope_kind = 'user' AND scope_id = %s "
+            "RETURNING id, metadata->'subject'->>'kind' = 'person'",
+            (new, new, owner.person_id or "", tenant_id, subject, tenant_id, old),
+        )
+        rows = cur.fetchall()
+        if owner.person_id:
+            context = {"scope_kind": "user", "scope_id": new, "person_id": owner.person_id}
+            for fact_id, about_owner in rows:
+                if not about_owner:
+                    continue
+                mention = [
+                    MentionInput(
+                        "the user",
+                        "person",
+                        strong_keys={"crm_person_id": owner.person_id},
+                        context=context,
+                    )
+                ]
+                resolved = resolve_mentions(tenant_id, mention, cur=cur, create=False)
+                write_mentions(tenant_id, int(fact_id), mention, resolved, cur=cur)
+        conn.commit()
+    if rows:
+        logger.info(
+            "Conversation %s: %d placeholder facts re-owned", sanitize_log(session_key), len(rows)
+        )
+    return len(rows)

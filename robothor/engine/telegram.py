@@ -46,6 +46,7 @@ from robothor.engine.chat_store import (
     save_exchange_async,
 )
 from robothor.engine.chunking import TELEGRAM_MAX_MESSAGE_LENGTH
+from robothor.engine.conversation_memory import remember_exchange
 from robothor.engine.delivery import set_telegram_sender
 from robothor.engine.early_done import EarlyRelease
 from robothor.engine.models import TriggerType
@@ -584,6 +585,7 @@ class TelegramBot(
                     user_message_id=user_message_id,
                     reply_ctx=reply_ctx,
                     attachments=self._live_attachments(inbox, attachments),
+                    sender_telegram_id=(_user or {}).get("telegram_user_id"),
                 )
 
                 sent_messages: list[Any] = await early.result_or(run)
@@ -616,23 +618,11 @@ class TelegramBot(
                         name=f"tg-persist-and-map:{chat_id}",
                     )
 
-                # Ingest conversation to memory (fire-and-forget)
-                if len(session.history) >= 4:
-                    from robothor.memory.conversation_ingest import (
-                        ingest_conversation_session,
-                    )
-
-                    get_task_registry().spawn(
-                        ingest_conversation_session(
-                            session_key=session_key,
-                            history=list(session.history),
-                            agent_id=self.config.default_chat_agent,
-                            trigger_type="telegram",
-                            run_id=run.id,
-                            tenant_id=self.config.tenant_id,
-                        ),
-                        name=f"conv-ingest:{chat_id}",
-                    )
+                remember_exchange(  # conversation memory, under the tenant saved to
+                    session_key=session_key, history=session.history,
+                    agent_id=self.config.default_chat_agent, channel="telegram",
+                    run_id=run.id, tenant_id=_tenant, name=f"conv-ingest:{chat_id}",
+                )  # fmt: skip
 
             except asyncio.CancelledError:
                 # /stop was called during execution

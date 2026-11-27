@@ -19,13 +19,12 @@ extracts first and then calls it). For each fact it:
 Origin (:func:`origin_for`) is decided by who said it, never upgraded by
 default.
 
-Scope. Every writer stores ``shared`` facts, exactly as before this module:
-making facts from a one-to-one conversation private to its person would stop
-scheduled agents and other team members recalling them, which is a product
-decision for the operator, not a side effect of a write-path change. A PRIVATE
-scope is written only when a caller passes one explicitly (``scope=`` on
-:meth:`WriteContext.for_source`, ``ingest_content`` and ``store_memory_content``;
-nothing passes it yet). The mechanism is complete and tested: a private fact
+Scope. A writer stores ``shared`` facts unless it passes a scope explicitly
+(``scope=`` on :meth:`WriteContext.for_source`, ``ingest_content`` and
+``store_memory_content``). Conversation ingest passes the conversation's own
+scope (``segments.session_scope``), so a private conversation's facts are as
+private as its segments; every other writer stores ``shared``. The mechanism is
+complete and tested: a private fact
 never deduplicates into, reinforces or supersedes a shared one or another
 reader's (scope is in the content hash and bounds the similarity search),
 and consolidation never mixes scopes. :func:`conversation_scope` is the
@@ -38,7 +37,9 @@ and entity expansion show every edge of a node to every reader):
 
 * no provisional node is created from a private fact's text (a shared node
   would show the name to everyone); its mentions resolve to existing nodes
-  only, or stay unresolved;
+  only, and a name that resolves to nothing is recorded neither as a mention
+  nor as a resolution decision (neither table has an owner scope); a private
+  write's decisions carry its scope in ``evidence.scope``;
 * no edge is written from a private fact. The relations it stated are kept on
   the fact (``metadata.graph_pending_relations``), readable only as the fact is,
   and counted in ``relations_private_deferred``, so a reader that enforces
@@ -634,12 +635,18 @@ def _mention_inputs(cur: Any, fact: Mapping[str, Any], context: WriteContext) ->
     if mentions is None:
         mentions = _known_mentions(cur, context.tenant_id, str(fact.get("fact_text") or ""))
     pairs: list[tuple[str, str | None]] = []
+    anchors: dict[str, str] = {}
     seen: set[str] = set()
     for m in mentions:
         surface = str(m.get("surface_form") or "").strip()
         if surface and normalize_surface(surface) not in seen:
             seen.add(normalize_surface(surface))
             pairs.append((surface, m.get("entity_type")))
+            # An identity anchor (conversation ingest: "the user" is the person
+            # whose conversation it is) is honoured only for the person who owns
+            # this write's private scope, never for anyone else.
+            if context.person_id and str(m.get("crm_person_id") or "") == context.person_id:
+                anchors[surface] = context.person_id
     # A relation endpoint the model did not list is still a name in the fact.
     for rel in fact.get("relations") or []:
         for end in (rel.get("source"), rel.get("target")):
@@ -658,7 +665,11 @@ def _mention_inputs(cur: Any, fact: Mapping[str, Any], context: WriteContext) ->
         MentionInput(
             s,
             t,
-            strong_keys={"email": s.lower()} if _EMAIL.match(s) else {},
+            strong_keys=(
+                {"crm_person_id": anchors[s]}
+                if s in anchors
+                else ({"email": s.lower()} if _EMAIL.match(s) else {})
+            ),
             context={**base, "co_mentions": [n for n in names if n != s]},
         )
         for s, t in pairs
@@ -683,8 +694,18 @@ def _write_graph(
     with tenant_scope(tenant_id), get_connection() as conn:
         cur = conn.cursor()
         inputs = _mention_inputs(cur, fact, context)
-        resolved = resolve_mentions(tenant_id, inputs, cur=cur, create=context.is_shared)
-        out["mentions_written"] = write_mentions(tenant_id, fact_id, inputs, resolved, cur=cur)
+        resolved = resolve_mentions(
+            tenant_id,
+            inputs,
+            cur=cur,
+            create=context.is_shared,
+            record_unresolved=context.is_shared,
+        )
+        # A private fact's name that resolved to nothing stays in the fact only.
+        kept = [(m, r) for m, r in zip(inputs, resolved, strict=True) if r.decision_id != 0]
+        out["mentions_written"] = write_mentions(
+            tenant_id, fact_id, [m for m, _ in kept], [r for _, r in kept], cur=cur
+        )
         ids = {
             normalize_surface(m.surface_form): r.entity_id
             for m, r in zip(inputs, resolved, strict=True)

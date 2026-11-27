@@ -1079,11 +1079,13 @@ class _Resolver:
         plan: _Plan | None = None,
         read_only: bool = False,
         create: bool = True,
+        record_unresolved: bool = True,
     ) -> None:
         self.cur = cur
         self.tenant = tenant_id
         self.dry_run = dry_run
         self.create = create
+        self.record_unresolved = record_unresolved
         self.read_only = read_only or dry_run
         self.plan = plan if plan is not None else _Plan()
         self._rows: dict[str, list[dict[str, Any]]] = {}
@@ -1680,7 +1682,14 @@ class _Resolver:
                 {**outcome.evidence, tag: ids},
                 outcome.create_type,
             )
+        scope = _scope_of(mention.context or {})
+        if outcome.entity_id is None and not self.record_unresolved and scope[0] != "shared":
+            # A private write's name that resolved to nothing: recording it here
+            # would keep it in an unscoped table every tenant admin path reads.
+            return _Result(ResolvedMention(None, 0, outcome.method, 0.0, None), outcome, created)
         evidence = {**outcome.evidence, "basis": outcome.basis, "reason": outcome.reason}
+        if scope[0] != "shared":
+            evidence["scope"] = {"scope_kind": scope[0], "scope_id": scope[1]}
         key = (surface.lower(), etype, outcome.entity_id, outcome.method, outcome.basis)
         reused = self._reuse(key)
         if reused is not None:
@@ -1803,7 +1812,12 @@ def _merge_tags(rows: Sequence[tuple[str, tuple[int, ...]]]) -> tuple[list[int],
 
 
 def resolve_mentions(
-    tenant_id: str, mentions: Sequence[MentionInput], *, cur: Any = None, create: bool = True
+    tenant_id: str,
+    mentions: Sequence[MentionInput],
+    *,
+    cur: Any = None,
+    create: bool = True,
+    record_unresolved: bool = True,
 ) -> list[ResolvedMention]:
     """Resolve each mention to a node, or leave it unresolved, and record why.
 
@@ -1823,13 +1837,17 @@ def resolve_mentions(
     May create a provisional node (rule e) and may link a CRM record that had no
     node yet (rule a). With ``create=False`` no provisional node is created: a
     mention that would have needed one is recorded unresolved (reason
-    ``no_create``). Never writes mentions: :func:`write_mentions` does that.
+    ``no_create``). With ``record_unresolved=False`` a mention of a private
+    write (its context's scope is not ``shared``) that resolves to nothing gets
+    no decision row at all (``decision_id`` 0): the table has no owner scope.
+    A private write's decisions carry its scope in ``evidence.scope``. Never
+    writes mentions: :func:`write_mentions` does that.
     """
     _require_tenant(tenant_id)
     if not mentions:
         return []
     with _cursor(tenant_id, cur) as c:
-        resolver = _Resolver(c, tenant_id, create=create)
+        resolver = _Resolver(c, tenant_id, create=create, record_unresolved=record_unresolved)
         resolver.prefetch([m.surface_form for m in mentions])
         return [resolver.resolve(m).resolved for m in mentions]
 

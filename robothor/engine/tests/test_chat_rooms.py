@@ -890,7 +890,9 @@ class TestMainConversationUnchanged:
         kwargs = mock_runner.execute.await_args.kwargs
         assert kwargs["message"] == "morning"
         stored = fake.store[(TENANT, "agent:main:primary")]
-        assert stored[0] == {"role": "user", "content": "morning"}
+        # No room attribution; only the sender memory needs to tell the
+        # owner's words from anyone else's (conversation facts).
+        assert stored[0] == {"role": "user", "content": "morning", "sender_user_id": ALICE}
         fake.activity.assert_not_called()
         assert fake.published == []
         with _as(_auth(ALICE, role="owner")):
