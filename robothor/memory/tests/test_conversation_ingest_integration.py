@@ -407,3 +407,45 @@ async def test_a_malformed_watermark_starts_at_the_current_end_and_says_so(
     )[0]
     assert state.split("|")[0] == str(ids[-1])
     assert any("malformed" in r.getMessage().lower() for r in caplog.records)
+
+
+# ═══ a writer open longer than the hold still loses nothing ══════════════
+
+
+@pytest.mark.asyncio
+async def test_a_turn_from_a_writer_open_longer_than_the_hold_is_still_extracted(
+    world: World,
+) -> None:
+    world.model.on_turn(
+        "dark roast", turn_fact("The user prefers dark roast coffee.", about_user=True)
+    )
+    world.model.on_turn("road bike", turn_fact("The user owns a red road bike.", about_user=True))
+    key = "telegram:4242"
+    sid = world.db.one(
+        "INSERT INTO chat_sessions (tenant_id, session_key, channel, person_id) "
+        "VALUES (%s, %s, 'telegram', %s) RETURNING id",
+        (TENANT, key, ALICE),
+    )
+
+    def put(i: int, role: str, content: str, ago: int) -> None:
+        world.db.q(
+            "INSERT INTO chat_messages (id, session_id, message, created_at) "
+            "VALUES (%s, %s, %s::jsonb, now() - %s * interval '1 second')",
+            (
+                i,
+                sid,
+                json.dumps({"role": role, "content": content, "sender_telegram_id": "4242"}),
+                ago,
+            ),
+        )
+
+    put(102, "user", "I have a red road bike.", 8)
+    put(103, "assistant", "Nice.", 8)
+    await _ingest(key, [])  # past the hold: extracted, the watermark moves to 103
+    put(100, "user", "I always go for dark roast.", 9)  # its writer was open over 5 s
+    put(101, "assistant", "Noted.", 9)
+    await _ingest(key, [])
+    texts = {f["fact_text"] for f in world.db.facts()}
+    assert texts == {"The user prefers dark roast coffee.", "The user owns a red road bike."}
+    await _ingest(key, [])  # and each is extracted once
+    assert world.model.calls.count("extract_conversation") == 2

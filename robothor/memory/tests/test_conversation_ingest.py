@@ -768,3 +768,17 @@ async def test_turns_stored_while_a_run_works_are_handed_to_a_follow_up() -> Non
 
 def test_a_waiter_outlasts_a_lease() -> None:
     assert ci.CLAIM_RETRY_SECONDS * ci.MAX_FOLLOW_UPS > ci.CLAIM_LEASE_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_held_turns_whose_follow_up_was_lost_are_taken_by_the_next_run() -> None:
+    """A restart inside the hold drops the scheduled follow-up; nothing is lost,
+    because the watermark never passed the held turns: the next run takes them."""
+    store = Store(_stored(4), scope=("user", f"person:{ALICE}"))
+    store.fresh_from = 3
+    model = Model()
+    await _run(store, model, scheduled=[])  # the follow-up is lost
+    assert store.watermark == 2
+    store.fresh_from = None  # later: the next exchange, or any run of this conversation
+    await _run(store, model)
+    assert store.watermark == 4
