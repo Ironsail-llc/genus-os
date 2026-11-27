@@ -97,7 +97,10 @@ def test_a_declaration_is_loaded_with_its_defaults() -> None:
 
 
 def test_the_plugin_is_named_by_its_distribution_when_it_has_one() -> None:
-    result = _load(_payload({"acme_lookup": {"access": "read"}}), manifest="handlers: [acme_lookup, acme_update]\n")
+    result = _load(
+        _payload({"acme_lookup": {"access": "read"}}),
+        manifest="handlers: [acme_lookup, acme_update]\n",
+    )
 
     assert result.remote["acme_lookup"]["plugin"] == "acme-tools"
 
@@ -254,7 +257,7 @@ def test_the_scan_reports_none_when_the_manifest_declares_none(tmp_path) -> None
     result = _scan(tmp_path, "contract_version: 1\nhandlers: [acme_lookup]\n")
 
     assert result.remote_tools is None
-    assert result.as_json()["remote_tools"] is None
+    assert "remote_tools" not in result.as_json()  # serialised exactly as before
 
 
 @pytest.mark.parametrize(

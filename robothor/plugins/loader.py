@@ -143,6 +143,11 @@ class PluginSet:
     #: write tools acts on, and its read-back verifier. Absent means the
     #: engine derives the target and nothing can read the write back.
     effects: dict[str, Any] = field(default_factory=dict)
+    #: Tool name -> ``{access, attestations, notes, plugin}``: which of a
+    #: plugin's OWN tools a parent tenant's agent may run in this tenant
+    #: (``robothor.engine.remote_tools``). Absent means not remote: a plugin
+    #: that says nothing offers nothing.
+    remote: dict[str, dict[str, Any]] = field(default_factory=dict)
     loaded: list[Any] = field(default_factory=list)
     failures: list[PluginFailure] = field(default_factory=list)
 
@@ -607,10 +612,28 @@ def load_plugins(
                 continue
             declared_effects = parsed
 
+        declared_remote: dict[str, dict[str, Any]] = {}
+        if group == "genus.tools" and "remote" in payload:
+            remote = _remote_specs(
+                payload.get("remote"), set(contributions), declared_ro, distribution or name
+            )
+            if isinstance(remote, str):
+                result.failures.append(PluginFailure(name, group, remote, distribution))
+                logger.warning("Plugin %r remote declaration refused: %s", name, remote)
+                continue
+            declared_remote = remote
+        if group == "genus.tools" and manifest is not None and manifest.remote_tools is not None:
+            mismatch = _remote_mismatch(declared_remote, manifest.remote_tools, set(contributions))
+            if mismatch:
+                result.failures.append(PluginFailure(name, group, mismatch, distribution))
+                logger.warning("Plugin %r remote declaration refused: %s", name, mismatch)
+                continue
+
         # All-or-nothing: validated above, applied here.
         target.update(contributions)
         result.read_only |= declared_ro
         result.effects.update(declared_effects)
+        result.remote.update(declared_remote)
         result.loaded.append(ep)
         logger.info("Plugin %r loaded %d %s", name, len(contributions), _GROUPS[group])
 
@@ -655,3 +678,77 @@ def _effect_specs(raw: Any, provided: set[str]) -> dict[str, Any] | str:
             target=tuple(target) if target is not None else None, fence=fence, verify=verify
         )
     return specs
+
+
+_REMOTE_KEYS = frozenset({"access", "attestations", "notes"})
+
+
+def _remote_specs(
+    raw: Any, provided: set[str], read_only: set[str], plugin: str
+) -> dict[str, dict[str, Any]] | str:
+    """A plugin's ``remote`` declaration, validated; or why it is refused.
+
+    The ``read_only`` rule again: a plugin offers only tools it provides, and
+    it may offer one for READ only when it declared that tool read-only. A
+    plugin naming another package's tool, or calling a write a read, would be
+    opening someone else's door.
+    """
+    from robothor.tenancy.remote_contract import (
+        ACCESS_READ,
+        ACCESS_VALUES,
+        ATTESTATION_TOKEN_RE,
+        NOTES_MAX_CHARS,
+    )
+
+    if not isinstance(raw, dict):
+        return "remote must map tool names to declarations — refused"
+    foreign = sorted(str(tool) for tool in set(raw) - provided)
+    if foreign:
+        return f"remote names {foreign} are not provided by this plugin — refused"
+    specs: dict[str, dict[str, Any]] = {}
+    for tool, declaration in raw.items():
+        if not isinstance(declaration, dict) or set(declaration) - _REMOTE_KEYS:
+            return f"remote[{tool!r}] takes only {sorted(_REMOTE_KEYS)} — refused"
+        access = declaration.get("access")
+        if access not in ACCESS_VALUES:
+            return f"remote[{tool!r}].access must be one of {sorted(ACCESS_VALUES)} — refused"
+        if access == ACCESS_READ and tool not in read_only:
+            return f"remote[{tool!r}] is offered for read but is not in read_only — refused"
+        attestations = declaration.get("attestations", [])
+        if not isinstance(attestations, list | tuple) or not all(
+            isinstance(token, str) and ATTESTATION_TOKEN_RE.fullmatch(token)
+            for token in attestations
+        ):
+            return (
+                f"remote[{tool!r}].attestations must be a list of tokens matching "
+                f"{ATTESTATION_TOKEN_RE.pattern} — refused"
+            )
+        notes = declaration.get("notes", "")
+        if not isinstance(notes, str) or len(notes) > NOTES_MAX_CHARS:
+            return f"remote[{tool!r}].notes must be text of at most {NOTES_MAX_CHARS} characters — refused"
+        specs[tool] = {
+            "access": access,
+            "attestations": list(dict.fromkeys(attestations)),
+            "notes": notes,
+            "plugin": plugin,
+        }
+    return specs
+
+
+def _remote_mismatch(
+    declared: dict[str, dict[str, Any]], manifest: dict[str, set[str]], provided: set[str]
+) -> str | None:
+    """Why a payload's ``remote`` differs from its manifest's ``remote_tools``, or None.
+
+    Compared over THIS entry point's tools only: a distribution publishing two
+    tool entry points has one manifest covering both.
+    """
+    for access in ("read", "write"):
+        promised = manifest.get(access, set()) & provided
+        offered = {tool for tool, spec in declared.items() if spec["access"] == access}
+        if promised != offered:
+            differ = sorted(promised ^ offered)
+            return (
+                f"remote {access} tools {differ} differ from the manifest's remote_tools — refused"
+            )
+    return None
