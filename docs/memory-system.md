@@ -67,16 +67,17 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    - `entity_expansion` (`expand_entities`; with the graph leg on, only when it
      returned nothing) — facts about entities related to the top hits'
      entities.
-   - `segment_dense` and `segment_keyword` (`include_segments`, **on by
-     default**) — raw conversation segments from `search_segment_legs` (see
-     [Conversation segments](#conversation-segments)), kind `segment`. They
-     are the segment store's dense and keyword legs, entered into fusion
-     separately at half weight each (`LEG_WEIGHTS`), so a segment both found
-     scores what the single pre-fused `segment` leg gave it and the default
-     ranking is unchanged. Full weight was measured and rejected: segments
-     took about half of the reranker's head in the fact strata of the memory
-     evaluation's world and pushed the facts that answer multi-hop and
-     point-in-time questions out of the context. Each
+   - `segment` (`include_segments`, **on by default**) — raw conversation
+     segments from `search_segments` (see
+     [Conversation segments](#conversation-segments)), kind `segment`; the
+     store fuses its own dense and keyword legs and enters as this one leg.
+     Entering them as two legs was measured and rejected: at full weight
+     segments took about half of the reranker's head in the fact strata of
+     the memory evaluation's world and pushed out the facts that answer
+     multi-hop and point-in-time questions; at half weight a segment only one
+     leg found was halved, and conversation evidence fell out of the context
+     tail. A segment buried under many facts reaches the reranker through
+     the head rule in step 3 instead. Each
      row's `fact_text` is the whole verbatim text; the reranker reads only a
      `SEGMENT_RERANK_CHARS` (1,200) excerpt around the best keyword match
      (`rerank_excerpt`). Which segments come back depends on the reader:
@@ -86,10 +87,10 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    - `insight`, `episode`, `chat_turn` (`include_insights`,
      `include_episodes`, `include_chat_turns`). These stores cannot filter by
      person, so a restricted data scope leaves them out. The dense-only
-     `chat_turn` leg also does not run while the segment legs are on, even when
-     asked for: both read the same conversation, and the segment legs add a
+     `chat_turn` leg also does not run while the `segment` leg is on, even when
+     asked for: both read the same conversation, and the segment leg adds a
      keyword leg and the reader rule. `search_chat_turns` itself is unchanged.
-     The segment legs can filter by person, so they stay on under a restricted
+     The `segment` leg can filter by person, so it stays on under a restricted
      scope, read by the same reader as the fact legs, which the scope only
      narrows.
 2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`), weighted
@@ -117,11 +118,17 @@ source ("leg") implements is in `robothor/memory/recall.py`.
 4. **Blend** — `relevance` (the rerank score, or `10 / (10 + fused rank)` when
    there is none — one 0..1 scale for every leg; cosine similarity is not used)
    + recency + importance + access count, with supersession demotion; then
-   near-duplicates are dropped. A row is a near-duplicate only of a row of its
-   own `kind`, here and in the head, the reserved picks and the budget fill: a
-   fact is a summary of the conversation it came from, so its words are often
-   a subset of a segment's, and the subset rule used to drop whichever of the
-   two came second.
+   near-duplicates are dropped, here and in the head, the reserved picks and
+   the budget fill: a row whose words overlap a kept row's by 75% or more, or
+   contain or are inside them, whatever the two rows' kinds. A fact is a
+   summary of the conversation it came from, so a fact and its segment often
+   collapse to whichever ranks first. Comparing rows only within their kind,
+   and dropping only the contained row across kinds, were both measured and
+   rejected: the duplicates they kept pushed the conversation evidence for
+   point-in-time and multi-hop questions out of the context (held-out
+   point_in_time 31 to 26 and 25 of 40). The cost is the `update` shape: a
+   fact that still states an old value is inside the newer segment that
+   changes it, and when the fact ranks first the segment is dropped.
 5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps
    reserved rows whenever it returned anything, chosen by its own score:
    `graph` 2, `entity_expansion` 1. A related-but-not-similar fact is exactly
@@ -417,10 +424,7 @@ the embedding call for a caller whose own already failed). Each hit carries
 `id`, `kind: "segment"`, `source: "segment"`, `text`, `topic`,
 `source_kind`, `source_ref`, `start_ref`, `end_ref`, `part`, `started_at`,
 `ended_at`, `scope_kind`, `similarity` (or `None`), `keyword_rank` (or
-`None`) and `rrf_score`. `search_segment_legs` takes the same arguments and
-runs the same two queries under the same visibility rule, and returns the
-legs unfused, `(dense, keyword)`, each cut to `limit`; `search_facts` fuses
-them beside the fact legs.
+`None`) and `rrf_score`.
 
 **Retention.** A segment never outlives the chat it copies. It references its
 `chat_sessions` row with `ON DELETE CASCADE`, so clearing a session or the
@@ -430,9 +434,8 @@ than `CHAT_TURN_TTL_DAYS`) ago, tenant by tenant, and turns older than that are
 never indexed. Segments move with their session in `genus tenant
 move-workload`.
 
-Segments are the `segment_dense` and `segment_keyword` legs of
-`search_facts` and so of the `search_memory` tool (see
-[Retrieval](#retrieval)).
+Segments are the `segment` leg of `search_facts` and so of the `search_memory`
+tool (see [Retrieval](#retrieval)).
 
 ## Symbolic short-term memory (RIP 13)
 
