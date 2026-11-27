@@ -605,26 +605,15 @@ class TestTheDecisionTable:
     )
     def test_each_outcome(self, outcome, cardinality, wording, order, action):
         assert (
-            cf.slot_action(
-                outcome, cardinality, replacement_wording=wording, order=order, old_dated=True
-            )
-            == action
+            cf.slot_action(outcome, cardinality, replacement_wording=wording, order=order) == action
         )
 
-    @pytest.mark.parametrize(
-        ("wording", "old_dated", "action"),
-        [(True, False, "unresolved"), (False, False, "unresolved"), (True, True, "unresolved")],
-    )
-    def test_a_change_dated_before_an_undated_value_was_recorded_never_closes(
-        self, wording, old_dated, action
-    ):
+    @pytest.mark.parametrize("wording", [True, False])
+    def test_a_change_dated_before_the_old_value_never_closes(self, wording):
         assert (
-            cf.slot_action(
-                "changed", "single", replacement_wording=wording, order="earlier",
-                old_dated=old_dated,
-            )
-            == action
-        )  # fmt: skip
+            cf.slot_action("changed", "single", replacement_wording=wording, order="earlier")
+            == "unresolved"
+        )
 
     def test_the_judge_is_told_when_the_new_event_predates_an_undated_record(self):
         prompt = cf.build_slot_prompt(

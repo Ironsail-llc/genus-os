@@ -1065,7 +1065,6 @@ def slot_action(
     *,
     replacement_wording: bool,
     order: str,
-    old_dated: bool = True,
 ) -> str:
     """What one judged pair does: ``close``, ``history``, ``keep``, ``skip`` or ``unresolved``.
 
@@ -1076,9 +1075,9 @@ def slot_action(
     ``earlier`` with the times agreeing files the new fact as history. A
     conflict, no answer, or the judge and the dates disagreeing keep both
     (``unresolved``, recorded). That holds for an old value with no event date
-    of its own too (``old_dated`` False): a new fact dated before it was
-    recorded never closes it, whatever the judge says or the wording; the
-    judge is told the timing so it can say ``earlier`` (history).
+    of its own too (its effective time is when it was recorded): a new fact
+    dated before it never closes it, whatever the judge says or the wording;
+    the judge is told the timing so it can say ``earlier`` (history).
     """
     if outcome == "same":
         return "skip"
@@ -1555,14 +1554,11 @@ async def _decide_slot(
                 verdicts[rid] = {"outcome": None, "reasoning": "timed out", "unavailable": True}
         verdict = verdicts[rid]
         outcome = None if verdict.get("unavailable") else verdict.get("outcome")
-        old_event = _when(r.get("event_time"))
-        old_recorded = _when(r.get("created_at"))
         action = slot_action(
             outcome,
             new_slot.cardinality,
             replacement_wording=wording,
             order=_time_order(event_time, r),
-            old_dated=old_event is not None and (old_recorded is None or old_event <= old_recorded),
         )
         if new_slot.directive and (
             action in ("close", "history") or outcome in ("changed", "earlier")
@@ -1917,13 +1913,11 @@ async def _rejudge(
             old_origin=partner.get("origin"),
         )
         outcome = None if verdict.get("unavailable") else verdict.get("outcome")
-        old_event, old_recorded = _when(partner.get("event_time")), _when(partner.get("created_at"))
         action = slot_action(
             outcome,
             new_slot.cardinality,
             replacement_wording=replacement_wording(new_slot.lead, value=new_slot.value),
             order=_time_order(row.get("event_time"), partner),
-            old_dated=old_event is not None and (old_recorded is None or old_event <= old_recorded),
         )
         if new_slot.directive and action in ("close", "history"):
             return "unresolved"

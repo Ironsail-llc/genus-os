@@ -134,7 +134,6 @@ async def test_no_compatible_pair_is_closed() -> None:
                 new_slot.cardinality,
                 replacement_wording=replacement_wording(new_slot.lead, value=new_slot.value),
                 order="earlier" if new_event else "later",
-                old_dated=False,
             )
             if new_slot.directive and (
                 action in ("close", "history") or outcome in ("changed", "earlier")
