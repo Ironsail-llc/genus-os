@@ -268,7 +268,8 @@ def label_superseded(row: dict[str, Any]) -> dict[str, Any]:
     """
     row["superseded"] = True
     valid_to = row.get("valid_to")
-    row["superseded_at"] = valid_to.isoformat() if hasattr(valid_to, "isoformat") else valid_to
+    iso = getattr(valid_to, "isoformat", None)
+    row["superseded_at"] = iso() if callable(iso) else valid_to
     meta = row.get("metadata")
     row["superseded_reason"] = meta.get("superseded_reason") if isinstance(meta, dict) else None
     return row
@@ -287,8 +288,8 @@ def earlier_ids(row: Mapping[str, Any]) -> list[int]:
 def place_superseded(
     rows: list[dict[str, Any]],
     *,
-    earlier: Mapping[int, list[dict[str, Any]]] | None = None,
-    current: Mapping[int, dict[str, Any]] | None = None,
+    earlier: Mapping[Any, list[dict[str, Any]]] | None = None,
+    current: Mapping[Any, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Order recall rows so a closed value never outranks its current one.
 

@@ -737,9 +737,8 @@ async def _resolve_slot(
         return {"action": "stored", "new_id": new_id, "slot": "coexist"}
 
     new_id = await store()
-    reasoning = f"{where}: " + ", ".join(
-        f"{fact_slot(r).value if fact_slot(r) else '?'} -> {new_slot.value}" for r in changes[:3]
-    )
+    old_values = [getattr(fact_slot(r), "value", "?") for r in changes[:3]]
+    reasoning = f"{where}: " + ", ".join(f"{v} -> {new_slot.value}" for v in old_values)
     outranking = [r for r in changes if _authority(r) > authority_rank(origin)]
     if outranking:
         kept = max(outranking, key=_authority)
