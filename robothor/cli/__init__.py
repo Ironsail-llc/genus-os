@@ -983,6 +983,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="With --benchmark: print the questions, tokens and spend per cell; ingest and call nothing",
     )
+    memeval_parser.add_argument(
+        "--rescore",
+        default=None,
+        help="With --benchmark: re-score saved report(s), comma-separated, from their cached "
+        "contexts (answer-turn evidence, loss split); no model call, no database",
+    )
 
     # memory-replay — read-only dry run: real questions, today's recall vs the new
     from robothor.cli.memory_replay import add_parser as _add_memory_replay

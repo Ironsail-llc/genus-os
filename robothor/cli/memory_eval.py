@@ -253,6 +253,8 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
             f"memory-eval cannot run: benchmark file not found: {path} (see docs/memory-system.md)"
         )
         return 3
+    if getattr(args, "rescore", None):
+        return _cmd_rescore(args, path)
     systems_arg = args.systems if args.systems != _WORLD_SYSTEMS else _BENCH_SYSTEMS
     systems = [s.strip() for s in systems_arg.split(",") if s.strip()]
     try:
@@ -380,6 +382,28 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
             out.with_suffix(".md").write_text(markdown, encoding="utf-8")
             print(f"report: {out}")
         print(markdown)
+    return 0
+
+
+def _cmd_rescore(args: argparse.Namespace, path: Path) -> int:
+    """Re-score saved reports from their cached contexts: ``<report>.rescored.json`` / ``.md``."""
+    import json
+
+    from robothor.memory import eval_bench as eb
+    from robothor.memory import eval_bench_data as bd
+
+    bench = bd.load_benchmark(args.benchmark, path)
+    for name in (n.strip() for n in args.rescore.split(",") if n.strip()):
+        saved = Path(name)
+        if not saved.is_file():
+            print(f"memory-eval cannot run: report not found: {saved}")
+            return 3
+        report = json.loads(saved.read_text(encoding="utf-8"))
+        out = eb.rescore_report(report, bench, cache_dir=args.bench_dir)
+        target = saved.with_name(saved.stem + ".rescored.json")
+        target.write_text(json.dumps(out, indent=2, default=str) + "\n", encoding="utf-8")
+        target.with_suffix(".md").write_text(eb.format_bench_markdown(out), encoding="utf-8")
+        print(f"rescored: {target} ({out['rescore']})")
     return 0
 
 
