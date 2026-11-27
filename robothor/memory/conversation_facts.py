@@ -325,22 +325,22 @@ def parse_conversation_response(
         kind = item.get("kind") if item.get("kind") in CONVERSATION_KINDS else "other"
         mentions = _mentions(item)
         model_time = _event_time(item.get("event_time"))
+        event_time = _dated(model_time, cited if positions is not None else [])
         last = max(cited, key=lambda t: t.ref)
-        fact = {
-            "fact_text": text.strip(),
+        fact: dict[str, Any] = {
+            "fact_text": _redated(text.strip(), model_time, event_time),
             "category": category,
             "entities": [m["surface_form"] for m in mentions],
             "confidence": confidence,
             "mentions": mentions,
             "relations": _relations(item),
-            "event_time": _dated(model_time, cited if positions is not None else []),
+            "event_time": event_time,
             "speaker_role": "user" if user_said_it else "assistant",
             "about_user": item.get("about_user") is True,
             "kind": kind,
             "turn_refs": sorted(t.ref for t in cited),
             "mentioned_at": last.at.isoformat() if last.at is not None else None,
         }
-        fact["fact_text"] = _redated(fact["fact_text"], model_time, fact["event_time"])
         if passes_quality_filter(fact, require_entities=False):
             out.append(fact)
     return out
