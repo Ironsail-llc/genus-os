@@ -837,7 +837,7 @@ def _mutate(
             "fact_ids, ingested_at) SELECT %s, %s, %s, COALESCE(("
             "SELECT max(m.id) FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id "
             "WHERE s.tenant_id = %s AND s.session_key = %s AND m.created_at <= ("
-            "SELECT max(o.ingested_at) FROM ingested_items o WHERE o.tenant_id = %s "
+            "SELECT max(o.ingested_at) FROM ingested_items o WHERE o.tenant_id IN (%s, %s) "
             "AND o.item_id = %s AND o.source_name = ANY(%s))), 0)::text || '|0|||', '{}', NOW() "
             "ON CONFLICT (tenant_id, source_name, item_id) DO NOTHING",
             (
@@ -847,6 +847,9 @@ def _mutate(
                 tenant_id,
                 session_key,
                 tenant_id,
+                # The previous ingest wrote its tail-hash row without a tenant,
+                # so under the default one, whatever tenant the chat was in.
+                DEFAULT_TENANT,
                 session_key,
                 list(_OLD_PATH_SOURCES),
             ),
