@@ -310,3 +310,41 @@ async def test_a_reowned_fact_the_owner_already_has_is_retired_not_duplicated(
     assert [(f["fact_text"], f["scope_id"]) for f in live] == [
         ("The user prefers dark roast coffee.", ALICE_P)
     ]
+
+
+# ═══ history the old path ingested is not extracted again ════════════════
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_the_old_path_ingested_starts_at_its_end(world: World) -> None:
+    world.model.on_turn(
+        "dark roast", turn_fact("The user prefers dark roast coffee.", about_user=True)
+    )
+    world.model.on_turn("road bike", turn_fact("The user owns a red road bike.", about_user=True))
+    key = "telegram:4242"
+    turns = [
+        ("user", "I always go for dark roast."),  # 09:00, before the old path ran
+        ("assistant", "Noted."),  # 09:01
+        ("user", "I have a red road bike."),  # 09:02, after it
+        ("assistant", "Nice."),  # 09:03
+    ]
+    store_chat(world.db, key, turns, person=ALICE)
+    world.db.q(
+        "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, ingested_at) "
+        "VALUES (%s, 'conversation_session', %s, 'old-hash', '2023-05-20T09:01:30Z')",
+        (TENANT, key),
+    )
+    await _ingest(key, turns)
+    assert {f["fact_text"] for f in world.db.facts()} == {"The user owns a red road bike."}
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_the_old_path_never_saw_is_extracted_whole(world: World) -> None:
+    world.model.on_turn(
+        "dark roast", turn_fact("The user prefers dark roast coffee.", about_user=True)
+    )
+    key = "telegram:4242"
+    turns = [("user", "I always go for dark roast."), ("assistant", "Noted.")]
+    store_chat(world.db, key, turns, person=ALICE)
+    await _ingest(key, turns)
+    assert {f["fact_text"] for f in world.db.facts()} == {"The user prefers dark roast coffee."}
