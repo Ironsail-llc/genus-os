@@ -310,6 +310,7 @@ def builtin_handlers() -> dict[str, Any]:
         n8n,
         observability,
         org,
+        org_remote,
         pdf,
         plugins,
         pr_review,
@@ -390,6 +391,7 @@ def builtin_handlers() -> dict[str, Any]:
         workflows,
         plugins,
         org,
+        org_remote,
         room_editions,
         room_runs,
         room_tasks,
@@ -854,7 +856,10 @@ async def _dispatch_admitted(
                 status="ok" if decision.action == "answered" else "denied",
                 error=decision.note if decision.action == "refused" else None,
             )
-            if decision.action == "answered" and crossing is not None:
+            # A crossing answered from the guard is still a crossing. The
+            # remote tools admit themselves (crossing None), so asked too;
+            # `audit_answered` writes nothing for a call that crossed nothing.
+            if decision.action == "answered":
                 from robothor.engine.tools.cross_tenant import audit_answered
 
                 audit_answered(name, args, ctx, "repeat")

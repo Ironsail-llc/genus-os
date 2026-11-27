@@ -431,6 +431,11 @@ CROSS_TENANT_WRITES: frozenset[str] = frozenset(
 # leaving work for a child's team, not changing what it already has.
 UNATTENDED_CROSS_TENANT_WRITES: frozenset[str] = frozenset({"create_task", "send_notification"})
 
+# A child company's OWN tools, run in its engine through the bridge
+# (handlers/org_remote.py). Not on the lists above: they take `tenant` in their
+# own schema, admit the call themselves, and never run under tenant_scope.
+ORG_REMOTE_TOOLS: frozenset[str] = frozenset({"org_tools", "org_tool_read", "org_tool_write"})
+
 # Read-only tools for plan mode — tools with no side effects.
 READONLY_TOOLS: frozenset[str] = frozenset(
     {
@@ -527,6 +532,10 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "plugins_overview",
         # Every reachable tenant's health (handlers/org.py); SELECT-only.
         "org_overview",
+        # A child company's tool catalogue, and one of its read tools, through
+        # the bridge (handlers/org_remote.py). `org_tool_write` is not here.
+        "org_tools",
+        "org_tool_read",
         # Vault read-only tools
         "vault_get",
         "vault_list",
@@ -725,6 +734,10 @@ CORE_TOOLS: frozenset[str] = frozenset(
         "get_task",
         "create_task",
         "search_records",
+        # A child company's own connectors (handlers/org_remote.py): the
+        # catalogue and its reads. The write is found through tool_search.
+        "org_tools",
+        "org_tool_read",
         # NOTE: no "message" here. It was listed for months and has never been
         # a registered schema, so under deferral the advertised set was one
         # shorter than it looked and an agent reading CORE_TOOLS in the source

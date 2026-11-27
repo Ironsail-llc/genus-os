@@ -24,6 +24,7 @@ from robothor.engine.tools.handlers import (  # noqa: F401
     memory,
     messaging,
     observability,
+    org_remote,
     pdf,
     pr_review,
     reasoning,
