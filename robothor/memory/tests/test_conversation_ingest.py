@@ -837,3 +837,14 @@ async def test_a_window_that_always_times_out_is_skipped_later(exc: Exception) -
     for _ in range(ci.MAX_WINDOW_FAILURES):
         await _run(store, model)
     assert store.skipped == [(1, 2)]  # twice as many are
+
+
+@pytest.mark.asyncio
+async def test_skipped_late_turns_are_recorded_one_by_one() -> None:
+    """Late turns are scattered between extracted ones; a span from the first to
+    the last would make a retry extract the turns between them again."""
+    store = Store(_stored(20), scope=("user", f"person:{ALICE}"))
+    store.watermark = 20
+    store.late = [_turn(11, "user", "POISON late"), _turn(14, "user", "POISON later")]
+    await _run(store, PoisonModel())
+    assert store.skipped == [(11, 11), (14, 14)]
