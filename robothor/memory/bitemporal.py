@@ -26,6 +26,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from datetime import datetime
 
 from robothor.constants import DEFAULT_TENANT
@@ -248,3 +249,96 @@ def keep_overruled(new_id: int, kept_id: int, *, tenant_id: str = "") -> bool:
     if not written:
         logger.info("keep_overruled: fact %s left alone (kept %s) for %s", new_id, kept_id, tenant)
     return written
+
+
+# ── Read time: the current value first, earlier ones labelled ───────────────
+
+#: Earlier values shown after one current row, and in one recall overall.
+EARLIER_PER_ROW = 1
+MAX_EARLIER_ROWS = 3
+
+
+def label_superseded(row: dict[str, Any]) -> dict[str, Any]:
+    """Mark a closed row for the reader: ``superseded`` and when and why.
+
+    ``superseded_at`` is the row's ``valid_to`` (ISO), ``superseded_reason``
+    its ``metadata.superseded_reason`` (``"changed"`` for a same-slot value
+    change, None for a row closed before reasons were written).
+    ``superseded_by`` is the column, already on the row.
+    """
+    row["superseded"] = True
+    valid_to = row.get("valid_to")
+    row["superseded_at"] = valid_to.isoformat() if hasattr(valid_to, "isoformat") else valid_to
+    meta = row.get("metadata")
+    row["superseded_reason"] = meta.get("superseded_reason") if isinstance(meta, dict) else None
+    return row
+
+
+def earlier_ids(row: Mapping[str, Any]) -> list[int]:
+    """The ids a current row replaced (``metadata.supersedes``), newest first."""
+    meta = row.get("metadata")
+    raw = meta.get("supersedes") if isinstance(meta, dict) else None
+    if not isinstance(raw, list):
+        return []
+    ids = [int(i) for i in raw if isinstance(i, int) or (isinstance(i, str) and i.isdigit())]
+    return sorted(set(ids), reverse=True)[:EARLIER_PER_ROW]
+
+
+def place_superseded(
+    rows: list[dict[str, Any]],
+    *,
+    earlier: Mapping[int, list[dict[str, Any]]] | None = None,
+    current: Mapping[int, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Order recall rows so a closed value never outranks its current one.
+
+    * A row with ``superseded_by`` set is labelled (:func:`label_superseded`)
+      and placed directly after its current row: where that row stands when it
+      is in ``rows``, else after ``current[old_id]`` (the visible current row,
+      brought in at the old row's place), else where it was.
+    * ``earlier[current_id]`` rows (the values a current row replaced) follow
+      it, labelled, unless already placed.
+
+    Rows without supersession pass through in order, untouched.
+    """
+    earlier = earlier or {}
+    current = current or {}
+    ids = {r.get("id") for r in rows if r.get("kind", "fact") == "fact"}
+    deferred: dict[Any, list[dict[str, Any]]] = {}
+    out: list[dict[str, Any]] = []
+    placed: set[Any] = set()
+
+    def _emit(row: dict[str, Any]) -> None:
+        if row.get("id") in placed:
+            return
+        placed.add(row.get("id"))
+        out.append(row)
+        for old in [*deferred.pop(row.get("id"), []), *earlier.get(row.get("id"), [])]:
+            if old.get("id") in placed:
+                continue
+            label_superseded(old)
+            rel = row.get("relevance")
+            if rel is not None:
+                old["relevance"] = min(float(old.get("relevance") or rel), float(rel))
+            _emit(old)
+
+    for row in rows:
+        is_fact = row.get("kind", "fact") == "fact"
+        by = row.get("superseded_by") if is_fact else None
+        if by is None:
+            _emit(row)
+            continue
+        label_superseded(row)
+        if by in ids and by not in placed:
+            deferred.setdefault(by, []).append(row)
+            continue
+        head = current.get(row.get("id"))
+        if head is not None and head.get("id") not in placed:
+            deferred.setdefault(head.get("id"), []).append(row)
+            _emit(head)
+            continue
+        _emit(row)
+    for rest in deferred.values():  # current row never emitted: keep the old ones
+        for old in rest:
+            _emit(old)
+    return out

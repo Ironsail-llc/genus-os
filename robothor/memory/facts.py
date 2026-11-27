@@ -1245,7 +1245,7 @@ def _fact_candidates(rows: list[dict[str, Any]], leg: str, score_key: str) -> li
 
 _FACT_COLUMNS = """id, fact_text, category, entities, confidence, source_type,
                    metadata, created_at, importance_score, access_count, superseded_by,
-                   person_id, utility,
+                   valid_to, person_id, utility,
                    EXTRACT(EPOCH FROM (now() - created_at)) as age_seconds"""
 
 
@@ -1742,6 +1742,92 @@ def _fill_from_pool(
     return out
 
 
+#: Most links followed from a closed row to the value now current.
+_CURRENT_HOPS = 3
+
+
+async def _with_earlier_values(
+    result: list[dict[str, Any]],
+    tenant: str,
+    scope_clause: str,
+    scope_params: tuple[Any, ...],
+) -> list[dict[str, Any]]:
+    """Recall rows with each changed value's earlier row after its current one.
+
+    Reads only when a row carries supersession (``metadata.supersedes`` on a
+    current row, ``superseded_by`` on a closed one), by primary key, in
+    ``tenant`` and through the caller's ``scope_clause`` (the same reader and
+    scope rules as the legs). At most ``bitemporal.MAX_EARLIER_ROWS`` earlier
+    rows are added. See ``bitemporal.place_superseded`` for the order.
+    """
+    from robothor.memory.bitemporal import MAX_EARLIER_ROWS, earlier_ids, place_superseded
+
+    facts = [r for r in result if r.get("kind", "fact") == "fact"]
+    present = {r.get("id") for r in facts}
+    wanted: list[int] = []
+    for r in facts:
+        if r.get("superseded_by") is None:
+            wanted += [i for i in earlier_ids(r) if i not in present and i not in wanted]
+    wanted = wanted[:MAX_EARLIER_ROWS]
+    closed = [r for r in facts if r.get("superseded_by") is not None]
+    missing = {int(r["id"]): int(r["superseded_by"]) for r in closed}
+    missing = {k: v for k, v in missing.items() if v not in present}
+    if not wanted and not closed:
+        return result
+    if not wanted and not missing:
+        return place_superseded(result)
+
+    sql = (
+        f"SELECT {_FACT_COLUMNS}, is_active FROM memory_facts "  # noqa: S608 - fixed fragments
+        f"WHERE tenant_id = %s AND id = ANY(%s) {scope_clause}"
+    )
+
+    def _fetch() -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]]]:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            old_rows: list[dict[str, Any]] = []
+            if wanted:
+                cur.execute(sql, (tenant, wanted, *scope_params))
+                old_rows = [dict(r) for r in cur.fetchall() if r["superseded_by"] is not None]
+            heads: dict[int, dict[str, Any]] = {}
+            pending = dict(missing)  # closed id -> the id to look at next
+            for _ in range(_CURRENT_HOPS):
+                if not pending:
+                    break
+                cur.execute(sql, (tenant, list(set(pending.values())), *scope_params))
+                found = {int(r["id"]): dict(r) for r in cur.fetchall()}
+                nxt: dict[int, int] = {}
+                for old_id, look in pending.items():
+                    row = found.get(look)
+                    if row is None:
+                        continue
+                    if row["is_active"]:
+                        heads[old_id] = row
+                    elif row.get("superseded_by") is not None:
+                        nxt[old_id] = int(row["superseded_by"])
+                pending = nxt
+            return old_rows, heads
+
+    try:
+        old_rows, heads = await asyncio.to_thread(_fetch)
+    except Exception as e:  # noqa: BLE001 - the ranked rows still return
+        logger.warning("search_facts: earlier values not read: %s: %s", type(e).__name__, e)
+        return result
+    by_id = {r.get("id"): r for r in result}
+    earlier: dict[int, list[dict[str, Any]]] = {}
+    for row in old_rows:
+        row.pop("is_active", None)
+        row["kind"] = "fact"
+        earlier.setdefault(int(row["superseded_by"]), []).append(row)
+    current: dict[int, dict[str, Any]] = {}
+    for old_id, row in heads.items():
+        row.pop("is_active", None)
+        row["kind"] = "fact"
+        row["relevance"] = by_id.get(old_id, {}).get("relevance")
+        current[old_id] = row
+    return place_superseded(result, earlier=earlier, current=current)
+
+
 async def search_facts(
     query: str,
     limit: int = 10,
@@ -2018,6 +2104,9 @@ async def search_facts(
     for r in result:
         if "relevance" not in r:  # a reserved pick or a tail row the blend never saw
             _assign_relevance([r])
+    # A changed value: the current row first, the one it replaced after it,
+    # labelled; a closed row never outranks its current one.
+    result = await _with_earlier_values(result, _tenant, scope_clause, scope_params)
     if degraded is not None:
         for r in result:
             r["degraded"] = degraded
