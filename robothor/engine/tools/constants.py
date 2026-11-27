@@ -734,10 +734,9 @@ CORE_TOOLS: frozenset[str] = frozenset(
         "get_task",
         "create_task",
         "search_records",
-        # A child company's own connectors (handlers/org_remote.py): the
-        # catalogue and its reads. The write is found through tool_search.
-        "org_tools",
-        "org_tool_read",
+        # NOT org_tools / org_tool_read / org_tool_write: only a run that
+        # reaches another tenant is offered them up front (toolset_prep); any
+        # other run finds them through tool_search.
         # NOTE: no "message" here. It was listed for months and has never been
         # a registered schema, so under deferral the advertised set was one
         # shorter than it looked and an agent reading CORE_TOOLS in the source
