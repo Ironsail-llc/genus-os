@@ -36,6 +36,12 @@ MANIFEST_NAME = "genus-plugin.yaml"
 #: saw before these keys existed.
 ASSET_KEYS = ("agents", "workflows", "patches", "files")
 
+#: The optional mirror of a tool plugin's ``remote`` payload key: which of its
+#: tools a parent tenant's agent may run here, by access. A DICT, never a list,
+#: and never a contribution kind.
+REMOTE_TOOLS_KEY = "remote_tools"
+REMOTE_TOOLS_ACCESS = ("read", "write")
+
 
 @dataclass(frozen=True)
 class PluginManifest:
@@ -60,6 +66,12 @@ class PluginManifest:
     #: wheel at ``review`` rather than ``safe`` -- because "nobody declared the
     #: surface at this granularity" is not the same as "the surface matches".
     entry_points: dict[str, set[str]] = field(default_factory=dict)
+    #: OPTIONAL: ``remote_tools: {read: [...], write: [...]}``, the mirror of
+    #: the payload's ``remote`` key. None when the manifest does not use it, in
+    #: which case nothing constrains the payload's declaration. A value that is
+    #: not a dict parses as two EMPTY sets, so the loader refuses any payload
+    #: that offers a remote tool: a malformed promise must not read as none.
+    remote_tools: dict[str, set[str]] | None = None
 
     def declares(self, kind: str) -> set[str]:
         return set(self.declared.get(kind) or set())
@@ -186,7 +198,7 @@ def parse_manifest(raw: str | None) -> PluginManifest | None:
 
     declared: dict[str, set[str]] = {}
     for kind, value in data.items():
-        if kind in ("name", "contract_version", "entry_points", *ASSET_KEYS):
+        if kind in ("name", "contract_version", "entry_points", REMOTE_TOOLS_KEY, *ASSET_KEYS):
             continue
         if isinstance(value, list):
             declared[kind] = {str(v) for v in value if isinstance(v, str | int | float)}
@@ -205,12 +217,23 @@ def parse_manifest(raw: str | None) -> PluginManifest | None:
                     str(n) for n in names if isinstance(n, str | int | float)
                 }
 
+    remote_tools: dict[str, set[str]] | None = None
+    if REMOTE_TOOLS_KEY in data:
+        raw_remote = data.get(REMOTE_TOOLS_KEY)
+        remote_tools = {access: set() for access in REMOTE_TOOLS_ACCESS}
+        if isinstance(raw_remote, dict):
+            for access in REMOTE_TOOLS_ACCESS:
+                names = raw_remote.get(access)
+                if isinstance(names, list):
+                    remote_tools[access] = {str(n) for n in names if isinstance(n, str)}
+
     version = data.get("contract_version")
     return PluginManifest(
         name=str(data.get("name") or ""),
         contract_version=int(version) if isinstance(version, int) else None,
         declared=declared,
         entry_points=entry_points,
+        remote_tools=remote_tools,
     )
 
 

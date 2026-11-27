@@ -290,13 +290,17 @@ class ScanResult:
     #: How many members the scan classified. Reported so "we did not look" is a
     #: number an operator can compare against the wheel, rather than a claim.
     members_accounted: int = 0
+    #: ``{"read": [...], "write": [...]}`` from the manifest's ``remote_tools``:
+    #: the tools a parent tenant's agent could run on an instance that installs
+    #: this wheel. None when the manifest declares none.
+    remote_tools: dict[str, list[str]] | None = None
 
     @property
     def blocked(self) -> bool:
         return self.verdict == BLOCKED
 
     def as_json(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "verdict": self.verdict,
             "reasons": list(self.reasons),
             "prompt_scan": self.prompt_scan,
@@ -304,6 +308,10 @@ class ScanResult:
             "prompt_files": list(self.prompt_files),
             "members_accounted": self.members_accounted,
         }
+        # Only when declared: a wheel without the key serialises exactly as before.
+        if self.remote_tools is not None:
+            payload["remote_tools"] = {k: list(v) for k, v in self.remote_tools.items()}
+        return payload
 
 
 def _builtin_names(group: str) -> set[str]:
@@ -1133,6 +1141,8 @@ def scan_wheel(contents: WheelContents, *, scan_prompts: bool = False) -> ScanRe
         )
 
     review.extend(_workspace_review(contents.manifest_text))
+    remote_tools, remote_blocked = _remote_tools(contents.manifest_text)
+    blocked.extend(remote_blocked)
 
     verdict = BLOCKED if blocked else (REVIEW if review else SAFE)
     return ScanResult(
@@ -1142,7 +1152,58 @@ def scan_wheel(contents: WheelContents, *, scan_prompts: bool = False) -> ScanRe
         files_scanned=len(sources),
         prompt_files=tuple(prompt_files),
         members_accounted=members,
+        remote_tools=remote_tools,
     )
+
+
+def _remote_tools(manifest_text: str) -> tuple[dict[str, list[str]] | None, list[str]]:
+    """The manifest's ``remote_tools``, as reported, and why it is blocked if it is.
+
+    Read from the raw YAML: the parse keeps only well-formed names, and a
+    malformed promise about who may run this wheel's tools from another tenant
+    is a declaration nobody can review.
+    """
+    import yaml
+
+    from robothor.plugins.manifest import (
+        MANIFEST_NAME,
+        REMOTE_TOOLS_ACCESS,
+        REMOTE_TOOLS_KEY,
+        parse_manifest,
+    )
+
+    try:
+        data = yaml.safe_load(manifest_text or "") or {}
+    except Exception:  # noqa: BLE001 - an unreadable manifest is judged elsewhere
+        return None, []
+    if not isinstance(data, dict) or REMOTE_TOOLS_KEY not in data:
+        return None, []
+    raw = data.get(REMOTE_TOOLS_KEY)
+    where = f"{MANIFEST_NAME} {REMOTE_TOOLS_KEY}"
+    if not isinstance(raw, dict):
+        return None, [f"{where} must map read and write to lists of tool names."]
+    unknown = sorted(str(key) for key in set(raw) - set(REMOTE_TOOLS_ACCESS))
+    if unknown:
+        return None, [f"{where} takes only read and write, not {', '.join(unknown)}."]
+    report: dict[str, list[str]] = {}
+    for access in REMOTE_TOOLS_ACCESS:
+        names = raw.get(access, [])
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            return None, [f"{where}.{access} must be a list of tool names."]
+        report[access] = sorted(set(names))
+    reasons: list[str] = []
+    both = sorted(set(report["read"]) & set(report["write"]))
+    if both:
+        reasons.append(f"{where} names {', '.join(both)} for both read and write.")
+    manifest = parse_manifest(manifest_text)
+    tools = (manifest.declares("handlers") | manifest.declares("schemas")) if manifest else set()
+    foreign = sorted((set(report["read"]) | set(report["write"])) - tools)
+    if foreign:
+        reasons.append(
+            f"{where} names {', '.join(foreign)}, which this manifest does not declare "
+            "as its own tools."
+        )
+    return report, reasons
 
 
 def _normalised(value: Any) -> str:
