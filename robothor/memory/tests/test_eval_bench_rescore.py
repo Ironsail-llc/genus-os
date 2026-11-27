@@ -102,3 +102,34 @@ def test_a_context_is_linked_only_when_its_answer_matches(old_run):
     report["records"][0]["answer"] = "a different answer than the cache holds"
     out = eb.rescore_report(report, bench, cache_dir=cache)
     assert out["rescore"]["linked"] == 1 and out["rescore"]["answer_mismatch"] == 1
+
+
+def test_cli_rescores_a_saved_report_without_a_database(old_run, tmp_path, monkeypatch, capsys):
+    from robothor.cli import _build_parser
+    from robothor.cli.memory_eval import cmd_memory_eval
+
+    bench, report, cache = old_run
+    saved = tmp_path / "it1.json"
+    saved.write_text(json.dumps(report), encoding="utf-8")
+    monkeypatch.setattr(
+        "robothor.cli.memory_eval.preflight",
+        lambda *_a: pytest.fail("re-scoring needs no database"),
+    )
+    path = tmp_path / "longmemeval_s_cleaned.json"
+    args = _build_parser().parse_args(
+        [
+            "memory-eval",
+            "--benchmark",
+            "longmemeval",
+            "--benchmark-path",
+            str(path),
+            "--bench-dir",
+            cache,
+            "--rescore",
+            str(saved),
+        ]
+    )
+    assert cmd_memory_eval(args) == 0
+    out = json.loads((tmp_path / "it1.rescored.json").read_text())
+    assert out["rescore"]["linked"] == 2
+    assert (tmp_path / "it1.rescored.md").exists()
