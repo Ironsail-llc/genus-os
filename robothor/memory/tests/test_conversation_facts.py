@@ -338,3 +338,35 @@ def test_a_date_the_model_gave_is_kept_when_the_turn_names_no_relative_date() ->
         _said("We move to Lisbon in June."),
     )
     assert fact["event_time"] == "2023-06-01"
+
+
+@pytest.mark.parametrize(
+    ("text", "model_said", "expected"),
+    [
+        ("I switched to an iPhone last Tuesday.", "2023-05-15", "2023-05-16"),
+        ("I'm flying to Rome in two weeks.", "2023-05-27", "2023-06-03"),
+    ],
+)
+def test_a_relative_date_the_model_miscounted_is_counted_from_the_turn(
+    text: str, model_said: str, expected: str
+) -> None:
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user did something worth remembering.", [1], event_time=model_said)),
+        _said(text),
+    )
+    assert fact["event_time"] == expected
+
+
+def test_today_only_fills_an_empty_event_time() -> None:
+    # "today" frames the turn more often than it dates the fact.
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user booked a trip for June 2023.", [1], event_time="2023-06-10")),
+        _said("Today I booked a trip for next month."),
+    )
+    assert fact["event_time"] == "2023-06-10"
+
+
+def test_the_prompt_asks_for_absolute_dates_and_no_date_for_a_suggestion() -> None:
+    prompt = build_conversation_prompt(_turns()).lower()
+    assert "absolute date" in prompt
+    assert "not when it was said" in prompt
