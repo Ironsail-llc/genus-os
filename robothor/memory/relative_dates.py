@@ -176,10 +176,39 @@ def days_in_phrase(text: str, phrase: str, at: datetime | None) -> set[date] | N
     return {d for s, e, d in _matches(text, at) if s < found.end() and e > found.start()}
 
 
+_MONTHS = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+]
+
+
+def states_day(text: str, day: date) -> bool:
+    """Whether ``text`` writes ``day`` out itself: ``2026-11-22``, ``November 22``,
+    ``22 Nov``, ``Nov. 22nd`` and the like (a month name or its first three
+    letters, and the day of the month)."""
+    if day.isoformat() in text:
+        return True
+    month = _MONTHS[day.month - 1]
+    names = rf"(?:{month}|{month[:3]}\.?)"
+    n = rf"0?{day.day}(?:st|nd|rd|th)?"
+    pattern = rf"\b{names}\s+{n}\b|\b{n}(?:\s+of)?\s+{names}\b"
+    return re.search(pattern, text, re.IGNORECASE) is not None
+
+
 def resolve_relative_date(text: str, at: datetime | None) -> date | None:
     """The one day ``text`` names, counted from ``at``; ``None`` for none or several."""
     found = relative_days(text, at)
     return found.pop() if len(found) == 1 else None
 
 
-__all__ = ["days_in_phrase", "relative_days", "resolve_relative_date"]
+__all__ = ["days_in_phrase", "relative_days", "resolve_relative_date", "states_day"]

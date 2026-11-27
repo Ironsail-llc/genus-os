@@ -56,7 +56,7 @@ from robothor.memory.facts import (
     _relations,
     passes_quality_filter,
 )
-from robothor.memory.relative_dates import days_in_phrase
+from robothor.memory.relative_dates import days_in_phrase, states_day
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -378,9 +378,10 @@ def _citations(item: dict[str, Any], window: list[ConversationTurn], offset: int
 
 
 #: How far the model's date may be from the day its phrase names and still be
-#: taken as a miscount of that phrase (a weekday off by one, "in two weeks"
-#: counted as one week). Further apart, the model meant something else.
-CORRECTION_TOLERANCE = timedelta(days=7)
+#: taken as a miscount of that phrase (a weekday off by one or two). Further
+#: apart, the model may have meant something else (a speaker correcting
+#: themselves, "last Tuesday" meant as the week before): it is left alone.
+CORRECTION_TOLERANCE = timedelta(days=3)
 
 
 def _dated(
@@ -391,9 +392,11 @@ def _dated(
     The computed date only ever corrects the model's: the model must have
     returned a date and the phrase it dated from (``date_phrase``); the phrase
     must occur in a cited turn and name exactly one day there, read in its own
-    clause and counted from that turn's local day (:func:`days_in_phrase`); and
-    the model's date must be within :data:`CORRECTION_TOLERANCE` of it. Never
-    fills an empty event time; anything else leaves the model's answer alone.
+    clause and counted from that turn's local day (:func:`days_in_phrase`); the
+    model's date must be within :data:`CORRECTION_TOLERANCE` of it; and no cited
+    turn may state the model's date itself (``states_day``: the speaker's own
+    date always wins). Never fills an empty event time; anything else leaves
+    the model's answer alone.
     """
     if model_time is None or not isinstance(phrase, str) or not phrase.strip():
         return model_time, False
@@ -401,6 +404,8 @@ def _dated(
         model_day = date.fromisoformat(model_time[:10])
     except ValueError:
         return model_time, False
+    if any(states_day(t.text, model_day) for t in cited):
+        return model_time, False  # the speaker gave that date: theirs, not a count
     for turn in cited:
         days = days_in_phrase(turn.text, phrase, turn.at)
         if days is None:
