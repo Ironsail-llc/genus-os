@@ -674,6 +674,7 @@ def _bundle_to_row(bundle: ContextBundle, dates: dict[str, str]) -> dict[str, An
         "budget": bundle.budget,
         "equal_budget": bundle.equal_budget,
         "retrieval_ms": bundle.retrieval_ms,
+        **({"delivered": bundle.delivered} if bundle.delivered is not None else {}),
     }
 
 
@@ -801,12 +802,36 @@ def answer_prompt_for(
         return answer_prompt(bench, q, _prompt_items(ctx))
     from robothor.memory import eval_answer
 
-    history = eval_answer.render_bundle(bundle_from_row(ctx), now=q.as_of)
+    delivered = ctx.get("delivered")
+    history = (
+        str(delivered)
+        if delivered is not None
+        else eval_answer.render_bundle(bundle_from_row(ctx), now=q.as_of)
+    )
     return (
         bd.longmemeval_answer_prompt(q.question, q.as_of, _prompt_items(ctx), history=history),
         None,
         LONGMEMEVAL_ANSWER_MAX_TOKENS,
     )
+
+
+def _context_tokens(ctx: dict[str, Any]) -> int:
+    """Tokens of what the answer model read: the delivered text, else the items."""
+    if ctx.get("delivered") is not None:
+        from robothor.memory.eval_systems import estimate_tokens
+
+        return estimate_tokens(str(ctx["delivered"]))
+    return sum(int(i.get("tokens") or 0) for i in ctx["items"])
+
+
+def _retrieval_order(s: Any, q: bd.BenchQuestion) -> tuple[bool, str]:
+    """Harness cells first, then product-parity ones (whose retention deletes
+    segments), questions in date order (a later date deletes more)."""
+    at = ""
+    if q.as_of:
+        with contextlib.suppress(ValueError):
+            at = bd.parse_longmemeval_date(q.as_of).isoformat()
+    return (bool(getattr(s, "product_parity", False)), at)
 
 
 def _answer_key(
@@ -1224,7 +1249,7 @@ async def run_benchmark(
             question_type=q.question_type,
             abstention=q.abstention,
             score=score,
-            tokens=sum(int(i.get("tokens") or 0) for i in ctx["items"]),
+            tokens=_context_tokens(ctx),
             retrieval_ms=float(ctx.get("retrieval_ms") or 0.0),
             answer_ms=answer_ms,
             judge_ms=judge_ms,
@@ -1293,6 +1318,7 @@ async def run_benchmark(
             else:
                 need.append((s, q))
         if need:
+            need.sort(key=lambda sq: _retrieval_order(*sq))
             if cleanup:
                 clean(tenant)
             try:
@@ -1386,6 +1412,8 @@ async def run_benchmark(
             if bench.name == "longmemeval"
             else None,
             "metric": "judge_accuracy" if bench.name == "longmemeval" else "token_f1",
+            "cells": {n: cell_mode(n, token_budget, ingest_mode) for n in names},
+            "product_flags": product_flags(),
             "code_version": version,
             "carried_forward": carried,
             "split_seed": split_seed,
@@ -1469,6 +1497,7 @@ async def prefill_contexts(
         stats["cached"] += len(qs) * len(built) * len(token_budgets) - len(need)
         if not need:
             continue
+        need.sort(key=lambda sqb: _retrieval_order(sqb[0], sqb[1]))
         if cleanup:
             clean(tenant)
         try:
@@ -1510,6 +1539,110 @@ async def prefill_contexts(
             if cleanup:
                 clean(tenant)
     return stats
+
+
+#: Process flags that change what the tool returns; read per process.
+PRODUCT_FLAG_ENV: tuple[str, ...] = (
+    "MEMORY_NARROW_SEARCH",
+    "MEMORY_RERANK_ENABLED",
+    "MEMORY_RERANK_WIDE",
+    "MEMORY_RERANK_MAX_CANDIDATES",
+    "MEMORY_RANK_BLEND",
+    "MEMORY_DEDUP",
+    "MEMORY_TEMPORAL_COHERENCE",
+    "ROBOTHOR_RIP_15_ENABLED",
+)
+
+
+def product_flags() -> dict[str, Any]:
+    """The flag posture of this process, as the tool reads it."""
+    import os
+
+    from robothor.engine.feature_flags import is_rip_enabled, narrow_memory_search_enabled
+
+    return {
+        "env": {k: os.environ.get(k, "(unset)") for k in PRODUCT_FLAG_ENV},
+        "fan_out": not narrow_memory_search_enabled(),
+        "routed": is_rip_enabled(15),
+    }
+
+
+_RECALL_FAMILY = {
+    "recall": "",
+    "recall_budget": "appends a second, unreranked search_facts to fill the budget; "
+    "the tool returns one search",
+    "recall_today": "head rows only, segment and graph legs off; the tool runs its default legs",
+    "recall_no_segments": "segment leg switched off; the tool searches segments",
+    "recall_no_graph": "graph leg switched off; the tool runs its default",
+    "recall_with_graph": "graph leg switched on; the tool runs its default",
+}
+
+
+def cell_mode(system: str, token_budget: int, ingest_mode: str) -> dict[str, Any]:
+    """Whether a cell measures the product's path, and every setting where it does not.
+
+    ``product-parity``: the agent's ``search_memory`` path with product
+    defaults (still listing what the benchmark cannot exercise).
+    ``harness-only``: a measurement the product cannot produce as it ships.
+    """
+    from robothor.memory.recall import RECALL_CONTEXT_CHARS, RECALL_FILL_ROWS
+    from robothor.memory.segments import SEGMENT_RETENTION_DAYS
+
+    fan_out = "on" if product_flags()["fan_out"] else "off"
+    ingest = (
+        "ingest `segments`: segments only, no extracted facts compete with them"
+        if ingest_mode == "segments"
+        else "ingest `extract`: segments and the product's fact extraction"
+    )
+    if system == "search_memory_tool":
+        return {
+            "mode": "product-parity",
+            "differences": [
+                "the search_memory handler is called directly: the dispatch permission "
+                "gate and an agent manifest's tool filter are not exercised",
+                ingest,
+                f"retention ({SEGMENT_RETENTION_DAYS} days) is the product's nightly "
+                "cleanup run as of the question date; the product measures it from the "
+                "wall clock",
+                "recency is scored against the wall clock, so every benchmark row is years "
+                "old and recency does not separate them",
+                "the reader prompt is the LongMemEval template around the tool message, "
+                "not an agent's system prompt",
+                "tool_offload_threshold 0: an agent with a threshold may offload a long result",
+                "the cell's token budget is ignored: the product cap applies",
+            ],
+        }
+    if system in _RECALL_FAMILY:
+        from robothor.memory.eval_systems import _CANDIDATES
+
+        diffs = [
+            "calls search_facts directly, not the search_memory tool handler",
+            f"context filled to the harness budget, {token_budget} tokens "
+            f"({token_budget * 4} chars); the tool caps its context at "
+            f"{RECALL_CONTEXT_CHARS} chars",
+            f"asks for limit {_CANDIDATES} rows; the tool asks for {RECALL_FILL_ROWS}",
+            "fan-out legs (entities, insights, episodes) off; the tool's default is "
+            f"{fan_out} in this process",
+            f"segment retention {_RETENTION_DAYS} days; the product keeps {SEGMENT_RETENTION_DAYS}",
+            "context rendered as benchmark sessions; the tool returns a JSON message",
+            ingest,
+        ]
+        if _RECALL_FAMILY[system]:
+            diffs.insert(1, _RECALL_FAMILY[system])
+        return {"mode": "harness-only", "differences": diffs}
+    known = {
+        "evidence_only": "not a retrieval: the question's evidence sessions, whole, in date "
+        "order (the answering step's ceiling)",
+        "full_history": "not a retrieval: the whole history in date order",
+        "keyword_only": "not a product path: Postgres full text over facts",
+        "raw_verbatim": "not a product path: dense + keyword over raw turns",
+        "full_context": "not a product path: the newest raw turns that fit the budget",
+        "full_context_unbounded": "not a product path: the newest raw turns, unbounded",
+    }
+    return {
+        "mode": "harness-only",
+        "differences": [known.get(system, "not described: treat as harness-only")],
+    }
 
 
 def _session_bucket(rec: dict[str, Any]) -> str:
@@ -1850,6 +1983,28 @@ def format_bench_markdown(report: dict[str, Any]) -> str:
             f"{jv.get('n_right')} right marked right, {_pct(jv.get('wrong_marked_wrong'))} of "
             f"{jv.get('n_wrong')} wrong marked wrong."
         )
+    cells = p.get("cells") or {}
+    if cells:
+        lines += [
+            "",
+            "Cells. **product-parity**: the agent's `search_memory` path with product "
+            "defaults; **harness-only**: a setting the product cannot reach as it ships.",
+            "",
+            "| System | Mode | Differences from the product |",
+            "|---|---|---|",
+        ]
+        lines += [
+            f"| {name} | {c.get('mode')} | {'; '.join(c.get('differences') or [])} |"
+            for name, c in cells.items()
+        ]
+    flags = p.get("product_flags")
+    if flags:
+        env = ", ".join(f"{k}={v}" for k, v in (flags.get("env") or {}).items())
+        lines += [
+            "",
+            f"Product flags in this process: fan-out {'on' if flags.get('fan_out') else 'off'}, "
+            f"routed recall {'on' if flags.get('routed') else 'off'}; {env}.",
+        ]
     lines += [
         "",
         "| System | Type | n | Score [95% CI] | Answer-turn evidence | All answer turns | "

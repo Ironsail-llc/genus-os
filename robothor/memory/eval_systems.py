@@ -22,6 +22,10 @@ Built in:
     full_context            no retrieval: the newest raw history that fits the budget
     full_context_unbounded  the same, filled to the answer model's context instead
                             (flagged equal_budget=False; never a fair comparison)
+    search_memory_tool      product parity: the search_memory tool handler with its own
+                            defaults, as the conversation's owner, after the product's
+                            retention as of the question date; the answer model reads the
+                            tool message itself
 
 Tokens are estimated with the repo's ``block_budget.estimate_tokens``
 (chars / 4).
@@ -34,6 +38,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from robothor.memory.block_budget import _CHARS_PER_TOKEN
@@ -84,6 +89,9 @@ class ContextBundle:
     #: The system itself declined (nothing retrieved).
     abstained: bool
     retrieval_ms: float
+    #: The exact text the answer model is handed, when the system produces it
+    #: itself (a tool message); None to render the items.
+    delivered: str | None = None
 
     @property
     def tokens(self) -> int:
@@ -522,6 +530,102 @@ def _newest_turns(tenant: str) -> list[tuple[int, str, str, str]]:
         ]
 
 
+def _utc_now() -> datetime:
+    """The wall clock the product's retention is measured from (patched in tests)."""
+    return datetime.now(UTC)
+
+
+def _question_date(case: Any) -> datetime | None:
+    from robothor.memory.eval_bench_data import parse_longmemeval_date
+
+    raw = getattr(case, "as_of", None)
+    try:
+        return parse_longmemeval_date(raw) if raw else None
+    except ValueError:
+        return None
+
+
+class SearchMemoryToolSystem:
+    """Product parity: what an agent's ``search_memory`` call returns, as it reads it.
+
+    The tool handler is called with the query alone, so its own defaults
+    apply: the limit (``recall.recall_limit``), the context cap
+    (``RECALL_CONTEXT_CHARS``), the legs and fan-out the process flags give,
+    and the reader rules, with the eval reader passed as the person whose
+    conversation this is (``ctx.private_reader``), the one key to a private
+    segment. Before the call the product's own nightly retention
+    (``segments.cleanup_stale_segments``) runs as of the question's date, so
+    segments older than ``SEGMENT_RETENTION_DAYS`` before it are gone. The
+    answer model is handed the tool message an agent session builds from the
+    result (``AgentSession.record_tool_call``: redacted, JSON, wrapped as
+    untrusted content), unchanged. The token budget is ignored.
+
+    It deletes segments, so the runner retrieves it after every harness cell
+    of the same history, and questions on one history in date order.
+    """
+
+    name = "search_memory_tool"
+    equal_budget = False
+    product_parity = True
+
+    async def retrieve(
+        self, case: Case, *, world_handle: WorldHandle, token_budget: int
+    ) -> ContextBundle:
+        import asyncio
+
+        from robothor.db.connection import tenant_scope
+        from robothor.engine.private_recall import PrivateReader
+        from robothor.engine.session import AgentSession
+        from robothor.engine.tools.dispatch import ToolContext
+        from robothor.engine.tools.handlers import memory as tool_memory
+        from robothor.memory import segments
+
+        started = time.perf_counter()
+        tenant = world_handle.tenant_id
+        as_of = _question_date(case)
+        if as_of is not None:
+            days = segments.SEGMENT_RETENTION_DAYS + max(0, (_utc_now() - as_of).days)
+            with tenant_scope(tenant):
+                await asyncio.to_thread(segments.cleanup_stale_segments, days, tenant)
+        reader = getattr(world_handle.seeded, "reader_person_id", None)
+        ctx = ToolContext(
+            agent_id="memory-eval",
+            tenant_id=tenant,
+            is_benchmark=True,
+            private_reader=PrivateReader(person_id=reader, user_id=None) if reader else None,
+        )
+        args = {"query": case.question}
+        with tenant_scope(tenant):
+            result = await tool_memory.HANDLERS["search_memory"](args, ctx, record_access=False)
+        session = AgentSession("memory-eval", tenant_id=tenant)
+        session.record_tool_call("search_memory", args, result, tool_call_id="call-0")
+        delivered = str(session.messages[-1]["content"])
+        items: list[ContextItem] = []
+        for n, row in enumerate(result.get("results") or [], start=1):
+            text = str(row.get("fact") or "")
+            item_id: str | None
+            if row.get("kind") == "segment":
+                item_id, kind = world_handle.turn_id(int(row.get("start_ref") or -1)), "turn"
+            else:
+                rid = row.get("id")
+                item_id, kind = (world_handle.fact_id(rid) if rid is not None else None), "fact"
+            meta = {
+                k: row[k] for k in ("source_ref", "started_at", "ended_at", "source") if k in row
+            }
+            items.append(
+                ContextItem(item_id or f"row:{n}", kind, text, estimate_tokens(text), n, meta)
+            )
+        return ContextBundle(
+            system=self.name,
+            items=tuple(items),
+            budget=None,
+            equal_budget=False,
+            abstained=not items,
+            retrieval_ms=(time.perf_counter() - started) * 1000,
+            delivered=delivered,
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Registry
 # --------------------------------------------------------------------------- #
@@ -537,6 +641,7 @@ _REGISTRY: dict[str, Callable[[], MemorySystem]] = {
     "raw_verbatim": RawVerbatimSystem,
     "full_context": FullContextSystem,
     "full_context_unbounded": lambda: FullContextSystem(unbounded=True),
+    "search_memory_tool": SearchMemoryToolSystem,
 }
 
 DEFAULT_SYSTEMS: tuple[str, ...] = (
