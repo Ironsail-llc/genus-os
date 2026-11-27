@@ -64,7 +64,12 @@ WINDOW_MAX_TURNS = 20
 #: of its own, and the model reads only this much of it (``_clipped``).
 WINDOW_MAX_CHARS = 12_000
 #: Runs in a row that may fail to extract the same window before it is skipped.
+#: Only a failure where the model answered counts (:data:`ANSWERED_ERRORS`).
 MAX_WINDOW_FAILURES = 3
+#: Extraction errors that mean the model answered, just not usefully: the only
+#: ones that count toward skipping a window. A transport error, a timeout or a
+#: server error never counts and never moves the watermark.
+ANSWERED_ERRORS = frozenset({"unparseable", "empty"})
 #: Where a skipped window is recorded (``ingested_items``), one row per window.
 _SKIPPED_SOURCE = "conversation_facts_skipped"
 #: Turns before a window shown to the model as read-only context.
@@ -661,6 +666,16 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
             context = seen[-CONTEXT_TURNS:]
             extraction = await extract_conversation_facts(kept, context=context)
             result["llm_calls"] += 1
+            if extraction.error is not None and extraction.error not in ANSWERED_ERRORS:
+                # The model server did not answer (unreachable, timed out,
+                # errored): nothing is wrong with these turns. Never counted,
+                # never skipped; the next run tries again.
+                logger.warning(
+                    "Conversation extraction for %s did not reach the model (%s); will retry",
+                    sanitize_log(key),
+                    extraction.error,
+                )
+                return _done(result)
             if extraction.error is not None:
                 failures = await asyncio.to_thread(_fail, key, tenant, mark.token, last_ref)
                 if failures < MAX_WINDOW_FAILURES:
