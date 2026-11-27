@@ -8,19 +8,24 @@ agent run in telegram.py / chat.py.
 The source is the stored conversation (``chat_sessions`` / ``chat_messages``),
 not the in-memory history: it has every turn, each with its message id and the
 time it was said, and the person the session belongs to. The in-memory history
-is used only to wait until the turn that triggered this run has been stored.
+is used only to tell whether the turn that triggered this run is stored yet.
 
 Architecture:
-    stored turns past the conversation's watermark -> windows of consecutive
-    turns (user and assistant interleaved) -> one conversation-mode extraction
-    per window (``robothor.memory.conversation_facts``), the turns before it
-    shown read-only -> each fact written through the write path with its
-    speaker's origin and a link to its source turns -> watermark moves to the
-    window's last message id
+    claim the conversation's watermark row (a lease: one run at a time, across
+    engine processes) -> stored turns past the watermark, except those written
+    in the last few seconds -> windows of consecutive turns (user and assistant
+    interleaved) -> one conversation-mode extraction per window
+    (``robothor.memory.conversation_facts``), the turns before it shown
+    read-only -> each fact written through the write path with its speaker's
+    origin and a link to its source turns -> watermark moves to the window's
+    last message id -> release; a follow-up run is scheduled for turns held
+    back, not stored yet, or past this run's five windows
 
 Each window is extracted once. A failed extraction, or a fact that could not be
 stored, leaves the watermark where it was, so the same turns are extracted on
-the next run; nothing is stored as a raw transcript.
+the next run; a window that fails three runs in a row is recorded as skipped
+and passed over. Nothing is stored as a raw transcript. Every database call
+runs off the event loop.
 """
 
 from __future__ import annotations
@@ -64,10 +69,11 @@ CONTEXT_TURNS = 4
 #: Most windows one run extracts, so a long backlog (a conversation older than
 #: this feature) is covered over several runs instead of one burst.
 MAX_WINDOWS_PER_RUN = 5
-#: How long a run waits for the turn that triggered it to be committed (the
-#: save and this ingest are spawned side by side).
-STORE_WAIT_ATTEMPTS = 20
-STORE_WAIT_SECONDS = 0.5
+#: Rows written more recently than this are left for a follow-up run (see
+#: ``held_from``), which is scheduled a little after they come of age.
+HOLD_SECONDS = 5.0
+#: How soon a follow-up run continues a backlog longer than one run's windows.
+BACKLOG_DELAY_SECONDS = 1.0
 
 #: Watermark (``ingested_items``): see "the watermark row" below.
 _WATERMARK_SOURCE = "conversation_facts"
@@ -163,8 +169,15 @@ def _load_conversation(
         if session is None:
             return None
         cols = "SELECT id, message, created_at FROM chat_messages WHERE session_id = %s "
-        cur.execute(cols + "AND id > %s ORDER BY id LIMIT %s", (session["id"], after_ref, limit))
+        cur.execute(
+            "SELECT id, message, created_at, "
+            "created_at > now() - make_interval(secs => %s) AS fresh "
+            "FROM chat_messages WHERE session_id = %s AND id > %s ORDER BY id LIMIT %s",
+            (HOLD_SECONDS, session["id"], after_ref, limit + 1),
+        )
         new = list(cur.fetchall())
+        more = len(new) > limit
+        new = new[:limit]
         cur.execute(
             cols + "AND id <= %s ORDER BY id DESC LIMIT %s",
             (session["id"], after_ref, CONTEXT_TURNS * 3),
@@ -182,7 +195,33 @@ def _load_conversation(
         is_room=parse_room_key(session_key) is not None,
         tail_text=last[0].text if last else None,
         scanned_through=int(new[-1]["id"]) if new else None,
+        held_from=held_from([(int(r["id"]), _role(r), bool(r["fresh"])) for r in new]),
+        more=more,
     )
+
+
+def _role(row: dict[str, Any]) -> str | None:
+    message = row["message"] if isinstance(row["message"], dict) else json.loads(row["message"])
+    role = message.get("role")
+    return str(role) if role else None
+
+
+def held_from(rows: list[tuple[int, str | None, bool]]) -> int | None:
+    """The first message id this run must not extract yet, from ``(id, role, fresh)``.
+
+    A row written in the last :data:`HOLD_SECONDS` may have a lower id still
+    uncommitted beside it (two writers on one session): extracting it now would
+    move the watermark past that row for good. So the first fresh row and
+    everything after it wait for a follow-up run. A fresh assistant reply holds
+    back the user turn it answers with it (the user turn is stamped with its
+    arrival time, so it can look old).
+    """
+    for i, (ref, role, fresh) in enumerate(rows):
+        if fresh:
+            if i > 0 and role == "assistant" and rows[i - 1][1] == "user":
+                return rows[i - 1][0]
+            return ref
+    return None
 
 
 def _expected_tail(history: list[dict[str, Any]]) -> str | None:
@@ -193,27 +232,6 @@ def _expected_tail(history: list[dict[str, Any]]) -> str | None:
         if m.get("role") in ("user", "assistant") and isinstance(content, str) and content.strip():
             return redact(content).strip()
     return None
-
-
-async def _load_when_stored(
-    session_key: str, tenant_id: str, after_ref: int, history: list[dict[str, Any]]
-) -> StoredConversation | None:
-    """The stored conversation, once it holds the turn that triggered this run.
-
-    Gives up waiting after :data:`STORE_WAIT_ATTEMPTS` tries and goes on with
-    what is stored: a turn stored later is extracted by the next run.
-    """
-    expected = _expected_tail(history)
-    limit = WINDOW_MAX_TURNS * MAX_WINDOWS_PER_RUN
-    conv: StoredConversation | None = None
-    for attempt in range(STORE_WAIT_ATTEMPTS):
-        conv = await asyncio.to_thread(_load_conversation, session_key, tenant_id, after_ref, limit)
-        stored = (conv.tail_text or "").strip() if conv is not None else None
-        if expected is None or stored == expected:
-            return conv
-        if attempt + 1 < STORE_WAIT_ATTEMPTS:
-            await asyncio.sleep(STORE_WAIT_SECONDS)
-    return conv
 
 
 def windows(
@@ -479,12 +497,25 @@ async def _ingest(run: _Run) -> dict[str, Any] | None:
 
 async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
     key, tenant = run.session_key, run.tenant
-    conv = await _load_when_stored(key, tenant, mark.through, run.history)
+    conv = await asyncio.to_thread(
+        _load_conversation, key, tenant, mark.through, WINDOW_MAX_TURNS * MAX_WINDOWS_PER_RUN
+    )
+    expected = _expected_tail(run.history)
     if conv is None:
+        if expected is not None:
+            run.again(HOLD_SECONDS + 1)  # the save may not have committed yet
         return None
-    if not conv.turns:
-        if conv.scanned_through is not None and conv.scanned_through > mark.through:
+    later = _follow_up_delay(conv, expected)
+    turns = [t for t in conv.turns if conv.held_from is None or t.ref < conv.held_from]
+    if not turns:
+        if (
+            conv.held_from is None
+            and conv.scanned_through is not None
+            and conv.scanned_through > mark.through
+        ):
             await asyncio.to_thread(_advance, key, tenant, mark.token, conv.scanned_through, [])
+        if later is not None:
+            run.again(later)
         return None
     owner = owner_of(conv, key)
 
@@ -498,7 +529,9 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
         "windows_skipped": 0,
         "turns_covered": 0,
     }
-    all_windows = windows(conv.turns, first_end=mark.failed_end)
+    all_windows = windows(turns, first_end=mark.failed_end)
+    if len(all_windows) > MAX_WINDOWS_PER_RUN:
+        later = min(later or BACKLOG_DELAY_SECONDS, BACKLOG_DELAY_SECONDS)
     for window in all_windows[:MAX_WINDOWS_PER_RUN]:
         last_ref = window[-1].ref
         kept = [
@@ -564,6 +597,8 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
         result["turns_covered"] += len(window)
         seen.extend(window)
 
+    if later is not None:
+        run.again(later)
     logger.info(
         "Ingested conversation session %s: %d windows, %d facts",
         sanitize_log(key),
@@ -571,6 +606,18 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
         len(result["fact_ids"]),
     )
     return result
+
+
+def _follow_up_delay(conv: StoredConversation, expected: str | None) -> float | None:
+    """When a follow-up run is needed, how soon: held-back rows and a triggering
+    turn not stored yet wait until they come of age; a backlog goes on shortly."""
+    if conv.held_from is not None or (
+        expected is not None and (conv.tail_text or "").strip() != expected
+    ):
+        return HOLD_SECONDS + 1
+    if conv.more:
+        return BACKLOG_DELAY_SECONDS
+    return None
 
 
 def _done(result: dict[str, Any]) -> dict[str, Any] | None:
