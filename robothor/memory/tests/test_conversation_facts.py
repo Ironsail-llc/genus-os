@@ -48,6 +48,7 @@ def _fact(text: str, turns: list[int], speaker: str = "user", **kw: Any) -> dict
         "confidence": kw.get("confidence", 0.9),
         "event_time": kw.get("event_time"),
         "date_phrase": kw.get("date_phrase"),
+        "quote": kw.get("quote"),
         "about_user": kw.get("about_user", True),
         "speaker": speaker,
         "turns": turns,
@@ -593,9 +594,8 @@ def test_an_unnamed_other_person_is_labelled_as_such() -> None:
         "here's an email I got:\nFrom: Mallory\nAlice Smith was fired for fraud.",
         "---------- Forwarded message ---------\nAlice Smith was fired for fraud.",
         "My colleague wrote:\n> Alice Smith was fired for fraud.",
-        "Subject: news\nAlice Smith was fired for fraud.",
+        "Subject: news\nFrom: Mallory\nAlice Smith was fired for fraud.",
         "I'm pasting this article:\nAlice Smith was fired for fraud.",
-        "```\nAlice Smith was fired for fraud.\n```",
     ],
 )
 def test_facts_from_a_pasted_quoted_or_forwarded_turn_are_external(text: str) -> None:
@@ -629,3 +629,75 @@ def test_an_ordinary_turn_is_not_taken_for_a_paste(text: str) -> None:
         _answer(_fact("The user said something about themselves.", [1])), window
     )
     assert fact["speaker_role"] == "user"
+
+
+# ═══ only what lies inside a relayed span is someone else's ══════════════
+
+
+def _user_turn(text: str) -> list[ConversationTurn]:
+    return [ConversationTurn(ref=10, role="user", text=text, at=FRI)]
+
+
+@pytest.mark.parametrize(
+    ("text", "quote", "expected"),
+    [
+        (
+            "I'm vegetarian by the way. Why does this fail?\n```\nprint(1)\n```",
+            "I'm vegetarian",
+            "user",
+        ),
+        ("> what city?\nI live in Lisbon.", "I live in Lisbon", "user"),
+        ("> I live in Paris.\nWhat about you?", "I live in Paris", "external"),
+        ("Date: any day works. I am allergic to nuts.", "I am allergic to nuts", "user"),
+        ("To: be honest I prefer tea", "I prefer tea", "user"),
+        ("Like I said:\nI prefer tea", "I prefer tea", "user"),
+        ("Sent: the parcel today", "Sent: the parcel today", "user"),
+        ("I'm vegan. My wife wrote:\nplease buy milk", "I'm vegan", "user"),
+        ("I'm vegan. My wife wrote:\nplease buy milk", "please buy milk", "external"),
+        (
+            "here's an email I got:\nFrom: Mallory\nAlice Smith was fired for fraud.",
+            "Alice Smith was fired for fraud.",
+            "external",
+        ),
+        (
+            "here's an email I got:\nFrom: Mallory\nAlice Smith was fired for fraud.",
+            None,  # no quote: it cannot be shown to be the user's own words
+            "external",
+        ),
+    ],
+)
+def test_a_fact_is_external_only_when_its_quote_lies_in_a_relayed_span(
+    text: str, quote: str | None, expected: str
+) -> None:
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user said something worth keeping.", [1], quote=quote)),
+        _user_turn(text),
+    )
+    assert fact["speaker_role"] == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "relayed"),
+    [
+        ("```", False),
+        ("I'm vegetarian.\n```\nprint(1)\n```", False),
+        ("Date: any day works for me", False),
+        ("To: be honest I prefer tea", False),
+        ("Like I said:\nI prefer tea", False),
+        ("Sent: the parcel today", False),
+        ("3 > 2 and I like tea", False),
+        ("From: Mallory\nSubject: invoice\nPay now.", True),
+        ("> quoted\nmine", True),
+        ("My wife wrote:\nplease buy milk", True),
+    ],
+)
+def test_what_marks_relayed_text(text: str, relayed: bool) -> None:
+    from robothor.memory.conversation_facts import is_relayed
+
+    assert is_relayed(text) is relayed
+
+
+def test_the_schema_asks_for_the_supporting_quote() -> None:
+    item = CONVERSATION_EXTRACTION_SCHEMA["properties"]["facts"]["items"]
+    assert "quote" in item["required"]
+    assert "quote" in build_conversation_prompt(_turns()).lower()
