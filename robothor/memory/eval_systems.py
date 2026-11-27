@@ -92,7 +92,9 @@ def fill_budget(
 
     Packed by the product's own rule, ``robothor.memory.recall.pack_within``
     (a candidate that does not fit is skipped and a later, smaller one may
-    still go in), so the measured context is the one the tool ships.
+    still go in; then the best skipped one is cut to the room left when that
+    is at least the product's minimum), so the measured context is the one the
+    tool ships.
     Duplicate ids keep their first (best) occurrence; ``rank`` is the
     position before packing.
     """
@@ -111,7 +113,14 @@ def fill_budget(
         chars = tokens * _CHARS_PER_TOKEN
         return (c[0], c[1], c[2], recall.truncate_text(c[3], chars))
 
-    packed = recall.pack_within(ranked, budget, lambda c: estimate_tokens(c[3]), _cut)
+    packed = recall.pack_within(
+        ranked,
+        budget,
+        lambda c: estimate_tokens(c[3]),
+        _cut,
+        # The product's minimum, in tokens.
+        min_cut=recall.RECALL_MIN_CUT_CHARS // _CHARS_PER_TOKEN,
+    )
     return tuple(
         ContextItem(item_id, kind, text, estimate_tokens(text), rank)
         for rank, item_id, kind, text in packed

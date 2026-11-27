@@ -88,41 +88,63 @@ def recall_limit(named: Any) -> int:
 TRUNCATION_MARKER = " [truncated]"
 
 
+#: Least room, in characters, worth filling with a cut row. About 75 tokens:
+#: two or three sentences, room for a fact with its context or one short
+#: exchange of a conversation. Less than that rarely holds a whole statement,
+#: and the 12-character marker would be a large share of it.
+RECALL_MIN_CUT_CHARS = 300
+
+
 def pack_within(
     items: Sequence[_T],
     cap: int | None,
     size: Callable[[_T], int],
     truncate: Callable[[_T, int], _T] | None = None,
+    min_cut: int = RECALL_MIN_CUT_CHARS,
 ) -> list[_T]:
     """The one packing rule: ``items`` in order, each kept while it still fits.
 
     An item that does not fit in what is left of ``cap`` is skipped and a
-    later, smaller one may still go in, so the cap is used and never exceeded
-    and the kept items stay in rank order. ``cap`` None keeps everything.
-    Skipping, not stopping: one long conversation segment early in the head
-    must not end a context that has room for the rows after it. The first,
+    later, smaller one may still go in, so the cap is never exceeded and the
+    kept items stay in rank order. ``cap`` None keeps everything. Skipping,
+    not stopping: one long conversation segment early in the head must not end
+    a context that has room for the rows after it.
+
+    Then, if at least ``min_cut`` (in ``size``'s units) of the cap is still
+    empty, the best-ranked item that was skipped is cut to exactly that room
+    by ``truncate`` (which marks the cut) and kept in its rank position. Every
+    item the skipping kept stays, whole; at most one item is cut. The first,
     top-ranked item is never skipped: if it alone is larger than the cap it is
-    kept cut to the cap by ``truncate`` (which marks the cut), so a result is
-    never empty because its best row was long. The recall tool, the routed path
+    kept cut to the cap, so a result is never empty because its best row was
+    long. Without ``truncate`` nothing is cut. The recall tool, the routed path
     and the eval all pack with this function, so the measured context is the
     shipped one.
     """
     if cap is None:
         return list(items)
-    kept: list[_T] = []
+    kept: list[tuple[int, _T]] = []
     used = 0
+    skipped: int | None = None
     for index, item in enumerate(items):
         n = size(item)
         if used + n > cap:
             if index == 0 and truncate is not None and cap > 0:
                 cut = truncate(item, cap)
                 if 0 < size(cut) <= cap:
-                    kept.append(cut)
+                    kept.append((index, cut))
                     used += size(cut)
+            elif skipped is None:
+                skipped = index
             continue
-        kept.append(item)
+        kept.append((index, item))
         used += n
-    return kept
+    room = cap - used
+    if truncate is not None and skipped is not None and room >= max(1, min_cut):
+        cut = truncate(items[skipped], room)
+        if 0 < size(cut) <= room:
+            kept.append((skipped, cut))
+            kept.sort(key=lambda pair: pair[0])
+    return [item for _, item in kept]
 
 
 def row_chars(row: dict[str, Any]) -> int:

@@ -215,9 +215,9 @@ def test_the_eval_packs_with_the_products_rule(monkeypatch: pytest.MonkeyPatch) 
     calls: list[Any] = []
     real = recall.pack_within
 
-    def spy(items: Any, cap: Any, size: Any, *rest: Any) -> Any:
+    def spy(items: Any, cap: Any, size: Any, *rest: Any, **kw: Any) -> Any:
         calls.append(cap)
-        return real(items, cap, size, *rest)
+        return real(items, cap, size, *rest, **kw)
 
     monkeypatch.setattr(recall, "pack_within", spy)
     items = eval_systems.fill_budget([("a", "fact", "x" * 40), ("b", "fact", "y" * 40)], 15)
