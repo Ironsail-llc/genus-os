@@ -1566,9 +1566,10 @@ report says it was carried forward. `--progress` makes a run resumable.
 
 **Hosted models.** `--answer-models openai/gpt-5-mini,openai/gpt-4o
 --judge-model openai/gpt-4o-2024-08-06` answers with hosted models (one cell
-per answer model) through litellm; the key and endpoint are read from the
-process environment (`OPENAI_API_KEY`, `OPENAI_API_BASE`) and are written to no
-file. At most four hosted calls are in flight; rate limits back off. Embedding,
+per answer model) through litellm. The key comes from the shared credential
+pool (`OPENAI_API_KEY`, then `OPENAI_API_KEY_2` …), as every provider call
+takes it, and a key the provider rejects is retired there; the endpoint comes
+from `OPENAI_API_BASE`. Neither is written to any file. At most four hosted calls are in flight; rate limits back off. Embedding,
 reranking, ingestion and extraction stay local. `--dry-run` ingests and calls
 nothing: it prints the questions, the estimated input and output tokens of the
 answers and the judge per cell, and the spend at the list prices in

@@ -65,8 +65,11 @@ class TestHostedClient:
 
     @pytest.mark.asyncio
     async def test_the_judge_call_is_the_official_one(self, fake_litellm, monkeypatch):
+        from robothor.engine import key_pool
+
         monkeypatch.setenv("OPENAI_API_BASE", "https://regional.example.com/v1")
         monkeypatch.setenv("OPENAI_API_KEY", SECRET)
+        key_pool.reset_shared_pools()
         res = await eh.hosted_chat(
             [{"role": "user", "content": "Is it correct?"}],
             model="openai/gpt-4o-2024-08-06",
@@ -77,10 +80,12 @@ class TestHostedClient:
         (call,) = fake_litellm.calls
         assert call["model"] == "openai/gpt-4o-2024-08-06"
         assert call["temperature"] == 0.0 and call["max_tokens"] == 10
-        # The endpoint the key is bound to, from the environment; the key itself
-        # is left to the provider client and never handled here.
+        # The endpoint the key is bound to, from the environment; the key comes
+        # from the shared credential pool, the one door to a provider, and no
+        # report or cache file holds it (test_eval_bench_hosted_pool).
         assert call["api_base"] == "https://regional.example.com/v1"
-        assert SECRET not in json.dumps(call, default=str)
+        assert call["api_key"] == SECRET == key_pool.api_key_for_model(call["model"])
+        key_pool.reset_shared_pools()
         assert res.text == "yes" and res.input_tokens == 100 and res.output_tokens == 5
         # gpt-4o-2024-08-06: 100 * 2.50/1M + 5 * 10.00/1M
         assert res.cost_usd == pytest.approx(100 * 2.5e-6 + 5 * 10e-6)

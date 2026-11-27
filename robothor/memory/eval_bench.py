@@ -618,7 +618,7 @@ def context_version(system: str, *, repo_root: Path | None = None) -> str:
     what retrieved it changed. ``--carry-forward`` reuses one across versions
     on purpose.
     """
-    import os
+    from robothor.settings.env import process_env_get
 
     root = repo_root if repo_root is not None else Path(__file__).resolve().parents[2]
     memory = code_version() if repo_root is None else code_version(root / "robothor" / "memory")
@@ -629,7 +629,7 @@ def context_version(system: str, *, repo_root: Path | None = None) -> str:
             if path.is_file():
                 h.update(str(path.relative_to(root)).encode())
                 h.update(path.read_bytes())
-    flags = {k: os.environ.get(k) for k in PRODUCT_FLAG_ENV}
+    flags = {k: process_env_get(k, None) for k in PRODUCT_FLAG_ENV}
     h.update(json.dumps(flags, sort_keys=True).encode())
     return h.hexdigest()[:12]
 
@@ -1634,12 +1634,11 @@ PRODUCT_FLAG_ENV: tuple[str, ...] = (
 
 def product_flags() -> dict[str, Any]:
     """The flag posture of this process, as the tool reads it."""
-    import os
-
     from robothor.engine.feature_flags import is_rip_enabled, narrow_memory_search_enabled
+    from robothor.settings.env import process_env_get
 
     return {
-        "env": {k: os.environ.get(k, "(unset)") for k in PRODUCT_FLAG_ENV},
+        "env": {k: process_env_get(k, "(unset)") for k in PRODUCT_FLAG_ENV},
         "fan_out": not narrow_memory_search_enabled(),
         "routed": is_rip_enabled(15),
     }

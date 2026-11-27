@@ -6,11 +6,14 @@ decide what a reasoning model accepts). Everything else is a local Ollama
 model. Nothing falls back: a hosted call that fails raises, so a run is never
 labelled with one model and answered by another.
 
-The key is never handled here. litellm reads ``OPENAI_API_KEY`` from the
-process environment, which the operator's wrapper sets for that process
-only; the endpoint comes from ``OPENAI_API_BASE`` (or ``OPENAI_BASE_URL``)
-when set, since a key can be bound to a regional endpoint. Neither appears in
-a log, a report or a cache.
+The key comes from the shared credential pool
+(``robothor.engine.key_pool.api_key_for_model``: ``OPENAI_API_KEY``, then
+``OPENAI_API_KEY_2`` …), as every other provider call takes it; a key the
+provider rejects (401, 402, 403) is retired there, so the next call rotates.
+With no pooled key litellm resolves the environment itself. The endpoint
+comes from ``OPENAI_API_BASE`` (or ``OPENAI_BASE_URL``) when set, since a key
+can be bound to a regional endpoint. Neither appears in a log, a report or a
+cache.
 
 Prices are the provider's list prices in US dollars per million tokens, as
 stated on 2026-11-26; check them before a run. A dry run multiplies them by
@@ -21,7 +24,6 @@ provider reports for each call.
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -104,6 +106,24 @@ def _is_rate_limit(exc: Exception) -> bool:
     return status in (429, 500, 502, 503, 504)
 
 
+#: Provider statuses that mean this credential is spent or refused.
+_REJECTED = (401, 402, 403)
+
+
+def _retire(model: str, key: str, exc: Exception) -> None:
+    """Take a rejected key out of rotation, classified as the engine does."""
+    from robothor.engine.key_pool import Retirement, retire_for_model
+
+    detail = str(exc).lower()
+    if any(m in detail for m in ("weekly limit", "daily limit", "monthly limit")):
+        reason = Retirement.QUOTA_EXHAUSTED_PERIODIC
+    elif getattr(exc, "status_code", None) == 401:
+        reason = Retirement.AUTH_FAILED
+    else:
+        reason = Retirement.CREDIT_EXHAUSTED
+    retire_for_model(model, key, reason)
+
+
 async def hosted_chat(
     messages: list[dict[str, str]],
     *,
@@ -130,9 +150,15 @@ async def hosted_chat(
         kwargs["max_tokens"] = max_tokens + REASONING_HEADROOM
     else:
         kwargs["temperature"] = temperature
-    base = os.environ.get("OPENAI_API_BASE") or os.environ.get("OPENAI_BASE_URL")
+    from robothor.engine.key_pool import api_key_for_model
+    from robothor.settings.env import process_env_get
+
+    base = process_env_get("OPENAI_API_BASE", None) or process_env_get("OPENAI_BASE_URL", None)
     if base:
         kwargs["api_base"] = base
+    key = api_key_for_model(model)
+    if key is not None:
+        kwargs["api_key"] = key
     gate = _gate_for_loop()
     attempt = 0
     while True:
@@ -142,6 +168,9 @@ async def hosted_chat(
             break
         except Exception as exc:
             attempt += 1
+            if key is not None and getattr(exc, "status_code", None) in _REJECTED:
+                _retire(model, key, exc)
+                raise
             if attempt >= _MAX_ATTEMPTS or not _is_rate_limit(exc):
                 raise
             await _sleep(min(_BACKOFF_CAP_S, _BACKOFF_BASE_S * 2 ** (attempt - 1)))
