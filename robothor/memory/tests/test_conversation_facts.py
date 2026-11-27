@@ -769,3 +769,32 @@ def test_last_weekday_is_the_most_recent_such_day_before_today() -> None:
     assert [d.isoformat() for d in relative_days("last Tuesday", WED)] == ["2026-11-24"]
     tue = datetime(2026, 11, 24, 15, 0, tzinfo=UTC)
     assert [d.isoformat() for d in relative_days("last Tuesday", tue)] == ["2026-11-17"]
+
+
+# ═══ a quote touching a relayed span fails closed ════════════════════════
+
+WIFE = "I'm vegan, remember that. My wife wrote:\nplease buy milk, Sam is lactose tolerant"
+
+
+@pytest.mark.parametrize(
+    ("text", "quote", "expected"),
+    [
+        (WIFE, "My wife wrote:\nplease buy milk", "external"),  # straddles the boundary
+        (WIFE, "wrote: please buy milk, Sam is lactose tolerant", "external"),
+        (WIFE, "I'm vegan", "user"),  # wholly outside: still the user's
+        # The same words outside and inside a span: which was meant is unknown.
+        (
+            "Tea is great.\n> Tea is great. Bob was fired for fraud.\nanyway",
+            "Tea is great.",
+            "external",
+        ),
+    ],
+)
+def test_any_overlap_with_a_relayed_span_makes_a_fact_external(
+    text: str, quote: str, expected: str
+) -> None:
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user said something worth keeping.", [1], quote=quote)),
+        _user_turn(text),
+    )
+    assert fact["speaker_role"] == expected
