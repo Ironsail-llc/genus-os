@@ -1069,10 +1069,10 @@ def slot_action(
     attribute only when the new text itself says it replaces one; only
     ``earlier`` with the times agreeing files the new fact as history. A
     conflict, no answer, or the judge and the dates disagreeing keep both
-    (``unresolved``, recorded). One exception: against an old value with no
-    event date of its own (``old_dated`` False), a new fact dated before that
-    value was recorded closes it when the judge says ``changed`` and the new
-    text itself words the change.
+    (``unresolved``, recorded). That holds for an old value with no event date
+    of its own too (``old_dated`` False): a new fact dated before it was
+    recorded never closes it, whatever the judge says or the wording; the
+    judge is told the timing so it can say ``earlier`` (history).
     """
     if outcome == "same":
         return "skip"
@@ -1080,7 +1080,9 @@ def slot_action(
         return "keep"
     if outcome == "changed":
         if order == "earlier":
-            return "close" if (not old_dated and replacement_wording) else "unresolved"
+            # A new fact dated before the old value (or, for an undated old
+            # value, before it was recorded) never closes it.
+            return "unresolved"
         if cardinality == "several" and not replacement_wording:
             return "keep"
         return "close"
