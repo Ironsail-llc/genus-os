@@ -234,11 +234,12 @@ def is_relayed(text: str) -> bool:
 
 
 def _from_relayed_span(turn: ConversationTurn, quote: Any) -> bool:
-    """Whether a fact drawn from ``turn`` comes from inside one of its relayed spans.
+    """Whether a fact drawn from ``turn`` may come from one of its relayed spans.
 
-    True when its supporting quote lies inside a span, and when the turn has a
-    span but the quote is missing or is not in the turn (it cannot be shown to
-    be the user's own words).
+    Fails closed. True when the turn has a span and the fact's supporting quote
+    is missing, is not in the turn, overlaps a span anywhere (a quote straddling
+    the boundary included), or occurs more than once with any occurrence
+    touching a span (which one the model meant is unknown).
     """
     spans = relayed_spans(turn.text)
     if not spans:
@@ -246,10 +247,10 @@ def _from_relayed_span(turn: ConversationTurn, quote: Any) -> bool:
     if not isinstance(quote, str) or not quote.strip():
         return True
     words = [re.escape(w) for w in quote.split()]
-    found = re.search(r"\s+".join(words), turn.text, re.IGNORECASE)
-    if found is None:
+    found = list(re.finditer(r"\s+".join(words), turn.text, re.IGNORECASE))
+    if not found:
         return True
-    return any(lo <= found.start() and found.end() <= hi for lo, hi in spans)
+    return any(m.start() < hi and m.end() > lo for m in found for lo, hi in spans)
 
 
 #: What opens each continuation line of a turn's text. A turn's own text can
