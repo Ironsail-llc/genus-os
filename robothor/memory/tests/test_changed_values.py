@@ -156,3 +156,207 @@ class TestValuesDiffer:
     )
     def test_a_rewording_does_not(self, a, b):
         assert values_differ(a, b) is False
+
+
+# ── Store time ──────────────────────────────────────────────────────────────
+
+from typing import Any  # noqa: E402
+from unittest.mock import AsyncMock, MagicMock  # noqa: E402
+
+import robothor.memory.conflicts as cf  # noqa: E402
+
+
+def _row(
+    fid: int,
+    text: str,
+    *,
+    similarity: float | None = None,
+    origin: str | None = None,
+    metadata: Any = None,
+    category: str = "personal",
+) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "id": fid,
+        "fact_text": text,
+        "category": category,
+        "entities": [],
+        "origin": origin,
+        "metadata": metadata,
+    }
+    if similarity is not None:
+        row["similarity"] = similarity
+    return row
+
+
+class _Store:
+    """resolve_and_store with every collaborator mocked; records what it did."""
+
+    def __init__(self, monkeypatch: Any, *, similar=(), slot_rows=(), entity_ids=()):
+        self.similar = AsyncMock(return_value=list(similar))
+        self.lookup = AsyncMock(return_value=(list(entity_ids), list(slot_rows)))
+        self.store = AsyncMock(return_value=99)
+        self.classify = AsyncMock(return_value={"classification": "new", "reasoning": "r"})
+        self.supersede = MagicMock(return_value=True)
+        self.overrule = MagicMock(return_value=True)
+        self.record = MagicMock()
+        self.reinforced: list[int] = []
+        monkeypatch.setattr(cf, "find_similar_facts", self.similar)
+        monkeypatch.setattr(cf, "find_slot_candidates", self.lookup, raising=False)
+        monkeypatch.setattr(cf, "store_fact", self.store)
+        monkeypatch.setattr(cf, "classify_relationship", self.classify)
+        monkeypatch.setattr(cf, "supersede_with_validity", self.supersede)
+        monkeypatch.setattr(cf, "keep_overruled", self.overrule)
+        monkeypatch.setattr(cf, "record_conflict_decision", self.record)
+        monkeypatch.setattr(cf, "_reinforce_fact", lambda fid, **_k: self.reinforced.append(fid))
+
+    async def __call__(self, text: str, **kw: Any) -> dict[str, Any]:
+        fact = {"fact_text": text, "category": "personal", "entities": [], "confidence": 0.9}
+        kw.setdefault("tenant_id", "test-tenant")
+        return await cf.resolve_and_store(fact, "src", "conversation", **kw)
+
+    def actions(self) -> list[str]:
+        return [c.kwargs["action"] for c in self.record.call_args_list]
+
+
+class TestStoreTimeChange:
+    @pytest.mark.asyncio
+    async def test_a_reversed_preference_supersedes_instead_of_reinforcing(self, monkeypatch):
+        old = _row(7, "Bob prefers tea over coffee.", similarity=0.975)
+        s = _Store(monkeypatch, similar=[old])
+        out = await s("Bob prefers coffee over tea.")
+        assert out["action"] == "superseded"
+        assert out["new_id"] == 99 and out["old_id"] == 7
+        assert s.reinforced == []
+        s.store.assert_awaited_once()
+        assert s.supersede.call_args.args[:2] == (7, 99)
+        assert s.supersede.call_args.kwargs["reason"] == "changed"
+        s.classify.assert_not_awaited()  # the slot decided; no model call
+        assert s.actions() == ["superseded"]
+
+    @pytest.mark.asyncio
+    async def test_a_move_below_the_similarity_threshold_is_still_found(self, monkeypatch):
+        old = _row(7, "Alice lives in Boston.")
+        s = _Store(monkeypatch, similar=[], slot_rows=[old])
+        out = await s("Alice moved to Denver.")
+        assert out["action"] == "superseded"
+        assert s.supersede.call_args.args[:2] == (7, 99)
+        lookup_kw = s.lookup.call_args.kwargs
+        assert lookup_kw["tenant_id"] == "test-tenant"
+
+    @pytest.mark.asyncio
+    async def test_every_active_value_of_the_slot_is_closed(self, monkeypatch):
+        a = _row(7, "Alice lives in Boston.")
+        b = _row(8, "Alice lives in Seattle.")
+        s = _Store(monkeypatch, slot_rows=[a, b])
+        out = await s("Alice moved to Denver.")
+        assert out["action"] == "superseded"
+        assert sorted(c.args[0] for c in s.supersede.call_args_list) == [7, 8]
+        assert sorted(out["old_ids"]) == [7, 8]
+
+    @pytest.mark.asyncio
+    async def test_a_true_repeat_is_reinforced(self, monkeypatch):
+        old = _row(7, "Alice lives in Boston.", similarity=0.6)
+        s = _Store(monkeypatch, slot_rows=[old])
+        out = await s("Alice now lives in Boston.")
+        assert out["action"] == "reinforced"
+        assert out["existing_id"] == 7
+        assert s.reinforced == [7]
+        s.store.assert_not_awaited()
+        s.supersede.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_multi_valued_attribute_keeps_both(self, monkeypatch):
+        old = _row(7, "Alice has visited Paris.", similarity=0.95)
+        s = _Store(monkeypatch, similar=[old], slot_rows=[old])
+        out = await s("Alice has visited Rome.")
+        assert out["action"] == "stored"
+        assert out["new_id"] == 99
+        assert s.reinforced == []
+        s.supersede.assert_not_called()
+        s.classify.assert_not_awaited()
+        assert s.record.call_args.kwargs["classification"] == "new"
+
+    @pytest.mark.asyncio
+    async def test_a_fact_with_no_slot_costs_no_lookup(self, monkeypatch):
+        s = _Store(monkeypatch)
+        out = await s("The Helios launch went well.")
+        assert out["action"] == "stored"
+        s.lookup.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_lookup_reads_the_facts_own_scope(self, monkeypatch):
+        s = _Store(monkeypatch)
+        await s("Alice moved to Denver.", scope_kind="user", scope_id="person:p-1")
+        kw = s.lookup.call_args.kwargs
+        assert (kw["tenant_id"], kw["scope_kind"], kw["scope_id"]) == (
+            "test-tenant",
+            "user",
+            "person:p-1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_failed_lookup_falls_back_to_similarity(self, monkeypatch):
+        s = _Store(monkeypatch)
+        s.lookup.side_effect = RuntimeError("db down")
+        out = await s("Alice moved to Denver.")
+        assert out["action"] == "stored"
+
+
+class TestAuthority:
+    @pytest.mark.asyncio
+    async def test_a_lower_authority_value_does_not_replace_a_user_stated_one(self, monkeypatch):
+        old = _row(7, "Alice lives in Boston.", origin="user_stated")
+        s = _Store(monkeypatch, slot_rows=[old])
+        out = await s("Alice moved to Denver.", origin="agent_generated")
+        assert out["action"] == "kept_authority"
+        assert out["new_id"] == 99 and out["existing_id"] == 7
+        s.supersede.assert_not_called()
+        assert s.overrule.call_args.args[:2] == (99, 7)  # stored, overruled, not deleted
+        assert s.actions() == ["kept_authority"]
+
+    @pytest.mark.asyncio
+    async def test_external_does_not_replace_an_agent_value(self, monkeypatch):
+        old = _row(7, "Alice lives in Boston.", origin=None)  # legacy: agent-generated
+        s = _Store(monkeypatch, slot_rows=[old])
+        out = await s("Alice moved to Denver.", origin="external")
+        assert out["action"] == "kept_authority"
+        s.supersede.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_an_operator_confirmed_value_is_kept(self, monkeypatch):
+        confirmed = {"operator_confirmed": {"at": "2026-01-01T00:00:00+00:00", "by": "operator"}}
+        old = _row(7, "Alice lives in Boston.", origin="agent_generated", metadata=confirmed)
+        s = _Store(monkeypatch, slot_rows=[old])
+        out = await s("Alice moved to Denver.", origin="user_stated")
+        assert out["action"] == "kept_confirmed"
+        s.supersede.assert_not_called()
+        assert s.overrule.call_args.args[:2] == (99, 7)
+
+    @pytest.mark.asyncio
+    async def test_a_user_statement_replaces_an_agent_value(self, monkeypatch):
+        old = _row(7, "Alice lives in Boston.", origin="agent_generated")
+        s = _Store(monkeypatch, slot_rows=[old])
+        out = await s("Alice moved to Denver.", origin="user_stated")
+        assert out["action"] == "superseded"
+
+    @pytest.mark.asyncio
+    async def test_the_classifier_path_respects_authority_too(self, monkeypatch):
+        old = _row(7, "Alice leads the Helios project.", similarity=0.8, origin="user_stated")
+        s = _Store(monkeypatch, similar=[old])
+        s.classify.return_value = {"classification": "update", "reasoning": "r"}
+        out = await s("Bob leads the Helios project.", origin="agent_generated")
+        assert out["action"] == "kept_authority"
+        s.supersede.assert_not_called()
+        assert s.overrule.call_args.args[:2] == (99, 7)
+
+
+class TestReinforceGuard:
+    @pytest.mark.asyncio
+    async def test_a_near_identical_text_with_another_name_is_not_reinforced(self, monkeypatch):
+        # No frame: the similarity path decides, and it must not treat a
+        # different name as the same fact said again.
+        old = _row(7, "Alice leads the Helios project.", similarity=0.95)
+        s = _Store(monkeypatch, similar=[old])
+        out = await s("Bob leads the Helios project.")
+        assert out["action"] != "reinforced"
+        s.classify.assert_awaited_once()
