@@ -272,18 +272,7 @@ def _prepared(fact: dict[str, Any], session_key: str, owner: Owner) -> dict[str,
     """
     refs = list(fact["turn_refs"])
     out = {k: v for k, v in fact.items() if k not in _MODE_KEYS}
-    if fact["about_user"]:
-        out["metadata_subject"] = owner.subject()
-        if owner.person_id:
-            out["mentions"] = [
-                {
-                    "surface_form": "the user",
-                    "entity_type": "person",
-                    "crm_person_id": owner.person_id,
-                },
-                *fact["mentions"],
-            ]
-    out["metadata"] = {
+    metadata: dict[str, Any] = {
         "extraction": "conversation",
         "conversation_kind": fact["kind"],
         "source": {
@@ -295,9 +284,12 @@ def _prepared(fact: dict[str, Any], session_key: str, owner: Owner) -> dict[str,
             "mentioned_at": fact["mentioned_at"],
         },
     }
-    subject = out.pop("metadata_subject", None)
-    if subject is not None:
-        out["metadata"]["subject"] = subject
+    if fact["about_user"]:
+        metadata["subject"] = owner.subject()
+        if owner.person_id:
+            anchor = {"surface_form": "the user", "entity_type": "person"}
+            out["mentions"] = [{**anchor, "crm_person_id": owner.person_id}, *fact["mentions"]]
+    out["metadata"] = metadata
     return out
 
 
