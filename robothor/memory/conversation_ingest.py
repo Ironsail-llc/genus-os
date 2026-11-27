@@ -35,13 +35,16 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, tzinfo
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from psycopg2.extras import RealDictCursor
 
-from robothor.constants import DEFAULT_TENANT
+from robothor.constants import DEFAULT_TENANT, platform_timezone
 from robothor.db.connection import get_connection
 from robothor.engine.sanitize import sanitize_log
 from robothor.memory.conversation_facts import (
@@ -134,28 +137,123 @@ class StoredConversation:
     scanned_through: int | None = None
 
 
-def _turn(row: dict[str, Any]) -> ConversationTurn | None:
+def _message(row: dict[str, Any]) -> dict[str, Any]:
+    raw = row["message"]
+    message = raw if isinstance(raw, dict) else json.loads(raw)
+    return message if isinstance(message, dict) else {}
+
+
+def _local_zone() -> tzinfo:
+    """The instance's timezone (``ROBOTHOR_TIMEZONE``), or UTC if it is not a zone.
+
+    No per-person timezone is stored, so a conversation is read in the
+    instance's: what "yesterday" means for its operator.
+    """
+    try:
+        return ZoneInfo(platform_timezone())
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.debug("conversation ingest: timezone not found; reading turns in UTC")
+        return UTC
+
+
+def _turn(
+    row: dict[str, Any], is_owner: Callable[[dict[str, Any]], bool], zone: tzinfo
+) -> ConversationTurn | None:
     from robothor.secrets.redaction import redact
 
-    message = row["message"] if isinstance(row["message"], dict) else json.loads(row["message"])
+    message = _message(row)
     role = message.get("role")
     content = message.get("content")
     if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
         return None
-    speaker = message.get("author_display_name") if role == "user" else None
+    owner = role != "user" or is_owner(message)
+    speaker = message.get("author_display_name") if not owner else None
+    at = row["created_at"]
     return ConversationTurn(
         ref=int(row["id"]),
         role=role,
         text=redact(content),
-        at=row["created_at"],
+        at=at.astimezone(zone) if at is not None else None,
         speaker=str(speaker) if speaker else None,
+        author_is_owner=owner,
     )
+
+
+_TELEGRAM_PRIVATE = re.compile(r"telegram:\d+")
+
+
+def one_to_one(session_key: str, person_id: str | None, main_session_key: str) -> bool:
+    """Whether a session has a single human sender by construction.
+
+    The operator's main session, a member's own webchat session
+    (``agent:{agent}:user:{uid}``), a private Telegram chat (a positive chat
+    id), or a session the CRM routed to one person. A Telegram group (a
+    negative chat id) and anything unrecognised are not.
+    """
+    if session_key == main_session_key:
+        return True
+    parts = session_key.split(":")
+    if len(parts) == 4 and parts[0] == "agent" and parts[2] == "user" and parts[3]:
+        return True
+    if session_key.startswith("telegram:"):
+        return _TELEGRAM_PRIVATE.fullmatch(session_key) is not None
+    return person_id is not None
+
+
+class _Authors:
+    """Decides, per stored user turn, whether the conversation's owner wrote it.
+
+    A turn naming its author (``author_user_id``, as webchat records it) is the
+    owner's when that member is the owner (the scope's member, or a member
+    linked to the scope's person). A turn naming only a display name is someone
+    else's. A turn naming no author is the owner's only when the session has a
+    single human sender by construction (:func:`one_to_one`) and no turn seen
+    names another author: once someone else speaks, an unmarked turn could be
+    anyone's.
+    """
+
+    def __init__(self, tenant_id: str, scope_id: str | None, single_sender: bool) -> None:
+        self.tenant = tenant_id
+        self.scope_id = scope_id
+        self.single_sender = single_sender
+        self._members: dict[str, bool] = {}
+        self.foreign_seen = False
+
+    def _member_is_owner(self, uid: str) -> bool:
+        if uid not in self._members:
+            from robothor.memory.segments import user_belongs_to_person
+
+            sid = self.scope_id or ""
+            owner = sid == f"user:{uid}"
+            if not owner and sid.startswith("person:"):
+                owner = user_belongs_to_person(self.tenant, uid, sid.split(":", 1)[1])
+            self._members[uid] = owner
+        return self._members[uid]
+
+    def note(self, message: dict[str, Any]) -> None:
+        """See one stored message before any is judged."""
+        if message.get("role") != "user":
+            return
+        uid = message.get("author_user_id")
+        if uid:
+            self.foreign_seen = self.foreign_seen or not self._member_is_owner(str(uid))
+        elif message.get("author_display_name"):
+            self.foreign_seen = True
+
+    def is_owner(self, message: dict[str, Any]) -> bool:
+        uid = message.get("author_user_id")
+        if uid:
+            return self._member_is_owner(str(uid))
+        if message.get("author_display_name"):
+            return False
+        return self.single_sender and not self.foreign_seen
 
 
 def _load_conversation(
     session_key: str, tenant_id: str, after_ref: int, limit: int
 ) -> StoredConversation | None:
     """Read one session's turns past ``after_ref`` (sync; run in a worker thread)."""
+    from robothor.memory import segments
     from robothor.memory.segments import session_scope
     from robothor.rooms.keys import parse_room_key
 
@@ -184,12 +282,23 @@ def _load_conversation(
         )
         before = list(reversed(cur.fetchall()))
         cur.execute(cols + "ORDER BY id DESC LIMIT 8", (session["id"],))
-        last = [t for t in (_turn(r) for r in cur.fetchall()) if t is not None]
+        last_rows = list(cur.fetchall())
     person_id = str(session["person_id"]) if session["person_id"] else None
     kind, sid = session_scope(tenant_id, session_key, person_id)
+    authors = _Authors(
+        tenant_id, sid, one_to_one(session_key, person_id, segments._main_session_key())
+    )
+    for row in (*before, *new, *last_rows):
+        authors.note(_message(row))
+    zone = _local_zone()
+
+    def turns_of(rows: list[Any]) -> list[ConversationTurn]:
+        return [t for t in (_turn(r, authors.is_owner, zone) for r in rows) if t is not None]
+
+    last = turns_of(last_rows)
     return StoredConversation(
-        turns=[t for t in (_turn(r) for r in new) if t is not None],
-        context=[t for t in (_turn(r) for r in before) if t is not None][-CONTEXT_TURNS:],
+        turns=turns_of(new),
+        context=turns_of(before)[-CONTEXT_TURNS:],
         scope_kind=kind,
         scope_id=sid,
         is_room=parse_room_key(session_key) is not None,
@@ -201,8 +310,7 @@ def _load_conversation(
 
 
 def _role(row: dict[str, Any]) -> str | None:
-    message = row["message"] if isinstance(row["message"], dict) else json.loads(row["message"])
-    role = message.get("role")
+    role = _message(row).get("role")
     return str(role) if role else None
 
 
