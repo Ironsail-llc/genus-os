@@ -51,6 +51,8 @@ BOB = "6f1c1b7e-0000-4000-8000-000000000002"
 ALICE_P = f"person:{ALICE}"
 BOB_P = f"person:{BOB}"
 DIM = 1024
+#: A webchat member's own conversation (``chat.derive_user_session_key``).
+KEY = "agent:main:user:member-1"
 
 _TABLES = (
     "memory_mentions",
@@ -66,6 +68,9 @@ _TABLES = (
     "contact_identifiers",
     "crm_people",
     "crm_companies",
+    "chat_messages",
+    "chat_sessions",
+    "ingested_items",
 )
 
 
@@ -232,22 +237,84 @@ def fact(text: str, mentions=(), relations=(), **kw: Any) -> dict[str, Any]:
     }
 
 
+def turn_fact(text: str, mentions=(), relations=(), **kw: Any) -> dict[str, Any]:
+    """A conversation-mode fact (its turn and speaker are filled in by the fake)."""
+    return {
+        **fact(text, mentions, relations, **kw),
+        "kind": kw.get("kind", "other"),
+        "about_user": kw.get("about_user", False),
+    }
+
+
+def store_chat(
+    db: DB,
+    key: str,
+    turns: list[tuple[str, str]],
+    *,
+    person: str | None = None,
+    tenant: str = TENANT,
+) -> list[int]:
+    """A stored conversation, as chat_store writes it; returns the message ids."""
+    sid = db.one(
+        "INSERT INTO chat_sessions (tenant_id, session_key, channel, person_id) "
+        "VALUES (%s, %s, 'webchat', %s) ON CONFLICT (tenant_id, session_key) "
+        "DO UPDATE SET last_active_at = NOW() RETURNING id",
+        (tenant, key, person),
+    )
+    return [
+        int(db.one(
+            "INSERT INTO chat_messages (session_id, message, created_at) "
+            "VALUES (%s, %s::jsonb, '2023-05-20T09:00:00Z'::timestamptz + %s * interval '1 minute') "
+            "RETURNING id",
+            (sid, json.dumps({"role": role, "content": content}), i),
+        ))
+        for i, (role, content) in enumerate(turns)
+    ]  # fmt: skip
+
+
 class Model:
     """Scripted extraction (by a marker found in the content) and classification."""
 
     def __init__(self) -> None:
         self.extractions: list[tuple[str, Any]] = []
+        self.turn_extractions: list[tuple[str, list[dict[str, Any]]]] = []
         self.classifications: list[str] = []
         self.calls: list[str] = []
 
     def on(self, marker: str, *facts: dict[str, Any], raw: str | None = None) -> None:
         self.extractions.append((marker, raw if raw is not None else {"facts": list(facts)}))
 
+    def on_turn(self, marker: str, *facts: dict[str, Any]) -> None:
+        """Conversation mode: the facts of the new turn whose text holds ``marker``,
+        each citing that turn and said by its speaker."""
+        self.turn_extractions.append((marker, list(facts)))
+
+    def _conversation(self, prompt: str) -> str:
+        import re
+
+        from robothor.memory.conversation_facts import CONVERSATION_EXTRACTION_SCHEMA
+
+        self.calls.append("extract_conversation")
+        new = prompt[prompt.index("New turns:") :]
+        out = []
+        for number, label, text in re.findall(
+            r"^\[(\d+)\] .*? (User|Assistant)[^:]*: (.*)$", new, re.MULTILINE
+        ):
+            for marker, facts in self.turn_extractions:
+                if marker in text:
+                    out += [{**f, "turns": [int(number)], "speaker": label.lower()} for f in facts]
+        answer = {"facts": out}
+        jsonschema.validate(answer, CONVERSATION_EXTRACTION_SCHEMA)
+        return json.dumps(answer)
+
     async def generate(self, prompt: str, system: str | None = None, **kw: Any) -> str:
         from robothor.memory.conflicts import CLASSIFICATION_SCHEMA
+        from robothor.memory.conversation_facts import CONVERSATION_EXTRACTION_SCHEMA
         from robothor.memory.facts import FACT_EXTRACTION_SCHEMA
 
         fmt = kw.get("format")
+        if fmt == CONVERSATION_EXTRACTION_SCHEMA:
+            return self._conversation(prompt)
         if fmt == FACT_EXTRACTION_SCHEMA:
             self.calls.append("extract")
             content = prompt.rsplit("Content:\n", 1)[-1]
@@ -457,21 +524,21 @@ async def test_an_assistant_turn_paraphrasing_external_content_is_agent_generate
 ) -> None:
     from robothor.memory.conversation_ingest import ingest_conversation_session
 
-    world.model.on(
+    world.model.on_turn(
         "ASST-3",
-        fact("Carol Diaz became CFO of Globex Corporation.",
-             [("Carol Diaz", "person"), ("Globex Corporation", "organization")],
-             [("Carol Diaz", "is CFO of", "Globex Corporation")]),
+        turn_fact("Carol Diaz became CFO of Globex Corporation.",
+                  [("Carol Diaz", "person"), ("Globex Corporation", "organization")],
+                  [("Carol Diaz", "is CFO of", "Globex Corporation")]),
     )  # fmt: skip
-    history = [
-        {"role": "user", "content": "anything new in my inbox?"},
-        {"role": "assistant", "content": "ASST-3 The email says Carol Diaz is now CFO at Globex."},
-        {"role": "user", "content": "ok thanks"},
-        {"role": "assistant", "content": "You're welcome."},
+    turns = [
+        ("user", "anything new in my inbox?"),
+        ("assistant", "ASST-3 The email says Carol Diaz is now CFO at Globex."),
+        ("user", "ok thanks"),
+        ("assistant", "You're welcome."),
     ]
-    await ingest_conversation_session(
-        "agent:main:webchat:abc", history, "main", "webchat", "run-1", TENANT
-    )
+    store_chat(world.db, KEY, turns)
+    history = [{"role": r, "content": c} for r, c in turns]
+    await ingest_conversation_session(KEY, history, "main", "webchat", "run-1", TENANT)
     (row,) = world.db.facts()
     assert row["origin"] == Origin.AGENT_GENERATED
     (edge,) = world.db.edges()
@@ -482,25 +549,26 @@ async def test_an_assistant_turn_paraphrasing_external_content_is_agent_generate
 async def test_user_turns_of_a_conversation_are_user_stated(world: World) -> None:
     from robothor.memory.conversation_ingest import ingest_conversation_session
 
-    world.model.on("USER-T", fact("Dana Reyes manages Project Atlas.",
-                                  [("Dana Reyes", "person"), ("Project Atlas", "project")],
-                                  [("Dana Reyes", "manages", "Project Atlas")]))  # fmt: skip
-    world.model.on("ASST-T", fact("Project Atlas launches in June.",
-                                  [("Project Atlas", "project")]))  # fmt: skip
-    history = [
-        {"role": "user", "content": "USER-T Dana Reyes manages Project Atlas now."},
-        {"role": "assistant", "content": "ASST-T Got it; Atlas launches in June per the plan."},
-        {"role": "user", "content": "yes"},
-        {"role": "assistant", "content": "ok"},
+    world.model.on_turn("USER-T", turn_fact("Dana Reyes manages Project Atlas.",
+                                            [("Dana Reyes", "person"), ("Project Atlas", "project")],
+                                            [("Dana Reyes", "manages", "Project Atlas")]))  # fmt: skip
+    world.model.on_turn("ASST-T", turn_fact("Project Atlas launches in June.",
+                                            [("Project Atlas", "project")]))  # fmt: skip
+    turns = [
+        ("user", "USER-T Dana Reyes manages Project Atlas now."),
+        ("assistant", "ASST-T Got it; Atlas launches in June per the plan."),
+        ("user", "yes"),
+        ("assistant", "ok"),
     ]
-    await ingest_conversation_session(
-        "agent:main:webchat:abc", history, "main", "webchat", "run-1", TENANT
-    )
+    store_chat(world.db, KEY, turns)
+    history = [{"role": r, "content": c} for r, c in turns]
+    await ingest_conversation_session(KEY, history, "main", "webchat", "run-1", TENANT)
     origin = {f["fact_text"]: f["origin"] for f in world.db.facts()}
     assert origin == {
         "Dana Reyes manages Project Atlas.": Origin.USER_STATED,
         "Project Atlas launches in June.": Origin.AGENT_GENERATED,
     }
+    assert world.model.calls.count("extract_conversation") == 1
     (edge,) = world.db.edges()
     assert edge["origin"] == Origin.USER_STATED
 

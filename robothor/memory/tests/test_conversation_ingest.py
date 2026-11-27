@@ -351,3 +351,35 @@ async def test_each_fact_names_its_conversation_and_turn_range() -> None:
     # The stored source content is the window's own turns, verbatim.
     call = write.call_args_list[0]
     assert all(f"turn number {i}" in call.kwargs["source_content"] for i in range(1, 5))
+
+
+# ═══ the agent's own briefings (MEMORY_INGEST_SKIP_GENERATED) ════════════
+
+
+def _briefing_store() -> Store:
+    return Store(
+        [
+            _turn(1, "user", "morning"),
+            _turn(2, "assistant", "Morning Briefing: a new login was detected"),
+            _turn(3, "user", "thanks"),
+        ],
+        scope=("user", "person:6f1c1b7e-0000-4000-8000-000000000001"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_briefing_is_left_out_when_the_flag_is_on(monkeypatch: Any) -> None:
+    monkeypatch.setenv("MEMORY_INGEST_SKIP_GENERATED", "1")
+    store, model = _briefing_store(), Model()
+    await _run(store, model)
+    assert "Morning Briefing" not in model.prompts[0]
+    assert "morning" in model.prompts[0] and "thanks" in model.prompts[0]
+    assert store.watermark == 3  # the briefing is passed over, not retried
+
+
+@pytest.mark.asyncio
+async def test_a_briefing_is_extracted_by_default(monkeypatch: Any) -> None:
+    monkeypatch.delenv("MEMORY_INGEST_SKIP_GENERATED", raising=False)
+    store, model = _briefing_store(), Model()
+    await _run(store, model)
+    assert "Morning Briefing" in model.prompts[0]

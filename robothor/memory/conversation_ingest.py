@@ -1,48 +1,73 @@
 """
 Conversation Session Ingestion for Genus OS Memory System.
 
-Ingests Telegram and webchat conversation sessions into the memory pipeline
-so that interactive exchanges compound into the knowledge graph (facts + entities).
+Turns what is said in Telegram and webchat conversations into facts, so that
+interactive exchanges compound into memory. Called fire-and-forget after each
+agent run in telegram.py / chat.py.
 
-Called fire-and-forget after each agent run in telegram.py / chat.py.
+The source is the stored conversation (``chat_sessions`` / ``chat_messages``),
+not the in-memory history: it has every turn, each with its message id and the
+time it was said, and the person the session belongs to. The in-memory history
+is used only to wait until the turn that triggered this run has been stored.
 
 Architecture:
-    Session history -> dedup check -> split by role -> ingest_content() once per
-    role (user turns are user-stated, assistant turns agent-generated; the other
-    role is read-only context) -> record
+    stored turns past the conversation's watermark -> windows of consecutive
+    turns (user and assistant interleaved) -> one conversation-mode extraction
+    per window (``robothor.memory.conversation_facts``), the turns before it
+    shown read-only -> each fact written through the write path with its
+    speaker's origin and a link to its source turns -> watermark moves to the
+    window's last message id
+
+Each window is extracted once. A failed extraction, or a fact that could not be
+stored, leaves the watermark where it was, so the same turns are extracted on
+the next run; nothing is stored as a raw transcript.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
+import weakref
+from dataclasses import dataclass, field
 from typing import Any
 
+from psycopg2.extras import RealDictCursor
+
+from robothor.constants import DEFAULT_TENANT
+from robothor.db.connection import get_connection
 from robothor.engine.sanitize import sanitize_log
-from robothor.memory.ingest_state import (
-    content_hash,
-    get_ingested_count,
-    is_already_ingested,
-    record_ingested,
+from robothor.memory.conversation_facts import (
+    ConversationTurn,
+    extract_conversation_facts,
+    render_window,
 )
-from robothor.memory.ingestion import ingest_content
+from robothor.memory.ingest_state import get_ingested_count, record_ingested
 
 logger = logging.getLogger(__name__)
 
-# Minimum number of messages in session history to trigger ingestion.
-MIN_HISTORY_THRESHOLD = 4
+#: Most turns in one extraction window (the old trailing window's size).
+WINDOW_MAX_TURNS = 20
+#: Most characters of turn text in one window; a single longer turn is a
+#: window of its own, never clipped.
+WINDOW_MAX_CHARS = 12_000
+#: Turns before a window shown to the model as read-only context.
+CONTEXT_TURNS = 4
+#: Most windows one run extracts, so a long backlog (a conversation older than
+#: this feature) is covered over several runs instead of one burst.
+MAX_WINDOWS_PER_RUN = 5
+#: How long a run waits for the turn that triggered it to be committed (the
+#: save and this ingest are spawned side by side).
+STORE_WAIT_ATTEMPTS = 20
+STORE_WAIT_SECONDS = 0.5
 
-# Maximum messages to include in the transcript sent to the LLM for extraction.
-MAX_TRANSCRIPT_MESSAGES = 20
-
-# Dedup source name used in ingested_items table.
-_DEDUP_SOURCE = "conversation_session"
-# Per-session message-count watermark (incremental path only).
-_WATERMARK_SOURCE = "conversation_session_watermark"
+#: Watermark (``ingested_items``): the last ``chat_messages.id`` extracted.
+_WATERMARK_SOURCE = "conversation_facts"
 
 # Heuristic markers for an agent's OWN scheduled output (briefings/summaries).
 # Re-ingesting these mistakes the agent re-reporting an event for the event
-# recurring — the dominant churn driver. Names are generic feature labels.
+# recurring. Names are generic feature labels.
 _GENERATED_MARKERS = (
     "morning briefing",
     "evening wind-down",
@@ -51,11 +76,16 @@ _GENERATED_MARKERS = (
     "weekly review",
 )
 
+#: One run at a time per conversation in this process.
+_LOCKS: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = weakref.WeakValueDictionary()
+
 
 def _ingest_skip_generated_enabled() -> bool:
-    """WS-3: skip re-ingesting agent-emitted briefings and extract only NEW turns
-    per session (incremental). Default OFF. When on, both reduce the churn where
-    the same event is re-extracted from the agent's own repeated output."""
+    """Leave the agent's own briefings out of extraction (``MEMORY_INGEST_SKIP_GENERATED``).
+
+    Default off. Every window is extracted once whatever this says; the flag
+    only drops assistant turns that look like a scheduled briefing.
+    """
     raw = os.environ.get("MEMORY_INGEST_SKIP_GENERATED", "0").strip().lower()
     return raw not in ("0", "false", "no", "off")
 
@@ -66,55 +96,149 @@ def _is_generated_briefing(content: str) -> bool:
     return any(m in head for m in _GENERATED_MARKERS)
 
 
-def format_transcript(history: list[dict[str, Any]], *, skip_generated: bool = False) -> str:
-    """Format session history as a readable transcript for fact extraction.
+@dataclass
+class StoredConversation:
+    """One session as stored: the turns past the watermark (oldest first, at
+    most the run's limit), up to :data:`CONTEXT_TURNS` turns before them, who
+    may read it (``segments.session_scope``), whether it is a workspace room,
+    and the text of its last stored turn."""
 
-    Filters out system messages. Truncates to the most recent
-    MAX_TRANSCRIPT_MESSAGES entries to bound LLM context usage. When
-    ``skip_generated`` is set, assistant turns that are the agent's own
-    briefing/summary are dropped so they are not re-extracted as fresh events.
-    """
-    messages = [m for m in history if m.get("role") in ("user", "assistant")]
-
-    if len(messages) > MAX_TRANSCRIPT_MESSAGES:
-        messages = messages[-MAX_TRANSCRIPT_MESSAGES:]
-
-    lines = []
-    for msg in messages:
-        content = msg.get("content", "")
-        if not content:
-            continue
-        if skip_generated and msg["role"] == "assistant" and _is_generated_briefing(content):
-            continue
-        role = "User" if msg["role"] == "user" else "Assistant"
-        lines.append(f"{role}: {content}")
-    return "\n".join(lines)
+    turns: list[ConversationTurn] = field(default_factory=list)
+    context: list[ConversationTurn] = field(default_factory=list)
+    scope_kind: str = "user"
+    scope_id: str | None = None
+    is_room: bool = False
+    tail_text: str | None = None
 
 
-def role_transcripts(
-    history: list[dict[str, Any]], *, skip_generated: bool = False
-) -> dict[str, str]:
-    """The last MAX_TRANSCRIPT_MESSAGES turns, split by who said them.
+def _turn(row: dict[str, Any]) -> ConversationTurn | None:
+    from robothor.secrets.redaction import redact
 
-    ``{"user": ..., "assistant": ...}``, each in :func:`format_transcript`'s
-    line format and order. Extraction runs once per role so a fact's origin is
-    its speaker's.
-    """
-    messages = [m for m in history if m.get("role") in ("user", "assistant")]
-    if len(messages) > MAX_TRANSCRIPT_MESSAGES:
-        messages = messages[-MAX_TRANSCRIPT_MESSAGES:]
-    return {
-        role: format_transcript(
-            [m for m in messages if m["role"] == role], skip_generated=skip_generated
+    message = row["message"] if isinstance(row["message"], dict) else json.loads(row["message"])
+    role = message.get("role")
+    content = message.get("content")
+    if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+        return None
+    speaker = message.get("author_display_name") if role == "user" else None
+    return ConversationTurn(
+        ref=int(row["id"]),
+        role=role,
+        text=redact(content),
+        at=row["created_at"],
+        speaker=str(speaker) if speaker else None,
+    )
+
+
+def _load_conversation(
+    session_key: str, tenant_id: str, after_ref: int, limit: int
+) -> StoredConversation | None:
+    """Read one session's turns past ``after_ref`` (sync; run in a worker thread)."""
+    from robothor.memory.segments import session_scope
+    from robothor.rooms.keys import parse_room_key
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT id, person_id FROM chat_sessions WHERE tenant_id = %s AND session_key = %s",
+            (tenant_id, session_key),
         )
-        for role in ("user", "assistant")
+        session = cur.fetchone()
+        if session is None:
+            return None
+        cols = "SELECT id, message, created_at FROM chat_messages WHERE session_id = %s "
+        cur.execute(cols + "AND id > %s ORDER BY id LIMIT %s", (session["id"], after_ref, limit))
+        new = list(cur.fetchall())
+        cur.execute(
+            cols + "AND id <= %s ORDER BY id DESC LIMIT %s",
+            (session["id"], after_ref, CONTEXT_TURNS * 3),
+        )
+        before = list(reversed(cur.fetchall()))
+        cur.execute(cols + "ORDER BY id DESC LIMIT 8", (session["id"],))
+        last = [t for t in (_turn(r) for r in cur.fetchall()) if t is not None]
+    person_id = str(session["person_id"]) if session["person_id"] else None
+    kind, sid = session_scope(tenant_id, session_key, person_id)
+    return StoredConversation(
+        turns=[t for t in (_turn(r) for r in new) if t is not None],
+        context=[t for t in (_turn(r) for r in before) if t is not None][-CONTEXT_TURNS:],
+        scope_kind=kind,
+        scope_id=sid,
+        is_room=parse_room_key(session_key) is not None,
+        tail_text=last[0].text if last else None,
+    )
+
+
+def _expected_tail(history: list[dict[str, Any]]) -> str | None:
+    from robothor.secrets.redaction import redact
+
+    for m in reversed(history):
+        content = m.get("content")
+        if m.get("role") in ("user", "assistant") and isinstance(content, str) and content.strip():
+            return redact(content).strip()
+    return None
+
+
+async def _load_when_stored(
+    session_key: str, tenant_id: str, after_ref: int, history: list[dict[str, Any]]
+) -> StoredConversation | None:
+    """The stored conversation, once it holds the turn that triggered this run.
+
+    Gives up waiting after :data:`STORE_WAIT_ATTEMPTS` tries and goes on with
+    what is stored: a turn stored later is extracted by the next run.
+    """
+    expected = _expected_tail(history)
+    limit = WINDOW_MAX_TURNS * MAX_WINDOWS_PER_RUN
+    conv: StoredConversation | None = None
+    for attempt in range(STORE_WAIT_ATTEMPTS):
+        conv = await asyncio.to_thread(_load_conversation, session_key, tenant_id, after_ref, limit)
+        stored = (conv.tail_text or "").strip() if conv is not None else None
+        if expected is None or stored == expected:
+            return conv
+        if attempt + 1 < STORE_WAIT_ATTEMPTS:
+            await asyncio.sleep(STORE_WAIT_SECONDS)
+    return conv
+
+
+def windows(turns: list[ConversationTurn]) -> list[list[ConversationTurn]]:
+    """Consecutive runs of at most :data:`WINDOW_MAX_TURNS` turns and
+    :data:`WINDOW_MAX_CHARS` characters, in order."""
+    out: list[list[ConversationTurn]] = []
+    current: list[ConversationTurn] = []
+    chars = 0
+    for t in turns:
+        if current and (len(current) >= WINDOW_MAX_TURNS or chars + len(t.text) > WINDOW_MAX_CHARS):
+            out.append(current)
+            current, chars = [], 0
+        current.append(t)
+        chars += len(t.text)
+    if current:
+        out.append(current)
+    return out
+
+
+_MODE_KEYS = ("speaker_role", "about_user", "kind", "turn_refs", "mentioned_at")
+
+
+def _prepared(fact: dict[str, Any], session_key: str) -> dict[str, Any]:
+    """An extracted fact as the write path takes it, its source turns in its metadata."""
+    refs = list(fact["turn_refs"])
+    out = {k: v for k, v in fact.items() if k not in _MODE_KEYS}
+    out["metadata"] = {
+        "extraction": "conversation",
+        "conversation_kind": fact["kind"],
+        "source": {
+            "kind": "conversation",
+            "ref": session_key,
+            "start_ref": min(refs),
+            "end_ref": max(refs),
+            "turn_refs": refs,
+            "mentioned_at": fact["mentioned_at"],
+        },
     }
+    return out
 
 
 def _merge(total: dict[str, Any], part: dict[str, Any]) -> dict[str, Any]:
-    """Two per-role ingest results as one: ids joined, counts added."""
-    if not total:
-        return dict(part)
+    """Two write results as one: ids joined, counts added."""
     out = dict(total)
     for key, value in part.items():
         if isinstance(value, bool):
@@ -123,21 +247,53 @@ def _merge(total: dict[str, Any], part: dict[str, Any]) -> dict[str, Any]:
             out[key] = int(out.get(key) or 0) + value
         elif isinstance(value, list):
             out[key] = list(out.get(key) or []) + value
-        elif out.get(key) is None:
-            out[key] = value
     return out
 
 
-def _compute_session_hash(session_key: str, history: list[dict[str, Any]]) -> str:
-    """Compute a deterministic hash for dedup."""
-    tail = ""
-    if history:
-        tail = (history[-1].get("content") or "")[:200]
+async def _write_window(
+    facts: list[dict[str, Any]],
+    window: list[ConversationTurn],
+    *,
+    session_key: str,
+    tenant_id: str,
+    trigger_type: str,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Write one window's facts, grouped by speaker so each gets its origin."""
+    from robothor.memory import write_path
 
-    return content_hash(
-        {"key": session_key, "n": str(len(history)), "tail": tail},
-        ["key", "n", "tail"],
-    )
+    source_content = render_window(window)
+    result: dict[str, Any] = {}
+    for role in ("user", "assistant"):
+        group = [_prepared(f, session_key) for f in facts if f["speaker_role"] == role]
+        if not group:
+            continue
+        context = write_path.WriteContext.for_source(
+            tenant_id=tenant_id,
+            source_channel=trigger_type,
+            content_type="conversation",
+            role=role,
+            metadata=metadata,
+        )
+        part = await write_path.write_facts(group, source_content=source_content, context=context)
+        result = _merge(result, part)
+    return result
+
+
+async def _populate_vault(window: list[ConversationTurn], trigger_type: str, tenant: str) -> int:
+    """Verbatim reference values to the Knowledge Vault, as ``ingest_content`` does (gated)."""
+    from robothor.memory.vault import _vault_populate_enabled, populate_vault_from_content
+
+    if not _vault_populate_enabled():
+        return 0
+    try:
+        stored = await populate_vault_from_content(
+            render_window(window), source=trigger_type, tenant_id=tenant
+        )
+        return len(stored)
+    except Exception as e:
+        logger.warning("Vault auto-populate failed: %s", e)
+        return 0
 
 
 async def ingest_conversation_session(
@@ -148,99 +304,99 @@ async def ingest_conversation_session(
     run_id: str,
     tenant_id: str = "",
 ) -> dict[str, Any] | None:
-    """Ingest a conversation session into the memory pipeline.
+    """Extract the conversation's turns not yet extracted; never raises.
 
-    Called fire-and-forget after each interactive agent run.
+    Returns the merged write result with ``llm_calls``, ``windows`` and
+    ``turns_covered``, or ``None`` when nothing was extracted (nothing new, the
+    session is not stored, or extraction or storage failed — those turns are
+    retried by the next run).
     """
+    tenant = tenant_id or DEFAULT_TENANT
     try:
-        if len(history) < MIN_HISTORY_THRESHOLD:
-            return None
-
-        incremental = _ingest_skip_generated_enabled()
-        tid = tenant_id or None
-        hash_val = ""
-
-        if incremental:
-            # Extract only the turns added since this session was last ingested,
-            # dropping the agent's own briefings — instead of re-extracting the
-            # trailing 20 messages every turn (the {n, tail} hash never matched a
-            # growing session, so the same tail was re-ingested repeatedly).
-            last_n = get_ingested_count(_WATERMARK_SOURCE, session_key, tenant_id=tid)
-            window = history[last_n:] if 0 < last_n < len(history) else history
-            new_msgs = [m for m in window if m.get("role") in ("user", "assistant")]
-            if len(new_msgs) < 2:
-                record_ingested(_WATERMARK_SOURCE, session_key, str(len(history)), tenant_id=tid)
-                return None
-            turns = role_transcripts(window, skip_generated=True)
-        else:
-            hash_val = _compute_session_hash(session_key, history)
-            if is_already_ingested(_DEDUP_SOURCE, session_key, hash_val):
-                logger.debug(
-                    "Session %s already ingested (hash match), skipping",
-                    sanitize_log(session_key),
-                )
-                return None
-            turns = role_transcripts(history)
-
-        if not any(t.strip() for t in turns.values()):
-            if incremental:
-                record_ingested(_WATERMARK_SOURCE, session_key, str(len(history)), tenant_id=tid)
-            return None
-
-        metadata = {
-            "session_key": session_key,
-            "agent_id": agent_id,
-            "run_id": run_id,
-            "message_count": len(history),
-        }
-        # Extracted per role, so each fact's origin is who said it: a person's
-        # turns are user-stated, the assistant's agent-generated (even when they
-        # paraphrase an email). The other side is shown only as read-only context.
-        result: dict[str, Any] = {}
-        for role, other in (("user", "assistant"), ("assistant", "user")):
-            if not turns[role].strip():
-                continue
-            part = await ingest_content(
-                content=turns[role],
-                source_channel=trigger_type,
-                content_type="conversation",
-                metadata=metadata,
-                # Without this the watermarks were tenant-correct while the facts
-                # they tracked were written to DEFAULT_TENANT.
-                tenant_id=tenant_id,
-                role=role,
-                read_only_context=turns[other] or None,
-                # A transcript nobody asked to keep is not stored as one blob
-                # when extraction fails; the watermark stays put and the turns
-                # are extracted again on the next run.
-                fallback_on_failure=False,
-            )
-            result = _merge(result, part)
-        if result.get("extraction_failed"):
-            logger.warning(
-                "Conversation extraction failed for %s (%s); will retry",
-                sanitize_log(session_key),
-                result.get("extraction_error"),
-            )
-            return None
-
-        if incremental:
-            record_ingested(
-                _WATERMARK_SOURCE, session_key, str(len(history)), result.get("fact_ids", []), tid
-            )
-        else:
-            record_ingested(_DEDUP_SOURCE, session_key, hash_val, result.get("fact_ids", []))
-
-        logger.info(
-            "Ingested conversation session %s: %d facts, %d entities",
-            sanitize_log(session_key),
-            result.get("facts_processed", 0),
-            result.get("entities_stored", 0),
-        )
-        return result
-
+        lock = _LOCKS.setdefault((tenant, session_key), asyncio.Lock())
+        async with lock:
+            return await _ingest(session_key, history, agent_id, trigger_type, run_id, tenant)
     except Exception:
         logger.warning(
             "Conversation ingestion failed for %s", sanitize_log(session_key), exc_info=True
         )
         return None
+
+
+async def _ingest(
+    session_key: str,
+    history: list[dict[str, Any]],
+    agent_id: str,
+    trigger_type: str,
+    run_id: str,
+    tenant: str,
+) -> dict[str, Any] | None:
+    after = get_ingested_count(_WATERMARK_SOURCE, session_key, tenant_id=tenant)
+    conv = await _load_when_stored(session_key, tenant, after, history)
+    if conv is None or not conv.turns:
+        return None
+
+    metadata = {"session_key": session_key, "agent_id": agent_id, "run_id": run_id}
+    skip_generated = _ingest_skip_generated_enabled()
+    seen = list(conv.context)
+    result: dict[str, Any] = {"fact_ids": [], "llm_calls": 0, "windows": 0, "turns_covered": 0}
+    for window in windows(conv.turns):
+        last_ref = window[-1].ref
+        kept = [
+            t
+            for t in window
+            if not (skip_generated and t.role == "assistant" and _is_generated_briefing(t.text))
+        ]
+        if kept:
+            context = seen[-CONTEXT_TURNS:]
+            extraction = await extract_conversation_facts(kept, context=context)
+            result["llm_calls"] += 1
+            if extraction.error is not None:
+                logger.warning(
+                    "Conversation extraction failed for %s (%s); will retry",
+                    sanitize_log(session_key),
+                    extraction.error,
+                )
+                return _done(result)
+            part = await _write_window(
+                extraction.facts,
+                kept,
+                session_key=session_key,
+                tenant_id=tenant,
+                trigger_type=trigger_type,
+                metadata=metadata,
+            )
+            if part.get("facts_failed"):
+                logger.warning(
+                    "Conversation facts not stored for %s (%s); will retry",
+                    sanitize_log(session_key),
+                    "; ".join(part.get("errors") or []),
+                )
+                return _done(result)
+            result = _merge(result, part)
+            result["vault_stored"] = result.get("vault_stored", 0) + await _populate_vault(
+                kept, trigger_type, tenant
+            )
+        record_ingested(
+            _WATERMARK_SOURCE,
+            session_key,
+            str(last_ref),
+            list(result.get("fact_ids") or []),
+            tenant_id=tenant,
+        )
+        result["windows"] += 1
+        result["turns_covered"] += len(window)
+        seen.extend(window)
+
+    logger.info(
+        "Ingested conversation session %s: %d windows, %d facts",
+        sanitize_log(session_key),
+        result["windows"],
+        len(result["fact_ids"]),
+    )
+    return result
+
+
+def _done(result: dict[str, Any]) -> dict[str, Any] | None:
+    """What a run that stopped early returns: what it completed, else None."""
+    return result if result["windows"] else None

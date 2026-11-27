@@ -124,21 +124,3 @@ class TestGeneratedBriefingSkip:
         assert ci._is_generated_briefing("Morning Briefing — May 30\n...") is True
         assert ci._is_generated_briefing("Evening Wind-Down summary") is True
         assert ci._is_generated_briefing("hey, can you check this email?") is False
-
-    def test_format_transcript_drops_generated_assistant_turn(self) -> None:
-        history = [
-            {"role": "user", "content": "morning"},
-            {"role": "assistant", "content": "Morning Briefing: an OpenRouter login was detected"},
-            {"role": "user", "content": "thanks"},
-        ]
-        out = ci.format_transcript(history, skip_generated=True)
-        assert "Morning Briefing" not in out
-        assert "morning" in out and "thanks" in out
-
-    def test_format_transcript_keeps_everything_by_default(self) -> None:
-        history = [
-            {"role": "user", "content": "morning"},
-            {"role": "assistant", "content": "Morning Briefing: stuff"},
-        ]
-        out = ci.format_transcript(history)
-        assert "Morning Briefing" in out

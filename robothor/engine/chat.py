@@ -468,8 +468,9 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 else:
                     await chat_rooms.saved(target, saving)
 
-            # Ingest conversation to memory (fire-and-forget)
-            if len(session.history) >= 4 and _config:
+            # Ingest conversation to memory (fire-and-forget). Every exchange,
+            # however short: ingest extracts only the turns not yet extracted.
+            if _config:
                 from robothor.engine.task_registry import get_task_registry
                 from robothor.memory.conversation_ingest import (
                     ingest_conversation_session,
