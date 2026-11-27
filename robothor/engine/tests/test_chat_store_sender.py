@@ -35,3 +35,30 @@ def test_the_webchat_path_passes_the_member() -> None:
     src = (ROOT / "robothor/engine/chat.py").read_text()
     call = src[src.index("saving = save_exchange_async(") :]
     assert "with_sender(" in call[: call.index("user_at=")]
+
+
+async def test_history_never_shows_who_sent_a_turn(monkeypatch) -> None:  # noqa: ANN001
+    """The sender is for memory's attribution only; no history reader sees it."""
+    from types import SimpleNamespace
+
+    from robothor.engine import chat_history_page
+
+    stored = {
+        "messages": [
+            {"role": "user", "content": "hi", "sender_user_id": "member-1"},
+            {
+                "role": "user",
+                "content": "yo",
+                "sender_telegram_id": "4242",
+                "telegram_message_id": "9",
+            },
+        ],
+        "hasMore": False,
+    }
+    monkeypatch.setattr(chat_store, "load_history_page", lambda *a, **k: stored)
+    page = await chat_history_page.history_page(
+        [], "agent:main:primary", 50, {}, SimpleNamespace(tenant_id="t")
+    )
+    for message in page["messages"]:
+        assert "sender_user_id" not in message and "sender_telegram_id" not in message
+    assert page["messages"][1]["telegram_message_id"] == "9"  # everything else is unchanged
