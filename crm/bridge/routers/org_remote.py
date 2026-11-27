@@ -220,9 +220,13 @@ async def remote_call(request: Request) -> JSONResponse:
         target,
         forwarded,
         body,
-        status="ok"
-        if status == 200
-        else ("denied" if status in (403, 404, 409, 413, 422) else "error"),
+        status=(
+            "unknown"
+            if isinstance(answer, dict) and answer.get("outcome_unknown") is True
+            else "ok"
+            if status == 200
+            else ("denied" if status in (403, 404, 409, 413, 422) else "error")
+        ),
         reason=str(answer.get("error") or "") if isinstance(answer, dict) else "",
         http_status=status,
         outcome=outcome,
