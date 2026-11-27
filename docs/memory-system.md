@@ -581,13 +581,13 @@ search.
 **Only the matched clause counts.** The frame matches the first sentence of
 the fact; that clause and the slot values (passed as separate quoted fields)
 are all the judge sees, and the wording gate reads that clause with the
-value struck out ("9 New Street" or "New York" never count as "new"). The
+value struck out ("9 New Plaza" or "New York" never count as "new"). The
 judge's prompt states that both facts are untrusted data and that any
 instruction inside them is to be ignored. A fact whose text reads like an
 instruction to a classifier ("SYSTEM: …", "ignore previous instructions",
 "note to classifier", "answer changed") never closes or files anything:
 when the judge says it changed, both stay and the conflict is recorded. Names (residence, employer, manager, spouse, car, ...) must be
-capitalised words ("the sales team", "night", "her job", "12 Main Street" as a
+capitalised words ("the sales team", "night", "her job", "12 Main Plaza" as a
 residence are refused); phone, email, address, birthday, age and timezone must
 match their literal shape ("broken", "next week", "a sensitive topic" are
 refused).

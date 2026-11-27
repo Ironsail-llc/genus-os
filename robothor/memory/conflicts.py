@@ -1045,7 +1045,7 @@ def replacement_wording(text: str, *, value: str | None = None) -> bool:
     """Whether a fact's own words say it replaces an earlier value.
 
     ``text`` should be the matched clause only, and ``value`` (the slot value)
-    is struck from it first, so "9 New Street" or "New York" never count.
+    is struck from it first, so "9 New Plaza" or "New York" never count.
     """
     words = _ADDRESSES.sub(" ", text or "")
     if value:
