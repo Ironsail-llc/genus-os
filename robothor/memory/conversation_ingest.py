@@ -43,6 +43,7 @@ from robothor.memory.conversation_facts import (
     extract_conversation_facts,
     render_window,
 )
+from robothor.memory.graph_schema import Origin
 from robothor.memory.ingest_state import get_ingested_count, record_ingested
 
 logger = logging.getLogger(__name__)
@@ -288,7 +289,7 @@ def _prepared(fact: dict[str, Any], session_key: str, owner: Owner) -> dict[str,
             "mentioned_at": fact["mentioned_at"],
         },
     }
-    if fact["about_user"]:
+    if fact["about_user"] and fact["speaker_role"] == "user":
         metadata["subject"] = owner.subject()
         if owner.person_id:
             anchor = {"surface_form": "the user", "entity_type": "person"}
@@ -326,17 +327,21 @@ async def _write_window(
 
     source_content = render_window(window)
     result: dict[str, Any] = {}
-    for role in ("user", "assistant"):
-        group = [_prepared(f, session_key, owner) for f in facts if f["speaker_role"] == role]
+    for speaker in ("user", "assistant", "external"):
+        group = [_prepared(f, session_key, owner) for f in facts if f["speaker_role"] == speaker]
         if not group:
             continue
+        # Someone else's words, relayed in a user turn or said by a guest: they
+        # reached us through the chat, so they are external, never user-stated.
+        external = speaker == "external"
         context = write_path.WriteContext.for_source(
             tenant_id=tenant_id,
             source_channel=trigger_type,
             content_type="conversation",
-            role=role,
+            role="user" if external else speaker,
             metadata=metadata,
             scope=owner.scope,
+            origin_cap=Origin.EXTERNAL if external else None,
         )
         part = await write_path.write_facts(group, source_content=source_content, context=context)
         result = _merge(result, part)
