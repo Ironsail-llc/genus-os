@@ -802,16 +802,23 @@ class _State:
     claimed_until: int | None = None
 
     @classmethod
-    def parse(cls, raw: str | None) -> _State:
+    def parse(cls, raw: str | None) -> _State | None:
+        """The state, or ``None`` when the row does not hold a well-formed one."""
         parts = (raw or "").split("|")
         if len(parts) != 5:
-            return cls()
-
-        def num(v: str) -> int | None:
-            return int(v) if v.isdigit() else None
-
+            return None
+        through, failures, failed_end, claim, until = parts
+        numbers = (through, failures, failed_end, until)
+        if not through or not failures or claim and not claim.isalnum():
+            return None
+        if any(v and (not v.isdigit() or len(v) > 19) for v in numbers):
+            return None
         return cls(
-            num(parts[0]) or 0, num(parts[1]) or 0, num(parts[2]), parts[3] or None, num(parts[4])
+            int(through),
+            int(failures),
+            int(failed_end) if failed_end else None,
+            claim or None,
+            int(until) if until else None,
         )
 
     def encode(self) -> str:
@@ -860,12 +867,30 @@ def _mutate(
             (tenant_id, _WATERMARK_SOURCE, session_key),
         )
         raw, now = cur.fetchone()
-        new = change(_State.parse(raw), int(now))
-        if new is not None:
+        state = _State.parse(raw)
+        if state is None:
+            # Never restart from zero: that would extract the whole history
+            # again. Start at the conversation's current end, and say so.
+            cur.execute(
+                "SELECT COALESCE(max(m.id), 0) FROM chat_messages m JOIN chat_sessions s "
+                "ON s.id = m.session_id WHERE s.tenant_id = %s AND s.session_key = %s",
+                (tenant_id, session_key),
+            )
+            state = _State(through=int(cur.fetchone()[0]))
+            logger.error(
+                "Conversation %s: malformed watermark %r; starting at its current end (%d)",
+                sanitize_log(session_key),
+                sanitize_log(str(raw))[:80],
+                state.through,
+            )
+        repaired = state.encode() != raw
+        new = change(state, int(now))
+        write = new if new is not None else (state if repaired else None)
+        if write is not None:
             cur.execute(
                 "UPDATE ingested_items SET content_hash = %s, ingested_at = NOW() "
                 "WHERE tenant_id = %s AND source_name = %s AND item_id = %s",
-                (new.encode(), tenant_id, _WATERMARK_SOURCE, session_key),
+                (write.encode(), tenant_id, _WATERMARK_SOURCE, session_key),
             )
         conn.commit()
     return new
