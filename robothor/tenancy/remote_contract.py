@@ -12,20 +12,6 @@ import json
 import re
 from typing import Any
 
-# ── Mode (GENUS_ORG_REMOTE_TOOLS) ────────────────────────────────────────────
-
-MODE_OFF = "off"  # every remote call refused
-MODE_READ = "read"  # reads allowed, writes refused
-MODE_DRY_RUN = "dry_run"  # reads allowed, every write forced to a dry run
-MODE_FULL = "full"  # reads allowed, writes execute (or dry-run when asked)
-
-REMOTE_MODES: tuple[str, ...] = (MODE_OFF, MODE_READ, MODE_DRY_RUN, MODE_FULL)
-
-#: What an unset (or empty) mode means.
-DEFAULT_MODE = MODE_FULL
-#: What a value outside :data:`REMOTE_MODES` means: a typo must not open anything.
-UNKNOWN_MODE_FALLBACK = MODE_OFF
-
 # ── Access, outcomes ─────────────────────────────────────────────────────────
 
 ACCESS_READ = "read"
@@ -40,7 +26,6 @@ OUTCOMES: frozenset[str] = frozenset({OUTCOME_OK, OUTCOME_ERROR, OUTCOME_DRY_RUN
 
 # ── Refusal codes ────────────────────────────────────────────────────────────
 
-ERR_TOOLS_OFF = "remote_tools_off"
 ERR_WRITE_FORBIDDEN = "remote_write_forbidden"
 ERR_TOOL_UNKNOWN = "remote_tool_unknown"
 ERR_ACCESS_MISMATCH = "remote_access_mismatch"
@@ -54,7 +39,6 @@ ERR_TIMEOUT = "remote_timeout"
 
 ERROR_CODES: frozenset[str] = frozenset(
     {
-        ERR_TOOLS_OFF,
         ERR_WRITE_FORBIDDEN,
         ERR_TOOL_UNKNOWN,
         ERR_ACCESS_MISMATCH,
@@ -114,16 +98,3 @@ def args_digest(args: Any) -> str:
         ensure_ascii=False,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def normalise_mode(raw: str | None) -> str:
-    """One mode value as every hop reads it.
-
-    Surrounding whitespace is ignored; unset or empty is :data:`DEFAULT_MODE`;
-    anything else outside :data:`REMOTE_MODES` (case included) is
-    :data:`UNKNOWN_MODE_FALLBACK`.
-    """
-    text = (raw or "").strip()
-    if not text:
-        return DEFAULT_MODE
-    return text if text in REMOTE_MODES else UNKNOWN_MODE_FALLBACK

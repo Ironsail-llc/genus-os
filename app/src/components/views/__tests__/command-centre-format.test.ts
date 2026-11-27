@@ -7,7 +7,6 @@ import {
   failureReasonLabel,
   formatCost,
   formatRate,
-  remoteToolsModeLabel,
   sortCompanies,
   statusLabel,
   summariseChecks,
@@ -98,19 +97,6 @@ describe("formatting", () => {
   });
 });
 
-describe("remoteToolsModeLabel", () => {
-  it("names each remote-tools mode in plain words", () => {
-    expect(remoteToolsModeLabel("off")).toBe("off");
-    expect(remoteToolsModeLabel("read")).toBe("read only");
-    expect(remoteToolsModeLabel("dry_run")).toBe("dry run");
-    expect(remoteToolsModeLabel("full")).toBe("full");
-  });
-
-  it("shows an unknown mode as itself, words split, rather than as full", () => {
-    expect(remoteToolsModeLabel("something_new")).toBe("something new");
-  });
-});
-
 describe("summariseChecks", () => {
   it("counts checks by status and names the failing and warning ones", () => {
     expect(
@@ -174,7 +160,6 @@ describe("connectionsByTenant", () => {
     const map = connectionsByTenant({
       as_of: "",
       home_tenant_id: "acme-parent",
-      mode: "full",
       tenants: [entryFor("acme-child-a"), entryFor("acme-child-b")],
     });
     expect(map.get("acme-child-a")?.tenant_id).toBe("acme-child-a");

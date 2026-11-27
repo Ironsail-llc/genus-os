@@ -2000,16 +2000,19 @@ attestation the parent's deployment must make (`GENUS_ORG_REMOTE_ATTESTATIONS`,
 for example a signed data agreement). The engine admits a call in this order,
 and refuses with one sentence, sending nothing, at the first that fails:
 
-1. the mode, `GENUS_ORG_REMOTE_TOOLS` (`off` refuses all three; `read`
-   refuses `org_tool_write`; `dry_run` turns every write into a dry run);
-2. `tenant` must look like a tenant id (anything else reads as unreachable);
-3. a live, top-level run: a sub-agent or benchmark run is refused;
-4. a tenant the run may reach that is not its own. An unknown tenant and an
+1. `tenant` must look like a tenant id (anything else reads as unreachable);
+2. a live, top-level run: a sub-agent or benchmark run is refused;
+3. a tenant the run may reach that is not its own. An unknown tenant and an
    unreachable one get the same sentence; the run's own tenant is refused with
    a pointer to call the tool directly;
-5. a write: a person-started run by the verified owner. A scheduled or other
+4. a write: a person-started run by the verified owner. A scheduled or other
    unattended run never writes;
-6. `dry_run` must be the boolean `true` or `false`.
+5. `dry_run` must be the boolean `true` or `false`.
+
+There is no setting that turns remote tools on or off. A child controls what
+it offers through its plugins' `remote` declarations, its per-tool grants and
+its roles; how an operator stops or narrows them is in the
+[tenant hierarchy runbook](runbooks/TENANT_HIERARCHY.md#using-a-childs-connectors).
 
 The bridge and the child check again (the person must be an owner or admin of
 the parent who may act in the child, an owner for a write; a person-less read
@@ -2458,8 +2461,8 @@ for what the agent can do, a fail naming the gate and the unlock for what it
 cannot. Not a verdict on the instance; it is where to look when an agent says it
 cannot do something the person expected. `--agent <id>` reports one agent.
 
-**`capabilities.remote_tools`** (recommended) — when `GENUS_ORG_REMOTE_TOOLS` is
-not `off` and the tenant has child tenants, fails for each agent that uses the
+**`capabilities.remote_tools`** (recommended) — when the tenant has child
+tenants, fails for each agent that uses the
 remote tools (`main`, and any agent granted `org_tools`, `org_tool_read` or
 `org_tool_write`) which the bridge's `agent_capabilities.json` lists without
 `"GET /api/org/remote/*"` and `"POST /api/org/remote/call"` in its

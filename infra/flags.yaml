@@ -948,21 +948,6 @@ flags:
       benchmark checkout that produce nothing. Only after both does a promotion
       date belong here at all.
 
-  - name: GENUS_ORG_REMOTE_TOOLS
-    owner: ops
-    # A value-set flag, not a ladder (see ROBOTHOR_CALENDAR_SEND_UPDATES):
-    # robothor/flags/store.py::VALUE_SET_FLAGS is the mirror.
-    values: ["off", read, dry_run, full]
-    mode: full
-    soak: >
-      NEW in 1.141.0. How far a parent tenant's agent may go with the tools a
-      descendant tenant's plugins declare remote. `off` refuses every remote
-      call; `read` allows reads and refuses writes; `dry_run` allows reads and
-      turns every write into a dry run; `full` allows both. Checked by the
-      calling engine, the bridge and the target engine, each from its own
-      value. Ships at `full`: each remote call is still bounded by the target's
-      own declaration, roles and attestations. Any other value reads as `off`.
-
   - name: GENUS_TENANT_SWITCH_MODE
     owner: ops
     mode: "off"

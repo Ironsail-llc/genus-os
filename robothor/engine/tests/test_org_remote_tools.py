@@ -7,13 +7,11 @@ These three built-ins reach them through the bridge (``POST
 (``cross_tenant.admit``) leaves them alone, and the handler admits the call
 itself, in this order:
 
-1. the mode (``GENUS_ORG_REMOTE_TOOLS``): ``off`` refuses all; ``read``
-   refuses writes,
-2. the shape of ``tenant``,
-3. a live, top-level, non-benchmark run,
-4. a target this run may reach that is not its own tenant,
-5. for a write, an attended run by the verified owner,
-6. ``dry_run`` a real boolean.
+1. the shape of ``tenant``,
+2. a live, top-level, non-benchmark run,
+3. a target this run may reach that is not its own tenant,
+4. for a write, an attended run by the verified owner,
+5. ``dry_run`` a real boolean.
 
 Every outcome writes one ``agent.cross_tenant_call`` row under the home
 tenant, with ``details.remote_tool``. The bridge is faked at the HTTP layer
@@ -37,7 +35,6 @@ from robothor.identity import IdentityContext
 from robothor.tenancy.remote_contract import (
     ERR_ATTESTATION_MISSING,
     ERR_OUTCOME_UNKNOWN,
-    ERR_TOOLS_OFF,
     ERR_WRITE_FORBIDDEN,
     HOME_TIMEOUT_S,
     SCOPE_ORG_REMOTE,
@@ -100,7 +97,6 @@ class _Bridge:
                 200,
                 {
                     "tenant_id": tenant,
-                    "mode": "full",
                     "plugins": [{"name": "example-plugin", "version": "1.0.0", "enabled": True}],
                     "tools": [{"name": "example_read", "access": "read", "description": "d"}],
                     "checks": [],
@@ -133,7 +129,6 @@ class _Bridge:
 @pytest.fixture
 def env(monkeypatch):
     monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", KEY)
-    monkeypatch.setenv("GENUS_ORG_REMOTE_TOOLS", "full")
     from robothor.auth import tokens
     from robothor.engine.tools.handlers.org_remote import HANDLERS
     from robothor.engine.tools.service_client import reset_bridge_token_cache
@@ -172,13 +167,6 @@ def env(monkeypatch):
         yield state
     tokens.reset_signing_key_cache()
     reset_bridge_token_cache()
-    reset_settings()
-
-
-def _mode(monkeypatch, mode: str) -> None:
-    from robothor.settings import reset_settings
-
-    monkeypatch.setenv("GENUS_ORG_REMOTE_TOOLS", mode)
     reset_settings()
 
 
@@ -339,45 +327,7 @@ def test_the_catalogue_with_no_reach_says_so_and_asks_nobody(env):
 # ── Admission, in order ─────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("name", TOOLS)
-def test_off_refuses_every_tool(env, monkeypatch, name):
-    _mode(monkeypatch, "off")
-
-    result = _call(name, _write())
-
-    _refused(result, env)
-    assert result["error_code"] == ERR_TOOLS_OFF
-
-
-def test_off_is_checked_before_the_target(env, monkeypatch):
-    _mode(monkeypatch, "off")
-
-    result = _call("org_tool_read", _read(tenant=["not", "a", "tenant"]))
-
-    assert result["error_code"] == ERR_TOOLS_OFF
-
-
-def test_read_mode_allows_reads_and_refuses_writes(env, monkeypatch):
-    _mode(monkeypatch, "read")
-
-    assert "error" not in _call("org_tool_read", _read())
-    env.bridge.requests.clear()
-    result = _call("org_tool_write", _write())
-
-    _refused(result, env)
-    assert result["error_code"] == ERR_WRITE_FORBIDDEN
-
-
-def test_dry_run_mode_sends_every_write_as_a_dry_run(env, monkeypatch):
-    _mode(monkeypatch, "dry_run")
-
-    result = _call("org_tool_write", _write())
-
-    assert env.bridge.body(env.bridge.calls[0])["dry_run"] is True
-    assert result["outcome"] == "dry_run"
-
-
-def test_full_sends_a_write_as_asked(env):
+def test_a_write_is_sent_as_asked(env):
     _call("org_tool_write", _write())
     _call("org_tool_write", _write(dry_run=True))
 
@@ -436,12 +386,16 @@ def test_a_write_needs_the_verified_owner(env):
     result = _call("org_tool_write", _write(), identity=ADMIN, user_id="bob", user_role="admin")
 
     assert "owner" in _refused(result, env).lower()
+    assert result["error_code"] == ERR_WRITE_FORBIDDEN
 
 
 def test_an_unattended_run_never_writes(env):
     env.session = _session(trigger_type=TriggerType.CRON)
 
-    _refused(_unattended("org_tool_write", _write()), env)
+    result = _unattended("org_tool_write", _write())
+
+    _refused(result, env)
+    assert result["error_code"] == ERR_WRITE_FORBIDDEN
 
 
 def test_an_owner_identity_on_a_scheduled_run_still_does_not_write(env):
@@ -594,10 +548,8 @@ def test_the_catalogue_is_audited_once_per_company(env):
     assert {r["tool"] for r in _rows(env)} == {"org_tools"}
 
 
-def test_a_refused_catalogue_is_audited(env, monkeypatch):
-    _mode(monkeypatch, "off")
-
-    _call("org_tools", {"tenant": CHILD_A})
+def test_a_refused_catalogue_is_audited(env):
+    _call("org_tools", {"tenant": CHILD_B}, accessible_tenant_ids=(PARENT, CHILD_A))
 
     (row,) = _rows(env)
     assert row["outcome"] == "denied"

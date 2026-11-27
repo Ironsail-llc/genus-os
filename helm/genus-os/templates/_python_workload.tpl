@@ -130,15 +130,9 @@ Renders:
 {{- end -}}
 {{- end -}}
 {{- /* Remote tools: the bridge forwards a parent agent's call and the
-       target engine admits it, so the mode and the attestation list reach
-       the bridge and every engine alike. The bridge's own attestations are
-       the ones presented to a target. */ -}}
-{{- with $tenancy.remoteTools -}}
-{{- if not (has (toString .) (list "off" "read" "dry_run" "full")) -}}
-{{- fail (printf "tenancy.remoteTools must be one of off, read, dry_run, full, got %q" (toString .)) -}}
-{{- end -}}
-{{- $_ := set $serviceEnv "GENUS_ORG_REMOTE_TOOLS" (toString .) -}}
-{{- end -}}
+       target engine admits it, so the attestation list reaches the bridge
+       and every engine alike. The bridge's own attestations are the ones
+       presented to a target. */ -}}
 {{- with $tenancy.remoteAttestations -}}
 {{- range . -}}
 {{- if not (regexMatch "^[a-z][a-z0-9_]{0,31}$" (toString .)) -}}

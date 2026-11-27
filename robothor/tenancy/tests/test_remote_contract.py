@@ -11,18 +11,10 @@ import pytest
 from robothor.tenancy import remote_contract as rc
 
 
-def test_the_four_modes_and_their_default():
-    assert rc.REMOTE_MODES == ("off", "read", "dry_run", "full")
-    assert (rc.MODE_OFF, rc.MODE_READ, rc.MODE_DRY_RUN, rc.MODE_FULL) == rc.REMOTE_MODES
-    assert rc.DEFAULT_MODE == "full"
-    assert rc.UNKNOWN_MODE_FALLBACK == "off"
-
-
 def test_every_refusal_code_in_the_contract():
     assert (
         frozenset(
             {
-                "remote_tools_off",
                 "remote_write_forbidden",
                 "remote_tool_unknown",
                 "remote_access_mismatch",
@@ -37,7 +29,6 @@ def test_every_refusal_code_in_the_contract():
         )
         == rc.ERROR_CODES
     )
-    assert rc.ERR_TOOLS_OFF == "remote_tools_off"
     assert rc.ERR_TIMEOUT == "remote_timeout"
 
 
@@ -93,19 +84,3 @@ def test_args_digest_ignores_key_order_and_is_stable():
 
 def test_args_digest_of_none_is_the_empty_object():
     assert rc.args_digest(None) == rc.args_digest({})
-
-
-@pytest.mark.parametrize("raw", ["off", "read", "dry_run", "full"])
-def test_normalise_mode_keeps_each_rung(raw):
-    assert rc.normalise_mode(raw) == raw
-    assert rc.normalise_mode(f"  {raw} ") == raw
-
-
-@pytest.mark.parametrize("raw", [None, "", "   "])
-def test_normalise_mode_unset_is_full(raw):
-    assert rc.normalise_mode(raw) == "full"
-
-
-@pytest.mark.parametrize("raw", ["mostly", "on", "true", "enforce", "Full", "dry-run"])
-def test_normalise_mode_unknown_is_off(raw):
-    assert rc.normalise_mode(raw) == "off"

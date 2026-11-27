@@ -14,13 +14,11 @@ ENGINE: a service token carrying ``org:remote`` (``middleware`` refuses
 anything else before these run). The token's tenant is the HOME tenant; the
 body never names it. Before anything travels the bridge checks, in order:
 
-1. the mode (``GENUS_ORG_REMOTE_TOOLS``): ``off`` refuses everything, ``read``
-   refuses writes, ``dry_run`` turns every write into a dry run;
-2. the body's shape;
-3. that the target is a descendant of home -- anything else is a 404 with the
+1. the body's shape;
+2. that the target is a descendant of home -- anything else is a 404 with the
    engine's own unreachable sentence, so an unknown tenant and a forbidden one
    look the same;
-4. who the call is for: a named person must act in the target
+3. who the call is for: a named person must act in the target
    (``acting_role``), as its ``owner`` for a write; no person means an
    unattended read, allowed only while home grants its agents child data
    access, and never a write.
@@ -49,11 +47,7 @@ from robothor.tenancy.remote_contract import (
     ERR_BAD_ARGUMENTS,
     ERR_NOT_PERMITTED,
     ERR_TIMEOUT,
-    ERR_TOOLS_OFF,
     ERR_WRITE_FORBIDDEN,
-    MODE_DRY_RUN,
-    MODE_OFF,
-    MODE_READ,
     SCOPE_ORG_REMOTE,
     args_digest,
 )
@@ -88,21 +82,6 @@ class _RefusedError(Exception):
         return JSONResponse(
             status_code=self.status,
             content={"error": self.code, "message": self.message, "attestation": None},
-        )
-
-
-def _mode() -> str:
-    from robothor.auth.runtime import org_remote_tools_mode
-
-    return org_remote_tools_mode()
-
-
-def _check_mode(mode: str, access: str) -> None:
-    if mode == MODE_OFF:
-        raise _RefusedError(403, ERR_TOOLS_OFF, "Remote tools are turned off on this deployment.")
-    if access == ACCESS_WRITE and mode == MODE_READ:
-        raise _RefusedError(
-            403, ERR_WRITE_FORBIDDEN, "Remote tools are read-only on this deployment."
         )
 
 
@@ -217,9 +196,6 @@ async def remote_call(request: Request) -> JSONResponse:
     try:
         auth = _require_engine(request)
         home = auth.tenant_id
-        mode = await asyncio.to_thread(_mode)
-        raw_access = body.get("access") if isinstance(body, dict) else None
-        _check_mode(mode, raw_access if isinstance(raw_access, str) else "")
         call = _parse_call(body)
         target = await _check_target(home, body.get("tenant"))
         await _check_requester(home, target, call["requested_by"], call["access"])
@@ -229,7 +205,6 @@ async def remote_call(request: Request) -> JSONResponse:
 
     forwarded = {
         **call,
-        "dry_run": call["dry_run"] or (call["access"] == ACCESS_WRITE and mode == MODE_DRY_RUN),
         "home_tenant": home,
         "agent_id": auth.agent_id or auth.user_id,
         "attestations": _attestations(),
@@ -293,7 +268,6 @@ async def remote_catalogue(
     target: str | None = None
     try:
         auth = _require_engine(request)
-        _check_mode(await asyncio.to_thread(_mode), "")
         if tool is not None and not _TOOL_NAME.fullmatch(tool):
             raise _bad("`tool` must be a tool name.")
         target = await _check_target(auth.tenant_id, tenant)
@@ -381,32 +355,24 @@ async def org_connections(request: Request) -> dict[str, Any]:
     reach = await asyncio.to_thread(resolve_accessible_tenants, home, auth.role)
     targets = [t for t in reach if t != home]
     names = await asyncio.to_thread(lambda: {t: _display_name(t) for t in targets})
-    mode = await asyncio.to_thread(_mode)
-    if mode == MODE_OFF:
-        answers: list[tuple[int, Any]] = [
-            (403, {"error": ERR_TOOLS_OFF, "message": "Remote tools are turned off."})
-        ] * len(targets)
-    else:
-        answers = list(await asyncio.gather(*(_list_tools(t) for t in targets)))
+    answers = list(await asyncio.gather(*(_list_tools(t) for t in targets)))
     tenants = [
         _entry(t, names[t], status, body)
         for t, (status, body) in zip(targets, answers, strict=True)
     ]
-    if mode != MODE_OFF:
-        for entry in tenants:
-            audited(
-                request,
-                "org.connections",
-                action=entry["tenant_id"],
-                status="ok" if entry["status"] == "ok" else "error",
-                audit_tenant_id=entry["tenant_id"],
-                user_id=auth.user_id,
-                home_tenant_id=home,
-                target_tenant_id=entry["tenant_id"],
-            )
+    for entry in tenants:
+        audited(
+            request,
+            "org.connections",
+            action=entry["tenant_id"],
+            status="ok" if entry["status"] == "ok" else "error",
+            audit_tenant_id=entry["tenant_id"],
+            user_id=auth.user_id,
+            home_tenant_id=home,
+            target_tenant_id=entry["tenant_id"],
+        )
     return {
         "as_of": datetime.now(UTC).isoformat(),
         "home_tenant_id": home,
-        "mode": mode,
         "tenants": tenants,
     }

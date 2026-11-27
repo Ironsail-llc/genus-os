@@ -27,7 +27,7 @@ runs nothing: neither a real write nor a preview is guessed from it.
 A tool that declares ``tenant`` in its OWN schema -- an external MCP server's
 or a plugin's -- is none of this module's business: its ``tenant`` and
 ``dry_run`` reach it untouched (:func:`_argument_owner`). Nor are the remote
-tools (``ORG_REMOTE_TOOLS``, ``handlers/org_remote.py``): they reach a child's
+tools (``ORG_REMOTE_TOOL_NAMES``, ``handlers/org_remote.py``): they reach a child's
 OWN tools through the bridge, admit the call themselves with the helpers here,
 and never run under ``tenant_scope``; a replay of one is still audited.
 
@@ -201,7 +201,7 @@ def _argument_owner(name: str) -> str | None:
     """Who gives ``tenant`` and ``dry_run`` their meaning on a call to ``name``.
 
     ``"engine"``: an allowlisted built-in; :func:`admit` reads them.
-    ``"remote"``: a remote tool (``ORG_REMOTE_TOOLS``); its handler admits the
+    ``"remote"``: a remote tool (``ORG_REMOTE_TOOL_NAMES``); its handler admits the
     call with this module's helpers and :func:`admit` passes it. ``"tool"``:
     the tool's OWN registered schema declares ``tenant`` -- an external MCP
     server's tool or a plugin's -- so both reach it untouched, never refused,
@@ -215,14 +215,14 @@ def _argument_owner(name: str) -> str | None:
     from robothor.engine.tools.constants import (
         CROSS_TENANT_READS,
         CROSS_TENANT_WRITES,
-        ORG_REMOTE_TOOLS,
+        ORG_REMOTE_TOOL_NAMES,
     )
 
     registry = get_registry()
     adapter = registry.get_adapter_route(name) is not None
     if not adapter and name in CROSS_TENANT_READS | CROSS_TENANT_WRITES:
         return "engine"
-    if not adapter and name in ORG_REMOTE_TOOLS:
+    if not adapter and name in ORG_REMOTE_TOOL_NAMES:
         return "remote"
     if TENANT_ARG in registry.declared_parameters(name):
         return "tool"

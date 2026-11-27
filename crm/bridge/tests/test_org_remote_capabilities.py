@@ -91,7 +91,6 @@ def capabilities(monkeypatch, tmp_path):
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", KEY)
-    monkeypatch.setenv("GENUS_ORG_REMOTE_TOOLS", "full")
     import routers._operator as operator
 
     from robothor.auth import tokens

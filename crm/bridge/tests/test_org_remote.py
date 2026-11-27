@@ -7,7 +7,7 @@ home, with what each descendant's engine reports (``GET
 
 ``GET /api/org/remote/catalogue`` and ``POST /api/org/remote/call`` answer an
 ENGINE: a service token carrying the ``org:remote`` scope. The token's tenant
-is the home tenant; the body never names it. The bridge checks the mode, that
+is the home tenant; the body never names it. The bridge checks the body, that
 the target is a descendant, and who the call is for, then forwards to the
 target engine with its OWN attestations and returns the target's status and
 body unchanged. The target engine is faked: ``engine_request`` records what it
@@ -35,7 +35,6 @@ from robothor.tenancy.remote_contract import (  # noqa: E402
     BRIDGE_TIMEOUT_S,
     ERR_BAD_ARGUMENTS,
     ERR_NOT_PERMITTED,
-    ERR_TOOLS_OFF,
     ERR_WRITE_FORBIDDEN,
     SCOPE_ORG_REMOTE,
 )
@@ -80,7 +79,6 @@ class _Engine:
             return 200, {
                 "tenant_id": tenant,
                 "as_of": "2026-01-01T00:00:00Z",
-                "mode": "full",
                 "plugins": [{"name": "example-plugin", "version": "1.2.3", "enabled": True}],
                 "tools": [
                     {
@@ -138,7 +136,6 @@ def child_access():
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, engine, acting, audit_rows, child_access):
     monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", KEY)
-    monkeypatch.setenv("GENUS_ORG_REMOTE_TOOLS", "full")
     monkeypatch.setenv("GENUS_ORG_REMOTE_ATTESTATIONS", "baa")
     import routers._operator as operator
 
@@ -170,13 +167,6 @@ def _env(monkeypatch, engine, acting, audit_rows, child_access):
     ):
         yield
     tokens.reset_signing_key_cache()
-    reset_settings()
-
-
-def _mode(monkeypatch, mode: str) -> None:
-    from robothor.settings import reset_settings
-
-    monkeypatch.setenv("GENUS_ORG_REMOTE_TOOLS", mode)
     reset_settings()
 
 
@@ -425,40 +415,10 @@ def test_a_malformed_body_is_refused_before_anything_travels(engine, over):
     assert engine.calls == []
 
 
-# ── The mode ────────────────────────────────────────────────────────────────
+# ── A write ─────────────────────────────────────────────────────────────────
 
 
-def test_off_refuses_every_call_and_the_catalogue(engine, monkeypatch):
-    _mode(monkeypatch, "off")
-
-    read = _engine_client().post(CALL, json=_body())
-    catalogue = _engine_client().get(CATALOGUE, params={"tenant": CHILD_A})
-
-    assert (read.status_code, _code(read)) == (403, ERR_TOOLS_OFF)
-    assert (catalogue.status_code, _code(catalogue)) == (403, ERR_TOOLS_OFF)
-    assert engine.calls == []
-
-
-def test_read_allows_reads_and_refuses_writes(engine, monkeypatch):
-    _mode(monkeypatch, "read")
-
-    assert _engine_client().post(CALL, json=_body()).status_code == 200
-    write = _engine_client().post(CALL, json=_body(access="write", request_id="eff-1"))
-
-    assert (write.status_code, _code(write)) == (403, ERR_WRITE_FORBIDDEN)
-    assert len(_forwards(engine)) == 1
-
-
-def test_dry_run_forces_every_write_to_a_dry_run(engine, monkeypatch):
-    _mode(monkeypatch, "dry_run")
-
-    response = _engine_client().post(CALL, json=_body(access="write", request_id="eff-1"))
-
-    assert response.status_code == 200
-    assert _forwards(engine)[0]["json"]["dry_run"] is True
-
-
-def test_full_sends_a_write_as_asked(engine):
+def test_a_write_is_sent_as_asked(engine):
     _engine_client().post(CALL, json=_body(access="write", request_id="eff-1"))
     _engine_client().post(CALL, json=_body(access="write", request_id="eff-2", dry_run=True))
 
@@ -536,7 +496,7 @@ def test_an_owner_at_home_sees_every_companys_connections(engine):
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["home_tenant_id"] == ROOT
-    assert body["mode"] == "full"
+    assert "mode" not in body
     assert [t["tenant_id"] for t in body["tenants"]] == [CHILD_A, CHILD_B]
     first = body["tenants"][0]
     assert first["status"] == "ok"
@@ -586,16 +546,6 @@ def test_connections_are_audited_one_row_per_company(engine, audit_rows):
 
     rows = [r for r in audit_rows if r["event_type"] == "org.connections"]
     assert sorted(r["tenant_id"] for r in rows) == [CHILD_A, CHILD_B]
-
-
-def test_connections_when_off_ask_no_engine(engine, monkeypatch):
-    _mode(monkeypatch, "off")
-
-    body = _person().get(CONNECTIONS).json()
-
-    assert body["mode"] == "off"
-    assert engine.calls == []
-    assert all(t["status"] == "error" for t in body["tenants"])
 
 
 def test_connections_ask_each_engine_with_a_short_timeout(engine):

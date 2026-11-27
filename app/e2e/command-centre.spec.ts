@@ -96,7 +96,6 @@ const OVERVIEW = {
 const CONNECTIONS = {
   as_of: "2026-11-18T12:00:00+00:00",
   home_tenant_id: "acme-parent",
-  mode: "read",
   tenants: [
     {
       tenant_id: "acme-child-a",
@@ -217,7 +216,7 @@ test.describe("command centre", () => {
     await expect(page.getByTestId("company-card-acme-child-b").getByTestId("runs-24h")).toHaveCount(0);
     await expect(page.getByTestId("org-as-of")).toBeVisible();
 
-    // What each child company has connected, and the page's remote-tools mode.
+    // What each child company has connected.
     const connected = childA.getByTestId("connected");
     await expect(connected.getByRole("heading", { name: "Connected" })).toBeVisible();
     await expect(connected.getByTestId("connected-plugins")).toContainText("example-plugin");
@@ -229,7 +228,6 @@ test.describe("command centre", () => {
     await expect(page.getByTestId("company-card-acme-child-b").getByTestId("connected-error")).toContainText(
       "could not be read",
     );
-    await expect(page.getByTestId("org-remote-mode")).toContainText("read only");
 
     await page.screenshot({ path: test.info().outputPath("command-centre.png"), fullPage: true });
 
@@ -265,7 +263,6 @@ test.describe("command centre", () => {
     await expect(page.getByTestId(/^company-card-/)).toHaveCount(3);
     await expect(page.getByTestId("company-card-acme-child-a")).toContainText("Renew the lease");
     await expect(page.getByTestId("connected")).toHaveCount(0);
-    await expect(page.getByTestId("org-remote-mode")).toHaveCount(0);
     await expect(page.getByTestId("org-error")).toHaveCount(0);
   });
 

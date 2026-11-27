@@ -4,7 +4,6 @@ The path is home engine -> bridge -> this engine; engines never call each other.
 The bridge is the only caller (``admin_remote_tools`` refuses anyone else) and
 this module believes nothing it forwards beyond what it re-derives here:
 
-* the mode (``GENUS_ORG_REMOTE_TOOLS``),
 * the plugin's own declaration (``PluginSet.remote``): undeclared is unknown,
 * who is asking: a person's standing in the parent (``acting_role``), or for
   a person-less read the parent's grant (``parent_agent_grant``) and the
@@ -43,7 +42,6 @@ TIMEOUT_S: float = rc.TARGET_TIMEOUT_S
 _AGENT_ID_MAX = 64
 
 _MESSAGES = {
-    rc.ERR_TOOLS_OFF: "Remote tools are turned off in this tenant.",
     rc.ERR_WRITE_FORBIDDEN: "This remote call may not write in this tenant.",
     rc.ERR_TOOL_UNKNOWN: "This tenant offers no remote tool by that name.",
     rc.ERR_ACCESS_MISMATCH: "The tool is not offered for that access.",
@@ -122,17 +120,6 @@ async def _declared(tool: str) -> tuple[dict[str, Any], dict[str, Any]]:
     return declared, function
 
 
-async def _mode_open() -> str:
-    """The mode, refused when ``off``. Read off the loop: the flag store may
-    read the database."""
-    from robothor.auth import runtime
-
-    mode = await asyncio.to_thread(runtime.org_remote_tools_mode)
-    if mode == rc.MODE_OFF:
-        raise Refused(403, rc.ERR_TOOLS_OFF)
-    return mode
-
-
 # ── Catalogue ────────────────────────────────────────────────────────────────
 
 #: Absolute-looking paths in a check's detail: where an instance keeps its
@@ -208,7 +195,6 @@ async def _plugins_and_checks() -> tuple[list[dict[str, Any]], list[dict[str, An
 
 async def catalogue(tenant_id: str) -> dict[str, Any]:
     """``GET /api/admin/remote-tools``: what this tenant offers its parent."""
-    mode = await _mode_open()
     declared = await asyncio.to_thread(declarations)
     tools: list[dict[str, Any]] = []
     for name in sorted(declared):
@@ -229,7 +215,6 @@ async def catalogue(tenant_id: str) -> dict[str, Any]:
     return {
         "tenant_id": tenant_id,
         "as_of": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "mode": mode,
         "plugins": plugins,
         "tools": tools,
         "checks": checks,
@@ -238,7 +223,6 @@ async def catalogue(tenant_id: str) -> dict[str, Any]:
 
 async def describe(tool: str) -> dict[str, Any]:
     """``GET /api/admin/remote-tools/{tool}``: one tool's declaration and schema."""
-    await _mode_open()
     spec, function = await _declared(tool)
     return {
         "name": tool,
@@ -506,24 +490,20 @@ async def _execute(
     body: dict[str, Any],
     seen: dict[str, Any],
 ) -> tuple[int, dict[str, Any]]:
-    # 2. the mode
-    mode = await _mode_open()
     write = access == rc.ACCESS_WRITE
-    if write and mode == rc.MODE_READ:
-        raise Refused(403, rc.ERR_WRITE_FORBIDDEN)
-    # 3. the declaration
+    # 2. the declaration
     spec, function = await _declared(tool)
     if spec["access"] != access:
         raise Refused(409, rc.ERR_ACCESS_MISMATCH)
-    # 4. who is asking
+    # 3. who is asking
     user_id, role = await _identity(body.get("requested_by"), home, tenant_id, access)
     seen["user_id"] = user_id
-    # 5. attestations
+    # 4. attestations
     presented = {t for t in body.get("attestations") or () if isinstance(t, str)}
     for token in spec["attestations"]:
         if token not in presented:
             raise Refused(403, rc.ERR_ATTESTATION_MISSING, attestation=token)
-    # 6. arguments
+    # 5. arguments
     if not isinstance(dry_run_asked, bool):
         raise Refused(422, rc.ERR_BAD_ARGUMENTS, "dry_run must be true or false.")
     parameters = function.get("parameters") or {"type": "object", "properties": {}}
@@ -532,20 +512,20 @@ async def _execute(
     )
     if problem:
         raise Refused(422, rc.ERR_BAD_ARGUMENTS, f"The arguments do not fit the tool: {problem}.")
-    # 7. a dry run executes nothing
-    if write and (dry_run_asked or mode == rc.MODE_DRY_RUN):
+    # 6. a dry run executes nothing
+    if write and dry_run_asked:
         seen["dry_run"] = True
         return 200, _answer(
             rc.OUTCOME_DRY_RUN, request_id, tool, None, {"tool": tool, "args": args}
         )
-    # 8. a write runs at most once
+    # 7. a write runs at most once
     if write:
         if not request_id:
             raise Refused(422, rc.ERR_BAD_ARGUMENTS, "A remote write needs a request_id.")
         replay = await _claim(tenant_id, request_id)
         if replay is not None:
             return replay
-    # 9. the normal dispatch, confined to this tenant
+    # 8. the normal dispatch, confined to this tenant
     status, payload = await _dispatch(
         tenant_id, tool, args, home, agent_id, user_id, role, request_id
     )

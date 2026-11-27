@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-519 settings in 18 groups.
+518 settings in 18 groups.
 
 ## autonomy
 
@@ -414,7 +414,6 @@ Who may reach the bridge and the dashboard, and how that is proven.
 | `GENUS_LOCAL_LOGIN` | bool | `false` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Offer local email + password sign-in (bridge routes and the dashboard form). Off by default: a fresh instance must opt in. Owner MFA becomes mandatory when this is the only sign-in method. |
 | `GENUS_OIDC_ISSUERS` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Comma-separated OIDC issuer URLs whose tokens the bridge accepts. |
 | `GENUS_ORG_REMOTE_ATTESTATIONS` | str | _(empty)_ | `robothor-bridge`, `robothor-engine` | no | 1.141.0 | Comma-separated attestation tokens this deployment vouches for when it calls a descendant tenant's remote tools (each matching ^[a-z][a-z0-9_]{0,31}$). A remote tool that requires a token not listed here is refused. The bridge presents its own value; a value in a request is ignored. Malformed tokens are dropped and logged. |
-| `GENUS_ORG_REMOTE_TOOLS` | str | `full` | `robothor-bridge`, `robothor-engine` | no | 1.141.0 | **governed.** Whether a parent tenant's agent may run the tools a descendant tenant's plugins declare remote. 'off' refuses every remote call; 'read' allows reads and refuses writes; 'dry_run' allows reads and turns every write into a dry run; 'full' allows reads and writes. Checked by the calling engine, the bridge and the target engine. Values are case-sensitive; any other value reads as 'off' and is logged. |
 | `GENUS_OWNER_MFA_REQUIRED` | bool | `true` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Tell an owner account with no second factor to enrol one while local login is on. Setting it false gives up the only compensating control for a public password endpoint: one argon2-verified password then becomes the entire authentication for the instance and its stored credentials, and the operator is never prompted. |
 | `GENUS_SETUP_TOKEN_TTL_SECONDS` | int | `1800` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | How long the first-run setup link printed by `genus init` stays usable. The link reaches a page that creates the owner account, so a long window turns a terminal scrollback into a standing credential; raise it only for an install someone has to walk away from. |
 | `GENUS_TENANT_ENGINE_URLS` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.127.0 | Optional JSON object mapping a tenant id to the base URL of that tenant's engine, e.g. {"acme-child-a": "http://127.0.0.1:18801"}. An explicit entry wins over GENUS_TENANT_ENGINE_URL_TEMPLATE; meant for local development and one-off overrides. Empty means none. Also read from `ROBOTHOR_TENANT_ENGINE_URLS`. |
