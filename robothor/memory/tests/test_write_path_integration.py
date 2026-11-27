@@ -980,7 +980,10 @@ async def test_a_write_job_produces_mentions_and_keeps_its_scope(world: World) -
     assert await process_write_job(job) is True
     (row,) = world.db.facts()
     assert (row["scope_kind"], row["scope_id"], row["person_id"]) == ("user", ALICE_P, ALICE)
-    assert {m[0] for m in world.db.mentions(row["id"])} == {"Alice Moreno", "Initech Systems"}
+    # Neither name has a node, and a private write records an unresolved name
+    # only on the fact itself (mentions and decisions have no owner scope).
+    assert world.db.mentions(row["id"]) == []
+    assert set(row["entities"]) == {"Alice Moreno", "Initech Systems"}
 
 
 # ═══ tenant isolation ════════════════════════════════════════════════════

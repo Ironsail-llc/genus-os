@@ -37,7 +37,9 @@ and entity expansion show every edge of a node to every reader):
 
 * no provisional node is created from a private fact's text (a shared node
   would show the name to everyone); its mentions resolve to existing nodes
-  only, or stay unresolved;
+  only, and a name that resolves to nothing is recorded neither as a mention
+  nor as a resolution decision (neither table has an owner scope); a private
+  write's decisions carry its scope in ``evidence.scope``;
 * no edge is written from a private fact. The relations it stated are kept on
   the fact (``metadata.graph_pending_relations``), readable only as the fact is,
   and counted in ``relations_private_deferred``, so a reader that enforces
@@ -692,8 +694,18 @@ def _write_graph(
     with tenant_scope(tenant_id), get_connection() as conn:
         cur = conn.cursor()
         inputs = _mention_inputs(cur, fact, context)
-        resolved = resolve_mentions(tenant_id, inputs, cur=cur, create=context.is_shared)
-        out["mentions_written"] = write_mentions(tenant_id, fact_id, inputs, resolved, cur=cur)
+        resolved = resolve_mentions(
+            tenant_id,
+            inputs,
+            cur=cur,
+            create=context.is_shared,
+            record_unresolved=context.is_shared,
+        )
+        # A private fact's name that resolved to nothing stays in the fact only.
+        kept = [(m, r) for m, r in zip(inputs, resolved, strict=True) if r.decision_id != 0]
+        out["mentions_written"] = write_mentions(
+            tenant_id, fact_id, [m for m, _ in kept], [r for _, r in kept], cur=cur
+        )
         ids = {
             normalize_surface(m.surface_form): r.entity_id
             for m, r in zip(inputs, resolved, strict=True)
