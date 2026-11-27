@@ -801,14 +801,40 @@ async def test_private_facts_write_mentions_but_no_edges_or_new_nodes(world: Wor
     fid = world.db.fact_id("Alice Moreno is interviewing at Northwind Traders.")
     mentions = {m[0]: m[2] for m in world.db.mentions(fid)}
     assert mentions["Alice Moreno"] == alice and mentions["Northwind Traders"] == org
-    # No shared node is minted from a private fact's text ...
-    assert mentions["Hidden Project Zeta"] is None
+    # No shared node is minted from a private fact's text, and the name it
+    # could not resolve is recorded nowhere outside the fact itself: neither
+    # memory_mentions nor memory_resolution_decisions has an owner scope.
+    assert "Hidden Project Zeta" not in mentions
     assert (
         world.db.one("SELECT count(*) FROM memory_entities WHERE name = 'Hidden Project Zeta'") == 0
     )
+    assert (
+        world.db.one(
+            "SELECT count(*) FROM memory_resolution_decisions "
+            "WHERE surface_form = 'Hidden Project Zeta'"
+        )
+        == 0
+    )
+    # A decision that did resolve says whose private write it served.
+    scopes = world.db.q(
+        "SELECT evidence->'scope' FROM memory_resolution_decisions WHERE surface_form = %s",
+        ("Alice Moreno",),
+    )
+    assert scopes and all(r[0] == {"scope_kind": "user", "scope_id": ALICE_P} for r in scopes)
     # ... and no edge exists that today's readers would show to everyone.
     assert world.db.edges() == []
     assert out["relations_private_deferred"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_shared_facts_unresolved_name_is_still_recorded(world: World) -> None:
+    world.model.on("SHARED-U", fact("Dana Reyes joined.", [("Dana Reyes", "person")]))
+    world.db.entity("Dana Reyes")
+    world.db.entity("Dana Reyes", "organization")  # two candidates of mixed type
+    await _ingest("SHARED-U the team update")
+    assert world.db.one(
+        "SELECT count(*) FROM memory_resolution_decisions WHERE surface_form = 'Dana Reyes'"
+    )
 
 
 # ═══ consolidation ═══════════════════════════════════════════════════════
