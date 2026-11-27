@@ -47,6 +47,7 @@ def _fact(text: str, turns: list[int], speaker: str = "user", **kw: Any) -> dict
         "kind": kw.get("kind", "preference"),
         "confidence": kw.get("confidence", 0.9),
         "event_time": kw.get("event_time"),
+        "date_phrase": kw.get("date_phrase"),
         "about_user": kw.get("about_user", True),
         "speaker": speaker,
         "turns": turns,
@@ -278,111 +279,194 @@ def test_the_default_extraction_mode_is_unchanged() -> None:
     assert parse_extraction_response(raw) == []  # still needs a named entity
 
 
-# ═══ relative dates resolve against the turn that says them ══════════════
+# ═══ relative dates: a correction, never an invention ════════════════════
+
+FRI = datetime(2026, 11, 27, 15, 0, tzinfo=UTC)  # a Friday
 
 
 def _said(text: str, at: datetime = AT) -> list[ConversationTurn]:
     return [ConversationTurn(ref=7, role="user", text=text, at=at)]
 
 
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        ("I bought a road bike yesterday.", "2023-05-19"),
-        ("I'm flying to Rome tomorrow.", "2023-05-21"),
-        ("I sold my old car three days ago.", "2023-05-17"),
-        ("We adopted a puppy two weeks ago.", "2023-05-06"),
-        ("My exam is in 10 days.", "2023-05-30"),
-        ("I started yoga last Tuesday.", "2023-05-16"),  # AT is a Saturday
-        ("I'm seeing the dentist next Monday.", "2023-05-22"),
-        ("I finished the book the day before yesterday.", "2023-05-18"),
-    ],
-)
-def test_a_relative_date_is_counted_from_the_turns_own_time(text: str, expected: str) -> None:
-    from robothor.memory.relative_dates import resolve_relative_date
+#: The verifier's table: what each phrase names, said on Friday 2026-11-27.
+#: Empty where the phrase is a duration, a title, a quotation, or ambiguous.
+VERIFIER_TABLE = [
+    ("I bought it yesterday", ["2026-11-26"]),
+    ("see you next friday", []),  # said on a Friday: this week's or next week's?
+    ("this friday we fly", []),
+    ("last friday was fun", ["2026-11-20"]),
+    ("I'll go on friday", []),
+    ("in two weeks we move", []),  # nothing says it points forward
+    ("in a week or two", []),
+    ("in 2 days' time", ["2026-11-29"]),
+    ("a day ago", ["2026-11-26"]),
+    ("three weeks ago", ["2026-11-06"]),
+    ("I was not there yesterday; tomorrow I will be", ["2026-11-26", "2026-11-28"]),
+    ("It's due in 3 weeks", ["2026-12-18"]),
+    ("I ran 5 days ago and in 5 days I race", ["2026-11-22"]),
+    ("The Day After Tomorrow is a film I like", []),
+    ("Yesterday by the Beatles is my favourite song", []),
+    ("I read 'Tomorrow, and Tomorrow, and Tomorrow' ", []),
+    ("in one day I learned it", []),
+    ("I'm in a week long course", []),
+    ("I finished it in two days", []),
+    ("I stayed in 3 days", []),
+    ("a week ago today", ["2026-11-20", "2026-11-27"]),
+    ("two weeks ago yesterday", ["2026-11-13", "2026-11-26"]),
+    ("yesterday's meeting was moved to next monday", ["2026-11-26"]),
+    ("I do yoga in ten days cycles", []),
+    ("next monday week", []),
+    ("the monday after next", []),
+    ("last night I slept badly", []),
+    ("tonight we dine", ["2026-11-27"]),
+    ("in 100 weeks", []),
+    ("in 999 weeks", []),
+    ("eleven days ago", []),
+    ("a couple of days ago", []),
+    ("a few days ago", []),
+    ("next week tuesday", []),
+    ("last week on tuesday", []),
+    ("My flight was 2 days ago, no wait, 3 days ago", ["2026-11-24", "2026-11-25"]),
+    ("he said 'see you tomorrow' but that was a month ago", []),
+    ("in a day", []),
+    ("I'm flying to Rome in two weeks", ["2026-12-11"]),
+    ("We will move in 10 days", ["2026-12-07"]),
+]
 
-    assert resolve_relative_date(text, AT) is not None
-    assert resolve_relative_date(text, AT).isoformat() == expected  # type: ignore[union-attr]
+
+@pytest.mark.parametrize(("text", "expected"), VERIFIER_TABLE)
+def test_what_a_phrase_names_counted_from_its_turn(text: str, expected: list[str]) -> None:
+    from robothor.memory.relative_dates import relative_days
+
+    assert sorted(d.isoformat() for d in relative_days(text, FRI)) == expected
 
 
-def test_no_date_or_two_different_dates_resolve_to_nothing() -> None:
-    from robothor.memory.relative_dates import resolve_relative_date
+def test_a_day_is_the_turns_local_day_not_utcs() -> None:
+    from zoneinfo import ZoneInfo
 
-    assert resolve_relative_date("I like tea.", AT) is None
-    assert resolve_relative_date("I bought it yesterday and return it tomorrow.", AT) is None
-    assert resolve_relative_date("yesterday", None) is None
+    from robothor.memory.relative_dates import relative_days
+
+    # 23:30 on Thursday in New York is already Friday in UTC.
+    ny = datetime(2026, 11, 26, 23, 30, tzinfo=ZoneInfo("America/New_York"))
+    assert [d.isoformat() for d in relative_days("yesterday", ny)] == ["2026-11-25"]
 
 
-def test_event_time_is_filled_from_the_turn_when_the_model_left_it_empty() -> None:
+def test_an_empty_event_time_is_never_filled() -> None:
     (fact,) = parse_conversation_response(
         _answer(_fact("The user bought a road bike.", [1], kind="possession")),
         _said("I bought a road bike yesterday."),
     )
-    assert fact["event_time"] == "2023-05-19"
-
-
-def test_a_date_the_model_counted_from_today_is_counted_from_the_turn_instead() -> None:
-    from datetime import timedelta
-
-    from_today = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
-    (fact,) = parse_conversation_response(
-        _answer(_fact("The user bought a road bike.", [1], event_time=from_today)),
-        _said("I bought a road bike yesterday."),
-    )
-    assert fact["event_time"] == "2023-05-19"
-
-
-def test_a_date_the_model_gave_is_kept_when_the_turn_names_no_relative_date() -> None:
-    (fact,) = parse_conversation_response(
-        _answer(_fact("The user moves to Lisbon in June 2023.", [1], event_time="2023-06-01")),
-        _said("We move to Lisbon in June."),
-    )
-    assert fact["event_time"] == "2023-06-01"
+    assert fact["event_time"] is None
 
 
 @pytest.mark.parametrize(
-    ("text", "model_said", "expected"),
+    ("text", "phrase", "model_said", "expected"),
     [
-        ("I switched to an iPhone last Tuesday.", "2023-05-15", "2023-05-16"),
-        ("I'm flying to Rome in two weeks.", "2023-05-27", "2023-06-03"),
+        ("I switched to an iPhone last Tuesday.", "last Tuesday", "2023-05-15", "2023-05-16"),
+        ("I'm flying to Rome in two weeks.", "in two weeks", "2023-05-27", "2023-06-03"),
     ],
 )
-def test_a_relative_date_the_model_miscounted_is_counted_from_the_turn(
-    text: str, model_said: str, expected: str
+def test_a_miscounted_date_is_corrected_from_the_phrase_it_came_from(
+    text: str, phrase: str, model_said: str, expected: str
 ) -> None:
-    (fact,) = parse_conversation_response(
-        _answer(_fact("The user did something worth remembering.", [1], event_time=model_said)),
-        _said(text),
-    )
-    assert fact["event_time"] == expected
-
-
-def test_today_only_fills_an_empty_event_time() -> None:
-    # "today" frames the turn more often than it dates the fact.
-    (fact,) = parse_conversation_response(
-        _answer(_fact("The user booked a trip for June 2023.", [1], event_time="2023-06-10")),
-        _said("Today I booked a trip for next month."),
-    )
-    assert fact["event_time"] == "2023-06-10"
-
-
-def test_the_prompt_asks_for_absolute_dates_and_no_date_for_a_suggestion() -> None:
-    prompt = build_conversation_prompt(_turns()).lower()
-    assert "absolute date" in prompt
-    assert "not when it was said" in prompt
-
-
-def test_the_corrected_date_replaces_the_miscounted_one_in_the_fact_text() -> None:
     (fact,) = parse_conversation_response(
         _answer(
             _fact(
-                "The user switched to an iPhone on 2023-05-15.",
+                f"The user did it on {model_said}.",
                 [1],
-                kind="state",
-                event_time="2023-05-15",
+                event_time=model_said,
+                date_phrase=phrase,
             )
         ),
+        _said(text),
+    )
+    assert fact["event_time"] == expected
+    assert fact["fact_text"] == f"The user did it on {expected}."
+
+
+def test_another_clause_of_the_turn_never_dates_the_fact() -> None:
+    (fact,) = parse_conversation_response(
+        _answer(
+            _fact(
+                "The user started at Acme on 2020-03-01.",
+                [1],
+                event_time="2020-03-01",
+                date_phrase="in March 2020",
+            )
+        ),
+        _said("I started at Acme in March 2020 and yesterday I got promoted."),
+    )
+    assert fact["event_time"] == "2020-03-01"
+    assert fact["fact_text"] == "The user started at Acme on 2020-03-01."
+
+
+def test_a_phrase_the_turn_does_not_contain_is_ignored() -> None:
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user did X.", [1], event_time="2023-05-15", date_phrase="yesterday")),
         _said("I switched to an iPhone last Tuesday."),
     )
-    assert fact["event_time"] == "2023-05-16"
-    assert fact["fact_text"] == "The user switched to an iPhone on 2023-05-16."
+    assert fact["event_time"] == "2023-05-15"
+
+
+def test_a_date_far_from_what_the_phrase_names_is_left_alone() -> None:
+    (fact,) = parse_conversation_response(
+        _answer(
+            _fact(
+                "The user bought a road bike.",
+                [1],
+                event_time="2026-11-26",
+                date_phrase="yesterday",
+            )
+        ),
+        _said("I bought a road bike yesterday."),  # said in 2023
+    )
+    assert fact["event_time"] == "2026-11-26"
+
+
+def test_a_date_the_turn_states_itself_is_never_rewritten_in_the_text() -> None:
+    (fact,) = parse_conversation_response(
+        _answer(
+            _fact(
+                "The user's exam on 2023-05-22 was moved.",
+                [1],
+                event_time="2023-05-22",
+                date_phrase="next monday",
+            )
+        ),
+        _said("My exam on 2023-05-22 was moved, see you next Monday."),
+    )
+    assert fact["fact_text"] == "The user's exam on 2023-05-22 was moved."
+
+
+@pytest.mark.parametrize(
+    ("title", "text", "fact_text"),
+    [
+        (
+            "unrelated fact in the same turn",
+            "I prefer dark roast coffee. Yesterday I bought a road bike.",
+            "The user prefers dark roast coffee.",
+        ),
+        (
+            "song title",
+            "Yesterday by the Beatles is my favourite song.",
+            "The user's favourite song is Yesterday by the Beatles.",
+        ),
+        (
+            "a duration",
+            "I finished the marathon training plan in two weeks.",
+            "The user finished the marathon training plan in two weeks.",
+        ),
+    ],
+)
+def test_the_verifiers_parse_cases_get_no_invented_date(
+    title: str, text: str, fact_text: str
+) -> None:
+    (fact,) = parse_conversation_response(_answer(_fact(fact_text, [1])), _said(text, FRI))
+    assert fact["event_time"] is None, title
+
+
+def test_the_prompt_asks_for_absolute_dates_and_the_phrase_they_came_from() -> None:
+    prompt = build_conversation_prompt(_turns()).lower()
+    assert "absolute date" in prompt
+    assert "not when it was said" in prompt
+    assert "date_phrase" in prompt
