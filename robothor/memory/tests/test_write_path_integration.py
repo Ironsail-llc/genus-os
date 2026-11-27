@@ -250,12 +250,16 @@ def turn_fact(text: str, mentions=(), relations=(), **kw: Any) -> dict[str, Any]
 def store_chat(
     db: DB,
     key: str,
-    turns: list[tuple[str, str]],
+    turns: list[tuple[Any, ...]],
     *,
     person: str | None = None,
     tenant: str = TENANT,
 ) -> list[int]:
-    """A stored conversation, as chat_store writes it; returns the message ids."""
+    """A stored conversation, as chat_store writes it; returns the message ids.
+
+    Each turn is ``(role, content)`` or ``(role, content, extras)``, the extras
+    merged into the stored message as chat_store merges them.
+    """
     sid = db.one(
         "INSERT INTO chat_sessions (tenant_id, session_key, channel, person_id) "
         "VALUES (%s, %s, 'webchat', %s) ON CONFLICT (tenant_id, session_key) "
@@ -267,9 +271,9 @@ def store_chat(
             "INSERT INTO chat_messages (session_id, message, created_at) "
             "VALUES (%s, %s::jsonb, '2023-05-20T09:00:00Z'::timestamptz + %s * interval '1 minute') "
             "RETURNING id",
-            (sid, json.dumps({"role": role, "content": content}), i),
+            (sid, json.dumps({"role": t[0], "content": t[1], **(t[2] if len(t) > 2 else {})}), i),
         ))
-        for i, (role, content) in enumerate(turns)
+        for i, t in enumerate(turns)
     ]  # fmt: skip
 
 

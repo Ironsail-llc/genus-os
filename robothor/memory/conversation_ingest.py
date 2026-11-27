@@ -628,13 +628,16 @@ def _done(result: dict[str, Any]) -> dict[str, Any] | None:
 # ═══ the watermark row ═══════════════════════════════════════════════════
 #
 # One ``ingested_items`` row per conversation (``source_name`` =
-# :data:`_WATERMARK_SOURCE`, ``item_id`` = the session key) holds, as JSON in
-# ``content_hash``: ``through``, the last ``chat_messages.id`` extracted;
-# ``failures``, how many runs in a row could not extract the next window; and,
-# while a run works on the conversation, its ``claim`` and ``claimed_until``.
-# A run claims the row with a compare-and-set, so engine processes never
-# extract the same window twice; a claim lapses after :data:`CLAIM_LEASE_SECONDS`
-# if its run died. All of this is synchronous: callers run it off the loop.
+# :data:`_WATERMARK_SOURCE`, ``item_id`` = the session key). Its
+# ``content_hash`` (a 64-character column) holds the state as
+# ``through|failures|failed_end|claim|claimed_until``: the last
+# ``chat_messages.id`` extracted, how many runs in a row could not extract the
+# next window, that window's end while it keeps failing, and, while a run works
+# on the conversation, its claim token and when the claim lapses (epoch
+# seconds). Every change is a read-modify-write under ``SELECT … FOR UPDATE``,
+# so two engine processes never hold one conversation and never extract the
+# same window twice; a claim lapses after :data:`CLAIM_LEASE_SECONDS` if its run
+# died. All of this is synchronous: callers run it off the event loop.
 
 
 @dataclass(frozen=True)
@@ -648,79 +651,101 @@ class Watermark:
     failed_end: int | None = None
 
 
-def _state(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, dict):
-        return raw
-    try:
-        value = json.loads(raw) if raw else {}
-    except (TypeError, ValueError):
-        return {}
-    return value if isinstance(value, dict) else {}
+@dataclass
+class _State:
+    through: int = 0
+    failures: int = 0
+    failed_end: int | None = None
+    claim: str | None = None
+    claimed_until: int | None = None
+
+    @classmethod
+    def parse(cls, raw: str | None) -> _State:
+        parts = (raw or "").split("|")
+        if len(parts) != 5:
+            return cls()
+
+        def num(v: str) -> int | None:
+            return int(v) if v.isdigit() else None
+
+        return cls(
+            num(parts[0]) or 0, num(parts[1]) or 0, num(parts[2]), parts[3] or None, num(parts[4])
+        )
+
+    def encode(self) -> str:
+        fields = (self.through, self.failures, self.failed_end, self.claim, self.claimed_until)
+        return "|".join("" if v is None else str(v) for v in fields)
 
 
-def _claim(session_key: str, tenant_id: str) -> Watermark | None:
-    """Claim the conversation for this run, or ``None`` if another run holds it."""
-    token = uuid.uuid4().hex
+def _mutate(
+    session_key: str, tenant_id: str, change: Callable[[_State, int], _State | None]
+) -> _State | None:
+    """Apply ``change(state, now)`` to the conversation's row, locked; the new state.
+
+    ``change`` returns ``None`` to leave the row as it is (and get ``None``).
+    The row is created, at ``through = 0``, when the conversation has none.
+    """
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, "
             "fact_ids, ingested_at) VALUES (%s, %s, %s, %s, '{}', NOW()) "
             "ON CONFLICT (tenant_id, source_name, item_id) DO NOTHING",
-            (tenant_id, _WATERMARK_SOURCE, session_key, json.dumps({"through": 0})),
+            (tenant_id, _WATERMARK_SOURCE, session_key, _State().encode()),
         )
         cur.execute(
-            "UPDATE ingested_items SET content_hash = (COALESCE(content_hash::jsonb, '{}') "
-            "|| jsonb_build_object('claim', %s::text, 'claimed_until', "
-            "extract(epoch FROM now()) + %s))::text "
-            "WHERE tenant_id = %s AND source_name = %s AND item_id = %s "
-            "AND (content_hash::jsonb->>'claim' IS NULL "
-            "OR (content_hash::jsonb->>'claimed_until')::float8 < extract(epoch FROM now())) "
-            "RETURNING content_hash",
-            (token, CLAIM_LEASE_SECONDS, tenant_id, _WATERMARK_SOURCE, session_key),
+            "SELECT content_hash, extract(epoch FROM now())::bigint FROM ingested_items "
+            "WHERE tenant_id = %s AND source_name = %s AND item_id = %s FOR UPDATE",
+            (tenant_id, _WATERMARK_SOURCE, session_key),
         )
-        row = cur.fetchone()
+        raw, now = cur.fetchone()
+        new = change(_State.parse(raw), int(now))
+        if new is not None:
+            cur.execute(
+                "UPDATE ingested_items SET content_hash = %s, ingested_at = NOW() "
+                "WHERE tenant_id = %s AND source_name = %s AND item_id = %s",
+                (new.encode(), tenant_id, _WATERMARK_SOURCE, session_key),
+            )
         conn.commit()
-    if row is None:
+    return new
+
+
+def _claim(session_key: str, tenant_id: str) -> Watermark | None:
+    """Claim the conversation for this run, or ``None`` if another run holds it."""
+    token = uuid.uuid4().hex[:10]
+
+    def take(state: _State, now: int) -> _State | None:
+        if state.claim and (state.claimed_until or 0) > now:
+            return None
+        state.claim, state.claimed_until = token, now + CLAIM_LEASE_SECONDS
+        return state
+
+    state = _mutate(session_key, tenant_id, take)
+    if state is None:
         return None
-    state = _state(row[0])
-    failed_end = state.get("failed_end")
-    return Watermark(
-        int(state.get("through") or 0),
-        int(state.get("failures") or 0),
-        token,
-        int(failed_end) if failed_end is not None else None,
-    )
+    return Watermark(state.through, state.failures, token, state.failed_end)
 
 
-def _update(
-    session_key: str, tenant_id: str, token: str, sql_set: str, params: tuple[Any, ...]
-) -> Any:
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            f"UPDATE ingested_items SET {sql_set} "  # noqa: S608 - fixed fragments only
-            "WHERE tenant_id = %s AND source_name = %s AND item_id = %s "
-            "AND content_hash::jsonb->>'claim' = %s RETURNING content_hash",
-            (*params, tenant_id, _WATERMARK_SOURCE, session_key, token),
-        )
-        row = cur.fetchone()
-        conn.commit()
-    return _state(row[0]) if row else None
+def _owned(token: str, change: Callable[[_State], None]) -> Callable[[_State, int], _State | None]:
+    def apply(state: _State, _now: int) -> _State | None:
+        if state.claim != token:
+            return None  # the claim lapsed and another run took it: change nothing
+        change(state)
+        return state
+
+    return apply
 
 
 def _advance(
     session_key: str, tenant_id: str, token: str, through: int, fact_ids: list[int]
 ) -> None:
     """Move the watermark (and clear the failure count) under this run's claim."""
-    _update(
-        session_key,
-        tenant_id,
-        token,
-        "content_hash = ((content_hash::jsonb - 'failed_end') || jsonb_build_object("
-        "'through', %s::bigint, 'failures', 0))::text, fact_ids = %s, ingested_at = NOW()",
-        (through, list(fact_ids)),
-    )
+
+    def change(state: _State) -> None:
+        state.through, state.failures, state.failed_end = through, 0, None
+
+    del fact_ids  # the facts carry their own link to the turns
+    _mutate(session_key, tenant_id, _owned(token, change))
 
 
 def _fail(session_key: str, tenant_id: str, token: str, window_end: int) -> int:
@@ -729,16 +754,23 @@ def _fail(session_key: str, tenant_id: str, token: str, window_end: int) -> int:
     The first failure pins the window's end (``failed_end``), so the turns that
     arrive later are not folded into the window that fails.
     """
-    state = _update(
-        session_key,
-        tenant_id,
-        token,
-        "content_hash = (content_hash::jsonb || jsonb_build_object('failures', "
-        "COALESCE((content_hash::jsonb->>'failures')::int, 0) + 1, 'failed_end', "
-        "COALESCE((content_hash::jsonb->>'failed_end')::bigint, %s::bigint)))::text",
-        (window_end,),
-    )
-    return int((state or {}).get("failures") or 0)
+
+    def change(state: _State) -> None:
+        state.failures += 1
+        if state.failed_end is None:
+            state.failed_end = window_end
+
+    state = _mutate(session_key, tenant_id, _owned(token, change))
+    return state.failures if state is not None else 0
+
+
+def _release(session_key: str, tenant_id: str, token: str) -> None:
+    """Give the conversation back (only this run's own claim)."""
+
+    def change(state: _State) -> None:
+        state.claim, state.claimed_until = None, None
+
+    _mutate(session_key, tenant_id, _owned(token, change))
 
 
 def _record_skip(session_key: str, tenant_id: str, start: int, end: int, reason: str) -> None:
@@ -749,17 +781,6 @@ def _record_skip(session_key: str, tenant_id: str, start: int, end: int, reason:
             "fact_ids, ingested_at) VALUES (%s, %s, %s, %s, '{}', NOW()) "
             "ON CONFLICT (tenant_id, source_name, item_id) DO UPDATE "
             "SET content_hash = EXCLUDED.content_hash, ingested_at = NOW()",
-            (tenant_id, _SKIPPED_SOURCE, f"{session_key}#{start}-{end}", reason[:200]),
+            (tenant_id, _SKIPPED_SOURCE, f"{session_key}#{start}-{end}", reason[:64]),
         )
         conn.commit()
-
-
-def _release(session_key: str, tenant_id: str, token: str) -> None:
-    """Give the conversation back (only this run's own claim)."""
-    _update(
-        session_key,
-        tenant_id,
-        token,
-        "content_hash = (content_hash::jsonb - 'claim' - 'claimed_until')::text",
-        (),
-    )
