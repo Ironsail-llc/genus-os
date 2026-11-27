@@ -394,6 +394,16 @@ async def _call(name: str, args: dict[str, Any], ctx: ToolContext, access: str) 
     }
     if answer.get("would") is not None:
         result["would"] = answer["would"]
+    withheld = answer.get("result_withheld")
+    if isinstance(withheld, dict):
+        # The tool ran in the child; only its result was too large to send.
+        # Reported as done (no ``error``), so the effect ledger records it and
+        # a retry replays this answer instead of running the write again.
+        result["result_withheld"] = withheld
+        result["note"] = (
+            f"'{args['tool']}' ran in that company, but its result was too large to "
+            "return here. Do not run it again; check the outcome in that company."
+        )
     if outcome == OUTCOME_ERROR:
         inner = answer.get("result")
         detail = inner.get("error") if isinstance(inner, dict) else None

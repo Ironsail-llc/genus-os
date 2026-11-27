@@ -5,7 +5,9 @@
 --
 -- remote_tool_requests: a write runs at most once per (tenant_id, request_id).
 -- The request is claimed 'running' before the tool runs and becomes 'done',
--- with the answer it gave, after. A done request answers again from its row
+-- with the answer it gave, after. The row keeps the tool and a digest of the
+-- arguments it was claimed for: a later call with the same id but another
+-- tool or other arguments is refused, never answered with this row. A done request answers again from its row
 -- (outcome 'replayed'); a running one is never run again -- its outcome is
 -- unknown until an operator looks, because the tool may have acted.
 --
@@ -22,12 +24,18 @@
 CREATE TABLE IF NOT EXISTS remote_tool_requests (
     tenant_id    TEXT NOT NULL,
     request_id   TEXT NOT NULL,
+    tool         TEXT NOT NULL DEFAULT '',
+    args_digest  TEXT NOT NULL DEFAULT '',
     state        TEXT NOT NULL DEFAULT 'running' CHECK (state IN ('running', 'done')),
     result       JSONB,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at  TIMESTAMPTZ,
     PRIMARY KEY (tenant_id, request_id)
 );
+
+-- A database that ran an earlier draft of this file gets the two columns too.
+ALTER TABLE remote_tool_requests ADD COLUMN IF NOT EXISTS tool TEXT NOT NULL DEFAULT '';
+ALTER TABLE remote_tool_requests ADD COLUMN IF NOT EXISTS args_digest TEXT NOT NULL DEFAULT '';
 
 -- The platform's tenant_isolation shape (081, 164, 169).
 ALTER TABLE remote_tool_requests ENABLE ROW LEVEL SECURITY;
