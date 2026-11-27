@@ -110,6 +110,66 @@ async def _agent_capabilities(ctx: DoctorContext) -> list[Result]:
     return rows or [ok("no capabilities to report")]
 
 
+#: The tools that reach the bridge's remote routes.
+_REMOTE_TOOLS = ("org_tools", "org_tool_read", "org_tool_write")
+_GRANT_KEYS = ("tools_allowed", "tools_eager", "tools_opt_in")
+
+
+def _remote_facts(directory: Any) -> tuple[str, bool, list[str]]:
+    """``(mode, has children, agents that use remote tools)``. Blocking."""
+    from robothor.auth.runtime import org_remote_tools_mode
+    from robothor.doctor.checks.tools import _scan_manifests
+    from robothor.engine.config import EngineConfig
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    mode = org_remote_tools_mode()
+    tenant = EngineConfig.from_env().tenant_id
+    children = len(resolve_accessible_tenants(tenant, "owner")) > 1
+    agents = {"main"}
+    for manifest in _scan_manifests(directory):
+        granted = {str(t) for key in _GRANT_KEYS for t in manifest.get(key) or ()}
+        if granted & set(_REMOTE_TOOLS):
+            agents.add(str(manifest.get("id")))
+    return mode, children, sorted(agents)
+
+
+async def _remote_tools_reach(ctx: DoctorContext) -> list[Result]:
+    """Whether this tenant's agents can reach the bridge's remote-tool routes.
+
+    A failure means the bridge's capabilities manifest (agent_capabilities.json)
+    LISTS the agent but its ``bridge_endpoints`` lack the remote-tool patterns,
+    so every org_tools / org_tool_read / org_tool_write call is refused with
+    403. Add the patterns the detail names to that agent's entry and restart
+    the bridge, which reads the file only at start. An agent the file does not
+    list needs nothing: the routes are authorised by the org:remote scope.
+    Skipped when remote tools are off or this tenant has no child tenants.
+    """
+    from robothor.doctor.checks.tools import _manifest_dir
+    from robothor.events.capabilities import manifest_path, missing_remote_endpoints
+    from robothor.tenancy.remote_contract import MODE_OFF
+
+    mode, children, agents = await ctx.run_blocking(_remote_facts, _manifest_dir(ctx))
+    if mode == MODE_OFF:
+        return [skip("remote tools are off (GENUS_ORG_REMOTE_TOOLS=off)")]
+    if not children:
+        return [skip("this tenant has no child tenants")]
+    path = manifest_path()
+    rows: list[Result] = []
+    for agent in agents:
+        missing = missing_remote_endpoints(agent)
+        if missing:
+            lines = ", ".join(f'"{pattern}"' for pattern in missing)
+            rows.append(
+                fail(
+                    f"agent '{agent}' is listed in {path} without {lines} in its "
+                    "bridge_endpoints, so its remote tool calls are refused; add them "
+                    "to that entry and restart the bridge",
+                    sub_id=agent,
+                )
+            )
+    return rows or [ok(f"remote tool routes reachable for {', '.join(agents)}")]
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         id="capabilities.agent",
@@ -117,5 +177,12 @@ CHECKS: tuple[Check, ...] = (
         category="capabilities",
         severity="info",
         run=_agent_capabilities,
+    ),
+    Check(
+        id="capabilities.remote_tools",
+        title="Whether this tenant's agents can reach the bridge's remote-tool routes",
+        category="capabilities",
+        severity="recommended",
+        run=_remote_tools_reach,
     ),
 )

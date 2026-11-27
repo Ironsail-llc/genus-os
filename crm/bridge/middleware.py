@@ -386,6 +386,9 @@ class BridgeMiddleware:
                     actor=auth.actor_id,
                     public_error="agent identity not authorized",
                 )
+            if _is_remote_tool_call(auth, request.url.path):
+                request.state.agent_id = agent_id
+                return _remote_endpoint_denial(request, str(agent_id or ""))
             if auth.is_service and agent_id not in _known_agent_ids():
                 return _deny(
                     request,
@@ -409,6 +412,38 @@ class BridgeMiddleware:
                     public_error=f"Agent '{agent_id}' not authorized for {method} {path}",
                 )
         return None
+
+
+def _is_remote_tool_call(auth: AuthContext, path: str) -> bool:
+    """An engine's remote-tool call: authorised by its ``org:remote`` scope.
+
+    Nothing builds the capabilities manifest from the agent manifests, so on
+    a fresh install the agent is in no list; the scope (minted only by the
+    engine's remote tools) and the route's own checks are the gate.
+    """
+    return (
+        auth.is_service and path.startswith(_ORG_REMOTE_PREFIX) and auth.has_scope(SCOPE_ORG_REMOTE)
+    )
+
+
+def _remote_endpoint_denial(request: Request, agent_id: str) -> Response | None:
+    """Refuse only an agent the manifest LISTS without the pattern this call needs,
+    naming every remote pattern it lacks so one edit fixes both routes."""
+    from robothor.events.capabilities import manifest_path, missing_remote_endpoints
+
+    if not missing_remote_endpoints(agent_id, request.method, request.url.path):
+        return None
+    need = ", ".join(f'"{pattern}"' for pattern in missing_remote_endpoints(agent_id))
+    return _deny(
+        request,
+        f"Agent '{agent_id}' lacks remote-tool bridge_endpoints {need} in {manifest_path()}",
+        actor=agent_id,
+        public_error=(
+            f"agent '{agent_id}' is listed in the bridge's capabilities manifest "
+            f"(agent_capabilities.json) without {need} in its bridge_endpoints: "
+            "add them and restart the bridge"
+        ),
+    )
 
 
 async def _session_refusal(auth: AuthContext) -> tuple[int, str] | None:
