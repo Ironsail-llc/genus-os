@@ -1054,16 +1054,25 @@ def _dedupe(results: list[dict[str, Any]], threshold: float = 0.75) -> list[dict
     Catches exact dups, subsets, and lexical near-dups (Jaccard token overlap
     >= threshold) — e.g. the camera-detection spam and reworded restatements
     that otherwise fill the top of a result set. Conservative: only suppresses
-    clear textual overlap, not merely topically-related facts.
+    clear textual overlap, not merely topically-related facts. Rows are
+    compared only with rows of their own ``kind``: a fact is a summary of the
+    conversation it came from, so its words are often a subset of a segment's,
+    and each holds what the other lacks.
     """
     kept: list[dict[str, Any]] = []
-    kept_tokens: list[frozenset[str]] = []
+    kept_tokens: dict[str, list[frozenset[str]]] = {}
     for r in results:
         toks = _row_tokens(r)
-        if not _is_near_duplicate(toks, kept_tokens, threshold):
+        same_kind = kept_tokens.setdefault(_row_kind(r), [])
+        if not _is_near_duplicate(toks, same_kind, threshold):
             kept.append(r)
-            kept_tokens.append(toks)
+            same_kind.append(toks)
     return kept
+
+
+def _row_kind(r: dict[str, Any]) -> str:
+    """The kind near-duplicates are looked for within (a row without one is a fact)."""
+    return str(r.get("kind") or "fact")
 
 
 def _row_tokens(r: dict[str, Any]) -> frozenset[str]:
@@ -1758,8 +1767,8 @@ def _fill_from_pool(
     (``RERANK_MAX_CANDIDATES``) and returns what it scored, so a caller asking
     for more rows than that used to get the head alone. The rest of the pool
     follows in fused order, unscored (``rerank_score`` None, relevance from its
-    fused rank), skipping a row already returned, a near-duplicate of one, or
-    one in ``drop`` (``tail_entities.confusable_tail_keys``: a row about a
+    fused rank), skipping a row already returned, a near-duplicate of one of
+    its kind, or one in ``drop`` (``tail_entities.confusable_tail_keys``: a row about a
     different person sharing a name with one the question names). Every pool
     row came through the same filtered legs, so the tail obeys the same
     tenant, scope, trust and reader rules as the head.
@@ -1770,8 +1779,12 @@ def _fill_from_pool(
     seen = {(r.get("kind", "fact"), r.get("id")) for r in out}
     dedup = _dedup_enabled()
     # Incremental: each kept row is tokenized once (the head is already free
-    # of near-duplicates), so a candidate costs one pass over the kept rows.
-    kept_tokens = [_row_tokens(r) for r in out] if dedup else []
+    # of near-duplicates), so a candidate costs one pass over the kept rows
+    # of its own kind (``_dedupe``'s rule).
+    kept_tokens: dict[str, list[frozenset[str]]] = {}
+    if dedup:
+        for r in out:
+            kept_tokens.setdefault(_row_kind(r), []).append(_row_tokens(r))
     for row in pool:
         if len(out) >= limit:
             break
@@ -1780,9 +1793,10 @@ def _fill_from_pool(
             continue
         if dedup:
             toks = _row_tokens(row)
-            if _is_near_duplicate(toks, kept_tokens):
+            same_kind = kept_tokens.setdefault(_row_kind(row), [])
+            if _is_near_duplicate(toks, same_kind):
                 continue
-            kept_tokens.append(toks)
+            same_kind.append(toks)
         seen.add(key)
         # Marked so a later re-sort (the routed path's recency order) keeps it
         # behind the head.
