@@ -159,6 +159,8 @@ class TestOnlyInConversation:
     @pytest.mark.parametrize(("seed", "size"), [(1, "full"), (7, "small")])
     def test_gold_is_in_no_fact_document_or_original_conversation(self, seed, size):
         w = _world(seed, size)
+        # The conversation_buried stratum's own conversations count as
+        # elsewhere too: none of them may state this stratum's answers.
         recall_convs = {r.conversation_id for r in w.conversation_recall}
         elsewhere = " ".join(
             [f.text for f in w.facts]

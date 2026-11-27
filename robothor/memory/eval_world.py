@@ -41,11 +41,12 @@ import dataclasses
 import hashlib
 import json
 import random
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
-WORLD_SCHEMA_VERSION = 2
+WORLD_SCHEMA_VERSION = 3
 
 #: Where a fact's knowledge came from. Outcome learning and poisoning
 #: defences weigh these differently, so every fact carries exactly one.
@@ -75,6 +76,10 @@ STRATA: tuple[str, ...] = (
     # detail deep in a long message, one changed in a later session, one that
     # needs three sessions. Last, so the others keep their order and cases.
     "conversation_recall",
+    # A company named by about a hundred extracted facts, and one of its
+    # conversations that alone holds the answer: the facts fill the context
+    # and the conversation never reaches it. Last, for the same reason.
+    "conversation_buried",
 )
 
 #: Rewordings of the multi-hop questions, by kind; one is chosen per case by a
@@ -250,6 +255,8 @@ class WorldSize:
     max_cases_per_stratum: int
     #: Conversations of the ``conversation_recall`` stratum (four cases each).
     recall_conversations: int = 0
+    #: Companies of the ``conversation_buried`` stratum (three cases each).
+    buried_subjects: int = 0
 
 
 WORLD_SIZES: dict[str, WorldSize] = {
@@ -271,6 +278,7 @@ WORLD_SIZES: dict[str, WorldSize] = {
         shadow_locations=4,
         max_cases_per_stratum=40,
         recall_conversations=6,
+        buried_subjects=4,
     ),
     "full": WorldSize(
         name="full",
@@ -290,6 +298,7 @@ WORLD_SIZES: dict[str, WorldSize] = {
         shadow_locations=6,
         max_cases_per_stratum=240,
         recall_conversations=40,
+        buried_subjects=50,
     ),
 }
 
@@ -594,6 +603,8 @@ class World:
     shadow: World | None = None
     #: What the ``conversation_recall`` conversations answer (primary only).
     conversation_recall: tuple[ConversationRecall, ...] = ()
+    #: What the ``conversation_buried`` conversations answer (primary only).
+    conversation_buried: tuple[ConversationRecall, ...] = ()
 
 
 # --------------------------------------------------------------------------- #
@@ -700,10 +711,24 @@ def generate_world(seed: int, size: str | WorldSize = "full") -> World:
     )
     cases += _recall_cases(recall, spec.max_cases_per_stratum)
     built = primary.world(seed, spec.name, cases=())
+    # Its own stream too, after conversation_recall: everything above is
+    # what it was without it. It adds companies, facts and conversations.
+    buried_orgs, buried_facts, buried_convs, buried = _conversation_buried(
+        random.Random(seed * 1_000_037 + 912), spec.buried_subjects, built.locations
+    )
+    cases += _recall_cases(
+        buried,
+        spec.max_cases_per_stratum,
+        "conversation_buried",
+        subjects={c.id: _buried_org_id(c.id) for c in buried_convs},
+    )
     return dataclasses.replace(
         built,
-        conversations=built.conversations + recall_convs,
+        organisations=built.organisations + buried_orgs,
+        facts=built.facts + buried_facts,
+        conversations=built.conversations + recall_convs + buried_convs,
         conversation_recall=recall,
+        conversation_buried=buried,
         cases=tuple(cases),
         shadow=shadow.world(seed, spec.name, cases=()),
     )
@@ -2203,9 +2228,17 @@ def _conversation_recall(
     return tuple(convs), tuple(recall)
 
 
-def _recall_cases(recall: tuple[ConversationRecall, ...], cap: int) -> list[Case]:
-    """The ``conversation_recall`` cases, capped as every stratum is."""
-    stratum = "conversation_recall"
+def _recall_cases(
+    recall: tuple[ConversationRecall, ...],
+    cap: int,
+    stratum: str = "conversation_recall",
+    subjects: dict[str, str] | None = None,
+) -> list[Case]:
+    """A conversation stratum's cases, capped as every stratum is.
+
+    ``subjects`` maps a conversation to the entity its cases are about (the
+    company of a ``conversation_buried`` conversation); else the conversation.
+    """
     cases = [
         Case(
             id=f"{stratum}:{r.id}",
@@ -2215,13 +2248,253 @@ def _recall_cases(recall: tuple[ConversationRecall, ...], cap: int) -> list[Case
             supporting_ids=r.turn_ids,
             as_of=None,
             split=split_for(f"{stratum}:{r.id}"),
-            subject_id=r.conversation_id,
+            subject_id=(subjects or {}).get(r.conversation_id, r.conversation_id),
         )
         for r in recall
     ]
     if len(cases) > cap:
         cases = sorted(cases, key=lambda c: hashlib.sha256(c.id.encode()).hexdigest())[:cap]
     return sorted(cases, key=lambda c: c.id)
+
+
+# --------------------------------------------------------------------------- #
+# conversation_buried: a conversation answer under a company's pile of facts
+# --------------------------------------------------------------------------- #
+
+#: Companies of the stratum. No word here is a world name or a word any other
+#: world text uses, so the pile is the only thing that names them.
+_BURIED_A = (
+    "Larch", "Sorrel", "Quince", "Yarrow", "Bracken",
+    "Fescue", "Wicken", "Teasel", "Burdock", "Hornbeam",
+)  # fmt: skip
+_BURIED_B = ("Ceramics", "Upholstery", "Glazing", "Tiling", "Plastering")
+
+#: What the pile says. Every fact names the company, so a question about it
+#: finds the pile on the dense and the keyword fact leg alike; none uses a
+#: word the stratum's questions ask with besides the company's name.
+_BURIED_ITEMS = (
+    "sheets of plywood", "tubs of filler", "rolls of masking tape", "boxes of screws",
+    "tins of varnish", "packs of sandpaper", "cartons of gloves", "drums of sealant",
+    "coils of cable", "bags of grout", "pots of primer", "reels of twine",
+)  # fmt: skip
+_BURIED_SERVICES = (
+    "boiler", "window cleaning", "pest control", "fire alarm", "lift",
+    "gutter", "drain", "pressure washing", "sprinkler", "roof",
+)  # fmt: skip
+_BURIED_PEOPLE = ("bookkeeper", "surveyor", "accountant", "solicitor", "architect", "auditor")
+_MONTHS = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)  # fmt: skip
+#: Facts per company, its headquarters and the old dock door included.
+_BURIED_FACTS_PER_SUBJECT = 100
+
+
+def _buried_org_id(conversation_id: str) -> str:
+    return f"org-{conversation_id}"
+
+
+def _words(text: str) -> frozenset[str]:
+    return frozenset(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _buried_pile(rng: random.Random, org: str, n: int) -> list[tuple[str, date]]:
+    """``n`` facts naming ``org``, each with the date it became true.
+
+    No two are near-duplicates by recall's own rule (word sets 75% the same,
+    or one inside the other), so the pile is not collapsed to a few rows.
+    """
+    out: list[tuple[str, date]] = []
+    kept: list[frozenset[str]] = []
+    while len(out) < n:
+        when = date(2023, 1, 2) + timedelta(days=rng.randrange(700))
+        month = f"{_MONTHS[when.month - 1]} {when.year}"
+        shape = rng.randrange(5)
+        if shape == 0:
+            text = f"{org} took delivery of {rng.randint(2, 90)} {rng.choice(_BURIED_ITEMS)} in {month}."
+        elif shape == 1:
+            text = (
+                f"{org} paid invoice INV-{rng.randint(10000, 99999)} for "
+                f"{rng.choice(_BURIED_ITEMS)} in {month}."
+            )
+        elif shape == 2:
+            text = f"{org} booked a {rng.choice(_BURIED_SERVICES)} inspection for {month}."
+        elif shape == 3:
+            text = (
+                f"{org} sent back {rng.randint(2, 40)} damaged {rng.choice(_BURIED_ITEMS)} "
+                f"in {month}."
+            )
+        else:
+            text = f"{org} met its {rng.choice(_BURIED_PEOPLE)} on {when.day} {month}."
+        words = _words(text)
+        if any(len(words & k) / len(words | k) >= 0.7 or words <= k or k <= words for k in kept):
+            continue
+        kept.append(words)
+        out.append((text, when))
+    return out
+
+
+def _conversation_buried(
+    rng: random.Random, n: int, locations: tuple[Location, ...]
+) -> tuple[
+    tuple[Organisation, ...],
+    tuple[Fact, ...],
+    tuple[Conversation, ...],
+    tuple[ConversationRecall, ...],
+]:
+    """``n`` companies, their piles of facts, one conversation each, three questions each.
+
+    The conversation has three sessions after every fact in the pile: an order
+    reference beside the question's words, a gate code more than 1,200
+    characters after the words that ask for it, and a dock door that replaced
+    the one an active fact still states. The answers exist only there.
+    """
+    names = [f"{a} {b}" for a in _BURIED_A for b in _BURIED_B]
+    rng.shuffle(names)
+    codes = rng.sample(range(1000, 10000), n)
+    refs = rng.sample(range(10000, 100000), n)
+    orgs: list[Organisation] = []
+    facts: list[Fact] = []
+    convs: list[Conversation] = []
+    buried: list[ConversationRecall] = []
+    for k in range(n):
+        org, cid = names[k], f"cvb-{k + 1:02d}"
+        oid = _buried_org_id(cid)
+        loc = rng.choice(locations)
+        # Doors, codes and references of their own shape, so no value here is
+        # one conversation_recall asks for.
+        old_door, new_door = rng.randint(40, 59), rng.randint(60, 79)
+        code = "".join(rng.choices("BCDFGHJKLMNPRSTVWXZ", k=2)) + f"-{codes[k]}"
+        ref = f"SO-{refs[k]}"
+        first = f"{cid}/s001/t001"
+        pile = [
+            (f"{org} is headquartered in {loc.name}.", date(2023, 1, 2), "contact", (loc,)),
+            (
+                f"Deliveries for {org} go to dock door {old_door}.",
+                date(2024, 6, 3) + timedelta(days=rng.randrange(60)),
+                "contact",
+                (),
+            ),
+            *(
+                (text, when, "event", ())
+                for text, when in _buried_pile(rng, org, _BURIED_FACTS_PER_SUBJECT - 2)
+            ),
+        ]
+        hq_fact = f"cvb-fct-{k + 1:02d}-001"
+        for ix, (text, when, category, others) in enumerate(pile, start=1):
+            mentions = (Mention(oid, org), *(Mention(o.id, o.name) for o in others))
+            day = when.isoformat()
+            facts.append(
+                Fact(
+                    id=f"cvb-fct-{k + 1:02d}-{ix:03d}",
+                    text=text,
+                    category=category,
+                    mentions=mentions,
+                    event_date=day,
+                    source=SourceRef("conversation", cid, first),
+                    origin="user_stated",
+                    supersedes=None,
+                    superseded_by=None,
+                    valid_from=day,
+                    valid_to=None,
+                )
+            )
+        orgs.append(
+            Organisation(
+                id=oid,
+                name=org,
+                domain=f"{org.lower().replace(' ', '-')}.example.com",
+                hq_location_id=loc.id,
+                hq_fact_id=hq_fact,
+                has_crm_row=False,
+            )
+        )
+        start = max(when for _t, when, _c, _o in pile) + timedelta(days=rng.randint(10, 40))
+        dates = [start, start + timedelta(days=rng.randint(9, 30))]
+        dates.append(dates[-1] + timedelta(days=rng.randint(9, 30)))
+
+        def note(planted: str, org: str = org) -> str:
+            body = rng.sample(_NOTE_FILLER, 11)
+            body.insert(rng.randint(3, len(body)), planted)
+            return " ".join([f"My notes from today's visit to {org}:", *body])
+
+        notes = [
+            # The value sits between the words that ask for it.
+            note(
+                f"The order reference {ref} belongs to the {org} spring catalogue; "
+                "put it on every invoice that goes out."
+            ),
+            " ".join(
+                [
+                    f"Notes from this morning's walk-round of the {org} loading yard, mostly "
+                    "about the gate code that keeps failing:",
+                    *rng.sample(_NOTE_FILLER, 13),
+                    f"In the end the site supervisor texted it over: {code}, and it changes on "
+                    "the first of every month.",
+                ]
+            ),
+            note(
+                f"Change of plan on deliveries for {org}: from this week they go to dock "
+                f"door {new_door}, not dock door {old_door}, since the old entrance is being "
+                "bricked up."
+            ),
+        ]
+        sessions: list[ChatSession] = []
+        note_turns: list[str] = []
+        for s_ix, (when, text) in enumerate(zip(dates, notes, strict=True)):
+            sid = f"{cid}/s{s_ix + 1:03d}"
+            pairs = [
+                (
+                    rng.choice(_SHORT_ASKS).format(acct=org),
+                    "From your notes: " + " ".join(rng.sample(_NOTE_FILLER, 2)),
+                )
+                for _ in range(3)
+            ]
+            # The gate code note ends its session and its reply names no
+            # company, so no question word follows the far answer.
+            far = s_ix == 1
+            at = 3 if far else rng.randint(0, 3)
+            ack = "Thanks, I have filed those notes." if far else f"Thanks, filed under {org}."
+            pairs.insert(at, (text, ack))
+            turns: list[Turn] = []
+            for user, assistant in pairs:
+                for role, said in (("user", user), ("assistant", assistant)):
+                    minute = len(turns)
+                    stamp = f"{when.isoformat()}T10:{minute:02d}:00+00:00"
+                    turns.append(Turn(f"{sid}/t{minute + 1:03d}", role, said, stamp))
+            note_turns.append(turns[2 * at].id)
+            sessions.append(ChatSession(sid, when.isoformat(), tuple(turns)))
+        convs.append(Conversation(cid, f"{org} premises", tuple(sessions)))
+        buried += [
+            ConversationRecall(
+                f"{cid}:near",
+                cid,
+                "near",
+                f"What is the order reference for the {org} spring catalogue?",
+                (ref,),
+                (),
+                (note_turns[0],),
+            ),
+            ConversationRecall(
+                f"{cid}:far",
+                cid,
+                "far",
+                f"What is the gate code for the {org} loading yard?",
+                (code,),
+                (),
+                (note_turns[1],),
+            ),
+            ConversationRecall(
+                f"{cid}:update",
+                cid,
+                "update",
+                f"Which dock door do deliveries for {org} go to now?",
+                (f"dock door {new_door}", f"door {new_door}"),
+                (f"dock door {old_door}",),
+                (note_turns[2],),
+            ),
+        ]
+    return tuple(orgs), tuple(facts), tuple(convs), tuple(buried)
 
 
 __all__ = [

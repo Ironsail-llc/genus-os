@@ -296,7 +296,11 @@ def known_values(world: World) -> frozenset[str]:
         out |= {p.full_name for p in w.people} | {p.email for p in w.people}
         out |= {e.role for e in w.employments}
         out |= {r.value for r in w.raw_details}
-        out |= {v for r in w.conversation_recall for v in (r.gold[0], *r.rivals)}
+        out |= {
+            v
+            for r in (*w.conversation_recall, *w.conversation_buried)
+            for v in (r.gold[0], *r.rivals)
+        }
     return frozenset(out)
 
 
@@ -327,6 +331,19 @@ def known_kinds(world: World) -> dict[str, str]:
                     ],
                 )
                 for kind in ("near", "far", "update", "multi_session")
+            ),
+            # The same question shapes, about the buried companies.
+            *(
+                (
+                    f"conversation_buried_{kind}",
+                    [
+                        v
+                        for r in w.conversation_buried
+                        if r.kind == kind
+                        for v in (r.gold[0], *r.rivals)
+                    ],
+                )
+                for kind in ("near", "far", "update")
             ),
         ):
             for v in values:

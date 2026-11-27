@@ -177,8 +177,9 @@ class TestThePile:
         )
         assert overlapping == 0
 
-    def test_subject_names_share_no_word_with_the_rest_of_the_world(self):
-        w = _world(1, "full")
+    @pytest.mark.parametrize(("seed", "size"), [(1, "full"), (7, "full"), (7, "small")])
+    def test_subject_names_share_no_word_with_the_rest_of_the_world(self, seed, size):
+        w = _world(seed, size)
         subjects = {c.subject_id for c in _cases(w)}
         names = {o.name for o in w.organisations if o.id in subjects}
         words = {x.lower() for n in names for x in n.split()}
