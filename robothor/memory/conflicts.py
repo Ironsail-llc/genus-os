@@ -81,31 +81,34 @@ def numbers_differ(a: str, b: str) -> bool:
 
 # ── Same-slot detection ─────────────────────────────────────────────────────
 # A slot is (subject, attribute). Two facts in one slot either repeat its value,
-# change it (a single-valued attribute), or add a value (a multi-valued one).
-# Similarity cannot tell these apart, so the slot is read from the fact's
-# canonical predicate when it has one and otherwise from a small lexical frame.
-# A fact matching no frame has no slot and keeps the similarity path.
+# give it another value, or are unrelated. Similarity cannot tell these apart,
+# so the slot is read from the fact's canonical predicate when it has one and
+# otherwise from a small lexical frame. A frame only ever NOMINATES a pair for
+# the classifier; it never closes a fact on its own (see ``_resolve_slot``). A
+# sentence that is hedged, negated, conditional, quoted, questioned, about a
+# pronoun or a generic subject, or whose value is not of the attribute's type
+# has no slot at all and keeps the similarity path.
 
-#: Attributes a subject has one value of at a time. Every other attribute the
-#: frames name is multi-valued: a new value is one more, not a replacement.
+#: One value at a time: a new value is a change.
 SINGLE_VALUED_ATTRIBUTES = frozenset(
     {
         "residence",
-        "employer",
         "manager",
         "role",
         "title",
         "spouse",
         "partner",
         "car",
-        "phone",
-        "email",
-        "address",
         "birthday",
         "age",
         "timezone",
     }
 )
+#: People often have several (two employers, a work and a home email): a new
+#: value MAY be a change, and only the classifier says so.
+SEVERAL_VALUED_ATTRIBUTES = frozenset({"employer", "phone", "email", "address"})
+#: A new value is one more, never a replacement.
+MULTI_VALUED_ATTRIBUTES = frozenset({"visited", "likes", "owns", "uses", "speaks", "plays"})
 
 #: Canonical predicates (``write_path.normalize_predicate`` of a relation
 #: phrase) and the attribute each fills.
@@ -132,7 +135,7 @@ PREDICATE_ATTRIBUTES: dict[str, str] = {
     "plays": "plays",
 }
 
-_ADV = r"(?:(?:now|currently|recently|just|also|still|actually|finally)\s+)*"
+_ADV = r"(?:(?:now|currently|recently|just|still|actually|finally)\s+)*"
 _ART = r"(?:(?:a|an|the|her|his|their|its)\s+)?"
 _SUBJ = r"(?P<subj>[^,;:]+?)"
 
@@ -160,7 +163,7 @@ _FRAMES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         (
             "residence",
             rf"^{_SUBJ}\s+{_ADV}(?:lives|is living|resides|is based|has moved|moved|"
-            rf"has relocated|relocated)\s+(?:back\s+)?(?:from\s+.+?\s+)?(?:in|to|at)\s+(?P<val>.+)$",
+            rf"has relocated|relocated)\s+(?:back\s+)?(?:from\s+.+?\s+)?(?:in|to)\s+(?P<val>.+)$",
         ),
         (
             "employer",
@@ -191,6 +194,20 @@ _POSSESSIVE_ATTRIBUTES = {
     "time zone": "timezone",
 }
 
+#: A sentence with any of these is not a plain statement of one current value.
+_UNSAFE = re.compile(
+    r"\b(?:also|not|no longer|never|but|if|unless|might|could|would|should|used to|said|"
+    r"says|told|tells|asked|whether|maybe|perhaps|probably|temporarily|for now|"
+    r"plans? to|wants? to|hopes? to)\b|n't\b|\?|[\"“”]",
+    re.IGNORECASE,
+)
+#: Subjects that name nobody in particular.
+_GENERIC_SUBJECT = re.compile(
+    r"^(?:he|she|they|it|we|i|you|him|her|them|someone|somebody|everyone|nobody|user|"
+    r"this|that|there|(?:the|a|an|this|that|our|my|their|his|her|its)\s+.*)$",
+    re.IGNORECASE,
+)
+
 # Where a value stops: punctuation, or a clause about time or cause.
 _VALUE_END = re.compile(
     r"\s*(?:[,;!?]|\.(?:\s|$)|\s(?:since|last|this|next|because|as of|after|before|recently|"
@@ -202,20 +219,72 @@ _VALUE_END = re.compile(
 _LEADING_ARTICLE = re.compile(r"^(?:a|an|the)\s+", re.IGNORECASE)
 _VALUE_STOPWORDS = frozenset({"a", "an", "the", "in", "at", "of", "to", "for", "and", "now"})
 _MAX_SUBJECT_WORDS = 5
+_NAME_CONNECTORS = frozenset({"of", "de", "la", "van", "von", "and", "&"})
+_MONTHS = (
+    "january|february|march|april|may|june|july|august|september|october|november|december|"
+    "jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec"
+)
+#: Values that must look like a literal of their type, not a name.
+_TYPED_VALUES: dict[str, re.Pattern[str]] = {
+    "phone": re.compile(r"\+?\d[\d\s().-]{5,}\d"),
+    "email": re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+"),
+    "address": re.compile(r"\d+\s+[A-Za-z].*"),
+    "birthday": re.compile(
+        rf"(?:(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?|\d{{1,2}}\s+(?:{_MONTHS})|"
+        r"\d{4}-\d{2}-\d{2})",
+        re.IGNORECASE,
+    ),
+    "age": re.compile(r"\d{1,3}"),
+    "timezone": re.compile(r"[A-Z]{2,5}|UTC[+-]\d{1,2}|[A-Z][a-z]+/[A-Za-z_]+"),
+}
+#: Values that must be a name: capitalised words, a few connectors inside.
+_NAMED_VALUES = frozenset(
+    {"residence", "employer", "manager", "role", "title", "spouse", "partner", "car", "visited"}
+)
+_MAX_VALUE_WORDS = 5
+
+
+def _cut_value(raw: str) -> str:
+    text = _VALUE_END.split(raw.strip(), maxsplit=1)[0]
+    return _LEADING_ARTICLE.sub("", text.strip().rstrip(".")).strip()
 
 
 def _norm_value(raw: str) -> str:
-    text = _VALUE_END.split(raw.strip(), maxsplit=1)[0]
-    text = _LEADING_ARTICLE.sub("", text.strip().rstrip(".")).strip()
-    return re.sub(r"\s+", " ", text.lower())
+    return re.sub(r"\s+", " ", _cut_value(raw).lower())
+
+
+def _is_name(text: str) -> bool:
+    words = text.split()
+    if not words or len(words) > _MAX_VALUE_WORDS or not words[0][:1].isupper():
+        return False
+    return all(w[:1].isupper() or w.lower() in _NAME_CONNECTORS for w in words)
+
+
+def _typed_value(attribute: str, raw: str) -> str | None:
+    """The normalised value when ``raw`` is of ``attribute``'s type, else None."""
+    value = _cut_value(raw)
+    if not value:
+        return None
+    base = attribute.split(":", 1)[0]
+    pattern = _TYPED_VALUES.get(base)
+    if pattern is not None:
+        if not pattern.fullmatch(value):
+            return None
+    elif base in _NAMED_VALUES:
+        if not _is_name(value) or (base == "residence" and value[:1].isdigit()):
+            return None
+    elif len(value.split()) > _MAX_VALUE_WORDS - 1 or not re.fullmatch(r"[\w' -]+", value):
+        return None
+    return re.sub(r"\s+", " ", value.lower())
 
 
 def _norm_subject(raw: str) -> str | None:
-    text = re.sub(r"\s+", " ", raw.strip().lower())
-    text = _LEADING_ARTICLE.sub("", text)
-    if not text or len(text.split()) > _MAX_SUBJECT_WORDS:
+    text = re.sub(r"\s+", " ", raw.strip())
+    if not text or not text[:1].isupper() or _GENERIC_SUBJECT.match(text):
         return None
-    return text
+    if len(text.split()) > _MAX_SUBJECT_WORDS:
+        return None
+    return text.lower()
 
 
 @dataclass(frozen=True)
@@ -223,22 +292,38 @@ class FactSlot:
     """One fact's (subject, attribute) and the value it gives that slot.
 
     ``subject_keys`` holds ``name:<lowercased subject>`` and, when known,
-    ``entity:<id>`` for every entity the subject resolves to; two facts share a
-    subject when their keys intersect.
+    ``entity:<id>`` for the entity the subject resolves to. ``source`` is
+    ``relation`` (a canonical predicate) or ``frame`` (the text's wording).
     """
 
     subject_keys: frozenset[str]
     attribute: str
     value: str
+    source: str = "frame"
+
+    @property
+    def cardinality(self) -> str:
+        """``single``, ``several`` or ``multi`` (see the attribute sets above)."""
+        base = self.attribute.split(":", 1)[0]
+        if base in SINGLE_VALUED_ATTRIBUTES or base in ("prefers", "favorite"):
+            return "single"
+        if base in SEVERAL_VALUED_ATTRIBUTES:
+            return "several"
+        return "multi"
 
     @property
     def single_valued(self) -> bool:
-        base = self.attribute.split(":", 1)[0]
-        return base in SINGLE_VALUED_ATTRIBUTES or base in ("prefers", "favorite")
+        return self.cardinality == "single"
+
+    @property
+    def entity_ids(self) -> frozenset[int]:
+        return frozenset(
+            int(k.split(":", 1)[1]) for k in self.subject_keys if k.startswith("entity:")
+        )
 
     def with_entity_ids(self, ids: Iterable[int]) -> FactSlot:
         keys = self.subject_keys | {f"entity:{int(i)}" for i in ids}
-        return FactSlot(frozenset(keys), self.attribute, self.value)
+        return FactSlot(frozenset(keys), self.attribute, self.value, self.source)
 
     @property
     def subject_name(self) -> str:
@@ -265,44 +350,50 @@ def _slot_from_relations(
     for rel in relations:
         attribute = PREDICATE_ATTRIBUTES.get(normalize_predicate(rel.get("relation")) or "")
         subject = _norm_subject(str(rel.get("source") or ""))
-        value = _norm_value(str(rel.get("target") or ""))
+        value = _typed_value(attribute or "", str(rel.get("target") or "")) if attribute else None
         if attribute and subject and value:
-            return FactSlot(_subject_keys(subject, mention_entities), attribute, value)
+            return FactSlot(_subject_keys(subject, mention_entities), attribute, value, "relation")
     return None
 
 
 def fact_slot(fact: Mapping[str, Any]) -> FactSlot | None:
-    """The slot ``fact`` fills, or None when no predicate or frame names one.
+    """The slot ``fact`` fills, or None when no predicate or frame names one safely.
 
-    A relation whose canonical predicate is in :data:`PREDICATE_ATTRIBUTES`
-    decides first; otherwise the first frame matching ``fact_text``.
-    ``mention_entities`` (``[{surface_form, entity_id}]``, a stored fact's
-    resolved mentions) adds entity keys to the subject.
+    None for a hedged, negated, conditional, quoted or questioned sentence
+    (``_UNSAFE``), a pronoun or generic subject, or a value not of the
+    attribute's type. Otherwise a relation whose canonical predicate is in
+    :data:`PREDICATE_ATTRIBUTES` decides first, then the first frame matching
+    ``fact_text``. ``mention_entities`` (``[{surface_form, entity_id}]``, a
+    stored fact's resolved mentions) adds entity keys to the subject.
     """
+    text = str(fact.get("fact_text") or "").strip()
+    if not text or _UNSAFE.search(text):
+        return None
     mention_entities = list(fact.get("mention_entities") or [])
     slot = _slot_from_relations(fact.get("relations") or [], mention_entities)
     if slot is not None:
         return slot
-    text = str(fact.get("fact_text") or "").strip()
     for attribute, pattern in _FRAMES:
         m = pattern.match(text)
         if not m:
             continue
         subject = _norm_subject(m.group("subj"))
-        value = _norm_value(m.group("val"))
-        if not subject or not value:
-            continue
+        if not subject:
+            return None
         groups = m.groupdict()
-        if attribute == "prefers":
-            other = _norm_value(groups.get("other") or "")
-            if not other:
-                continue
-            attribute = "prefers:" + "|".join(sorted((value, other)))
-        elif attribute == "favorite":
+        if attribute == "favorite":
             attribute = f"favorite:{str(groups['attr']).lower()}"
         elif attribute == "possessive":
             raw = str(groups["attr"]).lower()
             attribute = _POSSESSIVE_ATTRIBUTES.get(raw, raw)
+        value = _typed_value(attribute, m.group("val"))
+        if not value:
+            return None
+        if attribute == "prefers":
+            other = _typed_value("prefers", groups.get("other") or "")
+            if not other:
+                return None
+            attribute = "prefers:" + "|".join(sorted((value, other)))
         return FactSlot(_subject_keys(subject, mention_entities), attribute, value)
     return None
 
@@ -311,21 +402,35 @@ def _value_tokens(value: str) -> frozenset[str]:
     return frozenset(re.findall(r"[a-z0-9]+", value.lower())) - _VALUE_STOPWORDS
 
 
+def same_subject(new: FactSlot, old: FactSlot) -> bool:
+    """Whether two slots are about one subject.
+
+    When the stored fact's subject resolved to an entity, only that entity
+    matches (two people named Alice never share a slot, and an unresolved
+    name never borrows a resolved fact's); otherwise a matching name does.
+    """
+    if old.entity_ids:
+        return bool(old.entity_ids & new.entity_ids)
+    return bool(new.subject_keys & old.subject_keys)
+
+
 def compare_slots(new: FactSlot | None, old: FactSlot | None) -> str:
     """How ``new`` relates to ``old``: ``repeat``, ``change``, ``coexist`` or ``unrelated``.
 
-    Same subject and attribute, and one value's words contain the other's:
-    ``repeat``. A different value: ``change`` for a single-valued attribute,
-    ``coexist`` for a multi-valued one. Anything else: ``unrelated``.
+    Same subject (:func:`same_subject`) and attribute, and one value's words
+    contain the other's: ``repeat``. A different value: ``change`` for a
+    single- or several-valued attribute (a candidate for closing, which the
+    caller still has to establish), ``coexist`` for a multi-valued one.
+    Anything else: ``unrelated``.
     """
     if new is None or old is None:
         return "unrelated"
-    if new.attribute != old.attribute or not (new.subject_keys & old.subject_keys):
+    if new.attribute != old.attribute or not same_subject(new, old):
         return "unrelated"
     a, b = _value_tokens(new.value), _value_tokens(old.value)
     if a and b and (a <= b or b <= a):
         return "repeat"
-    return "change" if new.single_valued else "coexist"
+    return "coexist" if new.cardinality == "multi" else "change"
 
 
 _SENTENCE_STARTERS = frozenset(
