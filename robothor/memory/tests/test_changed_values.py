@@ -813,6 +813,16 @@ class TestTheSimilarityPath:
         assert s.actions() == ["conflict_unresolved"]
 
     @pytest.mark.asyncio
+    async def test_an_update_records_why_so_recall_shows_the_earlier_value(self, monkeypatch):
+        # Without a reason no metadata.supersedes is written, and recall
+        # would show the new value with no earlier one after it.
+        old = _row(7, "The launch date is March 3.", similarity=0.85)
+        s = _Store(monkeypatch, similar=[old], verdict="update")
+        out = await s("The launch date is April 9.")
+        assert out["action"] == "superseded"
+        assert s.supersede.call_args.kwargs["reason"] == "changed"
+
+    @pytest.mark.asyncio
     async def test_the_classifier_hears_both_dates(self, monkeypatch):
         old = _row(7, "The launch date is March 3.", similarity=0.85, event_time="2026-01-01")
         s = _Store(monkeypatch, similar=[old])
