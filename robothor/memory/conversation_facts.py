@@ -276,6 +276,14 @@ def _dated(model_time: str | None, cited: list[ConversationTurn]) -> str | None:
     return model_time
 
 
+def _redated(text: str, model_time: str | None, event_time: str | None) -> str:
+    """The fact text with the model's date replaced by the corrected one, so the
+    sentence and ``event_time`` never disagree."""
+    if not model_time or not event_time or model_time[:10] == event_time[:10]:
+        return text
+    return text.replace(model_time[:10], event_time[:10])
+
+
 def parse_conversation_response(
     raw: str,
     window: list[ConversationTurn],
@@ -316,6 +324,7 @@ def parse_conversation_response(
             confidence = 0.8
         kind = item.get("kind") if item.get("kind") in CONVERSATION_KINDS else "other"
         mentions = _mentions(item)
+        model_time = _event_time(item.get("event_time"))
         last = max(cited, key=lambda t: t.ref)
         fact = {
             "fact_text": text.strip(),
@@ -324,15 +333,14 @@ def parse_conversation_response(
             "confidence": confidence,
             "mentions": mentions,
             "relations": _relations(item),
-            "event_time": _dated(
-                _event_time(item.get("event_time")), cited if positions is not None else []
-            ),
+            "event_time": _dated(model_time, cited if positions is not None else []),
             "speaker_role": "user" if user_said_it else "assistant",
             "about_user": item.get("about_user") is True,
             "kind": kind,
             "turn_refs": sorted(t.ref for t in cited),
             "mentioned_at": last.at.isoformat() if last.at is not None else None,
         }
+        fact["fact_text"] = _redated(fact["fact_text"], model_time, fact["event_time"])
         if passes_quality_filter(fact, require_entities=False):
             out.append(fact)
     return out
