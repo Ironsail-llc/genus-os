@@ -546,3 +546,73 @@ async def test_a_private_chat_turn_from_its_own_sender_is_theirs_and_no_sender_i
     world.model.turn_extractions.clear()
     row = await _one_turn(world, "telegram:4242", {}, person=ALICE)
     assert row["origin"] == Origin.EXTERNAL
+
+
+# ═══ late rows are bounded: no re-extraction, no runaway work ════════════
+
+
+def _session(world: World, key: str) -> int:
+    return int(
+        world.db.one(
+            "INSERT INTO chat_sessions (tenant_id, session_key, channel, person_id) "
+            "VALUES (%s, %s, 'telegram', %s) RETURNING id",
+            (TENANT, key, ALICE),
+        )
+    )
+
+
+def _put(world: World, sid: int, i: int, role: str, content: str, ago: int) -> None:
+    world.db.q(
+        "INSERT INTO chat_messages (id, session_id, message, created_at) "
+        "VALUES (%s, %s, %s::jsonb, now() - %s * interval '1 second')",
+        (i, sid, json.dumps({"role": role, "content": content, "sender_telegram_id": "4242"}), ago),
+    )
+
+
+@pytest.mark.asyncio
+async def test_ids_too_large_for_the_list_are_never_taken_for_late_rows(world: World) -> None:
+    world.model.on_turn("road bike", turn_fact("The user owns a red road bike.", about_user=True))
+    sid = _session(world, "telegram:4242")
+    big = 3_000_000_000
+    _put(world, sid, big, "user", "I have a red road bike.", 20)
+    _put(world, sid, big + 1, "assistant", "Nice.", 20)
+    for _ in range(4):
+        await _ingest("telegram:4242", [])
+    assert world.model.calls.count("extract_conversation") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_burst_longer_than_the_list_drains_once_and_stops(world: World) -> None:
+    from robothor.memory import conversation_ingest as ci
+
+    sid = _session(world, "telegram:4242")
+    for i in range(1, 1001):
+        _put(world, sid, i, "user" if i % 2 else "assistant", f"m{i}", 30)
+    for _ in range(12):
+        await _ingest("telegram:4242", [])
+    drained = world.model.calls.count("extract_conversation")
+    assert drained <= 1000 // ci.WINDOW_MAX_TURNS + 2  # each window once, no re-extraction
+    for _ in range(3):
+        await _ingest("telegram:4242", [])
+    assert world.model.calls.count("extract_conversation") == drained  # nothing new: no calls
+
+
+@pytest.mark.asyncio
+async def test_late_work_per_run_is_capped(world: World, monkeypatch: Any) -> None:
+    from robothor.memory import conversation_ingest as ci
+
+    monkeypatch.setattr(ci, "LATE_MAX_PER_RUN", 4)
+    sid = _session(world, "telegram:4242")
+    _put(world, sid, 200, "user", "first", 30)
+    _put(world, sid, 201, "assistant", "ok", 30)
+    await _ingest("telegram:4242", [])  # watermark at 201
+    for i in range(100, 110):  # ten rows a slow writer committed late
+        _put(world, sid, i, "user" if i % 2 == 0 else "assistant", f"late {i}", 30)
+    before = world.model.calls.count("extract_conversation")
+    await _ingest("telegram:4242", [])
+    (raw,) = world.db.q(
+        "SELECT fact_ids FROM ingested_items WHERE item_id = 'telegram:4242' "
+        "AND source_name = 'conversation_facts'"
+    )[0]
+    assert len([i for i in raw if 100 <= i < 110]) == 4  # four taken this run
+    assert world.model.calls.count("extract_conversation") == before + 1
