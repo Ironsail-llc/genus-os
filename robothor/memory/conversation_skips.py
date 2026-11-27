@@ -82,6 +82,8 @@ async def _retry_one(tenant_id: str, window: dict[str, Any]) -> bool:
         metadata = {"session_key": key, "agent_id": "skip-retry", "run_id": "skip-retry"}
         for turns in ci.windows([ci._clipped(t) for t in conv.turns]):
             extraction = await extract_conversation_facts(turns, context=conv.context)
+            if not await asyncio.to_thread(ci._renew, key, tenant_id, mark.token):
+                return False  # the claim lapsed while the model worked: write nothing
             if extraction.error is not None:
                 return False
             part = await ci._write_window(

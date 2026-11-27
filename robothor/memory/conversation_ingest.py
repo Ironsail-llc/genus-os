@@ -725,7 +725,7 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
     # Late turns first: below the watermark, written by a writer that committed
     # after a later id was extracted (at most LATE_MAX_PER_RUN a run).
     for window in windows(conv.late):
-        if await job.window(window, [], late=True) != "done":
+        if await job.window(window, [], late=True) == "stop":
             return _done(job.result)
     if conv.late_refs:
         await asyncio.to_thread(
@@ -806,16 +806,32 @@ class _Job:
                 "Conversation %s: lost the claim during extraction; stopping", sanitize_log(key)
             )
             return "stop"
-        if extraction.error is not None and (late or extraction.error not in ANSWERED_ERRORS):
-            # The model server did not answer (unreachable, timed out, errored),
-            # or late turns failed: nothing is counted or skipped; the next run
-            # tries again.
+        if extraction.error is not None and extraction.error not in ANSWERED_ERRORS:
+            # The model server did not answer (unreachable, timed out, errored):
+            # nothing is counted or skipped; the next run tries again.
             logger.warning(
-                "Conversation extraction for %s did not complete (%s); will retry",
+                "Conversation extraction for %s did not reach the model (%s); will retry",
                 sanitize_log(key),
                 extraction.error,
             )
             return "stop"
+        if extraction.error is not None and late:
+            # A late turn the model answered unusably: recorded as skipped at
+            # once (it is out of order already), never left to vanish.
+            total = await asyncio.to_thread(
+                _record_skip, key, tenant, window[0].ref, last_ref, str(extraction.error)
+            )
+            logger.warning(
+                "Conversation %s: skipping late turns %d-%d (%s); %s skipped window(s) in "
+                "this tenant, see python -m robothor.memory.conversation_skips",
+                sanitize_log(key),
+                window[0].ref,
+                last_ref,
+                extraction.error,
+                total,
+            )
+            self.result["windows_skipped"] += 1
+            return "skipped"
         if extraction.error is not None:
             failures = await asyncio.to_thread(_fail, key, tenant, token, last_ref)
             if failures < MAX_WINDOW_FAILURES:

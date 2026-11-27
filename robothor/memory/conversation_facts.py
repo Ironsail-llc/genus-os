@@ -56,7 +56,7 @@ from robothor.memory.facts import (
     _relations,
     passes_quality_filter,
 )
-from robothor.memory.relative_dates import days_in_phrase, states_day
+from robothor.memory.relative_dates import days_in_phrase, same_statement, states_day
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -386,7 +386,7 @@ CORRECTION_TOLERANCE = timedelta(days=3)
 
 
 def _dated(
-    model_time: str | None, phrase: Any, cited: list[ConversationTurn]
+    model_time: str | None, phrase: Any, cited: list[ConversationTurn], quote: Any = None
 ) -> tuple[str | None, bool]:
     """The fact's event time, and whether it was corrected.
 
@@ -396,7 +396,8 @@ def _dated(
     clause and counted from that turn's local day (:func:`days_in_phrase`); the
     model's date must be within :data:`CORRECTION_TOLERANCE` of it; and no cited
     turn may state the model's date itself (``states_day``: the speaker's own
-    date always wins). Never fills an empty event time; anything else leaves
+    date always wins); and when the model quoted the fact's own words, the
+    phrase must be in the same statement as them (``same_statement``). Never fills an empty event time; anything else leaves
     the model's answer alone.
     """
     if model_time is None or not isinstance(phrase, str) or not phrase.strip():
@@ -411,6 +412,12 @@ def _dated(
         days = days_in_phrase(turn.text, phrase, turn.at)
         if days is None:
             continue
+        if (
+            isinstance(quote, str)
+            and quote.strip()
+            and same_statement(turn.text, quote, phrase) is False
+        ):
+            return model_time, False  # the phrase dates another statement
         if len(days) != 1:
             return model_time, False
         (day,) = days
@@ -484,7 +491,9 @@ def parse_conversation_response(
         kind = item.get("kind") if item.get("kind") in CONVERSATION_KINDS else "other"
         mentions = _mentions(item)
         model_time = _event_time(item.get("event_time"))
-        event_time, _corrected = _dated(model_time, item.get("date_phrase"), cited)
+        event_time, _corrected = _dated(
+            model_time, item.get("date_phrase"), cited, item.get("quote")
+        )
         last = max(cited, key=lambda t: t.ref)
         fact: dict[str, Any] = {
             "fact_text": _redated(text.strip(), model_time, event_time, cited),

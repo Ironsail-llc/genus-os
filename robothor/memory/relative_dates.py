@@ -96,6 +96,29 @@ def _days(unit: str) -> int:
     return 7 if unit.lower().startswith("week") else 1
 
 
+#: Where one statement ends and the next begins, for telling whether a date
+#: phrase belongs to the same statement as a fact's own words.
+_STATEMENT_END = re.compile(r"[.;!?\n]|,\s+|\s+(?:and|but|while|whereas)\s+", re.IGNORECASE)
+
+
+def same_statement(text: str, a: str, b: str) -> bool | None:
+    """Whether phrases ``a`` and ``b`` occur in one statement of ``text``.
+
+    ``None`` when either is not in the text. Statements end at sentence
+    punctuation, a comma, or "and" / "but" / "while" / "whereas".
+    """
+    found = []
+    for phrase in (a, b):
+        words = [re.escape(w) for w in phrase.split()]
+        match = re.search(r"\s+".join(words), text, re.IGNORECASE) if words else None
+        if match is None:
+            return None
+        found.append(match)
+    lo = min(found[0].start(), found[1].start())
+    hi = max(found[0].end(), found[1].end())
+    return not any(lo < m.start() and m.end() <= hi for m in _STATEMENT_END.finditer(text))
+
+
 def _clause(text: str, start: int, end: int) -> str:
     lo = 0
     for m in _CLAUSE_END.finditer(text):
@@ -211,4 +234,10 @@ def resolve_relative_date(text: str, at: datetime | None) -> date | None:
     return found.pop() if len(found) == 1 else None
 
 
-__all__ = ["days_in_phrase", "relative_days", "resolve_relative_date", "states_day"]
+__all__ = [
+    "days_in_phrase",
+    "relative_days",
+    "resolve_relative_date",
+    "same_statement",
+    "states_day",
+]
