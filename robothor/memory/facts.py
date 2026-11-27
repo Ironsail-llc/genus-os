@@ -305,52 +305,46 @@ def parse_extraction_response(raw: str) -> list[dict[str, Any]]:
             }
         )
 
-    # Hard quality filters — reject garbage before it enters the database
-    filtered = []
-    for fact in valid_facts:
-        text = fact["fact_text"]
-
-        # Too short to be meaningful (resolutions may be terse but high-value).
-        if len(text) < 15 and fact["category"] != "resolution":
-            logger.debug("Rejected (too short): %s", text[:50])
-            continue
-
-        # No entities — can't be a specific fact
-        if not fact["entities"]:
-            logger.debug("Rejected (no entities): %s", text[:50])
-            continue
-
-        # Too low confidence
-        if fact["confidence"] < 0.3:
-            logger.debug("Rejected (low confidence %.2f): %s", fact["confidence"], text[:50])
-            continue
-
-        # Single word/number
-        if re.match(r"^\s*\w+\s*$", text):
-            logger.debug("Rejected (single word): %s", text[:50])
-            continue
-
-        # Generic patterns that add no value
-        generic_patterns = [
-            r"^.{1,30}\s+is\s+a\s+(company|person|tool|platform|service|technology)\b",
-            r"^.{1,30}\s+is\s+available\b",
-            r"^(Hello|Hi|Hey|Thanks|Thank you|Bye|Goodbye)\b",
-        ]
-        is_generic = False
-        for pattern in generic_patterns:
-            if re.match(pattern, text, re.IGNORECASE):
-                logger.debug("Rejected (generic pattern): %s", text[:50])
-                is_generic = True
-                break
-        if is_generic:
-            continue
-
-        filtered.append(fact)
-
+    filtered = [f for f in valid_facts if passes_quality_filter(f)]
     if len(filtered) < len(valid_facts):
         logger.info("Quality filter: %d/%d facts passed", len(filtered), len(valid_facts))
 
     return filtered
+
+
+_GENERIC_PATTERNS = (
+    r"^.{1,30}\s+is\s+a\s+(company|person|tool|platform|service|technology)\b",
+    r"^.{1,30}\s+is\s+available\b",
+    r"^(Hello|Hi|Hey|Thanks|Thank you|Bye|Goodbye)\b",
+)
+
+
+def passes_quality_filter(fact: dict[str, Any], *, require_entities: bool = True) -> bool:
+    """The hard filters that reject garbage before it enters the database.
+
+    ``require_entities=False`` is the conversation mode
+    (``robothor.memory.conversation_facts``): a fact about the person speaking
+    ("The user prefers dark roast") names no entity and is still worth keeping.
+    """
+    text = fact["fact_text"]
+    # Too short to be meaningful (resolutions may be terse but high-value).
+    if len(text) < 15 and fact["category"] != "resolution":
+        logger.debug("Rejected (too short): %s", text[:50])
+        return False
+    if require_entities and not fact["entities"]:
+        logger.debug("Rejected (no entities): %s", text[:50])
+        return False
+    if fact["confidence"] < 0.3:
+        logger.debug("Rejected (low confidence %.2f): %s", fact["confidence"], text[:50])
+        return False
+    if re.match(r"^\s*\w+\s*$", text):
+        logger.debug("Rejected (single word): %s", text[:50])
+        return False
+    for pattern in _GENERIC_PATTERNS:
+        if re.match(pattern, text, re.IGNORECASE):
+            logger.debug("Rejected (generic pattern): %s", text[:50])
+            return False
+    return True
 
 
 @dataclass
