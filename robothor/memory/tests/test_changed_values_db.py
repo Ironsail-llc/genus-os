@@ -46,6 +46,8 @@ def tenants():
             for t in (TENANT, OTHER_TENANT):
                 cur.execute("DELETE FROM memory_conflict_decisions WHERE tenant_id = %s", (t,))
                 cur.execute("DELETE FROM memory_mentions WHERE tenant_id = %s", (t,))
+                cur.execute("DELETE FROM memory_relation_evidence WHERE tenant_id = %s", (t,))
+                cur.execute("DELETE FROM memory_relations WHERE tenant_id = %s", (t,))
                 cur.execute("DELETE FROM memory_facts WHERE tenant_id = %s", (t,))
                 cur.execute("DELETE FROM memory_entities WHERE tenant_id = %s", (t,))
             conn.commit()
@@ -64,6 +66,29 @@ def tenants():
     _wipe()
 
 
+class _Verdict:
+    """The classifier, mocked: every pair it is asked about gets ``kind``."""
+
+    def __init__(self) -> None:
+        self.kind = "update"
+        self.calls: list[tuple[str, str]] = []
+
+    async def __call__(self, new: str, old: str) -> dict[str, Any]:
+        self.calls.append((new, old))
+        if self.kind == "unavailable":
+            return {"classification": "new", "reasoning": "down", "unavailable": True}
+        return {"classification": self.kind, "reasoning": "mocked"}
+
+
+@pytest.fixture(autouse=True)
+def verdict(monkeypatch):
+    import robothor.memory.conflicts as cf
+
+    v = _Verdict()
+    monkeypatch.setattr(cf, "classify_relationship", v)
+    return v
+
+
 _counter = iter(range(1, 10_000))
 
 
@@ -79,12 +104,12 @@ async def _write(text: str, *, tenant: str = TENANT, **kw: Any) -> dict[str, Any
                         "fact_text": text,
                         "category": kw.pop("category", "personal"),
                         "confidence": 0.9,
-                        "event_time": None,
+                        "event_time": kw.get("event_time"),
                         "mentions": [
                             {"surface_form": n, "entity_type": "person"}
                             for n in kw.pop("names", ["Alice"])
                         ],
-                        "relations": [],
+                        "relations": kw.pop("relations", []),
                     }
                 ]
             }
@@ -245,9 +270,9 @@ class TestBoundedLookup:
 
         for i in range(30):
             await _write(f"Alice has visited City{i}.", names=["Alice", f"City{i}"])
-        slot = fact_slot({"fact_text": "Alice lives in Denver."})
-        _ids, rows = await find_slot_candidates(slot, tenant_id=TENANT, limit=10)
-        assert len(rows) == 10
+        slot = fact_slot({"fact_text": "Alice has visited Rome."})
+        found = await find_slot_candidates(slot, tenant_id=TENANT, limit=10)
+        assert len(found.rows) == 10
 
 
 class TestRecall:
@@ -320,3 +345,180 @@ class TestRecall:
             conn.commit()
         rows = await self._search(monkeypatch, 700)
         assert theirs["new_id"] not in [r["id"] for r in rows]
+
+
+# ── The verifier's findings, as behaviour ──────────────────────────────────
+
+
+def _active(text_part: str) -> list[int]:
+    return [i for i, r in _rows().items() if r["is_active"] and text_part in r["fact_text"]]
+
+
+class TestNothingTrueIsClosed:
+    @pytest.mark.parametrize(
+        ("old", "new", "names"),
+        [
+            ("Alice works at Acme.", "Alice also works at Globex.", ["Alice"]),
+            ("Alice lives in Boston.", "Alice moved to the sales team.", ["Alice"]),
+            ("Alice works at Acme.", "Alice works at night.", ["Alice"]),
+            ("Alice lives in Boston.", "Alice moved to Denver last year but is back in Boston.",
+             ["Alice"]),
+            ("Alice's manager is Bob.", "Alice's manager is on vacation.", ["Alice", "Bob"]),
+            ("Alice's email is alice@example.com.", "Alice's email is also alice@work.example.",
+             ["Alice"]),
+            ("Alice lives in Boston.", "Alice lives in Denver?", ["Alice"]),
+        ],
+    )  # fmt: skip
+    async def test_a_sentence_that_is_not_a_plain_change_closes_nothing(
+        self, tenants, verdict, old, new, names
+    ):
+        first = await _write(old, names=names)
+        await _write(new, names=names)
+        assert _rows()[first["new_id"]]["is_active"] is True
+
+    async def test_a_pronoun_never_reaches_another_persons_fact(self, tenants):
+        first = await _write("She lives in Boston.", names=["Carol"], embedding=_vec(800))
+        await _write("She lives in Denver.", names=["Dana"], embedding=_vec(800))
+        assert _rows()[first["new_id"]]["is_active"] is True
+
+    async def test_an_older_event_becomes_the_earlier_value(self, tenants):
+        first = await _write("Alice lives in Boston.", event_time="2026-11-01")
+        out = await _write("Alice moved to Denver in 2019.", event_time="2019-06-01")
+        assert out["action"] == "stored_history"
+        rows = _rows()
+        old, new = rows[first["new_id"]], rows[out["new_id"]]
+        assert old["is_active"] is True
+        assert new["is_active"] is False and new["superseded_by"] == first["new_id"]
+        assert new["valid_from"] < new["valid_to"]
+        assert out["new_id"] in old["metadata"]["supersedes"]
+
+    async def test_without_a_classifier_both_stay(self, tenants, verdict):
+        verdict.kind = "unavailable"
+        first = await _write("Alice lives in Boston.")
+        out = await _write("Alice moved to Denver.", names=["Alice", "Denver"])
+        assert out["action"] == "stored"
+        assert len(_active("Alice")) == 2
+        assert _rows()[first["new_id"]]["is_active"] is True
+        assert "conflict_unresolved" in [d["action"] for d in _decisions()]
+
+    async def test_a_legacy_fact_is_not_closed_by_a_tool(self, tenants):
+        first = await _write("Alice lives in Boston.", origin=None)
+        out = await _write("Alice moved to Denver.", origin="tool")
+        assert out["action"] == "kept_authority"
+        assert _rows()[first["new_id"]]["is_active"] is True
+
+
+class TestSelfAndRepeats:
+    _REL = [{"source": "Alice", "relation": "lives in", "target": "New York City"}]
+
+    async def test_the_same_fact_twice_never_closes_itself(self, tenants):
+        a = await _write("Alice is based in NYC.", relations=self._REL)
+        b = await _write("Alice is based in NYC.", relations=self._REL)
+        row = _rows()[a["new_id"]]
+        assert row["is_active"] is True
+        assert row["superseded_by"] is None
+        assert b.get("new_id", a["new_id"]) == a["new_id"]
+
+    async def test_history_recall_survives_a_fact_stored_twice(self, tenants, monkeypatch):
+        import robothor.memory.facts as facts
+
+        await _write("Alice is based in NYC.", relations=self._REL, embedding=_vec(820))
+        await _write("Alice is based in NYC.", relations=self._REL, embedding=_vec(821))
+
+        async def _embed(_q: str) -> list[float]:
+            return _vec(820)
+
+        monkeypatch.setattr(facts, "_embed_query", _embed)
+        rows = await facts.search_facts(
+            "Where is Alice based?",
+            use_reranker=False,
+            include_segments=False,
+            tenant_id=TENANT,
+            active_only=False,
+        )
+        assert rows
+
+    async def test_an_overruled_sentence_seen_again_adds_no_row(self, tenants):
+        await _write("Alice lives in Boston.", origin="user_stated")
+        for _ in range(4):
+            await _write("Alice moved to Denver.", origin="external", embedding=_vec(830))
+        assert len([r for r in _rows().values() if "Denver" in r["fact_text"]]) == 1
+
+
+class TestBusySubject:
+    async def test_many_other_facts_about_the_subject_do_not_hide_the_slot(self, tenants):
+        first = await _write("Alice lives in Boston.")
+        for i in range(30):
+            await _write(f"Alice has visited City{i}.", names=["Alice", f"City{i}"])
+        out = await _write("Alice moved to Denver.", names=["Alice", "Denver"])
+        assert out["action"] == "superseded", out
+        assert _rows()[first["new_id"]]["is_active"] is False
+
+
+class TestDeterministicEndToEnd:
+    async def test_resolved_predicate_subject_and_value_close_without_the_model(
+        self, tenants, verdict
+    ):
+        from robothor.db.connection import get_connection
+
+        rel = [{"source": "Alice", "relation": "lives in", "target": "Boston"}]
+        first = await _write(
+            "Alice lives in Boston.",
+            names=["Alice", "Boston"],
+            relations=rel,
+            origin="agent_generated",
+        )
+        with get_connection() as conn:
+            cur = conn.cursor()
+            ids = {}
+            for name, kind in (("Alice", "person"), ("Boston", "location"), ("Denver", "location")):
+                cur.execute(
+                    "INSERT INTO memory_entities (name, entity_type, tenant_id) "
+                    "VALUES (%s, %s, %s) RETURNING id",
+                    (name, kind, TENANT),
+                )
+                ids[name] = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO memory_relations (source_entity_id, target_entity_id, relation_type, "
+                "predicate, tenant_id, fact_id, origin) "
+                "VALUES (%s, %s, 'lives in', 'lives_in', %s, %s, 'agent_generated') RETURNING id",
+                (ids["Alice"], ids["Boston"], TENANT, first["new_id"]),
+            )
+            cur.execute(
+                "INSERT INTO memory_relation_evidence (tenant_id, relation_id, fact_id) "
+                "VALUES (%s, %s, %s)",
+                (TENANT, cur.fetchone()[0], first["new_id"]),
+            )
+            conn.commit()
+        out = await _write(
+            "Alice moved to Denver.",
+            names=["Alice", "Denver"],
+            relations=[{"source": "Alice", "relation": "moved to", "target": "Denver"}],
+            origin="agent_generated",
+        )
+        assert out["action"] == "superseded"
+        assert verdict.calls == []
+
+
+class TestConcurrency:
+    async def test_two_different_values_at_once_leave_one_current(self, tenants):
+        import asyncio
+
+        await _write("Alice lives in Boston.")
+        await asyncio.gather(
+            _write("Alice lives in Denver.", names=["Alice", "Denver"]),
+            _write("Alice lives in Chicago.", names=["Alice", "Chicago"]),
+        )
+        assert len(_active("Alice lives")) == 1
+
+    async def test_the_same_value_twice_at_once_is_one_fact_listed_once(self, tenants):
+        import asyncio
+
+        first = await _write("Alice lives in Boston.")
+        await asyncio.gather(
+            _write("Alice lives in Denver.", names=["Alice", "Denver"]),
+            _write("Alice lives in Denver.", names=["Alice", "Denver"]),
+        )
+        current = _active("Denver")
+        assert len(current) == 1
+        assert _rows()[current[0]]["metadata"]["supersedes"] == [first["new_id"]]
