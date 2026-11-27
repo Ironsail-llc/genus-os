@@ -499,7 +499,9 @@ async def test_a_conversation_with_no_known_owner_is_kept_but_readable_by_no_one
 async def test_a_workspace_room_is_not_extracted_into_tenant_wide_facts() -> None:
     store = Store(_stored(4), scope=("shared", None))
     model = Model()
-    out, write = await _run(store, model, key="agent:main:room:3f2a0000-0000-4000-8000-000000000001")
+    out, write = await _run(
+        store, model, key="agent:main:room:3f2a0000-0000-4000-8000-000000000001"
+    )
     assert model.prompts == []
     write.assert_not_awaited()
     assert out is None
@@ -568,3 +570,49 @@ async def test_a_room_never_reads_the_store_or_the_watermark() -> None:
     store = Store(_stored(4), scope=("shared", None))
     await _run(store, Model(), key="agent:main:room:3f2a0000-0000-4000-8000-000000000001")
     assert store.threads == set()  # nothing on the database was called
+
+
+# ═══ a window that cannot be extracted never blocks the conversation ═════
+
+
+class PoisonModel(Model):
+    """Cannot answer any window that holds the word POISON."""
+
+    async def generate(self, prompt: str, **kw: Any) -> str:
+        if "POISON" in prompt.split("New turns:", 1)[1]:
+            self.prompts.append(prompt)
+            return "not json"
+        return await super().generate(prompt, **kw)
+
+
+@pytest.mark.asyncio
+async def test_a_window_that_keeps_failing_is_skipped_counted_and_logged(caplog: Any) -> None:
+    store = Store(
+        [_turn(1, "user", "POISON"), _turn(2, "assistant", "ok")],
+        scope=("user", f"person:{ALICE}"),
+    )
+    model = PoisonModel()
+    for _ in range(ci.MAX_WINDOW_FAILURES - 1):
+        out, _ = await _run(store, model)
+        assert out is None and store.watermark == 0
+    assert store.failures == ci.MAX_WINDOW_FAILURES - 1  # one per failed run
+    store.turns += [_turn(3, "user", "turn number 3"), _turn(4, "assistant", "turn number 4")]
+    with caplog.at_level("WARNING"):
+        out, write = await _run(store, model)
+    assert store.skipped == [(1, 2)]
+    assert out is not None and out["windows_skipped"] == 1
+    assert any("skipp" in r.getMessage().lower() for r in caplog.records)
+    assert store.watermark == 4  # the next turns were extracted after it
+    assert _written(write)
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_turn_is_clipped_for_extraction_with_a_marker() -> None:
+    big = "word " * (ci.WINDOW_MAX_CHARS // 2)
+    store = Store([_turn(1, "user", big), _turn(2, "assistant", "ok")], scope=("user", None))
+    model = Model()
+    await _run(store, model)
+    assert model.prompts
+    prompt = model.prompts[0]
+    assert len(prompt) < ci.WINDOW_MAX_CHARS + 6000
+    assert "characters not shown" in prompt
