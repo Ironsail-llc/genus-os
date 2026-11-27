@@ -586,8 +586,9 @@ to someone else, is never compared.
 **Cardinality.** Single-valued (`SINGLE_VALUED_ATTRIBUTES`: residence,
 manager, role, title, spouse, partner, car, birthday, age, timezone, and every
 pairwise preference and favorite); several-valued
-(`SEVERAL_VALUED_ATTRIBUTES`: employer, phone, email, address, which people
-often have more than one of); multi-valued (`MULTI_VALUED_ATTRIBUTES`: likes,
+(`SEVERAL_VALUED_ATTRIBUTES`: employer, phone, email, address, and base,
+where someone works from, which is a slot of its own and never their
+residence; people often have more than one of each); multi-valued (`MULTI_VALUED_ATTRIBUTES`: likes,
 owns, visited, uses, speaks, plays).
 
 - **Repeat** (the same value, one value's words containing the other's, or
