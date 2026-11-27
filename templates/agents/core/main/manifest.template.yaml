@@ -49,6 +49,12 @@ tools_eager:
   - gws_gmail_search
   - gws_gmail_get
 
+# Bridge routes main calls through its own token. Remote tools (org_tools,
+# org_tool_read, org_tool_write) reach a child tenant's tools through these.
+bridge_endpoints:
+  - "GET /api/org/remote/*"
+  - "POST /api/org/remote/call"
+
 task_protocol: true
 status_file: brain/memory/main-status.md
 

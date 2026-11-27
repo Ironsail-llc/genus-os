@@ -79,6 +79,15 @@ SCOPE_ORG_REMOTE = "org:remote"
 #: The only service id a target engine accepts remote calls from.
 BRIDGE_SERVICE_ID = "genus-bridge"
 
+#: The bridge routes a remote call uses, as ``bridge_endpoints`` patterns, each
+#: with one request it must match. An agent the bridge's capabilities manifest
+#: LISTS needs both; an unlisted one is authorised by :data:`SCOPE_ORG_REMOTE`.
+ORG_REMOTE_ENDPOINT_SAMPLES: tuple[tuple[str, str, str], ...] = (
+    ("GET /api/org/remote/*", "GET", "/api/org/remote/catalogue"),
+    ("POST /api/org/remote/call", "POST", "/api/org/remote/call"),
+)
+ORG_REMOTE_ENDPOINTS: tuple[str, ...] = tuple(p for p, _, _ in ORG_REMOTE_ENDPOINT_SAMPLES)
+
 #: A plugin's attestation token (and a deployment's attested one).
 ATTESTATION_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 

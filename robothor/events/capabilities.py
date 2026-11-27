@@ -175,6 +175,31 @@ def get_agent_tools(agent_id: str) -> list[str]:
     return tools
 
 
+def missing_remote_endpoints(agent_id: str, method: str = "", path: str = "") -> tuple[str, ...]:
+    """The remote-tool patterns a LISTED agent's ``bridge_endpoints`` lack.
+
+    ``()`` for an agent the manifest does not list: the remote routes are
+    authorised by their own scope, and nothing builds this manifest from the
+    agent manifests, so an absent entry is not a decision to deny. With
+    ``method`` and ``path``, only the pattern that request needs is judged.
+    """
+    from robothor.tenancy.remote_contract import ORG_REMOTE_ENDPOINT_SAMPLES
+
+    if _get_agent(agent_id) is None:
+        return ()
+    return tuple(
+        pattern
+        for pattern, sample_method, sample_path in ORG_REMOTE_ENDPOINT_SAMPLES
+        if (not method or fnmatch.fnmatch(f"{method.upper()} {path}", pattern))
+        and not check_endpoint_access(agent_id, sample_method, sample_path)
+    )
+
+
+def manifest_path() -> str:
+    """Where the capabilities manifest is read from (for an operator's message)."""
+    return _get_manifest_path()
+
+
 def list_agents() -> list[str]:
     """List all known agent IDs."""
     manifest = _get_manifest()
