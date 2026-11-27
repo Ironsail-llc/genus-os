@@ -109,6 +109,9 @@ class StoredConversation:
     scope_id: str | None = None
     is_room: bool = False
     tail_text: str | None = None
+    #: The highest message id read past the watermark, turn or not (a run of
+    #: system rows moves the watermark too, so the next run starts past it).
+    scanned_through: int | None = None
 
 
 def _turn(row: dict[str, Any]) -> ConversationTurn | None:
@@ -164,6 +167,7 @@ def _load_conversation(
         scope_id=sid,
         is_room=parse_room_key(session_key) is not None,
         tail_text=last[0].text if last else None,
+        scanned_through=int(new[-1]["id"]) if new else None,
     )
 
 
@@ -376,7 +380,13 @@ async def _ingest(
 ) -> dict[str, Any] | None:
     after = get_ingested_count(_WATERMARK_SOURCE, session_key, tenant_id=tenant)
     conv = await _load_when_stored(session_key, tenant, after, history)
-    if conv is None or not conv.turns:
+    if conv is None:
+        return None
+    if not conv.turns:
+        if conv.scanned_through is not None and conv.scanned_through > after:
+            record_ingested(
+                _WATERMARK_SOURCE, session_key, str(conv.scanned_through), [], tenant_id=tenant
+            )
         return None
     if conv.is_room:
         # A workspace's segments are read only by its members, but a fact has
