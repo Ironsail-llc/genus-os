@@ -712,6 +712,31 @@ class TestOnlyTheJudgeCloses:
         assert s.actions() == ["conflict_unresolved"]
 
     @pytest.mark.asyncio
+    async def test_all_judge_calls_share_one_time_budget(self, monkeypatch):
+        # On the request path classify_timeout is what is left of the call's
+        # budget: three slow judge calls must not each get all of it, or the
+        # fact is never stored before the tool's wall.
+        import asyncio
+        import time
+
+        rows = [
+            _row(7 + i, f"Alice's manager is {n}.") for i, n in enumerate(("Bob", "Carol", "Dana"))
+        ]
+
+        async def _slow(*_a: Any, **_k: Any) -> dict[str, Any]:
+            await asyncio.sleep(0.3)
+            return {"outcome": "coexist", "reasoning": "r"}
+
+        s = _Store(monkeypatch, slot_rows=rows)
+        s.judge.side_effect = _slow
+        started = time.monotonic()
+        out = await s("Alice's manager is now Erin.", classify_timeout=0.5)
+        assert time.monotonic() - started < 0.75
+        assert out["action"] == "stored"
+        s.store.assert_awaited_once()
+        assert "conflict_unresolved" in s.actions()
+
+    @pytest.mark.asyncio
     async def test_a_second_email_is_kept_unless_the_text_says_it_replaced_one(self, monkeypatch):
         old = _row(7, "Alice's email is alice@example.com.")
         s = _Store(monkeypatch, slot_rows=[old])
