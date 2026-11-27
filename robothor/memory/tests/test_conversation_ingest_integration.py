@@ -248,3 +248,65 @@ async def test_a_turn_committed_after_a_later_id_is_not_lost(
     await follow_up()
     texts = {f["fact_text"] for f in world.db.facts()}
     assert texts == {"The user prefers dark roast coffee.", "The user owns a red road bike."}
+
+
+# ═══ a conversation's earlier facts follow it when its owner is learned ══
+
+
+@pytest.mark.asyncio
+async def test_facts_from_before_the_owner_was_known_are_reowned(world: World) -> None:
+    """The Telegram first-exchange race: ingest runs before the CRM stamps the person."""
+    from robothor.memory.visibility import fact_visibility_sql
+
+    world.model.on_turn(
+        "dark roast", turn_fact("The user prefers dark roast coffee.", about_user=True)
+    )
+    world.model.on_turn("road bike", turn_fact("The user owns a red road bike.", about_user=True))
+    key = "telegram:4242"
+    t1 = [("user", "I always go for dark roast."), ("assistant", "Noted.")]
+    store_chat(world.db, key, t1)  # no person yet
+    await _ingest(key, t1)
+    (early,) = world.db.facts()
+    assert early["scope_id"] == f"conversation:{key}"
+    world.db.q("UPDATE chat_sessions SET person_id = %s WHERE session_key = %s", (ALICE, key))
+    # Another tenant's and another conversation's placeholders stay where they are.
+    world.db.q(
+        "INSERT INTO memory_facts (fact_text, category, tenant_id, scope_kind, scope_id, "
+        "metadata) VALUES ('The user likes tea.', 'preference', %s, 'user', %s, '{}')",
+        (TENANT, "conversation:telegram:999"),
+    )
+    t2 = [("user", "I have a red road bike."), ("assistant", "Nice.")]
+    store_chat(world.db, key, t2, person=ALICE)
+    await _ingest(key, t1 + t2)
+
+    rows = {f["fact_text"]: f for f in world.db.facts()}
+    reowned = rows["The user prefers dark roast coffee."]
+    assert (reowned["scope_kind"], reowned["scope_id"]) == ("user", ALICE_P)
+    assert reowned["person_id"] == ALICE
+    assert reowned["metadata"]["subject"] == {"kind": "person", "person_id": ALICE}
+    assert ALICE in _anchored_to(world, reowned["id"])
+    assert rows["The user likes tea."]["scope_id"] == "conversation:telegram:999"
+    pred, params = fact_visibility_sql([ALICE_P])
+    seen = {r[0] for r in world.db.q(f"SELECT fact_text FROM memory_facts WHERE {pred}", params)}
+    assert seen == {"The user prefers dark roast coffee.", "The user owns a red road bike."}
+
+
+@pytest.mark.asyncio
+async def test_a_reowned_fact_the_owner_already_has_is_retired_not_duplicated(
+    world: World,
+) -> None:
+    world.model.on_turn(
+        "dark roast", turn_fact("The user prefers dark roast coffee.", about_user=True)
+    )
+    key = "telegram:4242"
+    t1 = [("user", "I always go for dark roast."), ("assistant", "Noted.")]
+    store_chat(world.db, key, t1)
+    await _ingest(key, t1)
+    world.db.q("UPDATE chat_sessions SET person_id = %s WHERE session_key = %s", (ALICE, key))
+    t2 = [("user", "Still dark roast for me."), ("assistant", "Got it.")]
+    store_chat(world.db, key, t2, person=ALICE)
+    await _ingest(key, t1 + t2)
+    live = [f for f in world.db.facts() if f["is_active"]]
+    assert [(f["fact_text"], f["scope_id"]) for f in live] == [
+        ("The user prefers dark roast coffee.", ALICE_P)
+    ]
