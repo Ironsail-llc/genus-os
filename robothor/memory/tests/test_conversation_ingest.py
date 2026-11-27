@@ -213,6 +213,35 @@ async def _run(
     return out, write
 
 
+async def _run_scheduled(store: Store, model: Model, follow_up: Any) -> None:
+    """Run a scheduled follow-up against the same fake store and model."""
+    await _run_with(store, model, follow_up)
+
+
+async def _run_with(store: Store, model: Model, fn: Any) -> None:
+    counter = iter(range(200000, 300000))
+    write = AsyncMock(
+        side_effect=lambda facts, **kw: {
+            "fact_ids": [next(counter) for _ in facts],
+            "facts_processed": len(facts),
+            "facts_failed": 0,
+        }
+    )
+    with (
+        patch.object(ci, "_load_conversation", side_effect=store.load),
+        patch.object(ci, "_claim", side_effect=store.claim),
+        patch.object(ci, "_advance", side_effect=store.advance),
+        patch.object(ci, "_fail", side_effect=store.fail),
+        patch.object(ci, "_release", side_effect=store.release),
+        patch.object(ci, "_record_skip", side_effect=store.skip),
+        patch.object(ci, "_reown", side_effect=store.reown, create=True),
+        patch.object(ci, "_schedule", side_effect=lambda delay, f: None),
+        patch("robothor.memory.generation.generate", new=model.generate),
+        patch("robothor.memory.write_path.write_facts", new=write),
+    ):
+        await fn()
+
+
 def _written(write: AsyncMock) -> list[tuple[Any, dict[str, Any]]]:
     return [(c.kwargs["context"], f) for c in write.call_args_list for f in c.args[0]]
 
@@ -309,13 +338,15 @@ async def test_the_whole_conversation_is_covered_not_just_the_tail() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_long_backlog_is_extracted_over_several_runs() -> None:
+async def test_a_long_backlog_drains_without_waiting_for_the_next_message() -> None:
     n = ci.WINDOW_MAX_TURNS * (ci.MAX_WINDOWS_PER_RUN + 1)
-    store = Store(_stored(n), scope=("user", "person:6f1c1b7e-0000-4000-8000-000000000001"))
-    model = Model()
-    await _run(store, model)
+    store = Store(_stored(n), scope=("user", f"person:{ALICE}"))
+    model, later = Model(), []
+    await _run(store, model, scheduled=later)
     assert len(model.prompts) == ci.MAX_WINDOWS_PER_RUN
-    await _run(store, model)
+    assert len(later) == 1
+    _delay, follow_up = later.pop()
+    await _run_scheduled(store, model, follow_up)
     assert len(model.prompts) == ci.MAX_WINDOWS_PER_RUN + 1
     assert store.watermark == n
 
@@ -349,27 +380,22 @@ async def test_a_session_nobody_stored_is_not_extracted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_it_waits_for_the_turn_that_triggered_it_to_be_stored() -> None:
-    store = Store(_stored(2), scope=("user", "person:6f1c1b7e-0000-4000-8000-000000000001"))
+async def test_a_turn_not_stored_yet_is_picked_up_by_a_follow_up_not_a_wait() -> None:
+    store = Store(_stored(2), scope=("user", f"person:{ALICE}"))
     history = _history(store) + [
         {"role": "user", "content": "turn number 3"},
         {"role": "assistant", "content": "turn number 4"},
     ]
-    calls = {"n": 0}
-    real = store.load
-
-    def late(*a: Any) -> Any:
-        calls["n"] += 1
-        if calls["n"] == 2:  # the save commits while ingest waits
-            store.turns += _stored(2, first_ref=3)
-        return real(*a)
-
-    store.load = late  # type: ignore[method-assign]
-    model = Model()
-    await _run(store, model, history=history)
-    assert len(model.prompts) == 1
-    assert "turn number 4" in model.prompts[0]
+    model, later = Model(), []
+    await _run(store, model, history=history, scheduled=later)
+    assert store.loads == 1  # no polling while holding the claim
+    assert store.claimed_by is None
+    assert len(later) == 1
+    store.turns += _stored(2, first_ref=3)  # the save commits
+    _delay, follow_up = later.pop()
+    await _run_scheduled(store, model, follow_up)
     assert store.watermark == 4
+    assert any("turn number 4" in p for p in model.prompts)
 
 
 @pytest.mark.asyncio
@@ -625,3 +651,31 @@ async def test_an_oversized_turn_is_clipped_for_extraction_with_a_marker() -> No
     prompt = model.prompts[0]
     assert len(prompt) < ci.WINDOW_MAX_CHARS + 6000
     assert "characters not shown" in prompt
+
+
+# ═══ turns committed out of order are not passed over ════════════════════
+
+
+@pytest.mark.asyncio
+async def test_turns_written_moments_ago_are_held_back_for_a_follow_up() -> None:
+    store = Store(_stored(4), scope=("user", f"person:{ALICE}"))
+    store.fresh_from = 3
+    model, later = Model(), []
+    await _run(store, model, scheduled=later)
+    new = model.prompts[0].split("New turns:", 1)[1]
+    assert "turn number 2" in new and "turn number 3" not in new
+    assert store.watermark == 2
+    assert len(later) == 1 and later[0][0] >= ci.HOLD_SECONDS
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        ([(1, "user", False), (2, "assistant", False)], None),
+        ([(1, "user", False), (2, "assistant", True)], 1),  # an exchange stays together
+        ([(1, "user", False), (2, "assistant", False), (3, "user", True)], 3),
+        ([(1, "assistant", False), (2, "user", True), (3, "assistant", True)], 2),
+    ],
+)
+def test_what_is_held_back(rows: list[tuple[int, str, bool]], expected: int | None) -> None:
+    assert ci.held_from(rows) == expected
