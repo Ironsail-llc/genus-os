@@ -572,9 +572,35 @@ class TestTheDecisionTable:
         ],
     )
     def test_each_outcome(self, outcome, cardinality, wording, order, action):
-        assert cf.slot_action(outcome, cardinality, replacement_wording=wording, order=order) == (
-            action
+        assert (
+            cf.slot_action(
+                outcome, cardinality, replacement_wording=wording, order=order, old_dated=True
+            )
+            == action
         )
+
+    @pytest.mark.parametrize(
+        ("wording", "old_dated", "action"),
+        [(True, False, "close"), (False, False, "unresolved"), (True, True, "unresolved")],
+    )
+    def test_a_worded_change_dated_before_an_undated_value_was_recorded(
+        self, wording, old_dated, action
+    ):
+        assert (
+            cf.slot_action(
+                "changed", "single", replacement_wording=wording, order="earlier",
+                old_dated=old_dated,
+            )
+            == action
+        )  # fmt: skip
+
+    def test_the_judge_is_told_when_the_new_event_predates_an_undated_record(self):
+        prompt = cf.build_slot_prompt(
+            "Alice moved to Denver.", "Alice lives in Boston.", attribute="residence",
+            several=False, new_event="2026-11-20", old_event=None, new_recorded="2026-11-27",
+            old_recorded="2026-11-25", new_origin=None, old_origin=None,
+        )  # fmt: skip
+        assert "before the existing statement was recorded" in prompt
 
     @pytest.mark.parametrize(
         ("text", "wording"),
@@ -933,13 +959,39 @@ class TestStoreTimeOther:
         assert s.judge.await_count <= cf.SLOT_CLASSIFY_TOTAL
 
     @pytest.mark.asyncio
-    async def test_the_slot_lock_is_on_the_resolved_entity(self, monkeypatch):
+    async def test_the_name_lock_always_and_the_entity_lock_too_in_order(self, monkeypatch):
         s = _Store(monkeypatch, slot_rows=[_row(7, "Alice lives in Boston.")], subject_id=5)
         await s("Alice moved to Denver.")
-        assert s.recheck.call_args.kwargs["subject_key"] == "entity:5"
+        assert s.recheck.call_args.kwargs["subject_keys"] == ["entity:5", "name:alice"]
         s = _Store(monkeypatch, slot_rows=[_row(7, "Alice lives in Boston.")])
         await s("Alice moved to Denver.")
-        assert s.recheck.call_args.kwargs["subject_key"] == "name:alice"
+        assert s.recheck.call_args.kwargs["subject_keys"] == ["name:alice"]
+
+    @pytest.mark.asyncio
+    async def test_a_no_origin_repeat_does_not_reinforce_a_user_stated_fact(self, monkeypatch):
+        old = _row(7, "Alice lives in Boston.", similarity=0.95, origin="user_stated")
+        s = _Store(monkeypatch, similar=[old], slot_rows=[_row(7, "Alice lives in Boston.",
+                   origin="user_stated")])  # fmt: skip
+        out = await s("Alice now lives in Boston.", origin=None)
+        assert s.reinforced == []
+        assert out["action"] == "skipped"
+
+    @pytest.mark.asyncio
+    async def test_three_open_values_all_close_on_a_judged_worded_change(self, monkeypatch):
+        rows = [_row(7, "Alice's manager is Bob."), _row(8, "Alice's manager is Carol."),
+                _row(9, "Alice's manager is Dana.")]  # fmt: skip
+        s = _Store(monkeypatch, slot_rows=rows)
+        out = await s("Alice's manager is now Erin.")
+        assert s.judge.await_count == 3
+        assert sorted(out["old_ids"]) == [7, 8, 9]
+
+    @pytest.mark.asyncio
+    async def test_an_open_conflict_is_marked_on_both_rows(self, monkeypatch):
+        s = _Store(monkeypatch, slot_rows=[_row(7, "Alice lives in Boston.")], outcome="conflict")
+        marked = MagicMock()
+        monkeypatch.setattr(cf, "_mark_conflicts", marked)
+        await s("Alice lives in Denver.")
+        assert marked.call_args.args[:2] == (99, [7])
 
 
 class TestDifferentSubjectsOnTheSimilarityPath:

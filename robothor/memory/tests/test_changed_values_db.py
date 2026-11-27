@@ -645,3 +645,69 @@ class TestManyWriters:
                     unresolved |= {d["new_fact_id"], d["existing_fact_id"]}
             assert set(active) <= unresolved, (active, unresolved)
         assert len(active) >= 1
+
+
+class TestOpenConflicts:
+    async def _search(self, monkeypatch, vector_of: int, query: str, **kw: Any):
+        import robothor.memory.facts as facts
+
+        async def _embed(_q: str) -> list[float]:
+            return _vec(vector_of)
+
+        monkeypatch.setattr(facts, "_embed_query", _embed)
+        return await facts.search_facts(
+            query, use_reranker=False, include_segments=False, tenant_id=TENANT, **kw
+        )
+
+    async def test_recall_labels_both_sides_of_an_open_conflict(
+        self, tenants, verdict, monkeypatch
+    ):
+        verdict.kind = "contradiction"
+        a = await _write("Alice's manager is Bob.", names=["Alice", "Bob"], embedding=_vec(560))
+        b = await _write("Alice's manager is Carol.", names=["Alice", "Carol"], embedding=_vec(560))
+        rows = {r["id"]: r for r in await self._search(monkeypatch, 560, "Alice manager")}
+        assert rows[a["new_id"]]["conflict_open"] is True
+        assert rows[a["new_id"]]["conflict_with"] == b["new_id"]
+        assert rows[b["new_id"]]["conflict_with"] == a["new_id"]
+
+    async def test_the_nightly_sweep_re_asks_once_and_resolves(self, tenants, verdict):
+        from robothor.memory.conflicts import sweep_open_conflicts
+
+        verdict.kind = "contradiction"
+        a = await _write("Alice lives in Boston.")
+        await _write("Alice lives in Denver.", names=["Alice", "Denver"])
+        assert len(_active("Alice lives")) == 2
+        verdict.kind = "update"
+        verdict.calls.clear()
+        out = await sweep_open_conflicts(TENANT, limit=5)
+        assert out["resolved"] == 1
+        assert _rows()[a["new_id"]]["is_active"] is False
+        again = await sweep_open_conflicts(TENANT, limit=5)
+        assert again["asked"] == 0
+
+    async def test_the_sweep_asks_each_open_conflict_once_a_night(self, tenants, verdict):
+        from robothor.memory.conflicts import sweep_open_conflicts
+
+        verdict.kind = "contradiction"
+        await _write("Alice lives in Boston.")
+        await _write("Alice lives in Denver.", names=["Alice", "Denver"])
+        verdict.calls.clear()
+        first = await sweep_open_conflicts(TENANT, limit=5)
+        assert first["asked"] == 1 and first["resolved"] == 0
+        second = await sweep_open_conflicts(TENANT, limit=5)
+        assert second["asked"] == 0
+
+
+class TestFirstPersonEndToEnd:
+    async def test_a_users_own_move_closes_their_old_value_only(self, tenants):
+        mine, theirs = (
+            "person:11111111-1111-1111-1111-111111111111",
+            "person:22222222-2222-2222-2222-222222222222",
+        )
+        old = await _write("I live in Boston.", names=[], scope_kind="user", scope_id=mine)
+        other = await _write("I live in Boston.", names=[], scope_kind="user", scope_id=theirs)
+        out = await _write("I moved to Denver.", names=[], scope_kind="user", scope_id=mine)
+        assert out["action"] == "superseded"
+        rows = _rows()
+        assert rows[old["new_id"]]["is_active"] is False
+        assert rows[other["new_id"]]["is_active"] is True

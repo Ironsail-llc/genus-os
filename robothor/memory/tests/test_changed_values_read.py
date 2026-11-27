@@ -75,6 +75,18 @@ class TestTheLabel:
         assert row_text(_pair()[0]) == "Alice moved to Denver."
 
 
+class TestAnOpenConflict:
+    def test_row_text_says_the_value_is_in_an_unresolved_conflict(self):
+        row = _cur(2, "Alice's manager is Carol.", conflict_open=True, conflict_with=1)
+        assert row_text(row) == "Conflicting value, unresolved: Alice's manager is Carol."
+
+    def test_the_tool_row_carries_the_conflict_fields(self):
+        from robothor.memory.recall import superseded_fields
+
+        row = _cur(2, "Alice's manager is Carol.", conflict_open=True, conflict_with=1)
+        assert superseded_fields(row) == {"conflict_open": True, "conflict_with": 1}
+
+
 class TestThePlacedRow:
     def test_an_earlier_row_has_the_full_row_shape_with_null_scores(self):
         cur, old = _pair()
