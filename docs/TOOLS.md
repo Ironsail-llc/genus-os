@@ -1973,6 +1973,71 @@ heartbeat or schedule, to brief the owner when something changed: called from
 chat it records nothing and only repeats what the next beat will report. Use `dry_run` before any
 write in another tenant, and show the operator what it would change.
 
+### A child company's own tools: `org_tools`, `org_tool_read`, `org_tool_write`
+
+Connectors (plugins) are installed per company: a child tenant's plugins run
+in the child's engine and are not in the parent's. These three tools let a
+parent's agent use a child's own tools anyway. The call goes home engine →
+bridge → the child's engine, which runs the tool under its own permissions,
+kill switches and audit. Nothing runs in the child's database scope from the
+parent's engine, and engines never call each other directly.
+
+- **`org_tools`** `{tenant?, tool?}`: with no arguments, every reachable child
+  company's plugins (name, version, enabled), its declared remote tools (name,
+  `read` or `write`, a short description) and its plugins' health checks, one
+  entry per company; a company that does not answer is that entry's
+  `status: "error"` only. With `tenant`, that company only. With `tenant` and
+  `tool`, that tool's parameters and notes. Read-only.
+- **`org_tool_read`** `{tenant, tool, args?}`: runs one of the child's
+  declared read tools and returns `outcome` and `result`. Read-only.
+- **`org_tool_write`** `{tenant, tool, args?, dry_run?}`: runs one of the
+  child's declared write tools. `dry_run: true` returns `outcome: "dry_run"`
+  and `would` without changing anything.
+
+A child offers only the tools its plugins declare remote
+([Plugins](PLUGINS.md)), each as a read or a write; a tool may also require an
+attestation the parent's deployment must make (`GENUS_ORG_REMOTE_ATTESTATIONS`,
+for example a signed data agreement). The engine admits a call in this order,
+and refuses with one sentence, sending nothing, at the first that fails:
+
+1. the mode, `GENUS_ORG_REMOTE_TOOLS` (`off` refuses all three; `read`
+   refuses `org_tool_write`; `dry_run` turns every write into a dry run);
+2. `tenant` must look like a tenant id (anything else reads as unreachable);
+3. a live, top-level run: a sub-agent or benchmark run is refused;
+4. a tenant the run may reach that is not its own. An unknown tenant and an
+   unreachable one get the same sentence; the run's own tenant is refused with
+   a pointer to call the tool directly;
+5. a write: a person-started run by the verified owner. A scheduled or other
+   unattended run never writes;
+6. `dry_run` must be the boolean `true` or `false`.
+
+The bridge and the child check again (the person must be an owner or admin of
+the parent who may act in the child, an owner for a write; a person-less read
+needs the parent's child data access and a per-tool grant of the child's
+`parent_agent` role). A refusal from the child keeps its code in
+`error_code` (`remote_tool_unknown`, `remote_attestation_missing`,
+`remote_not_permitted`, …) beside the sentence in `error`. A write the child
+cannot account for (`remote_outcome_unknown`, a timeout) is reported with
+`outcome_unknown: true`, and the effect ledger then fences an identical call
+until it is reconciled. Each write is journalled in the home effect ledger and
+its effect id travels as the child's dedupe key, so a replay is answered from
+the ledger and never sent twice. Each call can take up to 180 seconds.
+
+Every call, allowed or refused, writes an `agent.cross_tenant_call` row under
+the home tenant with `tool` set to `org_tools`, `org_tool_read` or
+`org_tool_write` and `details.remote_tool` naming the child's tool; the child
+writes its own `agent.remote_tool_call` row. Results are wrapped as untrusted
+content: they come from the child's systems.
+
+**Which to use.** For a child's tasks, runs, notes, people and other CRM data,
+pass `tenant` to the ordinary tool (`list_tasks`, `get_agent_run`, …): that
+data lives in the shared database and the `tenant` argument reads it
+directly. Use `org_tools` / `org_tool_read` only when the answer lives in a
+system the child is connected to and this company is not (its practice
+software, its ticketing system). Use `org_tool_write` only when the owner asks
+for a change in chat, preview with `dry_run: true` when the effect is not
+obvious, and never to work around a tool this company has itself.
+
 ### Credentials: `vault_get`, `vault_set`, `vault_test`, `vault_list`, `vault_delete`
 
 An agent whose own manifest declares `v2.credentials: operator` holds these
@@ -2142,6 +2207,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Skills | `list_skills`, `invoke_skill` |
 | Plugins | [`plugins_overview`](#what-plugins-contribute-plugins_overview) |
 | Child tenants | [`org_overview`, and `tenant` / `dry_run` on CRM and run tools](#child-tenants-org_overview-the-tenant-argument-and-dry_run) |
+| A child company's own tools | [`org_tools`, `org_tool_read`, `org_tool_write`](#a-child-companys-own-tools-org_tools-org_tool_read-org_tool_write) |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
 | Workflows | [`list_workflows`, `run_workflow`, `workflow_runs`](#workflows-list_workflows-run_workflow-workflow_runs) |
 | Workspaces | [`room_create`, `room_update`, `room_list`, `room_read`, …](#workspaces-room_) (the main agent's) |
