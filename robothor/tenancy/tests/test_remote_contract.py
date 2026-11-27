@@ -19,28 +19,31 @@ def test_the_four_modes_and_their_default():
 
 
 def test_every_refusal_code_in_the_contract():
-    assert rc.ERROR_CODES == frozenset(
-        {
-            "remote_tools_off",
-            "remote_write_forbidden",
-            "remote_tool_unknown",
-            "remote_access_mismatch",
-            "remote_caller_forbidden",
-            "remote_not_permitted",
-            "remote_attestation_missing",
-            "remote_bad_arguments",
-            "remote_outcome_unknown",
-            "remote_too_large",
-            "remote_timeout",
-        }
+    assert (
+        frozenset(
+            {
+                "remote_tools_off",
+                "remote_write_forbidden",
+                "remote_tool_unknown",
+                "remote_access_mismatch",
+                "remote_caller_forbidden",
+                "remote_not_permitted",
+                "remote_attestation_missing",
+                "remote_bad_arguments",
+                "remote_outcome_unknown",
+                "remote_too_large",
+                "remote_timeout",
+            }
+        )
+        == rc.ERROR_CODES
     )
     assert rc.ERR_TOOLS_OFF == "remote_tools_off"
     assert rc.ERR_TIMEOUT == "remote_timeout"
 
 
 def test_outcomes_access_and_names():
-    assert rc.OUTCOMES == frozenset({"ok", "error", "dry_run", "replayed"})
-    assert rc.ACCESS_VALUES == frozenset({"read", "write"})
+    assert frozenset({"ok", "error", "dry_run", "replayed"}) == rc.OUTCOMES
+    assert frozenset({"read", "write"}) == rc.ACCESS_VALUES
     assert rc.EVENT_REMOTE_TOOL_CALL == "agent.remote_tool_call"
     assert rc.ROLE_PARENT_AGENT == "parent_agent"
     assert rc.SCOPE_ORG_REMOTE == "org:remote"

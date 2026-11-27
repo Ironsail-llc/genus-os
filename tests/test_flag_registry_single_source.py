@@ -79,6 +79,10 @@ HISTORICAL_GOVERNED_FLAGS: frozenset[str] = frozenset(
         "ROBOTHOR_TRUNCATION_LEDGER_MODE",
         "ROBOTHOR_ACT_OBSERVE_MODE",
         "ROBOTHOR_VERDICT_COMMITMENT_MODE",
+        # Added with remote tools. Governed from the start: whether a parent
+        # tenant's agent may run a descendant's tools at all is a posture an
+        # operator must be able to take from Controls, without a restart.
+        "GENUS_ORG_REMOTE_TOOLS",
     }
 )
 

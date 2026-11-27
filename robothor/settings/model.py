@@ -1852,6 +1852,31 @@ class AuthSettings(SettingsGroup):
         restart_units=("robothor-bridge",),
         since="1.127.0",
     )
+    org_remote_tools: str = declare(
+        "full",
+        "GENUS_ORG_REMOTE_TOOLS",
+        "Whether a parent tenant's agent may run the tools a descendant "
+        "tenant's plugins declare remote. 'off' refuses every remote call; "
+        "'read' allows reads and refuses writes; 'dry_run' allows reads and "
+        "turns every write into a dry run; 'full' allows reads and writes. "
+        "Checked by the calling engine, the bridge and the target engine. "
+        "Values are case-sensitive; any other value reads as 'off' and is "
+        "logged.",
+        restart_units=("robothor-bridge", "robothor-engine"),
+        since="1.141.0",
+        governed=True,
+    )
+    org_remote_attestations: str = declare(
+        "",
+        "GENUS_ORG_REMOTE_ATTESTATIONS",
+        "Comma-separated attestation tokens this deployment vouches for when "
+        "it calls a descendant tenant's remote tools (each matching "
+        "^[a-z][a-z0-9_]{0,31}$). A remote tool that requires a token not "
+        "listed here is refused. The bridge presents its own value; a value "
+        "in a request is ignored. Malformed tokens are dropped and logged.",
+        restart_units=("robothor-bridge", "robothor-engine"),
+        since="1.141.0",
+    )
     tenant_switch_allow_inert_rls: bool = declare(
         False,
         "GENUS_TENANT_SWITCH_ALLOW_INERT_RLS",

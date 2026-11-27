@@ -533,9 +533,13 @@ def engine_flag_readers() -> dict[str, tuple[object, str]]:
     about the value of the one a page is rendering. Setting the gate isolates
     the question to "what does this flag itself resolve to".
     """
+    from robothor.auth import runtime as auth_runtime
     from robothor.engine import feature_flags as ff
 
     return {
+        # Read by the bridge and every engine through robothor.auth.runtime,
+        # not feature_flags, but resolved through the same store.
+        "GENUS_ORG_REMOTE_TOOLS": (auth_runtime.org_remote_tools_mode, ""),
         # The three observation ladders (2026-09-17) are single-var, like
         # `step_efficiency_mode` and `honesty_suite_mode`: no `_ENABLED`
         # companion, so no gate. All three resolve `observe` when nothing is

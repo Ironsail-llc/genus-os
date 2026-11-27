@@ -13,7 +13,10 @@ from silently reopening the legacy trusted-header path.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _PRODUCTION_ENVIRONMENTS = frozenset({"prod", "production"})
@@ -108,6 +111,60 @@ def tenant_switch_mode() -> str:
 
     mode = str(get_settings().auth.tenant_switch_mode or "").strip().lower()
     return mode if mode in TENANT_SWITCH_MODES else "off"
+
+
+#: The governed flag for remote tools; ``robothor.tenancy.remote_contract`` holds its rungs.
+ORG_REMOTE_TOOLS_FLAG = "GENUS_ORG_REMOTE_TOOLS"
+
+
+def org_remote_tools_mode() -> str:
+    """``off`` | ``read`` | ``dry_run`` | ``full``: how far remote tools may go.
+
+    Governed: an operator-written flag-store row wins over the environment,
+    which wins over the declared default (``full``). A value outside the four
+    rungs reads as ``off`` and is logged, so a typo never opens anything.
+    """
+    from robothor.flags import store
+    from robothor.settings import get_settings
+    from robothor.tenancy.remote_contract import REMOTE_MODES, normalise_mode
+
+    raw = store.resolve(ORG_REMOTE_TOOLS_FLAG)
+    if raw is None:
+        raw = get_settings().auth.org_remote_tools
+    mode = normalise_mode(raw)
+    if (raw or "").strip() and (raw or "").strip() not in REMOTE_MODES:
+        logger.warning(
+            "%s=%r is not one of %s; remote tools are off.",
+            ORG_REMOTE_TOOLS_FLAG,
+            raw,
+            "/".join(REMOTE_MODES),
+        )
+    return mode
+
+
+def org_remote_attestations() -> frozenset[str]:
+    """The attestation tokens this deployment presents on remote calls.
+
+    ``GENUS_ORG_REMOTE_ATTESTATIONS`` as a comma list; blanks and duplicates
+    collapse, and a token that is not ``^[a-z][a-z0-9_]{0,31}$`` is dropped
+    and logged rather than presented.
+    """
+    from robothor.settings import get_settings
+    from robothor.tenancy.remote_contract import ATTESTATION_TOKEN_RE
+
+    tokens: set[str] = set()
+    for part in str(get_settings().auth.org_remote_attestations or "").split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if ATTESTATION_TOKEN_RE.fullmatch(token):
+            tokens.add(token)
+        else:
+            logger.warning(
+                "GENUS_ORG_REMOTE_ATTESTATIONS: dropping malformed token %r.",
+                token,
+            )
+    return frozenset(tokens)
 
 
 def legacy_headers_allowed(*, bind_host: str = "127.0.0.1") -> bool:

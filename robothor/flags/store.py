@@ -77,7 +77,16 @@ _MODE_VALUES: tuple[str, ...] = ("off", "observe", "alert", "enforce")
 #: flag is one line, in the one place every surface already reads.
 VALUE_SET_FLAGS: dict[str, tuple[str, ...]] = {
     "ROBOTHOR_CALENDAR_SEND_UPDATES": ("all", "externalOnly", "none"),
+    # How far a parent tenant's agent may go with a descendant's remote tools.
+    # Mirrors robothor.tenancy.remote_contract.REMOTE_MODES (a test pins it).
+    "GENUS_ORG_REMOTE_TOOLS": ("off", "read", "dry_run", "full"),
 }
+
+#: Value-set flags whose reader maps an UNRECOGNISED value somewhere other than
+#: the declared default. ``GENUS_ORG_REMOTE_TOOLS`` defaults to ``full`` when
+#: unset but reads a typo as ``off`` (``auth.runtime.org_remote_tools_mode``),
+#: so a page showing ``full`` for ``mostly`` would contradict the process.
+_UNRECOGNISED_FALLBACKS: dict[str, str] = {"GENUS_ORG_REMOTE_TOOLS": "off"}
 _RIP_13_VALUES: tuple[str, ...] = ("observe", "enforce")
 _HONESTY_SUITE_VALUES: tuple[str, ...] = ("off", "observe", "enforce")
 
@@ -301,7 +310,11 @@ def normalise(name: str, value: Any) -> str:
         # The engine reads a boolean flag as membership of TRUE_VALUES, so
         # everything it does not recognise is off -- not "unset".
         return "true" if text in TRUE_VALUES else "false"
-    return text if text in valid else default_value_for(name)
+    if text in valid:
+        return text
+    if text and name in _UNRECOGNISED_FALLBACKS:
+        return _UNRECOGNISED_FALLBACKS[name]
+    return default_value_for(name)
 
 
 def set_flag(name: str, value: str, actor: str, reason: str) -> None:
