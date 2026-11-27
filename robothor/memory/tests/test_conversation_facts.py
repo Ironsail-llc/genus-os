@@ -276,3 +276,65 @@ def test_the_default_extraction_mode_is_unchanged() -> None:
         }
     )
     assert parse_extraction_response(raw) == []  # still needs a named entity
+
+
+# ═══ relative dates resolve against the turn that says them ══════════════
+
+
+def _said(text: str, at: datetime = AT) -> list[ConversationTurn]:
+    return [ConversationTurn(ref=7, role="user", text=text, at=at)]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("I bought a road bike yesterday.", "2023-05-19"),
+        ("I'm flying to Rome tomorrow.", "2023-05-21"),
+        ("I sold my old car three days ago.", "2023-05-17"),
+        ("We adopted a puppy two weeks ago.", "2023-05-06"),
+        ("My exam is in 10 days.", "2023-05-30"),
+        ("I started yoga last Tuesday.", "2023-05-16"),  # AT is a Saturday
+        ("I'm seeing the dentist next Monday.", "2023-05-22"),
+        ("I finished the book the day before yesterday.", "2023-05-18"),
+    ],
+)
+def test_a_relative_date_is_counted_from_the_turns_own_time(text: str, expected: str) -> None:
+    from robothor.memory.relative_dates import resolve_relative_date
+
+    assert resolve_relative_date(text, AT) is not None
+    assert resolve_relative_date(text, AT).isoformat() == expected  # type: ignore[union-attr]
+
+
+def test_no_date_or_two_different_dates_resolve_to_nothing() -> None:
+    from robothor.memory.relative_dates import resolve_relative_date
+
+    assert resolve_relative_date("I like tea.", AT) is None
+    assert resolve_relative_date("I bought it yesterday and return it tomorrow.", AT) is None
+    assert resolve_relative_date("yesterday", None) is None
+
+
+def test_event_time_is_filled_from_the_turn_when_the_model_left_it_empty() -> None:
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user bought a road bike.", [1], kind="possession")),
+        _said("I bought a road bike yesterday."),
+    )
+    assert fact["event_time"] == "2023-05-19"
+
+
+def test_a_date_the_model_counted_from_today_is_counted_from_the_turn_instead() -> None:
+    from datetime import timedelta
+
+    from_today = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user bought a road bike.", [1], event_time=from_today)),
+        _said("I bought a road bike yesterday."),
+    )
+    assert fact["event_time"] == "2023-05-19"
+
+
+def test_a_date_the_model_gave_is_kept_when_the_turn_names_no_relative_date() -> None:
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user moves to Lisbon in June 2023.", [1], event_time="2023-06-01")),
+        _said("We move to Lisbon in June."),
+    )
+    assert fact["event_time"] == "2023-06-01"
