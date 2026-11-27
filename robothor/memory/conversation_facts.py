@@ -16,9 +16,10 @@ exchange as it happened:
   fact about "the user" (``about_user``), with no named entity needed;
 * trust is decided here, not by the model (:func:`parse_conversation_response`):
   a fact is the user's (``speaker_role == "user"``, stored ``user_stated``) only
-  when the model says so AND every turn it cites is a user turn. A fact citing
-  an assistant turn, or no usable turn, is the assistant's (``agent_generated``).
-  Assistant text never becomes a user-stated fact;
+  when the model says so AND every number it cites is a user turn of the
+  window. A fact citing an assistant turn, a context turn or a number that
+  points nowhere is the assistant's (``agent_generated``); one citing no window
+  turn at all is dropped. Assistant text never becomes a user-stated fact;
 * each fact keeps the chat message ids it came from (``turn_refs``) and when it
   was said (``mentioned_at``), so it can be linked back to its source turns;
 * the model dates each fact and quotes the phrase it dated from; a relative
@@ -235,30 +236,36 @@ New turns:
 {render_window(window, start=len(ctx) + 1)}"""
 
 
-def _cited(item: dict[str, Any], window: list[ConversationTurn], offset: int) -> list[int] | None:
-    """Window positions the fact cites, or None when it cites none of them.
+@dataclass(frozen=True)
+class _Citations:
+    """What a fact's ``turns`` point at.
 
-    Numbers ``1..offset`` are context turns; ``offset+1..`` the window's.
+    ``positions``: the window turns cited (sorted, each once). ``all_user``:
+    every cited number is a user turn inside the window — a context turn, an
+    assistant turn, or a number that points nowhere makes it false.
     """
+
+    positions: list[int]
+    all_user: bool
+
+
+def _citations(item: dict[str, Any], window: list[ConversationTurn], offset: int) -> _Citations:
+    """Numbers ``1..offset`` are context turns; ``offset+1..`` the window's."""
     raw = item.get("turns")
-    if not isinstance(raw, list):
-        return None
-    out: list[int] = []
-    for n in raw:
+    numbers = raw if isinstance(raw, list) else []
+    positions: set[int] = set()
+    all_user = bool(numbers)
+    for n in numbers:
         if isinstance(n, bool) or not isinstance(n, int):
+            all_user = False
             continue
         pos = n - offset - 1
-        if 0 <= pos < len(window) and pos not in out:
-            out.append(pos)
-    return sorted(out) or None
-
-
-def _cites_context_only(item: dict[str, Any], offset: int) -> bool:
-    raw = item.get("turns")
-    if not isinstance(raw, list) or not raw or offset == 0:
-        return False
-    nums = [n for n in raw if isinstance(n, int) and not isinstance(n, bool)]
-    return bool(nums) and all(1 <= n <= offset for n in nums)
+        if 0 <= pos < len(window):
+            positions.add(pos)
+            all_user = all_user and window[pos].role == "user"
+        else:
+            all_user = False
+    return _Citations(sorted(positions), all_user and bool(positions))
 
 
 #: How far the model's date may be from the day its phrase names and still be
@@ -324,11 +331,12 @@ def parse_conversation_response(
     Every fact carries the write path's keys (``fact_text``, ``category``,
     ``confidence``, ``mentions``, ``relations``, ``event_time``, ``entities``)
     and this mode's: ``speaker_role`` (``user`` only when the model says so and
-    every cited turn is the user's, else ``assistant``), ``about_user``,
-    ``kind``, ``turn_refs`` (chat message ids; the whole window when the fact
-    cites no window turn) and ``mentioned_at``. A fact citing only context
-    turns was extracted before and is dropped. The default quality filters
-    apply, except that no named entity is required.
+    every number it cites is a user turn inside the window, else
+    ``assistant``), ``about_user``, ``kind``, ``turn_refs`` (the chat message
+    ids of the window turns it cites) and ``mentioned_at``. A fact citing no
+    window turn (only context turns, which were extracted before, or numbers
+    that point nowhere) is dropped. The default quality filters apply, except
+    that no named entity is required.
     """
     offset = len(context)
     out: list[dict[str, Any]] = []
@@ -336,14 +344,11 @@ def parse_conversation_response(
         text = item.get("fact_text")
         if not isinstance(text, str) or not text.strip():
             continue
-        if _cites_context_only(item, offset):
-            continue
-        positions = _cited(item, window, offset)
-        cited = [window[p] for p in positions] if positions is not None else list(window)
-        claimed = item.get("speaker") if item.get("speaker") in SPEAKERS else "assistant"
-        user_said_it = (
-            positions is not None and claimed == "user" and all(t.role == "user" for t in cited)
-        )
+        cites = _citations(item, window, offset)
+        if not cites.positions:
+            continue  # no window turn: extracted before, or linked to nothing
+        cited = [window[p] for p in cites.positions]
+        user_said_it = item.get("speaker") == "user" and cites.all_user
         category = str(item.get("category", "personal")).lower().strip()
         if category not in VALID_CATEGORIES:
             category = "personal"
@@ -354,9 +359,7 @@ def parse_conversation_response(
         kind = item.get("kind") if item.get("kind") in CONVERSATION_KINDS else "other"
         mentions = _mentions(item)
         model_time = _event_time(item.get("event_time"))
-        event_time, _corrected = _dated(
-            model_time, item.get("date_phrase"), cited if positions is not None else []
-        )
+        event_time, _corrected = _dated(model_time, item.get("date_phrase"), cited)
         last = max(cited, key=lambda t: t.ref)
         fact: dict[str, Any] = {
             "fact_text": _redated(text.strip(), model_time, event_time, cited),
