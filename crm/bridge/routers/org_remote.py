@@ -173,7 +173,8 @@ def _parse_call(body: Any) -> dict[str, Any]:
         "args": args,
         "access": access,
         "dry_run": dry_run,
-        "request_id": request_id or None,
+        # Only a write is deduplicated in the target; a read carries no id.
+        "request_id": (request_id or None) if access == ACCESS_WRITE else None,
         "requested_by": requested_by or None,
     }
 

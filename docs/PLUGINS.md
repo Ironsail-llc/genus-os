@@ -484,7 +484,9 @@ the tool is declared and for that access, who is asking (an owner or admin of th
 for a write; or, with no person, the parent's child-data grant and the
 `parent_agent` role, reads only), the attestations, and the arguments against
 the tool's own schema. A write needs a request id and runs at most once for
-it. The call then goes through the normal dispatch in the child tenant, so
+it; a second call with that id but another tool or other arguments is
+refused. A write whose result is over 256 kB is still reported as done, with
+the result withheld, so keep a write's result small. The call then goes through the normal dispatch in the child tenant, so
 the role's permission rows, kill switches and your own audit apply as they do
 for any call. `parent_agent` is denied everything until the child grants it a
 tool ([Service roles](runbooks/SERVICE_ROLES.md#roles-available)). Your tool

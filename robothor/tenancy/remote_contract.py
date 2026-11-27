@@ -34,6 +34,8 @@ ERR_NOT_PERMITTED = "remote_not_permitted"
 ERR_ATTESTATION_MISSING = "remote_attestation_missing"
 ERR_BAD_ARGUMENTS = "remote_bad_arguments"
 ERR_OUTCOME_UNKNOWN = "remote_outcome_unknown"
+#: A replayed request id whose tool or arguments differ from the call that claimed it.
+ERR_REQUEST_MISMATCH = "remote_request_mismatch"
 ERR_TOO_LARGE = "remote_too_large"
 ERR_TIMEOUT = "remote_timeout"
 
@@ -47,6 +49,7 @@ ERROR_CODES: frozenset[str] = frozenset(
         ERR_ATTESTATION_MISSING,
         ERR_BAD_ARGUMENTS,
         ERR_OUTCOME_UNKNOWN,
+        ERR_REQUEST_MISMATCH,
         ERR_TOO_LARGE,
         ERR_TIMEOUT,
     }
@@ -77,7 +80,10 @@ ATTESTATION_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
 # ── Limits ───────────────────────────────────────────────────────────────────
 
-REMOTE_RESULT_MAX_BYTES = 262144  # a larger result is refused, never truncated
+REMOTE_RESULT_MAX_BYTES = 262144  # a larger result is refused (a read) or withheld (a write)
+
+#: ``result_withheld.reason`` on a write that ran but whose result is over the cap.
+WITHHELD_TOO_LARGE = "too_large"
 TARGET_TIMEOUT_S = 150  # the target engine's own execution budget
 BRIDGE_TIMEOUT_S = 165  # bridge -> target
 HOME_TIMEOUT_S = 180  # home engine -> bridge

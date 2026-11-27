@@ -11,7 +11,9 @@ this module believes nothing it forwards beyond what it re-derives here:
 * the attestations the declaration requires, against what the bridge presents,
 * the arguments, against the tool's own JSON schema.
 
-A write runs at most once per request id (``remote_tool_requests``). The call
+A write runs at most once per request id (``remote_tool_requests``), and a
+replay is answered only for the same tool and arguments. A read carries no
+request id here: whatever one the body names is ignored. The call
 itself goes through the normal registry dispatch, so RBAC (with the derived role
 and the person's user id), kill switches and the plugin's own audit all apply,
 confined to this tenant. Every call leaves one ``agent.remote_tool_call`` audit
@@ -50,6 +52,9 @@ _MESSAGES = {
     rc.ERR_ATTESTATION_MISSING: "The tool needs an attestation the caller did not present.",
     rc.ERR_BAD_ARGUMENTS: "The arguments do not match the tool's parameters.",
     rc.ERR_OUTCOME_UNKNOWN: "An earlier call with this request id has no known outcome.",
+    rc.ERR_REQUEST_MISMATCH: (
+        "This request id was used for another tool or other arguments; nothing was run."
+    ),
     rc.ERR_TOO_LARGE: "The tool's result is larger than a remote call may return.",
     rc.ERR_TIMEOUT: "The tool did not finish in time.",
 }
@@ -292,22 +297,27 @@ def schema_problem(value: Any, schema: Any, where: str = "args") -> str | None:
 # ── The request ledger (remote_tool_requests) ────────────────────────────────
 
 
-def claim_request(tenant_id: str, request_id: str) -> dict[str, Any] | None:
-    """Claim ``request_id`` as running. None when claimed now, else the existing
-    row ``{state, result}``. Blocking; raises when the ledger cannot be read."""
+def claim_request(
+    tenant_id: str, request_id: str, tool: str, args_digest: str
+) -> dict[str, Any] | None:
+    """Claim ``request_id`` as running for ``tool`` with ``args_digest``.
+
+    None when claimed now, else the existing row ``{state, result, tool,
+    args_digest}``, unchanged. Blocking; raises when the ledger cannot be read.
+    """
     from robothor.db.connection import get_connection, tenant_scope
 
     with tenant_scope(tenant_id), get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO remote_tool_requests (tenant_id, request_id, state) "
-            "VALUES (%s, %s, 'running') ON CONFLICT (tenant_id, request_id) DO NOTHING "
+            "INSERT INTO remote_tool_requests (tenant_id, request_id, tool, args_digest, state) "
+            "VALUES (%s, %s, %s, %s, 'running') ON CONFLICT (tenant_id, request_id) DO NOTHING "
             "RETURNING request_id",
-            (tenant_id, request_id),
+            (tenant_id, request_id, tool, args_digest),
         )
         if cur.fetchone() is not None:
             return None
         cur.execute(
-            "SELECT state, result FROM remote_tool_requests "
+            "SELECT state, result, tool, args_digest FROM remote_tool_requests "
             "WHERE tenant_id = %s AND request_id = %s",
             (tenant_id, request_id),
         )
@@ -317,7 +327,7 @@ def claim_request(tenant_id: str, request_id: str) -> dict[str, Any] | None:
     result = row[1]
     if isinstance(result, str):
         result = json.loads(result)
-    return {"state": row[0], "result": result}
+    return {"state": row[0], "result": result, "tool": row[2], "args_digest": row[3]}
 
 
 def finish_request(tenant_id: str, request_id: str, result: dict[str, Any]) -> None:
@@ -449,7 +459,12 @@ async def execute(tenant_id: str, body: Any) -> tuple[int, dict[str, Any]]:
     access = _text(body.get("access"))
     home = _text(body.get("home_tenant"))
     agent_id = _text(body.get("agent_id"))[:_AGENT_ID_MAX]
-    request_id = body.get("request_id") if isinstance(body.get("request_id"), str) else None
+    raw_request_id = body.get("request_id")
+    # Only a write is deduplicated, so only a write carries a request id: a
+    # read's is ignored, and can neither replay nor release anything.
+    request_id = (
+        raw_request_id if access == rc.ACCESS_WRITE and isinstance(raw_request_id, str) else None
+    )
     args = body.get("args", {})
     dry_run_asked = body.get("dry_run", False)
     seen: dict[str, Any] = {"user_id": "", "dry_run": dry_run_asked is True}
@@ -522,12 +537,12 @@ async def _execute(
     if write:
         if not request_id:
             raise Refused(422, rc.ERR_BAD_ARGUMENTS, "A remote write needs a request_id.")
-        replay = await _claim(tenant_id, request_id)
+        replay = await _claim(tenant_id, request_id, tool, rc.args_digest(args))
         if replay is not None:
             return replay
     # 8. the normal dispatch, confined to this tenant
     status, payload = await _dispatch(
-        tenant_id, tool, args, home, agent_id, user_id, role, request_id
+        tenant_id, tool, args, home, agent_id, user_id, role, request_id, write=write
     )
     if write and request_id:
         try:
@@ -539,10 +554,16 @@ async def _execute(
     return status, payload
 
 
-async def _claim(tenant_id: str, request_id: str) -> tuple[int, dict[str, Any]] | None:
-    """None when this call may run; else the stored answer (replayed); or 409."""
+async def _claim(
+    tenant_id: str, request_id: str, tool: str, digest: str
+) -> tuple[int, dict[str, Any]] | None:
+    """None when this call may run; else the stored answer (replayed); or 409.
+
+    A finished row answers only the call it was claimed for: another tool or
+    other arguments under the same id is ``remote_request_mismatch``.
+    """
     try:
-        prior = await asyncio.to_thread(claim_request, tenant_id, request_id)
+        prior = await asyncio.to_thread(claim_request, tenant_id, request_id, tool, digest)
     except Exception:  # noqa: BLE001 - an unreadable ledger is an unknown outcome
         logger.warning("remote tool request ledger unavailable", exc_info=True)
         raise Refused(409, rc.ERR_OUTCOME_UNKNOWN) from None
@@ -555,6 +576,8 @@ async def _claim(tenant_id: str, request_id: str) -> tuple[int, dict[str, Any]] 
         or not isinstance(stored.get("body"), dict)
     ):
         raise Refused(409, rc.ERR_OUTCOME_UNKNOWN)
+    if prior.get("tool") != tool or prior.get("args_digest") != digest:
+        raise Refused(409, rc.ERR_REQUEST_MISMATCH)
     status = int(stored.get("status") or 200)
     body = dict(stored["body"])
     if status == 200:
@@ -571,6 +594,8 @@ async def _dispatch(
     user_id: str,
     role: str,
     request_id: str | None,
+    *,
+    write: bool,
 ) -> tuple[int, dict[str, Any]]:
     from robothor.engine.tools.registry import get_registry
 
@@ -592,7 +617,9 @@ async def _dispatch(
     if not isinstance(result, dict):
         result = {"result": result}
     if _rbac_denied(result):
-        if request_id:
+        # The role refused before the handler ran, so a write's claim is
+        # released for a retry. A read has no claim to release.
+        if write and request_id:
             try:
                 await asyncio.to_thread(release_request, tenant_id, request_id)
             except Exception:  # noqa: BLE001 - a kept claim is a 409 later, never a re-run
@@ -602,7 +629,17 @@ async def _dispatch(
         size = len(json.dumps(result, default=str).encode("utf-8"))
     except (TypeError, ValueError):
         size = rc.REMOTE_RESULT_MAX_BYTES + 1
-    if size > rc.REMOTE_RESULT_MAX_BYTES:
-        return 413, refusal_body(rc.ERR_TOO_LARGE)
     outcome = rc.OUTCOME_ERROR if "error" in result else rc.OUTCOME_OK
+    if size > rc.REMOTE_RESULT_MAX_BYTES:
+        if not write:
+            return 413, refusal_body(rc.ERR_TOO_LARGE)
+        # A write has acted: it is answered as done, its result withheld,
+        # never as a refusal a caller would retry.
+        answer = _answer(outcome, request_id, tool, None)
+        answer["result_withheld"] = {
+            "reason": rc.WITHHELD_TOO_LARGE,
+            "bytes": size,
+            "max_bytes": rc.REMOTE_RESULT_MAX_BYTES,
+        }
+        return 200, answer
     return 200, _answer(outcome, request_id, tool, result)

@@ -2022,7 +2022,11 @@ needs the parent's child data access and a per-tool grant of the child's
 `remote_not_permitted`, …) beside the sentence in `error`. A write the child
 cannot account for (`remote_outcome_unknown`, a timeout) is reported with
 `outcome_unknown: true`, and the effect ledger then fences an identical call
-until it is reconciled. Each write is journalled in the home effect ledger and
+until it is reconciled. A write that ran but whose result is over 256 kB is
+reported as done with `result: null`, `result_withheld` (`reason:
+"too_large"`, its size and the cap) and a note, never as a refusal, so the
+ledger records it and a retry replays it; a read over the cap is refused
+(`remote_too_large`). Each write is journalled in the home effect ledger and
 its effect id travels as the child's dedupe key, so a replay is answered from
 the ledger and never sent twice. Each call can take up to 180 seconds.
 
