@@ -14,12 +14,35 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import os
 import time
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+#: Reranker outcomes since the process started (or the last reset): a pass
+#: that scored, one that fell back to the fused order because a pair failed,
+#: and one that ran with the reranker unavailable (rows come back unscored).
+#: The last two look normal to the caller, so they are counted and logged.
+_STATS: dict[str, int] = {"scored": 0, "fell_back": 0, "unavailable": 0}
+_warned_unavailable = False
+
+
+def rerank_stats() -> dict[str, int]:
+    """A copy of the reranker outcome counters."""
+    return dict(_STATS)
+
+
+def reset_rerank_stats() -> None:
+    global _warned_unavailable  # noqa: PLW0603
+    for k in _STATS:
+        _STATS[k] = 0
+    _warned_unavailable = False
+
 
 RERANKER_MODEL = os.environ.get("ROBOTHOR_RERANKER_MODEL", "dengcao/Qwen3-Reranker-0.6B:F16")
 
@@ -246,11 +269,22 @@ async def rerank(
     if not results:
         return []
 
+    global _warned_unavailable  # noqa: PLW0603
     available = await check_reranker_available()
     if not available:
+        _STATS["unavailable"] += 1
+        if not _warned_unavailable:
+            # Once until it is back: every search would otherwise repeat it.
+            _warned_unavailable = True
+            logger.warning(
+                "reranker %s unavailable; results are returned unscored in fused order "
+                "(counted in rerank_stats)",
+                RERANKER_MODEL,
+            )
         for r in results[:top_k]:
             r["rerank_relevant"] = "skipped"
         return results[:top_k]
+    _warned_unavailable = False
 
     max_candidates = _max_candidates()
     if max_candidates > 0:
@@ -284,6 +318,7 @@ async def rerank(
     for r in final:
         r["rerank_time_ms"] = elapsed_ms
 
+    _STATS["scored"] += 1
     return final
 
 
@@ -292,10 +327,24 @@ async def rerank_with_fallback(
     results: list[dict[str, Any]],
     top_k: int = 10,
 ) -> list[dict[str, Any]]:
-    """Rerank; on any reranker error return the input (fused) order, cut to top_k."""
+    """Rerank; on any reranker error return the input (fused) order, cut to top_k.
+
+    The fallback is counted (``rerank_stats()["fell_back"]``) and logged at
+    WARNING: its rows look like a normal result, so a silent fallback would
+    make a degraded search indistinguishable from a scored one.
+    """
     try:
         return await rerank(query, results, top_k=top_k)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - recall must survive the reranker
+        _STATS["fell_back"] += 1
+        logger.warning(
+            "reranker failed (%s: %s); returning %d rows in fused order unscored "
+            "(fell back %d times since start)",
+            type(exc).__name__,
+            exc,
+            min(top_k, len(results)),
+            _STATS["fell_back"],
+        )
         return results[:top_k]
 
 
