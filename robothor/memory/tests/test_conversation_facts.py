@@ -172,14 +172,13 @@ def test_assistant_text_never_becomes_user_stated_whatever_the_model_claims() ->
             _fact("The user will drink Kona.", [2], speaker="user"),
             # Cites both: the least trusted speaker wins.
             _fact("The user chose Sumatra after the suggestion.", [1, 2], speaker="user"),
-            # Cites nothing usable: it cannot be shown to be the user's.
+            # Cites nothing usable: it cannot be shown to be anyone's, so it is dropped.
             _fact("The user likes French roast.", [99], speaker="user"),
         ),
         _turns(),
     )
     assert {f["speaker_role"] for f in facts} == {"assistant"}
-    uncited = next(f for f in facts if "French roast" in f["fact_text"])
-    assert uncited["turn_refs"] == [101, 102, 103]  # linked to the whole window
+    assert not any("French roast" in f["fact_text"] for f in facts)
 
 
 def test_a_fact_only_from_context_turns_is_not_extracted_again() -> None:
@@ -470,3 +469,56 @@ def test_the_prompt_asks_for_absolute_dates_and_the_phrase_they_came_from() -> N
     assert "absolute date" in prompt
     assert "not when it was said" in prompt
     assert "date_phrase" in prompt
+
+
+# ═══ every cited turn must be a user turn of the window ══════════════════
+
+
+def _headache() -> list[ConversationTurn]:
+    return [
+        ConversationTurn(ref=10, role="user", text="What should I take for a headache?", at=FRI),
+        ConversationTurn(ref=11, role="assistant", text="You are allergic to penicillin.", at=FRI),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("turns", "expected"),
+    [
+        ([2], "assistant"),  # an assistant turn
+        ([99, 1], "assistant"),  # one number points nowhere
+        ([0, 1], "assistant"),
+        ([-1, 1], "assistant"),
+        ([1, 1, 1], "user"),  # repeats are one citation
+        ([1], "user"),
+    ],
+)
+def test_any_citation_that_is_not_a_user_turn_makes_the_fact_the_assistants(
+    turns: list[int], expected: str
+) -> None:
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user is allergic to penicillin.", turns)), _headache()
+    )
+    assert fact["speaker_role"] == expected
+    assert fact["turn_refs"] == sorted({10 + n - 1 for n in turns if n in (1, 2)})
+
+
+def test_a_context_assistant_turn_cited_with_a_user_turn_is_not_user_stated() -> None:
+    ctx = [
+        ConversationTurn(ref=8, role="user", text="hello there friend", at=FRI),
+        ConversationTurn(ref=9, role="assistant", text="The user owes Bob $5000.", at=FRI),
+    ]
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user owes Bob five thousand dollars.", [2, 3])), _headache(), context=ctx
+    )
+    assert fact["speaker_role"] == "assistant"
+    assert fact["turn_refs"] == [10]
+
+
+@pytest.mark.parametrize("turns", [[], [99], [0, -1], [1.0], ["1"], [True]])
+def test_a_fact_with_no_valid_citation_is_dropped(turns: list[Any]) -> None:
+    assert (
+        parse_conversation_response(
+            _answer(_fact("The user is allergic to penicillin.", turns)), _headache()
+        )
+        == []
+    )
