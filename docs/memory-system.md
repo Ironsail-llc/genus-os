@@ -651,9 +651,11 @@ owns, visited, uses, speaks, plays): never closes.
   "Older" compares the new fact's `event_time` with the old fact's effective
   time: its `event_time`, unless that is after the row was even recorded (a
   wrong date, ignored), else its `created_at`. An undated new fact is never
-  older. One exception to the second row: when the old value has no event
-  date of its own, the judge is told the new event predates the old record,
-  and a `changed` with change wording in the new text closes it.
+  older. When the old value has no event date of its own, the judge is told
+  the new event predates the old record: `earlier` files the new fact as
+  history, and anything else keeps both with the conflict recorded. A new
+  fact dated before an old value is never what closes it ("moved to Denver in
+  2019" against an undated "lives in Boston" leaves Boston current).
 - **Closing** sets `superseded_by`, `valid_to` and
   `metadata.superseded_reason = "changed"`; the new row lists the closed ids
   once in `metadata.supersedes`. Nothing is deleted. A fact never closes
