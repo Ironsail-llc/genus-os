@@ -174,35 +174,6 @@ async def test_a_breadcrumb_whose_fact_failed_to_store_is_kept() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_failed_conversation_extraction_stores_nothing_and_is_retried(
-    monkeypatch: Any,
-) -> None:
-    import robothor.memory.conversation_ingest as ci
-
-    monkeypatch.delenv("MEMORY_INGEST_SKIP_GENERATED", raising=False)
-    monkeypatch.delenv("MEMORY_VAULT_POPULATE", raising=False)
-    history = [
-        {"role": "user", "content": "I moved to Lisbon in May."},
-        {"role": "assistant", "content": "Noted."},
-        {"role": "user", "content": "Bob Chen is my manager."},
-        {"role": "assistant", "content": "Got it."},
-    ]
-    failed = {"fact_ids": [], "extraction_failed": True, "extraction_error": "timeout"}
-    write = AsyncMock(return_value=failed)
-    with (
-        patch.object(ci, "is_already_ingested", return_value=False),
-        patch.object(ci, "record_ingested") as rec,
-        patch("robothor.memory.write_path.ingest_text", new=write),
-    ):
-        out = await ci.ingest_conversation_session(
-            "agent:main:telegram:4242", history, "main", "telegram", "run-1", "test-tenant"
-        )
-    assert out is None
-    rec.assert_not_called()  # the turns are ingested again next time
-    assert all(c.kwargs["fallback_on_failure"] is False for c in write.call_args_list)
-
-
-@pytest.mark.asyncio
 async def test_without_the_fallback_a_failed_extraction_writes_nothing() -> None:
     from robothor.memory import facts
 

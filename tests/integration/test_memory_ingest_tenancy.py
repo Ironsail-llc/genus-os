@@ -143,18 +143,19 @@ async def test_ingest_content_still_defaults_when_no_tenant_given(
 def test_conversation_ingest_forwards_its_tenant():
     """Pin the call site.
 
-    ingest_conversation_session already accepts tenant_id and uses it for the
-    watermark bookkeeping. Adding the parameter to ingest_content while leaving
-    this call site unchanged would fix the signature and none of the behaviour.
+    ingest_conversation_session accepts tenant_id and uses it for the
+    watermark bookkeeping. The write context it builds for the facts must carry
+    it too, or the watermarks would be tenant-correct while the facts they
+    track were written to DEFAULT_TENANT.
     """
     import inspect
 
     from robothor.memory import conversation_ingest
 
-    src = inspect.getsource(conversation_ingest.ingest_conversation_session)
-    call = src[src.index("ingest_content(") :]
+    src = inspect.getsource(conversation_ingest)
+    call = src[src.index("WriteContext.for_source(") :]
     call = call[: call.index(")\n")]
     assert "tenant_id" in call, (
-        "ingest_conversation_session calls ingest_content without a tenant; "
+        "conversation ingest builds its write context without a tenant; "
         "conversation facts would be written to DEFAULT_TENANT"
     )

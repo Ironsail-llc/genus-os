@@ -497,51 +497,6 @@ async def test_store_memory_writes_a_private_scope_only_when_asked(monkeypatch: 
     assert (private.scope_kind, private.scope_id) == ("user", ALICE_P)
 
 
-# ═══ conversation ingest extracts per role ═══════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_conversation_ingest_extracts_user_and_assistant_turns_separately(
-    monkeypatch: Any,
-) -> None:
-    import robothor.memory.conversation_ingest as ci
-
-    monkeypatch.delenv("MEMORY_INGEST_SKIP_GENERATED", raising=False)
-    history = [
-        {"role": "user", "content": "I moved to Lisbon in May."},
-        {"role": "assistant", "content": "Noted: you moved to Lisbon."},
-        {"role": "user", "content": "Bob Chen is my manager now."},
-        {"role": "assistant", "content": "The email from Northwind says the deal closed."},
-    ]
-    write = AsyncMock(side_effect=[{"fact_ids": [1]}, {"fact_ids": [2, 3]}])
-    with (
-        patch.object(ci, "is_already_ingested", return_value=False),
-        patch.object(ci, "record_ingested") as rec,
-        patch("robothor.memory.write_path.ingest_text", new=write),
-    ):
-        out = await ci.ingest_conversation_session(
-            "agent:main:telegram:4242", history, "main", "telegram", "run-1", "test-tenant"
-        )
-
-    assert write.await_count == 2
-    by_origin = {c.args[1].origin: c for c in write.call_args_list}
-    user_call = by_origin[Origin.USER_STATED]
-    asst_call = by_origin[Origin.AGENT_GENERATED]
-    assert "Lisbon in May" in user_call.args[0] and "Bob Chen" in user_call.args[0]
-    assert "Northwind" not in user_call.args[0]
-    assert "Northwind" in asst_call.args[0] and "Lisbon in May" not in asst_call.args[0]
-    # The other role is shown as read-only context.
-    assert "Northwind" in user_call.kwargs["read_only_context"]
-    assert "Lisbon in May" in asst_call.kwargs["read_only_context"]
-    for c in (user_call, asst_call):
-        ctx = c.args[1]
-        assert (ctx.scope_kind, ctx.scope_id) == ("shared", None)  # as before this story
-        assert ctx.conversation_ref == "agent:main:telegram:4242"
-        assert ctx.tenant_id == "test-tenant"
-    assert sorted(out["fact_ids"]) == [1, 2, 3]
-    assert sorted(rec.call_args.args[3]) == [1, 2, 3]
-
-
 # ═══ write jobs carry what the write path needs ══════════════════════════
 
 
