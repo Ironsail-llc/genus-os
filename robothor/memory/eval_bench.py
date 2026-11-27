@@ -891,6 +891,37 @@ async def validate_longmemeval_judge(
 # --------------------------------------------------------------------------- #
 
 
+#: Reranker states a retrieval can end in (``reranker_state``).
+RERANKER_DEGRADED: tuple[str, ...] = ("fell_back", "unavailable")
+
+
+def _rerank_counts() -> dict[str, int]:
+    from robothor.rag.reranker import rerank_stats
+
+    return rerank_stats()
+
+
+def reranker_state(before: dict[str, int], after: dict[str, int]) -> str:
+    """What the reranker did between two reads of its outcome counters.
+
+    A fallback or an unavailable reranker wins over a scored pass in the same
+    retrieval (a system that searches twice is degraded if either was).
+    Retrievals run one at a time, so the difference is this question's.
+    """
+    for state in (*RERANKER_DEGRADED, "scored"):
+        if after.get(state, 0) > before.get(state, 0):
+            return state
+    return "not_run"
+
+
+async def _retrieve_recorded(
+    s: Any, q: bd.BenchQuestion, handle: WorldHandle, budget: int
+) -> tuple[ContextBundle, str]:
+    before = _rerank_counts()
+    bundle = await s.retrieve(q, world_handle=handle, token_budget=budget)
+    return bundle, reranker_state(before, _rerank_counts())
+
+
 def evidence_recall(q: bd.BenchQuestion, items: Sequence[dict[str, Any]]) -> float | None:
     """Share of ``q``'s evidence sessions that reached the context sent.
 
@@ -1202,6 +1233,7 @@ async def run_benchmark(
             evidence_recall=evidence_recall(q, ctx["items"]),
             answer_turn_recall=turns.recall,
             answer_turns_complete=turns.complete,
+            reranker=str(ctx.get("reranker") or ""),
         )
 
     def _error(system: str, q: bd.BenchQuestion, exc: Exception) -> bd.BenchRecord:
@@ -1298,11 +1330,11 @@ async def run_benchmark(
                 )
                 for s, q in need:
                     try:
-                        bundle = await s.retrieve(q, world_handle=handle, token_budget=token_budget)
+                        bundle, rr = await _retrieve_recorded(s, q, handle, token_budget)
                     except Exception as exc:  # noqa: BLE001 — excluded and counted, never scored
                         _exclude(s.name, q, f"retrieval failed: {type(exc).__name__}: {exc}")
                         continue
-                    row = _bundle_to_row(bundle, ing.turn_dates)
+                    row = {**_bundle_to_row(bundle, ing.turn_dates), "reranker": rr}
                     cache.put_context(_base(s.name, q), version, row)
                     row = {"key": _key(_base(s.name, q), version), "version": version, **row}
                     contexts[(s.name, q.id)] = row
@@ -1459,7 +1491,7 @@ async def prefill_contexts(
             )
             for s, q, b in need:
                 try:
-                    bundle = await s.retrieve(cast("Any", q), world_handle=handle, token_budget=b)
+                    bundle, rr = await _retrieve_recorded(s, q, handle, b)
                 except Exception as exc:  # noqa: BLE001 — counted; the run retries it
                     logger.warning("prefill retrieve failed for %s %s: %s", s.name, q.id, exc)
                     stats["errors"] += 1
@@ -1467,7 +1499,7 @@ async def prefill_contexts(
                 cache.put_context(
                     context_base(bench, ingest_mode, b, s.name, q),
                     version,
-                    _bundle_to_row(bundle, ing.turn_dates),
+                    {**_bundle_to_row(bundle, ing.turn_dates), "reranker": rr},
                 )
                 stats["contexts"] += 1
         except Exception as exc:  # noqa: BLE001 — counted; the run retries it
@@ -1765,6 +1797,30 @@ def _pct(x: Any) -> str:
     return "–" if x is None else f"{float(x):.1%}"
 
 
+def _reranker_counts(report: dict[str, Any]) -> dict[str, dict[str, int]]:
+    return {
+        system: dict((m.get("overall") or {}).get("reranker") or {})
+        for system, m in (report.get("systems") or {}).items()
+    }
+
+
+def _degraded_line(report: dict[str, Any]) -> str:
+    """A warning for the top of the report when any retrieval ran degraded."""
+    parts = []
+    for system, counts in _reranker_counts(report).items():
+        bad = [f"{k.replace('_', ' ')} for {counts[k]}" for k in RERANKER_DEGRADED if counts.get(k)]
+        if bad:
+            parts.append(f"`{system}` " + ", ".join(bad))
+    if not parts:
+        return ""
+    return (
+        "**Reranker degraded:** "
+        + "; ".join(parts)
+        + " question(s). Those contexts are in fused order, unscored; the numbers below "
+        "include them."
+    )
+
+
 def _complete(b: dict[str, Any]) -> str:
     n = b.get("answer_turn_n") or 0
     return f"{b.get('answer_turns_complete', 0)} / {n}" if n else "–"
@@ -1773,9 +1829,11 @@ def _complete(b: dict[str, Any]) -> str:
 def format_bench_markdown(report: dict[str, Any]) -> str:
     p = report.get("params", {})
     metric = "mean token F1" if p.get("benchmark") == "locomo" else "judge accuracy"
-    lines = [
-        f"# Memory eval: {p.get('benchmark')} ({p.get('variant')})",
-        "",
+    lines = [f"# Memory eval: {p.get('benchmark')} ({p.get('variant')})", ""]
+    degraded = _degraded_line(report)
+    if degraded:
+        lines += [degraded, ""]
+    lines += [
         f"{p.get('questions')} questions ({', '.join(f'{k} {v}' for k, v in (p.get('questions_by_type') or {}).items())}); "
         f"ingest mode `{p.get('ingest_mode')}`; context budget {p.get('token_budget')} tokens.",
         f"Answer model `{p.get('answer_model')}`, judge `{p.get('judge_model')}`; metric: {metric}.",
@@ -1825,6 +1883,12 @@ def format_bench_markdown(report: dict[str, Any]) -> str:
             f"abstention {lo_.get('abstention', 0)} | | | "
             f"session level: all sessions present {ov.get('wrong_with_evidence', 0)}, "
             f"missing evidence {ov.get('wrong_missing_evidence', 0)} | | | | |"
+        )
+        rr = ov.get("reranker") or {}
+        lines.append(
+            f"| {system} | reranker | | "
+            + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in rr.items())
+            + " | | | | | | | |"
         )
     halves = report.get("by_split") or {}
     if any(halves.values()):

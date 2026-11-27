@@ -18,9 +18,11 @@ from robothor.memory.tests.test_eval_bench import _bench, _fake_ingest, _FakeCha
 from robothor.rag import reranker
 
 
-def _system(outcome: str | None):
+def _system(outcome: str | None, name: str | None = None):
+    name_ = name
+
     class _S:
-        name = f"rr_{outcome}"
+        name = name_ or f"rr_{outcome}"
         equal_budget = True
 
         async def retrieve(self, case, *, world_handle, token_budget):
@@ -38,8 +40,8 @@ def _system(outcome: str | None):
     return _S
 
 
-async def _run(outcome, tmp_path=None):
-    s = _system(outcome)
+async def _run(outcome, tmp_path=None, name=None):
+    s = _system(outcome, name)
     es.register_system(s.name, s)
     try:
         return await eb.run_benchmark(
@@ -84,8 +86,9 @@ async def test_a_degraded_run_says_so_at_the_top():
 
 @pytest.mark.asyncio
 async def test_the_state_travels_with_the_cached_context(tmp_path):
-    await _run("fell_back", tmp_path)
-    again = await _run(None, tmp_path)  # served from the cache: nothing retrieved
+    await _run("fell_back", tmp_path, name="rr_cached")
+    # Served from the cache: this retrieval (which would say not_run) never runs.
+    again = await _run(None, tmp_path, name="rr_cached")
     assert {r["reranker"] for r in again["records"]} == {"fell_back"}
 
 

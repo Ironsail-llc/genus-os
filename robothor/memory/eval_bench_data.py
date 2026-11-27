@@ -136,6 +136,10 @@ class BenchRecord:
     answer_turn_recall: float | None = None
     #: Every answer-bearing turn reached the context; None when not measured.
     answer_turns_complete: bool | None = None
+    #: What the reranker did for this context: ``scored``, ``fell_back`` (a
+    #: pair failed; fused order), ``unavailable`` (unscored rows),
+    #: ``not_run``; empty in a record written before it was recorded.
+    reranker: str = ""
 
 
 @dataclass(frozen=True)
@@ -797,6 +801,10 @@ def _block(recs: Sequence[BenchRecord]) -> dict[str, Any]:
     found = [r.evidence_recall for r in recs if r.evidence_recall is not None]
     wrong = [r for r in recs if r.score < 1.0 and r.evidence_recall is not None]
     turns = [r.answer_turn_recall for r in recs if r.answer_turn_recall is not None]
+    reranker: dict[str, int] = {}
+    for r in recs:
+        state = r.reranker or "unrecorded"
+        reranker[state] = reranker.get(state, 0) + 1
     losses = dict.fromkeys(LOSS_BUCKETS, 0)
     for r in recs:
         bucket = loss_bucket(r)
@@ -814,6 +822,7 @@ def _block(recs: Sequence[BenchRecord]) -> dict[str, Any]:
         "answer_turn_recall": (sum(turns) / len(turns)) if turns else None,
         "answer_turns_complete": sum(1 for r in recs if r.answer_turns_complete),
         "losses": losses,
+        "reranker": dict(sorted(reranker.items())),
         "wilson": [lo, hi],
         "errors": sum(1 for r in recs if r.error),
         "mean_tokens": (sum(r.tokens for r in recs) / n) if n else 0.0,
