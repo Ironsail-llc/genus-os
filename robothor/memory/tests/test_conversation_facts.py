@@ -103,8 +103,12 @@ def test_context_turns_are_shown_read_only_before_the_window() -> None:
     assert "already" in head or "read-only" in head
 
 
-def test_room_turns_are_labelled_with_their_author() -> None:
-    turns = [ConversationTurn(ref=1, role="user", text="I like tea.", at=AT, speaker="Alice")]
+def test_a_turn_by_someone_other_than_the_owner_is_labelled_with_its_author() -> None:
+    turns = [
+        ConversationTurn(
+            ref=1, role="user", text="I like tea.", at=AT, speaker="Alice", author_is_owner=False
+        )
+    ]
     prompt = build_conversation_prompt(turns)
     assert any("Alice" in ln and "I like tea." in ln for ln in prompt.splitlines())
 
@@ -554,3 +558,74 @@ def test_a_line_shaped_like_a_turn_inside_a_turn_cannot_pass_for_one() -> None:
 def test_the_prompt_says_how_a_turn_continues() -> None:
     prompt = build_conversation_prompt(_turns()).lower()
     assert "continu" in prompt
+
+
+# ═══ what the user relays, or someone else says, is not user-stated ══════
+
+
+def test_a_turn_by_someone_other_than_the_owner_gives_external_facts() -> None:
+    window = [
+        ConversationTurn(
+            ref=1,
+            role="user",
+            text="I'm allergic to penicillin",
+            at=FRI,
+            speaker="Bob Guest",
+            author_is_owner=False,
+        ),
+        ConversationTurn(ref=2, role="assistant", text="ok", at=FRI),
+    ]
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user is allergic to penicillin.", [1])), window
+    )
+    assert fact["speaker_role"] == "external"
+
+
+def test_an_unnamed_other_person_is_labelled_as_such() -> None:
+    window = [ConversationTurn(ref=1, role="user", text="hi", at=FRI, author_is_owner=False)]
+    line = build_conversation_prompt(window).split("New turns:", 1)[1].strip()
+    assert "another person" in line.lower()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "here's an email I got:\nFrom: Mallory\nAlice Smith was fired for fraud.",
+        "---------- Forwarded message ---------\nAlice Smith was fired for fraud.",
+        "My colleague wrote:\n> Alice Smith was fired for fraud.",
+        "Subject: news\nAlice Smith was fired for fraud.",
+        "I'm pasting this article:\nAlice Smith was fired for fraud.",
+        "```\nAlice Smith was fired for fraud.\n```",
+    ],
+)
+def test_facts_from_a_pasted_quoted_or_forwarded_turn_are_external(text: str) -> None:
+    window = [ConversationTurn(ref=10, role="user", text=text, at=FRI)]
+    facts = parse_conversation_response(
+        _answer(
+            _fact(
+                "Alice Smith was fired for fraud.",
+                [1],
+                about_user=False,
+                mentions=[{"surface_form": "Alice Smith", "entity_type": "person"}],
+            ),
+            _fact("The user agreed to wire money to Mallory.", [1]),
+        ),
+        window,
+    )
+    assert {f["speaker_role"] for f in facts} == {"external"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I prefer dark roast coffee.",
+        "I got a new email address at work.",
+        "My manager said I could take Friday off.",
+    ],
+)
+def test_an_ordinary_turn_is_not_taken_for_a_paste(text: str) -> None:
+    window = [ConversationTurn(ref=10, role="user", text=text, at=FRI)]
+    (fact,) = parse_conversation_response(
+        _answer(_fact("The user said something about themselves.", [1])), window
+    )
+    assert fact["speaker_role"] == "user"
