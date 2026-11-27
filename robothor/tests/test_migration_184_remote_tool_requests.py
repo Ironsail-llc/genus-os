@@ -68,7 +68,8 @@ def test_it_applies_twice_with_forced_row_level_security(scratch_db) -> None:
             "WHERE table_name = 'remote_tool_requests'"
         )
         assert {r[0] for r in cur.fetchall()} >= {
-            "tenant_id", "request_id", "state", "result", "created_at", "finished_at",
+            "tenant_id", "request_id", "tool", "args_digest", "state", "result",
+            "created_at", "finished_at",
         }  # fmt: skip
 
 
@@ -91,23 +92,35 @@ def test_the_ledger_claims_finishes_and_releases(scratch_db, monkeypatch) -> Non
     _, dsn = scratch_db(through=MIGRATION)
     _connect(dsn, monkeypatch)
 
-    assert remote_tools.claim_request("test-tenant", "req-1") is None  # claimed
-    assert remote_tools.claim_request("test-tenant", "req-1") == {
+    def claim(tenant: str) -> Any:
+        return remote_tools.claim_request(tenant, "req-1", "example_write", "d1")
+
+    assert claim("test-tenant") is None  # claimed
+    assert claim("test-tenant") == {
         "state": "running",
         "result": None,
+        "tool": "example_write",
+        "args_digest": "d1",
     }
-    assert remote_tools.claim_request("test-tenant-other", "req-1") is None  # another tenant's
+    assert claim("test-tenant-other") is None  # another tenant's
 
     remote_tools.finish_request("test-tenant", "req-1", {"status": 200, "body": {"x": 1}})
-    assert remote_tools.claim_request("test-tenant", "req-1") == {
+    assert claim("test-tenant") == {
         "state": "done",
         "result": {"status": 200, "body": {"x": 1}},
+        "tool": "example_write",
+        "args_digest": "d1",
     }
+    # A second claim with other arguments reads the first call's row back,
+    # unchanged, for the caller to refuse.
+    assert remote_tools.claim_request("test-tenant", "req-1", "other_tool", "d2")["tool"] == (
+        "example_write"
+    )
 
     remote_tools.release_request("test-tenant", "req-1")  # a finished row is kept
-    assert remote_tools.claim_request("test-tenant", "req-1")["state"] == "done"
+    assert claim("test-tenant")["state"] == "done"
     remote_tools.release_request("test-tenant-other", "req-1")  # a running one is released
-    assert remote_tools.claim_request("test-tenant-other", "req-1") is None
+    assert claim("test-tenant-other") is None
 
 
 @pytest.mark.integration

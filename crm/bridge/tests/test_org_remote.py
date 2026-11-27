@@ -426,6 +426,13 @@ def test_a_write_is_sent_as_asked(engine):
     assert [c["json"]["request_id"] for c in _forwards(engine)] == ["eff-1", "eff-2"]
 
 
+def test_a_read_is_forwarded_without_a_request_id(engine):
+    response = _engine_client().post(CALL, json=_body(request_id="eff-9"))
+
+    assert response.status_code == 200
+    assert _forwards(engine)[0]["json"]["request_id"] is None
+
+
 # ── The catalogue ───────────────────────────────────────────────────────────
 
 
