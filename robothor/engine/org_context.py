@@ -109,6 +109,12 @@ def _render(tenant_id: str, accessible: tuple[str, ...]) -> str:
             "`tenant` (a tenant id above) to the task, run and CRM tools to look inside one. "
             "Do not ask the user which tenants exist or for a link: they are listed here."
         )
+        lines.append(
+            "A child's own connectors are not installed here: when an answer lives in a "
+            "system only a child is connected to, call `org_tools` (with `tenant`) to see what "
+            "it offers, then `org_tool_read`. Use `org_tool_write` only when the owner asks in "
+            "chat, previewing with `dry_run` first when the effect is not obvious."
+        )
     else:
         lines.append("Access: this run may read and act only in this tenant.")
     lines.append(

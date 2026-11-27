@@ -39,6 +39,10 @@ The core is three things, all cut to what the agent is allowed:
   and `gws_gmail_get` eager. Measured on a live instance before that list, "the
   five most urgent open tasks" went tool_search, tool_search, tool_describe,
   tool_call on every run: 4 to 9 model calls instead of 2.
+* for a run that reaches another tenant (an owner or admin of a parent, or an
+  unattended run with the parent's grant), the remote tools `org_tools`,
+  `org_tool_read` and `org_tool_write`. Any other run is not shown them and
+  finds them through `tool_search`.
 
 On a stock checkout an agent with no `tools_allowed` (so every registered tool)
 is shown 30 schemas instead of 206: about 6,600 estimated schema tokens per call
@@ -1974,6 +1978,10 @@ chat it records nothing and only repeats what the next beat will report. Use `dr
 write in another tenant, and show the operator what it would change.
 
 ### A child company's own tools: `org_tools`, `org_tool_read`, `org_tool_write`
+
+A run is shown these three up front only when it reaches another tenant, and
+its ORGANISATION block names them; any other run finds them through
+`tool_search`, so an instance with no child tenants pays nothing for them.
 
 Connectors (plugins) are installed per company: a child tenant's plugins run
 in the child's engine and are not in the parent's. These three tools let a

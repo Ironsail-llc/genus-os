@@ -41,8 +41,6 @@ tools_opt_in:
 # always shown to the model rather than found through tool_search each time.
 tools_eager:
   - org_overview
-  - org_tools
-  - org_tool_read
   - list_tasks
   - get_task
   - update_task
