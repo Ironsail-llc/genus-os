@@ -98,7 +98,11 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    lowest one listed, so a confident answer still gets a graded score. (An
    Ollama without logprobs gives 1 or 0.) Candidates are ordered by that
    score alone, whichever leg found them. On any reranker error the fused
-   order stands.
+   order stands, unscored; with the reranker unavailable the rows come back
+   unscored too. Neither is silent: a fallback logs a WARNING each time, an
+   unavailable reranker logs one until it is back, and both are counted
+   (`robothor.rag.reranker.rerank_stats()`: `scored`, `fell_back`,
+   `unavailable`), since the rows look like a normal result.
 4. **Blend** — `relevance` (the rerank score, or `10 / (10 + fused rank)` when
    there is none — one 0..1 scale for every leg; cosine similarity is not used)
    + recency + importance + access count, with supersession demotion; then
@@ -1582,17 +1586,80 @@ never tuned on, so a gain that holds there is not fitted to the questions.
 **Reading the result.** Per system: accuracy overall (question-weighted),
 task-averaged (the mean of the per-type accuracies, which several published
 tables use), per question type, and the abstention questions on their own
-(also counted in their type); evidence recall, the share of each
-question's evidence sessions (LongMemEval's `answer_session_ids`) that reached
-the context actually sent, per type, with the losses split into those whose
-context held all the evidence (the answer model's) and those missing some
-(retrieval's); the context tokens per question (mean and
-median), retrieval and answer latency; errors, scored as wrong. Before any
+(also counted in their type); the context tokens per question (mean and
+median), retrieval and answer latency; errors, scored as wrong.
+
+- **Answer-turn evidence** is the share of the turns LongMemEval marks as
+  holding the answer (`has_answer`) whose text reached the context the answer
+  model actually read, after excerpting and packing; **all answer turns** counts
+  the questions where every one did. A turn counts when at least half
+  (`TURN_PRESENT_COVERAGE`) of its word 6-grams appear in that text, so case,
+  punctuation and role prefixes do not decide it. Abstention questions and
+  questions with no labelled turn are not measured.
+- **Session evidence** is the share of the question's evidence sessions
+  (`answer_session_ids`) with any item in the context. It is kept beside the
+  turn number, labelled as session-level: a session present only as an excerpt
+  without the answer counts as present here.
+- **Losses** split three ways: answer turns absent (retrieval or packing lost
+  them, whatever the session count says); answer turns present but the answer
+  wrong (the answer step's); and abstention (an unanswerable question answered
+  anyway). The session-level split stays in the same row.
+- In `extract` mode, an extracted fact can carry the answer in other words, so
+  answer-turn evidence (verbatim text) under-counts what such a context
+  delivers; read it on `segments` runs, or beside the session number.
+- **Reranker state.** Each question records what the reranker did for its
+  context (`scored`, `fell_back`, `unavailable`, `not_run`), read from the
+  reranker's counters around its retrieval (retrievals run one at a time);
+  the report counts them, and a run with any degraded retrieval says so in its
+  first lines. Records written before this have none (`unrecorded`).
+
+Before any
 question, a LongMemEval judge is checked on planted responses (each reference
 answer phrased plainly, another question's answer, a plain "not mentioned",
 and a confident answer to an unanswerable question); below 90% on either side
 the run stops. The official repository ships no human-labelled judgements, so
 agreement with the official judge cannot be measured on its own data.
+
+**Product parity and harness cells.** Every report has a cells table: each
+system is **product-parity** or **harness-only**, with every setting where it
+differs from the product. `search_memory_tool` is the parity cell: it calls the
+`search_memory` tool handler with the query alone (the tool's own limit,
+`RECALL_CONTEXT_CHARS` cap and default legs and fan-out), with the eval reader
+as the person whose conversation it is (`ctx.private_reader`), after the
+product's nightly retention (`segments.cleanup_stale_segments`,
+`SEGMENT_RETENTION_DAYS`) has run as of the question's date, and the answer
+model reads the tool message an agent session builds from the result
+(`AgentSession.record_tool_call`: redacted JSON wrapped as untrusted content),
+unchanged. Its retention deletes segments, so it retrieves after every
+harness cell of the same history. The parity row still lists what it cannot
+exercise (the dispatch gate, an agent's system prompt and offload threshold,
+recency scored against the wall clock). The `recall` family stays for
+comparability with earlier runs: it calls `search_facts` directly at the
+harness budget, a 60-row limit, fan-out off and 36,500-day retention, none of
+which the product can produce. The report also records the memory flags of
+the process (`MEMORY_NARROW_SEARCH`, `MEMORY_RERANK_*`, RIP 15 and others).
+
+**Bounds.** `evidence_only` hands the answer model only the question's
+evidence sessions, whole, oldest first: the ceiling of the answering step (a
+perfect retrieval). `full_history` hands it every session. Both are built from
+the benchmark file, so a run of them alone ingests nothing and needs no
+database; `--dry-run` prices them at their real size (about 124k tokens per
+LongMemEval-S question for `full_history`, so run it only after reading the
+estimate).
+
+**Re-scoring a saved run.** `--rescore <report.json>[,…]` with
+`--benchmark-path` and `--bench-dir` (the run's cache) recomputes answer-turn
+evidence and the loss split for an earlier report from the contexts it was
+answered from: no model call, no database. A record is linked only when the
+answer cached for its context is its own answer; the output
+(`<report>.rescored.json` / `.md`) counts the linked records and shows how many
+wrong answers moved from each session-level bucket to each new one.
+
+**Fair comparison.** Every LongMemEval report ends with a table of published
+results (`PUBLISHED_LONGMEMEVAL` in `eval_bench_data.py`): source, answer
+model, judge, context tokens, whether anything was retrieved, score and known
+caveats, with this run's cells under the same columns. The published rows are
+collected from their sources, not reproduced, and the table says so.
 
 **Comparability.** Published numbers on these benchmarks come from specific
 answer and judge models, and the answer model moves a score more than the
@@ -1602,10 +1669,10 @@ deviation and the report names it. State beside every number of ours: the
 answer model, the judge, the context budget, the ingest mode, the subset (and
 its per-type counts), and the dataset file's SHA-256. Compare it only with
 published rows that used the same answer model and the official judge, and
-read it beside the same answer model's full-context and oracle scores
-(`full_context_unbounded` on the oracle file is the reader's own ceiling).
+read it beside the same answer model's `evidence_only` score (the reader's own
+ceiling) and, when it was run, `full_history`.
 LongMemEval-S histories (~115k tokens) do not fit a local 32B model's
-context; a full-context row for a hosted model is the published one, not ours.
+context.
 On LoCoMo the conversations fit any modern context, so a LoCoMo score means
 little without a full-context row from the same answer model. Many LoCoMo
 comparisons use an LLM judge rather than the official F1; ours is F1.
@@ -1613,10 +1680,13 @@ comparisons use an LLM judge rather than the official F1; ours is F1.
 **Where a run departs from the published protocol**, and says so in its report:
 
 - The reader prompt is LongMemEval's own (`prepare_prompt`, without chain of
-  thought), but its history is what the system retrieved, each item rendered
-  as a session: a turn or segment with its session date, an extracted fact as
-  one line without a date (the `search_memory` tool shows a fact without its
-  date too).
+  thought), but its history is what the system retrieved, as the eval renderer
+  (`eval_answer.render_bundle`) writes it: one session block per session, with
+  its date, holding every fragment recall returned from it in conversation
+  order (fragments of one session are never numbered as separate sessions);
+  an extracted fact as one line without a date (the `search_memory` tool shows
+  a fact without its date too). The parity cell's history is the tool message
+  itself. A cached answer is reused only for the exact prompt.
 - Turns are dated by their session; turn `n` of a session is stamped
   `n × 30` seconds after its start (the benchmarks date sessions only).
 - Extraction runs over consecutive windows of the product's transcript cap,
