@@ -388,6 +388,7 @@ def world(database: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
         "robothor.memory.ingest_state",
         "robothor.memory.conversation_ingest",
         "robothor.memory.conversation_backfill",
+        "robothor.memory.conversation_skips",
         "robothor.crm.dal",
     ):
         try:
