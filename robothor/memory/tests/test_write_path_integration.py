@@ -600,12 +600,12 @@ async def test_a_stated_preference_with_no_named_entity_is_a_fact_about_that_per
                   kind="preference", about_user=True),
     )  # fmt: skip
     turns = [
-        ("user", "I always go for dark roast."),
+        ("user", "I always go for dark roast.", {"sender_telegram_id": "4242"}),
         ("assistant", "Noted, dark roast it is."),
     ]
-    key = "agent:main:telegram:4242"
+    key = "telegram:4242"
     ids = store_chat(world.db, key, turns, person=ALICE)
-    history = [{"role": r, "content": c} for r, c in turns]
+    history = [{"role": t[0], "content": t[1]} for t in turns]
     await ingest_conversation_session(key, history, "main", "telegram", "run-1", TENANT)
 
     rows = [f for f in world.db.facts() if f["fact_text"] == "The user prefers dark roast coffee."]

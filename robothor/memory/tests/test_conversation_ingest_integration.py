@@ -121,7 +121,7 @@ async def test_a_group_chat_turn_with_no_author_is_not_anyones_own(world: World)
 @pytest.mark.asyncio
 async def test_the_owners_own_one_to_one_chat_is_theirs(world: World) -> None:
     world.model.on_turn("allergic", turn_fact("The user is allergic to nuts.", about_user=True))
-    turns = [("user", "I'm allergic to nuts"), ("assistant", "ok")]
+    turns = [("user", "I'm allergic to nuts", {"sender_telegram_id": "4242"}), ("assistant", "ok")]
     store_chat(world.db, "telegram:4242", turns, person=ALICE)
     await _ingest("telegram:4242", turns)
     (row,) = world.db.facts()
@@ -263,7 +263,10 @@ async def test_facts_from_before_the_owner_was_known_are_reowned(world: World) -
     )
     world.model.on_turn("road bike", turn_fact("The user owns a red road bike.", about_user=True))
     key = "telegram:4242"
-    t1 = [("user", "I always go for dark roast."), ("assistant", "Noted.")]
+    t1 = [
+        ("user", "I always go for dark roast.", {"sender_telegram_id": "4242"}),
+        ("assistant", "Noted."),
+    ]
     store_chat(world.db, key, t1)  # no person yet
     await _ingest(key, t1)
     (early,) = world.db.facts()
@@ -275,7 +278,10 @@ async def test_facts_from_before_the_owner_was_known_are_reowned(world: World) -
         "metadata) VALUES ('The user likes tea.', 'preference', %s, 'user', %s, '{}')",
         (TENANT, "conversation:telegram:999"),
     )
-    t2 = [("user", "I have a red road bike."), ("assistant", "Nice.")]
+    t2 = [
+        ("user", "I have a red road bike.", {"sender_telegram_id": "4242"}),
+        ("assistant", "Nice."),
+    ]
     store_chat(world.db, key, t2, person=ALICE)
     await _ingest(key, t1 + t2)
 
@@ -299,11 +305,17 @@ async def test_a_reowned_fact_the_owner_already_has_is_retired_not_duplicated(
         "dark roast", turn_fact("The user prefers dark roast coffee.", about_user=True)
     )
     key = "telegram:4242"
-    t1 = [("user", "I always go for dark roast."), ("assistant", "Noted.")]
+    t1 = [
+        ("user", "I always go for dark roast.", {"sender_telegram_id": "4242"}),
+        ("assistant", "Noted."),
+    ]
     store_chat(world.db, key, t1)
     await _ingest(key, t1)
     world.db.q("UPDATE chat_sessions SET person_id = %s WHERE session_key = %s", (ALICE, key))
-    t2 = [("user", "Still dark roast for me."), ("assistant", "Got it.")]
+    t2 = [
+        ("user", "Still dark roast for me.", {"sender_telegram_id": "4242"}),
+        ("assistant", "Got it."),
+    ]
     store_chat(world.db, key, t2, person=ALICE)
     await _ingest(key, t1 + t2)
     live = [f for f in world.db.facts() if f["is_active"]]
@@ -449,3 +461,88 @@ async def test_a_turn_from_a_writer_open_longer_than_the_hold_is_still_extracted
     assert texts == {"The user prefers dark roast coffee.", "The user owns a red road bike."}
     await _ingest(key, [])  # and each is extracted once
     assert world.model.calls.count("extract_conversation") == 2
+
+
+# ═══ the owner is known by construction, never assumed ═══════════════════
+
+
+@pytest.fixture
+def main_session(monkeypatch: pytest.MonkeyPatch) -> str:
+    from robothor.memory import conversation_ingest as ci
+    from robothor.memory import segments
+
+    monkeypatch.setattr(segments, "_main_session_key", lambda: "agent:main:primary")
+    monkeypatch.setattr(segments, "_owner_person_id", lambda tenant: ALICE)
+    monkeypatch.setattr(ci, "_owner_telegram_chat", lambda: "4242")
+    monkeypatch.setattr(ci, "_per_user_sessions_on", lambda: True)
+    return "agent:main:primary"
+
+
+async def _one_turn(
+    world: World, key: str, extras: dict[str, Any], person: str | None = None
+) -> Any:
+    world.model.on_turn(
+        "shellfish", turn_fact("The user is allergic to shellfish.", about_user=True)
+    )
+    turns = [("user", "I'm allergic to shellfish", extras), ("assistant", "ok")]
+    store_chat(world.db, key, turns, person=person)
+    await _ingest(key, turns)
+    (row,) = world.db.facts()
+    return row
+
+
+@pytest.mark.asyncio
+async def test_a_main_session_turn_stored_the_telegram_way_without_a_sender_is_not_the_operators(
+    world: World, main_session: str
+) -> None:
+    row = await _one_turn(world, main_session, {"message_id": "77"})
+    assert row["origin"] == Origin.EXTERNAL
+    assert ALICE not in _anchored_to(world, row["id"])
+
+
+@pytest.mark.asyncio
+async def test_the_operators_own_telegram_turn_in_the_main_session_is_theirs(
+    world: World, main_session: str
+) -> None:
+    row = await _one_turn(world, main_session, {"sender_telegram_id": "4242"})
+    assert row["origin"] == Origin.USER_STATED
+    assert ALICE in _anchored_to(world, row["id"])
+
+
+@pytest.mark.asyncio
+async def test_someone_else_in_the_operators_default_chat_is_not_the_operator(
+    world: World, main_session: str
+) -> None:
+    row = await _one_turn(world, main_session, {"sender_telegram_id": "9999"})
+    assert row["origin"] == Origin.EXTERNAL
+
+
+@pytest.mark.asyncio
+async def test_a_main_session_whose_default_chat_is_a_group_has_no_single_sender(
+    world: World, main_session: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from robothor.memory import conversation_ingest as ci
+
+    monkeypatch.setattr(ci, "_owner_telegram_chat", lambda: "-100777")
+    row = await _one_turn(world, main_session, {"sender_user_id": "member-9"})
+    assert row["origin"] == Origin.EXTERNAL
+
+
+@pytest.mark.asyncio
+async def test_a_webchat_owner_turn_in_a_single_sender_main_session_is_theirs(
+    world: World, main_session: str
+) -> None:
+    row = await _one_turn(world, main_session, {"sender_user_id": "operator-account"})
+    assert row["origin"] == Origin.USER_STATED
+
+
+@pytest.mark.asyncio
+async def test_a_private_chat_turn_from_its_own_sender_is_theirs_and_no_sender_is_not(
+    world: World,
+) -> None:
+    row = await _one_turn(world, "telegram:4242", {"sender_telegram_id": "4242"}, person=ALICE)
+    assert row["origin"] == Origin.USER_STATED
+    world.db.q("TRUNCATE memory_mentions, memory_facts, chat_messages, ingested_items CASCADE")
+    world.model.turn_extractions.clear()
+    row = await _one_turn(world, "telegram:4242", {}, person=ALICE)
+    assert row["origin"] == Origin.EXTERNAL
