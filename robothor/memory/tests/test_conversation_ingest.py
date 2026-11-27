@@ -499,7 +499,7 @@ async def test_a_conversation_with_no_known_owner_is_kept_but_readable_by_no_one
 async def test_a_workspace_room_is_not_extracted_into_tenant_wide_facts() -> None:
     store = Store(_stored(4), scope=("shared", None))
     model = Model()
-    out, write = await _run(store, model, key="agent:main:room:3f2a")
+    out, write = await _run(store, model, key="agent:main:room:3f2a0000-0000-4000-8000-000000000001")
     assert model.prompts == []
     write.assert_not_awaited()
     assert out is None
@@ -566,5 +566,5 @@ async def test_the_claim_is_released_even_when_extraction_fails() -> None:
 @pytest.mark.asyncio
 async def test_a_room_never_reads_the_store_or_the_watermark() -> None:
     store = Store(_stored(4), scope=("shared", None))
-    await _run(store, Model(), key="agent:main:room:3f2a")
+    await _run(store, Model(), key="agent:main:room:3f2a0000-0000-4000-8000-000000000001")
     assert store.threads == set()  # nothing on the database was called

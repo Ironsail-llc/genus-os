@@ -29,9 +29,9 @@ import asyncio
 import json
 import logging
 import os
-import weakref
+import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from psycopg2.extras import RealDictCursor
 
@@ -41,10 +41,11 @@ from robothor.engine.sanitize import sanitize_log
 from robothor.memory.conversation_facts import (
     ConversationTurn,
     extract_conversation_facts,
-    render_window,
 )
 from robothor.memory.graph_schema import Origin
-from robothor.memory.ingest_state import get_ingested_count, record_ingested
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +64,14 @@ MAX_WINDOWS_PER_RUN = 5
 STORE_WAIT_ATTEMPTS = 20
 STORE_WAIT_SECONDS = 0.5
 
-#: Watermark (``ingested_items``): the last ``chat_messages.id`` extracted.
+#: Watermark (``ingested_items``): see "the watermark row" below.
 _WATERMARK_SOURCE = "conversation_facts"
+#: How long a claim on a conversation lasts if its run never releases it.
+CLAIM_LEASE_SECONDS = 900
+#: When a run finds the conversation claimed, how soon it looks again.
+CLAIM_RETRY_SECONDS = 30.0
+#: Most follow-up runs one exchange can lead to (see ``_Run.again``).
+MAX_FOLLOW_UPS = 20
 
 # Heuristic markers for an agent's OWN scheduled output (briefings/summaries).
 # Re-ingesting these mistakes the agent re-reporting an event for the event
@@ -76,9 +83,6 @@ _GENERATED_MARKERS = (
     "daily summary",
     "weekly review",
 )
-
-#: One run at a time per conversation in this process.
-_LOCKS: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def _ingest_skip_generated_enabled() -> bool:
@@ -110,6 +114,10 @@ class StoredConversation:
     scope_id: str | None = None
     is_room: bool = False
     tail_text: str | None = None
+    #: The first message id held back from this run (see the loader), if any.
+    held_from: int | None = None
+    #: More turns are stored past those loaded.
+    more: bool = False
     #: The highest message id read past the watermark, turn or not (a run of
     #: system rows moves the watermark too, so the next run starts past it).
     scanned_through: int | None = None
@@ -325,7 +333,9 @@ async def _write_window(
     in the conversation's own scope."""
     from robothor.memory import write_path
 
-    source_content = render_window(window)
+    # A reference, never the turns themselves: the turns stay in chat_messages
+    # (with their own retention), and no raw transcript is stored with a fact.
+    source_content = f"conversation:{session_key}#{window[0].ref}-{window[-1].ref}"
     result: dict[str, Any] = {}
     for speaker in ("user", "assistant", "external"):
         group = [_prepared(f, session_key, owner) for f in facts if f["speaker_role"] == speaker]
@@ -355,19 +365,29 @@ async def ingest_conversation_session(
     trigger_type: str,
     run_id: str,
     tenant_id: str = "",
+    *,
+    attempt: int = 0,
 ) -> dict[str, Any] | None:
     """Extract the conversation's turns not yet extracted; never raises.
 
     Returns the merged write result with ``llm_calls``, ``windows`` and
     ``turns_covered``, or ``None`` when nothing was extracted (nothing new, the
     session is not stored, or extraction or storage failed — those turns are
-    retried by the next run).
+    retried by the next run). ``attempt`` counts the follow-up runs this one
+    was scheduled by (:func:`_schedule`).
     """
+    from robothor.rooms.keys import parse_room_key
+
+    if parse_room_key(session_key) is not None:
+        # A workspace's segments are read only by its members, but a fact has
+        # no room scope: written shared, it would reach every reader in the
+        # tenant. Until facts can carry a room's scope, rooms are not extracted,
+        # and nothing about them is read or written here.
+        return None
     tenant = tenant_id or DEFAULT_TENANT
+    run = _Run(session_key, history, agent_id, trigger_type, run_id, tenant, attempt)
     try:
-        lock = _LOCKS.setdefault((tenant, session_key), asyncio.Lock())
-        async with lock:
-            return await _ingest(session_key, history, agent_id, trigger_type, run_id, tenant)
+        return await _ingest(run)
     except Exception:
         logger.warning(
             "Conversation ingestion failed for %s", sanitize_log(session_key), exc_info=True
@@ -375,37 +395,82 @@ async def ingest_conversation_session(
         return None
 
 
-async def _ingest(
-    session_key: str,
-    history: list[dict[str, Any]],
-    agent_id: str,
-    trigger_type: str,
-    run_id: str,
-    tenant: str,
-) -> dict[str, Any] | None:
-    after = get_ingested_count(_WATERMARK_SOURCE, session_key, tenant_id=tenant)
-    conv = await _load_when_stored(session_key, tenant, after, history)
+@dataclass(frozen=True)
+class _Run:
+    session_key: str
+    history: list[dict[str, Any]]
+    agent_id: str
+    trigger_type: str
+    run_id: str
+    tenant: str
+    attempt: int
+
+    def again(self, delay: float) -> None:
+        """Schedule a follow-up run of this conversation (bounded)."""
+        if self.attempt >= MAX_FOLLOW_UPS:
+            logger.info(
+                "Conversation %s: follow-up limit reached; the next exchange continues it",
+                sanitize_log(self.session_key),
+            )
+            return
+
+        async def follow_up() -> None:
+            await ingest_conversation_session(
+                self.session_key,
+                [],
+                self.agent_id,
+                self.trigger_type,
+                self.run_id,
+                self.tenant,
+                attempt=self.attempt + 1,
+            )
+
+        _schedule(delay, follow_up)
+
+
+def _schedule(delay: float, fn: Callable[[], Awaitable[None]]) -> None:
+    """Run ``fn`` after ``delay`` seconds, in the background (the task registry)."""
+    from robothor.engine.task_registry import get_task_registry
+
+    async def later() -> None:
+        await asyncio.sleep(delay)
+        await fn()
+
+    get_task_registry().spawn(later(), name="conv-ingest-follow-up")
+
+
+async def _ingest(run: _Run) -> dict[str, Any] | None:
+    key, tenant = run.session_key, run.tenant
+    mark = await asyncio.to_thread(_claim, key, tenant)
+    if mark is None:
+        # Another run (in this process or another engine) holds the
+        # conversation. It may have read the turns before this exchange was
+        # stored, so look again once it is likely done.
+        run.again(CLAIM_RETRY_SECONDS)
+        return None
+    try:
+        return await _extract(run, mark)
+    finally:
+        await asyncio.to_thread(_release, key, tenant, mark.token)
+
+
+async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
+    key, tenant = run.session_key, run.tenant
+    conv = await _load_when_stored(key, tenant, mark.through, run.history)
     if conv is None:
         return None
     if not conv.turns:
-        if conv.scanned_through is not None and conv.scanned_through > after:
-            record_ingested(
-                _WATERMARK_SOURCE, session_key, str(conv.scanned_through), [], tenant_id=tenant
-            )
+        if conv.scanned_through is not None and conv.scanned_through > mark.through:
+            await asyncio.to_thread(_advance, key, tenant, mark.token, conv.scanned_through, [])
         return None
-    if conv.is_room:
-        # A workspace's segments are read only by its members, but a fact has
-        # no room scope: written shared, it would reach every reader in the
-        # tenant. Until facts can carry a room's scope, rooms are not extracted.
-        logger.debug("Conversation %s is a room; not extracted", sanitize_log(session_key))
-        return None
-    owner = owner_of(conv, session_key)
+    owner = owner_of(conv, key)
 
-    metadata = {"session_key": session_key, "agent_id": agent_id, "run_id": run_id}
+    metadata = {"session_key": key, "agent_id": run.agent_id, "run_id": run.run_id}
     skip_generated = _ingest_skip_generated_enabled()
     seen = list(conv.context)
     result: dict[str, Any] = {"fact_ids": [], "llm_calls": 0, "windows": 0, "turns_covered": 0}
-    for window in windows(conv.turns):
+    all_windows = windows(conv.turns)
+    for window in all_windows[:MAX_WINDOWS_PER_RUN]:
         last_ref = window[-1].ref
         kept = [
             t
@@ -419,33 +484,29 @@ async def _ingest(
             if extraction.error is not None:
                 logger.warning(
                     "Conversation extraction failed for %s (%s); will retry",
-                    sanitize_log(session_key),
+                    sanitize_log(key),
                     extraction.error,
                 )
                 return _done(result)
             part = await _write_window(
                 extraction.facts,
                 kept,
-                session_key=session_key,
+                session_key=key,
                 tenant_id=tenant,
-                trigger_type=trigger_type,
+                trigger_type=run.trigger_type,
                 metadata=metadata,
                 owner=owner,
             )
             if part.get("facts_failed"):
                 logger.warning(
                     "Conversation facts not stored for %s (%s); will retry",
-                    sanitize_log(session_key),
+                    sanitize_log(key),
                     "; ".join(part.get("errors") or []),
                 )
                 return _done(result)
             result = _merge(result, part)
-        record_ingested(
-            _WATERMARK_SOURCE,
-            session_key,
-            str(last_ref),
-            list(result.get("fact_ids") or []),
-            tenant_id=tenant,
+        await asyncio.to_thread(
+            _advance, key, tenant, mark.token, last_ref, list(result.get("fact_ids") or [])
         )
         result["windows"] += 1
         result["turns_covered"] += len(window)
@@ -453,7 +514,7 @@ async def _ingest(
 
     logger.info(
         "Ingested conversation session %s: %d windows, %d facts",
-        sanitize_log(session_key),
+        sanitize_log(key),
         result["windows"],
         len(result["fact_ids"]),
     )
@@ -463,3 +524,117 @@ async def _ingest(
 def _done(result: dict[str, Any]) -> dict[str, Any] | None:
     """What a run that stopped early returns: what it completed, else None."""
     return result if result["windows"] else None
+
+
+# ═══ the watermark row ═══════════════════════════════════════════════════
+#
+# One ``ingested_items`` row per conversation (``source_name`` =
+# :data:`_WATERMARK_SOURCE`, ``item_id`` = the session key) holds, as JSON in
+# ``content_hash``: ``through``, the last ``chat_messages.id`` extracted;
+# ``failures``, how many runs in a row could not extract the next window; and,
+# while a run works on the conversation, its ``claim`` and ``claimed_until``.
+# A run claims the row with a compare-and-set, so engine processes never
+# extract the same window twice; a claim lapses after :data:`CLAIM_LEASE_SECONDS`
+# if its run died. All of this is synchronous: callers run it off the loop.
+
+
+@dataclass(frozen=True)
+class Watermark:
+    """The claimed state of one conversation."""
+
+    through: int
+    failures: int
+    token: str
+
+
+def _state(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    try:
+        value = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _claim(session_key: str, tenant_id: str) -> Watermark | None:
+    """Claim the conversation for this run, or ``None`` if another run holds it."""
+    token = uuid.uuid4().hex
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, "
+            "fact_ids, ingested_at) VALUES (%s, %s, %s, %s, '{}', NOW()) "
+            "ON CONFLICT (tenant_id, source_name, item_id) DO NOTHING",
+            (tenant_id, _WATERMARK_SOURCE, session_key, json.dumps({"through": 0})),
+        )
+        cur.execute(
+            "UPDATE ingested_items SET content_hash = (COALESCE(content_hash::jsonb, '{}') "
+            "|| jsonb_build_object('claim', %s::text, 'claimed_until', "
+            "extract(epoch FROM now()) + %s))::text "
+            "WHERE tenant_id = %s AND source_name = %s AND item_id = %s "
+            "AND (content_hash::jsonb->>'claim' IS NULL "
+            "OR (content_hash::jsonb->>'claimed_until')::float8 < extract(epoch FROM now())) "
+            "RETURNING content_hash",
+            (token, CLAIM_LEASE_SECONDS, tenant_id, _WATERMARK_SOURCE, session_key),
+        )
+        row = cur.fetchone()
+        conn.commit()
+    if row is None:
+        return None
+    state = _state(row[0])
+    return Watermark(int(state.get("through") or 0), int(state.get("failures") or 0), token)
+
+
+def _update(
+    session_key: str, tenant_id: str, token: str, sql_set: str, params: tuple[Any, ...]
+) -> Any:
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"UPDATE ingested_items SET {sql_set} "  # noqa: S608 - fixed fragments only
+            "WHERE tenant_id = %s AND source_name = %s AND item_id = %s "
+            "AND content_hash::jsonb->>'claim' = %s RETURNING content_hash",
+            (*params, tenant_id, _WATERMARK_SOURCE, session_key, token),
+        )
+        row = cur.fetchone()
+        conn.commit()
+    return _state(row[0]) if row else None
+
+
+def _advance(
+    session_key: str, tenant_id: str, token: str, through: int, fact_ids: list[int]
+) -> None:
+    """Move the watermark (and clear the failure count) under this run's claim."""
+    _update(
+        session_key,
+        tenant_id,
+        token,
+        "content_hash = (content_hash::jsonb || jsonb_build_object('through', %s::bigint, "
+        "'failures', 0))::text, fact_ids = %s, ingested_at = NOW()",
+        (through, list(fact_ids)),
+    )
+
+
+def _fail(session_key: str, tenant_id: str, token: str) -> int:
+    """Count one more run that could not extract the next window; the new count."""
+    state = _update(
+        session_key,
+        tenant_id,
+        token,
+        "content_hash = (content_hash::jsonb || jsonb_build_object('failures', "
+        "COALESCE((content_hash::jsonb->>'failures')::int, 0) + 1))::text",
+        (),
+    )
+    return int((state or {}).get("failures") or 0)
+
+
+def _release(session_key: str, tenant_id: str, token: str) -> None:
+    """Give the conversation back (only this run's own claim)."""
+    _update(
+        session_key,
+        tenant_id,
+        token,
+        "content_hash = (content_hash::jsonb - 'claim' - 'claimed_until')::text",
+        (),
+    )
