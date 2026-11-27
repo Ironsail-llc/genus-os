@@ -20,7 +20,9 @@ exchange as it happened:
   an assistant turn, or no usable turn, is the assistant's (``agent_generated``).
   Assistant text never becomes a user-stated fact;
 * each fact keeps the chat message ids it came from (``turn_refs``) and when it
-  was said (``mentioned_at``), so it can be linked back to its source turns.
+  was said (``mentioned_at``), so it can be linked back to its source turns;
+* a relative date is counted from the turn that says it (:func:`_dated`), never
+  from the day the conversation is ingested.
 
 One model call per window, with the strict schema; a valid answer with no facts
 is final (it is not asked again).
@@ -31,7 +33,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 from robothor.memory import generation
 from robothor.memory.facts import (
@@ -44,9 +47,7 @@ from robothor.memory.facts import (
     _relations,
     passes_quality_filter,
 )
-
-if TYPE_CHECKING:
-    from datetime import datetime
+from robothor.memory.relative_dates import resolve_relative_date
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +249,41 @@ def _cites_context_only(item: dict[str, Any], offset: int) -> bool:
     return bool(nums) and all(1 <= n <= offset for n in nums)
 
 
+#: A model date this close to now, for a turn older than this, was counted from
+#: today rather than from the turn (the mistake the turn timestamps are for).
+_NOW_WINDOW = timedelta(days=7)
+
+
+def _dated(model_time: str | None, cited: list[ConversationTurn]) -> str | None:
+    """The fact's event time, with a relative date counted from its turn.
+
+    The cited turns' relative expressions (:func:`resolve_relative_date`, each
+    from its own turn's time) fill an empty event time, and replace one the
+    model evidently counted from today: within a week of now, for a turn more
+    than a week old. Turns naming two different days change nothing.
+    """
+    days = {d for t in cited if (d := resolve_relative_date(t.text, t.at)) is not None}
+    if len(days) != 1:
+        return model_time
+    (resolved,) = days
+    if model_time is None:
+        return resolved.isoformat()
+    now = datetime.now(UTC)
+    said = max((t.at for t in cited if t.at is not None), default=None)
+    try:
+        model_day = date.fromisoformat(model_time[:10])
+    except ValueError:
+        return model_time
+    if (
+        said is not None
+        and now - said > _NOW_WINDOW
+        and abs(model_day - now.date()) <= _NOW_WINDOW
+        and model_day != resolved
+    ):
+        return resolved.isoformat()
+    return model_time
+
+
 def parse_conversation_response(
     raw: str,
     window: list[ConversationTurn],
@@ -296,7 +332,9 @@ def parse_conversation_response(
             "confidence": confidence,
             "mentions": mentions,
             "relations": _relations(item),
-            "event_time": _event_time(item.get("event_time")),
+            "event_time": _dated(
+                _event_time(item.get("event_time")), cited if positions is not None else []
+            ),
             "speaker_role": "user" if user_said_it else "assistant",
             "about_user": item.get("about_user") is True,
             "kind": kind,
