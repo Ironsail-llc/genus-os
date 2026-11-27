@@ -153,6 +153,33 @@ ANSWER_SCHEMA: dict[str, Any] = {
 }
 
 
+def render_bundle(bundle: ContextBundle, *, now: str | None = None) -> str:
+    """The bundle's items as an answer model reads them.
+
+    The public-benchmark reader prompt takes its context text from here, so
+    a change to how recall reads reaches the benchmark with no second
+    formatter. Until the shared recall renderer lands this is the LongMemEval
+    session layout (``eval_bench_data.render_sessions``): an item's ``meta``
+    gives its session date (``date``), session (``session``) and place in it
+    (``position``). ``now`` (the question's date) is stated by the prompt
+    itself in this layout.
+    """
+    from robothor.memory import eval_bench_data as bd
+
+    return bd.render_sessions(
+        [
+            bd.PromptItem(
+                i.kind,
+                i.text,
+                i.meta.get("date"),
+                i.meta.get("session"),
+                int(i.meta.get("position") or 0),
+            )
+            for i in bundle.items
+        ]
+    )
+
+
 def build_answer_messages(
     question: str, bundle: ContextBundle, as_of: str | None = None
 ) -> list[dict[str, str]]:
