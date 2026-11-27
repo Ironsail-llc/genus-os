@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
 
     from robothor.identity.scope import DataScope
 
@@ -572,6 +572,7 @@ async def store_fact(
     scope_id: str | None = None,
     source_channel: str | None = None,
     embedding: list[float] | None = None,
+    after_insert: Callable[[Any, int], None] | None = None,
 ) -> int:
     """Store a fact with its embedding in the database.
 
@@ -592,6 +593,10 @@ async def store_fact(
             deduplicates into anyone else's.
         source_channel: Where the content came from.
         embedding: A vector already computed for ``fact_text``, to save a call.
+        after_insert: Called with the insert's cursor and the row's id inside
+            the insert's transaction, before it commits (conflict resolution
+            closes the values a fact replaces there, so the two never part).
+            If it raises, the insert is rolled back and the error propagates.
 
     Returns:
         The database ID of the stored fact, or 0 if the quality gate refused it
@@ -642,8 +647,9 @@ async def store_fact(
 
     def _insert() -> int:
         with get_connection() as conn:
-            return _insert_fact(
-                conn.cursor(),
+            cur = conn.cursor()
+            fid = _insert_fact(
+                cur,
                 (
                     fact["fact_text"],
                     fact["category"],
@@ -667,6 +673,9 @@ async def store_fact(
                 content_hash=content_hash,
                 sql=_INSERT_FACT_FULL_SQL,
             )
+            if after_insert is not None and fid:
+                after_insert(cur, fid)
+            return fid
 
     # Off the event loop: the write path reaches this from the engine's loop.
     fact_id = await asyncio.to_thread(_insert)

@@ -16,6 +16,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +27,7 @@ from robothor.db.connection import get_connection
 from robothor.llm import ollama as llm_client
 from robothor.memory import generation
 from robothor.memory.bitemporal import (
+    close_on_arrival,
     keep_overruled,
     record_conflict_decision,
     supersede_with_validity,
@@ -545,6 +547,89 @@ async def find_similar_facts(
 SLOT_CANDIDATE_LIMIT = 25
 
 
+@dataclass
+class SlotLookup:
+    """What one slot lookup found.
+
+    ``subject_entity_id``: the one entity of the tenant the subject's name
+    resolves to (None when none or several do: two people named Alice).
+    ``value_entity_id``: the same for the value. ``rows``: active facts of the
+    fact's tenant and scope that may fill the slot, newest first, each with
+    ``mention_entities`` (``[{surface_form, entity_id}]``) and ``relations``
+    (``[{predicate, source_entity_id, target_entity_id}]``).
+    """
+
+    subject_entity_id: int | None
+    value_entity_id: int | None
+    rows: list[dict[str, Any]]
+
+
+_SLOT_SQL = """
+    WITH subj AS (
+        SELECT id FROM memory_entities WHERE tenant_id = %(t)s AND lower(name) = %(name)s
+    ), val AS (
+        SELECT id FROM memory_entities WHERE tenant_id = %(t)s AND lower(name) = %(value)s
+    ), cand AS (
+        SELECT id FROM memory_facts
+         WHERE tenant_id = %(t)s AND lower_entities(entities) && ARRAY[%(name)s]::text[]
+        UNION
+        SELECT m.fact_id FROM memory_mentions m
+         WHERE m.tenant_id = %(t)s AND m.entity_id IN (SELECT id FROM subj)
+    ), hits AS (
+        SELECT f.id, f.fact_text, f.category, f.entities, f.origin, f.metadata, f.event_time,
+               COALESCE((SELECT json_agg(json_build_object(
+                            'surface_form', m.surface_form, 'entity_id', m.entity_id))
+                           FROM memory_mentions m
+                          WHERE m.fact_id = f.id AND m.entity_id IS NOT NULL),
+                        '[]'::json) AS mention_entities,
+               COALESCE((SELECT json_agg(json_build_object(
+                            'predicate', r.predicate, 'source_entity_id', r.source_entity_id,
+                            'target_entity_id', r.target_entity_id))
+                           FROM memory_relation_evidence ev
+                           JOIN memory_relations r ON r.id = ev.relation_id
+                          WHERE ev.fact_id = f.id AND r.predicate IS NOT NULL),
+                        '[]'::json) AS relations
+          FROM memory_facts f JOIN cand c ON c.id = f.id
+         WHERE f.tenant_id = %(t)s AND f.is_active = TRUE
+           AND f.scope_kind = %(kind)s AND f.scope_id IS NOT DISTINCT FROM %(sid)s
+           AND f.id > %(after)s
+         ORDER BY f.id DESC
+         LIMIT %(limit)s
+    )
+    SELECT (SELECT CASE WHEN count(*) = 1 THEN min(id) END FROM subj),
+           (SELECT CASE WHEN count(*) = 1 THEN min(id) END FROM val),
+           (SELECT COALESCE(json_agg(h), '[]'::json) FROM hits h)
+"""
+
+
+def _slot_params(
+    slot: FactSlot, tenant: str, kind: str, sid: str | None, limit: int, after: int
+) -> dict[str, Any]:
+    return {
+        "t": tenant,
+        "name": slot.subject_name,
+        "value": slot.value,
+        "kind": kind,
+        "sid": None if kind == "shared" else sid,
+        "limit": int(limit),
+        "after": int(after),
+    }
+
+
+def _run_slot_query(cur: Any, params: dict[str, Any]) -> SlotLookup:
+    cur.execute(_SLOT_SQL, params)
+    row = cur.fetchone()
+    if not row:
+        return SlotLookup(None, None, [])
+    subject, value, hits = (row[0], row[1], row[2]) if not isinstance(row, dict) else (
+        row["subject"], row["value"], row["hits"])  # fmt: skip
+    return SlotLookup(
+        int(subject) if subject is not None else None,
+        int(value) if value is not None else None,
+        list(hits or []),
+    )
+
+
 async def find_slot_candidates(
     slot: FactSlot,
     *,
@@ -552,64 +637,47 @@ async def find_slot_candidates(
     scope_kind: str = "shared",
     scope_id: str | None = None,
     limit: int = SLOT_CANDIDATE_LIMIT,
-) -> tuple[list[int], list[dict[str, Any]]]:
-    """Active facts that may fill ``slot``, and the entity ids its subject resolves to.
+) -> SlotLookup:
+    """Active facts that may fill ``slot``, and what its subject and value resolve to.
 
-    One statement, bounded by indexes, never a scan: the subject's name
-    through ``lower_entities(entities)`` (GIN, migration 109), and the
-    entities of that name (``memory_entities (tenant_id, lower(name))``)
-    through ``memory_mentions (tenant_id, entity_id)``, so a fact that named the
-    same entity another way is found too. Newest first, at most ``limit``.
-    Only the fact's own tenant and exactly its scope are read, as in
-    :func:`find_similar_facts`. Each row carries ``mention_entities``
-    (``[{surface_form, entity_id}]``) for :func:`fact_slot`.
+    One statement over indexes, in the fact's own tenant and exactly its scope,
+    as in :func:`find_similar_facts`. Newest first, at most ``limit``.
     """
-    name = slot.subject_name
-    if not name:
-        return [], []
-    tenant = tenant_id or DEFAULT_TENANT
-    kind = scope_kind or "shared"
-    sid = None if kind == "shared" else scope_id
+    if not slot.subject_name:
+        return SlotLookup(None, None, [])
+    params = _slot_params(
+        slot, tenant_id or DEFAULT_TENANT, scope_kind or "shared", scope_id, limit, 0
+    )
 
-    def _query() -> tuple[list[int], list[dict[str, Any]]]:
+    def _query() -> SlotLookup:
         with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                WITH subj AS (
-                    SELECT id FROM memory_entities
-                     WHERE tenant_id = %(t)s AND lower(name) = %(name)s
-                ), cand AS (
-                    SELECT id FROM memory_facts
-                     WHERE tenant_id = %(t)s AND lower_entities(entities) && ARRAY[%(name)s]::text[]
-                    UNION
-                    SELECT m.fact_id FROM memory_mentions m
-                     WHERE m.tenant_id = %(t)s AND m.entity_id IN (SELECT id FROM subj)
-                ), hits AS (
-                    SELECT f.id, f.fact_text, f.category, f.entities, f.origin, f.metadata,
-                           COALESCE((SELECT json_agg(json_build_object(
-                                        'surface_form', m.surface_form, 'entity_id', m.entity_id))
-                                       FROM memory_mentions m
-                                      WHERE m.fact_id = f.id AND m.entity_id IS NOT NULL),
-                                    '[]'::json) AS mention_entities
-                      FROM memory_facts f JOIN cand c ON c.id = f.id
-                     WHERE f.tenant_id = %(t)s AND f.is_active = TRUE
-                       AND f.scope_kind = %(kind)s AND f.scope_id IS NOT DISTINCT FROM %(sid)s
-                     ORDER BY f.id DESC
-                     LIMIT %(limit)s
-                )
-                SELECT (SELECT COALESCE(array_agg(id), '{}') FROM subj),
-                       (SELECT COALESCE(json_agg(h), '[]'::json) FROM hits h)
-                """,
-                {"t": tenant, "name": name, "kind": kind, "sid": sid, "limit": int(limit)},
-            )
-            row = cur.fetchone()
-        if not row:
-            return [], []
-        ids, hits = row
-        return [int(i) for i in ids or []], list(hits or [])
+            return _run_slot_query(conn.cursor(), params)
 
     return await asyncio.to_thread(_query)
+
+
+def _slot_newcomers(
+    cur: Any,
+    slot: FactSlot,
+    *,
+    tenant_id: str,
+    scope_kind: str,
+    scope_id: str | None,
+    after_id: int,
+    new_id: int,
+) -> list[dict[str, Any]]:
+    """Inside the insert's transaction: lock the slot, then the values written since.
+
+    The advisory lock (per tenant, scope, subject and attribute) serialises
+    two writers of one slot from here to their commit, so the second sees the
+    first's value and decides again instead of leaving two current values.
+    """
+    key = "|".join((tenant_id, scope_kind, scope_id or "", slot.subject_name, slot.attribute))
+    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
+    found = _run_slot_query(
+        cur, _slot_params(slot, tenant_id, scope_kind, scope_id, SLOT_CANDIDATE_LIMIT, after_id)
+    )
+    return [r for r in found.rows if int(r["id"]) != int(new_id)]
 
 
 def build_classification_prompt(new_fact: str, existing_fact: str) -> str:
@@ -665,7 +733,11 @@ async def classify_relationship(new_fact: str, existing_fact: str) -> dict[str, 
             "reasoning": parsed.get("reasoning", ""),
         }
     except (json.JSONDecodeError, Exception):
-        return {"classification": "new", "reasoning": "Failed to classify, treating as new"}
+        return {
+            "classification": "new",
+            "reasoning": "Failed to classify, treating as new",
+            "unavailable": True,
+        }
 
 
 def _reinforce_fact(fact_id: int, *, tenant_id: str = "") -> None:
@@ -763,43 +835,165 @@ def _authority(row: Mapping[str, Any]) -> int:
     return authority_rank(row.get("origin"))
 
 
+def _may_close(old: Mapping[str, Any], origin: str | None) -> bool:
+    """Whether a fact from ``origin`` may close ``old``.
+
+    Never an operator-confirmed fact. A fact with no recorded origin (written
+    before origins existed, so possibly a user's own statement) only by a user
+    or the operator, or by another caller that records no origin either.
+    Otherwise a source ranked at least as high as the old fact's own.
+    """
+    if is_operator_confirmed(old):
+        return False
+    if old.get("origin") is None:
+        return origin is None or authority_rank(origin) >= authority_rank(Origin.USER_STATED)
+    return authority_rank(origin) >= _authority(old)
+
+
+def _when(value: Any) -> datetime | None:
+    """An event time as an aware datetime, or None."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _deterministic(new: FactSlot, lookup: SlotLookup, old: Mapping[str, Any]) -> bool:
+    """Whether the pair may be decided without the classifier.
+
+    Only when both facts carry the slot's canonical predicate, both subjects
+    are the same resolved entity, the values are resolved entities, the
+    attribute is single-valued, and the old fact has a recorded origin.
+    """
+    if new.source != "relation" or new.cardinality != "single" or old.get("origin") is None:
+        return False
+    if lookup.subject_entity_id is None or lookup.value_entity_id is None:
+        return False
+    for rel in old.get("relations") or []:
+        if (
+            PREDICATE_ATTRIBUTES.get(str(rel.get("predicate") or "")) == new.attribute
+            and rel.get("source_entity_id") == lookup.subject_entity_id
+            and rel.get("target_entity_id") is not None
+        ):
+            return True
+    return False
+
+
+def _old_value_entity(new: FactSlot, old: Mapping[str, Any]) -> int | None:
+    for rel in old.get("relations") or []:
+        if PREDICATE_ATTRIBUTES.get(str(rel.get("predicate") or "")) == new.attribute:
+            target = rel.get("target_entity_id")
+            return int(target) if target is not None else None
+    return None
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+#: Most pairs one fact sends to the classifier (the newest candidates).
+SLOT_CLASSIFY_MAX = 2
+
+
+class _SlotRacedError(Exception):
+    """Another writer changed the slot after this decision; decide again."""
+
+
 async def _resolve_slot(
     fact: dict[str, Any],
     slot: FactSlot,
     similar: list[dict[str, Any]],
-    store: Callable[[], Awaitable[int]],
+    store: Callable[..., Awaitable[int]],
     *,
     tenant_id: str,
     scope_kind: str,
     scope_id: str | None,
     origin: str | None,
+    event_time: str | None,
+    classify_timeout: float | None,
 ) -> dict[str, Any] | None:
     """Decide a fact that fills a slot against the slot's current values.
 
-    Candidates are the nearest neighbours already found plus the facts the
-    subject's entity index finds (:func:`find_slot_candidates`), all in the
-    fact's own tenant and scope. Returns None when none shares the slot, and
-    the caller carries on by similarity.
+    Candidates are the nearest neighbours already found plus the slot lookup
+    (:func:`find_slot_candidates`), all of the fact's own tenant and scope.
+    Returns None when none shares the slot (or a repeat is for the similarity
+    rules to judge), and the caller carries on by similarity.
 
     * repeat (same value): at cosine 0.92 or more in the same category the
       existing fact is reinforced and nothing stored; below that the caller's
       similarity path decides, as before.
     * coexist (a multi-valued attribute): the new fact is stored beside it.
-    * change (a single-valued attribute): the new fact is stored and every
-      active value of the slot is closed (``superseded_by``, ``valid_to``,
-      reason ``changed``), unless one of them outranks the new fact's source;
-      then the new fact is stored overruled by it and nothing is closed.
+    * change: decided without a model only when :func:`_deterministic`; every
+      other pair goes to the classifier, which says update, contradiction,
+      duplicate or new. With no answer (unavailable, timed out) both stay
+      active and the conflict is recorded (``conflict_unresolved``).
+    * An update or contradiction closes the old value (``superseded_by``,
+      ``valid_to``, reason ``changed`` / ``contradicted``) when
+      :func:`_may_close` allows it; otherwise the new fact is stored overruled
+      by it (``kept_authority`` / ``kept_confirmed``), reusing a row already
+      overruled the same way. A new value whose event is older than the old
+      one's is stored as its earlier value instead (``stored_history``).
+
+    The insert and every close are one transaction, under a per-slot lock that
+    re-reads the slot; a value written meanwhile restarts the decision.
     """
+    for _attempt in range(3):
+        try:
+            return await _decide_slot(
+                fact,
+                slot,
+                similar,
+                store,
+                tenant_id=tenant_id,
+                scope_kind=scope_kind,
+                scope_id=scope_id,
+                origin=origin,
+                event_time=event_time,
+                classify_timeout=classify_timeout,
+            )
+        except _SlotRacedError:
+            continue
+    # Still contended: keep the fact, close nothing, say so.
+    new_id = await store()
+    await asyncio.to_thread(
+        record_conflict_decision,
+        tenant_id=tenant_id,
+        classification="update",
+        action="conflict_unresolved",
+        new_fact_id=new_id or None,
+        existing_fact_id=None,
+        reasoning="slot changed by concurrent writers; nothing closed",
+        new_fact_text=fact["fact_text"],
+    )
+    return {"action": "stored", "new_id": new_id, "conflict_check": "contended"}
+
+
+async def _decide_slot(
+    fact: dict[str, Any],
+    slot: FactSlot,
+    similar: list[dict[str, Any]],
+    store: Callable[..., Awaitable[int]],
+    *,
+    tenant_id: str,
+    scope_kind: str,
+    scope_id: str | None,
+    origin: str | None,
+    event_time: str | None,
+    classify_timeout: float | None,
+) -> dict[str, Any] | None:
     try:
-        entity_ids, rows = await find_slot_candidates(
+        lookup = await find_slot_candidates(
             slot, tenant_id=tenant_id, scope_kind=scope_kind, scope_id=scope_id
         )
     except Exception as exc:  # noqa: BLE001 - the similarity path still decides
         logger.warning("resolve_and_store: slot lookup failed (%s)", type(exc).__name__)
-        entity_ids, rows = [], []
-    new_slot = slot.with_entity_ids(entity_ids)
+        lookup = SlotLookup(None, None, [])
+    new_slot = slot.with_entity_ids([lookup.subject_entity_id] if lookup.subject_entity_id else [])
     candidates: dict[int, dict[str, Any]] = {int(r["id"]): r for r in similar}
-    for r in rows:
+    for r in lookup.rows:
         near = candidates.get(int(r["id"]), {})
         # The lookup's row adds resolved mentions; the similarity is the search's.
         candidates[int(r["id"])] = {**near, **r, "similarity": near.get("similarity")}
@@ -807,16 +1001,17 @@ async def _resolve_slot(
     matches = [(r, kind) for r, kind in matches if kind != "unrelated"]
     if not matches:
         return None
+    seen_max = max(int(r["id"]) for r in candidates.values())
 
-    def _record(row: Mapping[str, Any], **kw: Any) -> Awaitable[Any]:
-        sim = row.get("similarity")
+    def _record(row: Mapping[str, Any] | None, **kw: Any) -> Awaitable[Any]:
+        sim = (row or {}).get("similarity")
         return asyncio.to_thread(
             record_conflict_decision,
             tenant_id=tenant_id,
-            existing_fact_id=row["id"],
+            existing_fact_id=row["id"] if row else None,
             similarity=float(sim) if sim is not None else None,
             new_fact_text=fact["fact_text"],
-            existing_fact_text=row.get("fact_text") or "",
+            existing_fact_text=(row or {}).get("fact_text") or "",
             **kw,
         )
 
@@ -842,7 +1037,29 @@ async def _resolve_slot(
         )
         return {"action": "reinforced", "existing_id": repeat["id"], "slot": "repeat"}
 
-    changes = [r for r, kind in matches if kind == "change"]
+    changes = sorted((r for r, kind in matches if kind == "change"), key=lambda r: -int(r["id"]))
+    # Each change candidate's verdict: update, contradiction, duplicate, new,
+    # or unresolved (no answer from the classifier).
+    verdicts: list[tuple[dict[str, Any], str, str]] = []
+    asked = 0
+    for r in changes:
+        if _deterministic(new_slot, lookup, r):
+            same = _old_value_entity(new_slot, r) == lookup.value_entity_id
+            verdicts.append((r, "duplicate" if same else "update", f"{where}: resolved entities"))
+            continue
+        if asked >= SLOT_CLASSIFY_MAX:
+            continue
+        asked += 1
+        try:
+            verdict = await asyncio.wait_for(
+                classify_relationship(fact["fact_text"], r.get("fact_text") or ""),
+                timeout=classify_timeout,
+            )
+        except TimeoutError:
+            verdict = {"classification": "new", "reasoning": "timed out", "unavailable": True}
+        kind = "unresolved" if verdict.get("unavailable") else verdict["classification"]
+        verdicts.append((r, kind, f"{where}: {verdict.get('reasoning', '')}"))
+
     if not changes:
         new_id = await store()
         await _record(
@@ -854,57 +1071,127 @@ async def _resolve_slot(
         )
         return {"action": "stored", "new_id": new_id, "slot": "coexist"}
 
-    new_id = await store()
-    old_values = [getattr(fact_slot(r), "value", "?") for r in changes[:3]]
-    reasoning = f"{where}: " + ", ".join(f"{v} -> {new_slot.value}" for v in old_values)
-    outranking = [r for r in changes if _authority(r) > authority_rank(origin)]
-    if outranking:
-        kept = max(outranking, key=_authority)
-        action = "kept_confirmed" if is_operator_confirmed(kept) else "kept_authority"
-        if new_id:
-            await asyncio.to_thread(keep_overruled, new_id, kept["id"], tenant_id=tenant_id)
+    replaced = [(r, k, why) for r, k, why in verdicts if k in ("update", "contradiction")]
+    if not replaced and any(k == "duplicate" for _r, k, _w in verdicts):
+        dup = next(r for r, k, _w in verdicts if k == "duplicate")
         await _record(
-            kept,
+            dup, classification="duplicate", action="skipped", new_fact_id=None, reasoning=where
+        )
+        return {"action": "skipped", "existing_id": dup["id"]}
+
+    # What this fact does to the slot, decided before the insert.
+    kept = [r for r, _k, _w in replaced if not _may_close(r, origin)]
+    new_when = _when(event_time)
+    history = [
+        r
+        for r, _k, _w in replaced
+        if new_when is not None and (_when(r.get("event_time")) or new_when) > new_when
+    ]
+    closes = [(r, k, why) for r, k, why in replaced if r not in kept and r not in history]
+
+    def _check_newcomers(cur: Any, nid: int) -> None:
+        newcomers = _slot_newcomers(
+            cur,
+            new_slot,
+            tenant_id=tenant_id,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            after_id=seen_max,
+            new_id=nid,
+        )
+        if any(compare_slots(new_slot, fact_slot(r)) != "unrelated" for r in newcomers):
+            raise _SlotRacedError
+
+    if kept:
+        keeper = max(kept, key=_authority)
+        action = "kept_confirmed" if is_operator_confirmed(keeper) else "kept_authority"
+        reused = await asyncio.to_thread(
+            _find_overruled,
+            fact,
+            keeper["id"],
+            tenant_id=tenant_id,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+        )
+        if reused:
+            new_id = reused
+        else:
+
+            def _overrule_hook(cur: Any, nid: int) -> None:
+                _check_newcomers(cur, nid)
+                if nid != keeper["id"]:
+                    keep_overruled(nid, keeper["id"], tenant_id=tenant_id, cur=cur)
+
+            new_id = await store(after_insert=_overrule_hook)
+        await _record(
+            keeper,
             classification="update",
             action=action,
             new_fact_id=new_id or None,
-            reasoning=f"{reasoning}; kept: higher-authority source",
+            reasoning=f"{where}; kept: higher-authority source",
         )
         return {
             "action": action,
             "new_id": new_id,
-            "existing_id": kept["id"],
+            "existing_id": keeper["id"],
             "classification": "update",
-            "reasoning": reasoning,
+            "reasoning": where,
         }
 
     closed: list[int] = []
-    for r in changes:
-        done = bool(new_id) and await asyncio.to_thread(
-            supersede_with_validity,
-            r["id"],
-            new_id,
-            tenant_id=tenant_id,
-            classification="update",
-            reason="changed",
-        )
-        if done:
-            closed.append(int(r["id"]))
+    earlier_of: list[int] = []
+
+    def _hook(cur: Any, nid: int) -> None:
+        _check_newcomers(cur, nid)
+        if history and nid != history[0]["id"]:
+            current = max(history, key=lambda r: _when(r.get("event_time")) or _EPOCH)
+            if close_on_arrival(nid, current["id"], tenant_id=tenant_id, cur=cur):
+                earlier_of.append(int(current["id"]))
+            return
+        for r, k, _why in closes:
+            if int(r["id"]) == int(nid):
+                continue
+            if supersede_with_validity(
+                r["id"],
+                nid,
+                tenant_id=tenant_id,
+                classification=k,
+                reason="changed" if k == "update" else "contradicted",
+                cur=cur,
+            ):
+                closed.append(int(r["id"]))
+
+    new_id = await store(after_insert=_hook)
+    for r, k, why in verdicts:
+        if k == "unresolved":
+            action = "conflict_unresolved"
+        elif int(r["id"]) in closed:
+            action = "superseded"
+        elif int(r["id"]) in earlier_of:
+            action = "stored_history"
+        elif k in ("update", "contradiction"):
+            action = "supersede_skipped"
+        else:
+            action = "stored"
         await _record(
             r,
-            classification="update",
-            action="superseded" if done else "supersede_skipped",
+            classification="update" if k == "unresolved" else k,
+            action=action,
             new_fact_id=new_id or None,
-            reasoning=reasoning,
+            reasoning=why,
         )
-    return {
-        "action": "superseded" if closed else "supersede_skipped",
-        "new_id": new_id,
-        "old_id": closed[0] if closed else changes[0]["id"],
-        "old_ids": closed,
-        "classification": "update",
-        "reasoning": reasoning,
-    }
+    if earlier_of:
+        return {"action": "stored_history", "new_id": new_id, "current_id": earlier_of[0]}
+    if closed:
+        return {
+            "action": "superseded",
+            "new_id": new_id,
+            "old_id": closed[0],
+            "old_ids": closed,
+            "classification": "update",
+            "reasoning": where,
+        }
+    return {"action": "stored", "new_id": new_id}
 
 
 async def resolve_and_store(
@@ -954,9 +1241,9 @@ async def resolve_and_store(
         "embedding": embedding,
     }
 
-    async def _store(extra: dict[str, Any] | None = None) -> int:
+    async def _store(extra: dict[str, Any] | None = None, **kw: Any) -> int:
         meta = {**(metadata or {}), **(extra or {})}
-        return await store_fact(fact, source_content, source_type, meta or None, **store_kw)
+        return await store_fact(fact, source_content, source_type, meta or None, **store_kw, **kw)
 
     similar = await find_similar_facts(
         fact["fact_text"],
@@ -982,6 +1269,8 @@ async def resolve_and_store(
             scope_kind=scope_kind or "shared",
             scope_id=scope_id,
             origin=origin,
+            event_time=event_time,
+            classify_timeout=classify_timeout,
         )
         if decided is not None:
             return decided
@@ -1121,9 +1410,7 @@ async def resolve_and_store(
         # after the similarity search; both cases land in the branch below.
         # Trust order: a lower-authority source does not replace a fact from
         # a higher one. Both stay; the new one is kept overruled by it.
-        if not is_operator_confirmed(best_match) and _authority(best_match) > authority_rank(
-            origin
-        ):
+        if not is_operator_confirmed(best_match) and not _may_close(best_match, origin):
             if new_id:
                 await asyncio.to_thread(
                     keep_overruled, new_id, best_match["id"], tenant_id=tenant_id
