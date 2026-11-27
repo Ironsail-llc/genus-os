@@ -82,24 +82,32 @@ class TestExistingStrataUnchanged:
     @pytest.mark.parametrize(("seed", "size"), sorted(_BEFORE))
     def test_other_strata_facts_and_original_conversations_are_byte_identical(self, seed, size):
         w = _world(seed, size)
+        # Later strata (conversation_buried) add their own cases, facts and
+        # conversations; what existed before them is pinned here.
+        later = {r.conversation_id for r in getattr(w, "conversation_buried", ())}
         cases = [
             [c.id, c.stratum, c.question, list(c.gold), list(c.supporting_ids), c.split, c.as_of]
             for c in w.cases
-            if c.stratum != STRATUM
+            if c.stratum not in (STRATUM, "conversation_buried")
         ]
-        facts = [[f.id, f.text, f.event_date, f.source.segment_id] for f in w.facts]
+        facts = [
+            [f.id, f.text, f.event_date, f.source.segment_id]
+            for f in w.facts
+            if f.source.container_id not in later
+        ]
         original = [
             [t.id, t.text, t.at]
             for c in w.conversations
-            if c.id not in {r.conversation_id for r in w.conversation_recall}
+            if c.id not in {r.conversation_id for r in w.conversation_recall} | later
             for s in c.sessions
             for t in s.turns
         ]
         assert (_digest(cases), _digest(facts), _digest(original)) == _BEFORE[(seed, size)]
 
-    def test_the_stratum_comes_last_so_the_case_order_of_the_others_holds(self):
-        assert ew.STRATA[-1] == STRATUM
-        assert ew.STRATA[:-1] == (
+    def test_the_stratum_follows_the_others_so_their_case_order_holds(self):
+        at = ew.STRATA.index(STRATUM)
+        assert ew.STRATA[at + 1 :] == ("conversation_buried",)
+        assert ew.STRATA[:at] == (
             "multi_hop",
             "entity_confusion",
             "point_in_time",
@@ -112,7 +120,7 @@ class TestExistingStrataUnchanged:
         )
 
     def test_the_schema_version_was_bumped_for_the_new_field(self):
-        assert ew.WORLD_SCHEMA_VERSION == 2
+        assert ew.WORLD_SCHEMA_VERSION >= 2
         assert json.loads(ew.world_to_json(_world(7, "small")))["conversation_recall"]
 
 
