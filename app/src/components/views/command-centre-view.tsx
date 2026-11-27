@@ -14,6 +14,13 @@
  * Every read of the overview writes an audit row in each child company, so
  * the page reads it when opened (if its last answer is over a minute old) and
  * when Refresh is clicked: never on tab focus, reconnect or a timer. The as-of time says how old it is.
+ *
+ * Beside it, the page reads `GET /api/org/connections` the same way: each child
+ * company's plugins, their connection checks and its remote tools, shown as a
+ * Connected block on that company's card. It is extra: when it is refused or
+ * fails (a bridge without the route answers 404), the cards read exactly as
+ * they would without it, with no error. The first load waits for both, so a
+ * card never grows a block after it is drawn.
  */
 
 import { useState } from "react";
@@ -31,12 +38,18 @@ import { reloadPage } from "@/lib/reload-page";
 
 import {
   companyStatus,
+  connectionsByTenant,
+  countRemoteTools,
   failureReasonLabel,
   formatCost,
   formatRate,
+  remoteToolsModeLabel,
   sortCompanies,
   statusLabel,
+  summariseChecks,
+  type CompanyConnections,
   type CompanyEntry,
+  type OrgConnections,
   type OrgOverview,
 } from "./command-centre-format";
 
@@ -47,6 +60,8 @@ const OVERVIEW_KEY = ["bridge", "org", "overview"] as const;
  * else re-reads it but Refresh, because each read is audited in every company.
  */
 const OVERVIEW_STALE_MS = 60_000;
+const CONNECTIONS_URL = "/api/bridge/api/org/connections";
+const CONNECTIONS_KEY = ["bridge", "org", "connections"] as const;
 
 class OverviewRefused extends Error {}
 
@@ -80,6 +95,28 @@ async function fetchOverview(signal: AbortSignal): Promise<OrgOverview> {
     switching_enabled: reply.switching_enabled === true,
     tenants: Array.isArray(reply.tenants) ? reply.tenants : [],
   };
+}
+
+/**
+ * The connections, or `null` when they cannot be had: refused, missing on an
+ * older bridge, unreachable or malformed. Never an error, so it never shows one.
+ */
+async function fetchConnections(signal: AbortSignal): Promise<OrgConnections | null> {
+  try {
+    const res = await fetch(CONNECTIONS_URL, { signal });
+    if (!res.ok) return null;
+    const reply = ((await res.json()) ?? {}) as Partial<OrgConnections>;
+    if (!Array.isArray(reply.tenants)) return null;
+    return {
+      as_of: typeof reply.as_of === "string" ? reply.as_of : "",
+      home_tenant_id: reply.home_tenant_id,
+      mode: typeof reply.mode === "string" ? reply.mode : "",
+      tenants: reply.tenants.filter((t) => t && typeof t.tenant_id === "string"),
+    };
+  } catch (err) {
+    if (signal.aborted) throw err;
+    return null;
+  }
 }
 
 /**
@@ -219,14 +256,89 @@ function CompanyFigures({ entry }: { entry: CompanyEntry }) {
   );
 }
 
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+/** What one company has connected: plugins, their checks, its remote tools. */
+function ConnectedBlock({ connections }: { connections: CompanyConnections }) {
+  const headingId = `connected-${connections.tenant_id}`;
+  const heading = (
+    <h4 id={headingId} className="text-[11px] font-medium text-muted-foreground">
+      Connected
+    </h4>
+  );
+  if (connections.status === "error") {
+    return (
+      <section data-testid="connected" aria-labelledby={headingId} className="flex flex-col gap-1 border-t border-border pt-2">
+        {heading}
+        <p data-testid="connected-error" className="text-xs text-muted-foreground">
+          This company&apos;s connections could not be read.
+        </p>
+      </section>
+    );
+  }
+  const plugins = connections.plugins ?? [];
+  const checks = summariseChecks(connections.checks ?? []);
+  const checkCount = checks.ok + checks.warn + checks.fail + checks.skip;
+  const tools = countRemoteTools(connections.tools ?? []);
+  return (
+    <section data-testid="connected" aria-labelledby={headingId} className="flex flex-col gap-1.5 border-t border-border pt-2">
+      {heading}
+      {plugins.length > 0 ? (
+        <ul data-testid="connected-plugins" aria-label="Plugins" className="flex flex-wrap gap-1">
+          {plugins.map((p) => (
+            <li
+              key={p.name}
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-background/40 px-1.5 py-0.5 font-mono text-[11px] text-foreground"
+            >
+              <span className="min-w-0 break-all">{p.name}</span>
+              <span className="text-muted-foreground">{p.version}</span>
+              {p.enabled === false && <span className="text-muted-foreground">(off)</span>}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p data-testid="connected-plugins" className="text-xs text-muted-foreground">
+          No plugins installed
+        </p>
+      )}
+      <div data-testid="connected-checks" className="text-xs text-foreground">
+        Checks:{" "}
+        {checkCount === 0
+          ? "none"
+          : `${checks.ok} ok · ${checks.warn} warn · ${checks.fail} fail${checks.skip ? ` · ${checks.skip} skipped` : ""}`}
+      </div>
+      {checks.failing.length > 0 && (
+        <div data-testid="connected-failing" className="flex flex-wrap gap-x-1.5 text-xs text-destructive">
+          <span>Failing:</span>
+          <span className="min-w-0 break-all font-mono">{checks.failing.join(", ")}</span>
+        </div>
+      )}
+      {checks.warning.length > 0 && (
+        <div data-testid="connected-warning" className="flex flex-wrap gap-x-1.5 text-xs text-muted-foreground">
+          <span>Warning:</span>
+          <span className="min-w-0 break-all font-mono">{checks.warning.join(", ")}</span>
+        </div>
+      )}
+      <div data-testid="connected-tools" className="text-xs text-foreground">
+        Remote tools:{" "}
+        {tools.read + tools.write === 0 ? "none" : `${plural(tools.read, "read")} · ${plural(tools.write, "write")}`}
+      </div>
+    </section>
+  );
+}
+
 function CompanyCard({
   entry,
+  connections,
   switchable,
   pending,
   error,
   onOpen,
 }: {
   entry: CompanyEntry;
+  connections?: CompanyConnections;
   switchable: boolean;
   pending: boolean;
   error: string | null;
@@ -277,6 +389,8 @@ function CompanyCard({
       ) : (
         <CompanyFigures entry={entry} />
       )}
+
+      {connections && <ConnectedBlock connections={connections} />}
     </article>
   );
 }
@@ -302,11 +416,27 @@ export function CommandCentreView({
     },
     client,
   );
+  const connections = useQuery(
+    {
+      queryKey: CONNECTIONS_KEY,
+      queryFn: ({ signal }) => fetchConnections(signal),
+      enabled: visible,
+      staleTime: OVERVIEW_STALE_MS,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchInterval: false,
+    },
+    client,
+  );
   const { pending, error: switchError, switchTo } = useTenantSwitch(onSwitched);
   const [opening, setOpening] = useState<string | null>(null);
 
   const data = overview.data;
-  const loading = overview.isFetching && !data;
+  // The first load waits for the connections too, so the cards are drawn once.
+  const loading = (overview.isFetching && !data) || (visible && connections.isPending);
+  const reading = overview.isFetching || connections.isFetching;
+  const connected = connectionsByTenant(connections.data);
+  const remoteMode = connections.data?.mode;
   const error = overview.error instanceof OverviewRefused ? overview.error.message : null;
   const companies = data ? sortCompanies(data.tenants) : [];
   const home = data?.home_tenant_id;
@@ -334,6 +464,11 @@ export function CommandCentreView({
             : undefined
         }
       >
+        {data && !loading && remoteMode && (
+          <span data-testid="org-remote-mode" className="text-xs text-muted-foreground">
+            Remote tools: {remoteToolsModeLabel(remoteMode)}
+          </span>
+        )}
         {data?.as_of && (
           <span className="text-xs text-muted-foreground">
             As of{" "}
@@ -346,11 +481,14 @@ export function CommandCentreView({
           variant="outline"
           size="sm"
           data-testid="org-refresh"
-          disabled={overview.isFetching}
-          aria-busy={overview.isFetching}
-          onClick={() => void overview.refetch({ cancelRefetch: false })}
+          disabled={reading}
+          aria-busy={reading}
+          onClick={() => {
+            void overview.refetch({ cancelRefetch: false });
+            void connections.refetch({ cancelRefetch: false });
+          }}
         >
-          <RefreshCw aria-hidden className={overview.isFetching ? "animate-spin" : undefined} />
+          <RefreshCw aria-hidden className={reading ? "animate-spin" : undefined} />
           Refresh
         </Button>
       </PageHeader>
@@ -373,7 +511,7 @@ export function CommandCentreView({
         </div>
       )}
 
-      {data && !error && !data.has_children && (
+      {data && !loading && !error && !data.has_children && (
         <EmptyState
           testId="org-empty"
           icon={Building2}
@@ -382,12 +520,13 @@ export function CommandCentreView({
         />
       )}
 
-      {data && !error && data.has_children && (
+      {data && !loading && !error && data.has_children && (
         <div className="grid items-start gap-3 lg:grid-cols-2">
           {companies.map((entry) => (
             <CompanyCard
               key={entry.tenant_id}
               entry={entry}
+              connections={connected.get(entry.tenant_id)}
               switchable={data.switching_enabled && entry.tenant_id !== home}
               pending={pending}
               error={opening === entry.tenant_id ? switchError : null}
