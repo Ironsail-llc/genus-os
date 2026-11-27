@@ -860,3 +860,121 @@ def summarise_bench(records: Sequence[BenchRecord], *, benchmark: str) -> dict[s
             "abstention": _block(abst) if abst else {"n": 0, "accuracy": None},
         }
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Published LongMemEval-S results: collected from their sources, not reproduced
+# --------------------------------------------------------------------------- #
+
+#: Outside LongMemEval-S numbers with the conditions that decide whether they
+#: compare with a run here. Read from each source (2026-11), never re-run by
+#: this harness. ``score`` is overall accuracy (%) as published; ``context_tokens``
+#: is what the answering model sees per question.
+PUBLISHED_LONGMEMEVAL: tuple[dict[str, str], ...] = (
+    {
+        "system": "Full context (benchmark paper)",
+        "source": "https://arxiv.org/abs/2410.10813",
+        "answer_model": "gpt-4o",
+        "judge": "gpt-4o (official)",
+        "context_tokens": "~115k",
+        "retrieval": "no",
+        "score": "60.6 (64.0 with chain-of-note)",
+        "caveats": "the benchmark authors' own full-context baseline",
+    },
+    {
+        "system": "Raw-RAG, no turn expansion (independent paper)",
+        "source": "https://arxiv.org/abs/2610.30755",
+        "answer_model": "gpt-4.1-mini",
+        "judge": "gpt-4o-mini x3",
+        "context_tokens": "4.1k",
+        "retrieval": "yes",
+        "score": "89.2",
+        "caveats": "independent; budget reported; judge not the official one (likely more "
+        "lenient); nearest fair comparison at ~4k tokens",
+    },
+    {
+        "system": "Zep / Graphiti",
+        "source": "https://arxiv.org/abs/2501.13956",
+        "answer_model": "gpt-4o",
+        "judge": "not stated",
+        "context_tokens": "~1.6k",
+        "retrieval": "yes",
+        "score": "71.2",
+        "caveats": "vendor-run; budget nearest a 1k cell; higher figures quoted elsewhere "
+        "were not found in a primary source",
+    },
+    {
+        "system": "Redis Remis + Instruct",
+        "source": "https://redis.io/resources/agent-memory-benchmark-report/",
+        "answer_model": "gpt-4o",
+        "judge": "gpt-4o",
+        "context_tokens": "not stated (top-5 chunks + neighbours)",
+        "retrieval": "yes",
+        "score": "86.5 (Remis alone 83.4)",
+        "caveats": "same reader and judge for every system; harness not public",
+    },
+    {
+        "system": "EmergenceMem Simple",
+        "source": "https://www.emergence.ai/blog/sota-on-longmemeval-with-rag",
+        "answer_model": "gpt-4o-2024-08-06",
+        "judge": "not stated",
+        "context_tokens": "not stated (whole sessions)",
+        "retrieval": "yes",
+        "score": "82.4",
+        "caveats": "reasons before answering; a third party reproduced the Fast variant at 81.3",
+    },
+    {
+        "system": "Mastra Observational Memory",
+        "source": "https://mastra.ai/research/observational-memory",
+        "answer_model": "gpt-5-mini",
+        "judge": "gpt-4o (per-type prompts)",
+        "context_tokens": "~30k",
+        "retrieval": "no (whole observation log)",
+        "score": "94.87",
+        "caveats": "7-30x a 1k-4k budget; LLM rewrites history at write time; macro average "
+        "over types (micro 93.6); prompts tuned on the same 500 questions; its gpt-4o run "
+        "is 84.23, reproduced by a third party at 84.2",
+    },
+    {
+        "system": "MemMachine",
+        "source": "https://arxiv.org/abs/2604.04853",
+        "answer_model": "gpt-5-mini",
+        "judge": "gpt-4o-mini",
+        "context_tokens": "5.2k-19.6k",
+        "retrieval": "yes",
+        "score": "93.0",
+        "caveats": "best of 12 configurations chosen on all 500 questions, no held-out half; "
+        "judge not the official one; an independent re-run scored 74.3",
+    },
+    {
+        "system": "Hindsight",
+        "source": "https://arxiv.org/abs/2512.12818",
+        "answer_model": "gemini-3-pro",
+        "judge": "gpt-oss-120b",
+        "context_tokens": "not reported",
+        "retrieval": "yes",
+        "score": "91.4",
+        "caveats": "judge not the official one; context budget not reported",
+    },
+    {
+        "system": "Chronos",
+        "source": "https://arxiv.org/abs/2603.16862",
+        "answer_model": "gpt-4o",
+        "judge": "claude-opus-4.6",
+        "context_tokens": "not stated",
+        "retrieval": "yes",
+        "score": "92.6",
+        "caveats": "an audit (arXiv 2609.38021) reports the published runner read the "
+        "oracle file (evidence sessions only)",
+    },
+    {
+        "system": "Mem0",
+        "source": "https://dev.to/gaurav_dadhich/the-state-of-ai-memory-in-2026-claimed-vs-observed-1n94",
+        "answer_model": "not stated",
+        "judge": "not stated",
+        "context_tokens": "not stated",
+        "retrieval": "yes",
+        "score": "93.4 claimed; 57.5-73.8 observed",
+        "caveats": "an audit found question-specific rules in the answer prompt; very low trust",
+    },
+)

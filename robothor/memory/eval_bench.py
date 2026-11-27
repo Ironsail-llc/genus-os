@@ -1977,6 +1977,41 @@ def _degraded_line(report: dict[str, Any]) -> str:
     )
 
 
+def _comparison_lines(report: dict[str, Any]) -> list[str]:
+    """Outside LongMemEval-S numbers beside this run's cells, under the same columns."""
+    p = report.get("params") or {}
+    cells = p.get("cells") or {}
+
+    def _cell(text: Any) -> str:
+        return str(text).replace("|", "/")
+
+    lines = [
+        "",
+        "**Fair comparison** (published rows: collected, not reproduced; read from each "
+        "source, never re-run here. Compare only rows with the same answer model, judge "
+        "and context size.)",
+        "",
+        "| Source | System | Answer model | Judge | Context tokens | Retrieval | Score | Caveats |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for system, m in (report.get("systems") or {}).items():
+        mode = (cells.get(system) or {}).get("mode", "harness-only")
+        retrieval = "no" if system in ("evidence_only", "full_history") else "yes"
+        ov = m.get("overall") or {}
+        lines.append(
+            f"| this run | {system} ({mode}) | {p.get('answer_model')} | {p.get('judge_model')} | "
+            f"{ov.get('mean_tokens', 0):.0f} | {retrieval} | {_pct(ov.get('accuracy'))} | "
+            f"n={ov.get('n')}; see the cells table for settings |"
+        )
+    lines.extend(
+        f"| {r['source']} | {_cell(r['system'])} | {_cell(r['answer_model'])} | "
+        f"{_cell(r['judge'])} | {_cell(r['context_tokens'])} | {_cell(r['retrieval'])} | "
+        f"{_cell(r['score'])} | {_cell(r['caveats'])} |"
+        for r in bd.PUBLISHED_LONGMEMEVAL
+    )
+    return lines
+
+
 def _complete(b: dict[str, Any]) -> str:
     n = b.get("answer_turn_n") or 0
     return f"{b.get('answer_turns_complete', 0)} / {n}" if n else "–"
@@ -2119,6 +2154,8 @@ def format_bench_markdown(report: dict[str, Any]) -> str:
         "named above is not that model. Full context, subset size and context budget are stated "
         "beside every number; compare only rows with the same answer model and judge.",
     ]
+    if p.get("benchmark") == "longmemeval":
+        lines += _comparison_lines(report)
     if report.get("excluded"):
         ids = sorted({e["question_id"] for e in report["excluded"]})
         lines += [
