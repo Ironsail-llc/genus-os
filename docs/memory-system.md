@@ -67,9 +67,15 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    - `entity_expansion` (`expand_entities`; with the graph leg on, only when it
      returned nothing) — facts about entities related to the top hits'
      entities.
-   - `segment` (`include_segments`, **on by default**) — raw conversation
-     segments from `search_segments` (see
-     [Conversation segments](#conversation-segments)), kind `segment`. Each
+   - `segment_dense` and `segment_keyword` (`include_segments`, **on by
+     default**) — raw conversation segments from `search_segment_legs` (see
+     [Conversation segments](#conversation-segments)), kind `segment`. They
+     are the segment store's dense and keyword legs, entered into fusion
+     separately as the fact legs are, so a segment both legs found gets the
+     same fused credit as a fact both fact legs found. (One pre-fused
+     `segment` leg used to cap a segment at half of that, and with many
+     two-leg facts about the person a question names the answer segment
+     fused at rank 61, past the reranker.) Each
      row's `fact_text` is the whole verbatim text; the reranker reads only a
      `SEGMENT_RERANK_CHARS` (1,200) excerpt around the best keyword match
      (`rerank_excerpt`). Which segments come back depends on the reader:
@@ -79,10 +85,10 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    - `insight`, `episode`, `chat_turn` (`include_insights`,
      `include_episodes`, `include_chat_turns`). These stores cannot filter by
      person, so a restricted data scope leaves them out. The dense-only
-     `chat_turn` leg also does not run while the `segment` leg is on, even when
-     asked for: both read the same conversation, and the segment leg adds a
+     `chat_turn` leg also does not run while the segment legs are on, even when
+     asked for: both read the same conversation, and the segment legs add a
      keyword leg and the reader rule. `search_chat_turns` itself is unchanged.
-     The `segment` leg can filter by person, so it stays on under a restricted
+     The segment legs can filter by person, so they stay on under a restricted
      scope, read by the same reader as the fact legs, which the scope only
      narrows.
 2. **Fusion** — reciprocal rank fusion over every leg, k=60 (`fuse`), weighted
@@ -97,12 +103,20 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    returns. When one of the two is not listed, its logprob is bounded by the
    lowest one listed, so a confident answer still gets a graded score. (An
    Ollama without logprobs gives 1 or 0.) Candidates are ordered by that
-   score alone, whichever leg found them. On any reranker error the fused
-   order stands.
+   score alone, whichever leg found them. A segment found by only one of its
+   legs still fuses below every fact both fact legs found, so the first row
+   of each segment leg that fused below the scored head takes one of the
+   head's last places (`facts._segment_leaders_in_head`); the rows it
+   displaces follow in fused order. On any reranker error the fused order
+   stands.
 4. **Blend** — `relevance` (the rerank score, or `10 / (10 + fused rank)` when
    there is none — one 0..1 scale for every leg; cosine similarity is not used)
    + recency + importance + access count, with supersession demotion; then
-   near-duplicates are dropped.
+   near-duplicates are dropped. A row is a near-duplicate only of a row of its
+   own `kind`, here and in the head, the reserved picks and the budget fill: a
+   fact is a summary of the conversation it came from, so its words are often
+   a subset of a segment's, and the subset rule used to drop whichever of the
+   two came second.
 5. **Reserved places** — a leg named in `RESERVED_PLACES` (`facts.py`) keeps
    reserved rows whenever it returned anything, chosen by its own score:
    `graph` 2, `entity_expansion` 1. A related-but-not-similar fact is exactly
@@ -127,8 +141,9 @@ source ("leg") implements is in `robothor/memory/recall.py`.
      cuts the result to `limit`: on that path a graph row that follows the
      head is usually cut. Where the router re-orders the head by recency (a
      "most recent" question), a row only the graph leg found is left out of
-     that sort and stays after the head. The router's 4,000-character budget
-     and the engine's tool-output cap bound the text either way.
+     that sort and stays after the head. The router's recall context cap
+     (4,000 characters by default) and the engine's tool-output cap bound the
+     text either way.
 6. **Budget fill** — the reranker returns only the rows it scored (16), so
    the rest of the fused list follows in fused order, unscored, up to
    `limit` rows in all, skipping near-duplicates of rows already returned.
@@ -158,19 +173,27 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    and the failure is logged.
 
 Every leg shares `limit`. The `search_memory` tool fills the recall context
-cap, `RECALL_CONTEXT_CHARS` (4,000 characters, in `robothor/memory/recall.py`,
-the cap the routed path already applied), on both paths: with no `limit` it
+cap, the setting `ROBOTHOR_MEMORY_RECALL_CONTEXT_CHARS` (default 4,000
+characters, `recall.RECALL_CONTEXT_CHARS`, the cap the routed path already
+applied; read once per process, see
+[the configuration reference](reference/configuration.md)), on both paths: with no `limit` it
 asks for up to `RECALL_FILL_ROWS` (50) rows; a `limit` the caller names bounds
 the rows and is itself bounded by `RECALL_FILL_ROWS`. Rows are packed by one
 rule, `recall.pack_within`, on every path (both tools, the routed path and the
 eval): a row that does not fit in what is left of the cap is skipped and a
 later, smaller one may still go in, so one long conversation segment does not
-end a context with room left. The top-ranked row is never dropped: if it alone
-is over the cap it is cut to the cap and ends with ` [truncated]` (the row
-carries `truncated: true`), so a result is never empty because its best row
-was long. No eval context had a first candidate over the cap (0 of 360 on each
-split; the longest was 27 tokens), so the measured numbers are unaffected. On the routed path a temporal query re-sorts the
-head by recency; the tail stays behind it.
+stop the rows after it. Then, if at least `RECALL_MIN_CUT_CHARS` (300
+characters, about 75 tokens: room for a fact with its context or one short
+exchange) of the cap is still empty, the best-ranked skipped row is cut to
+exactly that room, ends with ` [truncated]` (the row carries
+`truncated: true`) and keeps its rank position. Every row the skipping kept
+stays whole, and at most one row is cut; with less room left it stays empty.
+(Skipping alone left room: a 2,100-character segment followed by
+2,000-character ones packed to 2,100 of 4,000 characters.) The top-ranked row
+is never dropped: if it alone is over the cap it is cut to the cap, so a
+result is never empty because its best row was long. The eval sizes in tokens
+and uses the same minimum, 75 tokens. On the routed path a temporal query
+re-sorts the head by recency; the tail stays behind it.
 MCP `search_memory` follows the same rule (`recall.recall_limit` and
 `recall.within_context_cap`); it names no reader, so it reads shared rows
 only.
@@ -389,7 +412,10 @@ the embedding call for a caller whose own already failed). Each hit carries
 `id`, `kind: "segment"`, `source: "segment"`, `text`, `topic`,
 `source_kind`, `source_ref`, `start_ref`, `end_ref`, `part`, `started_at`,
 `ended_at`, `scope_kind`, `similarity` (or `None`), `keyword_rank` (or
-`None`) and `rrf_score`.
+`None`) and `rrf_score`. `search_segment_legs` takes the same arguments and
+runs the same two queries under the same visibility rule, and returns the
+legs unfused, `(dense, keyword)`, each cut to `limit`; `search_facts` fuses
+them beside the fact legs.
 
 **Retention.** A segment never outlives the chat it copies. It references its
 `chat_sessions` row with `ON DELETE CASCADE`, so clearing a session or the
@@ -399,8 +425,9 @@ than `CHAT_TURN_TTL_DAYS`) ago, tenant by tenant, and turns older than that are
 never indexed. Segments move with their session in `genus tenant
 move-workload`.
 
-Segments are the `segment` leg of `search_facts` and so of the `search_memory`
-tool (see [Retrieval](#retrieval)).
+Segments are the `segment_dense` and `segment_keyword` legs of
+`search_facts` and so of the `search_memory` tool (see
+[Retrieval](#retrieval)).
 
 ## Symbolic short-term memory (RIP 13)
 

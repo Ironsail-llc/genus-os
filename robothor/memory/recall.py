@@ -1,9 +1,10 @@
 """The recall-leg contract: named legs in, one fused candidate list out.
 
 A **leg** is anything that turns a query into a ranked list of
-:class:`Candidate` objects, best first: today the vector and keyword legs over
-``memory_facts``, entity-graph expansion, insights, episodes and chat turns;
-tomorrow raw conversation segments and graph activation. A leg must return:
+:class:`Candidate` objects, best first: the vector and keyword legs over
+``memory_facts``, the dense and keyword legs over conversation segments
+(``segment_dense``, ``segment_keyword``), graph activation, entity-graph
+expansion, insights, episodes and chat turns. A leg must return:
 
 - ``id`` and ``kind`` — together the identity of the item. The same fact found
   by two legs is merged; a fact and an episode that share an integer id are not.

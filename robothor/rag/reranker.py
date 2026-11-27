@@ -106,10 +106,13 @@ MEMORY_RECALL_INSTRUCTION = (
     "conversation excerpt) helps answer it or is directly about it"
 )
 
-# Candidates scored per search. The pool arrives in fused (RRF) order, so pairs
-# past the cap were already ranked out by every leg; each pair is one
-# ~37 ms local generate call, serialised to the device's slot count. Scoring
-# all 30-60 fused candidates was 97% of search latency (measured 2026-08-24).
+# Candidates scored per search: the front of the pool, which arrives in fused
+# (RRF) order. A row past the cap is never scored, however well its own leg
+# ranked it: a row one leg found fuses below every row two legs found, so
+# search_facts moves each conversation-segment leg's first row into this head
+# (facts._segment_leaders_in_head). Each pair is one ~37 ms local generate
+# call, serialised to the device's slot count. Scoring all 30-60 fused
+# candidates was 97% of search latency (measured 2026-08-24).
 # Env MEMORY_RERANK_MAX_CANDIDATES overrides; 0 disables the cap.
 RERANK_MAX_CANDIDATES = 16
 
