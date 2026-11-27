@@ -242,6 +242,7 @@ def turn_fact(text: str, mentions=(), relations=(), **kw: Any) -> dict[str, Any]
     return {
         **fact(text, mentions, relations, **kw),
         "kind": kw.get("kind", "other"),
+        "date_phrase": kw.get("date_phrase"),
         "about_user": kw.get("about_user", False),
     }
 

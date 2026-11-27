@@ -21,8 +21,10 @@ exchange as it happened:
   Assistant text never becomes a user-stated fact;
 * each fact keeps the chat message ids it came from (``turn_refs``) and when it
   was said (``mentioned_at``), so it can be linked back to its source turns;
-* a relative date is counted from the turn that says it (:func:`_dated`), never
-  from the day the conversation is ingested.
+* the model dates each fact and quotes the phrase it dated from; a relative
+  phrase is then recounted from its own turn's local day, and only corrects a
+  miscount close to it (:func:`_dated`): a computed date never fills an empty
+  event time or replaces a date the model took from elsewhere.
 
 One model call per window, with the strict schema; a valid answer with no facts
 is final (it is not asked again).
@@ -33,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 
 from robothor.memory import generation
@@ -46,7 +49,7 @@ from robothor.memory.facts import (
     _relations,
     passes_quality_filter,
 )
-from robothor.memory.relative_dates import relative_days
+from robothor.memory.relative_dates import days_in_phrase
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -84,6 +87,7 @@ CONVERSATION_EXTRACTION_SCHEMA: dict[str, Any] = {
                     "kind",
                     "confidence",
                     "event_time",
+                    "date_phrase",
                     "about_user",
                     "speaker",
                     "turns",
@@ -96,6 +100,7 @@ CONVERSATION_EXTRACTION_SCHEMA: dict[str, Any] = {
                     "kind": {"type": "string", "enum": CONVERSATION_KINDS},
                     "confidence": {"type": "number"},
                     "event_time": {"type": ["string", "null"]},
+                    "date_phrase": {"type": ["string", "null"]},
                     "about_user": {"type": "boolean"},
                     "speaker": {"type": "string", "enum": SPEAKERS},
                     "turns": {"type": "array", "items": {"type": "integer"}},
@@ -215,6 +220,8 @@ How to write each fact:
   never against any other date. It is when the thing happens, and
   not when it was said: null for a suggestion, a standing preference, or when
   the conversation does not say.
+- date_phrase: the exact words of the turn that event_time was taken from
+  ("last Tuesday", "on 3 June"), copied as written; null when event_time is null.
 - mentions: every specific name the fact mentions, as written in the fact, with
   its type (person, project, organization, technology, location, event).
   "the user" is not a mention.
@@ -254,32 +261,54 @@ def _cites_context_only(item: dict[str, Any], offset: int) -> bool:
     return bool(nums) and all(1 <= n <= offset for n in nums)
 
 
-def _dated(model_time: str | None, cited: list[ConversationTurn]) -> str | None:
-    """The fact's event time, with a relative date counted from its own turn.
+#: How far the model's date may be from the day its phrase names and still be
+#: taken as a miscount of that phrase (a weekday off by one, "in two weeks"
+#: counted as one week). Further apart, the model meant something else.
+CORRECTION_TOLERANCE = timedelta(days=7)
 
-    When the cited turns name exactly one day (:func:`relative_days`, each
-    counted from its own turn's time), that day is the event time: it fills an
-    empty one and replaces the model's, which miscounts weekdays and spans and
-    may count from today. A day named only as "today" fills an empty event time
-    and nothing more ("today I booked a trip for next month" is not dated
-    today). Turns naming two different days leave the model's answer alone.
+
+def _dated(
+    model_time: str | None, phrase: Any, cited: list[ConversationTurn]
+) -> tuple[str | None, bool]:
+    """The fact's event time, and whether it was corrected.
+
+    The computed date only ever corrects the model's: the model must have
+    returned a date and the phrase it dated from (``date_phrase``); the phrase
+    must occur in a cited turn and name exactly one day there, read in its own
+    clause and counted from that turn's local day (:func:`days_in_phrase`); and
+    the model's date must be within :data:`CORRECTION_TOLERANCE` of it. Never
+    fills an empty event time; anything else leaves the model's answer alone.
     """
-    every = {d for t in cited for d in relative_days(t.text, t.at)}
-    if len(every) != 1:
-        return model_time
-    (day,) = every
-    if model_time is None:
-        return day.isoformat()
-    exact = {d for t in cited for d in relative_days(t.text, t.at, include_today=False)}
-    if exact == every:
-        return day.isoformat()
-    return model_time
+    if model_time is None or not isinstance(phrase, str) or not phrase.strip():
+        return model_time, False
+    try:
+        model_day = date.fromisoformat(model_time[:10])
+    except ValueError:
+        return model_time, False
+    for turn in cited:
+        days = days_in_phrase(turn.text, phrase, turn.at)
+        if days is None:
+            continue
+        if len(days) != 1:
+            return model_time, False
+        (day,) = days
+        if day != model_day and abs(day - model_day) <= CORRECTION_TOLERANCE:
+            return day.isoformat(), True
+        return model_time, False
+    return model_time, False
 
 
-def _redated(text: str, model_time: str | None, event_time: str | None) -> str:
-    """The fact text with the model's date replaced by the corrected one, so the
-    sentence and ``event_time`` never disagree."""
+def _redated(
+    text: str, model_time: str | None, event_time: str | None, cited: list[ConversationTurn]
+) -> str:
+    """The fact text with a corrected date in place of the model's miscount.
+
+    Only the model's own computed date is replaced: one a cited turn states
+    itself is the speaker's, and stays.
+    """
     if not model_time or not event_time or model_time[:10] == event_time[:10]:
+        return text
+    if any(model_time[:10] in t.text for t in cited):
         return text
     return text.replace(model_time[:10], event_time[:10])
 
@@ -325,10 +354,12 @@ def parse_conversation_response(
         kind = item.get("kind") if item.get("kind") in CONVERSATION_KINDS else "other"
         mentions = _mentions(item)
         model_time = _event_time(item.get("event_time"))
-        event_time = _dated(model_time, cited if positions is not None else [])
+        event_time, _corrected = _dated(
+            model_time, item.get("date_phrase"), cited if positions is not None else []
+        )
         last = max(cited, key=lambda t: t.ref)
         fact: dict[str, Any] = {
-            "fact_text": _redated(text.strip(), model_time, event_time),
+            "fact_text": _redated(text.strip(), model_time, event_time, cited),
             "category": category,
             "entities": [m["surface_form"] for m in mentions],
             "confidence": confidence,
