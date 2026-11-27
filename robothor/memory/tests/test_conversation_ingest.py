@@ -101,9 +101,10 @@ class Store:
         self.claimed_by = None
         self.released += 1
 
-    def skip(self, session_key: str, tenant_id: str, start: int, end: int, reason: str) -> None:
+    def skip(self, session_key: str, tenant_id: str, start: int, end: int, reason: str) -> int:
         self._seen()
         self.skipped.append((start, end))
+        return len(self.skipped)
 
     def reown(self, session_key: str, tenant_id: str, owner: Any) -> int:
         self._seen()

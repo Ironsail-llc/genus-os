@@ -258,9 +258,12 @@ class _Authors:
 
 
 def _load_conversation(
-    session_key: str, tenant_id: str, after_ref: int, limit: int
+    session_key: str, tenant_id: str, after_ref: int, limit: int, until: int | None = None
 ) -> StoredConversation | None:
-    """Read one session's turns past ``after_ref`` (sync; run in a worker thread)."""
+    """Read one session's turns past ``after_ref`` (sync; run in a worker thread).
+
+    ``until`` stops at that message id (a skipped window being retried).
+    """
     from robothor.memory import segments
     from robothor.memory.segments import session_scope
     from robothor.rooms.keys import parse_room_key
@@ -278,8 +281,9 @@ def _load_conversation(
         cur.execute(
             "SELECT id, message, created_at, "
             "created_at > now() - make_interval(secs => %s) AS fresh "
-            "FROM chat_messages WHERE session_id = %s AND id > %s ORDER BY id LIMIT %s",
-            (HOLD_SECONDS, session["id"], after_ref, limit + 1),
+            "FROM chat_messages WHERE session_id = %s AND id > %s AND id <= %s "
+            "ORDER BY id LIMIT %s",
+            (HOLD_SECONDS, session["id"], after_ref, until or 2**62, limit + 1),
         )
         new = list(cur.fetchall())
         more = len(new) > limit
@@ -697,8 +701,13 @@ async def _extract(run: _Run, mark: Watermark) -> dict[str, Any] | None:
                     failures,
                     extraction.error,
                 )
-                await asyncio.to_thread(
+                total = await asyncio.to_thread(
                     _record_skip, key, tenant, window[0].ref, last_ref, str(extraction.error)
+                )
+                logger.warning(
+                    "Conversation ingest: %s skipped window(s) in this tenant; "
+                    "python -m robothor.memory.conversation_skips lists and retries them",
+                    total,
                 )
                 await asyncio.to_thread(
                     _advance, key, tenant, mark.token, last_ref, list(result["fact_ids"])
@@ -922,17 +931,27 @@ def _release(session_key: str, tenant_id: str, token: str) -> None:
     _mutate(session_key, tenant_id, _owned(token, change))
 
 
-def _record_skip(session_key: str, tenant_id: str, start: int, end: int, reason: str) -> None:
-    """Record a window passed over unextracted, so it can be found and retried."""
+def _record_skip(session_key: str, tenant_id: str, start: int, end: int, reason: str) -> int:
+    """Record a window passed over unextracted; the tenant's skipped windows now.
+
+    ``python -m robothor.memory.conversation_skips`` lists and retries them.
+    """
     with get_connection() as conn:
-        conn.cursor().execute(
+        cur = conn.cursor()
+        cur.execute(
             "INSERT INTO ingested_items (tenant_id, source_name, item_id, content_hash, "
             "fact_ids, ingested_at) VALUES (%s, %s, %s, %s, '{}', NOW()) "
             "ON CONFLICT (tenant_id, source_name, item_id) DO UPDATE "
             "SET content_hash = EXCLUDED.content_hash, ingested_at = NOW()",
             (tenant_id, _SKIPPED_SOURCE, f"{session_key}#{start}-{end}", reason[:64]),
         )
+        cur.execute(
+            "SELECT count(*) FROM ingested_items WHERE tenant_id = %s AND source_name = %s",
+            (tenant_id, _SKIPPED_SOURCE),
+        )
+        total = int(cur.fetchone()[0])
         conn.commit()
+    return total
 
 
 # ═══ re-owning a conversation's placeholder facts ════════════════════════
