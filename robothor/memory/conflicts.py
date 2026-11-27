@@ -1359,6 +1359,9 @@ async def _decide_slot(
         rid = int(r["id"])
         if rid not in verdicts:
             if asked >= SLOT_CLASSIFY_MAX or budget[0] <= 0:
+                # Not asked (the judge's bound is spent): kept, and recorded as
+                # an open conflict for the next write to this slot to resolve.
+                judged.append((r, "unresolved", f"{where}: not judged (bound reached)", None))
                 continue
             asked += 1
             budget[0] -= 1

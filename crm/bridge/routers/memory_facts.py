@@ -488,13 +488,24 @@ def preview_forget(fact_id: str, request: Request) -> dict[str, Any]:
                 (tenant_id, needle),
             )
             blocks = [row[0] for row in cur.fetchall()]
+        cur.execute(
+            "SELECT COALESCE(metadata->'forgotten', 'null'::jsonb) <> 'null'::jsonb "
+            "FROM memory_facts WHERE id = %s AND tenant_id = %s",
+            (identifier, tenant_id),
+        )
+        marked = cur.fetchone()
+        forgotten = bool(marked and marked[0])
 
-    already_inactive = not fact["is_active"]
+    # A value since replaced is inactive but still shown after its current
+    # value, so a forget still acts on it (once): the preview says so.
+    replaced = not fact["is_active"] and fact["superseded_by"] is not None and not forgotten
+    already_inactive = not fact["is_active"] and not replaced
     return {
         "fact": fact,
         # Only ever this fact. Rule 2 in the module header — and the write path
         # asserts the same list, so the two cannot drift.
         "would_deactivate": [] if already_inactive else [fact["id"]],
+        "replaced": replaced,
         "references": {
             "entities": fact["entities"],
             "episodes": episodes,

@@ -161,12 +161,14 @@ def attach_earlier(
     earlier: Sequence[dict[str, Any]],
     *,
     room: int | None = None,
+    size: Callable[[dict[str, Any]], int] | None = None,
 ) -> list[dict[str, Any]]:
     """``kept`` with each earlier value directly after its current row.
 
     An earlier value whose current row is not in ``kept`` is dropped, and one
-    that does not fit in ``room`` characters is dropped: an earlier value is an
-    extra row after selection and never takes a ranked row's place.
+    that does not fit in ``room`` (characters, or what ``size`` counts) is
+    dropped: an earlier value is an extra row after selection and never takes
+    a ranked row's place.
     """
     under: dict[Any, list[dict[str, Any]]] = {}
     for e in earlier:
@@ -178,7 +180,7 @@ def attach_earlier(
         if row.get("kind", "fact") != "fact" or row.get("source") in _NOT_FACT_SOURCES:
             continue
         for e in under.get(row.get("id"), []):
-            n = row_chars(e)
+            n = (size or row_chars)(e)
             if left is not None and n > left:
                 continue
             out.append(e)

@@ -637,8 +637,11 @@ class TestManyWriters:
         )
         active = _active("Alice lives")
         if len(active) > 1:
-            unresolved = {
-                d["new_fact_id"] for d in _decisions() if d["action"] == "conflict_unresolved"
-            }
-            assert set(active) - unresolved <= {max(active)}, (active, unresolved)
+            # Every value left current beside another is in a recorded open
+            # conflict, as either side, for the next write to resolve.
+            unresolved = set()
+            for d in _decisions():
+                if d["action"] == "conflict_unresolved":
+                    unresolved |= {d["new_fact_id"], d["existing_fact_id"]}
+            assert set(active) <= unresolved, (active, unresolved)
         assert len(active) >= 1

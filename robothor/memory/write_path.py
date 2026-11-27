@@ -349,6 +349,8 @@ def _empty_result() -> dict[str, Any]:
         "facts_processed": 0,
         "facts_skipped": 0,
         "facts_kept_confirmed": 0,
+        "facts_stored_history": 0,
+        "history_ids": [],
         "facts_refused": 0,
         "facts_failed": 0,
         "errors": [],
@@ -457,6 +459,14 @@ async def write_facts(
             result["conflict_checks_timed_out"] += 1
         if action == "kept_confirmed":
             result["facts_kept_confirmed"] += 1
+            continue
+        if action == "stored_history":
+            # A value older than the current one, stored closed as its earlier
+            # value. Kept and counted, but no graph rows: its relations would
+            # read as the current edges.
+            result["facts_stored_history"] += 1
+            if new_id:
+                result["history_ids"].append(int(new_id))
             continue
         if action in _LIVE_ACTIONS:
             if not new_id:
