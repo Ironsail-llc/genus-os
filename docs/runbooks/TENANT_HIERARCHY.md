@@ -169,13 +169,41 @@ What has to be in place:
 3. If the tool requires an attestation, the bridge's
    `GENUS_ORG_REMOTE_ATTESTATIONS` lists it. The bridge presents its own
    value; a request cannot claim one.
-4. The parent's agent is in the bridge's capabilities manifest with
-   `GET /api/org/remote/*` and `POST /api/org/remote/call` in its
-   `bridge_endpoints`; the engine's token for these routes carries the
-   `org:remote` scope, which nothing else grants.
+4. Nothing, on a fresh install, at the bridge's capabilities manifest. The
+   engine's token for these routes carries the `org:remote` scope, which only
+   the remote tools mint, and the bridge authorises the routes by that scope.
+   An instance whose `agent_capabilities.json` **lists** the agent must also
+   list the two remote patterns for it (below).
 5. For unattended reads only: the child grants `parent_agent` on that tool.
    The role has no permission rows by default, so it is denied everything
    until granted.
+
+**An instance with its own capabilities manifest.** The bridge reads
+`agent_capabilities.json` from `ROBOTHOR_CAPABILITIES_MANIFEST`, else
+`<bridge workspace>/agent_capabilities.json`, else
+`<bridge workspace>/brain/agent_capabilities.json`. Nothing generates it from
+the agent manifests: the `bridge_endpoints` in the instance's `docs/agents/main.yaml` (and in
+the shipped template) record what the agent calls, but the bridge does not read
+them. It is one file for the whole deployment, keyed by agent id only, so an
+entry for `main` covers every tenant's `main`. If the file has an entry for the
+agent that makes remote calls (usually `main`), add the two patterns to that
+entry's `bridge_endpoints`:
+
+```json
+"main": {
+  "bridge_endpoints": [
+    "GET /api/org/remote/*",
+    "POST /api/org/remote/call"
+  ]
+}
+```
+
+keeping the entry's other patterns, then restart the bridge: it loads the file
+only when it starts. Until then every remote call from that agent is refused
+with a 403 that names the missing patterns, and `genus doctor --category
+capabilities` reports it (`capabilities.remote_tools`). For an installed
+instance `docs/agents/main.yaml`, add the same two lines under `bridge_endpoints:` so the
+manifest matches the template; it does not change what the bridge allows.
 
 Every call leaves a row on each side: `agent.cross_tenant_call` under the
 parent (with `details.remote_tool`), `org.remote_call` under the child from the
