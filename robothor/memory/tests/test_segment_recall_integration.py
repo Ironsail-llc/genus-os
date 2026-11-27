@@ -226,7 +226,7 @@ async def test_a_detail_said_only_in_conversation_is_recalled_by_search_facts(pg
     assert (top["start_ref"], top["end_ref"]) == (ids[0], ids[3])
     assert top["started_at"] <= top["ended_at"]
     assert top["topic"]
-    assert set(top["leg_ranks"]) & {"segment_dense", "segment_keyword"}
+    assert "segment" in top["leg_ranks"]
 
 
 @pytest.mark.integration

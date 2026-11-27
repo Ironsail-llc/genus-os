@@ -1,9 +1,8 @@
 """Conversation segments compete with facts on equal terms in fusion.
 
 A fact enters fusion as two legs (``vector`` and ``keyword``); a segment as
-two legs of half weight (``segment_dense``, ``segment_keyword``), so one both
-found scores what the single pre-fused segment leg gave it and the default
-ranking is unchanged. Any fact found by both fact legs in their top 60 still
+the one ``segment`` leg the segment store fuses from its own dense and keyword
+legs, as it always has. So any fact found by both fact legs in their top 60
 outranks the best segment: with many facts about the subject a question
 names, the segment holding the answer used to sit past the reranker's head
 and never come back. So when that head holds no segment at all, the best
@@ -172,17 +171,25 @@ async def test_an_irrelevant_segment_displaces_nothing(env: pytest.MonkeyPatch, 
 
 
 @pytest.mark.asyncio
-async def test_a_segment_both_its_legs_found_scores_what_the_one_leg_gave(
-    env: pytest.MonkeyPatch,
+@pytest.mark.parametrize("found_by", ["both", "dense", "keyword"])
+async def test_a_segment_fuses_as_the_single_segment_leg_it_was(
+    env: pytest.MonkeyPatch, found_by: str
 ) -> None:
-    """Each segment leg counts half: first in both, a segment fuses at 1/RRF_K,
-    what the single pre-fused segment leg gave it, so default ranking holds."""
-    seg_cur = _both_legs(_segment_row(9001, ANSWER))
+    """The best segment fuses at 1/RRF_K whichever of the store's legs found
+    it: the store fuses its own legs and enters as one ``segment`` leg, so the
+    default ranking of every recall is what it was. (Two half-weight legs
+    halved a segment one leg found, and conversation evidence fell out of the
+    context tail of fact questions.)"""
+    seg = _segment_row(9001, ANSWER)
+    seg_cur = _SegmentCursor(
+        dense=[dict(seg, similarity=0.7)] if found_by != "keyword" else [],
+        keyword=[dict(seg, keyword_rank=0.4)] if found_by != "dense" else [],
+    )
     with patch.object(reranker, "rerank_pair", _scorer({"4417": 0.95})):
         rows = await _search_with_segments(_two_leg_facts(5), seg_cur, limit=10)
 
     hit = _scored(rows)[0]
-    assert set(hit["leg_ranks"]) == {"segment_dense", "segment_keyword"}
+    assert hit["leg_ranks"] == {"segment": 0}
     assert hit["rrf_score"] == pytest.approx(1 / RRF_K, abs=1e-6)
 
 
