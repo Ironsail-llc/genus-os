@@ -26,6 +26,10 @@ import pytest
 from fastapi import FastAPI
 
 from robothor.auth.deps import AuthContext
+
+# The real evaluator, taken before the engine suite's autouse fixture swaps in
+# its seeded stand-in: these tests read permission rows through it.
+from robothor.engine.permissions import check_tool_permission as _real_check_tool_permission
 from robothor.tenancy import remote_contract as rc
 
 CHILD = "acme-child-a"  # this engine's tenant
@@ -260,6 +264,9 @@ def world(monkeypatch) -> Any:
     ledger = _Ledger()
     monkeypatch.setattr("robothor.auth.accounts.get_account_by_id", lambda uid: accounts.get(uid))
     monkeypatch.setattr("robothor.engine.permissions.resolve_accessible_tenants", accessible)
+    monkeypatch.setattr(
+        "robothor.engine.permissions.check_tool_permission", _real_check_tool_permission
+    )
     monkeypatch.setattr("robothor.engine.permissions._cached_rows", cached_rows)
     monkeypatch.setattr(
         "robothor.crm.dal.tenant_child_data_access", lambda t: bool(state["grant"].get(t))
@@ -323,14 +330,14 @@ def _body(**over: Any) -> dict[str, Any]:
 
 
 def _write(**over: Any) -> dict[str, Any]:
-    return _body(
-        tool="acme_update",
-        args={"id": 7, "note": SECRET},
-        access="write",
-        request_id="req-1",
-        attestations=["baa"],
-        **over,
-    )
+    base: dict[str, Any] = {
+        "tool": "acme_update",
+        "args": {"id": 7, "note": SECRET},
+        "access": "write",
+        "request_id": "req-1",
+        "attestations": ["baa"],
+    }
+    return _body(**{**base, **over})
 
 
 async def _call(auth: AuthContext = BRIDGE, **body: Any) -> httpx.Response:

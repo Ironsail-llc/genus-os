@@ -245,6 +245,9 @@ UNTOUCHED_TABLES: dict[str, str] = {
     "pursuit_goal_provider_reservations": _PURSUIT,
     "pursuit_goal_tasks": _PURSUIT,
     "pursuit_goals": _PURSUIT,
+    "remote_tool_requests": (
+        "a parent tenant's remote-call ledger for this tenant, keyed by request, not by agent"
+    ),
     "role_permissions": _IDENTITY,
     "sales_business_observation_history": _SALES,
     "sales_business_observations": _SALES,
