@@ -1,14 +1,14 @@
-"""Across kinds, the near-duplicate rule removes only the row that is contained.
+"""The near-duplicate rule is kind-blind: whichever row ranks second is dropped.
 
-A fact is a lossy summary of the conversation it came from, so its words are
-often a subset of a segment's. The subset test dropped whichever came second:
-sometimes the segment that holds the date, the speaker and the detail. Now,
-between rows of different kinds, a row is dropped only when its words are all
-inside a row already kept (the kept row says everything it says), never when
-it contains a kept row, and never when it is newer than the row that contains
-it (a current fact must not hide behind an older conversation that happens to
-use its words). Within one kind the rule is unchanged. It holds at every place
-the rule runs: the blend, the head, the reserved picks and the budget fill.
+A fact is a summary of the conversation it came from, so its words are often
+a subset of a segment's, and the subset test drops whichever of the two ranks
+second. Two other rules were measured on the memory evaluation's world and
+rejected: comparing rows only within their kind, and dropping only the
+contained row across kinds. Both kept a fact and the conversation that says
+it, and the duplicates pushed the conversation evidence for point-in-time and
+multi-hop questions out of the 1,000-token context (held-out point_in_time 31
+to 26 and 25 of 40). The rule is the same at every place it runs: the blend,
+the head, the reserved picks and the budget fill.
 """
 
 from __future__ import annotations
@@ -65,33 +65,16 @@ def _ids(rows: list[dict[str, Any]]) -> list[tuple[str, Any]]:
     return [(r["kind"], r["id"]) for r in rows]
 
 
-def test_a_segment_is_never_dropped_for_a_fact_it_contains() -> None:
-    kept = facts._dedupe([_fact(1, FACT), _seg(2, SEGMENT)])
-    assert _ids(kept) == [("fact", 1), ("segment", 2)]
+@pytest.mark.parametrize("created_at", [OLDER, NEWER, None])
+def test_a_segment_after_a_fact_it_contains_is_dropped(created_at: datetime | None) -> None:
+    kept = facts._dedupe([_fact(1, FACT, created_at), _seg(2, SEGMENT)])
+    assert _ids(kept) == [("fact", 1)]
 
 
-def test_an_older_fact_inside_a_kept_segment_is_dropped() -> None:
-    """The update case: the fact still states what the newer conversation
-    says, and the conversation says more."""
-    kept = facts._dedupe([_seg(2, SEGMENT), _fact(1, FACT, OLDER)])
+@pytest.mark.parametrize("created_at", [OLDER, NEWER, None])
+def test_a_fact_after_a_segment_that_contains_it_is_dropped(created_at: datetime | None) -> None:
+    kept = facts._dedupe([_seg(2, SEGMENT), _fact(1, FACT, created_at)])
     assert _ids(kept) == [("segment", 2)]
-
-
-def test_a_newer_fact_inside_an_older_segment_is_kept() -> None:
-    kept = facts._dedupe([_seg(2, SEGMENT), _fact(1, FACT, NEWER)])
-    assert _ids(kept) == [("segment", 2), ("fact", 1)]
-
-
-def test_a_fact_of_unknown_time_inside_a_segment_is_dropped() -> None:
-    kept = facts._dedupe([_seg(2, SEGMENT), _fact(1, FACT, None)])
-    assert _ids(kept) == [("segment", 2)]
-
-
-def test_a_lexical_near_duplicate_of_another_kind_that_is_not_contained_is_kept() -> None:
-    """Across kinds only containment counts, not word overlap."""
-    fact = _fact(1, "Alice adopted a dog named Rex in May at the shelter.")
-    kept = facts._dedupe([_seg(2, SEGMENT), fact])
-    assert _ids(kept) == [("segment", 2), ("fact", 1)]
 
 
 def test_a_fact_inside_another_fact_is_still_a_duplicate() -> None:
@@ -106,42 +89,21 @@ def test_a_short_segment_inside_a_long_one_is_still_a_duplicate() -> None:
     assert [r["id"] for r in kept] == [1]
 
 
-def test_the_fill_keeps_a_segment_whose_words_cover_a_head_fact(
-    env: pytest.MonkeyPatch,
-) -> None:
+def test_the_fill_drops_a_segment_that_contains_a_head_fact(env: pytest.MonkeyPatch) -> None:
     head = [_fact(1, FACT)]
-    pool = [_fact(1, FACT), _seg(2, SEGMENT), _fact(3, FACT + " Indeed.")]
+    pool = [_fact(1, FACT), _seg(2, SEGMENT), _fact(4, "Bob likes tea.")]
     out = facts._fill_from_pool(head, pool, limit=5)
-    assert _ids(out) == [("fact", 1), ("segment", 2)]
+    assert _ids(out) == [("fact", 1), ("fact", 4)]
 
 
-@pytest.mark.parametrize(("created_at", "kept"), [(OLDER, False), (NEWER, True)])
-def test_the_fill_drops_only_an_older_fact_a_head_segment_contains(
-    env: pytest.MonkeyPatch, created_at: datetime, kept: bool
+@pytest.mark.parametrize("created_at", [OLDER, NEWER])
+def test_the_fill_drops_a_fact_a_head_segment_contains(
+    env: pytest.MonkeyPatch, created_at: datetime
 ) -> None:
     head = [_seg(2, SEGMENT)]
     pool = [_seg(2, SEGMENT), _fact(1, FACT, created_at), _fact(4, "Bob likes tea.")]
     out = facts._fill_from_pool(head, pool, limit=5)
-    assert (("fact", 1) in _ids(out)) is kept
-    assert ("fact", 4) in _ids(out)
-
-
-@pytest.mark.asyncio
-async def test_search_keeps_a_newer_fact_beside_the_segment_holding_its_words(
-    env: pytest.MonkeyPatch,
-) -> None:
-    """Blend and head: both rows reach the caller, whichever ranks first."""
-    fact = _row(1, FACT, similarity=0.9, created_at=datetime.now(UTC) + timedelta(days=1))
-    cur = _Cursor(vector=[fact, *_dense(5)], keyword=[dict(fact, keyword_score=0.5)])
-    seg = _segment_row(9001, SEGMENT)
-    seg_cur = _SegmentCursor(
-        dense=[dict(seg, similarity=0.8)], keyword=[dict(seg, keyword_rank=0.4)]
-    )
-    with patch.object(reranker, "rerank_pair", _scorer({"Rex": 0.9})):
-        rows = await _search_with_segments(cur, seg_cur, limit=5)
-
-    kinds = {r["kind"] for r in rows if "Rex" in r["fact_text"]}
-    assert kinds == {"fact", "segment"}
+    assert _ids(out) == [("segment", 2), ("fact", 4)]
 
 
 async def _reserved_search(hop_created: datetime) -> list[dict[str, Any]]:
@@ -163,10 +125,10 @@ async def _reserved_search(hop_created: datetime) -> list[dict[str, Any]]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("days", "kept"), [(-400, False), (1, True)])
-async def test_a_reserved_fact_inside_a_head_segment_is_kept_only_if_newer(
-    env: pytest.MonkeyPatch, days: int, kept: bool
+@pytest.mark.parametrize("days", [-400, 1])
+async def test_a_reserved_pick_never_repeats_a_head_segment(
+    env: pytest.MonkeyPatch, days: int
 ) -> None:
     rows = await _reserved_search(datetime.now(UTC) + timedelta(days=days))
     assert rows[0]["kind"] == "segment"
-    assert (700 in [r["id"] for r in rows if r["kind"] == "fact"]) is kept
+    assert 700 not in [r["id"] for r in rows if r["kind"] == "fact"]
