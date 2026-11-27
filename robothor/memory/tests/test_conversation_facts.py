@@ -370,3 +370,19 @@ def test_the_prompt_asks_for_absolute_dates_and_no_date_for_a_suggestion() -> No
     prompt = build_conversation_prompt(_turns()).lower()
     assert "absolute date" in prompt
     assert "not when it was said" in prompt
+
+
+def test_the_corrected_date_replaces_the_miscounted_one_in_the_fact_text() -> None:
+    (fact,) = parse_conversation_response(
+        _answer(
+            _fact(
+                "The user switched to an iPhone on 2023-05-15.",
+                [1],
+                kind="state",
+                event_time="2023-05-15",
+            )
+        ),
+        _said("I switched to an iPhone last Tuesday."),
+    )
+    assert fact["event_time"] == "2023-05-16"
+    assert fact["fact_text"] == "The user switched to an iPhone on 2023-05-16."
