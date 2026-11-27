@@ -310,6 +310,13 @@ def _mount_subsystem_routers(
 
     register_admin_tools(app)
 
+    # Remote tools: a parent tenant's agent running a tool a plugin here
+    # declared remote. The plugins, the registry and the dispatch live in THIS
+    # process, so the bridge forwards the parent's call here.
+    from robothor.engine.admin_remote_tools import register as register_admin_remote_tools
+
+    register_admin_remote_tools(app)
+
     # Workspace routes that start runs (a period's edition). The run lives in
     # THIS process; the bridge serves the rest of /api/rooms.
     from robothor.engine.rooms_api import register as register_rooms_api

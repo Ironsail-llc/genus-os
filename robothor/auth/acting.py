@@ -45,3 +45,31 @@ def acting_role(user_id: str, home: str, here: str) -> str | None:
         logger.warning("could not check a switched-in requester; refused", exc_info=True)
         return None
     return role
+
+
+def parent_agent_grant(home: str, here: str) -> bool:
+    """Whether ``home``'s agents may read in ``here`` with no person asking.
+
+    The unattended half of remote tools (``robothor.engine.remote_tools``):
+    ``here`` is one of ``home``'s descendants (never ``home`` itself), and
+    ``home`` let its agents into its children's data
+    (``crm_tenants.child_data_access``). Read bound to ``home``, as
+    :func:`acting_role` reads. What the agent may then RUN is still the
+    ``parent_agent`` role's permission rows in ``here``.
+
+    Blocking (SELECTs). Never raises: a failure to read refuses.
+    """
+    from robothor.crm import dal
+    from robothor.db.connection import tenant_scope
+    from robothor.engine.permissions import resolve_accessible_tenants
+
+    if not home or not here or home == here:
+        return False
+    try:
+        with tenant_scope(home):
+            if here not in resolve_accessible_tenants(home, "owner"):
+                return False
+            return bool(dal.tenant_child_data_access(home))
+    except Exception:  # noqa: BLE001 - cannot check, so refuse
+        logger.warning("could not check a parent tenant's agent grant; refused", exc_info=True)
+        return False
