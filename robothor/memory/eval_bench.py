@@ -725,6 +725,11 @@ def answer_prompt(
     )
 
 
+def _answer_key(ctx: dict[str, Any], bench: bd.Benchmark, q: bd.BenchQuestion, model: str) -> str:
+    """The answer cache key: the context, the answer model and the reader prompt version."""
+    return _key(ctx.get("key", ""), model, ANSWER_PROMPT_VERSION)
+
+
 async def _call(
     chat: Chat, prompt: str, *, model: str, max_tokens: int
 ) -> tuple[ChatResult, float]:
@@ -1041,7 +1046,7 @@ async def run_benchmark(
     ) -> bd.BenchRecord:
         items = _prompt_items(ctx)
         prompt, cat5_key, max_tokens = answer_prompt(bench, q, items)
-        akey = _key(ctx.get("key", ""), answer_model, ANSWER_PROMPT_VERSION)
+        akey = _answer_key(ctx, bench, q, answer_model)
         cached = cache.answers.get(akey) if cache.answers else None
         if cached is not None:
             answer, answer_ms = cached["answer"], float(cached["answer_ms"])
@@ -1388,6 +1393,98 @@ async def prefill_contexts(
     return stats
 
 
+def _session_bucket(rec: dict[str, Any]) -> str:
+    """A wrong record's bucket as the session-level split put it."""
+    if rec.get("abstention"):
+        return "abstention"
+    er = rec.get("evidence_recall")
+    if er is None:
+        return "unmeasured"
+    return "all_sessions_present" if er >= 1.0 else "sessions_missing"
+
+
+def rescore_report(
+    report: dict[str, Any], bench: bd.Benchmark, *, cache_dir: str | None = None
+) -> dict[str, Any]:
+    """``report`` with answer-turn evidence computed from its saved contexts.
+
+    No model call and no database: each record's context is the cached one
+    its run answered from (the report's code version first, else any
+    version), and it is linked only when the answer cached for that context
+    and the report's answer model is the record's own answer. An unlinked
+    record keeps no turn measurement and is counted. The result carries the
+    old (session-level) and new bucket of every wrong answer, and how many
+    moved between them.
+    """
+    p = dict(report.get("params") or {})
+    cache = BenchCache(cache_dir or p.get("cache_dir"))
+    version = str(p.get("code_version") or "")
+    model = str(p.get("answer_model") or "")
+    questions = {q.id: q for q in bench.questions}
+    fields = {f.name for f in dataclasses.fields(bd.BenchRecord)}
+    stats = {"linked": 0, "unlinked": 0, "answer_mismatch": 0, "no_context": 0}
+    transitions: dict[str, int] = {}
+    records: list[bd.BenchRecord] = []
+    out_rows: list[dict[str, Any]] = []
+    for raw in report.get("records") or []:
+        row = {k: v for k, v in raw.items() if k in fields}
+        row["answer_turn_recall"] = None
+        row["answer_turns_complete"] = None
+        q = questions.get(str(raw.get("question_id")))
+        ctx = None
+        if q is not None and not raw.get("error"):
+            base = context_base(
+                bench, str(p.get("ingest_mode")), int(p.get("token_budget") or 0), raw["system"], q
+            )
+            ctx = cache.context(base, version, carry_forward=True)
+        linked = False
+        if ctx is None:
+            stats["no_context"] += 1
+        else:
+            ctx_key = ctx.get("key") or _key(ctx.get("base", ""), ctx.get("version", ""))
+            assert q is not None
+            keys = [_key(ctx_key, model, 1), _answer_key({**ctx, "key": ctx_key}, bench, q, model)]
+            cached = next(
+                (a for k in keys if cache.answers and (a := cache.answers.get(k)) is not None),
+                None,
+            )
+            if cached is not None and cached.get("answer") == raw.get("answer"):
+                linked = True
+                ev = answer_turn_evidence(q, ctx["items"])
+                row["answer_turn_recall"] = ev.recall
+                row["answer_turns_complete"] = ev.complete
+                row["evidence_recall"] = evidence_recall(q, ctx["items"])
+            else:
+                stats["answer_mismatch"] += 1
+        stats["linked" if linked else "unlinked"] += 1
+        rec = bd.BenchRecord(**row)
+        records.append(rec)
+        new = bd.loss_bucket(rec)
+        out = {**raw, **dataclasses.asdict(rec), "linked": linked}
+        if new is not None:
+            old = _session_bucket(raw)
+            out["old_bucket"], out["new_bucket"] = old, new
+            if linked:
+                label = f"{old} -> {new}"
+                transitions[label] = transitions.get(label, 0) + 1
+        out_rows.append(out)
+    split = dev_split(bench.questions, seed=int(p.get("split_seed") or DEFAULT_SPLIT_SEED))
+    p["rescored_from"] = str(cache.root) if cache.root else None
+    return {
+        **report,
+        "params": p,
+        "systems": bd.summarise_bench(records, benchmark=bench.name),
+        "by_split": {
+            half: bd.summarise_bench(
+                [r for r in records if split.get(r.question_id) == half], benchmark=bench.name
+            )
+            for half in ("dev", "held_out")
+        },
+        "records": out_rows,
+        "rescore": {**stats, "transitions": dict(sorted(transitions.items()))},
+    }
+
+
 def context_base(
     bench: bd.Benchmark, ingest_mode: str, token_budget: int, system: str, q: bd.BenchQuestion
 ) -> str:
@@ -1467,7 +1564,7 @@ def estimate_run(
                     c["cached_contexts"] += 1
                     prompt, _k, _m = answer_prompt(bench, q, _prompt_items(ctx))
                     ain = estimate_tokens(prompt)
-                    akey = _key(ctx.get("key", ""), model, ANSWER_PROMPT_VERSION)
+                    akey = _answer_key(ctx, bench, q, model)
                 else:
                     prompt, _k, _m = answer_prompt(bench, q, [])
                     ain = estimate_tokens(prompt) + token_budget
@@ -1652,6 +1749,20 @@ def format_bench_markdown(report: dict[str, Any]) -> str:
                     f"| {system} | {half} | {m['overall']['n']} | {_pct(m['overall']['accuracy'])} | "
                     f"{_pct(m.get('task_averaged'))} |"
                 )
+    rs = report.get("rescore")
+    if rs:
+        lines += [
+            "",
+            f"Re-scored from saved contexts (`{p.get('rescored_from')}`), no model call: "
+            f"{rs.get('linked', 0)} records linked to the context they were answered from, "
+            f"{rs.get('unlinked', 0)} not ({rs.get('no_context', 0)} no context, "
+            f"{rs.get('answer_mismatch', 0)} cached answer differs). Wrong answers, "
+            "old (session-level) bucket -> new (answer-turn) bucket:",
+            "",
+            "| Old -> new | n |",
+            "|---|---|",
+        ]
+        lines += [f"| {k} | {v} |" for k, v in (rs.get("transitions") or {}).items()]
     if p.get("carried_forward"):
         lines += [
             "",
