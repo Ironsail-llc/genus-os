@@ -20,9 +20,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from robothor.memory import segments
+from robothor.memory.fusion import RRF_K
 from robothor.memory.tests.test_search_facts_ranking import (
-    _Cursor,
     _conn,
+    _Cursor,
     _row,
     _scorer,
     _search,
@@ -144,8 +145,8 @@ async def test_a_segment_carries_its_rank_in_each_of_its_legs(env: pytest.Monkey
     hit = _scored(rows)[0]
     assert len(hit["leg_ranks"]) == 2, hit["leg_ranks"]
     assert set(hit["leg_ranks"].values()) == {0}
-    best_fact = max(r["rrf_score"] for r in rows if r.get("kind") == "fact")
-    assert hit["rrf_score"] == pytest.approx(best_fact), "same fused credit as a two-leg fact"
+    # A fact first in both fact legs scores 2 / RRF_K; so does this segment.
+    assert hit["rrf_score"] == pytest.approx(2 / RRF_K, abs=1e-6)
 
 
 @pytest.mark.asyncio

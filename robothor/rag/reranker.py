@@ -127,6 +127,11 @@ def _max_candidates() -> int:
         return RERANK_MAX_CANDIDATES
 
 
+def scored_head_size() -> int:
+    """How many candidates from the front of the input one rerank scores (0: all)."""
+    return _max_candidates()
+
+
 def build_reranker_prompt(
     query: str,
     document: str,

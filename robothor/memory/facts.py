@@ -1514,8 +1514,15 @@ def _aux_candidates(rows: list[dict[str, Any]], kind: str, text_key: str) -> lis
     ]
 
 
-def _segment_candidates(hits: list[dict[str, Any]], query: str) -> list[Candidate]:
-    """Conversation segments as candidates of kind ``segment``.
+def _segment_legs(
+    dense: list[dict[str, Any]], keyword: list[dict[str, Any]], query: str
+) -> dict[str, list[Candidate]]:
+    """Conversation segments as two legs of kind ``segment``, as facts are.
+
+    ``segment_dense`` is the segment store's dense leg in cosine order,
+    ``segment_keyword`` its keyword leg in ``ts_rank_cd`` order. Each enters
+    fusion on its own, so a segment both found earns the credit a fact both
+    fact legs found does (one pre-fused leg capped it at half of that).
 
     The reranker reads a bounded excerpt (``Candidate.text`` becomes the row's
     ``content``); the row keeps the whole verbatim text as ``fact_text`` so
@@ -1527,30 +1534,41 @@ def _segment_candidates(hits: list[dict[str, Any]], query: str) -> list[Candidat
     from robothor.memory.segments import rerank_excerpt
 
     now = datetime.now(UTC)
-    out: list[Candidate] = []
-    for h in hits:
-        ended = h.get("ended_at")
-        # A keyword-only hit has no cosine. Leave the key out rather than send
-        # None: callers format rows with round(r.get("similarity", 0), 4).
-        hit = {k: v for k, v in h.items() if not (k == "similarity" and v is None)}
-        payload = {
-            **hit,
-            "fact_text": h["text"],
-            "category": "segment",
-            "confidence": 0.5,
-            "age_seconds": (now - ended).total_seconds() if ended is not None else None,
-        }
-        out.append(
-            Candidate(
-                id=h["id"],
-                kind="segment",
-                text=rerank_excerpt(h["text"], query),
-                similarity=h.get("similarity"),
-                leg_scores={"segment": float(h.get("rrf_score") or 0.0)},
-                payload=payload,
-            )
+    built: dict[int, tuple[str, dict[str, Any]]] = {}
+
+    def candidate(h: dict[str, Any], leg: str, score_key: str) -> Candidate:
+        if h["id"] not in built:
+            ended = h.get("ended_at")
+            # A keyword-only hit has no cosine. Leave the key out rather than
+            # send None: callers format rows with round(r.get("similarity", 0), 4).
+            hit = {k: v for k, v in h.items() if not (k == "similarity" and v is None)}
+            payload = {
+                **hit,
+                "fact_text": h["text"],
+                "category": "segment",
+                "confidence": 0.5,
+                "age_seconds": (now - ended).total_seconds() if ended is not None else None,
+            }
+            built[h["id"]] = (rerank_excerpt(h["text"], query), payload)
+        text, payload = built[h["id"]]
+        score = h.get(score_key)
+        return Candidate(
+            id=h["id"],
+            kind="segment",
+            text=text,
+            similarity=h.get("similarity"),
+            leg_scores={leg: float(score)} if score is not None else {},
+            payload=payload,
         )
-    return out
+
+    return {
+        "segment_dense": [candidate(h, "segment_dense", "similarity") for h in dense],
+        "segment_keyword": [candidate(h, "segment_keyword", "keyword_rank") for h in keyword],
+    }
+
+
+#: The two legs conversation segments enter fusion as (``_segment_legs``).
+SEGMENT_LEGS = ("segment_dense", "segment_keyword")
 
 
 async def _auxiliary_legs(
@@ -1575,7 +1593,8 @@ async def _auxiliary_legs(
     episode leg dropped whenever the reranker ran); they are now fused and
     reranked with the facts.
 
-    The ``segment`` leg (dense + keyword over ``memory_segments``) supersedes
+    The segment legs (``segment_dense`` and ``segment_keyword`` over
+    ``memory_segments``, :data:`SEGMENT_LEGS`) supersede
     the dense-only ``chat_turn`` leg: when segments are on, chat turns are not
     searched for the same query, so one conversation is not returned twice
     in two shapes. ``reader_person_id`` / ``room_ids`` decide which segments
@@ -1584,9 +1603,9 @@ async def _auxiliary_legs(
     legs: dict[str, list[Candidate]] = {}
     if include_segments:
         try:
-            from robothor.memory.segments import search_segments
+            from robothor.memory.segments import search_segment_legs
 
-            hits = await search_segments(
+            dense, keyword = await search_segment_legs(
                 query,
                 tenant_id=_tenant,
                 limit=max(SEGMENT_LEG_MIN, limit),
@@ -1596,7 +1615,7 @@ async def _auxiliary_legs(
                 query_embedding=embedding,
                 embed_missing=False,
             )
-            legs["segment"] = _segment_candidates(hits, query)
+            legs.update(_segment_legs(dense, keyword, query))
         except Exception as e:  # noqa: BLE001 - best-effort leg; the facts still return
             logger.warning("search_facts: segment leg failed: %s: %s", type(e).__name__, e)
         include_chat_turns = False
@@ -1632,6 +1651,34 @@ async def _auxiliary_legs(
     return legs
 
 
+def _segment_leaders_in_head(pool: list[dict[str, Any]], head: int) -> list[dict[str, Any]]:
+    """``pool`` with each segment leg's first row inside the first ``head`` rows.
+
+    The reranker scores only the front of the pool. A segment that only one
+    of its legs found scores half of what a fact both fact legs found does,
+    so with many such facts the best segment fused below the scored head and
+    was never judged. The first row of each leg in :data:`SEGMENT_LEGS` that
+    sits past the head takes one of the head's last places; the rows it
+    displaces follow the head in their fused order. Nothing is added or
+    removed, and ``fused_rank`` is untouched.
+    """
+    if head <= 0 or len(pool) <= head:
+        return pool
+    keys = [(r.get("kind"), r.get("id")) for r in pool]
+    leaders: list[int] = []
+    for leg in SEGMENT_LEGS:
+        at = next((i for i, r in enumerate(pool) if (r.get("leg_ranks") or {}).get(leg) == 0), None)
+        if at is not None and at >= head and at not in leaders:
+            leaders.append(at)
+    if not leaders:
+        return pool
+    leaders.sort()
+    moved = {keys[i] for i in leaders}
+    rest = [r for r in pool if (r.get("kind"), r.get("id")) not in moved]
+    cut = head - len(leaders)
+    return [*rest[:cut], *(pool[i] for i in leaders), *rest[cut:]]
+
+
 async def _rank_pool(
     query: str, pool: list[dict[str, Any]], limit: int, use_reranker: bool
 ) -> list[dict[str, Any]]:
@@ -1641,7 +1688,9 @@ async def _rank_pool(
         try:
             import time
 
-            from robothor.rag.reranker import rerank_with_fallback
+            from robothor.rag.reranker import rerank_with_fallback, scored_head_size
+
+            pool = _segment_leaders_in_head(pool, scored_head_size())
 
             t0 = time.time()
             # WS-1: with MEMORY_RERANK_WIDE the reranker keeps a wider survivor
@@ -1771,13 +1820,15 @@ async def search_facts(
            robothor/memory/activation.py) only when ``include_graph=True``
            (off by default, ``GRAPH_LEG_DEFAULT``); ``entity_expansion``
            when ``expand_entities`` and the graph leg found nothing;
-           ``segment`` (raw conversation, on by default); ``insight`` /
+           ``segment_dense`` and ``segment_keyword`` (raw conversation, on
+           by default, two legs like the facts'); ``insight`` /
            ``episode`` / ``chat_turn`` when asked for. Each fact leg fetches
            max(30, limit * 3).
         2. ``fuse`` — reciprocal rank fusion, k=60, ``LEG_WEIGHTS``.
         3. Reranker (on by default; ``MEMORY_RERANK_ENABLED``) scores the head
-           of the fused list on 0..1 and orders by that score; on any error the
-           fused order stands.
+           of the fused list on 0..1 and orders by that score; the first row
+           of each segment leg is moved into that head when it fused below
+           it. On any error the fused order stands.
         4. Blend — relevance (rerank score, else from fused rank) + recency +
            importance + access, supersession demotion; near-duplicates dropped.
         5. ``RESERVED_PLACES`` — a leg keeps its reserved places; the graph's
@@ -1817,15 +1868,15 @@ async def search_facts(
             another person's facts through the fan-out). The insight, episode and chat-turn
             legs cannot filter by person, so a restricted scope leaves them
             out (the router's rule for unscopable stores) — see
-            robothor/identity/scope.py. The segment leg can filter by person
+            robothor/identity/scope.py. The segment legs can filter by person
             and stays on, read by the same reader as the fact legs, which the
             scope only narrows: the reader passed is kept only when it is the
             scope's person (and its user id only when it belongs to that
             person); a restricted scope never makes anyone a reader.
-        include_segments: Fuse a ``segment`` leg of raw conversation
-            (``robothor.memory.segments.search_segments``). On by default;
+        include_segments: Fuse the two segment legs of raw conversation
+            (``robothor.memory.segments.search_segment_legs``). On by default;
             when on, the ``chat_turn`` leg is not run even if asked for — the
-            segment leg covers the same conversation with a keyword leg too.
+            segment legs cover the same conversation with a keyword leg too.
         reader_person_id: The person the run serves (``ToolContext.private_reader``,
             never the run's identity alone). Facts and segments private to
             that person are returned with the shared ones; without it, shared
