@@ -724,3 +724,47 @@ class TestFirstPersonEndToEnd:
         rows = _rows()
         assert rows[old["new_id"]]["is_active"] is False
         assert rows[other["new_id"]]["is_active"] is True
+
+
+class TestTheSweepMovesOn:
+    async def _open_pairs(self, verdict, n: int) -> list[tuple[int, int]]:
+        verdict.kind = "contradiction"
+        pairs = []
+        for i in range(n):
+            a = await _write(f"Person{i} lives in Boston.", names=[f"Person{i}"])
+            b = await _write(f"Person{i} lives in Denver.", names=[f"Person{i}", "Denver"])
+            pairs.append((a["new_id"], b["new_id"]))
+        return pairs
+
+    async def test_each_night_asks_the_conflicts_asked_longest_ago(self, tenants, verdict):
+        from datetime import UTC, datetime
+
+        from robothor.memory.conflicts import sweep_open_conflicts
+
+        pairs = await self._open_pairs(verdict, 4)
+        verdict.kind = "contradiction"  # the judge still cannot decide
+        asked: list[set[str]] = []
+        for night in (datetime(2026, 12, 1, tzinfo=UTC), datetime(2026, 12, 2, tzinfo=UTC)):
+            verdict.calls.clear()
+            out = await sweep_open_conflicts(TENANT, limit=2, now=night)
+            assert out["asked"] == 2
+            asked.append({new for new, _old in verdict.calls})
+        assert asked[0].isdisjoint(asked[1]), asked
+        assert len(asked[0] | asked[1]) == len(pairs)
+
+    async def test_a_mark_whose_other_side_is_gone_is_cleared(self, tenants, verdict):
+        from robothor.memory.conflicts import sweep_open_conflicts
+
+        from robothor.db.connection import get_connection
+
+        ((old, new),) = await self._open_pairs(verdict, 1)
+        # One side closed by something else since (a store-time change, a
+        # forget): the survivor's mark is stale.
+        with get_connection() as conn:
+            conn.cursor().execute("UPDATE memory_facts SET is_active = FALSE WHERE id = %s", (old,))
+            conn.commit()
+        verdict.calls.clear()
+        out = await sweep_open_conflicts(TENANT, limit=5)
+        assert verdict.calls == []
+        assert out["asked"] == 0
+        assert not (_rows()[new]["metadata"] or {}).get("conflict_open")
