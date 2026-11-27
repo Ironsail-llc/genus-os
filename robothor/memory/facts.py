@@ -1054,68 +1054,16 @@ def _dedupe(results: list[dict[str, Any]], threshold: float = 0.75) -> list[dict
     Catches exact dups, subsets, and lexical near-dups (Jaccard token overlap
     >= threshold) — e.g. the camera-detection spam and reworded restatements
     that otherwise fill the top of a result set. Conservative: only suppresses
-    clear textual overlap, not merely topically-related facts. Between rows of
-    different kinds (``_duplicates_kept``) only containment counts, one way: a
-    fact is a summary of the conversation it came from, so its words are often
-    a subset of a segment's, and the segment says all it says and more.
+    clear textual overlap, not merely topically-related facts.
     """
     kept: list[dict[str, Any]] = []
-    kept_tokens: _KeptTokens = {}
+    kept_tokens: list[frozenset[str]] = []
     for r in results:
         toks = _row_tokens(r)
-        if not _duplicates_kept(r, toks, kept_tokens, threshold):
+        if not _is_near_duplicate(toks, kept_tokens, threshold):
             kept.append(r)
-            kept_tokens.setdefault(_row_kind(r), []).append((toks, r))
+            kept_tokens.append(toks)
     return kept
-
-
-#: Tokens of the rows kept so far, with the rows, by kind.
-_KeptTokens = dict[str, list[tuple[frozenset[str], dict[str, Any]]]]
-
-
-def _duplicates_kept(
-    row: dict[str, Any], toks: frozenset[str], kept: _KeptTokens, threshold: float = 0.75
-) -> bool:
-    """Whether ``row`` repeats a row already kept, so it can be left out.
-
-    Within its kind, the near-duplicate test (``_is_near_duplicate``). Across
-    kinds, only when all its words are inside a kept row (that row says all it
-    says), never when it contains one, and never when it is newer than the row
-    that contains it: a current fact must not hide behind an older
-    conversation that happens to use its words.
-    """
-    kind = _row_kind(row)
-    if _is_near_duplicate(toks, [t for t, _ in kept.get(kind, [])], threshold):
-        return True
-    if not toks:
-        return False
-    return any(
-        toks <= kt and not _newer(row, other)
-        for other_kind, rows in kept.items()
-        if other_kind != kind
-        for kt, other in rows
-        if kt
-    )
-
-
-def _row_time(r: dict[str, Any]) -> Any:
-    """When a row's content was last true: a segment's last turn, else when recorded."""
-    return r.get("ended_at") if _row_kind(r) == "segment" else r.get("created_at")
-
-
-def _newer(row: dict[str, Any], than: dict[str, Any]) -> bool:
-    mine, theirs = _row_time(row), _row_time(than)
-    if mine is None or theirs is None:
-        return False
-    try:
-        return bool(mine > theirs)
-    except TypeError:  # naive against aware: unknown, so not newer
-        return False
-
-
-def _row_kind(r: dict[str, Any]) -> str:
-    """The kind near-duplicates are looked for within (a row without one is a fact)."""
-    return str(r.get("kind") or "fact")
 
 
 def _row_tokens(r: dict[str, Any]) -> frozenset[str]:
@@ -1801,8 +1749,8 @@ def _fill_from_pool(
     (``RERANK_MAX_CANDIDATES``) and returns what it scored, so a caller asking
     for more rows than that used to get the head alone. The rest of the pool
     follows in fused order, unscored (``rerank_score`` None, relevance from its
-    fused rank), skipping a row already returned, one that repeats a returned
-    row (``_duplicates_kept``), or one in ``drop`` (``tail_entities.confusable_tail_keys``: a row about a
+    fused rank), skipping a row already returned, a near-duplicate of one, or
+    one in ``drop`` (``tail_entities.confusable_tail_keys``: a row about a
     different person sharing a name with one the question names). Every pool
     row came through the same filtered legs, so the tail obeys the same
     tenant, scope, trust and reader rules as the head.
@@ -1813,12 +1761,8 @@ def _fill_from_pool(
     seen = {(r.get("kind", "fact"), r.get("id")) for r in out}
     dedup = _dedup_enabled()
     # Incremental: each kept row is tokenized once (the head is already free
-    # of near-duplicates), so a candidate costs one pass over the kept rows
-    # of its own kind (``_dedupe``'s rule).
-    kept_tokens: _KeptTokens = {}
-    if dedup:
-        for r in out:
-            kept_tokens.setdefault(_row_kind(r), []).append((_row_tokens(r), r))
+    # of near-duplicates), so a candidate costs one pass over the kept rows.
+    kept_tokens = [_row_tokens(r) for r in out] if dedup else []
     for row in pool:
         if len(out) >= limit:
             break
@@ -1827,9 +1771,9 @@ def _fill_from_pool(
             continue
         if dedup:
             toks = _row_tokens(row)
-            if _duplicates_kept(row, toks, kept_tokens):
+            if _is_near_duplicate(toks, kept_tokens):
                 continue
-            kept_tokens.setdefault(_row_kind(row), []).append((toks, row))
+            kept_tokens.append(toks)
         seen.add(key)
         # Marked so a later re-sort (the routed path's recency order) keeps it
         # behind the head.
