@@ -1213,8 +1213,18 @@ LEG_FETCH_MIN_WIDE = 45
 # the fused order: it reaches through what the other legs found, and lifting
 # those rows into the reranker's head pushed the right fact out on the memory
 # evaluation's world (point in time 73 to 60 of 126). It contributes through
-# its reserved places, which hold its best rows by its own score.
-LEG_WEIGHTS: dict[str, float] = {"graph": 0.0, "entity_expansion": 0.5, "chat_turn": 0.5}
+# its reserved places, which hold its best rows by its own score. The two
+# conversation-segment legs count half each: a segment both found scores what
+# the single pre-fused segment leg gave it, so the default ranking holds
+# (full weight put segments in half the reranker's head and pushed facts out
+# of the context on the memory evaluation's world).
+LEG_WEIGHTS: dict[str, float] = {
+    "graph": 0.0,
+    "entity_expansion": 0.5,
+    "chat_turn": 0.5,
+    "segment_dense": 0.5,
+    "segment_keyword": 0.5,
+}
 
 # Places in the final top-k a leg keeps whenever it returned anything (see
 # recall.apply_reserved). Graph-derived facts are related to the query, not
@@ -1660,32 +1670,29 @@ async def _auxiliary_legs(
     return legs
 
 
-def _segment_leaders_in_head(pool: list[dict[str, Any]], head: int) -> list[dict[str, Any]]:
-    """``pool`` with each segment leg's first row inside the first ``head`` rows.
+def _segment_to_judge(pool: list[dict[str, Any]], head: int) -> dict[str, Any] | None:
+    """The best conversation segment, when the reranker's head holds none.
 
-    The reranker scores only the front of the pool. A segment that only one
-    of its legs found scores half of what a fact both fact legs found does,
-    so with many such facts the best segment fused below the scored head and
-    was never judged. The first row of each leg in :data:`SEGMENT_LEGS` that
-    sits past the head takes one of the head's last places; the rows it
-    displaces follow the head in their fused order. Nothing is added or
-    removed, and ``fused_rank`` is untouched.
+    The reranker scores only the first ``head`` rows of the fused pool. A
+    question about a subject many extracted facts name fills that head with
+    facts found by both fact legs, and the segment that holds the answer
+    fuses below it and is never judged. Then the first segment of the pool
+    (the one its own legs rank best) is judged beside the head; it is kept
+    only when the reranker scores it relevant (``_rank_pool``). ``None`` when
+    the head already holds a segment, or no segment fused past it.
     """
     if head <= 0 or len(pool) <= head:
-        return pool
-    keys = [(r.get("kind"), r.get("id")) for r in pool]
-    leaders: list[int] = []
-    for leg in SEGMENT_LEGS:
-        at = next((i for i, r in enumerate(pool) if (r.get("leg_ranks") or {}).get(leg) == 0), None)
-        if at is not None and at >= head and at not in leaders:
-            leaders.append(at)
-    if not leaders:
-        return pool
-    leaders.sort()
-    moved = {keys[i] for i in leaders}
-    rest = [r for r in pool if (r.get("kind"), r.get("id")) not in moved]
-    cut = head - len(leaders)
-    return [*rest[:cut], *(pool[i] for i in leaders), *rest[cut:]]
+        return None
+    if any(r.get("kind") == "segment" for r in pool[:head]):
+        return None
+    return next((r for r in pool[head:] if r.get("kind") == "segment"), None)
+
+
+def _judged_relevant(row: dict[str, Any]) -> bool:
+    from robothor.rag.reranker import RELEVANT_SCORE
+
+    score = row.get("rerank_score")
+    return score is not None and float(score) >= RELEVANT_SCORE
 
 
 async def _rank_pool(
@@ -1699,15 +1706,28 @@ async def _rank_pool(
 
             from robothor.rag.reranker import rerank_with_fallback, scored_head_size
 
-            pool = _segment_leaders_in_head(pool, scored_head_size())
-
             t0 = time.time()
             # WS-1: with MEMORY_RERANK_WIDE the reranker keeps a wider survivor
             # pool and the blend makes the final cut.
             rerank_topk = max(limit * 4, 24) if _rerank_wide_enabled() else limit
-            reranked: list[dict[str, Any]] = await rerank_with_fallback(
-                query, pool, top_k=rerank_topk
-            )
+            head = scored_head_size()
+            judge = _segment_to_judge(pool, head)
+            if judge is None:
+                reranked: list[dict[str, Any]] = await rerank_with_fallback(
+                    query, pool, top_k=rerank_topk
+                )
+            else:
+                # One more pair: the head as always, then the segment. Judged
+                # relevant, it takes one of the head's places; otherwise it
+                # is dropped and the result is what it is without it.
+                key = ("segment", judge.get("id"))
+                ordered = [*pool[:head], judge, *(r for r in pool[head:] if r is not judge)]
+                scored = await rerank_with_fallback(
+                    query, ordered, top_k=rerank_topk + 1, max_candidates=head + 1
+                )
+                reranked = [
+                    r for r in scored if (r.get("kind"), r.get("id")) != key or _judged_relevant(r)
+                ][:rerank_topk]
             logger.info(
                 "search_facts rerank: %d candidates → %d survivors (top_k=%d) in %dms",
                 len(pool),
