@@ -146,6 +146,10 @@ class PromptItem:
     text: str
     #: The session date, in the benchmark's own format, when known.
     date: str | None
+    #: The session the item comes from (fragments of one session share it).
+    session: str | None = None
+    #: Where in the session it starts (the exchange index), for reading order.
+    position: int = 0
 
 
 # --------------------------------------------------------------------------- #
@@ -393,13 +397,57 @@ _LME_FACTS = (
 )
 
 
-def longmemeval_answer_prompt(question: str, as_of: str | None, items: Sequence[PromptItem]) -> str:
+#: Between two fragments of one session in the session layout.
+FRAGMENT_GAP = "[… turns not recalled …]"
+
+
+def render_sessions(items: Sequence[PromptItem]) -> str:
+    """Context items in the official history layout, one block per session.
+
+    A dated item is rendered as the official history string renders a
+    session (``### Session n: / Session Date: / Session Content:``); an
+    undated fact is one line. Items of one session (``session``) share one
+    block, numbered where the session first appears in rank order, with the
+    fragments in conversation order and :data:`FRAGMENT_GAP` between them;
+    as separate blocks they read as separate sessions, and models counted
+    them twice.
+    """
+    blocks: list[tuple[str, list[PromptItem]]] = []
+    by_session: dict[str, list[PromptItem]] = {}
+    for item in items:
+        if item.date and item.session:
+            if item.session not in by_session:
+                by_session[item.session] = []
+                blocks.append(("session", by_session[item.session]))
+            by_session[item.session].append(item)
+        else:
+            blocks.append(("session" if item.date else "fact", [item]))
+    parts: list[str] = []
+    for n, (kind, group) in enumerate(blocks, start=1):
+        if kind == "fact":
+            parts.append(f"\n### Fact {n}:\n{group[0].text}\n")
+            continue
+        ordered = sorted(group, key=lambda i: i.position)
+        content = f"\n{FRAGMENT_GAP}\n".join(i.text for i in ordered)
+        parts.append(
+            f"\n### Session {n}:\nSession Date: {group[0].date}\nSession Content:\n{content}\n"
+        )
+    return "".join(parts)
+
+
+def longmemeval_answer_prompt(
+    question: str,
+    as_of: str | None,
+    items: Sequence[PromptItem],
+    *,
+    history: str | None = None,
+) -> str:
     """The official reader prompt (no chain of thought), for this context.
 
     The template is chosen as ``prepare_prompt`` chooses it: chats only,
-    extracted facts only, or both. A dated item is rendered as the official
-    history string renders a session (``### Session n: / Session Date: /
-    Session Content:``); an undated fact is one line.
+    extracted facts only, or both. ``history`` is the context text as a
+    renderer produced it; without it the items are rendered by
+    :func:`render_sessions`.
     """
     kinds = {i.kind for i in items}
     has_facts = "fact" in kinds
@@ -407,16 +455,8 @@ def longmemeval_answer_prompt(question: str, as_of: str | None, items: Sequence[
     template = (
         _LME_CHATS_AND_FACTS if has_facts and has_chats else _LME_FACTS if has_facts else _LME_CHATS
     )
-    parts: list[str] = []
-    for n, item in enumerate(items, start=1):
-        if item.date:
-            parts.append(
-                f"\n### Session {n}:\nSession Date: {item.date}\nSession Content:\n{item.text}\n"
-            )
-        else:
-            parts.append(f"\n### Fact {n}:\n{item.text}\n")
-    history = "".join(parts) if parts else "\n(no history)\n"
-    return template.format(history, as_of or "", question)
+    text = render_sessions(items) if history is None else history
+    return template.format(text or "\n(no history)\n", as_of or "", question)
 
 
 # --------------------------------------------------------------------------- #

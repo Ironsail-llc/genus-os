@@ -46,7 +46,7 @@ from typing import Any, cast
 
 from robothor.memory import eval_bench_data as bd
 from robothor.memory.eval import EVAL_TENANT, EvalPreconditionError
-from robothor.memory.eval_systems import ContextBundle, WorldHandle, make_systems
+from robothor.memory.eval_systems import ContextBundle, ContextItem, WorldHandle, make_systems
 from robothor.memory.eval_world_seed import SeededWorld, _require_eval_tenants
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ INGEST_MODES: tuple[str, ...] = ("segments", "extract")
 DEFAULT_TOKEN_BUDGET = 1000
 #: Bumped when the reader prompt or its rendering changes: cached answers
 #: under another version are not reused.
-ANSWER_PROMPT_VERSION = 1
+ANSWER_PROMPT_VERSION = 2
 #: Bumped when judging changes.
 BENCH_JUDGE_VERSION = 1
 LONGMEMEVAL_ANSWER_MAX_TOKENS = 512
@@ -667,6 +667,7 @@ def _bundle_to_row(bundle: ContextBundle, dates: dict[str, str]) -> dict[str, An
                 "tokens": i.tokens,
                 "rank": i.rank,
                 "date": dates.get(i.id),
+                **({"meta": dict(i.meta)} if i.meta else {}),
             }
             for i in bundle.items
         ],
@@ -678,6 +679,68 @@ def _bundle_to_row(bundle: ContextBundle, dates: dict[str, str]) -> dict[str, An
 
 def _prompt_items(row: dict[str, Any]) -> list[bd.PromptItem]:
     return [bd.PromptItem(i["kind"], i["text"], i.get("date")) for i in row["items"]]
+
+
+_POSITION = re.compile(r"#(\d+)")
+
+
+def _iso_date(value: str | None) -> str | None:
+    for parse in (bd.parse_longmemeval_date, bd.parse_locomo_date):
+        try:
+            return parse(value).isoformat() if value else None
+        except ValueError:
+            continue
+    return None
+
+
+def bundle_from_row(row: dict[str, Any]) -> ContextBundle:
+    """A cached context row as the bundle its system returned.
+
+    Each item's ``meta`` is what the system recorded, plus what the cache
+    knows about it: the session date in the benchmark's format (``date``),
+    its session (``session``, the turn id before ``#``) and exchange index
+    (``position``). An item from a session with no recorded renderer fields
+    is described as the conversation segment it is (``kind``,
+    ``source_ref``, ``started_at``), so a renderer that groups and dates
+    segments reads cached contexts too.
+    """
+    items = []
+    for n, i in enumerate(row.get("items") or [], start=1):
+        meta: dict[str, Any] = dict(i.get("meta") or {})
+        item_id = str(i.get("id", ""))
+        if "#" in item_id:
+            session = item_id.rsplit("#", 1)[0]
+            pos = _POSITION.search(item_id)
+            meta.setdefault("session", session)
+            meta.setdefault("position", int(pos.group(1)) if pos else 0)
+            if not {"source_ref", "started_at"} & set(meta):
+                meta.update(
+                    {
+                        "kind": "segment",
+                        "source_ref": session,
+                        "started_at": _iso_date(i.get("date")),
+                    }
+                )
+        if i.get("date"):
+            meta.setdefault("date", i["date"])
+        items.append(
+            ContextItem(
+                item_id,
+                str(i.get("kind", "")),
+                str(i.get("text", "")),
+                int(i.get("tokens") or 0),
+                int(i.get("rank") or n),
+                meta,
+            )
+        )
+    return ContextBundle(
+        system=str(row.get("system", "")),
+        items=tuple(items),
+        budget=row.get("budget"),
+        equal_budget=bool(row.get("equal_budget", True)),
+        abstained=not items,
+        retrieval_ms=float(row.get("retrieval_ms") or 0.0),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -725,9 +788,34 @@ def answer_prompt(
     )
 
 
-def _answer_key(ctx: dict[str, Any], bench: bd.Benchmark, q: bd.BenchQuestion, model: str) -> str:
-    """The answer cache key: the context, the answer model and the reader prompt version."""
-    return _key(ctx.get("key", ""), model, ANSWER_PROMPT_VERSION)
+def answer_prompt_for(
+    bench: bd.Benchmark, q: bd.BenchQuestion, ctx: dict[str, Any]
+) -> tuple[str, dict[str, str] | None, int]:
+    """The reader prompt for a cached context row.
+
+    LongMemEval's context text is the eval renderer's
+    (``eval_answer.render_bundle``), so the benchmark reads recall the way
+    every other answer surface does; the official template wraps it.
+    """
+    if bench.name == "locomo":
+        return answer_prompt(bench, q, _prompt_items(ctx))
+    from robothor.memory import eval_answer
+
+    history = eval_answer.render_bundle(bundle_from_row(ctx), now=q.as_of)
+    return (
+        bd.longmemeval_answer_prompt(q.question, q.as_of, _prompt_items(ctx), history=history),
+        None,
+        LONGMEMEVAL_ANSWER_MAX_TOKENS,
+    )
+
+
+def _answer_key(
+    ctx: dict[str, Any], bench: bd.Benchmark, q: bd.BenchQuestion, model: str, *, prompt: str
+) -> str:
+    """The answer cache key: the context, the answer model, the reader prompt
+    version and the exact prompt, so a changed rendering is answered again."""
+    digest = hashlib.sha256(prompt.encode()).hexdigest()[:16]
+    return _key(ctx.get("key", ""), model, ANSWER_PROMPT_VERSION, digest)
 
 
 async def _call(
@@ -1044,9 +1132,8 @@ async def run_benchmark(
     async def _answer_and_score(
         system: str, q: bd.BenchQuestion, ctx: dict[str, Any]
     ) -> bd.BenchRecord:
-        items = _prompt_items(ctx)
-        prompt, cat5_key, max_tokens = answer_prompt(bench, q, items)
-        akey = _answer_key(ctx, bench, q, answer_model)
+        prompt, cat5_key, max_tokens = answer_prompt_for(bench, q, ctx)
+        akey = _answer_key(ctx, bench, q, answer_model, prompt=prompt)
         cached = cache.answers.get(akey) if cache.answers else None
         if cached is not None:
             answer, answer_ms = cached["answer"], float(cached["answer_ms"])
@@ -1443,7 +1530,11 @@ def rescore_report(
         else:
             ctx_key = ctx.get("key") or _key(ctx.get("base", ""), ctx.get("version", ""))
             assert q is not None
-            keys = [_key(ctx_key, model, 1), _answer_key({**ctx, "key": ctx_key}, bench, q, model)]
+            now_prompt = answer_prompt_for(bench, q, ctx)[0]
+            keys = [
+                _key(ctx_key, model, 1),  # reports written before the prompt digest
+                _answer_key({**ctx, "key": ctx_key}, bench, q, model, prompt=now_prompt),
+            ]
             cached = next(
                 (a for k in keys if cache.answers and (a := cache.answers.get(k)) is not None),
                 None,
@@ -1562,9 +1653,9 @@ def estimate_run(
                 ctx = cache.context(base, version, carry_forward=system in carry_forward)
                 if ctx is not None:
                     c["cached_contexts"] += 1
-                    prompt, _k, _m = answer_prompt(bench, q, _prompt_items(ctx))
+                    prompt, _k, _m = answer_prompt_for(bench, q, ctx)
                     ain = estimate_tokens(prompt)
-                    akey = _answer_key(ctx, bench, q, model)
+                    akey = _answer_key(ctx, bench, q, model, prompt=prompt)
                 else:
                     prompt, _k, _m = answer_prompt(bench, q, [])
                     ain = estimate_tokens(prompt) + token_budget

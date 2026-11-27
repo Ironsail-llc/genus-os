@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -68,6 +68,9 @@ class ContextItem:
     tokens: int
     #: Position in the system's ranking (1 = best), before budget filling.
     rank: int
+    #: What the context renderer reads besides the text (dates, conversation,
+    #: relevance: ``context.render_fields``); empty when the system has none.
+    meta: Mapping[str, Any] = field(default_factory=dict, compare=False, hash=False)
 
 
 @dataclass(frozen=True)
