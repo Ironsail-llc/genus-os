@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
@@ -1291,7 +1292,7 @@ async def _resolve_slot(
     scope_id: str | None,
     origin: str | None,
     event_time: str | None,
-    classify_timeout: float | None,
+    deadline: float | None,
 ) -> dict[str, Any] | None:
     """Decide a fact that fills a slot against the slot's current values.
 
@@ -1333,7 +1334,7 @@ async def _resolve_slot(
                 scope_id=scope_id,
                 origin=origin,
                 event_time=event_time,
-                classify_timeout=classify_timeout,
+                deadline=deadline,
                 verdicts=verdicts,
                 budget=budget,
             )
@@ -1434,7 +1435,7 @@ async def _decide_slot(
     scope_id: str | None,
     origin: str | None,
     event_time: str | None,
-    classify_timeout: float | None,
+    deadline: float | None,
     verdicts: dict[int, dict[str, Any]],
     budget: list[int],
 ) -> dict[str, Any] | None:
@@ -1523,6 +1524,12 @@ async def _decide_slot(
                 # an open conflict for the next write to this slot to resolve.
                 judged.append((r, "unresolved", f"{where}: not judged (bound reached)", None))
                 continue
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                # The call's time is spent: kept, recorded open, and the fact
+                # is still stored before the caller's wall.
+                judged.append((r, "unresolved", f"{where}: not judged (time spent)", None))
+                continue
             asked += 1
             budget[0] -= 1
             try:
@@ -1542,7 +1549,7 @@ async def _decide_slot(
                         new_origin=origin,
                         old_origin=r.get("origin"),
                     ),
-                    timeout=classify_timeout,
+                    timeout=remaining,
                 )
             except TimeoutError:
                 verdicts[rid] = {"outcome": None, "reasoning": "timed out", "unavailable": True}
@@ -1930,9 +1937,12 @@ async def resolve_and_store(
         embedding: Written with the new row (see ``facts.store_fact``). The
             scope also bounds the search: only facts of the same scope are
             reinforced, skipped as duplicates or superseded.
-        classify_timeout: Seconds the one classification call may take. On
-            timeout the fact is stored as new (nothing is superseded, an
-            operator-confirmed match stays active) and the result says
+        classify_timeout: Seconds every model call for this fact may take in
+            all (the slot judge's calls, or the one classification), one
+            budget shared between them. Past it, no further pair is asked: the
+            fact is stored, nothing more is superseded, an operator-confirmed
+            match stays active, the unasked pairs are recorded as open
+            conflicts, and a timed-out classification says
             ``conflict_check: "timed_out"``.
 
     Returns:
@@ -1967,6 +1977,9 @@ async def resolve_and_store(
     # Same-slot facts decide first: a repeat needs the same value, and a
     # different value for a single-valued slot is a change, whatever the
     # similarity says.
+    # One time budget for every model call this fact makes (several judge
+    # calls, or the one classification): each gets what is left of it.
+    deadline = None if classify_timeout is None else time.monotonic() + classify_timeout
     # A user-scoped write has one known owner: who "I" and "the user" are.
     owner = scope_id if (scope_kind == "user" and scope_id) else None
     slot = fact_slot(fact, owner=owner)
@@ -1981,7 +1994,7 @@ async def resolve_and_store(
             scope_id=scope_id,
             origin=origin,
             event_time=event_time,
-            classify_timeout=classify_timeout,
+            deadline=deadline,
         )
         if decided is not None:
             return decided
@@ -2091,7 +2104,7 @@ async def resolve_and_store(
                 new_recorded=datetime.now(UTC).date().isoformat(),
                 old_recorded=best_match.get("created_at"),
             ),
-            timeout=classify_timeout,
+            timeout=None if deadline is None else max(0.0, deadline - time.monotonic()),
         )
     except TimeoutError:
         # Out of time on a request path: keep the fact rather than lose it. No
