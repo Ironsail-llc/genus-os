@@ -274,7 +274,7 @@ async def test_openrouter_chat_payload_and_think_stripping(monkeypatch):
     assert result == '{"facts": []}'
     payload = _FakeAsyncClient.last_post["json"]
     # litellm-style "openrouter/" prefix is stripped for the raw API
-    assert payload["model"] == "xiaomi/mimo-v2.5"
+    assert payload["model"] == "xiaomi/mimo-v2.6-flash"
     assert payload["temperature"] == 0.2
     assert payload["max_tokens"] == 512 + generation.REMOTE_NOTHINK_MARGIN
     assert payload["response_format"]["type"] == "json_schema"
@@ -670,3 +670,24 @@ class TestFallbackStreakEscalation:
         assert not [
             r for r in caplog.records if generation.FALLBACK_STREAK_MARKER in r.getMessage()
         ]
+
+
+def test_retired_model_slug_resolves_to_successor(monkeypatch):
+    """A slug OpenRouter retired must not reach the wire.
+
+    xiaomi/mimo-v2.5 was removed from the catalog (404), and the instance env
+    file that pins it lives on a read-only mount, so the substitution has to
+    happen here or every memory write falls back to local Ollama.
+    """
+    monkeypatch.setenv(generation.REMOTE_MODEL_ENV, "openrouter/xiaomi/mimo-v2.5")
+    assert generation._remote_model() == "xiaomi/mimo-v2.6-flash"
+
+
+def test_live_model_slug_is_never_rewritten(monkeypatch):
+    monkeypatch.setenv(generation.REMOTE_MODEL_ENV, "openrouter/xiaomi/mimo-v2.6-pro")
+    assert generation._remote_model() == "xiaomi/mimo-v2.6-pro"
+
+
+def test_retired_pro_slug_resolves_to_successor(monkeypatch):
+    monkeypatch.setenv(generation.REMOTE_MODEL_ENV, "openrouter/xiaomi/mimo-v2.5-pro")
+    assert generation._remote_model() == "xiaomi/mimo-v2.6-pro"
