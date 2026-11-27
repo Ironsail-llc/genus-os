@@ -368,22 +368,28 @@ def earlier_ids(row: Mapping[str, Any]) -> list[int]:
     return sorted(set(ids), reverse=True)[:EARLIER_PER_ROW]
 
 
-_NULL_SCORES = ("similarity", "rerank_score", "rrf_score", "fused_rank")
+#: Scores an earlier row has as zero, never None: callers format rows with
+#: ``round(r.get("similarity", 0), 4)`` (see facts.py), and ``get`` returns a
+#: present None. ``rerank_score`` stays None, its documented "not reranked".
+_ZERO_SCORES = ("similarity", "rrf_score")
 
 
 def _as_earlier(old: dict[str, Any], current: Mapping[str, Any]) -> dict[str, Any]:
     """``old`` labelled, shaped like ``current`` and placed under it.
 
-    Every key a ranked row has is present: scores explicitly None (the row was
-    not ranked, it follows its current row), ``leg_scores`` empty, and the
-    current row's position markers (``leg_ranks``, ``budget_tail``) so a
-    re-sort keeps the two together. ``earlier_of`` names the current row.
+    Every key a ranked row has is present: its scores zero (the row was not
+    ranked, it follows its current row; ``rerank_score`` None), ``leg_scores``
+    empty, and the current row's position markers (``leg_ranks``,
+    ``fused_rank``, ``budget_tail``) so a re-sort keeps the two together.
+    ``earlier_of`` names the current row.
     """
     label_superseded(old)
     for key in current:
         old.setdefault(key, None)
-    for key in _NULL_SCORES:
-        old[key] = None
+    for key in _ZERO_SCORES:
+        old[key] = 0.0
+    old["rerank_score"] = None
+    old["fused_rank"] = current.get("fused_rank")
     old["leg_scores"] = {}
     old["leg_ranks"] = dict(current.get("leg_ranks") or {})
     if "budget_tail" in current:

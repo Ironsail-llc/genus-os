@@ -2239,14 +2239,18 @@ def search_facts_compat(
     """
     import asyncio
 
+    from robothor.memory.recall import row_text
+
     results = asyncio.run(search_facts(query, limit=limit, tenant_id=tenant_id))
     compat_results = [
         {
             **r,
-            "content": r.get("fact_text", ""),
+            # As the model reads it: an earlier value or an open conflict is
+            # labelled, never shown as a plain current memory.
+            "content": row_text(r) if r.get("fact_text") else "",
             "content_type": r.get("source_type", "unknown"),
             "tier": "facts",
-            "similarity": r.get("rrf_score", 0.0),
+            "similarity": r.get("rrf_score") or 0.0,
         }
         for r in results
     ]
