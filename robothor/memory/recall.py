@@ -39,7 +39,7 @@ Ranking after fusion, in ``search_facts``:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from robothor.memory.fusion import RRF_K
 
@@ -49,6 +49,103 @@ if TYPE_CHECKING:
 # Fused rank at which the rank-derived relevance falls to 0.5. Ten keeps the
 # first page of a fused list clearly separated while the tail flattens out.
 RANK_RELEVANCE_HALF = 10
+
+_T = TypeVar("_T")
+
+# The recall context cap: characters of memory text one recall returns. Recall
+# fills it, reranked head first, then the remaining fused candidates in fused
+# order; the reranker scores only its head (RERANK_MAX_CANDIDATES), so its cost
+# does not grow. It was the router's DEFAULT_BUDGET_CHARS and keeps its value.
+RECALL_CONTEXT_CHARS = 4000
+
+# The most rows a recall asks for when the caller names no limit; the
+# character cap above normally binds first.
+RECALL_FILL_ROWS = 50
+
+
+def recall_limit(named: Any) -> int:
+    """Rows to ask recall for: the caller's limit, else enough to fill the cap.
+
+    A caller that names a limit gets at most that many rows; one that names
+    none gets up to ``RECALL_FILL_ROWS``, cut by ``within_context_cap``. A named
+    limit is bounded by ``RECALL_FILL_ROWS`` too: the cap holds no more than
+    that, and the fill's work grows with the limit.
+    """
+    return min(int(named), RECALL_FILL_ROWS) if named else RECALL_FILL_ROWS
+
+
+#: Ends a row cut to fit the cap, so a reader can see it was cut.
+TRUNCATION_MARKER = " [truncated]"
+
+
+def pack_within(
+    items: Sequence[_T],
+    cap: int | None,
+    size: Callable[[_T], int],
+    truncate: Callable[[_T, int], _T] | None = None,
+) -> list[_T]:
+    """The one packing rule: ``items`` in order, each kept while it still fits.
+
+    An item that does not fit in what is left of ``cap`` is skipped and a
+    later, smaller one may still go in, so the cap is used and never exceeded
+    and the kept items stay in rank order. ``cap`` None keeps everything.
+    Skipping, not stopping: one long conversation segment early in the head
+    must not end a context that has room for the rows after it. The first,
+    top-ranked item is never skipped: if it alone is larger than the cap it is
+    kept cut to the cap by ``truncate`` (which marks the cut), so a result is
+    never empty because its best row was long. The recall tool, the routed path
+    and the eval all pack with this function, so the measured context is the
+    shipped one.
+    """
+    if cap is None:
+        return list(items)
+    kept: list[_T] = []
+    used = 0
+    for index, item in enumerate(items):
+        n = size(item)
+        if used + n > cap:
+            if index == 0 and truncate is not None and cap > 0:
+                cut = truncate(item, cap)
+                if 0 < size(cut) <= cap:
+                    kept.append(cut)
+                    used += size(cut)
+            continue
+        kept.append(item)
+        used += n
+    return kept
+
+
+def row_chars(row: dict[str, Any]) -> int:
+    """Characters of a recall row's text, as the context counts them."""
+    return len(row.get("fact_text") or row.get("insight_text") or row.get("text") or "")
+
+
+def truncate_text(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` characters, ending in ``TRUNCATION_MARKER``.
+
+    A limit too small to hold the marker gets the cut text alone.
+    """
+    if len(text) <= limit:
+        return text
+    if limit <= len(TRUNCATION_MARKER):
+        return text[: max(0, limit)]
+    return text[: limit - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
+
+
+def truncate_row(row: dict[str, Any], limit: int) -> dict[str, Any]:
+    """A copy of ``row`` whose text is cut to ``limit`` characters, marked."""
+    out = dict(row)
+    for key in ("fact_text", "insight_text", "text"):
+        if out.get(key):
+            out[key] = truncate_text(str(out[key]), limit)
+            break
+    out["truncated"] = True
+    return out
+
+
+def within_context_cap(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rows in order packed into ``RECALL_CONTEXT_CHARS`` by :func:`pack_within`."""
+    return pack_within(rows, RECALL_CONTEXT_CHARS, row_chars, truncate_row)
 
 
 @dataclass
@@ -144,6 +241,16 @@ def relevance_from_rank(rank: int, half: int = RANK_RELEVANCE_HALF) -> float:
     return half / (half + max(0, int(rank)))
 
 
+def graph_only(row: Mapping[str, Any]) -> bool:
+    """Whether the graph leg alone found this row.
+
+    Such a row is related to what was asked, not a match for it: it is
+    labelled with its path (:func:`row_text`) and follows the ranked head
+    wherever rows are re-ordered.
+    """
+    return set(row.get("leg_ranks") or {}) == {"graph"}
+
+
 def row_text(row: Mapping[str, Any]) -> str:
     """The text a model reads for a recall row: the one formatter every
     surface that renders rows uses (the engine's ``search_memory`` tool, MCP,
@@ -158,7 +265,7 @@ def row_text(row: Mapping[str, Any]) -> str:
     """
     text = str(row.get("fact_text") or row.get("insight_text") or row.get("text") or "")
     path = [str(n) for n in (row.get("graph_path") or []) if n]
-    if path and set(row.get("leg_ranks") or {}) == {"graph"}:
+    if path and graph_only(row):
         return f"Related via {' → '.join(path)}: {text}"
     return text
 

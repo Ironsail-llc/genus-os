@@ -334,7 +334,7 @@ async def _recall_fallback(
 
     results = await search_facts(
         query,
-        limit=args.get("limit", 10),
+        limit=_recall_limit(args),
         tenant_id=ctx.tenant_id,
         expand_entities=bool(args.get("expand_entities", fan_out)),
         include_insights=bool(args.get("include_insights", fan_out)),
@@ -346,7 +346,21 @@ async def _recall_fallback(
     )
     # classify_query is a pure regex with no I/O, so the label is available on
     # this path too — the output shape stays identical across the flag.
-    return results, classify_query(query)
+    return _within_context_cap(results), classify_query(query)
+
+
+def _recall_limit(args: dict[str, Any]) -> int:
+    """Rows to ask recall for (``recall.recall_limit``): the caller's limit, else the fill."""
+    from robothor.memory.recall import recall_limit
+
+    return recall_limit(args.get("limit"))
+
+
+def _within_context_cap(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``recall.within_context_cap``: rows in order inside the recall context cap."""
+    from robothor.memory.recall import within_context_cap
+
+    return within_context_cap(rows)
 
 
 def _format_results(rows: list[dict[str, Any]], query_class: str) -> dict[str, Any]:
@@ -435,7 +449,7 @@ async def _recall_routed(
 
     out = await recall(
         args.get("query", ""),
-        limit=args.get("limit", 10),
+        limit=_recall_limit(args),
         tenant_id=ctx.tenant_id,
         scope=scope,
         reader_person_id=reader_person_id,

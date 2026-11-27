@@ -354,7 +354,10 @@ class TestRecallAtEqualBudget:
         # Facts, and the eval reader's conversation turns the segment leg adds.
         assert {i.kind for i in b.items} <= {"fact", "turn"}
         assert [i.id for i in b.items][: len(a.items)] == [i.id for i in a.items]
-        assert b.tokens > a.tokens
+        # The product now fills past the reranked head itself, so the variant
+        # adds at most what is left of the budget.
+        assert len(a.items) > 16
+        assert b.tokens >= a.tokens
 
 
 class TestRecallBudgetReadsAsTheWorldReader:

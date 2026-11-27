@@ -24,10 +24,11 @@ from typing import Any
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.memory.fusion import rrf_fuse
+from robothor.memory.recall import RECALL_CONTEXT_CHARS
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BUDGET_CHARS = 4000
+DEFAULT_BUDGET_CHARS = RECALL_CONTEXT_CHARS
 
 QUERY_CLASSES = ("exact_lookup", "temporal", "how_to", "who_is", "intent", "default")
 
@@ -102,7 +103,7 @@ def _normalize_fact(r: dict[str, Any]) -> dict[str, Any]:
     # A row the graph leg found keeps its labels: who asserted it, the path of
     # entities that reached it, and which legs found it (the shared formatter,
     # ``recall.row_text``, labels a row only the graph found).
-    for key in ("origin", "graph_hops", "graph_path", "leg_ranks"):
+    for key in ("origin", "graph_hops", "graph_path", "leg_ranks", "budget_tail"):
         if key in r:
             row[key] = r[key]
     return row
@@ -248,21 +249,24 @@ async def recall(
 
     fused = rrf_fuse(ranked_lists)
 
-    # Temporal queries want the newest matching fact first.
+    # Temporal queries want the newest matching fact first, within the head.
+    # Rows that follow the head stay behind it in their own order, so a newer
+    # one never pushes the head out: a row only the graph leg found, then the
+    # budget fill's tail rows (unscored, ``budget_tail``).
     if cls == "temporal":
-        fused.sort(
+        from robothor.memory.recall import graph_only
+
+        head = [r for r in fused if not r.get("budget_tail") and not graph_only(r)]
+        related = [r for r in fused if graph_only(r) and not r.get("budget_tail")]
+        tail = [r for r in fused if r.get("budget_tail")]
+        head.sort(
             key=lambda r: (r.get("created_at") is not None, r.get("created_at")), reverse=True
         )
+        fused = head + related + tail
 
-    # Budget cap: stop once the accumulated text would exceed budget_chars.
-    capped: list[dict[str, Any]] = []
-    used = 0
-    for r in fused:
-        if len(capped) >= limit:
-            break
-        used += len(r.get("text") or "")
-        if capped and used > budget_chars:
-            break
-        capped.append(r)
+    # Budget cap: the one packing rule (recall.pack_within), then the limit.
+    from robothor.memory.recall import pack_within, row_chars, truncate_row
+
+    capped = pack_within(fused, budget_chars, row_chars, truncate_row)[:limit]
 
     return {"query_class": cls, "results": capped}

@@ -125,10 +125,114 @@ source ("leg") implements is in `robothor/memory/recall.py`.
    - **Callers.** Every caller of `search_facts` reads the rows it gets,
      except the RIP 15 router (`router.recall`), which re-fuses its stores and
      cuts the result to `limit`: on that path a graph row that follows the
-     head is usually cut. The router's 4,000-character budget and the
-     engine's tool-output cap bound the text either way.
+     head is usually cut. Where the router re-orders the head by recency (a
+     "most recent" question), a row only the graph leg found is left out of
+     that sort and stays after the head. The router's 4,000-character budget
+     and the engine's tool-output cap bound the text either way.
+6. **Budget fill** — the reranker returns only the rows it scored (16), so
+   the rest of the fused list follows in fused order, unscored, up to
+   `limit` rows in all, skipping near-duplicates of rows already returned.
+   The order is the ranked head, then the graph leg's rows when that leg is
+   on, then this tail; the graph's rows count towards `limit` here, so the
+   tail never makes a result longer than the graph leg alone would. The reranker
+   still scores only its head, so its cost does not grow. Every row comes from
+   the same filtered legs, so the tenant, scope, trust and private-reader
+   rules are the same for the tail as for the head.
+7. **Entity-aware tail** (`robothor/memory/tail_entities.py`) — the tail
+   leaves out a row about a different person or company that shares a name
+   with one the question names. The question's entities are the ones recall's
+   seed linking resolves (`activation.seeds_from_text`: strong keys, or a full
+   name or alias of exactly one shared node, never a single token). A tail fact
+   is dropped when it is linked (its mentions, else its `entities` names) to an
+   entity of the same kind sharing a name token with a named one, and it is not
+   also linked to a named entity: a person through a given or family name token
+   (honorifics such as "Dr." ignored), a company through a distinctive token
+   (generic company words such as "Systems" or "Inc" ignored). A name of
+   unknown type is held only against named people. Rows about the named entity,
+   about entities with no shared token, with no links, or under a question that
+   names no resolvable person or company are kept; a first-name-only link never
+   counts as a different person. The rule covers every unscored row, the
+   reserved picks of the graph and expansion legs as well as the tail; only the
+   ranked head is exempt. It runs off the loop, makes no model call, and only
+   ever removes rows the caller already holds; on a failure nothing is left out
+   and the failure is logged.
 
-Every leg shares `limit`. Returned rows keep their fields and add `kind`,
+Every leg shares `limit`. The `search_memory` tool fills the recall context
+cap, `RECALL_CONTEXT_CHARS` (4,000 characters, in `robothor/memory/recall.py`,
+the cap the routed path already applied), on both paths: with no `limit` it
+asks for up to `RECALL_FILL_ROWS` (50) rows; a `limit` the caller names bounds
+the rows and is itself bounded by `RECALL_FILL_ROWS`. Rows are packed by one
+rule, `recall.pack_within`, on every path (both tools, the routed path and the
+eval): a row that does not fit in what is left of the cap is skipped and a
+later, smaller one may still go in, so one long conversation segment does not
+end a context with room left. The top-ranked row is never dropped: if it alone
+is over the cap it is cut to the cap and ends with ` [truncated]` (the row
+carries `truncated: true`), so a result is never empty because its best row
+was long. No eval context had a first candidate over the cap (0 of 360 on each
+split; the longest was 27 tokens), so the measured numbers are unaffected. On the routed path a temporal query re-sorts the
+head by recency; the tail stays behind it.
+MCP `search_memory` follows the same rule (`recall.recall_limit` and
+`recall.within_context_cap`); it names no reader, so it reads shared rows
+only.
+Warm-up is unchanged: its entity context never used the reranked head and
+already fills its own 1,000-character section.
+
+#### What the budget fill measured
+
+Answer-and-judge on the eval world (seed 1, full), 40 cases per stratum, at
+the tool's real cap (`--token-budget 1000`, 4,000 characters), on the code
+with the review fixes, each run paired case by case with recall before the
+budget fill (head only, run fresh at the same cap) under the same answer
+model; judge `qwen3:8b`, its validation 100% / 99.6% on every run. The
+held-out split had been seen once before these fixes, so its runs here are a
+regression check on already-seen data, not a fresh test. The pairing covers
+the eight strata both trees have; `multi_hop_paraphrase` (from the graph
+relevance change) has no head-only counterpart and is left out.
+
+| Answer model, split | Before | Budget fill + entity-aware tail | Improved / regressed | Strata that block |
+|---|---|---|---|---|
+| `qwen3:32b`, dev | 48.1% | 65.6% (hard 47.9% → 68.8%) | 60 / 4 | none |
+| `qwen3:32b`, held out | 48.8% | 62.8% (hard 47.5% → 65.0%) | 53 / 8 | none |
+| `qwen3:8b`, dev | 52.8% | 66.6% (hard 48.3% → 68.8%) | 60 / 16 | none |
+| `qwen3:8b`, held out | 51.6% | 62.5% (hard 45.8% → 61.7%) | 51 / 16 | none |
+
+Every pooled and hard gain is significant (McNemar p < 0.001). A stratum
+blocks when it regresses more than it improves at its own p < 0.20. With the
+8B model the dev split's cross_tenant (1 / 3, p = 0.63) and long_tenure
+(3 / 6, p = 0.51) are lower but do not block.
+
+**The ticket's criterion, said plainly.** GEN-902 asks for a significant gain
+with no stratum regressing on the default configuration, which answers with
+the 8B model. It is met on the held-out split with both answer models and on
+the dev split with the 32b model. Before the review fixes, on the dev split
+with the default 8B model, it was NOT met: cross_tenant regressed (0 improved
+/ 5 regressed, p = 0.06), paired with head-only recall from main at the eval's
+2,048-token budget. On the fixed code, paired with head-only recall run fresh
+at the cap, no stratum blocks there. The two dev 8B results differ in baseline
+as well as code, so they are not the same comparison. Shipping is the
+operator's decision.
+
+The 32b answer model is the closer stand-in for production, whose agents
+answer with models far stronger than the local 8B one; the 8B results stand
+beside it. The cross_tenant losses seen with the 8B model kept the right fact
+in the reranked head: the small model, given about 50 more rows, more often
+picks a same-tenant distractor that today's shorter context also held. No
+returned row ever belonged to another tenant, in any context of either split.
+Raw detail rises from 0% to about 90% on both splits, and the context per
+question from about 250 to about 1,000 tokens.
+
+Retrieval latency per question, p50 / p95, from the same runs; the local
+model server was shared with another evaluation throughout, so the absolute
+figures are inflated and the comparison is between runs on that one machine:
+
+| Answer model, split | Before | Budget fill + entity-aware tail |
+|---|---|---|
+| `qwen3:8b`, dev | 2,964 / 5,694 ms | 2,657 / 12,890 ms |
+| `qwen3:8b`, held out | 1,381 / 2,598 ms | 3,198 / 9,768 ms |
+| `qwen3:32b`, dev | 2,784 / 6,916 ms | 7,622 / 14,932 ms |
+| `qwen3:32b`, held out | 5,003 / 10,384 ms | 7,252 / 15,235 ms |
+
+The classic 267-case suite is unchanged (265 / 267). Returned rows keep their fields and add `kind`,
 `leg_ranks`, `leg_scores`, `rrf_score`, `fused_rank`, `rerank_score` and
 `relevance`. The search path is read-only.
 
