@@ -372,3 +372,38 @@ async def test_the_old_paths_row_under_the_default_tenant_counts_too(world: Worl
     )
     await _ingest(key, turns)
     assert world.db.facts() == []
+
+
+# ═══ a damaged watermark never restarts the conversation ═════════════════
+
+
+@pytest.mark.parametrize("bad", ["2", "2|x|||", "garbage", "", "9" * 64])
+@pytest.mark.asyncio
+async def test_a_malformed_watermark_starts_at_the_current_end_and_says_so(
+    world: World, bad: str, caplog: Any
+) -> None:
+    world.model.on_turn("road bike", turn_fact("The user owns a red road bike.", about_user=True))
+    key = "telegram:4242"
+    turns = [
+        ("user", "I have a red road bike.", {"sender_telegram_id": "4242"}),
+        ("assistant", "Nice."),
+    ]
+    ids = store_chat(world.db, key, turns, person=ALICE)
+    await _ingest(key, turns)
+    calls = world.model.calls.count("extract_conversation")
+    world.db.q(
+        "UPDATE ingested_items SET content_hash = %s WHERE item_id = %s AND "
+        "source_name = 'conversation_facts'",
+        (bad, key),
+    )
+    with caplog.at_level("ERROR"):
+        await _ingest(key, turns)
+    assert world.model.calls.count("extract_conversation") == calls  # history not redone
+    assert len(world.db.facts()) == 1
+    (state,) = world.db.q(
+        "SELECT content_hash FROM ingested_items WHERE item_id = %s AND "
+        "source_name = 'conversation_facts'",
+        (key,),
+    )[0]
+    assert state.split("|")[0] == str(ids[-1])
+    assert any("malformed" in r.getMessage().lower() for r in caplog.records)
