@@ -63,13 +63,19 @@ WINDOW_MAX_TURNS = 20
 #: Most characters of turn text in one window. A single longer turn is a window
 #: of its own, and the model reads only this much of it (``_clipped``).
 WINDOW_MAX_CHARS = 12_000
-#: Runs in a row that may fail to extract the same window before it is skipped.
-#: Only a failure where the model answered counts (:data:`ANSWERED_ERRORS`).
+#: Answered failures in a row on the same window before it is skipped.
 MAX_WINDOW_FAILURES = 3
-#: Extraction errors that mean the model answered, just not usefully: the only
-#: ones that count toward skipping a window. A transport error, a timeout or a
-#: server error never counts and never moves the watermark.
-ANSWERED_ERRORS = frozenset({"unparseable", "empty"})
+#: Extraction errors that mean the model answered, just not usefully: empty, cut
+#: short (``finish_reason=length``), or not the JSON asked for.
+ANSWERED_ERRORS = frozenset({"unparseable", "empty", "truncated"})
+#: Extraction errors that mean the window took too long. They count at half
+#: weight: a window that always times out is skipped after twice as many runs.
+TIMEOUT_ERRORS = frozenset({"timeout"})
+#: Failure points per run, and the points at which a window is skipped. A
+#: transport or server error scores nothing and never moves the watermark.
+ANSWERED_POINTS = 2
+TIMEOUT_POINTS = 1
+SKIP_POINTS = ANSWERED_POINTS * MAX_WINDOW_FAILURES
 #: Where a skipped window is recorded (``ingested_items``), one row per window.
 _SKIPPED_SOURCE = "conversation_facts_skipped"
 #: Turns before a window shown to the model as read-only context.
@@ -806,18 +812,20 @@ class _Job:
                 "Conversation %s: lost the claim during extraction; stopping", sanitize_log(key)
             )
             return "stop"
-        if extraction.error is not None and extraction.error not in ANSWERED_ERRORS:
-            # The model server did not answer (unreachable, timed out, errored):
-            # nothing is counted or skipped; the next run tries again.
+        error = extraction.error
+        if error is not None and error not in ANSWERED_ERRORS | TIMEOUT_ERRORS:
+            # The model server did not answer (unreachable, errored): nothing is
+            # counted or skipped; the next run tries again.
             logger.warning(
                 "Conversation extraction for %s did not reach the model (%s); will retry",
                 sanitize_log(key),
                 extraction.error,
             )
             return "stop"
-        if extraction.error is not None and late:
-            # A late turn the model answered unusably: recorded as skipped at
-            # once (it is out of order already), never left to vanish.
+        if error is not None and late:
+            # A late turn the model answered unusably, or that timed out:
+            # recorded as skipped at once (it is out of order already, and the
+            # skips command retries it), never left to vanish.
             total = await asyncio.to_thread(
                 _record_skip, key, tenant, window[0].ref, last_ref, str(extraction.error)
             )
@@ -832,15 +840,16 @@ class _Job:
             )
             self.result["windows_skipped"] += 1
             return "skipped"
-        if extraction.error is not None:
-            failures = await asyncio.to_thread(_fail, key, tenant, token, last_ref)
-            if failures < MAX_WINDOW_FAILURES:
+        if error is not None:
+            points = TIMEOUT_POINTS if error in TIMEOUT_ERRORS else ANSWERED_POINTS
+            failures = await asyncio.to_thread(_fail, key, tenant, token, last_ref, points)
+            if failures < SKIP_POINTS:
                 logger.warning(
-                    "Conversation extraction failed for %s (%s, %d of %d); will retry",
+                    "Conversation extraction failed for %s (%s, %d of %d points); will retry",
                     sanitize_log(key),
-                    extraction.error,
+                    error,
                     failures,
-                    MAX_WINDOW_FAILURES,
+                    SKIP_POINTS,
                 )
                 return "stop"
             # It never extracts: pass over it, so the rest of the conversation is
@@ -1099,15 +1108,16 @@ def _advance(
     _mutate(session_key, tenant_id, _owned(token, change))
 
 
-def _fail(session_key: str, tenant_id: str, token: str, window_end: int) -> int:
-    """Count one more run that could not extract the next window; the new count.
+def _fail(session_key: str, tenant_id: str, token: str, window_end: int, points: int) -> int:
+    """Add ``points`` for one more run that could not extract the next window;
+    the new total.
 
     The first failure pins the window's end (``failed_end``), so the turns that
     arrive later are not folded into the window that fails.
     """
 
     def change(state: _State) -> None:
-        state.failures += 1
+        state.failures += points
         if state.failed_end is None:
             state.failed_end = window_end
 

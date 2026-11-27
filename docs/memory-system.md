@@ -1202,12 +1202,13 @@ not see. Each window is one model call, with the strict
 `CONVERSATION_EXTRACTION_SCHEMA`; up to four earlier turns are shown read-only,
 so a reply is read with what it answers. After a window is written the
 watermark moves to its last message id. A failed extraction, or a fact that
-could not be stored, leaves it there for the next run. Only an answer the model
-gave counts toward skipping (empty, or not the JSON asked for): a window it
-answered that way three runs in a row is recorded as skipped
-(`conversation_facts_skipped`), logged with the tenant's skipped count, counted
-in `windows_skipped`, and passed over. An unreachable, timed-out or erroring
-model server never counts and never moves the watermark. `python -m
+could not be stored, leaves it there for the next run. A window the model
+answered unusably (empty, cut short at its token budget, or not the JSON asked
+for) three runs in a row, or that timed out six runs in a row (a timeout counts
+half), is recorded as skipped (`conversation_facts_skipped`), logged with the
+tenant's skipped count, counted in `windows_skipped`, and passed over. An
+unreachable or erroring model server never counts and never moves the
+watermark. `python -m
 robothor.memory.conversation_skips --tenant <id>` lists the skipped windows and
 their count; `--retry` extracts each again and clears it, leaving listed any
 that still fail. A valid answer with no facts is final. `MEMORY_INGEST_SKIP_GENERATED` (default off) still leaves the

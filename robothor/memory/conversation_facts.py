@@ -514,6 +514,20 @@ def parse_conversation_response(
     return out
 
 
+def _error_of(exc: Exception) -> str:
+    """What a failed generation means: ``truncated`` or ``empty`` when the model
+    answered unusably (the generation layer raises for both), ``timeout`` when
+    it took too long, else the exception's type (a transport or server error)."""
+    text = str(exc)
+    if text.startswith("truncated response"):
+        return "truncated"
+    if text.startswith("empty content"):
+        return "empty"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    return type(exc).__name__
+
+
 async def extract_conversation_facts(
     window: list[ConversationTurn],
     *,
@@ -538,7 +552,7 @@ async def extract_conversation_facts(
                 )
             except Exception as exc:
                 logger.warning("conversation extraction attempt %d failed: %s", attempt + 1, exc)
-                error = type(exc).__name__
+                error = _error_of(exc)
                 continue
             if not raw or not raw.strip():
                 error = "empty"
