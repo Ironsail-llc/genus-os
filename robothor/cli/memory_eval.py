@@ -327,11 +327,15 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
         print(f"Iteration total: ${total:.2f} (judge validation not included).")
         return 0
 
-    blocked = preflight(tenant)
-    if blocked:
-        print(f"memory-eval cannot run: {blocked}")
-        return exit_code_for(None, blocked)
-    if len(cells) > 1 and args.bench_dir:
+    # A bound built from the benchmark (evidence_only, full_history) ingests
+    # nothing, so a run of bounds alone needs no database.
+    ingests = eb.needs_database(systems)
+    if ingests:
+        blocked = preflight(tenant)
+        if blocked:
+            print(f"memory-eval cannot run: {blocked}")
+            return exit_code_for(None, blocked)
+    if ingests and len(cells) > 1 and args.bench_dir:
         # One ingestion per history for every budget; the cells then ingest nothing.
         stats = asyncio.run(
             eb.prefill_contexts(

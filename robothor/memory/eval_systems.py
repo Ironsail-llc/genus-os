@@ -26,6 +26,9 @@ Built in:
                             defaults, as the conversation's owner, after the product's
                             retention as of the question date; the answer model reads the
                             tool message itself
+    evidence_only           a bound, no retrieval: the question's evidence sessions, whole,
+                            in date order (the answering step's ceiling)
+    full_history            a bound, no retrieval: every session of the history, whole
 
 Tokens are estimated with the repo's ``block_budget.estimate_tokens``
 (chars / 4).
@@ -626,6 +629,54 @@ class SearchMemoryToolSystem:
         )
 
 
+class BenchmarkBoundSystem:
+    """A bound built from the benchmark itself: no ingest, no retrieval, no database.
+
+    ``evidence_only`` is the question's evidence sessions (LongMemEval
+    ``answer_session_ids``), ``full_history`` every session of its history;
+    both whole, oldest first, one item per session, dated in the
+    benchmark's format. Evidence-only is the ceiling of the answering step:
+    the context a perfect retrieval would deliver. The token budget is
+    ignored.
+    """
+
+    equal_budget = False
+    needs_ingest = False
+
+    def __init__(self, *, evidence_only: bool) -> None:
+        self.evidence_only = evidence_only
+        self.name = "evidence_only" if evidence_only else "full_history"
+
+    def from_benchmark(self, bench: Any, q: Any) -> ContextBundle:
+        from robothor.memory.eval_bench import session_date_format
+
+        started = time.perf_counter()
+        fmt = session_date_format(bench.name)
+        want = set(q.evidence_sessions)
+        sessions = sorted(bench.histories[q.history_id].sessions, key=lambda s: s.at)
+        items = []
+        for n, session in enumerate(
+            (s for s in sessions if not self.evidence_only or s.id in want), start=1
+        ):
+            text = "\n".join(f"{t.role.capitalize()}: {t.text}" for t in session.turns)
+            items.append(
+                ContextItem(
+                    f"{session.id}#0u",
+                    "turn",
+                    text,
+                    estimate_tokens(text),
+                    n,
+                    {"date": fmt(session.at), "session": session.id, "position": 0},
+                )
+            )
+        return _bundle(self.name, tuple(items), None, False, started)
+
+    async def retrieve(
+        self, case: Case, *, world_handle: WorldHandle, token_budget: int
+    ) -> ContextBundle:
+        raise RuntimeError(f"{self.name} is built from the benchmark (from_benchmark)")
+
+
 # --------------------------------------------------------------------------- #
 # Registry
 # --------------------------------------------------------------------------- #
@@ -642,6 +693,8 @@ _REGISTRY: dict[str, Callable[[], MemorySystem]] = {
     "full_context": FullContextSystem,
     "full_context_unbounded": lambda: FullContextSystem(unbounded=True),
     "search_memory_tool": SearchMemoryToolSystem,
+    "evidence_only": lambda: BenchmarkBoundSystem(evidence_only=True),
+    "full_history": lambda: BenchmarkBoundSystem(evidence_only=False),
 }
 
 DEFAULT_SYSTEMS: tuple[str, ...] = (

@@ -666,7 +666,7 @@ def _bundle_to_row(bundle: ContextBundle, dates: dict[str, str]) -> dict[str, An
                 "text": i.text,
                 "tokens": i.tokens,
                 "rank": i.rank,
-                "date": dates.get(i.id),
+                "date": dates.get(i.id) or i.meta.get("date"),
                 **({"meta": dict(i.meta)} if i.meta else {}),
             }
             for i in bundle.items
@@ -822,6 +822,16 @@ def _context_tokens(ctx: dict[str, Any]) -> int:
 
         return estimate_tokens(str(ctx["delivered"]))
     return sum(int(i.get("tokens") or 0) for i in ctx["items"])
+
+
+def _bound_row(s: Any, bench: bd.Benchmark, q: bd.BenchQuestion) -> dict[str, Any]:
+    """The context row of a system built from the benchmark (no ingest)."""
+    return {**_bundle_to_row(s.from_benchmark(bench, q), {}), "reranker": "not_run"}
+
+
+def needs_database(systems: Sequence[str]) -> bool:
+    """Whether any of these systems ingests (and so needs the database)."""
+    return any(getattr(s, "needs_ingest", True) for s in make_systems(list(systems)))
 
 
 def _retrieval_order(s: Any, q: bd.BenchQuestion) -> tuple[bool, str]:
@@ -1311,6 +1321,10 @@ async def run_benchmark(
         need: list[tuple[Any, bd.BenchQuestion]] = []
         for s, q in pending:
             row = cache.context(_base(s.name, q), version, carry_forward=s.name in carry_forward)
+            if row is None and not getattr(s, "needs_ingest", True):
+                row = _bound_row(s, bench, q)
+                cache.put_context(_base(s.name, q), version, row)
+                row = {"key": _key(_base(s.name, q), version), "version": version, **row}
             if row is not None:
                 contexts[(s.name, q.id)] = row
                 if row.get("version") != version:
@@ -1486,6 +1500,7 @@ async def prefill_contexts(
             (s, q, b)
             for q in qs
             for s in built
+            if getattr(s, "needs_ingest", True)
             for b in token_budgets
             if cache.context(
                 context_base(bench, ingest_mode, b, s.name, q),
@@ -1494,7 +1509,8 @@ async def prefill_contexts(
             )
             is None
         ]
-        stats["cached"] += len(qs) * len(built) * len(token_budgets) - len(need)
+        ingesting = [s for s in built if getattr(s, "needs_ingest", True)]
+        stats["cached"] += len(qs) * len(ingesting) * len(token_budgets) - len(need)
         if not need:
             continue
         need.sort(key=lambda sqb: _retrieval_order(sqb[0], sqb[1]))
@@ -1779,6 +1795,7 @@ def estimate_run(
 
     cache = BenchCache(cache_dir)
     version = code_version()
+    built = {s.name: s for s in make_systems(list(systems))}
     measured: dict[str, list[int]] = {}
     for row in cache.answers.rows.values() if cache.answers else []:
         if row.get("model") and row.get("output_tokens") is not None:
@@ -1812,18 +1829,24 @@ def estimate_run(
                 "answer_output_tokens": 0,
                 "judge_input_tokens": 0,
                 "judge_output_tokens": 0,
+                "context_tokens": 0,
             }
             for q in questions:
                 base = context_base(bench, ingest_mode, token_budget, system, q)
                 ctx = cache.context(base, version, carry_forward=system in carry_forward)
+                if ctx is None and not getattr(built[system], "needs_ingest", True):
+                    # Built from the benchmark: its real size, nothing retrieved.
+                    ctx = {"key": _key(base, version), **_bound_row(built[system], bench, q)}
                 if ctx is not None:
                     c["cached_contexts"] += 1
+                    c["context_tokens"] += _context_tokens(ctx)
                     prompt, _k, _m = answer_prompt_for(bench, q, ctx)
                     ain = estimate_tokens(prompt)
                     akey = _answer_key(ctx, bench, q, model, prompt=prompt)
                 else:
                     prompt, _k, _m = answer_prompt(bench, q, [])
                     ain = estimate_tokens(prompt) + token_budget
+                    c["context_tokens"] += token_budget
                     akey = ""
                 cached = cache.answers.get(akey) if (akey and cache.answers) else None
                 if cached is not None:
