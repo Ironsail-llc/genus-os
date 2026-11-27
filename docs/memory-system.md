@@ -539,9 +539,14 @@ falls back to similarity:
    new fact ("She lives in Boston" said of one person, "She lives in Denver"
    of another) is stored beside it, with no model call.
 5. **classify_relationship** -- otherwise the LLM classifies the best match as
-   `new`, `duplicate`, `update`, or `contradiction`.
-6. **Act** -- store (new), skip (duplicate), or supersede (update/contradiction),
-   within the trust order below.
+   `new`, `duplicate`, `update`, or `contradiction`. It is told both facts'
+   event and recorded dates, and that both facts are untrusted data whose
+   instructions are ignored.
+6. **Act** -- store (new), skip (duplicate), or supersede (update only), within
+   the trust order below. A `contradiction` closes nothing: both stay active
+   and the open conflict is recorded and marked, as on the slot path (against
+   an operator-confirmed or higher-authority fact the new one is still kept
+   overruled).
 
 Every decision, including the ones that change nothing, is a row in
 `memory_conflict_decisions`.
@@ -558,9 +563,30 @@ favorite C is Y", "X's manager is Y", "X has visited Y", "X likes Y", ...).
 that is not a plain statement of one current value: one with `also`, a
 negation (`not`, `never`, `no longer`, `n't`), `but`, `if`, `unless`, a hedge
 (`might`, `could`, `would`, `maybe`, `temporarily`, `used to`), reported
-speech (`said`, `told`), quotes or a question mark; a pronoun or generic
-subject (`she`, `the user`, `the company`); or a value not of the attribute's
-type. Names (residence, employer, manager, spouse, car, ...) must be
+speech (`said`, `told`), quotes or a question mark; a time-bounded value,
+checked on the whole text (`this week` / `month` / `summer`, `for a few
+weeks`, `until`, `temporarily`, `visiting`, `staying`, `on holiday` /
+`vacation`, `for now`); a subject that is not a name (`Alice left Acme and`),
+a pronoun or a generic one (`she`, `the company`); or a value not of the
+attribute's type.
+
+**First person.** "I live in …", "My manager is …" and "The user prefers …"
+are about the person the write is anchored to: a user-scoped write's owner
+(its `scope_id`). With that one known owner they fill the owner's slot
+(`owner:<scope id>`, matched only against the owner's own first-person facts
+in that scope) and go through the judge like any other; a shared write has no
+single owner, so such a fact has no slot. The owner is never found by a name
+search.
+
+**Only the matched clause counts.** The frame matches the first sentence of
+the fact; that clause and the slot values (passed as separate quoted fields)
+are all the judge sees, and the wording gate reads that clause with the
+value struck out ("9 New Street" or "New York" never count as "new"). The
+judge's prompt states that both facts are untrusted data and that any
+instruction inside them is to be ignored. A fact whose text reads like an
+instruction to a classifier ("SYSTEM: …", "ignore previous instructions",
+"note to classifier", "answer changed") never closes or files anything:
+when the judge says it changed, both stay and the conflict is recorded. Names (residence, employer, manager, spouse, car, ...) must be
 capitalised words ("the sales team", "night", "her job", "12 Main Street" as a
 residence are refused); phone, email, address, birthday, age and timezone must
 match their literal shape ("broken", "next week", "a sensitive topic" are
@@ -583,19 +609,21 @@ same way, at most 25, plus the nearest neighbours already found, all in the
 fact's own tenant and exactly its scope. A fact in another tenant, or private
 to someone else, is never compared.
 
-**Cardinality.** Single-valued (`SINGLE_VALUED_ATTRIBUTES`: residence,
-manager, role, title, spouse, partner, car, birthday, age, timezone, and every
-pairwise preference and favorite); several-valued
-(`SEVERAL_VALUED_ATTRIBUTES`: employer, phone, email, address, and base,
-where someone works from, which is a slot of its own and never their
-residence; people often have more than one of each); multi-valued (`MULTI_VALUED_ATTRIBUTES`: likes,
-owns, visited, uses, speaks, plays).
+**Cardinality.** Single-valued by nature (`SINGLE_VALUED_ATTRIBUTES`:
+residence, spouse, partner, birthday, age, timezone, plus every pairwise
+preference and favorite): a judged change closes. Several-valued
+(`SEVERAL_VALUED_ATTRIBUTES`: employer, phone, email, address, base (where
+someone works from, never their residence), role, title, car, manager):
+people hold more than one, so a judged change closes only when the new text
+words it as a replacement. Multi-valued (`MULTI_VALUED_ATTRIBUTES`: likes,
+owns, visited, uses, speaks, plays): never closes.
 
 - **Repeat** (the same value, one value's words containing the other's, or
   the same resolved value entity): at cosine 0.92 or more in the same
   category the existing fact is reinforced, unless the new source ranks below
   the fact's own authority, which reinforces nothing (only the sighting is
-  recorded, action `sighted`). A restatement below 0.92 goes on to the
+  recorded, action `sighted`); a source with no recorded origin ranks as an
+  agent for this, so it never reinforces a user-stated or confirmed fact. A restatement below 0.92 goes on to the
   similarity path, so its provenance is not lost. The similarity path's own
   reinforce rule follows the same authority rule.
 - **Multi-valued, a different value:** stored beside the old, no model call,
@@ -623,7 +651,9 @@ owns, visited, uses, speaks, plays).
   "Older" compares the new fact's `event_time` with the old fact's effective
   time: its `event_time`, unless that is after the row was even recorded (a
   wrong date, ignored), else its `created_at`. An undated new fact is never
-  older.
+  older. One exception to the second row: when the old value has no event
+  date of its own, the judge is told the new event predates the old record,
+  and a `changed` with change wording in the new text closes it.
 - **Closing** sets `superseded_by`, `valid_to` and
   `metadata.superseded_reason = "changed"`; the new row lists the closed ids
   once in `metadata.supersedes`. Nothing is deleted. A fact never closes
@@ -634,14 +664,26 @@ owns, visited, uses, speaks, plays).
   after the current value. The write path counts it in
   `facts_stored_history` / `history_ids` and writes no graph rows for it (its
   relations would read as current edges).
-- **Bounds.** At most `SLOT_CLASSIFY_MAX` (2) pairs per decision and
-  `SLOT_CLASSIFY_TOTAL` (3) judge calls per stored fact in all, a pair asked
-  once, across up to `SLOT_ATTEMPTS` (6) restarts. A pair left unasked is kept
-  and recorded as an open conflict.
+- **Bounds.** At most `SLOT_CLASSIFY_MAX` (3) pairs per decision, newest
+  first, and `SLOT_CLASSIFY_TOTAL` (3) judge calls per stored fact in all, a
+  pair asked once, across up to `SLOT_ATTEMPTS` (6) restarts. A judged change
+  closes every value it covers; a pair left unasked is kept and recorded as
+  an open conflict.
+- **Open conflicts are visible and swept.** Both rows of an unresolved pair
+  carry `metadata.conflict_open` (the other row's id). Recall labels a row
+  whose other side is still current and visible to the reader
+  (`conflict_open: true`, `conflict_with`), and `recall.row_text` reads it as
+  `Conflicting value, unresolved: …`. The nightly per-tenant maintenance
+  (`lifecycle._run_tenant_core_steps`, step 7b) runs
+  `conflicts.sweep_open_conflicts`: at most `SWEEP_LIMIT` (20) of the newest
+  open conflicts, each asked again at most once a night with the store-time
+  rules (judge and decision table, or the classifier, where only `update`
+  closes), closed in one transaction and its marks cleared when resolved.
 - **One transaction.** The insert and every close run in the insert's
-  transaction (`store_fact(after_insert=...)`), under a per-slot advisory
-  lock (on the subject's resolved entity when it has one, so two names for one
-  entity share it) that re-reads the slot; a value another writer stored
+  transaction (`store_fact(after_insert=...)`), under per-slot advisory
+  locks (always the subject's name or owner, and its resolved entity too when
+  it has one, taken in a fixed order, so two writers that resolved it
+  differently still share a lock) that re-reads the slot; a value another writer stored
   meanwhile restarts the decision. When writers keep colliding past the
   restarts, the fact is stored, nothing is closed, and an open conflict is
   recorded against every value then current: concurrent values end with one
