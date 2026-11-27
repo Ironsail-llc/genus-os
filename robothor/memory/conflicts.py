@@ -570,11 +570,21 @@ _SLOT_SQL = """
     ), val AS (
         SELECT id FROM memory_entities WHERE tenant_id = %(t)s AND lower(name) = %(value)s
     ), cand AS (
+        -- Subject AND attribute, each arm on an index: the subject's edges of
+        -- the slot's predicates; facts naming the subject whose words name the
+        -- attribute (two GINs); the subject entity's mentions, filtered the same.
+        SELECT ev.fact_id AS id
+          FROM memory_relations r JOIN memory_relation_evidence ev ON ev.relation_id = r.id
+         WHERE r.tenant_id = %(t)s AND r.source_entity_id IN (SELECT id FROM subj)
+           AND r.predicate = ANY(%(preds)s)
+        UNION
         SELECT id FROM memory_facts
          WHERE tenant_id = %(t)s AND lower_entities(entities) && ARRAY[%(name)s]::text[]
+           AND tsv @@ to_tsquery('english', %(terms)s)
         UNION
-        SELECT m.fact_id FROM memory_mentions m
+        SELECT m.fact_id FROM memory_mentions m JOIN memory_facts mf ON mf.id = m.fact_id
          WHERE m.tenant_id = %(t)s AND m.entity_id IN (SELECT id FROM subj)
+           AND mf.tsv @@ to_tsquery('english', %(terms)s)
     ), hits AS (
         SELECT f.id, f.fact_text, f.category, f.entities, f.origin, f.metadata, f.event_time,
                COALESCE((SELECT json_agg(json_build_object(
@@ -602,10 +612,40 @@ _SLOT_SQL = """
 """
 
 
+#: Words (``to_tsquery`` terms, stemmed by it) a fact naming each attribute uses.
+_ATTRIBUTE_TERMS: dict[str, str] = {
+    "residence": "live | lives | moved | move | resides | relocated | based",
+    "employer": "works | working | employed",
+    "manager": "manager | boss",
+    "role": "role",
+    "title": "title",
+    "spouse": "married | spouse | husband | wife",
+    "partner": "partner",
+    "car": "drives",
+    "phone": "phone",
+    "email": "email",
+    "address": "address",
+    "birthday": "birthday",
+    "age": "age",
+    "timezone": "timezone | zone",
+    "prefers": "prefers | prefer",
+    "favorite": "favorite | favourite",
+    "visited": "visited | visit | travelled | traveled",
+    "likes": "likes | enjoys | loves",
+    "owns": "owns",
+    "uses": "uses",
+    "speaks": "speaks",
+    "plays": "plays",
+}
+
+
 def _slot_params(
     slot: FactSlot, tenant: str, kind: str, sid: str | None, limit: int, after: int
 ) -> dict[str, Any]:
+    base = slot.attribute.split(":", 1)[0]
     return {
+        "preds": [p for p, a in PREDICATE_ATTRIBUTES.items() if a == base],
+        "terms": _ATTRIBUTE_TERMS.get(base, base),
         "t": tenant,
         "name": slot.subject_name,
         "value": slot.value,
@@ -640,8 +680,14 @@ async def find_slot_candidates(
 ) -> SlotLookup:
     """Active facts that may fill ``slot``, and what its subject and value resolve to.
 
-    One statement over indexes, in the fact's own tenant and exactly its scope,
-    as in :func:`find_similar_facts`. Newest first, at most ``limit``.
+    By subject AND attribute, so a busy subject's other facts never hide the
+    slot: the subject entity's edges of the slot's predicates
+    (``memory_relations (tenant_id, source_entity_id)``), facts naming the
+    subject whose text names the attribute (``lower_entities`` and ``tsv``
+    GINs), and the subject entity's mentions (``memory_mentions (tenant_id,
+    entity_id)``) filtered the same way. One statement, in the fact's own
+    tenant and exactly its scope, as in :func:`find_similar_facts`. Newest
+    first, at most ``limit``.
     """
     if not slot.subject_name:
         return SlotLookup(None, None, [])
@@ -1351,6 +1397,27 @@ async def resolve_and_store(
                 "classification": "duplicate",
                 "reasoning": "already overruled",
             }
+
+    # Facts naming no entity in common are about different subjects ("She
+    # lives in Boston" said of one person, "She lives in Denver" of another):
+    # never an update of one another, and not worth a model call.
+    new_names = {str(e).strip().lower() for e in fact.get("entities") or [] if e}
+    old_names = {str(e).strip().lower() for e in best_match.get("entities") or [] if e}
+    if new_names and old_names and not (new_names & old_names):
+        fact_id = await _store()
+        await asyncio.to_thread(
+            record_conflict_decision,
+            tenant_id=tenant_id or DEFAULT_TENANT,
+            classification="new",
+            action="stored",
+            new_fact_id=fact_id or None,
+            existing_fact_id=best_match["id"],
+            reasoning="no entity in common",
+            similarity=float(best_match.get("similarity") or 0) or None,
+            new_fact_text=fact["fact_text"],
+            existing_fact_text=best_match["fact_text"],
+        )
+        return {"action": "stored", "new_id": fact_id}
 
     try:
         classification = await asyncio.wait_for(
