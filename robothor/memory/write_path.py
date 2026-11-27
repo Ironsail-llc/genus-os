@@ -19,13 +19,12 @@ extracts first and then calls it). For each fact it:
 Origin (:func:`origin_for`) is decided by who said it, never upgraded by
 default.
 
-Scope. Every writer stores ``shared`` facts, exactly as before this module:
-making facts from a one-to-one conversation private to its person would stop
-scheduled agents and other team members recalling them, which is a product
-decision for the operator, not a side effect of a write-path change. A PRIVATE
-scope is written only when a caller passes one explicitly (``scope=`` on
-:meth:`WriteContext.for_source`, ``ingest_content`` and ``store_memory_content``;
-nothing passes it yet). The mechanism is complete and tested: a private fact
+Scope. A writer stores ``shared`` facts unless it passes a scope explicitly
+(``scope=`` on :meth:`WriteContext.for_source`, ``ingest_content`` and
+``store_memory_content``). Conversation ingest passes the conversation's own
+scope (``segments.session_scope``), so a private conversation's facts are as
+private as its segments; every other writer stores ``shared``. The mechanism is
+complete and tested: a private fact
 never deduplicates into, reinforces or supersedes a shared one or another
 reader's (scope is in the content hash and bounds the similarity search),
 and consolidation never mixes scopes. :func:`conversation_scope` is the
