@@ -261,11 +261,14 @@ def _follow_consolidations(cur: Any, tenant_id: str, moved: list[int]) -> dict[s
             "AND NOT (COALESCE(s.metadata, '{}'::jsonb) ? 'operator_confirmed')",
             (tenant_id, frontier),
         )
+        # Only a row that moved, or was private already, is settled: a row judged
+        # mixed is judged again if another path reaches it after more members
+        # move (only settled rows extend the frontier, so this terminates).
         successors = [(int(i), k, a) for i, k, a in cur.fetchall() if int(i) not in seen]
-        seen.update(i for i, _k, _a in successors)
         frontier = []
         for row_id, kind, active in successors:
             if kind != "shared":
+                seen.add(row_id)
                 frontier.append(row_id)  # already private: look further along
                 continue
             cur.execute(
@@ -280,6 +283,8 @@ def _follow_consolidations(cur: Any, tenant_id: str, moved: list[int]) -> dict[s
                 out["graph"].update(_unpublish_graph(cur, tenant_id, [row_id]))
                 if active:
                     out["moved"].add(row_id)
+                out["mixed"].discard(row_id)
+                seen.add(row_id)
                 frontier.append(row_id)
             elif active:
                 out["mixed"].add(row_id)
