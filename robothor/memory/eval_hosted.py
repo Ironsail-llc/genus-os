@@ -107,6 +107,12 @@ def _is_rate_limit(exc: Exception) -> bool:
     return status in (429, 500, 502, 503, 504)
 
 
+def _out_of_credit(exc: Exception) -> bool:
+    from robothor.engine.llm_client import is_credit_exhausted
+
+    return bool(is_credit_exhausted(exc))
+
+
 def _retire_if_credential_failure(model: str, key: str, exc: Exception) -> bool:
     """Retire ``key`` when the provider rejected the credential; True if it did.
 
@@ -181,8 +187,12 @@ async def hosted_chat(
         except Exception as exc:
             attempt += 1
             # A spent or rejected key is retired and raised at once: waiting
-            # does not refill an account, and the next call rotates.
+            # does not refill an account, and the next call rotates. With no
+            # pooled key left (litellm read the environment), a spent account
+            # still raises at once.
             if key is not None and _retire_if_credential_failure(model, key, exc):
+                raise
+            if _out_of_credit(exc):
                 raise
             if attempt >= _MAX_ATTEMPTS or not _is_rate_limit(exc):
                 raise
