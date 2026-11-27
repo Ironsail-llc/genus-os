@@ -560,7 +560,9 @@ def test_connections_ask_each_engine_with_a_short_timeout(engine):
 
     from routers.org_remote import CONNECTIONS_TIMEOUT_S
 
-    assert CONNECTIONS_TIMEOUT_S == 10
+    from robothor.tenancy import remote_contract as rc
+
+    assert CONNECTIONS_TIMEOUT_S == rc.CONNECTIONS_TIMEOUT_S == 10
     assert {c["timeout"] for c in engine.calls} == {CONNECTIONS_TIMEOUT_S}
 
 

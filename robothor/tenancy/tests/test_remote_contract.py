@@ -55,6 +55,14 @@ def test_limits():
     assert rc.TARGET_TIMEOUT_S < rc.BRIDGE_TIMEOUT_S < rc.HOME_TIMEOUT_S
 
 
+def test_a_catalogues_checks_finish_inside_the_connections_budget():
+    # The connections page gives each company CONNECTIONS_TIMEOUT_S; the
+    # catalogue's plugin checks must end before it, or a company with a slow
+    # check reads as "could not be read" every time the check cache expires.
+    assert rc.CONNECTIONS_TIMEOUT_S == 10
+    assert 0 < rc.CHECKS_BUDGET_S < rc.CONNECTIONS_TIMEOUT_S
+
+
 @pytest.mark.parametrize("token", ["baa", "a", "hipaa_2", "a" + "b" * 31])
 def test_attestation_token_accepts(token):
     assert rc.ATTESTATION_TOKEN_RE.fullmatch(token)
