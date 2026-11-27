@@ -28,6 +28,8 @@ from robothor.memory.recall import RECALL_CONTEXT_CHARS
 
 logger = logging.getLogger(__name__)
 
+# The cap's default; ``recall`` packs to the setting
+# (``recall.recall_context_chars``) unless the caller passes ``budget_chars``.
 DEFAULT_BUDGET_CHARS = RECALL_CONTEXT_CHARS
 
 QUERY_CLASSES = ("exact_lookup", "temporal", "how_to", "who_is", "intent", "default")
@@ -135,7 +137,7 @@ async def recall(
     *,
     tenant_id: str = "",
     limit: int = 10,
-    budget_chars: int = DEFAULT_BUDGET_CHARS,
+    budget_chars: int | None = None,
     scope: Any = None,
     reader_person_id: str | None = None,
     room_ids: Any = None,
@@ -145,6 +147,9 @@ async def recall(
     """Route a recall query to the relevant stores, fuse, and budget-cap.
 
     Returns ``{"query_class": str, "results": [ {id, source, text, score, ...} ]}``.
+
+    ``budget_chars`` None packs to the recall context cap setting
+    (``ROBOTHOR_MEMORY_RECALL_CONTEXT_CHARS``).
 
     ``scope`` is the caller's :class:`~robothor.identity.scope.DataScope`, or
     None for unrestricted. It must be threaded to every store that can return
@@ -265,8 +270,9 @@ async def recall(
         fused = head + related + tail
 
     # Budget cap: the one packing rule (recall.pack_within), then the limit.
-    from robothor.memory.recall import pack_within, row_chars, truncate_row
+    from robothor.memory.recall import pack_within, recall_context_chars, row_chars, truncate_row
 
-    capped = pack_within(fused, budget_chars, row_chars, truncate_row)[:limit]
+    cap = recall_context_chars() if budget_chars is None else budget_chars
+    capped = pack_within(fused, cap, row_chars, truncate_row)[:limit]
 
     return {"query_class": cls, "results": capped}

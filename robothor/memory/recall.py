@@ -52,11 +52,21 @@ RANK_RELEVANCE_HALF = 10
 
 _T = TypeVar("_T")
 
-# The recall context cap: characters of memory text one recall returns. Recall
-# fills it, reranked head first, then the remaining fused candidates in fused
-# order; the reranker scores only its head (RERANK_MAX_CANDIDATES), so its cost
-# does not grow. It was the router's DEFAULT_BUDGET_CHARS and keeps its value.
+# The recall context cap's default: characters of memory text one recall
+# returns. Recall fills it, reranked head first, then the remaining fused
+# candidates in fused order; the reranker scores only its head
+# (RERANK_MAX_CANDIDATES), so its cost does not grow. It was the router's
+# DEFAULT_BUDGET_CHARS and keeps its value. The setting
+# ROBOTHOR_MEMORY_RECALL_CONTEXT_CHARS (recall_context_chars) sets the cap.
 RECALL_CONTEXT_CHARS = 4000
+
+
+def recall_context_chars() -> int:
+    """The recall context cap in characters, from the settings (read once per process)."""
+    from robothor.settings import get_settings
+
+    return int(get_settings().engine.recall_context_chars)
+
 
 # The most rows a recall asks for when the caller names no limit; the
 # character cap above normally binds first.
@@ -144,8 +154,8 @@ def truncate_row(row: dict[str, Any], limit: int) -> dict[str, Any]:
 
 
 def within_context_cap(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rows in order packed into ``RECALL_CONTEXT_CHARS`` by :func:`pack_within`."""
-    return pack_within(rows, RECALL_CONTEXT_CHARS, row_chars, truncate_row)
+    """Rows in order packed into :func:`recall_context_chars` by :func:`pack_within`."""
+    return pack_within(rows, recall_context_chars(), row_chars, truncate_row)
 
 
 @dataclass

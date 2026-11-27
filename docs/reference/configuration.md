@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-517 settings in 18 groups.
+518 settings in 18 groups.
 
 ## autonomy
 
@@ -322,6 +322,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_MAX_SPAWN_BATCH` | int | `10` | no | no | legacy | Largest number of sub-agents one parent may spawn in a single batch. |
 | `ROBOTHOR_MAX_WALLCLOCK_SECONDS` | int | `0` | no | no | legacy | Hard wall-clock ceiling for one run before the stall watchdog ends it. 0 disables the ceiling. |
 | `ROBOTHOR_MEMORY_BLOCK_MAX_CHARS` | int | `5000` | `robothor-engine` | no | legacy | Character ceiling on one agent memory block before it is compacted. |
+| `ROBOTHOR_MEMORY_RECALL_CONTEXT_CHARS` | int | `4000` | `robothor-engine`, `robothor-bridge` | no | unreleased | Characters of memory text one recall returns: the search_memory tool, the routed recall and MCP search_memory pack their rows into it, best first. Read once per process. |
 | `ROBOTHOR_MEMORY_TTL_HOURS` | int | `48` | `robothor-engine` | no | legacy | How long short-term memory rows survive before decay considers them. |
 | `ROBOTHOR_MIN_AGENT_COUNT` | int | `1` | `robothor-engine` | no | legacy | Fewest loaded agents the fleet guard accepts before /ready reports unhealthy — the tripwire for a manifest directory that went missing. |
 | `ROBOTHOR_OPERATOR_NAME` | str | _(empty)_ | `robothor-engine` | no | legacy | Display name the engine uses for the operator in prompts. Prefer ~/.robothor/owner.yaml, which is the canonical identity source. |
