@@ -732,3 +732,18 @@ def test_main_holds_the_two_reads_without_searching():
     assert "org_tool_write" not in eager
     text = (root / "templates/agents/core/main/instructions.template.md").read_text()
     assert "org_tool_read" in text and "org_tool_write" in text
+
+
+def test_a_bridge_refusal_says_what_to_fix_and_is_not_a_target_code(env):
+    sentence = (
+        "agent 'main' is listed in the bridge's capabilities manifest "
+        '(agent_capabilities.json) without "POST /api/org/remote/call" in its '
+        "bridge_endpoints: add them and restart the bridge"
+    )
+    env.bridge.answer = (403, {"error": sentence})
+
+    result = _call("org_tool_read", _read())
+
+    assert sentence in result["error"]
+    assert result["error"].startswith("The bridge refused the call")
+    assert result["error_code"] is None
