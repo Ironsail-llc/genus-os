@@ -852,3 +852,19 @@ def test_parent_agent_grant_refuses_when_it_cannot_read(world, monkeypatch) -> N
     monkeypatch.setattr("robothor.crm.dal.tenant_child_data_access", broken)
 
     assert parent_agent_grant(PARENT, CHILD) is False
+
+
+async def test_the_plugin_checks_run_inside_the_checks_budget(world, monkeypatch) -> None:
+    from robothor.doctor import runner
+
+    budgets: list[float] = []
+    real = runner.run
+
+    async def run(ctx: Any, **kw: Any) -> Any:
+        budgets.append(ctx.total_timeout_s)
+        return await real(ctx, **kw)
+
+    monkeypatch.setattr(runner, "run", run)
+
+    assert (await _request("GET", "/api/admin/remote-tools")).status_code == 200
+    assert budgets == [rc.CHECKS_BUDGET_S]
