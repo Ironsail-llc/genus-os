@@ -634,12 +634,18 @@ def _mention_inputs(cur: Any, fact: Mapping[str, Any], context: WriteContext) ->
     if mentions is None:
         mentions = _known_mentions(cur, context.tenant_id, str(fact.get("fact_text") or ""))
     pairs: list[tuple[str, str | None]] = []
+    anchors: dict[str, str] = {}
     seen: set[str] = set()
     for m in mentions:
         surface = str(m.get("surface_form") or "").strip()
         if surface and normalize_surface(surface) not in seen:
             seen.add(normalize_surface(surface))
             pairs.append((surface, m.get("entity_type")))
+            # An identity anchor (conversation ingest: "the user" is the person
+            # whose conversation it is) is honoured only for the person who owns
+            # this write's private scope, never for anyone else.
+            if context.person_id and str(m.get("crm_person_id") or "") == context.person_id:
+                anchors[surface] = context.person_id
     # A relation endpoint the model did not list is still a name in the fact.
     for rel in fact.get("relations") or []:
         for end in (rel.get("source"), rel.get("target")):
@@ -658,7 +664,11 @@ def _mention_inputs(cur: Any, fact: Mapping[str, Any], context: WriteContext) ->
         MentionInput(
             s,
             t,
-            strong_keys={"email": s.lower()} if _EMAIL.match(s) else {},
+            strong_keys=(
+                {"crm_person_id": anchors[s]}
+                if s in anchors
+                else ({"email": s.lower()} if _EMAIL.match(s) else {})
+            ),
             context={**base, "co_mentions": [n for n in names if n != s]},
         )
         for s, t in pairs

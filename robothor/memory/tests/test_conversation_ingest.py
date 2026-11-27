@@ -405,7 +405,7 @@ async def test_facts_about_the_speaker_are_anchored_to_their_person() -> None:
     _, write = await _run(store, Model())
     for _ctx, f in _written(write):
         anchors = [m for m in f["mentions"] if m.get("crm_person_id")]
-        if "number 1 " in f["fact_text"]:  # a user turn: about the user
+        if f["metadata"]["source"]["turn_refs"][0] % 2 == 1:  # a user turn: about the user
             assert anchors == [
                 {"surface_form": "the user", "entity_type": "person", "crm_person_id": ALICE}
             ]

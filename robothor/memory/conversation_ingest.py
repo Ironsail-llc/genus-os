@@ -218,10 +218,71 @@ def windows(turns: list[ConversationTurn]) -> list[list[ConversationTurn]]:
 _MODE_KEYS = ("speaker_role", "about_user", "kind", "turn_refs", "mentioned_at")
 
 
-def _prepared(fact: dict[str, Any], session_key: str) -> dict[str, Any]:
-    """An extracted fact as the write path takes it, its source turns in its metadata."""
+#: The label of the speaker of a conversation nobody is known to own.
+PARTICIPANT_LABEL = "Conversation participant (not linked to a person)"
+
+
+@dataclass(frozen=True)
+class Owner:
+    """Who a conversation's facts belong to: the write scope, and what "the user"
+    in them is anchored to.
+
+    ``person_id`` is the CRM person the conversation belongs to (its recorded
+    person, or the operator for the main session: ``segments.session_scope``).
+    Without one, "the user" is a placeholder subject scoped to this
+    conversation (``metadata.subject``), never a node: a private fact may not
+    create one (``write_path``), and nothing is guessed from a name.
+    """
+
+    scope: tuple[str, str]
+    person_id: str | None
+    session_key: str
+
+    def subject(self) -> dict[str, Any]:
+        if self.person_id:
+            return {"kind": "person", "person_id": self.person_id}
+        return {
+            "kind": "conversation_participant",
+            "label": PARTICIPANT_LABEL,
+            "conversation_ref": self.session_key,
+            "owner": self.scope[1],
+        }
+
+
+def owner_of(conv: StoredConversation, session_key: str) -> Owner:
+    """The conversation's own scope, exactly as its segments are scoped.
+
+    A conversation with no known owner is ``("user", None)`` for its segments:
+    readable by no one. A fact needs an owner id, so it gets
+    ``conversation:{session_key}``, which no reader ever holds (reader ids are
+    ``person:``, ``user:`` and ``agent:``): kept, and readable by no one, the
+    same.
+    """
+    from robothor.memory.write_path import person_of
+
+    sid = conv.scope_id or f"conversation:{session_key}"
+    return Owner(("user", sid), person_of("user", sid), session_key)
+
+
+def _prepared(fact: dict[str, Any], session_key: str, owner: Owner) -> dict[str, Any]:
+    """An extracted fact as the write path takes it, its source turns in its metadata.
+
+    A fact about the speaker gets the owner as its subject, and, when the owner
+    is a CRM person, a ``the user`` mention anchored to that person's node.
+    """
     refs = list(fact["turn_refs"])
     out = {k: v for k, v in fact.items() if k not in _MODE_KEYS}
+    if fact["about_user"]:
+        out["metadata_subject"] = owner.subject()
+        if owner.person_id:
+            out["mentions"] = [
+                {
+                    "surface_form": "the user",
+                    "entity_type": "person",
+                    "crm_person_id": owner.person_id,
+                },
+                *fact["mentions"],
+            ]
     out["metadata"] = {
         "extraction": "conversation",
         "conversation_kind": fact["kind"],
@@ -234,6 +295,9 @@ def _prepared(fact: dict[str, Any], session_key: str) -> dict[str, Any]:
             "mentioned_at": fact["mentioned_at"],
         },
     }
+    subject = out.pop("metadata_subject", None)
+    if subject is not None:
+        out["metadata"]["subject"] = subject
     return out
 
 
@@ -258,14 +322,16 @@ async def _write_window(
     tenant_id: str,
     trigger_type: str,
     metadata: dict[str, Any],
+    owner: Owner,
 ) -> dict[str, Any]:
-    """Write one window's facts, grouped by speaker so each gets its origin."""
+    """Write one window's facts, grouped by speaker so each gets its origin, all
+    in the conversation's own scope."""
     from robothor.memory import write_path
 
     source_content = render_window(window)
     result: dict[str, Any] = {}
     for role in ("user", "assistant"):
-        group = [_prepared(f, session_key) for f in facts if f["speaker_role"] == role]
+        group = [_prepared(f, session_key, owner) for f in facts if f["speaker_role"] == role]
         if not group:
             continue
         context = write_path.WriteContext.for_source(
@@ -274,26 +340,11 @@ async def _write_window(
             content_type="conversation",
             role=role,
             metadata=metadata,
+            scope=owner.scope,
         )
         part = await write_path.write_facts(group, source_content=source_content, context=context)
         result = _merge(result, part)
     return result
-
-
-async def _populate_vault(window: list[ConversationTurn], trigger_type: str, tenant: str) -> int:
-    """Verbatim reference values to the Knowledge Vault, as ``ingest_content`` does (gated)."""
-    from robothor.memory.vault import _vault_populate_enabled, populate_vault_from_content
-
-    if not _vault_populate_enabled():
-        return 0
-    try:
-        stored = await populate_vault_from_content(
-            render_window(window), source=trigger_type, tenant_id=tenant
-        )
-        return len(stored)
-    except Exception as e:
-        logger.warning("Vault auto-populate failed: %s", e)
-        return 0
 
 
 async def ingest_conversation_session(
@@ -335,6 +386,13 @@ async def _ingest(
     conv = await _load_when_stored(session_key, tenant, after, history)
     if conv is None or not conv.turns:
         return None
+    if conv.is_room:
+        # A workspace's segments are read only by its members, but a fact has
+        # no room scope: written shared, it would reach every reader in the
+        # tenant. Until facts can carry a room's scope, rooms are not extracted.
+        logger.debug("Conversation %s is a room; not extracted", sanitize_log(session_key))
+        return None
+    owner = owner_of(conv, session_key)
 
     metadata = {"session_key": session_key, "agent_id": agent_id, "run_id": run_id}
     skip_generated = _ingest_skip_generated_enabled()
@@ -365,6 +423,7 @@ async def _ingest(
                 tenant_id=tenant,
                 trigger_type=trigger_type,
                 metadata=metadata,
+                owner=owner,
             )
             if part.get("facts_failed"):
                 logger.warning(
@@ -374,9 +433,6 @@ async def _ingest(
                 )
                 return _done(result)
             result = _merge(result, part)
-            result["vault_stored"] = result.get("vault_stored", 0) + await _populate_vault(
-                kept, trigger_type, tenant
-            )
         record_ingested(
             _WATERMARK_SOURCE,
             session_key,
