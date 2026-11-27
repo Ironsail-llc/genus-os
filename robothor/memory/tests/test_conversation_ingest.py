@@ -455,3 +455,20 @@ async def test_a_workspace_room_is_not_extracted_into_tenant_wide_facts() -> Non
     assert model.prompts == []
     write.assert_not_awaited()
     assert out is None
+
+
+@pytest.mark.asyncio
+async def test_rows_with_no_turn_to_extract_still_move_the_watermark() -> None:
+    store = Store([], scope=("user", f"person:{ALICE}"))
+    real = store.load
+
+    def only_system_rows(*a: Any) -> Any:
+        conv = real(*a)
+        conv.scanned_through = 30  # thirty system rows, nothing to extract
+        return conv
+
+    store.load = only_system_rows  # type: ignore[method-assign]
+    model = Model()
+    out, _ = await _run(store, model, history=[])
+    assert out is None and model.prompts == []
+    assert store.watermark == 30  # the next run starts past them
