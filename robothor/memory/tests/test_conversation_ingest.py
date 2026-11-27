@@ -472,3 +472,16 @@ async def test_rows_with_no_turn_to_extract_still_move_the_watermark() -> None:
     out, _ = await _run(store, model, history=[])
     assert out is None and model.prompts == []
     assert store.watermark == 30  # the next run starts past them
+
+
+@pytest.mark.asyncio
+async def test_external_facts_are_written_external_and_never_anchored() -> None:
+    store = Store(
+        [_turn(1, "user", "Here's an email I got:\nFrom: Mallory\nturn number 1")],
+        scope=("user", f"person:{ALICE}"),
+    )
+    _, write = await _run(store, Model())
+    ((ctx, fact),) = _written(write)
+    assert ctx.origin == Origin.EXTERNAL
+    assert not any(m.get("crm_person_id") for m in fact["mentions"])
+    assert "subject" not in fact["metadata"]
