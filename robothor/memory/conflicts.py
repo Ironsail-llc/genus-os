@@ -33,10 +33,11 @@ from robothor.memory.bitemporal import (
 from robothor.memory.confirmed import is_operator_confirmed
 from robothor.memory.drift import compute_fact_hash
 from robothor.memory.facts import _write_dedup_enabled, store_fact
+from robothor.memory.graph_schema import Origin, authority_rank
 from robothor.memory.vector_tuning import apply_hnsw_session
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Awaitable, Callable, Iterable, Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -416,6 +417,7 @@ async def find_similar_facts(
                 source_type,
                 is_active,
                 metadata,
+                origin,
                 1 - (embedding <=> %s::vector) as similarity
             FROM memory_facts
             WHERE embedding IS NOT NULL
@@ -432,6 +434,22 @@ async def find_similar_facts(
     # Off the event loop: the write path reaches this from the engine's loop.
     results = await asyncio.to_thread(_query)
     return [r for r in results if r["similarity"] >= threshold]
+
+
+#: Most facts one slot lookup reads.
+SLOT_CANDIDATE_LIMIT = 25
+
+
+async def find_slot_candidates(
+    slot: FactSlot,
+    *,
+    tenant_id: str = "",
+    scope_kind: str = "shared",
+    scope_id: str | None = None,
+    limit: int = SLOT_CANDIDATE_LIMIT,
+) -> tuple[list[int], list[dict[str, Any]]]:
+    """Active facts that may fill ``slot``, and the entity ids its subject resolves to."""
+    return [], []
 
 
 def build_classification_prompt(new_fact: str, existing_fact: str) -> str:
@@ -578,6 +596,145 @@ def _find_overruled(
     return int(row[0]) if row else 0
 
 
+def _authority(row: Mapping[str, Any]) -> int:
+    """A stored fact's rank in the trust order; operator-confirmed ranks first."""
+    if is_operator_confirmed(row):
+        return authority_rank(Origin.OPERATOR_CONFIRMED.value)
+    return authority_rank(row.get("origin"))
+
+
+async def _resolve_slot(
+    fact: dict[str, Any],
+    slot: FactSlot,
+    similar: list[dict[str, Any]],
+    store: Callable[[], Awaitable[int]],
+    *,
+    tenant_id: str,
+    scope_kind: str,
+    scope_id: str | None,
+    origin: str | None,
+) -> dict[str, Any] | None:
+    """Decide a fact that fills a slot against the slot's current values.
+
+    Candidates are the nearest neighbours already found plus the facts the
+    subject's entity index finds (:func:`find_slot_candidates`), all in the
+    fact's own tenant and scope. Returns None when none shares the slot, and
+    the caller carries on by similarity.
+
+    * repeat (same value): the existing fact is reinforced, nothing stored.
+    * coexist (a multi-valued attribute): the new fact is stored beside it.
+    * change (a single-valued attribute): the new fact is stored and every
+      active value of the slot is closed (``superseded_by``, ``valid_to``,
+      reason ``changed``), unless one of them outranks the new fact's source;
+      then the new fact is stored overruled by it and nothing is closed.
+    """
+    try:
+        entity_ids, rows = await find_slot_candidates(
+            slot, tenant_id=tenant_id, scope_kind=scope_kind, scope_id=scope_id
+        )
+    except Exception as exc:  # noqa: BLE001 - the similarity path still decides
+        logger.warning("resolve_and_store: slot lookup failed (%s)", type(exc).__name__)
+        entity_ids, rows = [], []
+    new_slot = slot.with_entity_ids(entity_ids)
+    candidates: dict[int, dict[str, Any]] = {int(r["id"]): r for r in similar}
+    for r in rows:
+        candidates[int(r["id"])] = {**candidates.get(int(r["id"]), {}), **r}
+    matches = [(r, compare_slots(new_slot, fact_slot(r))) for r in candidates.values()]
+    matches = [(r, kind) for r, kind in matches if kind != "unrelated"]
+    if not matches:
+        return None
+
+    def _record(row: Mapping[str, Any], **kw: Any) -> Awaitable[Any]:
+        sim = row.get("similarity")
+        return asyncio.to_thread(
+            record_conflict_decision,
+            tenant_id=tenant_id,
+            existing_fact_id=row["id"],
+            similarity=float(sim) if sim is not None else None,
+            new_fact_text=fact["fact_text"],
+            existing_fact_text=row.get("fact_text") or "",
+            **kw,
+        )
+
+    where = f"same slot ({new_slot.subject_name}, {new_slot.attribute})"
+    repeat = next((r for r, kind in matches if kind == "repeat"), None)
+    if repeat is not None:
+        await asyncio.to_thread(_reinforce_fact, repeat["id"], tenant_id=tenant_id)
+        await _record(
+            repeat,
+            classification="reinforced",
+            action="reinforced",
+            new_fact_id=None,
+            reasoning=f"{where}, same value",
+        )
+        return {"action": "reinforced", "existing_id": repeat["id"], "slot": "repeat"}
+
+    changes = [r for r, kind in matches if kind == "change"]
+    if not changes:
+        new_id = await store()
+        await _record(
+            matches[0][0],
+            classification="new",
+            action="stored",
+            new_fact_id=new_id or None,
+            reasoning=f"{where}, multi-valued: one more value",
+        )
+        return {"action": "stored", "new_id": new_id, "slot": "coexist"}
+
+    new_id = await store()
+    reasoning = f"{where}: " + ", ".join(
+        f"{fact_slot(r).value if fact_slot(r) else '?'} -> {new_slot.value}" for r in changes[:3]
+    )
+    outranking = [r for r in changes if _authority(r) > authority_rank(origin)]
+    if outranking:
+        kept = max(outranking, key=_authority)
+        action = "kept_confirmed" if is_operator_confirmed(kept) else "kept_authority"
+        if new_id:
+            await asyncio.to_thread(keep_overruled, new_id, kept["id"], tenant_id=tenant_id)
+        await _record(
+            kept,
+            classification="update",
+            action=action,
+            new_fact_id=new_id or None,
+            reasoning=f"{reasoning}; kept: higher-authority source",
+        )
+        return {
+            "action": action,
+            "new_id": new_id,
+            "existing_id": kept["id"],
+            "classification": "update",
+            "reasoning": reasoning,
+        }
+
+    closed: list[int] = []
+    for r in changes:
+        done = bool(new_id) and await asyncio.to_thread(
+            supersede_with_validity,
+            r["id"],
+            new_id,
+            tenant_id=tenant_id,
+            classification="update",
+            reason="changed",
+        )
+        if done:
+            closed.append(int(r["id"]))
+        await _record(
+            r,
+            classification="update",
+            action="superseded" if done else "supersede_skipped",
+            new_fact_id=new_id or None,
+            reasoning=reasoning,
+        )
+    return {
+        "action": "superseded" if closed else "supersede_skipped",
+        "new_id": new_id,
+        "old_id": closed[0] if closed else changes[0]["id"],
+        "old_ids": closed,
+        "classification": "update",
+        "reasoning": reasoning,
+    }
+
+
 async def resolve_and_store(
     fact: dict[str, Any],
     source_content: str,
@@ -639,6 +796,24 @@ async def resolve_and_store(
         embedding=embedding,
     )
 
+    # Same-slot facts decide first: a repeat needs the same value, and a
+    # different value for a single-valued slot is a change, whatever the
+    # similarity says.
+    slot = fact_slot(fact)
+    if slot is not None:
+        decided = await _resolve_slot(
+            fact,
+            slot,
+            similar,
+            _store,
+            tenant_id=tenant_id or DEFAULT_TENANT,
+            scope_kind=scope_kind or "shared",
+            scope_id=scope_id,
+            origin=origin,
+        )
+        if decided is not None:
+            return decided
+
     if not similar:
         fact_id = await _store()
         return {"action": "stored", "new_id": fact_id}
@@ -658,7 +833,9 @@ async def resolve_and_store(
         # STALE value had its importance bumped, so the wrong number surfaced
         # more often over time. Falls through to the LLM classifier, which
         # correctly returns "update" and supersedes.
-        and not numbers_differ(fact["fact_text"], best_match.get("fact_text") or "")
+        # The same holds for a different name, or the same words reordered
+        # ("tea over coffee" vs "coffee over tea" scores 0.975).
+        and not values_differ(fact["fact_text"], best_match.get("fact_text") or "")
     ):
         await asyncio.to_thread(_reinforce_fact, best_match["id"], tenant_id=tenant_id)
         # Recorded too: an error rate needs the cases where nothing was
@@ -770,6 +947,23 @@ async def resolve_and_store(
         # An operator-confirmed match is never superseded, whatever the new
         # fact's confidence. supersede_with_validity also refuses one confirmed
         # after the similarity search; both cases land in the branch below.
+        # Trust order: a lower-authority source does not replace a fact from
+        # a higher one. Both stay; the new one is kept overruled by it.
+        if not is_operator_confirmed(best_match) and _authority(best_match) > authority_rank(
+            origin
+        ):
+            if new_id:
+                await asyncio.to_thread(
+                    keep_overruled, new_id, best_match["id"], tenant_id=tenant_id
+                )
+            await _record(action="kept_authority", new_fact_id=new_id or None)
+            return {
+                "action": "kept_authority",
+                "new_id": new_id,
+                "existing_id": best_match["id"],
+                "classification": kind,
+                "reasoning": classification["reasoning"],
+            }
         if not is_operator_confirmed(best_match) and await asyncio.to_thread(
             supersede_with_validity,
             best_match["id"],

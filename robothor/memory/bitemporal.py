@@ -131,6 +131,7 @@ def supersede_with_validity(
     tenant_id: str = "",
     classification: str = "update",
     force: bool = False,
+    reason: str | None = None,
 ) -> bool:
     """Supersede ``old_id`` by ``new_id``, bounding the old fact in world-time.
 
