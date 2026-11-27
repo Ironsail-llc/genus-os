@@ -143,9 +143,60 @@ def truncate_row(row: dict[str, Any], limit: int) -> dict[str, Any]:
     return out
 
 
+#: Row sources that are not ``memory_facts`` rows (their ids are another table's).
+_NOT_FACT_SOURCES = frozenset({"vault", "intent", "procedure", "insight", "episode", "chat_turn"})
+
+
+def split_earlier(
+    rows: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """``(ranked, earlier)``: earlier values (``earlier_of`` set) apart from the rest."""
+    ranked = [r for r in rows if r.get("earlier_of") is None]
+    earlier = [r for r in rows if r.get("earlier_of") is not None]
+    return ranked, earlier
+
+
+def attach_earlier(
+    kept: Sequence[dict[str, Any]],
+    earlier: Sequence[dict[str, Any]],
+    *,
+    room: int | None = None,
+) -> list[dict[str, Any]]:
+    """``kept`` with each earlier value directly after its current row.
+
+    An earlier value whose current row is not in ``kept`` is dropped, and one
+    that does not fit in ``room`` characters is dropped: an earlier value is an
+    extra row after selection and never takes a ranked row's place.
+    """
+    under: dict[Any, list[dict[str, Any]]] = {}
+    for e in earlier:
+        under.setdefault(e.get("earlier_of"), []).append(e)
+    out: list[dict[str, Any]] = []
+    left = room
+    for row in kept:
+        out.append(row)
+        if row.get("kind", "fact") != "fact" or row.get("source") in _NOT_FACT_SOURCES:
+            continue
+        for e in under.get(row.get("id"), []):
+            n = row_chars(e)
+            if left is not None and n > left:
+                continue
+            out.append(e)
+            if left is not None:
+                left -= n
+    return out
+
+
 def within_context_cap(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rows in order packed into ``RECALL_CONTEXT_CHARS`` by :func:`pack_within`."""
-    return pack_within(rows, RECALL_CONTEXT_CHARS, row_chars, truncate_row)
+    """Rows in order packed into ``RECALL_CONTEXT_CHARS`` by :func:`pack_within`.
+
+    Earlier values are packed after the ranked rows, into what room is left,
+    each directly after its current row (:func:`attach_earlier`).
+    """
+    ranked, earlier = split_earlier(rows)
+    packed = pack_within(ranked, RECALL_CONTEXT_CHARS, row_chars, truncate_row)
+    room = RECALL_CONTEXT_CHARS - sum(row_chars(r) for r in packed)
+    return attach_earlier(packed, earlier, room=max(0, room))
 
 
 @dataclass
@@ -262,12 +313,39 @@ def row_text(row: Mapping[str, Any]) -> str:
     answer model otherwise took an employer's address for the person's). The
     path is the walk's first-reach path, every node of it visible to the
     reader. Any row another leg also found keeps its plain text.
+
+    A value since replaced (``superseded``) reads ``Earlier value, replaced
+    2026-05-01: Alice lives in Boston.``
     """
     text = str(row.get("fact_text") or row.get("insight_text") or row.get("text") or "")
+    if row.get("superseded"):
+        # A value since replaced (bitemporal.place_superseded): said so, with
+        # when, so it is never read as the current one.
+        when = str(row.get("superseded_at") or "")[:10]
+        return f"Earlier value, replaced {when}: {text}" if when else f"Earlier value: {text}"
     path = [str(n) for n in (row.get("graph_path") or []) if n]
     if path and graph_only(row):
         return f"Related via {' → '.join(path)}: {text}"
     return text
+
+
+def superseded_fields(row: Mapping[str, Any]) -> dict[str, Any]:
+    """A replaced value's label fields for an output row; empty for any other row.
+
+    ``superseded`` (True), ``superseded_at`` (ISO), ``superseded_reason``
+    (``changed``, ``contradicted``, ``earlier`` or None) and ``superseded_by``
+    (the row that replaced it).
+    """
+    if not row.get("superseded"):
+        return {}
+    at = row.get("superseded_at")
+    iso = getattr(at, "isoformat", None)
+    return {
+        "superseded": True,
+        "superseded_at": iso() if callable(iso) else at,
+        "superseded_reason": row.get("superseded_reason"),
+        "superseded_by": row.get("superseded_by"),
+    }
 
 
 def _row_key(row: Mapping[str, Any]) -> tuple[Any, Any]:

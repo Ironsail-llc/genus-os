@@ -103,7 +103,19 @@ def _normalize_fact(r: dict[str, Any]) -> dict[str, Any]:
     # A row the graph leg found keeps its labels: who asserted it, the path of
     # entities that reached it, and which legs found it (the shared formatter,
     # ``recall.row_text``, labels a row only the graph found).
-    for key in ("origin", "graph_hops", "graph_path", "leg_ranks", "budget_tail"):
+    for key in (
+        "origin",
+        "graph_hops",
+        "graph_path",
+        "leg_ranks",
+        "budget_tail",
+        # A value since replaced: its label and which row replaced it.
+        "superseded",
+        "superseded_at",
+        "superseded_reason",
+        "superseded_by",
+        "earlier_of",
+    ):
         if key in r:
             row[key] = r[key]
     return row
@@ -178,7 +190,13 @@ async def recall(
         room_ids=room_ids,
         reader_scope_id=reader_scope_id,
     )
-    ranked_lists.append([_normalize_fact(r) for r in fact_rows])
+    # Earlier values (a replaced value after its current row) sit out the
+    # fusion, the re-sort, the budget and the limit, and are put back after
+    # their current row at the end: extra rows that never displace one.
+    from robothor.memory.recall import attach_earlier, split_earlier
+
+    fact_ranked, fact_earlier = split_earlier(fact_rows)
+    ranked_lists.append([_normalize_fact(r) for r in fact_ranked])
 
     # --- exact lookup → Knowledge Vault captions (no values) ---
     # Fails closed for restricted callers. The vault holds credential and PII
@@ -268,5 +286,11 @@ async def recall(
     from robothor.memory.recall import pack_within, row_chars, truncate_row
 
     capped = pack_within(fused, budget_chars, row_chars, truncate_row)[:limit]
+    room = budget_chars - sum(row_chars(r) for r in capped) if budget_chars else None
+    capped = attach_earlier(
+        capped,
+        [_normalize_fact(r) for r in fact_earlier],
+        room=max(0, room) if room is not None else None,
+    )
 
     return {"query_class": cls, "results": capped}

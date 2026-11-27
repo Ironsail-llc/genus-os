@@ -368,61 +368,118 @@ def earlier_ids(row: Mapping[str, Any]) -> list[int]:
     return sorted(set(ids), reverse=True)[:EARLIER_PER_ROW]
 
 
+_NULL_SCORES = ("similarity", "rerank_score", "rrf_score", "fused_rank")
+
+
+def _as_earlier(old: dict[str, Any], current: Mapping[str, Any]) -> dict[str, Any]:
+    """``old`` labelled, shaped like ``current`` and placed under it.
+
+    Every key a ranked row has is present: scores explicitly None (the row was
+    not ranked, it follows its current row), ``leg_scores`` empty, and the
+    current row's position markers (``leg_ranks``, ``budget_tail``) so a
+    re-sort keeps the two together. ``earlier_of`` names the current row.
+    """
+    label_superseded(old)
+    for key in current:
+        old.setdefault(key, None)
+    for key in _NULL_SCORES:
+        old[key] = None
+    old["leg_scores"] = {}
+    old["leg_ranks"] = dict(current.get("leg_ranks") or {})
+    if "budget_tail" in current:
+        old["budget_tail"] = current["budget_tail"]
+    rel = current.get("relevance")
+    old["relevance"] = float(rel) if rel is not None else None
+    old["earlier_of"] = current.get("id")
+    return old
+
+
+def _is_fact(row: Mapping[str, Any]) -> bool:
+    return bool(row.get("kind", "fact") == "fact")
+
+
 def place_superseded(
     rows: list[dict[str, Any]],
     *,
     earlier: Mapping[Any, list[dict[str, Any]]] | None = None,
     current: Mapping[Any, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Order recall rows so a closed value never outranks its current one.
+    """Order recall rows so a closed value directly follows its current one.
 
-    * A row with ``superseded_by`` set is labelled (:func:`label_superseded`)
-      and placed directly after its current row: where that row stands when it
-      is in ``rows``, else after ``current[old_id]`` (the visible current row,
-      brought in at the old row's place), else where it was.
-    * ``earlier[current_id]`` rows (the values a current row replaced) follow
-      it, labelled, unless already placed.
+    * ``earlier[current_id]``: the values a current row replaced, read for it.
+      Each follows its current row (:func:`_as_earlier`).
+    * A row in ``rows`` with ``superseded_by`` set (history recall): it moves
+      directly after its current row when that row is in ``rows``; otherwise
+      ``current[old_id]`` (the visible current row) takes the closed row's place
+      and the closed row follows it; otherwise it stays where it was, labelled.
+    * Extra rows (earlier values read for a current row, current rows brought
+      in) are at most :data:`MAX_EARLIER_ROWS`; they never displace a row.
+    * An earlier row that near-duplicates another row (not its own current row,
+      which a reversal repeats word for word) is dropped, as ``_dedupe`` would.
 
-    Rows without supersession pass through in order, untouched.
+    Rows without supersession keep their order and are untouched. Never
+    mutates the mappings it is given while iterating them.
     """
+    from robothor.memory.facts import _is_near_duplicate, _row_tokens
+
     earlier = earlier or {}
     current = current or {}
-    ids = {r.get("id") for r in rows if r.get("kind", "fact") == "fact"}
-    deferred: dict[Any, list[dict[str, Any]]] = {}
+    ids = {r.get("id") for r in rows if _is_fact(r)}
+    under: dict[Any, list[dict[str, Any]]] = {}
+    ranked: list[dict[str, Any]] = []
+    budget = MAX_EARLIER_ROWS
+    for row in list(rows):
+        by = row.get("superseded_by") if _is_fact(row) else None
+        if by is None:
+            ranked.append(row)
+            continue
+        label_superseded(row)
+        if by in ids:
+            under.setdefault(by, []).append(row)
+            continue
+        head = current.get(row.get("id"))
+        if head is not None and head.get("id") not in ids and budget > 0:
+            budget -= 1
+            for key in ("leg_ranks", "budget_tail", "relevance"):
+                if key in row and key not in head:
+                    head[key] = row[key]
+            ids.add(head.get("id"))
+            ranked.append(head)
+            under.setdefault(head.get("id"), []).append(row)
+            continue
+        ranked.append(row)
+
+    ranked_tokens = {id(r): _row_tokens(r) for r in ranked}
     out: list[dict[str, Any]] = []
     placed: set[Any] = set()
 
-    def _emit(row: dict[str, Any]) -> None:
-        if row.get("id") in placed:
-            return
-        placed.add(row.get("id"))
+    def _place(row: dict[str, Any]) -> None:
+        placed.add(row.get("id") if _is_fact(row) else ("x", id(row)))
         out.append(row)
-        for old in [*deferred.pop(row.get("id"), []), *earlier.get(row.get("id"), [])]:
+
+    for row in ranked:
+        seen: Any = row.get("id") if _is_fact(row) else ("x", id(row))
+        if seen in placed:
+            continue
+        _place(row)
+        if not _is_fact(row):
+            continue
+        followers = list(under.get(row.get("id"), []))
+        fetched = [dict(e) for e in earlier.get(row.get("id"), [])]
+        for old in followers + fetched:
             if old.get("id") in placed:
                 continue
-            label_superseded(old)
-            rel = row.get("relevance")
-            if rel is not None:
-                old["relevance"] = min(float(old.get("relevance") or rel), float(rel))
-            _emit(old)
-
-    for row in rows:
-        is_fact = row.get("kind", "fact") == "fact"
-        by = row.get("superseded_by") if is_fact else None
-        if by is None:
-            _emit(row)
-            continue
-        label_superseded(row)
-        if by in ids and by not in placed:
-            deferred.setdefault(by, []).append(row)
-            continue
-        head = current.get(row.get("id"))
-        if head is not None and head.get("id") not in placed:
-            deferred.setdefault(head.get("id"), []).append(row)
-            _emit(head)
-            continue
-        _emit(row)
-    for rest in deferred.values():  # current row never emitted: keep the old ones
+            if old in fetched:
+                if budget <= 0:
+                    continue
+                others = [t for r, t in ((r, ranked_tokens[id(r)]) for r in ranked) if r is not row]
+                if _is_near_duplicate(_row_tokens(old), others):
+                    continue
+                budget -= 1
+            _place(_as_earlier(old, row))
+    # Rows whose current row never came (a cycle of closed rows): kept, labelled.
+    for rest in list(under.values()):
         for old in rest:
-            _emit(old)
+            if old.get("id") not in placed:
+                _place(old)
     return out
