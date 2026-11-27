@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from robothor.memory.conversation_facts import ConversationTurn
 from robothor.memory.graph_schema import Origin
 
 TENANT = "test-tenant"
+ALICE = "6f1c1b7e-0000-4000-8000-000000000001"
 KEY = "agent:main:telegram:4242"
 T0 = datetime(2023, 5, 20, 9, 0, tzinfo=UTC)
 
@@ -37,21 +39,81 @@ def _stored(n: int, *, first_ref: int = 1) -> list[ConversationTurn]:
 
 
 class Store:
-    """The chat store and the watermark, in memory."""
+    """The chat store and the conversation's watermark row, in memory.
+
+    Every function the ingest calls on the database is one of these methods;
+    each notes the thread it ran on, so a test can check none runs on the loop.
+    """
 
     def __init__(self, turns: list[ConversationTurn], *, scope: tuple[str, str | None]) -> None:
         self.turns = turns
         self.scope = scope
         self.watermark = 0
+        self.failures = 0
         self.recorded: list[tuple[str, list[int]]] = []
+        self.skipped: list[tuple[int, int]] = []
         self.loads = 0
+        self.claimed_by: str | None = None
+        self.claims_refused = False
+        self.released = 0
+        self.reowned: list[Any] = []
+        self.fresh_from: int | None = None  # refs from here on are "just written"
+        self.threads: set[str] = set()
+
+    def _seen(self) -> None:
+        self.threads.add(threading.current_thread().name)
+
+    def claim(self, session_key: str, tenant_id: str) -> ci.Watermark | None:
+        self._seen()
+        assert tenant_id == TENANT
+        if self.claims_refused or self.claimed_by is not None:
+            return None
+        self.claimed_by = "token-1"
+        return ci.Watermark(through=self.watermark, failures=self.failures, token="token-1")
+
+    def advance(
+        self, session_key: str, tenant_id: str, token: str, through: int, fact_ids: list[int]
+    ) -> None:
+        self._seen()
+        assert token == self.claimed_by and tenant_id == TENANT
+        self.watermark = through
+        self.failures = 0
+        self.recorded.append((str(through), list(fact_ids)))
+
+    def fail(self, session_key: str, tenant_id: str, token: str) -> int:
+        self._seen()
+        assert token == self.claimed_by
+        self.failures += 1
+        return self.failures
+
+    def release(self, session_key: str, tenant_id: str, token: str) -> None:
+        self._seen()
+        assert token == self.claimed_by
+        self.claimed_by = None
+        self.released += 1
+
+    def skip(self, session_key: str, tenant_id: str, start: int, end: int, reason: str) -> None:
+        self._seen()
+        self.skipped.append((start, end))
+
+    def reown(self, session_key: str, tenant_id: str, owner: Any) -> int:
+        self._seen()
+        self.reowned.append(owner)
+        return 0
 
     def load(
         self, session_key: str, tenant_id: str, after_ref: int, limit: int
     ) -> ci.StoredConversation | None:
+        self._seen()
         self.loads += 1
-        new = [t for t in self.turns if t.ref > after_ref][:limit]
+        rows = [t for t in self.turns if t.ref > after_ref]
+        new = rows[:limit]
         before = [t for t in self.turns if t.ref <= after_ref][-ci.CONTEXT_TURNS :]
+        held = (
+            min((t.ref for t in new if t.ref >= self.fresh_from), default=None)
+            if self.fresh_from is not None
+            else None
+        )
         return ci.StoredConversation(
             turns=new,
             context=before,
@@ -59,22 +121,9 @@ class Store:
             scope_id=self.scope[1],
             is_room=":room:" in session_key,
             tail_text=self.turns[-1].text if self.turns else None,
+            held_from=held,
+            more=len(rows) > limit,
         )
-
-    def count(self, source: str, item_id: str, tenant_id: str | None = None) -> int:
-        return self.watermark
-
-    def record(
-        self,
-        source: str,
-        item_id: str,
-        hash_val: str,
-        fact_ids: list[int] | None = None,
-        tenant_id: str | None = None,
-    ) -> None:
-        assert tenant_id == TENANT
-        self.watermark = int(hash_val)
-        self.recorded.append((hash_val, list(fact_ids or [])))
 
 
 class Model:
@@ -121,6 +170,7 @@ async def _run(
     key: str = KEY,
     write: AsyncMock | None = None,
     history: list[dict[str, Any]] | None = None,
+    scheduled: list[tuple[float, Any]] | None = None,
 ) -> tuple[dict[str, Any] | None, AsyncMock]:
     counter = iter(range(1000, 100000))
     write = write or AsyncMock(
@@ -130,13 +180,18 @@ async def _run(
             "facts_failed": 0,
         }
     )
+    later = scheduled if scheduled is not None else []
     with (
         patch.object(ci, "_load_conversation", side_effect=store.load),
-        patch.object(ci, "get_ingested_count", side_effect=store.count),
-        patch.object(ci, "record_ingested", side_effect=store.record),
+        patch.object(ci, "_claim", side_effect=store.claim),
+        patch.object(ci, "_advance", side_effect=store.advance),
+        patch.object(ci, "_fail", side_effect=store.fail),
+        patch.object(ci, "_release", side_effect=store.release),
+        patch.object(ci, "_record_skip", side_effect=store.skip),
+        patch.object(ci, "_reown", side_effect=store.reown),
+        patch.object(ci, "_schedule", side_effect=lambda delay, fn: later.append((delay, fn))),
         patch("robothor.memory.generation.generate", new=model.generate),
         patch("robothor.memory.write_path.write_facts", new=write),
-        patch.object(ci, "STORE_WAIT_SECONDS", 0.0),
     ):
         out = await ci.ingest_conversation_session(
             key,
@@ -276,17 +331,12 @@ async def test_a_fact_that_could_not_be_stored_leaves_the_watermark() -> None:
 
 @pytest.mark.asyncio
 async def test_a_session_nobody_stored_is_not_extracted() -> None:
+    store = Store([], scope=("user", f"person:{ALICE}"))
+    store.load = lambda *a: None  # type: ignore[method-assign]
     model = Model()
-    with (
-        patch.object(ci, "_load_conversation", return_value=None),
-        patch.object(ci, "get_ingested_count", return_value=0),
-        patch("robothor.memory.generation.generate", new=model.generate),
-        patch.object(ci, "STORE_WAIT_SECONDS", 0.0),
-    ):
-        out = await ci.ingest_conversation_session(
-            KEY, [{"role": "user", "content": "hi"}], "main", "telegram", "run-1", TENANT
-        )
+    out, _ = await _run(store, model, history=[{"role": "user", "content": "hi"}])
     assert out is None and model.prompts == []
+    assert store.released == 1
 
 
 @pytest.mark.asyncio
@@ -315,7 +365,7 @@ async def test_it_waits_for_the_turn_that_triggered_it_to_be_stored() -> None:
 
 @pytest.mark.asyncio
 async def test_a_failure_anywhere_is_logged_never_raised() -> None:
-    with patch.object(ci, "get_ingested_count", side_effect=RuntimeError("db down")):
+    with patch.object(ci, "_claim", side_effect=RuntimeError("db down")):
         out = await ci.ingest_conversation_session(
             KEY, [{"role": "user", "content": "hi"}], "main", "telegram", "run-1", TENANT
         )
@@ -348,9 +398,9 @@ async def test_each_fact_names_its_conversation_and_turn_range() -> None:
         assert source["end_ref"] == max(source["turn_refs"])
         assert source["mentioned_at"].startswith("2023-05-20")
         assert ctx.metadata["session_key"] == KEY
-    # The stored source content is the window's own turns, verbatim.
-    call = write.call_args_list[0]
-    assert all(f"turn number {i}" in call.kwargs["source_content"] for i in range(1, 5))
+    # The stored source content is a reference to the turns, never their text.
+    for call in write.call_args_list:
+        assert call.kwargs["source_content"] == f"conversation:{KEY}#1-4"
 
 
 # ═══ the agent's own briefings (MEMORY_INGEST_SKIP_GENERATED) ════════════
@@ -386,8 +436,6 @@ async def test_a_briefing_is_extracted_by_default(monkeypatch: Any) -> None:
 
 
 # ═══ a conversation's facts are as private as the conversation ══════════
-
-ALICE = "6f1c1b7e-0000-4000-8000-000000000001"
 
 
 @pytest.mark.asyncio
@@ -485,3 +533,38 @@ async def test_external_facts_are_written_external_and_never_anchored() -> None:
     assert ctx.origin == Origin.EXTERNAL
     assert not any(m.get("crm_person_id") for m in fact["mentions"])
     assert "subject" not in fact["metadata"]
+
+
+# ═══ the watermark row is the lock; nothing blocks the loop ══════════════
+
+
+@pytest.mark.asyncio
+async def test_every_database_call_runs_off_the_event_loop() -> None:
+    store = Store(_stored(4), scope=("user", f"person:{ALICE}"))
+    loop_thread = threading.current_thread().name
+    await _run(store, Model())
+    assert store.threads and loop_thread not in store.threads
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_another_run_holds_is_left_to_it_then_retried() -> None:
+    store = Store(_stored(4), scope=("user", f"person:{ALICE}"))
+    store.claims_refused = True
+    model, later = Model(), []
+    out, _ = await _run(store, model, scheduled=later)
+    assert out is None and model.prompts == [] and store.loads == 0
+    assert len(later) == 1  # tried again shortly, so this exchange is not missed
+
+
+@pytest.mark.asyncio
+async def test_the_claim_is_released_even_when_extraction_fails() -> None:
+    store = Store(_stored(4), scope=("user", f"person:{ALICE}"))
+    await _run(store, Model(fail=True))
+    assert store.released == 1 and store.claimed_by is None
+
+
+@pytest.mark.asyncio
+async def test_a_room_never_reads_the_store_or_the_watermark() -> None:
+    store = Store(_stored(4), scope=("shared", None))
+    await _run(store, Model(), key="agent:main:room:3f2a")
+    assert store.threads == set()  # nothing on the database was called
